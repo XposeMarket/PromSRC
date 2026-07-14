@@ -1,6 +1,6 @@
 ---
-name: lottie
-description: Lottie and dotLottie adapter patterns for HyperFrames. Use when embedding lottie-web JSON animations, .lottie files, @lottiefiles/dotlottie-web players, registering instances on window.__hfLottie, or making After Effects exports deterministic in HyperFrames.
+name: "lottie"
+description: "Lottie and dotLottie adapter patterns for HyperFrames. Use when embedding lottie-web JSON animations, .lottie files, @lottiefiles/dotlottie-web players, registering instances on window.__hfLottie, or making After Effects exports deterministic in HyperFrames."
 ---
 
 # Lottie for HyperFrames
@@ -45,29 +45,12 @@ The adapter seeks `lottie-web` with `goToAndStop(timeMs, false)` and dotLottie w
 
 ## dotLottie Pattern
 
-```html
-<canvas id="product-lottie" class="lottie-canvas"></canvas>
-<script src="https://unpkg.com/@lottiefiles/dotlottie-web"></script>
-<script>
-  const player = new DotLottie({
-    canvas: document.getElementById("product-lottie"),
-    src: "assets/product-flow.lottie",
-    autoplay: false,
-    loop: false,
-  });
-
-  window.__hfLottie = window.__hfLottie || [];
-  window.__hfLottie.push(player);
-</script>
-```
-
-```css
-.lottie-canvas {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-```
+For current `@lottiefiles/dotlottie-web` projects, read
+[references/dotlottie-current.md](references/dotlottie-current.md). Prometheus
+validates against `0.77.1`, whose public seek API is `setFrame()`. HyperFrames
+0.6.x expects older dotLottie seek hooks and may issue the first render seek
+before the asynchronous player finishes loading, so direct registration alone
+is not enough. Use the documented compatibility bridge and local WASM bundle.
 
 ## Multiple Animations
 
@@ -94,15 +77,20 @@ HyperFrames seeks them all to the same composition time.
 - Starting playback with `play()`.
 - Assuming unsupported After Effects effects will survive export. Test the JSON or `.lottie` file in a browser first.
 - Loading a player asynchronously and registering it after HyperFrames validation has already inspected the page.
+- Loading the package root with a classic `<script src="https://unpkg.com/@lottiefiles/dotlottie-web">`; that build does not reliably create `window.DotLottie`. Use the locally bundled ESM package described in the reference.
 
 ## Validation
 
 After editing a Lottie composition:
 
-```bash
-npx hyperframes lint
-npx hyperframes validate
+```powershell
+node <PROMETHEUS_ROOT>/scripts/run-hyperframes.js lint
+node <PROMETHEUS_ROOT>/scripts/run-hyperframes.js validate
+node <PROMETHEUS_ROOT>/scripts/run-hyperframes.js render --output renders/lottie-proof.mp4
 ```
+
+For `.lottie`, sample at least two frames from the exported MP4. A successful
+load or a single initial snapshot does not prove deterministic seeking.
 
 ## Credits And References
 

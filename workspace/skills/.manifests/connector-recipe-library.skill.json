@@ -1,23 +1,8 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when documenting, using, or extending reusable connector recipes, integration patterns, setup instructions, troubleshooting notes, or service-specific connector playbooks.",
-  "triggers": [
-    "connector recipe",
-    "integration recipe",
-    "connector playbook",
-    "add recipe for connector",
-    "document connector setup",
-    "reusable integration pattern",
-    "connector troubleshooting",
-    "service setup recipe",
-    "connector library",
-    "integration cookbook",
-    "connected app recipe",
-    "connector runbook",
-    "setup guide for integration",
-    "connector examples"
-  ],
+  "description": "Deprecated compatibility entry for selecting connector implementation patterns. Use connector-builder and load its connector-recipes reference.",
+  "triggers": [],
   "categories": [
     "prometheus",
     "connectors",
@@ -28,6 +13,8 @@
     "workspace_write",
     "skills"
   ],
-  "lifecycle": "active",
-  "id": "connector-recipe-library"
+  "lifecycle": "deprecated",
+  "id": "connector-recipe-library",
+  "implicitInvocation": false,
+  "name": "connector-recipe-library"
 }

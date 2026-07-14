@@ -19,6 +19,8 @@ import { recordAgentRun } from '../../scheduler';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
 import { loadScheduleMemory, formatScheduleMemoryForPrompt, startRunLogEntry, completeScheduledRun, addLearnedContext, setNote, type ScheduleAgentMemory } from './schedule-memory';
 import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from './schedule-agent';
+import { archiveCompletedScheduledJob, deleteArchivedScheduledJob } from './schedule-archive';
+import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { appendSubagentChatMessage, getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import {
   createTask,
@@ -43,6 +45,7 @@ import { handleManagerConversationDetailed, triggerManagerReview } from '../team
 import { broadcastTeamEvent } from '../comms/broadcaster';
 import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
+import { setRuntimeActorContext } from '../runtime-actor.js';
 import {
   buildMissingSourceBlockMessage,
   buildObsoleteBrandBlockMessage,
@@ -81,6 +84,8 @@ export interface CronJob {
   priority: number;          // lower number = higher priority
   delivery: 'web';           // 'telegram' coming later — stub is ready
   lastRun: string | null;
+  /** Start timestamp of the most recent run; used for output freshness checks. */
+  lastRunStartedAt?: string | null;
   lastResult: string | null;
   lastDuration: number | null;
   consecutiveErrors?: number;
@@ -143,6 +148,28 @@ export interface RunJobNowOptions {
 // continuity before it reads any broader workspace context.
 function getScheduleNote(mem: ScheduleAgentMemory | null, key: string): string {
   return String(mem?.notes?.[key] || '').replace(/\s+/g, ' ').trim();
+}
+
+function verifyScheduledExpectedOutputs(job: CronJob): { configured: boolean; allPassed: boolean; paths: string[] } {
+  const expected = Array.isArray(job.expectedOutputs) ? job.expectedOutputs : [];
+  if (!expected.length) return { configured: false, allPassed: false, paths: [] };
+  const workspaceRoot = path.resolve(getConfig().getWorkspacePath());
+  const paths: string[] = [];
+  let allPassed = true;
+  for (const item of expected) {
+    const rel = String(item?.path || '').trim().replace(/\\/g, '/').replace(/^\/+/, '');
+    const abs = path.resolve(workspaceRoot, rel);
+    const inside = !path.relative(workspaceRoot, abs).startsWith('..') && !path.isAbsolute(path.relative(workspaceRoot, abs));
+    if (!rel || !inside || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+      allPassed = false;
+      continue;
+    }
+    const text = fs.readFileSync(abs, 'utf-8');
+    if (item.requiredText && !text.includes(item.requiredText)) allPassed = false;
+    if (item.absentText && text.includes(item.absentText)) allPassed = false;
+    paths.push(rel);
+  }
+  return { configured: true, allPassed: allPassed && paths.length === expected.length, paths };
 }
 
 function buildLastRunContext(job: CronJob, mem: ScheduleAgentMemory | null): string {
@@ -317,21 +344,7 @@ function getSubagentChatSessionId(agentId: string): string {
 }
 
 function loadAgentIdentityPrompt(agentWorkspace: string): string {
-  const candidates = [
-    path.join(agentWorkspace, 'system_prompt.md'),
-    path.join(agentWorkspace, 'AGENTS.md'),
-    path.join(agentWorkspace, 'HEARTBEAT.md'),
-  ];
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue;
-      const content = fs.readFileSync(candidate, 'utf-8').trim();
-      if (content) return content;
-    } catch {
-      // Keep falling back when a prompt file is unreadable.
-    }
-  }
-  return '';
+  return String(readAgentPromptFile(agentWorkspace, { migrateLegacy: true })?.content || '').trim();
 }
 
 function buildScheduleOwnerCallerContext(agentId: string, agent: any, mainWorkspace: string, artifactWorkspace: string, job: CronJob, taskId: string, runId: string): string {
@@ -913,7 +926,7 @@ export class CronScheduler {
       skillIds: normalizeScheduleSkillIds((partial as any).skillIds),
       context_refs: normalizeScheduleContextRefs((partial as any).context_refs || (partial as any).contextReferences),
       type: normalizedType,
-      schedule: partial.schedule || '*/30 * * * *',
+      schedule: normalizedType === 'one-shot' ? null : (partial.schedule || '*/30 * * * *'),
       tz: partial.tz,
       sessionTarget: partial.sessionTarget === 'main' ? 'main' : 'isolated',
       payloadKind: partial.payloadKind === 'systemEvent' ? 'systemEvent' : 'agentTurn',
@@ -930,6 +943,7 @@ export class CronScheduler {
       priority: typeof partial.priority === 'number' ? partial.priority : this.store.jobs.length,
       delivery: 'web',
       lastRun: null,
+      lastRunStartedAt: null,
       lastResult: null,
       lastDuration: null,
       consecutiveErrors: 0,
@@ -959,6 +973,7 @@ export class CronScheduler {
     const normalizedPartial: Partial<CronJob> = { ...partial };
     if (partial.type !== undefined) {
       normalizedPartial.type = partial.type === 'one-shot' ? 'one-shot' : 'recurring';
+      if (normalizedPartial.type === 'one-shot' && partial.schedule === undefined) normalizedPartial.schedule = null;
     }
     this.store.jobs[idx] = { ...this.store.jobs[idx], ...normalizedPartial };
     for (const [key, value] of Object.entries(normalizedPartial)) {
@@ -983,7 +998,8 @@ export class CronScheduler {
   deleteJob(id: string): boolean {
     const before = this.store.jobs.length;
     this.store.jobs = this.store.jobs.filter(j => j.id !== id);
-    if (this.store.jobs.length === before) return false;
+    const deletedArchive = deleteArchivedScheduledJob(id);
+    if (this.store.jobs.length === before && !deletedArchive) return false;
     const pendingCompaction = this.pendingRunHistoryCompactions.get(id);
     if (pendingCompaction) {
       clearTimeout(pendingCompaction);
@@ -1120,11 +1136,6 @@ export class CronScheduler {
 
     if (overdue.length === 0) return;
 
-    if (this.deps.getIsModelBusy?.()) {
-      console.log('[CronScheduler] Tick - foreground model is busy; deferring scheduled job start.');
-      return;
-    }
-
     // Fire ALL overdue jobs in parallel. Independent jobs must not block each other;
     // a job already executing (in runningJobIds) is skipped so it can't double-fire.
     const toRun = overdue.filter(j => !this.runningJobIds.has(j.id));
@@ -1156,6 +1167,7 @@ export class CronScheduler {
 
     // Mark as running
     job.status = 'running';
+    job.lastRunStartedAt = new Date(start).toISOString();
     this.saveStore();
     this.deps.broadcast({ type: 'tasks_update', jobs: this.store.jobs, config: this.store.heartbeat });
     this.deps.broadcast({ type: 'task_running', jobId: job.id, jobName: job.name });
@@ -1537,6 +1549,16 @@ export class CronScheduler {
                 }
               }
 
+              setRuntimeActorContext(chatSessionId, {
+                kind: 'agent',
+                surface: 'scheduled_run',
+                agentId: teamSubagentId,
+                displayName: String((agentDef as any)?.identity?.displayName || agentDef?.name || teamSubagentId),
+                identityRoot: agentWorkspace,
+                memoryRoot: agentWorkspace,
+                executionRoot: getConfig().getWorkspacePath(),
+                allowedWorkPaths: [getConfig().getWorkspacePath(), agentWorkspace],
+              });
               const ownerResult = await this.deps.handleChat(
                 effectivePrompt,
                 chatSessionId,
@@ -1783,7 +1805,8 @@ export class CronScheduler {
         const isVagueResult =
           resultText.trim().length < 300 ||
           /^(done\.?|complete\.?|ok\.?|finished\.?|task complete\.?|step complete\.?|all steps complete\.?|all done\.?)$/i.test(resultText.trim());
-        if (!abortSignal.aborted && hadToolCalls && isVagueResult) {
+        const hasExpectedArtifacts = Array.isArray(job.expectedOutputs) && job.expectedOutputs.length > 0;
+        if (!abortSignal.aborted && hadToolCalls && isVagueResult && !hasExpectedArtifacts) {
           console.log(`[CronScheduler] Job "${job.name}" returned vague response (${resultText.length} chars) — running synthesis round.`);
           try {
             const synthResult = await this.deps.handleChat(
@@ -1909,6 +1932,14 @@ export class CronScheduler {
           } catch {}
         }
       }
+    }
+
+    const expectedOutputVerification = verifyScheduledExpectedOutputs(job);
+    if (
+      expectedOutputVerification.allPassed
+      && (resultText.length > 1200 || /^(done\.?|complete\.?|finished\.?|task complete\.?)$/i.test(resultText.trim()))
+    ) {
+      resultText = `Scheduled job completed. Verified expected output${expectedOutputVerification.paths.length === 1 ? '' : 's'}: ${expectedOutputVerification.paths.join(', ')}`;
     }
 
     // Determine if this is a silent OK or real output
@@ -2093,6 +2124,10 @@ export class CronScheduler {
       duration,
       result_excerpt: resultText.slice(0, 500),
     });
+
+    if (job.type === 'one-shot' || job.deleteAfterRun) {
+      archiveCompletedScheduledJob(job);
+    }
 
     this.saveStore();
     if (isolatedRunSession) {

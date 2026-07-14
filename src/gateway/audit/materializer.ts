@@ -17,7 +17,81 @@ type MirrorStats = {
   copied: number;
   skipped: number;
   errors: number;
+  redactions: number;
 };
+
+const REDACTION_SCHEMA_VERSION = 1;
+const REDACTED = '[REDACTED]';
+const SENSITIVE_KEYS = new Set([
+  'password', 'passwd', 'secret', 'apikey', 'apitoken', 'authtoken', 'accesstoken', 'refreshtoken',
+  'idtoken', 'clientsecret', 'privatekey', 'bottoken', 'gatewaytoken', 'desktoptoken', 'webhooktoken',
+  'authorization', 'proxyauthorization', 'cookie', 'cookies', 'setcookie', 'credential', 'credentials',
+]);
+
+function scrubAuditText(value: string): { value: string; redactions: number } {
+  let redactions = 0;
+  let output = String(value || '');
+  const replace = (pattern: RegExp, replacement: string): void => {
+    output = output.replace(pattern, (...args: any[]) => { redactions += 1; return typeof replacement === 'string' ? replacement : args[0]; });
+  };
+  replace(/\b(Bearer)\s+[^\s"'<>]+/gi, '$1 [REDACTED]');
+  replace(/\b(password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|bot[_-]?token|webhook[_-]?token|cookie)\s*[:=]\s*([^\s&,;"']+)/gi, '$1=[REDACTED]');
+  replace(/([?&](?:password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|cookie)=)[^&#\s]*/gi, '$1[REDACTED]');
+  return { value: output, redactions };
+}
+
+function redactAuditValue(value: any, parentKey = ''): { value: any; redactions: number } {
+  if (typeof value === 'string') return scrubAuditText(value);
+  if (Array.isArray(value)) {
+    let redactions = 0;
+    const out = value.map((item) => { const next = redactAuditValue(item, parentKey); redactions += next.redactions; return next.value; });
+    return { value: out, redactions };
+  }
+  if (!value || typeof value !== 'object') return { value, redactions: 0 };
+  let redactions = 0;
+  const out: Record<string, any> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (SENSITIVE_KEYS.has(normalized)) { out[key] = REDACTED; redactions += 1; continue; }
+    if (normalized === 'env' && raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const envOut: Record<string, any> = {};
+      for (const [envKey, envValue] of Object.entries(raw as any)) {
+        if (/(?:key|token|secret|password|credential|auth|cookie)/i.test(envKey)) { envOut[envKey] = REDACTED; redactions += 1; }
+        else { const next = redactAuditValue(envValue, envKey); envOut[envKey] = next.value; redactions += next.redactions; }
+      }
+      out[key] = envOut;
+      continue;
+    }
+    const next = redactAuditValue(raw, key);
+    out[key] = next.value;
+    redactions += next.redactions;
+  }
+  return { value: out, redactions };
+}
+
+function materializeRedactedContent(filePath: string): { content: string; redactions: number; parseStatus: string } {
+  const raw = fs.readFileSync(filePath, 'utf8');
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.json') {
+    const parsed = JSON.parse(raw);
+    const clean = redactAuditValue(parsed);
+    return { content: `${JSON.stringify(clean.value, null, 2)}\n`, redactions: clean.redactions, parseStatus: 'json' };
+  }
+  if (ext === '.jsonl' || ext === '.ndjson') {
+    let redactions = 0;
+    let malformed = false;
+    const lines = raw.split(/\r?\n/).filter((line) => line.length).map((line) => {
+      try {
+        const clean = redactAuditValue(JSON.parse(line)); redactions += clean.redactions; return JSON.stringify(clean.value);
+      } catch {
+        malformed = true; const clean = scrubAuditText(line); redactions += clean.redactions; return clean.value;
+      }
+    });
+    return { content: `${lines.join('\n')}${lines.length ? '\n' : ''}`, redactions, parseStatus: malformed ? 'jsonl_partial' : 'jsonl' };
+  }
+  const clean = scrubAuditText(raw);
+  return { content: clean.value, redactions: clean.redactions, parseStatus: 'text' };
+}
 
 type SessionPreview = {
   id: string;
@@ -127,6 +201,7 @@ function collectMirrorFiles(configDir: string, workspacePath: string): MirrorFil
   pushDir(path.join(configDir, 'projects'), 'projects/state', 'projects');
   pushDir(path.join(configDir, 'tasks'), 'tasks/state', 'tasks');
   pushDir(path.join(workspacePath, 'proposals'), 'proposals/state', 'proposals');
+  pushDir(path.join(workspacePath, 'diagnostics', 'incidents'), 'diagnostics/incidents', 'diagnostics');
 
   pushFile(path.join(configDir, 'cron', 'jobs.json'), 'cron/jobs/jobs.json', 'cron');
   pushDir(path.join(configDir, 'cron', 'runs'), 'cron/runs', 'cron');
@@ -170,27 +245,36 @@ function collectMirrorFiles(configDir: string, workspacePath: string): MirrorFil
   return mirrors;
 }
 
-function readManifest(manifestPath: string): Record<string, { mtimeMs: number; size: number }> {
-  return readJson<Record<string, { mtimeMs: number; size: number }>>(manifestPath) || {};
+function readManifest(manifestPath: string): any {
+  const parsed = readJson<any>(manifestPath);
+  return parsed?.entries ? parsed : { entries: {} };
 }
 
-function copyMirrors(auditRoot: string, mirrors: MirrorFile[], manifestPath: string): MirrorStats {
+function copyMirrors(auditRoot: string, workspacePath: string, mirrors: MirrorFile[], manifestPath: string): MirrorStats {
   const prev = readManifest(manifestPath);
-  const next: Record<string, { mtimeMs: number; size: number }> = {};
-  const stats: MirrorStats = { copied: 0, skipped: 0, errors: 0 };
+  const next: Record<string, any> = {};
+  const stats: MirrorStats = { copied: 0, skipped: 0, errors: 0, redactions: 0 };
 
   for (const item of mirrors) {
     try {
       const srcStat = fs.statSync(item.srcAbs);
       if (!srcStat.isFile()) continue;
-      const key = item.srcAbs;
-      next[key] = { mtimeMs: srcStat.mtimeMs, size: srcStat.size };
+      const key = item.destRel;
+      const previous = prev.entries?.[key];
+      next[key] = { ...previous,
+        domain: item.domain,
+        canonicalStore: item.srcAbs.startsWith(workspacePath) ? 'workspace' : 'config',
+        canonicalRel: item.srcAbs.startsWith(workspacePath) ? safeRel(item.srcAbs, workspacePath) : path.basename(item.srcAbs),
+        sourceModifiedAt: new Date(srcStat.mtimeMs).toISOString(), sourceSize: srcStat.size,
+        materializedAt: previous?.materializedAt || null, redactionSchemaVersion: REDACTION_SCHEMA_VERSION,
+      };
 
-      const prevEntry = prev[key];
+      const prevEntry = previous;
       const unchanged =
         prevEntry &&
-        prevEntry.mtimeMs === srcStat.mtimeMs &&
-        prevEntry.size === srcStat.size;
+        prevEntry.sourceModifiedAt === next[key].sourceModifiedAt &&
+        prevEntry.sourceSize === srcStat.size &&
+        prevEntry.redactionSchemaVersion === REDACTION_SCHEMA_VERSION;
 
       const destAbs = path.join(auditRoot, item.destRel);
       if (unchanged && fs.existsSync(destAbs)) {
@@ -198,15 +282,24 @@ function copyMirrors(auditRoot: string, mirrors: MirrorFile[], manifestPath: str
         continue;
       }
 
+      const materialized = materializeRedactedContent(item.srcAbs);
       ensureDir(path.dirname(destAbs));
-      fs.copyFileSync(item.srcAbs, destAbs);
+      fs.writeFileSync(destAbs, materialized.content, 'utf8');
+      next[key] = { ...next[key], materializedAt: new Date().toISOString(), outputSize: Buffer.byteLength(materialized.content), redactions: materialized.redactions, parseStatus: materialized.parseStatus, artifactRole: 'redacted_snapshot', sourceOfTruth: false };
+      stats.redactions += materialized.redactions;
       stats.copied += 1;
     } catch {
       stats.errors += 1;
     }
   }
 
-  writeJson(manifestPath, next);
+  for (const oldRel of Object.keys(prev.entries || {})) {
+    if (next[oldRel]) continue;
+    const target = path.resolve(auditRoot, oldRel);
+    const root = path.resolve(auditRoot) + path.sep;
+    if (target.startsWith(root)) { try { fs.rmSync(target, { force: true }); } catch {} }
+  }
+  writeJson(manifestPath, { schemaVersion: 2, redactionSchemaVersion: REDACTION_SCHEMA_VERSION, generatedAt: new Date().toISOString(), entries: next });
   return stats;
 }
 
@@ -220,6 +313,7 @@ function buildDirectoryScaffold(auditRoot: string): void {
     'tasks/state',
     'background-tasks',
     'proposals/state',
+    'diagnostics/incidents',
     'cron/jobs',
     'cron/runs',
     'schedules/state',
@@ -240,10 +334,13 @@ function buildAuditReadme(auditRoot: string): void {
   const lines = [
     '# Audit Directory',
     '',
-    'This directory is a one-way materialized mirror for observability.',
+    'This directory is a one-way redacted materialized mirror for observability.',
     '',
     '- Canonical runtime stores remain in `.prometheus/` and `workspace/`.',
     '- Files under `workspace/audit/` are snapshots for debugging and review.',
+    '- Snapshots may lag live state; `_index/global.json` records freshness and provenance.',
+    '- Canonical runtime stores and live tools remain the source of truth.',
+    '- Sensitive structural fields and labeled secret values are redacted during materialization.',
     '- Team/subagent workspaces are intentionally not mirrored here.',
     '',
     '## Navigation',
@@ -253,6 +350,7 @@ function buildAuditReadme(auditRoot: string): void {
     '- `projects/` project state snapshots',
     '- `tasks/` task/background-task state snapshots',
     '- `proposals/` proposal timeline/state snapshots',
+    '- `diagnostics/` sanitized structured incident packets',
     '- `cron/` cron scheduler config and run history',
     '- `schedules/` schedule memory and per-run logs',
     '- `teams/` managed-team state and run metadata (not workspace files)',
@@ -377,6 +475,16 @@ function writeIndexes(auditRoot: string, configDir: string, workspacePath: strin
 
   const globalIndex = {
     generatedAt: nowIso,
+    artifactRole: 'redacted_snapshot',
+    sourceOfTruth: false,
+    provenance: 'materialized_mirror',
+    freshness: {
+      status: mirrorStats.errors ? 'error' : 'fresh',
+      lastAttemptAt: nowIso,
+      lastSuccessfulRunAt: mirrorStats.errors ? null : nowIso,
+      expectedIntervalMs: _intervalMs,
+      redactionSchemaVersion: REDACTION_SCHEMA_VERSION,
+    },
     materializer: {
       intervalMs: _intervalMs,
       lastRunAt: _lastRunAt,
@@ -384,6 +492,7 @@ function writeIndexes(auditRoot: string, configDir: string, workspacePath: strin
       copied: mirrorStats.copied,
       skipped: mirrorStats.skipped,
       errors: mirrorStats.errors,
+      redactions: mirrorStats.redactions,
     },
     counts: {
       sessionsPreviewed: sessionPreview.length,
@@ -487,14 +596,14 @@ function writeIndexes(auditRoot: string, configDir: string, workspacePath: strin
   writeText(path.join(auditRoot, 'teams', 'INDEX.md'), `${teamsMd.join('\n')}\n`);
 }
 
-function runMaterialization(configDir: string, workspacePath: string): void {
+export function materializeAuditSnapshot(configDir: string, workspacePath: string): void {
   const auditRoot = path.join(workspacePath, 'audit');
   buildDirectoryScaffold(auditRoot);
   buildAuditReadme(auditRoot);
 
   const mirrors = collectMirrorFiles(configDir, workspacePath);
   const manifestPath = path.join(auditRoot, '_index', 'materializer-manifest.json');
-  const mirrorStats = copyMirrors(auditRoot, mirrors, manifestPath);
+  const mirrorStats = copyMirrors(auditRoot, workspacePath, mirrors, manifestPath);
   _lastRunAt = Date.now();
   writeIndexes(auditRoot, configDir, workspacePath, mirrors, mirrorStats);
 }
@@ -508,7 +617,7 @@ export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {
     if (_running) return;
     _running = true;
     try {
-      runMaterialization(opts.configDir, opts.workspacePath);
+      materializeAuditSnapshot(opts.configDir, opts.workspacePath);
     } catch (err: any) {
       console.warn('[AuditMaterializer] Sync failed:', String(err?.message || err));
     } finally {

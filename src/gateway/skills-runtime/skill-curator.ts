@@ -1,11 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import type { SkillChangeLedgerEntry, SkillsManager } from './skills-manager';
+import { rankSkillMatches, type SkillChangeLedgerEntry, type SkillsManager } from './skills-manager';
+import { MAX_SKILL_TRIGGERS, validateSkillTriggers } from './skill-package';
 import { scanSkillText, type SkillSafetyScan } from './skill-safety';
 
 export type SkillCuratorMode = 'dry-run' | 'pending' | 'auto-safe';
-export type SkillCuratorSuggestionStatus = 'pending' | 'applied' | 'rejected' | 'quarantined';
+export type SkillCuratorSuggestionStatus = 'pending' | 'applied' | 'rejected' | 'quarantined' | 'expired' | 'suppressed';
 export type SkillCuratorLessonType =
   | 'recovery'
   | 'style_pattern'
@@ -41,6 +42,16 @@ export interface SkillCuratorSuggestion {
   scan: SkillSafetyScan;
   appliedAt?: string;
   rejectedAt?: string;
+  semanticKey?: string;
+  expiresAt?: string;
+  suppressedUntil?: string;
+  duplicateOf?: string;
+  triggerEvaluation?: {
+    passed: boolean;
+    positive: Array<{ prompt: string; passed: boolean; topSkill?: string; confidence?: string }>;
+    negative: Array<{ prompt: string; passed: boolean; topSkill?: string; confidence?: string }>;
+    errors: string[];
+  };
 }
 
 export interface SkillCuratorRunResult {
@@ -92,6 +103,7 @@ type CandidateRow = {
   id?: string;
   timestamp?: string;
   date?: string;
+  sessionId?: string;
   type?: string;
   confidence?: string;
   risk?: string;
@@ -106,6 +118,12 @@ type CandidateRow = {
   touchedPaths?: string[];
   outcomeHints?: string[];
   evidence?: string[];
+  corroboratingSessionIds?: string[];
+  signalProvenance?: string[];
+  submittedBy?: string;
+  triggerPositivePrompts?: string[];
+  triggerNegativePrompts?: string[];
+  proposedTrigger?: string;
   businessContext?: unknown;
 };
 
@@ -398,27 +416,39 @@ function slugify(raw: unknown, fallback = 'lesson'): string {
 }
 
 function hasFailureSignal(row: CandidateRow): boolean {
-  const finalText = String(row.finalResponseExcerpt || '');
   return !!(row.errors && row.errors.length)
     || row.type === 'update_existing_skill'
-    || (Array.isArray(row.outcomeHints) && row.outcomeHints.some((hint) => /error|failed|blocked/i.test(String(hint))))
-    || /\b(failed|error|blocked|unable|could not|timeout|exception|workaround|but .* exists)\b/i.test(finalText);
+    || (Array.isArray(row.outcomeHints) && row.outcomeHints.some((hint) => /error|failed|blocked/i.test(String(hint))));
 }
 
 function hasPositiveReusableSignal(row: CandidateRow): boolean {
-  const text = `${row.requestExcerpt || ''}\n${row.finalResponseExcerpt || ''}`;
+  const text = String(row.requestExcerpt || '');
   return (Array.isArray(row.userCorrectionHints) && row.userCorrectionHints.includes('explicit_reusable_instruction'))
-    || /\b(next time|from now on|always|prefer|remember to|keep this style|that was (really )?(good|great|perfect|fire)|love this)\b/i.test(text);
+    || /\b(next time|from now on|always|prefer|remember to|keep this style)\b/i.test(text);
+}
+
+function hasValidatedRepeatedSignal(row: CandidateRow): boolean {
+  const provenance = new Set((row.signalProvenance || []).map(String));
+  return provenance.has('validation')
+    && provenance.has('repeated_session')
+    && (row.corroboratingSessionIds || []).length > 0;
+}
+
+function hasRepeatedSessionEvidence(row: CandidateRow): boolean {
+  return new Set([
+    ...(row.corroboratingSessionIds || []).map(String),
+    ...[row.sessionId].filter(Boolean).map(String),
+  ]).size >= 2;
 }
 
 function isCreativeVideoSignal(row: CandidateRow): boolean {
-  const text = `${row.requestExcerpt || ''}\n${row.finalResponseExcerpt || ''}\n${(row.toolSequence || []).join(' ')}`;
+  const text = `${row.requestExcerpt || ''}\n${(row.toolSequence || []).join(' ')}`;
   return /\b(hyperframes|html motion|creative|promo|video|mp4|scene|animation|3d|canvas|export)\b/i.test(text);
 }
 
 function isExportArtifactRecovery(row: CandidateRow): boolean {
-  const finalText = String(row.finalResponseExcerpt || '');
-  return /failed to fetch/i.test(finalText) && /\b(mp4|file .* exists|does exist|nonzero|snapshot|quality report)\b/i.test(finalText);
+  const errorText = (row.errors || []).map((item) => String(item.result || '')).join('\n');
+  return /failed to fetch/i.test(errorText) && /\b(mp4|file .* exists|does exist|nonzero|snapshot|quality report)\b/i.test(errorText);
 }
 
 function isPatchRecovery(row: CandidateRow): boolean {
@@ -436,7 +466,6 @@ function errorSignature(row: CandidateRow): string {
   const errors = Array.isArray(row.errors) ? row.errors : [];
   const preferred = errors.find((err) => /find_replace/i.test(String(err.tool || '')) || /\b(text not found|patch context|context drift)\b/i.test(String(err.result || '')));
   const first = preferred || errors.find((err) => err && (err.tool || err.result));
-  const finalText = String(row.finalResponseExcerpt || '');
   if (isExportArtifactRecovery(row)) {
     return 'Creative export reported `Failed to fetch`, but the output artifact appeared to exist.';
   }
@@ -445,12 +474,10 @@ function errorSignature(row: CandidateRow): string {
     const result = cleanSnippet(first.result || '', 180);
     return result ? `${tool} failed: ${result}` : `${tool} failed during the workflow.`;
   }
-  const m = finalText.match(/(?:failed|error|blocked|unable|could not)[^.!\n]{0,180}/i);
-  return m ? cleanSnippet(m[0], 220) : 'The workflow hit an error, blocker, or rework signal.';
+  return 'The workflow hit an observed tool error, blocker, or rework signal.';
 }
 
 function recoveryBehavior(row: CandidateRow): string {
-  const finalText = String(row.finalResponseExcerpt || '');
   if (isExportArtifactRecovery(row)) {
     return 'Before treating the export as failed, verify the artifact path, file size, timeline snapshots, and quality report; if those pass, report it as an export transport/status issue.';
   }
@@ -461,16 +488,8 @@ function recoveryBehavior(row: CandidateRow): string {
 }
 
 function positiveStyleBehavior(row: CandidateRow): string {
-  const finalText = String(row.finalResponseExcerpt || '');
-  const bullets = finalText
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^\s*[-*]\s*/, '').trim())
-    .filter((line) => line.length > 8 && line.length < 180)
-    .filter((line) => /\b(palette|typing|3d|canvas|transition|cta|scene|animation|mockup|grid|nodes|style|effect)\b/i.test(line))
-    .slice(0, 8);
-  if (bullets.length) return bullets.join('; ');
-  return cleanSnippet(row.suggestedAction || row.reason, 360)
-    || 'Capture the reusable style/component pattern the user explicitly liked.';
+  return cleanSnippet(row.requestExcerpt || row.suggestedAction || row.reason, 360)
+    || 'Capture only the reusable style constraint the user explicitly requested.';
 }
 
 function observedEvidence(row: CandidateRow): string[] {
@@ -483,24 +502,14 @@ function observedEvidence(row: CandidateRow): string[] {
 
 function buildLessonContent(params: {
   title: string;
-  sourceId: string;
-  captured: string;
-  confidence: string;
-  lessonType: SkillCuratorLessonType;
   futureTrigger: string;
   learnedBehavior: string;
   whyUseful: string;
   recoverySteps?: string[];
   avoid?: string[];
-  evidence: string[];
 }): string {
   return [
     `# ${params.title}`,
-    '',
-    `Source candidate: ${params.sourceId || '(unknown)'}`,
-    `Captured: ${params.captured || new Date().toISOString()}`,
-    `Lesson type: ${params.lessonType}`,
-    `Confidence: ${params.confidence || 'medium'}`,
     '',
     '## Future Trigger',
     params.futureTrigger,
@@ -521,9 +530,6 @@ function buildLessonContent(params: {
       ...params.avoid.map((step) => `- ${step}`),
       '',
     ] : []),
-    '## Evidence',
-    ...params.evidence.map((item) => `- ${item}`),
-    '',
   ].join('\n');
 }
 
@@ -531,7 +537,6 @@ function buildResourceSuggestion(row: CandidateRow, skillsManager: SkillsManager
   const sourceSkillId = String(row.skillId || '').trim();
   if (!sourceSkillId) return null;
   const skillId = chooseLessonSkill(row, skillsManager, sourceSkillId);
-  const dateKey = safeDateKey(row.timestamp);
   let lessonType: SkillCuratorLessonType | null = null;
   let title = '';
   let pathName = '';
@@ -546,6 +551,7 @@ function buildResourceSuggestion(row: CandidateRow, skillsManager: SkillsManager
   let autoDecisionReason = '';
 
   if (hasFailureSignal(row)) {
+    if (!hasPositiveReusableSignal(row) && !hasRepeatedSessionEvidence(row)) return null;
     const behavior = recoveryBehavior(row);
     if (!behavior) return null;
     lessonType = 'recovery';
@@ -570,31 +576,31 @@ function buildResourceSuggestion(row: CandidateRow, skillsManager: SkillsManager
     avoid = signature.includes('Failed to fetch')
       ? ['Do not discard or rerender a valid export solely because the API response said `Failed to fetch`.']
       : ['Do not save raw tool logs as the lesson; save the recovery behavior that should change the next run.'];
-    pathName = `references/recovery/${slugify(title)}-${dateKey}.md`;
+    pathName = `references/recovery/${slugify(title)}.md`;
     qualityScore = 86;
-    autoApplyEligible = risk === 'low';
-    autoDecisionReason = 'Low-risk recovery note with an explicit failure/workaround signal.';
+    autoApplyEligible = false;
+    autoDecisionReason = 'Behavioral resource changes require explicit review during the curator freeze.';
   } else if (hasPositiveReusableSignal(row) && isCreativeVideoSignal(row)) {
     lessonType = 'style_pattern';
     title = `Creative style pattern: ${skillId}`;
     futureTrigger = 'Use this when the user asks for a similar creative/video output or explicitly says to keep this style.';
     learnedBehavior = positiveStyleBehavior(row);
     whyUseful = 'Preserves a user-approved creative direction as reusable style guidance instead of saving a raw transcript.';
-    pathName = `references/styles/${slugify(skillId)}-${dateKey}.md`;
+    pathName = `references/styles/${slugify(skillId)}.md`;
     qualityScore = 72;
-    autoApplyEligible = risk === 'low';
-    autoDecisionReason = 'Low-risk style resource with positive or explicit reusable feedback.';
-  } else if (hasPositiveReusableSignal(row)) {
+    autoApplyEligible = false;
+    autoDecisionReason = 'Style resources require explicit review and user-origin evidence.';
+  } else if (hasPositiveReusableSignal(row) || hasValidatedRepeatedSignal(row)) {
     lessonType = 'workflow_recipe';
     title = `Reusable workflow recipe: ${skillId}`;
     futureTrigger = 'Use this when the user asks for this same operating pattern again or explicitly asks Prometheus to remember the workflow.';
     learnedBehavior = cleanSnippet(row.suggestedAction || row.reason, 360)
       || 'Repeat the user-approved operating pattern using the specific constraints that made the prior run successful.';
     whyUseful = 'Captures a user-approved behavior change without preserving noisy tool-by-tool transcript details.';
-    pathName = `references/workflows/${slugify(skillId)}-${dateKey}.md`;
+    pathName = `references/workflows/${slugify(skillId)}.md`;
     qualityScore = 68;
-    autoApplyEligible = risk === 'low';
-    autoDecisionReason = 'Low-risk workflow resource with explicit reusable/positive signal.';
+    autoApplyEligible = false;
+    autoDecisionReason = 'Workflow resources require explicit review.';
   } else {
     return null;
   }
@@ -602,21 +608,16 @@ function buildResourceSuggestion(row: CandidateRow, skillsManager: SkillsManager
   const evidence = observedEvidence(row);
   const content = buildLessonContent({
     title,
-    sourceId: String(row.id || ''),
-    captured: String(row.timestamp || new Date().toISOString()),
-    confidence: String(row.confidence || 'medium'),
-    lessonType,
     futureTrigger,
     learnedBehavior,
     whyUseful,
     recoverySteps,
     avoid,
-    evidence,
   });
   const scan = scanSkillText(content, pathName);
   const now = new Date().toISOString();
   return {
-    id: suggestionId({ skillId, lessonType, pathName, futureTrigger, learnedBehavior }),
+    id: suggestionId({ skillId, lessonType, futureTrigger, learnedBehavior }),
     createdAt: now,
     updatedAt: now,
     status: scan.verdict === 'critical' ? 'quarantined' : 'pending',
@@ -627,7 +628,7 @@ function buildResourceSuggestion(row: CandidateRow, skillsManager: SkillsManager
     futureTrigger,
     learnedBehavior,
     whyUseful,
-    approvePreview: `Approve will add ${pathName} to ${skillId}.`,
+    approvePreview: `Approve will merge this lesson into canonical resource ${pathName} in ${skillId}.`,
     qualityScore,
     autoApplyEligible,
     autoDecisionReason,
@@ -646,50 +647,149 @@ function buildTriggerSuggestion(row: CandidateRow, skillsManager: SkillsManager)
   if (!skillId) return null;
   const skill = skillsManager.get(skillId);
   if (!skill) return null;
-  const phrase = String(row.requestExcerpt || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]+/g, ' ')
-    .split(/\s+/)
-    .filter((word) => word.length >= 5)
-    .slice(0, 4)
-    .join(' ');
+  const phrase = String(row.proposedTrigger || '').toLowerCase().replace(/\s+/g, ' ').trim();
   if (!phrase) return null;
+  const now = new Date().toISOString();
+  const positivePrompts = (row.triggerPositivePrompts || []).map(String).filter(Boolean).slice(0, 12);
+  const negativePrompts = (row.triggerNegativePrompts || []).map(String).filter(Boolean).slice(0, 12);
+  const triggerValidation = validateSkillTriggers([phrase]);
+  const errors: string[] = [];
+  if (triggerValidation.rejected.length || triggerValidation.triggers.length !== 1) errors.push('Proposed trigger is generic, too short, or invalid.');
+  if (!positivePrompts.length || !negativePrompts.length) errors.push('Positive and negative prompt sets are required.');
+  if (skill.implicitInvocation === false) errors.push('Target skill has implicitInvocation=false; trigger activation would have no effect.');
+  if (skill.triggers.length >= MAX_SKILL_TRIGGERS) errors.push(`Target skill already has the maximum ${MAX_SKILL_TRIGGERS} active triggers; replace a weaker trigger instead of appending.`);
+
   const triggers = Array.from(new Set([...(skill.triggers || []), phrase]));
+  const candidateSkill = { ...skill, triggers };
+  const evaluationSkills = skillsManager.getAll().map((item) => item.id === skill.id ? candidateSkill : item);
+  const positive = positivePrompts.map((prompt) => {
+    const top = rankSkillMatches(evaluationSkills, prompt, { limit: 1 })[0];
+    return { prompt, passed: top?.id === skillId && top.confidence === 'high', topSkill: top?.id, confidence: top?.confidence };
+  });
+  const negative = negativePrompts.map((prompt) => {
+    const matches = rankSkillMatches(evaluationSkills, prompt, { limit: 6 });
+    const target = matches.find((match) => match.id === skillId);
+    return { prompt, passed: !target || target.confidence === 'low', topSkill: matches[0]?.id, confidence: target?.confidence };
+  });
+  if (positive.some((item) => !item.passed)) errors.push('One or more positive prompts did not rank the target skill first with high confidence.');
+  if (negative.some((item) => !item.passed)) errors.push('One or more negative prompts still routed or suggested the target skill.');
+  const passed = errors.length === 0;
   const manifest = { ...skill.manifest, triggers };
   const scan = scanSkillText(JSON.stringify(manifest, null, 2), 'skill.json overlay');
-  const now = new Date().toISOString();
   return {
     id: suggestionId({ skillId, type: 'add_trigger', phrase }),
     createdAt: now,
     updatedAt: now,
-    status: scan.verdict === 'critical' ? 'quarantined' : 'pending',
+    status: scan.verdict === 'critical' ? 'quarantined' : passed ? 'pending' : 'rejected',
     skillId,
     title: `Add trigger to ${skillId}`,
-    reason: 'Brain observed skill discovery friction after skills were listed without a matching skill read.',
+    reason: passed ? 'Trigger passed target-skill ranking and negative collision tests.' : `Trigger activation rejected: ${errors.join(' ')}`,
     lessonType: 'trigger_patch',
     futureTrigger: `When a user asks for work matching "${phrase}" and no skill is selected.`,
     learnedBehavior: `Add "${phrase}" as a trigger so Prometheus routes to ${skillId} earlier.`,
     whyUseful: 'Improves skill discovery without changing skill instructions or workflow behavior.',
     approvePreview: `Approve will update ${skillId}'s trigger metadata.`,
-    qualityScore: 62,
-    autoApplyEligible: true,
-    autoDecisionReason: 'Low-risk manifest trigger enrichment.',
+    qualityScore: passed ? 82 : 20,
+    autoApplyEligible: false,
+    autoDecisionReason: passed
+      ? 'Trigger passed deterministic positive/negative evaluations but still requires explicit review.'
+      : 'Rejected and suppressed because trigger evaluation failed.',
     evidence: Array.isArray(row.evidence) && row.evidence.length ? row.evidence.map(String) : [],
     risk: 'low',
     change: { kind: 'manifest_overlay', manifest },
     scan,
+    rejectedAt: passed ? undefined : now,
+    suppressedUntil: passed ? undefined : new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+    triggerEvaluation: { passed, positive, negative, errors },
   };
 }
 
 function mergeSuggestions(existing: SkillCuratorSuggestion[], incoming: SkillCuratorSuggestion[]): SkillCuratorSuggestion[] {
-  const byId = new Map<string, SkillCuratorSuggestion>();
-  for (const item of existing) byId.set(item.id, item);
-  for (const item of incoming) {
-    const old = byId.get(item.id);
-    if (old && old.status !== 'pending' && old.status !== 'quarantined') continue;
-    byId.set(item.id, old ? { ...old, ...item, createdAt: old.createdAt, status: old.status } : item);
+  const now = Date.now();
+  const suppressionMs = 90 * 24 * 60 * 60 * 1000;
+  const expiryMs = 45 * 24 * 60 * 60 * 1000;
+  const semanticKeyFor = (item: SkillCuratorSuggestion): string => item.semanticKey || normalizeSemanticText([
+    item.skillId,
+    item.lessonType,
+    item.futureTrigger,
+    item.learnedBehavior,
+    item.change.kind,
+    item.change.path,
+  ].join('|'));
+  const enrich = (item: SkillCuratorSuggestion): SkillCuratorSuggestion => {
+    const created = Date.parse(String(item.createdAt || ''));
+    const semanticKey = semanticKeyFor(item);
+    const expiresAt = item.expiresAt || new Date((Number.isFinite(created) ? created : now) + expiryMs).toISOString();
+    let status = item.status;
+    if ((status === 'pending' || status === 'quarantined') && Date.parse(expiresAt) <= now) status = 'expired';
+    return {
+      ...item,
+      status,
+      semanticKey,
+      expiresAt,
+      suppressedUntil: item.status === 'rejected' && !item.suppressedUntil
+        ? new Date((Date.parse(String(item.rejectedAt || item.updatedAt || '')) || now) + suppressionMs).toISOString()
+        : item.suppressedUntil,
+    };
+  };
+  const priority: Record<SkillCuratorSuggestionStatus, number> = {
+    applied: 6,
+    rejected: 5,
+    pending: 4,
+    quarantined: 3,
+    suppressed: 2,
+    expired: 1,
+  };
+  const bySemantic = new Map<string, SkillCuratorSuggestion>();
+  const duplicates: SkillCuratorSuggestion[] = [];
+  for (const raw of existing.map(enrich)) {
+    const key = raw.semanticKey || semanticKeyFor(raw);
+    const old = bySemantic.get(key);
+    if (!old) {
+      bySemantic.set(key, raw);
+      continue;
+    }
+    const keep = priority[raw.status] > priority[old.status]
+      || (priority[raw.status] === priority[old.status] && raw.updatedAt > old.updatedAt)
+      ? raw
+      : old;
+    const suppress = keep === raw ? old : raw;
+    bySemantic.set(key, keep);
+    duplicates.push({
+      ...suppress,
+      status: 'suppressed',
+      duplicateOf: keep.id,
+      suppressedUntil: new Date(now + suppressionMs).toISOString(),
+      autoDecisionReason: `Suppressed semantic duplicate of ${keep.id}.`,
+    });
   }
-  return Array.from(byId.values()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+  for (const raw of incoming.map(enrich)) {
+    const key = raw.semanticKey || semanticKeyFor(raw);
+    const old = bySemantic.get(key);
+    if (!old) {
+      bySemantic.set(key, raw);
+      continue;
+    }
+    const suppressionActive = (old.status === 'rejected' || old.status === 'suppressed')
+      && Date.parse(String(old.suppressedUntil || '')) > now;
+    if (old.status === 'applied' || suppressionActive) continue;
+    if (old.status === 'expired' || old.status === 'suppressed' || old.status === 'rejected') {
+      bySemantic.set(key, { ...raw, id: old.id, createdAt: raw.createdAt, semanticKey: key });
+      continue;
+    }
+    bySemantic.set(key, {
+      ...old,
+      ...raw,
+      id: old.id,
+      createdAt: old.createdAt,
+      status: old.status,
+      semanticKey: key,
+      evidence: Array.from(new Set([...(old.evidence || []), ...(raw.evidence || [])])),
+    });
+  }
+  return [...bySemantic.values(), ...duplicates]
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 function dedupeIncomingSuggestions(incoming: SkillCuratorSuggestion[]): SkillCuratorSuggestion[] {
@@ -716,6 +816,133 @@ function dedupeIncomingSuggestions(incoming: SkillCuratorSuggestion[]): SkillCur
 
 export function listSkillCuratorSuggestions(workspacePath: string): SkillCuratorSuggestion[] {
   return readJsonArray<SkillCuratorSuggestion>(suggestionsPath(workspacePath));
+}
+
+export function getSkillCuratorStatus(workspacePath: string, options: {
+  limit?: number; cursor?: number; statusFilter?: string; skillId?: string; includeContent?: boolean;
+} = {}): Record<string, unknown> {
+  const all = listSkillCuratorSuggestions(workspacePath);
+  const counts = Object.fromEntries(['pending', 'applied', 'rejected', 'quarantined', 'expired', 'suppressed']
+    .map((status) => [status, all.filter((item) => item.status === status).length]));
+  const statusFilter = String(options.statusFilter || '').trim().toLowerCase();
+  const skillId = String(options.skillId || '').trim().toLowerCase();
+  const filtered = all
+    .filter((item) => !statusFilter || item.status === statusFilter)
+    .filter((item) => !skillId || String(item.skillId || '').toLowerCase() === skillId)
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || '') - Date.parse(a.updatedAt || a.createdAt || ''));
+  const cursor = Math.max(0, Math.floor(Number(options.cursor) || 0));
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(options.limit) || 5)));
+  const page = filtered.slice(cursor, cursor + limit);
+  const recent = options.includeContent === true ? page : page.map((item) => ({
+    id: item.id, status: item.status, skillId: item.skillId, title: item.title,
+    risk: item.risk, qualityScore: item.qualityScore, createdAt: item.createdAt, updatedAt: item.updatedAt,
+  }));
+  return {
+    totalCount: all.length,
+    pendingCount: counts.pending || 0,
+    appliedCount: counts.applied || 0,
+    rejectedCount: counts.rejected || 0,
+    quarantinedCount: counts.quarantined || 0,
+    expiredCount: counts.expired || 0,
+    suppressedCount: counts.suppressed || 0,
+    matchedCount: filtered.length,
+    cursor,
+    nextCursor: cursor + page.length < filtered.length ? cursor + page.length : null,
+    includeContent: options.includeContent === true,
+    recent,
+  };
+}
+
+function normalizeSemanticText(value: unknown): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\d{4}-\d{2}-\d{2}/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function candidateClusterKey(row: CandidateRow): string {
+  return [
+    String(row.type || ''),
+    String(row.skillId || ''),
+    normalizeSemanticText(row.suggestedAction || row.reason),
+  ].join('|');
+}
+
+function clusterCandidateRows(rows: CandidateRow[]): CandidateRow[] {
+  const clusters = new Map<string, CandidateRow>();
+  for (const row of rows) {
+    const key = candidateClusterKey(row);
+    const old = clusters.get(key);
+    if (!old) {
+      clusters.set(key, { ...row });
+      continue;
+    }
+    const newer = String(row.timestamp || '').localeCompare(String(old.timestamp || '')) > 0 ? row : old;
+    const older = newer === row ? old : row;
+    clusters.set(key, {
+      ...older,
+      ...newer,
+      evidence: Array.from(new Set([...(older.evidence || []), ...(newer.evidence || [])])),
+      corroboratingSessionIds: Array.from(new Set([
+        ...(older.corroboratingSessionIds || []),
+        ...(newer.corroboratingSessionIds || []),
+        ...[older.sessionId, newer.sessionId].filter(Boolean).map(String),
+      ])),
+      signalProvenance: Array.from(new Set([...(older.signalProvenance || []), ...(newer.signalProvenance || [])])),
+    });
+  }
+  return Array.from(clusters.values());
+}
+
+function buildNewSkillReviewSuggestion(row: CandidateRow, skillsManager: SkillsManager): SkillCuratorSuggestion {
+  const now = new Date().toISOString();
+  const overlaps = skillsManager.findComposerSkillMatches(String(row.requestExcerpt || row.reason || ''), 5);
+  const evidence = observedEvidence(row);
+  const overlapSummary = overlaps.length ? overlaps.join(', ') : '(no likely overlap found)';
+  const content = [
+    '# New skill candidate review',
+    '',
+    `Observed need: ${cleanSnippet(row.reason, 700)}`,
+    `Suggested action: ${cleanSnippet(row.suggestedAction, 900)}`,
+    `Likely existing-skill overlaps: ${overlapSummary}`,
+    `Corroborating sessions: ${(row.corroboratingSessionIds || []).join(', ') || '(none recorded)'}`,
+    '',
+    'Approval only accepts this candidate for design/proposal work. It does not create a skill.',
+    'Before creation, define one focused job, test positive and negative triggers, and explain why the overlaps cannot absorb the workflow.',
+    '',
+    '## Evidence',
+    ...evidence.map((item) => `- ${item}`),
+    '',
+  ].join('\n');
+  const scan = scanSkillText(content, 'new-skill-candidate-review.md');
+  return {
+    id: suggestionId({
+      type: 'new_skill_review',
+      reason: normalizeSemanticText(row.reason),
+      action: normalizeSemanticText(row.suggestedAction),
+      overlaps,
+    }),
+    createdAt: now,
+    updatedAt: now,
+    status: scan.verdict === 'critical' ? 'quarantined' : 'pending',
+    skillId: String(row.skillId || 'new-skill-candidate'),
+    title: 'Review new skill candidate',
+    reason: `New skills require overlap analysis and explicit approval. Likely overlaps: ${overlapSummary}.`,
+    lessonType: 'instruction_patch',
+    futureTrigger: 'Use when repeated validated work has no suitable existing skill.',
+    learnedBehavior: 'Do not create a skill until overlap, scope, trigger boundaries, and repeated evidence are reviewed.',
+    whyUseful: 'Prevents one-off workflows and overlapping jobs from expanding the active skill catalog.',
+    approvePreview: 'Approve marks the candidate ready for a separate skill_evolution proposal; it does not create the skill.',
+    qualityScore: 75,
+    autoApplyEligible: false,
+    autoDecisionReason: 'New skills always require explicit approval.',
+    evidence,
+    risk: 'high',
+    change: { kind: 'review_only', content },
+    scan,
+  };
 }
 
 export function listSkillCuratorActivity(
@@ -746,7 +973,14 @@ export function rejectSkillCuratorSuggestion(workspacePath: string, id: string):
   const rows = listSkillCuratorSuggestions(workspacePath);
   const idx = rows.findIndex((row) => row.id === id);
   if (idx < 0) return null;
-  rows[idx] = { ...rows[idx], status: 'rejected', updatedAt: new Date().toISOString(), rejectedAt: new Date().toISOString() };
+  const now = new Date();
+  rows[idx] = {
+    ...rows[idx],
+    status: 'rejected',
+    updatedAt: now.toISOString(),
+    rejectedAt: now.toISOString(),
+    suppressedUntil: new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+  };
   writeJsonArray(suggestionsPath(workspacePath), rows);
   return rows[idx];
 }
@@ -756,9 +990,19 @@ export function applySkillCuratorSuggestion(workspacePath: string, skillsManager
   const idx = rows.findIndex((row) => row.id === id);
   if (idx < 0) return null;
   const suggestion = rows[idx];
-  if (suggestion.status === 'quarantined') throw new Error('Cannot apply a quarantined skill suggestion.');
+  if (suggestion.status === 'applied') return suggestion;
+  if (suggestion.status !== 'pending') throw new Error(`Cannot apply a ${suggestion.status} skill suggestion.`);
   if (suggestion.change.kind === 'write_resource') {
-    skillsManager.writeResource(suggestion.skillId, suggestion.change.path || '', suggestion.change.content || '', {
+    const resourcePath = suggestion.change.path || '';
+    const incomingContent = suggestion.change.content || '';
+    const existing = skillsManager.readResource(suggestion.skillId, resourcePath, 100_000);
+    const existingContent = existing.ok ? existing.content.trim() : '';
+    const normalizedExisting = normalizeSemanticText(existingContent);
+    const normalizedIncoming = normalizeSemanticText(incomingContent);
+    const mergedContent = existingContent && normalizedIncoming && !normalizedExisting.includes(normalizedIncoming)
+      ? `${existingContent}\n\n---\n\n${incomingContent.trim()}\n`
+      : existingContent || `${incomingContent.trim()}\n`;
+    skillsManager.writeResource(suggestion.skillId, resourcePath, mergedContent, {
       type: 'doc',
       description: suggestion.title,
       change: {
@@ -774,6 +1018,8 @@ export function applySkillCuratorSuggestion(workspacePath: string, skillsManager
       evidence: suggestion.evidence,
       appliedBy: 'skill_curator',
       reason: suggestion.learnedBehavior || suggestion.reason,
+      triggerPositivePrompts: suggestion.triggerEvaluation?.positive.map((item) => item.prompt),
+      triggerNegativePrompts: suggestion.triggerEvaluation?.negative.map((item) => item.prompt),
     });
   } else if (suggestion.change.kind === 'review_only') {
     // Review-only audit items intentionally do not mutate skill files.
@@ -784,13 +1030,10 @@ export function applySkillCuratorSuggestion(workspacePath: string, skillsManager
 }
 
 function canAutoApplySuggestion(suggestion: SkillCuratorSuggestion): boolean {
-  if (suggestion.status !== 'pending') return false;
-  if (!suggestion.autoApplyEligible) return false;
-  if (suggestion.risk !== 'low') return false;
-  if (suggestion.scan.verdict === 'critical') return false;
-  if ((suggestion.qualityScore || 0) < 60) return false;
-  if (suggestion.lessonType === 'instruction_patch') return false;
-  return suggestion.change.kind === 'write_resource' || suggestion.change.kind === 'manifest_overlay';
+  // Autonomous behavioral mutation is frozen. A future exact-metadata repair
+  // lane can opt in here once it has deterministic before/after validation.
+  void suggestion;
+  return false;
 }
 
 function isWeakLegacySuggestion(suggestion: SkillCuratorSuggestion): boolean {
@@ -819,17 +1062,23 @@ export function runSkillCurator(params: {
   const startedAt = new Date().toISOString();
   const runId = `skill_curator_${startedAt.replace(/[:.]/g, '-')}`;
   const rows = recentCandidateRows(params.workspacePath);
+  const clusteredRows = clusterCandidateRows(rows.filter((row) => row.type !== 'no_action_but_record_episode'));
   const skillChangeRows = recentSkillChangeRows(params.skillsManager);
   const auditedChanges = skillChangeRows.map(auditSkillChange);
   const auditSuggestions = auditedChanges
     .map(buildSkillChangeAuditSuggestion)
-    .filter((item): item is SkillCuratorSuggestion => !!item && !!params.skillsManager.get(item.skillId));
-  const incomingRaw = rows
-    .filter((row) => row.type !== 'no_action_but_record_episode')
-    .map((row) => row.type === 'add_trigger'
-      ? buildTriggerSuggestion(row, params.skillsManager)
-      : buildResourceSuggestion(row, params.skillsManager))
-    .filter((item): item is SkillCuratorSuggestion => !!item && !!params.skillsManager.get(item.skillId));
+    .filter((item): item is SkillCuratorSuggestion => !!item && (
+      item.change.kind === 'review_only' || !!params.skillsManager.get(item.skillId)
+    ));
+  const incomingRaw = clusteredRows
+    .map((row) => row.type === 'create_new_skill_candidate'
+      ? buildNewSkillReviewSuggestion(row, params.skillsManager)
+      : row.type === 'add_trigger'
+        ? buildTriggerSuggestion(row, params.skillsManager)
+        : buildResourceSuggestion(row, params.skillsManager))
+    .filter((item): item is SkillCuratorSuggestion => !!item && (
+      item.change.kind === 'review_only' || !!params.skillsManager.get(item.skillId)
+    ));
   const incoming = dedupeIncomingSuggestions([...incomingRaw, ...auditSuggestions]);
 
   const existing = listSkillCuratorSuggestions(params.workspacePath);
@@ -870,6 +1119,7 @@ export function runSkillCurator(params: {
     '',
     `Mode: ${params.mode}`,
     `Candidates reviewed: ${rows.length}`,
+    `Semantic candidate clusters: ${clusteredRows.length}`,
     `Recent skill changes audited: ${auditedChanges.length}`,
     `Suggestions generated: ${incoming.length}`,
     `Applied: ${applied.length}`,

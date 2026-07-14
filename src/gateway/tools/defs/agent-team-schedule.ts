@@ -228,7 +228,7 @@ export function getAgentTeamScheduleTools(): any[] {
                 },
                 system_instructions: {
                   type: 'string',
-                  description: 'Full system prompt / instructions for this agent. Written to system_prompt.md and used every time the agent runs.',
+                  description: 'Full identity and operating instructions for this agent. Written to AGENT.md and used every time the agent runs.',
                 },
                 heartbeat_instructions: {
                   type: 'string',
@@ -254,6 +254,11 @@ export function getAgentTeamScheduleTools(): any[] {
                 model: {
                   type: 'string',
                   description: 'Optional model override for this subagent',
+                },
+                reasoning_effort: {
+                  type: 'string',
+                  enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+                  description: 'Optional provider/model-aware reasoning effort for this subagent.',
                 },
                 is_team_manager: {
                   type: 'boolean',
@@ -300,7 +305,7 @@ export function getAgentTeamScheduleTools(): any[] {
         description:
           'Directly update a configured spawn_subagent profile without asking the agent to edit files itself. ' +
               'Use agent_list first to get the exact agent_id. Supports renaming, description/instruction updates, model/max-step settings, and heartbeat instructions. ' +
-          'This keeps config.json, system_prompt.md, and the Agents UI in sync for dynamic subagents.',
+          'This keeps config.json, AGENT.md, and the Agents UI in sync for dynamic subagents.',
         parameters: {
           type: 'object',
           required: ['agent_id'],
@@ -308,7 +313,7 @@ export function getAgentTeamScheduleTools(): any[] {
             agent_id: { type: 'string', description: 'The dynamic subagent ID to update (get IDs from agent_list first)' },
             name: { type: 'string', description: 'New display name shown in Agents and Teams UI' },
             description: { type: 'string', description: 'New short description / specialty summary' },
-            system_instructions: { type: 'string', description: 'Full replacement instructions for system_prompt.md' },
+            system_instructions: { type: 'string', description: 'Full replacement instructions for AGENT.md' },
             heartbeat_instructions: { type: 'string', description: 'Full replacement content for HEARTBEAT.md. Must include the HEARTBEAT_OK silence rule for no-op heartbeats.' },
             executionWorkspace: { type: 'string', description: 'Default working directory for this agent. Must be inside allowedWorkPaths.' },
             execution_workspace: { type: 'string', description: 'Alias for executionWorkspace.' },
@@ -449,6 +454,9 @@ export function getAgentTeamScheduleTools(): any[] {
             context: { type: 'string', description: 'Optional extra context to include below the message.' },
             timeout_ms: { type: 'number', description: 'How long to wait for the reply. Default 300000, max 1800000.' },
             user_label: { type: 'string', description: 'Optional label shown to the subagent, default "Main Agent".' },
+            include_history: { type: 'boolean', description: 'Include recent thread history. Default false.' },
+            history_limit: { type: 'number', description: 'History turns when included. Default 3, max 20.' },
+            include_thinking: { type: 'boolean', description: 'Include model thinking when available. Default false.' },
           },
         },
       },
@@ -905,7 +913,7 @@ export function getAgentTeamScheduleTools(): any[] {
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'get', 'recover', 'resume', 'rerun', 'pause', 'cancel'],
+              enum: ['list', 'get', 'recover', 'resume', 'rerun', 'pause', 'cancel', 'benchmark_disposable'],
               description: 'list/get inspect runs; recover chats in task recovery mode; resume/rerun/pause/cancel control the existing run.',
             },
             agent_id: { type: 'string', description: 'Optional agent ID. Required for agent-scoped lists; optional with task_id because ownership can be derived from the task.' },
@@ -913,11 +921,17 @@ export function getAgentTeamScheduleTools(): any[] {
             status: { type: 'string', description: 'Optional list filter: queued|running|paused|stalled|needs_assistance|awaiting_user_input|failed|complete|waiting_subagent. Comma/space separated values are allowed.' },
             recoverable_only: { type: 'boolean', description: 'For list, return only paused/stalled/failed/needs-input runs that can use recovery chat.' },
             limit: { type: 'number', description: 'For list, max runs returned. Default 20, max 100.' },
+            detail: { type: 'string', enum: ['compact', 'full'], description: 'List payload detail. Default compact; use get for one hydrated run.' },
             message: { type: 'string', description: 'Recovery chat message for action="recover". This is added to the run recovery conversation.' },
             note: { type: 'string', description: 'Optional operator note for resume/rerun/pause/cancel actions.' },
             include_task: { type: 'boolean', description: 'For get/recover/control responses, include the full raw task record. Default false to keep tool output compact.' },
             include_evidence: { type: 'boolean', description: 'Include a capped evidence bus snapshot when available. Default true.' },
             confirm: { type: 'boolean', description: 'Required true for action="cancel".' },
+            prompt: { type: 'string', description: 'Optional bounded prompt for benchmark_disposable.' },
+            role: { type: 'string', description: 'Role route to verify for benchmark_disposable. Default researcher.' },
+            model: { type: 'string', description: 'Optional explicit model override for benchmark_disposable.' },
+            reasoning_effort: { type: 'string', enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional reasoning override for benchmark_disposable.' },
+            timeout_ms: { type: 'number' },
           },
         },
       },
@@ -935,6 +949,7 @@ export function getAgentTeamScheduleTools(): any[] {
             task_id: { type: 'string', description: 'Task ID (required for get/pause/cancel/delete; optional for resume/rerun)' },
             status: { type: 'string', description: 'Optional filter: queued|running|paused|stalled|needs_assistance|awaiting_user_input|failed|complete|waiting_subagent' },
             include_all_sessions: { type: 'boolean', description: 'If true, list across all sessions/channels; default false (scoped)' },
+            include_scheduled: { type: 'boolean', description: 'Include compact scheduled jobs in list output. Default false.' },
             limit: { type: 'number', description: 'Max tasks to return (default 20, max 100)' },
             note: { type: 'string', description: 'Optional operator note to append when resuming/rerunning' },
             confirm: { type: 'boolean', description: 'Required true for destructive actions cancel/delete' },
@@ -1107,6 +1122,42 @@ export function getAgentTeamScheduleTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'diagnostic_packet',
+        description: 'Create, get, list, or resolve a sanitized structured Prometheus incident packet under workspace/diagnostics/incidents. Public-safe: records evidence and recovery attempts but never edits application source.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['create', 'get', 'list', 'resolve'] },
+            packet_id: { type: 'string' }, limit: { type: 'number' },
+            classification: { type: 'string', enum: ['agent','task','team','schedule','provider','configuration','dependency','workspace','application_defect','unknown'] },
+            severity: { type: 'string', enum: ['low','medium','high','critical'] }, confidence: { type: 'string', enum: ['low','medium','high'] },
+            observed_behavior: { type: 'string' }, expected_behavior: { type: 'string' }, minimal_reproduction: { type: 'array', items: { type: 'string' } },
+            affected_subsystem: { type: 'string' }, evidence: { type: 'array', items: { type: 'object' } }, attempted_recoveries: { type: 'array', items: { type: 'object' } },
+            operational_recovery_exhausted: { type: 'boolean' }, unresolved_uncertainty: { type: 'array', items: { type: 'string' } }, sanitized_summary: { type: 'string' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'system_diagnostics',
+        description: 'Public-safe, read-only Prometheus incident snapshot combining gateway heartbeat, automation anomalies, runtimes, recurring errors, cached provider health, restart state, build status, and audit freshness. Use first for explicit Self Repair requests; it never changes state or exposes source/dev capabilities.',
+        parameters: {
+          type: 'object',
+          required: [],
+          properties: {
+            depth: { type: 'string', enum: ['summary', 'full'], description: 'Summary by default; full includes bounded sanitized runtime items.' },
+            focus: { type: 'string', enum: ['all', 'gateway', 'runtime', 'automation', 'provider', 'audit', 'restart', 'errors'] },
+            limit: { type: 'number', description: 'Maximum anomalous items per section. Default 10, maximum 50.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'automation_dashboard',
         description:
           'Unified read-only operator snapshot for priorities, agents, schedules, tasks, teams, watches, recent outputs, and app update status. Prefer over chaining granular list/detail tools.',
@@ -1177,6 +1228,9 @@ export function getAgentTeamScheduleTools(): any[] {
               items: { type: 'string' },
               description: 'Optional spawn tracking tags.',
             },
+            model: { type: 'string', description: 'Optional explicit spawn model override; otherwise background_task routing is used.' },
+            provider: { type: 'string', description: 'Optional explicit provider override.' },
+            reasoning_effort: { type: 'string', enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional provider/model-aware reasoning override for this spawn.' },
           },
         },
       },
@@ -1209,6 +1263,9 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             timeout_ms: { type: 'number', description: 'Optional wait cap used by timeout-based policies. Default 120000.' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags for tracking/grouping.' },
+            model: { type: 'string', description: 'Optional model override.' },
+            provider: { type: 'string', description: 'Optional provider override.' },
+            reasoning_effort: { type: 'string', enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional reasoning override.' },
           },
         },
       },
@@ -1429,7 +1486,7 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             subagent_id: {
               type: 'string',
-              description: 'Optional: ID of a configured subagent to inherit system instructions from. If provided, the subagent\'s system_prompt.md is injected as context for the task.',
+              description: 'Optional: ID of a configured subagent to inherit system instructions from. If provided, the subagent\'s AGENT.md is injected as context for the task.',
             },
             timeout_ms: {
               type: 'number',

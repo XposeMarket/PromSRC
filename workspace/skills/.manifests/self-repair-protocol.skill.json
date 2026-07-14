@@ -1,0 +1,30 @@
+{
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "A disposable operational incident produced freshness-aware redacted audit evidence and a structured diagnostic packet; development privately handed the proven source defect to the standard proposal lane, while the legacy patch executor remained absent.",
+    "verifiedCapabilities": [
+      "system_diagnostics",
+      "operational_triage",
+      "governed_recovery",
+      "redacted_audit_evidence",
+      "diagnostic_packet",
+      "public_dev_boundary",
+      "standard_source_proposal_handoff",
+      "single_source_edit_lane"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "id": "self-repair-protocol",
+  "name": "self-repair-protocol",
+  "description": "Diagnose and recover Prometheus internal operational problems involving tasks, agents, teams, schedules, providers, connections, configuration, workspace state, startup, or runtime health. Use only when the user explicitly asks Prometheus to diagnose or repair itself; do not invoke for an ordinary isolated tool error.",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "diagnose prometheus internals",
+    "repair prometheus runtime",
+    "self-repair prometheus"
+  ],
+  "lifecycle": "active"
+}

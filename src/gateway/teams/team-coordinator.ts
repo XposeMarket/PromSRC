@@ -1,7 +1,7 @@
 /**
- * team-coordinator.ts — Main Agent as Team Coordinator
+ * team-coordinator.ts — Distinct Managed-Team Coordinator Agent
  *
- * The main Prometheus agent IS the team coordinator:
+ * Each team has its own manager agent:
  *   - Runs in dedicated session `team_coord_{teamId}` (isolated from main chat)
  *   - Has access to dispatch_team_agent tool to run subagents
  *   - Posts its responses to team chat as 'manager'
@@ -18,12 +18,16 @@ import {
   buildTeamRoomSummary,
   getMainAgentThread,
   drainManagerMessages,
+  ensureManagedTeamManagerAgent,
 } from './managed-teams';
 import { notifyMainAgent } from './notify-bridge';
 import { getAgentById, getConfig } from '../../config/config';
 import { setWorkspace } from '../session';
 import { getTeamWorkspacePath, readTeamMemoryContext, ensureTeamInfoFile } from './team-workspace';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
+import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
+import { parseProviderModelRef } from '../../agents/model-routing.js';
+import { setRuntimeActorContext } from '../runtime-actor.js';
 
 type HandleChatFn = (
   message: string,
@@ -356,6 +360,29 @@ function prepareTeamManagerToolScope(sessionId: string): void {
   void sessionId;
 }
 
+function prepareTeamManagerRuntime(team: any, sessionId: string): { modelOverride?: string; providerOverride?: string } {
+  const manager = ensureManagedTeamManagerAgent(team);
+  const managerAgent = getAgentById(manager.agentId) as any;
+  const teamWorkspace = getTeamWorkspacePath(team.id);
+  setRuntimeActorContext(sessionId, {
+    kind: 'manager',
+    surface: 'team_room',
+    agentId: manager.agentId,
+    displayName: managerAgent?.identity?.displayName || managerAgent?.name || `${team.name} Manager`,
+    teamId: team.id,
+    teamName: team.name,
+    identityRoot: manager.identityPath,
+    memoryRoot: manager.identityPath,
+    executionRoot: teamWorkspace,
+    allowedWorkPaths: [getConfig().getWorkspacePath(), teamWorkspace],
+  });
+  const rawModel = String(managerAgent?.model || team.manager?.model || '').trim();
+  const parsed = rawModel ? parseProviderModelRef(rawModel) : null;
+  return parsed
+    ? { providerOverride: parsed.providerId, modelOverride: parsed.model }
+    : (rawModel ? { modelOverride: rawModel } : {});
+}
+
 function buildTeamCallerContext(teamId: string): string {
   const team = getManagedTeam(teamId);
   if (!team) return '';
@@ -428,10 +455,13 @@ function buildTeamCallerContext(teamId: string): string {
     : '';
 
   const teamWsPath = getTeamWorkspacePath(team.id);
+  const manager = ensureManagedTeamManagerAgent(team);
+  const managerPrompt = String(readAgentPromptFile(manager.identityPath, { migrateLegacy: true })?.content || '').trim();
 
   return [
     `=== MANAGER MODE ===`,
-    `You are acting as the Manager for the team: "${team.name}" (ID: ${team.id})`,
+    `You are the distinct manager agent for the team: "${team.name}" (ID: ${team.id}). You are not Prom or the main user chat.`,
+    managerPrompt ? `\n[MANAGER AGENT IDENTITY]\n${managerPrompt}` : '',
     `Team workspace: ${teamWsPath}`,
     ``,
     `Team Purpose:`,
@@ -626,6 +656,7 @@ export async function runCoordinatorConversation(
         }
       };
 
+	      const managerRouting = prepareTeamManagerRuntime(freshTeam, sessionId);
 	      const result = await _deps.handleChat(
 	        currentMessage,
 	        sessionId,
@@ -633,10 +664,12 @@ export async function runCoordinatorConversation(
 	        undefined,
 	        abortSignal,
         callerContext,
-        undefined,
+        managerRouting.modelOverride,
         'team_manager',
         TEAM_MANAGER_TOOL_FILTER,
-        turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
+	        turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
+	        undefined,
+	        managerRouting.providerOverride,
 	      );
 
 	      responseText = String(result.text || '').trim();
@@ -886,6 +919,7 @@ export async function runCoordinatorConversationDetailed(
           }
         };
 
+        const managerRouting = prepareTeamManagerRuntime(freshTeam, sessionId);
         const result = await _deps.handleChat(
           currentMessage,
           sessionId,
@@ -893,10 +927,12 @@ export async function runCoordinatorConversationDetailed(
           undefined,
           abortSignal,
           callerContext,
-          undefined,
+          managerRouting.modelOverride,
           'team_manager',
           TEAM_MANAGER_TOOL_FILTER,
           turn === 0 && Array.isArray(options.attachments) && options.attachments.length > 0 ? options.attachments : undefined,
+	          undefined,
+	          managerRouting.providerOverride,
 	        );
 
 	        responseText = String(result.text || '').trim();
@@ -1131,6 +1167,7 @@ export async function runCoordinatorReview(
       captureTeamManagerStreamEvent(streamTracker, event, data);
       broadcastTeamManagerStreamEvent(bfn, team, streamTracker, 1, 'review', false, event, data);
     };
+    const managerRouting = prepareTeamManagerRuntime(team, sessionId);
     const result = await _deps.handleChat(
       reviewPrompt,
       sessionId,
@@ -1138,9 +1175,12 @@ export async function runCoordinatorReview(
       undefined,
       undefined,
       callerContext,
-      undefined,
+      managerRouting.modelOverride,
       'team_manager',
       TEAM_MANAGER_TOOL_FILTER,
+      undefined,
+      undefined,
+      managerRouting.providerOverride,
     );
 
     const responseText = String(result.text || '').trim();

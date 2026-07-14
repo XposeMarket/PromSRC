@@ -14,13 +14,13 @@
 
 import fs from 'fs';
 import { ToolResult } from '../types.js';
-import { SkillsManager } from '../gateway/skills-runtime/skills-manager.js';
+import { SkillsManager, rankSkillMatches } from '../gateway/skills-runtime/skills-manager.js';
 import { resolveSkillsRoot } from '../skills/store.js';
 import { getConfig } from '../config/config.js';
 import { scanSkillDirectory } from '../gateway/skills-runtime/skill-safety.js';
 import {
   applySkillCuratorSuggestion,
-  listSkillCuratorSuggestions,
+  getSkillCuratorStatus,
   rejectSkillCuratorSuggestion,
   runSkillCurator,
   type SkillCuratorMode,
@@ -121,6 +121,13 @@ function buildMetadataOverlay(skill: any, args: any): Record<string, unknown> | 
       changed = true;
     }
   }
+  if (args?.implicitInvocation !== undefined || args?.implicit_invocation !== undefined) {
+    const implicitInvocation = args.implicitInvocation ?? args.implicit_invocation;
+    if (typeof implicitInvocation === 'boolean' && implicitInvocation !== skill?.implicitInvocation) {
+      manifest.implicitInvocation = implicitInvocation;
+      changed = true;
+    }
+  }
 
   return changed ? manifest : null;
 }
@@ -131,23 +138,29 @@ export async function executeSkillList(
 ): Promise<ToolResult> {
   skillsManager.scanSkills();
   const all = skillsManager.getAll();
+  const available = all.filter((skill: any) =>
+    skill.executionEnabled !== false
+    && !['deprecated', 'archived'].includes(String(skill.lifecycle || '').toLowerCase())
+    && skill.eligibility?.status === 'ready'
+    && !['blocked', 'quarantined', 'unsupported'].includes(String(skill.status || '').toLowerCase())
+  );
   const query = String(args?.query || args?.q || '').trim().toLowerCase();
   const includeDescriptions = args?.include_descriptions === true || args?.includeDescriptions === true;
   const limit = Math.max(1, Math.min(80, Math.floor(Number(args?.limit) || 24)));
-  const haystackFor = (s: any): string => [
-    s?.id,
-    s?.name,
-    s?.description,
-    ...(Array.isArray(s?.triggers) ? s.triggers : []),
-    ...(Array.isArray(s?.categories) ? s.categories : []),
-    ...(Array.isArray(s?.requiredTools) ? s.requiredTools : []),
-  ].map((value) => String(value || '')).join(' ').toLowerCase();
-  const matched = query ? all.filter((s: any) => haystackFor(s).includes(query)) : all;
+  const ranked = query ? rankSkillMatches(available, query, { limit: available.length }) : [];
+  const matched = query ? ranked.map((item) => item.skill) : available;
   const rows = matched.slice(0, limit).map((s: any) => {
     const row: any = { id: String(s.id || ''), name: String(s.name || s.id || '') };
     if (s.eligibility?.status && s.eligibility.status !== 'ready') row.status = String(s.eligibility.status || '');
+    if (s.health?.state && s.health.state !== 'ready') {
+      row.health = s.health.state;
+      row.healthReason = s.health.reason || '';
+      row.verifiedCapabilities = s.health.verifiedCapabilities;
+      row.blockedCapabilities = s.health.blockedCapabilities;
+    }
     if (Array.isArray(s.categories) && s.categories.length) row.categories = s.categories.slice(0, 4);
     if (Array.isArray(s.requiredTools) && s.requiredTools.length) row.requiredTools = s.requiredTools.slice(0, 6);
+    if (s.implicitInvocation === false) row.implicitInvocation = false;
     if (includeDescriptions) row.description = String(s.description || '').slice(0, 180);
     return row;
   });
@@ -155,12 +168,14 @@ export async function executeSkillList(
     success: true,
     stdout: JSON.stringify({
       totalInstalled: all.length,
+      availableCount: available.length,
+      unavailableOmittedCount: all.length - available.length,
       query: query || undefined,
       matchedCount: matched.length,
       returnedCount: rows.length,
       truncated: matched.length > rows.length,
       compact: !includeDescriptions,
-      note: 'Compact skill discovery. Use query to narrow, include_descriptions:true only when descriptions are needed, then call skill_read(id) for one relevant skill.',
+      note: `${all.length - available.length ? `${all.length - available.length} unavailable, quarantined, disabled, or deprecated skill(s) omitted. ` : ''}Compact relevance-ranked discovery. Read at most one skill whose full description directly fits the request; ignore weak or cross-domain lexical overlap.`,
       skills: rows,
     }, null, 2),
   };
@@ -187,6 +202,11 @@ export async function executeSkillRead(
     skillMd = fs.readFileSync(skill.filePath, 'utf-8');
   } catch {
     skillMd = skill.instructions;
+  }
+
+  const autoLoaded = skillsManager.readAutoLoadedResources(skill.id);
+  if (autoLoaded.length) {
+    skillMd += autoLoaded.map((resource) => `\n\n---\n\n[Auto-loaded development resource: ${resource.path}]\n\n${resource.content}`).join('');
   }
 
   // For bundle skills, return a resource menu so the AI fetches what it needs lazily.
@@ -218,6 +238,9 @@ export async function executeSkillCreate(
     instructions: string;
     emoji?: string;
     triggers?: string;
+    triggerPositivePrompts?: string[];
+    triggerNegativePrompts?: string[];
+    implicitInvocation?: boolean;
   },
   skillsManager: SkillsManager,
 ): Promise<ToolResult> {
@@ -236,6 +259,9 @@ export async function executeSkillCreate(
       description: args.description || '',
       emoji: args.emoji,
       triggers,
+      triggerPositivePrompts: args.triggerPositivePrompts || [],
+      triggerNegativePrompts: args.triggerNegativePrompts || [],
+      implicitInvocation: args.implicitInvocation,
       instructions: args.instructions,
     });
 
@@ -293,6 +319,9 @@ export const skillCreateTool = {
     instructions: 'string (required) - full markdown instructions for using this skill',
     emoji: 'string (optional)',
     triggers: 'string (optional) - comma-separated keywords for discovery metadata',
+    triggerPositivePrompts: 'string[] (required when triggers are provided)',
+    triggerNegativePrompts: 'string[] (required when triggers are provided)',
+    implicitInvocation: 'boolean (optional) - false disables implicit routing',
   },
   jsonSchema: {
     type: 'object',
@@ -304,6 +333,9 @@ export const skillCreateTool = {
       instructions: { type: 'string' },
       emoji: { type: 'string' },
       triggers: { type: 'string' },
+      triggerPositivePrompts: { type: 'array', items: { type: 'string' } },
+      triggerNegativePrompts: { type: 'array', items: { type: 'string' } },
+      implicitInvocation: { type: 'boolean' },
     },
     additionalProperties: true,
   },
@@ -431,7 +463,10 @@ export const skillManifestWriteTool = {
     if (!id) return skillErr('id is required.');
     if (!manifest) return skillErr('manifest object is required.');
     try {
-      const updated = sm.writeManifestOverlay(id, manifest);
+      const updated = sm.writeManifestOverlay(id, manifest, {
+        triggerPositivePrompts: parseCsv(args?.triggerPositivePrompts || args?.trigger_positive_prompts),
+        triggerNegativePrompts: parseCsv(args?.triggerNegativePrompts || args?.trigger_negative_prompts),
+      });
       return skillOk(`Updated manifest overlay for skill "${updated.id}".`, updated);
     } catch (err: any) {
       return skillErr(`skill_manifest_write failed: ${err.message}`);
@@ -440,6 +475,8 @@ export const skillManifestWriteTool = {
   schema: {
     id: 'string (required) - installed skill id',
     manifest: 'json object (required) - manifest overlay',
+    triggerPositivePrompts: 'string|string[] (required when triggers change)',
+    triggerNegativePrompts: 'string|string[] (required when triggers change)',
   },
   jsonSchema: {
     type: 'object',
@@ -447,6 +484,8 @@ export const skillManifestWriteTool = {
     properties: {
       id: { type: 'string' },
       manifest: { type: 'object' },
+      triggerPositivePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      triggerNegativePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
     },
     additionalProperties: true,
   },
@@ -463,13 +502,15 @@ export const skillUpdateMetadataTool = {
     const skill = sm.get(id);
     if (!skill) return skillErr(`Skill "${id}" not found. Call skill_list to see available IDs.`);
     const manifest = buildMetadataOverlay(skill, args);
-    if (!manifest) return skillErr(`skill_update_metadata: no metadata changes provided for "${id}" (pass description, triggers, addTriggers, removeTriggers, categories, requiredTools, lifecycle, or name).`);
+    if (!manifest) return skillErr(`skill_update_metadata: no metadata changes provided for "${id}" (pass description, triggers, addTriggers, removeTriggers, categories, requiredTools, lifecycle, implicitInvocation, or name).`);
     try {
       const updated = sm.writeManifestOverlay(id, manifest, {
         changeType: args?.changeType || args?.change_type ? String(args.changeType || args.change_type) : 'metadata_update',
         evidence: Array.isArray(args?.evidence) ? args.evidence.map((v: any) => String(v || '').trim()).filter(Boolean) : (args?.evidence ? [String(args.evidence)] : undefined),
         appliedBy: args?.appliedBy || args?.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
         reason: args?.reason ? String(args.reason) : undefined,
+        triggerPositivePrompts: parseCsv(args?.triggerPositivePrompts || args?.trigger_positive_prompts),
+        triggerNegativePrompts: parseCsv(args?.triggerNegativePrompts || args?.trigger_negative_prompts),
       });
       return skillOk(`Updated metadata for skill "${updated.id}". Fields: ${Object.keys(manifest).join(', ')}.`, updated);
     } catch (err: any) {
@@ -485,6 +526,9 @@ export const skillUpdateMetadataTool = {
     categories: 'string|string[] (optional)',
     requiredTools: 'string|string[] (optional)',
     lifecycle: 'string (optional)',
+    implicitInvocation: 'boolean (optional) - false disables implicit routing',
+    triggerPositivePrompts: 'string|string[] (required when triggers change)',
+    triggerNegativePrompts: 'string|string[] (required when triggers change)',
     name: 'string (optional)',
   },
   jsonSchema: {
@@ -503,6 +547,10 @@ export const skillUpdateMetadataTool = {
       requiredTools: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       required_tools: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       lifecycle: { type: 'string' },
+      implicitInvocation: { type: 'boolean' },
+      implicit_invocation: { type: 'boolean' },
+      triggerPositivePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+      triggerNegativePrompts: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       name: { type: 'string' },
     },
     additionalProperties: true,
@@ -535,6 +583,9 @@ export const skillCreateBundleTool = {
         assignment: args?.assignment && typeof args.assignment === 'object' ? args.assignment : undefined,
         toolBinding: args?.toolBinding && typeof args.toolBinding === 'object' ? args.toolBinding : undefined,
         permissions: args?.permissions && typeof args.permissions === 'object' ? args.permissions : undefined,
+        implicitInvocation: args?.implicitInvocation ?? args?.implicit_invocation,
+        triggerPositivePrompts: parseCsv(args?.triggerPositivePrompts || args?.trigger_positive_prompts),
+        triggerNegativePrompts: parseCsv(args?.triggerNegativePrompts || args?.trigger_negative_prompts),
         resources: Array.isArray(args?.resources) ? args.resources : undefined,
         overwrite: args?.overwrite === true,
       });
@@ -548,6 +599,9 @@ export const skillCreateBundleTool = {
     name: 'string (required) - human readable name',
     instructions: 'string (required) - full SKILL.md instructions',
     resources: 'json array (optional) - resource objects with path/content/type/description',
+    implicitInvocation: 'boolean (optional) - false disables implicit routing',
+    triggerPositivePrompts: 'string|string[] (required when triggers are provided)',
+    triggerNegativePrompts: 'string|string[] (required when triggers are provided)',
   },
   jsonSchema: {
     type: 'object',
@@ -566,6 +620,9 @@ export const skillCreateBundleTool = {
       assignment: { type: 'object' },
       toolBinding: { type: 'object' },
       permissions: { type: 'object' },
+      implicitInvocation: { type: 'boolean' },
+      triggerPositivePrompts: { type: 'array', items: { type: 'string' } },
+      triggerNegativePrompts: { type: 'array', items: { type: 'string' } },
       resources: { type: 'array' },
       overwrite: { type: 'boolean' },
     },
@@ -747,11 +804,11 @@ export const skillCuratorTool = {
     const action = String(args?.action || 'status').trim().toLowerCase();
     try {
       if (action === 'status') {
-        const suggestions = listSkillCuratorSuggestions(workspacePath);
-        return skillOk(JSON.stringify({ suggestions }, null, 2), { suggestions });
+        const status = getSkillCuratorStatus(workspacePath, { limit: args?.limit, cursor: args?.cursor, statusFilter: args?.statusFilter || args?.status_filter, skillId: args?.skillId || args?.skill_id, includeContent: args?.includeContent === true || args?.include_content === true });
+        return skillOk(JSON.stringify(status, null, 2), status);
       }
       if (action === 'run') {
-        const rawMode = String(args?.mode || 'auto-safe').trim();
+        const rawMode = String(args?.mode || 'dry-run').trim();
         const mode: SkillCuratorMode = rawMode === 'dry-run' || rawMode === 'auto-safe' ? rawMode : 'pending';
         const result = runSkillCurator({ workspacePath, skillsManager: sm, mode });
         return skillOk(JSON.stringify(result, null, 2), result);
@@ -779,6 +836,11 @@ export const skillCuratorTool = {
     action: 'status|run|apply|reject',
     mode: 'dry-run|pending|auto-safe (for action=run)',
     id: 'string (for apply/reject)',
+    limit: 'number (status; default 5, max 100)',
+    cursor: 'number (status pagination offset)',
+    statusFilter: 'string (status filter)',
+    skillId: 'string (skill filter)',
+    includeContent: 'boolean (default false)',
   },
   jsonSchema: {
     type: 'object',
@@ -786,6 +848,11 @@ export const skillCuratorTool = {
       action: { type: 'string' },
       mode: { type: 'string' },
       id: { type: 'string' },
+      limit: { type: 'number' },
+      cursor: { type: 'number' },
+      statusFilter: { type: 'string' },
+      skillId: { type: 'string' },
+      includeContent: { type: 'boolean' },
     },
     additionalProperties: true,
   },

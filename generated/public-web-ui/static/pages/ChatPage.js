@@ -24,6 +24,17 @@ import { createHyperframesController } from '../components/creative/hyperframesC
 import { createHyperframesCatalogBrowser } from '../components/creative/hyperframesCatalogBrowser.js';
 import { syncCreativeEditor } from '../components/creative/editor/index.js';
 import { installProcessRunCardHandlers, renderProcessRunCard } from '../components/ProcessRunCard.js';
+import {
+  appendCommandTerminalChunkToDom,
+  applyCommandProcessEvent,
+  applyToolActivityEvent,
+  coalesceToolActivityEntries,
+  installToolActivityExpansionPersistence,
+  renderToolActivityEntry,
+  setToolActivityDisclosureState,
+  toolActivitySummary,
+} from '../tool-activity.js';
+installToolActivityExpansionPersistence();
 // (state.js imports handled via window.* proxy above)
 
 // ─── Global state: all shared mutable state accessed via window.* ───────────
@@ -1003,10 +1014,14 @@ function renderChatContextPlanUsage() {
     }).join('');
   }
   if (!windows.length) {
-    const tokens = prov.tokens || {};
-    const total = Number(tokens.total || 0);
-    const calls = Number(tokens.calls || 0);
-    html += `<div class="ccw-plan-tokens">${formatContextTokenCount(total)} tokens · ${calls} calls tracked</div>`;
+    if (prov.usage_scope === 'model') {
+      html += `<div class="ccw-plan-tokens">Codex Spark usage is currently unavailable.</div>`;
+    } else {
+      const tokens = prov.tokens || {};
+      const total = Number(tokens.total || 0);
+      const calls = Number(tokens.calls || 0);
+      html += `<div class="ccw-plan-tokens">${formatContextTokenCount(total)} tokens · ${calls} calls tracked</div>`;
+    }
   }
   body.innerHTML = html;
   wrap.hidden = false;
@@ -6535,7 +6550,7 @@ function mainGoalElapsedMs(goal) {
   const startedAt = mainGoalStartedAtMs(goal);
   if (!startedAt) return 0;
   const status = String(goal?.status || 'active');
-  if (status === 'paused') {
+  if (status === 'paused' || status === 'restarting') {
     const pausedMs = mainGoalPausedMs(goal);
     const pauseStartedAt = mainGoalPauseStartedAtMs(goal);
     const totalPausedMs = pauseStartedAt ? pausedMs + Math.max(0, Date.now() - pauseStartedAt) : pausedMs;
@@ -6563,6 +6578,7 @@ function mainGoalStatusLabel(status) {
   const value = String(status || 'active').toLowerCase();
   if (value === 'done' || value === 'completed') return 'Completed goal';
   if (value === 'paused') return 'Paused goal';
+  if (value === 'restarting') return 'Applying changes';
   if (value === 'blocked') return 'Blocked goal';
   if (value === 'failed') return 'Failed goal';
   return 'Pursuing goal';
@@ -6775,9 +6791,7 @@ function syncActiveChat() {
   canvasWorkspaceTree = [];
   canvasWorkspaceRootPath = '';
   canvasFolderExpanded.clear();
-  window.runtimeProgressState = sess && sess.progressState
-    ? { source: String(sess.progressState.source || 'none'), activeIndex: Number(sess.progressState.activeIndex || -1), items: Array.isArray(sess.progressState.items) ? sess.progressState.items : [] }
-    : { source: 'none', activeIndex: -1, items: [] };
+  window.runtimeProgressState = normalizeDeclaredRuntimeProgressState(sess?.progressState);
   if (sess?.activeRun === true && !window._sessionThinking?.[sess.id]) {
     window._sessionThinking[sess.id] = true;
     const st = getSessionStreamState(sess.id) || resetSessionStreamState(sess.id);
@@ -10160,14 +10174,16 @@ function renderSourcesArtifact(artifact) {
   const layout = artifact?.layout === 'list' ? 'list' : 'cards';
   const cards = items.map((it) => {
     const url = String(it.url || '').trim();
-    const img = String(it.imageUrl || '').trim();
+    const img = it.imagePath
+      ? `/api/canvas/download?path=${encodeURIComponent(String(it.imagePath))}`
+      : String(it.imageUrl || '').trim();
     const publisher = String(it.publisher || '').trim();
     const headline = String(it.title || url || 'Source').trim();
     const snippet = String(it.snippet || '').trim();
     const date = String(it.publishedAt || '').trim();
     const badge = String(it.badge || '').trim();
     const inner = `
-      ${layout === 'cards' && img ? `<div class="src-img-wrap"><img class="src-img" src="${escHtml(img)}" alt="" loading="lazy" onerror="this.closest('.src-img-wrap')?.remove()"></div>` : ''}
+      <div class="src-img-wrap${img ? '' : ' src-img-missing'}">${img ? `<img class="src-img" src="${escHtml(img)}" alt="" loading="lazy" onerror="this.closest('.src-img-wrap')?.classList.add('src-img-missing');this.remove()">` : ''}<div class="src-img-placeholder"><span>${escHtml(publisher || headline)}</span></div></div>
       <div class="src-body">
         ${publisher ? `<div class="src-publisher">${escHtml(publisher)}${badge ? ` <span class="src-badge">${escHtml(badge)}</span>` : ''}</div>` : (badge ? `<div class="src-publisher"><span class="src-badge">${escHtml(badge)}</span></div>` : '')}
         <strong class="src-title">${escHtml(headline)}</strong>
@@ -10436,6 +10452,7 @@ function renderArtifacts(artifacts) {
     const locationTarget = normalizeCanvasPath(String(a?.to_path || a?.path || a?.from_path || '').trim());
     return !locationTarget || !mediaKeys.has(locationTarget);
   }).map((a, idx) => {
+    if (String(a?.type || '') === 'connection_card') return renderConnectionCardArtifact(a);
     const type = String(a?.type || '').trim();
     const title = String(a?.title || type || `Artifact ${idx + 1}`).trim();
     const status = String(a?.status || 'ok').toLowerCase();
@@ -10504,6 +10521,85 @@ function normalizeFileChangesPayload(fileChanges) {
     checkpoint: normalizeWorkspaceCheckpoint(fileChanges?.checkpoint),
   };
 }
+
+function renderConnectionCardArtifact(artifact) {
+  const attempt = artifact?.attempt || artifact;
+  const id = String(attempt?.id || '').trim();
+  const action = attempt?.requiredUserAction || null;
+  const title = String(attempt?.serviceName || attempt?.serviceId || 'Connection');
+  const state = String(attempt?.state || 'requested');
+  const summary = String(attempt?.plan?.summary || artifact?.summary || '');
+  const scopes = Array.isArray(action?.scopes) ? action.scopes : [];
+  const idArg = encodeInlineJsString(id);
+  let controls = '';
+  if (state === 'awaiting_approval') controls = `<button class="artifact-btn" onclick="connectionCardContinue(${idArg}, {approved:true}, this)">Approve and continue</button>`;
+  if (action?.type === 'oauth') {
+    const mobile = window.matchMedia?.('(max-width: 760px)')?.matches === true;
+    controls = action.desktopRequired && mobile
+      ? `<div class="artifact-row"><b>Continue on desktop.</b> ${escHtml(String(action.desktopReason || 'This provider requires desktop authorization.'))}</div>`
+      : `<button class="artifact-btn" onclick="connectionCardOAuth(${idArg}, ${encodeInlineJsString(String(action.authorizationUrl || ''))}, this)">${escHtml(String(action.label || 'Authorize'))}</button>`;
+  }
+  if (state === 'research_required') controls = `<div class="artifact-row">Official-source research is required before this connector can be installed or authorized.</div>`;
+  if (action?.type === 'secure-input') {
+    const fields = Array.isArray(action.fields) ? action.fields : [];
+    controls = `<div class="connection-secure-fields" data-session="${escHtml(String(action.credentialSessionId || ''))}">${fields.map((field) => `<label>${escHtml(String(field.label || field.key))}<input type="password" autocomplete="off" data-key="${escHtml(String(field.key || ''))}" placeholder="${escHtml(String(field.placeholder || ''))}"></label>`).join('')}<button class="artifact-btn" onclick="connectionCardSecureInput(${idArg}, this)">Save securely and continue</button></div>`;
+  }
+  return `<div class="artifact-card connection-card" data-connection-attempt="${escHtml(id)}"><div class="artifact-head"><div class="artifact-title">${escHtml(title)}</div><div class="artifact-status ${escHtml(state)}">${escHtml(state.replace(/_/g, ' '))}</div></div>${summary ? `<div class="artifact-row">${escHtml(summary)}</div>` : ''}${scopes.length ? `<div class="artifact-row"><b>Requested scopes:</b> ${escHtml(scopes.join(', '))}</div>` : ''}<div class="artifact-actions">${controls}<button class="artifact-btn" onclick="connectionCardRefresh(${idArg}, this)">Refresh</button></div></div>`;
+}
+
+async function connectionCardContinue(attemptId, input, button) {
+  try { if (button) button.disabled = true; const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) }); showToast?.('Connection updated', String(result?.attempt?.state || ''), 'success', 3000); await connectionCardRefresh(attemptId, button); }
+  catch (error) { showToast?.('Connection failed', String(error?.message || error), 'error', 5000); if (button) button.disabled = false; }
+}
+
+async function connectionCardOAuth(attemptId, url, button) {
+  if (url) window.open(url, '_blank', 'noopener,noreferrer');
+  if (button) { button.disabled = true; button.textContent = 'Waiting for authorization…'; }
+  const started = Date.now();
+  while (Date.now() - started < 10 * 60 * 1000) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    try { const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: '{}' }); const state = String(result?.attempt?.state || ''); if (!state.startsWith('awaiting_')) { showToast?.('Authorization updated', state, state === 'failed' ? 'error' : 'success', 4000); break; } } catch {}
+  }
+  await connectionCardRefresh(attemptId, button);
+}
+
+async function connectionCardSecureInput(attemptId, button) {
+  const wrap = button?.closest?.('.connection-secure-fields');
+  const sessionId = String(wrap?.getAttribute('data-session') || '');
+  const values = {};
+  wrap?.querySelectorAll?.('input[data-key]').forEach((input) => { values[input.getAttribute('data-key')] = input.value; });
+  try {
+    button.disabled = true;
+    const saved = await api(`/api/connection-secure-input/${encodeURIComponent(sessionId)}`, { method: 'POST', body: JSON.stringify({ values }) });
+    wrap?.querySelectorAll?.('input').forEach((input) => { input.value = ''; });
+    await connectionCardContinue(attemptId, { credentialRef: saved.credentialRef }, button);
+  } catch (error) { showToast?.('Credential setup failed', String(error?.message || error), 'error', 5000); button.disabled = false; }
+}
+
+async function connectionCardRefresh(attemptId, button) {
+  try {
+    const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}`);
+    const card = button?.closest?.('.connection-card') || document.querySelector(`[data-connection-attempt="${CSS.escape(attemptId)}"]`);
+    if (card && result?.attempt) card.outerHTML = renderConnectionCardArtifact({ type: 'connection_card', attempt: result.attempt });
+  } catch (error) { showToast?.('Refresh failed', String(error?.message || error), 'error', 3000); }
+}
+
+window.connectionCardContinue = connectionCardContinue;
+window.connectionCardOAuth = connectionCardOAuth;
+window.connectionCardSecureInput = connectionCardSecureInput;
+window.connectionCardRefresh = connectionCardRefresh;
+
+// Connection attempts are durable and may advance in another browser/device
+// (for example mobile -> desktop OAuth). Keep any visible card synchronized
+// with the gateway's canonical attempt rather than relying on tool prose.
+wsEventBus.on('connection_attempt_updated', (event) => {
+  const attempt = event?.attempt;
+  const id = String(attempt?.id || '').trim();
+  if (!id) return;
+  document.querySelectorAll(`[data-connection-attempt="${CSS.escape(id)}"]`).forEach((card) => {
+    card.outerHTML = renderConnectionCardArtifact({ type: 'connection_card', attempt });
+  });
+});
 
 function normalizeWorkspaceCheckpoint(checkpoint) {
   if (!checkpoint || typeof checkpoint !== 'object') return null;
@@ -10774,7 +10870,7 @@ function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
 }
 
 function visibleLiveTraceEntries(entries) {
-  return (Array.isArray(entries) ? entries : []).filter((entry) =>
+  return coalesceToolActivityEntries(entries).filter((entry) =>
     entry
     && !isDesktopPreparedTraceEntry(entry)
     && !isBareThinkingLiveTraceText(entry?.text)
@@ -10783,6 +10879,7 @@ function visibleLiveTraceEntries(entries) {
 }
 
 function renderLiveTraceEntry(entry) {
+  if (entry?.activity) return renderToolActivityEntry(entry, escHtml);
   const type = String(entry.type || 'info').toLowerCase();
   const text = String(entry.text || '').trim();
   const entryId = String(entry.id || `${type}_${text.replace(/\s+/g, ' ').slice(0, 80)}_${String(entry.ts || entry.time || '')}`).trim();
@@ -11071,6 +11168,8 @@ function liveTraceLogicalGroupText(calls) {
 }
 
 function liveTraceToolSummary(entries) {
+  const structured = toolActivitySummary(entries);
+  if (structured) return structured;
   const calls = liveTraceLogicalTools(entries);
   const groups = new Map();
   calls.forEach((call) => {
@@ -11085,6 +11184,8 @@ function liveTraceToolSummary(entries) {
 }
 
 function liveTraceCurrentToolLabel(entries) {
+  const structured = toolActivitySummary(entries, { live: true });
+  if (structured) return structured;
   const calls = liveTraceLogicalTools(entries);
   const call = calls[calls.length - 1];
   if (call) {
@@ -11114,12 +11215,15 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
     const isLiveCurrent = streaming && index === groups.length - 1;
     const summary = isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries);
     const summaryKey = liveTraceSummaryKey(summary);
-    const eventCount = visibleLiveTraceEntries(group.entries).length;
+    const visibleEntries = visibleLiveTraceEntries(group.entries);
+    const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
+    const itemCount = callCount || visibleEntries.length;
+    const itemLabel = callCount ? 'call' : 'item';
     return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">›</span>
         <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
-        <em>${eventCount} event${eventCount === 1 ? '' : 's'}</em>
+        <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
       <div class="live-turn-tool-body">${renderLiveTraceList(group.entries)}</div>
     </details>`;
@@ -11129,13 +11233,19 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
 function desktopWorkflowTraceEntriesForMessage(message) {
   const out = [];
   const seen = new Set();
+  const liveSources = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
+  const structuredActions = new Set(liveSources.map((entry) => String(entry?.activity?.action || '').trim()).filter(Boolean));
+  const structuredCallIds = new Set(liveSources.map((entry) => String(entry?.activity?.callId || '').trim()).filter(Boolean));
   const finalText = String(message?.content || message?.body?.text || '').replace(/\s+/g, ' ').trim();
-  const add = (entry, fallbackType = 'info') => {
+  const add = (entry, fallbackType = 'info', fromProcess = false) => {
     if (!entry || typeof entry !== 'object') return;
     const normalizedEntry = normalizeProcessEntryForRender(entry) || entry;
     let type = String(normalizedEntry.type || normalizedEntry.kind || fallbackType || 'info').toLowerCase();
     const extra = normalizedEntry.extra && typeof normalizedEntry.extra === 'object' ? normalizedEntry.extra : null;
     const action = String(extra?.action || extra?.toolName || normalizedEntry.action || normalizedEntry.toolName || '').trim();
+    const callId = String(extra?.toolCallId || extra?.tool_call_id || normalizedEntry.toolCallId || '').trim();
+    if (fromProcess && action && (structuredActions.has(action) || (callId && structuredCallIds.has(callId)))
+      && ['tool', 'skill', 'result', 'error', 'info', 'progress'].includes(type)) return;
     let text = String(normalizedEntry.text || normalizedEntry.content || normalizedEntry.message || '').trim();
     let traceEntry = normalizedEntry;
     if (action === 'context_compaction') {
@@ -11180,9 +11290,9 @@ function desktopWorkflowTraceEntriesForMessage(message) {
     });
   };
   (Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : []).forEach((entry) => add(entry, 'info'));
-  processEntriesForMessage(message).forEach((entry) => add(entry, 'process'));
+  processEntriesForMessage(message).forEach((entry) => add(entry, 'process', true));
   const bodyEntries = Array.isArray(message?.body?.processEntries) ? message.body.processEntries : [];
-  bodyEntries.forEach((entry) => add(entry, 'process'));
+  bodyEntries.forEach((entry) => add(entry, 'process', true));
   return out;
 }
 
@@ -11422,10 +11532,12 @@ function extractGoalContinuationDirective(content) {
 }
 
 function renderGoalContinuationMessage(msg) {
-  const directive = extractGoalContinuationDirective(msg?.content);
+  const content = String(msg?.content || '').trim();
+  const isRestart = String(msg?.messageKind || '') === 'goal_restart_notice'
+    || /Restart recovery checkpoint:|Interrupted by (?:prom_apply_dev_changes|gateway_restart|build_deploy)/i.test(content);
+  const label = isRestart ? 'Gateway restarted — goal continuing.' : 'Goal continuing.';
   return `<div class="msg-content">
-    <strong>Goal continuation</strong><br>
-    <span style="color:var(--muted);font-size:12px">Judge reprompt: ${escHtml(directive)}</span>
+    <strong>${escHtml(label)}</strong>
   </div>`;
 }
 
@@ -12440,7 +12552,7 @@ function parsePersistedToolLogEntries(toolLog, msg) {
         args = {};
       }
     }
-    const ok = status !== 'error' && !/^ERROR:/i.test(resultText);
+    const ok = status !== 'error';
     const extra = { source: 'toolLog', toolName: name, args };
     entries.push({
       ts,
@@ -12998,9 +13110,20 @@ function renderChecklistItemsHTML(items, options = {}) {
 }
 
 function getRuntimePlanItems(progressState) {
-  return Array.isArray(progressState?.items)
-    ? progressState.items.filter((item) => item && String(item.text || '').trim())
+  const declared = normalizeDeclaredRuntimeProgressState(progressState);
+  return Array.isArray(declared.items)
+    ? declared.items.filter((item) => item && String(item.text || '').trim())
     : [];
+}
+
+function normalizeDeclaredRuntimeProgressState(progressState) {
+  const source = String(progressState?.source || 'none').trim().toLowerCase();
+  if (source !== 'declared') return { source: 'none', activeIndex: -1, items: [] };
+  return {
+    source: 'declared',
+    activeIndex: Number(progressState?.activeIndex ?? -1),
+    items: Array.isArray(progressState?.items) ? progressState.items : [],
+  };
 }
 
 function renderInlineRuntimePlanHtml(progressState) {
@@ -13084,7 +13207,8 @@ function renderProgressPanel() {
   const list = document.getElementById('progress-list');
   const empty = document.getElementById('progress-empty');
   if (!list || !empty) return;
-  const items = Array.isArray(window.runtimeProgressState?.items) ? window.runtimeProgressState.items : [];
+  const declaredProgress = normalizeDeclaredRuntimeProgressState(window.runtimeProgressState);
+  const items = declaredProgress.items;
 
   if (!items.length) {
     empty.style.display = 'block';
@@ -13944,7 +14068,7 @@ function persistSession(id) {
   if (window.activeChatSessionId === id) {
     window.chatHistory = Array.isArray(s.history) ? s.history : (s.history = []);
     window.processLogEntries = Array.isArray(s.processLog) ? s.processLog : (s.processLog = []);
-    if (s.progressState) window.runtimeProgressState = s.progressState;
+    window.runtimeProgressState = normalizeDeclaredRuntimeProgressState(s.progressState);
   }
   applyAutoSessionTitleOnce(s, s.history);
   s.updatedAt = Date.now();
@@ -14066,6 +14190,12 @@ async function sendChat(queuedMessage = null, options = {}) {
       });
     }
     scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
+  };
+  const applyLiveToolActivity = (phase, payload = {}) => {
+    if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
+    const entry = applyToolActivityEvent(streamState.liveTraceEntries, phase, payload);
+    scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
+    return entry;
   };
   const appendCompactionTrace = (status = 'compacting', summary = '', extra = null) => {
     if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
@@ -14195,6 +14325,8 @@ async function sendChat(queuedMessage = null, options = {}) {
   let messageWithFiles = message;
 
   const realtimeAgentDispatch = String(options.voiceSource || '').includes('realtime_agent_dispatch');
+  const realtimeAgentChatHandoff = String(options.voiceSource || '').includes('realtime_agent_chat_handoff');
+  const realtimeAgentVoiceHandoff = realtimeAgentDispatch || realtimeAgentChatHandoff;
   const reuseExistingUserIndex = Number.isInteger(options.reuseExistingUserIndex)
     ? options.reuseExistingUserIndex
     : (options.voiceAgentHandoff === true ? findRecentVoiceWorkflowUserIndex(sessionHistoryRef, messageWithFiles) : -1);
@@ -14208,11 +14340,11 @@ async function sendChat(queuedMessage = null, options = {}) {
   userTurnMessage.content = messageWithFiles;
   userTurnMessage.attachmentPreviews = uploadedAttachmentPreviews.length ? uploadedAttachmentPreviews : undefined;
   userTurnMessage.timestamp = userTurnMessage.timestamp || Date.now();
-  if (realtimeAgentDispatch) {
+  if (realtimeAgentVoiceHandoff) {
     userTurnMessage.voiceAgentWorkerHandoff = true;
-    userTurnMessage.source = 'realtime_agent_dispatch';
+    userTurnMessage.source = realtimeAgentChatHandoff ? 'realtime_agent_chat_handoff' : 'realtime_agent_dispatch';
     userTurnMessage.channel = 'voice';
-    userTurnMessage.channelLabel = 'Voice Agent handoff';
+    userTurnMessage.channelLabel = realtimeAgentChatHandoff ? 'Voice Agent to Worker' : 'Voice Agent handoff';
   }
   if (reuseExistingUserIndex < 0) sessionHistoryRef.push(userTurnMessage);
   const userTurnIndex = sessionHistoryRef.indexOf(userTurnMessage);
@@ -14307,8 +14439,8 @@ async function sendChat(queuedMessage = null, options = {}) {
 
   streamState.currentTurnStartIndex = Array.isArray(thisSession?.processLog) ? thisSession.processLog.length : 0;
   if (window.activeChatSessionId === thisSessionId) window.currentTurnStartIndex = streamState.currentTurnStartIndex;
-  if (realtimeAgentDispatch) {
-    addProcessEntry('info', `Voice Agent handoff to Worker: ${(uploadedFileCount > 0 ? `${message} [+${uploadedFileCount} file(s)]` : message).slice(0, 900)}`);
+  if (realtimeAgentVoiceHandoff) {
+    addProcessEntry('info', `${realtimeAgentChatHandoff ? 'Voice Agent to Worker (current chat)' : 'Voice Agent handoff to Worker'}: ${(uploadedFileCount > 0 ? `${message} [+${uploadedFileCount} file(s)]` : message).slice(0, 900)}`);
   } else {
     addProcessEntry('user', uploadedFileCount > 0 ? `${message} [+${uploadedFileCount} file(s)]` : message);
   }
@@ -14367,7 +14499,18 @@ async function sendChat(queuedMessage = null, options = {}) {
       '[/REALTIME_AGENT_HANDOFF]',
     ].join('\n')
     : '';
-  const turnCallerContext = [combinedCallerContext, realtimeInterruptCallerContext, desktopVoiceAgentHandoffContext, realtimeAgentDispatchContext].filter(Boolean).join('\n\n') || undefined;
+  const realtimeAgentChatHandoffContext = realtimeAgentChatHandoff
+    ? [
+      '[VOICE_AGENT_HANDOFF]',
+      '[VOICE_AGENT_CHAT_HANDOFF]',
+      'The live Voice Agent routed this planning or discussion request to the Prometheus Worker in the current foreground chat.',
+      'Respond as a normal chat turn with the full reasoning and tool stream. Do not create or queue a background task for this turn.',
+      'Voice milestone mode may narrate meaningful progress, so emit accurate progress and finish with a complete answer for the Voice Agent to summarize.',
+      '[/VOICE_AGENT_CHAT_HANDOFF]',
+      '[/VOICE_AGENT_HANDOFF]',
+    ].join('\n')
+    : '';
+  const turnCallerContext = [combinedCallerContext, realtimeInterruptCallerContext, desktopVoiceAgentHandoffContext, realtimeAgentDispatchContext, realtimeAgentChatHandoffContext].filter(Boolean).join('\n\n') || undefined;
   if (designMultiSelectedElements.length) clearDesignMultiSelection();
 
 		  const allSteps = [];
@@ -14414,7 +14557,6 @@ async function sendChat(queuedMessage = null, options = {}) {
 	    if (!text) return '';
 	    pendingThinkingBurst = '';
 	    collectTurnThinking(text);
-	    logThinkingToProcess(text);
 	    return text;
 	  };
 		  const persistTurnThinkingToProcess = () => {
@@ -14632,6 +14774,18 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            break;
 	          }
 
+	          case 'reasoning_summary_delta': {
+	            const chunk = String(event.text || event.summary || '');
+	            if (chunk) {
+	              collectTurnThinking(chunk);
+	              appendLiveTrace('think', chunk, {
+	                append: true,
+	                extra: { visibility: 'user', source: 'reasoning_summary' },
+	              });
+	            }
+	            break;
+	          }
+
 	          case 'agent_thought': {
 	            const thoughtText = String(event.text || '').trim();
 	            if (thoughtText) {
@@ -14657,15 +14811,13 @@ async function sendChat(queuedMessage = null, options = {}) {
             if (modelType === 'tool_call_start') {
               movePreToolAnswerTextIntoPreamble();
               sawToolActivityThisTurn = true;
-              const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
-              appendLiveTrace('tool', `Preparing ${name}...`);
+              applyLiveToolActivity('prepare', { ...modelEvent, action: modelEvent.name });
             } else if (modelType === 'tool_call_delta') {
               // Arguments can stream token-by-token; keep the UI calm and let the
               // final normalized tool event show the complete call.
             } else if (modelType === 'tool_call_done') {
               sawToolActivityThisTurn = true;
-              const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
-              appendLiveTrace('tool', `Prepared ${name}`);
+              applyLiveToolActivity('prepared', { ...modelEvent, action: modelEvent.name });
             }
             break;
           }
@@ -14748,24 +14900,24 @@ async function sendChat(queuedMessage = null, options = {}) {
             const isBackgroundAgentTool = action.startsWith('background_');
             if (isSkillTool) {
               pushProgressLine(`${stepPrefix}${displayAction}`);
-              appendLiveTrace('tool', `${stepPrefix}${displayAction}`);
-              addProcessEntry('skill', `${stepPrefix}${displayAction}${syntheticTag}`);
+              applyLiveToolActivity('call', event);
+              addProcessEntry('skill', `${stepPrefix}${displayAction}${syntheticTag}`, { action, args: args || {}, ...(event.actor ? { actor: event.actor } : {}) });
             } else if (isBackgroundAgentTool) {
               pushProgressLine(`${stepPrefix}${displayAction}`);
-              appendLiveTrace('tool', `${stepPrefix}${displayAction}`);
+              applyLiveToolActivity('call', event);
               addProcessEntry(
                 'tool',
                 `${stepPrefix}${displayAction}${syntheticTag}`,
-                (args || event.actor) ? { ...(args || {}), actor: event.actor || 'Background Agent' } : { actor: 'Background Agent' },
+                { action, args: args || {}, ...(args || {}), actor: event.actor || 'Background Agent' },
               );
             } else {
               if (action) pushProgressLine(`${stepPrefix}${displayAction}`);
-              if (action) appendLiveTrace('tool', `${stepPrefix}${displayAction}`);
+              if (action) applyLiveToolActivity('call', event);
               if (action) {
                 addProcessEntry(
                   'tool',
                   `${stepPrefix}${displayAction}${syntheticTag}`,
-                  (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
+                  { action, args: args || {}, ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) },
                 );
                 scheduleChatContextWindowRefresh(650);
               }
@@ -14779,7 +14931,7 @@ async function sendChat(queuedMessage = null, options = {}) {
             const stepPrefix = getDeclaredPlanToolPrefix(stepNum);
             movePreToolAnswerTextIntoPreamble();
             const text = String(event.result || '');
-	            const ok = event.error === true ? false : !/^ERROR:/i.test(text);
+	            const ok = event.ok !== false && event.success !== false && !event.error;
 	            const syntheticTag = event.synthetic ? ' [synthetic]' : '';
 	            const isBackgroundAgentTool = action.startsWith('background_');
 	            const extraData = (event.extra && typeof event.extra === 'object') ? { ...event.extra } : {};
@@ -14820,7 +14972,7 @@ async function sendChat(queuedMessage = null, options = {}) {
             sawToolActivityThisTurn = true;
             const resultDisplay = formatToolResultForLog(action, text, ok, streamState);
             if (action) pushProgressLine(`${stepPrefix}${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}`);
-            if (action) appendLiveTrace(ok ? 'result' : 'error', `${stepPrefix}${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}`);
+            if (action) applyLiveToolActivity('result', event);
             if (isBackgroundAgentTool) {
               try {
                 const parsed = JSON.parse(text);
@@ -14831,7 +14983,7 @@ async function sendChat(queuedMessage = null, options = {}) {
             addProcessEntry(
               ok ? 'result' : 'error',
               `${stepPrefix}${resultDisplay}${syntheticTag}`,
-              extraPayload,
+              { action, args: event.args || {}, error: !ok, durationMs: event.durationMs ?? event.elapsedMs, ...(extraPayload || {}) },
             );
             recordChatContextWindowToolResult(event, thisSessionId);
             break;
@@ -14845,7 +14997,7 @@ async function sendChat(queuedMessage = null, options = {}) {
               sawToolActivityThisTurn = true;
               const progressText = formatToolProgressForLog(action, message);
               pushProgressLine(progressText);
-              appendLiveTrace('tool', progressText);
+              applyLiveToolActivity('progress', event);
               addProcessEntry('info', progressText, event.actor ? { actor: event.actor } : undefined);
             }
             break;
@@ -14881,7 +15033,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 
 	          case 'progress_state': {
 	            const previousPlanActiveIndex = Number(streamState.declaredPlanToolActiveIndex ?? -1);
-	            streamState.runtimeProgressState = {
+	            streamState.runtimeProgressState = normalizeDeclaredRuntimeProgressState({
 	              source: String(event.source || 'none'),
 	              activeIndex: Number(event.activeIndex || -1),
 	              items: Array.isArray(event.items) ? event.items.map((item, idx) => ({
@@ -14889,7 +15041,7 @@ async function sendChat(queuedMessage = null, options = {}) {
                 text: String(item.text || '').slice(0, 120),
 	                status: String(item.status || 'pending'),
 	              })) : [],
-	            };
+	            });
 	            const nextPlanActiveIndex = getDeclaredPlanActiveIndex();
 	            if (nextPlanActiveIndex < 0 || nextPlanActiveIndex !== previousPlanActiveIndex) {
 	              if (previousPlanActiveIndex >= 0 && nextPlanActiveIndex !== previousPlanActiveIndex) {
@@ -15481,7 +15633,7 @@ function backgroundSpawnProcessEntryFromEvent(msg = {}) {
     }
     case 'tool_result': {
       const text = String(msg.result || msg.output || msg.error || '').trim();
-      const ok = msg.error !== true && !/^ERROR:/i.test(text);
+      const ok = msg.ok !== false && msg.success !== false && !msg.error;
       const content = action
         ? formatToolResultForLog(action, backgroundSpawnPreview(text, 240), ok, null)
         : `${label}${text ? ` -> ${backgroundSpawnPreview(text, 220)}` : ok ? ' complete' : ' failed'}`;
@@ -19012,11 +19164,13 @@ function isDesktopVoiceNarrationActive() {
 
 function speakVoiceAgentRealtimeMilestone(text, options = {}) {
   const spoken = cleanVoiceSpeechText(text);
+  if (!spoken) return;
+  if (desktopVoiceOutputBusy()) {
+    setTimeout(() => speakVoiceAgentRealtimeMilestone(spoken, { ...options, force: true }), 750);
+    return;
+  }
   const dc = voiceAgentRealtimeConnection?.dc;
-  if (!spoken || !dc || dc.readyState !== 'open') return;
-  if (voiceAgentRealtimeQuiet?.active) return;
-  if (voiceAgentRealtimeConnection?.activeResponse || realtimeVoicePlaybackActive || realtimeVoiceActiveResponseId) return;
-  if (voiceAgentRealtimeTurn?.hadFunctionCall && options.force !== true) return;
+  if (!dc || dc.readyState !== 'open') return;
   if (!shouldSpeakRealtimeNarration(spoken, { ...options, minGapMs: Number(options.minGapMs ?? 20000) || 20000 })) return;
   try {
     dc.send(JSON.stringify({
@@ -20139,6 +20293,53 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
 
   addSessionProcessEntry(sessionId, 'tool', `Realtime model called: ${name}`, { actor: 'Voice Agent (Realtime)', args });
 
+  if (name === 'restart_gateway_quick') {
+    try {
+      const response = await fetch('/api/voice-agent/restart-gateway-quick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, reason: String(args.reason || '').trim(), source: 'desktop_realtime_voice' }),
+      });
+      const data = await response.json().catch(() => ({}));
+      sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({
+        ok: response.ok && data?.success === true,
+        restarting: data?.restarting === true,
+        note: 'The quick restart has been scheduled. Do not speak again before disconnect; the restarted gateway will confirm success.',
+        error: data?.error || '',
+      }), { createResponse: false });
+    } catch (err) {
+      sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: false, restarting: false, error: String(err?.message || err) }));
+    }
+    return;
+  }
+
+  if (name === 'send_to_prometheus_chat') {
+    const message = String(args.message || args.prompt || '').trim();
+    let started = false;
+    let error = '';
+    if (message) {
+      try {
+        removeRecentRealtimeAgentChatMessage(sessionId, 'user', voiceAgentRealtimeTurn.lastUserTranscript || message);
+        addSessionProcessEntry(sessionId, 'info', `Voice Agent routed discussion to Worker: ${message.slice(0, 900)}`, { actor: 'Voice Agent (Realtime)' });
+        sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: true, started: true, mode: 'current_chat', spoken_confirmation_not_needed: true }), { createResponse: false });
+        started = true;
+        Promise.resolve(window.sendChat?.(message, {
+          skipVoiceAgent: true,
+          voiceSource: 'realtime_agent_chat_handoff',
+          sessionIdOverride: sessionId,
+        })).catch((err) => {
+          console.warn('[voice-agent-realtime] current-chat handoff failed', err);
+        });
+      } catch (err) {
+        error = String(err?.message || err);
+      }
+    }
+    if (!started) {
+      sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: false, started: false, mode: 'current_chat', error: error || 'A message is required.' }));
+    }
+    return;
+  }
+
   // Worker control — handled client-side via existing flows
   if (name === 'dispatch_prometheus_worker') {
     const singleTask = String(args.task || args.prompt || '').trim();
@@ -20163,27 +20364,62 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
     let error = '';
     if (tasks.length) {
       try {
+        const primaryTask = tasks[0];
+        const backgroundTasks = tasks.slice(1);
+        const primaryLink = {
+          taskId: `voice_primary_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          title: primaryTask.title || 'Primary chat worker',
+          prompt: primaryTask.prompt,
+          status: 'running',
+          workgroupId: '',
+          finalResult: '',
+        };
+        const syncPrimary = async (status, finalResult = '') => {
+          primaryLink.status = status;
+          primaryLink.finalResult = String(finalResult || '');
+          if (!primaryLink.workgroupId) return;
+          try {
+            await fetch(`/api/voice-agent/workgroups/${encodeURIComponent(primaryLink.workgroupId)}/workers/${encodeURIComponent(primaryLink.taskId)}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status, finalResult: primaryLink.finalResult }),
+            });
+          } catch {}
+        };
         voiceAgentRealtimeTurn.dispatchedWorkerThisResponse = true;
         cancelVoiceAgentRealtimeResponseForDispatch();
         removeRecentRealtimeAgentChatMessage(sessionId, 'user', singleTask || voiceAgentRealtimeTurn.lastUserTranscript || dispatchLabel);
-        markVoiceAgentRealtimeWorkerDispatch(sessionId, dispatchLabel);
-        const response = await fetch('/api/voice-agent/dispatch-workers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId,
-            task: singleTask,
-            tasks,
-            delivery: 'report_each',
-            sourceTranscript: String(voiceAgentRealtimeTurn.lastUserTranscript || singleTask || dispatchLabel || '').trim(),
-            source: 'desktop_realtime_agent_dispatch',
-          }),
-        });
-        data = await response.json().catch(() => ({}));
-        dispatched = response.ok && (data?.success === true || data?.ok === true);
-        error = data?.error || '';
+        markVoiceAgentRealtimeWorkerDispatch(sessionId, primaryTask.prompt);
+        Promise.resolve(window.sendChat?.(primaryTask.prompt, {
+          skipVoiceAgent: true,
+          voiceSource: 'realtime_agent_dispatch',
+          sessionIdOverride: sessionId,
+        })).then((result) => syncPrimary('complete', String(result?.text || result || '')))
+          .catch((err) => syncPrimary('failed', String(err?.message || err)));
+        dispatched = true;
+        if (backgroundTasks.length) {
+          const response = await fetch('/api/voice-agent/dispatch-workers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId,
+              tasks: backgroundTasks,
+              primaryWorker: primaryLink,
+              delivery: 'report_each',
+              sourceTranscript: String(voiceAgentRealtimeTurn.lastUserTranscript || singleTask || dispatchLabel || '').trim(),
+              source: 'desktop_realtime_agent_hybrid_dispatch',
+            }),
+          });
+          data = await response.json().catch(() => ({}));
+          const backgroundDispatched = response.ok && (data?.success === true || data?.ok === true);
+          error = backgroundDispatched ? '' : (data?.error || 'Additional workers could not be started.');
+          primaryLink.workgroupId = backgroundDispatched ? String(data?.workgroupId || '') : '';
+          if (primaryLink.workgroupId) syncPrimary(primaryLink.status, primaryLink.finalResult);
+        }
         if (dispatched) {
-          addSessionProcessEntry(sessionId, 'info', `Dispatched ${tasks.length} Prometheus worker${tasks.length === 1 ? '' : 's'}.`, {
+          addSessionProcessEntry(sessionId, 'info', backgroundTasks.length
+            ? `Primary Worker linked to chat; dispatched ${backgroundTasks.length} background worker${backgroundTasks.length === 1 ? '' : 's'}.`
+            : 'Primary Worker linked to the current chat.', {
             actor: 'Voice Agent (Realtime)',
             workgroupId: data?.workgroupId || '',
             taskIds: data?.taskIds || [],
@@ -20206,7 +20442,9 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
       error,
       spoken_confirmation_not_needed: true,
       note: dispatched
-        ? 'Worker dispatch has started through the voice workgroup bridge. Do not speak another handoff acknowledgement.'
+        ? (tasks.length > 1
+          ? 'The primary Worker is linked to the current chat and additional Workers are background tasks in one tracked workgroup. Background completions remain visible to voice while the primary continues. Do not speak another handoff acknowledgement.'
+          : 'The primary Worker is linked to the current chat. No workgroup or background task was created. Do not speak another handoff acknowledgement.')
         : 'Worker dispatch failed before any worker started.',
     }), { createResponse: false });
     return;
@@ -38124,6 +38362,7 @@ function renderInlinePrometheusQuestion(item) {
     ${question.prompt ? `<div class="chat-approval-detail">${escHtml(question.prompt)}</div>` : ''}
     ${question.context ? `<div class="chat-approval-subdetail">${escHtml(question.context)}</div>` : ''}
     ${questionBlocks}
+    ${!pending && question.generalOther ? `<div class="chat-approval-scope"><span>Anything else</span>${escHtml(question.generalOther).replace(/\n/g, '<br>')}</div>` : ''}
     ${pending && question.allowGeneralOther ? `<div style="margin-top:10px"><textarea data-question-general-other="1" placeholder="Anything else..." rows="2" class="pq-input"></textarea></div>` : ''}
     ${pending
       ? `<div class="chat-approval-actions">
@@ -38214,10 +38453,12 @@ function updateInlinePrometheusQuestionStatus(event = {}, status = '') {
   const sessionId = String(event.sessionId || event.question?.sessionId || event.question?.sourceSessionId || window.activeChatSessionId || '').trim();
   const targetSessions = sessionId ? [getChatSessionById(sessionId)].filter(Boolean) : (window.chatSessions || []);
   targetSessions.forEach((sess) => {
-    const msg = (sess.history || []).find((entry) => String(entry?.questionRequest?.id || '') === id);
-    if (!msg) return;
-    msg.questionRequest = normalizePrometheusQuestionRecord(event.question || msg.questionRequest, { ...event, id, status });
-    msg.questionRequest.status = status || msg.questionRequest.status || 'pending';
+    const matches = (sess.history || []).filter((entry) => String(entry?.questionRequest?.id || '') === id);
+    if (!matches.length) return;
+    matches.forEach((msg) => {
+      msg.questionRequest = normalizePrometheusQuestionRecord(event.question || msg.questionRequest, { ...event, id, status });
+      msg.questionRequest.status = status || msg.questionRequest.status || 'pending';
+    });
     persistSession(sess.id);
   });
   if (window.activeChatSessionId === sessionId) renderChatMessages();
@@ -38248,7 +38489,8 @@ async function submitInlinePrometheusQuestion(id) {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    updateInlinePrometheusQuestionStatus({ questionId: id, sessionId: question.sessionId, question: result.question }, 'answered');
+    const answeredQuestion = { ...(result?.question || question), answers: payload.answers, generalOther: payload.generalOther };
+    updateInlinePrometheusQuestionStatus({ questionId: id, sessionId: question.sessionId, question: answeredQuestion }, 'answered');
     await loadSessionApprovals();
     const resumePrompt = String(result?.resumePrompt || '').trim();
     if (resumePrompt) {
@@ -39030,7 +39272,7 @@ wsEventBus.on('session_notification', async (msg) => {
       };
       window.chatSessions.unshift(prev);
     }
-    if (String(msg.source || '') === 'hot_restart') {
+    if (['hot_restart', 'dev_apply'].includes(String(msg.source || ''))) {
       clearLiveTurnStateForSession(prevId);
       prev._needsServerLoad = true;
       await _loadSessionFromServer(prevId, { force: true });
@@ -39071,13 +39313,16 @@ wsEventBus.on('session_notification', async (msg) => {
     if (targetSessionId.startsWith('mobile_') || targetSessionId === 'mobile_default') return;
     const restored = await appendToPreviousSession();
     if (restored?.id) {
-      window.activeChatSessionId = restored.id;
-      setAgentSessionId(restored.id);
-      restored.unread = false;
+      const activeBeforeRestartNotice = String(window.activeChatSessionId || '').trim();
+      const viewingRecoveredThread = activeBeforeRestartNotice === restored.id;
+      restored.unread = !viewingRecoveredThread;
       saveChatSessions();
-      syncActiveChat();
       if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
-      renderChatMessages();
+      if (viewingRecoveredThread) {
+        setAgentSessionId(restored.id);
+        syncActiveChat();
+        renderChatMessages();
+      }
     }
     const restartText = String(msg.text || '').trim();
     const notificationKey = String(msg.notificationId || `${restored?.id || msg.previousSessionId || ''}:${restartText.length}:${restartText.slice(0, 120)}`);
@@ -39087,6 +39332,19 @@ wsEventBus.on('session_notification', async (msg) => {
         sessionId: restored?.id || msg.previousSessionId || msg.sessionId,
       });
     }
+    ack();
+    return;
+  }
+  if (String(msg.source || '') === 'dev_apply') {
+    const restored = await appendToPreviousSession();
+    if (restored?.id) {
+      const viewingAppliedThread = String(window.activeChatSessionId || '').trim() === restored.id;
+      restored.unread = !viewingAppliedThread;
+      saveChatSessions();
+      if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+      if (viewingAppliedThread) renderChatMessages();
+    }
+    bgtToast('Coordinated dev changes applied', String(msg.text || 'The shared web UI is live.').slice(0, 180));
     ack();
     return;
   }
@@ -39352,6 +39610,73 @@ function appendLiveTraceToStreamState(streamState, type, text, { append = false 
     ts: new Date().toLocaleTimeString(),
   });
 }
+
+function applyToolActivityToStreamState(streamState, phase, payload = {}) {
+  if (!streamState) return null;
+  if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
+  return applyToolActivityEvent(streamState.liveTraceEntries, phase, payload);
+}
+
+function desktopCommandActivityCollections(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return [];
+  const collections = [];
+  const add = (entries) => {
+    if (Array.isArray(entries) && !collections.includes(entries)) collections.push(entries);
+  };
+  add(getSessionStreamState(sid)?.liveTraceEntries);
+  const session = getChatSessionById(sid);
+  for (const message of Array.isArray(session?.history) ? session.history : []) {
+    add(message?.liveTraceEntries);
+    add(message?.metadata?.liveTraceEntries);
+  }
+  return collections;
+}
+
+function handleDesktopInlineCommandProcessEvent(eventType, message = {}, attempt = 0) {
+  const run = message.run && typeof message.run === 'object' ? message.run : {};
+  const sessionId = String(run.sessionId || message.sessionId || '').trim();
+  const runId = String(run.runId || message.runId || '').trim();
+  if (!sessionId || !runId) return;
+  if (eventType === 'process_run_exited') setToolActivityDisclosureState(`terminal:${runId}`, false);
+  let applied = false;
+  for (const entries of desktopCommandActivityCollections(sessionId)) {
+    if (applyCommandProcessEvent(entries, eventType, message)) applied = true;
+  }
+  if (!applied && attempt < 12) {
+    setTimeout(() => handleDesktopInlineCommandProcessEvent(eventType, message, attempt + 1), 40 + attempt * 20);
+    return;
+  }
+  if (eventType === 'process_run_output') {
+    appendCommandTerminalChunkToDom(runId, message.chunk, message.sequence || run.outputSeq);
+    return;
+  }
+  if (applied && window.activeChatSessionId === sessionId) renderChatMessages();
+}
+
+['process_run_started', 'process_run_update', 'process_run_exited'].forEach((eventType) => {
+  wsEventBus.on(eventType, (message = {}) => handleDesktopInlineCommandProcessEvent(eventType, message));
+});
+wsEventBus.on('process_run_output', (message = {}) => handleDesktopInlineCommandProcessEvent('process_run_output', message));
+
+document.addEventListener('toggle', async (event) => {
+  const terminal = event.target?.closest?.('.tool-command-terminal.is-complete');
+  if (!terminal?.open || terminal.dataset.logLoaded === '1' || terminal.dataset.logLoading === '1') return;
+  const runId = String(terminal.dataset.commandRunId || '').trim();
+  if (!runId) return;
+  terminal.dataset.logLoading = '1';
+  try {
+    const log = await api(`/api/processes/${encodeURIComponent(runId)}/log`);
+    const output = terminal.querySelector('[data-command-terminal-output]');
+    if (output) output.textContent = String(log?.combined || '(no output)');
+    terminal.dataset.logLoaded = '1';
+  } catch {
+    const output = terminal.querySelector('[data-command-terminal-output]');
+    if (output && /Open to load output/.test(output.textContent || '')) output.textContent = 'Could not load terminal output.';
+  } finally {
+    delete terminal.dataset.logLoading;
+  }
+}, true);
 
 async function refreshSessionFromServer(sessionId) {
   const sid = String(sessionId || '').trim();
@@ -39663,6 +39988,16 @@ function handleMainChatStreamEvent(msg = {}) {
     if (streamState.agentExecutionMode === 'execute') movePreToolAnswerTextIntoPreamble();
     if (evt.mode) addSessionProcessEntry(sid, 'info', `Agent mode: ${evt.mode}${evt.turnKind ? ` (${evt.turnKind})` : ''}`);
     renderIfViewing();
+  } else if (evt.type === 'reasoning_summary_delta') {
+    const chunk = String(evt.text || evt.summary || '');
+    if (chunk) {
+      window._sessionThinking[sid] = true;
+      appendLiveTraceToStreamState(streamState, 'think', chunk, {
+        append: true,
+        extra: { visibility: 'user', source: 'reasoning_summary' },
+      });
+      scheduleStreamingRenderFor(sid, renderIfViewing);
+    }
   } else if (evt.type === 'thinking_delta') {
     const chunk = String(evt.thinking || evt.text || '');
     if (chunk) {
@@ -39679,6 +40014,18 @@ function handleMainChatStreamEvent(msg = {}) {
     if (text) {
       addSessionProcessEntry(sid, 'think', text);
       appendLiveTraceToStreamState(streamState, 'think', text);
+      renderIfViewing();
+    }
+  } else if (evt.type === 'model_stream_event') {
+    const modelEvent = evt.event && typeof evt.event === 'object' ? evt.event : {};
+    const modelType = String(modelEvent.type || '').trim();
+    if (modelType === 'tool_call_start' || modelType === 'tool_call_done') {
+      movePreToolAnswerTextIntoPreamble();
+      streamState.toolActivityStarted = true;
+      applyToolActivityToStreamState(streamState, modelType === 'tool_call_start' ? 'prepare' : 'prepared', {
+        ...modelEvent,
+        action: modelEvent.name,
+      });
       renderIfViewing();
     }
   } else if (evt.type === 'ui_preflight' || evt.type === 'info') {
@@ -39699,8 +40046,8 @@ function handleMainChatStreamEvent(msg = {}) {
       streamState.toolActivityStarted = true;
       const args = evt.args && typeof evt.args === 'object' ? evt.args : {};
       const text = formatToolCallForLog(action, args, streamState);
-      addSessionProcessEntry(sid, action.startsWith('skill_') ? 'skill' : 'tool', text, evt.actor ? { actor: evt.actor, ...args } : args);
-      appendLiveTraceToStreamState(streamState, 'tool', text);
+      addSessionProcessEntry(sid, action.startsWith('skill_') ? 'skill' : 'tool', text, { action, args, ...args, ...(evt.actor ? { actor: evt.actor } : {}) });
+      applyToolActivityToStreamState(streamState, 'call', evt);
       renderIfViewing();
     }
   } else if (evt.type === 'tool_result') {
@@ -39712,10 +40059,10 @@ function handleMainChatStreamEvent(msg = {}) {
     const safeResultText = isBackgroundSession
       ? summarizeToolResultForBackgroundSession(resultText, action)
       : resultText;
-    const ok = evt.error === true ? false : !/^ERROR:/i.test(resultText);
+    const ok = evt.ok !== false && evt.success !== false && !evt.error;
     const text = action ? formatToolResultForLog(action, safeResultText, ok, streamState) : safeResultText;
-    addSessionProcessEntry(sid, ok ? 'result' : 'error', text, evt.actor ? { actor: evt.actor } : undefined);
-    appendLiveTraceToStreamState(streamState, ok ? 'result' : 'error', action ? `${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}` : text);
+    addSessionProcessEntry(sid, ok ? 'result' : 'error', text, { action, args: evt.args || {}, error: !ok, durationMs: evt.durationMs ?? evt.elapsedMs, ...(evt.actor ? { actor: evt.actor } : {}) });
+    applyToolActivityToStreamState(streamState, 'result', evt);
     renderIfViewing();
   } else if (evt.type === 'tool_progress') {
     movePreToolAnswerTextIntoPreamble();
@@ -39727,10 +40074,10 @@ function handleMainChatStreamEvent(msg = {}) {
       .filter(Boolean)
       .join(': ');
     addSessionProcessEntry(sid, 'info', text, evt.actor ? { actor: evt.actor } : undefined);
-    appendLiveTraceToStreamState(streamState, 'info', text);
+    applyToolActivityToStreamState(streamState, 'progress', evt);
     renderIfViewing();
   } else if (evt.type === 'progress_state') {
-    streamState.runtimeProgressState = {
+    streamState.runtimeProgressState = normalizeDeclaredRuntimeProgressState({
       source: String(evt.source || 'none'),
       activeIndex: Number(evt.activeIndex || -1),
       items: Array.isArray(evt.items) ? evt.items.map((item, idx) => ({
@@ -39738,7 +40085,7 @@ function handleMainChatStreamEvent(msg = {}) {
         text: String(item.text || '').slice(0, 120),
         status: String(item.status || 'pending'),
       })) : [],
-    };
+    });
     sess.progressState = streamState.runtimeProgressState;
     renderIfViewing();
   } else if (evt.type === 'done') {
@@ -39817,6 +40164,32 @@ wsEventBus.on('main_chat_stream_update', (msg = {}) => {
   scheduleMainChatStreamCatchup(sid);
 });
 
+wsEventBus.on('dev_edit_coordination_updated', (msg = {}) => {
+  const sid = String(msg.sessionId || '').trim();
+  const session = Array.isArray(window.chatSessions)
+    ? window.chatSessions.find((item) => String(item?.id || '') === sid)
+    : null;
+  if (session) {
+    session.devEditCoordination = {
+      phase: String(msg.phase || ''),
+      role: String(msg.role || ''),
+      batchId: String(msg.batchId || ''),
+      blockers: Array.isArray(msg.blockers) ? msg.blockers : [],
+      awakened: Array.isArray(msg.awakened) ? msg.awakened : [],
+      updatedAt: Date.now(),
+    };
+    session.updatedAt = Date.now();
+    saveChatSessions();
+    if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+  }
+  const blockers = Array.isArray(msg.blockers) ? msg.blockers.length : 0;
+  if (msg.role === 'waiting') {
+    bgtToast('Dev edit verified', `Waiting for ${blockers || 'other'} coordinated edit${blockers === 1 ? '' : 's'} before one shared apply.`);
+  } else if (msg.role === 'leader' && msg.batchId) {
+    bgtToast('Applying coordinated dev edits', `Batch ${String(msg.batchId).slice(-12)} is building once for all ready threads.`);
+  }
+});
+
 function appendVoiceAgentToolProcessEvent(msg = {}) {
   const sid = String(msg.sessionId || '').trim();
   if (!sid) return;
@@ -39829,7 +40202,7 @@ function appendVoiceAgentToolProcessEvent(msg = {}) {
       type: (action.startsWith('skill_') || action.startsWith('voice_skill')) ? 'skill' : 'tool',
       content: formatToolCallForLog(action, args, null),
       actor: 'Voice Agent',
-      extra: { actor: 'Voice Agent', ...args },
+      extra: { actor: 'Voice Agent', action, args, ...args },
       ts: new Date().toLocaleTimeString(),
     };
     addSessionProcessEntry(sid, entry.type, entry.content, entry.extra);
@@ -39838,12 +40211,12 @@ function appendVoiceAgentToolProcessEvent(msg = {}) {
   }
   if (evt.type === 'tool_result') {
     const resultText = String(evt.result || evt.output || '').trim();
-    const ok = evt.error === true ? false : !/^ERROR:/i.test(resultText);
+    const ok = evt.ok !== false && evt.success !== false && !evt.error;
     const entry = {
       type: ok ? 'result' : 'error',
       content: formatToolResultForLog(action, resultText, ok, null),
       actor: 'Voice Agent',
-      extra: { actor: 'Voice Agent' },
+      extra: { actor: 'Voice Agent', action, args: evt.args || {}, error: !ok, durationMs: evt.durationMs ?? evt.elapsedMs },
       ts: new Date().toLocaleTimeString(),
     };
     addSessionProcessEntry(sid, entry.type, entry.content, entry.extra);
@@ -40044,13 +40417,125 @@ wsEventBus.on('task_notification', (msg) => {
   bgtToast('💬 Task message', notifMessage.slice(0, 80));
 });
 
+const desktopVoiceWorkerAlertQueue = [];
+const desktopVoiceWorkerAlertRecent = new Map();
+let desktopVoiceWorkerAlertRunning = false;
+
+function desktopVoiceOutputBusy() {
+  return !!(
+    voiceAgentRealtimeConnection?.activeResponse
+    || realtimeVoicePlaybackActive
+    || realtimeVoiceActiveResponseId
+    || realtimeAssistantSpeaking
+    || window.speechSynthesis?.speaking
+  );
+}
+
+async function waitForDesktopVoiceOutputIdle(timeoutMs = 90000) {
+  const started = Date.now();
+  while (desktopVoiceOutputBusy() && Date.now() - started < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 500));
+}
+
+async function speakDesktopVoiceWorkerAlert(update) {
+  await waitForDesktopVoiceOutputIdle();
+  const text = String(update?.text || '').trim();
+  if (!text) return;
+  if (wantsVoiceAgentRealtimeMode()) {
+    const dc = voiceAgentRealtimeConnection?.dc;
+    if (!dc || dc.readyState !== 'open') return;
+    dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message', role: 'user', content: [{ type: 'input_text', text: [
+          '[BACKGROUND_WORKER_UPDATE]',
+          JSON.stringify(update).slice(0, 7000),
+          'Give the user a natural operational update. Explain what was established, what is happening now, and any failure or recovery in plain language. Do not recite tool names or raw status fields. For completion, include the actual outcome. For a pause, clearly say what needs attention.',
+          'This alert is allowed while wake-phrase quiet mode is active. Speak it without changing or disabling that quiet mode.',
+          '[/BACKGROUND_WORKER_UPDATE]',
+        ].join('\n') }],
+      },
+    }));
+    dc.send(JSON.stringify({
+      type: 'response.create',
+      response: {
+        output_modalities: ['audio'],
+        instructions: 'Speak a grounded, natural worker update. Do not mention internal event fields, tool protocol, or JSON. Never interrupt existing speech.',
+      },
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await waitForDesktopVoiceOutputIdle();
+    return;
+  }
+  await speakAssistantReply(text);
+}
+
+async function drainDesktopVoiceWorkerAlerts() {
+  if (desktopVoiceWorkerAlertRunning) return;
+  desktopVoiceWorkerAlertRunning = true;
+  try {
+    while (desktopVoiceWorkerAlertQueue.length) {
+      const update = desktopVoiceWorkerAlertQueue.shift();
+      await speakDesktopVoiceWorkerAlert(update);
+      if (desktopVoiceWorkerAlertQueue.length) await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+  } finally {
+    desktopVoiceWorkerAlertRunning = false;
+  }
+}
+
+wsEventBus.on('voice_worker_update', (msg = {}) => {
+  if (msg.silent === true) return;
+  const sessionId = String(msg.sessionId || '').trim();
+  if (!sessionId || sessionId !== String(window.activeChatSessionId || '').trim()) return;
+  const voiceActive = !!(wantsVoiceAgentRealtimeMode() || realtimeVoiceRepliesEnabled || voiceRepliesEnabled);
+  if (!voiceActive) return;
+  const critical = msg.critical === true || msg.kind === 'paused' || msg.kind === 'complete';
+  if (!critical && realtimeNarrationMode !== 'milestones') return;
+  const recentKey = `${msg.taskId || ''}:${msg.kind || ''}`;
+  const now = Date.now();
+  const recentAt = Number(desktopVoiceWorkerAlertRecent.get(recentKey) || 0);
+  if (msg.kind !== 'complete' && recentAt && now - recentAt < 6000) return;
+  desktopVoiceWorkerAlertRecent.set(recentKey, now);
+  const duplicate = desktopVoiceWorkerAlertQueue.findIndex((entry) => entry.id === msg.id);
+  if (duplicate >= 0) return;
+  if (!critical) {
+    const staleIndex = desktopVoiceWorkerAlertQueue.findIndex((entry) => entry.taskId === msg.taskId && entry.kind === 'milestone');
+    if (staleIndex >= 0) desktopVoiceWorkerAlertQueue.splice(staleIndex, 1);
+  }
+  desktopVoiceWorkerAlertQueue.push(msg);
+  drainDesktopVoiceWorkerAlerts().catch((err) => console.warn('[voice worker update] narration failed:', err));
+});
+
 wsEventBus.on('creative_mode_changed', (msg) => {
   const sid = String(msg?.sessionId || '').trim();
   if (!sid) return;
   applySessionCreativeMode(sid, msg.creativeMode);
 });
 
+const CREATIVE_BRIDGE_ID = (() => {
+  const key = 'pm_creative_bridge_id';
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const created = `creative-ui-${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+    sessionStorage.setItem(key, created);
+    return created;
+  } catch { return `creative-ui-${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+})();
+const creativeBridgeCommandsSeen = new Set();
+
 wsEventBus.on('creative_command', (msg) => {
+  if (msg?.targetBridgeId && msg.targetBridgeId !== CREATIVE_BRIDGE_ID) return;
+  wsSend({ type: 'creative_command_ack', commandId: msg?.commandId, bridgeId: CREATIVE_BRIDGE_ID, timestamp: Date.now() });
+  const commandId = String(msg?.commandId || '');
+  if (commandId && creativeBridgeCommandsSeen.has(commandId)) return;
+  if (commandId) {
+    creativeBridgeCommandsSeen.add(commandId);
+    if (creativeBridgeCommandsSeen.size > 500) creativeBridgeCommandsSeen.delete(creativeBridgeCommandsSeen.values().next().value);
+  }
   handleCreativeCommandMessage(msg).catch((err) => {
     sendCreativeCommandResult(msg, {
       success: false,
@@ -40058,6 +40543,20 @@ wsEventBus.on('creative_command', (msg) => {
     });
   });
 });
+
+function announceCreativeBridgeReady() {
+  wsSend({
+    type: 'creative_bridge_ready',
+    bridgeId: CREATIVE_BRIDGE_ID,
+    sessionId: String(window.activeChatSessionId || window.agentSessionId || ''),
+    creativeMode: normalizeCreativeMode(window.currentCreativeMode),
+    surface: 'chat-page',
+    timestamp: Date.now(),
+  });
+}
+wsEventBus.on('ws:open', announceCreativeBridgeReady);
+announceCreativeBridgeReady();
+setInterval(announceCreativeBridgeReady, 15_000);
 
 wsEventBus.on('creative_extract_layers_progress', (msg) => {
   const sid = String(msg?.sessionId || '').trim();

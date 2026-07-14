@@ -1,24 +1,21 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating, rewriting, structuring, or polishing X/Twitter threads, multi-post narratives, launch threads, numbered posts, quote-tweet chains, or thread hooks and endings.",
+  "description": "Draft, rewrite, structure, or polish a multi-post X/Twitter thread. Use only when the user explicitly asks for an X thread, Twitter thread, numbered post sequence, thread hook, or thread rewrite—not for single posts or posting automation.",
+  "implicitInvocation": false,
   "triggers": [
-    "write a Twitter thread",
-    "write an X thread",
-    "turn this into a thread",
-    "launch thread",
-    "numbered thread",
-    "multi-post thread",
-    "thread hook",
-    "thread outline",
-    "split into tweets",
-    "make a tweetstorm",
-    "rewrite this thread",
-    "create a thread draft",
-    "thread ending",
-    "X thread structure",
-    "viral thread",
-    "founder thread"
+    "turn this into a twitter thread",
+    "draft a twitter thread hook",
+    "create a founder twitter thread",
+    "split this into tweets",
+    "rewrite this twitter thread",
+    "outline an x thread",
+    "launch thread on x",
+    "polish an x thread",
+    "write a twitter thread",
+    "multi post x thread",
+    "write an x thread",
+    "numbered twitter thread"
   ],
   "categories": [
     "x",
@@ -26,10 +23,8 @@
     "writing",
     "social"
   ],
-  "requiredTools": [
-    "skills"
-  ],
+  "requiredTools": [],
   "lifecycle": "active",
-  "name": "Twitter Thread",
+  "name": "twitter-thread",
   "id": "twitter-thread"
 }

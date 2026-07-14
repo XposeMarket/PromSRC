@@ -1,23 +1,16 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to import, ingest, organize, summarize, or convert external knowledge into Prometheus memory, skills, resources, docs, entity files, or workspace notes. It focuses on preserving source provenance and making knowledge reusable.",
+  "description": "Import external documents, repositories, notes, transcripts, or datasets into the appropriate Prometheus memory, project context, skill resource, or temporary artifact. Use for deliberate knowledge ingestion with provenance; do not use for merely reading or summarizing a file.",
+  "implicitInvocation": true,
   "triggers": [
-    "knowledge import",
-    "import docs",
-    "ingest knowledge",
-    "convert notes",
-    "add to memory",
-    "import resource",
-    "organize knowledge",
-    "knowledge pipeline",
-    "save this knowledge",
-    "turn into skill",
-    "document source",
-    "archive this",
-    "import file",
-    "knowledge base",
-    "source provenance"
+    "import repo docs into prometheus",
+    "add source material to memory",
+    "import knowledge into prometheus",
+    "ingest docs into memory",
+    "index external notes",
+    "transcript knowledge import",
+    "dataset knowledge import"
   ],
   "categories": [
     "knowledge-management",
@@ -31,5 +24,6 @@
     "skills"
   ],
   "lifecycle": "active",
-  "id": "knowledge-import-pipeline"
+  "id": "knowledge-import-pipeline",
+  "name": "knowledge-import-pipeline"
 }

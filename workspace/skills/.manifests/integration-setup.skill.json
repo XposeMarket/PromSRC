@@ -1,25 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when setting up, connecting, debugging, or verifying external app integrations, OAuth flows, connector setup, API app registrations, webhooks, redirect URLs, and connection status.",
+  "description": "Research, configure, connect, and verify a Prometheus integration for an external service using an existing connector, MCP preset, or supported definition. Use for installing/configuring a service connection; use connector-builder when implementation is missing and connector-smoke-test-harness for repeatable verification.",
   "triggers": [
-    "set up integration",
-    "connect this app",
-    "integration setup",
-    "OAuth setup",
-    "redirect URI",
-    "app registration",
-    "connector setup",
-    "webhook setup",
-    "connection status",
-    "integration failed",
-    "authorize account",
-    "add connected app",
-    "configure integration",
     "verify integration works",
+    "set up integration",
     "external app setup",
-    "reconnect service",
-    "integration credentials"
+    "add connected app",
+    "connect this app",
+    "configure integration",
+    "integration credentials",
+    "integration failed",
+    "integration setup",
+    "connection status",
+    "authorize account",
+    "reconnect service"
   ],
   "categories": [
     "integrations",
@@ -28,10 +23,14 @@
     "auth"
   ],
   "requiredTools": [
+    "connection_ops",
+    "mcp_server_tools",
     "connector_list",
     "integration_admin",
     "external_apps"
   ],
   "lifecycle": "active",
-  "id": "integration-setup"
+  "id": "integration-setup",
+  "name": "integration-setup",
+  "implicitInvocation": true
 }

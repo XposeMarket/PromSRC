@@ -16,6 +16,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getAgentById, ensureAgentWorkspace, getConfig } from '../../config/config.js';
+import { buildAgentIdentity, renderIdentityPrompt } from '../../agents/identity-generator.js';
+import { ensureAgentPromptFile } from '../../agents/agent-prompt-file.js';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -344,6 +346,9 @@ export interface ManagedTeam {
     pauseReason?: string;
     savedSchedules?: Record<string, string | null | undefined>;
   };
+
+  /** Canonical distinct manager agent for this team. */
+  managerAgentId?: string;
 
   // Links to AgentDefinition IDs in config.agents[]
   subagentIds: string[];
@@ -1205,6 +1210,7 @@ export function loadManagedTeamStore(): ManagedTeamStore {
 
       const normalizedTeam = {
         ...team,
+        managerAgentId: String(team.managerAgentId || `${team.id}_manager`),
         pendingChanges: pendingNormalized,
         changeHistory: historyNormalized,
         contextReferences: refsNormalized,
@@ -1212,6 +1218,7 @@ export function loadManagedTeamStore(): ManagedTeamStore {
         // Ensure runHistory is always an array (backwards-compat with older JSON)
         runHistory: Array.isArray(team.runHistory) ? team.runHistory : [],
       } as ManagedTeam;
+      if (!team.managerAgentId) mutated = true;
       const roomNormalized = normalizeTeamRoomState(normalizedTeam);
       normalizedTeam.roomState = roomNormalized.state;
       syncLegacyTeamFields(normalizedTeam);
@@ -1325,6 +1332,88 @@ export function deleteManagedTeam(id: string): boolean {
   return true;
 }
 
+function safeTeamPathId(value: string): string {
+  return String(value || '').trim().replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120);
+}
+
+export function getTeamManagerIdentityPath(teamId: string): string {
+  return path.join(getConfig().getWorkspacePath(), 'teams', safeTeamPathId(teamId), 'manager');
+}
+
+/** Ensure a managed team has a real, named manager agent with private identity and memory. */
+export function ensureManagedTeamManagerAgent(team: ManagedTeam): { agentId: string; identityPath: string } {
+  const agentId = String(team.managerAgentId || `${team.id}_manager`).trim();
+  const identityPath = getTeamManagerIdentityPath(team.id);
+  const managerName = `${team.name} Manager`;
+  const identity = buildAgentIdentity({
+    id: agentId,
+    explicitName: managerName,
+    description: `Manager agent for the ${team.name} managed team.`,
+    roleType: 'manager',
+    teamRole: 'Team Manager',
+    teamAssignment: String(team.manager?.systemPrompt || team.mission || team.teamContext || '').trim(),
+  });
+  ensureAgentPromptFile(identityPath, [
+    `# ${managerName}`,
+    '',
+    `Distinct manager agent for the ${team.name} managed team.`,
+    '',
+    renderIdentityPrompt(identity),
+    '',
+    '## Manager Role',
+    'Coordinate this team, choose useful members, verify their work, maintain shared team memory, and escalate decisions to the main Prometheus agent.',
+    '',
+    '## Team Mandate',
+    String(team.manager?.systemPrompt || team.mission || team.teamContext || 'Manage the team mandate.').trim(),
+    '',
+    '## Identity Boundary',
+    'You are this team’s manager agent. You are not Prom and not the main user-facing Prometheus chat.',
+  ].join('\n'));
+
+  const memoryPath = path.join(identityPath, 'MEMORY.md');
+  if (!fs.existsSync(memoryPath)) {
+    const legacyNotes = Array.isArray(team.managerNotes) && team.managerNotes.length
+      ? ['', '## Migrated Manager Notes', ...team.managerNotes.map((note) => `- ${new Date(note.timestamp).toISOString()}: ${note.content}`)]
+      : [];
+    fs.mkdirSync(identityPath, { recursive: true });
+    fs.writeFileSync(memoryPath, [
+      `# MEMORY.md - ${managerName}`,
+      '',
+      'Durable personal memory for this manager agent.',
+      '',
+      'Keep management lessons, verification preferences, recurring coordination decisions, and manager-owned open threads here.',
+      'Shared accepted team truth belongs in the team workspace memory.json.',
+      ...legacyNotes,
+    ].join('\n'), 'utf-8');
+  }
+
+  const cm = getConfig();
+  const cfg = cm.getConfig() as any;
+  const agents = Array.isArray(cfg.agents) ? [...cfg.agents] : [];
+  const idx = agents.findIndex((agent: any) => String(agent?.id || '') === agentId);
+  const entry = {
+    ...(idx >= 0 ? agents[idx] : {}),
+    id: agentId,
+    name: managerName,
+    description: `Manager agent for the ${team.name} managed team.`,
+    identity,
+    roleType: 'manager',
+    teamRole: 'Team Manager',
+    teamAssignment: String(team.manager?.systemPrompt || team.mission || team.teamContext || '').trim(),
+    teamId: team.id,
+    isTeamManager: true,
+    workspace: identityPath,
+    executionWorkspace: path.join(getConfig().getWorkspacePath(), 'teams', safeTeamPathId(team.id), 'workspace'),
+    model: team.manager?.model || (idx >= 0 ? agents[idx]?.model : undefined),
+  };
+  const changed = idx < 0 || JSON.stringify(agents[idx]) !== JSON.stringify(entry);
+  if (idx >= 0) agents[idx] = entry;
+  else agents.push(entry);
+  if (changed) cm.updateConfig({ agents } as any);
+  team.managerAgentId = agentId;
+  return { agentId, identityPath };
+}
+
 export function createManagedTeam(input: {
   name: string;
   description: string;
@@ -1339,9 +1428,10 @@ export function createManagedTeam(input: {
   allowedWorkPaths?: string[];
 }): ManagedTeam {
   const now = Date.now();
+  const teamId = `team_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
   const purposeOrContext = input.purpose || input.teamContext || input.description || '';
   const team: ManagedTeam = {
-    id: `team_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`,
+    id: teamId,
     name: input.name,
     description: input.description,
     emoji: input.emoji || '🏠',
@@ -1353,6 +1443,7 @@ export function createManagedTeam(input: {
       lastReviewAt: undefined,
       paused: false,
     },
+    managerAgentId: `${teamId}_manager`,
     subagentIds: input.subagentIds,
     allowedWorkPaths: Array.isArray(input.allowedWorkPaths) ? input.allowedWorkPaths.map(String).filter(Boolean) : [],
     teamContext: input.teamContext,
@@ -1394,6 +1485,7 @@ export function createManagedTeam(input: {
     originatingSessionId: input.originatingSessionId,
   };
   syncLegacyTeamFields(team);
+  ensureManagedTeamManagerAgent(team);
   saveManagedTeam(team);
 
   // Initialize memory files for the purpose→task workflow

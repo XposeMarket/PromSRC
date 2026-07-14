@@ -5,6 +5,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import { resolveRuntimeBinary } from '../../runtime/dependencies';
 import { getConfig, getAgents, getAgentById } from '../../config/config';
@@ -14,7 +15,14 @@ import { getPolicyEngine } from '../policy';
 import { scoreSkillMetadata, skillMatchesScope, buildMetadataManifest, splitCsv, formatCompactSkillList, type SkillMetadataAudit } from './capabilities/skills-executor';
 import { appendAuditEntry } from '../audit-log';
 import { webSearch } from '../../tools/web';
-import { executeWebFetch, executeWebFetchBatch, executeShoppingSearchProducts } from '../../tools/web';
+import {
+  enrichProductArtifactItems,
+  enrichSourceArtifactItems,
+  executeWebFetch,
+  executeWebFetchBatch,
+  executeShoppingSearchProducts,
+} from '../../tools/web';
+import { isUsableProductArtifactItem, normalizeProductArtifactItems, normalizeSourceArtifactItems } from '../rich-artifacts';
 import { executeMarketLookup } from '../../tools/market';
 import { executeWeatherLookup } from '../../tools/weather';
 import { executeMapLookup } from '../../tools/mapcard';
@@ -50,6 +58,11 @@ import {
 } from '../../tools/file-intelligence';
 import { getMCPManager } from '../mcp-manager';
 import { getProcessSupervisor } from '../process/supervisor';
+import { buildToolBenchmarkAggregate } from '../tool-observations';
+import {
+  applyLineEndingTolerantFindReplace,
+  normalizeDevSourcePatchsetArgs,
+} from '../dev-source-patchset';
 import { executeAgentBuilderTool } from './agent-builder-integration';
 import { SubagentManager } from './subagent-manager';
 import { appendSubagentChatMessage, getSubagentChatHistory } from './subagent-chat-store';
@@ -145,6 +158,7 @@ import { recordAgentRun, reloadAgentSchedules } from '../../scheduler';
 import { normalizeScheduleSpec, parseSchedulePattern } from '../scheduling/schedule-pattern';
 import { getSessionChannelHint, linkTelegramSession } from '../comms/broadcaster';
 import { judgeGoalApprovalRequest } from '../main-chat-goals';
+import { addMessage, flushSession } from '../session';
 
 const getTeamDispatchRuntime = () => require('../teams/team-dispatch-runtime') as typeof import('../teams/team-dispatch-runtime');
 const getBgAgentResults = () => getTeamDispatchRuntime()._bgAgentResults;
@@ -207,6 +221,7 @@ import {
   browserScrollCollect,
   browserScrollCollectV2,
   browserRunJs,
+  browserRunSmokeSteps,
   browserInspectConsole,
   browserInterceptNetwork,
   browserElementWatch,
@@ -226,6 +241,7 @@ import {
   resolveDesktopActionPoint,
   desktopFindWindow,
   desktopFocusWindowVerified,
+  desktopFocusWindowCanonical,
   desktopClick,
   desktopDrag,
   desktopWait,
@@ -255,6 +271,9 @@ import {
   desktopDoctor,
   desktopGetWindowText,
   desktopGetAccessibilityTree,
+  desktopGetAccessibilityState,
+  desktopAccessibilityAction,
+  desktopAccessibilityFindAndAct,
   desktopPixelWatch,
   desktopRecordMacro,
   desktopStopMacro,
@@ -263,12 +282,17 @@ import {
   desktopListApps,
   desktopListWindowsCanonical,
   desktopGetWindowState,
+  resolveCanonicalWindow,
   desktopWindowClick,
   desktopWindowType,
   desktopWindowPressKey,
   desktopWindowScroll,
   desktopWindowDrag,
+  desktopLocateText,
+  desktopClickText,
 } from '../desktop-tools';
+import { normalizeDesktopWrapperTool } from '../desktop-wrappers';
+import { isDesktopCancellationError } from '../desktop-cancellation';
 import { deliverToTargets, readAttachmentBuffer } from '../delivery-router';
 import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
 import {
@@ -351,6 +375,15 @@ import {
   upsertDevSourceEditContinuation,
 } from '../dev-source-approvals.js';
 import {
+  claimCoordinatedDevEditFile,
+  getCoordinatedDevEdit,
+  listCoordinatedDevEditPeers,
+  markCoordinatedDevApplyBatch,
+  recordCoordinatedDevEditVerification,
+  requestCoordinatedDevEditApply,
+  waitForCoordinatedDevEditFiles,
+} from '../dev-edit-coordinator.js';
+import {
   formatDevVerificationSummary,
   resolveDevVerificationPlan,
   runDevVerificationPlan,
@@ -371,7 +404,7 @@ import {
   createInternalWatch,
   listInternalWatches,
 } from '../internal-watch/internal-watch-store';
-import { observeInternalWatchTarget } from '../internal-watch/internal-watch-runner';
+import { observeInternalWatchTarget, refreshInternalWatchObservation } from '../internal-watch/internal-watch-runner';
 import {
   automationDashboardTool,
   scheduleJobDetailTool,
@@ -477,13 +510,18 @@ export interface ExecuteToolDeps {
   buildBrowserLaunchCommand: (app: string, url: string) => string;
   normalizeWorkspacePathAliases: (rawCmd: string, workspacePath: string) => string;
   isAllowedShellCommand: (command: string) => boolean;
-  runCommandCaptured: (command: string, cwd: string, timeoutMs?: number, options?: { shell?: string; pty?: boolean; approvalId?: string }) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; runId?: string }>;
+  runCommandCaptured: (command: string, cwd: string, timeoutMs?: number, options?: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string }) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; runId?: string }>;
+  toolCallId?: string;
   skillsManager: any;
   getSessionSkillWindows: (sessionId: string) => Map<string, SkillWindow>;
   sessionCurrentTurn: Map<string, number>;
   executionPolicy?: ToolExecutionPolicy;
   onHardToolDeny?: (event: { sessionId: string; toolName: string; args: any; decision: HardToolDenyDecision }) => void;
+  /** Cooperative interruption for long-running desktop waits, macros, capture,
+   * and background-worker commands. */
+  abortSignal?: { aborted: boolean; signal?: AbortSignal };
 }
+
 
 
 function looksLikeNativeFileToolBypass(command: string): boolean {
@@ -938,6 +976,10 @@ function resolveCreativeEditorTimeoutMs(toolName: string, args?: any): number {
   if (toolName === 'creative_attach_audio_from_url' || toolName === 'creative_attach_audio_from_file') return 120000;
   if (['creative_download_audio', 'creative_generate_voiceover', 'creative_transcribe_audio', 'creative_mix_audio_tracks', 'creative_extract_audio_from_video'].includes(toolName)) return 180000;
   if (toolName === 'creative_create_html_motion_clip') return 60000;
+  // State is also the bridge readiness probe. Do not make callers wait the old
+  // generic 30 seconds merely to learn that a connected websocket is not an
+  // active Creative editor.
+  if (toolName === 'creative_get_state') return 4000;
   if (toolName === 'creative_set_canvas' || toolName === 'creative_apply_motion_template') return 45000;
   if (toolName === 'creative_render_snapshot' || toolName === 'creative_render_html_motion_snapshot') {
     const sampleCount = Array.isArray(args?.sampleTimesMs) && args.sampleTimesMs.length
@@ -1452,7 +1494,29 @@ function summarizeAgentRunForTool(task: TaskRecord, agentIdHint?: string): Recor
     session_id: task.sessionId,
     originating_session_id: task.originatingSessionId || null,
     executor_provider: task.executorProvider || null,
+    executor_reasoning_effort: task.executorReasoningEffort || null,
     manager_enabled: task.managerEnabled === true,
+  };
+}
+
+function summarizeAgentRunCompact(task: TaskRecord, agentIdHint?: string): Record<string, any> {
+  const full = summarizeAgentRunForTool(task, agentIdHint);
+  const started = Number(task.startedAt || 0);
+  const ended = Number(task.completedAt || Date.now());
+  return {
+    id: task.id,
+    agent_id: full.agent_id,
+    agent_name: full.agent_name,
+    title: task.title || 'Task',
+    status: task.status,
+    elapsed_ms: started ? Math.max(0, ended - started) : null,
+    current_step: full.active_step ? { index: full.current_step_index, title: full.active_step.title || full.active_step.description || String(full.active_step).slice(0, 160) } : null,
+    progress: { completed: full.completed_steps, total: full.total_steps },
+    last_issue: String(task.pauseAnalysis?.message || full.last_journal_event?.content || task.pauseReason || '').replace(/\s+/g, ' ').trim().slice(0, 240) || null,
+    runner_state: full.runner_state,
+    executor_provider: task.executorProvider || null,
+    executor_reasoning_effort: task.executorReasoningEffort || null,
+    can_recover: full.can_recover,
   };
 }
 
@@ -1806,7 +1870,7 @@ function getPostSourceEditInstructionForSession(sessionId: string, files: string
   const surfaceText = (surfaces.length ? surfaces : ['backend']).join(',');
   const idText = grant?.devEditId ? ` dev_edit_id=${grant.devEditId}` : '';
   const tagText = grant?.plan?.completionNoteTag || 'dev_edit_complete';
-  return `Pending: prom_apply_dev_changes verify_only then apply_live; surfaces=${surfaceText}; write_note tag=${tagText}.${idText}`;
+  return `Pending: prom_apply_dev_changes verify_only then apply_live readiness; surfaces=${surfaceText}; write_note tag=${tagText} only after the coordinator reports the shared batch live.${idText} If an approved file is queued behind another edit, use dev_source_edit action=await_files and reread it after handoff.`;
 }
 
 function normalizeTypeScriptModule(mod: any): typeof import('typescript') {
@@ -1938,7 +2002,8 @@ function normalizeDevSourceWrapperTool(name: string, rawArgs: any): { name: stri
     return { name, args: rawArgs, error: 'dev_source_edit supports approved src/ and web-ui/ edits only; prom-root writes are not available in this wrapper.' };
   }
 
-  if (action === 'patchset') return { name: 'apply_dev_source_patchset', args };
+  if (action === 'patchset') return { name: 'apply_dev_source_patchset', args: normalizeDevSourcePatchsetArgs(args) };
+  if (action === 'await_files' || action === 'await_handoff') return { name: 'await_dev_edit_handoff', args };
   if (action === 'verify' || action === 'verify_only') return { name: 'prom_apply_dev_changes', args: { ...args, mode: 'verify_only' } };
   if (action === 'apply_live' || action === 'apply') return { name: 'prom_apply_dev_changes', args: { ...args, mode: 'apply_live' } };
 
@@ -2226,6 +2291,7 @@ function normalizeWorkspaceWrapperTool(name: string, rawArgs: any): { name: stri
   }
 
   if (name === 'workspace_run') {
+    if (action === 'telemetry' || action === 'benchmark_summary') return { name: 'tool_benchmark_summary', args };
     if (['run', 'start', 'status', 'log', 'wait', 'kill', 'submit'].includes(action)) {
       const runArgs = {
         ...args,
@@ -2318,6 +2384,7 @@ function normalizeBrowserWrapperTool(name: string, rawArgs: any): { name: string
   }
 
   if (name === 'browser_act') {
+    if (args.fast === true && args.observe == null) args.observe = 'none';
     if (action === 'click') return { name: 'browser_click', args };
     if (action === 'fill') return { name: 'browser_fill', args };
     if (action === 'type') return { name: 'browser_type', args };
@@ -2350,113 +2417,6 @@ function normalizeBrowserWrapperTool(name: string, rawArgs: any): { name: string
     if (action === 'smoke_test' || action === 'smoke') return { name: 'browser_smoke_test', args };
     if (action === 'teach_verify') return { name: 'browser_teach_verify', args };
     return { name, args: rawArgs, error: `Unsupported browser_extract action "${action}".` };
-  }
-
-  return null;
-}
-
-function normalizeDesktopWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
-  if (!['desktop_screen', 'desktop_apps', 'desktop_window', 'desktop_input', 'desktop_macro', 'desktop_background'].includes(name)) return null;
-  const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
-  const action = String(args.action || '').trim().toLowerCase();
-  if (!action) return { name, args, error: `${name} requires action` };
-  delete args.action;
-  const normalizeModifier = () => {
-    const modifier = String(args.modifier || '').trim().toLowerCase();
-    if (modifier === 'shift' || modifier === 'ctrl' || modifier === 'alt') args.modifier = modifier;
-    else delete args.modifier;
-  };
-
-  if (name === 'desktop_screen') {
-    if (action === 'doctor') return { name: 'desktop_doctor', args };
-    if (action === 'screenshot') return { name: 'desktop_screenshot', args };
-    if (action === 'window_screenshot') return { name: 'desktop_window_screenshot', args };
-    if (action === 'monitors' || action === 'get_monitors') return { name: 'desktop_get_monitors', args };
-    if (action === 'wait_for_change') return { name: 'desktop_wait_for_change', args };
-    if (action === 'diff_screenshot' || action === 'diff') return { name: 'desktop_diff_screenshot', args };
-    if (action === 'pixel_watch') return { name: 'desktop_pixel_watch', args };
-    return { name, args: rawArgs, error: `Unsupported desktop_screen action "${action}".` };
-  }
-
-  if (name === 'desktop_apps') {
-    if (action === 'list_apps') return { name: 'desktop_list_apps', args };
-    if (action === 'list_windows') return { name: 'desktop_list_windows', args };
-    if (action === 'list_installed_apps') return { name: 'desktop_list_installed_apps', args };
-    if (action === 'find_installed_app') return { name: 'desktop_find_installed_app', args };
-    if (action === 'launch_app' || action === 'launch') return { name: 'desktop_launch_app', args };
-    if (action === 'close_app' || action === 'close') return { name: 'desktop_close_app', args };
-    if (action === 'process_list' || action === 'get_process_list') return { name: 'desktop_get_process_list', args };
-    return { name, args: rawArgs, error: `Unsupported desktop_apps action "${action}".` };
-  }
-
-  if (name === 'desktop_window') {
-    if (args.title != null && args.name == null) args.name = args.title;
-    if (args.name != null && args.title == null) args.title = args.name;
-    if (args.window_handle != null && args.handle == null) args.handle = args.window_handle;
-    if (args.handle != null && args.window_handle == null) args.window_handle = args.handle;
-    if (args.window_id != null && args.handle == null) {
-      const match = String(args.window_id || '').trim().match(/^win_(\d+)$/i);
-      if (match) args.handle = Number(match[1]);
-    }
-    if (args.handle != null && args.window_handle == null) args.window_handle = args.handle;
-    normalizeModifier();
-    if (action === 'find') return { name: 'desktop_find_window', args };
-    if (action === 'focus') return { name: 'desktop_focus_window', args };
-    if (action === 'control') {
-      if (args.control_action != null && args.action == null) args.action = args.control_action;
-      delete args.control_action;
-      if (args.window_handle != null && args.handle == null) args.handle = args.window_handle;
-      return { name: 'desktop_window_control', args };
-    }
-    if (action === 'state') return { name: 'desktop_get_window_state', args };
-    if (action === 'screenshot') return { name: 'desktop_window_screenshot', args };
-    if (action === 'text') {
-      if (args.name != null && args.window_name == null) args.window_name = args.name;
-      return { name: 'desktop_get_window_text', args };
-    }
-    if (action === 'accessibility_tree' || action === 'accessibility') {
-      if (args.name != null && args.window_name == null) args.window_name = args.name;
-      return { name: 'desktop_get_accessibility_tree', args };
-    }
-    if (action === 'click') return { name: 'desktop_window_click', args };
-    if (action === 'type') return { name: 'desktop_window_type', args };
-    if (action === 'key' || action === 'press_key') return { name: 'desktop_window_press_key', args };
-    if (action === 'scroll') return { name: 'desktop_window_scroll', args };
-    if (action === 'drag') return { name: 'desktop_window_drag', args };
-    return { name, args: rawArgs, error: `Unsupported desktop_window action "${action}".` };
-  }
-
-  if (name === 'desktop_input') {
-    normalizeModifier();
-    if (action === 'click') return { name: 'desktop_click', args };
-    if (action === 'drag') return { name: 'desktop_drag', args };
-    if (action === 'scroll') return { name: 'desktop_scroll', args };
-    if (action === 'type') return { name: 'desktop_type', args };
-    if (action === 'type_raw') return { name: 'desktop_type_raw', args };
-    if (action === 'key' || action === 'press_key') return { name: 'desktop_press_key', args };
-    if (action === 'wait') return { name: 'desktop_wait', args };
-    if (action === 'clipboard_get' || action === 'get_clipboard') return { name: 'desktop_get_clipboard', args };
-    if (action === 'clipboard_set' || action === 'set_clipboard') return { name: 'desktop_set_clipboard', args };
-    return { name, args: rawArgs, error: `Unsupported desktop_input action "${action}".` };
-  }
-
-  if (name === 'desktop_macro') {
-    if (action === 'record') return { name: 'desktop_record_macro', args };
-    if (action === 'stop') return { name: 'desktop_stop_macro', args };
-    if (action === 'replay') return { name: 'desktop_replay_macro', args };
-    if (action === 'list') return { name: 'desktop_list_macros', args };
-    return { name, args: rawArgs, error: `Unsupported desktop_macro action "${action}".` };
-  }
-
-  if (name === 'desktop_background') {
-    if (action === 'status') return { name: 'desktop_background_status', args };
-    if (action === 'prepare_sandbox') return { name: 'desktop_background_prepare_sandbox', args };
-    if (action === 'command') {
-      if (args.command_action != null && args.action == null) args.action = args.command_action;
-      delete args.command_action;
-      return { name: 'desktop_background_command', args };
-    }
-    return { name, args: rawArgs, error: `Unsupported desktop_background action "${action}".` };
   }
 
   return null;
@@ -3056,6 +3016,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
     name = desktopWrapper.name;
     args = desktopWrapper.args;
   }
+  if (name.startsWith('desktop_') && (deps.abortSignal?.aborted || deps.abortSignal?.signal?.aborted)) {
+    return {
+      name,
+      args,
+      result: 'ERROR: [DESKTOP_CANCELLED] Desktop operation was interrupted before execution.',
+      error: true,
+      data: { ok: false, code: 'DESKTOP_CANCELLED', retryable: true },
+    };
+  }
   const externalAppWrapper = normalizeExternalAppWrapperTool(name, args);
   if (externalAppWrapper) {
     if (externalAppWrapper.error) return { name, args, result: externalAppWrapper.error, error: true };
@@ -3452,25 +3421,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
     replace: string,
     replaceAll: boolean,
   ): { updated: string; count: number; variant: string; firstIndex: number } | null {
-    const fileUsesCRLF = /\r\n/.test(content);
-    const variants: string[] = [];
-    const pushVariant = (v: string) => { if (v && !variants.includes(v)) variants.push(v); };
-    pushVariant(find);                                            // exact as provided
-    pushVariant(find.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')); // fully CRLF
-    pushVariant(find.replace(/\r\n/g, '\n'));                     // fully LF
-    for (const variant of variants) {
-      if (!content.includes(variant)) continue;
-      // Align replacement newlines to the file's dominant style.
-      const normalizedReplace = fileUsesCRLF
-        ? replace.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')
-        : replace.replace(/\r\n/g, '\n');
-      const count = replaceAll ? content.split(variant).length - 1 : 1;
-      const updated = replaceAll
-        ? content.split(variant).join(normalizedReplace)
-        : content.replace(variant, normalizedReplace);
-      return { updated, count, variant, firstIndex: content.indexOf(variant) };
-    }
-    return null;
+    return applyLineEndingTolerantFindReplace(content, find, replace, replaceAll);
   }
 
   function lineNumberAtOffset(content: string, offset: number): number {
@@ -3875,7 +3826,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
     return targets;
   }
   async function runCapturedToolCommand(command: string, cwd: string, timeoutMs = 120000): Promise<ToolResult> {
-    const captured = await deps.runCommandCaptured(command, cwd, timeoutMs);
+    const captured = await deps.runCommandCaptured(command, cwd, timeoutMs, { sessionId, toolCallId: deps.toolCallId });
     const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
     const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
     return {
@@ -3883,6 +3834,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       args,
       result: `${command} [${exitLabel}]\n${truncateText(output || '(no output)', 12000)}`,
       error: (captured.code !== 0 && !captured.timedOut),
+      extra: captured.runId ? { runId: captured.runId } : undefined,
     };
   }
   function readPackageScripts(cwd: string): Record<string, string> {
@@ -4037,7 +3989,24 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		  function enforceProposalWriteAccess(relPath: string, kind: 'file' | 'dir', toolName: string): ToolResult | null {
 		    const proposalTask = resolveProposalExecutionTask();
         if (!proposalTask && hasDevSourceEditGrant(sessionId)) {
-          return enforceMutationScope(relPath, kind, toolName);
+          const scopeBlock = enforceMutationScope(relPath, kind, toolName);
+          if (scopeBlock || kind === 'dir') return scopeBlock;
+          const grant = getDevSourceEditGrant(sessionId);
+          const decision = claimCoordinatedDevEditFile({
+            id: grant?.devEditId,
+            sessionId,
+            file: relPath,
+          });
+          if (decision.allowed) return null;
+          const waitHint = grant?.devEditId
+            ? ` Call dev_source_edit(action:"await_files", dev_edit_id:"${grant.devEditId}") to wait for the verified handoff, then reread the latest file before retrying.`
+            : '';
+          return {
+            name: toolName,
+            args,
+            result: `BLOCKED BY DEV-EDIT FILE QUEUE: ${decision.reason || `${relPath} is owned by another dev edit.`}${waitHint}`,
+            error: true,
+          };
         }
         if (!proposalTask) {
           return {
@@ -4802,9 +4771,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
   }
 
   if (name === 'show_product_carousel') {
-    const items = Array.isArray(args?.items) ? args.items : [];
+    const normalizedItems = normalizeProductArtifactItems(Array.isArray(args?.items) ? args.items : []);
+    const enrichedItems = await enrichProductArtifactItems(normalizedItems.map((item, index) => ({
+      id: `artifact_product_${index + 1}`,
+      ...item,
+    })));
+    const items = enrichedItems.filter(isUsableProductArtifactItem);
+    if (!items.length) return { name, args, result: 'show_product_carousel requires at least one carousel-ready item with a title, product URL, image, and product metadata.', error: true };
     const title = String(args?.title || '');
     const source = String(args?.source || '');
+    args = { ...args, items };
     return {
       name,
       args,
@@ -4843,18 +4819,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
   }
 
   if (name === 'show_sources') {
-    const items = (Array.isArray(args?.items) ? args.items : [])
-      .filter((it: any) => it && (it.title || it.url))
-      .map((it: any) => ({
-        title: String(it.title || it.url || 'Source'),
-        publisher: it.publisher ? String(it.publisher) : undefined,
-        url: it.url ? String(it.url) : undefined,
-        imageUrl: it.imageUrl ? String(it.imageUrl) : undefined,
-        snippet: it.snippet ? String(it.snippet) : undefined,
-        publishedAt: it.publishedAt ? String(it.publishedAt) : undefined,
-        badge: it.badge ? String(it.badge) : undefined,
-      }));
+    const normalizedItems = normalizeSourceArtifactItems(Array.isArray(args?.items) ? args.items : []);
+    const items = await enrichSourceArtifactItems(normalizedItems);
     if (!items.length) return { name, args, result: 'show_sources requires at least one item with a title or url.', error: true };
+    args = { ...args, items };
     const artifact = {
       id: `sources-${Date.now()}`,
       type: 'sources' as const,
@@ -5110,6 +5078,70 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const includeEvidence = args?.include_evidence !== false && args?.includeEvidence !== false;
         if (!action) return { name, args, result: 'agent_run_ops requires action', error: true };
 
+        if (action === 'benchmark_disposable') {
+          const benchmarkStartedAt = Date.now();
+          const timeoutMs = Math.max(10_000, Math.min(300_000, Number(args?.timeout_ms || 120_000)));
+          const agentId = `benchmark_disposable_${Date.now().toString(36)}`;
+          const workspacePath = getConfig().getConfig().workspace?.path || process.cwd();
+          const manager = new SubagentManager(workspacePath, deps.broadcastWS, deps.handleChat, deps.telegramChannel);
+          let taskId = '';
+          let cleanedAgent = false;
+          let cleanedTask = false;
+          try {
+            const launched = await manager.callSubagent({
+              subagent_id: agentId,
+              task_prompt: String(args?.prompt || 'Return exactly RESULT=disposable agent operational and SIDE_EFFECTS=none. Do not use tools or change external state.'),
+              run_now: true,
+              delivery_mode: 'task_panel_only',
+              create_if_missing: {
+                name: 'Disposable Benchmark Agent',
+                description: 'Temporary bounded agent used to verify standalone provisioning, execution, routing, and cleanup.',
+                system_instructions: 'Follow the bounded benchmark prompt exactly. Do not use tools or create side effects.',
+                constraints: ['No tools', 'No file or external changes', 'Return a concise result'],
+                success_criteria: 'Return the requested result and side-effect declaration.',
+                max_steps: 2,
+                timeout_ms: timeoutMs,
+                model: args?.model ? String(args.model) : undefined,
+                reasoning_effort: args?.reasoning_effort ? String(args.reasoning_effort) : undefined,
+                roleType: String(args?.role || 'researcher'),
+              },
+            }, sessionId);
+            taskId = launched.task_id;
+            const deadline = Date.now() + timeoutMs;
+            let task = taskId ? loadTask(taskId) : null;
+            while (task && !['complete', 'failed', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input'].includes(String(task.status)) && Date.now() < deadline) {
+              await new Promise((resolve) => setTimeout(resolve, 250));
+              task = loadTask(taskId);
+            }
+            const timedOut = Date.now() >= deadline && task && !['complete', 'failed'].includes(String(task.status));
+            if (timedOut && taskId) await deps.handleTaskControlAction(sessionId, { action: 'cancel', task_id: taskId, confirm: true, note: 'Disposable benchmark timeout cleanup.' }).catch(() => null);
+            const finalTask = taskId ? loadTask(taskId) : task;
+            const response = {
+              ok: finalTask?.status === 'complete',
+              agent_id: agentId,
+              task_id: taskId,
+              status: finalTask?.status || launched.status,
+              model: finalTask?.executorProvider || null,
+              executor_reasoning_effort: finalTask?.executorReasoningEffort || null,
+              role: String(args?.role || 'researcher'),
+              result: String(finalTask?.finalSummary || '').slice(0, 2000),
+              timed_out: !!timedOut,
+              elapsed_ms: Date.now() - benchmarkStartedAt,
+              side_effect_policy: 'no tools or external changes requested',
+            };
+            if (taskId) {
+              const deleted = await deps.handleTaskControlAction(sessionId, { action: 'delete', task_id: taskId, confirm: true }).catch(() => null);
+              cleanedTask = deleted?.success === true;
+            }
+            cleanedAgent = manager.deleteSubagent(agentId);
+            return { name, args, result: JSON.stringify({ ...response, cleanup: { agent_deleted: cleanedAgent, task_deleted: cleanedTask } }, null, 2), error: response.ok !== true };
+          } catch (error: any) {
+            if (taskId) await deps.handleTaskControlAction(sessionId, { action: 'cancel', task_id: taskId, confirm: true }).catch(() => null);
+            cleanedAgent = manager.deleteSubagent(agentId);
+            return { name, args, result: JSON.stringify({ ok: false, agent_id: agentId, task_id: taskId || null, error: String(error?.message || error), cleanup: { agent_deleted: cleanedAgent } }, null, 2), error: true };
+          }
+        }
+
         if (action === 'list') {
           const agentId = String(args?.agent_id || args?.agentId || '').trim();
           if (agentId && !getAgentById(agentId)) {
@@ -5119,6 +5151,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const recoverableOnly = args?.recoverable_only === true || args?.recoverableOnly === true;
           const limitRaw = Number(args?.limit);
           const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(100, Math.floor(limitRaw)) : 20;
+          const detail = String(args?.detail || 'compact').trim().toLowerCase();
           const tasks = listTasks(statuses ? { status: statuses } : undefined)
             .filter((task) => !!inferAgentRunOwner(task))
             .filter((task) => !agentId || agentOwnsRunTask(agentId, task))
@@ -5134,7 +5167,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
               agent_id: agentId || null,
               status_filter: statuses || null,
               recoverable_only: recoverableOnly,
-              runs: tasks.map((task) => summarizeAgentRunForTool(task, agentId || undefined)),
+              detail,
+              runs: tasks.map((task) => detail === 'full' ? summarizeAgentRunForTool(task, agentId || undefined) : summarizeAgentRunCompact(task, agentId || undefined)),
               message: tasks.length
                 ? `Found ${tasks.length} agent-owned run(s).`
                 : 'No matching agent-owned runs found.',
@@ -5248,7 +5282,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return {
           name,
           args,
-          result: `Unsupported agent_run_ops action "${rawAction}". Use list, get, recover, resume, rerun, pause, or cancel.`,
+          result: `Unsupported agent_run_ops action "${rawAction}". Use list, get, recover, resume, rerun, pause, cancel, or benchmark_disposable.`,
           error: true,
         };
       }
@@ -5282,8 +5316,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
               thread_id: getStandaloneSubagentChatSessionId(agentId),
               after_ts: startedAt,
               reply: chat.result?.text || '',
-              thinking: chat.result?.thinking,
-              messages: chat.messages,
+              thinking: args?.include_thinking === true ? chat.result?.thinking : undefined,
+              messages: args?.include_history === true
+                ? chat.messages.slice(-Math.max(1, Math.min(20, Number(args?.history_limit || 3))))
+                : undefined,
             }, null, 2),
             error: false,
           };
@@ -7540,6 +7576,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const requestedMaxResults = Math.floor(Number(args.max_results) || 50);
         const contextLines = Math.max(0, Math.min(3, Math.floor(Number(args.context ?? args.context_lines) || 0)));
         const maxResults = Math.max(1, Math.min(80, requestedMaxResults));
+        const requestedMaxFileBytes = Math.floor(Number(args.max_file_bytes) || (5 * 1024 * 1024));
+        const maxFileBytes = Math.max(64 * 1024, Math.min(25 * 1024 * 1024, requestedMaxFileBytes));
         const storeLimit = Math.max(maxResults, Math.min(240, maxResults * 3));
         const defaultExcludes = new Set<string>([
           ...DEFAULT_FILE_TOOL_EXCLUDES,
@@ -7550,24 +7588,42 @@ export async function executeTool(name: string, args: any, workspacePath: string
         let totalMatches = 0;
         let filesSearched = 0;
         let filesSkipped = 0;
-        const walk = (dir: string): void => {
+        let filesSkippedTooLarge = 0;
+        const skippedLargeSamples: Array<{ path: string; bytes: number }> = [];
+        let filesystemOps = 0;
+        const yieldToGateway = async (): Promise<void> => {
+          filesystemOps += 1;
+          if (filesystemOps % 32 === 0) {
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          }
+        };
+        const walk = async (dir: string): Promise<void> => {
           let entries: fs.Dirent[] = [];
-          try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+          try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
           for (const entry of entries) {
+            await yieldToGateway();
             const abs = path.join(dir, entry.name);
             const rel = path.join(resolvedDir.displayPath === '.' ? '' : resolvedDir.displayPath, path.relative(searchDir, abs)).replace(/\\/g, '/');
             const relForIgnore = path.relative(searchDir, abs).replace(/\\/g, '/');
             if (entry.isDirectory()) {
               if (shouldSkipSearchPath(relForIgnore, entry.name, { excludes: defaultExcludes, gitignoreRules })) { filesSkipped += 1; continue; }
-              walk(abs);
+              await walk(abs);
               continue;
             }
             if (!entry.isFile()) continue;
             if (shouldSkipSearchPath(relForIgnore, entry.name, { excludes: defaultExcludes, gitignoreRules })) { filesSkipped += 1; continue; }
             if (!args.include_lockfiles && /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/i.test(rel)) { filesSkipped += 1; continue; }
             if (!matchesGlobList(rel, globs)) continue;
+            let fileSize = 0;
+            try { fileSize = (await fs.promises.stat(abs)).size; } catch { continue; }
+            if (fileSize > maxFileBytes) {
+              filesSkipped += 1;
+              filesSkippedTooLarge += 1;
+              if (skippedLargeSamples.length < 12) skippedLargeSamples.push({ path: rel || entry.name, bytes: fileSize });
+              continue;
+            }
             let content = '';
-            try { content = fs.readFileSync(abs, 'utf-8'); } catch { continue; }
+            try { content = await fs.promises.readFile(abs, 'utf-8'); } catch { continue; }
             filesSearched += 1;
             const grep = collectGrepMatchesInText(rel || entry.name, content, matcher, {
               maxResults: Math.max(1, storeLimit - matches.length),
@@ -7584,7 +7640,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             }
           }
         };
-        walk(searchDir);
+        await walk(searchDir);
         const sortedMatches = matches.sort(compareGrepMatches(pattern)).slice(0, maxResults);
         const payload = {
           directory: resolvedDir.displayPath,
@@ -7592,6 +7648,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
           search_mode: matcher.mode,
           files_searched: filesSearched,
           files_skipped: filesSkipped,
+          files_skipped_too_large: filesSkippedTooLarge,
+          max_file_bytes: maxFileBytes,
+          skipped_large_file_samples: skippedLargeSamples,
           match_count: totalMatches,
           returned_count: sortedMatches.length,
           truncated_count: Math.max(0, totalMatches - sortedMatches.length),
@@ -7602,7 +7661,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
             limit_reached: totalMatches > sortedMatches.length,
             note: 'Result payloads are hard-clamped. Narrow directory, glob, or pattern to inspect more matches.',
           },
-          no_match_hints: totalMatches === 0 ? buildNoMatchHints({ pattern, searched: resolvedDir.displayPath, mode: matcher.mode, excluded: Array.from(defaultExcludes), pathHint: String(directoryArg || '.') }) : undefined,
+          no_match_hints: totalMatches === 0 ? [
+            ...buildNoMatchHints({ pattern, searched: resolvedDir.displayPath, mode: matcher.mode, excluded: Array.from(defaultExcludes), pathHint: String(directoryArg || '.') }),
+            ...(filesSkippedTooLarge > 0 ? [`${filesSkippedTooLarge} large file(s) were skipped to protect gateway responsiveness. Narrow to a specific file and use file_stats/read_file, or explicitly raise max_file_bytes (hard cap 25 MiB).`] : []),
+          ] : undefined,
           matches: sortedMatches,
         };
         return { name, args, result: JSON.stringify(payload, null, 2), error: false };
@@ -8031,7 +8093,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 
       case 'apply_dev_source_patchset': {
-        const edits = Array.isArray(args.edits) ? args.edits : [];
+        const normalizedPatchsetArgs = normalizeDevSourcePatchsetArgs(args);
+        const edits = Array.isArray(normalizedPatchsetArgs.edits) ? normalizedPatchsetArgs.edits : [];
         if (!edits.length) return { name, args, result: 'ERROR: edits[] is required.', error: true };
         const projectRoot = resolveProjectRootForSourceAccess();
         const results: string[] = [];
@@ -11662,17 +11725,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 
       case 'hyperframes_browse_catalog': {
-        const items = getHyperframesCatalog().listHyperframesCatalogItems({
+        const browse = getHyperframesCatalog().browseHyperframesCatalog({
           query: args?.query,
           kind: args?.kind,
           tag: args?.tag,
         });
         const limit = Math.max(1, Math.min(100, Number(args?.limit) || 40));
-        const payload = { items: items.slice(0, limit), total: items.length };
+        const payload = { ...browse, items: browse.items.slice(0, limit) };
         return {
           name,
           args,
-          result: `${name}: ${payload.total} catalog item(s) matched.\n${JSON.stringify(payload).slice(0, 6000)}`,
+          result: `${name}: ${payload.message}\n${JSON.stringify(payload).slice(0, 6000)}`,
           error: false,
           data: payload,
         };
@@ -12365,6 +12428,32 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const creativeMode = currentCreativeMode && currentCreativeMode !== 'design'
           ? currentCreativeMode
           : (setCreativeMode(sessionId, 'video') || 'video');
+        // A websocket connection alone does not mean the Creative editor is
+        // mounted. Probe it before the expensive clip-create command so an
+        // ordinary chat/browser client cannot cause a misleading 60s timeout.
+        if (name === 'creative_create_html_motion_clip') {
+          const readiness = await sendCreativeCommand(deps.broadcastWS, {
+            sessionId,
+            mode: creativeMode,
+            command: 'get_state',
+            payload: { readinessProbe: true },
+            timeoutMs: 3000,
+          });
+          if (!readiness.success) {
+            return {
+              name,
+              args,
+              result: `${name}: Creative editor bridge is not ready. ${readiness.error || 'Open the Creative workspace and retry.'}`,
+              error: true,
+              data: {
+                code: readiness.code || 'CREATIVE_EDITOR_UNAVAILABLE',
+                readiness: readiness.readiness || 'unavailable',
+                fallback: 'Use the HyperFrames CLI scaffold/lint/validate workflow until the editable Creative workspace is open.',
+                probe: readiness,
+              },
+            };
+          }
+        }
         if (creativeMode === 'video') {
           if (VIDEO_MODE_REMOVED_SCENE_TOOL_NAMES.has(name)) {
             return videoModeHtmlMotionOnlyError(name, args);
@@ -12833,7 +12922,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		              show_result: true,
 		            });
 		          };
-		          const webFetchResult = await executeWebFetch({ url, max_chars: args.max_chars }, (event) => {
+		          const webFetchResult = await executeWebFetch({
+		            url,
+		            max_chars: args.max_chars,
+		            include_media: args.include_media === true,
+		            include_thread: args.include_thread === true,
+		          }, (event) => {
 		            switch (event.phase) {
 		              case 'fetch_complete':
 		                emitSyntheticToolResult('web_fetch', event.message);
@@ -13501,12 +13595,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
             stdinMode: args.stdin === true ? 'pipe' : 'ignore',
             noOutputTimeoutMs,
             sessionId,
+            toolCallId: deps.toolCallId,
           });
           return {
             name,
             args,
             result: `Started supervised process ${run.runId} cwd=${commandCwd.displayCwd}\n${normalizedCmd}`,
             error: false,
+            extra: { runId: run.runId },
           };
         } catch (err: any) {
           return { name, args, result: `start_process failed: ${err.message || err}`, error: true };
@@ -13518,7 +13614,33 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const supervisor = getProcessSupervisor();
         if (runId) {
           const run = supervisor.get(runId);
-          return { name, args, result: run ? JSON.stringify(run, null, 2) : `No process found for ${runId}`, error: !run };
+          if (!run) return { name, args, result: `No process found for ${runId}`, error: true };
+          const log = supervisor.log(runId, Math.max(500, Math.min(20_000, Number(args.max_chars || 4000))));
+          const healthUrl = String(args.health_url || (args.port ? `http://127.0.0.1:${Number(args.port)}/` : '')).trim();
+          let health: any = null;
+          if (healthUrl) {
+            const started = Date.now();
+            try {
+              const response = await fetch(healthUrl, { signal: AbortSignal.timeout(Math.max(250, Math.min(15_000, Number(args.health_timeout_ms || 3000)))) });
+              health = { healthy: response.ok, url: healthUrl, status: response.status, status_text: response.statusText, latency_ms: Date.now() - started };
+            } catch (error: any) {
+              health = { healthy: false, url: healthUrl, latency_ms: Date.now() - started, error: String(error?.cause?.message || error?.message || error) };
+            }
+          }
+          let portOwner: any = null;
+          if (process.platform === 'win32' && Number(args.port) > 0) {
+            try {
+              const output = execFileSync('powershell.exe', ['-NoProfile', '-Command', `$c=Get-NetTCPConnection -State Listen -LocalPort ${Math.floor(Number(args.port))} -ErrorAction SilentlyContinue | Select-Object -First 1 LocalAddress,LocalPort,OwningProcess; if($c){$c|ConvertTo-Json -Compress}`], { encoding: 'utf8', timeout: 3000, windowsHide: true }).trim();
+              if (output) portOwner = JSON.parse(output);
+            } catch {}
+          }
+          return { name, args, result: JSON.stringify({
+            process: run,
+            service_health: health,
+            listening_socket: portOwner,
+            recent_output: { stdout: log.stdout.slice(-2000), stderr: log.stderr.slice(-2000), stdout_bytes: log.stdoutBytes, stderr_bytes: log.stderrBytes },
+            verdict: run.state === 'running' ? (health ? (health.healthy ? 'running_and_healthy' : 'running_but_unhealthy') : 'running_unprobed') : `process_${run.state}`,
+          }, null, 2), error: false };
         }
         return { name, args, result: JSON.stringify({ runs: supervisor.list(Number(args.limit || 20)) }, null, 2), error: false };
       }
@@ -13637,6 +13759,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 shell: args.shell,
                 pty: args.pty === true,
                 approvalId: approvedCommandApprovalId || undefined,
+                sessionId,
+                toolCallId: deps.toolCallId,
               });
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
               const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
@@ -13644,6 +13768,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 name, args,
                 result: `${normalizedCmd} [${exitLabel}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
                 error: (captured.code !== 0 && !captured.timedOut),
+                extra: captured.runId ? { runId: captured.runId } : undefined,
               };
             } catch (capErr: any) {
               return { name, args, result: `run_command capture failed: ${capErr.message}`, error: true };
@@ -13666,6 +13791,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 shell: args.shell,
                 pty: args.pty === true,
                 approvalId: approvedCommandApprovalId || undefined,
+                sessionId,
+                toolCallId: deps.toolCallId,
               });
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
               const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
@@ -13673,6 +13800,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 name, args,
                 result: `${normalizedCmd} [${exitLabel}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
                 error: (captured.code !== 0 && !captured.timedOut),
+                extra: captured.runId ? { runId: captured.runId } : undefined,
               };
             } catch (capErr: any) {
               return { name, args, result: `run_command capture failed: ${capErr.message}`, error: true };
@@ -13718,6 +13846,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
             joinPolicy: args.join_policy || 'wait_all',
             timeoutMs: args.timeout_ms,
             tags: args.tags,
+            modelOverride: args.model ? String(args.model) : undefined,
+            providerOverride: args.provider ? String(args.provider) : undefined,
+            reasoningEffort: args.reasoning_effort ? String(args.reasoning_effort) : undefined,
           });
           return { name, args, result: JSON.stringify(status), error: false };
         } catch (err: any) {
@@ -13991,7 +14122,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const watches = listInternalWatches({
 	            sessionId,
 	            includeDone: args.include_done === true || args.includeDone === true,
-	          });
+	          }).map((watch) => refreshInternalWatchObservation(watch, deps.cronScheduler));
 	          return {
 	            name,
 	            args,
@@ -14029,6 +14160,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          if (targetType === 'file') {
 	            targetConfig.path = String(targetConfig.path || args.path || '').trim();
 	            if (!targetConfig.path) return { name, args, result: 'internal_watch(create file) requires target.path', error: true };
+	            targetConfig.workspaceRoot = path.resolve(workspacePath);
 	          } else if (targetType === 'task') {
 	            targetConfig.taskId = String(targetConfig.taskId || targetConfig.task_id || args.task_id || args.taskId || '').trim();
 	            if (!targetConfig.taskId) return { name, args, result: 'internal_watch(create task) requires target.task_id', error: true };
@@ -14037,6 +14169,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	            if (!targetConfig.jobId) return { name, args, result: 'internal_watch(create scheduled_job) requires target.job_id', error: true };
 	          } else if (targetType === 'event_queue') {
 	            targetConfig.match = targetConfig.match || args.match || undefined;
+	            targetConfig.workspaceRoot = path.resolve(workspacePath);
 	          }
 
 	          const onMatch = String(args.on_match || args.onMatch || args.instruction || '').trim();
@@ -14512,7 +14645,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         // Spawn a specialized sub-agent with restricted tool set
         // This is used by primary agents to delegate work to secondary specialists
         try {
-          const subagentId = String(args.subagent_id || '').trim();
+          let subagentId = String(args.subagent_id || '').trim();
           const taskPrompt = String(args.task_prompt || '').trim();
           const runNow = args.run_now !== false;
           const contextData = args.context_data && typeof args.context_data === 'object' ? args.context_data : undefined;
@@ -14576,10 +14709,24 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
 
           if (!subagentId) {
-            return { name, args, result: 'spawn_subagent requires subagent_id', error: true };
+            if (!createIfMissing) return { name, args, result: 'spawn_subagent requires subagent_id unless create_if_missing is provided', error: true };
+            const seed = String(createIfMissing.name || createIfMissing.description || fromRole || 'disposable_agent')
+              .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'disposable_agent';
+            subagentId = `${seed}_${Date.now().toString(36)}`;
           }
           if (runNow && !taskPrompt) {
             return { name, args, result: 'spawn_subagent requires task_prompt when run_now=true', error: true };
+          }
+          if (createIfMissing) {
+            const fieldErrors: string[] = [];
+            if (!String(createIfMissing.description || '').trim()) fieldErrors.push('create_if_missing.description is required');
+            if (!String(createIfMissing.system_instructions || '').trim()) fieldErrors.push('create_if_missing.system_instructions is required');
+            if (!Array.isArray(createIfMissing.constraints)) fieldErrors.push('create_if_missing.constraints must be an array (use [] when none)');
+            if (!String(createIfMissing.success_criteria || '').trim()) fieldErrors.push('create_if_missing.success_criteria is required');
+            for (const field of ['allowed_tools', 'forbidden_tools', 'mcp_servers', 'skillIds', 'context_refs']) {
+              if (createIfMissing[field] != null && !Array.isArray(createIfMissing[field])) fieldErrors.push(`create_if_missing.${field} must be an array`);
+            }
+            if (fieldErrors.length) return { name, args, result: JSON.stringify({ ok: false, code: 'INVALID_CREATE_SCHEMA', generated_subagent_id: subagentId, errors: fieldErrors }, null, 2), error: true };
           }
 
           // Get workspace path from config
@@ -15455,6 +15602,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'browser_get_page_text': {
         const result = await browserGetPageText(sessionId, {
           element: args.element != null ? String(args.element) : (args.element_name != null ? String(args.element_name) : ''),
+          query: args.query != null ? String(args.query) : '',
+          maxChars: args.max_chars,
+          maxLines: args.max_lines,
         });
         await broadcastBrowserStatus('browser_get_page_text');
         return { name, args, result, error: result.startsWith('ERROR') };
@@ -15550,14 +15700,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
           action,
           args.url_filter != null ? String(args.url_filter) : undefined,
           args.max_entries != null ? Number(args.max_entries) : undefined,
+          { includeBodies: args.include_bodies === true, bodyMaxChars: args.body_max_chars, statusMin: args.status_min, statusMax: args.status_max },
         );
         await broadcastBrowserStatus('browser_intercept_network');
         return { name, args, result, error: result.startsWith('ERROR') };
       }
+
+      case 'tool_benchmark_summary': {
+        const aggregate = buildToolBenchmarkAggregate(sessionId, Number(args.limit || 5000));
+        return { name, args, result: JSON.stringify(aggregate, null, 2), error: false };
+      }
       case 'inspect_console': {
         const maxEntries = Math.max(1, Math.min(500, Number(args.max_entries || 100)));
         const action = String(args.action || 'read').toLowerCase();
-        const result = await browserInspectConsole(sessionId, { action, maxEntries });
+        const result = await browserInspectConsole(sessionId, { action, maxEntries, sinceTs: args.since_ts, pageOnly: args.page_only !== false, urlFilter: args.url_filter, maxMessageChars: args.max_message_chars });
         await broadcastBrowserStatus('inspect_console');
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -15582,7 +15738,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
           });
           document.querySelectorAll('button,input,select,textarea,[role="button"],[role="textbox"],[role="combobox"]').forEach(el => {
             const id = el.id;
-            const hasLabel = el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || (id && document.querySelector('label[for="' + CSS.escape(id) + '"]')) || el.closest('label');
+            const labelledBy = el.getAttribute('aria-labelledby');
+            const labelledByText = labelledBy ? labelledBy.split(/\s+/).map(ref => document.getElementById(ref)?.textContent || '').join(' ').trim() : '';
+            const nativeText = ['button','a','summary','option'].includes(el.tagName.toLowerCase()) ? (el.textContent || '').trim() : '';
+            const associatedLabel = (id && document.querySelector('label[for="' + CSS.escape(id) + '"]')?.textContent) || el.closest('label')?.textContent || '';
+            const nativeFallback = el.getAttribute('alt') || el.getAttribute('value') || el.getAttribute('placeholder') || '';
+            const hasLabel = el.getAttribute('aria-label') || labelledByText || nativeText || associatedLabel.trim() || el.getAttribute('title') || nativeFallback;
             if (!hasLabel) add('control-label', 'Interactive control may be unlabeled.', selectorFor(el), 'serious');
           });
           const ids = new Map();
@@ -15611,10 +15772,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'browser_smoke_test': {
         const url = String(args.url || '').trim();
         if (!url) return { name, args, result: 'url is required', error: true };
+        await executeTool('inspect_console', { action: 'clear' }, workspacePath, deps, sessionId);
+        const consoleStartedAt = Date.now();
         const openResult = await browserOpen(sessionId, url, { observe: 'compact' });
         await browserWait(sessionId, Math.max(250, Math.min(10000, Number(args.wait_ms || 1500))), { observe: 'none' });
         const snapshot = await browserSnapshot(sessionId);
-        const consoleResult = await executeTool('inspect_console', { max_entries: args.max_console_entries || 50 }, workspacePath, deps, sessionId);
+        const smokeSteps = Array.isArray(args.steps) && args.steps.length
+          ? await browserRunSmokeSteps(sessionId, args.steps)
+          : JSON.stringify({ ok: true, executed: 0, results: [] });
+        const consoleResult = await executeTool('inspect_console', { max_entries: args.max_console_entries || 50, since_ts: consoleStartedAt, page_only: true }, workspacePath, deps, sessionId);
         const a11yResult = await executeTool('run_accessibility_check', { max_results: args.max_a11y_results || 50 }, workspacePath, deps, sessionId);
         await broadcastBrowserStatus('browser_smoke_test');
         return {
@@ -15626,8 +15792,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
             snapshot: snapshot.slice(0, 5000),
             console: consoleResult.result,
             accessibility: a11yResult.result,
+            steps: JSON.parse(smokeSteps),
           }, null, 2),
-          error: openResult.startsWith('ERROR') || snapshot.startsWith('ERROR') || consoleResult.error || a11yResult.error,
+          error: openResult.startsWith('ERROR') || snapshot.startsWith('ERROR') || consoleResult.error || a11yResult.error || smokeSteps.includes('"ok": false'),
         };
       }
       case 'browser_element_watch': {
@@ -15659,12 +15826,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       // Desktop automation tools
       case 'desktop_doctor': {
-        const result = await desktopDoctor(sessionId);
+        const result = await desktopDoctor(sessionId, { deep: args.deep === true });
         return { name, args, result, error: /\bFAIL\b/.test(result) };
       }
       case 'desktop_screenshot': {
         // Use history-aware wrapper so desktop_diff_screenshot always has a prev packet
-        const options = parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined);
+        const options = parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined) || {};
+        options.signal = deps.abortSignal?.signal;
         const result = await desktopScreenshotWithHistory(sessionId, options);
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -15674,21 +15842,41 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
       case 'desktop_window_screenshot': {
         const result = await desktopWindowScreenshot(sessionId, {
+          window_token: args.window_token == null ? undefined : String(args.window_token),
+          window_id: args.window_id == null ? undefined : String(args.window_id),
+          window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+          app_id: args.app_id == null ? undefined : String(args.app_id),
+          title: args.title == null ? undefined : String(args.title),
           name: args.name == null ? undefined : String(args.name),
           handle: args.handle == null ? undefined : Number(args.handle),
           active: args.active === true,
           focus_first: args.focus_first == null ? undefined : args.focus_first !== false,
           padding: args.padding == null ? undefined : Number(args.padding),
+          region: Array.isArray(args.region) && args.region.length === 4
+            ? args.region.map(Number) as [number, number, number, number]
+            : undefined,
           mode: String(args.mode || '').toLowerCase() === 'som' || args.som === true ? 'som' : 'normal',
           som: args.som === true || String(args.mode || '').toLowerCase() === 'som',
+          skipOcr: args.skip_ocr === true || args.skipOcr === true,
+          signal: deps.abortSignal?.signal,
         });
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_find_window': {
-        const result = await desktopFindWindow(String(args.name || ''));
+        const result = await desktopFindWindow(String(args.name || args.title || args.app || args.query || ''));
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_focus_window': {
+        if (args.window_token || args.window_id || args.window_handle || args.app_id || args.title) {
+          const result = await desktopFocusWindowCanonical(sessionId, {
+            window_token: args.window_token == null ? undefined : String(args.window_token),
+            window_id: args.window_id == null ? undefined : String(args.window_id),
+            window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+            app_id: args.app_id == null ? undefined : String(args.app_id),
+            title: args.title == null ? undefined : String(args.title),
+          }, args.include_screenshot !== false, deps.abortSignal?.signal);
+          return { name, args, result, error: result.startsWith('ERROR') };
+        }
         const verification = await desktopFocusWindowVerified(sessionId, String(args.name || ''), {
           includeScreenshot: args.include_screenshot !== false,
         });
@@ -15710,6 +15898,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
             ? actionRaw
             : 'restore';
         const result = await desktopWindowControl(action, {
+          window_token: args.window_token == null ? undefined : String(args.window_token),
+          window_id: args.window_id == null ? undefined : String(args.window_id),
+          window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+          app_id: args.app_id == null ? undefined : String(args.app_id),
+          title: args.title == null ? undefined : String(args.title),
           name: args.name == null ? undefined : String(args.name),
           handle: args.handle == null ? undefined : Number(args.handle),
           active: args.active === true,
@@ -15835,7 +16028,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_wait': {
-        const result = await desktopWait(Number(args.ms || 500));
+        const result = await desktopWait(Number(args.ms || 500), deps.abortSignal?.signal);
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_type': {
@@ -15861,7 +16054,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_get_clipboard': {
-        const result = await desktopGetClipboard();
+        const result = await desktopGetClipboard(args || {});
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_set_clipboard': {
@@ -15883,6 +16076,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           String(args.query || ''),
           Number(args.limit || 10),
           args.refresh === true,
+          args.exact === true,
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -15896,7 +16090,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_close_app': {
-        const result = await desktopCloseApp(String(args.name || ''), args.force === true);
+        const result = await desktopCloseApp(String(args.name || args.app || args.title || args.query || ''), args.force === true);
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_get_process_list': {
@@ -15910,6 +16104,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           sessionId,
           Number(args.timeout_ms || 10000),
           Number(args.poll_ms || 800),
+          deps.abortSignal?.signal,
         );
         return { name, args, result, error: false };
       }
@@ -15920,7 +16115,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       // Canonical app / window / state model (Phase 1)
       case 'desktop_list_apps': {
-        const result = await desktopListApps(String(args.filter || ''), args.include_windows !== false);
+        const result = await desktopListApps(String(args.filter || ''), args.include_windows !== false, {
+          scope: args.scope,
+          compact: args.compact !== false,
+          limit: args.limit,
+          cursor: args.cursor,
+        });
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_list_windows': {
@@ -15928,11 +16128,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
           app_id: args.app_id == null ? undefined : String(args.app_id),
           process_name: args.process_name == null ? undefined : String(args.process_name),
           title: args.title == null ? undefined : String(args.title),
+          filter: args.filter == null ? undefined : String(args.filter),
         });
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_get_window_state': {
         const result = await desktopGetWindowState(sessionId, {
+          window_token: args.window_token == null ? undefined : String(args.window_token),
           window_id: args.window_id == null ? undefined : String(args.window_id),
           window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
           app_id: args.app_id == null ? undefined : String(args.app_id),
@@ -15940,6 +16142,57 @@ export async function executeTool(name: string, args: any, workspacePath: string
           include_screenshot: args.include_screenshot !== false,
           include_text: args.include_text === true,
           focus_first: args.focus_first === true,
+          signal: deps.abortSignal?.signal,
+        });
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_locate_text': {
+        const result = await desktopLocateText(sessionId, {
+          screenshot_id: String(args.screenshot_id || ''),
+          query: String(args.query || ''),
+          min_confidence: args.min_confidence == null ? undefined : Number(args.min_confidence),
+        });
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_click_text': {
+        const result = await desktopClickText(sessionId, {
+          screenshot_id: String(args.screenshot_id || ''),
+          query: String(args.query || ''),
+          min_confidence: args.min_confidence == null ? undefined : Number(args.min_confidence),
+          button: String(args.button || 'left').toLowerCase() === 'right' ? 'right' : 'left',
+          verify: args.verify,
+        }, deps.abortSignal?.signal);
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_get_accessibility_state': {
+        const result = await desktopGetAccessibilityState({
+          window_token: args.window_token == null ? undefined : String(args.window_token),
+          window_id: args.window_id == null ? undefined : String(args.window_id),
+          window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+          app_id: args.app_id == null ? undefined : String(args.app_id),
+          title: args.title == null ? undefined : String(args.title),
+        }, args.max_depth == null ? undefined : Number(args.max_depth), args.max_nodes == null ? undefined : Number(args.max_nodes), deps.abortSignal?.signal, { limit: args.limit, cursor: args.cursor, compact: args.compact !== false });
+        return { name, args, result, error: result.startsWith('ERROR') };
+      }
+      case 'desktop_accessibility_action': {
+        if (args.atomic === true || (args.state_id == null && (args.element_name != null || args.automation_id != null))) {
+          const result = await desktopAccessibilityFindAndAct({
+            selector: { window_token: args.window_token, window_id: args.window_id, window_handle: args.window_handle, app_id: args.app_id, title: args.title },
+            name: args.element_name == null ? undefined : String(args.element_name),
+            automation_id: args.automation_id == null ? undefined : String(args.automation_id),
+            role: args.role == null ? undefined : String(args.role),
+            action: String(args.semantic_action || 'invoke') as any,
+            value: args.value == null ? undefined : String(args.value),
+            signal: deps.abortSignal?.signal,
+          });
+          return { name, args, result, error: result.startsWith('ERROR') };
+        }
+        const result = await desktopAccessibilityAction({
+          state_id: String(args.state_id || ''),
+          element_id: String(args.element_id || ''),
+          action: String(args.semantic_action || '') as any,
+          value: args.value == null ? undefined : String(args.value),
+          signal: deps.abortSignal?.signal,
         });
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -15947,6 +16200,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       // Window-scoped input (Phase 2)
       case 'desktop_window_click': {
         const selector = {
+          window_token: args.window_token == null ? undefined : String(args.window_token),
           window_id: args.window_id == null ? undefined : String(args.window_id),
           window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
           app_id: args.app_id == null ? undefined : String(args.app_id),
@@ -15970,6 +16224,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
             double_click: args.double_click === true,
             modifier: args.modifier === 'shift' || args.modifier === 'ctrl' || args.modifier === 'alt' ? args.modifier : undefined,
             verify: args.verify,
+            focus_first: args.focus_first !== false,
+            signal: deps.abortSignal?.signal,
           },
           sessionId,
         );
@@ -15978,6 +16234,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'desktop_window_type': {
         const result = await desktopWindowType(
           {
+            window_token: args.window_token == null ? undefined : String(args.window_token),
             window_id: args.window_id == null ? undefined : String(args.window_id),
             window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
             app_id: args.app_id == null ? undefined : String(args.app_id),
@@ -15985,6 +16242,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           },
           String(args.text || ''),
           args.raw === true,
+          deps.abortSignal?.signal,
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -15996,12 +16254,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
         }
         const result = await desktopWindowPressKey(
           {
+            window_token: args.window_token == null ? undefined : String(args.window_token),
             window_id: args.window_id == null ? undefined : String(args.window_id),
             window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
             app_id: args.app_id == null ? undefined : String(args.app_id),
             title: args.title == null ? undefined : String(args.title),
           },
           String(args.key || 'Enter'),
+          deps.abortSignal?.signal,
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -16009,6 +16269,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const dir = String(args.direction || 'down').toLowerCase();
         const result = await desktopWindowScroll(
           {
+            window_token: args.window_token == null ? undefined : String(args.window_token),
             window_id: args.window_id == null ? undefined : String(args.window_id),
             window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
             app_id: args.app_id == null ? undefined : String(args.app_id),
@@ -16021,14 +16282,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
             y: args.y == null ? undefined : Number(args.y),
             coordinate_space: args.coordinate_space as any,
             screenshot_id: args.screenshot_id == null ? undefined : String(args.screenshot_id),
+            focus_first: args.focus_first !== false,
           },
           sessionId,
+          deps.abortSignal?.signal,
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_window_drag': {
         const result = await desktopWindowDrag(
           {
+            window_token: args.window_token == null ? undefined : String(args.window_token),
             window_id: args.window_id == null ? undefined : String(args.window_id),
             window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
             app_id: args.app_id == null ? undefined : String(args.app_id),
@@ -16042,20 +16306,50 @@ export async function executeTool(name: string, args: any, workspacePath: string
             steps: args.steps == null ? undefined : Number(args.steps),
             coordinate_space: args.coordinate_space as any,
             screenshot_id: args.screenshot_id == null ? undefined : String(args.screenshot_id),
+            focus_first: args.focus_first !== false,
           },
           sessionId,
+          deps.abortSignal?.signal,
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
 
       // Previously-orphaned tools now wired into the chat/subagent dispatch
       case 'desktop_get_window_text': {
-        const result = await desktopGetWindowText(args.window_name == null ? undefined : String(args.window_name));
+        let windowName = args.window_name == null ? undefined : String(args.window_name);
+        if (args.window_token || args.window_id || args.window_handle || args.app_id || args.title) {
+          const resolved = await resolveCanonicalWindow({
+            window_token: args.window_token == null ? undefined : String(args.window_token),
+            window_id: args.window_id == null ? undefined : String(args.window_id),
+            window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+            app_id: args.app_id == null ? undefined : String(args.app_id),
+            title: args.title == null ? undefined : String(args.title),
+          });
+          if (!resolved.ok) return { name, args, result: `ERROR: [${resolved.code}] ${resolved.message}`, error: true };
+          windowName = resolved.window.title;
+        }
+        const result = await desktopGetWindowText(windowName, {
+          query: args.query == null ? undefined : String(args.query),
+          max_chars: args.max_chars == null ? undefined : Number(args.max_chars),
+          max_lines: args.max_lines == null ? undefined : Number(args.max_lines),
+        });
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'desktop_get_accessibility_tree': {
+        let windowName = args.window_name == null ? undefined : String(args.window_name);
+        if (args.window_token || args.window_id || args.window_handle || args.app_id || args.title) {
+          const resolved = await resolveCanonicalWindow({
+            window_token: args.window_token == null ? undefined : String(args.window_token),
+            window_id: args.window_id == null ? undefined : String(args.window_id),
+            window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
+            app_id: args.app_id == null ? undefined : String(args.app_id),
+            title: args.title == null ? undefined : String(args.title),
+          });
+          if (!resolved.ok) return { name, args, result: `ERROR: [${resolved.code}] ${resolved.message}`, error: true };
+          windowName = resolved.window.title;
+        }
         const result = await desktopGetAccessibilityTree(
-          args.window_name == null ? undefined : String(args.window_name),
+          windowName,
           args.max_depth == null ? undefined : Number(args.max_depth),
           args.max_nodes == null ? undefined : Number(args.max_nodes),
         );
@@ -16068,6 +16362,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           args.target_color == null ? undefined : String(args.target_color),
           args.timeout_ms == null ? undefined : Number(args.timeout_ms),
           args.poll_ms == null ? undefined : Number(args.poll_ms),
+          deps.abortSignal?.signal,
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -16083,6 +16378,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const result = await desktopReplayMacro(
           String(args.name || ''),
           args.speed_multiplier == null ? undefined : Number(args.speed_multiplier),
+          deps.abortSignal?.signal,
         );
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -16106,6 +16402,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'desktop_background_command': {
         const result = await desktopBackgroundCommand({
           action: args.action,
+          window_id: args.window_id == null ? undefined : String(args.window_id),
+          title: args.title == null ? undefined : String(args.title),
           x: args.x == null ? undefined : Number(args.x),
           y: args.y == null ? undefined : Number(args.y),
           text: args.text == null ? undefined : String(args.text),
@@ -16113,6 +16411,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           command: args.command == null ? undefined : String(args.command),
           ms: args.ms == null ? undefined : Number(args.ms),
           timeout_ms: args.timeout_ms == null ? undefined : Number(args.timeout_ms),
+          include_screenshot: args.include_screenshot !== false,
+          include_text: args.include_text === true,
+          max_depth: args.max_depth == null ? undefined : Number(args.max_depth),
+          max_nodes: args.max_nodes == null ? undefined : Number(args.max_nodes),
+          signal: deps.abortSignal?.signal,
         } as any);
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -16938,14 +17241,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const threshold = Number.isFinite(Number(args.threshold)) ? Number(args.threshold) : 80;
         const all = deps.skillsManager.getAll().filter((s: any) => skillMatchesScope(s, scope));
         const audits = all.map((s: any) => scoreSkillMetadata(s)).sort((a: SkillMetadataAudit, b: SkillMetadataAudit) => a.score - b.score);
-        const flagged = audits.filter((a: SkillMetadataAudit) => a.score < threshold || a.issues.length > 0);
-        const list = onlyProblems ? flagged : audits;
+        const activeAudits = audits.filter((a: SkillMetadataAudit) => !a.compatibilityEntry);
+        const compatibilityAudits = audits.filter((a: SkillMetadataAudit) => a.compatibilityEntry);
+        const flagged = activeAudits.filter((a: SkillMetadataAudit) => a.score < threshold || a.issues.length > 0);
+        const list = onlyProblems ? flagged : activeAudits;
         const summary = {
           scope,
           totalScanned: all.length,
           flagged: flagged.length,
           threshold,
-          avgScore: audits.length ? Math.round(audits.reduce((n: number, a: SkillMetadataAudit) => n + a.score, 0) / audits.length) : 100,
+          activeDiscoverableSkills: activeAudits.length,
+          compatibilityEntries: compatibilityAudits.length,
+          avgScore: activeAudits.length ? Math.round(activeAudits.reduce((n: number, a: SkillMetadataAudit) => n + a.score, 0) / activeAudits.length) : 100,
           skills: list.map((a: SkillMetadataAudit) => ({ id: a.id, name: a.name, score: a.score, issues: a.issues })),
         };
         return { name, args, result: JSON.stringify(summary, null, 2), error: false };
@@ -17020,7 +17327,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         });
         const flagged = all
           .map((s: any) => ({ skill: s, audit: scoreSkillMetadata(s) }))
-          .filter(({ audit }: { skill: any; audit: SkillMetadataAudit }) => audit.score < threshold || audit.issues.length > 0)
+          .filter(({ audit }: { skill: any; audit: SkillMetadataAudit }) => !audit.compatibilityEntry && (audit.score < threshold || audit.issues.length > 0))
           .sort((a: { skill: any; audit: SkillMetadataAudit }, b: { skill: any; audit: SkillMetadataAudit }) => a.audit.score - b.audit.score);
         const template = flagged.map(({ audit }: { skill: any; audit: SkillMetadataAudit }) => ({
           id: audit.id,
@@ -17894,11 +18201,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
         if (name === 'set_agent_model') {
           const targetAgentId = String(args?.agent_id || '').trim();
-          const model         = String(args?.model      || '').trim();
+          const provider      = String(args?.provider   || '').trim();
+          const rawModel      = String(args?.model      || '').trim();
+          const model         = provider && rawModel && !rawModel.includes('/') ? `${provider}/${rawModel}` : rawModel;
+          const hasReasoning  = typeof args?.reasoning_effort === 'string' || typeof args?.reasoning === 'string';
+          const reasoningEffort = String(args?.reasoning_effort ?? args?.reasoning ?? '').trim();
           const agentType     = String(args?.agent_type || '').trim();
 
-          if (!model) {
-            return { name, args, result: 'ERROR: model is required. Format: "provider/model" e.g. "anthropic/claude-haiku-4-5-20251001" or "openai/gpt-4o"', error: true };
+          if (!model && !hasReasoning) {
+            return { name, args, result: 'ERROR: provide model (optionally with provider) and/or reasoning_effort.', error: true };
           }
 
           const { getConfig: _gc } = require('../../config/config');
@@ -17913,11 +18224,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
               const resp = await fetch(`http://${gatewayHost}:${gatewayPort}/api/agents/${encodeURIComponent(targetAgentId)}/model`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model }),
+                body: JSON.stringify({ ...(model ? { model } : {}), ...(hasReasoning ? { reasoning_effort: reasoningEffort } : {}) }),
               });
               const data = await resp.json() as any;
               if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to update agent model'}`, error: true };
-              return { name, args, result: `✅ Agent "${targetAgentId}" model set to "${model}". Takes effect on next spawn.`, error: false };
+              return { name, args, result: `✅ Agent "${targetAgentId}" routing updated: model=${data.agent?.model || 'default'}, reasoning=${data.agent?.reasoning_effort || 'provider default'}. Takes effect on next spawn.`, error: false };
             }
 
             if (agentType) {
@@ -17941,19 +18252,37 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 'switch_model_medium',
                 'coordinator',
                 'background_task',
-                'background_agent',
+                'background_spawn',
+                'goal_compactor',
+                'goal_judge',
               ];
               if (!VALID_TYPES.includes(agentType)) {
                 return { name, args, result: `ERROR: Invalid agent_type "${agentType}". Valid values: ${VALID_TYPES.join(', ')}`, error: true };
               }
-              const resp = await fetch(`http://${gatewayHost}:${gatewayPort}/api/settings/agent-model-defaults`, {
+              const isGoalSupportRoute = agentType === 'goal_compactor' || agentType === 'goal_judge';
+              const goalPrefix = agentType === 'goal_compactor' ? 'compaction' : 'judge';
+              const endpoint = isGoalSupportRoute ? '/api/settings/session' : '/api/settings/agent-model-defaults';
+              const payload = isGoalSupportRoute
+                ? { mainChatGoals: {
+                    ...(model ? { [`${goalPrefix}Model`]: model } : {}),
+                    ...(hasReasoning ? { [`${goalPrefix}Reasoning`]: reasoningEffort } : {}),
+                  } }
+                : {
+                    ...(model ? { [agentType]: model } : {}),
+                    ...(hasReasoning ? { reasoning: { [agentType]: reasoningEffort } } : {}),
+                  };
+              const resp = await fetch(`http://${gatewayHost}:${gatewayPort}${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ [agentType]: model }),
+                body: JSON.stringify(payload),
               });
               const data = await resp.json() as any;
               if (!data?.success) return { name, args, result: `ERROR: Failed to update type default`, error: true };
-              return { name, args, result: `✅ Default model for "${agentType}" agents set to "${model}". New agents of this type will use this model.`, error: false };
+              if (isGoalSupportRoute) {
+                const route = data.session?.mainChatGoals || {};
+                return { name, args, result: `✅ Goal Support routing for "${agentType}" updated: model=${route[`${goalPrefix}Model`] || 'current main chat'}, reasoning=${route[`${goalPrefix}Reasoning`] || 'provider default'}.`, error: false };
+              }
+              return { name, args, result: `✅ Default routing for "${agentType}" updated: model=${data.defaults?.[agentType] || 'primary'}, reasoning=${data.reasoning?.[agentType] || 'provider default'}.`, error: false };
             }
 
             return { name, args, result: 'ERROR: Provide either agent_id (to update a specific agent) or agent_type (to set a type-level default).', error: true };
@@ -17968,20 +18297,35 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const { getConfig: _gc2 } = require('../../config/config');
             const cfg2 = _gc2().getConfig() as any;
             const defaults = cfg2.agent_model_defaults || {};
+            const defaultReasoning = cfg2.agent_model_default_reasoning || {};
             const activeProvider = String(cfg2.llm?.provider || '').trim() || null;
             const primaryModel = cfg2.llm?.providers?.[cfg2.llm?.provider]?.model || cfg2.models?.primary || null;
             const agents = (cfg2.agents || []).map((a: any) => ({
               id:    a.id,
               name:  a.name,
               model: a.model || null,
+              reasoning_effort: a.reasoning_effort || null,
             }));
             const result = {
               current_primary: activeProvider && primaryModel ? `${activeProvider}/${primaryModel}` : primaryModel,
               current_provider: activeProvider,
               global_primary: primaryModel,
               agent_model_defaults: defaults,
+              agent_model_default_reasoning: defaultReasoning,
               active_agent_model_default_template: cfg2.active_agent_model_default_template || null,
               agent_model_default_templates: cfg2.agent_model_default_templates || [],
+              goal_support: {
+                compactor: {
+                  model: cfg2.session?.mainChatGoals?.compactionModel || null,
+                  reasoning_effort: cfg2.session?.mainChatGoals?.compactionReasoning || null,
+                  fallback: 'current_primary',
+                },
+                judge: {
+                  model: cfg2.session?.mainChatGoals?.judgeModel || null,
+                  reasoning_effort: cfg2.session?.mainChatGoals?.judgeReasoning || null,
+                  fallback: 'current_primary',
+                },
+              },
               individual_agent_overrides: agents,
             };
             return { name, args, result: JSON.stringify(result, null, 2), error: false };
@@ -18020,6 +18364,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
               const body: any = { name: templateName };
               if (args?.id) body.id = String(args.id).trim();
               if (args?.defaults && typeof args.defaults === 'object') body.defaults = args.defaults;
+              if (args?.reasoning && typeof args.reasoning === 'object') body.reasoning = args.reasoning;
               const resp = await fetch(baseUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -18037,7 +18382,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
               const body: any = {};
               if (typeof args?.name === 'string' && args.name.trim()) body.name = args.name.trim();
               if (args?.defaults && typeof args.defaults === 'object') body.defaults = args.defaults;
-              if (!Object.keys(body).length) return { name, args, result: 'ERROR: provide name and/or defaults to update.', error: true };
+              if (args?.reasoning && typeof args.reasoning === 'object') body.reasoning = args.reasoning;
+              if (!Object.keys(body).length) return { name, args, result: 'ERROR: provide name, defaults, and/or reasoning to update.', error: true };
               const resp = await fetch(`${baseUrl}/${encodeURIComponent(id)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
@@ -18064,6 +18410,40 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
         }
 
+        if (name === 'await_dev_edit_handoff') {
+          const requestedDevEditId = String(args.dev_edit_id || args.devEditId || '').trim();
+          const activeDevEdit = requestedDevEditId
+            ? getDevSourceEditContinuation(requestedDevEditId)
+            : getLatestPendingDevSourceEditContinuation(sessionId);
+          if (!activeDevEdit) {
+            return { name, args, result: 'No pending dev edit was found for this handoff wait.', error: true };
+          }
+          const timeoutSeconds = Math.min(1800, Math.max(1, Number(args.timeout_seconds || args.timeoutSeconds || 900) || 900));
+          const coordinated = await waitForCoordinatedDevEditFiles(activeDevEdit.id, timeoutSeconds * 1000);
+          if (!coordinated) {
+            return { name, args, result: `Dev edit ${activeDevEdit.id} is no longer active in the coordination queue.`, error: true };
+          }
+          if (coordinated.waitingFiles.length) {
+            return {
+              name,
+              args,
+              result: `Dev edit ${activeDevEdit.id} is still waiting for verified handoff of: ${coordinated.waitingFiles.join(', ')}. No files were unlocked during this wait.`,
+              error: false,
+            };
+          }
+          return {
+            name,
+            args,
+            result:
+              `Verified file handoff completed for dev edit ${activeDevEdit.id}. ` +
+              `Unlocked files: ${coordinated.inheritedFiles.join(', ') || coordinated.ownedFiles.join(', ')}. ` +
+              'Reread every handed-off file now and apply the remaining edit on top of its latest version; do not reuse a stale patch.',
+            data: { dev_edit_id: activeDevEdit.id, unlocked_files: coordinated.ownedFiles, inherited_files: coordinated.inheritedFiles },
+            extra: { dev_edit_id: activeDevEdit.id, unlocked_files: coordinated.ownedFiles, inherited_files: coordinated.inheritedFiles },
+            error: false,
+          };
+        }
+
         if (name === 'prom_apply_dev_changes') {
           const requestedDevEditId = String(args.dev_edit_id || args.devEditId || '').trim();
           const activeDevEdit = requestedDevEditId
@@ -18072,7 +18452,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const explicitAffectedFiles = Array.isArray(args.affected_files)
             ? args.affected_files.map((f: any) => String(f || '').trim()).filter(Boolean)
             : [];
-          const affectedFiles = explicitAffectedFiles.length
+          let affectedFiles = explicitAffectedFiles.length
             ? explicitAffectedFiles
             : Array.isArray(activeDevEdit?.affectedFiles) && activeDevEdit.affectedFiles.length
               ? activeDevEdit.affectedFiles
@@ -18081,12 +18461,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
             ? args.changed_surfaces.map((s: any) => String(s || '').trim().toLowerCase()).filter(Boolean)
             : [];
           const inferredSurfaces = getPromApplySurfacesForFiles(affectedFiles);
-          const normalizedSurfaces: string[] = Array.from(new Set<string>([...surfaces, ...inferredSurfaces].map((surface: string) => {
+          let normalizedSurfaces: string[] = Array.from(new Set<string>([...surfaces, ...inferredSurfaces].map((surface: string) => {
             if (surface === 'src' || surface === 'gateway') return 'backend';
             return surface;
           })));
-          const hasBackend = normalizedSurfaces.some((surface: string) => surface === 'backend' || surface === 'config');
-          const hasWeb = normalizedSurfaces.some((surface: string) => surface === 'web-ui' || surface === 'mobile' || surface === 'static');
+          let hasBackend = normalizedSurfaces.some((surface: string) => surface === 'backend' || surface === 'config');
+          let hasWeb = normalizedSurfaces.some((surface: string) => surface === 'web-ui' || surface === 'mobile' || surface === 'static');
           const refreshDesktop = args.refresh_desktop !== false;
           const mode = String(args.mode || 'apply_live').trim().toLowerCase();
           const verifyOnly = mode === 'verify_only';
@@ -18105,19 +18485,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
             || 'dev_edit_complete',
           ).trim().replace(/\s+/g, '_').toLowerCase();
 
-          const runCommand = (command: string, timeoutMs: number) => {
-            const { execSync } = require('child_process');
+          const runCommand = async (command: string, timeoutMs: number) => {
             const root = path.resolve(__dirname, '..', '..', '..');
             const start = Date.now();
             try {
-              const output = execSync(command, {
-                cwd: root,
-                encoding: 'utf-8',
-                timeout: timeoutMs,
-                stdio: 'pipe',
-                windowsHide: true,
-              });
-              return { success: true, command, output: String(output || '').slice(-2500), durationMs: Date.now() - start };
+              const captured = await deps.runCommandCaptured(command, root, timeoutMs);
+              const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n');
+              return { success: captured.code === 0 && !captured.timedOut, command, output: output.slice(-2500), durationMs: Date.now() - start };
             } catch (err: any) {
               const output = [err?.stdout, err?.stderr, err?.message].filter(Boolean).join('\n');
               return { success: false, command, output: String(output || '').slice(-2500), durationMs: Date.now() - start };
@@ -18126,6 +18500,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
           const steps: any[] = [];
           if (verifyOnly) {
+            const coordinatedBeforeVerify = activeDevEdit ? getCoordinatedDevEdit(activeDevEdit.id) : null;
+            if (coordinatedBeforeVerify?.waitingFiles.length) {
+              return {
+                name,
+                args,
+                result:
+                  `prom_apply_dev_changes verify_only deferred: dev edit ${activeDevEdit?.id} is waiting for verified handoff of ` +
+                  `${coordinatedBeforeVerify.waitingFiles.join(', ')}. Call dev_source_edit(action:"await_files", dev_edit_id:"${activeDevEdit?.id}") first.`,
+                error: false,
+              };
+            }
             const plan = resolveDevVerificationPlan({
               mode: 'verify_only',
               changedFiles: affectedFiles,
@@ -18134,8 +18519,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
               requestedProfiles: args.verification_profiles || args.verificationProfiles || args.verification_profile || args.verificationProfile,
               rootDir: path.resolve(__dirname, '..', '..', '..'),
             });
+            const coordinatedPeers = activeDevEdit ? listCoordinatedDevEditPeers(activeDevEdit.id) : [];
+            if (coordinatedPeers.length) {
+              // Handoff verification must not blame this edit for another
+              // editor's transient cross-file state. The elected batch leader
+              // performs the canonical union build/sync after every queue drains.
+              plan.steps = plan.steps.filter((step) => step.id === 'syntax_changed');
+            }
             const results = await runDevVerificationPlan(plan, path.resolve(__dirname, '..', '..', '..'));
             const failed = results.find((result) => !result.success);
+            const verificationSummary = formatDevVerificationSummary(plan, results)
+              + (coordinatedPeers.length
+                ? `\nGlobal build/sync deferred to the shared batch because ${coordinatedPeers.length} coordinated peer edit(s) are active.`
+                : '');
             if (activeDevEdit) {
               upsertDevSourceEditContinuation({
                 ...activeDevEdit,
@@ -18147,11 +18543,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
                   profileIds: plan.profileIds,
                   changedFiles: plan.changedFiles,
                   success: !failed,
-                  summary: formatDevVerificationSummary(plan, results),
+                  summary: verificationSummary,
                   completedAt: Date.now(),
                 },
                 updatedAt: Date.now(),
               });
+              try {
+                recordCoordinatedDevEditVerification({
+                  id: activeDevEdit.id,
+                  files: plan.changedFiles.length ? plan.changedFiles : affectedFiles,
+                  success: !failed,
+                  summary: verificationSummary,
+                });
+              } catch {}
             }
             if (failed) {
               const completed = results.filter((result) => result.success);
@@ -18160,7 +18564,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 args,
                 result:
                   `prom_apply_dev_changes verify_only failed during ${failed.label} (${failed.durationMs}ms).\n\n` +
-                  `${formatDevVerificationSummary(plan, results)}` +
+                  `${verificationSummary}` +
                   (completed.length ? `\n\nCompleted first:\n${completed.map((s) => `- ${s.label}: ok (${s.durationMs}ms)`).join('\n')}` : '') +
                   `\n\n${failed.output || ''}`,
                 error: true,
@@ -18171,16 +18575,64 @@ export async function executeTool(name: string, args: any, workspacePath: string
               args,
               result:
                 `prom_apply_dev_changes verify_only succeeded.\n` +
-                `${formatDevVerificationSummary(plan, results)}\n` +
+                `${verificationSummary}\n` +
                 `Gateway was not restarted${hasWeb && refreshDesktop ? ', and no desktop reload was requested' : ''}.`,
               error: false,
             };
           }
 
+          let coordinatedApply: ReturnType<typeof requestCoordinatedDevEditApply> | null = null;
+          const coordinatedRecord = activeDevEdit ? getCoordinatedDevEdit(activeDevEdit.id) : null;
+          if (activeDevEdit && coordinatedRecord) {
+            try {
+              coordinatedApply = requestCoordinatedDevEditApply(activeDevEdit.id);
+            } catch (err: any) {
+              return { name, args, result: `prom_apply_dev_changes apply_live deferred: ${err.message || err}`, error: true };
+            }
+            try {
+              deps.broadcastWS?.({
+                type: 'dev_edit_coordination_updated',
+                sessionId,
+                devEditId: activeDevEdit.id,
+                phase: coordinatedApply.edit.phase,
+                role: coordinatedApply.role,
+                blockers: coordinatedApply.blockers.map((item) => ({ id: item.id, sessionId: item.sessionId, phase: item.phase, waitingFiles: item.waitingFiles })),
+                awakened: coordinatedApply.awakened.map((item) => ({ id: item.id, sessionId: item.sessionId, files: item.ownedFiles })),
+                batchId: coordinatedApply.batch?.id,
+              });
+            } catch {}
+            if (coordinatedApply.role === 'waiting') {
+              const blockerSummary = coordinatedApply.blockers
+                .map((item) => `${item.id} (${item.phase}${item.waitingFiles.length ? `; waiting: ${item.waitingFiles.join(', ')}` : ''})`)
+                .join('; ');
+              const handoffSummary = coordinatedApply.awakened.length
+                ? ` Verified handoff unlocked ${coordinatedApply.awakened.map((item) => `${item.id}: ${item.ownedFiles.join(', ')}`).join('; ')}.`
+                : '';
+              return {
+                name,
+                args,
+                result:
+                  `prom_apply_dev_changes is queued without restarting. Dev edit ${activeDevEdit.id} passed its readiness boundary and is waiting for the shared apply batch. ` +
+                  `Blockers: ${blockerSummary || 'other active dev edits'}.${handoffSummary} ` +
+                  'Do not call write_note yet and do not keep retrying apply_live; this thread will receive its own completion after the batch deploys.',
+                data: { dev_edit_id: activeDevEdit.id, coordination_status: 'waiting', blockers: coordinatedApply.blockers.map((item) => item.id) },
+                extra: { dev_edit_id: activeDevEdit.id, coordination_status: 'waiting', blockers: coordinatedApply.blockers.map((item) => item.id) },
+                error: false,
+              };
+            }
+            if (coordinatedApply.batch) {
+              affectedFiles = coordinatedApply.batch.files;
+              normalizedSurfaces = Array.from(new Set([...normalizedSurfaces, ...getPromApplySurfacesForFiles(affectedFiles)]));
+              hasBackend = normalizedSurfaces.some((surface: string) => surface === 'backend' || surface === 'config');
+              hasWeb = normalizedSurfaces.some((surface: string) => surface === 'web-ui' || surface === 'mobile' || surface === 'static');
+            }
+          }
+
           if (hasWeb) {
-            const sync = runCommand('npm run sync:web-ui', 120_000);
+            const sync = await runCommand('npm run sync:web-ui', 120_000);
             steps.push(sync);
             if (!sync.success) {
+              if (coordinatedApply?.batch) markCoordinatedDevApplyBatch(coordinatedApply.batch.id, 'failed', sync.output);
               return {
                 name,
                 args,
@@ -18207,10 +18659,24 @@ export async function executeTool(name: string, args: any, workspacePath: string
           if (devEditContinuation) {
             upsertDevSourceEditContinuation(devEditContinuation);
           }
+          const batchDevEditContinuations = coordinatedApply?.batch
+            ? coordinatedApply.batch.memberIds
+                .flatMap((memberId) => {
+                  const member = getDevSourceEditContinuation(memberId);
+                  return member ? [member] : [];
+                })
+                .map((member) => upsertDevSourceEditContinuation({
+                  ...member,
+                  status: 'applying_live',
+                  changedSurfaces: Array.from(new Set([...(member.changedSurfaces || []), ...getPromApplySurfacesForFiles(member.affectedFiles || member.allowedFiles || [])])),
+                  updatedAt: Date.now(),
+                }))
+            : (devEditContinuation ? [devEditContinuation] : []);
 
           if (hasBackend) {
             try {
               const { buildAndRestart } = require('../lifecycle');
+              const restartTask = resolveTaskForSession(sessionId);
               const sessionHint = getSessionChannelHint(sessionId);
               const isTelegramSession = String(sessionId || '').startsWith('telegram_') || sessionHint?.channel === 'telegram';
               const ctx = {
@@ -18222,17 +18688,28 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 affectedFiles: affectedFiles.length ? affectedFiles : undefined,
                 testInstructions: args.test_instructions || undefined,
                 previousSessionId: sessionId,
+                taskId: restartTask?.id,
+                taskOriginatingSessionId: restartTask?.originatingSessionId,
+                taskInitiatedTool: restartTask ? 'prom_apply_dev_changes' : undefined,
                 originChannel: isTelegramSession ? 'telegram' : undefined,
                 respondToTelegram: isTelegramSession ? true : undefined,
                 previousTelegramChatId: Number.isFinite(Number(sessionHint?.chatId)) ? String(sessionHint?.chatId) : undefined,
                 previousTelegramUserId: Number.isFinite(Number(sessionHint?.userId)) ? Number(sessionHint?.userId) : undefined,
                 devReload: refreshDesktop
-                  ? { enabled: true, reason, surfaces: normalizedSurfaces, delayMs: 1200 }
+                  ? { enabled: true, batchId: coordinatedApply?.batch?.id, reason, surfaces: normalizedSurfaces, delayMs: 1200 }
                   : undefined,
                 devEditContinuation,
+                devApplyBatch: coordinatedApply?.batch ? {
+                  id: coordinatedApply.batch.id,
+                  memberIds: coordinatedApply.batch.memberIds,
+                  memberSessionIds: coordinatedApply.batch.memberSessionIds,
+                  files: coordinatedApply.batch.files,
+                  members: batchDevEditContinuations,
+                } : undefined,
               };
               const buildResult = await buildAndRestart(ctx);
               if (!buildResult.success) {
+                if (coordinatedApply?.batch) markCoordinatedDevApplyBatch(coordinatedApply.batch.id, 'failed', buildResult.output);
                 return {
                   name,
                   args,
@@ -18258,6 +18735,58 @@ export async function executeTool(name: string, args: any, workspacePath: string
             }
           }
 
+          if (coordinatedApply?.batch) {
+            markCoordinatedDevApplyBatch(coordinatedApply.batch.id, 'applied');
+            const appliedAt = Date.now();
+            for (const member of batchDevEditContinuations) {
+              const completionTag = String(member.completionNoteTag || 'dev_edit_complete').trim();
+              const completionText =
+                `Coordinated dev batch ${coordinatedApply.batch.id} applied successfully without a gateway restart. ` +
+                `Dev edit ${member.id} is complete, and the shared web UI is now live.`;
+              markDevSourceEditContinuationComplete({
+                id: member.id,
+                tag: completionTag,
+                note: completionText,
+              });
+              try {
+                addMessage(member.sessionId, {
+                  role: 'assistant',
+                  messageKind: 'restart_status',
+                  content: completionText,
+                  timestamp: appliedAt,
+                  channel: 'system',
+                  channelLabel: 'Prom Apply',
+                }, {
+                  disableCompactionCheck: true,
+                  disableMemoryFlushCheck: true,
+                });
+                flushSession(member.sessionId);
+              } catch {}
+              try {
+                deps.broadcastWS?.({
+                  type: 'session_notification',
+                  source: 'dev_apply',
+                  previousSessionId: member.sessionId,
+                  sessionId: member.sessionId,
+                  title: 'Coordinated dev changes applied',
+                  text: completionText,
+                  batchId: coordinatedApply.batch.id,
+                  timestamp: appliedAt,
+                });
+                deps.broadcastWS?.({
+                  type: 'dev_edit_coordination_updated',
+                  sessionId: member.sessionId,
+                  devEditId: member.id,
+                  phase: 'complete',
+                  role: 'applied',
+                  blockers: [],
+                  awakened: [],
+                  batchId: coordinatedApply.batch.id,
+                });
+              } catch {}
+            }
+          }
+
           if (refreshDesktop) {
             try {
               deps.broadcastWS?.({
@@ -18266,6 +18795,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 source: 'prom_apply_dev_changes',
                 reason,
                 surfaces: normalizedSurfaces,
+                batchId: coordinatedApply?.batch?.id,
                 timestamp: Date.now(),
               });
             } catch {}
@@ -18277,7 +18807,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
               `prom_apply_dev_changes succeeded. ` +
               `${steps.map((s) => `${s.command} ok (${s.durationMs}ms)`).join('; ') || 'No build step required'}` +
               `${refreshDesktop ? '; desktop web UI reload requested.' : '.'}` +
-              (devEditContinuation ? ` Next, call write_note with tag "${completionNoteTag}" to complete dev edit ${devEditContinuation.id}.` : ''),
+              (coordinatedApply?.batch
+                ? ` Coordinated batch ${coordinatedApply.batch.id} completed all ${batchDevEditContinuations.length} member dev edits.`
+                : devEditContinuation
+                  ? ` Next, call write_note with tag "${completionNoteTag}" to complete dev edit ${devEditContinuation.id}.`
+                  : ''),
             data: devEditContinuation ? { dev_edit_id: devEditContinuation.id, completion_note_tag: completionNoteTag } : undefined,
             extra: devEditContinuation ? { dev_edit_id: devEditContinuation.id, completion_note_tag: completionNoteTag } : undefined,
             error: false,
@@ -18288,6 +18822,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const reason = String(args.reason || 'manual restart').trim();
           try {
             const { gracefulRestart } = require('../lifecycle');
+            const restartTask = resolveTaskForSession(sessionId);
             const sessionHint = getSessionChannelHint(sessionId);
             const isTelegramSession = String(sessionId || '').startsWith('telegram_') || sessionHint?.channel === 'telegram';
             const resolvedTelegramChatId = Number.isFinite(Number(args.telegram_chat_id))
@@ -18310,6 +18845,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
               affectedFiles: Array.isArray(args.affected_files) ? args.affected_files : undefined,
               testInstructions: args.test_instructions || undefined,
               previousSessionId: sessionId,
+              taskId: restartTask?.id,
+              taskOriginatingSessionId: restartTask?.originatingSessionId,
+              taskInitiatedTool: restartTask ? 'gateway_restart' : undefined,
+              suppressStandaloneRestartMessage: !!restartTask,
               originChannel: isTelegramSession ? 'telegram' : undefined,
               respondToTelegram: isTelegramSession ? true : undefined,
               previousTelegramChatId: Number.isFinite(resolvedTelegramChatId as number) ? String(resolvedTelegramChatId) : undefined,
@@ -18373,9 +18912,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
               'workspace/uploads/',
               'workspace/video-debug/',
               'workspace/logs/',
+              'workspace/temp/',
               'workspace/tmp/',
               'workspace/generated/',
               'workspace/creative-projects/',
+              'workspace/videos/',
+              'workspace/workspace/',
+              'workspace/scratch/',
+              'workspace/tool-bench-lab/',
+              'workspace/automation-bench-cleanup-*/',
+              'workspace/automation-retest-*/',
+              'workspace/games/**/build*/',
+              'videos/',
+              'captures/',
+              '**/node_modules/',
               '.prometheus/',
               '.agents/',
               '.claude/',
@@ -19133,57 +19683,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
             console.warn('[prometheus_questions] Could not send Telegram question:', err?.message || err);
           }
 
-          const waitResult = await new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string }>((resolve) => {
-            let settled = false;
-            const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string }) => {
-              if (settled) return;
-              settled = true;
-              questionQueue.clearSteerCallback(question.id);
-              resolve(value);
-            };
-            questionQueue.onResolve(question.id, (answerPayload) => safeResolve(answerPayload));
-            questionQueue.onSteer(question.id, (steerMessage) => safeResolve({ steerInterrupt: steerMessage }));
-          });
-
-          if ('steerInterrupt' in waitResult) {
-            try {
-              deps.broadcastWS({ type: 'question_steer_interrupt', sessionId, questionId: question.id, steerMessage: waitResult.steerInterrupt.slice(0, 500) });
-            } catch {}
-            return {
-              name,
-              args,
-              result:
-                `[STEER RECEIVED WHILE WAITING FOR PROMETHEUS QUESTION]\n` +
-                `Steer message: "${waitResult.steerInterrupt}"\n\n` +
-                `Question ${question.id} is still pending. Address the steer, then call await_prometheus_question_response(question_id: "${question.id}") to resume waiting.`,
-              error: false,
-            };
-          }
-
-          try {
-            if (activeTaskId) {
-              updateTaskStatus(activeTaskId, 'running', { pauseReason: undefined });
-              appendJournal(activeTaskId, {
-                type: 'resume',
-                content: `Prometheus question answered: ${question.title.slice(0, 220)}`,
-              });
-              deps.broadcastWS({ type: 'task_running', taskId: activeTaskId, title: activeTask?.title });
-              deps.broadcastWS({ type: 'task_panel_update', taskId: activeTaskId });
-            }
-            deps.broadcastWS({
-              type: 'question_answered',
-              sessionId,
-              taskId: activeTaskId,
-              questionId: question.id,
-              question: serializePrometheusQuestionForClient(questionQueue.get(question.id) || question),
-            });
-          } catch {}
-
+          // Do not keep the chat HTTP/SSE turn open while a human considers the
+          // card. Mobile radios routinely suspend or reconnect, and coupling the
+          // question to that transport made the turn look timed out even though
+          // the durable question was still valid. The submit endpoint resumes
+          // the chat with a resumePrompt when no live waiter is attached.
           return {
             name,
             args,
-            result: `Prometheus question ${question.id} answered.\n${JSON.stringify(waitResult, null, 2)}`,
-            data: { question_id: question.id, ...waitResult },
+            result:
+              `Prometheus question ${question.id} is pending. The card is durable across reconnects. ` +
+              'End this turn now; the submitted answer will resume the interrupted work automatically.',
+            data: { question_id: question.id, status: 'pending', expires_at: question.expiresAt },
             error: false,
           };
         }
@@ -19499,8 +20010,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 `Judge reason: ${judgeResult.reason}\n` +
                 `Approved workspace self-doc scope: ${scope.allowedDirs.join(', ')}.\n` +
                 `Approved plan hash: ${scope.planHash || 'none'}; dev_edit_id: ${scope.devEditId}.\n` +
-                `Use source-specific tools for src/web-ui files and scoped workspace file tools for approved self docs. When edits are complete, finalize through ${formatPromApplyDevChangesInstruction(scope.allowedFiles, scope.reason || 'Goal autonomous dev source edits', 'apply_live', scope.devEditId)}. ` +
-                `After apply_live/reload succeeds, write_note with tag "${scope.plan?.completionNoteTag || 'dev_edit_complete'}" to complete the dev edit plan.`,
+                `Use source-specific tools for src/web-ui files and scoped workspace file tools for approved self docs. When edits are verified, enter the shared apply barrier through ${formatPromApplyDevChangesInstruction(scope.allowedFiles, scope.reason || 'Goal autonomous dev source edits', 'apply_live', scope.devEditId)}. ` +
+                `If an overlapping file is queued, await its verified handoff and reread it before editing. Write_note with tag "${scope.plan?.completionNoteTag || 'dev_edit_complete'}" only after the coordinator confirms this edit's batch is live.`,
               data: {
                 devSourceEdit: {
                   devEditId: scope.devEditId,
@@ -19686,8 +20197,8 @@ export async function executeTool(name: string, args: any, workspacePath: string
               `Approved dev source edit scope for this session: ${scope.allowedFiles.join(', ')}.\n` +
               `Approved workspace self-doc scope: ${scope.allowedDirs.join(', ')}.\n` +
               `Approved plan hash: ${scope.planHash || 'none'}; dev_edit_id: ${scope.devEditId}.\n` +
-              `Use source-specific tools for src/web-ui files and scoped workspace file tools for approved self docs. When edits are complete, finalize through ${formatPromApplyDevChangesInstruction(scope.allowedFiles, scope.reason || 'Approved Prometheus dev source edits', 'apply_live', scope.devEditId)}. ` +
-              `For a no-restart preflight, call the same tool with mode:"verify_only". After apply_live/reload succeeds, write_note with tag "${scope.plan?.completionNoteTag || 'dev_edit_complete'}" to complete the dev edit plan.`,
+              `Use source-specific tools for src/web-ui files and scoped workspace file tools for approved self docs. When edits are verified, enter the shared apply barrier through ${formatPromApplyDevChangesInstruction(scope.allowedFiles, scope.reason || 'Approved Prometheus dev source edits', 'apply_live', scope.devEditId)}. ` +
+              `For a no-restart preflight, call the same tool with mode:"verify_only". If a file is queued, use dev_source_edit action=await_files and reread after handoff. Write_note with tag "${scope.plan?.completionNoteTag || 'dev_edit_complete'}" only after the coordinator confirms this batch is live.`,
             data: {
               devSourceEdit: {
                 devEditId: scope.devEditId,
@@ -19936,6 +20447,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const status = buildConnectorStatus();
             return { name, args, result: `Tool category "external_apps" activated for ${requestedScope} scope in session ${sessionId}.\n\n${status}`, error: false };
           }
+
           const suffix = requestedScope === 'ttl' ? ` (${requestedTurns} user turns)` : '';
           return { name, args, result: `Tool category "${requestedCategory}" activated with ${requestedScope} scope${suffix} in session ${sessionId}.`, error: false };
         }
@@ -19949,6 +20461,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
     }
   } catch (err: any) {
+    if (name.startsWith('desktop_') && isDesktopCancellationError(err)) {
+      return { name, args, result: 'ERROR: [DESKTOP_CANCELLED] Desktop operation was interrupted.', error: true, data: { ok: false, code: 'DESKTOP_CANCELLED', retryable: true } };
+    }
     return { name, args, result: `Error: ${err.message}`, error: true };
   }
 }

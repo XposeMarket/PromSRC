@@ -13,6 +13,60 @@ export type SkillKind = 'simple' | 'bundle';
 export type SkillResourceType = 'template' | 'schema' | 'example' | 'asset' | 'prompt-fragment' | 'doc' | 'data';
 export type SkillLifecycleState = 'draft' | 'active' | 'experimental' | 'deprecated' | 'archived';
 export type SkillOwnershipState = 'local' | 'imported' | 'upstream-managed' | 'prometheus-owned-overlay';
+export type SkillHealthState = 'ready' | 'needs_setup' | 'partial' | 'blocked';
+export interface SkillHealth {
+  state: SkillHealthState;
+  reason?: string;
+  verifiedCapabilities: string[];
+  blockedCapabilities: Record<string, string>;
+  lastVerified?: string;
+}
+export const MAX_SKILL_TRIGGERS = 12;
+
+const GENERIC_SINGLE_WORD_TRIGGERS = new Set([
+  'agent', 'automation', 'browser', 'code', 'coding', 'creative', 'data', 'desktop', 'document', 'edit',
+  'email', 'file', 'help', 'image', 'marketing', 'post', 'project', 'research', 'skill', 'social',
+  'task', 'tool', 'video', 'web', 'workflow', 'write', 'writing',
+]);
+
+export interface SkillTriggerValidation {
+  triggers: string[];
+  rejected: Array<{ trigger: string; reason: string }>;
+  capped: string[];
+}
+
+function triggerQuality(trigger: string): number {
+  const words = trigger.split(/\s+/).filter(Boolean);
+  const distinctive = words.filter((word) => !GENERIC_SINGLE_WORD_TRIGGERS.has(word));
+  return Math.min(5, words.length) * 10 + Math.min(20, trigger.length) + distinctive.length * 8;
+}
+
+export function validateSkillTriggers(value: unknown): SkillTriggerValidation {
+  const seen = new Set<string>();
+  const accepted: string[] = [];
+  const rejected: SkillTriggerValidation['rejected'] = [];
+  for (const raw of asStringArray(value)) {
+    const trigger = String(raw || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!trigger || seen.has(trigger)) continue;
+    seen.add(trigger);
+    const words = trigger.split(/\s+/).filter(Boolean);
+    if (words.length === 1 && (words[0].length < 5 || GENERIC_SINGLE_WORD_TRIGGERS.has(words[0]))) {
+      rejected.push({ trigger, reason: 'generic_or_short_single_word' });
+      continue;
+    }
+    if (trigger.length < 4) {
+      rejected.push({ trigger, reason: 'too_short' });
+      continue;
+    }
+    accepted.push(trigger);
+  }
+  const ranked = accepted
+    .map((trigger, index) => ({ trigger, index, score: triggerQuality(trigger) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  const triggers = ranked.slice(0, MAX_SKILL_TRIGGERS).map((item) => item.trigger);
+  const capped = ranked.slice(MAX_SKILL_TRIGGERS).map((item) => item.trigger);
+  return { triggers, rejected, capped };
+}
 
 export interface SkillPermissions {
   browser?: boolean;
@@ -49,9 +103,11 @@ export interface SkillManifest {
   resources: SkillResource[];
   templates?: Array<{ action?: string; label?: string; command?: string }>;
   status: 'ready' | 'needs_setup' | 'blocked';
+  health: SkillHealth;
   lifecycle: SkillLifecycleState;
   ownership: SkillOwnershipState;
   executionEnabled: boolean;
+  implicitInvocation: boolean;
   riskLevel?: string;
 }
 
@@ -70,9 +126,11 @@ export interface LoadedSkillPackage {
   toolBinding?: SkillToolBinding;
   permissions: SkillPermissions;
   status: 'ready' | 'needs_setup' | 'blocked';
+  health: SkillHealth;
   lifecycle: SkillLifecycleState;
   ownership: SkillOwnershipState;
   executionEnabled: boolean;
+  implicitInvocation: boolean;
   riskLevel?: string;
   rootDir: string;
   entrypoint: string;
@@ -169,6 +227,28 @@ function normalizeStatus(value: unknown): 'ready' | 'needs_setup' | 'blocked' {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'blocked' || raw === 'needs_setup') return raw;
   return 'ready';
+}
+
+function normalizeHealth(value: unknown, status: 'ready' | 'needs_setup' | 'blocked'): SkillHealth {
+  const raw = isPlainObject(value) ? value : {};
+  const requested = String(raw.state || '').trim().toLowerCase();
+  const state: SkillHealthState = ['ready', 'needs_setup', 'partial', 'blocked'].includes(requested)
+    ? requested as SkillHealthState
+    : status;
+  const blockedCapabilities: Record<string, string> = {};
+  const blockedRaw = raw.blockedCapabilities || raw.blocked_capabilities;
+  if (isPlainObject(blockedRaw)) {
+    for (const [key, reason] of Object.entries(blockedRaw)) {
+      blockedCapabilities[String(key)] = String(reason || '').trim();
+    }
+  }
+  return {
+    state,
+    reason: String(raw.reason || '').trim() || undefined,
+    verifiedCapabilities: asStringArray(raw.verifiedCapabilities || raw.verified_capabilities),
+    blockedCapabilities,
+    lastVerified: String(raw.lastVerified || raw.last_verified || '').trim() || undefined,
+  };
 }
 
 function normalizeLifecycle(value: unknown): SkillLifecycleState {
@@ -368,7 +448,14 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
   const description = String(manifestRaw?.description || fm.description || '').trim();
   const emoji = '';
   const version = String(manifestRaw?.version || fm.version || (kind === 'bundle' ? '1.0.0' : '0.0.0')).trim();
-  const triggers = asStringArray(manifestRaw?.triggers || fm.triggers).map((t) => t.toLowerCase());
+  const triggerValidation = validateSkillTriggers(manifestRaw?.triggers || fm.triggers);
+  const triggers = triggerValidation.triggers;
+  if (triggerValidation.rejected.length) {
+    warnings.push(`Ignored invalid triggers: ${triggerValidation.rejected.map((item) => `${item.trigger} (${item.reason})`).join(', ')}`);
+  }
+  if (triggerValidation.capped.length) {
+    warnings.push(`Trigger cap ${MAX_SKILL_TRIGGERS}: ignored ${triggerValidation.capped.length} lower-specificity trigger(s).`);
+  }
   const categories = asStringArray(manifestRaw?.categories).map((t) => t.toLowerCase());
   const requiredTools = asStringArray(manifestRaw?.requiredTools || manifestRaw?.required_tools || manifestRaw?.required_tool_categories);
   const requires = normalizeRequires(manifestRaw?.requires || manifestRaw?.requirements);
@@ -376,11 +463,29 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
   const toolBinding = normalizeToolBinding(manifestRaw?.toolBinding || manifestRaw?.tool_binding, requiredTools);
   const permissions = isPlainObject(manifestRaw?.permissions) ? manifestRaw.permissions as SkillPermissions : {};
   const status = normalizeStatus(manifestRaw?.status);
+  const health = normalizeHealth(manifestRaw?.health, status);
   const executionEnabled = typeof manifestRaw?.execution_enabled === 'boolean'
     ? manifestRaw.execution_enabled
     : typeof manifestRaw?.executionEnabled === 'boolean'
       ? manifestRaw.executionEnabled
       : true;
+  const explicitImplicitInvocation = typeof manifestRaw?.implicitInvocation === 'boolean'
+    ? manifestRaw.implicitInvocation
+    : typeof manifestRaw?.implicit_invocation === 'boolean'
+      ? manifestRaw.implicit_invocation
+      : /^(true|false)$/i.test(String(fm.implicitInvocation || fm.implicit_invocation || '').trim())
+        ? String(fm.implicitInvocation || fm.implicit_invocation).trim().toLowerCase() === 'true'
+        : undefined;
+  const invocationPolicy = String(manifestRaw?.invocationPolicy || manifestRaw?.invocation_policy || '').trim().toLowerCase();
+  const broadOrManualSkill = categories.some((category) => ['style', 'role', 'persona', 'manual', 'guidelines'].includes(category))
+    || /(?:^|-)(?:style|guidelines|operator|manager|strategist|persona|mode)(?:-|$)/i.test(`${id} ${name}`);
+  const implicitInvocation = explicitImplicitInvocation !== undefined
+    ? explicitImplicitInvocation
+    : invocationPolicy === 'explicit'
+      ? false
+      : invocationPolicy === 'implicit'
+        ? true
+        : !broadOrManualSkill;
   const riskLevel = isPlainObject(manifestRaw?.risk)
     ? String(manifestRaw.risk.level || '').trim() || undefined
     : String(manifestRaw?.riskLevel || '').trim() || undefined;
@@ -426,9 +531,11 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
     resources,
     templates: Array.isArray(manifestRaw?.templates) ? manifestRaw.templates as Array<{ action?: string; label?: string; command?: string }> : undefined,
     status,
+    health,
     lifecycle,
     ownership,
     executionEnabled,
+    implicitInvocation,
     riskLevel,
   };
 
@@ -447,9 +554,11 @@ export function loadSkillPackage(rootDir: string, fallbackId?: string): LoadedSk
     toolBinding,
     permissions,
     status,
+    health,
     lifecycle,
     ownership,
     executionEnabled,
+    implicitInvocation,
     riskLevel,
     rootDir,
     entrypoint,

@@ -11,6 +11,7 @@
 import type { LLMProvider, ChatMessage, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage, ProviderID } from './LLMProvider';
 import { contentToString, stripCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
+import { normalizeReasoningEffort, normalizeSpeed } from './reasoning-capabilities';
 
 // Remove the prompt-cache sentinel from any string message content. OpenAI/xAI
 // auto-cache on a stable prefix, so the marker has no API role here and must not
@@ -88,7 +89,7 @@ function shouldSendReasoningEffort(providerId: string, effort: string, modelName
     }
     return effort === 'none' || effort === 'low' || effort === 'medium' || effort === 'high';
   }
-  if (id === 'openai') return effort !== 'none';
+  if (id === 'openai') return !!normalizeReasoningEffort('openai', modelName || '', effort);
   return effort !== 'none' && effort !== 'xhigh' && effort !== 'max';
 }
 
@@ -270,6 +271,8 @@ export class OpenAICompatAdapter implements LLMProvider {
 	      max_tokens: options?.max_tokens ?? 512,
 	      stream: !!options?.onToken,
 	    };
+    const speedCfg = (getConfig().getConfig() as any)?.llm?.providers?.[this.id] || {};
+    if (normalizeSpeed(this.id, model, speedCfg.speed) === 'fast') body.service_tier = 'priority';
 	    // frequency_penalty removed: grok-4.3+ rejects the parameter with a 400 error.
 	    // Reasoning effort: only forward for providers that implement it.
     if (this.config.supportsReasoningEffort ?? EFFORT_PROVIDERS.has(this.id as string)) {

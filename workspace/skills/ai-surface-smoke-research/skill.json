@@ -1,21 +1,19 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "ai-surface-smoke-research",
-  "name": "AI Surface Smoke Research",
-  "description": "Run Raul's browser/desktop test workflow: focus Codex and Claude, open Chrome/browser, search Reddit and/or X for AI topics like Claude, OpenClaw, Hermes, summarize signals, and report only after tool-backed execution completes.",
+  "name": "ai-surface-smoke-research",
+  "description": "Run the shared browser, desktop, and optional voice-agent smoke workflow across ChatGPT, Claude, Reddit, X, and other requested AI surfaces. Use for voice-triggered or typed end-to-end tool tests, AI chatter collection, browser scrolling, desktop focus, visible-action proof, and concise tool-grounded summaries.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "run ai smoke research",
-    "ai surface test",
-    "codex claude reddit x test",
-    "search reddit and x for ai",
-    "focus codex and claude then search x",
-    "test browser desktop research",
-    "quick ai research workflow",
-    "claude openclaw hermes search",
-    "summarize ai chatter",
-    "browser desktop ai test"
+    "search reddit and x for ai chatter",
+    "search x and test desktop focus",
+    "run the ai browser test",
+    "ai surface smoke test",
+    "focus chatgpt and claude",
+    "browser desktop smoke test",
+    "voice browser desktop test",
+    "test voice tools"
   ],
   "categories": [
     "browser",
@@ -36,29 +34,31 @@
   },
   "resources": [
     {
-      "path": "examples/2026-05-21-reddit-openclaw-and-steering.md",
+      "path": "references/examples/reddit-openclaw-and-steering.md",
       "type": "example",
       "description": "Successful 2026-05-21 lightweight Reddit/OpenClaw AI-surface scan example with tool order, output shape, and steering guardrails."
     },
     {
-      "path": "examples/2026-05-22-ai-smoke-test.md",
+      "path": "references/examples/ai-smoke-test.md",
       "type": "example",
       "description": "Successful AI smoke-test example with tool order, Claude name-collision caveat, and output shape from 2026-05-22."
     },
     {
-      "path": "examples/2026-05-23-interrupted-browser-target-closed.md",
+      "path": "references/examples/interrupted-browser-target-closed.md",
       "type": "example",
       "description": "Recovery example for AI smoke tests when browser_scroll_collect fails because the page/context closed during a run."
     },
     {
-      "path": "references/styles/ai-surface-smoke-research-2026-07-04.md",
+      "path": "references/styles/ai-surface-smoke-research.md",
       "type": "doc",
       "description": "Add style pattern to ai-surface-smoke-research"
     },
     {
-      "path": "references/workflows/ai-surface-smoke-research-2026-07-07.md",
+      "path": "references/workflows/ai-surface-smoke-research.md",
       "type": "doc",
       "description": "Add workflow recipe to ai-surface-smoke-research"
     }
-  ]
+  ],
+  "implicitInvocation": false,
+  "lifecycle": "active"
 }

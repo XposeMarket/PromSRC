@@ -1,25 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when drafting, rewriting, or polishing writing in a specific voice for posts, essays, emails, articles, speeches, scripts, bios, stories, or personal/business copy.",
+  "description": "Draft publishable content in a specific person or brand voice from supplied samples, facts, intent, and boundaries. Use when voice fidelity is central; do not use to impersonate someone deceptively, invent personal experience, or replace a specialized legal/financial workflow.",
   "triggers": [
-    "write in my voice",
-    "ghostwrite this",
-    "rewrite this copy",
     "make this sound like me",
-    "draft a post",
-    "write an article",
-    "polish this writing",
+    "make this less ai",
+    "write in my voice",
+    "rewrite for clarity",
+    "rewrite this copy",
     "improve the tone",
+    "polish this writing",
+    "write an article",
     "write a script",
+    "draft a post",
     "write a bio",
-    "make this less AI",
-    "personal voice",
-    "founder note",
-    "essay draft",
-    "speech draft",
-    "content draft",
-    "rewrite for clarity"
+    "ghostwrite this"
   ],
   "categories": [
     "writing",
@@ -30,6 +25,7 @@
     "skills"
   ],
   "lifecycle": "active",
-  "name": "Ghostwriter",
-  "id": "ghostwriter"
+  "name": "ghostwriter",
+  "id": "ghostwriter",
+  "implicitInvocation": true
 }

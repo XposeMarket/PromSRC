@@ -1,3 +1,8 @@
+---
+name: "teams-meeting-pipeline"
+description: "Build a Microsoft Graph-backed Teams meeting pipeline for meeting discovery, transcript or recording ingestion, action extraction, follow-up drafting, and explicit task sync. Use when implementing Teams meeting integration or processing Teams meeting data with user intent."
+---
+
 # Teams Meeting Pipeline
 
 Use this skill when Prometheus needs Microsoft Teams meeting context, transcripts, recordings, action items, or follow-up workflows.

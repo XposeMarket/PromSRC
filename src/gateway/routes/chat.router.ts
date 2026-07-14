@@ -14,7 +14,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
 
 // ── TEMP latency bisection probe ──────────────────────────────────────────
 const TURN_TIMING_ENABLED = process.env.PROMETHEUS_TURN_TIMING === '1';
@@ -50,10 +50,16 @@ import { getOllamaClient } from '../../agents/ollama-client';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { readModelUsageEvents, getUsageCalibration } from '../../providers/model-usage';
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
+import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, type TurnOrigin } from '../session';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
-import { collectRichArtifacts, productCarouselToArtifact } from '../rich-artifacts';
+import {
+  collectRichArtifacts,
+  normalizeProductArtifactItems,
+  normalizeSourceArtifactItems,
+  productCarouselToArtifact,
+} from '../rich-artifacts';
 import { getConnector, isConnectorConnected } from '../../integrations/connector-registry.js';
 import type { GmailConnector } from '../../integrations/connectors/gmail.js';
 import { executeMarketLookup } from '../../tools/market';
@@ -86,6 +92,8 @@ import { SkillsManager } from '../skills-runtime/skills-manager';
 import { rankSkillsForQuery } from '../agents-runtime/capabilities/skills-executor';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
 import { loadSoul } from '../../config/soul-loader.js';
+import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
+import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
 import {
@@ -175,7 +183,13 @@ import { automationDashboardTool } from '../scheduling/schedule-admin-tools';
 import { TelegramChannel } from '../comms/telegram-channel';
 import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
 import { executeXaiImageVisionSummary } from '../tools/handlers/xai-handlers.js';
-import { executeWebSearch, executeWebFetch } from '../../tools/web';
+import {
+  enrichProductArtifactItems,
+  enrichSourceArtifactItems,
+  executeShoppingSearchProducts,
+  executeWebSearch,
+  executeWebFetch,
+} from '../../tools/web';
 import { executeGenerateImage } from '../../tools/generate-image.js';
 import { executeGenerateVideo } from '../../tools/generate-video.js';
 import { executeWriteNote } from '../../tools/write-note';
@@ -610,25 +624,30 @@ function extractTouchedFilesFromToolResult(result: any, workspacePath: string): 
   ));
 }
 
-function runGitText(cwd: string, args: string[], maxBuffer = 2 * 1024 * 1024): string {
-  return execFileSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer,
-  } as any).toString();
+function runGitText(cwd: string, args: string[], maxBuffer = 2 * 1024 * 1024): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, {
+      cwd,
+      encoding: 'utf8',
+      windowsHide: true,
+      maxBuffer,
+      timeout: 15_000,
+    }, (err, stdout) => {
+      if (err) reject(err);
+      else resolve(String(stdout || ''));
+    });
+  });
 }
 
-function findGitRootForPath(filePath: string, workspacePath: string): string | null {
+async function findGitRootForPath(filePath: string, workspacePath: string): Promise<string | null> {
   const cwd = fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()
     ? filePath
     : (fs.existsSync(filePath) ? path.dirname(filePath) : workspacePath);
   try {
-    return path.resolve(runGitText(cwd, ['rev-parse', '--show-toplevel']).trim());
+    return path.resolve((await runGitText(cwd, ['rev-parse', '--show-toplevel'])).trim());
   } catch {
     try {
-      return path.resolve(runGitText(workspacePath, ['rev-parse', '--show-toplevel']).trim());
+      return path.resolve((await runGitText(workspacePath, ['rev-parse', '--show-toplevel'])).trim());
     } catch {
       return null;
     }
@@ -647,9 +666,9 @@ function countTextFileLines(filePath: string): number {
   }
 }
 
-function inferGitStatus(root: string, relPath: string, absPath: string): TurnFileChangeStatus {
+async function inferGitStatus(root: string, relPath: string, absPath: string): Promise<TurnFileChangeStatus> {
   try {
-    const status = runGitText(root, ['status', '--porcelain', '--', relPath]).trim();
+    const status = (await runGitText(root, ['status', '--porcelain', '--', relPath])).trim();
     if (/^R/.test(status)) return 'renamed';
     if (/^\?\?/.test(status) || /^A/.test(status)) return 'added';
     if (/^D|^.D/.test(status)) return 'deleted';
@@ -657,16 +676,18 @@ function inferGitStatus(root: string, relPath: string, absPath: string): TurnFil
   return 'modified';
 }
 
-function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: string): TurnFileChanges | undefined {
+async function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: string): Promise<TurnFileChanges | undefined> {
   const touched = Array.from(new Set(
     (Array.isArray(toolResults) ? toolResults : [])
       .flatMap((result) => extractTouchedFilesFromToolResult(result, workspacePath)),
   ));
   if (!touched.length) return undefined;
 
-  const changes: TurnFileChange[] = [];
-  for (const absPath of touched.slice(0, 80)) {
-    const gitRoot = findGitRootForPath(absPath, workspacePath);
+  const candidates = touched.slice(0, 40);
+  const collected: Array<TurnFileChange | undefined> = new Array(candidates.length);
+  let nextIndex = 0;
+  const collectOne = async (absPath: string): Promise<TurnFileChange | undefined> => {
+    const gitRoot = await findGitRootForPath(absPath, workspacePath);
     let insertions = 0;
     let deletions = 0;
     let status: TurnFileChangeStatus = fs.existsSync(absPath) ? 'modified' : 'deleted';
@@ -675,9 +696,9 @@ function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: s
 
     if (gitRoot) {
       const relPath = path.relative(gitRoot, absPath).replace(/\\/g, '/');
-      status = inferGitStatus(gitRoot, relPath, absPath);
+      status = await inferGitStatus(gitRoot, relPath, absPath);
       try {
-        const numstat = runGitText(gitRoot, ['diff', '--numstat', '--', relPath]).trim().split(/\r?\n/).filter(Boolean)[0] || '';
+        const numstat = (await runGitText(gitRoot, ['diff', '--numstat', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0] || '';
         const parts = numstat.split(/\s+/);
         if (parts[0] === '-' || parts[1] === '-') {
           binary = true;
@@ -690,17 +711,17 @@ function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: s
         insertions = countTextFileLines(absPath);
       }
       try {
-        diffPreview = runGitText(gitRoot, ['diff', '--unified=2', '--', relPath], 512 * 1024).slice(0, 12000);
+        diffPreview = (await runGitText(gitRoot, ['diff', '--unified=2', '--', relPath], 512 * 1024)).slice(0, 12000);
       } catch {}
     } else if (fs.existsSync(absPath)) {
       insertions = countTextFileLines(absPath);
       status = 'added';
     }
 
-    if (!fs.existsSync(absPath) && status !== 'deleted') continue;
-    if (status === 'deleted' && insertions === 0 && deletions === 0 && !binary && !diffPreview) continue;
-    if (insertions === 0 && deletions === 0 && !binary && status === 'modified' && !diffPreview) continue;
-    changes.push({
+    if (!fs.existsSync(absPath) && status !== 'deleted') return undefined;
+    if (status === 'deleted' && insertions === 0 && deletions === 0 && !binary && !diffPreview) return undefined;
+    if (insertions === 0 && deletions === 0 && !binary && status === 'modified' && !diffPreview) return undefined;
+    return {
       path: absPath,
       displayPath: normalizeDisplayPath(absPath, workspacePath),
       status,
@@ -708,8 +729,16 @@ function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: s
       deletions,
       diffPreview: diffPreview || undefined,
       binary: binary || undefined,
-    });
-  }
+    };
+  };
+  const workers = Array.from({ length: Math.min(4, candidates.length) }, async () => {
+    while (nextIndex < candidates.length) {
+      const index = nextIndex++;
+      collected[index] = await collectOne(candidates[index]);
+    }
+  });
+  await Promise.all(workers);
+  const changes = collected.filter((change): change is TurnFileChange => !!change);
 
   if (!changes.length) return undefined;
   const insertions = changes.reduce((sum, file) => sum + Math.max(0, Number(file.insertions) || 0), 0);
@@ -891,6 +920,7 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
         event: eventType,
         toolName: action,
         args: data?.args,
+        toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
         stepNum: data?.stepNum,
       },
     };
@@ -906,7 +936,8 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
         event: eventType,
         toolName: action,
         args: data?.args,
-        error: data?.error === true,
+        error: data?.ok === false || data?.success === false || Boolean(data?.error),
+        toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
         stepNum: data?.stepNum,
       },
     };
@@ -990,6 +1021,7 @@ import {
   createVoiceWorkgroup,
   listVoiceWorkgroupsForSession,
   loadVoiceWorkgroup,
+  updateVoiceWorkgroupWorkerStatus,
   type VoiceWorkgroupDelivery,
   type VoiceWorkgroupMode,
 } from '../voice/voice-workgroup-store';
@@ -1005,18 +1037,19 @@ import {
 } from '../observation-policy';
 import { goalDecomposeTool, executeGoalDecompose, approveGoal, loadGoal, listGoals } from '../goal-decomposer';
 import {
-  applyMainChatGoalJudgeResult,
+  blockMainChatGoalFromOwner,
   buildMainChatGoalContinuationPrompt,
   getAllMainChatGoalRecords,
   handleMainChatGoalCommand,
   isMainChatGoalContinuation,
-  judgeMainChatGoal,
   maybeSummarizeMainChatGoal,
   recordMainChatGoalTurnPlanProgress,
   recordMainChatGoalDeniedAction,
   recordMainChatGoalRuntimeFailure,
+  recordMainChatGoalContinuationBoundary,
   resolveMainChatGoalPolicy,
   snapshotMainChatGoal,
+  completeMainChatGoalFromOwner,
 } from '../main-chat-goals';
 import {
   listManagedTeams,
@@ -1042,6 +1075,12 @@ import { triggerManagerReview, handleManagerConversation, setTeamRunAgentFn } fr
 import { buildTeamDispatchTask } from '../teams/team-dispatch-runtime';
 import { checkForTeamSuggestion } from '../teams/team-detector';
 import { SubagentManager } from '../agents-runtime/subagent-manager';
+import {
+  createInternalWatch,
+  listInternalWatches,
+  cancelInternalWatch,
+} from '../internal-watch/internal-watch-store';
+import { observeInternalWatchTarget } from '../internal-watch/internal-watch-runner';
 // orchestration/file-op-v2 removed — stubs to prevent reference errors
 type FileOpType = 'CHAT' | 'FILE_EDIT' | 'FILE_CREATE' | 'FILE_ANALYSIS' | 'BROWSER_OP' | 'DESKTOP_OP';
 class FileOpProgressWatchdog { constructor(_n: number) {} record(_x: any) { return { no_progress: false }; } }
@@ -1178,6 +1217,7 @@ import {
   abortLiveRuntime,
   addPendingRuntimeSteer,
   consumePendingRuntimeSteersForSession,
+  isSteerableChatRuntimeKind,
   type RuntimeSteerEvent,
 } from '../live-runtime-registry';
 import {
@@ -1266,6 +1306,7 @@ import { createApp } from '../core/app';
 import { createServer } from '../core/server';
 import { runStartup } from '../core/startup';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
+import { detectStage4InstructionIntents } from '../../runtime/instruction-intent-detector';
 import { isProviderStatusChecking, markProviderStatus, readProviderStatusCache } from '../provider-status';
 import { attachWorkspaceCheckpoint, createWorkspaceTurnCheckpoint } from '../../workspace-history';
 
@@ -1300,9 +1341,24 @@ const MAX_TOOL_ROUNDS = getMaxToolRounds();
 
 function resolveEffectiveMaxToolRounds(
   _baseMax: number,
-  _opts: { creativeMode?: string | null; executionMode: ExecutionMode; message: string },
+  opts: { creativeMode?: string | null; executionMode: ExecutionMode; message: string; sessionId: string },
 ): number {
-  // No cap — the tool loop runs until the model stops calling tools (or on abort).
+  // Interactive and explicitly managed workflows remain open-ended. Brain jobs
+  // are autonomous recurring work, so a confused model must not be able to loop
+  // for hundreds of provider calls and then retry again on the next ticker.
+  const readBrainLimit = (name: string, fallback: number): number => {
+    const parsed = Number(process.env[name]);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.max(1, Math.floor(parsed)) : fallback;
+  };
+  if (/^brain_thought_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}$/i.test(opts.sessionId)) {
+    return readBrainLimit('PROMETHEUS_BRAIN_THOUGHT_MAX_ROUNDS', 32);
+  }
+  if (/^brain_dream_cleanup_\d{4}-\d{2}-\d{2}$/i.test(opts.sessionId)) {
+    return readBrainLimit('PROMETHEUS_BRAIN_CLEANUP_MAX_ROUNDS', 32);
+  }
+  if (/^brain_dream_\d{4}-\d{2}-\d{2}$/i.test(opts.sessionId)) {
+    return readBrainLimit('PROMETHEUS_BRAIN_DREAM_MAX_ROUNDS', 48);
+  }
   return Infinity;
 }
 
@@ -1319,6 +1375,7 @@ function isResumableExecutionMode(executionMode: ExecutionMode): boolean {
 let _cronScheduler: CronScheduler;
 let _telegramChannel: TelegramChannel;
 let _skillsManager: SkillsManager;
+let _sessionHistoryHookRegistered = false;
 
 export interface ChatRouterDeps {
   cronScheduler: CronScheduler;
@@ -1331,8 +1388,26 @@ export function initChatRouter(deps: ChatRouterDeps): void {
   _telegramChannel = deps.telegramChannel;
   _skillsManager = deps.skillsManager;
 
+  if (!_sessionHistoryHookRegistered) {
+    _sessionHistoryHookRegistered = true;
+    hookBus.register('session:history_changed', (event) => {
+      broadcastWS({
+        type: 'session_history_changed',
+        sessionId: event.sessionId,
+        timestamp: event.timestamp,
+        historyCount: event.historyCount,
+        source: event.source,
+      });
+    });
+  }
+
   // Wire chat-helpers and task-router singletons (deferred to init time to avoid use-before-assigned)
-  initChatHelpers({ handleChat, telegramChannel: _telegramChannel, makeBroadcastForTask });
+  initChatHelpers({
+    handleChat,
+    telegramChannel: _telegramChannel,
+    makeBroadcastForTask,
+    resumeMainChatGoalsAfterBoot: (sessionIds) => resumeMainChatGoalsInterruptedForRestart(sessionIds),
+  });
   initTaskRouter({ handleChat, telegramChannel: _telegramChannel, makeBroadcastForTask, cronScheduler: _cronScheduler });
 }
 
@@ -1353,9 +1428,35 @@ function storageAwareStatus(error: unknown): number {
 }
 
 type ExecutionMode = 'interactive' | 'background_task' | 'proposal_execution' | 'background_agent' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent';
+
+function resolveConfiguredAgentReasoning(
+  executionMode: ExecutionMode,
+  providerId: string | undefined,
+  model: string | undefined,
+): import('../../providers/reasoning-capabilities').ReasoningEffort | undefined {
+  const cfg = getConfig().getConfig() as any;
+  const defaults = cfg.agent_model_defaults || {};
+  const reasoning = cfg.agent_model_default_reasoning || {};
+  const candidates: string[] = executionMode === 'interactive'
+    ? ['main_chat']
+    : executionMode === 'background_agent'
+      ? ['background_spawn', 'main_chat']
+      : executionMode === 'team_manager'
+        ? ['team_manager', 'manager']
+        : executionMode === 'team_subagent'
+          ? ['team_subagent', 'subagent', 'subagent_planner', 'subagent_orchestrator', 'subagent_researcher', 'subagent_analyst', 'subagent_builder', 'subagent_operator', 'subagent_verifier']
+          : executionMode === 'proposal_execution'
+            ? ['proposal_executor_high_risk', 'proposal_executor_low_risk', 'background_task']
+            : ['background_task'];
+  const activeRef = `${String(providerId || '').trim()}/${String(model || '').trim()}`.toLowerCase();
+  const matching = candidates.find((key) => String(defaults[key] || '').trim().toLowerCase() === activeRef && reasoning[key]);
+  const key = matching || candidates.find((candidate) => reasoning[candidate]);
+  if (!key) return undefined;
+  return normalizeReasoningEffort(String(providerId || ''), String(model || ''), reasoning[key]);
+}
 type ReasoningOptions = {
   enabled?: boolean;
-  level?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'extra_high' | 'max';
+  level?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'extra_high' | 'max' | 'ultra';
 };
 const ROLLING_COMPACTION_SUMMARY_PREFIX = '[Rolling context summary]';
 const LEGACY_COMPACTION_SUMMARY_PREFIX = '[Compacted context summary]';
@@ -1566,6 +1667,11 @@ function boundToolTextForModelContext(text: string, toolName: string, maxChars =
 }
 
 function boundToolMessageContentForModelContext(content: any, toolName: string): any {
+  // A skill is not considered read if its entrypoint was clipped before the
+  // next reasoning round. skill_read already returns one chosen skill plus a
+  // resource index, so preserve that result in full. Bundle resources remain
+  // progressive and are fetched individually with skill_resource_read.
+  if (toolName === 'skill_read') return content;
   if (typeof content === 'string') return boundToolTextForModelContext(content, toolName);
   if (!Array.isArray(content)) return content;
   return content.map((part: any) => {
@@ -1992,7 +2098,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
+  runtimeOptions?: { directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[] },
 ): Promise<HandleChatResult> {
   try {
   const latencyStartAt = Date.now();
@@ -2038,6 +2144,7 @@ async function handleChat(
   const rawSendSSE = sendSSE;
   const callerContextText = String(callerContext || '');
   const voiceAgentHandoffActive = /\[VOICE_AGENT_HANDOFF\]/i.test(callerContextText);
+  const voiceAgentChatHandoffActive = /\[VOICE_AGENT_CHAT_HANDOFF\]/i.test(callerContextText);
   const voiceNarrator = voiceAgentHandoffActive ? createVoiceNarrator(sessionId, message, (data) => {
     rawSendSSE('voice_milestone', data);
     mirrorSessionChatEvent(sessionId, 'voice_milestone', data, broadcastWS);
@@ -2054,13 +2161,15 @@ async function handleChat(
   sendSSE('ui_preflight', { message: 'Preparing Prometheus runtime...' });
   __htimeReset(); htime('handleChat: after Preparing Prometheus runtime');
   const isHandleChatGoalContinuation = isMainChatGoalContinuation(message);
+  const activeGoalAtTurnStart = snapshotMainChatGoal(sessionId);
+  const turnOwnsActiveGoal = activeGoalAtTurnStart?.status === 'active';
   const handleChatGoalPolicy = isHandleChatGoalContinuation ? resolveMainChatGoalPolicy() : null;
   const handleChatGoalExecutionPolicy = isHandleChatGoalContinuation ? {
     mode: 'goal_autonomous' as const,
     approvalMode: handleChatGoalPolicy?.permissions.approvalMode || 'never' as const,
     hardDeny: handleChatGoalPolicy?.permissions.hardDenyEnabled !== false,
   } : undefined;
-  const buildExecuteToolDeps = (): any => ({
+  const buildExecuteToolDeps = (toolCallId = ''): any => ({
     cronScheduler: _cronScheduler,
     handleChat,
     telegramChannel: _telegramChannel,
@@ -2075,7 +2184,9 @@ async function handleChat(
     handleTaskControlAction,
     makeBroadcastForTask,
     sendSSE,
+    toolCallId: String(toolCallId || '').trim() || undefined,
     executionPolicy: handleChatGoalExecutionPolicy,
+    abortSignal,
     onHardToolDeny: (event: any) => {
       if (!isHandleChatGoalContinuation) return;
       const updated = recordMainChatGoalDeniedAction(sessionId, {
@@ -2111,6 +2222,7 @@ async function handleChat(
     creativeMode,
     executionMode,
     message,
+    sessionId,
   });
   const activeHistoryMessageCount = resolveRollingCompactionPolicy().messageCount;
   htime('before getHistoryForApiCall');
@@ -2127,6 +2239,22 @@ async function handleChat(
       ? rawHistory.slice(0, -1)
       : rawHistory;
   autoActivateToolCategories(sessionId, message, history.length);
+  const stage4InstructionIntents = detectStage4InstructionIntents({
+    message,
+    recentMessages: history
+      .filter((entry: any) => entry?.role === 'user')
+      .slice(-4)
+      .map((entry: any) => String(entry?.content || '')),
+    executionMode,
+    activeToolCategories: getActivatedToolCategories(sessionId),
+    requiredTools: Array.isArray(toolFilter) ? toolFilter : [],
+    callerRequirements: Array.isArray(runtimeOptions?.instructionCallerRequirements)
+      ? runtimeOptions.instructionCallerRequirements
+      : executionMode !== 'interactive' && callerContextText
+        ? [callerContextText]
+        : [],
+    businessContextEnabled: isBusinessContextEnabled(sessionId),
+  });
   // Build a compact tool-state summary from recent assistant turns. Full raw
   // observations stay out-of-band for Hub/debugging instead of prompt context.
   const activeContextProfile = resolveActiveModelContextProfile();
@@ -2276,6 +2404,45 @@ async function handleChat(
     if (toolDefs.some((tool: any) => String(tool?.function?.name || '') === 'tool_loop_continue')) return toolDefs;
     return [LOOP_CONTINUE_TOOL_DEF, ...toolDefs];
   };
+  const GOAL_COMPLETE_TOOL_DEF = {
+    type: 'function',
+    function: {
+      name: 'complete_goal',
+      description: 'Complete the active Goal immediately. Prometheus owns this decision, and completion supersedes stale, overly broad, or still-open declared plan items. Include a completion note and the concrete steps taken to finish the Goal. A finished and verified deliverable with unavoidable user activation/physical handoff steps is complete unless live activation was an explicit acceptance criterion.',
+      parameters: {
+        type: 'object',
+        required: ['note', 'steps_taken'],
+        properties: {
+          note: { type: 'string', description: 'Final completion note describing the finished outcome.' },
+          steps_taken: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Concrete steps Prometheus took to complete the Goal.' },
+        },
+      },
+    },
+  };
+  const GOAL_BLOCK_TOOL_DEF = {
+    type: 'function',
+    function: {
+      name: 'block_goal',
+      description: 'Block the active Goal only when further progress is impossible without missing user authority, credentials, an essential user choice, an unavailable external system, or a hard policy boundary. Exhaust safe in-scope alternatives first. Never use this merely because work is difficult, lengthy, uncertain, or because a finished deliverable needs unavoidable user activation/physical handoff steps unless live activation was explicitly required.',
+      parameters: {
+        type: 'object',
+        required: ['reason', 'missing_requirement', 'attempted_alternatives'],
+        properties: {
+          reason: { type: 'string', description: 'The concrete blocker and why work cannot continue.' },
+          missing_requirement: { type: 'string', description: 'The exact authority, credential, choice, external state, or policy change required.' },
+          attempted_alternatives: { type: 'array', items: { type: 'string' }, description: 'Safe alternatives already attempted or ruled out.' },
+        },
+      },
+    },
+  };
+  const maybeAddGoalLifecycleTools = (toolDefs: any[]): any[] => {
+    if (!isHandleChatGoalContinuation) return toolDefs;
+    const names = new Set(toolDefs.map((tool: any) => String(tool?.function?.name || '').trim()));
+    const additions = [];
+    if (!names.has('complete_goal')) additions.push(GOAL_COMPLETE_TOOL_DEF);
+    if (!names.has('block_goal')) additions.push(GOAL_BLOCK_TOOL_DEF);
+    return [...additions, ...toolDefs];
+  };
   let planStepToolsActive = isProposalExecutionMode || sessionId.startsWith('task_');
   const backgroundPlanToolsActive = executionMode === 'background_agent' || sessionId.startsWith('background_');
   const addToolDefIfMissing = (toolDefs: any[], name: string): any[] => {
@@ -2328,7 +2495,7 @@ async function handleChat(
         return true; // Category tools are still governed by per-session activation.
       })
       : baseTools;
-    return maybeAddLoopGateTool(maybeAddPlanScopedTools(filterToolsForModelCapabilities(currentTools)));
+    return maybeAddGoalLifecycleTools(maybeAddLoopGateTool(maybeAddPlanScopedTools(filterToolsForModelCapabilities(currentTools))));
   };
   const buildSwitchModelToolCategories = (): Set<string> => {
     const switchCategories = new Set<string>();
@@ -2368,6 +2535,8 @@ async function handleChat(
     'declare_plan',
     'complete_plan_step',
     'step_complete',
+    'complete_goal',
+    'block_goal',
     'delivery_send',
     'delivery_send_screenshot',
     'connector_list',
@@ -2503,8 +2672,11 @@ async function handleChat(
       })),
     };
     sendSSE('progress_state', payload);
-    if (isHandleChatGoalContinuation && progressState.source === 'declared' && progressState.items.length >= 2) {
-      recordMainChatGoalTurnPlanProgress(sessionId, payload);
+    if (turnOwnsActiveGoal && progressState.source === 'declared' && progressState.items.length >= 2) {
+      const updatedGoal = recordMainChatGoalTurnPlanProgress(sessionId, payload, activeGoalAtTurnStart?.id);
+      if (updatedGoal?.id === activeGoalAtTurnStart?.id) {
+        broadcastMainChatGoalState(sessionId, 'plan_updated', { goal: updatedGoal, progress: payload });
+      }
     }
   };
 
@@ -2762,7 +2934,12 @@ async function handleChat(
     if (!shouldResumePlan) return false;
     const isOpenPlan = (plan: any) => plan && !['complete', 'blocked'].includes(String(plan.status || '').toLowerCase());
     const nextTurn = Number(goal.turnsUsed || 0) + 1;
-    const plan = [...plans].reverse().find((item: any) => Number(item?.turnNumber) === nextTurn && isOpenPlan(item))
+    const checkpointPlanId = String(goal.restartCheckpoint?.planId || '').trim();
+    const checkpointPlan = checkpointPlanId
+      ? plans.find((item: any) => String(item?.id || '') === checkpointPlanId && isOpenPlan(item))
+      : null;
+    const plan = checkpointPlan
+      || [...plans].reverse().find((item: any) => Number(item?.turnNumber) === nextTurn && isOpenPlan(item))
       || [...plans].reverse().find((item: any) => Number(item?.turnNumber) === Number(goal.turnsUsed || 0) && isOpenPlan(item))
       || [...plans].reverse().find((item: any) => isOpenPlan(item));
     const rawSteps = Array.isArray(plan?.steps) ? plan.steps : [];
@@ -2783,7 +2960,14 @@ async function handleChat(
       })
       .filter(Boolean) as RuntimeProgressItem[];
     if (items.length < 2) return false;
-    let firstOpenIndex = items.findIndex((item) => item.status === 'in_progress' || item.status === 'pending' || item.status === 'failed');
+    const checkpointStepIndex = Number(goal.restartCheckpoint?.activeStepIndex);
+    const checkpointOwnsPlan = !!checkpointPlan && Number.isInteger(checkpointStepIndex)
+      && checkpointStepIndex >= 0
+      && checkpointStepIndex < items.length
+      && !['done', 'skipped'].includes(items[checkpointStepIndex]?.status || '');
+    let firstOpenIndex = checkpointOwnsPlan
+      ? checkpointStepIndex
+      : items.findIndex((item) => item.status === 'in_progress' || item.status === 'pending' || item.status === 'failed');
     if (firstOpenIndex < 0) firstOpenIndex = items.length - 1;
     if (items[firstOpenIndex]?.status === 'pending' || items[firstOpenIndex]?.status === 'failed') {
       items[firstOpenIndex].status = 'in_progress';
@@ -2844,6 +3028,9 @@ async function handleChat(
     'replace_lines', 'find_replace', 'insert_after', 'delete_lines',
     'apply_patch', 'apply_patchset', 'apply_workspace_patchset',
     'workspace_edit', 'prom_apply_dev_changes',
+  ]);
+  const PROGRESS_LIFECYCLE_TOOLS = new Set([
+    'declare_plan', 'complete_plan_step', 'step_complete', 'complete_goal', 'block_goal',
   ]);
   const planStepNeedsWriteEvidence = (stepText: string, note: string): boolean => {
     const text = `${stepText || ''} ${note || ''}`.toLowerCase();
@@ -3373,10 +3560,10 @@ async function handleChat(
     ].filter(Boolean).join(' ');
   };
 
-  const executeToolWithTelemetry = async (toolName: string, toolArgs: any): Promise<ToolResult> => {
+  const executeToolWithTelemetry = async (toolName: string, toolArgs: any, toolCallId = ''): Promise<ToolResult> => {
     const startedAt = Date.now();
     try {
-      const toolResult = await executeTool(toolName, toolArgs, workspacePath, buildExecuteToolDeps(), sessionId);
+      const toolResult = await executeTool(toolName, toolArgs, workspacePath, buildExecuteToolDeps(toolCallId), sessionId);
       return attachUniversalToolTelemetry(toolResult, toolName, toolArgs, startedAt);
     } catch (err: any) {
       return makeInstrumentedToolResult(
@@ -3528,7 +3715,7 @@ async function handleChat(
       const isDesktopTool = isDesktopToolName(toolName);
       // Visual screenshot tools deliver a post-action screenshot via the advisor packet.
       // Route through buildDesktopScreenshotContent so vision primaries get the PNG image.
-      const isDesktopVisualTool1 = toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot';
+      const isDesktopVisualTool1 = isDesktopVisualToolName(toolName);
       let toolMessageContent = (isBrowserTool && multiAgentActive)
         ? buildBrowserAck(toolName, toolResult) + goalReminder
         : (isDesktopTool && isDesktopVisualTool1)
@@ -3576,12 +3763,12 @@ async function handleChat(
 
   const teachModeActive = /\[TEACH_SESSION\]/i.test(String(callerContext || ''));
   const personalityProfile = isDirectSubagentChatTurn
-    ? { profile: 'direct_subagent' as const, excludedSkillIds, forcedSkillIds }
+    ? { profile: 'direct_subagent' as const, excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents }
     : teachModeActive
-      ? { profile: 'teach_mode' as const, excludedSkillIds, forcedSkillIds }
+      ? { profile: 'teach_mode' as const, excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents }
       : (isLocalPrimary
-        ? { profile: 'local_llm' as const, excludedSkillIds, forcedSkillIds }
-        : (excludedSkillIds.length || forcedSkillIds.length ? { excludedSkillIds, forcedSkillIds } : undefined));
+        ? { profile: 'local_llm' as const, excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents }
+        : { excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents });
   htime('reached Building model context');
   sendSSE('ui_preflight', { message: 'Building model context...' });
   const contextBuildStartedAt = markLatency('context_build_start');
@@ -3726,8 +3913,10 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     })();
     // A subagent (team or standalone) is a worker, not a dispatcher — it never
     // routes messages to managed teams, so the team-routing policy is noise for it.
+    const runtimeActor = getRuntimeActorContext(sessionId);
     const isSubagentMode = executionMode === 'team_subagent' || executionMode === 'background_agent' || isDirectSubagentChatTurn;
-    const teamRoutingBlock = (teamsExist && !isSubagentMode) ? teamRoutingInstruction : '';
+    const isDistinctAgentMode = isSubagentMode || executionMode === 'team_manager' || isDistinctRuntimeActor(runtimeActor);
+    const teamRoutingBlock = (teamsExist && !isDistinctAgentMode) ? teamRoutingInstruction : '';
     const creativeActive = !!creativeMode;
     const creativeBlock = creativeActive
       ? `${creativeRuntimeInstruction}\n${hyperframesAgentRoutingInstruction}\n${creativeDebuggingInstruction}`
@@ -3735,9 +3924,12 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
 
     // Identity line is mode-aware: the main chat is Prom; subagents are distinct
     // workers operating UNDER Prometheus and must not claim to be Prom/the main chat.
-    const identityLine = isSubagentMode
-      ? 'You are a subagent operating under Prometheus — not the main Prometheus chat and not Prom. You are your own worker with your own assigned identity (described below). Prometheus is the system you run inside; you act on its behalf, but you speak and answer as yourself.'
-      : 'You are Prom, a local AI assistant running inside Prometheus.';
+    const identityLine = buildRuntimeActorRoleContract(runtimeActor)
+      || (executionMode === 'team_manager'
+        ? 'You are a distinct manager agent operating inside Prometheus, not Prom and not the main user chat. Your specific manager identity is described below.'
+        : isSubagentMode
+          ? 'You are a distinct agent operating inside Prometheus — not the main Prometheus chat and not Prom. Your assigned identity is described below.'
+          : 'You are Prom, a local AI assistant running inside Prometheus.');
     const baseParts = [
       executionModeSystemBlock ? `${executionModeSystemBlock}\n` : '',
       teachModeSystemBlock ? `${teachModeSystemBlock}\n` : '',
@@ -3753,6 +3945,9 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       creativeBlock,
       planProtocolInstruction,
       `${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`,
+      executionMode === 'interactive'
+        ? 'For tool-using work, keep the user oriented with brief visible work updates: state the approach before the first meaningful tool call; after important tool results, report what you found and what you will do next; and add another update when the approach changes, a blocker appears, or verification finishes. These updates are user-facing commentary, not private chain-of-thought. Make them concrete and evidence-based, avoid narrating every low-level call, and do not repeat information already obvious from the tool activity UI.'
+        : '',
     ].filter(Boolean);
     return baseParts.join('\n');
   };
@@ -3761,7 +3956,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     if (mode === 'switch_model') {
       return `${baseSystemPrompt}${switchModelPersonalityCtx || ''}`;
     }
-    if (executionMode === 'team_subagent' || executionMode === 'background_agent' || isDirectSubagentChatTurn) {
+    if (executionMode === 'team_subagent' || executionMode === 'team_manager' || executionMode === 'background_agent' || isDirectSubagentChatTurn) {
       // Subagents receive subagent personality context first, then their role file
       // and task/chat context from callerContext as the final, most specific layer.
       return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}`;
@@ -3919,7 +4114,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       return;
     }
     // Desktop tools have their own handling
-    if (toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot') {
+    if (toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot' || toolName === 'desktop_click_text') {
       // Keep existing desktop behavior — always inject on success
       if (toolResult?.error) return;
       const visionMessage = buildVisionScreenshotMessage(sessionId, 'desktop');
@@ -3992,7 +4187,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   };
 
   const isDesktopVisualToolName = (toolName: string): boolean =>
-    toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot';
+    toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot' || toolName === 'desktop_click_text';
 
   const countRecentToolRepeats = (toolName: string, toolArgs: Record<string, any>): number => {
     const argsHash = hashArgs(toolArgs);
@@ -4449,7 +4644,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       // Background tasks lose the browser session aliasing and use a broken tool-arg
       // serialisation path that causes browser_open to receive JSON strings instead of objects.
       const isTelegramSession = String(sessionId || '').startsWith('telegram_');
-      if (preflight.route === 'background_task' && multiAgentActive && !isTelegramSession) {
+      if (preflight.route === 'background_task' && multiAgentActive && !isTelegramSession && !voiceAgentChatHandoffActive) {
         const taskTitle = preflight.task_title || 'Background Task';
         const taskPlan = (preflight.task_plan || []).map((desc: string, i: number) => ({
           index: i,
@@ -4512,6 +4707,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
 
       if (
         preflight.route === 'secondary_chat' &&
+        !voiceAgentChatHandoffActive &&
         preflightCfg.preflight.allow_secondary_chat &&
         preflight.secondary_response?.trim()
       ) {
@@ -4522,9 +4718,11 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
         return { type: 'chat', text };
       }
 
-      if (preflight.route === 'secondary_chat' && !preflightCfg.preflight.allow_secondary_chat) {
+      if (preflight.route === 'secondary_chat' && (!preflightCfg.preflight.allow_secondary_chat || voiceAgentChatHandoffActive)) {
         sendSSE('info', {
-          message: 'Advisor suggested secondary_chat, but direct secondary chat is disabled. Continuing with primary.',
+          message: voiceAgentChatHandoffActive
+            ? 'Voice Agent requested the foreground Prometheus Worker. Continuing with primary.'
+            : 'Advisor suggested secondary_chat, but direct secondary chat is disabled. Continuing with primary.',
         });
       } else if (preflight.route === 'primary_direct') {
         sendSSE('info', { message: 'Advisor route selected primary_direct. Continuing with primary response.' });
@@ -4538,7 +4736,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       } else if (preflight.route === 'primary_with_plan') {
         // primary_with_plan is retired when multi-agent is active — upgrade to background_task
         // Exception: Telegram sessions always stay inline (no background tasks).
-        if (multiAgentActive && !isTelegramSession) {
+        if (multiAgentActive && !isTelegramSession && !voiceAgentChatHandoffActive) {
           sendSSE('info', { message: 'Advisor returned primary_with_plan but multi-agent is active — upgrading to background_task.' });
           const taskTitle = preflight.task_title || (preflight.reason ? preflight.reason.slice(0, 60) : 'Background Task');
           const taskPlan = (preflight.task_plan || preflight.quick_plan || []).map((desc: string, i: number) => ({
@@ -5480,7 +5678,7 @@ RULES:
         // Screenshot always delivers full data (image for OpenAI, rich OCR text for local).
         // Other desktop/browser tools pass their real result text so AI always knows the outcome.
         // Visual screenshot tools also update the advisor packet with the post-action screenshot.
-        const isDesktopVisualTool2 = toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot';
+        const isDesktopVisualTool2 = isDesktopVisualToolName(toolName);
         let toolMessageContent = (isBrowserTool && multiAgentActive)
           ? buildBrowserAck(toolName, toolResult) + goalReminder
           : (isDesktopTool && isDesktopVisualTool2)
@@ -5649,11 +5847,14 @@ RULES:
         )
       );
 	      const generationOverride = resolveProviderModelOverride();
+	      const configuredReasoning = reasoningOptions === undefined
+	        ? resolveConfiguredAgentReasoning(executionMode, generationOverride.providerId, generationOverride.model)
+	        : undefined;
 	      const requestedThinkMode = reasoningOptions?.enabled
 	        ? (reasoningOptions.level === 'extra_high' ? 'xhigh' : (reasoningOptions.level || 'low'))
-	        : undefined;
+	        : (reasoningOptions && !reasoningOptions.enabled ? 'none' : configuredReasoning);
 	      const activeProviderForThinking = String(generationOverride.providerId || providerOverride || '').trim();
-	      const primaryThinkMode: boolean | 'max' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none' | undefined =
+	      const primaryThinkMode: boolean | 'ultra' | 'max' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none' | undefined =
 	        requestedThinkMode
 	          || ((multiAgentActive && !isActiveAutomationOp)
 	            ? true
@@ -5755,7 +5956,14 @@ RULES:
             });
           }
 	        allThinking += text;
-	        sendSSE('thinking_delta', { thinking: text, source });
+	        // Provider reasoning summaries are safe, user-facing progress prose. Keep
+	        // them distinct from private/raw thinking so clients never have to infer
+	        // which kind of reasoning they are allowed to render.
+	        if (source === 'reasoning_summary') {
+	          sendSSE('reasoning_summary_delta', { text, source, visibility: 'user' });
+	        } else {
+	          sendSSE('thinking_delta', { thinking: text, source, visibility: 'private' });
+	        }
 	      };
 	      const emitModelStreamEvent = (event: any) => {
 	        if (abortSignal?.aborted || !event || typeof event !== 'object') return;
@@ -5779,7 +5987,8 @@ RULES:
         // v1 Prometheus prompt (buildSystemPrompt('full')) so it operates as complete
         // Prometheus. personalityCtx (already computed above) has the full context.
         // For cloud primaries the existing lightweight switch_model path is unchanged.
-        if (!isLocalPrimary && !switchModelPersonalityCtx) {
+        const isSubagentRuntime = executionMode === 'team_subagent' || executionMode === 'background_agent' || isDirectSubagentChatTurn;
+        if (!isSubagentRuntime && !isLocalPrimary && !switchModelPersonalityCtx) {
           switchModelPersonalityCtx = await buildPersonalityContext(
             sessionId,
             workspacePath,
@@ -5788,11 +5997,13 @@ RULES:
             history.length,
             _skillsManager,
             browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
-            teachModeActive ? { profile: 'teach_mode', excludedSkillIds, forcedSkillIds } : { profile: 'switch_model', excludedSkillIds, forcedSkillIds },
+            teachModeActive
+              ? { profile: 'teach_mode', excludedSkillIds, forcedSkillIds }
+              : { profile: 'switch_model', excludedSkillIds, forcedSkillIds },
           );
         }
-        if (messages[0]?.role === 'system') messages[0].content = isLocalPrimary
-          ? buildSystemPrompt('full')         // cloud model gets complete Prometheus runtime
+        if (messages[0]?.role === 'system') messages[0].content = (isLocalPrimary || isSubagentRuntime)
+          ? buildSystemPrompt('full')         // preserve the complete mode-appropriate runtime
           : buildSystemPrompt('switch_model'); // cloud primary: existing lightweight path
       } else {
         if (messages[0]?.role === 'system') messages[0].content = buildSystemPrompt('full');
@@ -5816,7 +6027,26 @@ RULES:
 	        onReasoningSummary: (chunk: string) => emitThinkingToken(chunk, 'reasoning_summary'),
 	        onModelEvent: emitModelStreamEvent,
 	        abortSignal: abortSignal?.signal,
-	        usageContext: { sessionId, agentId: 'main' },
+	        usageContext: {
+            sessionId,
+            agentId: 'main',
+            promptManifest: {
+              executionMode: executionMode || 'interactive',
+              personalityProfile: String((personalityProfile as any)?.profile || 'default'),
+              surface: isTelegramSessionForTools ? 'telegram' : (voiceAgentHandoffActive ? 'voice_handoff' : 'chat'),
+              promptVariant: generationOverride.source,
+              activeToolCategories: Array.from(getActivatedToolCategories(sessionId)).sort(),
+              exposedToolCategories: Object.keys(summarizeToolSurface(tools).byCategory).filter((category) => category !== 'core').sort(),
+              declaredSystemSegmentIds: ['core.base', 'personality.context'],
+              callerContextPresent: !!String(callerContext || '').trim(),
+              instructionIntents: stage4InstructionIntents,
+              capabilities: {
+                vision: currentModelCapabilities.hasVision,
+                provider: String(currentModelCapabilities.provider || generationOverride.providerId || ''),
+                model: String(currentModelCapabilities.model || generationOverride.model || ''),
+              },
+            },
+          },
 	      });
 
       // ── Preempt watchdog ────────────────────────────────────────────
@@ -6708,7 +6938,7 @@ RULES:
         const productsArtifact = productCarouselToArtifact(finalProductCarousel);
         if (productsArtifact) finalRichArtifacts.unshift(productsArtifact);
       }
-      const rawFileChanges = collectTurnFileChanges(allToolResults as any[], workspacePath);
+      const rawFileChanges = await collectTurnFileChanges(allToolResults as any[], workspacePath);
       const finalFileChanges = attachWorkspaceCheckpoint(
         rawFileChanges,
         rawFileChanges
@@ -7175,10 +7405,82 @@ RULES:
       }
 
       console.log(`[v2] TOOL[${round + 1}]: ${toolName}(${JSON.stringify(toolArgs).slice(0, 150)})`);
-      if (toolName !== 'declare_plan') {
+      if (!PROGRESS_LIFECYCLE_TOOLS.has(toolName)) {
         markProgressStepStart(toolName);
       }
-      sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length + 1 });
+      sendSSE('tool_call', {
+        action: toolName,
+        args: toolArgs,
+        stepNum: allToolResults.length + 1,
+        toolCallId: toolCallId || undefined,
+        tool_call_id: toolCallId || undefined,
+      });
+
+      // ── Goal lifecycle: Prometheus owns completion and blocking. ───────────
+      if (toolName === 'complete_goal') {
+        const activeGoal = snapshotMainChatGoal(sessionId);
+        const note = String(toolArgs?.note || '').trim();
+        const normalizeGoalList = (value: any, max = 30) => (Array.isArray(value) ? value : [])
+          .map((item: any) => String(item || '').replace(/\s+/g, ' ').trim())
+          .filter(Boolean)
+          .slice(0, max);
+        const stepsTaken = normalizeGoalList(toolArgs?.steps_taken || toolArgs?.stepsTaken);
+        if (!activeGoal || activeGoal.status !== 'active') {
+          const failText = 'complete_goal rejected: there is no active Goal owned by this thread.';
+          allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, failText, true));
+          sendSSE('tool_result', { action: toolName, result: failText, error: true, stepNum: allToolResults.length });
+          messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content: failText });
+          continue;
+        }
+        if (!note || !stepsTaken.length) {
+          const failText = 'complete_goal requires a completion note and at least one concrete step_taken.';
+          allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, failText, true));
+          sendSSE('tool_result', { action: toolName, result: failText, error: true, stepNum: allToolResults.length });
+          messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content: failText });
+          continue;
+        }
+        sendSSE('info', { message: 'Saving Prometheus Goal completion...' });
+        const completion = await completeMainChatGoalFromOwner(sessionId, activeGoal.id, {
+          note,
+          stepsTaken,
+        });
+        const resultText = completion.accepted
+          ? `Goal completed by Prometheus. ${completion.verification.reason}`
+          : `Goal completion could not be saved because the active Goal changed. ${completion.verification.reason}`;
+        allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, resultText, !completion.accepted));
+        sendSSE('tool_result', { action: toolName, result: resultText, error: !completion.accepted, stepNum: allToolResults.length, extra: { accepted: completion.accepted, goal: completion.goal } });
+        messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content: resultText });
+        if (completion.accepted) tools = [];
+        resetProgressRoundStats();
+        continue;
+      }
+
+      if (toolName === 'block_goal') {
+        const activeGoal = snapshotMainChatGoal(sessionId);
+        const reason = String(toolArgs?.reason || '').replace(/\s+/g, ' ').trim();
+        const missingRequirement = String(toolArgs?.missing_requirement || toolArgs?.missingRequirement || '').replace(/\s+/g, ' ').trim();
+        const attemptedAlternatives = (Array.isArray(toolArgs?.attempted_alternatives || toolArgs?.attemptedAlternatives)
+          ? (toolArgs.attempted_alternatives || toolArgs.attemptedAlternatives)
+          : [])
+          .map((item: any) => String(item || '').replace(/\s+/g, ' ').trim())
+          .filter(Boolean)
+          .slice(0, 20);
+        if (!activeGoal || activeGoal.status !== 'active' || reason.length < 20 || !missingRequirement || !attemptedAlternatives.length) {
+          const failText = 'block_goal rejected: provide a concrete blocker, the exact missing requirement, and at least one safe alternative already attempted. Difficulty or incomplete work is not a blocker.';
+          allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, failText, true));
+          sendSSE('tool_result', { action: toolName, result: failText, error: true, stepNum: allToolResults.length });
+          messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content: failText });
+          continue;
+        }
+        const blocked = blockMainChatGoalFromOwner(sessionId, activeGoal.id, { reason, missingRequirement, attemptedAlternatives });
+        const resultText = `Goal blocked after safe alternatives were exhausted. ${blocked?.blockedReason || reason}`;
+        allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, resultText, false));
+        sendSSE('tool_result', { action: toolName, result: resultText, error: false, stepNum: allToolResults.length, extra: { goal: blocked } });
+        messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content: resultText });
+        tools = [];
+        resetProgressRoundStats();
+        continue;
+      }
 
       // ── declare_plan: seed the progress panel and short-circuit (no executeTool needed) ──
       if (toolName === 'declare_plan') {
@@ -7610,7 +7912,7 @@ RULES:
 
 
 	      const preObservationContext = await captureObservationPreContext(toolName, toolArgs);
-	      const toolResult = await executeToolWithTelemetry(toolName, toolArgs);
+	      const toolResult = await executeToolWithTelemetry(toolName, toolArgs, toolCallId);
       if (canReplayReadOnlyCall(toolName)) cachedReadOnlyToolResults.set(callKey, toolResult);
       // After any write tool, invalidate cached reads for that file so a
       // subsequent read_file gets fresh content instead of the stale cached version.
@@ -7666,6 +7968,8 @@ RULES:
 		        result: toolResult.result.slice(0, 4000),
 		        error: toolResult.error,
 		        stepNum: allToolResults.length,
+            toolCallId: toolCallId || undefined,
+            tool_call_id: toolCallId || undefined,
             durationMs: toolElapsedMsForSse,
             elapsedMs: toolElapsedMsForSse,
             elapsed_ms: toolElapsedMsForSse,
@@ -7742,7 +8046,7 @@ RULES:
       const isDesktopTool = isDesktopToolName(toolName);
       // Visual screenshot tools end with a screenshot stored in the advisor packet.
       // Give vision-capable primaries the actual PNG so they can see the post-action state.
-      const isDesktopVisualTool3 = toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot';
+      const isDesktopVisualTool3 = isDesktopVisualToolName(toolName);
       let toolMessageContent = (isBrowserTool && multiAgentActive)
         ? buildBrowserAck(toolName, toolResult) + goalReminder
         : (isDesktopTool && isDesktopVisualTool3)
@@ -8120,7 +8424,19 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
           abortSignal,
           onAbort: () => abortController.abort(),
         });
+        const runtimeGoalTurnNumber = Math.max(1, Number(current.restartCheckpoint?.turnNumber || current.turnsUsed + 1));
+        const runtimeGoalIterationNumber = Math.max(1, Number(current.currentIteration || 1));
+        updateLiveRuntimeCheckpoint(runtimeId, {
+          event: 'goal_turn_identity',
+          at: Date.now(),
+          activeRunKind: 'main_chat_goal',
+          goalId: current.id,
+          goalTurnNumber: runtimeGoalTurnNumber,
+          goalIterationNumber: runtimeGoalIterationNumber,
+          goalTurnId: `${current.id}:turn:${runtimeGoalTurnNumber}:iteration:${runtimeGoalIterationNumber}`,
+        });
         setModelBusy(true);
+        const turnStartedAt = Date.now();
         broadcastMainChatGoalState(sid, 'turn_started', { turnsUsed: current.turnsUsed });
         const runtimeProcessEntries: Record<string, any>[] = [];
         let runtimeThinkingTail = '';
@@ -8169,7 +8485,13 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
             undefined,
             { syntheticGoalContinuation: true } as any,
           );
-          attachRuntimeProcessEntriesToLatestAssistant(sid, runtimeProcessEntries);
+          const goalTurnNumber = Math.max(1, Number(current.restartCheckpoint?.turnNumber || current.turnsUsed + 1));
+          const goalIterationNumber = Math.max(1, Number(current.currentIteration || 1));
+          attachRuntimeProcessEntriesToLatestAssistant(sid, runtimeProcessEntries, {
+            goalId: current.id,
+            goalTurnNumber,
+            goalTurnId: `${current.id}:turn:${goalTurnNumber}:iteration:${goalIterationNumber}`,
+          });
         } catch (err: any) {
           const failed = recordMainChatGoalRuntimeFailure(sid, current.id, err?.message || String(err));
           broadcastMainChatGoalState(sid, 'runtime_failure', { error: err?.message || String(err), goal: failed });
@@ -8187,10 +8509,56 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
           return;
         }
 
-        const judge = await judgeMainChatGoal(latest, String(result?.text || ''));
-        const judged = applyMainChatGoalJudgeResult(sid, latest.id, judge);
-        broadcastMainChatGoalState(sid, 'judged', { judge, goal: judged });
-        if (!judged || judged.status !== 'active') return;
+        const toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
+        const completionVerificationRan = toolResults.some((entry: any) => (
+          String(entry?.name || '').trim() === 'complete_goal'
+          && /Goal completion (?:accepted|was not accepted)/i.test(String(entry?.result || entry?.content || ''))
+        ));
+        const lifecycleOnlyTools = new Set([
+          'declare_plan', 'complete_plan_step', 'step_complete',
+          'request_tool_category', 'switch_model', 'set_current_model',
+          'tool_loop_continue', 'complete_goal', 'block_goal',
+        ]);
+        const successfulToolCalls = toolResults.filter((entry: any) => entry && entry.error !== true).length;
+        const failedToolCalls = toolResults.filter((entry: any) => entry?.error === true).length;
+        const meaningfulToolCalls = toolResults.filter((entry: any) => {
+          const name = String(entry?.name || '').trim();
+          return !!name && entry?.error !== true && !lifecycleOnlyTools.has(name);
+        }).length;
+        // Steers are mirrored into durable chat history for the normal workflow
+        // UI, but they were already injected into this runtime. Only a genuinely
+        // separate user turn should suppress the next autonomous goal iteration.
+        const queuedUserInput = getHistory(sid, 12).some((message) => (
+          message.role === 'user'
+          && Number(message.timestamp || 0) > turnStartedAt
+          && String(message.channel || '') !== 'system'
+          && String(message.channelLabel || '').trim().toLowerCase() !== 'steer'
+          && String((message as any).workflowPart || '').trim().toLowerCase() !== 'interruption'
+        ));
+        if (queuedUserInput) {
+          broadcastMainChatGoalState(sid, 'continuation_suppressed', { reason: 'user_input_queued' });
+          return;
+        }
+
+        // A rejected complete_goal already recorded verifier feedback and the
+        // next directive. Continue from that result without a second lifecycle
+        // decision or another judge call.
+        if (!completionVerificationRan) {
+          const boundary = recordMainChatGoalContinuationBoundary(sid, latest.id, {
+            successfulToolCalls,
+            meaningfulToolCalls,
+            failedToolCalls,
+            responseText: String(result?.text || ''),
+          });
+          broadcastMainChatGoalState(sid, boundary.shouldContinue ? 'continuation_scheduled' : 'continuation_suppressed', {
+            reason: boundary.reason,
+            toolStats: { successfulToolCalls, meaningfulToolCalls, failedToolCalls },
+            goal: boundary.goal,
+          });
+          if (!boundary.shouldContinue) return;
+        } else {
+          broadcastMainChatGoalState(sid, 'completion_rejected_continue', { goal: latest });
+        }
 
         const summarized = await maybeSummarizeMainChatGoal(sid);
         if (summarized?.lastSummaryAt && summarized.goalSummaryTurn === summarized.turnsUsed) {
@@ -8205,18 +8573,29 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
   })();
 }
 
-export function resumeMainChatGoalsInterruptedForRestart(): string[] {
+export function resumeMainChatGoalsInterruptedForRestart(targetSessionIds?: string[]): string[] {
   const policy = resolveMainChatGoalPolicy();
   if (!policy.enabled || !policy.autoResumeOnRestart) return [];
   const resumed: string[] = [];
-  const records = getAllMainChatGoalRecords();
+  const requested = new Set((targetSessionIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+  const records = requested.size > 0
+    ? Array.from(requested).map((sessionId) => ({
+        sessionId,
+        current: true,
+        goal: snapshotMainChatGoal(sessionId),
+      }))
+    : getAllMainChatGoalRecords();
   for (const record of records) {
     const goal = (record as any)?.goal || record;
     if ((record as any)?.current === false) continue;
     const sessionId = String((record as any)?.sessionId || goal?.sessionId || '').trim();
-    if (!sessionId || String(goal?.status || '') !== 'paused') continue;
+    if (requested.size > 0 && !requested.has(sessionId)) continue;
+    if (!sessionId || !['restarting', 'paused'].includes(String(goal?.status || ''))) continue;
     const pausedReason = String(goal?.pausedReason || goal?.paused_reason || '').toLowerCase();
-    if (!/gateway_restart|gateway_crash|restart/.test(pausedReason)) continue;
+    const checkpointReason = String(goal?.restartCheckpoint?.reason || '').toLowerCase();
+    const checkpointPhase = String(goal?.restartCheckpoint?.phase || '').toLowerCase();
+    const bootFinalized = checkpointPhase === 'boot_finalized' || checkpointPhase === 'resuming';
+    if (!bootFinalized && !/gateway_restart|gateway_crash|restart|prom_apply_dev_changes/.test(`${pausedReason} ${checkpointReason}`)) continue;
     const result = handleMainChatGoalCommand(sessionId, '/goal resume');
     if (result.goal?.status === 'active') {
       startMainChatGoalRunner(sessionId, 'startup_auto_resume');
@@ -8335,6 +8714,21 @@ async function runInteractiveTurn(
     ? flags.forcedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
   const isGoalContinuationTurn = flags?.syntheticGoalContinuation === true || isMainChatGoalContinuation(message);
+  const goalTurnSnapshot = isGoalContinuationTurn ? snapshotMainChatGoal(sessionId) : null;
+  const goalRestartCheckpoint = goalTurnSnapshot?.restartCheckpoint && goalTurnSnapshot.restartCheckpoint.phase !== 'complete'
+    ? goalTurnSnapshot.restartCheckpoint
+    : null;
+  const goalTurnNumber = goalTurnSnapshot ? Math.max(1, Number(goalTurnSnapshot.restartCheckpoint?.turnNumber || goalTurnSnapshot.turnsUsed + 1)) : 0;
+  const goalIterationNumber = goalTurnSnapshot ? Math.max(1, Number(goalTurnSnapshot.currentIteration || 1)) : 0;
+  const goalTurnId = goalTurnSnapshot ? `${goalTurnSnapshot.id}:turn:${goalTurnNumber}:iteration:${goalIterationNumber}` : '';
+  const goalMessageIdentity = goalTurnSnapshot ? {
+    messageKind: 'goal_turn',
+    activeRunKind: 'main_chat_goal',
+    goalId: goalTurnSnapshot.id,
+    goalTurnNumber,
+    goalIterationNumber,
+    goalTurnId,
+  } : {};
   const isTimerTurn = /^\s*\[Timer fired\]/i.test(String(message || ''));
   const turnOrigin = normalizeTurnOrigin(turnOriginInput, sessionId, isTimerTurn || isGoalContinuationTurn ? { channel: 'system', surface: 'automation', device: 'server' } : undefined);
   persistTurnOriginChannelHint(sessionId, turnOrigin);
@@ -8401,7 +8795,7 @@ async function runInteractiveTurn(
     const command = handleMainChatGoalCommand(sessionId, message);
     const reply = command.message || 'Goal command handled.';
     addMessage(sessionId, userMsg, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
-    addMessage(sessionId, { role: 'assistant', content: reply, timestamp: Date.now() }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+    addMessage(sessionId, { role: 'assistant', content: reply, timestamp: Date.now(), messageKind: 'goal_command_ack' }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     broadcastMainChatGoalState(sessionId, 'command', { goal: command.goal });
     if (command.shouldStartRunner) startMainChatGoalRunner(sessionId, 'goal_command');
     const commandResult = { type: 'chat' as const, text: reply };
@@ -8421,7 +8815,34 @@ async function runInteractiveTurn(
   // compaction attempts.
 
   const skipDuplicateVoiceWorkflowUser = hasRecentVoiceWorkflowUserMessage(sessionId, message);
-  const addResult: any = skipDuplicateVoiceWorkflowUser
+  if (isGoalContinuationTurn && goalRestartCheckpoint) {
+    const restartNoticeAlreadyStored = getHistory(sessionId, 80).some((historyMessage: any) => (
+      String(historyMessage?.messageKind || '') === 'goal_restart_notice'
+      && String(historyMessage?.goalRestartCheckpointId || '') === goalRestartCheckpoint.id
+    ));
+    if (!restartNoticeAlreadyStored) {
+      addMessage(sessionId, {
+        role: 'assistant',
+        content: 'Gateway restarted — goal continuing.',
+        timestamp: Date.now(),
+        messageKind: 'goal_restart_notice',
+        activeRunKind: 'main_chat_goal',
+        goalId: goalTurnSnapshot?.id,
+        goalTurnNumber,
+        goalIterationNumber,
+        goalTurnId,
+        channel: 'system',
+        channelLabel: 'goal',
+        goalRestartCheckpointId: goalRestartCheckpoint.id,
+      } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+    }
+  }
+  // Synthetic Goal prompts are runtime control input, not user-authored chat.
+  // handleChat receives the full prompt directly below; storing it in history
+  // leaks internal instructions into the UI and duplicates model context.
+  const addResult: any = isGoalContinuationTurn
+    ? { added: false, deferredForCompaction: false, deferredForMemoryFlush: false }
+    : skipDuplicateVoiceWorkflowUser
     ? { added: false, deferredForCompaction: false, deferredForMemoryFlush: false }
     : addMessage(sessionId, userMsg, {
         deferOnMemoryFlush: true,
@@ -8591,7 +9012,12 @@ async function runInteractiveTurn(
 	    reasoningOptions,
 	    undefined, // providerOverride
 	    callerOnToken,
-      { directSubagentChat: isDirectSubagentChatTurn, excludedSkillIds: turnExcludedSkillIds, forcedSkillIds: turnForcedSkillIds },
+      {
+        directSubagentChat: isDirectSubagentChatTurn,
+        excludedSkillIds: turnExcludedSkillIds,
+        forcedSkillIds: turnForcedSkillIds,
+        instructionCallerRequirements: callerContext ? [callerContext] : [],
+      },
 	  );
 
   const turnObservationId = `turn_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
@@ -8604,7 +9030,7 @@ async function runInteractiveTurn(
   const toolLogText = toolObservations.length > 0
     ? formatToolStateSummaryForContext(toolObservations, { includeHeader: true, maxChars: 2200, maxObservations: 14, includeTelemetry: true })
     : '';
-  const resultFileChanges = result.fileChanges || collectTurnFileChanges(result.toolResults as any[] | undefined, getWorkspace(sessionId) || process.cwd());
+  const resultFileChanges = result.fileChanges || await collectTurnFileChanges(result.toolResults as any[] | undefined, getWorkspace(sessionId) || process.cwd());
   if (resultFileChanges && !result.fileChanges) {
     (result as any).fileChanges = resultFileChanges;
   }
@@ -8650,6 +9076,7 @@ async function runInteractiveTurn(
     ].join('\n');
     addMessage(sessionId, {
       role: 'assistant',
+      ...goalMessageIdentity,
       content: visibleCheckpointText,
       timestamp: Date.now(),
       toolLog: toolLogText || checkpointPacket,
@@ -8675,6 +9102,7 @@ async function runInteractiveTurn(
   } else {
     addMessage(sessionId, {
       role: 'assistant',
+      ...goalMessageIdentity,
       content: result.text,
       timestamp: Date.now(),
       artifacts: Array.isArray(result.artifacts) && result.artifacts.length ? result.artifacts : undefined,
@@ -9297,6 +9725,14 @@ router.get('/api/status', async (_req, res) => {
 });
 
 function summarizeMobileRuntime(runtime: any): Record<string, any> {
+  const checkpoint = runtime?.checkpoint && typeof runtime.checkpoint === 'object'
+    ? runtime.checkpoint
+    : null;
+  const checkpointProcessEntries = Array.isArray(checkpoint?.processEntries)
+    ? checkpoint.processEntries
+      .slice(-500)
+      .map((entry: any) => sanitizeProcessEntryForUi(entry, { textLimit: 4000, extraLimit: 4000 }))
+    : [];
   return {
     id: String(runtime?.id || ''),
     kind: String(runtime?.kind || ''),
@@ -9311,6 +9747,13 @@ function summarizeMobileRuntime(runtime: any): Record<string, any> {
     startedAt: Number(runtime?.startedAt || 0),
     abortable: runtime?.abortable === true,
     abortRequestedAt: Number(runtime?.abortRequestedAt || 0) || null,
+    checkpoint: checkpoint ? {
+      event: String(checkpoint.event || ''),
+      at: Number(checkpoint.at || 0) || null,
+      toolName: String(checkpoint.toolName || ''),
+      message: truncateRuntimeProcessText(checkpoint.message || '', 4000),
+      processEntries: checkpointProcessEntries,
+    } : null,
   };
 }
 
@@ -9375,33 +9818,11 @@ function resolveSubagentVoiceWorkspace(target?: VoiceAgentTargetContext): { work
   return { workspacePath, agent, agentId, label };
 }
 
-function loadSubagentVoiceFile(workspacePath: string, candidates: string[], maxChars = 6000): string {
-  for (const candidate of candidates) {
-    try {
-      const content = loadWorkspaceFile(workspacePath, candidate, maxChars).trim();
-      if (content) return content;
-    } catch {}
-  }
-  return '';
-}
-
-function stripMainVoiceIdentitySections(contextBlock: string): string {
-  let next = String(contextBlock || '');
-  for (const marker of ['PROMETHEUS_SOUL', 'SOUL']) {
-    const pattern = new RegExp(`(?:^|\\n)\\[${marker}\\]\\n[\\s\\S]*?(?=\\n\\[[A-Z0-9_ -]+\\]\\n|$)`, 'g');
-    next = next.replace(pattern, '\n');
-  }
-  return next.replace(/\n{3,}/g, '\n\n').trim();
-}
-
 function buildSubagentVoiceContextOverlay(target?: VoiceAgentTargetContext): string {
   const resolved = resolveSubagentVoiceWorkspace(target);
   if (!resolved) return '';
   const { workspacePath, agent, agentId, label } = resolved;
-  const identityPrompt = loadSubagentVoiceFile(workspacePath, ['system_prompt.md', 'HEARTBEAT.md'], 10000);
-  const subagentSoul = loadSubagentVoiceFile(workspacePath, ['SOUL.md', 'soul.md'], 7000);
-  const subagentMemory = loadSubagentVoiceFile(workspacePath, ['MEMORY.md', 'memory.md'], 8000);
-  const subagentVoiceAgent = loadSubagentVoiceFile(workspacePath, ['VOICEAGENT.md', 'voiceagent.md'], 5000);
+  const identityPrompt = String(readAgentPromptFile(workspacePath, { migrateLegacy: true })?.content || '').slice(0, 10000).trim();
   const bits = [
     '[SUBAGENT_VOICE_IDENTITY]',
     `You are ${label}, the selected standalone subagent. The voice interface is only how the user is talking to you.`,
@@ -9412,10 +9833,7 @@ function buildSubagentVoiceContextOverlay(target?: VoiceAgentTargetContext): str
     `Subagent configured name: ${compactVoiceText(agent?.name || label, 160)}`,
     `Subagent workspace: ${workspacePath}`,
     '',
-    identityPrompt ? `[SUBAGENT_SYSTEM_PROMPT]\n${identityPrompt}` : '',
-    subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
-    subagentMemory ? `[SUBAGENT_MEMORY]\n${subagentMemory}` : '',
-    subagentVoiceAgent ? `[SUBAGENT_VOICEAGENT]\n${subagentVoiceAgent}` : '',
+    identityPrompt ? `[SUBAGENT_AGENT_MD]\n${identityPrompt}` : '',
   ].filter(Boolean);
   return bits.join('\n\n').trim();
 }
@@ -9425,16 +9843,13 @@ function applyVoiceTargetContextBlock(contextBlock: string, target?: VoiceAgentT
   if (normalized.kind !== 'subagent') return contextBlock;
   const overlay = buildSubagentVoiceContextOverlay(normalized);
   if (!overlay) return contextBlock;
-  return `${overlay}\n\n${stripMainVoiceIdentitySections(contextBlock)}`.trim();
+  return `${overlay}\n\n${String(contextBlock || '').trim()}`.trim();
 }
 
 function loadVoiceAgentMemoryForTarget(target?: VoiceAgentTargetContext): string {
-  const mainWorkspacePath = getConfig().getWorkspacePath();
-  const mainVoiceMemory = loadVoiceAgentMemory(mainWorkspacePath);
   const resolved = resolveSubagentVoiceWorkspace(target);
-  if (!resolved) return mainVoiceMemory;
-  const subagentVoiceMemory = loadVoiceAgentMemory(resolved.workspacePath);
-  return subagentVoiceMemory || mainVoiceMemory;
+  if (resolved) return '';
+  return loadVoiceAgentMemory(getConfig().getWorkspacePath());
 }
 
 const voiceAgentNarrationState = new Map<string, { signature: string; at: number; text?: string }>();
@@ -9458,7 +9873,7 @@ function findActiveMainChatRuntimeForSession(sessionId: string, expectedRuntimeI
   const expected = String(expectedRuntimeId || '').trim();
   return listLiveRuntimes()
     .filter((runtime) => (
-      runtime.kind === 'main_chat'
+      isSteerableChatRuntimeKind(runtime.kind)
       && String(runtime.sessionId || '') === sid
       && (!expected || runtime.id === expected)
     ))
@@ -9482,7 +9897,7 @@ function isVoiceContextNoiseText(value: unknown): boolean {
 }
 
 function isVoiceContextNoiseEvent(value: unknown): boolean {
-  return /^(?:heartbeat|token|thinking|thinking_delta|ui_preflight|voice_milestone|model_stream_event)$/i.test(String(value || '').trim());
+  return /^(?:heartbeat|token|thinking|thinking_delta|reasoning_summary_delta|ui_preflight|voice_milestone|model_stream_event)$/i.test(String(value || '').trim());
 }
 
 function summarizeVoiceToolActivity(toolName: unknown, args: any, eventType = '', data: any = {}): string {
@@ -9860,12 +10275,50 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     const workers = workgroup.workers.map((worker) => {
       const task = loadTask(worker.taskId);
       const status = String(task?.status || worker.status || 'queued');
+      const runtimeItems = Array.isArray(task?.runtimeProgress?.items) ? task.runtimeProgress.items : [];
+      const runtimeActiveIndex = Number(task?.runtimeProgress?.activeIndex ?? -1);
+      const runtimeCurrent = runtimeItems[runtimeActiveIndex]
+        || runtimeItems.find((item: any) => item?.status === 'in_progress' || item?.status === 'pending');
+      const recentActivity = (Array.isArray(task?.journal) ? task.journal : [])
+        .filter((entry: any) => ['tool_call', 'tool_result', 'write_note', 'error', 'pause', 'resume', 'plan_mutation'].includes(String(entry?.type || '')))
+        .slice(-8)
+        .map((entry: any) => ({
+          at: Number(entry?.t || 0) || null,
+          type: String(entry?.type || ''),
+          detail: compactVoiceText(entry?.content || entry?.detail || '', 360),
+        }))
+        .filter((entry: any) => entry.detail);
+      const currentStep = compactVoiceText(
+        runtimeCurrent?.text
+          || task?.plan?.[Math.max(0, Number(task.currentStepIndex || 0))]?.description
+          || '',
+        300,
+      );
+      const finalResult = status === 'complete'
+        ? compactVoiceText(task?.finalSummary || '', 1800)
+        : '';
       return {
         taskId: worker.taskId,
         title: task?.title || worker.title,
         status,
-        finalSummary: compactVoiceText(task?.finalSummary || '', 260),
-        currentStep: task?.plan?.[Math.max(0, Number(task.currentStepIndex || 0))]?.description || '',
+        currentStep,
+        runtimeProgress: task?.runtimeProgress ? {
+          source: task.runtimeProgress.source,
+          activeIndex: runtimeActiveIndex,
+          updatedAt: Number(task.runtimeProgress.updatedAt || 0) || null,
+          items: runtimeItems.slice(0, 12).map((item: any) => ({
+            text: compactVoiceText(item?.text || '', 240),
+            status: String(item?.status || 'pending'),
+          })),
+        } : null,
+        lastToolCall: compactVoiceText(task?.lastToolCall || '', 300),
+        lastToolCallAt: Number(task?.lastToolCallAt || 0) || null,
+        lastProgressAt: Number(task?.lastProgressAt || 0) || null,
+        progressAgeMs: task?.lastProgressAt ? Math.max(0, Date.now() - Number(task.lastProgressAt)) : null,
+        recentActivity,
+        finalResult,
+        // Backward-compatible alias for clients that already read this field.
+        finalSummary: finalResult,
       };
     });
     const activeWorkers = workers.filter((worker) => !['complete', 'failed'].includes(worker.status));
@@ -9893,9 +10346,21 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     };
   });
   const activeVoiceWorkgroups = voiceWorkgroups.filter((workgroup) => !['complete', 'failed'].includes(workgroup.status));
+  const completedWorkerResults = voiceWorkgroups.flatMap((workgroup) => workgroup.workers
+    .filter((worker) => worker.status === 'complete' && worker.finalResult)
+    .map((worker) => ({
+      workgroupId: workgroup.id,
+      taskId: worker.taskId,
+      title: worker.title,
+      result: worker.finalResult,
+    })));
   const voiceWorkgroupLines = voiceWorkgroups.slice(0, 2).map((workgroup) => {
     const workerBits = workgroup.workers.slice(0, 5)
-      .map((worker) => `${worker.title} (${worker.status}${worker.currentStep ? `: ${compactVoiceText(worker.currentStep, 120)}` : ''})`)
+      .map((worker) => {
+        const latestActivity = worker.recentActivity[worker.recentActivity.length - 1]?.detail || worker.lastToolCall;
+        const detail = latestActivity || worker.currentStep;
+        return `${worker.title} (${worker.status}${detail ? `: ${compactVoiceText(detail, 160)}` : ''})`;
+      })
       .join('; ');
     return `Voice workgroup ${workgroup.id}: ${workgroup.status}; ${workgroup.completedCount}/${workgroup.workerCount} complete${workerBits ? `; ${workerBits}` : ''}`;
   }).filter(Boolean);
@@ -9911,6 +10376,7 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     displayTool ? `Active step: ${displayTool}` : '',
     activeToolLabel ? `Latest update: ${activeToolLabel}` : '',
     completed.length ? `Recent completed work: ${completed.join(' | ')}` : '',
+    completedWorkerResults.length ? `Completed worker results: ${completedWorkerResults.map((entry) => `${entry.title}: ${compactVoiceText(entry.result, 700)}`).join(' | ')}` : '',
     voiceWorkgroupLines.length ? `Voice-dispatched workers: ${voiceWorkgroupLines.join(' | ')}` : '',
   ].filter(Boolean);
   const active = !!activeRuntime || activeVoiceWorkgroups.length > 0;
@@ -9958,7 +10424,12 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     recentEvents,
     observations: summarizeVoiceObservation(sid),
     voiceWorkgroups,
-    doneAlready: [...completed, ...voiceWorkgroupLines],
+    completedWorkerResults,
+    doneAlready: [
+      ...completed,
+      ...completedWorkerResults.map((entry) => `${entry.title}: ${entry.result}`),
+      ...voiceWorkgroupLines,
+    ],
     currentlyDoing: activeToolLabel || displayTool || displayPhase || voiceWorkgroupLines[0] || '',
     summary: recentSummaryLines.join('\n'),
   };
@@ -10075,7 +10546,7 @@ async function getVoiceAgentContextBlock(sessionId: string, transcript: string, 
       historyLength,
       _skillsManager,
       undefined,
-      { profile: 'voice_agent' },
+      { profile: targetAgentId ? 'direct_subagent' : 'voice_agent' },
     );
     const contextBlock = applyVoiceTargetContextBlock(baseContextBlock, voiceTarget);
     const entry = { sessionId: sid, workspacePath, historyLength, targetKey, contextBlock, createdAt: Date.now() };
@@ -10206,6 +10677,7 @@ type VoiceAgentDecision = {
   needsWorkerResponse?: boolean;
   reason?: string;
   runtimeDirectives?: Array<Record<string, any>>;
+  richArtifacts?: any[];
 };
 
 type VoiceAgentProcessEntry = {
@@ -10400,13 +10872,48 @@ async function buildVoiceShowArtifact(name: string, args: Record<string, any>): 
     case 'show_map':
       return fromLookup(await executeMapLookup({ markers: Array.isArray(args.markers) ? args.markers : [], center: args.center, zoom: args.zoom, title: args.title }), 'Map unavailable.');
     case 'show_product_carousel': {
-      const artifact = productCarouselToArtifact({ title: args.title, items: Array.isArray(args.items) ? args.items : [] });
-      return { ok: !!artifact, summary: artifact ? `Showing ${artifact.items.length} product(s).` : 'No products to show.', artifact };
+      let normalized = normalizeProductArtifactItems(Array.isArray(args.items) ? args.items : []);
+      const query = compactVoiceText(args.query || args.title || '', 220);
+      let searchSource = String(args.source || '').trim();
+      if (!normalized.length && query) {
+        const search = await executeShoppingSearchProducts({
+          query,
+          merchant: String(args.merchant || '').trim() || undefined,
+          max_results: Math.max(2, Math.min(10, Number(args.limit || args.max_results || 6) || 6)),
+          provider: 'multi',
+          include_metadata: true,
+          include_images: true,
+        });
+        normalized = normalizeProductArtifactItems(Array.isArray(search?.data?.products) ? search.data.products : []);
+        searchSource = searchSource || 'shopping_search_products';
+        if (!normalized.length) {
+          return { ok: false, summary: String(search?.error || `No carousel-ready products found for "${query}".`), artifact: null };
+        }
+      }
+      const items = await enrichProductArtifactItems(normalized.map((item, index) => ({ id: `voice_product_${index + 1}`, ...item })));
+      const artifact = productCarouselToArtifact({ title: args.title || query, source: searchSource, items });
+      return { ok: !!artifact, summary: artifact ? `Showing ${artifact.items.length} product(s)${query ? ` for "${query}"` : ''}.` : (query ? `No products found for "${query}".` : 'A product query or product items are required.'), artifact };
     }
     case 'show_sources': {
-      const items = (Array.isArray(args.items) ? args.items : []).filter((it: any) => it && (it.title || it.url));
-      if (!items.length) return { ok: false, summary: 'No sources to show.', artifact: null };
-      return { ok: true, summary: `Showing ${items.length} source(s).`, artifact: { id: `sources-${Date.now()}`, type: 'sources', title: args.title, layout: args.layout === 'list' ? 'list' : 'cards', items } };
+      let normalized = normalizeSourceArtifactItems(Array.isArray(args.items) ? args.items : []);
+      const query = compactVoiceText(args.query || '', 220) || 'latest news';
+      if (!normalized.length) {
+        const search = await executeWebSearch({
+          query,
+          max_results: Math.max(2, Math.min(10, Number(args.limit || args.max_results || 6) || 6)),
+          provider: 'multi',
+        });
+        const rows = Array.isArray(search?.data?.results) ? search.data.results
+          : Array.isArray(search?.data?.items) ? search.data.items
+            : [];
+        normalized = normalizeSourceArtifactItems(rows);
+        if (!normalized.length) {
+          return { ok: false, summary: String(search?.error || `No sources found for "${query}".`), artifact: null };
+        }
+      }
+      const items = await enrichSourceArtifactItems(normalized);
+      if (!items.length) return { ok: false, summary: `No sources found for "${query}".`, artifact: null };
+      return { ok: true, summary: `Showing ${items.length} source(s) for "${query}".`, artifact: { id: `sources-${Date.now()}`, type: 'sources', title: args.title || query, layout: args.layout === 'list' ? 'list' : 'cards', items } };
     }
     case 'show_comparison': {
       const columns = (Array.isArray(args.columns) ? args.columns : []).filter((c: any) => c && c.key);
@@ -10428,7 +10935,6 @@ async function buildVoiceShowArtifact(name: string, args: Record<string, any>): 
   }
 }
 
-const VOICE_SKILL_INSTRUCTIONS_MAX_CHARS = 7000;
 const VOICE_SKILL_RESOURCE_MAX_CHARS = 5000;
 
 const VOICE_TOOL_EQUIVALENTS: Record<string, string> = {
@@ -10504,11 +11010,12 @@ function buildRealtimeSkillContextForTranscript(transcript: string, maxChars = 4
   const text = String(transcript || '').trim();
   if (!text || !_skillsManager) return { context: '', skills: [] };
   _skillsManager.scanSkillsIfStale?.();
-  const matched = _skillsManager.findMatchingSkillsForMessage(text)
+  const routing = _skillsManager.resolveRuntimeRouting(text);
+  const matched = routing.candidates.map((item: any) => item.id)
     .map((id: string) => _skillsManager.get(id))
     .filter(Boolean)
     .slice(0, 5);
-  if (!matched.length) return { context: '', skills: [] };
+  if (!matched.length && !routing.discoveryRecommended) return { context: '', skills: [] };
   const skillLines = matched.map((skill: any) => {
     const triggers = Array.isArray(skill.triggers) && skill.triggers.length
       ? ` Triggers: ${skill.triggers.slice(0, 6).join(', ')}.`
@@ -10519,13 +11026,14 @@ function buildRealtimeSkillContextForTranscript(transcript: string, maxChars = 4
     const status = skill?.eligibility?.status && skill.eligibility.status !== 'ready'
       ? ` Eligibility: ${skill.eligibility.status}.`
       : '';
-    return `- ${skill.id} (${skill.name || skill.id}): ${compactVoiceText(skill.description || '', 180)}.${triggers}${required}${status}`;
+    return `- ${skill.id} [CANDIDATE ONLY] (${skill.name || skill.id}): ${compactVoiceText(skill.description || '', 180)}.${triggers}${required}${status}`;
   });
   const context = [
     '## Realtime Skill Trigger Update',
-    'The just-completed spoken turn matched installed skill trigger metadata.',
+    'The just-completed spoken turn was evaluated by the canonical deterministic skill resolver.',
     'This is metadata for the current audio turn only, not a second user message or a transcript repeat.',
-    'These are not active instructions yet. If a skill is relevant, call skill_read with its id before acting.',
+    routing.candidates.length ? 'Compare the candidates against the full spoken request. Call skill_read for only the single genuinely relevant candidate before acting; if none fits, read none. Never read every matching skill.' : '',
+    routing.discoveryRecommended ? 'No installed skill matched this specialized workflow unambiguously. Call skill_list once with a concise query, then skill_read at most one strong result. Continue without a skill if no strong result exists.' : '',
     ...skillLines,
     'Use skill guidance only through voice_* tools and canonical read-only skill_* tools. Explicit user-authorized social posts/messages are allowed through voice browser/desktop UI tools when the content and destination are clear. Dispatch to the Prometheus worker for non-voice tools, files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
   ].join('\n');
@@ -10821,6 +11329,7 @@ const VOICE_WRAPPER_TOOL_NAMES = new Set([
   'voice_browser',
   'voice_desktop',
   'voice_ops',
+  'show_ui',
 ]);
 
 const VOICE_HIDDEN_COMPAT_TOOL_NAMES = new Set([
@@ -10858,9 +11367,24 @@ const VOICE_HIDDEN_COMPAT_TOOL_NAMES = new Set([
   'voice_automation_dashboard',
   'voice_worker_status',
   'voice_task_control',
+  'voice_task_directory',
+  'voice_task_watch',
+  'voice_agent_directory',
+  'voice_agent_control',
   'voice_send_screenshot',
   'voice_generate_image',
   'voice_generate_video',
+  'show_weather',
+  'show_market',
+  'show_stocks',
+  'show_prediction_market',
+  'show_map',
+  'show_sources',
+  'show_comparison',
+  'show_chart',
+  'show_product_carousel',
+  'show_agent_work',
+  'show_run_result',
 ]);
 
 function stripVoiceWrapperArgs(args: Record<string, any>): Record<string, any> {
@@ -10871,6 +11395,23 @@ function stripVoiceWrapperArgs(args: Record<string, any>): Record<string, any> {
 function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>): { name: string; args: Record<string, any> } {
   const action = String(args?.action || args?.operation || args?.op || '').trim().toLowerCase();
   const innerArgs = stripVoiceWrapperArgs(args || {});
+  if (name === 'show_ui') {
+    const target = ({
+      weather: 'show_weather',
+      market: 'show_market',
+      stocks: 'show_stocks',
+      prediction_market: 'show_prediction_market',
+      map: 'show_map',
+      sources: 'show_sources',
+      comparison: 'show_comparison',
+      chart: 'show_chart',
+      product_carousel: 'show_product_carousel',
+      products: 'show_product_carousel',
+      agent_work: 'show_agent_work',
+      run_result: 'show_run_result',
+    } as Record<string, string>)[action.replace(/^show_/, '')];
+    return target ? { name: target, args: innerArgs } : { name, args };
+  }
   if (name === 'voice_browser') {
     const target = ({
       screenshot: 'voice_browser_screenshot',
@@ -10921,6 +11462,10 @@ function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>)
       automation_dashboard: 'voice_automation_dashboard',
       worker_status: 'voice_worker_status',
       task_control: 'voice_task_control',
+      task_directory: 'voice_task_directory',
+      task_watch: 'voice_task_watch',
+      agent_directory: 'voice_agent_directory',
+      agent_control: 'voice_agent_control',
       send_screenshot: 'voice_send_screenshot',
       generate_image: 'voice_generate_image',
       generate_video: 'voice_generate_video',
@@ -10937,6 +11482,14 @@ function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>)
       const innerAction = args?.task_action ?? args?.taskAction ?? args?.tool_action ?? args?.toolAction ?? args?.command;
       if (innerAction != null) innerArgs.action = innerAction;
     }
+    if (target === 'voice_task_watch' && innerArgs.action == null) {
+      const innerAction = args?.watch_action ?? args?.watchAction ?? args?.tool_action ?? args?.toolAction ?? args?.command;
+      if (innerAction != null) innerArgs.action = innerAction;
+    }
+    if (target === 'voice_agent_control' && innerArgs.action == null) {
+      const innerAction = args?.agent_action ?? args?.agentAction ?? args?.tool_action ?? args?.toolAction ?? args?.command;
+      if (innerAction != null) innerArgs.action = innerAction;
+    }
     return target ? { name: target, args: innerArgs } : { name, args };
   }
   return { name, args };
@@ -10948,14 +11501,14 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_ops',
-        description: 'Unified voice operations wrapper for quick search/fetch, notes, voice-agent memory, wake/quiet runtime controls, recall, timers, operator status, screenshot delivery, and simple image/video generation. Use action to choose the wrapper operation; pass underlying arguments at top level. For agent_memory use memory_action read/append/replace; for timer use timer_action create/list/update/reschedule/cancel.',
+        description: 'Unified voice operations wrapper for quick operations plus global task discovery/control, opt-in task watches, and constrained standalone-subagent chat/dispatch/run control. Controlling an outside task never tracks it automatically; create a task_watch only when the user asks for updates.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
             action: {
               type: 'string',
-              enum: ['web_search', 'web_fetch', 'write_note', 'agent_memory', 'set_wake_phrase', 'enter_quiet_mode', 'set_quiet_until', 'memory_search', 'timer', 'automation_dashboard', 'worker_status', 'task_control', 'send_screenshot', 'generate_image', 'generate_video'],
+              enum: ['web_search', 'web_fetch', 'write_note', 'agent_memory', 'set_wake_phrase', 'enter_quiet_mode', 'set_quiet_until', 'memory_search', 'timer', 'automation_dashboard', 'worker_status', 'task_directory', 'task_control', 'task_watch', 'agent_directory', 'agent_control', 'send_screenshot', 'generate_image', 'generate_video'],
             },
             query: { type: 'string' },
             url: { type: 'string' },
@@ -10967,11 +11520,20 @@ function buildVoiceToolDefinitions(): any[] {
             memory_action: { type: 'string', enum: ['read', 'append', 'replace'], description: 'Inner action when action is agent_memory.' },
             timer_action: { type: 'string', enum: ['create', 'list', 'update', 'reschedule', 'cancel'], description: 'Inner action when action is timer.' },
             task_action: { type: 'string', enum: ['status', 'resume', 'pause', 'rerun', 'cancel', 'message'], description: 'Inner action when action is task_control.' },
+            watch_action: { type: 'string', enum: ['create', 'list', 'cancel'], description: 'Inner action when action is task_watch.' },
+            agent_action: { type: 'string', enum: ['chat', 'dispatch', 'run_status', 'run_message', 'run_resume', 'run_pause', 'run_rerun', 'run_cancel'], description: 'Inner action when action is agent_control.' },
             task_id: { type: 'string', description: 'Optional exact task id for task_control. If omitted, defaults to latest unfinished voice workgroup tasks.' },
             task_ids: { type: 'array', items: { type: 'string' }, description: 'Optional exact task ids for task_control.' },
             workgroup_id: { type: 'string', description: 'Optional voice workgroup id for task_control.' },
+            scope: { type: 'string', enum: ['voice_workgroup', 'all_voice_workgroups', 'all_tasks'], description: 'Task discovery/control scope. all_tasks searches outside voice workgroups.' },
+            status: { type: 'string', description: 'Optional task status filter.' },
+            owner_type: { type: 'string', enum: ['prometheus', 'standalone_subagent', 'team_member', 'team_manager', 'voice_worker'], description: 'Optional task owner filter.' },
+            notify_on: { type: 'string', enum: ['completion', 'attention', 'terminal', 'milestones'], description: 'Events for a task watch.' },
+            watch_id: { type: 'string' },
+            expires_in_seconds: { type: 'number' },
             message: { type: 'string', description: 'Guidance/note for task_control, especially "tell the worker..." or resume with new direction.' },
             resume_after_message: { type: 'boolean', description: 'For task_control action=message, resume after injecting the message. Default false.' },
+            allow_multiple: { type: 'boolean', description: 'Set true only when the user explicitly asks to control several matching tasks.' },
             timer_id: { type: 'string' },
             instruction: { type: 'string' },
             label: { type: 'string' },
@@ -11781,6 +12343,30 @@ function buildVoiceToolDefinitions(): any[] {
     {
       type: 'function',
       function: {
+        name: 'show_ui',
+        description: 'Unified visual-card wrapper. Render a native card in the app while speaking only the gist. Use action weather, market, stocks, prediction_market, map, sources, comparison, chart, product_carousel, agent_work, or run_result. For sources/news and product_carousel, pass query and this wrapper performs search, assembly, metadata enrichment, and image caching itself; items are optional when query is present.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['weather', 'market', 'stocks', 'prediction_market', 'map', 'sources', 'comparison', 'chart', 'product_carousel', 'agent_work', 'run_result'] },
+            title: { type: 'string' }, source: { type: 'string' }, layout: { type: 'string', enum: ['cards', 'list'] },
+            location: { type: 'string' }, latitude: { type: 'number' }, longitude: { type: 'number' }, unit: { type: 'string', enum: ['F', 'C'] }, days: { type: 'number' },
+            coins: { type: 'array', items: { type: 'string' } }, symbols: { type: 'array', items: { type: 'string' } }, vs_currency: { type: 'string' }, sparkline: { type: 'boolean' }, range: { type: 'string' },
+            query: { type: 'string', description: 'Natural-language lookup query. Sufficient by itself for sources or product_carousel.' }, slug: { type: 'string' }, limit: { type: 'number' }, max_results: { type: 'number' }, merchant: { type: 'string' }, zoom: { type: 'number' }, center: { type: 'object' }, markers: { type: 'array', items: { type: 'object' } },
+            items: { type: 'array', items: { type: 'object' }, description: 'Source/news items or product items, depending on action.' },
+            columns: { type: 'array', items: { type: 'object' } }, rows: { type: 'array', items: { type: 'object' } }, labelKey: { type: 'string' }, highlightColumn: { type: 'string' },
+            chartType: { type: 'string', enum: ['line', 'bar', 'area'] }, series: { type: 'array', items: { type: 'object' } }, xLabel: { type: 'string' }, yLabel: { type: 'string' },
+            greeting: { type: 'string' }, subtitle: { type: 'string' }, summaryRows: { type: 'array', items: { type: 'object' } }, priorities: { type: 'array', items: { type: 'object' } }, teams: { type: 'array', items: { type: 'object' } }, activeWork: { type: 'array', items: { type: 'object' } },
+            taskId: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' }, files: { type: 'array', items: {} }, links: { type: 'array', items: { type: 'object' } },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'show_weather',
         description: 'Show a live weather forecast card (Open-Meteo, keyless) in chat and speak the gist. Use for weather/forecast questions. Pass a location name.',
         parameters: { type: 'object', properties: { location: { type: 'string' }, latitude: { type: 'number' }, longitude: { type: 'number' }, unit: { type: 'string', enum: ['F', 'C'] }, days: { type: 'number' } }, additionalProperties: false },
@@ -11822,8 +12408,8 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'show_sources',
-        description: 'Show a sources/news card from items you already gathered. Use to present articles/citations visually.',
-        parameters: { type: 'object', required: ['items'], properties: { title: { type: 'string' }, layout: { type: 'string', enum: ['cards', 'list'] }, items: { type: 'array', items: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, publisher: { type: 'string' }, url: { type: 'string' }, imageUrl: { type: 'string' }, snippet: { type: 'string' }, publishedAt: { type: 'string' }, badge: { type: 'string' } } } } }, additionalProperties: false },
+        description: 'Show source/news cards. Missing page metadata and preview images are extracted from each URL and cached for reliable display.',
+        parameters: { type: 'object', required: ['items'], properties: { title: { type: 'string' }, layout: { type: 'string', enum: ['cards', 'list'] }, items: { type: 'array', items: { type: 'object', required: ['url'], properties: { title: { type: 'string' }, publisher: { type: 'string' }, url: { type: 'string' }, imageUrl: { type: 'string' }, imagePath: { type: 'string' }, snippet: { type: 'string' }, publishedAt: { type: 'string' }, badge: { type: 'string' } } } } }, additionalProperties: false },
       },
     },
     {
@@ -11846,8 +12432,8 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'show_product_carousel',
-        description: 'Show a product carousel card from product items you gathered (title + productUrl each).',
-        parameters: { type: 'object', required: ['items'], properties: { title: { type: 'string' }, items: { type: 'array', items: { type: 'object', required: ['title', 'productUrl'], properties: { title: { type: 'string' }, price: { type: 'string' }, description: { type: 'string' }, rating: { type: 'number' }, reviews: { type: 'number' }, tag: { type: 'string' }, imageUrl: { type: 'string' }, productUrl: { type: 'string' }, merchant: { type: 'string' } } } } }, additionalProperties: false },
+        description: 'Show product cards. Missing price/rating/review/image metadata is extracted from each product URL and images are cached locally.',
+        parameters: { type: 'object', required: ['items'], properties: { title: { type: 'string' }, source: { type: 'string' }, items: { type: 'array', items: { type: 'object', required: ['title', 'productUrl'], properties: { title: { type: 'string' }, price: { type: 'string' }, listPrice: { type: 'string' }, description: { type: 'string' }, rating: { type: 'number' }, reviews: { type: 'number' }, reviewCount: { type: 'number' }, tag: { type: 'string' }, badge: { type: 'string' }, imageUrl: { type: 'string' }, imagePath: { type: 'string' }, productUrl: { type: 'string' }, merchant: { type: 'string' }, availability: { type: 'string' }, seller: { type: 'string' }, sku: { type: 'string' }, asin: { type: 'string' }, confidence: { type: 'number' } } } } }, additionalProperties: false },
       },
     },
     {
@@ -11943,6 +12529,49 @@ function parseVoiceTaskIds(args: Record<string, any>): string[] {
   return Array.from(new Set(ids));
 }
 
+function voiceTaskOwner(task: TaskRecord): { type: string; id: string; label: string } {
+  if (task.voiceDispatch?.workgroupId) return { type: 'voice_worker', id: task.voiceDispatch.workgroupId, label: 'Voice workgroup' };
+  if (task.teamSubagent?.agentId) return { type: 'team_member', id: task.teamSubagent.agentId, label: task.teamSubagent.agentName || task.teamSubagent.agentId };
+  const teamExecution = task.proposalExecution?.teamExecution;
+  if (teamExecution?.teamId) return { type: 'team_manager', id: teamExecution.teamId, label: `Team ${teamExecution.teamId}` };
+  if (task.subagentProfile) {
+    const agent = getAgentById(task.subagentProfile) as any;
+    return { type: 'standalone_subagent', id: task.subagentProfile, label: String(agent?.name || task.subagentProfile) };
+  }
+  return { type: 'prometheus', id: 'main', label: 'Prometheus' };
+}
+
+function voiceTaskSearchScore(task: TaskRecord, query: string): number {
+  const q = String(query || '').toLowerCase().replace(/[^a-z0-9\s_-]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!q) return 1;
+  const title = String(task.title || '').toLowerCase();
+  const prompt = String(task.prompt || '').toLowerCase();
+  if (task.id.toLowerCase() === q) return 100;
+  if (title === q) return 80;
+  if (title.includes(q)) return 60;
+  const terms = q.split(' ').filter((term) => term.length > 1);
+  const titleHits = terms.filter((term) => title.includes(term)).length;
+  const promptHits = terms.filter((term) => prompt.includes(term)).length;
+  return titleHits * 8 + promptHits * 2;
+}
+
+function listVoiceDirectoryTasks(args: Record<string, any>): TaskRecord[] {
+  const query = String(args?.query || args?.title || args?.name || '').trim();
+  const statusFilter = String(args?.status || '').trim().toLowerCase();
+  const statuses = new Set(statusFilter.split(/[\s,]+/).filter(Boolean));
+  const ownerType = String(args?.owner_type || args?.ownerType || '').trim();
+  const limit = Math.max(1, Math.min(20, Number(args?.limit || 10) || 10));
+  return listTasks()
+    .map((task) => ({ task, score: voiceTaskSearchScore(task, query) }))
+    .filter(({ score }) => !query || score > 0)
+    .filter(({ task }) => !statuses.size || statuses.has(String(task.status || '').toLowerCase()))
+    .filter(({ task }) => !ownerType || voiceTaskOwner(task).type === ownerType)
+    .filter(({ task }) => !/^run_once_verify_|^task_recovery_|^task_resume_brief_/i.test(String(task.sessionId || '')))
+    .sort((a, b) => b.score - a.score || Number(b.task.lastProgressAt || b.task.startedAt || 0) - Number(a.task.lastProgressAt || a.task.startedAt || 0))
+    .slice(0, limit)
+    .map(({ task }) => task);
+}
+
 function selectVoiceTaskControlTargets(sessionId: string, args: Record<string, any>): TaskRecord[] {
   const action = String(args?.action || args?.task_action || args?.taskAction || 'status').trim().toLowerCase();
   const explicitTaskIds = parseVoiceTaskIds(args);
@@ -11950,6 +12579,10 @@ function selectVoiceTaskControlTargets(sessionId: string, args: Record<string, a
     return explicitTaskIds
       .map((id) => loadTask(id))
       .filter((task): task is TaskRecord => !!task);
+  }
+
+  if (String(args?.scope || '').trim() === 'all_tasks') {
+    return listVoiceDirectoryTasks(args).filter((task) => action === 'status' || VOICE_TASK_CONTROL_STATUSES.has(String(task.status || ''))).slice(0, 8);
   }
 
   const workgroupId = String(args?.workgroup_id || args?.workgroupId || '').trim();
@@ -11994,7 +12627,18 @@ function summarizeVoiceTaskTargets(tasks: TaskRecord[]): any[] {
     currentStep: Array.isArray(task.plan) ? task.plan[Math.max(0, Number(task.currentStepIndex || 0))]?.description || '' : '',
     finalSummary: compactVoiceText(task.finalSummary || '', 500),
     workgroupId: task.voiceDispatch?.workgroupId || '',
+    owner: voiceTaskOwner(task),
+    tracking: task.voiceDispatch?.workgroupId ? 'voice_workgroup' : 'none',
+    lastProgressAt: task.lastProgressAt || null,
   }));
+}
+
+function executeVoiceTaskDirectory(args: Record<string, any>): string {
+  const tasks = listVoiceDirectoryTasks(args);
+  return voiceToolResult(true, tasks.length ? `Found ${tasks.length} matching task${tasks.length === 1 ? '' : 's'}.` : 'No matching tasks were found.', {
+    tasks: summarizeVoiceTaskTargets(tasks),
+    trackingNote: 'Discovery does not subscribe the voice agent to these tasks.',
+  });
 }
 
 async function executeVoiceTaskControl(sessionId: string, args: Record<string, any>): Promise<string> {
@@ -12007,6 +12651,15 @@ async function executeVoiceTaskControl(sessionId: string, args: Record<string, a
       action: normalizedAction,
       requestedTaskIds: parseVoiceTaskIds(args),
       workgroupId: String(args?.workgroup_id || args?.workgroupId || '').trim(),
+    });
+  }
+
+  const explicitIds = parseVoiceTaskIds(args);
+  if (normalizedAction !== 'status' && targets.length > 1 && !explicitIds.length && args?.allow_multiple !== true && args?.allowMultiple !== true) {
+    return voiceToolResult(false, 'Multiple tasks match. Ask the user which one, or set allow_multiple only for an explicit plural command.', {
+      action: normalizedAction,
+      ambiguous: true,
+      candidates: summarizeVoiceTaskTargets(targets.slice(0, 5)),
     });
   }
 
@@ -12054,6 +12707,8 @@ async function executeVoiceTaskControl(sessionId: string, args: Record<string, a
       action: normalizedAction,
       resumeAfter,
       results,
+      tracking: 'none',
+      trackingNote: 'The task remains outside the voice workgroup unless a task watch is explicitly created.',
     });
   }
 
@@ -12081,7 +12736,130 @@ async function executeVoiceTaskControl(sessionId: string, args: Record<string, a
   return voiceToolResult(okCount > 0, `${normalizedAction} applied to ${okCount}/${results.length} task${results.length === 1 ? '' : 's'}.`, {
     action: normalizedAction,
     results,
+    tracking: 'none',
+    trackingNote: 'Control does not subscribe the voice agent to outside tasks.',
   });
+}
+
+function resolveSingleVoiceTask(args: Record<string, any>): { task?: TaskRecord; candidates?: TaskRecord[]; error?: string } {
+  const taskId = String(args?.task_id || args?.taskId || '').trim();
+  if (taskId) {
+    const task = loadTask(taskId);
+    return task ? { task } : { error: `Task not found: ${taskId}` };
+  }
+  const candidates = listVoiceDirectoryTasks({ ...args, limit: 6 });
+  if (candidates.length === 1) return { task: candidates[0] };
+  if (!candidates.length) return { error: 'No matching task was found.' };
+  const firstScore = voiceTaskSearchScore(candidates[0], String(args?.query || ''));
+  const secondScore = voiceTaskSearchScore(candidates[1], String(args?.query || ''));
+  if (firstScore >= 60 && firstScore > secondScore) return { task: candidates[0] };
+  return { candidates, error: 'Multiple tasks match.' };
+}
+
+function executeVoiceTaskWatch(sessionId: string, args: Record<string, any>): string {
+  const action = String(args?.action || args?.watch_action || 'list').trim().toLowerCase();
+  if (action === 'list') {
+    const watches = listInternalWatches({ sessionId, includeDone: args?.include_done === true })
+      .filter((watch) => /^Voice task watch:/i.test(watch.label));
+    return voiceToolResult(true, watches.length ? `Found ${watches.length} voice task watch${watches.length === 1 ? '' : 'es'}.` : 'No voice task watches are active.', {
+      watches: watches.map((watch) => ({ id: watch.id, label: watch.label, status: watch.status, target: watch.target, condition: watch.condition, expiresAt: watch.expiresAt, firedCount: watch.firedCount })),
+    });
+  }
+  if (action === 'cancel') {
+    const watchId = String(args?.watch_id || args?.watchId || args?.id || '').trim();
+    const owned = listInternalWatches({ sessionId, includeDone: true }).find((watch) => watch.id === watchId && /^Voice task watch:/i.test(watch.label));
+    if (!owned) return voiceToolResult(false, 'That voice task watch was not found.');
+    const cancelled = cancelInternalWatch(watchId);
+    return voiceToolResult(!!cancelled, cancelled ? `Cancelled watch for ${owned.label.replace(/^Voice task watch:\s*/i, '')}.` : 'Could not cancel the watch.', { watch: cancelled });
+  }
+  if (action !== 'create') return voiceToolResult(false, `Unsupported task watch action: ${action}`);
+
+  const resolved = resolveSingleVoiceTask(args);
+  if (!resolved.task) {
+    return voiceToolResult(false, resolved.error || 'A unique task is required.', {
+      ambiguous: !!resolved.candidates?.length,
+      candidates: summarizeVoiceTaskTargets(resolved.candidates || []),
+    });
+  }
+  const task = resolved.task;
+  const notifyOn = String(args?.notify_on || args?.notifyOn || 'terminal').trim().toLowerCase();
+  const statusGroups: Record<string, string[]> = {
+    completion: ['complete', 'failed'],
+    attention: ['paused', 'stalled', 'needs_assistance', 'awaiting_user_input'],
+    terminal: ['complete', 'failed', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input'],
+  };
+  if (!['completion', 'attention', 'terminal', 'milestones'].includes(notifyOn)) return voiceToolResult(false, `Unsupported notify_on value: ${notifyOn}`);
+  const ttlMs = Math.max(60_000, Math.min(24 * 60 * 60_000, Number(args?.expires_in_seconds || args?.expiresInSeconds || 3600) * 1000));
+  const condition = notifyOn === 'milestones'
+    ? { mode: 'milestones' }
+    : { mode: 'terminal', terminalStatuses: statusGroups[notifyOn] };
+  const draft: any = {
+    id: '', label: `Voice task watch: ${task.title}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + ttlMs).toISOString(), ttlMs,
+    origin: { sessionId, channel: 'web' }, target: { type: 'task', config: { taskId: task.id } }, condition,
+    onMatch: '', maxFirings: notifyOn === 'milestones' ? 10 : 1, firedCount: 0, status: 'active',
+  };
+  const initialObservation = observeInternalWatchTarget(draft, _cronScheduler);
+  const watch = createInternalWatch({
+    label: draft.label,
+    ttlMs,
+    origin: { sessionId, channel: 'web' },
+    target: { type: 'task', config: { taskId: task.id } },
+    condition,
+    maxFirings: notifyOn === 'milestones' ? 10 : 1,
+    initialObservation,
+    onMatch: `A voice-requested watch for task "${task.title}" matched. Give the user a natural update from {{observation_json}}. Do not resume, rerun, or otherwise control the task unless the user explicitly asked for that separately.`,
+  });
+  return voiceToolResult(true, `Watching ${task.title} for ${notifyOn === 'milestones' ? 'milestones and terminal changes' : notifyOn}.`, {
+    watch: { id: watch.id, taskId: task.id, notifyOn, expiresAt: watch.expiresAt, status: watch.status },
+    tracking: 'watched_external_task',
+  });
+}
+
+function standaloneVoiceAgents(): any[] {
+  const teams = listManagedTeams();
+  return getAgents().filter((agent: any) => agent && agent.default !== true && agent.id !== 'main').map((agent: any) => {
+    const team = teams.find((entry: any) => Array.isArray(entry.subagentIds) && entry.subagentIds.includes(agent.id));
+    return { id: agent.id, name: agent.name || agent.id, description: compactVoiceText(agent.description || '', 300), teamId: team?.id || '', teamName: team?.name || '', standalone: !team };
+  });
+}
+
+async function executeVoiceAgentControl(sessionId: string, args: Record<string, any>): Promise<string> {
+  const action = String(args?.action || args?.agent_action || '').trim().toLowerCase();
+  const agentId = String(args?.agent_id || args?.agentId || '').trim();
+  const taskId = String(args?.task_id || args?.taskId || '').trim();
+  const message = String(args?.message || args?.prompt || args?.instruction || '').trim();
+  const agents = standaloneVoiceAgents();
+  const agent = agentId ? agents.find((entry) => entry.id === agentId) : null;
+  if (agentId && !agent) return voiceToolResult(false, `Unknown subagent: ${agentId}. Use agent_directory first.`);
+  if (agent && !agent.standalone) return voiceToolResult(false, `${agent.name} belongs to managed team ${agent.teamName || agent.teamId}. Team control is intentionally separate from standalone voice-agent control.`);
+
+  if (action === 'chat') {
+    if (!agent || !message) return voiceToolResult(false, 'agent_control chat requires agent_id and message.');
+    const { runSubagentChatTurnFromChannel } = require('./channels.router') as typeof import('./channels.router');
+    const result = await runSubagentChatTurnFromChannel({ agentId, message, source: 'voice_agent_chat', accountId: 'prometheus', peerId: sessionId, userLabel: 'Prometheus Voice Agent', timeoutMs: 120_000, sessionId: `subagent_chat_${agentId}`, seedFromSharedChatStore: true });
+    return voiceToolResult(true, `${agent.name} replied.`, { agentId, reply: compactVoiceText(result?.result?.text || '', 2400), threadId: `subagent_chat_${agentId}` });
+  }
+  if (action === 'dispatch') {
+    if (!agent || !message) return voiceToolResult(false, 'agent_control dispatch requires agent_id and a task message.');
+    const manager = new SubagentManager(getConfig().getWorkspacePath(), broadcastWS, handleChat, _telegramChannel);
+    const result = await manager.callSubagent({ subagent_id: agentId, task_prompt: message, run_now: true, delivery_mode: 'task_panel_only' }, sessionId);
+    return voiceToolResult(true, `Dispatched new background work to ${agent.name}.`, { agentId, taskId: result.task_id, status: result.status, tracking: 'none', trackingNote: 'The subagent run is not watched unless task_watch is explicitly created.' });
+  }
+
+  const ownedTasks = listTasks().filter((task) => voiceTaskOwner(task).type === 'standalone_subagent' && voiceTaskOwner(task).id === agentId);
+  const target = taskId ? loadTask(taskId) : ownedTasks.sort((a, b) => Number(b.lastProgressAt || 0) - Number(a.lastProgressAt || 0))[0];
+  if (!target || voiceTaskOwner(target).type !== 'standalone_subagent' || (agentId && voiceTaskOwner(target).id !== agentId)) return voiceToolResult(false, 'No matching standalone-subagent run was found.');
+  if (action === 'run_status') return voiceToolResult(true, `Loaded ${target.title}.`, { task: summarizeVoiceTaskTargets([target])[0] });
+  if (action === 'run_message') {
+    if (!message) return voiceToolResult(false, 'run_message requires a message.');
+    const recovery = await handleTaskRecoveryMessage(target.id, message, { sourceSessionId: sessionId, source: 'chat', visibleMessage: message });
+    return voiceToolResult(recovery.handled, recovery.handled ? `Sent recovery guidance to ${agent?.name || voiceTaskOwner(target).label}.` : 'That run is not eligible for recovery chat.', { taskId: target.id, reply: compactVoiceText(recovery.reply || '', 1600), resumed: recovery.resumed, tracking: 'none' });
+  }
+  const actionMap: Record<string, string> = { run_resume: 'resume', run_pause: 'pause', run_rerun: 'rerun', run_cancel: 'cancel' };
+  const controlAction = actionMap[action];
+  if (!controlAction) return voiceToolResult(false, `Unsupported agent action: ${action}`);
+  const control = await handleTaskControlAction(sessionId, { action: controlAction, task_id: target.id, note: message, ...(controlAction === 'cancel' ? { confirm: true } : {}) });
+  return voiceToolResult(control.success === true, control.message || `${controlAction} applied.`, { control, tracking: 'none' });
 }
 
 async function executeVoiceAgentTool(sessionId: string, name: string, args: Record<string, any>): Promise<string> {
@@ -12312,18 +13090,20 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         });
       }
       activateSkillForSession(sessionId, skill.id);
-      const maxChars = Math.min(12000, Math.max(1200, Number(args.max_chars || args.maxChars || VOICE_SKILL_INSTRUCTIONS_MAX_CHARS) || VOICE_SKILL_INSTRUCTIONS_MAX_CHARS));
-      const resources = Array.isArray(skill.resources) ? skill.resources.slice(0, 16).map((resource: any) => ({
+      let completeInstructions = String(skill.instructions || '');
+      try { completeInstructions = fs.readFileSync(skill.filePath, 'utf-8'); } catch {}
+      const resources = Array.isArray(skill.resources) ? skill.resources.map((resource: any) => ({
         path: resource.path,
         type: resource.type,
         description: compactVoiceText(resource.description || '', 180),
       })) : [];
       return voiceToolResult(true, `Loaded skill "${skill.name || skill.id}".`, {
         skill: summarizeVoiceSkill(skill),
-        instructions: compactVoiceText(skill.instructions || '', maxChars),
+        instructions: completeInstructions,
         runtimeGuidance: buildVoiceSkillRuntimeGuidance(skill),
         resources,
-        truncated: String(skill.instructions || '').length > maxChars,
+        completeEntrypoint: true,
+        truncated: false,
       });
     }
     if (name === 'skill_resource_list') {
@@ -12889,6 +13669,19 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
     if (name === 'voice_task_control') {
       return await executeVoiceTaskControl(sessionId, args || {});
     }
+    if (name === 'voice_task_directory') {
+      return executeVoiceTaskDirectory(args || {});
+    }
+    if (name === 'voice_task_watch') {
+      return executeVoiceTaskWatch(sessionId, args || {});
+    }
+    if (name === 'voice_agent_directory') {
+      const agents = standaloneVoiceAgents();
+      return voiceToolResult(true, agents.length ? `Found ${agents.length} configured subagent${agents.length === 1 ? '' : 's'}.` : 'No standalone subagents are configured.', { agents });
+    }
+    if (name === 'voice_agent_control') {
+      return await executeVoiceAgentControl(sessionId, args || {});
+    }
     if (name === 'voice_worker_status') {
       const providedPacket = args?.contextPacket && typeof args.contextPacket === 'object' ? args.contextPacket : null;
       const providedSessionId = String(providedPacket?.sessionId || '').trim();
@@ -13021,9 +13814,11 @@ async function runVoiceAutomationSkillScout(
   const listResult = parseVoiceToolResult(listRaw);
   if (listResult?.ok === false) return;
   const skills = Array.isArray(listResult?.skills) ? listResult.skills : [];
-  const first = skills.find((skill: any) => String(skill?.id || '').trim());
-  if (!first?.id || Number(listResult?.matchedCount || skills.length || 0) <= 0) return;
-  await executeVoiceAgentToolWithTrace(sessionId, 'skill_read', { id: String(first.id), max_chars: VOICE_SKILL_INSTRUCTIONS_MAX_CHARS }, trace);
+  if (Number(listResult?.matchedCount || skills.length || 0) <= 0) return;
+  pushVoiceAgentProcessEntry(trace, 'skill', 'Skill candidates found; leaving relevance choice to the voice model instead of auto-reading the first match.', {
+    actor: 'Voice Agent',
+    candidates: skills.slice(0, 5).map((skill: any) => String(skill?.id || '')).filter(Boolean),
+  });
 }
 
 function extractFirstVoiceUrl(text: string): string {
@@ -13299,7 +14094,7 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     '- no_reply: use only when the transcript is empty, duplicate, or just says continue/resume without needing speech.',
     '',
     'Voice tool rules:',
-    '- voice_ops: unified quick voice operations. Use action web_search for quick factual/current lookup; web_fetch for one clean text URL; write_note for explicit remember/jot/log/save-note requests; agent_memory for workspace/VOICEAGENT.md routing/spoken-behavior notes with memory_action read/append/replace; set_wake_phrase, enter_quiet_mode, or set_quiet_until for runtime voice settings; memory_search for read-only recall; timer for one-shot timers with timer_action create/list/update/reschedule/cancel; automation_dashboard for operator snapshots; worker_status for Worker progress; send_screenshot for screenshot delivery; generate_image/generate_video for simple media generation. Social/video/media/auth fetches and durable work go to Worker.',
+    '- voice_ops: quick operations plus task_directory, task_control, task_watch, agent_directory, and agent_control. Existing outside tasks can be discovered and controlled globally, but are not tracked unless the user explicitly asks for a task_watch. Standalone-subagent chat, new dispatch, and existing run recovery are separate agent_control actions.',
     '- Quiet-mode intent must be a real instruction. Do not call quiet tools for mentions, examples, debugging, or questions about the words "quiet" or "Prometheus".',
     '- When a quiet tool succeeds, give one natural acknowledgement in spokenReply. The runtime will activate quiet mode after the acknowledgement finishes.',
     '- skill_list: canonical skill discovery. Use it to orient yourself with available workflows and triggers for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled/matchedCount/returnedCount/truncated from the result; never say the returned list length is the total number of skills unless truncated is false and matchedCount equals totalInstalled.',
@@ -13331,7 +14126,8 @@ function buildVoiceAgentLightSystemPrompt(contextBlock: string, contextPacket: R
     identity.roleLine,
     'Answer naturally and specifically in one or two short spoken sentences.',
     'Do not use canned fallback phrases. Do not answer with generic "I am here" or "I\'m here" phrasing; respond to what the user actually said.',
-    'If the user asks for current Worker status/progress/context, answer from the injected worker packet; do not steer the Worker just to ask it for status.',
+    'If the user asks for current Worker status/progress/context, answer from the injected worker packet; use each worker recentActivity, lastToolCall, runtimeProgress, and progressAgeMs to explain what it is actually doing rather than merely repeating its plan-step status. Do not steer the Worker just to ask it for status.',
+    'When a voice-dispatched Worker completes, its verified response is in completedWorkerResults and worker.finalResult. Report the substantive result to the user, not only that the task completed.',
     identity.isSubagent
       ? `If the user asks for heavier work outside conversation, choose handoff_new_work and write a natural, specific acknowledgement as ${identity.speakerName}; say you will handle it yourself, not that you will get a worker or Prometheus.`
       : 'If the user asks for heavier work outside conversation, choose handoff_new_work and write a natural, specific acknowledgement in spokenReply.',
@@ -13378,7 +14174,11 @@ function voiceRuntimeContextText(value: any): string {
   return `Mobile voice wake phrase is currently "${wakePhrase}". Quiet mode is ${gateActive ? 'active' : 'not active'}; setting the phrase alone may be acknowledged naturally, and quiet mode should only start through a quiet-mode tool or a strict local command.`;
 }
 
-function attachRuntimeProcessEntriesToLatestAssistant(sessionId: string, entries: Record<string, any>[]): void {
+function attachRuntimeProcessEntriesToLatestAssistant(
+  sessionId: string,
+  entries: Record<string, any>[],
+  identity?: { goalId?: string; goalTurnId?: string; goalTurnNumber?: number },
+): void {
   const sid = String(sessionId || '').trim();
   const processEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
   if (!sid || !processEntries.length) return;
@@ -13388,6 +14188,9 @@ function attachRuntimeProcessEntriesToLatestAssistant(sessionId: string, entries
     for (let i = history.length - 1; i >= 0; i -= 1) {
       const msg: any = history[i];
       if (msg?.role !== 'assistant' && msg?.role !== 'ai') continue;
+      if (identity?.goalTurnId && String(msg.goalTurnId || '') !== identity.goalTurnId) continue;
+      if (!identity?.goalTurnId && identity?.goalId && String(msg.goalId || '') !== identity.goalId) continue;
+      if (!identity?.goalTurnId && Number.isFinite(Number(identity?.goalTurnNumber)) && Number(msg.goalTurnNumber || 0) !== Number(identity?.goalTurnNumber)) continue;
       const existing = Array.isArray(msg.processEntries) ? msg.processEntries : [];
       const merged = [...existing];
       const seen = new Set(merged.map((entry: any) => JSON.stringify({
@@ -13448,6 +14251,16 @@ function mergeHistoryMetadataFromPrior(raw: any, prior: any): any {
   if (!next.toolLog && (prior as any).toolLog) next.toolLog = (prior as any).toolLog;
   if (!next.thinking && (prior as any).thinking) next.thinking = (prior as any).thinking;
   if (!next.fileChanges && (prior as any).fileChanges) next.fileChanges = (prior as any).fileChanges;
+  for (const key of ['generatedImages', 'generatedVideos', 'canvasFiles', 'files', 'artifacts', 'richArtifacts', 'attachmentPreviews']) {
+    if ((!Array.isArray(next[key]) || next[key].length === 0) && Array.isArray((prior as any)[key]) && (prior as any)[key].length) {
+      next[key] = (prior as any)[key];
+    }
+  }
+  const priorBodyFiles = Array.isArray((prior as any)?.body?.files) ? (prior as any).body.files : [];
+  const nextBodyFiles = Array.isArray(next?.body?.files) ? next.body.files : [];
+  if (!nextBodyFiles.length && priorBodyFiles.length) {
+    next.body = { ...(next.body && typeof next.body === 'object' ? next.body : {}), files: priorBodyFiles };
+  }
   return next;
 }
 
@@ -13556,6 +14369,30 @@ function sanitizeAttachmentPreviewForUi(preview: any, options: { dataUrlLimit: n
   return next;
 }
 
+function sanitizeDurableMediaDescriptorForUi(value: any): any {
+  if (!value || typeof value !== 'object') return value;
+  const next: any = { ...value };
+  const durablePath = String(
+    next.path || next.absPath || next.relPath || next.rel_path || next.workspacePath
+    || next.filePath || next.cachePath || next.cache_path || '',
+  ).trim();
+  if (durablePath) {
+    // The client can stream this through /api/canvas/inline when the element
+    // enters view. Do not duplicate the file as base64 in initial chat JSON.
+    for (const key of ['dataUrl', 'base64', 'raw', 'buffer']) delete next[key];
+  }
+  return next;
+}
+
+function sanitizeMessageMediaForUi(msg: any): void {
+  for (const key of ['generatedImages', 'generatedVideos', 'files', 'artifacts']) {
+    if (Array.isArray(msg[key])) msg[key] = msg[key].map(sanitizeDurableMediaDescriptorForUi);
+  }
+  if (msg.body && typeof msg.body === 'object' && Array.isArray(msg.body.files)) {
+    msg.body = { ...msg.body, files: msg.body.files.map(sanitizeDurableMediaDescriptorForUi) };
+  }
+}
+
 function sanitizeHistoryForUiResponse(
   history: any[],
   options: {
@@ -13588,6 +14425,7 @@ function sanitizeHistoryForUiResponse(
         textLimit: options.attachmentPreviewTextLimit || 4000,
       }));
     }
+    sanitizeMessageMediaForUi(msg);
     return msg;
   });
 }
@@ -14672,6 +15510,7 @@ async function callVoiceAgentDecisionModel(
       totalMs: Date.now() - startedAt,
     });
     const voiceAutomationSkillScoutSeen = new Set<string>();
+    const collectedRichArtifacts: any[] = [];
     const deterministicFastRoutesDisabled = options?.disableDeterministicFastRoutes === true;
     const detectedFallbackToolRequest = findVoiceToolFallbackRequest(transcript);
     const runtimeControlFastRouteAllowed = deterministicFastRoutesDisabled && isVoiceRuntimeControlTool(detectedFallbackToolRequest?.name || '');
@@ -14758,6 +15597,7 @@ async function callVoiceAgentDecisionModel(
       await runVoiceAutomationSkillScout(sessionId, transcript, fallbackToolRequest.name, trace, voiceAutomationSkillScoutSeen);
       const raw = await executeVoiceAgentToolWithTrace(sessionId, fallbackToolRequest.name, fallbackToolRequest.args, trace);
       const toolResult = parseVoiceToolResult(raw);
+      if (Array.isArray(toolResult?.richArtifacts)) collectedRichArtifacts.push(...toolResult.richArtifacts);
       const runtimeDirective = voiceRuntimeDirectiveFromToolResult(toolResult);
       const runtimeDirectives = runtimeDirective ? [runtimeDirective] : [];
       pushVoiceAgentProcessEntry(trace, 'info', `Voice latency: deterministic tool execute ${Date.now() - toolStartedAt}ms.`, {
@@ -14847,6 +15687,7 @@ async function callVoiceAgentDecisionModel(
         needsWorkerResponse: false,
         reason: `deterministic_tool_fast_route:${fallbackToolRequest.name}`,
         runtimeDirectives,
+        richArtifacts: collectedRichArtifacts.length ? collectedRichArtifacts : undefined,
       } as VoiceAgentDecision;
     }
     const smallTalkReply = deterministicFastRoutesDisabled ? '' : deterministicVoiceSmallTalkReply(transcript, contextPacket);
@@ -14941,6 +15782,8 @@ async function callVoiceAgentDecisionModel(
         const args = parseVoiceToolArgs(call?.function?.arguments);
         await runVoiceAutomationSkillScout(sessionId, transcript, name, trace, voiceAutomationSkillScoutSeen);
         const content = await executeVoiceAgentToolWithTrace(sessionId, name, args, trace);
+        const parsedToolResult = parseVoiceToolResult(content);
+        if (Array.isArray(parsedToolResult?.richArtifacts)) collectedRichArtifacts.push(...parsedToolResult.richArtifacts);
         messages.push({
           role: 'tool',
           tool_call_id: call?.id || `voice_tool_${Date.now()}`,
@@ -14952,8 +15795,9 @@ async function callVoiceAgentDecisionModel(
     }
     const content = String(result?.message?.content || '').trim();
     const parsed = safeParseVoiceAgentJson(content);
-    if (!parsed) return fallback;
+    if (!parsed) return collectedRichArtifacts.length ? { ...fallback, richArtifacts: collectedRichArtifacts } : fallback;
     const normalized = normalizeVoiceAgentDecision(parsed, fallback);
+    if (collectedRichArtifacts.length) normalized.richArtifacts = collectedRichArtifacts;
     if (classification.shouldAbortOriginalRun) normalized.action = 'interrupt_worker';
     if (classification.shouldPauseOriginalRun && normalized.action !== 'interrupt_worker') normalized.action = 'answer_now';
     if (normalized.action === 'handoff_new_work' && !String(normalized.spokenReply || '').trim()) {
@@ -15734,6 +16578,7 @@ router.post('/api/voice-agent/input', async (req, res) => {
       voiceTarget,
       contextPacket,
       decision,
+      richArtifacts: Array.isArray(decision.richArtifacts) ? decision.richArtifacts : undefined,
       processEntries: voiceProcessEntries,
       runtimeDirectives,
       timings: {
@@ -15915,7 +16760,7 @@ function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext): an
     name: 'dispatch_prometheus_worker',
     description: identity.isSubagent
       ? `Technical dispatch signal for heavy or durable work. The app routes this into the selected subagent chat for ${identity.label}, not the main Prometheus chat. Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. In speech, phrase the work as your own work as ${identity.label}; do not say you are getting a worker or asking Prometheus.`
-      : 'Hand off heavy or durable work to the Prometheus worker (your primary GPT-5 reasoning brain). Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. Do not use for ordinary live browser/desktop UI navigation or explicit user-authorized social posts/messages that voice_browser and voice_desktop can handle. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. The app visibly posts the worker handoff. Speaking "on it" or "I started that" WITHOUT emitting this function call does nothing and the work never runs. Never claim the worker is running unless you actually called this function or voice_ops action worker_status reports it active.',
+      : 'Hand off heavy or durable work to Prometheus Workers. The FIRST task always becomes the primary foreground Worker linked to the CURRENT chat, with its normal reasoning/tool/final stream. A workgroup is created only when tasks[] contains a SECOND or later task; those additional Workers become durable background tasks and report completion to you while the primary continues. Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. Do not use for ordinary live browser/desktop UI navigation or explicit user-authorized social posts/messages that voice_browser and voice_desktop can handle. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. The app visibly posts the worker handoff. Never claim a Worker is running unless you actually called this function or voice_ops action worker_status reports it active.',
     parameters: {
       type: 'object',
       required: [],
@@ -15923,7 +16768,7 @@ function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext): an
         task: { type: 'string', description: 'Natural-language description of the single worker task. Include any constraints or details the user mentioned.' },
         tasks: {
           type: 'array',
-          description: 'Use this for multi-part requests that should fan out to multiple Prometheus workers in parallel.',
+          description: 'Ordered Worker assignments. Item 1 is the primary Worker linked to this chat. Items 2+ are durable background Workers in the workgroup.',
           items: {
             type: 'object',
             required: ['prompt'],
@@ -15940,6 +16785,33 @@ function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext): an
       additionalProperties: false,
     },
   });
+  if (!identity.isSubagent) {
+    realtimeTools.push({
+      type: 'function',
+      name: 'send_to_prometheus_chat',
+      description: 'Send a planning, analysis, brainstorming, explanation, review, or other discussion request to the stronger Prometheus Worker inside the CURRENT chat. This is a normal foreground chat turn: its reasoning, tool stream, milestones, and final answer remain visible in the chat, and it does not create a task or voice workgroup. Use this when the user wants to consult the Worker or develop a plan together. Do not use it for source edits, commands, files, or other durable execution; use dispatch_prometheus_worker for those. Call immediately without a separate spoken handoff acknowledgement; the app visibly posts the handoff and returns milestone/final summaries to voice.',
+      parameters: {
+        type: 'object',
+        required: ['message'],
+        properties: {
+          message: { type: 'string', description: 'A self-contained restatement of what the user wants the Prometheus Worker to discuss or analyze in the current chat.' },
+        },
+        additionalProperties: false,
+      },
+    });
+    realtimeTools.push({
+      type: 'function',
+      name: 'restart_gateway_quick',
+      description: 'Quickly restart the Prometheus gateway directly from voice without dispatching a Worker and without running npm build. First speak a short acknowledgement such as "All right, restarting the gateway now." Then call this function. The connection will close during restart; after the replacement gateway is healthy, the normal hot-restart notification will confirm success aloud.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'Short user-facing reason for the restart.' },
+        },
+        additionalProperties: false,
+      },
+    });
+  }
   realtimeTools.push({
     type: 'function',
     name: 'steer_active_worker',
@@ -16042,29 +16914,41 @@ function buildRealtimeVoiceAgentInstructions(args: {
     args.voiceAgentMemory ? args.voiceAgentMemory : '',
     args.voiceAgentMemory ? '' : '',
     '## When to call which tool',
-    '- voice_ops: unified quick voice operations. Use action web_search for quick factual/current lookup; web_fetch for one clean text URL; write_note for explicit remember/jot/note; agent_memory for workspace/VOICEAGENT.md routing/spoken-behavior notes with memory_action read/append/replace; set_wake_phrase, enter_quiet_mode, or set_quiet_until for runtime voice settings; memory_search for read-only recall; timer for one-shot timers with timer_action create/list/update/reschedule/cancel; automation_dashboard for operator snapshots; worker_status for Worker progress; task_control for paused/restarted/background task resume, pause, rerun, cancel, or sending guidance to a paused/blocked worker; send_screenshot for screenshot delivery; generate_image/generate_video for simple media generation.',
-    '- Visual cards (render a card in the app while you speak the gist — keep speech short, the card carries the detail): show_weather (forecast), show_market (crypto/memecoins), show_stocks (equities/ETFs), show_prediction_market (Polymarket odds), show_map (places/locations), show_sources (news/citations you gathered), show_comparison (side-by-side table), show_chart (line/bar/area from numbers), show_product_carousel (products), show_agent_work (operator snapshot — gather via voice_automation_dashboard first), show_run_result (finished-task summary). All keyless and read-only; call them directly instead of dispatching the Worker for these.',
+    '- voice_ops: unified quick voice operations. It also provides task_directory for global task discovery, task_control for existing-task operations, task_watch for explicit opt-in notifications, agent_directory for subagent discovery, and agent_control for standalone-subagent chat/dispatch/run recovery. Controlling an outside task never tracks it automatically.',
+    '- Visual cards use the show_ui wrapper (render a card in the app while you speak the gist — keep speech short, the card carries the detail). Actions: weather (forecast), market (crypto/memecoins), stocks (equities/ETFs), prediction_market (Polymarket odds), map (places/locations), sources (news/citations), comparison (side-by-side table), chart (line/bar/area from numbers), product_carousel (products), agent_work (operator snapshot — gather via voice_ops action automation_dashboard first), and run_result (finished-task summary). For sources or product_carousel, pass the user\'s query directly; show_ui searches and assembles the items, so do not call it first with an empty items array and do not separately call voice_ops web_search unless show_ui reports a search failure. If the user asks for unspecified news sources, use query "latest news". All are keyless and read-only; call show_ui directly instead of dispatching the Worker for these.',
     '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. Load relevant workflow instructions before browser/desktop/tool actions when skill trigger context points to them. Follow skill instructions only through voice_* tools; explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker if they require files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
     '- voice_browser: use action open, snapshot, screenshot, click, vision_click, fill, type, vision_type, press_key, scroll, or wait for fast browser navigation, input, drafting, and explicit user-authorized social posts/messages when content and destination are clear. Hand off to Worker for uploads, downloads, password/payment entry, purchases/payments, destructive actions, account settings/security changes, or anything involving files.',
     '- voice_desktop: use action screenshot, list_windows, focus_window, window_control, find_app, launch_app, click, window_click, window_type, window_press_key, or window_scroll for live desktop UI. For window_control include window_action minimize/maximize/restore/close. Use window_id/window_handle/app_id/title and fresh screenshot coordinates. Explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker for file edits, shell commands, installs, destructive confirmations, purchases/payments, account settings/security changes, durable system changes, or anything requiring approvals.',
     '- Screenshot ownership: screenshot capture and screenshot sending stay in the voice layer. Do not call dispatch_prometheus_worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser action screenshot, voice_desktop action screenshot, or voice_ops action send_screenshot.',
+    !identity.isSubagent
+      ? '- send_to_prometheus_chat: consult the stronger Prometheus Worker for planning, analysis, brainstorming, explanations, reviews, or an ongoing discussion. This stays in the current chat with the full normal stream and creates no task. Call it immediately and stay quiet around the handoff; milestone mode and the final summary will bring the result back into voice.'
+      : '',
     identity.isSubagent
       ? `- dispatch_prometheus_worker: TECHNICAL HANDOFF for heavy/durable work. The browser routes it into ${identity.label}'s selected subagent chat. Call it IMMEDIATELY and do not speak an acknowledgement before or after it. Do not describe this as getting a worker or asking Prometheus.`
-      : '- dispatch_prometheus_worker: HAND OFF heavy/durable work — code, file ops, shell/run commands, MCP/connectors, uploads/downloads, long research, media processing, approvals, credentials, purchases/payments, destructive external actions, account settings/security changes, or anything outside voice_* and skill_*. If the user gives multiple independent work items, pass them as tasks[] so multiple Prometheus workers can run in parallel. Do not dispatch for explicit user-authorized social posts/messages that voice browser/desktop tools can complete. Call this function IMMEDIATELY and do not speak an acknowledgement before or after it. The app shows the worker handoff.',
+      : '- dispatch_prometheus_worker: HAND OFF heavy/durable work — code, file ops, shell/run commands, MCP/connectors, uploads/downloads, long research, media processing, approvals, credentials, purchases/payments, destructive external actions, account settings/security changes, or anything outside voice_* and skill_*. The first assignment is always the primary foreground Worker linked to this chat. Only assignments 2+ become durable background tasks; their completion updates return to you even while the primary is still active. For multiple independent work items, pass one ordered tasks[] array with the primary task first. Do not dispatch for explicit user-authorized social posts/messages that voice browser/desktop tools can complete. Call this function IMMEDIATELY and do not speak an acknowledgement before or after it. The app shows the worker handoff.',
     '- steer_active_worker / interrupt_active_worker: ONLY when a live foreground worker runtime is currently active (check the worker context below) AND the user is correcting, changing, pausing, or cancelling that active runtime. If the worker status says tasks are paused, stalled, awaiting input, failed, or paused after gateway restart, use voice_ops action task_control instead.',
     '',
     '## Routing decisions you make implicitly',
     '- If the user asks something answerable from your context (memory, identity, recall, small talk) — answer directly, no tool.',
-    '- If the user asks for status/progress/context about the active Worker — call voice_ops action worker_status, then answer from that result. Do not send the status question to the Worker as a steer.',
+    !identity.isSubagent
+      ? '- If the user asks the Worker to make or critique a plan, reason deeply, analyze something, or continue a substantive current-chat discussion without performing durable work, call send_to_prometheus_chat. Never turn that consultation into dispatch_prometheus_worker.'
+      : '',
+    '- If the user asks for status/progress/context about the active Worker — call voice_ops action worker_status, then use recentActivity, lastToolCall, runtimeProgress, and progressAgeMs to say what it is actually doing. Do not merely repeat the plan step, and do not send the status question to the Worker as a steer.',
+    '- If the main Prometheus user asks only to restart/reboot the gateway without a build or additional work, speak one short acknowledgement and call restart_gateway_quick. Do not dispatch a Worker for a plain quick restart. The restarted gateway will provide the success confirmation.',
+    '- When a voice-dispatched Worker completes, read completedWorkerResults or worker.finalResult and tell the user the actual verified result, not only that it completed.',
     '- Skill scout rule: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call voice_browser or voice_desktop immediately.',
     '- If the user wants quick voice-scope work — call voice_ops, voice_browser, voice_desktop, or skill_* as appropriate, then narrate the result. For automation/operator status snapshots, call voice_ops action automation_dashboard.',
     '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_ops action agent_memory instead of voice_ops action write_note.',
     identity.isSubagent
       ? `- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app routes it into ${identity.label}'s subagent chat and ${identity.label} will report progress.`
-      : '- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. For several independent work items, call it once with tasks[] instead of serial single-task calls. The app shows the handoff and the worker will report progress.',
+      : '- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. A single assignment stays linked to the chat. For several independent work items, call it once with an ordered tasks[]: the first stays in chat and the rest become background tasks. The Voice Agent continues tracking and acknowledging background completions while the primary works.',
     '- If the user asks to resume, pause, rerun, cancel, or unpause paused/restarted tasks — call voice_ops with action task_control and task_action resume/pause/rerun/cancel. If task ids are not known, omit task_id so it targets the latest voice workgroup.',
     '- If the user says to tell a paused/blocked worker something, call voice_ops with action task_control, task_action message, message set to their guidance, and resume_after_message true only when they also ask to continue/resume.',
+    '- For an existing task outside the voice workgroup, call voice_ops action task_directory with scope all_tasks to resolve it, then task_control with its exact task_id. Do not add it to dispatch_prometheus_worker tasks[].',
+    '- Resuming, messaging, or otherwise controlling an outside task leaves tracking off. Create voice_ops action task_watch only when the user explicitly asks to be notified or kept updated. If they did not specify, you may briefly offer notification after the action but do not create a watch yet.',
+    '- For compound requests, dispatch new requested work in one dispatch_prometheus_worker tasks[] call and separately control any existing task by exact id. Never turn an existing task resume into another newly dispatched worker.',
+    '- Use agent_directory before agent_control when a standalone subagent id is unknown. agent_control chat is persistent conversation, dispatch starts new background work, and run_* operates an existing agent-owned task. Managed-team members are intentionally excluded from this standalone tool.',
     '- If the user interrupts an active live runtime with an actual correction, new constraint, pause, or direction change — call steer_active_worker. Do not use steer_active_worker for paused background tasks.',
     '- If the user explicitly cancels/stops/aborts — call interrupt_active_worker.',
     '',
@@ -16616,6 +17500,7 @@ router.post('/api/voice-agent/realtime-skill-context', async (req, res) => {
 });
 
 type NormalizedVoiceDispatchTask = { title: string; prompt: string };
+type NormalizedPrimaryVoiceWorker = NormalizedVoiceDispatchTask & { taskId: string; status: string };
 
 function compactVoiceDispatchTitle(value: string, fallback: string): string {
   const clean = String(value || '').replace(/\s+/g, ' ').trim();
@@ -16664,6 +17549,20 @@ function normalizeVoiceDispatchTasks(body: any): NormalizedVoiceDispatchTask[] {
   return tasks.slice(0, 8);
 }
 
+function normalizePrimaryVoiceWorker(body: any): NormalizedPrimaryVoiceWorker | null {
+  const raw = body?.primaryWorker || body?.primary_worker;
+  if (!raw || typeof raw !== 'object') return null;
+  const taskId = String(raw.taskId || raw.id || '').trim();
+  const prompt = String(raw.prompt || raw.task || raw.objective || '').trim();
+  if (!taskId || !prompt) return null;
+  return {
+    taskId: assertSafeStorageId(taskId, 'primary voice worker id'),
+    title: compactVoiceDispatchTitle(String(raw.title || raw.name || prompt), 'Primary chat worker'),
+    prompt: prompt.slice(0, 12000),
+    status: String(raw.status || 'running').trim() || 'running',
+  };
+}
+
 router.get('/api/voice-agent/workgroups/:id', (req, res) => {
   try {
     const workgroup = loadVoiceWorkgroup(String(req.params.id || ''));
@@ -16677,13 +17576,99 @@ router.get('/api/voice-agent/workgroups/:id', (req, res) => {
   }
 });
 
+router.patch('/api/voice-agent/workgroups/:id/workers/:taskId', (req, res) => {
+  try {
+    const workgroupId = assertSafeStorageId(String(req.params.id || ''), 'voice workgroup id');
+    const taskId = assertSafeStorageId(String(req.params.taskId || ''), 'voice worker id');
+    const status = String(req.body?.status || '').trim();
+    if (!status) {
+      res.status(400).json({ ok: false, success: false, error: 'status is required.' });
+      return;
+    }
+    const workgroup = updateVoiceWorkgroupWorkerStatus(workgroupId, taskId, status, {
+      currentStep: String(req.body?.currentStep || '').trim() || undefined,
+      completedSteps: Array.isArray(req.body?.completedSteps) ? req.body.completedSteps : undefined,
+      finalResult: String(req.body?.finalResult || '').trim() || undefined,
+      updatedAt: Date.now(),
+    });
+    if (!workgroup) {
+      res.status(404).json({ ok: false, success: false, error: 'Voice workgroup or worker not found.' });
+      return;
+    }
+    const worker = workgroup.workers.find((entry) => entry.taskId === taskId);
+    broadcastWS({
+      type: 'voice_worker_update',
+      id: `voice_worker_${taskId}_primary_${Date.now()}`,
+      sessionId: workgroup.parentSessionId,
+      workgroupId,
+      taskId,
+      title: worker?.title || 'Primary chat worker',
+      kind: status === 'complete' ? 'complete' : status === 'failed' ? 'paused' : 'milestone',
+      critical: false,
+      silent: true,
+      status,
+      text: status === 'complete' ? 'Primary chat worker completed.' : `Primary chat worker is ${status}.`,
+      currentStep: worker?.currentStep || '',
+      completedSteps: worker?.completedSteps || [],
+      finalResult: worker?.finalResult || '',
+      timestamp: Date.now(),
+    });
+    res.json({ ok: true, success: true, workgroup, worker });
+  } catch (err: any) {
+    res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/voice-agent/restart-gateway-quick', (req, res) => {
+  try {
+    const body = req.body || {};
+    const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
+    const reason = compactVoiceText(body.reason || 'Voice-requested quick gateway restart', 240);
+    res.status(202).json({
+      ok: true,
+      success: true,
+      restarting: true,
+      message: 'Quick gateway restart accepted. No npm build will run.',
+    });
+    const timer = setTimeout(() => {
+      try {
+        const { gracefulRestart } = require('../lifecycle') as typeof import('../lifecycle');
+        gracefulRestart({
+          reason: 'manual',
+          timestamp: Date.now(),
+          title: 'Voice quick gateway restart',
+          summary: reason || 'Voice-requested quick gateway restart',
+          previousSessionId: sessionId,
+          originChannel: String(body.source || '').toLowerCase().includes('mobile') ? 'mobile' : 'web',
+        }).catch((err: any) => console.error('[VoiceRestart] Quick restart failed:', err?.message || err));
+      } catch (err: any) {
+        console.error('[VoiceRestart] Could not start quick restart:', err?.message || err);
+      }
+    }, 3500);
+    timer.unref?.();
+  } catch (err: any) {
+    if (!res.headersSent) res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
+  }
+});
+
 router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
   try {
     const body = req.body || {};
     const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const tasks = normalizeVoiceDispatchTasks(body);
+    const primaryWorker = normalizePrimaryVoiceWorker(body);
+    const dispatchSource = String(body.source || 'realtime_voice_dispatch').trim() || 'realtime_voice_dispatch';
     if (!tasks.length) {
       res.status(400).json({ ok: false, success: false, error: 'dispatch_prometheus_worker requires task or tasks[].' });
+      return;
+    }
+    if (!primaryWorker && tasks.length === 1 && /realtime[_-]?agent/i.test(dispatchSource)) {
+      res.status(409).json({
+        ok: false,
+        success: false,
+        error: 'The first realtime voice worker must run in the current chat. No background task was created.',
+        requiresForegroundPrimary: true,
+      });
       return;
     }
 
@@ -16693,15 +17678,28 @@ router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
     const workgroup = createVoiceWorkgroup({
       parentSessionId: sessionId,
       sourceTranscript,
-      source: String(body.source || 'realtime_voice_dispatch').trim() || 'realtime_voice_dispatch',
+      source: dispatchSource,
       mode,
       delivery,
     });
     const taskChannel = inferTaskChannelFromSession(sessionId);
     const suppressOriginDelivery = delivery === 'grouped_summary' || delivery === 'task_panel_only';
     const createdTasks: Array<{ taskId: string; title: string; prompt: string; status: string; index: number }> = [];
+    const workerIndexOffset = primaryWorker ? 1 : 0;
+    const workerTotal = tasks.length + workerIndexOffset;
+
+    if (primaryWorker) {
+      addVoiceWorkgroupWorker(workgroup.id, {
+        ...primaryWorker,
+        index: 0,
+        kind: 'primary_chat',
+        currentStep: 'Working in this chat',
+        updatedAt: Date.now(),
+      });
+    }
 
     tasks.forEach((item, index) => {
+      const workerIndex = index + workerIndexOffset;
       const task = createTask({
         title: item.title,
         prompt: item.prompt,
@@ -16713,8 +17711,8 @@ router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
         suppressOriginDelivery,
         voiceDispatch: {
           workgroupId: workgroup.id,
-          workerIndex: index,
-          workerTotal: tasks.length,
+          workerIndex,
+          workerTotal,
           sourceTranscript: sourceTranscript.slice(0, 500) || undefined,
           delivery,
           mode,
@@ -16722,16 +17720,17 @@ router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
       });
       appendJournal(task.id, {
         type: 'status_push',
-        content: `Voice worker ${index + 1}/${tasks.length} queued from realtime dispatch group ${workgroup.id}.`,
+        content: `Voice worker ${workerIndex + 1}/${workerTotal} queued from realtime dispatch group ${workgroup.id}.`,
       });
       addVoiceWorkgroupWorker(workgroup.id, {
         taskId: task.id,
         title: task.title,
         prompt: task.prompt,
-        index,
+        index: workerIndex,
         status: task.status,
+        kind: 'background_task',
       });
-      createdTasks.push({ taskId: task.id, title: task.title, prompt: task.prompt, status: task.status, index });
+      createdTasks.push({ taskId: task.id, title: task.title, prompt: task.prompt, status: task.status, index: workerIndex });
 
       setImmediate(() => {
         try {
@@ -16751,20 +17750,34 @@ router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
           source: 'voice_dispatch',
           sessionId,
           workgroupId: workgroup.id,
-          workerIndex: index,
-          workerTotal: tasks.length,
+          workerIndex,
+          workerTotal,
         });
         broadcastWS({ type: 'task_panel_update', taskId: task.id, workgroupId: workgroup.id });
       } catch {}
     });
 
     const refreshedWorkgroup = loadVoiceWorkgroup(workgroup.id) || workgroup;
+    const dispatchAcknowledgement = primaryWorker
+      ? `I'm keeping the primary worker in this chat and sending out ${createdTasks.length} more worker${createdTasks.length === 1 ? '' : 's'}.`
+      : createdTasks.length === 1
+        ? `All right — I'm sending out a worker for this.`
+        : `All right — I'm sending out ${createdTasks.length} workers for this.`;
+    addMessage(sessionId, {
+      role: 'assistant',
+      content: dispatchAcknowledgement,
+      timestamp: Date.now(),
+      source: 'voice_workgroup_dispatch',
+      voiceWorkgroup: refreshedWorkgroup,
+    } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
     broadcastWS({
       type: 'voice_workgroup_dispatched',
       sessionId,
       workgroupId: workgroup.id,
       workgroup: refreshedWorkgroup,
+      acknowledgement: dispatchAcknowledgement,
       tasks: createdTasks,
+      primaryWorker: primaryWorker || undefined,
       taskIds: createdTasks.map((task) => task.taskId),
       delivery,
       mode,
@@ -16778,8 +17791,10 @@ router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
       workgroup: refreshedWorkgroup,
       taskIds: createdTasks.map((task) => task.taskId),
       tasks: createdTasks,
+      primaryWorker: primaryWorker || undefined,
       delivery,
       mode,
+      acknowledgement: dispatchAcknowledgement,
       message: `Dispatched ${createdTasks.length} Prometheus worker${createdTasks.length === 1 ? '' : 's'}.`,
     });
   } catch (err: any) {
@@ -17080,7 +18095,7 @@ router.post('/api/chat/steer', (req, res) => {
     const expectedRuntimeId = String(body.expectedRuntimeId || body.runtimeId || '').trim();
     const activeRuntime = listLiveRuntimes()
       .filter((runtime) => (
-        runtime.kind === 'main_chat'
+        isSteerableChatRuntimeKind(runtime.kind)
         && String(runtime.sessionId || '') === sessionId
         && (!expectedRuntimeId || runtime.id === expectedRuntimeId)
       ))
@@ -17510,6 +18525,11 @@ router.post('/api/chat', async (req, res) => {
     finishLiveRuntime(runtimeId);
     finishMainChatStream(resolvedSessionId, chatStream.streamId);
     setModelBusy(false); // release busy guard — cron scheduler may now run
+    const goalAfterUserTurn = snapshotMainChatGoal(resolvedSessionId);
+    if (goalAfterUserTurn?.status === 'active') {
+      const resumeTimer = setTimeout(() => startMainChatGoalRunner(resolvedSessionId, 'post_user_turn'), 450);
+      resumeTimer.unref?.();
+    }
     if (!res.destroyed && !res.writableEnded) res.end();
   }
 });
@@ -17747,6 +18767,7 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
     }
 
     const full = req.query.full === '1' || req.query.full === 'true';
+    const fullProcess = full || req.query.fullProcess === '1' || req.query.fullProcess === 'true';
     const mobileOptimized = req.query.mobile === '1'
       || req.query.client === 'mobile'
       || !!req.headers['x-pairing-token']
@@ -17755,16 +18776,16 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
     const historyLimit = full
       ? 0
       : boundedPositiveInt(req.query.historyLimit, mobileOptimized ? 70 : 200, 20, mobileOptimized ? 180 : 500);
-    const processLimit = full
+    const processLimit = fullProcess
       ? 500
       : boundedPositiveInt(req.query.processLimit, mobileOptimized ? 120 : 250, 20, mobileOptimized ? 160 : 500);
     const includeToolLog = full || req.query.includeToolLog === '1' || req.query.includeToolLog === 'true';
     const responseHistory = sanitizeHistoryForUiResponse(session.history, {
       historyLimit,
       includeToolLog,
-      perMessageProcessLimit: full ? 500 : mobileOptimized ? 12 : 50,
-      processEntryTextLimit: full ? 10_000_000 : mobileOptimized ? 900 : 1600,
-      processEntryExtraLimit: full ? 10_000_000 : mobileOptimized ? 700 : 1200,
+      perMessageProcessLimit: fullProcess ? 500 : mobileOptimized ? 12 : 50,
+      processEntryTextLimit: full ? 10_000_000 : fullProcess ? 4000 : mobileOptimized ? 900 : 1600,
+      processEntryExtraLimit: full ? 10_000_000 : fullProcess ? 4000 : mobileOptimized ? 700 : 1200,
       attachmentPreviewDataUrlLimit: full ? 10_000_000 : mobileOptimized ? 30_000 : 60_000,
       attachmentPreviewTextLimit: full ? 10_000_000 : mobileOptimized ? 2000 : 4000,
     });
@@ -17775,8 +18796,8 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
     ]
       .slice(-processLimit)
       .map((entry: any) => sanitizeProcessEntryForUi(entry, {
-        textLimit: full ? 10_000_000 : mobileOptimized ? 900 : 1600,
-        extraLimit: full ? 10_000_000 : mobileOptimized ? 700 : 1200,
+        textLimit: full ? 10_000_000 : fullProcess ? 4000 : mobileOptimized ? 900 : 1600,
+        extraLimit: full ? 10_000_000 : fullProcess ? 4000 : mobileOptimized ? 700 : 1200,
       }));
     
     res.json({

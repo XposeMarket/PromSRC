@@ -26,6 +26,7 @@ import {
 } from '../auth/anthropic-oauth';
 import { contentToString, splitOnCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
+import { getReasoningCapability, normalizeReasoningEffort, normalizeSpeed, supportsFastSpeed } from './reasoning-capabilities';
 
 // Anthropic ignores cache breakpoints on segments below the minimum cacheable
 // size, but to avoid emitting pointless cache writes we only mark the system
@@ -92,7 +93,7 @@ export class AnthropicAdapter implements LLMProvider {
   // model, no intelligence downgrade. Supported on Opus 4.6/4.7/4.8 only; sending
   // it to other models 400s, so gate strictly.
   private isFastModeCapableModel(model: string): boolean {
-    return /^claude-opus-4-(6|7|8)(?:\b|[-_])/.test(model);
+    return supportsFastSpeed('anthropic', model);
   }
 
   private supportsEffort(model: string): boolean {
@@ -104,15 +105,7 @@ export class AnthropicAdapter implements LLMProvider {
   }
 
   private normalizeEffort(value: unknown, model: string): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined {
-    if (!this.supportsEffort(model)) return undefined;
-    const raw = String(value || '').trim().toLowerCase();
-    if (!raw || raw === 'none') return undefined;
-    if (raw === 'extra_high' || raw === 'extra-high' || raw === 'extra high') return this.supportsXHighEffort(model) ? 'xhigh' : 'high';
-    if (raw === 'minimal') return 'low';
-    if (raw === 'xhigh') return this.supportsXHighEffort(model) ? 'xhigh' : 'high';
-    if (raw === 'max') return 'max';
-    if (raw === 'low' || raw === 'medium' || raw === 'high') return raw;
-    return undefined;
+    return normalizeReasoningEffort('anthropic', model, value) as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined;
   }
 
   private getKnownModelInfo(name: string): Partial<ModelInfo> {
@@ -566,7 +559,7 @@ export class AnthropicAdapter implements LLMProvider {
 
   // Only add interleaved-thinking beta when extended thinking is actually enabled.
   // Adding it unconditionally causes 429s on OAuth tokens.
-  private buildHeaders(model: string, extendedThinkingEnabled = false): Record<string, string> {
+  private buildHeaders(model: string, extendedThinkingEnabled = false, fastSpeed = false): Record<string, string> {
     const headers = this.directConfig
       ? this.buildDirectHeaders()
       : buildAuthHeaders(this.configDir!, this.accountId);
@@ -577,6 +570,12 @@ export class AnthropicAdapter implements LLMProvider {
         headers['anthropic-beta'] = `${existing},interleaved-thinking-2025-05-14`;
       } else if (!existing) {
         headers['anthropic-beta'] = 'interleaved-thinking-2025-05-14';
+      }
+    }
+    if (fastSpeed) {
+      const existing = headers['anthropic-beta'];
+      if (!existing?.includes('fast-mode-2026-02-01')) {
+        headers['anthropic-beta'] = existing ? `${existing},fast-mode-2026-02-01` : 'fast-mode-2026-02-01';
       }
     }
     return headers;
@@ -626,7 +625,8 @@ export class AnthropicAdapter implements LLMProvider {
       && options?.think !== 'none'
       && (anthropicCfg.extended_thinking === true || !!options?.think);
 
-    const headers = this.buildHeaders(model, extendedThinkingEnabled);
+    const fastSpeed = normalizeSpeed('anthropic', model, anthropicCfg.speed || (anthropicCfg.fast_mode === true ? 'fast' : 'standard')) === 'fast';
+    const headers = this.buildHeaders(model, extendedThinkingEnabled, fastSpeed);
     const { system, messages: anthropicMessages } = this.buildMessages(messages, options?.omitIntradayNotes);
 
     const body: any = {
@@ -668,7 +668,7 @@ export class AnthropicAdapter implements LLMProvider {
 
     // Claude Fast Mode: faster output on the same Opus model. Gated to capable
     // models so it never 400s on Sonnet/Haiku or older Opus.
-    if (anthropicCfg.fast_mode === true && this.isFastModeCapableModel(model)) {
+    if (fastSpeed) {
       body.speed = 'fast';
     }
 
@@ -676,7 +676,7 @@ export class AnthropicAdapter implements LLMProvider {
     // Claude Opus 4.7+ rejects manual budgets; Claude Opus/Sonnet 4.6 support
     // adaptive thinking and deprecate manual budgets, so prefer adaptive there too.
     if (extendedThinkingEnabled) {
-      if (this.isAdaptiveThinkingCapableModel(model)) {
+      if (getReasoningCapability('anthropic', model).thinkingMode === 'adaptive') {
         body.thinking = { type: 'adaptive', display: 'summarized' };
       } else {
         const budget = typeof anthropicCfg.thinking_budget === 'number' ? anthropicCfg.thinking_budget : 10000;

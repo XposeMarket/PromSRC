@@ -1,34 +1,37 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when contributing, packaging, publishing, cataloging, or documenting reusable Prometheus skills, connectors, recipes, templates, examples, or shared workflow bundles.",
+  "description": "Author and prepare an upstream HyperFrames registry block or component when the user explicitly wants to contribute it to the public HyperFrames catalog. Do not use for installing catalog items or for ordinary in-project video authoring.",
   "triggers": [
-    "contribute to catalog",
-    "publish this skill",
-    "package a skill",
-    "skill catalog",
-    "add to library",
-    "share workflow bundle",
-    "catalog entry",
-    "reusable template catalog",
-    "publish connector recipe",
-    "package connector",
-    "export skill bundle",
-    "document reusable asset",
-    "add metadata to catalog",
-    "skill contribution",
-    "workflow catalog"
+    "contribute hyperframes catalog item",
+    "publish hyperframes registry component",
+    "submit hyperframes block upstream"
   ],
   "categories": [
-    "skills",
+    "hyperframes",
     "catalog",
-    "packaging",
-    "docs"
+    "contribution"
   ],
   "requiredTools": [
-    "skills",
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "contribute-catalog"
+  "id": "contribute-catalog",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "A disposable local upstream exercised the complete inspect, validate, render, commit, and patch contribution lifecycle without pushing or publishing.",
+    "verifiedCapabilities": [
+      "disposable_upstream",
+      "catalog_item_validation",
+      "render_verification",
+      "local_commit",
+      "patch_generation",
+      "publish_boundary"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "contribute-catalog"
 }

@@ -1,31 +1,22 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "hook-library",
-  "name": "Hook Library",
-  "description": "Curated Prometheus playbook for generating strong social-media hooks, opening lines, captions, short-form video intros, ad hooks, and scroll-stopping first lines matched to platform, content goal, tone, and psychological angle.",
+  "name": "hook-library",
+  "description": "Generate and evaluate opening hooks for social posts, short-form video, ads, newsletters, and creator content. Use only when the user explicitly wants hook ideation or optimization; do not auto-invoke for full articles, generic copywriting, or unrelated writing.",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "hook",
-    "write hooks",
-    "make this hook better",
-    "opening line",
-    "first line",
-    "caption hook",
-    "social media hook",
-    "TikTok hook",
-    "Reels hook",
-    "Shorts hook",
-    "X post hook",
-    "ad hook",
-    "scroll stopping",
-    "attention grabbing intro",
-    "stronger intro",
-    "better lead",
-    "make this post grab attention",
-    "creator content hook",
-    "viral hook",
-    "multiple hook options"
+    "landing page headline",
+    "improve the opener",
+    "make this punchier",
+    "social media opener",
+    "write a hook",
+    "scroll-stopping hook",
+    "attention grabber",
+    "better headline",
+    "headline ideas",
+    "stronger angle",
+    "opening line"
   ],
   "categories": [
     "copywriting",
@@ -40,19 +31,21 @@
   },
   "resources": [
     {
-      "path": "references/workflows/hook-library-2026-06-12.md",
+      "path": "references/workflows/hook-library.md",
       "type": "doc",
       "description": "Add workflow recipe to hook-library"
     },
     {
-      "path": "references/workflows/hook-library-2026-06-13.md",
+      "path": "references/workflows/hook-library.md",
       "type": "doc",
       "description": "Add workflow recipe to hook-library"
     },
     {
-      "path": "references/workflows/hook-library-2026-06-14.md",
+      "path": "references/workflows/hook-library.md",
       "type": "doc",
       "description": "Add workflow recipe to hook-library"
     }
-  ]
+  ],
+  "implicitInvocation": false,
+  "lifecycle": "active"
 }

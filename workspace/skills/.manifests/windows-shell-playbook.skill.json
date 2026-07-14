@@ -1,28 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when running or debugging Windows shell, PowerShell, cmd, terminal commands, process management, npm scripts, path issues, environment checks, or CLI smoke tests on Raul's Windows machine.",
+  "description": "Run and debug Windows PowerShell, cmd, terminal commands, processes, npm scripts, paths, environment checks, and CLI smoke tests safely. Use for Windows-specific command execution, quoting, process inspection, PATH failures, or disposable shell verification.",
   "triggers": [
     "run a terminal command",
-    "PowerShell",
-    "cmd.exe",
-    "Windows shell",
-    "terminal tool",
-    "npm run",
+    "check process status",
     "start a process",
     "kill a process",
-    "check process status",
-    "command failed",
-    "PATH issue",
-    "environment variable",
     "run the build",
+    "environment variable",
+    "command failed",
+    "windows shell",
+    "path issue",
     "run tests",
-    "terminal smoke test",
-    "shell output",
-    "CLI command",
-    "Windows path",
-    "background process",
-    "port in use"
+    "npm run",
+    "terminal tool"
   ],
   "categories": [
     "windows",
@@ -34,5 +26,22 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "windows-shell-playbook"
+  "id": "windows-shell-playbook",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "Core PowerShell operations passed in a disposable directory, including spaced paths, JSON parsing, file writes, process inspection, and command discovery.",
+    "verifiedCapabilities": [
+      "read_only_commands",
+      "temporary_file_writes",
+      "spaced_paths",
+      "json_parsing",
+      "process_inspection",
+      "command_discovery"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "windows-shell-playbook"
 }

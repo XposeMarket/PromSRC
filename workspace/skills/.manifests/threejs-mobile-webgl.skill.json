@@ -1,20 +1,22 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
+  "name": "threejs-mobile-webgl",
+  "description": "Diagnose Three.js/WebGL failures that reproduce on iPhone, iPad, mobile Safari, iOS PWA/WebView, or a mobile file canvas while the same scene works on desktop. Use for missing textured sprites or transparent PNG planes, CanvasTexture upload issues, touch-overlay interception, or Three.js mobile yaw, movement, and fire misalignment; do not use for general Three.js authoring.",
   "triggers": [
-    "three.js mobile",
-    "threejs mobile",
-    "ios webgl",
-    "mobile safari webgl",
-    "iphone missing sprites",
-    "three.js missing textures",
-    "mobile canvas assets",
-    "webgl texture bug",
-    "transparent png sprites missing",
-    "yaw mismatch",
-    "shooting direction wrong",
-    "movement and fire misaligned",
-    "camera yaw convention"
+    "three.js transparent png missing on ios",
+    "iphone three.js missing sprites",
+    "three.js mobile missing textures",
+    "mobile safari three.js canvastexture",
+    "three.js ios texture upload",
+    "three.js mobile yaw mismatch",
+    "three.js mobile shooting direction",
+    "three.js mobile canvas iframe",
+    "three.js mobile safari",
+    "three.js mobile webgl",
+    "ios webgl three.js"
   ],
+  "implicitInvocation": false,
+  "lifecycle": "active",
   "id": "threejs-mobile-webgl"
 }

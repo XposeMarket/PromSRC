@@ -2,13 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
-import { loadTask } from '../tasks/task-store';
+import { listTasks, loadTask } from '../tasks/task-store';
 import {
   getActiveInternalWatches,
   updateInternalWatch,
   type InternalWatch,
 } from './internal-watch-store';
 import { getLastMainSessionId, isModelBusy, setModelBusy } from '../comms/broadcaster';
+import { findArchivedScheduledJob } from '../scheduling/schedule-archive';
 
 type RunInteractiveTurn = (
   message: string,
@@ -54,8 +55,8 @@ function normalizeRelPath(raw: any): string {
   return String(raw || '').trim().replace(/\\/g, '/').replace(/^\/+/, '');
 }
 
-function resolveWorkspaceWatchPath(raw: any): string {
-  const workspaceRoot = path.resolve(getConfig().getWorkspacePath());
+function resolveWorkspaceWatchPath(raw: any, configuredRoot?: any): string {
+  const workspaceRoot = path.resolve(String(configuredRoot || getConfig().getWorkspacePath()));
   const rel = normalizeRelPath(raw);
   if (!rel) throw new Error('file path is required');
   if (path.isAbsolute(rel)) throw new Error('file watches must use workspace-relative paths');
@@ -70,7 +71,7 @@ function resolveWorkspaceWatchPath(raw: any): string {
 export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?: any): Observation {
   const cfg = watch.target.config || {};
   if (watch.target.type === 'file') {
-    const abs = resolveWorkspaceWatchPath(cfg.path || cfg.file || cfg.relativePath);
+    const abs = resolveWorkspaceWatchPath(cfg.path || cfg.file || cfg.relativePath, cfg.workspaceRoot || cfg.workspace_root);
     if (!fs.existsSync(abs)) return { exists: false, path: normalizeRelPath(cfg.path || cfg.file || cfg.relativePath) };
     const stat = fs.statSync(abs);
     if (!stat.isFile()) return { exists: false, path: normalizeRelPath(cfg.path || cfg.file || cfg.relativePath), error: 'not_a_file' };
@@ -89,7 +90,9 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
   if (watch.target.type === 'task') {
     const taskId = String(cfg.taskId || cfg.task_id || '').trim();
     if (!taskId) return { exists: false, error: 'task_id_required' };
-    const task = loadTask(taskId);
+    const task = loadTask(taskId) || listTasks()
+      .filter((candidate) => candidate.scheduleId === taskId)
+      .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
     if (!task) return { exists: false, taskId };
     const plan = Array.isArray(task.plan) ? task.plan : [];
     const currentStepIndex = Number.isFinite(Number(task.currentStepIndex)) ? Number(task.currentStepIndex) : 0;
@@ -105,7 +108,9 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
       }));
     return {
       exists: true,
-      taskId,
+      taskId: task.id,
+      watchedId: taskId,
+      scheduleId: task.scheduleId || null,
       status: task.status,
       finalSummary: task.finalSummary || '',
       completedAt: task.completedAt,
@@ -132,7 +137,8 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
   if (watch.target.type === 'scheduled_job') {
     const jobId = String(cfg.jobId || cfg.job_id || '').trim();
     if (!jobId) return { exists: false, error: 'job_id_required' };
-    const job = cronScheduler?.getJobs?.().find((j: any) => String(j?.id || '') === jobId);
+    const job = cronScheduler?.getJobs?.().find((j: any) => String(j?.id || '') === jobId)
+      || findArchivedScheduledJob(jobId);
     if (!job) return { exists: false, jobId };
     return {
       exists: true,
@@ -148,7 +154,7 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
   }
 
   if (watch.target.type === 'event_queue') {
-    const workspaceRoot = path.resolve(getConfig().getWorkspacePath());
+    const workspaceRoot = path.resolve(String(cfg.workspaceRoot || cfg.workspace_root || getConfig().getWorkspacePath()));
     const queuePath = path.join(workspaceRoot, 'events', 'pending.json');
     if (!fs.existsSync(queuePath)) return { exists: false, path: 'events/pending.json' };
     const parsed = JSON.parse(fs.readFileSync(queuePath, 'utf-8'));
@@ -185,6 +191,8 @@ function hasChanged(watch: InternalWatch, obs: Observation): boolean {
   if (Number.isFinite(Number(prev.mtimeMs)) && Number.isFinite(Number(obs.mtimeMs)) && Number(prev.mtimeMs) !== Number(obs.mtimeMs)) return true;
   if (prev.lastRun && obs.lastRun && prev.lastRun !== obs.lastRun) return true;
   if (prev.status && obs.status && prev.status !== obs.status) return true;
+  if (Number.isFinite(Number(prev.currentStepIndex)) && Number.isFinite(Number(obs.currentStepIndex)) && Number(prev.currentStepIndex) !== Number(obs.currentStepIndex)) return true;
+  if (Number.isFinite(Number(prev.completedSteps)) && Number.isFinite(Number(obs.completedSteps)) && Number(prev.completedSteps) !== Number(obs.completedSteps)) return true;
   return false;
 }
 
@@ -203,6 +211,9 @@ export function internalWatchMatches(watch: InternalWatch, obs: Observation): bo
   }
 
   if (watch.target.type === 'task') {
+    if (mode === 'changes' || mode === 'milestones') {
+      return !!obs.exists && hasChanged(watch, obs) && textChecksPass(condition, obs);
+    }
     const statuses = Array.isArray(condition.terminalStatuses) && condition.terminalStatuses.length
       ? new Set(condition.terminalStatuses.map((s) => String(s)))
       : TERMINAL_TASK_STATUSES;
@@ -236,6 +247,29 @@ function renderInstruction(template: string, watch: InternalWatch, obs: Observat
     observation_json: JSON.stringify({ ...obs, text: obs.text ? obs.text.slice(0, 2000) : undefined }, null, 2),
   };
   return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) => replacements[key] ?? '');
+}
+
+export function refreshInternalWatchObservation(watch: InternalWatch, cronScheduler?: any): InternalWatch {
+  if (watch.status !== 'active') return watch;
+  try {
+    const obs = watch.pendingMatchObservation || observeInternalWatchTarget(watch, cronScheduler);
+    const matched = !!watch.pendingMatchObservation || internalWatchMatches(watch, obs);
+    const compactObservation = { ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined };
+    return updateInternalWatch(watch.id, {
+      lastCheckedAt: new Date().toISOString(),
+      lastObservation: compactObservation,
+      error: undefined,
+      ...(matched ? {
+        pendingMatchObservation: { ...obs, text: obs.text ? String(obs.text).slice(0, 20_000) : undefined },
+        matchPendingAt: watch.matchPendingAt || new Date().toISOString(),
+      } : {}),
+    }) || watch;
+  } catch (err: any) {
+    return updateInternalWatch(watch.id, {
+      lastCheckedAt: new Date().toISOString(),
+      error: String(err?.message || err),
+    }) || watch;
+  }
 }
 
 function isToolLimitedSessionId(sessionId: string): boolean {
@@ -294,16 +328,26 @@ export class InternalWatchRunner {
       if (this.runningWatchIds.has(watch.id)) continue;
       try {
         if (new Date(watch.expiresAt).getTime() <= now) {
-          await this.fireTimeout(watch);
+          this.fireTimeout(watch).catch((err) => {
+            updateInternalWatch(watch.id, { error: String(err?.message || err), lastCheckedAt: new Date().toISOString() });
+          });
           continue;
         }
-        const obs = observeInternalWatchTarget(watch, this.cronScheduler);
-        const matched = internalWatchMatches(watch, obs);
+        const pendingObservation = watch.pendingMatchObservation;
+        const obs = pendingObservation || observeInternalWatchTarget(watch, this.cronScheduler);
+        const matched = !!pendingObservation || internalWatchMatches(watch, obs);
         if (matched && !isModelBusy()) {
           updateInternalWatch(watch.id, { lastCheckedAt: new Date().toISOString() });
-          await this.fireMatch(watch, obs);
+          this.fireMatch(watch, obs).catch((err) => {
+            updateInternalWatch(watch.id, { error: String(err?.message || err), lastCheckedAt: new Date().toISOString() });
+          });
         } else if (matched) {
-          updateInternalWatch(watch.id, { lastCheckedAt: new Date().toISOString() });
+          updateInternalWatch(watch.id, {
+            lastCheckedAt: new Date().toISOString(),
+            lastObservation: { ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined },
+            pendingMatchObservation: { ...obs, text: obs.text ? String(obs.text).slice(0, 20_000) : undefined },
+            matchPendingAt: watch.matchPendingAt || new Date().toISOString(),
+          });
           const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
           this.broadcast({ type: 'internal_watch_waiting', watchId: watch.id, watch, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
         } else {
@@ -336,9 +380,37 @@ export class InternalWatchRunner {
         firedCount,
         matchedAt: new Date().toISOString(),
         completedAt: terminal ? new Date().toISOString() : undefined,
+        lastObservation: { ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined },
+        pendingMatchObservation: undefined,
+        matchPendingAt: undefined,
       });
       const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
       this.broadcast({ type: 'internal_watch_matched', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
+      if (watch.target.type === 'task' && /^Voice task watch:/i.test(watch.label)) {
+        const status = String(obs.status || '');
+        const critical = ['complete', 'failed', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input'].includes(status);
+        this.broadcast({
+          type: 'voice_worker_update',
+          id: `voice_watch_${watch.id}_${Date.now()}`,
+          sessionId: watch.origin.sessionId,
+          taskId: String(obs.taskId || watch.target.config?.taskId || ''),
+          title: String(obs.title || watch.label.replace(/^Voice task watch:\s*/i, '')),
+          kind: status === 'complete' ? 'complete' : critical ? 'paused' : 'milestone',
+          critical,
+          status,
+          text: status === 'complete'
+            ? `${obs.title || 'The watched task'} completed. ${obs.finalSummary || ''}`
+            : critical
+              ? `${obs.title || 'The watched task'} needs attention. Status: ${status}.`
+              : `${obs.title || 'The watched task'} reached ${obs.completedSteps || 0} of ${obs.totalSteps || 0} completed steps. ${obs.currentStep?.description ? `It is now working on ${obs.currentStep.description}.` : ''}`,
+          currentStep: String(obs.currentStep?.description || ''),
+          completedSteps: [],
+          recentActivity: [],
+          finalResult: String(obs.finalSummary || ''),
+          timestamp: Date.now(),
+          watchId: watch.id,
+        });
+      }
       await this.deliver(watch, obs, 'match', watch.onMatch);
     } finally {
       setModelBusy(false);

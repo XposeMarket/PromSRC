@@ -242,10 +242,10 @@ export class OllamaAdapter implements LLMProvider {
     await this.client.pull({ model: modelName, stream: false });
   }
 
-  private buildThinkCandidates(requested?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none') {
+  private buildThinkCandidates(requested?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none') {
     // Ollama doesn't support Anthropic/Codex higher tiers — fall back to high.
     const normalized: boolean | 'high' | 'medium' | 'low' | undefined =
-      requested === 'max' || requested === 'extra_high' || requested === 'xhigh'
+      requested === 'ultra' || requested === 'max' || requested === 'extra_high' || requested === 'xhigh'
         ? 'high'
         : requested === 'minimal'
           ? 'low'

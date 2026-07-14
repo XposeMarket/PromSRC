@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "version": "1.0.0",
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [],
+  "id": "revenue-manager",
+  "name": "revenue-manager",
+  "description": "Analyze and design pricing, packaging, monetization, revenue optimization, demand segmentation, discounting, and revenue experiments. Use only when the user explicitly requests revenue or pricing strategy; do not use for bookkeeping, generic financial analysis, or unsupported dynamic-pricing decisions.",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "design a pricing strategy",
+    "test willingness to pay",
+    "optimize product pricing",
+    "build packaging tiers",
+    "analyze discount policy",
+    "model revenue optimization"
+  ],
+  "implicitInvocation": false,
+  "lifecycle": "active"
+}

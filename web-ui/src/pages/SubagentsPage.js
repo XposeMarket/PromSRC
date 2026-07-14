@@ -2,7 +2,7 @@
  * SubagentsPage.js — Standalone subagent management
  *
  * Shows all standalone (non-team) subagents in a card grid.
- * Click an agent to open a detail panel with Overview, System Prompt, Runs, and Chat tabs.
+ * Click an agent to open a detail panel with Overview, AGENT.md, Runs, and Chat tabs.
  */
 
 import { api } from '../api.js';
@@ -10,6 +10,14 @@ import { escHtml, renderMd, bgtToast, timeAgo, showToast } from '../utils.js';
 import { wsEventBus } from '../ws.js';
 import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
 import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
+import {
+  applyToolActivityEvent,
+  coalesceToolActivityEntries,
+  installToolActivityExpansionPersistence,
+  renderToolActivityEntry,
+  toolActivitySummary,
+} from '../tool-activity.js';
+installToolActivityExpansionPersistence();
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let subagentsData = [];          // All standalone agents (not team members)
@@ -888,14 +896,14 @@ function pushSubagentProgressLine(line, state = subagentStreamingState) {
   state.progressLines = lines;
 }
 
-function addSubagentProcessEntry(type, content, extra = undefined, state = subagentStreamingState) {
+function addSubagentProcessEntry(type, content, extra = undefined, state = subagentStreamingState, includeLiveTrace = true) {
   if (!state) return;
   if (!Array.isArray(state.processEntries)) state.processEntries = [];
   state.processEntries.push(newSubagentProcessEntry(type, content, extra));
-  appendSubagentLiveTrace(state, type, content);
+  if (includeLiveTrace) appendSubagentLiveTrace(state, type, content, { extra });
 }
 
-function appendSubagentLiveTrace(state, type, text, { append = false } = {}) {
+function appendSubagentLiveTrace(state, type, text, { append = false, extra = null } = {}) {
   if (!state) return;
   const content = String(text || '');
   if (!content) return;
@@ -914,7 +922,14 @@ function appendSubagentLiveTrace(state, type, text, { append = false } = {}) {
     type: normalizedType,
     text: trimmed,
     ts: new Date().toLocaleTimeString(),
+    ...(extra && typeof extra === 'object' ? { extra } : {}),
   });
+}
+
+function applySubagentToolActivity(state, phase, event) {
+  if (!state) return;
+  if (!Array.isArray(state.liveTraceEntries)) state.liveTraceEntries = [];
+  applyToolActivityEvent(state.liveTraceEntries, phase, event);
 }
 
 function moveSubagentVisibleAnswerIntoWorkflowTrace(state) {
@@ -969,9 +984,19 @@ function subagentWorkflowTraceEntriesForMessage(message) {
   const finalText = String(message?.content || '').replace(/\s+/g, ' ').trim();
   const out = [];
   const seen = new Set();
-  const add = (entry) => {
+  const liveSources = [
+    ...(Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : []),
+    ...(Array.isArray(message?.metadata?.liveTraceEntries) ? message.metadata.liveTraceEntries : []),
+  ];
+  const structuredActions = new Set(liveSources.map((entry) => String(entry?.activity?.action || '').trim()).filter(Boolean));
+  const structuredCallIds = new Set(liveSources.map((entry) => String(entry?.activity?.callId || '').trim()).filter(Boolean));
+  const add = (entry, fromProcess = false) => {
     const normalized = normalizeSubagentTraceEntry(entry, finalText);
     if (!normalized || isSubagentPreparedTraceEntry(normalized)) return;
+    const action = String(normalized?.extra?.action || normalized?.extra?.toolName || normalized.action || '').trim();
+    const callId = String(normalized?.extra?.toolCallId || normalized?.extra?.tool_call_id || normalized.toolCallId || '').trim();
+    if (fromProcess && action && (structuredActions.has(action) || (callId && structuredCallIds.has(callId)))
+      && ['tool', 'skill', 'result', 'error', 'info', 'progress'].includes(String(normalized.type || '').toLowerCase())) return;
     const key = `${normalized.type}|${String(normalized.text || '').replace(/\s+/g, ' ').trim()}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -979,18 +1004,19 @@ function subagentWorkflowTraceEntriesForMessage(message) {
   };
   (Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : []).forEach(add);
   (Array.isArray(message?.metadata?.liveTraceEntries) ? message.metadata.liveTraceEntries : []).forEach(add);
-  (Array.isArray(message?.processEntries) ? message.processEntries : []).forEach(add);
-  (Array.isArray(message?.metadata?.processEntries) ? message.metadata.processEntries : []).forEach(add);
+  (Array.isArray(message?.processEntries) ? message.processEntries : []).forEach((entry) => add(entry, true));
+  (Array.isArray(message?.metadata?.processEntries) ? message.metadata.processEntries : []).forEach((entry) => add(entry, true));
   return out;
 }
 
 function visibleSubagentTraceEntries(entries) {
-  return (Array.isArray(entries) ? entries : [])
+  return coalesceToolActivityEntries(entries)
     .map((entry) => normalizeSubagentTraceEntry(entry))
     .filter((entry) => entry && !isSubagentPreparedTraceEntry(entry) && String(entry.text || '').trim());
 }
 
 function renderSubagentTraceEntry(entry) {
+  if (entry?.activity) return renderToolActivityEntry(entry, escHtml);
   const type = String(entry?.type || 'info').toLowerCase();
   const text = String(entry?.text || entry?.content || '').trim();
   if (type === 'preamble' || type === 'think' || type === 'assistant') {
@@ -1224,6 +1250,8 @@ function subagentTraceLogicalGroupText(calls) {
 }
 
 function subagentTraceToolSummary(entries) {
+  const structured = toolActivitySummary(entries);
+  if (structured) return structured;
   const calls = subagentTraceLogicalTools(entries);
   const groups = new Map();
   calls.forEach((call) => {
@@ -1238,6 +1266,8 @@ function subagentTraceToolSummary(entries) {
 }
 
 function subagentTraceCurrentToolLabel(entries) {
+  const structured = toolActivitySummary(entries, { live: true });
+  if (structured) return structured;
   const calls = subagentTraceLogicalTools(entries);
   const call = calls[calls.length - 1];
   if (call) {
@@ -1263,12 +1293,15 @@ function renderSubagentGroupedTrace(entries, { streaming = false } = {}) {
     const isLiveCurrent = streaming && index === groups.length - 1;
     const summary = isLiveCurrent ? subagentTraceCurrentToolLabel(group.entries) : subagentTraceToolSummary(group.entries);
     const summaryKey = subagentTraceSummaryKey(summary);
-    const eventCount = visibleSubagentTraceEntries(group.entries).length;
+    const visibleEntries = visibleSubagentTraceEntries(group.entries);
+    const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
+    const itemCount = callCount || visibleEntries.length;
+    const itemLabel = callCount ? 'call' : 'item';
     return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''}>
       <summary class="live-turn-tool-summary">
         <span class="live-turn-tool-icon" aria-hidden="true">›</span>
         <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
-        <em>${eventCount} event${eventCount === 1 ? '' : 's'}</em>
+        <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
       <div class="live-turn-tool-body">${renderSubagentTraceList(group.entries)}</div>
     </details>`;
@@ -1645,7 +1678,7 @@ function renderSubagentBoard(agentId) {
   body.innerHTML = `
     <div style="display:flex;border-bottom:1px solid var(--line);flex-shrink:0;overflow-x:auto;scrollbar-width:none">
       ${['overview','systemprompt','memory','heartbeat','runs','chat'].map(tab => {
-        const labels = { overview:'Overview', systemprompt:'System Prompt', memory:'Memory', heartbeat:'Heartbeat', runs:`Runs (${subagentRuns.length})`, chat:'Chat' };
+        const labels = { overview:'Overview', systemprompt:'AGENT.md', memory:'Memory', heartbeat:'Heartbeat', runs:`Runs (${subagentRuns.length})`, chat:'Chat' };
         const isActive = tab === subagentDetailTab;
         return `<button onclick="switchSubagentTab('${tab}','${escHtml(agentId)}')" style="padding:10px 14px;font-size:12px;font-weight:${isActive?'700':'500'};border:none;background:none;cursor:pointer;white-space:nowrap;color:${isActive?'var(--brand)':'var(--muted)'};border-bottom:2px solid ${isActive?'var(--brand)':'transparent'};margin-bottom:-1px;transition:all 0.15s">${labels[tab]}</button>`;
       }).join('')}
@@ -1680,7 +1713,7 @@ async function switchSubagentTab(tab, agentId) {
 
   if (tab === 'systemprompt' && !subagentSystemPrompt) {
     try {
-      const d = await api(`/api/agents/${encodeURIComponent(agentId)}/system-prompt-md`);
+      const d = await api(`/api/agents/${encodeURIComponent(agentId)}/agent-md`);
       subagentSystemPrompt = d.content || '';
     } catch {}
   }
@@ -1895,12 +1928,12 @@ function renderSubagentSystemPromptTab(agent) {
     <div style="display:flex;flex-direction:column;gap:10px;height:100%">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div>
-          <div style="font-size:13px;font-weight:800">System Prompt</div>
+          <div style="font-size:13px;font-weight:800">AGENT.md</div>
           <div style="font-size:11px;color:var(--muted);margin-top:2px">Defines this agent's persona, goals, and constraints</div>
         </div>
         <button onclick="saveSubagentSystemPrompt('${escHtml(agent.id)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer">Save</button>
       </div>
-      <textarea id="subagent-system-prompt-editor" style="flex:1;min-height:300px;resize:vertical;border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel-2);color:var(--text);line-height:1.6;outline:none" placeholder="Enter system prompt for this agent…">${escHtml(subagentSystemPrompt)}</textarea>
+      <textarea id="subagent-system-prompt-editor" style="flex:1;min-height:300px;resize:vertical;border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel-2);color:var(--text);line-height:1.6;outline:none" placeholder="Enter this agent's identity and operating instructions…">${escHtml(subagentSystemPrompt)}</textarea>
     </div>`;
 }
 
@@ -2526,9 +2559,11 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
             addSubagentProcessEntry(
               'tool',
               `${stepPrefix}${action}${argsPreview ? ` ${argsPreview}` : ''}`,
-              (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
+              { action, args: args || {}, ...(args || {}), toolCallId: event.toolCallId || event.tool_call_id, ...(event.actor ? { actor: event.actor } : {}) },
               streamState,
+              false,
             );
+            applySubagentToolActivity(streamState, 'call', event);
             refreshSubagentStreamingUI(agentId, true);
             break;
           }
@@ -2538,16 +2573,18 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
             const stepNum = Number(event.stepNum || 0);
             const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
             const text = String(event.result || '').trim();
-            const ok = event.error === true ? false : !/^ERROR:/i.test(text);
+            const ok = event.error !== true && event.ok !== false;
             moveSubagentVisibleAnswerIntoWorkflowTrace(streamState);
             streamState.toolActivityStarted = true;
             pushSubagentProgressLine(`${stepPrefix}${action} ${ok ? 'complete' : 'failed'}`, streamState);
             addSubagentProcessEntry(
               ok ? 'result' : 'error',
               `${stepPrefix}${action} => ${text || '(no output)'}`,
-              event.actor ? { actor: event.actor } : undefined,
+              { ...(event.actor ? { actor: event.actor } : {}), action, toolCallId: event.toolCallId || event.tool_call_id, error: !ok },
               streamState,
+              false,
             );
+            applySubagentToolActivity(streamState, 'result', { ...event, error: !ok });
             refreshSubagentStreamingUI(agentId, true);
             break;
           }
@@ -2559,7 +2596,8 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
             moveSubagentVisibleAnswerIntoWorkflowTrace(streamState);
             streamState.toolActivityStarted = true;
             pushSubagentProgressLine(`${action}: ${progressMsg}`, streamState);
-            addSubagentProcessEntry('info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined, streamState);
+            addSubagentProcessEntry('info', `${action}: ${progressMsg}`, { action, event: 'tool_progress', message: progressMsg, toolCallId: event.toolCallId || event.tool_call_id, ...(event.actor ? { actor: event.actor } : {}) }, streamState, false);
+            applySubagentToolActivity(streamState, 'progress', event);
             refreshSubagentStreamingUI(agentId, true);
             break;
           }
@@ -2680,12 +2718,12 @@ async function saveSubagentSystemPrompt(agentId) {
   if (!editor) return;
   const content = editor.value;
   try {
-    await api(`/api/agents/${encodeURIComponent(agentId)}/system-prompt-md`, {
+    await api(`/api/agents/${encodeURIComponent(agentId)}/agent-md`, {
       method: 'PUT',
       body: JSON.stringify({ content }),
     });
     subagentSystemPrompt = content;
-    showToast('Saved', 'System prompt saved', 'success');
+    showToast('Saved', 'AGENT.md saved', 'success');
   } catch (err) {
     showToast('Error', 'Failed to save: ' + err.message, 'error');
   }
@@ -2945,7 +2983,7 @@ async function refreshSubagentDetail(agentId) {
   await loadSubagentBoardData(agentId);
   // Reload current tab data too
   if (subagentDetailTab === 'systemprompt') {
-    try { const d = await api(`/api/agents/${encodeURIComponent(agentId)}/system-prompt-md`); subagentSystemPrompt = d.content || ''; } catch {}
+    try { const d = await api(`/api/agents/${encodeURIComponent(agentId)}/agent-md`); subagentSystemPrompt = d.content || ''; } catch {}
   }
   if (subagentDetailTab === 'memory') {
     try { const d = await api(`/api/agents/${encodeURIComponent(agentId)}/workspace/notes`); subagentMemoryNotes = d.notes || ''; } catch {}
@@ -3198,9 +3236,11 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
         addSubagentProcessEntry(
           'tool',
           `${stepPrefix}${action}${argsPreview ? ` ${argsPreview}` : ''}`,
-          (args || event.actor) ? { ...(args || {}), ...(event.actor ? { actor: event.actor } : {}) } : undefined,
+          { action, args: args || {}, ...(args || {}), toolCallId: event.toolCallId || event.tool_call_id, ...(event.actor ? { actor: event.actor } : {}) },
           streamState,
+          false,
         );
+        applySubagentToolActivity(streamState, 'call', event);
       }
       break;
     }
@@ -3209,16 +3249,18 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
       const stepNum = Number(event.stepNum || 0);
       const stepPrefix = stepNum ? `Step ${stepNum}: ` : '';
       const text = String(event.result || '').trim();
-      const ok = event.error === true ? false : !/^ERROR:/i.test(text);
+      const ok = event.error !== true && event.ok !== false;
       moveSubagentVisibleAnswerIntoWorkflowTrace(streamState);
       streamState.toolActivityStarted = true;
       pushSubagentProgressLine(`${stepPrefix}${action} ${ok ? 'complete' : 'failed'}`, streamState);
       addSubagentProcessEntry(
         ok ? 'result' : 'error',
         `${stepPrefix}${action} => ${text || '(no output)'}`,
-        event.actor ? { actor: event.actor } : undefined,
+        { ...(event.actor ? { actor: event.actor } : {}), action, toolCallId: event.toolCallId || event.tool_call_id, error: !ok },
         streamState,
+        false,
       );
+      applySubagentToolActivity(streamState, 'result', { ...event, error: !ok });
       break;
     }
     case 'tool_progress': {
@@ -3228,7 +3270,8 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
         moveSubagentVisibleAnswerIntoWorkflowTrace(streamState);
         streamState.toolActivityStarted = true;
         pushSubagentProgressLine(`${action}: ${progressMsg}`, streamState);
-        addSubagentProcessEntry('info', `${action}: ${progressMsg}`, event.actor ? { actor: event.actor } : undefined, streamState);
+        addSubagentProcessEntry('info', `${action}: ${progressMsg}`, { action, event: 'tool_progress', message: progressMsg, toolCallId: event.toolCallId || event.tool_call_id, ...(event.actor ? { actor: event.actor } : {}) }, streamState, false);
+        applySubagentToolActivity(streamState, 'progress', event);
       }
       break;
     }

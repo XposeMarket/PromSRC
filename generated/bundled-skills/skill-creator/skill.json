@@ -1,26 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "skill-creator",
-  "name": "Skill Creator",
-  "description": "Use this skill when the user asks to create, update, package, repair, import, export, or improve a Prometheus skill, skill trigger set, skill description, bundled resources, examples, templates, schemas, or reusable workflow playbook. It ensures skills are discoverable and reusable.",
-  "version": "1.0.0",
+  "name": "skill-creator",
+  "description": "Design or revise a focused Prometheus skill when the user explicitly asks to create, update, improve, review, or troubleshoot a skill. Route inferred reusable lessons through candidate submission and Brain Curator review; do not mutate skills after ordinary workflows.",
+  "version": "4.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
+    "improve this skill",
+    "add a skill",
+    "reusable playbook",
+    "skill description",
+    "skill triggers",
+    "skill metadata",
+    "package skill",
+    "skill catalog",
     "create skill",
     "update skill",
     "repair skill",
-    "skill triggers",
-    "skill description",
-    "skill metadata",
-    "skill bundle",
-    "package skill",
-    "import skill",
-    "export skill",
-    "reusable playbook",
-    "workflow skill",
-    "skill catalog",
-    "add a skill",
-    "improve this skill"
+    "skill bundle"
   ],
   "categories": [
     "skills",
@@ -36,11 +33,7 @@
     "skill_repair_metadata"
   ],
   "permissions": {},
-  "resources": [
-    {
-      "path": "references/workflows/skill-creator-2026-06-13.md",
-      "type": "doc",
-      "description": "Add workflow recipe to skill-creator"
-    }
-  ]
+  "resources": [],
+  "implicitInvocation": false,
+  "lifecycle": "active"
 }

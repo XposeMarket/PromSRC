@@ -109,3 +109,12 @@ Browser-vs-web routing after the 2026-06-05 batch research update:
 ## 9A) Session hygiene (browser_close)
 
 After a standalone browser task completes, call `browser_close` unless the user asked to keep the browser open for immediate follow-up. Reduces CDP port conflicts and wedged Chrome profiles. Migrated from workspace SOUL.md 2026-07-07; skill resource: `browser-automation-playbook` → `references/session-hygiene-browser-close.md`.
+
+
+Browser hardening additions (2026-07-13):
+
+- `browser_fill` selects the native value setter from the actual element type (`HTMLInputElement` vs `HTMLTextAreaElement`) and native input/textarea fills do not pay the former fixed 800ms sleep.
+- keyboard input normalizes common aliases such as `Left` → `ArrowLeft`, `Esc` → `Escape`, and `Cmd` → `Meta`, including modifier combinations.
+- `browser_observe(action:"page_text")` supports `query`, `max_chars`, and `max_lines`; output whitespace is normalized and defaults remain bounded.
+- console inspection bounds message and location URLs; `max_message_chars` controls the per-entry cap.
+- smoke-test steps accept both legacy nested shapes and canonical `{ action: "assertText", ... }` / `{ action: "click", ... }` shapes.

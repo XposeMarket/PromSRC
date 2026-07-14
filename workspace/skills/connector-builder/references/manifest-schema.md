@@ -20,6 +20,10 @@ rejected by the install endpoint with a precise error. Fields:
 | `setup.authType` | yes | `"api_key"` \| `"oauth"` \| `"browser_session"` \| `"none"` |
 | `setup.fields` | for api_key | credential inputs the user fills in |
 | `setup.docsUrl` / `setup.docsHint` | no | help the user find their key |
+| `connection.aliases` | MCP/connection plugins | natural service names resolved by `connection_ops` |
+| `connection.domains` | no | official provider hosts used for high-confidence identity matching |
+| `connection.strategies` | MCP/connection plugins | adapter, auth, capabilities, verification, and adapter config |
+| `connection.toolPolicy` | recommended | default exposure and unknown-tool behavior |
 
 ## `setup.fields` entry
 

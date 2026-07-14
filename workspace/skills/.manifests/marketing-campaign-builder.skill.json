@@ -1,25 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when planning, writing, or structuring marketing campaigns, launch campaigns, content calendars, email/social/ad sequences, campaign positioning, offers, funnels, and campaign assets.",
+  "description": "Plan an integrated marketing campaign with audience, positioning, channel roles, content, timeline, budget assumptions, measurement, and launch operations. Use for campaign systems; do not use for one standalone email, article, social post, or brand-strategy exercise.",
   "triggers": [
-    "marketing campaign",
-    "launch campaign",
-    "content calendar",
-    "campaign plan",
-    "ad campaign",
-    "email campaign",
-    "social campaign",
-    "funnel plan",
-    "campaign assets",
-    "offer sequence",
-    "campaign messaging",
+    "build a campaign",
     "go-to-market campaign",
     "promotional campaign",
-    "nurture campaign",
+    "campaign messaging",
     "campaign calendar",
-    "marketing plan",
-    "build a campaign"
+    "content calendar",
+    "nurture campaign",
+    "launch campaign",
+    "campaign assets",
+    "offer sequence",
+    "campaign plan",
+    "ad campaign"
   ],
   "categories": [
     "marketing",
@@ -32,6 +27,7 @@
     "web_search"
   ],
   "lifecycle": "active",
-  "name": "Marketing Campaign Builder",
-  "id": "marketing-campaign-builder"
+  "name": "marketing-campaign-builder",
+  "id": "marketing-campaign-builder",
+  "implicitInvocation": true
 }

@@ -20,6 +20,8 @@ import type { RuntimeVisionAttachment } from '../chat/attachment-context';
 import type { SkillsManager } from '../skills-runtime/skills-manager';
 import { installAgentProfilePack, isMarketplaceImportedAgent, previewAgentProfilePack } from '../marketplace/agent-profile-packs';
 import { deleteAgentCompletely } from '../agents-runtime/entity-delete';
+import { AGENT_PROMPT_FILENAME, readAgentPromptFile, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
+import { setRuntimeActorContext } from '../runtime-actor.js';
 
 type DiscordChannelConfig = any;
 type WhatsAppChannelConfig = any;
@@ -700,6 +702,7 @@ function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   if (Array.isArray(raw?.constraints)) normalized.constraints = raw.constraints;
   if (raw?.system_instructions !== undefined) normalized.system_instructions = String(raw.system_instructions || '').trim();
   if (raw?.success_criteria !== undefined) normalized.success_criteria = String(raw.success_criteria || '').trim();
+  if (raw?.teamId !== undefined) normalized.teamId = String(raw.teamId || '').trim();
   // Preserve isTeamManager flag
   if (typeof raw?.isTeamManager === 'boolean') normalized.isTeamManager = raw.isTeamManager;
   return normalized;
@@ -758,20 +761,7 @@ function getChannelSubagentChatSessionId(channel: string, accountId: string, age
 }
 
 function loadAgentIdentityPrompt(agentWorkspace: string): string {
-  const candidates = [
-    path.join(agentWorkspace, 'system_prompt.md'),
-    path.join(agentWorkspace, 'HEARTBEAT.md'),
-  ];
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue;
-      const content = fs.readFileSync(candidate, 'utf-8').trim();
-      if (content) return content;
-    } catch {
-      // Ignore unreadable prompt file and keep falling back.
-    }
-  }
-  return '';
+  return String(readAgentPromptFile(agentWorkspace, { migrateLegacy: true })?.content || '').trim();
 }
 
 function buildSubagentCallerContext(agentId: string, agent: any, mainWorkspace: string, artifactWorkspace: string): string {
@@ -958,6 +948,21 @@ async function runSubagentChatTurn(
     buildSubagentCallerContext(agentId, agent, mainWorkspace, artifactWorkspace),
     options?.callerContextExtra,
   ].filter(Boolean).join('\n\n');
+  const managerTeam = isManager
+    ? allTeams.find((team: any) => String(team?.managerAgentId || '').trim() === agentId || String((agent as any)?.teamId || '').trim() === team.id)
+    : null;
+  setRuntimeActorContext(sessionId, {
+    kind: isManager ? 'manager' : 'agent',
+    surface: 'direct_chat',
+    agentId,
+    displayName: String(agent?.identity?.displayName || agent?.name || agentId),
+    teamId: managerTeam?.id,
+    teamName: managerTeam?.name,
+    identityRoot: artifactWorkspace,
+    memoryRoot: artifactWorkspace,
+    executionRoot: mainWorkspace,
+    allowedWorkPaths: [mainWorkspace, artifactWorkspace],
+  });
   const abortSignal = externalAbortSignal || { aborted: false };
   const baseEmit = sendSSE || (() => {});
 
@@ -1804,9 +1809,9 @@ router.get('/api/agents/:id/agents-md', (req, res) => {
     return;
   }
   const workspace = resolveAgentWorkspaceSafe(agent);
-  fs.mkdirSync(workspace, { recursive: true });
-  const filePath = path.join(workspace, 'AGENTS.md');
-  const content = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
+  const prompt = readAgentPromptFile(workspace, { migrateLegacy: true });
+  const filePath = prompt?.path || path.join(workspace, AGENT_PROMPT_FILENAME);
+  const content = prompt?.content || '';
   res.json({ success: true, agentId, path: filePath, content });
 });
 
@@ -1819,9 +1824,7 @@ router.put('/api/agents/:id/agents-md', (req, res) => {
   }
   const content = String(req.body?.content || '');
   const workspace = resolveAgentWorkspaceSafe(agent);
-  fs.mkdirSync(workspace, { recursive: true });
-  const filePath = path.join(workspace, 'AGENTS.md');
-  fs.writeFileSync(filePath, content, 'utf-8');
+  const filePath = writeAgentPromptFile(workspace, content);
   res.json({ success: true, path: filePath });
 });
 
@@ -1850,28 +1853,33 @@ router.put('/api/agents/:id/heartbeat-md', (req, res) => {
   res.json({ success: true, path: filePath });
 });
 
-// Task prompt file for subagents/system-managed agents.
-router.get('/api/agents/:id/system-prompt-md', (req, res) => {
+const getAgentMd = (req: any, res: any) => {
   const agentId = _sanitizeAgentId(req.params.id);
   const agent = getAgentById(agentId);
   if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
   const workspace = resolveAgentWorkspaceSafe(agent);
-  const filePath = path.join(workspace, 'system_prompt.md');
-  const content = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
+  const resolved = readAgentPromptFile(workspace, { migrateLegacy: true });
+  const filePath = resolved?.path || path.join(workspace, AGENT_PROMPT_FILENAME);
+  const content = resolved?.content || '';
   res.json({ success: true, agentId, path: filePath, content });
-});
+};
 
-router.put('/api/agents/:id/system-prompt-md', (req, res) => {
+const putAgentMd = (req: any, res: any) => {
   const agentId = _sanitizeAgentId(req.params.id);
   const agent = getAgentById(agentId);
   if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
   const content = String(req.body?.content || '');
   const workspace = resolveAgentWorkspaceSafe(agent);
-  const filePath = path.join(workspace, 'system_prompt.md');
-  fs.mkdirSync(workspace, { recursive: true });
-  fs.writeFileSync(filePath, content, 'utf-8');
+  const filePath = writeAgentPromptFile(workspace, content);
   res.json({ success: true, path: filePath });
-});
+};
+
+// Canonical per-agent identity prompt API.
+router.get('/api/agents/:id/agent-md', getAgentMd);
+router.put('/api/agents/:id/agent-md', putAgentMd);
+// Backward-compatible aliases for older desktop/mobile clients.
+router.get('/api/agents/:id/system-prompt-md', getAgentMd);
+router.put('/api/agents/:id/system-prompt-md', putAgentMd);
 
 // GET /api/agents/:id/subagent-config — read src_read_access + can_propose from workspace config.json
 router.get('/api/agents/:id/subagent-config', (req, res) => {

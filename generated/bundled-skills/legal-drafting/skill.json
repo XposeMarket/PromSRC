@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "version": "1.0.0",
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [],
+  "id": "legal-drafting",
+  "name": "legal-drafting",
+  "description": "Draft, review, explain, or revise legal-document language such as NDAs, service agreements, terms, policies, clauses, and negotiation notes. Use when legal text is the direct artifact; do not use for general business writing or claim jurisdiction-specific certainty without current authoritative support.",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "review a service agreement",
+    "revise a contract clause",
+    "explain this legal document",
+    "write a privacy policy",
+    "negotiate agreement terms",
+    "draft an nda"
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
+}

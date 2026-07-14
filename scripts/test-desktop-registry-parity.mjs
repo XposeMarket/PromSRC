@@ -1,14 +1,5 @@
 /**
- * test-desktop-registry-parity.mjs
- *
- * Ensures the three desktop-tool surfaces stay in sync:
- *   1. getDesktopToolDefinitions()  — gateway/model-facing schemas
- *   2. allDesktopTools              — ToolRegistry wrappers (Reactor/background)
- *   3. the chat/subagent dispatch switch in subagent-executor.ts
- *
- * If a tool is advertised to the model but not dispatched, or wrapped in one
- * surface but missing from another, this test fails loudly.
- *
+ * Desktop wrapper/handler parity.
  * Run after `npm run build:backend`:
  *   node scripts/test-desktop-registry-parity.mjs
  */
@@ -19,49 +10,72 @@ import path from 'node:path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const importLocal = (rel) => import(pathToFileURL(path.join(repoRoot, rel)).href);
-
-// Tools intentionally NOT mirrored into the ToolRegistry (need live gateway deps).
+const EXPECTED_WRAPPERS = new Set([
+  'desktop_screen',
+  'desktop_apps',
+  'desktop_window',
+  'desktop_input',
+  'desktop_macro',
+  'desktop_background',
+]);
 const REGISTRY_EXCEPTIONS = new Set(['desktop_send_to_telegram']);
 
 let failed = false;
-const fail = (msg) => { failed = true; console.error('FAIL: ' + msg); };
-const pass = (msg) => console.log('PASS: ' + msg);
+const fail = (msg) => { failed = true; console.error(`FAIL: ${msg}`); };
+const pass = (msg) => console.log(`PASS: ${msg}`);
 
-const { getDesktopToolNames, getDesktopToolDefinitions } = await importLocal('dist/gateway/desktop-tools.js');
-const { allDesktopTools } = await importLocal('dist/tools/desktop.js');
-
-const defNames = new Set(getDesktopToolNames());
-const defNamesFromDefs = new Set(getDesktopToolDefinitions().map((d) => d.function?.name));
-const registryNames = new Set(allDesktopTools.map((t) => t.name));
-
-// getDesktopToolNames() must equal the names inside getDesktopToolDefinitions().
-for (const n of defNamesFromDefs) {
-  if (!defNames.has(n)) fail(`getDesktopToolNames() is missing "${n}" present in definitions`);
-}
-if (!failed) pass(`getDesktopToolNames() matches getDesktopToolDefinitions() (${defNames.size} tools)`);
-
-// Parse the dispatch switch for `case 'desktop_*':` labels.
+const desktop = await importLocal('dist/gateway/desktop-tools.js');
+const wrappers = await importLocal('dist/gateway/desktop-wrappers.js');
+const registry = await importLocal('dist/tools/desktop.js');
+const reactorRegistry = await importLocal('dist/tools/registry.js');
+const toolBuilderSrc = readFileSync(path.join(repoRoot, 'src/gateway/tool-builder.ts'), 'utf8');
 const execSrc = readFileSync(path.join(repoRoot, 'src/gateway/agents-runtime/subagent-executor.ts'), 'utf8');
+
+const modelNames = new Set(desktop.getDesktopModelToolNames());
+const modelNamesFromDefs = new Set(desktop.getDesktopModelToolDefinitions().map((d) => d.function?.name));
+const internalNames = new Set(desktop.getDesktopInternalHandlerNames());
+const registryInternalNames = new Set(registry.allDesktopTools.map((t) => t.name));
+const registryWrapperNames = new Set(registry.desktopWrapperTools.map((t) => t.name));
+const reactor = reactorRegistry.getToolRegistry();
+const desktopProfileNames = new Set(reactor.listByProfile('desktop').map((tool) => tool.name).filter((name) => name.startsWith('desktop_')));
+const fullProfileDesktopNames = new Set(reactor.listByProfile('full').map((tool) => tool.name).filter((name) => name.startsWith('desktop_')));
+
+for (const name of EXPECTED_WRAPPERS) {
+  if (!modelNames.has(name)) fail(`main model surface is missing wrapper ${name}`);
+  if (!modelNamesFromDefs.has(name)) fail(`model definitions are missing wrapper ${name}`);
+  if (!registryWrapperNames.has(name)) fail(`Reactor wrapper registry is missing ${name}`);
+}
+for (const name of modelNames) {
+  if (!EXPECTED_WRAPPERS.has(name)) fail(`unexpected model-facing desktop tool ${name}`);
+}
+if (modelNames.size === EXPECTED_WRAPPERS.size && !failed) pass('main gateway and Reactor expose exactly six desktop wrappers');
+for (const profileNames of [desktopProfileNames, fullProfileDesktopNames]) {
+  for (const name of EXPECTED_WRAPPERS) if (!profileNames.has(name)) fail(`Reactor profile is missing ${name}`);
+  for (const name of profileNames) if (!EXPECTED_WRAPPERS.has(name)) fail(`Reactor profile leaked granular tool ${name}`);
+}
+if (!failed) pass('Reactor desktop and full profiles hide every granular desktop handler');
+
 const dispatchNames = new Set(
-  [...execSrc.matchAll(/case '(desktop_[a-z0-9_]+)':/g)].map((m) => m[1]),
+  [...execSrc.matchAll(/case '(desktop_[a-z0-9_]+)':/g)].map((match) => match[1]),
 );
+for (const name of internalNames) {
+  if (!dispatchNames.has(name)) fail(`internal handler ${name} has no dispatch case`);
+  if (!REGISTRY_EXCEPTIONS.has(name) && !registryInternalNames.has(name)) {
+    fail(`internal handler ${name} is missing from the Reactor compatibility registry`);
+  }
+  if (!toolBuilderSrc.includes(`'${name}'`)) fail(`internal handler ${name} is not schema-hidden in tool-builder`);
+}
+for (const name of registryInternalNames) {
+  if (!internalNames.has(name)) fail(`Reactor compatibility tool ${name} has no gateway handler definition`);
+}
 
-// Every advertised tool must be dispatched (except desktop_task which is a removed stub still handled).
-for (const n of defNames) {
-  if (!dispatchNames.has(n)) fail(`tool "${n}" is advertised by getDesktopToolDefinitions() but has no dispatch case in subagent-executor.ts`);
+for (const [wrapperName, actions] of Object.entries(wrappers.DESKTOP_WRAPPER_ACTION_MAP)) {
+  if (!EXPECTED_WRAPPERS.has(wrapperName)) fail(`action map contains unknown wrapper ${wrapperName}`);
+  for (const [action, handler] of Object.entries(actions)) {
+    if (!internalNames.has(handler)) fail(`${wrapperName} action ${action} maps to missing handler ${handler}`);
+  }
 }
-if (!failed) pass(`all ${defNames.size} advertised tools have a dispatch case`);
-
-// Every advertised tool must have a ToolRegistry wrapper (except known exceptions).
-for (const n of defNames) {
-  if (REGISTRY_EXCEPTIONS.has(n)) continue;
-  if (!registryNames.has(n)) fail(`tool "${n}" is advertised but missing from allDesktopTools (src/tools/desktop.ts)`);
-}
-// And no registry wrapper should reference a tool that doesn't exist in defs.
-for (const n of registryNames) {
-  if (!defNames.has(n)) fail(`allDesktopTools exposes "${n}" which is not in getDesktopToolDefinitions()`);
-}
-if (!failed) pass(`ToolRegistry wrappers are in parity with definitions (${registryNames.size} wrappers, ${REGISTRY_EXCEPTIONS.size} known exception)`);
+if (!failed) pass(`${internalNames.size} compatibility handlers and all wrapper actions are registered and dispatchable`);
 
 if (failed) {
   console.error('\nDesktop registry parity FAILED.');

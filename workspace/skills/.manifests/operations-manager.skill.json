@@ -1,25 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when organizing operations, SOPs, recurring workflows, checklists, task ownership, process improvements, team coordination, scheduling, or business/admin execution systems.",
+  "description": "Design or improve operating processes, SOPs, ownership, handoffs, checklists, recurring cadences, controls, and service metrics. Use for operations-system work; do not use for controlling Prometheus runtime tasks or schedules.",
   "triggers": [
-    "operations plan",
-    "SOP",
-    "recurring workflow",
-    "checklist",
-    "process improvement",
-    "assign ownership",
-    "operations manager",
     "organize this process",
-    "operational workflow",
-    "runbook",
-    "task system",
-    "admin workflow",
+    "standard operating procedure",
+    "process improvement",
     "business operations",
+    "operations manager",
     "team coordination",
     "operating cadence",
-    "standard operating procedure",
-    "process map"
+    "assign ownership",
+    "operations plan",
+    "operational workflow",
+    "process map",
+    "recurring workflow"
   ],
   "categories": [
     "operations",
@@ -32,6 +27,7 @@
     "automations"
   ],
   "lifecycle": "active",
-  "name": "Operations Manager",
-  "id": "operations-manager"
+  "name": "operations-manager",
+  "id": "operations-manager",
+  "implicitInvocation": false
 }

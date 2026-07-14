@@ -1,24 +1,17 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when adding, extending, or operating Google Workspace integrations such as Gmail, Drive, Docs, Sheets, Calendar, OAuth scopes, file search, document export, or workspace connector behavior.",
+  "description": "Extend Prometheus Google Workspace connectors for Calendar, Docs, Sheets, Drive, Gmail, or Contacts using OAuth-backed typed tools. Use when implementing or broadening Google Workspace integration; do not invoke for ordinary email, document, or spreadsheet content work.",
+  "implicitInvocation": true,
   "triggers": [
-    "Google Workspace",
-    "Gmail connector",
-    "Google Drive connector",
-    "Google Docs integration",
-    "Google Sheets integration",
-    "Google Calendar",
-    "search Drive files",
-    "export Google Doc",
-    "read Gmail",
-    "Google OAuth scope",
-    "workspace connector",
-    "connect Google account",
-    "Drive file search",
-    "Sheets API",
-    "Docs API",
-    "Calendar event integration"
+    "expand google workspace integration",
+    "google workspace connector",
+    "google calendar connector",
+    "google docs connector",
+    "google sheets connector",
+    "gmail connector setup",
+    "google contacts connector",
+    "drive connector extension"
   ],
   "categories": [
     "google",
@@ -32,5 +25,6 @@
     "integration_admin"
   ],
   "lifecycle": "active",
-  "id": "google-workspace-expansion"
+  "id": "google-workspace-expansion",
+  "name": "google-workspace-expansion"
 }

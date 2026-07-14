@@ -103,6 +103,8 @@ src/**/memory/*.md
 node_modules/
 /dist/
 native/desktop-helper-macos/.build/
+native/desktop-helper-windows/build/
+bin/prometheus-desktop-helper.exe
 *.js.map
 /package/
 *.tgz

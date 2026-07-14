@@ -1,12 +1,37 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "knowledge-import-pipeline",
-  "name": "Knowledge Import Pipeline",
-  "description": "Import external docs, repos, notes, transcripts, and datasets into Prometheus memory, project context, skills, or temporary artifacts without polluting durable memory.",
+  "name": "knowledge-import-pipeline",
+  "description": "Import external documents, repositories, notes, transcripts, or datasets into the appropriate Prometheus memory, project context, skill resource, or temporary artifact. Use for deliberate knowledge ingestion with provenance; do not use for merely reading or summarizing a file.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
-  "triggers": ["import knowledge", "ingest docs", "index notes", "import repo docs", "add to memory"],
-  "categories": ["prometheus", "memory", "knowledge", "ingestion"],
-  "requiredTools": ["advanced_memory", "workspace_write", "web_search", "web_fetch", "web_fetch_batch"],
-  "permissions": { "workspaceRead": true, "workspaceWrite": true, "externalSideEffects": true }
+  "implicitInvocation": true,
+  "triggers": [
+    "import repo docs into prometheus",
+    "add source material to memory",
+    "import knowledge into prometheus",
+    "ingest docs into memory",
+    "index external notes",
+    "transcript knowledge import",
+    "dataset knowledge import"
+  ],
+  "categories": [
+    "prometheus",
+    "memory",
+    "knowledge",
+    "ingestion"
+  ],
+  "requiredTools": [
+    "advanced_memory",
+    "workspace_write",
+    "web_search",
+    "web_fetch",
+    "web_fetch_batch"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": true
+  },
+  "lifecycle": "active"
 }

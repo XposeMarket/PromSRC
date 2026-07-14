@@ -1,25 +1,19 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when adding, operating, testing, or hardening a Prometheus Airtable connector for bases, tables, records, schema inspection, search, export, create/update operations, auth configuration, or Airtable API behavior.",
+  "description": "Build, operate, or harden a schema-aware Airtable connector for bases, tables, fields, record queries, exports, and confirmed writes. Use when a request explicitly concerns Airtable integration or Airtable record operations; do not use for generic database or spreadsheet work.",
+  "implicitInvocation": true,
   "triggers": [
-    "Airtable connector",
-    "connect Airtable",
-    "read Airtable base",
-    "search Airtable records",
-    "Airtable schema",
-    "list Airtable tables",
-    "create Airtable record",
-    "update Airtable record",
-    "export Airtable data",
-    "Airtable API",
-    "Airtable auth",
-    "test Airtable integration",
-    "sync Airtable",
-    "inspect Airtable fields",
-    "Prometheus Airtable tool",
-    "Airtable base id",
-    "Airtable table records"
+    "airtable record search",
+    "airtable base schema",
+    "airtable table schema",
+    "export airtable records",
+    "create airtable record",
+    "update airtable record",
+    "airtable integration",
+    "airtable connector",
+    "connect airtable",
+    "airtable api"
   ],
   "categories": [
     "prometheus",
@@ -34,5 +28,6 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "airtable-connector"
+  "id": "airtable-connector",
+  "name": "airtable-connector"
 }

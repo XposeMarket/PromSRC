@@ -1,24 +1,8 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to record, replay, document, convert, or formalize a workflow into a reusable runbook, checklist, automation recipe, skill, or repeatable process. It captures actual steps, evidence, failures, and recovery paths.",
-  "triggers": [
-    "workflow replay",
-    "runbook recorder",
-    "record workflow",
-    "replay workflow",
-    "create runbook",
-    "document process",
-    "automation recipe",
-    "repeatable workflow",
-    "convert to skill",
-    "save workflow",
-    "process checklist",
-    "workflow template",
-    "capture steps",
-    "reusable runbook",
-    "operational playbook"
-  ],
+  "description": "Deprecated compatibility entry for converting completed sessions into reusable skill instructions. Submit structured Brain candidates and let the Skill Curator cluster, review, and apply durable lessons instead.",
+  "triggers": [],
   "categories": [
     "workflow",
     "documentation",
@@ -29,6 +13,8 @@
     "skill_create",
     "skill_create_bundle"
   ],
-  "lifecycle": "active",
-  "id": "workflow-replay-runbook-recorder"
+  "lifecycle": "deprecated",
+  "id": "workflow-replay-runbook-recorder",
+  "implicitInvocation": false,
+  "name": "workflow-replay-runbook-recorder"
 }

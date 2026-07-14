@@ -1,0 +1,20 @@
+{
+  "ownership": "upstream-managed",
+  "implicitInvocation": false,
+  "status": "ready",
+  "health": {
+    "state": "ready",
+    "reason": "Official skill pinned from heygen-com/hyperframes and restricted to explicit specialist selection by the Creative Director.",
+    "verifiedCapabilities": [
+      "official_upstream_skill"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-11"
+  },
+  "id": "hyperframes-core",
+  "name": "hyperframes-core",
+  "description": "The HyperFrames composition contract — build one renderable project. Use for composition structure, the `data-*` timing attributes, `class=\"clip\"`, tracks, sub-compositions, variables, framework-owned media playback, deterministic-render rules, and validation. Also covers Tailwind projects and the STORYBOARD.md / SCRIPT.md plan formats. Read before writing composition HTML.",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "lifecycle": "active"
+}

@@ -158,7 +158,12 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
             show_result: true,
           });
         };
-        const webFetchResult = await executeWebFetch({ url, max_chars: args.max_chars }, (event) => {
+        const webFetchResult = await executeWebFetch({
+          url,
+          max_chars: args.max_chars,
+          include_media: args.include_media === true,
+          include_thread: args.include_thread === true,
+        }, (event) => {
           switch (event.phase) {
             case 'fetch_complete':
               emitSyntheticToolResult('web_fetch', event.message);
@@ -369,10 +374,15 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
         const toolResult = await executeAnalyzeVideo({
           file_path: String(args.file_path || ''),
           prompt: args.prompt != null ? String(args.prompt) : undefined,
+          analysis_mode: args.analysis_mode != null ? String(args.analysis_mode) as 'quick' | 'detail' | 'both' : undefined,
           sample_count: args.sample_count != null ? Number(args.sample_count) : undefined,
+          quick_sample_count: args.quick_sample_count != null ? Number(args.quick_sample_count) : undefined,
+          detail_frame_budget: args.detail_frame_budget != null ? Number(args.detail_frame_budget) : undefined,
+          max_detail_frames: args.max_detail_frames != null ? Number(args.max_detail_frames) : undefined,
           output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
           extract_audio: args.extract_audio !== false,
           transcribe: args.transcribe !== false,
+          include_raw_probe: args.include_raw_probe === true,
         });
         return {
           name,

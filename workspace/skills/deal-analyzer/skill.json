@@ -2,39 +2,33 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "deal-analyzer",
   "name": "deal-analyzer",
-  "description": "Use this skill when the user asks to analyze a deal, term sheet, acquisition offer, partnership agreement, commercial contract, investment terms, cap table dilution, liquidation preferences, due diligence, LOI, or negotiation leverage. Triggers on phrases like is this a good deal, what should I negotiate, review this term sheet, deal red flags, acquisition offer, partnership agreement, vendor agreement, investment terms, M&A, due diligence, and liquidation waterfall. Use it to classify the deal, surface economic/control risks, identify red flags, and produce negotiation priorities.",
+  "description": "Analyze the economics, obligations, incentives, risks, leverage, and negotiation options in a proposed business deal, offer, term sheet, acquisition, or partnership. Use for decision analysis; use legal-drafting for clause language and financial-model for a full quantitative model.",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "deal analysis",
-    "term sheet",
-    "acquisition offer",
-    "partnership agreement",
-    "deal structure",
-    "investment terms",
-    "red flags",
-    "letter of intent",
-    "loi",
-    "due diligence",
-    "deal review",
-    "commercial contract",
-    "vendor agreement",
-    "cap table",
-    "dilution",
-    "liquidation preference",
-    "anti-dilution",
-    "m&a",
     "is this a good deal",
-    "what should i negotiate"
+    "alternatives to this deal",
+    "should i buy this",
+    "saas plan comparison",
+    "service package price",
+    "compare this offer",
+    "analyze this deal",
+    "price value check",
+    "value for money",
+    "used item deal",
+    "discount negotiation",
+    "negotiate price"
   ],
   "categories": [],
   "requiredTools": [],
   "permissions": {},
   "resources": [
     {
-      "path": "references/workflows/deal-analyzer-2026-06-13.md",
+      "path": "references/workflows/deal-analyzer.md",
       "type": "doc",
       "description": "Add workflow recipe to deal-analyzer"
     }
-  ]
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
 }

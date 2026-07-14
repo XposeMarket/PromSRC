@@ -1,23 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when animating DOM elements, SVG, web UI, creative prototypes, timelines, entrances/exits, or motion effects specifically with Anime.js or when choosing Anime.js for lightweight web animation.",
+  "description": "Anime.js adapter patterns for HyperFrames. Use when writing Anime.js animations or timelines inside HyperFrames compositions, registering animations on window.__hfAnime, making Anime.js seek-driven and deterministic, or translating Anime.js examples into render-safe HyperFrames HTML.",
   "triggers": [
-    "Anime.js animation",
-    "use Anime.js",
-    "animate DOM elements",
-    "animate SVG with Anime",
-    "web animation timeline",
-    "Anime stagger effect",
-    "Anime easing",
-    "JavaScript animation sequence",
-    "animated landing page",
-    "motion effects with Anime",
+    "animate svg with anime",
+    "motion effects with anime",
     "build an animation timeline",
-    "animate UI elements",
-    "creative DOM animation",
-    "Anime.js docs",
-    "smooth UI motion"
+    "animate dom elements",
+    "anime stagger effect",
+    "javascript animation sequence",
+    "animated landing page",
+    "animate ui elements",
+    "smooth ui motion",
+    "web animation timeline",
+    "creative dom animation",
+    "anime.js animation"
   ],
   "categories": [
     "creative",
@@ -29,5 +26,21 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "animejs"
+  "id": "animejs",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "Anime.js v4 IIFE and module contracts passed in Chromium, including animate, timeline creation, explicit registry, pause/play methods, and deterministic seek.",
+    "verifiedCapabilities": [
+      "anime_v4_iife",
+      "anime_animate",
+      "anime_create_timeline",
+      "hyperframes_registry",
+      "deterministic_seek"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "animejs"
 }

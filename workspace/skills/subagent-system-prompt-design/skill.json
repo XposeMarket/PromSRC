@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "version": "1.0.0",
+  "categories": [],
+  "requiredTools": [],
+  "permissions": {},
+  "resources": [],
+  "id": "subagent-system-prompt-design",
+  "name": "subagent-system-prompt-design",
+  "description": "Design or audit a Prometheus subagent system prompt, role contract, tool boundary, handoff, and validation criteria. Use when creating or revising agent instructions; do not use merely because a task happens to involve subagents.",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "design a subagent system prompt",
+    "review an agent role prompt",
+    "define a subagent tool boundary",
+    "write an agent handoff contract",
+    "test agent system instructions",
+    "narrow agent mutation scope"
+  ],
+  "implicitInvocation": false,
+  "lifecycle": "active"
+}

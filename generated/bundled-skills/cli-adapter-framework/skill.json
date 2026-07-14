@@ -1,22 +1,21 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "cli-adapter-framework",
-  "name": "CLI Adapter Framework",
-  "description": "Use this skill when Prometheus needs to add, wrap, harden, or design a typed adapter around an external CLI tool instead of exposing raw shell commands. Triggers on phrases like CLI adapter, wrap this command, add command-line tool, external CLI integration, typed shell tool, CLI connector, harden shell workflow, command adapter, safe CLI wrapper, and expose this CLI in Prometheus. Use it to create bounded actions, setup/status checks, artifact paths, side-effect limits, and safe UI-visible operations.",
+  "name": "cli-adapter-framework",
+  "description": "Build or harden a typed Prometheus adapter around an external command-line tool, including status checks, bounded actions, artifacts, cancellation, and side-effect controls. Use when explicitly wrapping or exposing a CLI; do not use for ordinary shell commands.",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
+  "implicitInvocation": true,
   "triggers": [
-    "CLI adapter",
-    "wrap this command",
-    "add command-line tool",
-    "external CLI integration",
-    "typed shell tool",
-    "CLI connector",
+    "expose cli in prometheus",
+    "add command line tool",
+    "external cli integration",
+    "wrap external cli",
+    "safe cli wrapper",
     "harden shell workflow",
-    "command adapter",
-    "safe CLI wrapper",
-    "expose this CLI in Prometheus",
-    "cli tool wrapper"
+    "typed shell tool",
+    "cli connector",
+    "cli adapter"
   ],
   "categories": [
     "prometheus",
@@ -33,5 +32,6 @@
     "workspaceWrite": true,
     "shell": true,
     "externalSideEffects": true
-  }
+  },
+  "lifecycle": "active"
 }

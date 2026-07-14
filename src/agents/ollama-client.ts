@@ -21,6 +21,10 @@ import {
   normalizeUsage,
 } from '../providers/model-usage';
 import { AgentRole } from '../types';
+import {
+  captureRuntimePromptManifest,
+  type RuntimePromptManifestContext,
+} from '../runtime/prompt-manifest';
 
 export interface GenerateOutput {
   response: string;
@@ -47,7 +51,7 @@ export class OllamaClient {
       temperature?: number;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
       tools?: any[];
       model?: string;
       onToken?: (chunk: string) => void;
@@ -59,12 +63,23 @@ export class OllamaClient {
       provider?: LLMProvider;
       /** Strip [TODAY_NOTES] from system prompt — set when switch_model is active to reduce context bloat. */
       omitIntradayNotes?: boolean;
-      usageContext?: { sessionId?: string; agentId?: string };
+      usageContext?: { sessionId?: string; agentId?: string; promptManifest?: RuntimePromptManifestContext };
     }
   ): Promise<ChatOutput> {
     const model = String(options?.model || '').trim() || getModelForRole(role);
     const activeProvider = options?.provider ?? this.provider;
     const startedAt = Date.now();
+    const promptManifest = captureRuntimePromptManifest({
+      callType: 'chat',
+      provider: activeProvider.id,
+      model,
+      role,
+      sessionId: options?.usageContext?.sessionId,
+      agentId: options?.usageContext?.agentId,
+      messages,
+      tools: options?.tools,
+      context: options?.usageContext?.promptManifest,
+    });
     const result = await activeProvider.chat(messages, model, {
       temperature:       options?.temperature,
       max_tokens:        options?.num_predict,
@@ -99,6 +114,13 @@ export class OllamaClient {
       estimatedConversationTokens,
       estimatedToolSchemaTokens,
       estimatedProviderInputTokens,
+      promptManifestId: promptManifest.id,
+      promptManifestHash: promptManifest.hash,
+      promptManifestVersion: promptManifest.version,
+      runtimeRole: promptManifest.runtimeRole,
+      executionMode: promptManifest.executionMode,
+      systemSegmentIds: promptManifest.systemSegmentIds,
+      activeToolCategories: promptManifest.toolSurface.activeCategories,
       durationMs: Date.now() - startedAt,
     });
     return { message: result.message, thinking: result.thinking };
@@ -115,13 +137,24 @@ export class OllamaClient {
       system?: string;
       num_ctx?: number;
       num_predict?: number;
-      think?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
-      usageContext?: { sessionId?: string; agentId?: string };
+      think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      usageContext?: { sessionId?: string; agentId?: string; promptManifest?: RuntimePromptManifestContext };
     }
   ): Promise<GenerateOutput> {
     const model = getModelForRole(role);
     const activeProvider = this.provider;
     const startedAt = Date.now();
+    const promptManifest = captureRuntimePromptManifest({
+      callType: 'generate',
+      provider: activeProvider.id,
+      model,
+      role,
+      sessionId: options?.usageContext?.sessionId,
+      agentId: options?.usageContext?.agentId,
+      system: options?.system,
+      prompt,
+      context: options?.usageContext?.promptManifest,
+    });
     const result = await activeProvider.generate(prompt, model, {
       temperature: options?.temperature,
       format:      options?.format,
@@ -141,6 +174,13 @@ export class OllamaClient {
       sessionId: options?.usageContext?.sessionId,
       agentId: options?.usageContext?.agentId,
       ...usage,
+      promptManifestId: promptManifest.id,
+      promptManifestHash: promptManifest.hash,
+      promptManifestVersion: promptManifest.version,
+      runtimeRole: promptManifest.runtimeRole,
+      executionMode: promptManifest.executionMode,
+      systemSegmentIds: promptManifest.systemSegmentIds,
+      activeToolCategories: promptManifest.toolSurface.activeCategories,
       durationMs: Date.now() - startedAt,
     });
     return result;

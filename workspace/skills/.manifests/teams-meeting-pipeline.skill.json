@@ -1,22 +1,15 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when processing Teams meetings, transcripts, recordings, summaries, action items, decisions, speaker notes, or follow-up packets from Microsoft Teams or similar meeting recordings.",
+  "description": "Build a Microsoft Graph-backed Teams meeting pipeline for meeting discovery, transcript or recording ingestion, action extraction, follow-up drafting, and explicit task sync. Use when implementing Teams meeting integration or processing Teams meeting data with user intent.",
+  "implicitInvocation": true,
   "triggers": [
-    "Teams meeting",
-    "Microsoft Teams recording",
-    "meeting transcript",
-    "Teams transcript",
-    "meeting action items",
-    "speaker notes",
-    "meeting follow-up packet",
-    "summarize Teams call",
-    "process meeting recording",
-    "meeting decisions",
-    "Teams notes",
-    "recording summary",
-    "call recap",
-    "meeting pipeline"
+    "teams follow up workflow",
+    "teams meeting pipeline",
+    "microsoft teams connector",
+    "teams meeting transcript",
+    "teams recording ingestion",
+    "teams meeting actions"
   ],
   "categories": [
     "meetings",
@@ -28,5 +21,6 @@
     "media_assets"
   ],
   "lifecycle": "active",
-  "id": "teams-meeting-pipeline"
+  "id": "teams-meeting-pipeline",
+  "name": "teams-meeting-pipeline"
 }

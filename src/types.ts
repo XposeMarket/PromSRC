@@ -1,4 +1,5 @@
 // Core type definitions for Prometheus
+import type { ReasoningEffort } from './providers/reasoning-capabilities';
 
 export type JobStatus = 'queued' | 'planning' | 'executing' | 'verifying' | 'completed' | 'failed' | 'needs_approval';
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
@@ -190,7 +191,7 @@ export interface AgentIdentity {
   /** Why Prometheus chose this name/style */
   namingRationale?: string;
   personality?: AgentPersonality;
-  /** Extra prose guidance layered into system_prompt.md */
+  /** Extra prose guidance layered into AGENT.md */
   voiceGuidelines?: string;
 }
 
@@ -212,6 +213,12 @@ export interface AgentDefinition {
 
   /** Team-specific assignment/mission for this agent within its managed team */
   teamAssignment?: string;
+
+  /** Managed team that owns this identity, when team-scoped. */
+  teamId?: string;
+
+  /** True only for the distinct manager agent of a managed team. */
+  isTeamManager?: boolean;
 
   /** Legacy metadata field; skill UI renders computer icons instead. */
   emoji?: string;
@@ -265,6 +272,9 @@ export interface AgentDefinition {
    * If omitted, uses the global llm.provider + model.
    */
   model?: string;
+
+  /** Optional provider/model-aware reasoning effort for this agent. */
+  reasoning_effort?: ReasoningEffort;
 
   /** Tool policy for this agent - overrides global tool config */
   tools?: AgentToolPolicy;
@@ -332,6 +342,8 @@ export interface AgentModelDefaults {
   team_subagent?: string;
   /** Background tasks / scheduled cron jobs */
   background_task?: string;
+  /** Direct background agents spawned from chat */
+  background_spawn?: string;
   /** Per-role planner subagents */
   subagent_planner?: string;
   /** Per-role orchestrator subagents */
@@ -358,6 +370,8 @@ export interface AgentModelDefaultTemplate {
   id: string;
   name: string;
   defaults: AgentModelDefaults;
+  /** Per-slot reasoning efforts, keyed the same way as defaults. */
+  reasoning?: Partial<Record<keyof AgentModelDefaults, ReasoningEffort>>;
   created_at: string;
   updated_at: string;
 }
@@ -426,6 +440,8 @@ export interface PrometheusConfig {
    * no explicit model override. Falls back to models.primary if unset.
    */
   agent_model_defaults?: AgentModelDefaults;
+  /** Provider/model-aware reasoning effort for each agent-model default slot. */
+  agent_model_default_reasoning?: Partial<Record<keyof AgentModelDefaults, ReasoningEffort>>;
   /**
    * Named snapshots of agent_model_defaults. The gateway and AI tools use
    * these to swap full routing presets without manually changing each slot.
@@ -500,9 +516,14 @@ export interface PrometheusConfig {
       summaryEveryTurns?: number;
       summaryMaxWords?: number;
       judgeModel?: string;
+      judgeReasoning?: ReasoningEffort;
       compactionModel?: string;
+      compactionReasoning?: ReasoningEffort;
       maxConsecutiveJudgeFailures?: number;
       maxConsecutiveRuntimeFailures?: number;
+      maxIterations?: number;
+      maxNoProgressTurns?: number;
+      completionVerificationEnabled?: boolean;
       permissions?: {
         approvalMode?: 'normal' | 'never';
         hardDenyEnabled?: boolean;
@@ -649,6 +670,12 @@ export interface PrometheusConfig {
     enabled: boolean;
     token: string;
     path: string;
+    providers?: Record<string, {
+      enabled?: boolean;
+      secret?: string;
+      events?: Record<string, 'audit' | 'wake' | 'agent' | 'ignore'>;
+      deliver?: boolean;
+    }>;
   };
   agent_policy?: {
     retrieval_mode?: string;

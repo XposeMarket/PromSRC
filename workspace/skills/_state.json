@@ -45,7 +45,6 @@
   "gsap": false,
   "hyperframes": false,
   "hyperframes-cli": false,
-  "hyperframes-media": false,
   "hyperframes-registry": false,
   "lottie": false,
   "prometheus-hyperframes-bridge": false,
@@ -53,7 +52,6 @@
   "tailwind": false,
   "three": false,
   "waapi": false,
-  "website-to-hyperframes": false
-  ,"holographic-globe-hyperframes-preset": false
-  ,"html-motion-preset-author": false
+  "holographic-globe-hyperframes-preset": false,
+  "html-motion-preset-author": false
 }

@@ -1,24 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when writing, revising, publishing, scheduling, or preparing professional blog posts, thought-leadership articles, SEO posts, client articles, newsletter-style posts, or business content.",
+  "description": "Produce publication-ready business blog and SEO article packages from a concrete brief, including strategy, outline, article, metadata, internal links, schema recommendation, image brief, promotion copy, and QA. Use for full professional articles; do not use for short posts, generic rewriting, or research without an article deliverable.",
   "triggers": [
+    "optimize article for seo",
+    "prepare blog for publishing",
     "write a blog post",
-    "professional article",
-    "SEO blog",
     "thought leadership post",
-    "client blog post",
-    "newsletter article",
     "publish blog post",
+    "client blog post",
+    "professional article",
+    "newsletter article",
     "schedule article",
-    "revise blog",
-    "blog outline",
     "business article",
-    "content post",
-    "longform post",
-    "blog draft",
-    "optimize article for SEO",
-    "prepare blog for publishing"
+    "blog outline",
+    "revise blog"
   ],
   "categories": [
     "writing",
@@ -32,5 +28,7 @@
     "skills"
   ],
   "lifecycle": "active",
-  "id": "professional-blog-posting-engine"
+  "id": "professional-blog-posting-engine",
+  "name": "professional-blog-posting-engine",
+  "implicitInvocation": true
 }

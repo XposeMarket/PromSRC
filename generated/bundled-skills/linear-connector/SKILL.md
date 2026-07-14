@@ -1,3 +1,8 @@
+---
+name: "linear-connector"
+description: "Build or operate a vault-backed Linear GraphQL connector for teams, projects, issues, cycles, comments, statuses, and explicit task synchronization. Use when a request specifically concerns Linear integration or Linear issue operations; do not invoke for generic task planning."
+---
+
 # Linear Connector
 
 Use this skill when Prometheus needs Linear-backed product, engineering, bug, or roadmap workflows.

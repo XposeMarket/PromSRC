@@ -1,3 +1,8 @@
+---
+name: "trello-connector"
+description: "Build or operate a Trello connector for boards, lists, cards, labels, comments, checklists, movement, and explicit Prometheus task links. Use when a request specifically concerns Trello integration or Trello card operations; do not invoke for generic task planning."
+---
+
 # Trello Connector
 
 Use this skill when Prometheus needs Trello boards, lists, cards, labels, comments, or checklist workflows.

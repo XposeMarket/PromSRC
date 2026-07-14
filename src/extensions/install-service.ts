@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { loadBundledExtensionDescriptors, resolveUserPluginsDir } from './loader.js';
 import { parseExtensionDescriptor } from './schema.js';
 import { reloadExtensions } from './reload.js';
@@ -44,6 +45,10 @@ export function installUserPlugin(input: InstallUserPluginInput): InstallUserPlu
   if (bundledIds().has(`${descriptor.kind}:${id}`)) {
     throw new Error(`"${descriptor.kind}:${id}" is a built-in extension and cannot be overwritten.`);
   }
+  const pluginApi = String(descriptor.compatibility?.pluginApi || '1').trim();
+  if (!/^(?:\^|~|>=)?1(?:\.\d+){0,2}$/.test(pluginApi)) {
+    throw new Error(`Plugin "${id}" requires unsupported plugin API ${pluginApi}; this Prometheus build supports API 1.`);
+  }
 
   const wantsEntrypoint = !!descriptor.runtime?.entrypoint;
   if (wantsEntrypoint && !input.indexJs) {
@@ -53,11 +58,15 @@ export function installUserPlugin(input: InstallUserPluginInput): InstallUserPlu
   }
 
   const userDir = resolveUserPluginsDir();
+  fs.mkdirSync(userDir, { recursive: true });
   const pluginDir = path.join(userDir, id);
-  fs.mkdirSync(pluginDir, { recursive: true });
+  const stagingRoot = path.join(path.dirname(userDir), 'user-plugin-staging');
+  const stagingDir = path.join(stagingRoot, `${id}-${randomUUID()}`);
+  const backupDir = path.join(stagingRoot, `${id}-backup-${randomUUID()}`);
+  fs.mkdirSync(stagingDir, { recursive: true });
 
   fs.writeFileSync(
-    path.join(pluginDir, EXTENSION_DESCRIPTOR_FILENAME),
+    path.join(stagingDir, EXTENSION_DESCRIPTOR_FILENAME),
     JSON.stringify(input.manifest, null, 2),
     'utf-8',
   );
@@ -67,12 +76,25 @@ export function installUserPlugin(input: InstallUserPluginInput): InstallUserPlu
     const entryName = descriptor.runtime?.entrypoint
       ? path.basename(descriptor.runtime.entrypoint)
       : 'index.js';
-    fs.writeFileSync(path.join(pluginDir, entryName), input.indexJs, 'utf-8');
+    fs.writeFileSync(path.join(stagingDir, entryName), input.indexJs, 'utf-8');
     hadEntrypoint = true;
   }
-
-  const reload = reloadExtensions();
-  return { id, dir: pluginDir, hadEntrypoint, reload };
+  // Re-read staged content through the production validator before promotion.
+  parseExtensionDescriptor(JSON.parse(fs.readFileSync(path.join(stagingDir, EXTENSION_DESCRIPTOR_FILENAME), 'utf8')), path.join(stagingDir, EXTENSION_DESCRIPTOR_FILENAME));
+  let backedUp = false;
+  try {
+    if (fs.existsSync(pluginDir)) { fs.renameSync(pluginDir, backupDir); backedUp = true; }
+    fs.renameSync(stagingDir, pluginDir);
+    const reload = reloadExtensions();
+    if (backedUp && fs.existsSync(backupDir)) fs.rmSync(backupDir, { recursive: true, force: true });
+    return { id, dir: pluginDir, hadEntrypoint, reload };
+  } catch (error) {
+    try { if (fs.existsSync(pluginDir)) fs.rmSync(pluginDir, { recursive: true, force: true }); } catch {}
+    try { if (backedUp && fs.existsSync(backupDir)) fs.renameSync(backupDir, pluginDir); } catch {}
+    try { if (fs.existsSync(stagingDir)) fs.rmSync(stagingDir, { recursive: true, force: true }); } catch {}
+    try { reloadExtensions(); } catch {}
+    throw error;
+  }
 }
 
 export interface RemoveUserPluginResult {

@@ -146,7 +146,8 @@ export class DarwinBackend implements DesktopBackend {
   async enumerateMonitors(): Promise<DesktopMonitorInfo[]> {
     return this.call<DesktopMonitorInfo[]>('enumerateMonitors');
   }
-  async capture(req: DesktopCaptureRequest): Promise<DesktopCaptureResult> {
+  async capture(req: DesktopCaptureRequest, signal?: AbortSignal): Promise<DesktopCaptureResult> {
+    if (signal?.aborted) throw new DOMException('Desktop capture interrupted.', 'AbortError');
     const r = await this.call<{ pngBase64?: string; pngPath?: string; bounds: DesktopCaptureResult['bounds']; devicePixelRatio: number }>(
       'capture',
       req as unknown as Record<string, unknown>,

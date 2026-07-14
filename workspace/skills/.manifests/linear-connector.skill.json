@@ -1,23 +1,15 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when adding, testing, or operating a Linear connector for issues, projects, teams, comments, statuses, labels, cycles, roadmap data, or Linear API/webhook workflows.",
+  "description": "Build or operate a vault-backed Linear GraphQL connector for teams, projects, issues, cycles, comments, statuses, and explicit task synchronization. Use when a request specifically concerns Linear integration or Linear issue operations; do not invoke for generic task planning.",
+  "implicitInvocation": true,
   "triggers": [
-    "Linear connector",
-    "Linear issue",
-    "Linear project",
-    "Linear API",
-    "create Linear ticket",
-    "update Linear issue",
-    "read Linear tasks",
-    "Linear webhook",
-    "Linear team id",
-    "Linear cycle",
-    "Linear labels",
-    "connect Linear",
-    "sync Linear issues",
-    "test Linear integration",
-    "Linear roadmap"
+    "create linear issue from prometheus",
+    "linear issue integration",
+    "linear graphql connector",
+    "update linear issue",
+    "linear project sync",
+    "linear connector"
   ],
   "categories": [
     "connectors",
@@ -31,5 +23,6 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "linear-connector"
+  "id": "linear-connector",
+  "name": "linear-connector"
 }

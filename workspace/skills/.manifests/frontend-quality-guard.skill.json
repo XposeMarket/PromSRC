@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "frontend-quality-guard",
+  "entrypoint": "SKILL.md",
+  "categories": [
+    "frontend",
+    "design",
+    "browser",
+    "quality"
+  ],
+  "triggers": [
+    "make a quick html page",
+    "make a quick web page",
+    "create a web interface",
+    "build this frontend",
+    "update the frontend",
+    "polish this screen",
+    "mobile layout bug",
+    "remove ai slop",
+    "fix the ui",
+    "frontend component",
+    "responsive layout",
+    "visual qa"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "browser_automation"
+  ],
+  "status": "ready",
+  "lifecycle": "active",
+  "implicitInvocation": true,
+  "health": {
+    "state": "ready",
+    "reason": "Bundled Vite template installed and built successfully; static audit, desktop/mobile browser QA, responsive overflow checks, search/filter interactions, and console checks passed.",
+    "verifiedCapabilities": [
+      "vite_template_install",
+      "vite_build",
+      "frontend_static_audit",
+      "desktop_browser_qa",
+      "mobile_browser_qa",
+      "responsive_overflow",
+      "primary_interactions",
+      "console_error_check"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "frontend-quality-guard",
+  "description": "Enforce polished, human-designed frontend quality whenever Prometheus creates, edits, reviews, or repairs any user-facing web interface—even a tiny page, component, prototype, dashboard, tool, game, or one-off HTML file. Use to prevent generic AI-generated visual patterns, preserve the repository’s design language, and require responsive browser verification."
+}

@@ -19,6 +19,10 @@ export type LiveRuntimeKind =
   | 'brain_thought'
   | 'brain_dream';
 
+export function isSteerableChatRuntimeKind(kind: LiveRuntimeKind | string | null | undefined): boolean {
+  return kind === 'main_chat' || kind === 'main_chat_goal';
+}
+
 export interface LiveRuntimeRegistration {
   kind: LiveRuntimeKind;
   label: string;
@@ -429,7 +433,7 @@ export function addPendingRuntimeSteer(
 ): { ok: boolean; runtime?: LiveRuntimeSnapshot; event?: RuntimeSteerEvent; error?: string } {
   const record = activeRuntimes.get(String(id || ''));
   if (!record) return { ok: false, error: 'Runtime not found.' };
-  if (record.kind !== 'main_chat') return { ok: false, runtime: toSnapshot(record), error: 'Runtime is not steerable.' };
+  if (!isSteerableChatRuntimeKind(record.kind)) return { ok: false, runtime: toSnapshot(record), error: 'Runtime is not steerable.' };
   const message = String(input.message || '').trim();
   const attachments = Array.isArray((input as any).attachments) ? (input as any).attachments : [];
   const attachmentPreviews = Array.isArray((input as any).attachmentPreviews) ? (input as any).attachmentPreviews : [];
@@ -478,7 +482,7 @@ export function consumePendingRuntimeSteersForSession(sessionId: string, limit =
   if (!sid) return [];
   const out: RuntimeSteerEvent[] = [];
   for (const record of activeRuntimes.values()) {
-    if (record.kind !== 'main_chat' || String(record.sessionId || '') !== sid) continue;
+    if (!isSteerableChatRuntimeKind(record.kind) || String(record.sessionId || '') !== sid) continue;
     const queue = Array.isArray(record.pendingSteers) ? record.pendingSteers : [];
     while (queue.length && out.length < limit) {
       const event = queue.shift();

@@ -1,34 +1,24 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Raul asks to test voice mode, realtime voice, browser automation, desktop automation, mobile screenshot delivery, Codex/Claude focus, or end-to-end voice-driven visible actions. It emphasizes short natural replies, fresh screenshots, and proof sent to the origin/mobile surface.",
-  "triggers": [
-    "voice smoke test",
-    "realtime voice test",
-    "browser desktop smoke test",
-    "desktop screenshot test",
-    "focus Codex",
-    "focus Claude",
-    "voice automation",
-    "mobile screenshot",
-    "test voice tools",
-    "browser automation test",
-    "desktop automation test",
-    "end-to-end smoke test",
-    "voice mode QA",
-    "visible action proof",
-    "send screenshot to mobile"
-  ],
+  "description": "Deprecated compatibility entry for the merged AI Surface Browser and Desktop Smoke Test.",
+  "triggers": [],
   "categories": [
-    "testing",
-    "voice",
-    "automation"
+    "compatibility"
   ],
-  "requiredTools": [
-    "desktop_automation",
-    "browser_automation",
-    "delivery_send_screenshot"
-  ],
-  "lifecycle": "active",
-  "id": "voice-browser-desktop-smoke-test"
+  "requiredTools": [],
+  "lifecycle": "deprecated",
+  "id": "voice-browser-desktop-smoke-test",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "Merged into ai-surface-smoke-research because voice agents use the same browser and desktop tools.",
+    "verifiedCapabilities": [
+      "compatibility_redirect"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "voice-browser-desktop-smoke-test"
 }

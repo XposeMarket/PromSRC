@@ -1,17 +1,11 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "x-larp-posting-guidelines",
-  "name": "X LARP Posting Guidelines",
-  "description": "Shared posting guidelines and safeguards for Prometheus X LARP accounts system. Ensures consistent voice, engagement rules, and detection safeguards across all persona accounts.",
+  "name": "x-larp-posting-guidelines",
+  "description": "Deprecated compatibility entry for a manually selected X account style. Use the explicit prometheus-x-growth-operator skill and load its LARP guidelines only for that account mode.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
-  "triggers": [
-    "x posting",
-    "larp guidelines",
-    "persona voice",
-    "engagement rules",
-    "detection safeguards"
-  ],
+  "triggers": [],
   "categories": [
     "social",
     "x",
@@ -28,5 +22,7 @@
     "shell": false,
     "externalSideEffects": false
   },
-  "resources": []
+  "resources": [],
+  "implicitInvocation": false,
+  "lifecycle": "deprecated"
 }

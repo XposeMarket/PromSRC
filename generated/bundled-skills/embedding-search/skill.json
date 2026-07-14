@@ -1,25 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when building, debugging, or using embedding/vector search, semantic retrieval, hybrid search, similarity search, RAG retrieval, chunk ranking, or vector index quality checks.",
+  "description": "Design or implement semantic search, embeddings, vector indexes, RAG retrieval, document Q&A, chunking, similarity search, reranking, and retrieval evaluation. Use when information must be found by meaning rather than exact text.",
   "triggers": [
-    "embedding search",
-    "vector search",
-    "semantic search",
-    "similarity search",
-    "hybrid retrieval",
-    "RAG retrieval",
-    "vector index",
-    "chunk ranking",
-    "embeddings quality",
-    "nearest neighbors",
     "search memory semantically",
+    "embeddings quality",
+    "retrieval accuracy",
+    "similarity search",
+    "nearest neighbors",
     "improve retrieval",
+    "embedding search",
+    "hybrid retrieval",
+    "semantic search",
     "embedding model",
     "query expansion",
-    "rerank chunks",
-    "vector database",
-    "retrieval accuracy"
+    "vector database"
   ],
   "categories": [
     "search",
@@ -32,6 +27,7 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "Embedding Search",
-  "id": "embedding-search"
+  "name": "embedding-search",
+  "id": "embedding-search",
+  "implicitInvocation": true
 }

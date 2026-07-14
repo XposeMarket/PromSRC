@@ -1,4 +1,7 @@
 import type { LoadedExtensionDescriptor } from './types.js';
+import type { ConnectionAdapter } from '../connections/types.js';
+import type { ConnectionToolClassifier } from '../connections/tool-classifier.js';
+import type { ConnectionVerifier } from '../connections/verification-service.js';
 
 export type PrometheusExtensionTrustLevel =
   | 'core'
@@ -134,6 +137,9 @@ export interface PrometheusExtensionApi {
   registerHook(hook: PrometheusHookRuntime): void;
   registerMemorySource(source: PrometheusMemorySourceRuntime): void;
   registerContextProvider(provider: PrometheusContextProviderRuntime): void;
+  registerConnectionAdapter(adapter: ConnectionAdapter): void;
+  registerConnectionVerifier(verifier: ConnectionVerifier): void;
+  registerToolClassifier(classifier: ConnectionToolClassifier): void;
 }
 
 export interface PrometheusExtensionDefinition {
@@ -142,6 +148,7 @@ export interface PrometheusExtensionDefinition {
   contracts?: PrometheusExtensionContracts;
   trustLevel?: PrometheusExtensionTrustLevel;
   register(api: PrometheusExtensionApi): void;
+  deactivate?(): void | Promise<void>;
 }
 
 export function definePrometheusExtension(

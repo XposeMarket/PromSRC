@@ -1,34 +1,31 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating or adapting Three.js/WebGL/3D scenes, shaders, cameras, lighting, canvas textures, 3D product visuals, or real-time 3D motion for creative/web/video work.",
+  "name": "three",
+  "description": "Three.js adapter patterns for deterministic HyperFrames compositions. Use only when a HyperFrames scene needs a Three.js/WebGL canvas, hf-seek-driven rendering, AnimationMixer seeking, camera or shader motion derived from composition time, or pinned renderer settings for reproducible frames. Use threejs-mobile-webgl instead for desktop-versus-iOS texture and control failures.",
   "triggers": [
-    "Three.js",
-    "WebGL scene",
-    "3D scene",
-    "shader material",
-    "3D product visual",
-    "canvas texture",
-    "camera lighting",
-    "real-time 3D",
-    "3D device mockup",
-    "orbital camera",
-    "particle field",
-    "3D animation",
-    "browser 3D",
-    "WebGL shader",
-    "threejs scene"
+    "three.js product spin in hyperframes",
+    "webgl canvas in hyperframes",
+    "shader plate in hyperframes",
+    "hyperframes webgl adapter",
+    "deterministic three.js composition",
+    "hyperframes three canvas",
+    "hyperframes three.js",
+    "animationmixer hyperframes",
+    "three.js hf-seek"
   ],
   "categories": [
     "creative",
     "3d",
-    "webgl"
+    "webgl",
+    "hyperframes"
   ],
   "requiredTools": [
     "creative_basic",
     "workspace_write",
     "browser_automation"
   ],
+  "implicitInvocation": false,
   "lifecycle": "active",
   "id": "three"
 }

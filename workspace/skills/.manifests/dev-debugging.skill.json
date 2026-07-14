@@ -1,35 +1,40 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when debugging code, reproducing failures, reading logs, tracing stack errors, isolating regressions, running tests, investigating broken behavior, or repairing a development issue.",
+  "description": "Hand a Prometheus development or debugging request to the ChatGPT desktop app when the user explicitly asks for that desktop handoff. Use for composing, submitting, proving, and following up on a ChatGPT debugging request; do not invoke for normal debugging that Prometheus can perform directly.",
   "triggers": [
-    "debug this",
-    "fix this error",
-    "stack trace",
-    "failing test",
-    "reproduce the bug",
-    "logs show",
-    "regression",
-    "why is this broken",
-    "trace the issue",
-    "inspect the error",
-    "runtime failure",
-    "build failure",
-    "test failure",
-    "find root cause",
-    "debug the app",
-    "broken behavior",
-    "repair the bug",
-    "isolate the problem"
+    "send this dev issue to chatgpt desktop",
+    "hand this debugging task to chatgpt",
+    "chatgpt development handoff"
   ],
   "categories": [
+    "desktop",
     "debugging",
-    "development",
-    "engineering"
+    "handoff"
   ],
   "requiredTools": [
-    "workspace_write"
+    "desktop_list_windows",
+    "desktop_focus_window",
+    "desktop_type",
+    "desktop_press_key",
+    "delivery_send_screenshot"
   ],
   "lifecycle": "active",
-  "id": "dev-debugging"
+  "id": "dev-debugging",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "A localhost mock completed the exact five-call ChatGPT handoff contract without submitting to a real chat surface.",
+    "verifiedCapabilities": [
+      "chatgpt_app_discovery",
+      "five_call_handoff_contract",
+      "origin_proof_contract",
+      "localhost_mock",
+      "real_submission_boundary"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "dev-debugging"
 }

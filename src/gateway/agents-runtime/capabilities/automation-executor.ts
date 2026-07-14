@@ -1,3 +1,4 @@
+import path from 'path';
 import { backgroundJoin, backgroundProgress, backgroundSpawn, backgroundWait } from '../../tasks/task-runner';
 import {
   automationDashboardTool,
@@ -19,7 +20,7 @@ import {
   createInternalWatch,
   listInternalWatches,
 } from '../../internal-watch/internal-watch-store';
-import { observeInternalWatchTarget } from '../../internal-watch/internal-watch-runner';
+import { observeInternalWatchTarget, refreshInternalWatchObservation } from '../../internal-watch/internal-watch-runner';
 import { getSessionChannelHint } from '../../comms/broadcaster';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import {
@@ -30,6 +31,8 @@ import {
 } from '../../tool-builder';
 import { getManagedTeam } from '../../teams/managed-teams';
 import { ensureScheduleRuntimeForAgent } from '../../scheduling/schedule-agent';
+import { systemDiagnosticsTool } from '../../diagnostics/system-diagnostics';
+import { createDiagnosticPacket, getDiagnosticPacket, listDiagnosticPackets, updateDiagnosticPacketStatus } from '../../diagnostics/diagnostic-packet-store';
 
 const AUTOMATION_TOOL_NAMES = new Set([
   'background_spawn',
@@ -48,6 +51,8 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'schedule_job_outputs',
   'schedule_job_stuck_control',
   'automation_dashboard',
+  'system_diagnostics',
+  'diagnostic_packet',
 ]);
 
 export const automationCapabilityExecutor: CapabilityExecutor = {
@@ -58,7 +63,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
   },
 
   async execute(ctx: CapabilityExecutionContext): Promise<ToolResult> {
-    const { name, args, deps, sessionId } = ctx;
+    const { name, args, deps, sessionId, workspacePath } = ctx;
 
     switch (name) {
       case 'background_spawn': {
@@ -344,7 +349,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           const watches = listInternalWatches({
             sessionId,
             includeDone: args.include_done === true || args.includeDone === true,
-          });
+          }).map((watch) => refreshInternalWatchObservation(watch, deps.cronScheduler));
           return {
             name,
             args,
@@ -382,6 +387,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           if (targetType === 'file') {
             targetConfig.path = String(targetConfig.path || args.path || '').trim();
             if (!targetConfig.path) return { name, args, result: 'internal_watch(create file) requires target.path', error: true };
+            targetConfig.workspaceRoot = path.resolve(workspacePath);
           } else if (targetType === 'task') {
             targetConfig.taskId = String(targetConfig.taskId || targetConfig.task_id || args.task_id || args.taskId || '').trim();
             if (!targetConfig.taskId) return { name, args, result: 'internal_watch(create task) requires target.task_id', error: true };
@@ -390,6 +396,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             if (!targetConfig.jobId) return { name, args, result: 'internal_watch(create scheduled_job) requires target.job_id', error: true };
           } else if (targetType === 'event_queue') {
             targetConfig.match = targetConfig.match || args.match || undefined;
+            targetConfig.workspaceRoot = path.resolve(workspacePath);
           }
 
           const onMatch = String(args.on_match || args.onMatch || args.instruction || '').trim();
@@ -763,6 +770,30 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         }
 
         return { name, args, result: `Unsupported schedule_job action: ${action}`, error: true };
+      }
+
+      case 'system_diagnostics': {
+        try {
+          const out = systemDiagnosticsTool({ scheduler: deps.cronScheduler, workspacePath }, args);
+          return { name, args, result: JSON.stringify(out.data), error: false };
+        } catch (err: any) {
+          return { name, args, result: `system_diagnostics error: ${err.message}`, error: true };
+        }
+      }
+
+      case 'diagnostic_packet': {
+        try {
+          const action = String(args.action || 'create').toLowerCase();
+          const data = action === 'create' ? createDiagnosticPacket(workspacePath, args)
+            : action === 'get' ? getDiagnosticPacket(workspacePath, String(args.packet_id || args.id || ''))
+            : action === 'list' ? listDiagnosticPackets(workspacePath, Number(args.limit) || 20)
+            : action === 'resolve' ? updateDiagnosticPacketStatus(workspacePath, String(args.packet_id || args.id || ''), 'resolved')
+            : null;
+          if (!data) return { name, args, result: `diagnostic_packet ${action} found no result.`, error: true };
+          return { name, args, result: JSON.stringify(data), error: false };
+        } catch (err: any) {
+          return { name, args, result: `diagnostic_packet error: ${err.message}`, error: true };
+        }
       }
 
       case 'schedule_job_history': {

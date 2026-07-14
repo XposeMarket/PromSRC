@@ -1,23 +1,8 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Mara or a scheduled/delegated @raulinvests X/Twitter workflow needs to publish or prepare one original post that complements the broader engagement strategy and avoids generic AI voice.",
-  "triggers": [
-    "Mara post workflow",
-    "scheduled X post",
-    "@raulinvests original post",
-    "publish one tweet",
-    "prepare X post",
-    "X posting workflow",
-    "daily X post",
-    "scheduled tweet job",
-    "original post strategy",
-    "raulinvests tweet",
-    "approval packet for tweet",
-    "Mara scheduled post",
-    "post queue for X",
-    "one original X post"
-  ],
+  "description": "Deprecated compatibility entry for the scheduled Prometheus X posting workflow. Use the explicit prometheus-x-growth-operator skill and its scheduled-posting reference.",
+  "triggers": [],
   "categories": [
     "social",
     "x",
@@ -29,6 +14,8 @@
     "workspace_write",
     "skills"
   ],
-  "lifecycle": "active",
-  "id": "prometheus-x-posts-workflow"
+  "lifecycle": "deprecated",
+  "id": "prometheus-x-posts-workflow",
+  "implicitInvocation": false,
+  "name": "prometheus-x-posts-workflow"
 }

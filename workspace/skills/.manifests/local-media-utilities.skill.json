@@ -1,24 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when using local media utilities such as ffmpeg/ffprobe for audio extraction, frame capture, trimming, compression, conversion, metadata inspection, or safe media CLI workflows.",
+  "description": "Inspect and transform local audio, video, and image files with Prometheus-bundled FFmpeg and FFprobe. Use for metadata inspection, audio extraction, frame capture, trimming, transcoding, resizing, compression, thumbnails, contact sheets, or other safe local media operations.",
   "triggers": [
-    "ffmpeg command",
-    "ffprobe metadata",
-    "trim video",
-    "compress video",
-    "extract audio",
+    "inspect media metadata",
+    "local media utility",
     "capture video frame",
     "convert media file",
-    "local media utility",
-    "inspect media metadata",
+    "generate thumbnail",
+    "ffprobe metadata",
     "audio extraction",
+    "ffmpeg command",
+    "extract audio",
+    "media cli",
     "video conversion",
-    "resize video",
-    "media CLI",
-    "transcode file",
-    "cut clip",
-    "generate thumbnail"
+    "cut clip"
   ],
   "categories": [
     "media",
@@ -30,5 +26,24 @@
     "media_assets"
   ],
   "lifecycle": "active",
-  "id": "local-media-utilities"
+  "id": "local-media-utilities",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "Prometheus-bundled FFmpeg and FFprobe passed disposable probe, audio extraction, frame capture, trim, scale, and H.264/AAC transcode tests.",
+    "verifiedCapabilities": [
+      "bundled_ffmpeg",
+      "bundled_ffprobe",
+      "media_probe",
+      "audio_extract",
+      "frame_capture",
+      "media_trim",
+      "media_scale",
+      "media_transcode"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "local-media-utilities"
 }

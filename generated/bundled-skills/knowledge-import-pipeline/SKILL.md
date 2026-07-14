@@ -1,3 +1,8 @@
+---
+name: "knowledge-import-pipeline"
+description: "Import external documents, repositories, notes, transcripts, or datasets into the appropriate Prometheus memory, project context, skill resource, or temporary artifact. Use for deliberate knowledge ingestion with provenance; do not use for merely reading or summarizing a file."
+---
+
 # Knowledge Import Pipeline
 
 Use this skill when bringing external information into Prometheus.

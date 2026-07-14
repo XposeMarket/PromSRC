@@ -1,21 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "threejs-mobile-webgl",
-  "name": "Three.js Mobile WebGL",
-  "description": "Debug Three.js and WebGL scenes that work on desktop but fail on iPhone, iPad, mobile Safari, iOS PWA, WebView, or mobile file canvas, especially missing sprites, transparent PNG textures, billboards, pickups, enemies, or touch controls.",
+  "name": "threejs-mobile-webgl",
+  "description": "Diagnose Three.js/WebGL failures that reproduce on iPhone, iPad, mobile Safari, iOS PWA/WebView, or a mobile file canvas while the same scene works on desktop. Use for missing textured sprites or transparent PNG planes, CanvasTexture upload issues, touch-overlay interception, or Three.js mobile yaw, movement, and fire misalignment; do not use for general Three.js authoring.",
   "emoji": "📱",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "three.js mobile",
-    "threejs mobile",
-    "ios webgl",
-    "mobile safari webgl",
-    "iphone missing sprites",
-    "three.js missing textures",
-    "mobile canvas assets",
-    "webgl texture bug",
-    "transparent png sprites missing"
+    "three.js transparent png missing on ios",
+    "iphone three.js missing sprites",
+    "three.js mobile missing textures",
+    "mobile safari three.js canvastexture",
+    "three.js ios texture upload",
+    "three.js mobile yaw mismatch",
+    "three.js mobile shooting direction",
+    "three.js mobile canvas iframe",
+    "three.js mobile safari",
+    "three.js mobile webgl",
+    "ios webgl three.js"
   ],
   "categories": [
     "frontend",
@@ -24,6 +26,7 @@
     "debugging"
   ],
   "requiredTools": [],
+  "implicitInvocation": false,
   "permissions": {
     "workspaceRead": true,
     "workspaceWrite": true,
@@ -45,5 +48,6 @@
       "path": "references/mobile-canvas-iframe-game-checklist.md",
       "type": "doc"
     }
-  ]
+  ],
+  "lifecycle": "active"
 }

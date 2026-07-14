@@ -1,24 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when writing or improving job posts, hiring plans, interview questions, candidate screening rubrics, recruiting outreach, offer messaging, role scorecards, or HR workflows.",
+  "description": "Create hiring plans, role scorecards, job descriptions, interview loops, candidate rubrics, outreach, and onboarding handoffs. Use for recruiting and selection design; do not use for making unsupported judgments about protected traits or for legal employment advice.",
   "triggers": [
-    "job description",
-    "hiring plan",
+    "offer letter draft",
     "interview questions",
     "candidate screening",
     "recruiting outreach",
-    "role scorecard",
-    "job post",
-    "offer letter draft",
-    "hiring rubric",
-    "recruiter message",
+    "candidate scorecard",
     "evaluate candidate",
-    "interview plan",
-    "team hiring",
-    "HR workflow",
+    "recruiter message",
+    "job description",
     "onboarding plan",
-    "candidate scorecard"
+    "role scorecard",
+    "interview plan",
+    "hiring rubric"
   ],
   "categories": [
     "hr",
@@ -30,6 +26,7 @@
     "skills"
   ],
   "lifecycle": "active",
-  "name": "HR Recruiter",
-  "id": "hr-recruiter"
+  "name": "hr-recruiter",
+  "id": "hr-recruiter",
+  "implicitInvocation": false
 }

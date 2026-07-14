@@ -1,0 +1,20 @@
+{
+  "ownership": "upstream-managed",
+  "implicitInvocation": false,
+  "status": "ready",
+  "health": {
+    "state": "ready",
+    "reason": "Official skill pinned from heygen-com/hyperframes and restricted to explicit specialist selection by the Creative Director.",
+    "verifiedCapabilities": [
+      "official_upstream_skill"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-11"
+  },
+  "id": "pr-to-video",
+  "name": "pr-to-video",
+  "description": "Turn a GitHub pull request (a PR URL, owner/repo#N, or 'this PR' in a checked-out repo) into a code-change explainer video — changelog, feature reveal, fix, or refactor walkthrough built from the diff, commits, and files: the input is a code change, not a website. Not a product promo (/product-launch-video) or a no-PR topic explainer (/faceless-explainer). Unclear → /hyperframes.",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "lifecycle": "active"
+}

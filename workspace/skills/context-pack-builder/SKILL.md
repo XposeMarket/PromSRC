@@ -1,3 +1,8 @@
+---
+name: "context-pack-builder"
+description: "Assemble reusable Prometheus briefing packs from memory, project and team context, sessions, files, and cited sources. Use only when the user explicitly asks for a context pack, briefing pack, or reusable agent handoff; do not invoke for ordinary prompt context."
+---
+
 # Context Pack Builder
 
 Use this skill when Prometheus needs a reusable briefing packet for a project, client, repo, team, or workflow.

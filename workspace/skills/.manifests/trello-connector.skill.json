@@ -1,23 +1,15 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when connecting, configuring, testing, automating, troubleshooting, or using Trello boards, cards, lists, labels, comments, due dates, or notifications through a connector.",
+  "description": "Build or operate a Trello connector for boards, lists, cards, labels, comments, checklists, movement, and explicit Prometheus task links. Use when a request specifically concerns Trello integration or Trello card operations; do not invoke for generic task planning.",
+  "implicitInvocation": true,
   "triggers": [
-    "Trello connector",
-    "connect Trello",
-    "Trello board",
-    "Trello card",
-    "Trello list",
-    "create Trello card",
-    "update Trello card",
-    "Trello labels",
-    "Trello due dates",
-    "Trello comments",
-    "test Trello integration",
-    "Trello webhook",
-    "automate Trello",
-    "read Trello board",
-    "Trello notifications"
+    "trello board integration",
+    "create trello card",
+    "trello card tools",
+    "move trello card",
+    "trello task sync",
+    "trello connector"
   ],
   "categories": [
     "integrations",
@@ -30,5 +22,6 @@
     "integration_admin"
   ],
   "lifecycle": "active",
-  "id": "trello-connector"
+  "id": "trello-connector",
+  "name": "trello-connector"
 }

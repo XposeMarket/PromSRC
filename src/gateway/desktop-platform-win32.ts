@@ -1,14 +1,13 @@
 // ─── Win32Backend: Windows implementation of DesktopBackend ───────────────────
 //
-// Phase 0 of the macOS port. Wraps the existing inline-PowerShell primitives in
-// desktop-tools.ts behind the DesktopBackend interface, with ZERO behavior
-// change. Primitives are extracted incrementally; until a method is wired here,
-// the public desktop_* functions keep calling the internals directly, so Windows
-// stays fully working throughout the refactor.
+// Windows DesktopBackend. Capture and ordinary input share one persistent
+// native helper; inline PowerShell remains a compatibility fallback.
 //
 // STATUS:
-//   ✅ wired: gatherContext, enumerateMonitors, capture
-//   ⏳ pending extraction: pointer, keyboard, clipboard, window, launch, a11y
+//   ✅ backend seam wired for context, monitor capture, pointer, keyboard,
+//      clipboard, window control, launch, and accessibility
+//   ✅ persistent native helper for WGC capture + SendInput focus/input
+//   ↩ PowerShell/Win32 compatibility primitives remain as fallback
 //
 // The macOS counterpart is desktop-platform-darwin.ts (DarwinBackend), which
 // drives the in-house Swift helper over the JSON-RPC protocol in
@@ -49,6 +48,7 @@ import {
   type DesktopCaptureMode,
 } from './desktop-tools.js';
 import { canonicalKeyToSendKeys } from './desktop-keys.js';
+import { getWin32DesktopHelperClient, resolveWin32DesktopHelperPath } from './desktop-platform-win32-helper.js';
 
 /** Windows mouse_event supports left/right; middle is not a Win32 primitive
  *  today, so it falls back to left (matching prior tool behavior, which never
@@ -67,10 +67,8 @@ function toWin32Modifier(modifiers: DesktopModifier[]): 'shift' | 'ctrl' | 'alt'
   return undefined;
 }
 
-/** Map the platform-neutral capture request onto the existing Win32 capture.
- *  Windows capture is DPI-aware (1:1 virtual coords), so devicePixelRatio = 1.0.
- *  `window` capture is not yet a Win32 primitive (windows are captured by region
- *  via the screenshot tools today); it is left to Phase B. */
+/** Map non-window capture requests onto the existing Win32 visible-screen
+ * capture. Per-window capture routes through the persistent WGC helper. */
 function toCaptureMode(req: DesktopCaptureRequest): {
   mode: DesktopCaptureMode;
   crop?: [number, number, number, number];
@@ -91,7 +89,7 @@ function toCaptureMode(req: DesktopCaptureRequest): {
       throw new DesktopUnsupportedError(
         'win32',
         'capture(window)',
-        'Per-window capture is not yet exposed as a Win32 backend primitive (Phase B).',
+        'The Windows.Graphics.Capture helper is not installed.',
       );
   }
 }
@@ -108,7 +106,18 @@ export class Win32Backend implements DesktopBackend {
     return enumerateMonitorsInternal();
   }
 
-  async capture(req: DesktopCaptureRequest): Promise<DesktopCaptureResult> {
+  async capture(req: DesktopCaptureRequest, signal?: AbortSignal): Promise<DesktopCaptureResult> {
+    if (req.kind === 'window') {
+      const helper = getWin32DesktopHelperClient();
+      if (!helper.available) {
+        throw new DesktopUnsupportedError(
+          'win32',
+          'capture(window)',
+          `Build or install the helper at ${resolveWin32DesktopHelperPath()}, or use the CopyFromScreen fallback.`,
+        );
+      }
+      return helper.capture(req, signal);
+    }
     const { mode, crop } = toCaptureMode(req);
     const shot = await captureScreenshotInternal(mode, crop);
     const png = await readFile(shot.path);
@@ -172,6 +181,14 @@ export class Win32Backend implements DesktopBackend {
   async checkPermissions(): Promise<DesktopPermissionStatus[]> {
     // Windows requires no TCC-style grants; desktop automation works once the
     // process is running. desktop_doctor reports its own deeper health checks.
-    return [{ name: 'Windows desktop automation', granted: true }];
+    const helper = getWin32DesktopHelperClient();
+    return [
+      { name: 'Windows desktop automation', granted: true },
+      {
+        name: 'Windows.Graphics.Capture helper',
+        granted: helper.available,
+        remedy: helper.available ? undefined : `Build/install ${resolveWin32DesktopHelperPath()} for occlusion-safe window capture.`,
+      },
+    ];
   }
 }

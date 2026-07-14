@@ -1,36 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when writing, pruning, auditing, correcting, or deciding placement for durable memory, user preferences, project facts, operational runbooks, notes, or entity/business context.",
+  "description": "Decide whether durable information belongs in user memory, project/business context, daily notes, Brain evidence, a skill, or nowhere; then safely write, correct, prune, or audit it. Use for memory-governance decisions, not ordinary document ingestion or skill curation.",
   "triggers": [
-    "update memory",
-    "write this to memory",
-    "remember this",
-    "forget this",
-    "memory audit",
-    "clean up memory",
-    "wrong memory",
-    "durable fact",
-    "user preference memory",
-    "project memory",
     "where should this go in memory",
+    "what to remove from memory.md",
+    "audit user soul memory",
+    "move memory into skills",
+    "write this to memory",
+    "user preference memory",
+    "business context memory",
+    "memory feels heavy",
+    "clean up memory",
+    "memory file hygiene",
     "memory governance",
-    "prune memory",
-    "memory correction",
-    "update USER.md",
-    "update MEMORY.md",
-    "business context memory"
+    "memory correction"
   ],
-  "categories": [
-    "memory",
-    "governance",
-    "continuity"
-  ],
-  "requiredTools": [
-    "advanced_memory",
-    "workspace_write"
-  ],
-  "lifecycle": "active",
-  "name": "Memory Governance Playbook",
-  "id": "memory-governance-playbook"
+  "id": "memory-governance-playbook",
+  "name": "memory-governance-playbook",
+  "implicitInvocation": true,
+  "lifecycle": "active"
 }

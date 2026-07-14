@@ -381,6 +381,20 @@ export function submitPrometheusQuestionResponse(input: SubmitPrometheusQuestion
 
   const hadLiveWaiter = queue.hasResolveCallback(questionId);
   const answers = normalizeAnswers(question, input.answers || []);
+  const missingRequired = question.questions.filter((item) => {
+    if (item.required === false) return false;
+    const answer = answers.find((candidate) => candidate.id === item.id);
+    return !answer
+      || (!(answer.selected || []).length && !String(answer.text || '').trim() && !String(answer.other || '').trim());
+  });
+  if (missingRequired.length) {
+    return {
+      success: false,
+      statusCode: 400,
+      error: `Please answer: ${missingRequired.map((item) => item.label).join('; ')}`,
+      question,
+    };
+  }
   const resolved = queue.submit(questionId, answers, input.generalOther, resolvedBy);
   if (!resolved) return { success: false, statusCode: 409, error: 'Question could not be answered' };
 

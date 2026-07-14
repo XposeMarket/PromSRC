@@ -131,6 +131,14 @@ Budget math:
 
 Token counts are estimates, not provider-billed truth. `estimateTextTokensForModel(...)` uses character-density heuristics by tokenizer family and gives denser code/log text a smaller divisor. Provider usage metadata should be used for calibration where available, but UI/context decisions should still tolerate approximation.
 
+Codex Spark usage handling (2026-07-10):
+
+- OpenAI documents GPT-5.3-Codex-Spark as a separate model with its own model-specific usage limits rather than the standard Codex allowance.
+- `src/providers/provider-usage-limits.ts` parses `additional_rate_limits[]` from the authenticated `wham/usage` response. The Spark lane is identified by `limit_name: GPT-5.3-Codex-Spark` (with the provider feature identifier accepted as a fallback) and normalized into 5-hour/weekly windows.
+- Spark windows replace the standard Codex windows only when `openai_codex` and `gpt-5.3-codex-spark` are the currently configured main-chat provider/model. Agent defaults, secondary assignments, or merely having Spark in the catalog must not expose the Spark allowance.
+- The provider payload marks this with `usage_scope: "model"` and `usage_model: "gpt-5.3-codex-spark"`; otherwise usage remains `usage_scope: "provider"`.
+- Desktop chat, mobile chat, Models settings, and Hub reuse the same gated provider payload. If OpenAI omits the selected Spark lane, those surfaces show a Spark-specific unavailable state rather than incorrectly displaying standard Codex usage or local token totals.
+
 Anthropic extended-thinking request shape:
 
 - Opus 4.7 and newer Opus aliases use adaptive thinking (`thinking: { type: "adaptive" }`) with high effort output config instead of legacy `budget_tokens`.

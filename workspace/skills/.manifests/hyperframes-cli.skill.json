@@ -1,20 +1,19 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when using the HyperFrames CLI to render, preview, export, debug, or validate HTML motion/video projects from command line workflows.",
+  "description": "HyperFrames CLI dev loop for scaffolding, validation, snapshots, preview, rendering, and environment troubleshooting. Use Prometheus's bundled wrapper inside the Prometheus source tree so FFmpeg and FFprobe are exposed correctly; use ambient `npx hyperframes` only for standalone projects outside Prometheus. Route media sourcing, TTS, transcription, captions, and background removal through `media-use`.",
   "triggers": [
-    "HyperFrames CLI",
-    "render HyperFrames",
-    "export video from CLI",
+    "export video from cli",
+    "hyperframes render failed",
+    "command line hyperframes",
+    "render html motion",
     "preview motion project",
-    "HyperFrames render failed",
+    "validate hyperframes project",
     "debug video render",
-    "CLI video export",
-    "render HTML motion",
-    "validate HyperFrames project",
+    "cli video export",
+    "render hyperframes",
+    "hyperframes cli",
     "ffmpeg render",
-    "export mp4",
-    "command line HyperFrames",
     "render frames"
   ],
   "categories": [
@@ -28,6 +27,26 @@
     "creative_hyperframes"
   ],
   "lifecycle": "active",
-  "name": "HyperFrames CLI",
-  "id": "hyperframes-cli"
+  "name": "hyperframes-cli",
+  "id": "hyperframes-cli",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "The Prometheus wrapper discovered bundled FFmpeg/FFprobe and produced a deterministic H.264 MP4 with the expected duration, frame count, and visibly distinct frames.",
+    "verifiedCapabilities": [
+      "bundled_ffmpeg_discovery",
+      "bundled_ffprobe_discovery",
+      "scaffold",
+      "lint",
+      "capture",
+      "snapshot",
+      "mp4_render",
+      "frame_probe",
+      "visual_frame_validation"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "ownership": "upstream-managed"
 }

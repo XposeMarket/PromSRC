@@ -1,25 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when building SDR workflows, prospect research, target lists, outreach sequences, discovery call prep, objection handling, pipeline management, qualification frameworks, or sales process assets.",
+  "description": "Design an SDR sales motion: ICP, qualification, prospecting stages, outreach sequence, discovery process, pipeline metrics, handoffs, and operating cadence. Use for building or diagnosing the sales system; do not use for finding local leads or drafting one standalone message.",
   "triggers": [
-    "SDR workflow",
-    "prospect research",
-    "target list",
-    "outreach sequence",
-    "discovery call",
-    "objection handling",
+    "cold call script",
     "pipeline management",
-    "MEDDIC",
+    "objection handling",
+    "outreach sequence",
+    "sales development",
+    "prospecting plan",
+    "discovery call",
+    "sales playbook",
     "qualify leads",
     "sales cadence",
-    "sales playbook",
-    "cold call script",
-    "lead list",
-    "prospecting plan",
-    "sales development",
     "book meetings",
-    "account research"
+    "target list"
   ],
   "categories": [
     "sales",
@@ -33,6 +28,7 @@
     "skills"
   ],
   "lifecycle": "active",
-  "name": "SDR Sales",
-  "id": "sdr-sales"
+  "name": "sdr-sales",
+  "id": "sdr-sales",
+  "implicitInvocation": true
 }

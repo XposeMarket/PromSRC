@@ -2,13 +2,13 @@
 // Activates ONLY when location.hash starts with "#mobile" or pathname starts with "/mobile".
 // Otherwise stays out of the way so the desktop UI is untouched.
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=mobile-document-scroll-v1';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=mobile-drawer-scroll-v9';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage,
-} from './mobile-pages.js?v=mobile-document-scroll-v1';
+} from './mobile-pages.js?v=stream-focus-isolation-v16';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
@@ -154,7 +154,7 @@ function openMobileSettings(tab) {
     try { window.openSettings(tab || undefined); } catch (err) { console.warn('[mobile settings] openSettings failed', err); }
     return true;
   }
-  import('../pages/SettingsPage.js')
+  import('../pages/SettingsPage.js?v=goal-support-routing-v11')
     .then(() => openMobileSettings(tab))
     .catch((err) => console.warn('[mobile settings] could not lazy-load SettingsPage.js', err));
   console.warn('[mobile settings] desktop Settings modal not available yet');

@@ -1,0 +1,20 @@
+{
+  "ownership": "upstream-managed",
+  "implicitInvocation": false,
+  "status": "ready",
+  "health": {
+    "state": "ready",
+    "reason": "Official skill pinned from heygen-com/hyperframes and restricted to explicit specialist selection by the Creative Director.",
+    "verifiedCapabilities": [
+      "official_upstream_skill"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-11"
+  },
+  "id": "faceless-explainer",
+  "name": "faceless-explainer",
+  "description": "Turn arbitrary text — an article, notes, a topic, a brief — into a faceless explainer video: there is no site or footage to capture, so the visuals are invented per scene (typography, abstract graphics, diagrams, data-viz). Use for topic explainers, concept breakdowns, how-tos, listicles. Not a product promo (/product-launch-video) or a site tour (/website-to-video). Unclear → /hyperframes.",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "lifecycle": "active"
+}

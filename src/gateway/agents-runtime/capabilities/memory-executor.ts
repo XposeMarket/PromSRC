@@ -17,6 +17,7 @@ import { consolidateMemory, listMemoryClaims, reviewMemoryClaim } from '../../me
 import { isBusinessContextEnabled, setBusinessContextEnabled } from '../../session';
 import { appendTeamMemoryEvent } from '../../teams/team-workspace';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
+import { ensureRuntimeActorMemory, getRuntimeActorContext } from '../../runtime-actor.js';
 import type { ToolResult } from '../../tool-builder';
 import { inferTeamNoteContext } from './team-agent-helpers';
 import { appendEntityEvent, listEntities, readEntity, writeEntity } from '../../business/entity-store';
@@ -71,7 +72,18 @@ function resolveMemoryFile(file: any): { key: 'user' | 'memory' | 'soul'; filena
   };
 }
 
-function resolveMemoryPath(workspacePath: string, filename: string): string {
+function resolveMemoryPath(workspacePath: string, filename: string, sessionId?: string): string {
+  const actor = getRuntimeActorContext(String(sessionId || ''));
+  if (actor?.kind === 'agent' || actor?.kind === 'manager') {
+    // A distinct actor may only use the generic markdown-memory tools for its
+    // own MEMORY.md. USER.md and SOUL.md belong exclusively to main Prometheus.
+    if (filename !== 'MEMORY.md') {
+      throw new Error(`${filename} is main-Prometheus memory and is not writable/readable from the ${actor.kind} runtime. Use personal MEMORY.md instead.`);
+    }
+    const personalPath = ensureRuntimeActorMemory(actor);
+    if (!personalPath) throw new Error(`Personal memory root is not configured for ${actor.agentId || actor.kind}.`);
+    return personalPath;
+  }
   const primary = path.join(workspacePath, filename);
   if (fs.existsSync(primary)) return primary;
   const configWorkspace = getConfig().getWorkspacePath();
@@ -187,7 +199,9 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
       case 'memory_browse': {
         const { key, filename } = resolveMemoryFile(args.file);
         const primaryPath = path.join(workspacePath, filename);
-        const memoryPath = resolveMemoryPath(workspacePath, filename);
+        let memoryPath = '';
+        try { memoryPath = resolveMemoryPath(workspacePath, filename, sessionId); }
+        catch (err: any) { return { name, args, result: `memory_browse blocked: ${String(err?.message || err)}`, error: true }; }
         if (!fs.existsSync(memoryPath)) {
           return { name, args, result: `${filename} not found at ${primaryPath} or ${memoryPath}. Create it first.`, error: true };
         }
@@ -211,7 +225,9 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         const content = String(args.content || '').trim();
         if (!category) return { name, args, result: 'memory_write: category is required', error: true };
         if (!content) return { name, args, result: 'memory_write: content is required', error: true };
-        const memoryPath = resolveMemoryPath(workspacePath, filename);
+        let memoryPath = '';
+        try { memoryPath = resolveMemoryPath(workspacePath, filename, sessionId); }
+        catch (err: any) { return { name, args, result: `memory_write blocked: ${String(err?.message || err)}`, error: true }; }
         if (!fs.existsSync(memoryPath)) {
           fs.mkdirSync(path.dirname(memoryPath), { recursive: true });
           fs.writeFileSync(memoryPath, `# ${filename}\n\n---\n`, 'utf-8');
@@ -231,12 +247,16 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           fileContent = fileContent.slice(0, insertAt) + '\n\n' + sectionHeader + '\n' + entry + fileContent.slice(insertAt);
         }
         fs.writeFileSync(memoryPath, fileContent, 'utf-8');
-        return { name, args, result: `Written to ${filename} [${category}]: ${content}`, error: false };
+        const actor = getRuntimeActorContext(sessionId);
+        const scope = actor?.kind === 'agent' || actor?.kind === 'manager' ? `${actor.kind}:${actor.agentId || 'unknown'}` : 'main';
+        return { name, args, result: `Written to ${scope} ${filename} [${category}]: ${content}`, error: false };
       }
 
       case 'memory_read': {
         const { filename } = resolveMemoryFile(args.file);
-        const memoryPath = resolveMemoryPath(workspacePath, filename);
+        let memoryPath = '';
+        try { memoryPath = resolveMemoryPath(workspacePath, filename, sessionId); }
+        catch (err: any) { return { name, args, result: `memory_read blocked: ${String(err?.message || err)}`, error: true }; }
         if (!fs.existsSync(memoryPath)) return { name, args, result: `${filename} not found at ${memoryPath}`, error: true };
         return { name, args, result: fs.readFileSync(memoryPath, 'utf-8'), error: false };
       }

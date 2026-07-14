@@ -11,8 +11,19 @@ import { getActivatedSkillIds, getActivatedSkillResources, getActivatedToolCateg
 import { searchMemoryIndex } from './memory-index/index';
 import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
 import { buildCisContextBlock } from './business/cis-context-builder';
-import { loadSoul, loadSubagentSoul, loadVoiceSoul } from '../config/soul-loader';
+import { loadSoul, loadPrometheusRuntimeContract, loadVoiceSoul } from '../config/soul-loader';
+import { getRuntimeActorContext, loadRuntimeActorMemoryContext } from './runtime-actor';
 import { PROMPT_CACHE_MARKER } from '../providers/LLMProvider';
+import { TOOL_CATEGORY_MANIFEST, TOOL_CATEGORY_MENU_ORDER } from '../runtime/tool-category-manifest';
+import {
+  getInstructionResolverMode,
+  resolveStage3PilotPolicyDecision,
+} from '../runtime/instruction-segment-registry';
+import {
+  resolveStage4MenuSegmentDecision,
+  type Stage4InstructionIntents,
+  type Stage4MenuSegmentId,
+} from '../runtime/instruction-intent-detector';
 
 // ─── Prompt-cache assembly ─────────────────────────────────────────────────────
 // Splits the system prompt into a STABLE (cacheable) prefix and a VOLATILE
@@ -89,6 +100,7 @@ export interface BuildPersonalityContextOptions {
   profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent';
   excludedSkillIds?: string[];
   forcedSkillIds?: string[];
+  instructionIntents?: Stage4InstructionIntents;
 }
 
 const BOOT_COMPACTION_EXCLUDE_SESSION_RE = /^(startup_connection_probe_|brain_|auto_boot_|auto_restart_|task_|cron_|background_|team_dispatch_|subagent_chat_)/i;
@@ -733,8 +745,9 @@ export function readMemorySnippets(workspacePath: string, categories: string[]):
 // These constants are consumed by buildPersonalityContext. Exported so
 // consumers can extend or inspect them without importing server-v2.
 export const TOOL_BLOCKS: Record<string, string> = {
-  web: `WEB: shopping_search_products(query,merchant?,max_results?,provider?,include_metadata?)→fast normalized product cards and product carousel using existing web search/fetch only, no shopping API key. web_search(query,max_results?,multi_engine?,provider?,fetch_top_k?,fetch_max_chars?)→one unified search tool: provider="multi" or multi_engine=true queries every configured provider, provider=tinyfish|tavily|google|brave|ddg|xai targets one provider. web_fetch(url|urls,max_chars?,concurrency?)→fetch one page or a small batch of URLs. Search first, then fetch.
+  web: `WEB: shopping_search_products(query,merchant?,max_results?,provider?,include_metadata?,include_images?)→fast normalized product cards and product carousel using existing web search/fetch only, no shopping API key. web_search(query,max_results?,multi_engine?,provider?,fetch_top_k?,fetch_max_chars?)→one unified search tool: provider="multi" or multi_engine=true queries every configured provider, provider=tinyfish|tavily|google|brave|ddg|xai targets one provider. web_fetch(url|urls,max_chars?,concurrency?,include_media?,include_thread?)→fetch one page or a small batch of URLs; exact X statuses use official oEmbed, while media and thread browser work are opt-in. Search first, then fetch.
 Product/shopping rule: for product carousels, shopping comparisons, prices, ratings, or store-specific product lists, call shopping_search_products first. Use browser/page extraction only when this result is incomplete or needs visual/login verification.
+Visual source rule: pass real source URLs to show_sources after research. It normalizes web/provider aliases and automatically fills missing page metadata and cached preview images; include any title/snippet/image fields already returned instead of discarding them.
 Strategy: for complex topics call web_search 2–3× with different query angles; scan snippets; web_fetch the 1–3 most relevant URLs.
 Use web_search with provider:"tavily" to test Tavily-only; use provider:"google" to test Google-only; use provider:"xai" for X-backed social search. Use provider:"multi" or multi_engine:true for broad coverage.
 Site search: web_search("site:reddit.com keyword"). Fallback: web_fetch a direct URL (reuters.com, apnews.com, bbc.com).
@@ -745,8 +758,10 @@ OBSERVE MODES: observe="none" tiny ack and lowest latency; "compact" small URL/t
 RULES: visual-first workflow. Vision screenshots are highest-confidence on dynamic/SPA UIs. If DOM refs or JS-derived assumptions are uncertain, stale, or contradictory, take a fresh browser_observe(action:"screenshot") and trust that evidence first. After browser actions, rely on the default observation unless state likely changed in a way you must inspect; override with observe="none" on cheap deterministic actions when speed matters, observe="snapshot" for new refs, or observe="screenshot" for visual confirmation. Treat browser_extract(action:"run_js") as fallback for cases where snapshot/vision still cannot identify the target. For high-impact final submits/posts/sends/purchases/deletes, prepare the browser UI, call request_final_action_approval, then pass final_action_approval_id to the exact final browser_act(action:"click"|"key"). The approved final browser action returns post-action visual evidence automatically; inspect it, verify that the approved action actually succeeded, and only then report completion or explain the visible uncertainty/failure. Composer fills show "COMPOSER SUBMIT BUTTON: @N" - click it immediately unless it is a high-impact final action requiring request_final_action_approval first. j/k nav: call browser_observe(action:"focused_item") only when focus is unclear or you need to confirm position after navigation. Use SITE SHORTCUTS when shown; save new ones with save_site_shortcut().
 MEDIA SELECTION: when choosing an image/video on X, Google Images, or similar pages, first enumerate candidates via browser_observe(action:"snapshot") or browser_extract(action:"extract_structured") using nearby text, alt text, username, timestamp, href, or src. Rank candidates by text match to the request, then take browser_observe(action:"screenshot") to visually confirm the intended item before downloading. Prefer download_url for direct asset URLs and browser_act(action:"click_and_download") for browser-triggered downloads.`,
 
-  desktop: `DESKTOP: use unified wrappers. desktop_screen(action:"doctor"|"screenshot"|"window_screenshot"|"monitors"|"wait_for_change"|"diff_screenshot"|"pixel_watch", ...) inspects visual/monitor state. desktop_apps(action:"list_apps"|"list_windows"|"list_installed_apps"|"find_installed_app"|"launch_app"|"close_app"|"process_list", ...) handles app/window discovery and lifecycle. desktop_window(action:"find"|"focus"|"control"|"state"|"screenshot"|"text"|"accessibility_tree"|"click"|"type"|"key"|"scroll"|"drag", ...) is preferred for app-specific work and delegates to canonical window-scoped handlers. desktop_input(action:"click"|"drag"|"scroll"|"type"|"type_raw"|"key"|"wait"|"clipboard_get"|"clipboard_set", ...) is the host-desktop/global coordinate fallback. desktop_macro(action:"record"|"stop"|"replay"|"list"). desktop_background(action:"status"|"prepare_sandbox"|"command", command_action?, ...) targets the isolated background worker, not the host desktop.
-Screenshot/monitor first; prefer coordinate_space="capture" with screenshot_id when clicking from screenshot pixels, or coordinate_space="window" for app-local coords. Use SOM screenshots for element=N clicks. capture_after=true can return a post-action screenshot. Leave verify on auto unless speed matters. Focus before click/type. Routine desktop interaction is approval-free; for high-impact final submits/posts/sends/purchases/deletes, prepare the UI, call request_final_action_approval, then pass final_action_approval_id to the exact final desktop_window(action:"click"|"key") or desktop_input(action:"click"|"key"). The approved final desktop action returns a post-action capture automatically; inspect it, verify that the approved action actually succeeded, and only then report completion or explain the visible uncertainty/failure. Non-interrupting background desktop work requires desktop_background, not host desktop clicks/keys.`,
+  desktop: `DESKTOP: use unified wrappers. desktop_screen(action:"doctor"|"screenshot"|"region_screenshot"|"window_screenshot"|"monitors"|"wait_for_change"|"diff_screenshot"|"pixel_watch", ...) inspects visual/monitor state. desktop_apps(action:"list_apps"|"list_windows"|"list_installed_apps"|"find_installed_app"|"launch_app"|"close_app"|"process_list", ...) handles app/window discovery and lifecycle. desktop_window(action:"find"|"focus"|"control"|"state"|"screenshot"|"region_screenshot"|"text"|"accessibility_tree"|"click"|"type"|"key"|"scroll"|"drag", ...) is preferred for app-specific work and delegates to canonical window-scoped handlers. desktop_input(action:"click"|"drag"|"scroll"|"type"|"type_raw"|"key"|"wait"|"clipboard_get"|"clipboard_set", ...) is the host-desktop/global coordinate fallback. desktop_macro(action:"record"|"stop"|"replay"|"list"). desktop_background(action:"status"|"prepare_sandbox"|"command", command_action?, ...) targets the isolated background worker, not the host desktop.
+VISUAL GROUNDING: use coarse-to-fine capture. Take a whole-window screenshot for orientation, then recapture the relevant panel with desktop_window(action:"region_screenshot", window_token, region:[x1,y1,x2,y2]) whenever labels are unreadable, controls are dense, an icon/loading indicator is small, or the image was normalized/downscaled. Region coordinates are window-relative and the crop occurs on the native capture before transport normalization, preserving real detail. For cross-window/desktop areas use desktop_screen(action:"region_screenshot", region:[x1,y1,x2,y2]) with virtual-desktop coordinates. Never magnify an already downscaled image and treat invented pixels as evidence; recapture the native source, and repeat with a tighter region if needed.
+BOUNDED VISIBLE-TARGET FLOW: one whole-window orientation, one focused native region, one click, one verification. If the user says the target is visibly present, do not detour through accessibility, text extraction, Ctrl+K/Ctrl+P, search, or scrolling before attempting the grounded click. After one failed click, allow at most one tighter recapture, then report the blocker instead of looping.
+Screenshot/monitor first; prefer coordinate_space="capture" with the fresh region screenshot_id when clicking from screenshot pixels, or coordinate_space="window" only for independently known app-local logical coords. With screenshot_id, an omitted coordinate_space defaults to capture. Screenshots are vision-first and skip OCR by default; pass ocr=true only when OCR is specifically needed, or use text/accessibility. Use SOM only when accessibility exposes useful target controls; if it returns only window chrome, take a native region screenshot without SOM. For an ordinary well-grounded click, omit verify (fast path); use verify="auto" only when the immediate result is ambiguous and verify="strict" only when stronger evidence is worth the latency. Strict likely-noop/uncertain verification is an ACTION_NOT_CONFIRMED error. Never claim navigation/open/select success from the fact that a click was issued: verify the requested target identity in the resulting header/content, and if it does not match, report failure. A likely-noop is not permission to retry neighboring pixels: re-observe, tighten the region, or use accessibility. capture_after=true can return a post-action screenshot. Focus before click/type. Routine desktop interaction is approval-free; for high-impact final submits/posts/sends/purchases/deletes, prepare the UI, call request_final_action_approval, then pass final_action_approval_id to the exact final desktop_window(action:"click"|"key") or desktop_input(action:"click"|"key"). The approved final desktop action returns a post-action capture automatically; inspect it, verify that the approved action actually succeeded, and only then report completion or explain the visible uncertainty/failure. Non-interrupting background desktop work requires desktop_background, not host desktop clicks/keys.`,
 
   files: isPublicDistributionBuild()
     ? `FILES: use unified wrappers in workspace_write. workspace_read(action:"stats"|"read"|"batch_read"|"grep"|"search"|"tree"|"list"|"exists", path/filename/directory, ...) inspects files. workspace_edit(action:"create"|"write"|"find_replace"|"replace_lines"|"insert_after"|"delete_lines"|"delete_file"|"mkdir"|"copy"|"move"|"copy_directory"|"move_directory"|"patchset"|"preview_patch"|"apply_patch", ...) mutates files. workspace_git(action:"status"|"diff"|"log"|"branch"|"commit"|"push"|"open_pr"). workspace_safety(action:"snapshot"|"restore"|"revert_last"|"scan_secrets"|"scan_large_files"|"operation_plan"|"preview_patch"). workspace_code_nav(action:"outline"|"symbols"|"definition"|"references").
@@ -757,7 +772,7 @@ WORKSPACE ONLY: In the public app, file tools operate on the user workspace and 
 	SOURCE CODE REFERENCE FILES: self/index.md is the canonical Prometheus architecture/debug map. Read it with workspace_read(action:"read", path:"self/index.md"), not read_source. Use the split self/* files it points to when you only need one subsystem.
 	FILE COST DISCIPLINE: Broad file outputs are context-expensive. Prefer workspace_read(action:"stats"|"grep"|"search") before reading; use workspace_read(action:"tree", max_depth:2, max_entries:180) for orientation; prefer single-file exact line windows over batch reads; batch_read/dev_source_read(batch_read) is summary-first unless exact start_line/num_lines or content:true is provided. Use full:true/inline:true only when truly necessary.
 	SRC/WEB-UI SURFACES (read-only by default): use dev_source_read(action:"list"|"stats"|"stats_batch"|"read"|"batch_read"|"grep"|"search", surface:"src"|"web-ui"|"prom-root", file/path/pattern, ...) to inspect Prometheus src/, web-ui/, and allowlisted prom-root files. For self-edit token savings, prefer dev_source_read(action:"grep"|"search"|"stats") first, dev_source_read(action:"batch_read", max_files:2, max_lines_per_file:80) for focused multi-file summaries or exact windows, file_tree(path:"src/..."|"web-ui/...", max_depth:2, max_entries:180) for compact structure, and search_files(directory:"src/..."|"web-ui/...") when you want search_files-style args that delegate to source grep.
-	Write (approved dev source sessions only): use request_dev_source_edit for fast scoped approval in the current dev chat, or write_proposal execution_mode="code_change" for broad/risky changes that need the full proposal lane. request_dev_source_edit only needs exact files plus a short reason; add a concise plan/evidence only when the edit is non-trivial or touches safety/approval/runtime boundaries. After approval, edit only the approved scope, prefer dev_source_edit(action:"patchset") for grouped src/web-ui edits, verify with the narrowest relevant check or dev_source_edit(action:"verify_only"), then use dev_source_edit(action:"apply_live", changed_surfaces:[...]) when live sync/build/restart/reload is needed. Mobile source is web-ui/src/mobile/*; do not hand-edit generated/public-web-ui/static/mobile/* except for emergency verification. After apply_live/restart/reload succeeds, write the completion note with the approved completion_note_tag/dev_edit_id and summarize changed files, verification, and live status. Proposal/code_exec lanes are isolated sandboxes: verify them with the canonical terminal build command inside the sandbox, and do not call apply_live there.
+	Write (approved dev source sessions only): use request_dev_source_edit for fast scoped approval in the current dev chat, or write_proposal execution_mode="code_change" for broad/risky changes that need the full proposal lane. request_dev_source_edit only needs exact files plus a short reason; add a concise plan/evidence only when the edit is non-trivial or touches safety/approval/runtime boundaries. After approval, edit only the approved scope, prefer dev_source_edit(action:"patchset") for grouped src/web-ui edits, verify with the narrowest relevant check or dev_source_edit(action:"verify_only"), then use dev_source_edit(action:"apply_live", changed_surfaces:[...]) as the shared-batch readiness boundary. If a file is queued behind another dev edit, call dev_source_edit(action:"await_files", dev_edit_id:"...") and reread the handed-off latest version before writing. apply_live may queue without restarting; when it does, stop retrying and do not write the completion note until that thread receives its own batch-live continuation. Mobile source is web-ui/src/mobile/*; do not hand-edit generated/public-web-ui/static/mobile/* except for emergency verification. After the coordinator confirms apply/restart/reload succeeded, write the completion note with the approved completion_note_tag/dev_edit_id and summarize changed files, verification, and live status. Proposal/code_exec lanes are isolated sandboxes: verify them with the canonical terminal build command inside the sandbox, and do not call apply_live there.
 	MANDATORY EDIT ROUTE: For workspace file edits, native workspace wrappers are the default and expected path. Inspect enough to avoid blind edits: use workspace_read(action:"grep"/"search"/"stats"/"read") when the target is uncertain, but if the user/tool output already gives an exact file plus exact old text or line range, go directly to workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines") or workspace_edit(action:"patchset"). Edit tools verify the target and return post-edit context; do not re-read unless the result is ambiguous. Do not use terminal/Python/PowerShell/sed/node scripts to edit files unless the user explicitly asks for shell editing or native tools cannot perform the transformation.
 	EDIT PRIORITY: For source-controlled Prometheus code, skip broad orientation when the file/symbol is already clear. Use dev_source_read(action:"grep"|"search") to locate unknown code, dev_source_read(action:"stats") for unfamiliar/large files, and exact dev_source_read(action:"read", start_line, num_lines) only when grep/edit output is not enough. After approval, prefer dev_source_edit(action:"patchset") for grouped src/web-ui edits; it returns post-edit context. For normal workspace files, prefer workspace_read(action:"search"|"grep") before reads, then workspace_edit(action:"patchset") for grouped edits; keep reads line-windowed for one-off work.`,
 
@@ -778,7 +793,7 @@ TRIGGERS: use retrieval when user asks about previous discussions, older decisio
 GRAPH/DIAGNOSTICS: memory_graph_snapshot() returns relation graph nodes/edges; memory_index_refresh() forces reindex from workspace/audit.
 SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=project-scoped; timeline=chronological history.`,
 
-  integrations: `INTEGRATIONS: mcp_server_manage(action,...)→MCP lifecycle (list/upsert/import/connect/disconnect/delete/list_tools). webhook_manage(action,...)→webhook settings (enabled/token/path). integration_quick_setup(action,...)→one-shot presets (supabase/github/windows/brave/postgres/sqlite/filesystem/memory).`,
+  integrations: `INTEGRATIONS: connection_ops is the required normal setup path for connectors, MCP, APIs, CLIs, local resources, and model endpoints. Call discover with the user's natural service name, then plan/connect using the canonical match; unknown services return research_required so research official sources and pass only validated official metadata. Reuse/resume durable attempts and their user-action cards. Never request secrets in chat. Do not claim OAuth started unless the stored attempt is awaiting_oauth with an authorization action; do not claim connected or tools ready until verify returns connected. mcp_server_manage is advanced admin/debug only and must not bypass connection_ops for ordinary setup.`,
 
   media_assets: `MEDIA ASSETS: download_url(url,filename?) and download_media(url,audio_only?) retrieve remote assets. download_url auto-rewrites GitHub blob URLs to raw files. For a git/GitHub REPO (URL or owner/repo), use clone_repo(repo,paths?) to pull the whole repo or only specific files/dirs into the workspace (repos/<name>) — never fetch individual file URLs and re-type their contents. analyze_image/analyze_video inspect uploaded or downloaded media. Use browser_automation for browser-triggered downloads and media_assets for direct URL/media processing.`,
 
@@ -920,7 +935,7 @@ const BG_AGENT_RUNTIME_HINT = `BACKGROUND AGENTS: background_ops(action:"spawn",
   2) PARALLELIZE: when a piece of work is independent of what you're doing right now, spawn it to run concurrently instead of serially — gather data, scan the repo, run a web lookup, write a file, update memory, or prep one thing while you do another (e.g. browse a site while an agent builds a file). Don't do independent work one-at-a-time when it can overlap.
 prompt MUST be fully self-contained: include exact paths, URLs, context, and instructions — the spawned agent has no access to "the conversation". The finalization gate waits for and merges same-turn background_ops spawn results before your final reply. Use background_ops(action:"wait", wait_ms) to intentionally pause the foreground turn while spawned agents finish before you continue. Don't call background_ops action="join"/"status" unless explicitly needed. Legacy background_* tools remain executable compatibility aliases but are hidden from the normal schema surface. Spawned agents plan with bg_plan_declare/bg_plan_advance.`;
 
-export function buildToolsContext(activatedCategories: Set<string>): string {
+export function buildToolsContext(activatedCategories: Set<string>, options?: { instructionIntents?: Stage4InstructionIntents }): string {
   // Build dynamic search provider summary inline (getConfig already imported at top of file)
   let searchProviders = 'DuckDuckGo (fallback)';
   try {
@@ -942,63 +957,17 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
     searchProviders = ps.join(', ');
   } catch { /* use default */ }
 
-  const runtimeCategoryDefs: Array<[string, string]> = [
-    ['browser_automation', 'browser_automation (browser_session/observe/act/extract wrappers)'],
-    ['desktop_automation', 'desktop_automation (desktop_screen/apps/window/input/macro/background wrappers)'],
-    ['agents_and_teams', 'agents_and_teams (agent_ops/chat_ops/team wrappers)'],
-    ['workspace_write', 'workspace_write (unified workspace read/edit/run/git/safety/code-nav wrappers)'],
-    ['prometheus_source_read', 'prometheus_source_read (dev_source_read for Prometheus src/, web-ui/, and allowlisted root files)'],
-    ['prometheus_source_write', 'prometheus_source_write (dev_source_edit for approved Prometheus src/web-ui edits)'],
-    ['advanced_memory', 'advanced_memory (memory graph, timeline, related records, project search, index refresh)'],
-    ['media_assets', 'media_assets (download/analyze images, video, audio, remote assets)'],
-    ['creative_quality', 'creative_quality (creative_quality_ops QA wrapper)'],
-    ['automations', 'automations (schedule detail/history/outputs/patch/stuck control/dashboard)'],
-    ['integration_admin', 'integration_admin (MCP server setup, webhooks, integration quick setup)'],
-    ['external_apps', 'external_apps (connected app wrappers: X/xAI, Vercel, and other connected tools)'],
-    ['connectors', 'connectors (alias for external_apps; use connector_list, then wrappers such as x_posts or vercel_ops)'],
-    ['social_intelligence', 'social_intelligence (social profile analysis and recommendations)'],
-    ['proposal_admin', 'proposal_admin (edit pending proposals before approval)'],
-    ['mcp_server_tools', 'mcp_server_tools (dynamic mcp__server__tool functions from connected servers)'],
-    ['composite_tools', 'composite_tools (saved multi-step tools and composite management)'],
-    ['creative_basic', 'creative_basic (creative_project + creative_scene wrappers)'],
-    ['creative_image', 'creative_image (creative_image_ops wrapper)'],
-    ['creative_video', 'creative_video (creative_video_ops wrapper)'],
-    ['creative_hyperframes', 'creative_hyperframes (creative_hyperframes_ops wrapper)'],
-    ['skills', 'skills (skill_ops wrapper for authoring, packaging, import/export, resource maintenance, inspection, and metadata audits)'],
-    ['model_management', 'model_management (agent fleet model administration and templates)'],
-    ['business', 'business (structured business entity lifecycle administration)'],
-  ];
-  const allowedCategoryIds: Set<string> = new Set(getPublicBuildAllowedCategories([
-    'browser_automation',
-    'desktop_automation',
-    'agents_and_teams',
-    'workspace_write',
-    'prometheus_source_read',
-    'prometheus_source_write',
-    'advanced_memory',
-    'media_assets',
-    'creative_quality',
-    'automations',
-    'external_apps',
-    'integration_admin',
-    'social_intelligence',
-    'proposal_admin',
-    'mcp_server_tools',
-    'composite_tools',
-    'creative_basic',
-    'creative_image',
-    'creative_video',
-    'creative_hyperframes',
-    'skills',
-    'model_management',
-    'business',
-  ] as const));
+  const runtimeCategoryDefs: Array<[string, string]> = TOOL_CATEGORY_MENU_ORDER.map((id) => [
+    id,
+    `${id} (${TOOL_CATEGORY_MANIFEST[id].menuLabel})`,
+  ]);
+  const allowedCategoryIds: Set<string> = new Set(getPublicBuildAllowedCategories(TOOL_CATEGORY_MENU_ORDER));
   const categoryMenu = runtimeCategoryDefs
     .filter(([id]) => allowedCategoryIds.has(id))
     .map(([, label]) => label)
     .join(' | ');
 
-  const menu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, skill_list/skill_read only for core skill discovery, tasks, schedule_job, switch_model, set_current_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
+  const legacyMenu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, skill_list/skill_read only for core skill discovery, tasks, schedule_job, switch_model, set_current_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
   ${categoryMenu}
   Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
   Use: request_tool_category({"category":"browser_automation","scope":"turn"}) for the current user turn. Use scope=session only for explicit ongoing workflows; scope=next_turn keeps it through one follow-up turn; scope=ttl with turns keeps it for a bounded multi-turn workflow.
@@ -1015,6 +984,7 @@ export function buildToolsContext(activatedCategories: Set<string>): string {
 [SEARCH] Providers: ${searchProviders}.
 WHEN: freshness (today/latest/current/price), high-stakes facts, named entity lookup, uncertainty ("not sure if…"). Skip for timeless well-known facts.
 SHOPPING: for products, shopping comparisons, prices, ratings, or product carousels, call shopping_search_products first. It uses the existing web search/fetch stack and emits carousel-ready product cards without requiring shopping API keys. Use browser tools only to fill missing fields, inspect a JS-heavy page, or verify a specific product visually.
+VISUAL SOURCES: after research, call show_sources with the real source URLs and all metadata already returned. Missing title/publisher/snippet/date/image fields are enriched from the pages and discovered images are cached locally.
 HOW: complex topics → call web_search 2–3× with different angles (not the same query twice). Scan snippets → web_fetch the 1–3 most relevant URLs. Add site:domain.com to target a source.
 FETCH STRATEGY: web_fetch for static articles/docs (fast). browser_get_page_text for JS-heavy/login-gated pages (slower, use when web_fetch returns empty/broken).
 ITERATE: if first search misses, rephrase the query or try a broader/narrower angle before giving up.
@@ -1047,6 +1017,29 @@ Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct
   Auto-reverts after turn end — never switch back manually.
 
 ${BG_AGENT_RUNTIME_HINT}`;
+  const fallbackIntents: Stage4InstructionIntents = {
+    file_edit_intent: true,
+    command_execution_intent: true,
+    proposal_workflow_intent: true,
+    web_research_intent: true,
+    business_context_intent: true,
+    reasons: {},
+  };
+  const stage4Intents = options?.instructionIntents || fallbackIntents;
+  const sectionBounds: Array<[Stage4MenuSegmentId, string, string]> = [
+    ['tools.file_edit_routing', '[FILE EDIT ROUTING]', '[RUN COMMAND ROUTING]'],
+    ['tools.run_command_routing', '[RUN COMMAND ROUTING]', '[PROPOSAL LANES]'],
+    ['tools.proposal_lanes', '[PROPOSAL LANES]', '[SEARCH]'],
+    ['tools.search_strategy', '[SEARCH]', '[WRITE NOTE]'],
+    ['tools.business_context', '[BUSINESS CONTEXT]', '[TEAMS & AGENTS]'],
+  ];
+  let menu = legacyMenu;
+  for (const [id, startHeading, nextHeading] of sectionBounds) {
+    if (resolveStage4MenuSegmentDecision(id, stage4Intents).included) continue;
+    const start = menu.indexOf(`\n\n${startHeading}`);
+    const end = menu.indexOf(`\n\n${nextHeading}`, Math.max(0, start + 2));
+    if (start >= 0 && end > start) menu = menu.slice(0, start) + menu.slice(end);
+  }
   const activeCategoryList = Array.from(activatedCategories)
     .map((category) => String(category || '').trim())
     .filter(Boolean);
@@ -1059,7 +1052,17 @@ ${BG_AGENT_RUNTIME_HINT}`;
 
   const activePolicies: string[] = [];
   for (const cat of activatedCategories) {
-    if (CATEGORY_POLICIES[cat]) activePolicies.push(CATEGORY_POLICIES[cat]);
+    const policy = CATEGORY_POLICIES[cat];
+    if (!policy) continue;
+    const mode = getInstructionResolverMode();
+    const pilotDecision = resolveStage3PilotPolicyDecision(cat, activatedCategories);
+    if (mode === 'pilot' && pilotDecision.pilotCategory) {
+      if (pilotDecision.included) activePolicies.push(policy);
+      continue;
+    }
+    // legacy and shadow preserve the existing builder. Non-pilot categories
+    // remain on the existing path in every mode during Stage 3.
+    activePolicies.push(policy);
   }
 
   if (activePolicies.length === 0) return baseMenu;
@@ -1126,9 +1129,11 @@ export async function buildPersonalityContext(
     setCurrentTurn = (() => {}) as any;
   }
   const profile = options?.profile || 'default';
-  const skillContextOptions = (options?.excludedSkillIds?.length || options?.forcedSkillIds?.length)
-    ? { excludedSkillIds: options?.excludedSkillIds || [], forcedSkillIds: options?.forcedSkillIds || [] }
-    : undefined;
+  const skillContextOptions = {
+    sessionId,
+    excludedSkillIds: options?.excludedSkillIds || [],
+    forcedSkillIds: options?.forcedSkillIds || [],
+  };
 
   // ── Path LOCAL_LLM: tiny prompt for small local model primaries ───────────────
   // Activated only when isLocalPrimary() is true in chat.router.ts.
@@ -1167,14 +1172,22 @@ export async function buildPersonalityContext(
       [
         user ? `[USER]\n${user}` : '',
         soul ? `[SOUL]\n${soul}` : '',
-        buildToolsContext(activatedCatsTeach),
+        buildToolsContext(activatedCatsTeach, { instructionIntents: options?.instructionIntents }),
       ],
       [toolCategoryMatchTeach, skillCtxTeach, activeSkillCtxTeach],
     );
   }
 
   const isDirectSubagentProfile = profile === 'direct_subagent';
-  const allowLongTermSearch = executionMode === 'interactive' || executionMode === 'background_agent' || executionMode === 'team_subagent';
+  const runtimeActor = getRuntimeActorContext(sessionId);
+  const isScheduledAgentActor = executionMode === 'cron' && runtimeActor?.kind === 'agent';
+  const isInteractiveAgentSwitch = profile === 'switch_model'
+    && executionMode === 'interactive'
+    && runtimeActor?.kind === 'agent';
+  // Main-chat memory retrieval is never inherited by a subagent runtime. A
+  // subagent may still use an explicitly available memory tool when its task
+  // calls for it, but no user/main memory is silently injected into its prompt.
+  const allowLongTermSearch = executionMode === 'interactive' && !isDirectSubagentProfile && runtimeActor?.kind !== 'agent' && runtimeActor?.kind !== 'manager';
   const memorySearchRouting = allowLongTermSearch
     ? routeMemorySearchMode(messageText)
     : ({ mode: 'no_search', reason: 'execution_mode_skip' } as MemorySearchRouting);
@@ -1234,7 +1247,9 @@ export async function buildPersonalityContext(
     );
   }
 
-  if (profile === 'switch_model') {
+  // A model switch starts a fresh generation, but it must not turn a named
+  // agent/manager into main Prometheus by reloading Prom's USER/SOUL/MEMORY.
+  if (profile === 'switch_model' && runtimeActor?.kind !== 'agent' && runtimeActor?.kind !== 'manager') {
     const user = loadFullMemoryProfile(workspacePath, 'USER.md');
     const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
     const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
@@ -1261,16 +1276,14 @@ export async function buildPersonalityContext(
         soul ? `[SOUL]\n${soul}` : '',
         business ? `[BUSINESS]\n${business}` : '',
         memory ? `[MEMORY]\n${memory}` : '',
-        buildToolsContext(activatedCatsSwitch),
+        buildToolsContext(activatedCatsSwitch, { instructionIntents: options?.instructionIntents }),
       ],
       [cisContext, retrievedMemoryCtx, toolCategoryMatchSwitch, skillCtx, activeSkillCtx],
     );
   }
-  if (isDirectSubagentProfile) {
-    const subagentSoul = loadSubagentSoul();
-    const user = loadFullMemoryProfile(workspacePath, 'USER.md');
-    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
-    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md');
+  if (isDirectSubagentProfile || isScheduledAgentActor || isInteractiveAgentSwitch) {
+    const runtimeContract = loadPrometheusRuntimeContract();
+    const agentMemory = loadRuntimeActorMemoryContext(sessionId);
     const activatedCatsDirectSub = getActivatedToolCategories(sessionId);
     if (extraCats) {
       for (const ec of extraCats) {
@@ -1285,15 +1298,11 @@ export async function buildPersonalityContext(
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return assembleContext(
       [
-        subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
-        user ? `[USER]\n${user}` : '',
-        business ? `[BUSINESS]\n${business}` : '',
-        memory ? `[MEMORY]\n${memory}` : '',
-        buildToolsContext(activatedCatsDirectSub),
+        runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
+        agentMemory ? `[AGENT_MEMORY - PRIVATE TO THIS AGENT]\nUse memory_read/memory_write with file="memory" for this file. USER/SOUL memory belongs to main Prometheus and is unavailable here.\n${agentMemory}` : '',
+        buildToolsContext(activatedCatsDirectSub, { instructionIntents: options?.instructionIntents }),
       ],
       [
-        cisContext,
-        retrievedMemoryCtx,
         toolCategoryMatchDirectSub,
         skillCtx,
         activeSkillCtx,
@@ -1302,23 +1311,13 @@ export async function buildPersonalityContext(
   }
 
   // ── Path SUB: background/team subagents ────────────────────────────────────
-  // Subagents receive subagent soul plus their role/task context from callerContext.
+  // Distinct agents receive the shared runtime contract, their private memory,
+  // and their role/task context from callerContext.
   // They intentionally do not receive main Prometheus SOUL.md/config soul.
   if (executionMode === 'background_agent') {
-    const subagentSoul = loadSubagentSoul();
+    const runtimeContract = loadPrometheusRuntimeContract();
+    const agentMemory = loadRuntimeActorMemoryContext(sessionId);
     const activatedCatsBackground = getActivatedToolCategories(sessionId);
-    const mainWorkspacePath = getConfig().getWorkspacePath();
-    const fallbackMemoryRoots = mainWorkspacePath && path.resolve(mainWorkspacePath) !== path.resolve(workspacePath)
-      ? [mainWorkspacePath]
-      : [];
-    const user = loadFullMemoryProfile(workspacePath, 'USER.md', undefined, fallbackMemoryRoots);
-    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', undefined, fallbackMemoryRoots);
-    const intradayRoot = mainWorkspacePath || workspacePath;
-    const todayBackground = new Date().toISOString().split('T')[0];
-    const intradayPathBackground = path.join(intradayRoot, 'memory', `${todayBackground}-intraday-notes.md`);
-    const intradayNotesBackground = fs.existsSync(intradayPathBackground)
-      ? processIntradayNotes(fs.readFileSync(intradayPathBackground, 'utf-8'), 1, 300)
-      : '';
     if (extraCats) {
       for (const ec of extraCats) {
         if (ec === 'browser_vision' || ec === 'browser') activatedCatsBackground.add('browser');
@@ -1336,14 +1335,12 @@ export async function buildPersonalityContext(
     return assembleContext(
       [
         messageText ? `[Spawning Prompt from the Main Agent (or whomever is spawning it)]\n${messageText}` : '',
-        subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
-        user ? `[USER]\n${user}` : '',
-        memory ? `[MEMORY]\n${memory}` : '',
-        buildToolsContext(activatedCatsBackground),
+        runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
+        agentMemory ? `[AGENT_MEMORY - PRIVATE TO THIS AGENT]\nUse memory_read/memory_write with file="memory" for this file. USER/SOUL memory belongs to main Prometheus and is unavailable here.\n${agentMemory}` : '',
+        buildToolsContext(activatedCatsBackground, { instructionIntents: options?.instructionIntents }),
       ],
       [
         toolCategoryMatchBackground,
-        intradayNotesBackground ? `[TODAY_NOTES — latest entry only, read-only context]\n${intradayNotesBackground}` : '',
         referenceHintBackground,
         skillCtx,
         activeSkillCtx,
@@ -1352,28 +1349,9 @@ export async function buildPersonalityContext(
   }
 
   if (executionMode === 'team_subagent') {
-    const subagentSoul = loadSubagentSoul();
+    const runtimeContract = loadPrometheusRuntimeContract();
+    const agentMemory = loadRuntimeActorMemoryContext(sessionId);
     const activatedCatsSub = getActivatedToolCategories(sessionId);
-    const mainWorkspacePath = getConfig().getWorkspacePath();
-    const fallbackMemoryRoots = mainWorkspacePath && path.resolve(mainWorkspacePath) !== path.resolve(workspacePath)
-      ? [mainWorkspacePath]
-      : [];
-    const user = loadFullMemoryProfile(workspacePath, 'USER.md', undefined, fallbackMemoryRoots);
-    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
-    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md', undefined, fallbackMemoryRoots);
-    // Intraday: pull from the main workspace where the user's daily notes live,
-    // so a subagent working today shares the same working context as main chat.
-    const intradayRoot = mainWorkspacePath || workspacePath;
-    const todaySub = new Date().toISOString().split('T')[0];
-    const intradayPathSub = path.join(intradayRoot, 'memory', `${todaySub}-intraday-notes.md`);
-    const intradayNotesSub = fs.existsSync(intradayPathSub) ? processIntradayNotes(fs.readFileSync(intradayPathSub, 'utf-8')) : '';
-    let projectContextBlockSub = '';
-    try {
-      const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
-      if (findProjectBySessionId(sessionId)) {
-        projectContextBlockSub = buildProjectContextBlock(sessionId) || '';
-      }
-    } catch {}
     if (extraCats) {
       for (const ec of extraCats) {
         if (ec === 'browser_vision' || ec === 'browser') activatedCatsSub.add('browser');
@@ -1390,22 +1368,43 @@ export async function buildPersonalityContext(
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
     return assembleContext(
       [
-        subagentSoul ? `[SUBAGENT_SOUL]\n${subagentSoul}` : '',
-        user ? `[USER]\n${user}` : '',
-        business ? `[BUSINESS]\n${business}` : '',
-        memory ? `[MEMORY]\n${memory}` : '',
-        projectContextBlockSub ? `[PROJECT_CONTEXT]\n${projectContextBlockSub}` : '',
-        buildToolsContext(activatedCatsSub),
+        runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
+        agentMemory ? `[AGENT_MEMORY - PRIVATE TO THIS AGENT]\nUse memory_read/memory_write with file="memory" for this file. USER/SOUL memory belongs to main Prometheus and is unavailable here.\n${agentMemory}` : '',
+        buildToolsContext(activatedCatsSub, { instructionIntents: options?.instructionIntents }),
       ],
       [
-        cisContext,
-        retrievedMemoryCtx,
         toolCategoryMatchSub,
-        intradayNotesSub ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotesSub}` : '',
         referenceHintSub,
         skillCtx,
         activeSkillCtx,
       ],
+    );
+  }
+
+  // Team managers are distinct named agents. They receive their own identity
+  // from callerContext and their own memory here, never Prom's USER/SOUL/MEMORY.
+  if (executionMode === 'team_manager') {
+    const runtimeContract = loadPrometheusRuntimeContract();
+    const agentMemory = loadRuntimeActorMemoryContext(sessionId, 8000);
+    const activatedCatsManager = getActivatedToolCategories(sessionId);
+    if (extraCats) {
+      for (const ec of extraCats) {
+        if (ec === 'browser_vision' || ec === 'browser') activatedCatsManager.add('browser');
+        else activatedCatsManager.add(ec);
+      }
+    }
+    const toolCategoryMatchManager = buildToolCategoryMatchContext(messageText, activatedCatsManager);
+    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
+    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+    setCurrentTurn(sessionId, historyLength);
+    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    return assembleContext(
+      [
+        runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
+        agentMemory ? `[AGENT_MEMORY - PRIVATE TO THIS MANAGER]\nUse memory_read/memory_write with file="memory" for this private file. Shared team truth belongs in team memory.json. USER/SOUL memory belongs to main Prometheus and is unavailable here.\n${agentMemory}` : '',
+        buildToolsContext(activatedCatsManager, { instructionIntents: options?.instructionIntents }),
+      ],
+      [toolCategoryMatchManager, skillCtx, activeSkillCtx],
     );
   }
 
@@ -1454,7 +1453,7 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchAuto = buildToolCategoryMatchContext(messageText, activatedCatsAuto);
-    const toolsBlockAuto = buildToolsContext(activatedCatsAuto);
+    const toolsBlockAuto = buildToolsContext(activatedCatsAuto, { instructionIntents: options?.instructionIntents });
     // Autonomous agents: same hint + pinned skills as interactive chat.
     const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
     const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
@@ -1518,7 +1517,7 @@ export async function buildPersonalityContext(
         business ? `[BUSINESS]\n${business}` : '',
         memory ? `[MEMORY]\n${memory}` : '',
         projectContextBlockT1 ? `[PROJECT_CONTEXT]\n${projectContextBlockT1}` : '',
-        buildToolsContext(activatedCatsT1),
+        buildToolsContext(activatedCatsT1, { instructionIntents: options?.instructionIntents }),
       ],
       [
         cisContext,
@@ -1554,7 +1553,7 @@ export async function buildPersonalityContext(
     }
   }
   const toolCategoryMatch = buildToolCategoryMatchContext(messageText, activatedCats);
-  const toolsBlock = buildToolsContext(activatedCats);
+  const toolsBlock = buildToolsContext(activatedCats, { instructionIntents: options?.instructionIntents });
 
   // Reference hints — Prom reads these files when actually needed rather than
   // injecting partial snippets based on keyword guesses.

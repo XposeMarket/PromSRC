@@ -25,6 +25,22 @@ and auto-injects its tools under the `mcp_server_tools` category.
     "command": "npx",
     "args": ["-y", "airtable-mcp-server"],
     "envTemplate": { "AIRTABLE_API_KEY": "{{credential:airtable:apiKey}}" }
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["Airtable", "Airtable MCP"],
+    "domains": ["airtable.com"],
+    "strategies": [{
+      "id": "airtable-mcp",
+      "adapter": "mcp-stdio",
+      "priority": 100,
+      "capabilities": ["records.read"],
+      "readOnlyDefault": true,
+      "authentication": { "type": "api-key" },
+      "verification": ["mcp.initialize", "mcp.tools.discover", "safe-read"],
+      "config": { "mcpServerId": "mcp-airtable" }
+    }],
+    "toolPolicy": { "defaultExposure": "read-only", "unknownTools": "blocked" }
   }
 }
 ```
@@ -41,6 +57,6 @@ Same `POST /api/extensions/install` endpoint, but body is just
 `{ "manifest": { ...the mcp_preset manifest... } }` — **no `indexJs`**.
 
 After install, verify the MCP server appears (catalog `kind=mcp_preset`) and tell
-the user to enter the credential in Connections. Once connected and the
-`mcp_server_tools` category is active, the server's tools appear as
-`mcp__<id>__<toolName>`.
+the user to complete the durable connection card. Use `connection_ops` for
+discovery, plan, connect, continuation, and verification. Only verified and
+policy-approved tools should appear as `mcp__<id>__<toolName>`.

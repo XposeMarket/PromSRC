@@ -57,8 +57,12 @@ const DREAM_HOUR           = 23;                    // local hour for dream elig
 const DREAM_MIN            = 30;                    // local minute for dream eligibility
 const DREAM_BUFFER_MIN     = 90;                    // don't start thought if dream is ≤90 min away
 const DREAM_CLEANUP_DELAY_MS = 30 * 60 * 1000;      // run the memory solidifier 30m after dream success
-const THOUGHT_RETRY_BACKOFF_MS = 30 * 60 * 1000;    // wait 30m after a failed attempt
-const DREAM_RETRY_BACKOFF_MS   = 60 * 60 * 1000;    // wait 60m after a failed attempt
+// Failed model-backed runs used to retry every 30-60 minutes. When an artifact
+// integrity check kept failing, that turned the 15-minute ticker into a costly
+// retry storm. Successful runs retain their normal cadence; only failures back
+// off long enough to avoid repeatedly consuming the provider and gateway.
+const THOUGHT_RETRY_BACKOFF_MS = 6 * 60 * 60 * 1000;
+const DREAM_RETRY_BACKOFF_MS   = 6 * 60 * 60 * 1000;
 
 const PRIVATE_BRAIN_SOURCE_TOOL_NAMES = new Set([
   'list_source',
@@ -191,11 +195,12 @@ Operational proposal rules:
 ${brainHardenedActionContract()}
 
 Skill proposal rules:
-- Do not submit proposals for routine existing-skill improvements. Existing skill evolution is automatic in Phase 3.
-- Use type skill_evolution only for creating a new reusable workflow skill, or for a high-risk skill change you intentionally deferred from automatic editing.
+- Do not mutate skills or submit skill_evolution proposals directly from Dream.
+- Submit structured existing-skill and new-skill candidates with skill_candidate_submit for Curator clustering and overlap review.
+- A new skill may reach skill_evolution proposal design only after its Curator candidate is explicitly approved.
 - New skill proposals must include exact target skill id, planned resources, acceptance behavior after approval, a draft skill body or detailed outline, triggers, permissions, categories, and required tools.
-- High-risk existing-skill proposals must explain why automatic editing was unsafe and must cite skill_read/skill_inspect evidence.
-- Prefer automatic existing-skill updates or new-skill proposals over memory when the learning is procedural or workflow-specific.`;
+- High-risk existing-skill candidates must cite skill_read/skill_inspect evidence.
+- Prefer candidate submission over memory when the learning is procedural or workflow-specific.`;
   }
 
   return `Available proposal types:
@@ -229,11 +234,12 @@ Operational proposal rules:
 ${brainHardenedActionContract()}
 
 Skill proposal rules:
-- Do not submit proposals for routine existing-skill improvements. Existing skill evolution is automatic in Phase 3.
-- Use type skill_evolution only for creating a new reusable workflow skill, or for a high-risk skill change you intentionally deferred from automatic editing.
+- Do not mutate skills or submit skill_evolution proposals directly from Dream.
+- Submit structured existing-skill and new-skill candidates with skill_candidate_submit for Curator clustering and overlap review.
+- A new skill may reach skill_evolution proposal design only after its Curator candidate is explicitly approved.
 - New skill proposals must include exact target skill id, planned resources, acceptance behavior after approval, a draft skill body or detailed outline, triggers, permissions, categories, and required tools.
-- High-risk existing-skill proposals must explain why automatic editing was unsafe and must cite skill_read/skill_inspect evidence.
-- Prefer automatic existing-skill updates or new-skill proposals over memory when the learning is procedural or workflow-specific.
+- High-risk existing-skill candidates must cite skill_read/skill_inspect evidence.
+- Prefer candidate submission over memory when the learning is procedural or workflow-specific.
 
 Source-code proposal rules:
 - If a proposal would edit Prometheus source code, it must set execution_mode=code_change, type src_edit, and affected_files must include the exact src/... or web-ui/... paths
@@ -285,7 +291,7 @@ function brainDreamProposalSubmitRules(): string {
 - Make the title and summary feel like a morning briefing: obvious, concrete, approval-ready
 - Save the returned proposal ID for the output files`;
 }
-const DREAM_CLEANUP_RETRY_BACKOFF_MS = 60 * 60 * 1000;
+const DREAM_CLEANUP_RETRY_BACKOFF_MS = 12 * 60 * 60 * 1000;
 const DREAM_CATCHUP_LOOKBACK_DAYS = 7;              // max backlog window to auto-catch-up
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -396,9 +402,13 @@ export class BrainRunner {
 
     // Next thought
     const lastThought = state.lastThoughtAt ? new Date(state.lastThoughtAt) : null;
-    const nextThoughtMs = lastThought
+    const cadenceDueMs = lastThought
       ? Math.max(lastThought.getTime() + THOUGHT_INTERVAL_MS, now.getTime())
       : now.getTime();
+    const failedRetryDueMs = state.lastThoughtStatus === 'failed' && state.lastThoughtAttemptAt
+      ? new Date(state.lastThoughtAttemptAt).getTime() + THOUGHT_RETRY_BACKOFF_MS
+      : 0;
+    const nextThoughtMs = Math.max(cadenceDueMs, Number.isFinite(failedRetryDueMs) ? failedRetryDueMs : 0);
 
     // Next dream
     const dreamTime = pendingDreamDate
@@ -860,10 +870,12 @@ export class BrainRunner {
         sendSSE,
         undefined,
         abortSignal,
-        `CONTEXT: Automated Brain Thought run ${thoughtNumber} for ${dateStr}. Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}. Observe, verify current state against live artifacts, do light research, maintain the Active Work Ledger, write the thought file, and apply low-risk existing-skill maintenance only. No memory writes, proposals, or new skill creation.`,
+        `CONTEXT: Automated Brain Thought run ${thoughtNumber} for ${dateStr}. Window: ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}. Observe, verify current state against live artifacts, do light research, maintain the Active Work Ledger, write the thought file, and submit structured skill candidates only. No memory writes, proposals, or skill mutations.`,
         thoughtModelOverride,
         'cron',
         brainDreamToolFilter([
+          'workspace_read',
+          'workspace_edit',
           'list_directory',
           'list_files',
           'read_file',
@@ -899,9 +911,7 @@ export class BrainRunner {
           'skill_resource_list',
           'skill_resource_read',
           'skill_audit_all',
-          'skill_update_metadata',
-          'skill_manifest_write',
-          'skill_resource_write',
+          'skill_candidate_submit',
         ]),
       );
       resultText = abortSignal.aborted
@@ -928,10 +938,37 @@ export class BrainRunner {
       if (toolLog) persistToolLog(sessionId, toolLog);
     }
 
-    const fileExists = fs.existsSync(absOutFile);
-    const fileStats = fileExists ? fs.statSync(absOutFile) : null;
-    const fileLooksFresh = !!fileStats && fileStats.size > 0 && fileStats.mtimeMs >= (runStartedAt - 5000);
     const runFailed = /^error:/i.test(String(resultText || '').trim());
+    const artifactFresh = (): boolean => {
+      try {
+        if (!fs.existsSync(absOutFile)) return false;
+        const st = fs.statSync(absOutFile);
+        return st.size > 0 && st.mtimeMs >= (runStartedAt - 5000);
+      } catch {
+        return false;
+      }
+    };
+    let recoveredArtifact = false;
+    if (!runFailed && !artifactFresh() && String(resultText || '').trim()) {
+      try {
+        fs.mkdirSync(path.dirname(absOutFile), { recursive: true });
+        fs.writeFileSync(absOutFile, [
+          `# Thought ${thoughtNumber} - ${dateStr}`,
+          `_Generated: ${fmtLocal(new Date())}_`,
+          '',
+          '## Artifact Recovery Note',
+          'The model-backed Thought run returned a response but did not write its artifact. Prometheus recovered the run by saving that response here.',
+          '',
+          '## Recovered Thought Response',
+          String(resultText || '').trim(),
+          '',
+        ].join('\n'), 'utf-8');
+        recoveredArtifact = true;
+      } catch (err: any) {
+        console.warn('[BrainRunner] Failed to recover thought artifact:', err?.message || err);
+      }
+    }
+    const fileLooksFresh = artifactFresh();
     const success = fileLooksFresh && !runFailed;
 
     const latestAfter = loadLatestState();
@@ -939,7 +976,9 @@ export class BrainRunner {
       latestAfter.lastThoughtAt = new Date().toISOString();
       latestAfter.lastThoughtWindow = windowLabel;
       latestAfter.lastThoughtStatus = 'success';
-      latestAfter.lastThoughtError = null;
+      latestAfter.lastThoughtError = recoveredArtifact
+        ? `Recovered missing/stale thought artifact: ${outFile}`
+        : null;
       saveLatestState(latestAfter);
     } else {
       latestAfter.lastThoughtStatus = 'failed';
@@ -1056,6 +1095,8 @@ export class BrainRunner {
         dreamModelOverride,
         'cron',
         brainDreamToolFilter([
+          'workspace_read',
+          'workspace_edit',
           'list_directory',
           'list_files',
           'read_file',
@@ -1105,10 +1146,7 @@ export class BrainRunner {
           'skill_resource_list',
           'skill_resource_read',
           'skill_audit_all',
-          'skill_update_metadata',
-          'skill_repair_metadata',
-          'skill_manifest_write',
-          'skill_resource_write',
+          'skill_candidate_submit',
           'write_proposal',
         ]),
       );
@@ -1219,7 +1257,7 @@ export class BrainRunner {
           const curator = runSkillCurator({
             workspacePath: this.deps.workspacePath,
             skillsManager: this.deps.skillsManager,
-            mode: 'auto-safe',
+            mode: 'dry-run',
           });
           this.deps.broadcast({
             type: 'skill_curator_done',
@@ -1342,6 +1380,8 @@ export class BrainRunner {
         dreamModelOverride,
         'cron',
         [
+          'workspace_read',
+          'workspace_edit',
           'list_directory',
           'list_files',
           'read_file',
@@ -1363,9 +1403,7 @@ export class BrainRunner {
           'skill_resource_list',
           'skill_resource_read',
           'skill_audit_all',
-          'skill_repair_metadata',
-          'skill_resource_write',
-          'skill_resource_delete',
+          'skill_candidate_submit',
         ],
       );
       resultText = abortSignal.aborted
@@ -1485,8 +1523,8 @@ STRICT RULES — do not violate under any circumstances:
 • DO NOT create new skills directly
 • DO NOT update cron jobs, configs, or team state
 • Your direct file writes are limited to the thought output file listed above
-• You may update existing skills only through skill_manifest_write or skill_resource_write, after reading/inspecting the existing skill
-• Existing-skill updates must be low-risk, additive or narrowly corrective, evidence-backed, and recorded with appliedBy="brain_thought", evidence, reason, and changeType metadata
+• DO NOT mutate existing skills; after inspection, submit structured evidence with skill_candidate_submit
+• Skill candidates must be scoped, evidence-backed, and candidate-only. Curator is the sole autonomous skill writer.
 
 ════════════════════════════════════════════════════════════
 STEP 1 — SCAN AUDIT WINDOW
@@ -1840,6 +1878,7 @@ IMPORTANT - FILE PATH CONVENTION:
 All paths in this prompt are relative to the workspace root.
 Pass them directly to file tools without modification.
 Do not prepend "workspace/" or any drive letter.
+Use workspace_edit with action "create" or "write" for file output; legacy create_file/write_file tools may not be exposed.
 
 STRICT RULES:
 - Do not write to USER.md, SOUL.md, or any memory files
@@ -1847,11 +1886,10 @@ STRICT RULES:
 - Do not create new skills directly
 - Do not update cron jobs, configs, or team state
 - Your direct file writes are limited to the thought output file listed above, ${businessCandidatesFileRel} when business candidates exist, and the Active Work Ledger (Brain/active-work.jsonl)
-- You may update an existing skill only through skill_manifest_write, skill_resource_write, or skill_update_metadata, after reading/inspecting that existing skill
-- You may call skill_audit_all for a light fleet metadata scan, but Thought must not call skill_repair_metadata or perform broad/batch repairs
-- Existing-skill updates must be low-risk, additive or narrowly corrective, evidence-backed, and scoped to triggers, metadata, SKILL.md guidance, examples, templates, schemas, or other skill resources
-- Prefer skill_update_metadata for focused description/trigger/category/lifecycle metadata repairs; prefer skill_manifest_write or skill_resource_write for instruction/resource changes
-- When calling skill_manifest_write, skill_resource_write, or skill_update_metadata, include evidence/appliedBy="brain_thought"/reason fields when the tool supports them so Dream can audit the skill change ledger
+- Do not mutate an existing skill. Read/inspect it, then use skill_candidate_submit for any proposed trigger, metadata, instruction, resource, or new-skill change
+- You may call skill_audit_all for a light read-only fleet metadata scan
+- Candidate submissions must be evidence-backed and scoped to one exact skill gap or repeated workflow
+- Curator clusters and reviews candidates; Thought never applies them
 - You MAY read freely and do LIGHT research: read any workspace/project file, ${isPublicBrainProfile() ? 'and use web_search/web_fetch' : 'use read_source/grep_source/read_prom_file to inspect Prometheus\'s own code and tools, and use web_search/web_fetch'} to confirm the current state of an idea and scan for prior art. Keep research light (a couple of lookups); the Dream does the deep dive.
 
 WHO YOU ARE THIS RUN:
@@ -1932,15 +1970,12 @@ C. Skill And Workflow Signals
 - Format as: Skill/Workflow | Signal | Possible Action | Confidence | Evidence
 
 C2. Existing Skill Maintenance
-- For high-confidence, low-risk updates to an existing skill, call skill_read first, then skill_inspect or skill_resource_list/read if useful
+- For a plausible existing-skill improvement, call skill_read first, then skill_inspect or skill_resource_list/read if useful
 - Use skill_audit_all only as a light metadata scan when trigger/description/category quality is relevant to the window
-- Apply the update during this Thought with skill_update_metadata, skill_manifest_write, or skill_resource_write only when the current skill clearly benefits from observed session evidence
-- Prefer small additions: one missing trigger, one metadata correction, one troubleshooting guardrail, one compact example, one template/resource, or one corrected tool-order note
-- Preserve imported/upstream-managed skills by using overlays or additive resources where possible
-- Never split, delete, radically rewrite, or create skills in Thought
-- If a new skill is warranted, record it as an Improvement Candidate for Dream instead of creating it
-- After any skill write, verify with skill_read or skill_inspect
-- In the thought file, explain exactly what you changed, why, and cite the session/transcript/skill episode/live candidate evidence so Dream can review it later
+- Submit one structured candidate with skill_candidate_submit; do not write the skill
+- Use add_trigger only with an exact target skill id; use create_new_skill_candidate only for repeated workflows with no suitable overlap
+- Include evidence paths and submittedBy="brain_thought"
+- In the thought file, record candidate ids and why each item was submitted or deferred
 
 D. Business Candidates
 - Business facts/events that may belong in BUSINESS.md or workspace/entities/*
@@ -2150,9 +2185,9 @@ STRICT RULES:
 - You may only remove, lightly merge, or dedupe text that is clearly redundant, stale, contradictory, or unimportant after the latest dream.
 - If the memory is already good, make no memory edits. This is a successful outcome.
 - When uncertain, preserve the memory. It is better to leave a duplicate than erase something important.
-- You may audit recent Brain Skill Curator suggestions, auto-applied low-risk skill resources, and fleet metadata health.
-- You may call skill_audit_all to detect metadata regressions and skill_repair_metadata mode="preview" to inspect possible repairs, but cleanup must not call skill_repair_metadata mode="apply".
-- You may reject weak pending curator suggestions, delete/revert clearly bad auto-applied curator resources, or refine an auto-applied resource only when the fix is obvious and strictly improves the same lesson.
+- You may audit recent Brain Skill Curator suggestions and fleet metadata health.
+- You may call skill_audit_all as a read-only check.
+- You may reject weak pending curator suggestions. Submit any proposed repair with skill_candidate_submit; do not mutate skill files.
 - Do not rewrite SKILL.md, archive/merge/delete skills, apply bulk metadata repairs, or make broad skill changes in cleanup.
 - Your only required write is the cleanup report at ${outFileRel}. Memory and skill cleanup edits are optional and conservative.
 
@@ -2202,19 +2237,18 @@ Quality gate for curator lessons:
 6. SAFE SCOPE - it is additive or narrowly corrective; no broad rewrites here
 
 Allowed skill critic actions:
-- To inspect: skill_read, skill_inspect, skill_resource_list, skill_resource_read, skill_audit_all, skill_repair_metadata mode="preview"
+- To inspect: skill_read, skill_inspect, skill_resource_list, skill_resource_read, skill_audit_all
 - To reject a bad pending item: skill_curator action=reject id=<suggestion id>
-- To revert a bad applied resource: skill_resource_delete id=<skill id> path=<resource path>, then skill_curator action=reject id=<suggestion id>
-- To refine an applied resource: skill_resource_read, then skill_resource_write to the same path with clearer content and the same lesson scope
+- To propose a revert or refinement: skill_candidate_submit with the exact skill id, resource path, rationale, and evidence
 
 Do not apply pending high-risk suggestions. Do not create a new skill. Do not delete anything except an auto-applied curator resource that clearly fails the quality gate. Do not apply bulk metadata repair previews from cleanup; record them for the next Dream.
 
 STEP 4 - OPTIONAL MEMORY/SKILL EDITS
-If and only if an edit is clearly safe:
+If and only if a memory edit is clearly safe:
 - Use replace_lines, find_replace, or delete_lines surgically.
 - Prefer removing the weaker duplicate and keeping the more specific, more recent, or more actionable version.
 - Do not use insert_after unless it is only to repair formatting after removing text.
-- For skill resources, prefer skill_resource_delete for a bad auto-applied resource or skill_resource_write to refine the same resource path.
+- Never edit skill resources in cleanup; submit a candidate instead.
 
 STEP 5 - WRITE CLEANUP REPORT
 Create directory ${dreamsDirRel} if needed.
@@ -2244,7 +2278,7 @@ _(If no curator items needed action: "Reviewed curator state; no skill cleanup n
 ## Fleet Metadata Regression Check
 | Check | Result | Action |
 |-------|--------|--------|
-| skill_audit_all / skill_repair_metadata preview | [flag count, target skills, or none] | deferred to Dream / no action |
+| skill_audit_all / candidate submissions | [flag count, candidate ids, or none] | submitted / deferred / no action |
 
 ## Preserved On Purpose
 - [Any duplicate-looking or messy item you intentionally kept because it may still matter, or "None noted."]
@@ -2374,7 +2408,7 @@ Actions:
 - For ambiguous, private, external-action, or low/medium-confidence candidates, do not write. Record them under "Business Updates Needing Review" or "Deferred Ideas".
 - For repeatable business workflows, route them to Skill Gardener review as business workflow skill signals rather than memory pollution.
 
-Write a short reconciliation report to ${businessReconciliationDirRel}/report.md if any business candidates were reviewed. Use mkdir/write_file. Include applied updates, skipped candidates, and entity files touched.
+Write a short reconciliation report to ${businessReconciliationDirRel}/report.md if any business candidates were reviewed. Use workspace_edit with action "create" or "write". Include applied updates, skipped candidates, and entity files touched.
 
 PHASE 4 - SKILL GARDENER REVIEW
 
@@ -2382,11 +2416,9 @@ Use the thought Skill And Workflow Signals, ${skillEpisodesDirRel}/episodes.json
 
 Fleet metadata lane:
 - Start with skill_audit_all when skill metadata quality, trigger coverage, or discovery quality is relevant to today's evidence
-- Use skill_repair_metadata with mode="preview" to inspect possible bulk repairs before applying anything
-- Only call skill_repair_metadata with mode="apply" and confirm=true for a curated repair list you have reviewed; never blindly apply the whole preview set
-- Use skill_update_metadata for one or a few targeted existing skills when description, triggers, categories, required tools, lifecycle, or name need repair
+- Submit exact metadata repair candidates with skill_candidate_submit; do not apply repairs in Dream
 - Preserve precise trigger phrasing: descriptions should start with "Use this skill when..." and triggers should include concrete user-language phrases that should surface the skill
-- Record fleet audit counts, repair previews reviewed, metadata updates applied, and skipped/deferred repairs in the Dream output
+- Record fleet audit counts, candidate ids, and skipped/deferred repairs in the Dream output
 
 Business workflow skill lane:
 - Treat repeated business workflows as first-class skill candidates: lead qualification, prospect research, outreach packet creation, quote/invoice/follow-up drafting, customer support handling, vendor research, project status reporting, social planning, content calendar work, website audits, CRM hygiene, and industry-specific operating workflows.
@@ -2415,21 +2447,21 @@ For each live candidate:
 - Treat update_existing_skill, add_resource_or_template, and add_trigger as candidate existing-skill maintenance
 - Treat create_new_skill_candidate as a possible new skill proposal, but verify against existing skills first
 - Treat no_action_but_record_episode as raw evidence only unless repeated patterns make it stronger
-- Prefer high-confidence, low-risk candidates for automatic existing-skill updates; defer medium/low confidence items unless corroborated by thoughts, episodes, or transcripts
+- Prefer high-confidence candidates for submission, but never mutate a skill from Dream; defer medium/low confidence items unless corroborated by distinct sessions or explicit user instruction
 
 Route learnings carefully:
 - If the learning is "when using this workflow, do X" and an existing skill fits, update that skill automatically
-- If it is a repeated tool choreography with no good skill, prefer a skill_evolution proposal that creates a new bundled skill
+- If it is a repeated validated tool choreography with no good skill, submit create_new_skill_candidate for Curator overlap review
 - If it is a global Prometheus behavior rule independent of any skill, consider prompt_mutation or SOUL.md
 - If it is a durable user/project fact, consider memory
 - If it is only a one-off task, consider task_trigger or defer
 
-Automatic existing-skill evolution gate:
+Existing-skill candidate gate:
 1. EXISTING - the target skill already exists and was inspected with skill_read
 2. SPECIFIC - names the exact existing skill id and resource path to edit
 3. EVIDENCED - cites skill episode(s), thought rows, transcripts, or audit files
 4. BOUNDED - improves triggers, metadata, SKILL.md guidance, examples, templates, schemas, or other resources without changing unrelated behavior
-5. SAFE - preserves upstream/downloaded content where appropriate by using skill_manifest_write overlays or narrowly scoped skill_resource_write updates
+5. SAFE - proposes one bounded change and leaves all mutation to Curator approval
 
 Skill lifecycle metadata:
 - lifecycle should be one of: draft, active, experimental, deprecated, archived
@@ -2440,24 +2472,16 @@ Skill lifecycle metadata:
 - Mark stale, replaced, or unsafe skills deprecated/archived only with strong evidence; otherwise defer
 
 For existing skill updates:
-- Apply the update automatically tonight with skill_update_metadata, skill_resource_write, or skill_manifest_write
-- Do not write a proposal for existing-skill maintenance
-- Keep edits small, evidence-backed, and directly tied to observed workflow friction, repeated success patterns, or fleet metadata audit findings
-- After writing, call skill_read, skill_inspect, or skill_audit_all scoped to the target skill when appropriate to verify the updated skill is visible and scored correctly
-- When calling skill_resource_write, skill_manifest_write, or skill_update_metadata, include changeType/evidence/appliedBy="brain_dream"/reason fields when the tool supports them so the skill change ledger is useful
-- The skill manager will snapshot the skill before writing and append the change ledger automatically where supported; verify the update by inspecting the skill afterward
-- Record the automatic update in the Dream output under "Skill Gardener Review" and "Skill Updates Applied"
-- If the update would delete resources, split a skill, radically rewrite a skill, or otherwise feels high-risk, defer it instead of proposing a routine evolution
+- Submit the update with skill_candidate_submit and submittedBy="brain_dream"
+- Keep each candidate small, evidence-backed, and tied to explicit user instruction or repeated validated sessions
+- Record candidate ids in the Dream output under "Skill Gardener Review"
+- Defer deletes, splits, rewrites, merges, and lifecycle changes as high risk
 
 For a new skill proposal:
-- type must be skill_evolution
-- affected_files should reference "skill:<new-skill-id>/SKILL.md" and any planned resources
-- details should include the proposed id, name, description, triggers, categories, permissions, required tools, and a draft SKILL.md outline
-- prefer skill_create_bundle when resources, examples, schemas, or templates would help; use skill_create only for a simple one-file playbook
-- New skill creation is Dream-only and proposal-based: automatically write a skill_evolution proposal when the proposal quality gate passes
-- Do not wait for separate user approval to file the proposal; approval is only required later to execute/create the proposed new skill
-
-Do not create new skills directly. New skill creation must go through a skill_evolution proposal and wait for approval.
+- Submit type=create_new_skill_candidate with repeated-session evidence and a concise one-job scope
+- Curator performs overlap analysis against existing skills
+- Do not write skill_evolution until the Curator candidate is explicitly approved
+- Never create a skill directly from Dream
 
 PHASE 5 - INCUBATE OPPORTUNITY SEEDS (and the Active Work Ledger)
 
@@ -2516,7 +2540,7 @@ If nothing passes, write nothing to memory.
 
 Memory routing rule:
 - Do not write procedural workflow instructions, skill usage improvements, tool-order recipes, or "when doing X, do Y" notes to USER.md, SOUL.md, or MEMORY.md by default
-- Route those to automatic existing-skill updates when they fit an installed skill, or to new-skill proposals when no suitable skill exists
+- Route those to existing-skill or new-skill candidates; Curator owns clustering, overlap review, and any later approved mutation
 - This is important: skill learning should improve skills, not pollute durable memory
 
 For items that do pass:
@@ -2558,7 +2582,7 @@ If zero proposals pass the gate, note that in the dream file.
 PHASE 8 - WRITE OUTPUTS
 
 8a. Create directory ${dreamsDirRel} if needed.
-Write ${outFileRel} with this structure. Use \`mkdir\` for the directory and \`write_file\` for the markdown artifact:
+Write ${outFileRel} with this structure. Use \`workspace_edit\` with action "create" or "write" for the markdown artifact:
 
 ---
 # Dream - ${dateStr}
@@ -2612,7 +2636,7 @@ _(If none: "None - no items passed the proposal gate tonight.")_
 ## Fleet Skill Metadata Audit
 | Scan/Repair | Count Or Scope | Decision | Evidence |
 |-------------|----------------|----------|---------|
-| [skill_audit_all / skill_repair_metadata preview/apply / targeted skill_update_metadata] | [flag count or skill ids] | applied / partially applied / deferred / no action | [tool result or audit ref] |
+| [skill_audit_all / skill_candidate_submit] | [flag count, skill ids, or candidate ids] | submitted / deferred / no action | [tool result or audit ref] |
 
 _(If none: "None - no existing skills needed automatic evolution tonight.")_
 
@@ -2630,7 +2654,7 @@ _(If none: "None - no existing skills needed automatic evolution tonight.")_
 - [specific things to monitor in the next day's thoughts]
 ---
 
-8b. Rewrite ${proposalsFileRel} completely. This file is not just a proposal ledger anymore; it is the user's morning-readable, full post-day Dream summary after memory updates, business reconciliation, skill gardener review, investigation/incubation, and proposal generation are complete. Use \`write_file\` so the existing file is replaced in full.
+8b. Rewrite ${proposalsFileRel} completely. This file is not just a proposal ledger anymore; it is the user's morning-readable, full post-day Dream summary after memory updates, business reconciliation, skill gardener review, investigation/incubation, and proposal generation are complete. Use \`workspace_edit\` with action "write" so the existing file is replaced in full.
 
 ---
 # Brain Daily Summary - ${dateStr}

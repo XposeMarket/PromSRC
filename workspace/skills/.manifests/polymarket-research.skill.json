@@ -1,23 +1,22 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when researching prediction markets, Polymarket odds, event probabilities, market pricing, election/sports/crypto outcome markets, trader sentiment, or probability shifts.",
+  "name": "polymarket-research",
+  "description": "Perform read-only Polymarket research using public Gamma, CLOB, and Data APIs or the bundled Python helper. Use when the user explicitly asks for Polymarket market discovery, market-implied probabilities, order books, spreads, price history, or recent trades. Do not use for generic financial research, betting advice, wallet access, or trade execution.",
+  "implicitInvocation": false,
   "triggers": [
-    "Polymarket odds",
-    "prediction market",
-    "market probability",
-    "event odds",
-    "election odds",
-    "sports odds market",
-    "crypto prediction market",
-    "what are traders pricing",
-    "probability shifted",
-    "Polymarket research",
-    "prediction market analysis",
-    "betting market odds",
-    "outcome market",
-    "market-implied probability",
-    "live odds"
+    "polymarket trending markets",
+    "polymarket market odds",
+    "polymarket price history",
+    "polymarket order book",
+    "polymarket trade history",
+    "query polymarket api",
+    "compare polymarket probabilities",
+    "read polymarket market",
+    "research polymarket markets",
+    "polymarket event research",
+    "polymarket research workflow",
+    "search polymarket"
   ],
   "categories": [
     "markets",
@@ -25,8 +24,13 @@
     "prediction"
   ],
   "requiredTools": [
-    "show_ui_card",
-    "web_search"
+    "show_prediction_market",
+    "web_fetch"
+  ],
+  "optionalTools": [
+    "web_fetch_batch",
+    "web_search",
+    "run_command"
   ],
   "lifecycle": "active",
   "id": "polymarket-research"

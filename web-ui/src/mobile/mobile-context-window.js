@@ -330,8 +330,12 @@ function _renderPlan() {
     }).join('');
   }
   if (!windows.length) {
-    const t = prov.tokens || {};
-    html += `<div class="pm-ctx-plan-tokens">${_fmtTokens(t.total || 0)} tokens · ${Number(t.calls || 0)} calls tracked</div>`;
+    if (prov.usage_scope === 'model') {
+      html += `<div class="pm-ctx-plan-tokens">Codex Spark usage is currently unavailable.</div>`;
+    } else {
+      const t = prov.tokens || {};
+      html += `<div class="pm-ctx-plan-tokens">${_fmtTokens(t.total || 0)} tokens · ${Number(t.calls || 0)} calls tracked</div>`;
+    }
   }
   body.innerHTML = html;
   wrap.hidden = false;

@@ -1,22 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for Tailwind CSS work, utility-class styling, design system cleanup, responsive layouts, component styling, class refactors, or converting visual specs into Tailwind markup. Use only where Tailwind is already part of the project or explicitly requested.",
+  "description": "Tailwind CSS v4 browser-runtime patterns for HyperFrames compositions. Use only for HyperFrames Tailwind scaffolds, utility classes, CSS-first theme tokens, v3-to-v4 issues, and deterministic render styling.",
   "triggers": [
-    "Tailwind",
-    "Tailwind CSS",
-    "utility classes",
-    "tailwind component",
-    "responsive tailwind",
-    "class refactor",
-    "tailwind layout",
     "design system utilities",
+    "convert to tailwind",
+    "responsive tailwind",
+    "tailwind component",
+    "responsive classes",
+    "utility-first css",
     "tailwind styling",
-    "convert to Tailwind",
+    "utility classes",
+    "tailwind layout",
     "tailwind config",
-    "utility-first CSS",
-    "tailwind UI",
-    "responsive classes"
+    "class refactor",
+    "tailwind css"
   ],
   "categories": [
     "frontend",
@@ -27,6 +25,7 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "Tailwind",
-  "id": "tailwind"
+  "name": "tailwind",
+  "id": "tailwind",
+  "implicitInvocation": false
 }

@@ -1,256 +1,61 @@
 ---
-name: chart-visualizer
-description: Use this skill when the user asks for a chart, graph, visualization, KPI trend, bar chart, line chart, pie chart, radar chart, sparkline, analytics visual, financial chart, comparison chart, or Chart.js output in chat. Triggers on phrases like make a chart, visualize this data, show a graph, chart visualizer, bar chart, line chart, pie chart, KPI dashboard chart, plot these numbers, and Chart.js. Use it to render a live inline Chart.js chart directly in chat with no file saving.
-emoji: "📊"
-version: 1.1.0
-triggers: make a chart, visualize this data, show a graph, chart visualizer, bar chart, line chart, pie chart, radar chart, KPI dashboard chart, plot these numbers, Chart.js, analytics visual, financial chart, comparison chart, sparkline
+name: "chart-visualizer"
+description: "Render a live inline Chart.js chart in chat when the user asks to chart, graph, plot, or visualize numeric data, KPI trends, comparisons, distributions, or correlations. Use only for inline charts; do not save files or use this for dashboards, interactive apps, or presentation decks."
 ---
 
 # Chart Visualizer
 
-Render live Chart.js charts directly in chat using a fenced `chart` block. The frontend auto-injects Chart.js and wraps the config in a canvas — output only the config object, nothing else.
+Return one fenced `chart` block containing only a Chart.js configuration object. The frontend creates the canvas and loads Chart.js.
 
-## CRITICAL OUTPUT RULES
-
-- Output a single fenced ` ```chart ` block containing only the Chart.js config object
-- **No boilerplate.** No `new Chart()`, no `<canvas>`, no `<script>` tags
-- **No file saving.** Do not call any file tools. Inline output only
-- **No declare_plan.** Read skill → output chart block. Done
-
----
-
-## Chart Type Decision
-
-Pick the right chart type before writing anything:
-
-| Data situation | Chart type |
-|---|---|
-| Comparing values across categories | `bar` |
-| Trend over time (continuous) | `line` |
-| Part of a whole (≤6 slices) | `pie` or `doughnut` |
-| Two numeric variables, correlation | `scatter` |
-| Multiple metrics on one entity | `radar` |
-| Three variables (x, y, size) | `bubble` |
-| Comparing multiple series over time | `line` (multi-dataset) |
-| Distribution or frequency | `bar` (horizontal if many labels) |
-
-**Rules:**
-- Pie/doughnut: max 6 slices. More than 6 → use bar
-- Scatter: both axes must be numeric, no string labels
-- Radar: max 8 axes, all on same scale
-- When in doubt: bar for comparison, line for time
-
----
-
-## Format: Chart.js Config Object
-
-Output only the config. No wrapper.
-
-### Bar chart
 ```chart
 {
   type: "bar",
   data: {
-    labels: ["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
-    datasets: [{
-      label: "Revenue ($k)",
-      data: [42, 58, 51, 73, 88, 95],
-      backgroundColor: ["#6366f1","#8b5cf6","#ec4899","#f43f5e","#f97316","#22d3ee"]
-    }]
-  },
-  options: {
-    responsive: true,
-    plugins: {
-      legend: { position: "top" },
-      title: { display: true, text: "Monthly Revenue" }
-    },
-    scales: {
-      y: { beginAtZero: true }
-    }
-  }
-}
-```
-
-### Line chart (single series)
-```chart
-{
-  type: "line",
-  data: {
     labels: ["Q1", "Q2", "Q3", "Q4"],
     datasets: [{
-      label: "Users",
-      data: [1200, 1900, 1700, 2400],
-      borderColor: "#6366f1",
-      backgroundColor: "rgba(99,102,241,0.1)",
-      tension: 0.4,
-      fill: true
+      label: "Revenue ($k)",
+      data: [42, 58, 73, 95],
+      backgroundColor: "#E76F3C"
     }]
   },
   options: {
     responsive: true,
-    plugins: { title: { display: true, text: "Quarterly Active Users" } },
-    scales: { y: { beginAtZero: true } }
-  }
-}
-```
-
-### Multi-series line chart (year-over-year, A/B comparison)
-```chart
-{
-  type: "line",
-  data: {
-    labels: ["Jan", "Feb", "Mar", "Apr", "May"],
-    datasets: [
-      {
-        label: "2023",
-        data: [30, 45, 40, 60, 55],
-        borderColor: "#6366f1",
-        tension: 0.4
-      },
-      {
-        label: "2024",
-        data: [40, 55, 62, 78, 90],
-        borderColor: "#ec4899",
-        tension: 0.4
-      }
-    ]
-  },
-  options: {
-    responsive: true,
-    plugins: { title: { display: true, text: "Revenue YoY" } }
-  }
-}
-```
-
-### Pie / Doughnut
-```chart
-{
-  type: "doughnut",
-  data: {
-    labels: ["Direct", "Organic", "Referral", "Social", "Email"],
-    datasets: [{
-      data: [35, 28, 18, 12, 7],
-      backgroundColor: ["#6366f1","#8b5cf6","#ec4899","#f97316","#22d3ee"]
-    }]
-  },
-  options: {
-    responsive: true,
-    plugins: { title: { display: true, text: "Traffic Sources" } }
-  }
-}
-```
-
-### Scatter
-```chart
-{
-  type: "scatter",
-  data: {
-    datasets: [{
-      label: "Ad Spend vs Conversions",
-      data: [
-        { x: 500, y: 42 },
-        { x: 1200, y: 89 },
-        { x: 800, y: 61 },
-        { x: 2000, y: 140 }
-      ],
-      backgroundColor: "#6366f1"
-    }]
-  },
-  options: {
-    responsive: true,
-    plugins: { title: { display: true, text: "Spend vs Conversions" } },
+    plugins: { title: { display: true, text: "Quarterly Revenue" } },
     scales: {
-      x: { title: { display: true, text: "Ad Spend ($)" } },
-      y: { title: { display: true, text: "Conversions" } }
+      x: { title: { display: true, text: "Quarter" } },
+      y: { beginAtZero: true, title: { display: true, text: "Revenue ($k)" } }
     }
   }
 }
 ```
 
-### Radar
-```chart
-{
-  type: "radar",
-  data: {
-    labels: ["Speed", "Reliability", "Scalability", "Security", "Cost"],
-    datasets: [
-      {
-        label: "Option A",
-        data: [85, 92, 78, 88, 65],
-        borderColor: "#6366f1",
-        backgroundColor: "rgba(99,102,241,0.15)"
-      },
-      {
-        label: "Option B",
-        data: [72, 80, 95, 70, 90],
-        borderColor: "#ec4899",
-        backgroundColor: "rgba(236,72,153,0.15)"
-      }
-    ]
-  },
-  options: {
-    responsive: true,
-    plugins: { title: { display: true, text: "Option Comparison" } },
-    scales: { r: { beginAtZero: true, max: 100 } }
-  }
-}
-```
+Do not emit `new Chart()`, `<canvas>`, `<script>`, HTML, file writes, or implementation commentary around the block. A short insight may follow only when the user asked for analysis as well as a chart.
 
----
+## Choose the shape
 
-## Color Palette
+| Data relationship | Type |
+| --- | --- |
+| compare categories | `bar` |
+| continuous time trend | `line` |
+| part of a whole with at most six slices | `pie` or `doughnut` |
+| correlation between two numeric variables | `scatter` |
+| several same-scale metrics for one or more entities | `radar` |
+| x, y, and magnitude | `bubble` |
+| distribution/frequency without a histogram plugin | `bar` |
 
-Use these consistently. They work in both dark and light mode:
+Use horizontal bars for many or long category labels. Use a multi-dataset line for series over time. When uncertain, choose bar for comparison and line for time. Never force a pie chart past six categories or a radar chart past eight axes.
 
-| Role | Hex |
-|---|---|
-| Primary | `#6366f1` (indigo) |
-| Secondary | `#8b5cf6` (purple) |
-| Accent 1 | `#ec4899` (pink) |
-| Accent 2 | `#f97316` (orange) |
-| Accent 3 | `#22d3ee` (cyan) |
-| Danger | `#f43f5e` (red) |
-| Success | `#4ade80` (green) |
+## Chart contract
 
-For multi-dataset charts, cycle through these in order. For single-dataset bar charts, you can use all colors across bars for visual variety.
+- Use only values actually supplied or derived from cited data. Never invent missing rows.
+- Always include a useful title.
+- Label value axes and units for bar, line, scatter, and bubble charts.
+- Include a legend when multiple datasets need identification; omit redundant single-series legends.
+- Use deterministic label order and keep labels short.
+- Set `responsive:true` and `beginAtZero:true` on value axes unless negative values or a meaningful nonzero baseline require otherwise.
+- For scatter and bubble charts, x and y must remain numeric objects rather than category labels.
+- Preserve null/missing values as gaps unless the user authorizes interpolation.
 
-For background fills (line charts, radar): append `33` to the hex for ~20% opacity — e.g. `#6366f133`.
+Default to an editorial, accessible palette rather than generic purple/blue AI styling: ember `#E76F3C`, forest `#2F6B5F`, ochre `#D4A72C`, umber `#8B5E3C`, slate `#6B7280`, danger `#C64B4B`, and success `#3E8E63`. Use color consistently across datasets and ensure adjacent series remain distinguishable without color alone when possible.
 
----
-
-## Labels & Titles
-
-- **Always include a `title`** — unlabeled charts are useless
-- **Always include axis labels** for bar/line/scatter — use `scales.x.title` and `scales.y.title`
-- **Always include a legend** when there are multiple datasets
-- Format numbers in labels when needed: `ticks: { callback: (v) => '$' + v + 'k' }`
-- Keep labels short — truncate if needed, the chart is not a data table
-
----
-
-## Rules & Anti-Patterns
-
-**DO:**
-- Always set `responsive: true`
-- Always set `beginAtZero: true` on value axes unless negative values are meaningful
-- Use `tension: 0.4` on line charts for smooth curves
-- Use `fill: true` + low-opacity background for area emphasis on single-line charts
-
-**DON'T:**
-- Don't output anything outside the fenced block
-- Don't add `new Chart()` or canvas boilerplate — the renderer handles it
-- Don't use pie/doughnut for more than 6 categories
-- Don't skip titles or axis labels
-- Don't hardcode dark-mode-only colors (e.g. `color: "#cdd6f4"`) in the config — Chart.js axis colors are auto-managed by the renderer
-
----
-
-## Proactive Triggering
-
-Automatically produce a chart (without being asked) when:
-- User pastes a table of numbers and asks for analysis
-- User asks "how does X compare to Y" with quantifiable data  
-- User asks about trends, performance, or metrics over time
-- A data pipeline, integration sync, or report task produces numeric output
-
-Lead with the chart, then explain the key insight in 1–2 sentences below it.
+Read [references/config-examples.md](references/config-examples.md) only when the requested shape needs a scatter, radar, doughnut, or multi-series configuration example. The rules in this entrypoint override any legacy styling shown in preserved examples.

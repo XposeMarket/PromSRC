@@ -37,7 +37,7 @@
         "schemaVersion": "prometheus-skill-bundle-v1",
         "id": "hyperframes-cli",
         "name": "hyperframes-cli",
-        "description": "HyperFrames CLI dev loop — `npx hyperframes` for scaffolding (init), validation (lint, inspect), preview, render, and environment troubleshooting (doctor, browser, info, upgrade). Use when running any of these commands or troubleshooting the HyperFrames build/render environment. For asset preprocessing commands (`tts`, `transcribe`, `remove-background`), invoke the `hyperframes-media` skill instead.",
+        "description": "HyperFrames CLI dev loop — `npx hyperframes` for scaffolding, validation, preview, render, and environment troubleshooting. Route media sourcing, TTS, transcription, captions, and background removal through `media-use`.",
         "version": "1.0.0",
         "entrypoint": "SKILL.md",
         "triggers": [
@@ -104,7 +104,7 @@
     "schemaVersion": "prometheus-skill-bundle-v1",
     "id": "hyperframes-cli",
     "name": "hyperframes-cli",
-    "description": "HyperFrames CLI dev loop — `npx hyperframes` for scaffolding (init), validation (lint, inspect), preview, render, and environment troubleshooting (doctor, browser, info, upgrade). Use when running any of these commands or troubleshooting the HyperFrames build/render environment. For asset preprocessing commands (`tts`, `transcribe`, `remove-background`), invoke the `hyperframes-media` skill instead.",
+    "description": "HyperFrames CLI dev loop — `npx hyperframes` for scaffolding, validation, preview, render, and environment troubleshooting. Route media sourcing, TTS, transcription, captions, and background removal through `media-use`.",
     "version": "1.0.0",
     "entrypoint": "SKILL.md",
     "triggers": [

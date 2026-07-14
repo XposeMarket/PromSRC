@@ -1,24 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when analyzing images, screenshots, designs, logos, charts, visual bugs, photos, UI captures, or extracting visible details/evidence from an image.",
+  "description": "Use this skill when the user uploads an image, screenshot, chart, diagram, whiteboard photo, design mockup, document photo, error screenshot, or asks Prometheus to visually inspect a local image file. Triggers on phrases like analyze this image, what is in this screenshot, read this chart, extract text from this image, inspect this mockup, diagnose this error screenshot, OCR this photo, compare these images, and what do you see here. Use it to describe, extract, interpret, and recommend next actions from visual evidence.",
   "triggers": [
-    "analyze this image",
-    "inspect this screenshot",
     "what is in this photo",
-    "image analysis",
-    "visual QA",
-    "logo analysis",
-    "screenshot evidence",
-    "read the image",
-    "compare images",
-    "find visual issues",
-    "describe this screenshot",
     "extract text from image",
+    "inspect this screenshot",
+    "describe this screenshot",
+    "ui screenshot review",
+    "find visual issues",
+    "analyze this image",
+    "read the image",
     "chart in image",
+    "screenshot evidence",
     "design critique",
-    "photo details",
-    "UI screenshot review"
+    "compare images"
   ],
   "categories": [
     "image",
@@ -32,6 +28,7 @@
     "browser_automation"
   ],
   "lifecycle": "active",
-  "name": "Image Analyst",
-  "id": "image-analyst"
+  "name": "image-analyst",
+  "id": "image-analyst",
+  "implicitInvocation": true
 }

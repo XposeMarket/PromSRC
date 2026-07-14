@@ -1,25 +1,8 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when inspecting, editing, validating, repairing, or refactoring JSON, YAML, TOML, env files, manifests, package metadata, schedule configs, connector configs, or other structured config files.",
-  "triggers": [
-    "fix JSON config",
-    "validate manifest",
-    "edit YAML",
-    "repair package metadata",
-    "config file change",
-    "invalid JSON",
-    "update env file",
-    "TOML config",
-    "schedule config",
-    "connector config",
-    "parse error in config",
-    "JSON schema issue",
-    "clean JSON",
-    "update manifest",
-    "config surgery",
-    "structured config edit"
-  ],
+  "description": "Deprecated compatibility entry for JSON, YAML, and configuration edits. Use file-surgery and load its config-surgery reference when structured configuration is involved.",
+  "triggers": [],
   "categories": [
     "files",
     "config",
@@ -28,6 +11,8 @@
   "requiredTools": [
     "workspace_write"
   ],
-  "lifecycle": "active",
-  "id": "json-and-config-surgery"
+  "lifecycle": "deprecated",
+  "id": "json-and-config-surgery",
+  "implicitInvocation": false,
+  "name": "json-and-config-surgery"
 }

@@ -1,31 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "professional-blog-posting-engine",
-  "name": "Professional Blog Posting Engine",
-  "description": "Prometheus editorial workflow for producing publication-ready business blog posts, SEO articles, local SEO posts, thought-leadership pieces, comparison articles, how-to guides, internal-linking plans, schema suggestions, social promotion assets, and QA reports.",
+  "name": "professional-blog-posting-engine",
+  "description": "Produce publication-ready business blog and SEO article packages from a concrete brief, including strategy, outline, article, metadata, internal links, schema recommendation, image brief, promotion copy, and QA. Use for full professional articles; do not use for short posts, generic rewriting, or research without an article deliverable.",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
+    "optimize article for seo",
+    "prepare blog for publishing",
     "write a blog post",
-    "create a blog post",
-    "create an SEO article",
-    "SEO blog post",
-    "turn this keyword into an article",
-    "write a local SEO post",
-    "make a ranking-quality article",
-    "draft a blog for my company",
-    "create a thought leadership article",
-    "write a comparison post",
-    "create a how-to article",
-    "turn notes into a publishable article",
-    "write a blog for my business",
-    "make a blog post for my SaaS",
-    "create a blog article",
-    "publishable blog",
-    "blog content strategy",
-    "SEO package",
-    "internal linking plan",
-    "featured image brief"
+    "thought leadership post",
+    "publish blog post",
+    "client blog post",
+    "professional article",
+    "newsletter article",
+    "schedule article",
+    "business article",
+    "blog outline",
+    "revise blog"
   ],
   "categories": [
     "writing",
@@ -44,9 +36,11 @@
   },
   "resources": [
     {
-      "path": "examples/repo-backed-blog-agent-verification-2026-06-03.md",
+      "path": "references/examples/repo-backed-blog-agent-verification.md",
       "type": "example",
       "description": "Observed example for verifying an existing website blog repo/content model before creating an ongoing blog-poster agent or staging posts."
     }
-  ]
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
 }

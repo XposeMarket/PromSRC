@@ -3,6 +3,8 @@ const assert = require('assert');
 const {
   normalizeCreativeCommandTimeoutMs,
   sendCreativeCommand,
+  markCreativeBridgeReady,
+  getCreativeBridgeReadiness,
 } = require('../dist/gateway/creative/command-bus.js');
 
 (async () => {
@@ -26,7 +28,18 @@ const {
 
   assert.strictEqual(broadcasted, false, 'should not broadcast when no creative editor client is connected');
   assert.strictEqual(result.success, false);
-  assert.match(String(result.error || ''), /No connected creative editor client/i);
+  assert.strictEqual(result.code, 'CREATIVE_EDITOR_UNAVAILABLE');
+  assert.strictEqual(result.readiness, 'unavailable');
+  assert.match(String(result.error || ''), /registered the Creative editor command handler/i);
+  assert.match(String(result.error || ''), /CLI HyperFrames tools remain available/i);
+
+  markCreativeBridgeReady({ sessionId: 'telegram_test_session', creativeMode: 'video', surface: 'chat-page' });
+  assert.strictEqual(getCreativeBridgeReadiness().ready, true);
+  const timedOut = await sendCreativeCommand(() => { broadcasted = true; }, {
+    sessionId: 'telegram_test_session', mode: 'video', command: 'get_state', timeoutMs: 500,
+  });
+  assert.strictEqual(broadcasted, true, 'registered creative handler should receive command broadcasts');
+  assert.strictEqual(timedOut.code, 'CREATIVE_EDITOR_TIMEOUT');
 
   console.log('creative command bus tests passed');
 })().catch((err) => {

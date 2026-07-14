@@ -1,23 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating or updating a structured profile for a specific competitor: facts, products, pricing, positioning, strengths, weaknesses, evidence links, and monitoring notes.",
+  "description": "Create or update a sourced profile of one named competitor covering facts, product, pricing, positioning, customers, distribution, evidence, changes, strengths, and weaknesses. Use for a single-company dossier; use competitive-intelligence for cross-competitor synthesis.",
   "triggers": [
-    "competitor profile",
     "profile this competitor",
-    "research this company",
-    "competitor dossier",
     "track this competitor",
-    "competitor facts",
-    "company profile",
-    "competitor positioning",
     "competitor pricing notes",
     "competitor strengths weaknesses",
-    "update competitor file",
-    "monitor competitor",
     "analyze one competitor",
+    "research this company",
+    "update competitor file",
+    "competitor positioning",
     "competitor evidence",
-    "competitor summary"
+    "competitor profile",
+    "competitor dossier",
+    "monitor competitor"
   ],
   "categories": [
     "research",
@@ -30,5 +27,7 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "competitor-profile"
+  "id": "competitor-profile",
+  "name": "competitor-profile",
+  "implicitInvocation": true
 }

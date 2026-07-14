@@ -1,27 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for shopping recommendations, product comparisons, live prices, ratings, deal checks, gift ideas, best options under a budget, or product carousel cards.",
+  "description": "Use when the user asks to find, compare, recommend, or display real purchasable products as product cards or a carousel. Do not use for non-shopping research or generic visual cards.",
   "triggers": [
-    "best products",
+    "find me a good",
+    "ratings and reviews",
+    "best laptop under",
+    "buy this product",
+    "under my budget",
     "product recommendations",
     "shopping comparison",
-    "live prices",
-    "under my budget",
     "product carousel",
-    "gift ideas",
-    "compare prices",
-    "best laptop under",
-    "best monitor",
-    "ratings and reviews",
-    "current deals",
-    "find me a good",
     "cheapest option",
-    "buy this product",
-    "product cards",
-    "Amazon alternatives",
+    "compare prices",
     "review roundup",
-    "shopping research"
+    "best products"
   ],
   "categories": [
     "shopping",
@@ -34,5 +27,22 @@
     "web_search"
   ],
   "lifecycle": "active",
-  "id": "product-carousel-builder"
+  "id": "product-carousel-builder",
+  "status": "ready",
+  "implicitInvocation": true,
+  "health": {
+    "state": "ready",
+    "reason": "A live DDG-backed product query returned a validated product record with a real product URL and usable image; incomplete cards and empty results remain fail-closed.",
+    "verifiedCapabilities": [
+      "live_product_provider",
+      "product_payload_validation",
+      "empty_result_rejection",
+      "carousel_item_validation",
+      "usable_product_url",
+      "usable_product_image"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "product-carousel-builder"
 }

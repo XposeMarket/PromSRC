@@ -335,7 +335,7 @@ async function runCommandCaptured(
   command: string,
   cwd: string,
   timeoutMs = 120000,
-  options: { shell?: string; pty?: boolean; approvalId?: string } = {},
+  options: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string } = {},
 ): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; runId?: string }> {
   const resolvedCwd = path.resolve(String(cwd || getConfig().getWorkspacePath() || process.cwd()));
   const run = await getProcessSupervisor().spawn({
@@ -345,6 +345,8 @@ async function runCommandCaptured(
     shell: options.shell as any || 'auto',
     pty: options.pty === true,
     approvalId: options.approvalId,
+    sessionId: options.sessionId,
+    toolCallId: options.toolCallId,
     timeoutMs,
   });
   const exit = await run.wait();
@@ -442,15 +444,18 @@ export function resolveSkillsDir(configuredDir: string): string {
 let _handleChat: any;
 let _telegramChannel: any;
 let _makeBroadcastForTask: any;
+let _resumeMainChatGoalsAfterBoot: ((sessionIds?: string[]) => string[]) | undefined;
 
 export function initChatHelpers(deps: {
   handleChat: any;
   telegramChannel: any;
   makeBroadcastForTask: any;
+  resumeMainChatGoalsAfterBoot?: (sessionIds?: string[]) => string[];
 }): void {
   _handleChat = deps.handleChat;
   _telegramChannel = deps.telegramChannel;
   _makeBroadcastForTask = deps.makeBroadcastForTask;
+  _resumeMainChatGoalsAfterBoot = deps.resumeMainChatGoalsAfterBoot;
 }
 
 // --- Hook: gateway:startup -> run BOOT.md ------------------------------------
@@ -497,6 +502,20 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
         previousSessionId: item.previousSessionId,
       });
     }
+  }
+
+  // BOOT owns restart finalization. Only after it has persisted restart status
+  // and completed any dev-edit continuation may the durable goal runner reclaim
+  // the session and continue the interrupted iteration.
+  try {
+    const resumedGoals = _resumeMainChatGoalsAfterBoot?.(
+      bootResult?.status === 'ran' ? bootResult.resumableGoalSessionIds : undefined,
+    ) || [];
+    if (resumedGoals.length > 0) {
+      console.log(`[RuntimeRecovery] Auto-resumed ${resumedGoals.length} main-chat goal(s) after BOOT finalization.`);
+    }
+  } catch (err: any) {
+    console.warn('[RuntimeRecovery] Post-BOOT main-chat goal auto-resume failed:', err?.message || err);
   }
 });
 

@@ -8,6 +8,13 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { isPublicDistributionBuild } from '../../runtime/distribution';
+import {
+  buildActiveSkillRoutingContext,
+  getSkillRoutingMode,
+  recordSkillRoutingReport,
+  resolveSkillRuntimeRouting,
+} from '../../runtime/skill-routing-resolver';
 import {
   getSkillOverlayPath,
   getSkillProvenancePath,
@@ -17,11 +24,14 @@ import {
   resolveSkillRelativePath,
   sanitizeSkillId,
   canReadSkillResource,
+  validateSkillTriggers,
+  MAX_SKILL_TRIGGERS,
   type LoadedSkillPackage,
   type SkillPermissions,
   type SkillResource,
   type SkillLifecycleState,
   type SkillOwnershipState,
+  type SkillHealth,
 } from './skill-package';
 import {
   assertSkillScanAllowed,
@@ -58,11 +68,13 @@ export interface Skill {
   permissions: SkillPermissions;
   resources: SkillResource[];
   status: 'ready' | 'needs_setup' | 'blocked';
+  health: SkillHealth;
   eligibility: SkillEligibility;
   safety: SkillSafetyScan;
   lifecycle: SkillLifecycleState;
   ownership: SkillOwnershipState;
   executionEnabled: boolean;
+  implicitInvocation: boolean;
   riskLevel?: string;
   instructions: string;
   filePath: string;
@@ -83,6 +95,8 @@ export interface SkillChangeMetadata {
   evidence?: string[];
   appliedBy?: string;
   reason?: string;
+  triggerPositivePrompts?: string[];
+  triggerNegativePrompts?: string[];
 }
 
 export interface SkillChangeLedgerEntry {
@@ -109,6 +123,8 @@ export interface SkillImportOptions {
 type BuildTurnContextOptions = {
   maxCharsPerSkill?: number;
   excludedSkillIds?: Iterable<string> | string[];
+  forcedSkillIds?: string[];
+  sessionId?: string;
 };
 
 function normalizeSkillIdSet(value: unknown): Set<string> {
@@ -295,6 +311,189 @@ function composerMetadataScore(skill: Skill, rawText: string, queryWords: Set<st
   return score;
 }
 
+export type SkillRouteConfidence = 'high' | 'medium' | 'low';
+
+export interface SkillRouteMatch {
+  id: string;
+  skill: Skill;
+  score: number;
+  confidence: SkillRouteConfidence;
+  explicitMention: boolean;
+  implicitEligible: boolean;
+  domainConflict: boolean;
+  matchedTriggers: string[];
+  matchedDomains: string[];
+}
+
+const SKILL_DOMAIN_PATTERNS: Record<string, RegExp> = {
+  coding: /\b(code|coding|source|src|repo|repository|typescript|javascript|python|frontend|backend|api|debug|bug|patch|refactor|compile|build|test|webgl|webgpu)\b/i,
+  email: /\b(email|gmail|inbox|outlook|mail|imap|smtp)\b/i,
+  creative: /\b(creative|video|animation|hyperframes|remotion|motion|3d|graphics|image|design|render|mp4|lottie|gsap)\b/i,
+  social: /\b(social|twitter|tweet|linkedin|instagram|tiktok|repost|thread)\b|\bx\b/i,
+  browser: /\b(browser|chrome|chromium|website|webpage|dom|playwright|tab)\b/i,
+  desktop: /\b(desktop|windows|macos|window|computer use|screen automation)\b/i,
+  documents: /\b(document|docx|pdf|presentation|pptx|slides|word)\b/i,
+  spreadsheets: /\b(spreadsheet|excel|xlsx|csv|workbook)\b/i,
+  scheduling: /\b(schedule|scheduled|scheduler|cron|timer|background job|automation job)\b/i,
+  business: /\b(business|client|customer|sales|revenue|invoice|lead|prospect|operations|crm)\b/i,
+  research: /\b(research|investigate|sources|citations|competitive analysis|web search)\b/i,
+};
+
+function detectSkillDomains(value: string): Set<string> {
+  const out = new Set<string>();
+  for (const [domain, pattern] of Object.entries(SKILL_DOMAIN_PATTERNS)) {
+    if (pattern.test(value)) out.add(domain);
+  }
+  return out;
+}
+
+function exactPhraseInText(phrase: string, text: string): boolean {
+  const normalizedPhrase = normalizeSkillMatchTextLoose(phrase);
+  const normalizedText = normalizeSkillMatchTextLoose(text);
+  if (normalizedPhrase.length < 4) return false;
+  const escaped = normalizedPhrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|\\s)${escaped}(?:$|\\s)`, 'i').test(normalizedText);
+}
+
+function explicitSkillMentionScore(skill: Skill, rawText: string): number {
+  const normalizedText = normalizeSkillMatchTextLoose(rawText);
+  const idText = normalizeSkillMatchTextLoose(skill.id);
+  const nameText = normalizeSkillMatchTextLoose(skill.name);
+  const raw = String(rawText || '');
+  const escapedId = skill.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp(`(?:^|\\s)(?:\\$${escapedId}|skill:${escapedId})(?=$|\\s|[.,;!?])`, 'i').test(raw)) return 240;
+
+  const nameWords = nameText.split(' ').filter(Boolean);
+  const genericShortName = nameWords.length === 1 && nameText.length < 6;
+  if (!genericShortName && nameText.length >= 4 && exactPhraseInText(nameText, normalizedText)) {
+    return 190 + Math.min(30, nameWords.length * 6);
+  }
+
+  const idWords = idText.split(' ').filter(Boolean);
+  const genericShortId = idWords.length === 1 && idText.length < 6;
+  if (!genericShortId && idText.length >= 4 && exactPhraseInText(idText, normalizedText)) {
+    return 185 + Math.min(24, idWords.length * 5);
+  }
+  if (genericShortId && exactPhraseInText(`skill ${idText}`, normalizedText)) return 220;
+  return 0;
+}
+
+function triggerRouteScore(trigger: string, rawText: string, queryWords: Set<string>): number {
+  const triggerText = normalizeSkillMatchTextLoose(trigger);
+  const triggerWords = triggerText.split(' ').filter((word) => word.length >= 3);
+  if (!triggerWords.length) return 0;
+  if (exactPhraseInText(triggerText, rawText)) return 150 + Math.min(20, triggerWords.length * 4);
+  const overlap = triggerWords.filter((word) => queryWords.has(word)).length;
+  if (triggerWords.length >= 2 && overlap === triggerWords.length) return 52;
+  if (triggerWords.length >= 3 && overlap >= 2 && overlap / triggerWords.length >= 0.66) return 34;
+  return 0;
+}
+
+export function rankSkillMatches(
+  skills: Skill[],
+  messageText: string,
+  options?: { includeExplicitOnly?: boolean; includeUnavailable?: boolean; limit?: number },
+): SkillRouteMatch[] {
+  const text = String(messageText || '').trim();
+  if (!text) return [];
+  const normalized = normalizeSkillMatchTextLoose(text);
+  const queryWords = composerWordSet(text);
+  const queryDomains = detectSkillDomains(normalized);
+  const ranked: SkillRouteMatch[] = [];
+
+  for (const skill of skills) {
+    if (skill.lifecycle === 'deprecated' || skill.lifecycle === 'archived') continue;
+    if (!options?.includeUnavailable && (skill.executionEnabled === false || skill.eligibility?.status !== 'ready')) continue;
+    if (skill.status === 'blocked' || skill.health.state === 'blocked' || ['blocked', 'quarantined', 'unsupported'].includes(skill.eligibility.status)) continue;
+    const explicitMentionScore = explicitSkillMentionScore(skill, text);
+    const explicitMention = explicitMentionScore > 0;
+    const matchedTriggers = skill.triggers
+      .map((trigger) => ({ trigger, score: triggerRouteScore(trigger, text, queryWords) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score);
+    const bestTriggerScore = matchedTriggers[0]?.score || 0;
+    const hasExactTrigger = !!matchedTriggers[0] && exactPhraseInText(matchedTriggers[0].trigger, text);
+
+    const skillText = [
+      skill.id,
+      skill.name,
+      skill.categories.join(' '),
+      skill.requiredTools.join(' '),
+      skill.description,
+    ].join(' ');
+    const skillDomains = detectSkillDomains(normalizeSkillMatchTextLoose(skillText));
+    const matchedDomains = Array.from(queryDomains).filter((domain) => skillDomains.has(domain));
+    const domainConflict = queryDomains.size > 0 && skillDomains.size > 0 && matchedDomains.length === 0;
+    const specializedExtraDomains = Array.from(skillDomains).filter((domain) =>
+      !queryDomains.has(domain) && ['coding', 'email', 'creative', 'social', 'documents', 'spreadsheets', 'business'].includes(domain)
+    );
+
+    let score = explicitMention ? explicitMentionScore : bestTriggerScore;
+    const metadataWords = new Set(composerSkillWords(`${skill.id} ${skill.name} ${skill.categories.join(' ')}`));
+    const metadataOverlap = Array.from(queryWords).filter((word) => metadataWords.has(word)).length;
+    score += Math.min(24, metadataOverlap * 8);
+    const descriptionWords = new Set(composerSkillWords(skill.description));
+    const descriptionOverlap = Array.from(queryWords).filter((word) => descriptionWords.has(word)).length;
+    score += Math.min(30, descriptionOverlap * 10);
+    if (matchedDomains.length) score += 18 + Math.min(12, matchedDomains.length * 4);
+    if (queryDomains.size > 0 && specializedExtraDomains.length && !explicitMention && !hasExactTrigger) score -= 60;
+    if (domainConflict && !explicitMention && !hasExactTrigger) score -= 80;
+
+    const sourceWorkIntent = /\b(prometheus\s+(?:source|src)|self[ -]?edit|source\s+code|fix(?:ing)?\s+(?:a\s+)?bug|live\s+ui\s+verification)\b/i.test(text);
+    const sourceRigorSkill = /src-edit-proposal-rigor|source.*edit.*rigor/i.test(`${skill.id} ${skill.name}`);
+    if (sourceWorkIntent && sourceRigorSkill) score += 95;
+    if (sourceWorkIntent && /restart|launch|open app/i.test(`${skill.id} ${skill.name} ${skill.description}`) && !sourceRigorSkill) score -= 85;
+
+    const noBrowseIntent = /\b(draft only|write only|do not browse|don['’]?t browse|no research|do not publish|don['’]?t publish)\b/i.test(text);
+    const networkOperationSkill = /\b(browser|fetch|publish|post media|web research|playwright)\b/i.test(
+      `${skill.id} ${skill.name} ${skill.categories.join(' ')} ${skill.requiredTools.join(' ')} ${skill.description}`,
+    );
+    if (noBrowseIntent && networkOperationSkill && !explicitMention) score -= 100;
+
+    const setupRestricted = skill.status === 'needs_setup' || skill.health.state === 'needs_setup' || skill.health.state === 'partial' || skill.eligibility.status === 'needs_setup';
+    const implicitEligible = (!setupRestricted && skill.implicitInvocation !== false) || explicitMention;
+    if (!implicitEligible && !options?.includeExplicitOnly) continue;
+    if (domainConflict && !explicitMention && !hasExactTrigger) continue;
+    if (score < 25) continue;
+    const confidence: SkillRouteConfidence = score >= 75 ? 'high' : score >= 45 ? 'medium' : 'low';
+    ranked.push({
+      id: skill.id,
+      skill,
+      score,
+      confidence,
+      explicitMention,
+      implicitEligible,
+      domainConflict,
+      matchedTriggers: matchedTriggers.slice(0, 3).map((item) => item.trigger),
+      matchedDomains,
+    });
+  }
+
+  return ranked
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+    .slice(0, Math.max(1, options?.limit || 8));
+}
+
+export function evaluateSkillTriggerRouting(
+  skills: Skill[],
+  targetSkill: Skill,
+  positivePrompts: string[],
+  negativePrompts: string[],
+): { passed: boolean; failedPositive: string[]; failedNegative: string[] } {
+  const evaluationSkills = skills.map((skill) => skill.id === targetSkill.id ? targetSkill : skill);
+  if (!evaluationSkills.some((skill) => skill.id === targetSkill.id)) evaluationSkills.push(targetSkill);
+  const failedPositive = positivePrompts.filter((prompt) => {
+    const top = rankSkillMatches(evaluationSkills, prompt, { includeExplicitOnly: true, limit: 1 })[0];
+    return top?.id !== targetSkill.id || top.confidence !== 'high';
+  });
+  const failedNegative = negativePrompts.filter((prompt) => {
+    const target = rankSkillMatches(evaluationSkills, prompt, { includeExplicitOnly: true, limit: 8 })
+      .find((match) => match.id === targetSkill.id);
+    return !!target && target.confidence !== 'low';
+  });
+  return { passed: failedPositive.length === 0 && failedNegative.length === 0, failedPositive, failedNegative };
+}
+
 function mergeSkillIds(primary: string[], fallback: string[], limit = 8): string[] {
   const merged: string[] = [];
   const seen = new Set<string>();
@@ -402,6 +601,18 @@ export class SkillsManager {
     return readSkillResourceText(skill, relPath, maxChars);
   }
 
+  readAutoLoadedResources(id: string): Array<{ path: string; content: string }> {
+    const skill = this.get(id);
+    if (!skill || isPublicDistributionBuild()) return [];
+    const paths = skill.id === 'self-repair-protocol'
+      ? ['references/dev-escalation.md']
+      : [];
+    return paths.flatMap((resourcePath) => {
+      const result = this.readResource(skill.id, resourcePath, 12_000);
+      return result.ok ? [{ path: result.path, content: result.content }] : [];
+    });
+  }
+
   inspect(id: string): any {
     const skill = this.get(id);
     if (!skill) return null;
@@ -433,6 +644,7 @@ export class SkillsManager {
       lifecycle: skill.lifecycle,
       ownership: skill.ownership,
       executionEnabled: skill.executionEnabled,
+      implicitInvocation: skill.implicitInvocation,
       riskLevel: skill.riskLevel,
       resources: skill.resources,
       validation: skill.validation,
@@ -448,6 +660,44 @@ export class SkillsManager {
     const beforeHash = hashSkillDirectory(rootDir);
     const snapshotDir = this.snapshotSkill(existing || null, rootDir, 'manifest-overlay');
     const overlayPath = getSkillOverlayPath(rootDir, skillId);
+    if (Object.prototype.hasOwnProperty.call(manifest || {}, 'triggers')) {
+      const validation = validateSkillTriggers(manifest.triggers);
+      if (validation.rejected.length || validation.capped.length) {
+        const rejected = validation.rejected.map((item) => `"${item.trigger}" (${item.reason})`);
+        const capped = validation.capped.length ? [`${validation.capped.length} over cap ${MAX_SKILL_TRIGGERS}`] : [];
+        throw new Error(`Invalid skill trigger set: ${[...rejected, ...capped].join(', ')}`);
+      }
+      manifest = { ...manifest, triggers: validation.triggers };
+      const before = (existing?.triggers || []).join('\n');
+      const after = validation.triggers.join('\n');
+      if (before !== after) {
+        const positivePrompts = (metadata?.triggerPositivePrompts || []).map(String).filter(Boolean);
+        const negativePrompts = (metadata?.triggerNegativePrompts || []).map(String).filter(Boolean);
+        if (!positivePrompts.length || !negativePrompts.length) {
+          throw new Error('Trigger changes require positive and negative prompt evaluations.');
+        }
+        if (!existing) throw new Error('Cannot evaluate trigger routing for a missing skill.');
+        const candidateSkill: Skill = {
+          ...existing,
+          triggers: validation.triggers,
+          implicitInvocation: typeof manifest.implicitInvocation === 'boolean'
+            ? manifest.implicitInvocation
+            : existing.implicitInvocation,
+        };
+        const evaluationSkills = this.getAll().map((skill) => skill.id === existing.id ? candidateSkill : skill);
+        const failedPositive = positivePrompts.filter((prompt) => {
+          const top = rankSkillMatches(evaluationSkills, prompt, { limit: 1 })[0];
+          return top?.id !== existing.id || top.confidence !== 'high';
+        });
+        const failedNegative = negativePrompts.filter((prompt) => {
+          const target = rankSkillMatches(evaluationSkills, prompt, { limit: 8 }).find((match) => match.id === existing.id);
+          return !!target && target.confidence !== 'low';
+        });
+        if (failedPositive.length || failedNegative.length) {
+          throw new Error(`Trigger evaluation failed: ${failedPositive.length} positive prompt(s), ${failedNegative.length} negative prompt(s).`);
+        }
+      }
+    }
     fs.mkdirSync(path.dirname(overlayPath), { recursive: true });
     const { emoji: _emoji, ...manifestWithoutEmoji } = manifest || {};
     const normalized = {
@@ -472,55 +722,32 @@ export class SkillsManager {
   }
 
   findMatchingSkills(toolName: string, messageText?: string): string[] {
-    const text = `${toolName || ''} ${messageText || ''}`.toLowerCase();
-    const words = text.split(/\W+/).filter(Boolean);
-    const matches: string[] = [];
-    for (const skill of this.skills.values()) {
-      if (skill.triggers.length === 0) continue;
-      if (skill.triggers.some(t => skillTriggerMatchesText(t, text, words))) {
-        matches.push(skill.id);
-      }
-    }
-    const fallback = Array.from(this.skills.values())
-      .map((skill) => ({ id: skill.id, score: skillMetadataFallbackScore(skill, text) }))
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score)
+    return rankSkillMatches(Array.from(this.skills.values()), `${toolName || ''} ${messageText || ''}`, { limit: 8 })
+      .filter((item) => item.confidence !== 'low')
       .map((item) => item.id);
-    return mergeSkillIds(matches, fallback);
   }
 
   findMatchingSkillsForMessage(messageText: string): string[] {
-    const text = String(messageText || '').toLowerCase();
-    const words = text.split(/\W+/).filter(w => w.length > 2);
-    const matches: string[] = [];
-    for (const skill of this.skills.values()) {
-      if (skill.triggers.length === 0) continue;
-      if (skill.triggers.some(t => skillTriggerMatchesText(t, text, words))) {
-        matches.push(skill.id);
-      }
-    }
-    const fallback = Array.from(this.skills.values())
-      .map((skill) => ({ id: skill.id, score: skillMetadataFallbackScore(skill, text) }))
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score)
+    return rankSkillMatches(Array.from(this.skills.values()), messageText, { limit: 4 })
+      .filter((item) => item.confidence !== 'low')
       .map((item) => item.id);
-    return mergeSkillIds(matches, fallback);
   }
 
   findComposerSkillMatches(messageText: string, limit = 8): string[] {
-    const text = String(messageText || '').trim();
-    const queryWords = composerWordSet(text);
-    if (queryWords.size === 0) return [];
-    return Array.from(this.skills.values())
-      .map((skill) => {
-        const triggerScore = Math.max(0, ...skill.triggers.map((trigger) => composerTriggerScore(trigger, text, queryWords)));
-        const metadataScore = composerMetadataScore(skill, text, queryWords);
-        return { id: skill.id, score: triggerScore + metadataScore };
-      })
-      .filter((item) => item.score >= 10)
-      .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
-      .slice(0, Math.max(1, limit))
+    return rankSkillMatches(Array.from(this.skills.values()), messageText, { includeExplicitOnly: true, limit })
+      .filter((item) => item.confidence !== 'low')
       .map((item) => item.id);
+  }
+
+  resolveRuntimeRouting(messageText: string, options?: { forcedSkillIds?: string[]; excludedSkillIds?: Iterable<string> | string[] }) {
+    const all = this.getAll();
+    return resolveSkillRuntimeRouting({
+      skills: all,
+      rankedMatches: rankSkillMatches(all, messageText, { limit: 12 }),
+      message: messageText,
+      forcedSkillIds: options?.forcedSkillIds,
+      excludedSkillIds: options?.excludedSkillIds,
+    });
   }
 
   createSkill(data: {
@@ -529,10 +756,31 @@ export class SkillsManager {
     description: string;
     emoji?: string;
     triggers?: string[];
+    triggerPositivePrompts?: string[];
+    triggerNegativePrompts?: string[];
+    implicitInvocation?: boolean;
     instructions: string;
   }): Skill {
     const id = sanitizeSkillId(data.id);
     if (!id) throw new Error('Invalid skill ID');
+    const triggerValidation = validateSkillTriggers(data.triggers || []);
+    if (triggerValidation.rejected.length || triggerValidation.capped.length) throw new Error('Invalid or over-cap skill triggers.');
+    if (triggerValidation.triggers.length) {
+      const positive = (data.triggerPositivePrompts || []).map(String).filter(Boolean);
+      const negative = (data.triggerNegativePrompts || []).map(String).filter(Boolean);
+      if (!positive.length || !negative.length) throw new Error('New skill triggers require positive and negative prompt evaluations.');
+      const candidate = {
+        id,
+        name: data.name,
+        description: data.description,
+        triggers: triggerValidation.triggers,
+        categories: [],
+        requiredTools: [],
+        implicitInvocation: data.implicitInvocation !== false,
+      } as unknown as Skill;
+      const evaluation = evaluateSkillTriggerRouting(this.getAll(), candidate, positive, negative);
+      if (!evaluation.passed) throw new Error(`New skill trigger evaluation failed: ${evaluation.failedPositive.length} positive, ${evaluation.failedNegative.length} negative.`);
+    }
 
     const skillDir = path.join(this.skillsDir, id);
     fs.mkdirSync(skillDir, { recursive: true });
@@ -543,9 +791,10 @@ export class SkillsManager {
       `description: ${data.description}`,
       'version: 1.0.0',
     ];
-    if (data.triggers?.length) {
-      lines.push(`triggers: ${data.triggers.join(', ')}`);
+    if (triggerValidation.triggers.length) {
+      lines.push(`triggers: ${triggerValidation.triggers.join(', ')}`);
     }
+    if (data.implicitInvocation === false) lines.push('implicitInvocation: false');
     lines.push('---');
     const content = lines.join('\n') + '\n\n' + data.instructions;
     assertSkillScanAllowed(scanSkillText(content, 'SKILL.md'), `Skill "${id}"`);
@@ -573,11 +822,32 @@ export class SkillsManager {
     requires?: SkillRequires;
     assignment?: SkillAssignment;
     toolBinding?: SkillToolBinding;
+    implicitInvocation?: boolean;
+    triggerPositivePrompts?: string[];
+    triggerNegativePrompts?: string[];
     resources?: Array<{ path: string; content: string; type?: string; description?: string }>;
     overwrite?: boolean;
   }): Skill {
     const id = sanitizeSkillId(data.id);
     if (!id) throw new Error('Invalid skill ID');
+    const triggerValidation = validateSkillTriggers(data.triggers || []);
+    if (triggerValidation.rejected.length || triggerValidation.capped.length) throw new Error('Invalid or over-cap skill triggers.');
+    if (triggerValidation.triggers.length) {
+      const positive = (data.triggerPositivePrompts || []).map(String).filter(Boolean);
+      const negative = (data.triggerNegativePrompts || []).map(String).filter(Boolean);
+      if (!positive.length || !negative.length) throw new Error('New skill triggers require positive and negative prompt evaluations.');
+      const candidate = {
+        id,
+        name: data.name,
+        description: data.description,
+        triggers: triggerValidation.triggers,
+        categories: data.categories || [],
+        requiredTools: data.requiredTools || [],
+        implicitInvocation: data.implicitInvocation !== false,
+      } as unknown as Skill;
+      const evaluation = evaluateSkillTriggerRouting(this.getAll(), candidate, positive, negative);
+      if (!evaluation.passed) throw new Error(`New skill trigger evaluation failed: ${evaluation.failedPositive.length} positive, ${evaluation.failedNegative.length} negative.`);
+    }
     const skillDir = path.join(this.skillsDir, id);
     const existing = this.get(id);
     const beforeHash = existing ? hashSkillDirectory(existing.rootDir) : '';
@@ -600,12 +870,13 @@ export class SkillsManager {
       description: data.description || '',
       version: data.version || '1.0.0',
       entrypoint: 'SKILL.md',
-      triggers: data.triggers || [],
+      triggers: triggerValidation.triggers,
       categories: data.categories || [],
       requiredTools: data.requiredTools || [],
       requires: data.requires,
       assignment: data.assignment,
       toolBinding: data.toolBinding,
+      implicitInvocation: data.implicitInvocation !== false,
       permissions: data.permissions || {
         workspaceRead: true,
         workspaceWrite: true,
@@ -1019,12 +1290,13 @@ export class SkillsManager {
     const all = this.getAll();
     if (!all.length) return 'No skills installed.';
     return all.map(s => {
-      const status = s.eligibility.status !== 'ready' ? ` [${s.eligibility.status}]` : '';
-      return `${s.id}${status} - ${s.description || '(no description)'}`;
+      const status = s.health.state !== 'ready' ? ` [${s.health.state}]` : '';
+      const reason = s.health.state !== 'ready' && s.health.reason ? ` Setup: ${s.health.reason}` : '';
+      return `${s.id}${status} - ${s.description || '(no description)'}${reason}`;
     }).join('\n');
   }
 
-  buildTurnContext(_messageText: string, optionsOrMaxChars: number | (BuildTurnContextOptions & { forcedSkillIds?: string[] }) = 3000): string {
+  buildTurnContext(_messageText: string, optionsOrMaxChars: number | BuildTurnContextOptions = 3000): string {
     const all = this.getAll();
     if (!all.length) return '';
     const excludedSkillIds = typeof optionsOrMaxChars === 'number'
@@ -1033,42 +1305,66 @@ export class SkillsManager {
     const forcedSkillIds = typeof optionsOrMaxChars === 'number'
       ? []
       : (Array.isArray(optionsOrMaxChars?.forcedSkillIds) ? optionsOrMaxChars.forcedSkillIds : []);
-    const matchedIds = [
-      ...forcedSkillIds.map((id) => String(id || '').trim()).filter(Boolean),
-      ...this.findMatchingSkillsForMessage(_messageText),
-    ];
-    const seenSkillIds = new Set<string>();
-    const matchedSkills = matchedIds
+    const selectedSkills = forcedSkillIds
+      .map((id) => String(id || '').trim())
       .filter((id) => !excludedSkillIds.has(String(id || '').trim().toLowerCase()))
-      .filter((id) => {
-        const key = String(id || '').trim().toLowerCase();
-        if (!key || seenSkillIds.has(key)) return false;
-        seenSkillIds.add(key);
-        return true;
-      })
       .map((id) => this.get(id))
-      .filter((skill): skill is Skill => !!skill)
-      .slice(0, 5);
-    const matchedBlock = matchedSkills.length
+      .filter((skill): skill is Skill => !!skill && skill.health.state !== 'blocked' && skill.status !== 'blocked')
+      .slice(0, 3);
+    const selectedIds = new Set(selectedSkills.map((skill) => skill.id));
+    const allRankedMatches = rankSkillMatches(all, _messageText, { limit: 12 })
+      .filter((match) => !excludedSkillIds.has(match.id.toLowerCase()));
+    const rankedMatches = allRankedMatches
+      .filter((match) => !selectedIds.has(match.id));
+    const mandatoryMatch = rankedMatches.find((match) => match.confidence === 'high');
+    const advisoryMatches = rankedMatches
+      .filter((match) => match.id !== mandatoryMatch?.id && match.confidence !== 'low')
+      .slice(0, 3);
+    const selectedBlock = selectedSkills.length
       ? (
-        `\n\n[MATCHING_SKILLS] — MANDATORY READ\n` +
-        `Your message matched these skills by trigger word. You MUST skill_read EACH one before acting — even if you are not sure it applies. A partial match often still helps for one part of the work; read it and use whatever is relevant.\n` +
-        matchedSkills.map((s) => {
-          const triggerPreview = s.triggers.length ? ` [triggers: ${s.triggers.slice(0, 6).join(', ')}]` : '';
-          return `- ${s.id}${triggerPreview} - ${s.description.slice(0, 140) || s.name}`;
-        }).join('\n')
+        `\n\n[USER_SELECTED_SKILLS] — inspect relevance before reading\n` +
+        `The user explicitly selected these skills. Read only the ones whose description directly fits the current request; selection is not permission to load unrelated playbooks.\n` +
+        selectedSkills.map((skill) => `- ${skill.id}${skill.health.state !== 'ready' ? ` [${skill.health.state}: ${skill.health.reason || 'setup required'}]` : ''} - ${skill.description.slice(0, 180) || skill.name}`).join('\n')
+      )
+      : '';
+    const mandatoryBlock = mandatoryMatch
+      ? (
+        `\n\n[RELEVANT_SKILL] — one high-confidence read\n` +
+        `This is the only implicit skill ranked high enough to read before acting. Read it because its full task scope matches—not merely because one word overlapped.\n` +
+        `- ${mandatoryMatch.id} [score ${mandatoryMatch.score}; matched: ${mandatoryMatch.matchedTriggers.join(', ') || mandatoryMatch.matchedDomains.join(', ') || 'explicit name'}] - ${mandatoryMatch.skill.description.slice(0, 180) || mandatoryMatch.skill.name}`
+      )
+      : '';
+    const advisoryBlock = advisoryMatches.length
+      ? (
+        `\n\n[POSSIBLY_RELEVANT_SKILLS] — suggestions, not required reads\n` +
+        `Do not read these automatically. Read at most one only if a concrete part of the request clearly requires its non-obvious procedure. Ignore cross-domain or merely lexical matches.\n` +
+        advisoryMatches.map((match) => `- ${match.id} [score ${match.score}] - ${match.skill.description.slice(0, 160) || match.skill.name}`).join('\n')
       )
       : '';
 
-    return (
+    const legacyContext = (
       `[SKILLS] You have ${all.length} reusable skill playbook${all.length !== 1 ? 's' : ''}. Skills are saved workflow instructions — the canonical how-to for a task. Reading the right skill makes you faster, cheaper in tokens, and correct, instead of re-deriving a workflow from scratch.\n` +
-      `THE GOAL: there should be a skill for essentially every real workflow you do. Treat skills as the durable memory of HOW to do things.\n` +
+      `THE GOAL: use focused skills for genuinely repeatable workflows; do not create a skill for every task or one-off variation.\n` +
       `For greetings, small talk, quick Q&A, or confirmations: respond directly — do NOT call skill_list.\n` +
-      `BEFORE any real workflow (browser/desktop automation, file edits, multi-step or repeatable work): call skill_list first, skill_read every relevant skill, and follow it.\n` +
+      `Use skill_list only when the request is unfamiliar or specialized and no high-confidence match is supplied. Never list or read skills merely because work is multi-step, involves files, or contains a broad word such as code, email, video, browser, or workflow.\n` +
+      `When skill context appears, compare each description against the full user request. Read only the single clearly relevant skill; ignore unrelated matches even if their triggers overlap one token.\n` +
       `If a skill declares toolBinding metadata, treat requiredTools/defaultWorkflow as the operating contract (activate missing tool categories first); if it declares preferredAgent/assignedAgents/assignedTeams, consider routing substantial matching work there.\n` +
-      `AFTER finishing a workflow: if no skill covered it, create one; if a skill was incomplete or wrong, update it. Capture the actual steps AND the trigger words that should surface it next time (the same kind of request that prompted this work), so it fires automatically when this comes up again. This is part of finishing real work, not an optional extra. (Full skill-tool reference is in the SKILLS tool block.)` +
-      matchedBlock
+      `AFTER finishing a workflow: do not create or update a skill automatically. Normal turn evidence is recorded as a candidate; use skill_candidate_submit only when an explicit, evidence-backed candidate needs to be added. Skill mutations require Curator review or a direct user request. (Full skill-tool reference is in the SKILLS tool block.)` +
+      selectedBlock + mandatoryBlock + advisoryBlock
     );
+    const report = resolveSkillRuntimeRouting({
+      skills: all,
+      rankedMatches: allRankedMatches,
+      message: _messageText,
+      forcedSkillIds,
+      excludedSkillIds,
+    });
+    if (typeof optionsOrMaxChars !== 'number' && optionsOrMaxChars.sessionId) {
+      recordSkillRoutingReport(optionsOrMaxChars.sessionId, report);
+    }
+    return getSkillRoutingMode() === 'active'
+      ? buildActiveSkillRoutingContext({ report, skills: all })
+      : legacyContext;
   }
 
   buildPromptContext(options?: {

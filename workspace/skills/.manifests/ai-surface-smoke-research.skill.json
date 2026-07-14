@@ -2,25 +2,34 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "ai smoke test",
-    "run an ai surface test",
-    "test codex and claude",
-    "focus codex then search",
-    "browser desktop ai test",
-    "search reddit for ai chatter",
-    "search x for ai chatter",
-    "claude openclaw hermes search",
-    "check current ai discussion",
-    "live ai chatter",
-    "ai research smoke test",
-    "compare ai app surfaces",
+    "search reddit and x for ai chatter",
+    "search x and test desktop focus",
     "run the ai browser test",
-    "summarize ai ecosystem buzz",
-    "smoke test ai research flow",
-    "x.com javascript disabled",
-    "screenshot delivery failed",
-    "browser doctor 9222",
-    "resume smoke test"
+    "ai surface smoke test",
+    "focus chatgpt and claude",
+    "browser desktop smoke test",
+    "voice browser desktop test",
+    "test voice tools"
   ],
-  "id": "ai-surface-smoke-research"
+  "id": "ai-surface-smoke-research",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "Shared voice/typed workflow verified through live Prometheus browser extraction, ChatGPT discovery/window focus, and explicit Claude-missing recovery.",
+    "verifiedCapabilities": [
+      "voice_tool_parity",
+      "browser_open",
+      "browser_scroll_collect",
+      "chatgpt_app_discovery",
+      "chatgpt_window_focus",
+      "claude_app_discovery",
+      "missing_window_recovery"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "ai-surface-smoke-research",
+  "description": "Run the shared browser, desktop, and optional voice-agent smoke workflow across ChatGPT, Claude, Reddit, X, and other requested AI surfaces. Use for voice-triggered or typed end-to-end tool tests, AI chatter collection, browser scrolling, desktop focus, visible-action proof, and concise tool-grounded summaries.",
+  "lifecycle": "active"
 }

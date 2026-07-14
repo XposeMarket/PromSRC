@@ -1,33 +1,12 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "json-and-config-surgery",
-  "name": "JSON and Config Surgery",
-  "description": "Safe Prometheus JSON/config editing workflow: read the whole structure, parse mentally or with validation, modify minimal fields, write valid JSON, and verify config files without corrupting commas, brackets, model routing, jobs, teams, or skill manifests.",
+  "name": "json-and-config-surgery",
+  "description": "Deprecated compatibility entry for JSON, YAML, and configuration edits. Use file-surgery and load its config-surgery reference when structured configuration is involved.",
   "emoji": "🧩",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
-  "triggers": [
-    "edit json",
-    "fix json",
-    "update json",
-    "config surgery",
-    "edit config",
-    "update config.json",
-    "Prometheus config",
-    "jobs.json",
-    "managed-teams.json",
-    "heartbeat config",
-    "integrations-state.json",
-    "skill.json",
-    "skill manifest",
-    "model routing config",
-    "agent model config",
-    "parse json",
-    "invalid json",
-    "json comma",
-    "json bracket",
-    "write whole JSON file"
-  ],
+  "triggers": [],
   "categories": [
     "config",
     "json",
@@ -45,9 +24,11 @@
   },
   "resources": [
     {
-      "path": "notes/model-routing-tools-2026-05-09.md",
+      "path": "references/background/model-routing-tools.md",
       "type": "doc",
       "description": "May 9 runtime model-routing repair note: prefer get_agent_models/set_agent_model before raw .prometheus config edits."
     }
-  ]
+  ],
+  "implicitInvocation": false,
+  "lifecycle": "deprecated"
 }

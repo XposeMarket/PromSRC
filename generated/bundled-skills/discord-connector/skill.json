@@ -1,16 +1,18 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "discord-connector",
-  "name": "Discord Connector",
-  "description": "Add Discord server, channel, thread, message, member, and moderation-aware tools through a bot/OAuth connector with confirmation gates for side effects.",
+  "name": "discord-connector",
+  "description": "Build or extend a Discord bot or OAuth connector with typed server, channel, thread, message, member, and moderation tools. Use when implementing or hardening Discord integration in Prometheus; do not invoke for generic social-media work.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
+  "implicitInvocation": true,
   "triggers": [
-    "discord connector",
-    "discord bot",
-    "post to discord",
-    "read discord",
-    "discord channels"
+    "build discord connector",
+    "discord oauth integration",
+    "discord channel tools",
+    "discord message connector",
+    "connect discord bot",
+    "discord connector"
   ],
   "categories": [
     "prometheus",
@@ -29,5 +31,6 @@
     "workspaceRead": true,
     "workspaceWrite": true,
     "externalSideEffects": true
-  }
+  },
+  "lifecycle": "active"
 }

@@ -1,23 +1,18 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when adding, wrapping, hardening, or designing a typed Prometheus adapter around an external CLI tool, including command discovery, safe argument schemas, auth handling, output parsing, and replacing raw shell usage.",
+  "description": "Build or harden a typed Prometheus adapter around an external command-line tool, including status checks, bounded actions, artifacts, cancellation, and side-effect controls. Use when explicitly wrapping or exposing a CLI; do not use for ordinary shell commands.",
+  "implicitInvocation": true,
   "triggers": [
-    "CLI adapter",
-    "wrap this CLI",
-    "expose command as tool",
-    "typed CLI tool",
-    "external command integration",
-    "parse CLI output",
-    "safe shell wrapper",
-    "command adapter",
-    "add CLI connector",
-    "harden CLI usage",
-    "replace raw shell",
-    "tool schema for CLI",
-    "CLI auth flow",
-    "inspect CLI help",
-    "build a wrapper around this command"
+    "expose cli in prometheus",
+    "add command line tool",
+    "external cli integration",
+    "wrap external cli",
+    "safe cli wrapper",
+    "harden shell workflow",
+    "typed shell tool",
+    "cli connector",
+    "cli adapter"
   ],
   "categories": [
     "prometheus",
@@ -30,5 +25,6 @@
     "connector_list"
   ],
   "lifecycle": "active",
-  "id": "cli-adapter-framework"
+  "id": "cli-adapter-framework",
+  "name": "cli-adapter-framework"
 }

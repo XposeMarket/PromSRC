@@ -11,8 +11,11 @@
 
 import * as path from 'path';
 import * as fs from 'fs';
+import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import crypto from 'crypto';
-import { getConfig } from '../../config/config';
+import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
+import { setRuntimeActorContext } from '../runtime-actor.js';
+import { ensureTeamAgentIdentity } from '../teams/team-workspace.js';
 import {
   loadTask,
   saveTask,
@@ -428,7 +431,7 @@ export class BackgroundTaskRunner {
     executionMode?: 'interactive' | 'background_task' | 'proposal_execution' | 'background_agent' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent',
     toolFilter?: string[],
     attachments?: undefined,
-    reasoningOptions?: undefined,
+    reasoningOptions?: any,
     providerOverride?: string,
   ) => Promise<{ type: string; text: string; thinking?: string }>;
   private broadcast: (data: object) => void;
@@ -671,9 +674,7 @@ export class BackgroundTaskRunner {
       try {
         const ws = (task as any).agentWorkspace as string | undefined;
         if (!ws) return '';
-        const rolePath = path.join(ws, 'system_prompt.md');
-        if (!fs.existsSync(rolePath)) return '';
-        const content = fs.readFileSync(rolePath, 'utf-8').trim();
+        const content = String(readAgentPromptFile(ws, { migrateLegacy: true })?.content || '').trim();
         return content
           ? `\n[YOUR ROLE]\nKeep this role and scope for the whole task.\n\n${content}`
           : '';
@@ -1405,6 +1406,7 @@ export class BackgroundTaskRunner {
     timeoutOverrideMs?: number,
     providerOverride?: string,
 	    executionModeOverride: 'background_task' | 'proposal_execution' | 'background_agent' | 'team_subagent' = 'background_task',
+    reasoningEffortOverride?: string,
   ): Promise<
     | { ok: true; result: { type: string; text: string; thinking?: string } }
     | { ok: false; reason: string; detail: string }
@@ -1439,8 +1441,45 @@ export class BackgroundTaskRunner {
           if (event === 'tool_call' && pingInactivityTimeout) pingInactivityTimeout();
           sendSSE(event, data);
         };
+        if (task.subagentProfile || task.teamSubagent?.agentId) {
+          const actorAgentId = String(task.teamSubagent?.agentId || task.subagentProfile || '').trim();
+          const actorAgent = getAgentById(actorAgentId) as any;
+          const globalIdentity = actorAgent
+            ? ensureAgentWorkspace(actorAgent)
+            : path.join(getConfig().getWorkspacePath(), '.prometheus', 'subagents', actorAgentId.replace(/[^a-zA-Z0-9_.-]/g, '_'));
+          const identityRoot = task.teamSubagent?.teamId
+            ? ensureTeamAgentIdentity(task.teamSubagent.teamId, actorAgentId, globalIdentity)
+            : globalIdentity;
+          const actorExecutionRoot = String(task.agentWorkspace || getConfig().getWorkspacePath());
+          setRuntimeActorContext(sessionId, {
+            kind: 'agent',
+            surface: task.teamSubagent ? 'team_dispatch' : 'background_dispatch',
+            agentId: actorAgentId,
+            displayName: String(actorAgent?.identity?.displayName || actorAgent?.name || actorAgentId),
+            teamId: task.teamSubagent?.teamId,
+            identityRoot,
+            memoryRoot: identityRoot,
+            executionRoot: actorExecutionRoot,
+            allowedWorkPaths: task.agentAllowedWorkPaths || [actorExecutionRoot, identityRoot],
+          });
+        }
         attemptResult = await this._withRoundTimeout(
-          this.handleChat(prompt, sessionId, wrappedSendSSE, undefined, abortSignal, callerContext, modelOverride, executionModeOverride, toolFilter, undefined, undefined, providerOverride),
+          this.handleChat(
+            prompt,
+            sessionId,
+            wrappedSendSSE,
+            undefined,
+            abortSignal,
+            callerContext,
+            modelOverride,
+            executionModeOverride,
+            toolFilter,
+            undefined,
+            reasoningEffortOverride
+              ? { enabled: reasoningEffortOverride !== 'none', level: reasoningEffortOverride as any }
+              : undefined,
+            providerOverride,
+          ),
           INACTIVITY_TIMEOUT_MS,
           abortSignal,
           (ping) => { pingInactivityTimeout = ping; },
@@ -1700,6 +1739,14 @@ export class BackgroundTaskRunner {
           content: `${data.action || 'unknown'}: ${String(data.result || '').slice(0, 120)}${data.error ? ' [ERROR]' : ''}`,
 	          detail: data.error ? String(data.result || '') : undefined,
 	        });
+	        this._broadcast('task_tool_result', {
+	          taskId,
+	          tool: data.action,
+	          args: data.args,
+	          result: String(data.result || '').slice(0, 240),
+	          error: data.error === true,
+	        });
+	        this._broadcast('task_panel_update', { taskId });
 	        const liveTaskForTelegram = loadTask(taskId);
 	        if (
 	          liveTaskForTelegram?.channel === 'telegram'
@@ -2171,6 +2218,7 @@ export class BackgroundTaskRunner {
         undefined,
         taskProviderOverride,
 	        task.teamSubagent ? 'team_subagent' : task.subagentProfile ? 'background_agent' : isProposalLikeSourceSession ? 'proposal_execution' : 'background_task',
+	        liveTask.executorReasoningEffort,
 	      );
 
       if (!roundOutcome.ok) {
@@ -2420,11 +2468,65 @@ export class BackgroundTaskRunner {
 
   private _broadcast(event: string, data: object): void {
     try { this.broadcast({ type: event, ...data }); } catch {}
+    if (!['task_step_done', 'task_paused', 'task_awaiting_input', 'task_needs_assistance', 'task_complete'].includes(event)) return;
+    try {
+      const task = loadTask(this.taskId);
+      if (!task?.voiceDispatch?.workgroupId || !task.originatingSessionId) return;
+      if (event === 'task_complete' && task.taskKind === 'run_once' && task.verificationStatus !== 'complete') return;
+      const payload = data as any;
+      const kind = event === 'task_step_done'
+        ? 'milestone'
+        : event === 'task_complete'
+          ? 'complete'
+          : 'paused';
+      const plan = Array.isArray(task.plan) ? task.plan : [];
+      const completedSteps = plan.filter((step: any) => step?.status === 'done');
+      const activeStep = task.runtimeProgress?.items?.find((item: any) => item?.status === 'in_progress')?.text
+        || plan[Math.max(0, Number(task.currentStepIndex || 0))]?.description
+        || '';
+      const recentActivity = (Array.isArray(task.journal) ? task.journal : [])
+        .filter((entry: any) => ['tool_call', 'tool_result', 'write_note', 'error', 'pause'].includes(String(entry?.type || '')))
+        .slice(-6)
+        .map((entry: any) => ({ at: entry.t, type: entry.type, detail: String(entry.content || entry.detail || '').slice(0, 500) }));
+      const note = String(payload.note || payload.summary || payload.question || payload.reason || '').trim();
+      const text = kind === 'complete'
+        ? `${task.title} completed. ${String(task.finalSummary || payload.summary || '').trim()}`.trim()
+        : kind === 'paused'
+          ? `${task.title} paused${note ? `: ${note}` : ' and needs attention'}.`
+          : `${task.title} completed ${completedSteps.length} of ${plan.length || Math.max(1, completedSteps.length)} planned steps${note ? `: ${note}` : ''}.${activeStep ? ` It is now working on ${activeStep}.` : ''}`;
+      this.broadcast({
+        type: 'voice_worker_update',
+        id: `voice_worker_${task.id}_${event}_${Date.now()}`,
+        sessionId: task.originatingSessionId,
+        workgroupId: task.voiceDispatch.workgroupId,
+        taskId: task.id,
+        title: task.title,
+        kind,
+        critical: kind === 'paused' || kind === 'complete',
+        status: task.status,
+        text: text.slice(0, kind === 'complete' ? 2400 : 1000),
+        currentStep: String(activeStep).slice(0, 400),
+        completedSteps: completedSteps.map((step: any) => String(step.description || '')).filter(Boolean).slice(-6),
+        recentActivity,
+        finalResult: kind === 'complete' ? String(task.finalSummary || payload.summary || '').slice(0, 2400) : '',
+        timestamp: Date.now(),
+      });
+    } catch {}
   }
 
 	  private async _deliverToChannel(task: TaskRecord, message: string, opts?: { forceTelegram?: boolean }): Promise<void> {
     if (task.voiceDispatch?.workgroupId) {
-      updateVoiceWorkgroupWorkerStatus(task.voiceDispatch.workgroupId, task.id, task.status);
+      updateVoiceWorkgroupWorkerStatus(task.voiceDispatch.workgroupId, task.id, task.status, {
+        currentStep: task.runtimeProgress?.items?.find((item: any) => item?.status === 'in_progress')?.text
+          || (Array.isArray(task.plan) ? task.plan[Math.max(0, Number(task.currentStepIndex || 0))]?.description : '')
+          || '',
+        completedSteps: (Array.isArray(task.plan) ? task.plan : [])
+          .filter((step: any) => step?.status === 'done')
+          .map((step: any) => String(step.description || ''))
+          .filter(Boolean),
+        finalResult: String(task.finalSummary || '').trim(),
+        updatedAt: Date.now(),
+      });
     }
     // Sub-agent path: notify parent instead of user chat
     if (task.parentTaskId) {
@@ -2726,7 +2828,36 @@ export class BackgroundTaskRunner {
       }
     }
     if (task.voiceDispatch?.workgroupId) {
-      updateVoiceWorkgroupWorkerStatus(task.voiceDispatch.workgroupId, task.id, 'complete');
+      updateVoiceWorkgroupWorkerStatus(task.voiceDispatch.workgroupId, task.id, 'complete', {
+        completedSteps: (Array.isArray(task.plan) ? task.plan : []).map((step: any) => String(step.description || '')).filter(Boolean),
+        finalResult: verificationText,
+        updatedAt: Date.now(),
+      });
+      if (task.originatingSessionId) {
+        try {
+          this.broadcast({
+            type: 'voice_worker_update',
+            id: `voice_worker_${task.id}_verified_complete_${Date.now()}`,
+            sessionId: task.originatingSessionId,
+            workgroupId: task.voiceDispatch.workgroupId,
+            taskId: task.id,
+            title: task.title,
+            kind: 'complete',
+            critical: true,
+            status: 'complete',
+            text: `${task.title} completed. ${verificationText}`.slice(0, 3000),
+            currentStep: '',
+            completedSteps: (Array.isArray(task.plan) ? task.plan : []).map((step: any) => String(step.description || '')).filter(Boolean).slice(-8),
+            recentActivity: (Array.isArray(task.journal) ? task.journal : []).slice(-6).map((entry: any) => ({
+              at: entry.t,
+              type: entry.type,
+              detail: String(entry.content || entry.detail || '').slice(0, 500),
+            })),
+            finalResult: verificationText.slice(0, 2600),
+            timestamp: Date.now(),
+          });
+        } catch {}
+      }
     }
 
     console.log(`[RunOnce] Task "${task.title}" (${task.id}) verified and delivered to session ${task.originatingSessionId}`);

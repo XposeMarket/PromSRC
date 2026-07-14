@@ -2,6 +2,7 @@ import { ToolResult } from '../types.js';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 import { fetchXThread } from '../gateway/browser-tools.js';
 import { executeDownloadMedia, executeDownloadUrl } from './download-tools.js';
 import { executeAnalyzeImage, executeAnalyzeVideo } from './media-analysis.js';
@@ -9,8 +10,16 @@ import { executeXSearch, xaiHasCredentials } from '../gateway/tools/handlers/xai
 import { creativeTranscribeAudio } from '../gateway/creative/generative-pipeline.js';
 import { getActiveWorkspace } from './workspace-context.js';
 import { getConfig } from '../config/config.js';
+import { isUsableProductArtifactItem } from '../gateway/rich-artifacts.js';
 
-type SearchResultItem = { title: string; url: string; snippet: string };
+type SearchResultItem = {
+  title: string;
+  url: string;
+  snippet: string;
+  imageUrl?: string;
+  publisher?: string;
+  publishedAt?: string;
+};
 type StructuredSource = { id: number; tier: 'A' | 'B' | 'C'; title: string; url: string; snippet: string; score: number };
 type StructuredEvidence = { id: number; source_id: number; excerpt: string; score: number };
 type StructuredFact = { id: number; claim: string; evidence_ids: number[]; source_ids: number[]; confidence: number };
@@ -30,7 +39,7 @@ type SearchDiagnostics = {
   selected_provider?: SearchProvider;
 };
 type SearchProviderOption = 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai' | 'multi';
-type ShoppingProductResult = {
+export type ShoppingProductResult = {
   id: string;
   title: string;
   price?: string;
@@ -45,6 +54,10 @@ type ShoppingProductResult = {
   imagePath?: string;
   productUrl: string;
   merchant?: string;
+  availability?: string;
+  seller?: string;
+  sku?: string;
+  asin?: string;
   confidence?: number;
 };
 type XMediaDescriptor = {
@@ -681,6 +694,9 @@ async function searchTinyFish(query: string, limit: number, apiKey: string, time
     title: r.title || r.site_name || '',
     url: r.url || '',
     snippet: r.snippet || '',
+    imageUrl: r.image_url || r.thumbnail_url || r.thumbnail || r.image || undefined,
+    publisher: r.site_name || r.source || undefined,
+    publishedAt: r.published_date || r.published_at || r.date || undefined,
   }));
   const ranked = rankResults(query, results);
   const answer = buildDirectPriceAnswer(query, ranked);
@@ -743,6 +759,9 @@ async function searchGoogle(query: string, limit: number, apiKey: string, cx: st
     title: r.title || '',
     url: normalizeGoogleUrl(r.link || ''),
     snippet: r.snippet || '',
+    imageUrl: r.pagemap?.cse_image?.[0]?.src || r.pagemap?.cse_thumbnail?.[0]?.src || undefined,
+    publisher: r.displayLink || undefined,
+    publishedAt: r.pagemap?.metatags?.[0]?.['article:published_time'] || r.pagemap?.metatags?.[0]?.date || undefined,
   }));
   const ranked = rankResults(query, results);
 
@@ -787,6 +806,9 @@ async function searchTavily(query: string, limit: number, apiKey: string, timeou
     title: r.title || '',
     url: r.url || '',
     snippet: r.content || '',
+    imageUrl: r.image_url || r.thumbnail_url || r.image || undefined,
+    publisher: r.source || undefined,
+    publishedAt: r.published_date || r.published_at || undefined,
   }));
   const ranked = rankResults(query, results);
 
@@ -817,6 +839,9 @@ async function searchBrave(query: string, limit: number, apiKey: string, timeout
     title: r.title || '',
     url: r.url || '',
     snippet: r.description || '',
+    imageUrl: r.thumbnail?.src || r.thumbnail?.original || r.image?.url || undefined,
+    publisher: r.profile?.long_name || r.profile?.name || undefined,
+    publishedAt: r.page_age || r.age || undefined,
   }));
   const ranked = rankResults(query, results);
   const answer = buildDirectPriceAnswer(query, ranked);
@@ -842,7 +867,7 @@ async function searchDDG(query: string, limit: number, timeoutMs = DEFAULT_SEARC
   if (!res.ok) throw new Error(`DDG JSON HTTP ${res.status}`);
   const data: any = await res.json();
 
-  const results: Array<{ title: string; url: string; snippet: string }> = [];
+  const results: SearchResultItem[] = [];
 
   // Abstract (direct answer)
   if (data.AbstractText) {
@@ -850,6 +875,8 @@ async function searchDDG(query: string, limit: number, timeoutMs = DEFAULT_SEARC
       title: data.Heading || query,
       url: data.AbstractURL || '',
       snippet: data.AbstractText,
+      imageUrl: data.Image ? new URL(data.Image, 'https://duckduckgo.com').href : undefined,
+      publisher: data.AbstractSource || undefined,
     });
   }
 
@@ -987,7 +1014,7 @@ export async function executeWebSearch(args: {
   const providerRaw = String(args.provider || '').trim().toLowerCase();
   const providerOverride = (['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai', 'multi'].includes(providerRaw) ? providerRaw : '') as SearchProviderOption | '';
   const candidates: Array<'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg'> = ['tinyfish', 'tavily', 'google', 'brave', 'ddg'];
-  const useMultiEngine = providerOverride === 'multi' || (providerOverride === '' && args.multi_engine !== false);
+  const useMultiEngine = providerOverride === 'multi' || (providerOverride === '' && args.multi_engine === true);
   const providerOrder = providerOverride && providerOverride !== 'multi'
     ? [providerOverride as 'tinyfish' | 'tavily' | 'google' | 'brave' | 'ddg' | 'xai']
     : !useMultiEngine
@@ -995,7 +1022,7 @@ export async function executeWebSearch(args: {
       : [cfg.preferred, ...candidates.filter(p => p !== cfg.preferred)];
 
   // ── Multi-engine mode: query all configured providers in parallel, merge results ──
-  // Default ON for every configured credentialed provider. Pass multi_engine:false for the Settings preferred provider only.
+  // Default OFF for low latency: use the Settings preferred provider only. Pass multi_engine:true or provider:"multi" for wide research.
   if (useMultiEngine) {
     const tasks: { provider: SearchProvider; promise: Promise<ToolResult> }[] = [];
     if (cfg.tinyfishKey) tasks.push({ provider: 'tinyfish', promise: withSearchProviderTimeout('tinyfish', searchTinyFish(args.query, limit, cfg.tinyfishKey as string, providerTimeoutMs), providerTimeoutMs) });
@@ -1013,7 +1040,7 @@ export async function executeWebSearch(args: {
       };
       const settled = await Promise.allSettled(tasks.map(t => t.promise));
       const merged: SearchResultItem[] = [];
-      const seenUrls = new Set<string>();
+      const resultIndexByUrl = new Map<string, number>();
       const attemptedProviders = tasks.map(t => t.provider);
       const usedProviders: string[] = [];
       const failedProviders: string[] = [];
@@ -1027,9 +1054,24 @@ export async function executeWebSearch(args: {
             result_count: r.value.data.results.length,
           });
           for (const item of r.value.data.results as SearchResultItem[]) {
-            if (!seenUrls.has(item.url)) {
-              seenUrls.add(item.url);
+            const key = String(item.url || '').replace(/\/$/, '');
+            const existingIndex = resultIndexByUrl.get(key);
+            if (existingIndex == null) {
+              resultIndexByUrl.set(key, merged.length);
               merged.push(item);
+            } else {
+              // Different providers expose different pieces of the same result.
+              // Preserve the first provider's ranking while filling its sparse
+              // preview fields from later engines instead of discarding them.
+              const existing = merged[existingIndex];
+              merged[existingIndex] = {
+                ...existing,
+                title: existing.title || item.title,
+                snippet: existing.snippet || item.snippet,
+                imageUrl: existing.imageUrl || item.imageUrl,
+                publisher: existing.publisher || item.publisher,
+                publishedAt: existing.publishedAt || item.publishedAt,
+              };
             }
           }
         } else {
@@ -1209,9 +1251,9 @@ export async function executeWebSearch(args: {
     }
   }
 
-  if ((providerOverride && providerOverride !== 'multi') || args.multi_engine === false) {
+  if (!useMultiEngine) {
     const attempted = diagnostics.attempted[diagnostics.attempted.length - 1];
-    const selectedProvider = (providerOverride && providerOverride !== 'multi') ? providerOverride : cfg.preferred;
+    const selectedProvider = providerOverride || cfg.preferred;
     return {
       success: false,
       error: `${selectedProvider} search failed${attempted?.reason ? ` (${attempted.reason})` : ''}.`,
@@ -1280,6 +1322,60 @@ function isXStatusUrl(url: string): boolean {
   return /^https?:\/\/(www\.)?(x\.com|twitter\.com|mobile\.twitter\.com)\/[^/?#]+\/status\/\d+/i.test(String(url || '').trim());
 }
 
+async function fetchXStatusViaOEmbed(url: string): Promise<XFetchPayload | null> {
+  const id = String(url || '').match(/\/status\/(\d+)/i)?.[1];
+  if (!id) return null;
+  try {
+    const endpoint = new URL('https://publish.x.com/oembed');
+    endpoint.searchParams.set('url', url);
+    endpoint.searchParams.set('hide_thread', 'true');
+    endpoint.searchParams.set('omit_script', 'true');
+    endpoint.searchParams.set('dnt', 'true');
+    const response = await fetch(endpoint, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return null;
+    const data: any = await response.json();
+    const html = String(data?.html || '');
+    const paragraph = html.match(/<p\b[^>]*>([\s\S]*?)<\/p>/i)?.[1] || '';
+    const text = htmlDecodeLite(
+      paragraph
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<[^>]+>/g, ''),
+    );
+    const author = String(data?.author_name || '').trim();
+    let handle = '';
+    try {
+      const username = new URL(String(data?.author_url || '')).pathname.split('/').filter(Boolean)[0];
+      if (username) handle = `@${username}`;
+    } catch {
+      // The author name and status text are still usable without a profile URL.
+    }
+    const dateText = html.match(/<a\b[^>]*href=["'][^"']*\/status\/\d+[^"']*["'][^>]*>([^<]+)<\/a>/i)?.[1] || '';
+    if (!text || (!author && !handle)) return null;
+    return {
+      success: true,
+      url,
+      tweets: [{
+        id,
+        link: String(data?.url || url),
+        author,
+        handle,
+        // oEmbed exposes a calendar date, not a precise time. Preserve it as
+        // returned instead of manufacturing a midnight timestamp.
+        timestamp: dateText ? htmlDecodeLite(dateText) : undefined,
+        text,
+        rawRef: id,
+      }],
+      count: 1,
+      message: 'Captured exact X status through the official X oEmbed endpoint',
+    };
+  } catch {
+    return null;
+  }
+}
+
 function clipText(value: string, maxChars: number): string {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -1325,7 +1421,7 @@ async function fetchTinyFishContent(url: string, maxChars: number, apiKey: strin
   const res = await fetch('https://api.fetch.tinyfish.ai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-API-Key': apiKey },
-    body: JSON.stringify({ urls: [url], format: 'markdown', links: false, image_links: false }),
+    body: JSON.stringify({ urls: [url], format: 'markdown', links: false, image_links: true }),
     signal: AbortSignal.timeout(150_000),
   });
   if (!res.ok) throw new Error(`TinyFish Fetch HTTP ${res.status}`);
@@ -1353,6 +1449,8 @@ async function fetchTinyFishContent(url: string, maxChars: number, apiKey: strin
       language: page.language,
       author: page.author,
       published_date: page.published_date,
+      image_url: asFirstString(page.image_url) || asFirstString(page.image_links) || asFirstString(page.images),
+      image_links: Array.isArray(page.image_links) ? page.image_links.slice(0, 20) : undefined,
       latency_ms: page.latency_ms,
       provider: 'tinyfish',
       length: text.length,
@@ -1728,15 +1826,27 @@ async function executeXWebFetch(
   url: string,
   maxChars: number,
   progress?: WebFetchProgressReporter,
+  includeMedia = false,
+  includeThread = false,
 ): Promise<ToolResult> {
-  const raw = await fetchXThread('web_fetch', url);
-  const payload = parseXFetchPayload(raw, url);
+  let payload = !includeMedia && !includeThread && isXStatusUrl(url)
+    ? await fetchXStatusViaOEmbed(url)
+    : null;
+  if (!payload) {
+    const raw = await fetchXThread('web_fetch', url);
+    payload = parseXFetchPayload(raw, url);
+  }
+  const payloadError = validateXFetchPayload(payload, url);
+  if (payloadError) {
+    payload.success = false;
+    payload.error = payloadError;
+  }
 
   if (payload.success) {
     reportWebFetchProgress(progress, 'fetch_complete', 'Web fetch complete.');
   }
 
-  if (payload.success && isXStatusUrl(url)) {
+  if (payload.success && isXStatusUrl(url) && includeMedia) {
     try {
       payload.x_media = await buildXMediaReport(payload, url, progress);
     } catch (error: any) {
@@ -1785,7 +1895,7 @@ async function executeXWebFetch(
 }
 
 export async function executeWebFetch(
-  args: { url: string; max_chars?: number },
+  args: { url: string; max_chars?: number; include_media?: boolean; include_thread?: boolean },
   progress?: WebFetchProgressReporter,
 ): Promise<ToolResult> {
   if (!args.url?.trim()) return { success: false, error: 'url is required' };
@@ -1793,7 +1903,13 @@ export async function executeWebFetch(
   const maxChars = args.max_chars ?? 10_000;
 
   if (isXUrl(url)) {
-    return executeXWebFetch(url, maxChars, progress);
+    return executeXWebFetch(
+      url,
+      maxChars,
+      progress,
+      args.include_media === true,
+      args.include_thread === true,
+    );
   }
 
   const searchCfg = getSearchConfig();
@@ -1821,6 +1937,9 @@ export async function executeWebFetch(
     }
 
     const html = await res.text();
+    const preview = /html/i.test(contentType)
+      ? extractPagePreviewMetadataFromHtml(html.slice(0, 1_500_000), res.url || url)
+      : { url } as PagePreviewMetadata;
     let text = html
       .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/<style[\s\S]*?<\/style>/gi, '')
@@ -1838,7 +1957,18 @@ export async function executeWebFetch(
 
     return {
       success: true,
-      data: { url, length: text.length },
+      data: {
+        url,
+        final_url: res.url || url,
+        length: text.length,
+        title: preview.title,
+        description: preview.description,
+        publisher: preview.publisher,
+        published_at: preview.publishedAt,
+        image_url: preview.imageUrl,
+        icon_url: preview.iconUrl,
+        preview,
+      },
       stdout: text,
     };
   } catch (err: any) {
@@ -1850,6 +1980,8 @@ type WebFetchBatchArgs = {
   urls: string[];
   max_chars?: number;
   concurrency?: number;
+  include_media?: boolean;
+  include_thread?: boolean;
 };
 
 function normalizeBatchUrls(urls: unknown): string[] {
@@ -1889,7 +2021,12 @@ export async function executeWebFetchBatch(
       const index = nextIndex++;
       const url = urls[index];
       try {
-        const result = await executeWebFetch({ url, max_chars: maxChars }, progress);
+        const result = await executeWebFetch({
+          url,
+          max_chars: maxChars,
+          include_media: args.include_media === true,
+          include_thread: args.include_thread === true,
+        }, progress);
         const text = result.stdout || '';
         results[index] = result.success
           ? {
@@ -1962,8 +2099,25 @@ async function maybeAttachFetchedSearchResults(
     max_chars: args.fetch_max_chars ?? 4_000,
     concurrency: Math.min(4, urls.length),
   });
+  const fetchedByUrl = new Map<string, any>();
+  for (const fetched of (Array.isArray(batch.data?.results) ? batch.data.results : [])) {
+    if (!fetched?.url) continue;
+    fetchedByUrl.set(String(fetched.url), fetched.data?.preview || fetched.data || {});
+  }
+  const enrichedResults = result.data.results.map((item: SearchResultItem) => {
+    const preview = fetchedByUrl.get(String(item?.url || '')) || {};
+    return {
+      ...item,
+      title: item.title || preview.title || '',
+      snippet: item.snippet || preview.description || '',
+      imageUrl: item.imageUrl || preview.imageUrl || preview.image_url || undefined,
+      publisher: item.publisher || preview.publisher || undefined,
+      publishedAt: item.publishedAt || preview.publishedAt || preview.published_at || undefined,
+    };
+  });
   result.data = {
     ...(result.data || {}),
+    results: enrichedResults,
     fetched_results: batch.data?.results || [],
     fetch_summary: {
       count: batch.data?.count || 0,
@@ -1980,13 +2134,13 @@ async function maybeAttachFetchedSearchResults(
 export const webSearchTool = {
   name: 'web_search',
   get description() {
-    return `Search the web. Configured providers: ${getSearchProvidersSummary()}. Defaults to multi-engine mode across every configured credentialed provider, including xAI X Search when xAI credentials are present, and merges deduplicated results. Pass provider to force one engine, or provider:"multi" to force all configured engines. Set fetch_top_k to fetch the top result URLs in the same call.`;
+    return `Search the web. Configured providers: ${getSearchProvidersSummary()}. Provider thumbnails, publisher, and date fields are preserved when available. Defaults to the preferred provider from Settings for low latency. Pass provider to force one engine, or use provider:"multi" / multi_engine:true for wide research across all configured engines. fetch_top_k fetches top pages and merges preview metadata/images back into results.`;
   },
   execute: executeWebSearch,
   schema: {
     query: 'string (required) - Search query',
     max_results: 'number (optional, default 5) - Max results to return',
-    multi_engine: 'boolean (optional, default true) - Pass false to use only the preferred search provider from Settings',
+    multi_engine: 'boolean (optional, default false) - Pass true for wide research across all configured search providers',
     provider: 'string (optional) - One of tinyfish, tavily, google, brave, ddg, xai, multi. Use a provider name for single-provider search; use multi for all configured engines',
     fetch_top_k: 'number (optional, default 0, max 10) - Fetch this many top result URLs after search',
     fetch_max_chars: 'number (optional, default 4000) - Max characters per fetched result when fetch_top_k is set',
@@ -1998,7 +2152,7 @@ export const webSearchTool = {
     properties: {
       query: { type: 'string', description: 'Search query' },
       max_results: { type: 'number', description: 'Maximum results to return per provider. Default 5, max 10.' },
-      multi_engine: { type: 'boolean', description: 'Default true. Set false to use only the preferred search provider from Settings.' },
+      multi_engine: { type: 'boolean', description: 'Default false. Set true for wide research across all configured search providers.' },
       provider: {
         type: 'string',
         enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'],
@@ -2076,16 +2230,18 @@ export const webSearchMultiTool = {
 
 export const webFetchTool = {
   name: 'web_fetch',
-  description: 'Fetch and extract text content from one URL, or from multiple URLs in parallel when urls is provided. For X/Twitter status URLs, returns structured tweet/thread data and will attempt to download and analyze attached media automatically.',
-  execute: (args: { url?: string; urls?: string[]; max_chars?: number; concurrency?: number }, progress?: WebFetchProgressReporter) =>
+  description: 'Fetch text plus structured page preview metadata (title, description, publisher, date, hero image, icon) from one URL, or multiple URLs in parallel. Exact X/Twitter statuses use the official X oEmbed endpoint; thread expansion is opt-in with include_thread=true. Attached media is downloaded and analyzed only when include_media=true.',
+  execute: (args: { url?: string; urls?: string[]; max_chars?: number; concurrency?: number; include_media?: boolean; include_thread?: boolean }, progress?: WebFetchProgressReporter) =>
     Array.isArray(args?.urls) && args.urls.length
-      ? executeWebFetchBatch({ urls: args.urls, max_chars: args.max_chars, concurrency: args.concurrency }, progress)
-      : executeWebFetch({ url: args?.url || '', max_chars: args?.max_chars }, progress),
+      ? executeWebFetchBatch({ urls: args.urls, max_chars: args.max_chars, concurrency: args.concurrency, include_media: args.include_media, include_thread: args.include_thread }, progress)
+      : executeWebFetch({ url: args?.url || '', max_chars: args?.max_chars, include_media: args?.include_media, include_thread: args?.include_thread }, progress),
   schema: {
     url: 'string (optional) - Single full URL to fetch (include https://)',
     urls: 'string[] (optional, max 20) - Multiple full URLs to fetch in parallel',
     max_chars: 'number (optional) - Single fetch max characters, or max characters per URL for urls',
     concurrency: 'number (optional, default 4, max 8) - Batch-only parallel fetches',
+    include_media: 'boolean (optional, default false) - X status URLs only. Download and analyze attached media when explicitly requested.',
+    include_thread: 'boolean (optional, default false) - X status URLs only. Use browser extraction to expand the surrounding thread.',
   },
   jsonSchema: {
     type: 'object',
@@ -2098,6 +2254,8 @@ export const webFetchTool = {
       },
       max_chars: { type: 'number', description: 'Single fetch max characters, or max characters per URL for urls.' },
       concurrency: { type: 'number', description: 'Batch-only parallel fetches. Default 4, max 8.' },
+      include_media: { type: 'boolean', description: 'X status URLs only. Default false. Download and analyze attached media only when explicitly requested.' },
+      include_thread: { type: 'boolean', description: 'X status URLs only. Default false. Use browser extraction to expand the surrounding thread.' },
     },
     additionalProperties: false,
   },
@@ -2327,6 +2485,21 @@ function canonicalProductUrl(url: string): string {
   }
 }
 
+export function validateXFetchPayload(payload: XFetchPayload, url: string): string | null {
+  if (!payload.success) return payload.error || `X fetch failed for ${url}.`;
+  if (!isXStatusUrl(url)) return null;
+  const tweets = Array.isArray(payload.tweets) ? payload.tweets : [];
+  const count = Number.isFinite(Number(payload.count)) ? Number(payload.count) : tweets.length;
+  if (tweets.length === 0 || count <= 0) {
+    return `X fetch returned no posts for ${url}. The post may be deleted, unavailable, login-gated, or extraction may have been blocked.`;
+  }
+  return null;
+}
+
+function amazonAsinFromUrl(url: string): string | undefined {
+  return String(url || '').match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:[/?#]|$)/i)?.[1]?.toUpperCase();
+}
+
 function isWeakProductCandidate(item: SearchResultItem, title: string, price?: string): boolean {
   const url = String(item.url || '').toLowerCase();
   const text = `${item.title || ''} ${item.snippet || ''}`.toLowerCase();
@@ -2366,16 +2539,191 @@ function normalizeProductCandidate(item: SearchResultItem, index: number, query:
     reviewCount,
     tag: badge,
     badge,
+    imageUrl: normalizeProductImageUrl(item.imageUrl || '', item.url),
     productUrl: canonicalProductUrl(item.url),
     merchant: merchant ? merchantFromUrl(`https://${requestedDomain || merchant}`) : merchantFromUrl(item.url),
+    asin: amazonAsinFromUrl(item.url),
     confidence: Math.max(0, Math.min(1, Number(confidence.toFixed(2)))),
   };
 }
 
+export type PagePreviewMetadata = {
+  url: string;
+  canonicalUrl?: string;
+  title?: string;
+  description?: string;
+  publisher?: string;
+  publishedAt?: string;
+  imageUrl?: string;
+  iconUrl?: string;
+  price?: string;
+  rating?: number;
+  reviews?: number;
+  reviewCount?: number;
+  availability?: string;
+  seller?: string;
+  sku?: string;
+};
+
+const PAGE_PREVIEW_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const pagePreviewCache = new Map<string, { at: number; meta: PagePreviewMetadata }>();
+
+function parseHtmlAttributes(tag: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  const attrRe = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let match: RegExpExecArray | null;
+  while ((match = attrRe.exec(String(tag || ''))) !== null) {
+    const name = String(match[1] || '').toLowerCase();
+    if (!name || name.startsWith('<')) continue;
+    attrs[name] = htmlDecodeLite(match[2] ?? match[3] ?? match[4] ?? '');
+  }
+  return attrs;
+}
+
 function extractMetaTag(html: string, property: string): string | undefined {
-  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i');
-  return htmlDecodeLite(re.exec(html)?.[1] || '');
+  const wanted = String(property || '').toLowerCase();
+  for (const tag of String(html || '').match(/<meta\b[^>]*>/gi) || []) {
+    const attrs = parseHtmlAttributes(tag);
+    if (String(attrs.property || attrs.name || attrs.itemprop || '').toLowerCase() !== wanted) continue;
+    const value = htmlDecodeLite(attrs.content || attrs.value || '');
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function extractLinkTag(html: string, rel: string): string | undefined {
+  const wanted = String(rel || '').toLowerCase();
+  for (const tag of String(html || '').match(/<link\b[^>]*>/gi) || []) {
+    const attrs = parseHtmlAttributes(tag);
+    if (String(attrs.rel || '').toLowerCase().split(/\s+/).includes(wanted) && attrs.href) return attrs.href;
+  }
+  return undefined;
+}
+
+function absoluteHttpUrl(value: unknown, baseUrl: string): string | undefined {
+  const raw = asFirstString(value);
+  if (!raw || /^(?:data|blob|javascript):/i.test(raw)) return undefined;
+  try {
+    const parsed = new URL(raw, baseUrl);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function pickLargestSrcset(value: string): string | undefined {
+  const entries = String(value || '').split(',').map((part) => {
+    const pieces = part.trim().split(/\s+/);
+    return { url: pieces[0], size: Number(String(pieces[1] || '').replace(/[^0-9.]/g, '')) || 0 };
+  }).filter((entry) => entry.url).sort((a, b) => b.size - a.size);
+  return entries[0]?.url;
+}
+
+function imageCandidateScore(url: string, attrs: Record<string, string>, priority: number): number {
+  const text = `${url} ${attrs.alt || ''} ${attrs.class || ''} ${attrs.id || ''}`.toLowerCase();
+  const width = Number(attrs.width || 0);
+  const height = Number(attrs.height || 0);
+  let score = priority;
+  if (width >= 300 || height >= 200) score += 18;
+  if (width >= 800 || height >= 500) score += 8;
+  if (/hero|lead|article|product|primary|main|featured|landing/.test(text)) score += 15;
+  if (/logo|icon|avatar|sprite|badge|emoji|tracking|pixel|spacer|placeholder/.test(text)) score -= 35;
+  if ((width > 0 && width < 120) || (height > 0 && height < 90)) score -= 18;
+  return score;
+}
+
+function extractHtmlImageCandidates(html: string, pageUrl: string): string[] {
+  const candidates: Array<{ url: string; score: number }> = [];
+  const add = (value: unknown, score: number, attrs: Record<string, string> = {}) => {
+    const url = absoluteHttpUrl(value, pageUrl);
+    if (url) candidates.push({ url, score: imageCandidateScore(url, attrs, score) });
+  };
+  add(extractMetaTag(html, 'og:image:secure_url'), 120);
+  add(extractMetaTag(html, 'og:image'), 118);
+  add(extractMetaTag(html, 'twitter:image'), 115);
+  add(extractMetaTag(html, 'twitter:image:src'), 114);
+  add(extractMetaTag(html, 'thumbnailUrl'), 108);
+  add(extractLinkTag(html, 'image_src'), 105);
+  for (const tag of (String(html || '').match(/<img\b[^>]*>/gi) || []).slice(0, 300)) {
+    const attrs = parseHtmlAttributes(tag);
+    if (attrs['data-a-dynamic-image']) {
+      try {
+        const dynamic = JSON.parse(attrs['data-a-dynamic-image']) as Record<string, unknown>;
+        for (const [url, dimensions] of Object.entries(dynamic)) {
+          const dims = Array.isArray(dimensions) ? dimensions.map(Number) : [];
+          add(url, 100 + Math.min(20, ((dims[0] || 0) * (dims[1] || 0)) / 100_000), attrs);
+        }
+      } catch {}
+    }
+    add(attrs['data-old-hires'], 104, attrs);
+    add(attrs['data-zoom-hires'], 103, attrs);
+    add(pickLargestSrcset(attrs.srcset || attrs['data-srcset'] || ''), 80, attrs);
+    add(attrs['data-src'] || attrs['data-lazy-src'] || attrs['data-original'] || attrs.src, 62, attrs);
+  }
+  const seen = new Set<string>();
+  return candidates.sort((a, b) => b.score - a.score).filter((candidate) => {
+    if (candidate.score <= 20 || seen.has(candidate.url)) return false;
+    seen.add(candidate.url);
+    return true;
+  }).map((candidate) => candidate.url);
+}
+
+function collectJsonLdObjects(value: unknown, out: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (!value || typeof value !== 'object') return out;
+  if (Array.isArray(value)) {
+    for (const item of value) collectJsonLdObjects(item, out);
+    return out;
+  }
+  const obj = value as Record<string, unknown>;
+  out.push(obj);
+  for (const key of ['@graph', 'mainEntity', 'itemListElement']) collectJsonLdObjects(obj[key], out);
+  return out;
+}
+
+function parseJsonLdPageMetadata(html: string): Partial<PagePreviewMetadata> {
+  const meta: Partial<PagePreviewMetadata> = {};
+  const scripts = String(html || '').match(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+  for (const script of scripts.slice(0, 20)) {
+    const raw = script.replace(/^<script[^>]*>/i, '').replace(/<\/script>$/i, '').trim();
+    if (!raw) continue;
+    try {
+      const objects = collectJsonLdObjects(JSON.parse(htmlDecodeLite(raw)));
+      const preferred = objects.find((obj) => normalizeJsonLdType(obj['@type']).some((type) =>
+        ['newsarticle', 'article', 'blogposting', 'product', 'webpage'].includes(type))) || objects[0];
+      if (!preferred) continue;
+      meta.title ||= asFirstString(preferred.headline) || asFirstString(preferred.name);
+      meta.description ||= asFirstString(preferred.description);
+      meta.imageUrl ||= asFirstString(preferred.image) || asFirstString(preferred.thumbnailUrl);
+      meta.publishedAt ||= asFirstString(preferred.datePublished) || asFirstString(preferred.dateCreated);
+      meta.canonicalUrl ||= asFirstString(preferred.url) || asFirstString(preferred.mainEntityOfPage);
+      const publisher = preferred.publisher || preferred.author;
+      meta.publisher ||= typeof publisher === 'object' && publisher
+        ? asFirstString((publisher as Record<string, unknown>).name)
+        : asFirstString(publisher);
+    } catch {}
+  }
+  return meta;
+}
+
+/** Pure HTML metadata extractor shared by web fetch and all URL-backed visual cards. */
+export function extractPagePreviewMetadataFromHtml(html: string, pageUrl: string): PagePreviewMetadata {
+  const jsonLd = parseJsonLdPageMetadata(html);
+  const titleTag = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(String(html || ''))?.[1] || '';
+  const imageUrl = [jsonLd.imageUrl, ...extractHtmlImageCandidates(html, pageUrl)]
+    .map((value) => absoluteHttpUrl(value, pageUrl)).find(Boolean);
+  const iconRaw = extractLinkTag(html, 'apple-touch-icon') || extractLinkTag(html, 'icon') || extractLinkTag(html, 'shortcut');
+  let originIcon: string | undefined;
+  try { originIcon = new URL('/favicon.ico', pageUrl).href; } catch {}
+  return {
+    url: pageUrl,
+    canonicalUrl: absoluteHttpUrl(extractLinkTag(html, 'canonical') || jsonLd.canonicalUrl, pageUrl),
+    title: htmlDecodeLite(extractMetaTag(html, 'og:title') || extractMetaTag(html, 'twitter:title') || jsonLd.title || titleTag),
+    description: htmlDecodeLite(extractMetaTag(html, 'og:description') || extractMetaTag(html, 'twitter:description') || extractMetaTag(html, 'description') || jsonLd.description || ''),
+    publisher: htmlDecodeLite(extractMetaTag(html, 'og:site_name') || extractMetaTag(html, 'application-name') || jsonLd.publisher || ''),
+    publishedAt: extractMetaTag(html, 'article:published_time') || extractMetaTag(html, 'date') || extractMetaTag(html, 'datePublished') || jsonLd.publishedAt,
+    imageUrl,
+    iconUrl: absoluteHttpUrl(iconRaw || originIcon, pageUrl),
+  };
 }
 
 function extractAttributeNear(html: string, attrName: string, attrValue: string, targetAttr: string): string | undefined {
@@ -2450,12 +2798,18 @@ function parseJsonLdProductMetadata(html: string): Partial<ShoppingProductResult
         if (looksLikeProductTitle(title)) meta.title ||= title;
         meta.description ||= cleanProductDescription(asFirstString(product.description) || '');
         meta.imageUrl ||= asFirstString(product.image);
+        meta.sku ||= asFirstString(product.sku) || asFirstString(product.mpn) || asFirstString(product.productID);
         const offers = Array.isArray(product.offers) ? product.offers[0] : product.offers;
         if (offers && typeof offers === 'object') {
           const offer = offers as Record<string, unknown>;
           const price = asFirstString(offer.price) || asFirstString(offer.lowPrice);
           const currency = asFirstString(offer.priceCurrency) || 'USD';
           if (price && !meta.price) meta.price = `${currency === 'USD' ? '$' : `${currency} `}${price}`;
+          meta.availability ||= asFirstString(offer.availability)?.split('/').pop();
+          const seller = offer.seller;
+          meta.seller ||= seller && typeof seller === 'object'
+            ? asFirstString((seller as Record<string, unknown>).name)
+            : asFirstString(seller);
         }
         const rating = product.aggregateRating;
         if (rating && typeof rating === 'object') {
@@ -2488,7 +2842,7 @@ function getActiveWorkspaceRoot(): string {
   }
 }
 
-function safeProductImageFilename(product: ShoppingProductResult, index: number, contentType = '', imageUrl = ''): string {
+function safeArtifactImageFilename(label: string, index: number, contentType = '', imageUrl = ''): string {
   const extFromType = String(contentType || '').split(';')[0].trim().toLowerCase();
   const extFromUrl = (() => {
     try {
@@ -2503,12 +2857,13 @@ function safeProductImageFilename(product: ShoppingProductResult, index: number,
       : extFromType === 'image/gif' ? '.gif'
         : extFromType === 'image/avif' ? '.avif'
           : extFromUrl || '.jpg';
-  const stem = `${String(index + 1).padStart(2, '0')}-${product.title || product.id || 'product'}`
+  const hash = createHash('sha1').update(imageUrl).digest('hex').slice(0, 10);
+  const stem = `${String(index + 1).padStart(2, '0')}-${label || 'preview'}`
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 72) || `product-${index + 1}`;
-  return `${stem}${ext}`;
+    .slice(0, 60) || `preview-${index + 1}`;
+  return `${stem}-${hash}${ext}`;
 }
 
 function normalizeProductImageUrl(imageUrl: string, productUrl: string): string {
@@ -2521,74 +2876,275 @@ function normalizeProductImageUrl(imageUrl: string, productUrl: string): string 
   }
 }
 
-async function downloadProductImage(product: ShoppingProductResult, index: number, timeoutMs: number): Promise<string | undefined> {
-  const imageUrl = normalizeProductImageUrl(product.imageUrl || '', product.productUrl);
+async function downloadArtifactImage(args: {
+  imageUrl: string;
+  pageUrl: string;
+  label: string;
+  index: number;
+  timeoutMs: number;
+  relDir: string;
+}): Promise<string | undefined> {
+  const imageUrl = normalizeProductImageUrl(args.imageUrl || '', args.pageUrl);
   if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) return undefined;
   try {
+    const maxBytes = 10 * 1024 * 1024;
     const response = await fetch(imageUrl, {
       redirect: 'follow',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0',
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        'Referer': product.productUrl,
+        'Referer': args.pageUrl,
       },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(args.timeoutMs),
     });
     if (!response.ok) return undefined;
     const contentType = String(response.headers.get('content-type') || '').toLowerCase();
     if (contentType && !contentType.includes('image/')) return undefined;
+    const declaredLength = Number(response.headers.get('content-length') || 0);
+    if (declaredLength > maxBytes) return undefined;
     const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length < 1024 || bytes.length > 8 * 1024 * 1024) return undefined;
+    if (bytes.length < 512 || bytes.length > maxBytes) return undefined;
+    const isRasterImage = (bytes[0] === 0xff && bytes[1] === 0xd8)
+      || bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      || bytes.subarray(0, 6).toString('ascii').startsWith('GIF8')
+      || (bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP')
+      || bytes.subarray(4, 12).toString('ascii').includes('ftypavif');
+    if (!isRasterImage) return undefined;
     const workspaceRoot = getActiveWorkspaceRoot();
-    const relDir = 'downloads/product-carousel';
-    const absDir = path.join(workspaceRoot, relDir);
+    const relDir = args.relDir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const absDir = path.resolve(workspaceRoot, relDir);
+    const rootWithSep = `${path.resolve(workspaceRoot)}${path.sep}`.toLowerCase();
+    if (!`${absDir}${path.sep}`.toLowerCase().startsWith(rootWithSep)) return undefined;
     await fs.promises.mkdir(absDir, { recursive: true });
-    const filename = safeProductImageFilename(product, index, contentType, imageUrl);
+    const filename = safeArtifactImageFilename(args.label, args.index, contentType, imageUrl);
     const absPath = path.join(absDir, filename);
-    await fs.promises.writeFile(absPath, bytes);
+    if (!fs.existsSync(absPath)) await fs.promises.writeFile(absPath, bytes);
     return `${relDir}/${filename}`;
   } catch {
     return undefined;
   }
 }
 
+async function downloadProductImage(product: ShoppingProductResult, index: number, timeoutMs: number): Promise<string | undefined> {
+  return downloadArtifactImage({
+    imageUrl: product.imageUrl || '',
+    pageUrl: product.productUrl,
+    label: product.title || product.id || 'product',
+    index,
+    timeoutMs,
+    relDir: 'downloads/product-carousel',
+  });
+}
+
+export async function fetchPagePreviewMetadata(url: string, timeoutMs = 2500): Promise<PagePreviewMetadata> {
+  const normalizedUrl = String(url || '').trim();
+  const cached = pagePreviewCache.get(normalizedUrl);
+  if (cached && Date.now() - cached.at < PAGE_PREVIEW_CACHE_TTL_MS) return cached.meta;
+  const empty: PagePreviewMetadata = { url: normalizedUrl };
+  if (!/^https?:\/\//i.test(normalizedUrl) || !isTinyFishFetchEligible(normalizedUrl)) return empty;
+  try {
+    const res = await fetch(normalizedUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 Prometheus/1.0',
+        'Accept': 'text/html,application/xhtml+xml,application/json;q=0.8,*/*;q=0.5',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(Math.max(500, Math.min(10_000, timeoutMs))),
+    });
+    const contentType = String(res.headers.get('content-type') || '');
+    if (!res.ok || (contentType && !/html|text/i.test(contentType))) return empty;
+    const html = (await res.text()).slice(0, 1_500_000);
+    const finalUrl = res.url || normalizedUrl;
+    const meta = extractPagePreviewMetadataFromHtml(html, finalUrl);
+    const productJsonLd = parseJsonLdProductMetadata(html);
+    const priceAmount = extractMetaTag(html, 'product:price:amount');
+    const priceCurrency = extractMetaTag(html, 'product:price:currency') || 'USD';
+    const fallbackRating = fallbackProductPageRating(html);
+    const enriched: PagePreviewMetadata = {
+      ...meta,
+      url: normalizedUrl,
+      canonicalUrl: meta.canonicalUrl || finalUrl,
+      imageUrl: absoluteHttpUrl(productJsonLd.imageUrl || meta.imageUrl, finalUrl),
+      price: productJsonLd.price
+        || (priceAmount ? `${priceCurrency === 'USD' ? '$' : `${priceCurrency} `}${priceAmount}` : undefined)
+        || fallbackProductPagePrice(html),
+      rating: productJsonLd.rating || fallbackRating.rating,
+      reviews: productJsonLd.reviews || fallbackRating.reviews,
+      reviewCount: productJsonLd.reviewCount || fallbackRating.reviewCount,
+      availability: productJsonLd.availability,
+      seller: productJsonLd.seller,
+      sku: productJsonLd.sku,
+    };
+    pagePreviewCache.set(normalizedUrl, { at: Date.now(), meta: enriched });
+    return enriched;
+  } catch {
+    return empty;
+  }
+}
+
 async function fetchProductMetadata(url: string, timeoutMs: number): Promise<Partial<ShoppingProductResult>> {
   const cached = productMetadataCache.get(url);
   if (cached && Date.now() - cached.at < PRODUCT_METADATA_CACHE_TTL_MS) return cached.meta;
+  const preview = await fetchPagePreviewMetadata(url, timeoutMs);
+  const title = cleanProductTitle(preview.title || '');
+  const meta: Partial<ShoppingProductResult> = {
+    title: looksLikeProductTitle(title) ? title : undefined,
+    description: cleanProductDescription(preview.description || ''),
+    imageUrl: preview.imageUrl,
+    price: preview.price,
+    rating: preview.rating,
+    reviews: preview.reviews,
+    reviewCount: preview.reviewCount,
+    availability: preview.availability,
+    seller: preview.seller,
+    sku: preview.sku,
+  };
+  const compact = Object.fromEntries(Object.entries(meta).filter(([, value]) => value != null && String(value).trim())) as Partial<ShoppingProductResult>;
+  productMetadataCache.set(url, { at: Date.now(), meta: compact });
+  return compact;
+}
+
+function canonicalPreviewMatchUrl(value: unknown): string {
   try {
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Prometheus/1.0',
-        'Accept': 'text/html,application/xhtml+xml',
-      },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(timeoutMs),
+    const parsed = new URL(String(value || ''));
+    parsed.hash = '';
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (/^(?:utm_|ref$|source$|campaign$)/i.test(key)) parsed.searchParams.delete(key);
+    }
+    return parsed.href.replace(/\/$/, '');
+  } catch {
+    return String(value || '').trim().replace(/\/$/, '');
+  }
+}
+
+/** Search-provider thumbnails are the fallback for publishers that block page metadata fetches. */
+async function discoverSourcePreviewViaSearch(item: any, timeoutMs: number): Promise<Partial<SearchResultItem>> {
+  const url = String(item?.url || '').trim();
+  const title = String(item?.title || '').trim();
+  let host = '';
+  try { host = new URL(url).hostname.replace(/^www\./i, ''); } catch {}
+  const query = [title ? `"${title.slice(0, 180)}"` : '', host ? `site:${host}` : ''].filter(Boolean).join(' ');
+  if (!query) return {};
+  try {
+    const result = await executeWebSearch({
+      query,
+      max_results: 5,
+      provider: 'multi',
+      provider_timeout_ms: Math.max(800, Math.min(5_000, timeoutMs)),
     });
-    if (!res.ok) return {};
-    const contentType = res.headers.get('content-type') || '';
-    if (!/html|text/i.test(contentType)) return {};
-    const html = (await res.text()).slice(0, 240_000);
-    const priceAmount = extractMetaTag(html, 'product:price:amount');
-    const priceCurrency = extractMetaTag(html, 'product:price:currency') || '$';
-    const jsonLd = parseJsonLdProductMetadata(html);
-    const ogTitle = cleanProductTitle(extractMetaTag(html, 'og:title') || extractMetaTag(html, 'twitter:title') || '');
-    const ogDescription = cleanProductDescription(extractMetaTag(html, 'og:description') || extractMetaTag(html, 'twitter:description') || '');
-    const fallbackRating = fallbackProductPageRating(html);
-    const meta: Partial<ShoppingProductResult> = {
-      title: jsonLd.title || (looksLikeProductTitle(ogTitle) ? ogTitle : undefined),
-      description: jsonLd.description || ogDescription,
-      imageUrl: jsonLd.imageUrl || extractMetaTag(html, 'og:image') || extractMetaTag(html, 'twitter:image'),
-      price: jsonLd.price || (priceAmount ? `${priceCurrency === 'USD' ? '$' : `${priceCurrency} `}${priceAmount}` : undefined) || fallbackProductPagePrice(html),
-      rating: jsonLd.rating || fallbackRating.rating,
-      reviews: jsonLd.reviews || fallbackRating.reviews,
-      reviewCount: jsonLd.reviewCount || fallbackRating.reviewCount,
-    };
-    const compact = Object.fromEntries(Object.entries(meta).filter(([, v]) => v != null && String(v).trim())) as Partial<ShoppingProductResult>;
-    productMetadataCache.set(url, { at: Date.now(), meta: compact });
-    return compact;
+    const candidates = Array.isArray(result.data?.results) ? result.data.results as SearchResultItem[] : [];
+    const wantedUrl = canonicalPreviewMatchUrl(url);
+    const wantedWords = new Set(title.toLowerCase().match(/[a-z0-9]{4,}/g) || []);
+    return candidates
+      .filter((candidate) => candidate?.imageUrl)
+      .map((candidate) => {
+        const candidateUrl = canonicalPreviewMatchUrl(candidate.url);
+        const exactUrl = !!wantedUrl && candidateUrl === wantedUrl;
+        const candidateWords = candidate.title.toLowerCase().match(/[a-z0-9]{4,}/g) || [];
+        const overlap = candidateWords.filter((word) => wantedWords.has(word)).length;
+        const sameHost = !!host && candidateUrl.includes(`://${host}/`);
+        return { candidate, score: exactUrl ? 100 : (sameHost ? 20 : 0) + overlap };
+      })
+      .sort((a, b) => b.score - a.score)
+      .find((entry) => entry.score >= 3)?.candidate || {};
   } catch {
     return {};
   }
+}
+
+function sourcePageScreenshotUrl(pageUrl: string): string | undefined {
+  const raw = String(pageUrl || '').trim();
+  if (!/^https?:\/\//i.test(raw)) return undefined;
+  // Last-resort visual preview: use the source page itself, not an unrelated
+  // stock image, when publishers expose neither OG media nor search thumbnails.
+  return `https://image.thum.io/get/width/800/crop/520/noanimate/${raw}`;
+}
+
+/**
+ * Fill sparse source-card records from their pages and cache preview images in
+ * the workspace. A site icon is used only when no article/hero image exists.
+ */
+export async function enrichSourceArtifactItems(
+  items: any[],
+  options: { metadataTimeoutMs?: number; imageTimeoutMs?: number; downloadImages?: boolean } = {},
+): Promise<any[]> {
+  const input = (Array.isArray(items) ? items : []).slice(0, 16);
+  const metadataTimeoutMs = Math.max(500, Math.min(8_000, Number(options.metadataTimeoutMs || 2600)));
+  const imageTimeoutMs = Math.max(500, Math.min(6_000, Number(options.imageTimeoutMs || 2200)));
+  return mapWithConcurrency(input, Math.min(4, Math.max(1, input.length)), async (item, index) => {
+    const url = String(item?.url || '').trim();
+    if (!/^https?:\/\//i.test(url)) return item;
+    const needsMetadata = !item.title || !item.publisher || !item.snippet || !item.publishedAt || (!item.imageUrl && !item.imagePath);
+    const preview = needsMetadata ? await fetchPagePreviewMetadata(url, metadataTimeoutMs) : { url } as PagePreviewMetadata;
+    const searchPreview = (!item.imageUrl && !item.imagePath && !preview.imageUrl)
+      ? await discoverSourcePreviewViaSearch(item, metadataTimeoutMs)
+      : {};
+    const chosenImage = normalizeProductImageUrl(String(
+      item.imageUrl
+      || preview.imageUrl
+      || searchPreview.imageUrl
+      || sourcePageScreenshotUrl(url)
+      || preview.iconUrl
+      || '',
+    ), url);
+    let imagePath = String(item.imagePath || '').trim() || undefined;
+    if (options.downloadImages !== false && !imagePath && chosenImage) {
+      imagePath = await downloadArtifactImage({
+        imageUrl: chosenImage,
+        pageUrl: url,
+        label: String(item.title || preview.title || item.publisher || 'source'),
+        index,
+        timeoutMs: imageTimeoutMs,
+        relDir: 'downloads/source-previews',
+      });
+    }
+    return {
+      ...item,
+      title: String(item.title || preview.title || url),
+      publisher: String(item.publisher || preview.publisher || searchPreview.publisher || merchantFromUrl(url) || ''),
+      snippet: String(item.snippet || preview.description || searchPreview.snippet || ''),
+      publishedAt: String(item.publishedAt || preview.publishedAt || searchPreview.publishedAt || ''),
+      imageUrl: imagePath
+        ? `/api/canvas/inline?path=${encodeURIComponent(imagePath)}`
+        : (chosenImage || undefined),
+      imagePath,
+    };
+  });
+}
+
+/** Enrich arbitrary product-card records, including cards not produced by shopping_search_products. */
+export async function enrichProductArtifactItems(
+  items: ShoppingProductResult[],
+  options: { metadataTimeoutMs?: number; imageTimeoutMs?: number; downloadImages?: boolean } = {},
+): Promise<ShoppingProductResult[]> {
+  const input = (Array.isArray(items) ? items : []).slice(0, 16);
+  const metadataTimeoutMs = Math.max(500, Math.min(8_000, Number(options.metadataTimeoutMs || 2600)));
+  const imageTimeoutMs = Math.max(500, Math.min(6_000, Number(options.imageTimeoutMs || 2200)));
+  return mapWithConcurrency(input, Math.min(4, Math.max(1, input.length)), async (product, index) => {
+    if (!product?.productUrl) return product;
+    const needsMetadata = !product.title || !product.description || !product.price || product.rating == null
+      || (product.reviews == null && product.reviewCount == null) || (!product.imageUrl && !product.imagePath);
+    const meta = needsMetadata ? await fetchProductMetadata(product.productUrl, metadataTimeoutMs) : {};
+    const merged: ShoppingProductResult = {
+      ...product,
+      title: meta.title || product.title,
+      description: meta.description || product.description,
+      imageUrl: normalizeProductImageUrl(meta.imageUrl || product.imageUrl || '', product.productUrl) || undefined,
+      price: meta.price || product.price,
+      rating: meta.rating ?? product.rating,
+      reviews: meta.reviews ?? product.reviews ?? product.reviewCount,
+      reviewCount: meta.reviewCount ?? product.reviewCount ?? product.reviews,
+      availability: meta.availability || product.availability,
+      seller: meta.seller || product.seller,
+      sku: meta.sku || product.sku,
+      asin: product.asin || amazonAsinFromUrl(product.productUrl),
+    };
+    if (options.downloadImages !== false && !merged.imagePath && merged.imageUrl) {
+      merged.imagePath = await downloadProductImage(merged, index, imageTimeoutMs);
+    }
+    return merged;
+  });
 }
 
 export async function executeShoppingSearchProducts(args: {
@@ -2604,7 +3160,10 @@ export async function executeShoppingSearchProducts(args: {
   const query = String(args?.query || '').trim();
   if (!query) return { success: false, error: 'query is required' };
   const maxResults = Math.max(1, Math.min(12, Math.floor(Number(args?.max_results || 8))));
-  const provider = (String(args?.provider || 'multi').toLowerCase() || 'multi') as SearchProviderOption;
+  const providerRaw = String(args?.provider || '').trim().toLowerCase();
+  const provider = (['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'].includes(providerRaw)
+    ? providerRaw
+    : undefined) as SearchProviderOption | undefined;
   const includeMetadata = args?.include_metadata !== false;
   const includeImages = args?.include_images !== false;
   const metadataTimeoutMs = Math.max(500, Math.min(5000, Math.floor(Number(args?.metadata_timeout_ms || 1800))));
@@ -2651,6 +3210,9 @@ export async function executeShoppingSearchProducts(args: {
         rating: meta.rating || product.rating,
         reviews: meta.reviews || product.reviews,
         reviewCount: meta.reviewCount || product.reviewCount,
+        availability: meta.availability || product.availability,
+        seller: meta.seller || product.seller,
+        sku: meta.sku || product.sku,
         confidence: Math.min(1, Number(((product.confidence || 0.5) + (meta.imageUrl ? 0.08 : 0) + (meta.price && !product.price ? 0.06 : 0)).toFixed(2))),
       };
     });
@@ -2662,12 +3224,23 @@ export async function executeShoppingSearchProducts(args: {
     .filter((product) => productQueryRelevanceScore(query, `${product.title || ''} ${product.description || ''}`) >= 0.18)
     .slice(0, maxResults);
 
-  if (includeImages && relevantProducts.length) {
-    await mapWithConcurrency(relevantProducts.slice(0, Math.min(relevantProducts.length, maxResults)), 4, async (product, index) => {
+  const usableProducts = relevantProducts.filter(isUsableProductArtifactItem);
+
+  if (usableProducts.length === 0) {
+    return {
+      success: false,
+      error: `Product search returned no carousel-ready products for "${query}". Each product requires a title, product URL, image, and product metadata.`,
+      data: { query, searchQuery, provider: search.data?.provider || provider, products: [] },
+      stdout: `Found 0 usable product candidates for "${query}".`,
+    };
+  }
+
+  if (includeImages && usableProducts.length) {
+    await mapWithConcurrency(usableProducts.slice(0, Math.min(usableProducts.length, maxResults)), 4, async (product, index) => {
       if (product.imagePath || !product.imageUrl) return;
       const imagePath = await downloadProductImage(product, index, imageTimeoutMs);
       if (imagePath) {
-        relevantProducts[index] = {
+        usableProducts[index] = {
           ...product,
           imagePath,
           confidence: Math.min(1, Number(((product.confidence || 0.5) + 0.05).toFixed(2))),
@@ -2679,17 +3252,17 @@ export async function executeShoppingSearchProducts(args: {
   const carousel = {
     title: args?.merchant ? `${query} on ${merchantFromUrl(`https://${merchantDomain(args.merchant)}`) || args.merchant}` : query,
     source: 'shopping_search_products',
-    items: relevantProducts,
+    items: usableProducts,
   };
   const stdout = [
-    `Found ${relevantProducts.length} product candidate${relevantProducts.length === 1 ? '' : 's'} for "${query}" using existing web search (${String(search.data?.provider || provider)}).`,
+    `Found ${usableProducts.length} product candidate${usableProducts.length === 1 ? '' : 's'} for "${query}" using existing web search (${String(search.data?.provider || provider)}).`,
     'No shopping API key was used.',
     '',
-    JSON.stringify({ query, searchQuery, source: carousel.source, items: relevantProducts }, null, 2),
+    JSON.stringify({ query, searchQuery, source: carousel.source, items: usableProducts }, null, 2),
   ].join('\n');
   const result = {
     success: true,
-    data: { query, searchQuery, provider: search.data?.provider || provider, products: relevantProducts },
+    data: { query, searchQuery, provider: search.data?.provider || provider, products: usableProducts },
     stdout,
     extra: { productCarousel: carousel },
   } as ToolResult;
@@ -2700,14 +3273,14 @@ export async function executeShoppingSearchProducts(args: {
 export const shoppingSearchProductsTool = {
   name: 'shopping_search_products',
   get description() {
-    return `Fast product search for shopping/product carousel requests using the existing configured web_search providers (${getSearchProvidersSummary()}) plus optional lightweight page metadata fetches. No shopping API keys are required. Prefer this before browser tools when the user asks to find products, compare shopping results, or make a product carousel.`;
+    return `Fast product search for shopping/product carousel requests using the preferred configured web_search provider (${getSearchProvidersSummary()}) plus optional lightweight page metadata fetches. Pass provider:"multi" for wide all-provider discovery. No shopping API keys are required. Prefer this before browser tools when the user asks to find products, compare shopping results, or make a product carousel.`;
   },
   execute: executeShoppingSearchProducts,
   schema: {
     query: 'string (required) - Product search query',
     merchant: 'string (optional) - Store/domain such as Amazon, Walmart, Target, Best Buy, ebay.com',
     max_results: 'number (optional, default 8, max 12) - Product cards to return',
-    provider: 'string (optional, default multi) - One of multi, tinyfish, tavily, google, brave, ddg, xai',
+    provider: 'string (optional, default preferred provider from Settings) - One of multi, tinyfish, tavily, google, brave, ddg, xai',
     include_metadata: 'boolean (optional, default true) - Fetch top result pages briefly for Open Graph images/titles/prices',
     include_images: 'boolean (optional, default true) - Download discovered product images into downloads/product-carousel and set imagePath',
     metadata_timeout_ms: 'number (optional, default 1800, max 5000) - Per-page metadata fetch timeout',
@@ -2720,7 +3293,7 @@ export const shoppingSearchProductsTool = {
       query: { type: 'string', description: 'Product search query, e.g. "cordless stick vacuum under $300".' },
       merchant: { type: 'string', description: 'Optional store/domain such as Amazon, Walmart, Target, Best Buy, ebay.com.' },
       max_results: { type: 'number', description: 'Number of product cards to return. Default 8, max 12.' },
-      provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider selector. Default multi.' },
+      provider: { type: 'string', enum: ['multi', 'tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai'], description: 'Optional provider selector. Defaults to the preferred provider from Settings; use multi for wide discovery.' },
       include_metadata: { type: 'boolean', description: 'Default true. Briefly fetch top pages for Open Graph images/titles/prices without browser automation.' },
       include_images: { type: 'boolean', description: 'Default true. Briefly download discovered product images to downloads/product-carousel and set imagePath for stable carousel rendering.' },
       metadata_timeout_ms: { type: 'number', description: 'Per-page metadata fetch timeout. Default 1800, max 5000.' },
@@ -2738,6 +3311,8 @@ export const webFetchBatchTool = {
     urls: 'string[] (required, max 20) - Full URLs to fetch',
     max_chars: 'number (optional, default 6000, max 25000) - Max characters per URL',
     concurrency: 'number (optional, default 4, max 8) - Parallel fetches',
+    include_media: 'boolean (optional, default false) - X status URLs only. Download and analyze attached media when explicitly requested.',
+    include_thread: 'boolean (optional, default false) - X status URLs only. Use browser extraction to expand the surrounding thread.',
   },
   jsonSchema: {
     type: 'object',
@@ -2750,6 +3325,8 @@ export const webFetchBatchTool = {
       },
       max_chars: { type: 'number', description: 'Max characters per URL. Default 6000, max 25000.' },
       concurrency: { type: 'number', description: 'Parallel fetches. Default 4, max 8.' },
+      include_media: { type: 'boolean', description: 'X status URLs only. Default false. Download and analyze attached media only when explicitly requested.' },
+      include_thread: { type: 'boolean', description: 'X status URLs only. Default false. Use browser extraction to expand the surrounding thread.' },
     },
     additionalProperties: false,
   },

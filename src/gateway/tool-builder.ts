@@ -6,7 +6,7 @@
 
 import { getConfig } from '../config/config';
 import { getBrowserToolDefinitions } from './browser-tools';
-import { getDesktopToolDefinitions } from './desktop-tools';
+import { getDesktopModelToolDefinitions } from './desktop-tools';
 import { registerAgentBuilderTools } from './agents-runtime/agent-builder-integration';
 import { getFileWebMemoryTools } from './tools/defs/file-web-memory';
 import { getAgentTeamScheduleTools } from './tools/defs/agent-team-schedule';
@@ -16,41 +16,28 @@ import { getCompositeDefs, getCompositeManagementTools, loadComposites } from '.
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
 import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
 import { getPublicBuildAllowedCategories, isToolHiddenInPublicBuild } from '../runtime/distribution.js';
+import {
+  TOOL_CATEGORY_IDS,
+  type ToolCategoryId,
+  auditToolCategoryParity,
+  classifyToolFromManifest,
+  getRuntimeToolCategoryIds,
+  isToolAvailableForManifestCategory,
+  normalizeManifestToolCategory,
+} from '../runtime/tool-category-manifest';
 
 export interface BuildToolsDeps {
   getMCPManager: () => any;
+  /** Validation-only: keep static wrapper schemas but skip loading live extension modules. */
+  skipDynamicExtensionTools?: boolean;
 }
 
 // ─── Tool Category System ─────────────────────────────────────────────────────
 // Tools split into: core (always injected) + on-demand categories.
 // Categories are activated per-session via request_tool_category tool.
 
-export const ALL_TOOL_CATEGORIES = [
-  'browser_automation',
-  'desktop_automation',
-  'agents_and_teams',
-  'prometheus_source_read',
-  'prometheus_source_write',
-  'workspace_write',
-  'advanced_memory',
-  'media_assets',
-  'automations',
-  'external_apps',
-  'integration_admin',
-  'social_intelligence',
-  'proposal_admin',
-  'mcp_server_tools',
-  'composite_tools',
-  'creative_basic',
-  'creative_image',
-  'creative_video',
-  'creative_hyperframes',
-  'creative_quality',
-  'skills',
-  'model_management',
-  'business',
-] as const;
-export type ToolCategory = typeof ALL_TOOL_CATEGORIES[number];
+export const ALL_TOOL_CATEGORIES = TOOL_CATEGORY_IDS;
+export type ToolCategory = ToolCategoryId;
 type InternalToolCategory = ToolCategory;
 
 export function buildConnectorStatus(): string {
@@ -59,7 +46,7 @@ export function buildConnectorStatus(): string {
 }
 
 export function getRuntimeToolCategories(): ToolCategory[] {
-  return getPublicBuildAllowedCategories(ALL_TOOL_CATEGORIES) as ToolCategory[];
+  return getRuntimeToolCategoryIds();
 }
 
 const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
@@ -120,11 +107,7 @@ const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
 };
 
 export function normalizeToolCategory(raw: unknown): ToolCategory | null {
-  const key = String(raw || '').trim().toLowerCase();
-  if (!key) return null;
-  const normalized = TOOL_CATEGORY_ALIASES[key];
-  if (!normalized) return null;
-  return getRuntimeToolCategories().includes(normalized) ? normalized : null;
+  return normalizeManifestToolCategory(raw);
 }
 
 // Explicit name lists for non-prefix categories
@@ -561,6 +544,8 @@ const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
   'desktop_type_raw',
   'desktop_send_to_telegram',
   'desktop_get_accessibility_tree',
+  'desktop_get_accessibility_state',
+  'desktop_accessibility_action',
   'desktop_pixel_watch',
   'desktop_record_macro',
   'desktop_stop_macro',
@@ -569,6 +554,8 @@ const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
   'desktop_list_apps',
   'desktop_list_windows',
   'desktop_get_window_state',
+  'desktop_locate_text',
+  'desktop_click_text',
   'desktop_window_click',
   'desktop_window_type',
   'desktop_window_press_key',
@@ -931,7 +918,7 @@ const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
 ]);
 
 const INTEGRATION_ADMIN_TOOL_NAMES = new Set([
-  'mcp_server_manage', 'webhook_manage', 'integration_quick_setup',
+  'connection_ops', 'mcp_server_manage', 'webhook_manage', 'integration_quick_setup',
 ]);
 
 const SOCIAL_INTELLIGENCE_TOOL_NAMES = new Set(['social_intel']);
@@ -954,7 +941,15 @@ function isSavedCompositeToolName(name: string): boolean {
   }
 }
 
-export function getToolCategory(name: string): InternalToolCategory | null {
+export type ToolClassifierMode = 'legacy' | 'shadow' | 'canonical';
+
+export function getToolClassifierMode(): ToolClassifierMode {
+  const requested = String(process.env.PROMETHEUS_TOOL_CLASSIFIER_MODE || 'canonical').trim().toLowerCase();
+  if (requested === 'legacy' || requested === 'shadow' || requested === 'canonical') return requested;
+  return 'canonical';
+}
+
+export function getLegacyToolCategory(name: string): InternalToolCategory | null {
   // Keep these always available as core runtime tools.
   if (name === 'browser_send_to_telegram') return null;
   if (name === 'delivery_send' || name === 'delivery_send_screenshot') return null;
@@ -996,11 +991,20 @@ export function getToolCategory(name: string): InternalToolCategory | null {
   return null; // null = core tool, always included
 }
 
+export function getCanonicalToolCategory(name: string): InternalToolCategory | null {
+  return classifyToolFromManifest(name, { isSavedComposite: isSavedCompositeToolName });
+}
+
+export function getToolCategory(name: string): InternalToolCategory | null {
+  return getToolClassifierMode() === 'canonical'
+    ? getCanonicalToolCategory(name)
+    : getLegacyToolCategory(name);
+}
+
 const TOOL_BUILD_CACHE_TTL_MS = 30_000;
 const TOOL_BUILD_CACHE_MAX_ENTRIES = 64;
-const INCLUDE_DIRECT_CONNECTOR_TOOL_SCHEMAS =
-  String(process.env.PROMETHEUS_DIRECT_CONNECTOR_TOOL_SCHEMAS || '').trim() === '1';
 const DYNAMIC_TOOL_SURFACE_CATEGORIES = new Set<string>([
+  'external_apps',
   'mcp_server_tools',
   'composite_tools',
 ]);
@@ -1261,7 +1265,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     // Browser/desktop schemas are large and category-only. Avoid constructing
     // them for normal chat/background turns where they will be filtered out.
     ...(categoryIsActive('browser_automation') ? getBrowserToolDefinitions() : []),
-    ...(categoryIsActive('desktop_automation') ? getDesktopToolDefinitions() : []),
+    ...(categoryIsActive('desktop_automation') ? getDesktopModelToolDefinitions() : []),
     // ── Sub-agent tools ── shown based on subagent_mode toggle ────────────────────────────────────
     ...(() => {
       if (subagentMode) {
@@ -1484,7 +1488,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   // Connector, MCP, and composite tools can require status probes or filesystem
   // scans. Avoid touching those dynamic systems unless their category is in the
   // current tool surface; connector_list remains core for discovery.
-  if (categoryIsActive('external_apps') && INCLUDE_DIRECT_CONNECTOR_TOOL_SCHEMAS) {
+  if (categoryIsActive('external_apps') && !deps.skipDynamicExtensionTools) {
     try {
       ensurePrometheusExtensionRuntimeLoaded();
       dynamicToolDefs.push(...getExtensionRuntimeRegistry().listConnectedConnectorToolDefinitions());
@@ -1495,6 +1499,10 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     try {
       const mcpTools = getMCPManager().getAllTools();
       for (const t of mcpTools) {
+        try {
+          const { isManagedMcpToolExposed } = require('../connections/runtime');
+          if (!isManagedMcpToolExposed(t.serverId, t.name)) continue;
+        } catch { /* preserve legacy exposure if the orchestrator is unavailable */ }
         const prefixedName = `mcp__${t.serverId}__${t.name}`;
         dynamicToolDefs.push({
           type: 'function',
@@ -1529,13 +1537,21 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     : toolDefs;
   const visibleToolDefs = runtimeToolDefs.filter((t: any) => !SCHEMA_HIDDEN_COMPAT_TOOL_NAMES.has(String(t?.function?.name || '')));
 
+  // Canonical classification is authoritative by default. Keep the legacy
+  // classifier as a rollback/shadow oracle and record drift out of band.
+  auditToolCategoryParity(
+    visibleToolDefs.map((tool: any) => String(tool?.function?.name || '')),
+    getLegacyToolCategory,
+    { isSavedComposite: isSavedCompositeToolName },
+  );
+
   // ── Filter to core + activated categories ──────────────────────────────────
   // When activatedCategories is provided, only return core tools + those in active categories.
   if (activatedCategories !== undefined) {
     const filteredTools = visibleToolDefs.filter((t: any) => {
       const name = String(t?.function?.name || '');
       const cat = getToolCategory(name);
-      if (SOURCE_READ_FILE_HELPER_TOOL_NAMES.has(name) && normalizedActiveCategories.has('prometheus_source_read')) {
+      if (normalizedActiveCategories.has('prometheus_source_read') && isToolAvailableForManifestCategory(name, 'prometheus_source_read')) {
         return true;
       }
       return cat === null || normalizedActiveCategories.has(cat);

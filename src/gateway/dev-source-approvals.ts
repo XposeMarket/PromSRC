@@ -4,6 +4,10 @@ import { isPublicDistributionBuild } from '../runtime/distribution.js';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import {
+  markCoordinatedDevEditComplete,
+  registerCoordinatedDevEdit,
+} from './dev-edit-coordinator';
 
 export interface DevSourceEditEvidence {
   file: string;
@@ -269,12 +273,14 @@ export function markDevSourceEditContinuationComplete(input: {
   const pending = direct || getLatestPendingDevSourceEditContinuation(input.sessionId);
   if (!pending) return null;
   if (tag && tag !== String(pending.completionNoteTag || '').trim().toLowerCase()) return null;
-  return upsertDevSourceEditContinuation({
+  const completed = upsertDevSourceEditContinuation({
     ...pending,
     status: 'complete',
     completedAt: Date.now(),
     completionNote: String(input.note || '').trim() || undefined,
   });
+  try { markCoordinatedDevEditComplete(completed.id); } catch {}
+  return completed;
 }
 
 export function createDevSourceEditApprovalScope(input: {
@@ -383,6 +389,12 @@ export function grantDevSourceEditApproval(sessionId: string, scope: DevSourceEd
     verificationProfiles: grant.verificationProfiles,
     createdAt: Date.now(),
     updatedAt: Date.now(),
+  });
+  registerCoordinatedDevEdit({
+    id: grant.devEditId,
+    sessionId: sid,
+    files: grant.allowedFiles,
+    leaseMs: Math.max(60_000, grant.expiresAt - Date.now()),
   });
   appendAuditEntry({
     sessionId: sid,

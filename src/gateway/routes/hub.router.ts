@@ -506,7 +506,7 @@ router.get('/api/hub/skills/review', (_req: Request, res: Response) => {
 router.post('/api/hub/skills/review/run', (req: Request, res: Response) => {
   try {
     if (!_sm) { res.status(500).json({ success: false, error: 'skills manager not initialized' }); return; }
-    const rawMode = String(req.body?.mode || 'auto-safe').trim();
+    const rawMode = String(req.body?.mode || 'dry-run').trim();
     const mode: SkillCuratorMode = rawMode === 'dry-run' || rawMode === 'auto-safe' ? rawMode : 'pending';
     const result = runSkillCurator({
       workspacePath: getConfig().getWorkspacePath(),

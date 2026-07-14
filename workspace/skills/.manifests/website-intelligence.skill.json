@@ -1,26 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when analyzing a business website, landing page, SEO/content quality, conversion issues, technical trust signals, UX weaknesses, offer clarity, or lead-generation potential from a site.",
+  "description": "Use this skill when the user asks to audit, analyze, score, or inspect a website for SEO, content, performance heuristics, tech stack, AI/GEO visibility, backlinks/search signals, conversion clarity, or competitor site intelligence. Triggers on phrases like audit this website, analyze site, website score, SEO audit, competitor website, site performance, tech stack, content audit, AI visibility, GEO visibility, and website intelligence. Use it to deploy the website analysis team for full audits or choose quick web_fetch/web_fetch_batch checks for narrow questions.",
   "triggers": [
     "analyze this website",
-    "website audit",
-    "SEO audit",
-    "landing page review",
-    "conversion audit",
     "business website analysis",
-    "check their site",
-    "improve this site",
     "website trust signals",
-    "find website issues",
     "local business website",
-    "lead qualification",
-    "site looks outdated",
-    "audit homepage",
-    "website intelligence",
     "competitor website review",
     "inspect website copy",
-    "UX audit"
+    "landing page review",
+    "find website issues",
+    "site looks outdated",
+    "improve this site",
+    "check their site",
+    "website intelligence"
   ],
   "categories": [
     "website",
@@ -34,6 +28,7 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "Website Intelligence",
-  "id": "website-intelligence"
+  "name": "website-intelligence",
+  "id": "website-intelligence",
+  "implicitInvocation": true
 }

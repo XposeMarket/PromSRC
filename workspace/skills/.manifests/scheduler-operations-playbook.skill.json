@@ -2,24 +2,20 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "scheduled job",
-    "schedule automation",
-    "recurring job",
-    "cron job",
-    "timer",
-    "create schedule",
-    "update schedule",
-    "pause schedule",
-    "resume schedule",
-    "delete schedule",
-    "run job now",
-    "schedule status",
-    "scheduled task",
-    "recurring automation",
+    "run scheduled job now",
+    "create scheduled job",
+    "inspect scheduled job",
+    "update scheduled job",
+    "resume scheduled job",
+    "delete scheduled job",
+    "scheduled job status",
+    "diagnose scheduled delivery",
     "verify scheduled output",
-    "['delivery_send telegram'",
-    "'morning wake-up channel'",
-    "'deliver to telegram instead of mobile']"
+    "pause scheduled job"
   ],
-  "id": "scheduler-operations-playbook"
+  "id": "scheduler-operations-playbook",
+  "name": "scheduler-operations-playbook",
+  "description": "Create, inspect, update, run, diagnose, and verify Prometheus scheduled jobs, including cron/interval timing, ownership, expected outputs, delivery, retries, and run history. Use for scheduler operations; do not use for ordinary foreground tasks or generic background-agent work.",
+  "implicitInvocation": true,
+  "lifecycle": "active"
 }

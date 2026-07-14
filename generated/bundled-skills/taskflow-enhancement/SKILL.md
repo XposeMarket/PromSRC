@@ -1,3 +1,8 @@
+---
+name: "taskflow-enhancement"
+description: "Build, implement, or extend Prometheus task orchestration with child tasks, dependencies, waits, checkpoints, resumable summaries, progress, artifacts, and retry policy. Use for durable multi-step task flows or task-engine changes; do not use for a simple one-step task."
+---
+
 # TaskFlow Enhancement
 
 Use this skill when designing or implementing OpenClaw-style task orchestration inside Prometheus.

@@ -87,6 +87,15 @@ Build-failure handling for proposal execution is now more structured:
 
 Prometheus now has multiple agent layers, not one generic "subagent" concept.
 
+### Subagent identity and memory boundary
+
+- `AGENT.md` (singular, uppercase) is the canonical editable identity/operating file for every standalone subagent and every team-scoped subagent identity.
+- Legacy `system_prompt.md` and `AGENTS.md` are read once and copied non-destructively into `AGENT.md`; legacy files remain on disk for rollback. `HEARTBEAT.md` is scheduler-only and is not an identity fallback.
+- Standalone direct chat, background/one-shot subagent work, team dispatch/room/direct work, scheduled subagent-owner turns, internal agent tasks, model switches, and subagent voice must not inject the main chat's `USER.md`, `SOUL.md`, `MEMORY.md`, `BUSINESS.md`, intraday notes, project context, CIS context, or retrieved memory.
+- These runtimes receive the dedicated subagent soul, `AGENT.md`, their explicit assignment/caller/team context, and the shared runtime policy/tool/wrapper/skill layers.
+- Team-scoped `AGENT.md` lives under `teams/<teamId>/subagents/<agentId>/` and is edited through the team-scoped API; reusing an agent ID across teams does not share the team identity file.
+- Main/team-manager memory behavior is separate from this subagent boundary.
+
 Wrapper surface note:
 
 - `agents_and_teams` is wrapper-first for most model-facing agent/team operations. Use `agent_ops` for spawn/list/info/update/delete/deploy analysis team, `agent_chat_ops` for standalone subagent and agent chat turns/watches, `team_ops_wrapper` for managed team/coordinator/dispatch operations, and `team_collab_ops` for in-team collaboration actions.

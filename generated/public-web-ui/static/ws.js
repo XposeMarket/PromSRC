@@ -246,6 +246,14 @@ async function prepareMobileReload() {
   } catch {}
 }
 
+const PM_RELOAD_GUARD_KEY = 'pm_reload_pending_until';
+
+function markReloadPending(windowMs = 15000) {
+  try {
+    sessionStorage.setItem(PM_RELOAD_GUARD_KEY, String(Date.now() + Math.max(1000, Number(windowMs) || 15000)));
+  } catch {}
+}
+
 wsEventBus.on('dev_reload_requested', (msg) => {
   const target = String(msg?.target || 'all').toLowerCase();
   const mobile = isMobileRoute();
@@ -253,13 +261,17 @@ wsEventBus.on('dev_reload_requested', (msg) => {
     if (mobile && target !== 'mobile') return;
     if (!mobile && target !== 'desktop') return;
   }
-  const id = String(msg?.timestamp || msg?.reason || Date.now());
+  const id = String(msg?.batchId || msg?.timestamp || msg?.reason || Date.now());
   const key = `prom_dev_reload_${id}`;
   try {
     if (sessionStorage.getItem(key)) return;
     sessionStorage.setItem(key, '1');
   } catch {}
   const delayMs = Number.isFinite(Number(msg?.delayMs)) ? Math.max(250, Number(msg.delayMs)) : 900;
+  // A service-worker update can emit controllerchange while this explicit
+  // reload is being prepared. Share a cross-module guard so both paths do not
+  // reload the PWA one after the other.
+  markReloadPending(delayMs + 15000);
   setTimeout(() => {
     prepareMobileReload().finally(() => {
       try { location.reload(); } catch {}

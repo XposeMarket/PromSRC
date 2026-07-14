@@ -1,6 +1,6 @@
 ---
-name: threejs-mobile-webgl
-description: Debug Three.js and WebGL scenes that work on desktop but fail on iPhone, iPad, mobile Safari, iOS PWA, WebView, or mobile file canvas, especially missing sprites, transparent PNG textures, billboards, pickups, enemies, or touch controls.
+name: "threejs-mobile-webgl"
+description: "Diagnose Three.js/WebGL failures that reproduce on iPhone, iPad, mobile Safari, iOS PWA/WebView, or a mobile file canvas while the same scene works on desktop. Use for missing textured sprites or transparent PNG planes, CanvasTexture upload issues, touch-overlay interception, or Three.js mobile yaw, movement, and fire misalignment; do not use for general Three.js authoring."
 ---
 
 # Three.js Mobile WebGL

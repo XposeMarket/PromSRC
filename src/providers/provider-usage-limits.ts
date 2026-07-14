@@ -63,6 +63,10 @@ export interface ProviderUsage {
   source: 'live' | 'internal';
   plan_label: string | null;
   windows: UsageWindow[];
+  /** Provider-wide allowance or a model-specific allowance selected for main chat. */
+  usage_scope?: 'provider' | 'model';
+  /** Present when `windows` represents a model-specific allowance. */
+  usage_model?: string | null;
   budget: ProviderBudget | null;
   tokens: ProviderTokenTotals;
   error: string | null;
@@ -174,7 +178,13 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 // Each returns `null` when the provider cannot do a live fetch (no OAuth token),
 // or `{ windows, plan_label, error }` when a fetch was attempted.
 
-type LiveResult = { windows: UsageWindow[]; plan_label: string | null; error: string | null };
+type ModelLimit = { id: string; label: string; model_ids: string[]; windows: UsageWindow[] };
+type LiveResult = {
+  windows: UsageWindow[];
+  plan_label: string | null;
+  error: string | null;
+  model_limits?: ModelLimit[];
+};
 
 type GrokAuth = {
   source: 'prometheus_oauth' | 'grok_cli_auth';
@@ -231,12 +241,57 @@ async function fetchCodexLive(configDir: string): Promise<LiveResult | null> {
   if (!res.ok) return { windows: [], plan_label: null, error: `ChatGPT usage ${res.status}` };
 
   const body: any = await res.json().catch(() => ({}));
-  const rl = body.rate_limit || {};
+  return parseCodexLiveUsage(body);
+}
+
+function usageWindowLabel(raw: any, fallback: string): string {
+  const seconds = Number(raw?.limit_window_seconds ?? raw?.window_seconds ?? 0);
+  if (seconds === 5 * 60 * 60) return '5-hour';
+  if (seconds === 7 * 24 * 60 * 60) return 'Weekly';
+  if (seconds > 0 && seconds % (24 * 60 * 60) === 0) return `${seconds / (24 * 60 * 60)}-day`;
+  if (seconds > 0 && seconds % (60 * 60) === 0) return `${seconds / (60 * 60)}-hour`;
+  return fallback;
+}
+
+function rateLimitWindows(rateLimit: any, suffix = ''): UsageWindow[] {
+  const primary = rateLimit?.primary_window || rateLimit?.primary;
+  const secondary = rateLimit?.secondary_window || rateLimit?.secondary;
   const windows: UsageWindow[] = [];
+  if (primary) windows.push(win(`${usageWindowLabel(primary, 'Primary')}${suffix}`, primary));
+  if (secondary) windows.push(win(`${usageWindowLabel(secondary, 'Secondary')}${suffix}`, secondary));
+  return windows;
+}
+
+function codexModelIdsForLimit(limitName: string, meteredFeature: string): string[] {
+  const text = `${limitName} ${meteredFeature}`.toLowerCase();
+  if (text.includes('codex-spark') || text.includes('codex_spark') || text.includes('bengalfox')) {
+    return ['gpt-5.3-codex-spark'];
+  }
+  return [];
+}
+
+/** Parse the provider-native wham/usage response, including model-specific lanes. */
+export function parseCodexLiveUsage(body: any): LiveResult {
+  const rl = body.rate_limit || {};
   const primary = rl.primary_window || rl.primary;
   const secondary = rl.secondary_window || rl.secondary;
-  if (primary) windows.push(win('5-hour', primary));
-  if (secondary) windows.push(win('Weekly', secondary));
+  const windows = rateLimitWindows(rl);
+  const modelLimits: ModelLimit[] = (Array.isArray(body?.additional_rate_limits) ? body.additional_rate_limits : [])
+    .map((entry: any) => {
+      const limitName = String(entry?.limit_name || entry?.name || '').trim();
+      const meteredFeature = String(entry?.metered_feature || entry?.meteredFeature || '').trim();
+      const modelIds = codexModelIdsForLimit(limitName, meteredFeature);
+      if (!modelIds.length) return null;
+      const isSpark = modelIds.includes('gpt-5.3-codex-spark');
+      const label = isSpark ? 'Codex Spark' : (limitName || 'Model usage');
+      return {
+        id: isSpark ? 'codex-spark' : (meteredFeature || limitName.toLowerCase().replace(/[^a-z0-9]+/g, '-')),
+        label,
+        model_ids: modelIds,
+        windows: rateLimitWindows(entry?.rate_limit || {}, ` · ${isSpark ? 'Spark' : label}`),
+      } as ModelLimit;
+    })
+    .filter((entry: ModelLimit | null): entry is ModelLimit => !!entry && entry.windows.length > 0);
 
   // Diagnostic: if a window came back with no recognised reset field, log its
   // keys once so the field name can be added to resetIsoFrom. Opt-in via env to
@@ -248,7 +303,50 @@ async function fetchCodexLive(configDir: string): Promise<LiveResult | null> {
         'sample=', JSON.stringify(primary));
     } catch { /* ignore */ }
   }
-  return { windows, plan_label: null, error: null };
+  return {
+    windows,
+    plan_label: typeof body?.plan_type === 'string' && body.plan_type.trim() ? body.plan_type.trim() : null,
+    error: null,
+    model_limits: modelLimits,
+  };
+}
+
+function normalizeModelId(value: unknown): string {
+  const raw = String(value || '').trim().toLowerCase();
+  const slash = raw.lastIndexOf('/');
+  return slash >= 0 ? raw.slice(slash + 1) : raw;
+}
+
+export function isCodexSparkModel(value: unknown): boolean {
+  return normalizeModelId(value) === 'gpt-5.3-codex-spark';
+}
+
+export function selectCodexUsageForModel(live: LiveResult, model: unknown): {
+  windows: UsageWindow[];
+  error: string | null;
+  usage_scope: 'provider' | 'model';
+  usage_model: string | null;
+} {
+  const normalizedModel = normalizeModelId(model);
+  if (!isCodexSparkModel(normalizedModel)) {
+    return { windows: live.windows, error: live.error, usage_scope: 'provider', usage_model: null };
+  }
+  const modelLimit = (live.model_limits || []).find((limit) =>
+    limit.model_ids.some((id) => normalizeModelId(id) === normalizedModel));
+  if (!modelLimit) {
+    return {
+      windows: [],
+      error: live.error || 'Codex Spark usage limit was not returned by OpenAI.',
+      usage_scope: 'model',
+      usage_model: normalizedModel,
+    };
+  }
+  return {
+    windows: modelLimit.windows,
+    error: live.error,
+    usage_scope: 'model',
+    usage_model: normalizedModel,
+  };
 }
 
 function firstNumber(...values: unknown[]): number | null {
@@ -605,6 +703,21 @@ function getBudgets(): Record<string, { monthly_token_limit?: number }> {
   }
 }
 
+function getActiveMainModel(): { provider: string; model: string } {
+  try {
+    const cfg = getConfig().getConfig() as any;
+    const llm = cfg?.llm && typeof cfg.llm === 'object' ? cfg.llm : {};
+    const provider = String(llm.provider || '').trim();
+    const providerConfig = llm?.providers?.[provider] && typeof llm.providers[provider] === 'object'
+      ? llm.providers[provider]
+      : {};
+    const model = String(providerConfig.model || (provider === 'ollama' ? cfg?.models?.primary : '') || '').trim();
+    return { provider, model };
+  } catch {
+    return { provider: '', model: '' };
+  }
+}
+
 // ─── Public entry point ──────────────────────────────────────────────────────
 
 /**
@@ -616,6 +729,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
   try { configDir = getConfig().getConfigDir(); } catch { /* configDir stays '' */ }
 
   const budgets = getBudgets();
+  const activeMain = getActiveMainModel();
   const events = readModelUsageEvents();
   const ids = (Array.isArray(credentialedIds) ? credentialedIds : [])
     .filter((id) => id && !LOCAL_PROVIDERS.has(id));
@@ -624,6 +738,15 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
   const providers = await Promise.all(ids.map(async (id): Promise<ProviderUsage> => {
     const live = await getLive(id, configDir);
     const tokens = internalTokens(id, events);
+    const activeCodexModel = activeMain.provider === id ? activeMain.model : '';
+    const codexSelection = id === 'openai_codex' && (live || isCodexSparkModel(activeCodexModel))
+      ? selectCodexUsageForModel(live || {
+          windows: [],
+          plan_label: null,
+          error: 'Connect ChatGPT/Codex OAuth to read Codex Spark usage.',
+          model_limits: [],
+        }, activeCodexModel)
+      : null;
 
     // xAI/Grok has no live usage endpoint here; augment internal accounting with
     // token counts read from local Grok CLI session files, if present.
@@ -645,14 +768,16 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
 
     return {
       provider: id,
-      label: labelFor(id),
+      label: codexSelection?.usage_scope === 'model' ? 'OpenAI · Codex Spark' : labelFor(id),
       configured: true,
       source: live ? 'live' : 'internal',
       plan_label: live?.plan_label ?? null,
-      windows: live?.windows || [],
+      windows: codexSelection?.windows || live?.windows || [],
+      usage_scope: codexSelection?.usage_scope || 'provider',
+      usage_model: codexSelection?.usage_model || null,
       budget,
       tokens,
-      error: live?.error ?? null,
+      error: codexSelection?.error ?? live?.error ?? null,
     };
   }));
 

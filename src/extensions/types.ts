@@ -1,4 +1,4 @@
-export type ExtensionKind = 'provider' | 'connector' | 'mcp_preset';
+export type ExtensionKind = 'provider' | 'connector' | 'mcp_preset' | 'integration';
 export type ExtensionTrustLevel = 'core' | 'bundled' | 'local' | 'third_party' | 'marketplace';
 
 export type ExtensionSetupFieldInput =
@@ -14,6 +14,23 @@ export type ExtensionSetupAuthType =
   | 'oauth_setup_token'
   | 'browser_session'
   | 'none';
+
+export type ExtensionConnectionAdapter =
+  | 'oauth-pkce' | 'oauth-device-code' | 'oauth-manual-callback'
+  | 'api-key' | 'setup-token' | 'browser-session' | 'cli-login'
+  | 'mcp-oauth' | 'mcp-stdio' | 'mcp-http' | 'local-resource'
+  | 'custom-http' | 'openai-compatible-model' | 'external-admin-approval' | 'composite';
+
+export type ExtensionConnectionStrategy = {
+  id: string;
+  adapter: ExtensionConnectionAdapter | string;
+  priority?: number;
+  capabilities?: string[];
+  readOnlyDefault?: boolean;
+  authentication?: { type: string; scopes?: string[]; audience?: string; };
+  verification?: string[];
+  config?: Record<string, unknown>;
+};
 
 export type ExtensionSetupField = {
   key: string;
@@ -71,6 +88,7 @@ export type ExtensionDescriptor = {
   runtime: {
     binding: string;
     entrypoint?: string;
+    setupEntrypoint?: string;
     options?: ExtensionRuntimeOptions;
   };
   ui?: {
@@ -113,6 +131,24 @@ export type ExtensionDescriptor = {
     envTemplate?: Record<string, string>;
     urlTemplate?: string;
     headersTemplate?: Record<string, string>;
+  };
+  compatibility?: { pluginApi?: string; prometheus?: string };
+  permissions?: {
+    network?: string[];
+    filesystem?: string[];
+    process?: boolean;
+    credentials?: string[];
+  };
+  connection?: {
+    schemaVersion: 1;
+    /** Natural-language/provider identities accepted by universal connection discovery. */
+    aliases?: string[];
+    /** Official provider hosts used as high-confidence discovery identities. */
+    domains?: string[];
+    strategies: ExtensionConnectionStrategy[];
+    requestedCapabilities?: Array<{ id: string; label?: string; description?: string; risk?: 'read' | 'write' | 'high_impact' }>;
+    verification?: string[];
+    toolPolicy?: { defaultExposure?: 'all' | 'read-only' | 'none'; unknownTools?: 'allow' | 'review' | 'blocked' };
   };
 };
 

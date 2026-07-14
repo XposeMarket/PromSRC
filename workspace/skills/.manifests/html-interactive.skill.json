@@ -1,26 +1,8 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating an interactive HTML report, dashboard, iframe-style visual artifact, live card, rich analysis view, visual summary, or polished single-file HTML deliverable.",
-  "triggers": [
-    "make an interactive report",
-    "HTML dashboard",
-    "visual dashboard",
-    "interactive visualization",
-    "rich report",
-    "iframe report",
-    "single page report",
-    "polished dashboard",
-    "clickable report",
-    "build a live card",
-    "interactive summary",
-    "visual analysis",
-    "HTML artifact",
-    "dashboard for this analysis",
-    "make this scannable",
-    "interactive table",
-    "styled report"
-  ],
+  "description": "Deprecated compatibility entry for interactive HTML deliverables. Use the canonical interactive-artifacts skill.",
+  "triggers": [],
   "categories": [
     "visuals",
     "html",
@@ -31,7 +13,8 @@
     "workspace_write",
     "creative_basic"
   ],
-  "lifecycle": "active",
-  "name": "HTML Interactive",
-  "id": "html-interactive"
+  "lifecycle": "deprecated",
+  "name": "html-interactive",
+  "id": "html-interactive",
+  "implicitInvocation": false
 }

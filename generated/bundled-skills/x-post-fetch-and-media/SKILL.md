@@ -1,241 +1,41 @@
 ---
-name: X Post Fetch
-description: Use this skill when the user gives an X/Twitter status URL and wants the post or thread fetched, read, inspected, or summarized without interaction. For X URLs, `web_fetch` is the default and complete path; answer from the returned X-aware payload. Triggers on phrases like webfetch this X URL, fetch this tweet, read this X post, pull this thread, get this tweet, inspect this X status link, X status URL, and tweet fetch. Do not use it for posting, liking, replying, or browser feed interaction.
-emoji: "🧩"
-version: 2.1.0
-triggers: webfetch this x url, web fetch this x url, fetch this x post, fetch this tweet, read this tweet, read this x post, pull this x thread, get this tweet, get this x post, inspect this x link, x status url, x url fetch, tweet fetch
+name: "x-post-fetch-and-media"
+description: "Use when the user supplies an X/Twitter status URL and wants its post or thread fetched, read, inspected, or summarized without interaction. Do not use for posting, liking, replying, feed browsing, or generic web research."
 ---
 
 # X Post Fetch
 
-Use this skill when the job starts with an **X status URL** and the user wants the content fetched.
+Fetch an exact X status URL with `web_fetch` and report only content actually extracted. For several exact status URLs, use `web_fetch_batch` and evaluate every result independently.
 
-The rule is simple:
+## Workflow
 
-> For X URLs, use **`web_fetch`** first and treat its returned X-aware payload as the primary result.
+1. Confirm the URL is an `x.com` or `twitter.com` status URL.
+2. Call `web_fetch` on that exact URL. Leave `include_media` and `include_thread` false for a simple exact-post read; this uses X's official oEmbed endpoint without opening a browser.
+3. Require at least one extracted tweet/post. A success flag with `tweets: []`, a zero count, placeholder text, or an extraction message is failure—not a captured post.
+4. Report author/handle, timestamp, text, thread order/count, metrics, and media hints only when present.
+5. Clearly label deleted, unavailable, login-gated, rate-limited, or extraction-blocked results. Do not guess the post text.
+6. Stop when the fetch satisfies the request.
 
-If `web_fetch` returns the post/thread cleanly, that is the job. Do not add extra retrieval steps unless the user explicitly asks for something beyond the fetched content.
+For an explicitly requested thread, set `include_thread: true` and require more than the target status only when the URL actually belongs to a thread. Browser extraction can be login-gated or rate-limited, so report an incomplete thread instead of treating the exact post as the whole thread.
 
-If the user provides several X status URLs and wants each inspected, use `web_fetch_batch` with those exact URLs. Interpret each per-URL result independently; one blocked/deleted post does not invalidate the others.
+## Media
 
----
+Do not turn a read request into a download workflow. If the user explicitly asks to download, transcribe, or analyze attached media, capture the post first and then call `web_fetch` with `include_media: true` or hand the confirmed media to the appropriate media workflow.
 
-## What This Skill Is For
+Before claiming a media operation succeeded, verify the output file exists, has non-zero bytes, and has the expected media type. A URL, attempted download, or tool success flag alone is not proof.
 
-Use this skill when the user wants to:
-- fetch an X post from its URL
-- read a tweet without opening the browser
-- pull a thread from an X status link
-- inspect what an X URL contains
-- get the text, author, timestamp, metrics, and any media summary already present in the `web_fetch` response
+## Browser escalation
 
-Do **not** use this skill for:
-- posting on X
-- replying, liking, reposting, or quote-tweeting
-- feed interaction or search workflows on X.com
+Use the X browser automation skill only when the user asks for interaction or when they explicitly want a browser fallback. Browser visibility is not proof of programmatic extraction; report any login wall or inaccessible content honestly.
 
-Those belong to **`x-browser-automation-playbook`**.
+## Failure contract
 
----
+Return a failure/caveat when:
 
-## Core Rule
+- no posts were extracted;
+- the status is deleted or unavailable;
+- X requires authentication the current path does not have;
+- extraction times out or is blocked;
+- requested media cannot be validated.
 
-For an X/Twitter status URL, do this:
-
-```json
-web_fetch({ "url": "https://x.com/<handle>/status/<id>" })
-```
-
-Then answer directly from what comes back.
-
-For multiple X status URLs:
-```json
-web_fetch_batch({
-  "urls": [
-    "https://x.com/<handle>/status/<id>",
-    "https://x.com/<handle>/status/<id>"
-  ],
-  "max_chars": 6000
-})
-```
-
-No browser first.
-No extra media/download flow by default.
-No unnecessary handoff.
-
-If the user says **"webfetch this"** for an X URL, this skill should be enough on its own.
-
----
-
-## Standard Workflow
-
-### Flow A — Normal case
-
-1. Run `web_fetch` on the X URL
-2. Inspect the returned payload
-3. If it includes `tweets`, treat that as the canonical extracted result
-4. Report the useful fields clearly
-5. Stop unless the user asked for more
-
-### Flow B — Multiple X URLs
-
-1. Run `web_fetch_batch` on the URL list
-2. For each result, inspect whether the embedded payload/text contains captured tweets or a blocker message
-3. Report each URL separately with status: captured, empty/blocker, or fetch error
-4. Do not open X browser tabs unless the user asked for interaction or the batch results are insufficient
-
-### What to report
-
-Usually report:
-- author
-- handle
-- timestamp
-- post text
-- whether it looks like a single post or thread
-- count of returned tweets if present
-- metrics if present
-- whether media is present if the payload already indicates it
-
-### Default posture
-
-If `web_fetch` already returned the content, do **not** escalate to:
-- browser tools
-- `download_media`
-- `download_url`
-- analysis tools
-
-unless the user explicitly asks for those next.
-
----
-
-## Interpreting `web_fetch` Results
-
-A typical X-aware payload may include fields like:
-- `success`
-- `url`
-- `tweets`
-- `count`
-- `message`
-
-And per tweet:
-- `id`
-- `link`
-- `author`
-- `handle`
-- `timestamp`
-- `text`
-- `metrics`
-- media hints such as `hasImage` or similar fields
-
-### What matters most
-
-| Field | Meaning |
-|------|---------|
-| `tweets` | Canonical extracted post/thread items |
-| `count` | Fast single-post vs thread signal |
-| `text` | Main user-facing content |
-| `author` / `handle` | Attribution |
-| `timestamp` | When it was posted |
-| `metrics` | Engagement snapshot when available |
-| media hints | Mention only if already present in payload |
-
----
-
-## Response Pattern
-
-### If it is one post
-Return the core content cleanly.
-
-Example:
-- Author + handle
-- timestamp
-- full post text
-- metrics if present
-- note if media is attached according to the payload
-
-### If it is a thread
-Return:
-- thread count
-- anchor author/handle
-- ordered post texts
-- any useful metadata
-
-Condense when possible, but do not lose the actual text if the user asked to fetch/read it.
-
----
-
-## When To Escalate Beyond `web_fetch`
-
-Only escalate if the user explicitly asks for something else, such as:
-- download the video
-- pull the images
-- analyze the clip
-- transcribe the video
-- open X and interact with it
-
-At that point:
-- media/file requests can hand off to the relevant download or analysis tools
-- interaction requests belong to `x-browser-automation-playbook`
-
-But that is **not** the default behavior of this skill anymore.
-
----
-
-## Anti-Patterns
-
-Do **not**:
-- open the browser first for a simple X URL fetch
-- assume extra download/analysis work is needed when the user only said to fetch/read the URL
-- turn a one-step `web_fetch` job into a multi-tool flow by default
-- claim anything not present in the returned payload
-
----
-
-## Good Outputs
-
-Good:
-- "`web_fetch` returned a single post from Nebula (@NebulaAI)."
-- "`web_fetch` returned 8 posts from the thread."
-- "Here’s the post text, timestamp, and captured metrics."
-- "The payload indicates attached media."
-
-Bad:
-- "I need to open the browser for this."
-- "I should probably download the media too" when the user did not ask for that
-- "The tweet likely says..."
-
----
-
-## Minimal Reference
-
-### Fetch an X post
-```json
-{ "url": "https://x.com/<handle>/status/<id>" }
-```
-
----
-
-## Scope Test Examples
-
-### Clear match
-- "webfetch this https://x.com/.../status/..."
-- "fetch this tweet"
-- "read this X post"
-- "pull this thread"
-
-### False positive
-- "post this on X"
-- "reply to this tweet"
-- "like these posts"
-
-Those belong to `x-browser-automation-playbook`.
-
----
-
-## Changelog
-
-| Date | Change |
-|------|--------|
-| 2026-04-22 | v2.0.0: Simplified the skill so X status URLs default to a straight `web_fetch` flow with no extra download/analysis steps unless explicitly requested. Repositioned the skill as a pure fetch/read playbook. |
-| 2026-04-22 | v1.1.0: Expanded the skill so X video/media requests now explicitly hand off into the new `video-analysis-and-transcription` workflow for watch/transcribe/summarize tasks. Added stronger trigger phrases for X clip analysis/transcription requests. |
-| 2026-04-21 | v1.0.0: Initial skill covering X-aware `web_fetch`, thread/text retrieval, media extraction decision rules, and download/analyze handoff patterns. |
+The fail-closed payload validation is covered by `scripts/test-phase3-fail-closed.mjs`. The live smoke test in `scripts/test-x-live-smoke.mjs` has also captured a known public NASA status through Prometheus's real `web_fetch` path, including its target ID, author, handle, timestamp, text, and non-zero count without starting a media workflow. A later login wall, deletion, rate limit, or empty result is still a request-level failure; never reuse the fixture text as a fallback.

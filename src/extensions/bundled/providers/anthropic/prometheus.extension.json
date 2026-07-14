@@ -31,7 +31,8 @@
     },
     "schema": {
       "model": "string",
-      "reasoning_effort": "low|medium|high|xhigh|max?",
+      "reasoning_effort": "model-dependent Anthropic effort?",
+      "speed": "standard|fast?",
       "extended_thinking": "boolean?",
       "thinking_budget": "number?"
     },

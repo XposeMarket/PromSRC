@@ -1,25 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when starting, inspecting, managing, resuming, pausing, canceling, cleaning up, or summarizing background tasks, agent tasks, workflow runs, or task outputs.",
+  "description": "Inspect and manage existing Prometheus tasks, background runs, agents, jobs, and team work through their lifecycle, including status interpretation, pause/resume, retry, cancellation, recovery, deduplication, and completion verification. Use for lifecycle control; use execution-mode-routing when deciding how new work should run.",
   "triggers": [
+    "manage an existing task",
+    "cleanup tasks",
+    "running tasks",
+    "task lifecycle",
+    "summarize task",
+    "inspect task",
+    "stalled task",
     "task status",
-    "background task",
     "resume task",
-    "pause task",
     "cancel task",
     "task output",
-    "task lifecycle",
-    "inspect task",
-    "cleanup tasks",
-    "summarize task",
-    "running tasks",
-    "stalled task",
-    "task failed",
-    "task panel",
-    "agent task",
-    "rerun task",
-    "latest task"
+    "task failed"
   ],
   "categories": [
     "tasks",
@@ -30,5 +25,7 @@
     "automations"
   ],
   "lifecycle": "active",
-  "id": "task-lifecycle"
+  "id": "task-lifecycle",
+  "name": "task-lifecycle",
+  "implicitInvocation": true
 }

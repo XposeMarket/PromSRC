@@ -1,26 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Prometheus needs to operate a website in a browser: open pages, click controls, fill forms, take browser screenshots, extract page text, upload/download files, run browser QA, or recover from dynamic web UI state.",
+  "description": "Operate interactive websites with Prometheus browser tools, including navigation, clicking, forms, uploads, downloads, dynamic-page extraction, screenshots, and browser UI verification. Use for live browser interaction; do not use for ordinary web research, native desktop apps, or X-specific workflows that have their own skill.",
   "triggers": [
-    "open this website",
-    "use the browser",
-    "click on the page",
-    "fill this web form",
-    "browser automation",
-    "browser screenshot",
-    "inspect this webpage",
-    "extract page text",
-    "login in browser",
-    "upload file on website",
-    "download from website",
-    "test this web page",
     "check the live site",
-    "use Chrome",
-    "navigate the page",
+    "click on the page",
+    "upload file on website",
+    "fill this web form",
+    "test this web page",
+    "inspect this webpage",
+    "download from website",
     "scroll the webpage",
-    "browser QA",
-    "verify website UI"
+    "open this website",
+    "extract page text",
+    "navigate the page",
+    "verify website ui"
   ],
   "categories": [
     "browser",
@@ -32,5 +26,7 @@
     "browser_automation"
   ],
   "lifecycle": "active",
-  "id": "browser-automation-playbook"
+  "id": "browser-automation-playbook",
+  "name": "browser-automation-playbook",
+  "implicitInvocation": true
 }

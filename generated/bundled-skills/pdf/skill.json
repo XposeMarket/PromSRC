@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "pdf",
+  "name": "pdf",
+  "description": "Read, extract, OCR, create, and edit PDF documents with the installed PDF toolchain. Use when a task directly involves a PDF file or requires a PDF deliverable; do not use for Word documents, spreadsheets, or generic text output.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "summarize this pdf",
+    "extract pdf text",
+    "read this pdf",
+    "export as pdf",
+    "ocr this pdf",
+    "create a pdf",
+    "edit this pdf"
+  ],
+  "categories": [
+    "documents",
+    "pdf"
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
+}

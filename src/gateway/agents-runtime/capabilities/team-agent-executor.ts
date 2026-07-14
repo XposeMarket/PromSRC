@@ -121,6 +121,8 @@ const VALID_AGENT_MODEL_TYPES = [
   'coordinator',
   'background_task',
   'background_agent',
+  'goal_compactor',
+  'goal_judge',
 ];
 
 function resolveGatewayAddress(): { host: string; port: number } {
@@ -1612,7 +1614,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
 
       case 'spawn_subagent': {
         try {
-          const subagentId = String(args.subagent_id || '').trim();
+          let subagentId = String(args.subagent_id || '').trim();
           const taskPrompt = String(args.task_prompt || '').trim();
           const runNow = args.run_now !== false;
           const contextData = args.context_data && typeof args.context_data === 'object' ? args.context_data : undefined;
@@ -1673,8 +1675,24 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
             }
           }
 
-          if (!subagentId) return { name, args, result: 'spawn_subagent requires subagent_id', error: true };
+          if (!subagentId) {
+            if (!createIfMissing) return { name, args, result: 'spawn_subagent requires subagent_id unless create_if_missing is provided', error: true };
+            const seed = String(createIfMissing.name || createIfMissing.description || fromRole || 'disposable_agent')
+              .toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'disposable_agent';
+            subagentId = `${seed}_${Date.now().toString(36)}`;
+          }
           if (runNow && !taskPrompt) return { name, args, result: 'spawn_subagent requires task_prompt when run_now=true', error: true };
+          if (createIfMissing) {
+            const fieldErrors: string[] = [];
+            if (!String(createIfMissing.description || '').trim()) fieldErrors.push('create_if_missing.description is required');
+            if (!String(createIfMissing.system_instructions || '').trim()) fieldErrors.push('create_if_missing.system_instructions is required');
+            if (!Array.isArray(createIfMissing.constraints)) fieldErrors.push('create_if_missing.constraints must be an array (use [] when none)');
+            if (!String(createIfMissing.success_criteria || '').trim()) fieldErrors.push('create_if_missing.success_criteria is required');
+            for (const field of ['allowed_tools', 'forbidden_tools', 'mcp_servers', 'skillIds', 'context_refs']) {
+              if (createIfMissing[field] != null && !Array.isArray(createIfMissing[field])) fieldErrors.push(`create_if_missing.${field} must be an array`);
+            }
+            if (fieldErrors.length) return { name, args, result: JSON.stringify({ ok: false, code: 'INVALID_CREATE_SCHEMA', generated_subagent_id: subagentId, errors: fieldErrors }, null, 2), error: true };
+          }
 
           const managerWorkspacePath = getConfig().getConfig().workspace?.path || process.cwd();
           const subagentMgr = new SubagentManager(managerWorkspacePath, deps.broadcastWS, deps.handleChat, deps.telegramChannel);
@@ -2357,11 +2375,15 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
 
       case 'set_agent_model': {
         const targetAgentId = String(args?.agent_id || '').trim();
-        const model = String(args?.model || '').trim();
+        const provider = String(args?.provider || '').trim();
+        const rawModel = String(args?.model || '').trim();
+        const model = provider && rawModel && !rawModel.includes('/') ? `${provider}/${rawModel}` : rawModel;
+        const hasReasoning = typeof args?.reasoning_effort === 'string' || typeof args?.reasoning === 'string';
+        const reasoningEffort = String(args?.reasoning_effort ?? args?.reasoning ?? '').trim();
         const agentType = String(args?.agent_type || '').trim();
 
-        if (!model) {
-          return { name, args, result: 'ERROR: model is required. Format: "provider/model" e.g. "anthropic/claude-haiku-4-5-20251001" or "openai/gpt-4o"', error: true };
+        if (!model && !hasReasoning) {
+          return { name, args, result: 'ERROR: provide model (optionally with provider) and/or reasoning_effort.', error: true };
         }
 
         const { host, port } = resolveGatewayAddress();
@@ -2371,7 +2393,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
             const resp = await fetch(`http://${host}:${port}/api/agents/${encodeURIComponent(targetAgentId)}/model`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ model }),
+              body: JSON.stringify({ ...(model ? { model } : {}), ...(hasReasoning ? { reasoning_effort: reasoningEffort } : {}) }),
             });
             const data = await resp.json() as any;
             if (!data?.success) return { name, args, result: `ERROR: ${data?.error || 'Failed to update agent model'}`, error: true };
@@ -2382,13 +2404,29 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
             if (!VALID_AGENT_MODEL_TYPES.includes(agentType)) {
               return { name, args, result: `ERROR: Invalid agent_type "${agentType}". Valid values: ${VALID_AGENT_MODEL_TYPES.join(', ')}`, error: true };
             }
-            const resp = await fetch(`http://${host}:${port}/api/settings/agent-model-defaults`, {
+            const isGoalSupportRoute = agentType === 'goal_compactor' || agentType === 'goal_judge';
+            const goalPrefix = agentType === 'goal_compactor' ? 'compaction' : 'judge';
+            const endpoint = isGoalSupportRoute ? '/api/settings/session' : '/api/settings/agent-model-defaults';
+            const payload = isGoalSupportRoute
+              ? { mainChatGoals: {
+                  ...(model ? { [`${goalPrefix}Model`]: model } : {}),
+                  ...(hasReasoning ? { [`${goalPrefix}Reasoning`]: reasoningEffort } : {}),
+                } }
+              : {
+                  ...(model ? { [agentType]: model } : {}),
+                  ...(hasReasoning ? { reasoning: { [agentType]: reasoningEffort } } : {}),
+                };
+            const resp = await fetch(`http://${host}:${port}${endpoint}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ [agentType]: model }),
+              body: JSON.stringify(payload),
             });
             const data = await resp.json() as any;
             if (!data?.success) return { name, args, result: `ERROR: Failed to update type default`, error: true };
+            if (isGoalSupportRoute) {
+              const route = data.session?.mainChatGoals || {};
+              return { name, args, result: `Goal Support routing for "${agentType}" updated: model=${route[`${goalPrefix}Model`] || 'current main chat'}, reasoning=${route[`${goalPrefix}Reasoning`] || 'provider default'}.`, error: false };
+            }
             return { name, args, result: `Default model for "${agentType}" agents set to "${model}". New agents of this type will use this model.`, error: false };
           }
 
@@ -2416,6 +2454,18 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
             agent_model_defaults: defaults,
             active_agent_model_default_template: cfg.active_agent_model_default_template || null,
             agent_model_default_templates: cfg.agent_model_default_templates || [],
+            goal_support: {
+              compactor: {
+                model: cfg.session?.mainChatGoals?.compactionModel || null,
+                reasoning_effort: cfg.session?.mainChatGoals?.compactionReasoning || null,
+                fallback: 'current_primary',
+              },
+              judge: {
+                model: cfg.session?.mainChatGoals?.judgeModel || null,
+                reasoning_effort: cfg.session?.mainChatGoals?.judgeReasoning || null,
+                fallback: 'current_primary',
+              },
+            },
             individual_agent_overrides: agents,
           };
           return { name, args, result: JSON.stringify(result, null, 2), error: false };

@@ -337,6 +337,8 @@ export interface TaskRecord {
   managerEnabled?: boolean;
   /** Which provider/model to use for worker execution, e.g. "openai_codex/gpt-4o" */
   executorProvider?: string;
+  /** Explicit reasoning effort paired with executorProvider. */
+  executorReasoningEffort?: string;
   /** Last ExecutionBrief produced by the manager (stored for retry use) */
   lastBrief?: {
     exact_objective: string;
@@ -376,6 +378,7 @@ export interface TaskSummary {
   voiceDispatch?: TaskRecord['voiceDispatch'];
   managerEnabled?: boolean;
   executorProvider?: string;
+  executorReasoningEffort?: string;
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Index Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -549,6 +552,9 @@ function normalizeTaskSummary(input: any): TaskSummary | null {
     executorProvider: typeof input?.executorProvider === 'string' && input.executorProvider.trim()
       ? input.executorProvider.slice(0, 200)
       : undefined,
+    executorReasoningEffort: typeof input?.executorReasoningEffort === 'string' && input.executorReasoningEffort.trim()
+      ? input.executorReasoningEffort.slice(0, 32)
+      : undefined,
   };
 }
 
@@ -684,6 +690,9 @@ function buildTaskSummary(task: TaskRecord): TaskSummary {
     executorProvider: typeof task.executorProvider === 'string' && task.executorProvider.trim()
       ? task.executorProvider.slice(0, 200)
       : undefined,
+    executorReasoningEffort: typeof task.executorReasoningEffort === 'string' && task.executorReasoningEffort.trim()
+      ? task.executorReasoningEffort.slice(0, 32)
+      : undefined,
   };
 }
 
@@ -794,6 +803,7 @@ export function createTask(params: {
   scheduleId?: string;
   /** Executor model assignment: "providerId/model", e.g. "anthropic/claude-haiku-4-5-20251001". Set by proposal dispatch for risk_tier-aware execution. */
   executorProvider?: string;
+  executorReasoningEffort?: string;
   proposalExecution?: ProposalExecutionState;
   // run_task_now fields
   taskKind?: 'scheduled' | 'run_once';
@@ -825,6 +835,7 @@ export function createTask(params: {
     scheduleId: params.scheduleId,
     // Executor model override
     executorProvider: params.executorProvider,
+    executorReasoningEffort: params.executorReasoningEffort,
     proposalExecution: params.proposalExecution,
     // run_task_now linkage
     taskKind: params.taskKind,

@@ -328,7 +328,7 @@ const PAGE_TITLES = {
 };
 
 const PAGE_MODULES = {
-  chat: './pages/ChatPage.js?v=slash-command-style-align-v1',
+  chat: './pages/ChatPage.js?v=desktop-declared-plan-only-v2',
   bgtasks: './pages/TasksPage.js',
   schedule: './pages/SchedulePage.js',
   teams: './pages/TeamsPage.js',

@@ -2,35 +2,33 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "ghostwriter",
   "name": "ghostwriter",
-  "description": "Use this skill when the user asks to ghostwrite, write in their voice, draft publishable content, LinkedIn posts, newsletters, blog posts, essays, op-eds, thought leadership, founder stories, personal-brand writing, X threads, or content that should sound human instead of AI. Triggers on phrases like ghostwrite this, write in my voice, draft content, write something I can publish, LinkedIn post, newsletter, founder story, personal brand, thought leadership, op-ed, essay, and help me write. Use it to calibrate voice first, then produce sharp, non-template writing with format-specific structure.",
+  "description": "Draft publishable content in a specific person or brand voice from supplied samples, facts, intent, and boundaries. Use when voice fidelity is central; do not use to impersonate someone deceptively, invent personal experience, or replace a specialized legal/financial workflow.",
   "version": "1.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "ghostwrite",
+    "make this sound like me",
+    "make this less ai",
     "write in my voice",
-    "linkedin post",
-    "newsletter",
-    "blog post",
-    "thought leadership",
-    "article",
-    "op-ed",
-    "essay",
-    "write for me",
-    "write something i can publish",
-    "founder story",
-    "personal brand writing",
-    "write a thread",
-    "help me write",
-    "draft content"
+    "rewrite for clarity",
+    "rewrite this copy",
+    "improve the tone",
+    "polish this writing",
+    "write an article",
+    "write a script",
+    "draft a post",
+    "write a bio",
+    "ghostwrite this"
   ],
   "categories": [],
   "requiredTools": [],
   "permissions": {},
   "resources": [
     {
-      "path": "references/workflows/ghostwriter-2026-06-13.md",
+      "path": "references/workflows/ghostwriter.md",
       "type": "doc",
       "description": "Add workflow recipe to ghostwriter"
     }
-  ]
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
 }

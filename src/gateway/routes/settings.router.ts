@@ -7,6 +7,7 @@ import { getMCPManager } from '../mcp-manager';
 import { resolveHookConfig, buildWebhookRouter } from '../comms/webhook-handler';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { getCredentialHandler } from '../../security/credential-handler';
+import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -579,6 +580,29 @@ function getSessionDefaults() {
     rollingCompactionToolTurns: 5,
     rollingCompactionSummaryMaxWords: 900,
     rollingCompactionModel: '',
+    mainChatGoals: {
+      judgeModel: '',
+      judgeReasoning: '',
+      compactionModel: '',
+      compactionReasoning: '',
+    },
+  };
+}
+
+function normalizeAuxReasoning(value: unknown): string {
+  const effort = String(value || '').trim().toLowerCase();
+  return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort) ? effort : '';
+}
+
+function mergeMainChatGoalRouting(incoming: any, existing: any): Record<string, any> {
+  const source = incoming && typeof incoming === 'object' ? incoming : {};
+  const current = existing && typeof existing === 'object' ? existing : {};
+  return {
+    ...current,
+    judgeModel: String(source.judgeModel ?? current.judgeModel ?? '').trim(),
+    judgeReasoning: normalizeAuxReasoning(source.judgeReasoning ?? current.judgeReasoning),
+    compactionModel: String(source.compactionModel ?? current.compactionModel ?? '').trim(),
+    compactionReasoning: normalizeAuxReasoning(source.compactionReasoning ?? current.compactionReasoning),
   };
 }
 
@@ -629,6 +653,7 @@ router.get('/api/settings/session', async (_req, res) => {
       rollingCompactionToolTurns: toBoundedInt(cfg.rollingCompactionToolTurns, 1, 12, d.rollingCompactionToolTurns),
       rollingCompactionSummaryMaxWords: toBoundedInt(cfg.rollingCompactionSummaryMaxWords, 80, 1500, d.rollingCompactionSummaryMaxWords),
       rollingCompactionModel: String(cfg.rollingCompactionModel || '').trim(),
+      mainChatGoals: mergeMainChatGoalRouting(cfg.mainChatGoals, {}),
       contextProfile,
       contextBudget,
     },
@@ -676,6 +701,7 @@ router.post('/api/settings/session', (req, res) => {
         d.rollingCompactionSummaryMaxWords,
       ),
       rollingCompactionModel: String(body.rollingCompactionModel ?? existing.rollingCompactionModel ?? '').trim(),
+      mainChatGoals: mergeMainChatGoalRouting(body.mainChatGoals, existing.mainChatGoals),
     };
 
     cm.updateConfig({ session: nextSession } as any);
@@ -781,20 +807,52 @@ const AGENT_MODEL_DEFAULT_KEYS = [
   'coordinator',
 ] as const;
 
-const HIDDEN_AGENT_MODEL_DEFAULT_KEYS = [
-  'subagent',
-  'team_manager',
-  'team_subagent',
-] as const;
-
 type AgentModelDefaultKey = typeof AGENT_MODEL_DEFAULT_KEYS[number];
 type AgentModelDefaultTemplate = {
   id: string;
   name: string;
   defaults: Record<string, string>;
+  reasoning: Record<string, string>;
   created_at: string;
   updated_at: string;
 };
+
+function splitProviderModel(value: unknown): { provider: string; model: string } {
+  const raw = String(value || '').trim();
+  const slash = raw.indexOf('/');
+  return slash > 0
+    ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
+    : { provider: '', model: raw };
+}
+
+function normalizeAgentModelReasoning(raw: any, defaults: any): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const models = normalizeAgentModelDefaults(defaults || {});
+  for (const key of AGENT_MODEL_DEFAULT_KEYS) {
+    const value = source[key];
+    if (typeof value !== 'string' || !value.trim() || !models[key]) continue;
+    const { provider, model } = splitProviderModel(models[key]);
+    const effort = normalizeReasoningEffort(provider, model, value);
+    if (effort) normalized[key] = effort;
+  }
+  return normalized;
+}
+
+function validateAgentModelReasoning(raw: any, defaults: any): string | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const models = normalizeAgentModelDefaults(defaults || {});
+  for (const key of AGENT_MODEL_DEFAULT_KEYS) {
+    const value = typeof raw[key] === 'string' ? raw[key].trim() : '';
+    if (!value) continue;
+    if (!models[key]) return `Reasoning for "${key}" requires a provider/model default.`;
+    const { provider, model } = splitProviderModel(models[key]);
+    if (!normalizeReasoningEffort(provider, model, value)) {
+      return `Reasoning effort "${value}" is not supported by ${models[key]} for "${key}".`;
+    }
+  }
+  return null;
+}
 
 function normalizeAgentModelDefaults(raw: any): Record<string, string> {
   const normalized: Record<string, string> = {};
@@ -832,6 +890,7 @@ function normalizeAgentModelTemplates(raw: any): AgentModelDefaultTemplate[] {
       id,
       name,
       defaults: normalizeAgentModelDefaults(item.defaults || {}),
+      reasoning: normalizeAgentModelReasoning(item.reasoning || {}, item.defaults || {}),
       created_at: String(item.created_at || now),
       updated_at: String(item.updated_at || item.created_at || now),
     });
@@ -859,6 +918,13 @@ function readTemplateDefaultsFromBody(body: any, currentDefaults: any): Record<s
   return hasDirect ? normalizeAgentModelDefaults(direct) : normalizeAgentModelDefaults(currentDefaults || {});
 }
 
+function readTemplateReasoningFromBody(body: any, defaults: any, currentReasoning: any): Record<string, string> {
+  if (body?.reasoning && typeof body.reasoning === 'object') {
+    return normalizeAgentModelReasoning(body.reasoning, defaults);
+  }
+  return normalizeAgentModelReasoning(currentReasoning || {}, defaults);
+}
+
 // GET /api/settings/agent-model-defaults
 // Returns the stored per-type defaults and the per-agent overrides for reference.
 router.get('/api/settings/agent-model-defaults', (_req, res) => {
@@ -866,6 +932,7 @@ router.get('/api/settings/agent-model-defaults', (_req, res) => {
   res.json({
     success: true,
     defaults: normalizeAgentModelDefaults(cfg.agent_model_defaults || {}),
+    reasoning: normalizeAgentModelReasoning(cfg.agent_model_default_reasoning || {}, cfg.agent_model_defaults || {}),
     templates: normalizeAgentModelTemplates(cfg.agent_model_default_templates || []),
     activeTemplateId: cfg.active_agent_model_default_template || '',
     defaultTemplateId: cfg.default_agent_model_template || '',
@@ -873,6 +940,7 @@ router.get('/api/settings/agent-model-defaults', (_req, res) => {
       id:    a.id,
       name:  a.name,
       model: a.model || null,
+      reasoning_effort: a.reasoning_effort || null,
     })),
   });
 });
@@ -900,15 +968,42 @@ router.post('/api/settings/agent-model-defaults', (req, res) => {
   }
   // Merge: existing + patch (empty-string values are excluded from final object)
   const merged: Record<string, string> = { ...existing };
-  for (const key of HIDDEN_AGENT_MODEL_DEFAULT_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(incoming, key)) delete merged[key];
-  }
   for (const [k, v] of Object.entries(patch)) {
     if (v) merged[k] = v;
     else delete merged[k];
   }
-  cm.updateConfig({ agent_model_defaults: normalizeAgentModelDefaults(merged) } as any);
-  res.json({ success: true, defaults: (cm.getConfig() as any).agent_model_defaults || {} });
+  const normalizedDefaults = normalizeAgentModelDefaults(merged);
+  const reasoningError = validateAgentModelReasoning(incoming.reasoning, normalizedDefaults);
+  if (reasoningError) {
+    res.status(400).json({ success: false, error: reasoningError });
+    return;
+  }
+  const reasoningSource = incoming.reasoning && typeof incoming.reasoning === 'object'
+    ? { ...(current.agent_model_default_reasoning || {}), ...incoming.reasoning }
+    : (current.agent_model_default_reasoning || {});
+  const normalizedReasoning = normalizeAgentModelReasoning(reasoningSource, normalizedDefaults);
+  // A pinned startup template is the durable source of truth. Keep it in sync
+  // with direct Settings/API/tool edits; otherwise startup would reapply a
+  // stale snapshot and silently undo the values that were just saved.
+  const templates = normalizeAgentModelTemplates(current.agent_model_default_templates || []);
+  const defaultTemplateIdx = findTemplateIndex(templates, current.default_agent_model_template || '');
+  if (defaultTemplateIdx >= 0) {
+    templates[defaultTemplateIdx] = {
+      ...templates[defaultTemplateIdx],
+      defaults: normalizedDefaults,
+      reasoning: normalizedReasoning,
+      updated_at: new Date().toISOString(),
+    };
+  }
+  cm.updateConfig({
+    agent_model_defaults: normalizedDefaults,
+    agent_model_default_reasoning: normalizedReasoning,
+    ...(defaultTemplateIdx >= 0 ? {
+      agent_model_default_templates: templates,
+      active_agent_model_default_template: templates[defaultTemplateIdx].id,
+    } : {}),
+  } as any);
+  res.json({ success: true, defaults: normalizedDefaults, reasoning: normalizedReasoning });
 });
 
 // GET /api/settings/agent-model-default-templates
@@ -921,6 +1016,7 @@ router.get('/api/settings/agent-model-default-templates', (_req, res) => {
     activeTemplateId: cfg.active_agent_model_default_template || '',
     defaultTemplateId: cfg.default_agent_model_template || '',
     currentDefaults: normalizeAgentModelDefaults(cfg.agent_model_defaults || {}),
+    currentReasoning: normalizeAgentModelReasoning(cfg.agent_model_default_reasoning || {}, cfg.agent_model_defaults || {}),
   });
 });
 
@@ -941,6 +1037,12 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
   const idx = id ? findTemplateIndex(templates, id) : findTemplateIndex(templates, name);
   const now = new Date().toISOString();
   const defaults = readTemplateDefaultsFromBody(body, current.agent_model_defaults || {});
+  const reasoning = readTemplateReasoningFromBody(body, defaults, current.agent_model_default_reasoning || {});
+  const reasoningError = validateAgentModelReasoning(body.reasoning, defaults);
+  if (reasoningError) {
+    res.status(400).json({ success: false, error: reasoningError });
+    return;
+  }
   let template: AgentModelDefaultTemplate;
 
   if (idx >= 0) {
@@ -948,6 +1050,7 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
       ...templates[idx],
       name,
       defaults,
+      reasoning,
       updated_at: now,
     };
     templates[idx] = template;
@@ -956,13 +1059,23 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
       id: id || slugTemplateId(name),
       name,
       defaults,
+      reasoning,
       created_at: now,
       updated_at: now,
     };
     templates.push(template);
   }
 
-  cm.updateConfig({ agent_model_default_templates: templates } as any);
+  const isStartupDefault = current.default_agent_model_template
+    && findTemplateIndex([template], current.default_agent_model_template) === 0;
+  cm.updateConfig({
+    agent_model_default_templates: templates,
+    ...(isStartupDefault ? {
+      agent_model_defaults: defaults,
+      agent_model_default_reasoning: reasoning,
+      active_agent_model_default_template: template.id,
+    } : {}),
+  } as any);
   res.json({ success: true, template, templates });
 });
 
@@ -983,14 +1096,30 @@ router.patch('/api/settings/agent-model-default-templates/:id', (req, res) => {
   const defaults = (body.defaults && typeof body.defaults === 'object') || AGENT_MODEL_DEFAULT_KEYS.some((key) => typeof body[key] === 'string')
     ? readTemplateDefaultsFromBody(body, templates[idx].defaults)
     : templates[idx].defaults;
+  const reasoning = readTemplateReasoningFromBody(body, defaults, templates[idx].reasoning || {});
+  const reasoningError = validateAgentModelReasoning(body.reasoning, defaults);
+  if (reasoningError) {
+    res.status(400).json({ success: false, error: reasoningError });
+    return;
+  }
   const template = {
     ...templates[idx],
     name,
     defaults,
+    reasoning,
     updated_at: new Date().toISOString(),
   };
   templates[idx] = template;
-  cm.updateConfig({ agent_model_default_templates: templates } as any);
+  const isStartupDefault = current.default_agent_model_template
+    && findTemplateIndex([template], current.default_agent_model_template) === 0;
+  cm.updateConfig({
+    agent_model_default_templates: templates,
+    ...(isStartupDefault ? {
+      agent_model_defaults: defaults,
+      agent_model_default_reasoning: reasoning,
+      active_agent_model_default_template: template.id,
+    } : {}),
+  } as any);
   res.json({ success: true, template, templates });
 });
 
@@ -1008,13 +1137,19 @@ router.post('/api/settings/agent-model-default-templates/:id/apply', (req, res) 
   const template = templates[idx];
   cm.updateConfig({
     agent_model_defaults: normalizeAgentModelDefaults(template.defaults),
+    agent_model_default_reasoning: normalizeAgentModelReasoning(template.reasoning, template.defaults),
     active_agent_model_default_template: template.id,
+    // Applying/selecting a template is a durable selection. Without updating
+    // this pointer, the next gateway start can restore a different old template.
+    default_agent_model_template: template.id,
   } as any);
   res.json({
     success: true,
     template,
     defaults: (cm.getConfig() as any).agent_model_defaults || {},
+    reasoning: (cm.getConfig() as any).agent_model_default_reasoning || {},
     activeTemplateId: template.id,
+    defaultTemplateId: template.id,
   });
 });
 
@@ -1033,6 +1168,7 @@ router.post('/api/settings/agent-model-default-templates/:id/set-default', (req,
   const template = templates[idx];
   cm.updateConfig({
     agent_model_defaults: normalizeAgentModelDefaults(template.defaults),
+    agent_model_default_reasoning: normalizeAgentModelReasoning(template.reasoning, template.defaults),
     active_agent_model_default_template: template.id,
     default_agent_model_template: template.id,
   } as any);
@@ -1040,6 +1176,7 @@ router.post('/api/settings/agent-model-default-templates/:id/set-default', (req,
     success: true,
     template,
     defaults: (cm.getConfig() as any).agent_model_defaults || {},
+    reasoning: (cm.getConfig() as any).agent_model_default_reasoning || {},
     activeTemplateId: template.id,
     defaultTemplateId: template.id,
   });
@@ -1057,11 +1194,13 @@ router.delete('/api/settings/agent-model-default-templates/:id', (req, res) => {
   }
   const [removed] = templates.splice(idx, 1);
   const nextActive = current.active_agent_model_default_template === removed.id ? '' : current.active_agent_model_default_template || '';
+  const nextDefault = current.default_agent_model_template === removed.id ? '' : current.default_agent_model_template || '';
   cm.updateConfig({
     agent_model_default_templates: templates,
     active_agent_model_default_template: nextActive,
+    default_agent_model_template: nextDefault,
   } as any);
-  res.json({ success: true, removed, templates, activeTemplateId: nextActive });
+  res.json({ success: true, removed, templates, activeTemplateId: nextActive, defaultTemplateId: nextDefault });
 });
 
 // PATCH /api/agents/:id/model
@@ -1069,7 +1208,10 @@ router.delete('/api/settings/agent-model-default-templates/:id', (req, res) => {
 // Send { model: "" } to clear the override (agent falls back to type default or primary).
 router.patch('/api/agents/:id/model', (req, res) => {
   const agentId = req.params.id;
-  const model = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+  const hasModel = typeof req.body?.model === 'string';
+  const model = hasModel ? req.body.model.trim() : '';
+  const hasReasoning = typeof req.body?.reasoning_effort === 'string' || typeof req.body?.reasoning === 'string';
+  const requestedReasoning = String(req.body?.reasoning_effort ?? req.body?.reasoning ?? '').trim();
   if (!agentId) {
     res.status(400).json({ success: false, error: 'agent id required' });
     return;
@@ -1082,12 +1224,29 @@ router.patch('/api/agents/:id/model', (req, res) => {
     res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
     return;
   }
-  if (model) {
+  if (hasModel && model) {
     agents[idx] = { ...agents[idx], model };
-  } else {
+  } else if (hasModel) {
     // Empty string = clear override so it falls back to type defaults
     const { model: _removed, ...rest } = agents[idx];
     agents[idx] = rest;
+  }
+  if (hasReasoning) {
+    const activeModel = model || agents[idx].model || '';
+    const { provider, model: modelName } = splitProviderModel(activeModel);
+    const effort = normalizeReasoningEffort(provider, modelName, requestedReasoning);
+    if (requestedReasoning && !effort) {
+      res.status(400).json({
+        success: false,
+        error: `Reasoning effort "${requestedReasoning}" is not supported by ${activeModel || 'the selected model'}`,
+      });
+      return;
+    }
+    if (effort) agents[idx] = { ...agents[idx], reasoning_effort: effort };
+    else {
+      const { reasoning_effort: _removedReasoning, ...rest } = agents[idx];
+      agents[idx] = rest;
+    }
   }
   cm.updateConfig({ agents } as any);
   reloadAgentSchedules();
@@ -1807,6 +1966,7 @@ router.post('/api/settings/bulk', (req, res) => {
         rollingCompactionToolTurns: toBoundedInt(s.rollingCompactionToolTurns ?? existing.rollingCompactionToolTurns, 1, 12, d.rollingCompactionToolTurns),
         rollingCompactionSummaryMaxWords: toBoundedInt(s.rollingCompactionSummaryMaxWords ?? existing.rollingCompactionSummaryMaxWords, 80, 1500, d.rollingCompactionSummaryMaxWords),
         rollingCompactionModel: String(s.rollingCompactionModel ?? existing.rollingCompactionModel ?? '').trim(),
+        mainChatGoals: mergeMainChatGoalRouting(s.mainChatGoals, existing.mainChatGoals),
       };
     }
 

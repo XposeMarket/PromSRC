@@ -2,7 +2,8 @@
  * desktop-tools.ts
  *
  * Windows desktop automation primitives for Prometheus.
- * Uses PowerShell + Win32 APIs (no native npm dependency required).
+ * Uses a persistent native Windows helper for the capture/input hot path, with
+ * PowerShell + Win32 compatibility fallbacks when the helper is unavailable.
  *
  * NOTE: Current implementation targets Windows only.
  */
@@ -29,11 +30,27 @@ import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
 import { parseCanonicalKey, canonicalKeyToSendKeys } from './desktop-keys.js';
 import { getPlatformDesktopBackend, hasDesktopBackend } from './desktop-platform.js';
 import type { DesktopCaptureRequest } from './desktop-backend.js';
+import {
+  DESKTOP_WRAPPER_TOOL_NAME_SET,
+  getDesktopWrapperToolDefinitions,
+} from './desktop-wrappers.js';
+import {
+  getWin32DesktopHelperClient,
+  isWin32DesktopHelperAvailable,
+} from './desktop-platform-win32-helper.js';
+import {
+  desktopAbortableDelay,
+  isDesktopCancellationError,
+  throwIfDesktopCancelled,
+} from './desktop-cancellation.js';
 
 const execFileAsync = promisify(execFile);
 
 export interface DesktopWindowInfo {
   pid: number;
+  /** Process creation time in Unix milliseconds. Combined with PID + HWND to
+   * detect handle reuse between observation and action. */
+  processStartTime?: number;
   processName: string;
   appDisplayName?: string;
   bundleId?: string;
@@ -47,6 +64,8 @@ export interface DesktopWindowInfo {
   height?: number;
   /** 0-based index into `monitors` / `Screen.AllScreens` when known */
   monitorIndex?: number;
+  /** Whether this was the foreground window when the record was captured. */
+  isActive?: boolean;
 }
 
 export interface DesktopSomElement {
@@ -99,7 +118,7 @@ export interface DesktopAdvisorPacket {
     bytes: number;
   };
   /** How the bitmap maps to virtual-screen clicks */
-  captureMode?: 'all' | 'primary' | 'monitor';
+  captureMode?: 'all' | 'primary' | 'monitor' | 'window';
   /** When captureMode === 'monitor', which display index */
   captureMonitorIndex?: number;
   /** Which monitor holds the foreground window (if known) */
@@ -109,6 +128,13 @@ export interface DesktopAdvisorPacket {
   somElements?: DesktopSomElement[];
   /** Incremented whenever Prometheus performs an action that may change desktop/window state. */
   actionVersion?: number;
+  /** Scoped freshness generations. Exact-window packets use these instead of
+   * the global actionVersion so unrelated windows do not invalidate them. */
+  globalGeneration?: number;
+  windowGeneration?: number;
+  accessibilityGeneration?: number;
+  generationReason?: string;
+  windowToken?: string;
 }
 
 export interface DesktopFocusWindowVerification {
@@ -137,6 +163,8 @@ export interface DesktopScreenshotOptions {
   som?: boolean;
   /** Skip OCR when the caller only needs a visual image packet. */
   skipOcr?: boolean;
+  /** Cooperative interruption from the owning chat/runtime turn. */
+  signal?: AbortSignal;
 }
 
 /** Optional pointer tools: coords relative to a monitor's top-left */
@@ -155,6 +183,10 @@ export interface DesktopCoordinateTarget extends DesktopPointerMonitorOptions {
   screenshot_id?: string;
   window_name?: string;
   window_handle?: number;
+  /** Internal: exact window already identity-validated and focused for this action. */
+  prepared_window?: DesktopWindowInfo;
+  /** Internal: point came from a confidence-scored visual locator, not a model guess. */
+  allow_broad_grounded?: boolean;
 }
 
 export interface DesktopResolvedActionPoint {
@@ -186,6 +218,8 @@ export interface DesktopActionVerificationOptions {
   mode?: DesktopVerificationMode;
   coordinateSpace?: DesktopCoordinateSpace;
   allowRetryOnLikelyNoop?: boolean;
+  /** Exact HWND to re-activate immediately before native input injection. */
+  windowHandle?: number;
 }
 
 /** Parse `desktop_screenshot` tool args (monitor_index overrides capture). */
@@ -214,6 +248,7 @@ export function parseDesktopScreenshotToolArgs(
   if (a.som === true || a.som === 'true' || mode === 'som' || mode === 'set-of-mark') {
     opts.som = true;
   }
+  if (a.skip_ocr === true || a.skipOcr === true) opts.skipOcr = true;
   return Object.keys(opts).length > 0 ? opts : undefined;
 }
 
@@ -240,6 +275,65 @@ const DESKTOP_SCREENSHOT_FRESH_MS = 2 * 60 * 1000;
 const desktopPacketIndex = new Map<string, { sessionId: string; packet: DesktopAdvisorPacket; expiresAt: number }>();
 let desktopActionVersion = 0;
 
+interface DesktopWindowGenerationRecord {
+  visual: number;
+  accessibility: number;
+  geometry: number;
+  lastReason: string;
+  lastChangedAt: number;
+}
+
+const desktopWindowGenerations = new Map<string, DesktopWindowGenerationRecord>();
+
+const DESKTOP_CONTEXT_CACHE_MS = Math.max(0, Number(process.env.PROMETHEUS_DESKTOP_CONTEXT_CACHE_MS || 250));
+let desktopContextCache: { capturedAt: number; value: DesktopContextGathered } | null = null;
+
+interface DesktopWindowFrameCacheEntry {
+  capturedAt: number;
+  visualGeneration: number;
+  bounds: { left: number; top: number; width: number; height: number };
+  png: Buffer;
+}
+const DESKTOP_WINDOW_FRAME_CACHE_MS = Math.max(0, Number(process.env.PROMETHEUS_DESKTOP_FRAME_CACHE_MS || 500));
+const desktopWindowFrameCache = new Map<string, DesktopWindowFrameCacheEntry>();
+
+function desktopWindowGenerationKey(window: Pick<DesktopWindowInfo, 'handle' | 'pid' | 'processStartTime'>): string {
+  return createDesktopWindowToken(window);
+}
+
+function getDesktopWindowGeneration(window: Pick<DesktopWindowInfo, 'handle' | 'pid' | 'processStartTime'>): DesktopWindowGenerationRecord {
+  const key = desktopWindowGenerationKey(window);
+  return getDesktopWindowGenerationByKey(key);
+}
+
+function getDesktopWindowGenerationByKey(key: string): DesktopWindowGenerationRecord {
+  return desktopWindowGenerations.get(key) || {
+    visual: 0,
+    accessibility: 0,
+    geometry: 0,
+    lastReason: 'initial',
+    lastChangedAt: 0,
+  };
+}
+
+function markDesktopWindowChanged(
+  window: Pick<DesktopWindowInfo, 'handle' | 'pid' | 'processStartTime'>,
+  reason: string,
+  kinds: { visual?: boolean; accessibility?: boolean; geometry?: boolean } = { visual: true, accessibility: true },
+): DesktopWindowGenerationRecord {
+  const key = desktopWindowGenerationKey(window);
+  const current = getDesktopWindowGeneration(window);
+  const next: DesktopWindowGenerationRecord = {
+    visual: current.visual + (kinds.visual === true ? 1 : 0),
+    accessibility: current.accessibility + (kinds.accessibility === true ? 1 : 0),
+    geometry: current.geometry + (kinds.geometry === true ? 1 : 0),
+    lastReason: reason,
+    lastChangedAt: Date.now(),
+  };
+  desktopWindowGenerations.set(key, next);
+  return next;
+}
+
 function makeDesktopScreenshotId(capturedAt: number, contentHash: string): string {
   return `ds_${capturedAt.toString(36)}_${String(contentHash || '').slice(0, 12)}`;
 }
@@ -263,6 +357,31 @@ function markDesktopStateChanged(): void {
   desktopActionVersion++;
 }
 
+function validateDesktopPacketGeneration(packet: DesktopAdvisorPacket): { ok: true } | { ok: false; message: string } {
+  if (packet.targetWindow) {
+    const captured = Number(packet.windowGeneration);
+    const current = getDesktopWindowGeneration(packet.targetWindow);
+    if (!Number.isFinite(captured)) {
+      return { ok: false, message: `screenshot_id "${packet.screenshotId}" predates scoped window generations. Capture a fresh exact-window screenshot.` };
+    }
+    if (captured !== current.visual) {
+      return {
+        ok: false,
+        message: `screenshot_id "${packet.screenshotId}" is stale for this window: captured window_generation=${captured}, current=${current.visual}. Invalidated by "${current.lastReason}" at ${new Date(current.lastChangedAt).toISOString()}. Capture fresh state for this window.`,
+      };
+    }
+    return { ok: true };
+  }
+  const captured = Number(packet.globalGeneration ?? packet.actionVersion);
+  if (!Number.isFinite(captured) || captured !== desktopActionVersion) {
+    return {
+      ok: false,
+      message: `screenshot_id "${packet.screenshotId}" is stale for the global desktop: captured global_generation=${Number.isFinite(captured) ? captured : 'unknown'}, current=${desktopActionVersion}. Capture a fresh desktop screenshot.`,
+    };
+  }
+  return { ok: true };
+}
+
 function desktopPacketAgeMs(packet: DesktopAdvisorPacket): number {
   const capturedAt = Number(packet.capturedAt);
   return Number.isFinite(capturedAt) ? Date.now() - capturedAt : Number.POSITIVE_INFINITY;
@@ -274,11 +393,8 @@ function describeFreshScreenshotRequirement(packet: DesktopAdvisorPacket): strin
 }
 
 function describeStaleScreenshotRequirement(packet: DesktopAdvisorPacket): string {
-  const version = Number(packet.actionVersion);
-  if (!Number.isFinite(version)) {
-    return `screenshot_id "${packet.screenshotId}" predates desktop action tracking. Capture a fresh desktop_screenshot or desktop_window_screenshot before clicking.`;
-  }
-  return `screenshot_id "${packet.screenshotId}" is stale because the desktop changed after it was captured. Capture a fresh desktop_screenshot or desktop_window_screenshot and click with that screenshot_id.`;
+  const validation = validateDesktopPacketGeneration(packet);
+  return validation.ok ? `screenshot_id "${packet.screenshotId}" is still generation-valid.` : validation.message;
 }
 
 function describeDesktopWindowBounds(windowInfo: DesktopWindowInfo | undefined | null): string {
@@ -348,12 +464,12 @@ function clampInt(value: any, min: number, max: number, fallback: number): numbe
 
 const OCR_CHILD_SCRIPT = `
 (async () => {
-  const imagePath = process.argv[2];
+  const imagePath = process.argv[1];
   try {
     const mod = await import('tesseract.js');
     const createWorker = mod?.createWorker;
     if (typeof createWorker !== 'function') {
-      process.stdout.write('{}');
+      process.stdout.write(JSON.stringify({ ok: false, stage: 'module_api', error: 'createWorker unavailable' }));
       return;
     }
     const worker = await createWorker('eng');
@@ -371,11 +487,11 @@ const OCR_CHILD_SCRIPT = `
       .replace(/\\n{3,}/g, '\\n\\n')
       .trim();
     const confidence = Number(out?.data?.confidence || 0) || 0;
-    process.stdout.write(JSON.stringify({ text, confidence }));
-  } catch {
-    process.stdout.write('{}');
+    process.stdout.write(JSON.stringify({ ok: true, stage: 'recognize', text, confidence }));
+  } catch (error) {
+    process.stdout.write(JSON.stringify({ ok: false, stage: 'worker_or_recognition', error: String(error?.stack || error?.message || error) }));
   }
-})().catch(() => process.stdout.write('{}'));
+})().catch((error) => process.stdout.write(JSON.stringify({ ok: false, stage: 'child_top_level', error: String(error?.stack || error?.message || error) })));
 `;
 
 // ─── Phase 6: Cross-platform support stubs ────────────────────────────────────
@@ -459,7 +575,7 @@ function psSingleQuote(value: string): string {
 
 async function runPowerShell(
   script: string,
-  opts?: { timeoutMs?: number; sta?: boolean },
+  opts?: { timeoutMs?: number; sta?: boolean; signal?: AbortSignal },
 ): Promise<string> {
   ensureWindows();
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass'];
@@ -469,6 +585,7 @@ async function runPowerShell(
     timeout: opts?.timeoutMs ?? 15000,
     maxBuffer: 16 * 1024 * 1024,
     windowsHide: true,
+    signal: opts?.signal,
   });
   const out = String(stdout || '').trim();
   const err = String(stderr || '').trim();
@@ -495,6 +612,7 @@ function normalizeWindows(raw: any): DesktopWindowInfo[] {
       const mi = Number(w?.monitorIndex ?? w?.monitor_index ?? -1);
       const row: DesktopWindowInfo = {
         pid: Number(w?.pid || w?.Id || 0) || 0,
+        processStartTime: Number(w?.processStartTime ?? w?.process_start_time ?? 0) || undefined,
         processName: String(w?.processName || w?.ProcessName || '').trim(),
         appDisplayName: String(w?.appDisplayName || w?.app_display_name || '').trim() || undefined,
         bundleId: String(w?.bundleId || w?.bundle_id || '').trim() || undefined,
@@ -639,6 +757,7 @@ function normalizeDesktopContext(raw: any): DesktopContextGathered {
       if (!title) title = proc ? `[${proc}]` : '(foreground window)';
       activeWindow = {
         pid: Number(aw.pid || 0) || 0,
+        processStartTime: Number(aw.processStartTime ?? aw.process_start_time ?? 0) || undefined,
         processName: proc || 'unknown',
         appDisplayName: String(aw.appDisplayName || aw.app_display_name || proc || '').trim() || undefined,
         bundleId: String(aw.bundleId || aw.bundle_id || '').trim() || undefined,
@@ -657,15 +776,22 @@ function normalizeDesktopContext(raw: any): DesktopContextGathered {
  * One PowerShell round-trip: monitors, virtual screen, window list with monitor index, active window.
  */
 /** Exported for the Win32 DesktopBackend (desktop-platform-win32.ts). */
-export async function gatherDesktopContextInternal(): Promise<DesktopContextGathered> {
+export async function gatherDesktopContextInternal(signal?: AbortSignal): Promise<DesktopContextGathered> {
+  throwIfDesktopCancelled(signal);
+  const now = Date.now();
+  if (desktopContextCache && now - desktopContextCache.capturedAt <= DESKTOP_CONTEXT_CACHE_MS) {
+    return desktopContextCache.value;
+  }
   if (DELEGATE_TO_BACKEND) {
     const ctx = await getPlatformDesktopBackend().gatherContext();
-    return {
+    const gathered = {
       monitors: ctx.monitors,
       virtualScreen: ctx.virtualScreen,
       windows: ctx.windows,
       activeWindow: ctx.activeWindow,
     };
+    desktopContextCache = { capturedAt: Date.now(), value: gathered };
+    return gathered;
   }
   const script = `
 ${PS_DPI_AWARE_HEADER}
@@ -715,8 +841,11 @@ foreach ($r in $winRows) {
   $top = if ($okRect) { [int]$rect.Top } else { 0 }
   $w = if ($okRect) { [int]($rect.Right - $rect.Left) } else { 0 }
   $h = if ($okRect) { [int]($rect.Bottom - $rect.Top) } else { 0 }
+  $processStartTime = 0
+  try { $processStartTime = [DateTimeOffset]::new($r.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { }
   [void]$windows.Add([ordered]@{
     pid = [int]$r.Id
+    processStartTime = [int64]$processStartTime
     processName = [string]$r.ProcessName
     title = [string]$r.MainWindowTitle
     handle = [int64]$r.MainWindowHandle
@@ -744,6 +873,8 @@ if ($hFg -ne [IntPtr]::Zero) {
 }
 if (-not $winTitle -and $aproc) { $winTitle = [string]$aproc.MainWindowTitle }
 $procName = if ($aproc) { [string]$aproc.ProcessName } else { 'unknown' }
+$activeProcessStartTime = 0
+try { if ($aproc) { $activeProcessStartTime = [DateTimeOffset]::new($aproc.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds() } } catch { }
 if (-not $winTitle) { $winTitle = '[' + $procName + ']' }
 $activeWindow = $null
 if ($hFg -ne [IntPtr]::Zero) {
@@ -755,6 +886,7 @@ if ($hFg -ne [IntPtr]::Zero) {
   $fgHeight = if ($okFgRect) { [int]($fgRect.Bottom - $fgRect.Top) } else { 0 }
   $activeWindow = [ordered]@{
     pid = [int]$apid
+    processStartTime = [int64]$activeProcessStartTime
     processName = $procName
     title = $winTitle
     handle = [int64]$hFg.ToInt64()
@@ -772,7 +904,7 @@ if ($hFg -ne [IntPtr]::Zero) {
   activeWindow = $activeWindow
 } | ConvertTo-Json -Compress -Depth 8
 `;
-  const raw = await runPowerShell(script, { timeoutMs: 14000, sta: true });
+  const raw = await runPowerShell(script, { timeoutMs: 14000, sta: true, signal });
   const parsed = parseJsonMaybe(raw);
   if (!parsed) {
     return {
@@ -822,8 +954,9 @@ export async function desktopGetMonitorsSummary(): Promise<string> {
   return [`Monitors detected: ${monitors.length}.`, vsLine, ...lines].join('\n');
 }
 
-export async function desktopDoctor(sessionId: string): Promise<string> {
-  const lines: string[] = ['Desktop doctor:'];
+export async function desktopDoctor(sessionId: string, options: { deep?: boolean } = {}): Promise<string> {
+  const deep = options.deep === true;
+  const lines: string[] = [`Desktop doctor (${deep ? 'deep' : 'fast'}):`];
   const ok = (label: string, detail: string) => lines.push(`PASS ${label}: ${detail}`);
   const warn = (label: string, detail: string) => lines.push(`WARN ${label}: ${detail}`);
   const fail = (label: string, detail: string) => lines.push(`FAIL ${label}: ${detail}`);
@@ -862,9 +995,14 @@ export async function desktopDoctor(sessionId: string): Promise<string> {
     fail('Monitor/DPI context', err?.message || String(err));
   }
 
-  try {
+  let ocrProbe: { text: string; confidence: number } | null | undefined;
+  let ocrProbeError = '';
+  if (deep) try {
     const shot = await captureScreenshotInternal({ kind: 'primary' });
     const raw = fs.readFileSync(shot.path);
+    if (String(process.env.PROMETHEUS_DESKTOP_OCR || '1').trim() !== '0') {
+      try { ocrProbe = await runOcr(shot.path); } catch (error: any) { ocrProbeError = String(error?.message || error); }
+    }
     try { fs.unlinkSync(shot.path); } catch {}
     const normalized = await normalizeScreenshotBuffer(raw, {
       maxSide: Number(process.env.PROMETHEUS_DESKTOP_SCREENSHOT_MAX_SIDE || process.env.PROMETHEUS_SCREENSHOT_MAX_SIDE || 2400),
@@ -879,25 +1017,32 @@ export async function desktopDoctor(sessionId: string): Promise<string> {
     fail('Screenshot budget', err?.message || String(err));
   }
 
-  try {
+  if (deep) try {
     const ocrEnabled = String(process.env.PROMETHEUS_DESKTOP_OCR || '1').trim() !== '0';
     if (!ocrEnabled) warn('OCR', 'disabled by PROMETHEUS_DESKTOP_OCR=0');
     else {
       const packet = getDesktopAdvisorPacket(sessionId);
-      if (packet?.ocrText) ok('OCR', `last packet has OCR text (${packet.ocrText.length} chars, confidence ${Math.round(packet.ocrConfidence || 0)}%)`);
-      else warn('OCR', 'enabled, but no OCR text is cached yet; run desktop_screenshot on a text-heavy window to verify');
+      if (ocrProbeError) fail('OCR', `runtime probe failed: ${ocrProbeError}`);
+      else if (ocrProbe?.text) ok('OCR', `runtime available; probe read ${ocrProbe.text.length} chars at ${Math.round(ocrProbe.confidence || 0)}% confidence`);
+      else if (ocrProbe === null && lastOcrDiagnostic?.status === 'available_no_text') warn('OCR', `runtime available; probe completed at stage=${lastOcrDiagnostic.stage} but detected no text`);
+      else if (ocrProbe === null && lastOcrDiagnostic) fail('OCR', `status=${lastOcrDiagnostic.status}, stage=${lastOcrDiagnostic.stage}${lastOcrDiagnostic.error ? `, error=${lastOcrDiagnostic.error.split(/\r?\n/)[0]}` : ''}`);
+      else if (ocrProbe === null) fail('OCR', 'runtime returned unavailable without a diagnostic');
+      else if (packet?.ocrText) ok('OCR', `runtime previously returned ${packet.ocrText.length} cached chars (confidence ${Math.round(packet.ocrConfidence || 0)}%)`);
+      else warn('OCR', 'runtime probe completed but detected no text in the primary-screen sample');
     }
   } catch (err: any) {
     fail('OCR', err?.message || String(err));
   }
 
-  try {
+  if (deep) try {
     const out = await desktopGetAccessibilityTree(undefined, 2, 40);
     if (out.startsWith('ERROR:')) fail('UI Automation', out);
     else ok('UI Automation', `returned ${out.split(/\r?\n/).length} line(s) from active window`);
   } catch (err: any) {
     fail('UI Automation', err?.message || String(err));
   }
+
+  if (!deep) ok('Deep probes', 'skipped; call doctor with deep=true for live screenshot/OCR/UI Automation probes');
 
   try {
     const backend = resolveDesktopCaptureBackend();
@@ -918,10 +1063,11 @@ export async function desktopDoctor(sessionId: string): Promise<string> {
     warn('Tool session', 'no desktop screenshot packet cached yet');
   } else {
     const ageSec = Math.round(desktopPacketAgeMs(packet) / 1000);
-    const stale = packet.actionVersion !== desktopActionVersion;
+    const generationStatus = validateDesktopPacketGeneration(packet);
+    const stale = !generationStatus.ok;
     (stale ? warn : ok)(
       'Tool session',
-      `last screenshot ${packet.screenshotId} is ${ageSec}s old, actionVersion=${packet.actionVersion}, current=${desktopActionVersion}${stale ? ' (stale after desktop action)' : ''}`,
+      `last screenshot ${packet.screenshotId} is ${ageSec}s old, global_generation=${packet.globalGeneration ?? packet.actionVersion}, window_generation=${packet.windowGeneration ?? 'n/a'}${stale ? ` (${generationStatus.ok ? 'stale' : generationStatus.message})` : ' (fresh)'}`,
     );
   }
 
@@ -986,6 +1132,7 @@ export function parseScreenshotCaptureMode(opts?: DesktopScreenshotOptions): Des
 export async function captureScreenshotInternal(
   mode: DesktopCaptureMode = { kind: 'all' },
   cropRegion?: [number, number, number, number],
+  signal?: AbortSignal,
 ): Promise<{
   path: string;
   width: number;
@@ -1013,7 +1160,7 @@ export async function captureScreenshotInternal(
     } else {
       req = { kind: 'all' };
     }
-    const result = await getPlatformDesktopBackend().capture(req);
+    const result = await getPlatformDesktopBackend().capture(req, signal);
     // Downscale physical -> logical pixels so capture pixels == virtual-screen
     // coordinates (1:1), matching the Windows DPI-aware assumption that all the
     // downstream coordinate/SOM/verification math relies on. (Retina seam.)
@@ -1128,7 +1275,7 @@ $bmp.Dispose()
   top = [int]$bounds.Top
 } | ConvertTo-Json -Compress
 `;
-  const raw = await runPowerShell(script, { timeoutMs: 18000, sta: true });
+  const raw = await runPowerShell(script, { timeoutMs: 18000, sta: true, signal });
   const parsed = parseJsonMaybe(raw) || {};
   if (parsed.error === 'invalid_monitor_index') {
     const n = Number(parsed.monitorCount || 0) || 0;
@@ -1170,6 +1317,14 @@ export async function focusWindowHandle(handle: number): Promise<boolean> {
   const h = Number(handle || 0);
   if (!Number.isFinite(h) || h === 0) return false;
   if (DELEGATE_TO_BACKEND) return getPlatformDesktopBackend().focusWindow(h);
+  const helper = getWin32DesktopHelperClient();
+  if (helper.available) {
+    try {
+      return await helper.focusWindow(h);
+    } catch {
+      // Compatibility fallback for a missing, outdated, or failed helper.
+    }
+  }
   // Windows restricts SetForegroundWindow from background processes.
   // Multi-step sequence for focus-stealing and stubborn windows.
   const script = `
@@ -1290,6 +1445,13 @@ function normalizeCoordinateSpace(
   return 'virtual';
 }
 
+export function resolveDesktopWindowClickCoordinateSpace(point: {
+  coordinate_space?: DesktopCoordinateSpace;
+  screenshot_id?: string;
+}): DesktopCoordinateSpace {
+  return point.coordinate_space || (point.screenshot_id ? 'capture' : 'window');
+}
+
 function getDesktopAdvisorPacketByIdInternal(
   sessionId: string,
   screenshotId: string,
@@ -1335,6 +1497,8 @@ if ($tlen -gt 0) {
 }
 $proc = $null
 try { if ($targetPid -gt 0) { $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue } } catch { }
+$processStartTime = 0
+try { if ($proc) { $processStartTime = [DateTimeOffset]::new($proc.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds() } } catch { }
 $mi = -1
 try {
   $scr = [System.Windows.Forms.Screen]::FromHandle($hWnd)
@@ -1346,6 +1510,7 @@ try {
 [ordered]@{
   ok = [bool]($okRect -and $targetPid -gt 0)
   pid = [int]$targetPid
+  processStartTime = [int64]$processStartTime
   processName = if ($proc) { [string]$proc.ProcessName } else { 'unknown' }
   appDisplayName = if ($proc) { [string]$proc.ProcessName } else { 'unknown' }
   title = [string]$title
@@ -1355,6 +1520,7 @@ try {
   width = if ($okRect) { [int]($rect.Right - $rect.Left) } else { 0 }
   height = if ($okRect) { [int]($rect.Bottom - $rect.Top) } else { 0 }
   monitorIndex = [int]$mi
+  isActive = [bool]([PrometheusWinApi]::GetForegroundWindow() -eq $hWnd)
 } | ConvertTo-Json -Compress
 `;
   const parsed = parseJsonMaybe(await runPowerShell(script, { timeoutMs: 4000 }).catch(() => ''));
@@ -1362,6 +1528,7 @@ try {
   const mi = Number(parsed.monitorIndex);
   return {
     pid: Number(parsed.pid || 0) || 0,
+    processStartTime: Number(parsed.processStartTime || 0) || undefined,
     processName: String(parsed.processName || 'unknown') || 'unknown',
     appDisplayName: String(parsed.appDisplayName || parsed.processName || '').trim() || undefined,
     title: String(parsed.title || '').trim() || '(untitled)',
@@ -1370,6 +1537,7 @@ try {
     top: Number(parsed.top || 0) || 0,
     width: Number(parsed.width || 0) || 0,
     height: Number(parsed.height || 0) || 0,
+    isActive: parsed.isActive === true,
     ...(Number.isFinite(mi) && mi >= 0 ? { monitorIndex: Math.floor(mi) } : {}),
   };
 }
@@ -1423,6 +1591,342 @@ export function getDesktopAdvisorPacketById(sessionId: string, screenshotId: str
   return resolved.ok ? resolved.packet : null;
 }
 
+interface DesktopVisualTextCandidate {
+  text: string;
+  ocr_confidence: number;
+  match_score: number;
+  confidence: number;
+  bounds: { x: number; y: number; width: number; height: number };
+  center: { x: number; y: number };
+}
+
+let desktopVisualOcrWorkerPromise: Promise<any> | null = null;
+let desktopVisualOcrQueue: Promise<unknown> = Promise.resolve();
+const desktopVisualOcrCache = new Map<string, { at: number; lines: Array<{ text: string; confidence: number; bbox: any }> }>();
+
+function normalizeDesktopVisualText(value: unknown): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[“”‘’`'\"…]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function desktopVisualMatchScore(query: string, candidate: string): number {
+  if (!query || !candidate) return 0;
+  if (candidate === query) return 1;
+  if (candidate.includes(query)) return 0.97;
+  if (query.includes(candidate) && candidate.length >= Math.max(6, query.length * 0.55)) return 0.9;
+  const queryTokens = query.split(' ').filter(Boolean);
+  const candidateTokens = new Set(candidate.split(' ').filter(Boolean));
+  const overlap = queryTokens.filter((token) => candidateTokens.has(token)).length;
+  const coverage = overlap / Math.max(1, queryTokens.length);
+  const orderPrefix = queryTokens.slice(0, overlap).join(' ');
+  const prefixBonus = orderPrefix && candidate.startsWith(orderPrefix) ? 0.08 : 0;
+  return Math.min(0.89, coverage * 0.82 + prefixBonus);
+}
+
+async function getDesktopVisualOcrWorker(): Promise<any> {
+  if (!desktopVisualOcrWorkerPromise) {
+    desktopVisualOcrWorkerPromise = (async () => {
+      const mod: any = await import('tesseract.js');
+      const createWorker = mod?.createWorker || mod?.default?.createWorker;
+      if (typeof createWorker !== 'function') throw new Error('tesseract.js createWorker is unavailable');
+      const worker = await createWorker('eng');
+      if (typeof worker.setParameters === 'function') {
+        await worker.setParameters({
+          tessedit_pageseg_mode: '11',
+          preserve_interword_spaces: '1',
+          user_defined_dpi: '144',
+        });
+      }
+      return worker;
+    })().catch((error) => {
+      desktopVisualOcrWorkerPromise = null;
+      throw error;
+    });
+  }
+  return desktopVisualOcrWorkerPromise;
+}
+
+async function recognizeDesktopVisualLines(png: Buffer, cacheKey: string): Promise<Array<{ text: string; confidence: number; bbox: any }>> {
+  const cached = desktopVisualOcrCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < DESKTOP_PACKET_TTL_MS) return cached.lines;
+  const task = desktopVisualOcrQueue.then(async () => {
+    const worker = await getDesktopVisualOcrWorker();
+    let ocrInput = png;
+    let coordinateScale = 1;
+    try {
+      const image = await Jimp.read(png);
+      let luminanceTotal = 0;
+      const sampleStep = Math.max(1, Math.floor(Math.min(image.bitmap.width, image.bitmap.height) / 96));
+      let sampleCount = 0;
+      image.scan(0, 0, image.bitmap.width, image.bitmap.height, (x, y, idx) => {
+        if (x % sampleStep || y % sampleStep) return;
+        luminanceTotal += (image.bitmap.data[idx] * 299 + image.bitmap.data[idx + 1] * 587 + image.bitmap.data[idx + 2] * 114) / 1000;
+        sampleCount += 1;
+      });
+      const darkTheme = sampleCount > 0 && luminanceTotal / sampleCount < 128;
+      coordinateScale = 2;
+      image.greyscale().contrast(0.55);
+      if (darkTheme) image.invert();
+      image.resize(image.bitmap.width * coordinateScale, image.bitmap.height * coordinateScale, Jimp.RESIZE_BICUBIC);
+      ocrInput = await image.getBufferAsync(Jimp.MIME_PNG);
+    } catch {
+      coordinateScale = 1;
+      ocrInput = png;
+    }
+    const collectNestedOcrLines = (value: any): any[] => {
+      if (!value || typeof value !== 'object') return [];
+      if (Array.isArray(value)) return value.flatMap(collectNestedOcrLines);
+      if (Array.isArray(value.lines)) return value.lines.flatMap(collectNestedOcrLines);
+      if (Array.isArray(value.paragraphs)) return value.paragraphs.flatMap(collectNestedOcrLines);
+      if (Array.isArray(value.blocks)) return value.blocks.flatMap(collectNestedOcrLines);
+      if (value.text && value.bbox) return [value];
+      return [];
+    };
+    const collectNestedOcrNodes = (value: any, depth = 0, seen = new WeakSet<object>()): any[] => {
+      if (!value || typeof value !== 'object' || depth > 12 || seen.has(value)) return [];
+      seen.add(value);
+      if (Array.isArray(value)) return value.flatMap((entry) => collectNestedOcrNodes(entry, depth + 1, seen));
+      const own = value.text && value.bbox ? [value] : [];
+      return own.concat(Object.values(value).flatMap((entry) => collectNestedOcrNodes(entry, depth + 1, seen)));
+    };
+    const mapOcrResult = (result: any, scale: number): Array<{ text: string; confidence: number; bbox: any }> => {
+      const data = result?.data || {};
+      let lines: any[] = Array.isArray(data.lines)
+        ? data.lines
+        : collectNestedOcrLines(data.blocks);
+
+      // Tesseract output shapes vary by version and output configuration. Rebuild
+      // visual lines from TSV words when structured line/block arrays are absent.
+      if (!lines.length && typeof data.tsv === 'string' && data.tsv.trim()) {
+        const rows = data.tsv.split(/\r?\n/).slice(1);
+        const grouped = new Map<string, { words: string[]; confidence: number[]; x0: number; y0: number; x1: number; y1: number }>();
+        for (const row of rows) {
+          const columns = row.split('\t');
+          if (columns.length < 12 || Number(columns[0]) !== 5) continue;
+          const text = columns.slice(11).join('\t').replace(/\s+/g, ' ').trim();
+          const left = Number(columns[6]);
+          const top = Number(columns[7]);
+          const width = Number(columns[8]);
+          const height = Number(columns[9]);
+          const confidence = Number(columns[10]);
+          if (!text || !Number.isFinite(left) || !Number.isFinite(top) || width <= 0 || height <= 0) continue;
+          const key = columns.slice(1, 5).join(':');
+          const group = grouped.get(key) || { words: [], confidence: [], x0: left, y0: top, x1: left + width, y1: top + height };
+          group.words.push(text);
+          if (Number.isFinite(confidence) && confidence >= 0) group.confidence.push(confidence);
+          group.x0 = Math.min(group.x0, left);
+          group.y0 = Math.min(group.y0, top);
+          group.x1 = Math.max(group.x1, left + width);
+          group.y1 = Math.max(group.y1, top + height);
+          grouped.set(key, group);
+        }
+        lines = Array.from(grouped.values()).map((group) => ({
+          text: group.words.join(' '),
+          confidence: group.confidence.length ? group.confidence.reduce((sum, value) => sum + value, 0) / group.confidence.length : 0,
+          bbox: { x0: group.x0, y0: group.y0, x1: group.x1, y1: group.y1 },
+        }));
+      }
+
+      // hOCR is stable across Tesseract.js result-shape changes and carries explicit
+      // line boxes. Use it only after structured and TSV output produced nothing.
+      if (!lines.length && typeof data.hocr === 'string' && data.hocr.trim()) {
+        const decodeHocrText = (value: string): string => value
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&amp;/gi, '&')
+          .replace(/&lt;/gi, '<')
+          .replace(/&gt;/gi, '>')
+          .replace(/&#39;/gi, "'")
+          .replace(/&quot;/gi, '"')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const hocrLines: any[] = [];
+        const linePattern = /<span\b[^>]*class=["'][^"']*\bocr(?:x_)?line\b[^"']*["'][^>]*title=["'][^"']*\bbbox\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi;
+        for (const match of data.hocr.matchAll(linePattern)) {
+          const text = decodeHocrText(match[5]);
+          if (!text) continue;
+          const confidenceValues = Array.from(match[5].matchAll(/\bx_wconf\s+(\d+(?:\.\d+)?)/gi), (entry: RegExpMatchArray) => Number(entry[1])).filter(Number.isFinite);
+          hocrLines.push({
+            text,
+            confidence: confidenceValues.length ? confidenceValues.reduce((sum: number, value: number) => sum + value, 0) / confidenceValues.length : 70,
+            bbox: { x0: Number(match[1]), y0: Number(match[2]), x1: Number(match[3]), y1: Number(match[4]) },
+          });
+        }
+        lines = hocrLines;
+      }
+
+      if (!lines.length && Array.isArray(data.words)) lines = data.words;
+      if (!lines.length) lines = collectNestedOcrNodes(data);
+      return lines.map((line: any) => ({
+        text: String(line?.text || '').replace(/\s+/g, ' ').trim(),
+        confidence: Number(line?.confidence ?? line?.conf ?? 0),
+        bbox: {
+          x0: Number(line?.bbox?.x0 ?? line?.x0 ?? line?.left ?? 0) / scale,
+          y0: Number(line?.bbox?.y0 ?? line?.y0 ?? line?.top ?? 0) / scale,
+          x1: Number(line?.bbox?.x1 ?? line?.x1 ?? ((line?.left ?? 0) + (line?.width ?? 0))) / scale,
+          y1: Number(line?.bbox?.y1 ?? line?.y1 ?? ((line?.top ?? 0) + (line?.height ?? 0))) / scale,
+        },
+      })).filter((line: any) => line.text && line.bbox.x1 > line.bbox.x0 && line.bbox.y1 > line.bbox.y0);
+    };
+
+    const outputOptions = { text: true, blocks: true, tsv: true, hocr: true };
+    let result = await worker.recognize(ocrInput, {}, outputOptions);
+    let mapped = mapOcrResult(result, coordinateScale);
+    // High-contrast/inversion helps most application chrome, but can erase thin
+    // antialiased glyphs on some GPU-rendered surfaces. Retry the untouched crop
+    // once only when the enhanced pass produced no bounded text.
+    if (!mapped.length && coordinateScale !== 1) {
+      result = await worker.recognize(png, {}, outputOptions);
+      mapped = mapOcrResult(result, 1);
+    }
+    // Do not make a transient empty OCR result authoritative for the packet TTL.
+    if (mapped.length) {
+      while (desktopVisualOcrCache.size >= 32) desktopVisualOcrCache.delete(desktopVisualOcrCache.keys().next().value as string);
+      desktopVisualOcrCache.set(cacheKey, { at: Date.now(), lines: mapped });
+    }
+    return mapped;
+  });
+  desktopVisualOcrQueue = task.then(() => undefined, () => undefined);
+  return task as Promise<Array<{ text: string; confidence: number; bbox: any }>>;
+}
+
+async function locateDesktopTextInternal(args: {
+  sessionId: string;
+  screenshotId: string;
+  query: string;
+  minConfidence?: number;
+}): Promise<{ ok: true; packet: DesktopAdvisorPacket; match: DesktopVisualTextCandidate; candidates: DesktopVisualTextCandidate[]; elapsedMs: number } | { ok: false; code: string; message: string; candidates?: DesktopVisualTextCandidate[] }> {
+  const startedAt = performance.now();
+  const packetResult = getDesktopAdvisorPacketByIdInternal(args.sessionId, args.screenshotId);
+  if (!packetResult.ok) return { ok: false, code: 'SCREENSHOT_NOT_FOUND', message: packetResult.message };
+  const packet = packetResult.packet;
+  const generation = validateDesktopPacketGeneration(packet);
+  if (!generation.ok) return { ok: false, code: 'STATE_STALE', message: generation.message };
+  const query = normalizeDesktopVisualText(args.query);
+  if (!query) return { ok: false, code: 'INVALID_ARGUMENT', message: 'query is required' };
+  try {
+    const lines = await recognizeDesktopVisualLines(Buffer.from(packet.screenshotBase64, 'base64'), packet.contentHash);
+    const recognizedSamples: DesktopVisualTextCandidate[] = lines.slice(0, 12).map((line) => {
+      const x = Math.max(0, Math.round(line.bbox.x0));
+      const y = Math.max(0, Math.round(line.bbox.y0));
+      const width = Math.max(1, Math.round(line.bbox.x1 - line.bbox.x0));
+      const height = Math.max(1, Math.round(line.bbox.y1 - line.bbox.y0));
+      const ocrConfidence = Math.max(0, Math.min(100, Number(line.confidence) || 0));
+      return {
+        text: String(line.text || '').slice(0, 160),
+        ocr_confidence: Math.round(ocrConfidence * 10) / 10,
+        match_score: 0,
+        confidence: Math.round((ocrConfidence / 100) * 0.22 * 1000) / 1000,
+        bounds: { x, y, width, height },
+        center: { x: Math.round(x + width / 2), y: Math.round(y + height / 2) },
+      };
+    });
+    const candidates = lines.map((line) => {
+      const normalized = normalizeDesktopVisualText(line.text);
+      const matchScore = desktopVisualMatchScore(query, normalized);
+      const ocrConfidence = Math.max(0, Math.min(100, Number(line.confidence) || 0));
+      const confidence = Math.max(0, Math.min(1, matchScore * 0.78 + (ocrConfidence / 100) * 0.22));
+      const x = Math.max(0, Math.round(line.bbox.x0));
+      const y = Math.max(0, Math.round(line.bbox.y0));
+      const width = Math.max(1, Math.round(line.bbox.x1 - line.bbox.x0));
+      const height = Math.max(1, Math.round(line.bbox.y1 - line.bbox.y0));
+      return {
+        text: line.text,
+        ocr_confidence: Math.round(ocrConfidence * 10) / 10,
+        match_score: Math.round(matchScore * 1000) / 1000,
+        confidence: Math.round(confidence * 1000) / 1000,
+        bounds: { x, y, width, height },
+        center: { x: Math.round(x + width / 2), y: Math.round(y + height / 2) },
+      };
+    }).filter((candidate) => candidate.match_score >= 0.45)
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, 5);
+    const best = candidates[0];
+    const threshold = Math.max(0.5, Math.min(0.98, Number(args.minConfidence) || 0.72));
+    if (!best || best.confidence < threshold) {
+      return {
+        ok: false,
+        code: 'VISUAL_TARGET_NOT_FOUND',
+        message: `No text match for "${args.query}" met confidence ${threshold}. OCR recognized ${lines.length} bounded text line(s). Do not guess a neighboring control.`,
+        candidates: candidates.length ? candidates : recognizedSamples,
+      };
+    }
+    if (candidates[1] && best.confidence - candidates[1].confidence < 0.04) {
+      return { ok: false, code: 'VISUAL_TARGET_AMBIGUOUS', message: `Multiple text matches for "${args.query}" have nearly equal confidence. Tighten the crop before clicking.`, candidates };
+    }
+    return { ok: true, packet, match: best, candidates, elapsedMs: Math.round(performance.now() - startedAt) };
+  } catch (error: any) {
+    return { ok: false, code: 'VISUAL_OCR_FAILED', message: String(error?.message || error) };
+  }
+}
+
+export async function desktopLocateText(sessionId: string, args: { screenshot_id: string; query: string; min_confidence?: number }): Promise<string> {
+  const located = await locateDesktopTextInternal({
+    sessionId,
+    screenshotId: String(args.screenshot_id || ''),
+    query: String(args.query || ''),
+    minConfidence: args.min_confidence,
+  });
+  if (!located.ok) return desktopFailure(located.code as DesktopFailureCode, located.message, { candidates: located.candidates || [] });
+  return JSON.stringify({
+    ok: true,
+    screenshot_id: located.packet.screenshotId,
+    query: args.query,
+    match: located.match,
+    alternatives: located.candidates.slice(1),
+    elapsed_ms: located.elapsedMs,
+    click_contract: 'Use this exact screenshot_id and match.center in coordinate_space="capture". Recapture after any scroll or layout change.',
+  }, null, 2);
+}
+
+export async function desktopClickText(
+  sessionId: string,
+  args: { screenshot_id: string; query: string; min_confidence?: number; button?: 'left' | 'right'; verify?: DesktopVerificationMode },
+  signal?: AbortSignal,
+): Promise<string> {
+  const located = await locateDesktopTextInternal({
+    sessionId,
+    screenshotId: String(args.screenshot_id || ''),
+    query: String(args.query || ''),
+    minConfidence: args.min_confidence,
+  });
+  if (!located.ok) return desktopFailure(located.code as DesktopFailureCode, located.message, { candidates: located.candidates || [] });
+  const target = located.packet.targetWindow;
+  if (!target) return desktopFailure('INVALID_ARGUMENT', 'click_text requires a screenshot from an exact window region.');
+  const click = await desktopWindowClick({ window_token: createDesktopWindowToken(target) }, {
+    x: located.match.center.x,
+    y: located.match.center.y,
+    coordinate_space: 'capture',
+    screenshot_id: located.packet.screenshotId,
+  }, { button: args.button || 'left', verify: args.verify || 'off', focus_first: true, signal, allow_broad_grounded: true }, sessionId);
+  if (click.startsWith('ERROR')) return click;
+  const after = await desktopWindowScreenshot(sessionId, {
+    handle: target.handle,
+    focus_first: false,
+    skipOcr: true,
+    signal,
+  });
+  return [
+    `Visual text target "${args.query}" located and clicked with confidence ${located.match.confidence}.`,
+    `Matched OCR text: "${located.match.text}" at center (${located.match.center.x}, ${located.match.center.y}) in screenshot ${located.packet.screenshotId}.`,
+    click,
+    'Post-action full-window evidence:',
+    after,
+    'The click target was grounded; verify the requested destination identity in the attached post-action image before claiming completion.',
+  ].join('\n');
+}
+
+export function desktopCaptureRequiresPrecisionRecapture(packet: Pick<DesktopAdvisorPacket, 'width' | 'height' | 'targetWindow' | 'normalizedScreenshot'>): boolean {
+  if (!packet.targetWindow) return false;
+  const maxPixels = clampInt(process.env.PROMETHEUS_DESKTOP_MAX_CLICK_CAPTURE_PIXELS, 250_000, 8_000_000, 1_500_000);
+  const pixels = Math.max(0, Number(packet.width) || 0) * Math.max(0, Number(packet.height) || 0);
+  return !!packet.normalizedScreenshot || pixels > maxPixels;
+}
+
 export async function resolveDesktopActionPoint(
   sessionId: string,
   target: DesktopCoordinateTarget,
@@ -1437,9 +1941,8 @@ export async function resolveDesktopActionPoint(
     const packetResult = getDesktopAdvisorPacketByIdInternal(sessionId, screenshotId);
     if (!packetResult.ok) return { ok: false, message: `${label}: ${packetResult.message}` };
     const packet = packetResult.packet;
-    if (packet.actionVersion !== desktopActionVersion) {
-      return { ok: false, message: `${label}: ${describeStaleScreenshotRequirement(packet)}` };
-    }
+    const packetGeneration = validateDesktopPacketGeneration(packet);
+    if (!packetGeneration.ok) return { ok: false, message: `${label}: ${packetGeneration.message}` };
     const element = (packet.somElements || []).find((entry) => entry.index === Math.floor(elementIndex));
     if (!element) {
       return { ok: false, message: `${label}: SOM element #${Math.floor(elementIndex)} was not found in screenshot ${screenshotId}. Capture desktop_screenshot(mode="som") or desktop_window_screenshot(mode="som") again.` };
@@ -1503,9 +2006,8 @@ export async function resolveDesktopActionPoint(
     const packetResult = getDesktopAdvisorPacketByIdInternal(sessionId, String(target.screenshot_id || ''));
     if (!packetResult.ok) return { ok: false, message: `${label}: ${packetResult.message}` };
     packet = packetResult.packet;
-    if (packet.actionVersion !== desktopActionVersion) {
-      return { ok: false, message: `${label}: ${describeStaleScreenshotRequirement(packet)}` };
-    }
+    const packetGeneration = validateDesktopPacketGeneration(packet);
+    if (!packetGeneration.ok) return { ok: false, message: `${label}: ${packetGeneration.message}` };
   }
 
   if (coordinateSpace === 'capture') {
@@ -1513,6 +2015,12 @@ export async function resolveDesktopActionPoint(
       return {
         ok: false,
         message: `${label}: coordinate_space="capture" requires screenshot_id from desktop_screenshot or desktop_window_screenshot.`,
+      };
+    }
+    if (!target.allow_broad_grounded && desktopCaptureRequiresPrecisionRecapture(packet)) {
+      return {
+        ok: false,
+        message: `${label}: [PRECISION_CAPTURE_REQUIRED] Screenshot ${packet.screenshotId} is too broad or was downscaled (${packet.width}x${packet.height}) for a reliable exact-window click. Recapture the relevant sidebar, ribbon, toolbar, or panel with desktop_window(action="region_screenshot") and click from that fresh screenshot_id.`,
       };
     }
     if (x < 0 || y < 0 || x >= packet.width || y >= packet.height) {
@@ -1536,28 +2044,40 @@ export async function resolveDesktopActionPoint(
     const resolvedY = Math.floor(captureRegion.top + y * (Number.isFinite(scaleY) && scaleY > 0 ? scaleY : captureRegion.height / packet.height || 1));
     const targetWindow = packet.targetWindow;
     if (targetWindow) {
-      const ctx = await gatherDesktopContextInternal();
-      const liveTarget = ctx.windows.find((w) => Number(w.handle) === Number(targetWindow.handle));
+      // Window-scoped actions already identity-validate and focus the exact token
+      // immediately before coordinate resolution. Reuse that live record instead
+      // of paying for a second full desktop enumeration on every anchored click.
+      const preparedWindow = target.prepared_window;
+      let liveTarget: DesktopWindowInfo | null = null;
+      if (preparedWindow && sameDesktopWindowHandle(preparedWindow, targetWindow)) {
+        liveTarget = preparedWindow;
+      } else if (!DELEGATE_TO_BACKEND) {
+        liveTarget = await getWindowByHandleFast(targetWindow.handle);
+      } else {
+        const ctx = await gatherDesktopContextInternal();
+        liveTarget = ctx.windows.find((w) => Number(w.handle) === Number(targetWindow.handle)) || null;
+      }
       if (!liveTarget) {
         return { ok: false, message: `${label}: target window from screenshot is no longer visible. Capture a fresh desktop_window_screenshot.` };
       }
-      // On macOS, input is delivered to the visible window without requiring it
-      // to be the frontmost/active window (background input — see Hermes model),
-      // so the Windows-style "must be active" guard does not apply.
-      if (!DELEGATE_TO_BACKEND && !sameDesktopWindowHandle(ctx.activeWindow, liveTarget)) {
-        return {
-          ok: false,
-          message: `${label}: target window is not active (${shortWindowLabel(ctx.activeWindow)} is active). Use desktop_window_screenshot with focus_first=true and the new screenshot_id before clicking.`,
-        };
+      if (Number(targetWindow.pid) && Number(liveTarget.pid) !== Number(targetWindow.pid)) {
+        return { ok: false, message: `${label}: target window identity changed since screenshot. Capture fresh window state.` };
+      }
+      const targetStart = Math.floor(Number(targetWindow.processStartTime) || 0);
+      const liveStart = Math.floor(Number(liveTarget.processStartTime) || 0);
+      if (targetStart && liveStart !== targetStart) {
+        return { ok: false, message: `${label}: target window process changed since screenshot. Capture fresh window state.` };
       }
       if (
-        [targetWindow.left, targetWindow.top, liveTarget.left, liveTarget.top].every((n) => Number.isFinite(Number(n))) &&
+        [targetWindow.left, targetWindow.top, targetWindow.width, targetWindow.height, liveTarget.left, liveTarget.top, liveTarget.width, liveTarget.height].every((n) => Number.isFinite(Number(n))) &&
         (Math.floor(Number(targetWindow.left)) !== Math.floor(Number(liveTarget.left)) ||
-          Math.floor(Number(targetWindow.top)) !== Math.floor(Number(liveTarget.top)))
+          Math.floor(Number(targetWindow.top)) !== Math.floor(Number(liveTarget.top)) ||
+          Math.floor(Number(targetWindow.width)) !== Math.floor(Number(liveTarget.width)) ||
+          Math.floor(Number(targetWindow.height)) !== Math.floor(Number(liveTarget.height)))
       ) {
         return {
           ok: false,
-          message: `${label}: target window moved since screenshot. Capture a fresh focused desktop_window_screenshot and use its screenshot_id.`,
+          message: `${label}: target window geometry changed since screenshot. Capture a fresh focused desktop_window_screenshot and use its screenshot_id.`,
         };
       }
       if (!pointInsideDesktopWindow(resolvedX, resolvedY, liveTarget)) {
@@ -1618,13 +2138,15 @@ export async function resolveDesktopActionPoint(
       };
     }
     if (
-      [packet.targetWindow.left, packet.targetWindow.top, liveTarget.left, liveTarget.top].every((n) => Number.isFinite(Number(n))) &&
+      [packet.targetWindow.left, packet.targetWindow.top, packet.targetWindow.width, packet.targetWindow.height, liveTarget.left, liveTarget.top, liveTarget.width, liveTarget.height].every((n) => Number.isFinite(Number(n))) &&
       (Math.floor(Number(packet.targetWindow.left)) !== Math.floor(Number(liveTarget.left)) ||
-        Math.floor(Number(packet.targetWindow.top)) !== Math.floor(Number(liveTarget.top)))
+        Math.floor(Number(packet.targetWindow.top)) !== Math.floor(Number(liveTarget.top)) ||
+        Math.floor(Number(packet.targetWindow.width)) !== Math.floor(Number(liveTarget.width)) ||
+        Math.floor(Number(packet.targetWindow.height)) !== Math.floor(Number(liveTarget.height)))
     ) {
       return {
         ok: false,
-        message: `${label}: target window moved since screenshot. Capture a fresh focused desktop_window_screenshot and use its screenshot_id.`,
+        message: `${label}: target window geometry changed since screenshot. Capture a fresh focused desktop_window_screenshot and use its screenshot_id.`,
       };
     }
   }
@@ -1671,14 +2193,19 @@ function createDesktopAdvisorPacket(input: {
   captureRegion?: { left: number; top: number; width: number; height: number };
   coordinateScale?: { x: number; y: number };
   normalizedScreenshot?: DesktopAdvisorPacket['normalizedScreenshot'];
-  captureMode?: 'all' | 'primary' | 'monitor';
+  captureMode?: 'all' | 'primary' | 'monitor' | 'window';
   captureMonitorIndex?: number;
   activeMonitorIndex?: number | null;
   targetWindow?: DesktopWindowInfo;
   somElements?: DesktopSomElement[];
   actionVersion?: number;
+  globalGeneration?: number;
+  windowGeneration?: number;
+  accessibilityGeneration?: number;
+  generationReason?: string;
 }): DesktopAdvisorPacket {
   const contentHash = computeContentHash(input.screenshotBase64);
+  const scopedWindowGeneration = input.targetWindow ? getDesktopWindowGeneration(input.targetWindow) : null;
   return {
     screenshotId: makeDesktopScreenshotId(input.capturedAt, contentHash),
     screenshotBase64: input.screenshotBase64,
@@ -1702,6 +2229,11 @@ function createDesktopAdvisorPacket(input: {
     targetWindow: input.targetWindow,
     somElements: input.somElements,
     actionVersion: input.actionVersion ?? desktopActionVersion,
+    globalGeneration: input.globalGeneration ?? desktopActionVersion,
+    windowGeneration: input.windowGeneration ?? scopedWindowGeneration?.visual,
+    accessibilityGeneration: input.accessibilityGeneration ?? scopedWindowGeneration?.accessibility,
+    generationReason: input.generationReason ?? scopedWindowGeneration?.lastReason,
+    windowToken: input.targetWindow ? createDesktopWindowToken(input.targetWindow) : undefined,
   };
 }
 
@@ -1825,6 +2357,17 @@ export async function desktopMovePointer(x: number, y: number, settleMs: number 
     await getPlatformDesktopBackend().movePointer(xx, yy);
     return;
   }
+  const helper = getWin32DesktopHelperClient();
+  if (helper.available) {
+    try {
+      await helper.movePointer(xx, yy);
+      const nativeWaitMs = Math.max(0, Math.min(1000, Math.floor(Number(settleMs) || 40)));
+      if (nativeWaitMs > 0) await desktopAbortableDelay(nativeWaitMs);
+      return;
+    } catch {
+      // Compatibility fallback for an unavailable/outdated helper.
+    }
+  }
   const waitMs = Math.max(0, Math.min(1000, Math.floor(Number(settleMs) || 40)));
   const script = `
 ${PS_DPI_AWARE_HEADER}
@@ -1849,6 +2392,15 @@ export async function desktopPerformClickAtCurrent(
       modifier ? [modifier] : [],
     );
     return;
+  }
+  const helper = getWin32DesktopHelperClient();
+  if (helper.available && !modifier) {
+    try {
+      await helper.clickCurrent(button, repeat);
+      return;
+    } catch {
+      // Modifier input and old helper versions use the compatibility path.
+    }
   }
   const btn = button === 'right' ? 'right' : 'left';
   const downFlag = btn === 'right' ? '0x0008' : '0x0002';
@@ -1879,6 +2431,7 @@ export async function desktopPerformClickAt(
   repeat: number,
   modifier?: 'shift' | 'ctrl' | 'alt',
   settleMs: number = 0,
+  windowHandle?: number,
 ): Promise<void> {
   const xx = Math.floor(Number(x));
   const yy = Math.floor(Number(y));
@@ -1890,6 +2443,25 @@ export async function desktopPerformClickAt(
       modifier ? [modifier] : [],
     );
     return;
+  }
+  const helper = getWin32DesktopHelperClient();
+  if (helper.available && !modifier) {
+    try {
+      if (Number.isFinite(Number(windowHandle)) && Number(windowHandle) > 0) {
+        const focused = await helper.focusWindow(Number(windowHandle));
+        if (!focused) throw new Error(`Could not activate window ${windowHandle} before click`);
+      }
+      if (settleMs > 0) {
+        await helper.movePointer(xx, yy);
+        await desktopAbortableDelay(Math.max(0, Math.min(1000, Math.floor(Number(settleMs) || 0))));
+        await helper.clickCurrent(button, repeat);
+      } else {
+        await helper.clickAt(xx, yy, button, repeat);
+      }
+      return;
+    } catch {
+      // Compatibility fallback for an unavailable/outdated helper.
+    }
   }
   const btn = button === 'right' ? 'right' : 'left';
   const downFlag = btn === 'right' ? '0x0008' : '0x0002';
@@ -1926,6 +2498,16 @@ export async function desktopPerformScrollAtCurrent(
     await getPlatformDesktopBackend().scroll(horizontal ? d : 0, horizontal ? 0 : d);
     return;
   }
+  const helper = getWin32DesktopHelperClient();
+  if (helper.available) {
+    try {
+      const d = Math.floor(Number(delta) || 0);
+      await helper.scrollCurrent(horizontal ? d : 0, horizontal ? 0 : d);
+      return;
+    } catch {
+      // Compatibility fallback for an unavailable/outdated helper.
+    }
+  }
   const flag = horizontal ? '0x1000' : '0x0800';
   const script = `
 ${PS_DPI_AWARE_HEADER}
@@ -1950,6 +2532,29 @@ export async function desktopPerformScrollAt(
     }
     await getPlatformDesktopBackend().scroll(horizontal ? Math.floor(Number(delta) || 0) : 0, horizontal ? 0 : Math.floor(Number(delta) || 0));
     return;
+  }
+  const helper = getWin32DesktopHelperClient();
+  if (helper.available) {
+    try {
+      const d = Math.floor(Number(delta) || 0);
+      const hasNativePoint = Number.isFinite(Number(x)) && Number.isFinite(Number(y));
+      if (hasNativePoint) {
+        const nativeX = Math.floor(Number(x));
+        const nativeY = Math.floor(Number(y));
+        if (settleMs > 0) {
+          await helper.movePointer(nativeX, nativeY);
+          await desktopAbortableDelay(Math.max(0, Math.min(1000, Math.floor(Number(settleMs) || 0))));
+          await helper.scrollCurrent(horizontal ? d : 0, horizontal ? 0 : d);
+        } else {
+          await helper.scrollAt(nativeX, nativeY, horizontal ? d : 0, horizontal ? 0 : d);
+        }
+      } else {
+        await helper.scrollCurrent(horizontal ? d : 0, horizontal ? 0 : d);
+      }
+      return;
+    } catch {
+      // Compatibility fallback for an unavailable/outdated helper.
+    }
   }
   const flag = horizontal ? '0x1000' : '0x0800';
   const hasPoint = Number.isFinite(Number(x)) && Number.isFinite(Number(y));
@@ -1981,6 +2586,15 @@ export async function desktopPerformDragInternal(
   if (DELEGATE_TO_BACKEND) {
     await getPlatformDesktopBackend().drag(fx, fy, tx, ty, st);
     return;
+  }
+  const helper = getWin32DesktopHelperClient();
+  if (helper.available) {
+    try {
+      await helper.drag(fx, fy, tx, ty, st);
+      return;
+    } catch {
+      // Compatibility fallback for an unavailable/outdated helper.
+    }
   }
   const script = `
 ${PS_DPI_AWARE_HEADER}
@@ -2129,10 +2743,15 @@ async function verifyDesktopAction(options: {
     await options.actionFn();
     await new Promise((resolve) => setTimeout(resolve, Math.max(60, Math.floor(Number(options.afterSettleMs) || 180))));
     after = await captureDesktopVerificationSnapshot(region);
-    const shouldCheckOcr =
-      options.mode === 'strict' ||
-      before.hash === after.hash ||
-      options.action === 'drag';
+    // OCR is diagnostic evidence, not a prerequisite for ordinary pointer
+    // verification. In auto mode an unchanged pixel hash used to launch two
+    // OCR workers; an unavailable runtime could therefore add ~30 seconds to a
+    // single click. Strict mode may use OCR unless a recent runtime failure has
+    // opened the short circuit breaker.
+    const recentOcrRuntimeFailure = lastOcrDiagnostic
+      && (lastOcrDiagnostic.status === 'runtime_error' || lastOcrDiagnostic.status === 'child_process_error')
+      && Date.now() - lastOcrDiagnostic.at < 5 * 60_000;
+    const shouldCheckOcr = options.mode === 'strict' && !recentOcrRuntimeFailure;
     const [beforeOcr, afterOcr] = shouldCheckOcr
       ? await Promise.all([loadSnapshotOcrText(before), loadSnapshotOcrText(after)])
       : ['', ''];
@@ -2156,10 +2775,15 @@ async function verifyDesktopAction(options: {
   }
 }
 
+let lastOcrDiagnostic: { status: string; stage: string; error?: string; at: number } | null = null;
+
 async function runOcr(imagePath: string): Promise<{ text: string; confidence: number } | null> {
   try {
     const ocrEnabled = String(process.env.PROMETHEUS_DESKTOP_OCR || '1').trim() !== '0';
-    if (!ocrEnabled) return null;
+    if (!ocrEnabled) {
+      lastOcrDiagnostic = { status: 'disabled', stage: 'configuration', at: Date.now() };
+      return null;
+    }
     const timeoutMs = clampInt(process.env.PROMETHEUS_OCR_TIMEOUT_MS, 1000, 120000, 15000);
     const ocrCacheDir = path.join(
       process.env.PROMETHEUS_DATA_DIR ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus') : path.join(process.cwd(), '.prometheus'),
@@ -2177,11 +2801,20 @@ async function runOcr(imagePath: string): Promise<{ text: string; confidence: nu
       },
     );
     const parsed = parseJsonMaybe(String(stdout || '').trim()) || {};
+    if (parsed?.ok === false) {
+      lastOcrDiagnostic = { status: 'runtime_error', stage: String(parsed.stage || 'unknown'), error: String(parsed.error || 'unknown OCR worker error').slice(0, 2000), at: Date.now() };
+      return null;
+    }
     const text = String(parsed?.text || '').trim();
     const confidence = Number(parsed?.confidence || 0) || 0;
-    if (!text) return null;
+    if (!text) {
+      lastOcrDiagnostic = { status: 'available_no_text', stage: String(parsed.stage || 'recognize'), at: Date.now() };
+      return null;
+    }
+    lastOcrDiagnostic = { status: 'available', stage: String(parsed.stage || 'recognize'), at: Date.now() };
     return { text: text.slice(0, 16000), confidence };
-  } catch {
+  } catch (error: any) {
+    lastOcrDiagnostic = { status: 'child_process_error', stage: 'spawn_or_timeout', error: String(error?.stderr || error?.message || error).slice(0, 2000), at: Date.now() };
     return null;
   }
 }
@@ -2291,21 +2924,28 @@ export async function desktopScreenshot(
   options?: DesktopScreenshotOptions,
 ): Promise<string> {
   ensureWindows();
+  throwIfDesktopCancelled(options?.signal);
   let shot: Awaited<ReturnType<typeof captureScreenshotInternal>>;
   let ctx: DesktopContextGathered;
   try {
     const capMode = parseScreenshotCaptureMode(options);
     [ctx, shot] = await Promise.all([
-      gatherDesktopContextInternal(),
-      captureScreenshotInternal(capMode, options?.region),
+      gatherDesktopContextInternal(options?.signal),
+      captureScreenshotInternal(capMode, options?.region, options?.signal),
     ]);
   } catch (e: any) {
+    if (isDesktopCancellationError(e) || e?.name === 'AbortError') return desktopFailure('DESKTOP_CANCELLED', 'Desktop screenshot was interrupted.');
     return `ERROR: ${e?.message || e}`;
   }
 
   const openWindows = ctx.windows;
   const activeWindow = ctx.activeWindow;
+  throwIfDesktopCancelled(options?.signal);
   const ocr = options?.skipOcr === true ? null : await runOcr(shot.path);
+  if (options?.signal?.aborted) {
+    try { fs.unlinkSync(shot.path); } catch { /* best effort */ }
+    return desktopFailure('DESKTOP_CANCELLED', 'Desktop screenshot was interrupted during OCR.');
+  }
 
   let png: Buffer = fs.readFileSync(shot.path);
   try { fs.unlinkSync(shot.path); } catch {}
@@ -2444,6 +3084,7 @@ export async function desktopFocusWindow(name: string): Promise<string> {
     return `ERROR: Failed to focus "${target.title}" (${target.processName}).`;
   }
   markDesktopStateChanged();
+  markDesktopWindowChanged(target, 'focus_window', { accessibility: true });
   return `Focused window: "${target.title}" (${target.processName}).`;
 }
 
@@ -2565,9 +3206,34 @@ export async function desktopFocusWindowVerified(
 
 export async function desktopWindowControl(
   action: 'minimize' | 'maximize' | 'restore' | 'close',
-  selector?: { name?: string; handle?: number; active?: boolean },
+  selector?: DesktopWindowSelector & { name?: string; handle?: number },
 ): Promise<string> {
   ensureWindows();
+  if (selector?.window_token || selector?.window_id || selector?.window_handle || selector?.app_id || selector?.title) {
+    const resolved = await resolveCanonicalWindow({
+      window_token: selector.window_token,
+      window_id: selector.window_id,
+      window_handle: selector.window_handle,
+      app_id: selector.app_id,
+      title: selector.title,
+      active: selector.active,
+    });
+    if (!resolved.ok) return desktopFailure(resolved.code, resolved.message, { selector });
+    const target = resolved.window;
+    if (action !== 'minimize') {
+      const focused = await focusWindowHandle(target.handle).catch(() => false);
+      if (!focused) return desktopFailure('FOCUS_FAILED', `Could not focus ${shortWindowLabel(target)} before ${action}.`, { window_token: createDesktopWindowToken(target) });
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    try {
+      await windowControlInternal(target.handle, action);
+      markDesktopStateChanged();
+      markDesktopWindowChanged(target, `window_${action}`, { visual: true, accessibility: true, geometry: true });
+      return `${action[0].toUpperCase()}${action.slice(1)} requested for "${target.title}" (${target.processName}, handle=${target.handle}).`;
+    } catch (error: any) {
+      return desktopFailure('WINDOW_ACTION_FAILED', `Failed to ${action} "${target.title}": ${String(error?.message || error)}`, { window_token: createDesktopWindowToken(target) });
+    }
+  }
   const query = String(selector?.name || '').trim();
   const handleNum = Number(selector?.handle || 0);
   const hasHandle = Number.isFinite(handleNum) && handleNum > 0;
@@ -2592,6 +3258,8 @@ export async function desktopWindowControl(
 
   try {
     await windowControlInternal(target.handle, action);
+    markDesktopStateChanged();
+    markDesktopWindowChanged(target, `window_${action}`, { visual: true, accessibility: true, geometry: true });
     return `${action[0].toUpperCase()}${action.slice(1)} requested for "${target.title}" (${target.processName}, handle=${target.handle}).`;
   } catch (e: any) {
     return `ERROR: Failed to ${action} "${target.title}" (${target.processName}): ${e?.message || e}`;
@@ -2649,18 +3317,13 @@ export async function desktopClick(
     verificationOpts?.mode,
     verificationOpts?.coordinateSpace,
   );
-  const attempts = (verificationMode !== 'off'
-    && verificationOpts?.allowRetryOnLikelyNoop === true
-    && btn === 'left'
-    && repeat === 1
-    && !modifier)
-    ? [
-        { x: xx, y: yy },
-        { x: xx - 4, y: yy - 4 },
-        { x: xx + 4, y: yy + 4 },
-      ]
-    : [{ x: xx, y: yy }];
+  // Never spray neighboring coordinates after an unchanged click. A no-op can
+  // be a valid interaction (focus, selection, menu dismissal), and retrying at
+  // +/-4px can activate an adjacent dense-toolbar control. Re-observation and
+  // semantic re-grounding belong at the model/workflow layer.
+  const attempts = [{ x: xx, y: yy }];
   let verificationSummary = '';
+  let finalVerification: DesktopActionVerification | null = null;
   let finalX = xx;
   let finalY = yy;
   for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex++) {
@@ -2668,7 +3331,7 @@ export async function desktopClick(
     finalX = attempt.x;
     finalY = attempt.y;
     if (verificationMode === 'off') {
-      await desktopPerformClickAt(finalX, finalY, btn, repeat, modifier, 0);
+      await desktopPerformClickAt(finalX, finalY, btn, repeat, modifier, 0, verificationOpts?.windowHandle);
       break;
     }
     await desktopMovePointer(finalX, finalY, 40);
@@ -2680,6 +3343,7 @@ export async function desktopClick(
       actionFn: () => desktopPerformClickAtCurrent(btn, repeat, modifier),
       afterSettleMs: 180,
     });
+    finalVerification = verification;
     verificationSummary = formatDesktopVerification(verification, {
       current: attemptIndex + 1,
       total: attempts.length,
@@ -2708,6 +3372,9 @@ export async function desktopClick(
   // Record for macro replay (use resolved virtual coords so replay is coordinate-safe)
   _macroRecord({ type: doubleClick ? 'double_click' : 'click', x: finalX, y: finalY, button: btn });
   markDesktopStateChanged();
+  if (verificationMode === 'strict' && finalVerification?.status !== 'confirmed') {
+    return `ERROR: [ACTION_NOT_CONFIRMED] Click was issued at (${finalX}, ${finalY}), but strict verification returned ${finalVerification?.status || 'unknown'} (${finalVerification?.summary || 'no confirmation evidence'}). Do not claim the requested UI action succeeded. Re-observe and identify the exact target; do not retry neighboring pixels.${sourceSuffix}`;
+  }
   return `Clicked ${btn} at (${finalX}, ${finalY})${doubleClick ? ' [double]' : ''}${modNote}${sourceSuffix}${relNote}${monitorNote}.${verificationSummary ? ` ${verificationSummary}` : ''}`;
 }
 
@@ -2773,10 +3440,14 @@ export async function desktopDrag(
   return `Dragged from (${fx}, ${fy}) to (${tx}, ${ty}) in ${st} steps.${sourceSuffix}${monNote}${verificationSummary ? ` ${verificationSummary}` : ''}`;
 }
 
-export async function desktopWait(ms: number = 500): Promise<string> {
+export async function desktopWait(ms: number = 500, signal?: AbortSignal): Promise<string> {
   const waitMs = Math.max(50, Math.min(30000, Math.floor(Number(ms) || 500)));
-  await new Promise((resolve) => setTimeout(resolve, waitMs));
-  markDesktopStateChanged();
+  try {
+    await desktopAbortableDelay(waitMs, signal);
+  } catch (error) {
+    if (isDesktopCancellationError(error)) return desktopFailure('DESKTOP_CANCELLED', 'Desktop wait was interrupted.');
+    throw error;
+  }
   return `Waited ${waitMs} ms.`;
 }
 
@@ -2794,6 +3465,15 @@ export async function typeTextInternal(payload: string): Promise<void> {
   if (DELEGATE_TO_BACKEND) {
     await getPlatformDesktopBackend().typeText(payload);
     return;
+  }
+  const helper = getWin32DesktopHelperClient();
+  if (helper.available) {
+    try {
+      await helper.typeText(payload);
+      return;
+    } catch {
+      // Compatibility fallback for an unavailable/outdated helper.
+    }
   }
   const escaped = psSingleQuote(payload);
   // Read current clipboard content so we can restore it after pasting.
@@ -2876,19 +3556,38 @@ export async function desktopType(text: string): Promise<string> {
   await typeTextInternal(payload);
   _macroRecord({ type: 'type', text: payload });
   markDesktopStateChanged();
-  return `Typed ${payload.length} character(s) via clipboard paste (clipboard restored).`;
+  return `Typed ${payload.length} character(s).`;
 }
 
 export async function desktopPressKey(key: string): Promise<string> {
+  const raw = String(key || '').trim();
+  const parsedKey = parseCanonicalKey(raw);
+  const modifierTokens = new Set(['ctrl', 'control', 'cmd', 'command', 'shift', 'alt', 'option']);
+  const parts = raw.split('+').map((part) => part.trim()).filter(Boolean);
+  if (parts.length > 1 && parts.slice(0, -1).some((part) => !modifierTokens.has(part.toLowerCase()))) {
+    return desktopFailure('INVALID_ARGUMENT', `Composite text "${raw}" is not one key chord. Use desktop type for text, or send one named key/chord per call.`, {
+      supplied: raw,
+      normalized: parsedKey,
+    });
+  }
   ensureWindows();
   if (DELEGATE_TO_BACKEND) {
-    await getPlatformDesktopBackend().pressKey(parseCanonicalKey(key));
+    await getPlatformDesktopBackend().pressKey(parsedKey);
   } else {
-    await pressSendKeysSpecInternal(toSendKeysSpec(key));
+    const helper = getWin32DesktopHelperClient();
+    if (helper.available) {
+      try {
+        await helper.pressKey(parsedKey.key || 'enter', parsedKey.modifiers);
+      } catch {
+        await pressSendKeysSpecInternal(toSendKeysSpec(key));
+      }
+    } else {
+      await pressSendKeysSpecInternal(toSendKeysSpec(key));
+    }
   }
   _macroRecord({ type: 'key', text: key });
   markDesktopStateChanged();
-  return `Pressed key: ${key || 'Enter'}.`;
+  return JSON.stringify({ ok: true, pressed: raw || 'Enter', normalized: parsedKey });
 }
 
 /** Raw clipboard text read (empty string if no text). Exported for Win32Backend. */
@@ -2918,14 +3617,37 @@ Write-Output "OK"
   await runPowerShell(script, { timeoutMs: 6000, sta: true });
 }
 
-export async function desktopGetClipboard(): Promise<string> {
+export async function desktopGetClipboard(options: {
+  query?: string;
+  max_chars?: number;
+  head?: number;
+  tail?: number;
+  metadata_only?: boolean;
+  include_length?: boolean;
+} = {}): Promise<string> {
   ensureWindows();
   const out = await getClipboardTextInternal();
   if (!out) return 'Clipboard is empty.';
-  if (out.length > 5000) {
-    return `Clipboard text (${out.length} chars):\n${out.slice(0, 5000)}\n...(truncated)`;
+  const query = String(options.query || '').trim();
+  const includeLength = options.include_length !== false;
+  if (options.metadata_only === true) return `Clipboard contains text${includeLength ? ` (${out.length} chars)` : ''}.`;
+
+  let selected = out;
+  let label = 'Clipboard text';
+  if (query) {
+    const matching = out.split(/\r?\n/).filter((line) => line.toLowerCase().includes(query.toLowerCase()));
+    selected = matching.join('\n');
+    label = `Clipboard matches for "${query}"`;
+    if (!selected) return `Clipboard has no text matching "${query}"${includeLength ? ` (${out.length} chars total)` : ''}.`;
   }
-  return `Clipboard text (${out.length} chars):\n${out}`;
+  const explicitHead = Number(options.head);
+  const explicitTail = Number(options.tail);
+  if (Number.isFinite(explicitHead) && explicitHead > 0) selected = selected.slice(0, Math.floor(explicitHead));
+  if (Number.isFinite(explicitTail) && explicitTail > 0) selected = selected.slice(-Math.floor(explicitTail));
+  const maxChars = clampInt(options.max_chars, 32, 20_000, 1_000);
+  const truncated = selected.length > maxChars;
+  const visible = truncated ? selected.slice(0, maxChars) : selected;
+  return `${label}${includeLength ? ` (${out.length} chars total)` : ''}:\n${visible}${truncated ? '\n...(truncated; raise max_chars for more)' : ''}`;
 }
 
 const CLIPBOARD_IMAGE_EXTS = new Set([
@@ -3163,6 +3885,7 @@ export function desktopStopMacro(name?: string): string {
 export async function desktopReplayMacro(
   name: string,
   speedMultiplier = 1.0,
+  signal?: AbortSignal,
 ): Promise<string> {
   const macroName = String(name || '').trim();
   if (!macroName) return 'ERROR: name is required.';
@@ -3181,8 +3904,9 @@ export async function desktopReplayMacro(
   let lastDelay = 0;
   try {
     for (const action of actions) {
+      throwIfDesktopCancelled(signal);
       const waitMs = Math.round((action.delay - lastDelay) / speed);
-      if (waitMs > 0) await new Promise<void>(r => setTimeout(r, waitMs));
+      if (waitMs > 0) await desktopAbortableDelay(waitMs, signal);
       lastDelay = action.delay;
 
       switch (action.type) {
@@ -3214,6 +3938,9 @@ export async function desktopReplayMacro(
           break;
       }
     }
+  } catch (error) {
+    if (isDesktopCancellationError(error)) return desktopFailure('DESKTOP_CANCELLED', `Macro "${macroName}" was interrupted.`);
+    throw error;
   } finally {
     // Restore recording state if it was active before replay
     _activeRecordingName = wasRecording;
@@ -3358,6 +4085,441 @@ public class WinFGHelper {
   }
 }
 
+// ─── Structured UI Automation state + semantic actions ──────────────────────
+
+export interface DesktopAccessibilityNode {
+  elementId: string;
+  index: number;
+  parentIndex: number | null;
+  depth: number;
+  runtimeId: string;
+  role: string;
+  name: string;
+  automationId: string;
+  className: string;
+  enabled: boolean;
+  focused: boolean;
+  offscreen: boolean;
+  bounds: { x: number; y: number; width: number; height: number };
+  patterns: string[];
+  value?: string;
+}
+
+interface DesktopAccessibilitySnapshot {
+  stateId: string;
+  windowToken: string;
+  windowId: string;
+  handle: number;
+  capturedAt: number;
+  windowGeneration: number;
+  accessibilityGeneration: number;
+  nodes: DesktopAccessibilityNode[];
+}
+
+const desktopAccessibilitySnapshots = new Map<string, DesktopAccessibilitySnapshot>();
+
+function pruneDesktopAccessibilitySnapshots(): void {
+  const now = Date.now();
+  const ttl = Math.max(5_000, Number(process.env.PROMETHEUS_DESKTOP_UIA_STATE_TTL_MS || 60_000));
+  for (const [id, state] of desktopAccessibilitySnapshots) {
+    if (now - state.capturedAt > ttl || desktopAccessibilitySnapshots.size > 80) {
+      desktopAccessibilitySnapshots.delete(id);
+    }
+  }
+}
+
+/** Return flat, machine-readable UIA nodes with snapshot-scoped element IDs. */
+export async function desktopGetAccessibilityState(
+  selector: DesktopWindowSelector,
+  maxDepth = 7,
+  maxNodes = 500,
+  signal?: AbortSignal,
+  options: { cursor?: number; limit?: number; compact?: boolean } = {},
+): Promise<string> {
+  ensureWindows();
+  throwIfDesktopCancelled(signal);
+  const resolved = await resolveCanonicalWindow({ ...selector, active: !selector.window_token && !selector.window_id && !selector.window_handle && !selector.app_id && !selector.title });
+  if (!resolved.ok) return desktopFailure(resolved.code, resolved.message, { selector });
+  const target = resolved.window;
+  const safeDepth = Math.min(Math.max(Number(maxDepth) || 7, 1), 12);
+  const safeMax = Math.min(Math.max(Number(maxNodes) || 500, 10), 1500);
+  const script = `
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$maxDepth = ${safeDepth}
+$maxNodes = ${safeMax}
+$nodes = New-Object System.Collections.ArrayList
+$errors = New-Object System.Collections.ArrayList
+
+function Convert-SafeInt($value, [string]$field, [int]$nodeIndex) {
+  try {
+    $number = [double]$value
+    if ([double]::IsNaN($number) -or [double]::IsInfinity($number)) { return $null }
+    if ($number -gt [int]::MaxValue -or $number -lt [int]::MinValue) {
+      [void]$errors.Add("node=$nodeIndex field=$field value_out_of_int32_range")
+      return $null
+    }
+    return [int][Math]::Round($number)
+  } catch {
+    [void]$errors.Add("node=$nodeIndex field=$field conversion_failed")
+    return $null
+  }
+}
+
+function Test-Pattern($element, $pattern) {
+  try {
+    $obj = $null
+    return [bool]$element.TryGetCurrentPattern($pattern, [ref]$obj)
+  } catch { return $false }
+}
+
+function Add-UiaNode($element, [int]$parentIndex, [int]$depth) {
+  if ($depth -gt $maxDepth -or $nodes.Count -ge $maxNodes) { return }
+  try {
+    $index = [int]$nodes.Count
+    $current = $element.Current
+    $rect = $current.BoundingRectangle
+    $runtime = ''
+    try { $runtime = (($element.GetRuntimeId() | ForEach-Object { [string]$_ }) -join '.') } catch { }
+    $patterns = New-Object System.Collections.ArrayList
+    if (Test-Pattern $element ([System.Windows.Automation.InvokePattern]::Pattern)) { [void]$patterns.Add('invoke') }
+    if (Test-Pattern $element ([System.Windows.Automation.ValuePattern]::Pattern)) { [void]$patterns.Add('set_value') }
+    if (Test-Pattern $element ([System.Windows.Automation.SelectionItemPattern]::Pattern)) { [void]$patterns.Add('select') }
+    if (Test-Pattern $element ([System.Windows.Automation.TogglePattern]::Pattern)) { [void]$patterns.Add('toggle') }
+    if (Test-Pattern $element ([System.Windows.Automation.ExpandCollapsePattern]::Pattern)) { [void]$patterns.Add('expand_collapse') }
+    $value = ''
+    try {
+      $vp = $null
+      if ($element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) { $value = [string]$vp.Current.Value }
+    } catch { }
+    $role = if ($current.ControlType) { $current.ControlType.ProgrammaticName.Replace('ControlType.','') } else { 'Unknown' }
+    [void]$nodes.Add([ordered]@{
+      index = $index
+      parentIndex = if ($parentIndex -ge 0) { $parentIndex } else { $null }
+      depth = $depth
+      runtimeId = $runtime
+      role = [string]$role
+      name = [string]$current.Name
+      automationId = [string]$current.AutomationId
+      className = [string]$current.ClassName
+      enabled = [bool]$current.IsEnabled
+      focused = [bool]$current.HasKeyboardFocus
+      offscreen = [bool]$current.IsOffscreen
+      x = Convert-SafeInt $rect.X 'bounds.x' $index
+      y = Convert-SafeInt $rect.Y 'bounds.y' $index
+      width = Convert-SafeInt $rect.Width 'bounds.width' $index
+      height = Convert-SafeInt $rect.Height 'bounds.height' $index
+      patterns = @($patterns.ToArray())
+      value = $value
+    })
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $child = $walker.GetFirstChild($element)
+    while ($child -ne $null -and $nodes.Count -lt $maxNodes) {
+      Add-UiaNode $child $index ($depth + 1)
+      $child = $walker.GetNextSibling($child)
+    }
+  } catch { [void]$errors.Add($_.Exception.Message) }
+}
+
+try {
+  $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new([Int64]${Math.floor(target.handle)}))
+  if (-not $root) { throw 'Could not resolve the target UI Automation root.' }
+  Add-UiaNode $root -1 0
+  [ordered]@{ ok = $true; nodes = @($nodes.ToArray()); errors = @($errors.ToArray()); truncated = ($nodes.Count -ge $maxNodes) } | ConvertTo-Json -Compress -Depth 8
+} catch {
+  [ordered]@{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
+}
+`;
+  let parsed: any;
+  try {
+    parsed = parseJsonMaybe(await runPowerShell(script, { timeoutMs: 25_000, sta: true, signal }));
+  } catch (error: any) {
+    if (isDesktopCancellationError(error) || error?.name === 'AbortError') return desktopFailure('DESKTOP_CANCELLED', 'Structured accessibility capture was interrupted.');
+    return desktopFailure('ACCESSIBILITY_FAILED', `Structured accessibility capture failed: ${String(error?.message || error)}`, { window_token: createDesktopWindowToken(target) });
+  }
+  if (!parsed?.ok || !Array.isArray(parsed.nodes)) {
+    const legacy = await desktopGetAccessibilityTree(target.title, Math.min(safeDepth, 7), Math.min(safeMax, 500)).catch(() => '');
+    return JSON.stringify({ ok: true, mode: 'legacy_fallback', partial: true, structured_error: String(parsed?.error || 'Structured accessibility capture returned invalid data.'), window_token: createDesktopWindowToken(target), legacy_tree: legacy }, null, 2);
+  }
+
+  const nonce = crypto.randomBytes(5).toString('hex');
+  const nodes: DesktopAccessibilityNode[] = parsed.nodes.map((node: any, index: number) => ({
+    elementId: `uia_${nonce}_${index}`,
+    index,
+    parentIndex: node.parentIndex == null
+      ? null
+      : (Number.isFinite(Number(node.parentIndex)) ? Number(node.parentIndex) : null),
+    depth: Number(node.depth) || 0,
+    runtimeId: String(node.runtimeId || ''),
+    role: String(node.role || 'Unknown'),
+    name: String(node.name || ''),
+    automationId: String(node.automationId || ''),
+    className: String(node.className || ''),
+    enabled: node.enabled === true,
+    focused: node.focused === true,
+    offscreen: node.offscreen === true,
+    bounds: {
+      x: Number(node.x) || 0,
+      y: Number(node.y) || 0,
+      width: Math.max(0, Number(node.width) || 0),
+      height: Math.max(0, Number(node.height) || 0),
+    },
+    patterns: Array.isArray(node.patterns) ? node.patterns.map(String) : [],
+    ...(String(node.value || '') ? { value: String(node.value) } : {}),
+  }));
+  const stateId = `uia_state_${Date.now().toString(36)}_${nonce}`;
+  const capturedGeneration = getDesktopWindowGeneration(target);
+  const snapshot: DesktopAccessibilitySnapshot = {
+    stateId,
+    windowToken: createDesktopWindowToken(target),
+    windowId: windowIdForHandle(target.handle),
+    handle: target.handle,
+    capturedAt: Date.now(),
+    windowGeneration: capturedGeneration.visual,
+    accessibilityGeneration: capturedGeneration.accessibility,
+    nodes,
+  };
+  pruneDesktopAccessibilitySnapshots();
+  desktopAccessibilitySnapshots.set(stateId, snapshot);
+  const cursor = Math.max(0, Math.floor(Number(options.cursor) || 0));
+  const pageLimit = clampInt(options.limit, 1, safeMax, options.compact === false ? safeMax : 100);
+  const page = nodes.slice(cursor, cursor + pageLimit);
+  const meaningfulNodes = nodes.filter((node) => {
+    const role = node.role.toLowerCase();
+    const name = node.name.trim().toLowerCase();
+    if (role === 'window' || role === 'pane') return false;
+    if (role === 'button' && ['minimize', 'maximize', 'restore', 'close'].includes(name)) return false;
+    return !!name || node.patterns.length > 0;
+  });
+  const chromeOnly = nodes.length > 0 && meaningfulNodes.length === 0;
+  return JSON.stringify({
+    ok: true,
+    state_id: stateId,
+    captured_at: snapshot.capturedAt,
+    window_id: snapshot.windowId,
+    window_token: snapshot.windowToken,
+    node_count: nodes.length,
+    returned_count: page.length,
+    cursor,
+    next_cursor: cursor + page.length < nodes.length ? cursor + page.length : null,
+    truncated: parsed.truncated === true,
+    partial: Array.isArray(parsed.errors) && parsed.errors.length > 0,
+    capture_errors: Array.isArray(parsed.errors) ? [...new Set(parsed.errors.map(String))].slice(0, 5) : [],
+    surface_classification: chromeOnly ? 'chrome_only' : 'structured',
+    ...(chromeOnly ? { routing_hint: 'This app exposes only window chrome through UI Automation. Prefer a native screenshot plus OCR/text targeting; avoid a second full accessibility_tree probe.' } : {}),
+    nodes: page.map((node) => options.compact !== false
+      ? {
+          element_id: node.elementId,
+          role: node.role,
+          ...(node.name ? { name: node.name } : {}),
+          ...(node.automationId ? { automation_id: node.automationId } : {}),
+          ...(node.patterns.length ? { patterns: node.patterns } : {}),
+        }
+      : {
+          element_id: node.elementId,
+          index: node.index,
+          parent_index: node.parentIndex,
+          depth: node.depth,
+          role: node.role,
+          name: node.name,
+          automation_id: node.automationId,
+          class_name: node.className,
+          enabled: node.enabled,
+          focused: node.focused,
+          offscreen: node.offscreen,
+          bounds: node.bounds,
+          patterns: node.patterns,
+          ...(node.value !== undefined ? { value: node.value } : {}),
+        }),
+  }, null, 2);
+}
+
+export type DesktopAccessibilityAction = 'invoke' | 'set_value' | 'select' | 'toggle' | 'expand' | 'collapse' | 'focus' | 'secondary_action';
+
+/** Atomic semantic helper: capture, locate, act, and return a compact result in one call. */
+export async function desktopAccessibilityFindAndAct(input: {
+  selector: DesktopWindowSelector;
+  name?: string;
+  automation_id?: string;
+  role?: string;
+  match_mode?: 'exact' | 'contains';
+  action: DesktopAccessibilityAction;
+  value?: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const captured = await desktopGetAccessibilityState(input.selector, 8, 800, input.signal, { compact: false, limit: 800 });
+  let state: any;
+  try { state = JSON.parse(captured); } catch { return captured; }
+  if (!state?.ok || !state.state_id || !Array.isArray(state.nodes)) return captured;
+  const name = String(input.name || '').trim().toLowerCase();
+  const automationId = String(input.automation_id || '').trim().toLowerCase();
+  const role = String(input.role || '').trim().toLowerCase();
+  const textMatches = (actual: unknown, wanted: string) => {
+    const normalized = String(actual || '').trim().toLowerCase();
+    return !wanted || (input.match_mode === 'contains' ? normalized.includes(wanted) : normalized === wanted);
+  };
+  const matches = state.nodes.filter((node: any) =>
+    textMatches(node.name, name)
+    && (!automationId || String(node.automation_id || '').toLowerCase() === automationId)
+    && (!role || String(node.role || '').toLowerCase() === role),
+  );
+  if (!matches.length) return desktopFailure('ELEMENT_NOT_FOUND', 'No accessibility element matched the supplied semantic selector.', { name: input.name, automation_id: input.automation_id, role: input.role });
+  if (matches.length > 1) return desktopFailure('INVALID_ARGUMENT', 'Semantic selector matched multiple elements; add automation_id or role.', { match_count: matches.length, candidates: matches.slice(0, 8).map((node: any) => ({ name: node.name, automation_id: node.automation_id, role: node.role })) });
+  let target = matches[0];
+  const expectedPattern = input.action === 'expand' || input.action === 'collapse' ? 'expand_collapse' : input.action;
+  if (input.action !== 'focus' && (!Array.isArray(target.patterns) || !target.patterns.includes(expectedPattern))) {
+    // Chromium/Electron commonly exposes visible labels as Text descendants of
+    // an actionable ListItem/Button. Walk upward before falling back to a
+    // grounded center click on the visible text bounds.
+    let parentIndex = target.parent_index;
+    while (parentIndex != null) {
+      const parent = state.nodes.find((candidate: any) => candidate.index === parentIndex);
+      if (!parent) break;
+      if (Array.isArray(parent.patterns) && parent.patterns.includes(expectedPattern)) {
+        target = parent;
+        break;
+      }
+      parentIndex = parent.parent_index;
+    }
+  }
+  if (input.action === 'invoke' && (!Array.isArray(target.patterns) || !target.patterns.includes('invoke'))) {
+    const bounds = target.bounds;
+    if (bounds && bounds.width > 0 && bounds.height > 0) {
+      const snapshot = desktopAccessibilitySnapshots.get(state.state_id);
+      if (snapshot) {
+        return desktopWindowClick(
+          { window_token: snapshot.windowToken },
+          { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2, coordinate_space: 'virtual' },
+          { verify: 'auto', signal: input.signal },
+        );
+      }
+    }
+  }
+  return desktopAccessibilityAction({ state_id: state.state_id, element_id: target.element_id, action: input.action, value: input.value, signal: input.signal });
+}
+
+/** Act on a specific node from a fresh structured accessibility snapshot. */
+export async function desktopAccessibilityAction(input: {
+  state_id: string;
+  element_id: string;
+  action: DesktopAccessibilityAction;
+  value?: string;
+  signal?: AbortSignal;
+}): Promise<string> {
+  throwIfDesktopCancelled(input.signal);
+  const stateId = String(input.state_id || '').trim();
+  const elementId = String(input.element_id || '').trim();
+  const action = String(input.action || '').trim().toLowerCase() as DesktopAccessibilityAction;
+  const state = desktopAccessibilitySnapshots.get(stateId);
+  if (!state) return desktopFailure('STATE_STALE', 'Unknown or expired accessibility state_id. Capture accessibility_state again.', { state_id: stateId });
+  const ttl = Math.max(5_000, Number(process.env.PROMETHEUS_DESKTOP_UIA_STATE_TTL_MS || 60_000));
+  const currentGeneration = getDesktopWindowGenerationByKey(state.windowToken);
+  if (Date.now() - state.capturedAt > ttl || state.accessibilityGeneration !== currentGeneration.accessibility) {
+    desktopAccessibilitySnapshots.delete(stateId);
+    return desktopFailure('STATE_STALE', 'Accessibility state expired or the target window changed. Capture accessibility_state again.', {
+      state_id: stateId,
+      captured_accessibility_generation: state.accessibilityGeneration,
+      current_accessibility_generation: currentGeneration.accessibility,
+      invalidated_by: currentGeneration.lastReason,
+    });
+  }
+  const node = state.nodes.find((candidate) => candidate.elementId === elementId);
+  if (!node) return desktopFailure('ELEMENT_NOT_FOUND', 'element_id does not exist in the supplied accessibility state.', { state_id: stateId, element_id: elementId });
+  if (!['invoke', 'set_value', 'select', 'toggle', 'expand', 'collapse', 'focus', 'secondary_action'].includes(action)) {
+    return desktopFailure('INVALID_ARGUMENT', `Unsupported accessibility action "${action}".`, { action });
+  }
+  if (action === 'set_value' && input.value == null) {
+    return desktopFailure('INVALID_ARGUMENT', 'set_value requires value.', { element_id: elementId });
+  }
+
+  const live = await resolveCanonicalWindow({ window_token: state.windowToken });
+  if (!live.ok) return desktopFailure(live.code, live.message, { state_id: stateId, window_token: state.windowToken });
+
+  if (action === 'secondary_action') {
+    const centerX = node.bounds.x + node.bounds.width / 2 - (Number(live.window.left) || 0);
+    const centerY = node.bounds.y + node.bounds.height / 2 - (Number(live.window.top) || 0);
+    return desktopWindowClick(
+      { window_token: state.windowToken },
+      { x: centerX, y: centerY, coordinate_space: 'window' },
+      { button: 'right', verify: 'auto', signal: input.signal },
+    );
+  }
+
+  const expectedPattern = action === 'expand' || action === 'collapse' ? 'expand_collapse' : action;
+  if (action !== 'focus' && !node.patterns.includes(expectedPattern)) {
+    return desktopFailure('ACTION_UNSUPPORTED', `Element does not expose the ${expectedPattern} UIA pattern.`, {
+      element_id: elementId,
+      role: node.role,
+      patterns: node.patterns,
+    });
+  }
+  const runtimeId = psSingleQuote(node.runtimeId);
+  const value = psSingleQuote(String(input.value ?? ''));
+  const script = `
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$targetRuntimeId = '${runtimeId}'
+$action = '${psSingleQuote(action)}'
+$value = '${value}'
+$found = $null
+$visited = 0
+function Find-Element($element) {
+  if (-not $element -or $script:found -or $script:visited -ge 3000) { return }
+  $script:visited++
+  try {
+    $rid = (($element.GetRuntimeId() | ForEach-Object { [string]$_ }) -join '.')
+    if ($rid -eq $targetRuntimeId) { $script:found = $element; return }
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $child = $walker.GetFirstChild($element)
+    while ($child -ne $null -and -not $script:found) {
+      Find-Element $child
+      $child = $walker.GetNextSibling($child)
+    }
+  } catch { }
+}
+try {
+  $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]::new([Int64]${Math.floor(state.handle)}))
+  Find-Element $root
+  if (-not $found) { throw 'The UIA element no longer exists.' }
+  if ($action -eq 'focus') {
+    $found.SetFocus()
+  } elseif ($action -eq 'invoke') {
+    $pattern = $found.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+    $pattern.Invoke()
+  } elseif ($action -eq 'set_value') {
+    $pattern = $found.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    $pattern.SetValue($value)
+  } elseif ($action -eq 'select') {
+    $pattern = $found.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+    $pattern.Select()
+  } elseif ($action -eq 'toggle') {
+    $pattern = $found.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+    $pattern.Toggle()
+  } elseif ($action -eq 'expand' -or $action -eq 'collapse') {
+    $pattern = $found.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    if ($action -eq 'expand') { $pattern.Expand() } else { $pattern.Collapse() }
+  }
+  [ordered]@{ ok = $true; action = $action; visited = $visited } | ConvertTo-Json -Compress
+} catch {
+  [ordered]@{ ok = $false; error = $_.Exception.Message; action = $action; visited = $visited } | ConvertTo-Json -Compress
+}
+`;
+  let parsed: any;
+  try {
+    parsed = parseJsonMaybe(await runPowerShell(script, { timeoutMs: 20_000, sta: true, signal: input.signal }));
+  } catch (error: any) {
+    if (isDesktopCancellationError(error) || error?.name === 'AbortError') return desktopFailure('DESKTOP_CANCELLED', 'UI Automation action was interrupted.');
+    return desktopFailure('ACCESSIBILITY_FAILED', String(error?.message || error), { state_id: stateId, element_id: elementId, action });
+  }
+  if (!parsed?.ok) {
+    return desktopFailure(String(parsed?.error || '').includes('no longer exists') ? 'STATE_STALE' : 'ACTION_UNSUPPORTED', String(parsed?.error || 'UI Automation action failed.'), { state_id: stateId, element_id: elementId, action });
+  }
+  markDesktopStateChanged();
+  markDesktopWindowChanged(live.window, `accessibility_${action}`, { visual: true, accessibility: true });
+  desktopAccessibilitySnapshots.delete(stateId);
+  return JSON.stringify({ ok: true, action, state_id: stateId, element_id: elementId, element: { role: node.role, name: node.name }, visited: parsed.visited }, null, 2);
+}
+
 // ─── desktop_pixel_watch ──────────────────────────────────────────────────────
 
 /**
@@ -3372,6 +4534,7 @@ export async function desktopPixelWatch(
   targetColor?: string,
   timeoutMs = 15000,
   pollMs = 500,
+  signal?: AbortSignal,
 ): Promise<string> {
   ensureWindows();
   const vx = Math.round(Number(x) || 0);
@@ -3392,6 +4555,7 @@ Write-Output ('#' + $col.R.ToString('X2') + $col.G.ToString('X2') + $col.B.ToStr
 `;
 
   try {
+    throwIfDesktopCancelled(signal);
     // Sample initial color
     const initialColor = (await runPowerShell(sampleScript(vx, vy), { timeoutMs: 5000 })).trim();
     const watchFor = targetColor
@@ -3401,7 +4565,7 @@ Write-Output ('#' + $col.R.ToString('X2') + $col.G.ToString('X2') + $col.B.ToStr
     const deadline = Date.now() + safeTimeout;
     let iterations = 0;
     while (Date.now() < deadline) {
-      await new Promise<void>(r => setTimeout(r, safePoll));
+      await desktopAbortableDelay(safePoll, signal);
       iterations++;
       const current = (await runPowerShell(sampleScript(vx, vy), { timeoutMs: 5000 })).trim();
       if (watchFor) {
@@ -3417,6 +4581,7 @@ Write-Output ('#' + $col.R.ToString('X2') + $col.G.ToString('X2') + $col.B.ToStr
     const lastColor = (await runPowerShell(sampleScript(vx, vy), { timeoutMs: 5000 })).trim();
     return `ERROR: Timed out after ${safeTimeout}ms. Pixel at (${vx}, ${vy}) is still ${lastColor}${watchFor ? ` (target: ${watchFor})` : ` (initial: ${initialColor})`}.`;
   } catch (err: any) {
+    if (isDesktopCancellationError(err)) return desktopFailure('DESKTOP_CANCELLED', 'Pixel watch was interrupted.');
     return `ERROR: desktop_pixel_watch failed: ${err.message}`;
   }
 }
@@ -3726,6 +4891,8 @@ export async function desktopLaunchApp(
 
   const pollMs = 400;
   const maxPolls = Math.max(1, Math.floor(clampInt(waitMs, 200, 60000, 6000) / pollMs));
+  const beforeWindows = await listWindowsInternal().catch(() => [] as DesktopWindowInfo[]);
+  const beforeHandles = new Set(beforeWindows.map((window) => Number(window.handle)));
 
   let launchedPid = 0;
   try {
@@ -3772,14 +4939,22 @@ export async function desktopLaunchApp(
 
       if (match) {
         lastHandle = match.handle;
-        return `Launched '${launchLabel}' (PID ${launchedPid || match.pid}). Window: "${match.title}" (${match.processName}) handle=${match.handle}.`;
+        return JSON.stringify({
+          ok: true,
+          launched: true,
+          label: launchLabel,
+          pid: launchedPid || match.pid,
+          reused_existing_instance: beforeHandles.has(Number(match.handle)),
+          clean_state_guaranteed: false,
+          window: { title: match.title, process_name: match.processName, handle: match.handle, window_token: createDesktopWindowToken(match) },
+        }, null, 2);
       }
     } catch {
       // continue polling
     }
   }
   if (launchedPid > 0) {
-    return `Launched '${launchLabel}' (PID ${launchedPid}) but no window appeared within ${waitMs}ms. App may still be starting. Use desktop_get_process_list or desktop_find_window to check.`;
+    return JSON.stringify({ ok: true, launched: true, label: launchLabel, pid: launchedPid, window_detected: false, reused_existing_instance: null, clean_state_guaranteed: false, waited_ms: waitMs }, null, 2);
   }
   return `ERROR: Failed to launch '${launchLabel}' or detect its window within ${waitMs}ms.`;
 }
@@ -3913,12 +5088,20 @@ export async function desktopFindInstalledApp(
   query: string,
   limit: number = 10,
   refresh: boolean = false,
+  exact: boolean = false,
 ): Promise<string> {
   ensureWindows();
   const clean = String(query || '').trim();
   if (!clean) return 'ERROR: query is required.';
   const safeLimit = Math.min(Math.max(Math.floor(Number(limit) || 10), 1), 50);
-  const matches = await searchInstalledApps(clean, { limit: safeLimit, refresh });
+  const ranked = await searchInstalledApps(clean, { limit: Math.max(safeLimit, 50), refresh });
+  const normalized = clean.toLowerCase();
+  const matches = ranked.filter((row) => {
+    const exactName = row.displayName.toLowerCase() === normalized
+      || row.aliases.some((alias) => alias.toLowerCase() === normalized)
+      || row.id.toLowerCase() === normalized;
+    return exact ? exactName : exactName || row.score >= 50;
+  }).slice(0, safeLimit);
   if (!matches.length) {
     return `No installed apps matched "${clean}". Use desktop_list_installed_apps with a broad filter or refresh=true to rescan.`;
   }
@@ -3959,39 +5142,75 @@ export async function desktopWaitForChange(
   sessionId: string,
   timeoutMs: number = 10000,
   pollMs: number = 800,
+  signal?: AbortSignal,
 ): Promise<string> {
   ensureWindows();
+  throwIfDesktopCancelled(signal);
   const clampedTimeout = clampInt(timeoutMs, 500, 120000, 10000);
   const clampedPoll = clampInt(pollMs, 200, 5000, 800);
+  const startedAt = Date.now();
+  const deadline = startedAt + clampedTimeout;
+  const deadlineController = new AbortController();
+  const forwardAbort = () => deadlineController.abort();
+  signal?.addEventListener('abort', forwardAbort, { once: true });
+  const deadlineTimer = setTimeout(() => deadlineController.abort(), clampedTimeout);
 
-  // Capture baseline
-  const baselineResult = await desktopScreenshot(sessionId);
-  const baselinePacket = getDesktopAdvisorPacket(sessionId);
-  const baselineHash = baselinePacket?.contentHash || '';
-
-  const deadline = Date.now() + clampedTimeout;
   let polls = 0;
+  let captureMs = 0;
+  try {
+    const baselineStarted = Date.now();
+    await desktopScreenshot(sessionId, { signal: deadlineController.signal });
+    captureMs += Date.now() - baselineStarted;
+    const baselinePacket = getDesktopAdvisorPacket(sessionId);
+    const baselineHash = baselinePacket?.contentHash || '';
 
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, clampedPoll));
+    while (Date.now() < deadline) {
+      const remainingBeforeDelay = deadline - Date.now();
+      if (remainingBeforeDelay <= 0) break;
+    try {
+      await desktopAbortableDelay(Math.min(clampedPoll, remainingBeforeDelay), deadlineController.signal);
+    } catch (error) {
+      if (signal?.aborted) return desktopFailure('DESKTOP_CANCELLED', 'Screen-change wait was interrupted.');
+      if (isDesktopCancellationError(error)) break;
+      throw error;
+    }
+    if (Date.now() >= deadline) break;
     polls++;
     try {
-      await desktopScreenshot(sessionId);
+      const captureStarted = Date.now();
+      await desktopScreenshot(sessionId, { signal: deadlineController.signal });
+      captureMs += Date.now() - captureStarted;
       const newPacket = getDesktopAdvisorPacket(sessionId);
       const newHash = newPacket?.contentHash || '';
       if (newHash && newHash !== baselineHash) {
-        const elapsed = clampedTimeout - (deadline - Date.now());
+        const elapsed = Date.now() - startedAt;
         return (
           `Screen changed after ${Math.round(elapsed)}ms (${polls} poll(s)).\n` +
+          `Requested timeout: ${clampedTimeout}ms; capture time: ${captureMs}ms.\n` +
           `Active window: ${newPacket?.activeWindow ? `"${newPacket.activeWindow.title}"` : 'unknown'}.\n` +
           `OCR preview: ${(newPacket?.ocrText || '').slice(0, 200).replace(/\s+/g, ' ').trim() || '(none)'}`
         );
       }
-    } catch {
+    } catch (error) {
+      if (signal?.aborted) return desktopFailure('DESKTOP_CANCELLED', 'Screen-change wait was interrupted.');
+      if (deadlineController.signal.aborted) break;
       // transient capture failure — keep polling
     }
   }
-  return `Timed out after ${clampedTimeout}ms (${polls} poll(s)) — screen content did not change.`;
+    return JSON.stringify({
+      ok: false,
+      code: 'TIMEOUT',
+      changed: false,
+      requested_timeout_ms: clampedTimeout,
+      actual_elapsed_ms: Date.now() - startedAt,
+      poll_count: polls,
+      capture_ms: captureMs,
+      average_capture_ms: polls >= 0 ? Math.round(captureMs / (polls + 1)) : captureMs,
+    }, null, 2);
+  } finally {
+    clearTimeout(deadlineTimer);
+    signal?.removeEventListener('abort', forwardAbort);
+  }
 }
 
 /**
@@ -4075,15 +5294,25 @@ export async function desktopDiffScreenshot(sessionId: string): Promise<string> 
  * More reliable than OCR for text-based UIs — returns structured text content.
  * If no windowName given, reads the currently active/foreground window.
  */
-export async function desktopGetWindowText(windowName?: string): Promise<string> {
+export async function desktopGetWindowText(
+  windowName?: string,
+  options: { query?: string; max_chars?: number; max_lines?: number } = {},
+): Promise<string> {
   ensureWindows();
   const query = String(windowName || '').trim();
+  const textQuery = String(options.query || '').trim().toLowerCase();
+  const maxChars = clampInt(options.max_chars, 64, 20_000, 4_000);
+  const maxLines = clampInt(options.max_lines, 1, 2_000, 200);
+  const boundText = (value: string): string => {
+    let lines = String(value || '').trim().split(/\r?\n/);
+    if (textQuery) lines = lines.filter((line) => line.toLowerCase().includes(textQuery));
+    const bounded = lines.slice(0, maxLines).join('\n').slice(0, maxChars).trim();
+    return bounded || (textQuery ? `No text matching "${options.query}" found in window.` : 'No text content found in window.');
+  };
   if (DELEGATE_TO_BACKEND) {
     try {
       const out = await desktopGetAccessibilityTree(query || undefined, 6, 500);
-      const text = String(out || '').trim();
-      if (!text) return 'No text content found in window.';
-      return text.slice(0, 8000);
+      return boundText(String(out || ''));
     } catch (e: any) {
       return `ERROR: ${e?.message || e}`;
     }
@@ -4140,9 +5369,7 @@ try {
 `;
   try {
     const out = await runPowerShell(script, { timeoutMs: 10000, sta: true });
-    const text = String(out || '').trim();
-    if (!text) return 'No text content found in window.';
-    return text.slice(0, 8000);
+    return boundText(String(out || ''));
   } catch (e: any) {
     return `ERROR: ${e?.message || e}`;
   }
@@ -4156,13 +5383,26 @@ try {
  * the model supports vision; you then use desktop_click, desktop_scroll, etc.
  */
 export interface DesktopWindowScreenshotOptions {
+  window_token?: string;
+  window_id?: string;
+  window_handle?: number;
+  app_id?: string;
+  title?: string;
   name?: string;
   handle?: number;
   active?: boolean;
   focus_first?: boolean;
   padding?: number;
+  /** Window-relative logical crop [x1,y1,x2,y2], applied before normalization. */
+  region?: [number, number, number, number];
   mode?: 'normal' | 'som';
   som?: boolean;
+  /** Skip OCR for a fast vision-first capture. */
+  skipOcr?: boolean;
+  signal?: AbortSignal;
+  /** Internal fast-path inputs supplied by a caller that already resolved the window. */
+  resolvedTarget?: DesktopWindowInfo;
+  resolvedContext?: DesktopContextGathered;
 }
 
 export async function desktopWindowScreenshot(
@@ -4170,14 +5410,21 @@ export async function desktopWindowScreenshot(
   options?: DesktopWindowScreenshotOptions,
 ): Promise<string> {
   ensureWindows();
+  throwIfDesktopCancelled(options?.signal);
   const query = String(options?.name || '').trim();
-  const handleNum = Number(options?.handle || 0);
+  const handleNum = Number(options?.window_handle || options?.handle || 0);
   const hasHandle = Number.isFinite(handleNum) && handleNum > 0;
-  const useActive = options?.active === true || (!query && !hasHandle);
-  const focusFirst = options?.focus_first !== false;
+  const hasCanonicalSelector = !!(options?.window_token || options?.window_id || options?.app_id || options?.title);
+  const useActive = options?.active === true || (!query && !hasHandle && !hasCanonicalSelector);
+  const configuredCaptureBackend = resolveDesktopCaptureBackend();
+  // WGC captures an occluded window without stealing focus. The legacy screen
+  // crop must focus by default so another app does not cover the target pixels.
+  const focusFirst = options?.focus_first == null
+    ? configuredCaptureBackend.active !== 'graphics_capture'
+    : options.focus_first === true;
   const padding = clampInt(options?.padding, 0, 120, 8);
 
-  let ctx = await gatherDesktopContextInternal();
+  let ctx = options?.resolvedContext || await gatherDesktopContextInternal(options?.signal);
   const resolveTarget = (context: DesktopContextGathered): DesktopWindowInfo | null => {
     if (hasHandle) {
       const byHandle = context.windows.find((w) => Number(w.handle) === Math.floor(handleNum));
@@ -4191,7 +5438,22 @@ export async function desktopWindowScreenshot(
     return null;
   };
 
-  let target = resolveTarget(ctx);
+  let target: DesktopWindowInfo | null = options?.resolvedTarget || null;
+  if (!target) {
+    if (hasCanonicalSelector) {
+      const resolved = await resolveCanonicalWindow({
+        window_token: options?.window_token,
+        window_id: options?.window_id,
+        window_handle: options?.window_handle,
+        app_id: options?.app_id,
+        title: options?.title,
+      }, ctx);
+      if (!resolved.ok) return desktopFailure(resolved.code, resolved.message, { selector: options });
+      target = resolved.window;
+    } else {
+      target = resolveTarget(ctx);
+    }
+  }
   if (!target) {
     return hasHandle
       ? `ERROR: No window found for handle=${Math.floor(handleNum)}.`
@@ -4201,14 +5463,16 @@ export async function desktopWindowScreenshot(
   }
 
   if (focusFirst) {
-    const focused = await focusWindowHandle(target.handle);
-    if (!focused) {
-      return `ERROR: Failed to focus target window "${target.title}" (${target.processName}).`;
+    if (!sameDesktopWindowHandle(ctx.activeWindow, target)) {
+      const focused = await focusWindowHandle(target.handle);
+      if (!focused) {
+        return `ERROR: Failed to focus target window "${target.title}" (${target.processName}).`;
+      }
+      await desktopAbortableDelay(220, options?.signal);
+      ctx = await gatherDesktopContextInternal(options?.signal);
+      const refreshed = ctx.windows.find((w) => w.handle === target!.handle);
+      target = refreshed || resolveTarget(ctx) || target;
     }
-    await new Promise((r) => setTimeout(r, 220));
-    ctx = await gatherDesktopContextInternal();
-    const refreshed = ctx.windows.find((w) => w.handle === target!.handle);
-    target = refreshed || resolveTarget(ctx) || target;
   }
 
   const left = Number(target.left);
@@ -4219,29 +5483,164 @@ export async function desktopWindowScreenshot(
     return `ERROR: Target window bounds unavailable for "${target.title}" (${target.processName}). Try desktop_focus_window first.`;
   }
 
-  const x1 = Math.floor(left - padding);
-  const y1 = Math.floor(top - padding);
-  const x2 = Math.floor(left + width + padding);
-  const y2 = Math.floor(top + height + padding);
+  let requestedRegion: [number, number, number, number] | undefined;
+  if (Array.isArray(options?.region) && options.region.length === 4) {
+    const raw = options.region.map(Number);
+    if (!raw.every(Number.isFinite)) return 'ERROR: Window screenshot region must contain four finite numbers.';
+    const rx1 = Math.max(0, Math.min(width, Math.floor(raw[0])));
+    const ry1 = Math.max(0, Math.min(height, Math.floor(raw[1])));
+    const rx2 = Math.max(0, Math.min(width, Math.ceil(raw[2])));
+    const ry2 = Math.max(0, Math.min(height, Math.ceil(raw[3])));
+    if (rx2 <= rx1 || ry2 <= ry1) {
+      return `ERROR: Window screenshot region [${raw.join(', ')}] is empty or outside the ${Math.floor(width)}x${Math.floor(height)} window.`;
+    }
+    requestedRegion = [rx1, ry1, rx2, ry2];
+  }
+
+  let x1 = requestedRegion ? Math.floor(left + requestedRegion[0]) : Math.floor(left - padding);
+  let y1 = requestedRegion ? Math.floor(top + requestedRegion[1]) : Math.floor(top - padding);
+  let x2 = requestedRegion ? Math.ceil(left + requestedRegion[2]) : Math.floor(left + width + padding);
+  let y2 = requestedRegion ? Math.ceil(top + requestedRegion[3]) : Math.floor(top + height + padding);
   if (x2 <= x1 || y2 <= y1) return 'ERROR: Computed window crop region is invalid.';
 
-  let shot: Awaited<ReturnType<typeof captureScreenshotInternal>>;
-  try {
-    shot = await captureScreenshotInternal({ kind: 'all' }, [x1, y1, x2, y2]);
-  } catch (e: any) {
-    return `ERROR: ${e?.message || e}`;
+  let shot: {
+    path: string;
+    width: number;
+    height: number;
+    left: number;
+    top: number;
+    captureMode: 'all' | 'primary' | 'monitor' | 'window';
+    captureMonitorIndex?: number;
+    logicalWidth?: number;
+    logicalHeight?: number;
+  };
+  let captureBackendUsed: DesktopCaptureBackend = configuredCaptureBackend.active;
+  let captureFallbackNote = '';
+  let shotBuffer: Buffer | null = null;
+  if (configuredCaptureBackend.active === 'graphics_capture') {
+    try {
+      const windowToken = createDesktopWindowToken(target);
+      const visualGeneration = getDesktopWindowGeneration(target).visual;
+      const cachedFrame = desktopWindowFrameCache.get(windowToken);
+      const canReuseFrame = !!cachedFrame
+        && Date.now() - cachedFrame.capturedAt <= DESKTOP_WINDOW_FRAME_CACHE_MS
+        && cachedFrame.visualGeneration === visualGeneration
+        && cachedFrame.bounds.left === left
+        && cachedFrame.bounds.top === top
+        && cachedFrame.bounds.width === width
+        && cachedFrame.bounds.height === height;
+      const capture = canReuseFrame
+        ? { png: cachedFrame!.png, bounds: cachedFrame!.bounds, devicePixelRatio: 1 }
+        : await getPlatformDesktopBackend().capture({ kind: 'window', handle: target.handle }, options?.signal);
+      if (!canReuseFrame) {
+        desktopWindowFrameCache.set(windowToken, {
+          capturedAt: Date.now(), visualGeneration,
+          bounds: { left: capture.bounds.left, top: capture.bounds.top, width: capture.bounds.width, height: capture.bounds.height },
+          png: capture.png,
+        });
+        if (desktopWindowFrameCache.size > 12) {
+          const oldest = [...desktopWindowFrameCache.entries()].sort((a, b) => a[1].capturedAt - b[1].capturedAt)[0];
+          if (oldest) desktopWindowFrameCache.delete(oldest[0]);
+        }
+      }
+      const decoded = await Jimp.read(capture.png);
+      const tempPath = path.join(os.tmpdir(), `prometheus-window-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.png`);
+      shotBuffer = capture.png;
+      x1 = Math.floor(capture.bounds.left);
+      y1 = Math.floor(capture.bounds.top);
+      x2 = Math.floor(capture.bounds.left + capture.bounds.width);
+      y2 = Math.floor(capture.bounds.top + capture.bounds.height);
+      shot = {
+        path: tempPath,
+        width: decoded.bitmap.width,
+        height: decoded.bitmap.height,
+        left: capture.bounds.left,
+        top: capture.bounds.top,
+        captureMode: 'window',
+        logicalWidth: capture.bounds.width,
+        logicalHeight: capture.bounds.height,
+      };
+    } catch (error: any) {
+      if (isDesktopCancellationError(error) || error?.name === 'AbortError') {
+        return desktopFailure('DESKTOP_CANCELLED', 'Window screenshot was interrupted.');
+      }
+      captureBackendUsed = 'window_crop';
+      captureFallbackNote = `Windows.Graphics.Capture failed (${String(error?.message || error).slice(0, 180)}); used visible screen crop fallback.`;
+      try {
+        shot = await captureScreenshotInternal({ kind: 'all' }, [x1, y1, x2, y2], options?.signal);
+      } catch (fallbackError: any) {
+        if (isDesktopCancellationError(fallbackError) || fallbackError?.name === 'AbortError') {
+          return desktopFailure('DESKTOP_CANCELLED', 'Window screenshot was interrupted.');
+        }
+        return desktopFailure('CAPTURE_FAILED', String(fallbackError?.message || fallbackError), {
+          graphics_capture_error: String(error?.message || error),
+          window_token: createDesktopWindowToken(target),
+        });
+      }
+    }
+  } else {
+    try {
+      shot = await captureScreenshotInternal({ kind: 'all' }, [x1, y1, x2, y2], options?.signal);
+    } catch (error: any) {
+      if (isDesktopCancellationError(error) || error?.name === 'AbortError') {
+        return desktopFailure('DESKTOP_CANCELLED', 'Window screenshot was interrupted.');
+      }
+      return desktopFailure('CAPTURE_FAILED', String(error?.message || error), { window_token: createDesktopWindowToken(target) });
+    }
+  }
+
+  // Windows.Graphics.Capture returns the entire native window. Crop it here,
+  // before OCR and transport normalization, so dense ribbons/sidebars retain
+  // their original pixels and the packet still maps clicks to logical coords.
+  if (requestedRegion && shot.captureMode === 'window') {
+    try {
+      const nativeImage = shotBuffer ? await Jimp.read(shotBuffer) : await Jimp.read(shot.path);
+      const logicalWidth = Math.max(1, Number(shot.logicalWidth ?? width));
+      const logicalHeight = Math.max(1, Number(shot.logicalHeight ?? height));
+      const scaleX = nativeImage.bitmap.width / logicalWidth;
+      const scaleY = nativeImage.bitmap.height / logicalHeight;
+      const pixelX = Math.max(0, Math.min(nativeImage.bitmap.width - 1, Math.floor(requestedRegion[0] * scaleX)));
+      const pixelY = Math.max(0, Math.min(nativeImage.bitmap.height - 1, Math.floor(requestedRegion[1] * scaleY)));
+      const pixelX2 = Math.max(pixelX + 1, Math.min(nativeImage.bitmap.width, Math.ceil(requestedRegion[2] * scaleX)));
+      const pixelY2 = Math.max(pixelY + 1, Math.min(nativeImage.bitmap.height, Math.ceil(requestedRegion[3] * scaleY)));
+      nativeImage.crop(pixelX, pixelY, pixelX2 - pixelX, pixelY2 - pixelY);
+      shotBuffer = await nativeImage.getBufferAsync(Jimp.MIME_PNG);
+      shot.width = nativeImage.bitmap.width;
+      shot.height = nativeImage.bitmap.height;
+      shot.left = left + requestedRegion[0];
+      shot.top = top + requestedRegion[1];
+      shot.logicalWidth = requestedRegion[2] - requestedRegion[0];
+      shot.logicalHeight = requestedRegion[3] - requestedRegion[1];
+      x1 = Math.floor(shot.left);
+      y1 = Math.floor(shot.top);
+      x2 = Math.ceil(shot.left + shot.logicalWidth);
+      y2 = Math.ceil(shot.top + shot.logicalHeight);
+    } catch (error: any) {
+      try { fs.unlinkSync(shot.path); } catch {}
+      return desktopFailure('CAPTURE_FAILED', `Native window region crop failed: ${String(error?.message || error)}`);
+    }
   }
 
   const openWindows = ctx.windows;
   const activeWindow = ctx.activeWindow;
-  const ocr = await runOcr(shot.path);
+  if (shotBuffer && options?.skipOcr !== true) fs.writeFileSync(shot.path, shotBuffer);
+  const ocr = options?.skipOcr === true ? null : await runOcr(shot.path);
+  if (options?.signal?.aborted) {
+    try { fs.unlinkSync(shot.path); } catch { /* best effort */ }
+    return desktopFailure('DESKTOP_CANCELLED', 'Window screenshot was interrupted during OCR.');
+  }
 
-  let png: Buffer = fs.readFileSync(shot.path);
+  let png: Buffer = shotBuffer || fs.readFileSync(shot.path);
   try { fs.unlinkSync(shot.path); } catch {}
-  const captureRegion = { left: shot.left, top: shot.top, width: shot.width, height: shot.height };
+  const captureRegion = {
+    left: shot.left,
+    top: shot.top,
+    width: shot.logicalWidth ?? shot.width,
+    height: shot.logicalHeight ?? shot.height,
+  };
   let somElements: DesktopSomElement[] = [];
   if (options?.som === true || options?.mode === 'som') {
-    const treeText = await desktopGetAccessibilityTree(undefined, 5, 500).catch(() => '');
+    const treeText = await desktopGetAccessibilityTree(target.title, 5, 500).catch(() => '');
     somElements = parseSomElementsFromAccessibilityTree(treeText, captureRegion);
     png = await renderSomOverlay(png, somElements, captureRegion).catch((): Buffer => png);
   }
@@ -4276,8 +5675,8 @@ export async function desktopWindowScreenshot(
     virtualScreen: vs.width > 0 ? vs : undefined,
     captureRegion,
     coordinateScale: {
-      x: shot.width / Math.max(1, imageWidth),
-      y: shot.height / Math.max(1, imageHeight),
+      x: captureRegion.width / Math.max(1, imageWidth),
+      y: captureRegion.height / Math.max(1, imageHeight),
     },
     normalizedScreenshot: normalized?.normalized
       ? {
@@ -4299,14 +5698,17 @@ export async function desktopWindowScreenshot(
   const ocrLen = ocr?.text ? ocr.text.length : 0;
   const screenshotIdLine = `Screenshot ID: ${packet.screenshotId}.`;
   const captureUsageLine =
-    `Use coordinate_space="capture" or "window" with screenshot_id="${packet.screenshotId}" for clicks; recapture if window moves. For minimize/maximize/restore/close, use desktop_window_control.`;
+    `For a point chosen from this image, use coordinate_space="capture" with screenshot_id="${packet.screenshotId}". Use coordinate_space="window" only for independently known logical window coordinates. Recapture if the window moves. For minimize/maximize/restore/close, use desktop_window_control.`;
 
   return [
     `Window screenshot captured (${imageWidth}x${imageHeight}${normalized?.normalized ? `, normalized from ${shot.width}x${shot.height}` : ''}).`,
     screenshotIdLine,
     `Target window: "${target.title}" (${target.processName}).`,
     `Window bounds: left=${Math.floor(left)}, top=${Math.floor(top)}, width=${Math.floor(width)}, height=${Math.floor(height)}.`,
-    `Capture region: [${x1}, ${y1}] to [${x2}, ${y2}] (padding ${padding}px).`,
+    ...(requestedRegion ? [`Requested window-relative region: [${requestedRegion.join(', ')}].`] : []),
+    `Capture region: [${x1}, ${y1}] to [${x2}, ${y2}]${shot.captureMode === 'window' ? ' (native window capture)' : ` (padding ${padding}px)`}.`,
+    `Capture backend: ${captureBackendUsed}.`,
+    captureFallbackNote,
     captureUsageLine,
     (options?.som === true || options?.mode === 'som') ? formatSomElements(somElements) || 'SOM mode requested, but no UI Automation elements were found inside this window capture.' : '',
     `Active window: ${shortWindowLabel(activeWindow)}.`,
@@ -4335,43 +5737,93 @@ export {
 export type DesktopCaptureBackend = 'graphics_capture' | 'copy_from_screen' | 'window_crop';
 
 /**
- * Resolve the configured capture backend. Windows.Graphics.Capture is the
- * long-term goal (it can capture occluded windows); until a native helper is
- * installed we always fall back to the stable CopyFromScreen path. The env var
- * lets operators force a backend for diagnostics.
+ * Resolve the configured capture backend. A persistent native helper provides
+ * occlusion-safe Windows.Graphics.Capture when built/installed; otherwise the
+ * stable CopyFromScreen/window-crop path remains available. The env var lets
+ * operators force a backend for diagnostics.
  */
 export function resolveDesktopCaptureBackend(): { requested: DesktopCaptureBackend | 'auto'; active: DesktopCaptureBackend; reason: string } {
   const raw = String(process.env.PROMETHEUS_DESKTOP_CAPTURE_BACKEND || 'auto').trim().toLowerCase();
   const requested: DesktopCaptureBackend | 'auto' =
     raw === 'graphics_capture' || raw === 'copy_from_screen' || raw === 'window_crop' ? raw : 'auto';
-  // Windows.Graphics.Capture helper is not yet bundled; only CopyFromScreen and
-  // its window_crop variant are wired up today.
+  const helperAvailable = process.platform === 'win32' && isWin32DesktopHelperAvailable();
+  if (requested === 'copy_from_screen' || requested === 'window_crop') {
+    return {
+      requested,
+      active: requested,
+      reason: `${requested} forced by PROMETHEUS_DESKTOP_CAPTURE_BACKEND.`,
+    };
+  }
+  if (helperAvailable) {
+    return {
+      requested,
+      active: 'graphics_capture',
+      reason: 'Persistent Windows helper is available; using Windows.Graphics.Capture for per-window screenshots.',
+    };
+  }
   if (requested === 'graphics_capture') {
     return {
       requested,
       active: 'copy_from_screen',
-      reason: 'graphics_capture requested but the Windows.Graphics.Capture helper is not installed; using copy_from_screen fallback.',
+      reason: 'graphics_capture requested but the native helper is unavailable; using CopyFromScreen fallback.',
     };
   }
   return {
     requested,
     active: 'copy_from_screen',
     reason: requested === 'auto'
-      ? 'auto resolved to copy_from_screen (Windows.Graphics.Capture helper not installed).'
+      ? 'auto resolved to copy_from_screen because the native Windows.Graphics.Capture helper is unavailable.'
       : `${requested} active.`,
   };
 }
 
 export interface DesktopWindowState {
   windowId: string;
+  /** Strong point-in-time identity: HWND + PID + process creation time. */
+  windowToken: string;
   handle: number;
   appId: string;
   processName: string;
   pid: number;
+  processStartTime?: number;
   title: string;
   bounds: { left: number; top: number; width: number; height: number };
   monitorIndex?: number;
   isActive: boolean;
+}
+
+export type DesktopFailureCode =
+  | 'WINDOW_NOT_FOUND'
+  | 'STALE_WINDOW'
+  | 'FOCUS_FAILED'
+  | 'INVALID_ARGUMENT'
+  | 'STATE_STALE'
+  | 'ELEMENT_NOT_FOUND'
+  | 'ACTION_UNSUPPORTED'
+  | 'ACCESSIBILITY_FAILED'
+  | 'WINDOW_ACTION_FAILED'
+  | 'CAPTURE_FAILED'
+  | 'HELPER_UNAVAILABLE'
+  | 'DESKTOP_CANCELLED'
+  | 'BACKGROUND_TIMEOUT'
+  | 'BACKGROUND_FAILED';
+
+/** Machine-readable failure envelope that preserves the legacy ERROR prefix. */
+export function desktopFailure(
+  code: DesktopFailureCode,
+  message: string,
+  details: Record<string, unknown> = {},
+): string {
+  return [
+    `ERROR: [${code}] ${message}`,
+    JSON.stringify({
+      ok: false,
+      code,
+      message,
+      retryable: ['WINDOW_NOT_FOUND', 'STALE_WINDOW', 'FOCUS_FAILED', 'STATE_STALE', 'CAPTURE_FAILED', 'HELPER_UNAVAILABLE', 'DESKTOP_CANCELLED', 'BACKGROUND_TIMEOUT'].includes(code),
+      details,
+    }, null, 2),
+  ].join('\n');
 }
 
 export interface DesktopAppState {
@@ -4383,8 +5835,9 @@ export interface DesktopAppState {
   windows: DesktopWindowState[];
 }
 
-/** Stable window id derived from the HWND. Persists while the window is open. */
-function windowIdForHandle(handle: number): string {
+/** Compatibility id derived from HWND. Prefer windowToken for actions because
+ * Windows may eventually reuse an HWND after its original window closes. */
+export function windowIdForHandle(handle: number): string {
   return `win_${Math.floor(Number(handle) || 0)}`;
 }
 
@@ -4393,6 +5846,45 @@ function parseWindowId(windowId?: string | null): number | null {
   if (!m) return null;
   const h = Number(m[1]);
   return Number.isFinite(h) && h > 0 ? h : null;
+}
+
+export interface DesktopWindowTokenParts {
+  handle: number;
+  pid: number;
+  processStartTime: number;
+}
+
+export function createDesktopWindowToken(window: Pick<DesktopWindowInfo, 'handle' | 'pid' | 'processStartTime'>): string {
+  const handle = Math.max(0, Math.floor(Number(window.handle) || 0));
+  const pid = Math.max(0, Math.floor(Number(window.pid) || 0));
+  const processStartTime = Math.max(0, Math.floor(Number(window.processStartTime) || 0));
+  const payload = `${handle}.${pid}.${processStartTime}`;
+  const checksum = crypto.createHash('sha256').update(payload).digest('hex').slice(0, 12);
+  return `wt_${handle}_${pid}_${processStartTime.toString(36)}_${checksum}`;
+}
+
+export function parseDesktopWindowToken(token?: string | null): DesktopWindowTokenParts | null {
+  const match = String(token || '').trim().match(/^wt_(\d+)_(\d+)_([0-9a-z]+)_([0-9a-f]{12})$/i);
+  if (!match) return null;
+  const handle = Number(match[1]);
+  const pid = Number(match[2]);
+  const processStartTime = Number.parseInt(match[3], 36);
+  if (![handle, pid, processStartTime].every(Number.isFinite) || handle <= 0 || pid <= 0) return null;
+  const expected = createDesktopWindowToken({ handle, pid, processStartTime });
+  return expected.toLowerCase() === String(token).trim().toLowerCase()
+    ? { handle, pid, processStartTime }
+    : null;
+}
+
+export interface DesktopWindowSelector {
+  /** Strong selector returned by desktop_window(action="state") / list_windows. */
+  window_token?: string;
+  /** Compatibility selector derived from HWND. */
+  window_id?: string;
+  window_handle?: number;
+  app_id?: string;
+  title?: string;
+  active?: boolean;
 }
 
 /** Stable app id for a running process group. */
@@ -4426,10 +5918,12 @@ function toDesktopWindowState(w: DesktopWindowInfo, activeHandle: number): Deskt
   const handle = normalizedWindowHandle(w);
   return {
     windowId: windowIdForHandle(handle),
+    windowToken: createDesktopWindowToken(w),
     handle,
     appId: appIdForWindow(w),
     processName: w.processName,
     pid: Number(w.pid) || 0,
+    processStartTime: Number(w.processStartTime) || undefined,
     title: w.title,
     bounds: {
       left: Number(w.left) || 0,
@@ -4455,12 +5949,41 @@ export async function desktopListWindowStates(): Promise<DesktopWindowState[]> {
  * Preference order: window_id / window_handle (exact) → app_id → title.
  */
 export async function resolveCanonicalWindow(
-  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string; active?: boolean },
-): Promise<{ ok: true; window: DesktopWindowInfo; hint?: string } | { ok: false; message: string }> {
+  selector: DesktopWindowSelector,
+  knownContext?: DesktopContextGathered,
+): Promise<{ ok: true; window: DesktopWindowInfo; hint?: string; isActive?: boolean; context: DesktopContextGathered } | { ok: false; code: DesktopFailureCode; message: string }> {
   ensureWindows();
-  const ctx = await gatherDesktopContextInternal();
+  const ctx = knownContext || await gatherDesktopContextInternal();
   const windows = ctx.windows;
+  const activeHandle = normalizedWindowHandle(ctx.activeWindow);
+  const resolvedWindow = (window: DesktopWindowInfo, hint?: string) => ({
+    ok: true as const,
+    window,
+    ...(hint ? { hint } : {}),
+    isActive: normalizedWindowHandle(window) === activeHandle,
+    context: ctx,
+  });
   const byHandle = (h: number) => windows.find((w) => normalizedWindowHandle(w) === Math.floor(h)) || null;
+
+  const token = selector.window_token ? parseDesktopWindowToken(selector.window_token) : null;
+  if (selector.window_token && !token) {
+    return { ok: false, code: 'INVALID_ARGUMENT', message: 'window_token is malformed or its checksum is invalid. Capture fresh window state.' };
+  }
+  if (token) {
+    const live = byHandle(token.handle);
+    if (!live) {
+      return { ok: false, code: 'STALE_WINDOW', message: 'The window referenced by window_token is no longer open. Capture fresh window state.' };
+    }
+    const liveStart = Math.floor(Number(live.processStartTime) || 0);
+    if (Number(live.pid) !== token.pid || liveStart !== token.processStartTime) {
+      return {
+        ok: false,
+        code: 'STALE_WINDOW',
+        message: `The HWND in window_token now belongs to a different process/window (expected pid=${token.pid}, start=${token.processStartTime}; found pid=${live.pid}, start=${liveStart}).`,
+      };
+    }
+    return resolvedWindow(live);
+  }
 
   const explicitHandle = Number(selector.window_handle);
   const idHandle = parseWindowId(selector.window_id);
@@ -4470,44 +5993,36 @@ export async function resolveCanonicalWindow(
 
   if (handle > 0) {
     const w = byHandle(handle);
-    if (w) return { ok: true, window: w };
-    return { ok: false, message: `No open window for ${selector.window_id ? `window_id="${selector.window_id}"` : `window_handle=${handle}`}. Capture a fresh desktop_get_window_state or desktop_list_windows.` };
+    if (w) return resolvedWindow(w);
+    return { ok: false, code: 'WINDOW_NOT_FOUND', message: `No open window for ${selector.window_id ? `window_id="${selector.window_id}"` : `window_handle=${handle}`}. Capture fresh window state or list_windows.` };
   }
 
   if (selector.app_id) {
     const appId = String(selector.app_id).trim().toLowerCase();
     const matches = windows.filter((w) => appIdForWindow(w) === appId || appIdForProcess(w.processName) === appId);
-    if (matches.length === 1) return { ok: true, window: matches[0] };
+    if (matches.length === 1) return resolvedWindow(matches[0]);
     if (matches.length > 1) {
       const active = matches.find((w) => normalizedWindowHandle(w) === normalizedWindowHandle(ctx.activeWindow));
-      return {
-        ok: true,
-        window: active || matches[0],
-        hint: `app_id "${selector.app_id}" has ${matches.length} windows; targeting ${shortWindowLabel(active || matches[0])}. Pass window_id for an exact window.`,
-      };
+      return resolvedWindow(active || matches[0], `app_id "${selector.app_id}" has ${matches.length} windows; targeting ${shortWindowLabel(active || matches[0])}. Pass window_id for an exact window.`);
     }
-    return { ok: false, message: `No open window for app_id "${selector.app_id}".` };
+    return { ok: false, code: 'WINDOW_NOT_FOUND', message: `No open window for app_id "${selector.app_id}".` };
   }
 
   if (selector.title) {
     const matches = findWindowsByName(windows, String(selector.title));
     if (matches.length >= 1) {
-      return {
-        ok: true,
-        window: matches[0],
-        hint: matches.length > 1
-          ? `${matches.length} windows match "${selector.title}"; targeting ${shortWindowLabel(matches[0])}. Pass window_id (from desktop_list_windows) for deterministic targeting.`
-          : `Resolved by title; prefer window_id from desktop_list_windows for deterministic targeting.`,
-      };
+      return resolvedWindow(matches[0], matches.length > 1
+        ? `${matches.length} windows match "${selector.title}"; targeting ${shortWindowLabel(matches[0])}. Pass window_id (from desktop_list_windows) for deterministic targeting.`
+        : `Resolved by title; prefer window_id from desktop_list_windows for deterministic targeting.`);
     }
-    return { ok: false, message: `No open window matching title "${selector.title}".` };
+    return { ok: false, code: 'WINDOW_NOT_FOUND', message: `No open window matching title "${selector.title}".` };
   }
 
   if (selector.active === true && ctx.activeWindow) {
-    return { ok: true, window: ctx.activeWindow };
+    return resolvedWindow(ctx.activeWindow);
   }
 
-  return { ok: false, message: 'Provide window_id, window_handle, app_id, or title to identify the window.' };
+  return { ok: false, code: 'INVALID_ARGUMENT', message: 'Provide window_token, window_id, window_handle, app_id, or title to identify the window.' };
 }
 
 /**
@@ -4518,6 +6033,7 @@ export async function resolveCanonicalWindow(
 export async function desktopListApps(
   filter: string = '',
   includeWindows: boolean = true,
+  options: { scope?: 'running' | 'installed' | 'all'; compact?: boolean; limit?: number; cursor?: number } = {},
 ): Promise<string> {
   ensureWindows();
   const ctx = await gatherDesktopContextInternal();
@@ -4543,9 +6059,15 @@ export async function desktopListApps(
     app.windows.push(toDesktopWindowState(w, activeHandle));
   }
 
-  // Merge installed-app inventory for richer display names / not-running apps.
+  const scope = options.scope || (filter ? 'all' : 'running');
+  const compact = options.compact !== false;
+  const limit = clampInt(options.limit, 1, 100, 25);
+  const cursor = Math.max(0, Math.floor(Number(options.cursor) || 0));
+
+  // Merge installed-app inventory only when requested; the default running-only
+  // path avoids a large inventory scan and thousands of low-value output tokens.
   const apps: DesktopAppState[] = [];
-  try {
+  if (scope !== 'running') try {
     const inventory = await getInstalledAppsInventory({ refresh: false });
     const runningProcs = new Set(Array.from(runningByApp.keys()));
     for (const rec of inventory.apps) {
@@ -4571,7 +6093,7 @@ export async function desktopListApps(
   } catch {
     /* inventory optional */
   }
-  apps.push(...runningByApp.values());
+  if (scope !== 'installed') apps.push(...runningByApp.values());
 
   let filtered = apps;
   if (clean) {
@@ -4583,21 +6105,21 @@ export async function desktopListApps(
   }
   // Running apps first, then alphabetical.
   filtered.sort((a, b) => (Number(b.isRunning) - Number(a.isRunning)) || a.displayName.localeCompare(b.displayName));
-  const shown = filtered.slice(0, 120);
+  const shown = filtered.slice(cursor, cursor + limit);
 
   const payload = shown.map((a) => ({
     app_id: a.appId,
     display_name: a.displayName,
     process_name: a.processName,
-    executable_path: a.executablePath,
+    ...(!compact && a.executablePath ? { executable_path: a.executablePath } : {}),
     is_running: a.isRunning,
     ...(includeWindows
       ? {
           windows: a.windows.map((w) => ({
             window_id: w.windowId,
-            handle: w.handle,
+            window_token: w.windowToken,
             title: w.title,
-            bounds: w.bounds,
+            ...(!compact ? { bounds: w.bounds, handle: w.handle } : {}),
             monitor_index: w.monitorIndex,
             is_active: w.isActive,
           })),
@@ -4606,14 +6128,14 @@ export async function desktopListApps(
   }));
 
   return [
-    `Apps (${shown.length}${filtered.length > shown.length ? ` of ${filtered.length}` : ''}; running first). Pass app_id to desktop_launch_app or window_id to desktop_get_window_state / desktop_window_click.`,
+    `Apps (${shown.length} shown of ${filtered.length}; scope=${scope}; cursor=${cursor}; next_cursor=${cursor + shown.length < filtered.length ? cursor + shown.length : 'none'}).`,
     JSON.stringify(payload, null, 2),
   ].join('\n');
 }
 
 /** desktop_list_windows — flat list of open windows in the canonical model. */
 export async function desktopListWindowsCanonical(
-  selector: { app_id?: string; process_name?: string; title?: string } = {},
+  selector: { app_id?: string; process_name?: string; title?: string; filter?: string } = {},
 ): Promise<string> {
   const states = await desktopListWindowStates();
   let filtered = states;
@@ -4629,13 +6151,21 @@ export async function desktopListWindowsCanonical(
     const t = String(selector.title).trim().toLowerCase();
     filtered = filtered.filter((w) => w.title.toLowerCase().includes(t));
   }
+  if (selector.filter) {
+    const query = String(selector.filter).trim().toLowerCase();
+    filtered = filtered.filter((window) => window.title.toLowerCase().includes(query)
+      || window.processName.toLowerCase().includes(query)
+      || window.appId.toLowerCase().includes(query));
+  }
   if (!filtered.length) return 'No open windows matched.';
   const payload = filtered.map((w) => ({
     window_id: w.windowId,
+    window_token: w.windowToken,
     handle: w.handle,
     app_id: w.appId,
     process_name: w.processName,
     pid: w.pid,
+    process_start_time: w.processStartTime,
     title: w.title,
     bounds: w.bounds,
     monitor_index: w.monitorIndex,
@@ -4656,6 +6186,7 @@ export async function desktopListWindowsCanonical(
 export async function desktopGetWindowState(
   sessionId: string,
   input: {
+    window_token?: string;
     window_id?: string;
     window_handle?: number;
     app_id?: string;
@@ -4663,24 +6194,28 @@ export async function desktopGetWindowState(
     include_screenshot?: boolean;
     include_text?: boolean;
     focus_first?: boolean;
+    signal?: AbortSignal;
   },
 ): Promise<string> {
   ensureWindows();
+  throwIfDesktopCancelled(input.signal);
   const resolved = await resolveCanonicalWindow({
+    window_token: input.window_token,
     window_id: input.window_id,
     window_handle: input.window_handle,
     app_id: input.app_id,
     title: input.title,
-    active: !input.window_id && !input.window_handle && !input.app_id && !input.title,
+    active: !input.window_token && !input.window_id && !input.window_handle && !input.app_id && !input.title,
   });
-  if (!resolved.ok) return `ERROR: ${resolved.message}`;
+  if (!resolved.ok) return desktopFailure(resolved.code, resolved.message, { selector: input });
   const target = resolved.window;
-  const activeHandle = normalizedWindowHandle((await gatherDesktopContextInternal()).activeWindow);
+  const activeHandle = normalizedWindowHandle(resolved.context.activeWindow);
   const state = toDesktopWindowState(target, activeHandle);
 
   const includeScreenshot = input.include_screenshot !== false;
   const includeText = input.include_text === true;
   const backend = resolveDesktopCaptureBackend();
+  let captureBackendUsed: DesktopCaptureBackend = backend.active;
 
   let screenshotId: string | undefined;
   let screenshotNote = '';
@@ -4689,10 +6224,16 @@ export async function desktopGetWindowState(
       handle: target.handle,
       name: target.title,
       focus_first: input.focus_first === true,
+      skipOcr: true,
+      resolvedTarget: target,
+      resolvedContext: resolved.context,
+      signal: input.signal,
     }).catch((e: any) => `ERROR: ${e?.message || e}`);
     const idMatch = String(shot).match(/Screenshot ID:\s*(ds_[^\s.]+)/);
     if (idMatch) {
       screenshotId = idMatch[1];
+      const backendMatch = String(shot).match(/Capture backend:\s*(graphics_capture|copy_from_screen|window_crop)/i);
+      if (backendMatch) captureBackendUsed = backendMatch[1].toLowerCase() as DesktopCaptureBackend;
       screenshotNote = `\n${shot}`;
     } else {
       screenshotNote = `\nScreenshot capture failed: ${String(shot).slice(0, 200)}`;
@@ -4709,17 +6250,19 @@ export async function desktopGetWindowState(
     state_id: `ws_${state.windowId}_${Date.now().toString(36)}`,
     window: {
       window_id: state.windowId,
+      window_token: state.windowToken,
       handle: state.handle,
       app_id: state.appId,
       process_name: state.processName,
       pid: state.pid,
+      process_start_time: state.processStartTime,
       title: state.title,
       bounds: state.bounds,
       monitor_index: state.monitorIndex,
       is_active: state.isActive,
     },
     screenshot_id: screenshotId,
-    capture_backend: backend.active,
+    capture_backend: captureBackendUsed,
     captured_at: Date.now(),
   };
 
@@ -4736,9 +6279,62 @@ export async function desktopGetWindowState(
 // then delegate to the existing input primitives. They make the intended
 // "act on this window handle" model explicit and reject stale/foreign targets.
 
+export async function desktopFocusWindowCanonical(
+  sessionId: string,
+  selector: DesktopWindowSelector,
+  includeScreenshot = true,
+  signal?: AbortSignal,
+): Promise<string> {
+  throwIfDesktopCancelled(signal);
+  const resolved = await resolveCanonicalWindow(selector);
+  if (!resolved.ok) return desktopFailure(resolved.code, resolved.message, { selector });
+  const focused = await focusWindowHandle(resolved.window.handle).catch(() => false);
+  if (!focused) return desktopFailure('FOCUS_FAILED', `Could not focus ${shortWindowLabel(resolved.window)}.`, { window_token: createDesktopWindowToken(resolved.window) });
+  markDesktopWindowChanged(resolved.window, 'focus_window', { accessibility: true });
+  if (!includeScreenshot) {
+    return `Focused ${shortWindowLabel(resolved.window)}.\n${JSON.stringify({ ok: true, window_id: windowIdForHandle(resolved.window.handle), window_token: createDesktopWindowToken(resolved.window) }, null, 2)}`;
+  }
+  const screenshot = await desktopWindowScreenshot(sessionId, {
+    window_token: createDesktopWindowToken(resolved.window),
+    focus_first: false,
+    signal,
+  });
+  return screenshot.startsWith('ERROR')
+    ? screenshot
+    : `Focused ${shortWindowLabel(resolved.window)}.\n${screenshot}`;
+}
+
 async function prepareWindowForInput(
-  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
-): Promise<{ ok: true; window: DesktopWindowInfo; hint?: string } | { ok: false; message: string }> {
+  selector: DesktopWindowSelector,
+  signal?: AbortSignal,
+  focusFirst: boolean = true,
+): Promise<{ ok: true; window: DesktopWindowInfo; hint?: string } | { ok: false; code: DesktopFailureCode; message: string }> {
+  throwIfDesktopCancelled(signal);
+  // Strong tokens must take the full identity-validation path. Never fast-path
+  // their HWND alone, because that would reintroduce the handle-reuse race.
+  if (selector.window_token) {
+    const token = parseDesktopWindowToken(selector.window_token);
+    if (!token) return { ok: false, code: 'INVALID_ARGUMENT', message: 'window_token is malformed or its checksum is invalid. Capture fresh window state.' };
+    const live = await getWindowByHandleFast(token.handle);
+    if (!live) return { ok: false, code: 'STALE_WINDOW', message: 'The window referenced by window_token is no longer open. Capture fresh window state.' };
+    const liveStart = Math.floor(Number(live.processStartTime) || 0);
+    if (Number(live.pid) !== token.pid || liveStart !== token.processStartTime) {
+      return {
+        ok: false,
+        code: 'STALE_WINDOW',
+        message: `The HWND in window_token now belongs to a different process/window (expected pid=${token.pid}, start=${token.processStartTime}; found pid=${live.pid}, start=${liveStart}).`,
+      };
+    }
+    if (focusFirst) {
+      if (live.isActive) return { ok: true, window: live };
+      const active = await activeWindowInternal().catch(() => null);
+      if (active?.handle === live.handle) return { ok: true, window: { ...live, isActive: true } };
+      throwIfDesktopCancelled(signal);
+      const focused = await focusWindowHandle(live.handle).catch(() => false);
+      if (!focused) return { ok: false, code: 'FOCUS_FAILED', message: `Could not focus ${shortWindowLabel(live)} before input.` };
+    }
+    return { ok: true, window: live };
+  }
   const explicitHandle = Number(selector.window_handle);
   const exactHandle = Number.isFinite(explicitHandle) && explicitHandle > 0
     ? Math.floor(explicitHandle)
@@ -4746,34 +6342,127 @@ async function prepareWindowForInput(
   if (exactHandle > 0) {
     const fastWindow = await getWindowByHandleFast(exactHandle);
     if (fastWindow) {
+      if (!focusFirst) return { ok: true, window: fastWindow };
+      const active = await activeWindowInternal().catch(() => null);
+      if (active?.handle === exactHandle) return { ok: true, window: fastWindow };
       const focused = await focusWindowHandle(exactHandle).catch(() => false);
       if (!focused) {
-        return { ok: false, message: `Could not focus ${shortWindowLabel(fastWindow)} before input. Try desktop_get_window_state to confirm it is still open.` };
+        return { ok: false, code: 'FOCUS_FAILED', message: `Could not focus ${shortWindowLabel(fastWindow)} before input. Capture fresh window state to confirm it is still open.` };
       }
-      markDesktopStateChanged();
       return { ok: true, window: fastWindow };
     }
   }
   const resolved = await resolveCanonicalWindow(selector);
   if (!resolved.ok) return resolved;
+  if (!focusFirst || resolved.isActive) return resolved;
+  throwIfDesktopCancelled(signal);
   // Restore-if-minimized + focus happens inside focusWindowHandle.
   const focused = await focusWindowHandle(resolved.window.handle).catch(() => false);
   if (!focused) {
-    return { ok: false, message: `Could not focus ${shortWindowLabel(resolved.window)} before input. Try desktop_get_window_state to confirm it is still open.` };
+    return { ok: false, code: 'FOCUS_FAILED', message: `Could not focus ${shortWindowLabel(resolved.window)} before input. Capture fresh window state to confirm it is still open.` };
   }
-  markDesktopStateChanged();
   return resolved;
 }
 
+interface DesktopFocusedControlEvidence {
+  available: boolean;
+  editable: boolean;
+  role?: string;
+  name?: string;
+  automation_id?: string;
+  value?: string;
+  bounds?: { x: number; y: number; width: number; height: number };
+}
+
+async function inspectFocusedControl(signal?: AbortSignal): Promise<DesktopFocusedControlEvidence> {
+  const script = `
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+try {
+  $e = [System.Windows.Automation.AutomationElement]::FocusedElement
+  if (-not $e) { throw 'No focused UI Automation element.' }
+  $c = $e.Current
+  $vp = $null
+  $hasValue = $e.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp)
+  $value = ''
+  $readOnly = $true
+  if ($hasValue) { $value = [string]$vp.Current.Value; $readOnly = [bool]$vp.Current.IsReadOnly }
+  $role = if ($c.ControlType) { $c.ControlType.ProgrammaticName.Replace('ControlType.','') } else { 'Unknown' }
+  $r = $c.BoundingRectangle
+  [ordered]@{
+    available = $true
+    editable = (($role -eq 'Edit' -or $role -eq 'Document') -and (-not $hasValue -or -not $readOnly))
+    role = $role; name = [string]$c.Name; automation_id = [string]$c.AutomationId
+    value = $value; x = [int]$r.X; y = [int]$r.Y; width = [int]$r.Width; height = [int]$r.Height
+  } | ConvertTo-Json -Compress
+} catch {
+  [ordered]@{ available = $false; editable = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
+}`;
+  try {
+    const parsed = parseJsonMaybe(await runPowerShell(script, { timeoutMs: 6_000, sta: true, signal }));
+    return {
+      available: parsed?.available === true,
+      editable: parsed?.editable === true,
+      role: String(parsed?.role || ''), name: String(parsed?.name || ''),
+      automation_id: String(parsed?.automation_id || ''), value: String(parsed?.value || ''),
+      ...(parsed?.available ? { bounds: { x: Number(parsed.x) || 0, y: Number(parsed.y) || 0, width: Number(parsed.width) || 0, height: Number(parsed.height) || 0 } } : {}),
+    };
+  } catch {
+    return { available: false, editable: false };
+  }
+}
+
 export async function desktopWindowClick(
-  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
+  selector: DesktopWindowSelector,
   point: { x: number; y: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string },
-  options: { button?: 'left' | 'right'; double_click?: boolean; modifier?: 'shift' | 'ctrl' | 'alt'; verify?: DesktopVerificationMode } = {},
+  options: { button?: 'left' | 'right'; double_click?: boolean; modifier?: 'shift' | 'ctrl' | 'alt'; verify?: DesktopVerificationMode; focus_first?: boolean; signal?: AbortSignal; allow_broad_grounded?: boolean } = {},
   sessionId: string = '__reactor__',
 ): Promise<string> {
-  const prep = await prepareWindowForInput(selector);
-  if (!prep.ok) return `ERROR: ${prep.message}`;
-  const space = point.coordinate_space || 'window';
+  const startedAt = performance.now();
+  if (!options.allow_broad_grounded && (!point.coordinate_space || point.coordinate_space === 'capture') && point.screenshot_id) {
+    const anchor = getDesktopAdvisorPacketById(sessionId, point.screenshot_id);
+    if (anchor && desktopCaptureRequiresPrecisionRecapture(anchor)) {
+      return `ERROR: [PRECISION_CAPTURE_REQUIRED] Screenshot ${anchor.screenshotId} is too broad or was downscaled (${anchor.width}x${anchor.height}) for a reliable click. Capture the relevant panel with desktop_window(action="region_screenshot") and use its fresh screenshot_id.`;
+    }
+  }
+  const screenshotAnchor = point.screenshot_id
+    ? getDesktopAdvisorPacketById(sessionId, point.screenshot_id)
+    : null;
+  const anchorWindow = screenshotAnchor?.targetWindow || screenshotAnchor?.activeWindow || null;
+  const anchorTargetHandle = anchorWindow?.handle || 0;
+  const selectorToken = selector.window_token ? parseDesktopWindowToken(selector.window_token) : null;
+  const anchorAgeMs = screenshotAnchor ? Date.now() - screenshotAnchor.capturedAt : Number.POSITIVE_INFINITY;
+  const anchorMatchesSelector = Boolean(
+    anchorWindow
+    && anchorTargetHandle > 0
+    && (
+      (selectorToken
+        && selectorToken.handle === anchorTargetHandle
+        && selectorToken.pid === anchorWindow.pid
+        && selectorToken.processStartTime === Math.floor(Number(anchorWindow.processStartTime) || 0))
+      || Number(selector.window_handle) === anchorTargetHandle
+      || parseWindowId(selector.window_id) === anchorTargetHandle
+    )
+  );
+  // A recent exact-window capture already validated the HWND, PID, process start,
+  // bounds, and foreground state. Reuse that identity for its immediately-bound
+  // input instead of paying another PowerShell/Win32 discovery round trip. The
+  // short TTL preserves safety if the user changes windows outside Prometheus.
+  const anchorProvesActiveTarget = Boolean(
+    screenshotAnchor
+    && anchorAgeMs <= 30_000
+    && anchorMatchesSelector
+    && (anchorWindow?.isActive === true || screenshotAnchor.activeWindow?.handle === anchorTargetHandle)
+  );
+  const prep = anchorProvesActiveTarget && anchorWindow
+    ? { ok: true as const, window: { ...anchorWindow, isActive: true }, hint: 'Reused fresh screenshot-bound window identity.' }
+    : await prepareWindowForInput(selector, options.signal, options.focus_first !== false);
+  if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
+  const preparedAt = performance.now();
+  // A screenshot anchor means x/y normally came from that image. Match the
+  // global resolver and default to capture space; defaulting to window space
+  // silently mis-scaled points from normalized ultrawide/window screenshots.
+  const space = resolveDesktopWindowClickCoordinateSpace(point);
   const fastPoint = space === 'window' && !point.screenshot_id
     ? resolvePreparedWindowPoint(prep.window, Number(point.x), Number(point.y), 'desktop_window_click')
     : null;
@@ -4796,8 +6485,12 @@ export async function desktopWindowClick(
           screenshot_id: point.screenshot_id,
           window_handle: prep.window.handle,
           window_name: prep.window.title,
+          prepared_window: prep.window,
+          allow_broad_grounded: options.allow_broad_grounded,
         }, 'desktop_window_click');
   if (!resolvedPoint.ok) return `ERROR: ${resolvedPoint.message}`;
+  const resolvedAt = performance.now();
+  throwIfDesktopCancelled(options.signal);
   const result = await desktopClick(
     resolvedPoint.point.x,
     resolvedPoint.point.y,
@@ -4806,39 +6499,61 @@ export async function desktopWindowClick(
     undefined,
     options.modifier,
     `${resolvedPoint.point.sourceNote} [${shortWindowLabel(prep.window)}]`,
-    { mode: options.verify, coordinateSpace: resolvedPoint.point.coordinateSpace },
+    { mode: options.verify, coordinateSpace: resolvedPoint.point.coordinateSpace, windowHandle: prep.window.handle },
   );
-  return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
+  const clickedAt = performance.now();
+  if (!result.startsWith('ERROR')) markDesktopWindowChanged(prep.window, 'window_click');
+  if (result.startsWith('ERROR')) return result;
+  const timing = `Timing: focus=${Math.round(preparedAt - startedAt)}ms, resolve=${Math.round(resolvedAt - preparedAt)}ms, click=${Math.round(clickedAt - resolvedAt)}ms, total=${Math.round(clickedAt - startedAt)}ms.`;
+  return `${result}\n${timing}${prep.hint ? `\nNote: ${prep.hint}` : ''}`;
 }
 
 export async function desktopWindowType(
-  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
+  selector: DesktopWindowSelector,
   text: string,
   raw: boolean = false,
+  signal?: AbortSignal,
 ): Promise<string> {
-  const prep = await prepareWindowForInput(selector);
-  if (!prep.ok) return `ERROR: ${prep.message}`;
+  const prep = await prepareWindowForInput(selector, signal);
+  if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
+  const before = await inspectFocusedControl(signal);
+  if (!before.available || !before.editable) {
+    return desktopFailure('FOCUS_FAILED', 'Typing target is unknown or non-editable; no text was sent. Focus a specific editable control or use find_and_act(set_value).', {
+      window_token: createDesktopWindowToken(prep.window), focused_control: before,
+    });
+  }
+  throwIfDesktopCancelled(signal);
   const result = raw ? await desktopTypeRaw(String(text || '')) : await desktopType(String(text || ''));
-  return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
+  if (!result.startsWith('ERROR')) markDesktopWindowChanged(prep.window, raw ? 'window_type_raw' : 'window_type');
+  if (result.startsWith('ERROR')) return result;
+  const after = await inspectFocusedControl(signal);
+  const assertion = { focused_control: after, input_reached_editable_control: after.available && after.editable, value_changed: before.value !== after.value };
+  return `${result}\n${JSON.stringify(assertion, null, 2)}${prep.hint ? `\nNote: ${prep.hint}` : ''}`;
 }
 
 export async function desktopWindowPressKey(
-  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
+  selector: DesktopWindowSelector,
   key: string,
+  signal?: AbortSignal,
 ): Promise<string> {
-  const prep = await prepareWindowForInput(selector);
-  if (!prep.ok) return `ERROR: ${prep.message}`;
+  const prep = await prepareWindowForInput(selector, signal);
+  if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
+  throwIfDesktopCancelled(signal);
   const result = await desktopPressKey(String(key || 'Enter'));
-  return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
+  if (!result.startsWith('ERROR')) markDesktopWindowChanged(prep.window, 'window_key');
+  if (result.startsWith('ERROR')) return result;
+  const after = await inspectFocusedControl(signal);
+  return `${result}\n${JSON.stringify({ focused_control: after, target_known: after.available }, null, 2)}${prep.hint ? `\nNote: ${prep.hint}` : ''}`;
 }
 
 export async function desktopWindowScroll(
-  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
-  args: { direction: 'up' | 'down' | 'left' | 'right'; amount?: number; x?: number; y?: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string },
+  selector: DesktopWindowSelector,
+  args: { direction: 'up' | 'down' | 'left' | 'right'; amount?: number; x?: number; y?: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string; focus_first?: boolean },
   sessionId: string = '__reactor__',
+  signal?: AbortSignal,
 ): Promise<string> {
-  const prep = await prepareWindowForInput(selector);
-  if (!prep.ok) return `ERROR: ${prep.message}`;
+  const prep = await prepareWindowForInput(selector, signal, args.focus_first !== false);
+  if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
   const dir = args.direction;
   const horizontal = dir === 'left' || dir === 'right';
   let x: number | undefined;
@@ -4870,6 +6585,7 @@ export async function desktopWindowScroll(
       space = resolvedPoint.point.coordinateSpace;
     }
   }
+  throwIfDesktopCancelled(signal);
   const result = await desktopScroll(
     dir === 'up' || dir === 'left' ? dir : (dir === 'right' ? 'right' : 'down'),
     Number(args.amount || 3),
@@ -4880,16 +6596,18 @@ export async function desktopWindowScroll(
     `[${shortWindowLabel(prep.window)}]`,
     { coordinateSpace: space },
   );
+  if (!result.startsWith('ERROR')) markDesktopWindowChanged(prep.window, 'window_scroll');
   return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
 }
 
 export async function desktopWindowDrag(
-  selector: { window_id?: string; window_handle?: number; app_id?: string; title?: string },
-  args: { from_x: number; from_y: number; to_x: number; to_y: number; steps?: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string },
+  selector: DesktopWindowSelector,
+  args: { from_x: number; from_y: number; to_x: number; to_y: number; steps?: number; coordinate_space?: DesktopCoordinateSpace; screenshot_id?: string; focus_first?: boolean },
   sessionId: string = '__reactor__',
+  signal?: AbortSignal,
 ): Promise<string> {
-  const prep = await prepareWindowForInput(selector);
-  if (!prep.ok) return `ERROR: ${prep.message}`;
+  const prep = await prepareWindowForInput(selector, signal, args.focus_first !== false);
+  if (!prep.ok) return desktopFailure(prep.code, prep.message, { selector });
   const shared = {
     coordinate_space: args.coordinate_space || 'window' as DesktopCoordinateSpace,
     screenshot_id: args.screenshot_id,
@@ -4900,12 +6618,14 @@ export async function desktopWindowDrag(
   if (!from.ok) return `ERROR: ${from.message}`;
   const to = await resolveDesktopActionPoint(sessionId, { x: Number(args.to_x), y: Number(args.to_y), ...shared }, 'desktop_window_drag.to');
   if (!to.ok) return `ERROR: ${to.message}`;
+  throwIfDesktopCancelled(signal);
   const result = await desktopDrag(
     from.point.x, from.point.y, to.point.x, to.point.y,
     Number(args.steps || 20), undefined,
     `${from.point.sourceNote} -> ${to.point.sourceNote} [${shortWindowLabel(prep.window)}]`,
     { coordinateSpace: from.point.coordinateSpace },
   );
+  if (!result.startsWith('ERROR')) markDesktopWindowChanged(prep.window, 'window_drag');
   return prep.hint && !result.startsWith('ERROR') ? `${result}\nNote: ${prep.hint}` : result;
 }
 
@@ -4918,198 +6638,24 @@ export function getDesktopToolNames(): string[] {
   return getDesktopToolDefinitions().map((d: any) => d?.function?.name).filter(Boolean);
 }
 
+/** Public/model-facing desktop surface. Internal granular handlers stay available
+ * through getDesktopToolDefinitions() for compatibility and dispatch parity. */
+export function getDesktopModelToolDefinitions(): any[] {
+  return getDesktopWrapperToolDefinitions();
+}
+
+export function getDesktopModelToolNames(): string[] {
+  return getDesktopModelToolDefinitions().map((d: any) => d?.function?.name).filter(Boolean);
+}
+
+export function getDesktopInternalHandlerNames(): string[] {
+  return getDesktopToolDefinitions()
+    .map((d: any) => String(d?.function?.name || ''))
+    .filter((name: string) => name && !DESKTOP_WRAPPER_TOOL_NAME_SET.has(name));
+}
+
 export function getDesktopToolDefinitions(): any[] {
-  return [
-    {
-      type: 'function',
-      function: {
-        name: 'desktop_screen',
-        description: 'Unified desktop screen/state wrapper. Use for health checks, screenshots, monitor geometry, window screenshots, screen-change waits, diffs, and pixel watches.',
-        parameters: {
-          type: 'object',
-          required: ['action'],
-          properties: {
-            action: { type: 'string', enum: ['doctor', 'screenshot', 'window_screenshot', 'monitors', 'wait_for_change', 'diff_screenshot', 'pixel_watch'] },
-            capture: { type: 'string', enum: ['all', 'primary'] },
-            monitor_index: { type: 'integer' },
-            region: { type: 'array', items: { type: 'number' } },
-            mode: { type: 'string', enum: ['normal', 'som'] },
-            som: { type: 'boolean' },
-            name: { type: 'string', description: 'Window name for window_screenshot.' },
-            handle: { type: 'number', description: 'Window handle for window_screenshot.' },
-            active: { type: 'boolean' },
-            focus_first: { type: 'boolean' },
-            padding: { type: 'number' },
-            timeout_ms: { type: 'number' },
-            poll_ms: { type: 'number' },
-            x: { type: 'number' },
-            y: { type: 'number' },
-            target_color: { type: 'string' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'desktop_apps',
-        description: 'Unified desktop app/process/window discovery and lifecycle wrapper. Prefer canonical list_apps/list_windows before targeting windows.',
-        parameters: {
-          type: 'object',
-          required: ['action'],
-          properties: {
-            action: { type: 'string', enum: ['list_apps', 'list_windows', 'list_installed_apps', 'find_installed_app', 'launch_app', 'close_app', 'process_list'] },
-            filter: { type: 'string' },
-            include_windows: { type: 'boolean' },
-            app_id: { type: 'string' },
-            process_name: { type: 'string' },
-            title: { type: 'string' },
-            query: { type: 'string' },
-            limit: { type: 'number' },
-            refresh: { type: 'boolean' },
-            app: { type: 'string' },
-            args: { type: 'string' },
-            wait_ms: { type: 'number' },
-            name: { type: 'string' },
-            force: { type: 'boolean' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'desktop_window',
-        description: 'Unified desktop window wrapper. Prefer this for app-specific inspection and input; it delegates to the canonical window-scoped handlers where possible.',
-        parameters: {
-          type: 'object',
-          required: ['action'],
-          properties: {
-            action: { type: 'string', enum: ['find', 'focus', 'control', 'state', 'screenshot', 'text', 'accessibility_tree', 'click', 'type', 'key', 'press_key', 'scroll', 'drag'] },
-            window_id: { type: 'string' },
-            window_handle: { type: 'number' },
-            app_id: { type: 'string' },
-            title: { type: 'string' },
-            name: { type: 'string' },
-            handle: { type: 'number' },
-            control_action: { type: 'string', enum: ['minimize', 'maximize', 'restore', 'close'], description: 'Sub-action for action="control".' },
-            active: { type: 'boolean' },
-            include_screenshot: { type: 'boolean' },
-            include_text: { type: 'boolean' },
-            focus_first: { type: 'boolean' },
-            padding: { type: 'number' },
-            mode: { type: 'string', enum: ['normal', 'som'] },
-            som: { type: 'boolean' },
-            x: { type: 'number' },
-            y: { type: 'number' },
-            from_x: { type: 'number' },
-            from_y: { type: 'number' },
-            to_x: { type: 'number' },
-            to_y: { type: 'number' },
-            text: { type: 'string' },
-            key: { type: 'string' },
-            raw: { type: 'boolean' },
-            direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
-            amount: { type: 'number' },
-            coordinate_space: { type: 'string', enum: ['window', 'capture', 'virtual', 'monitor'] },
-            screenshot_id: { type: 'string' },
-            button: { type: 'string', enum: ['left', 'right'] },
-            double_click: { type: 'boolean' },
-            modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
-            verify: { type: 'string', enum: ['off', 'auto', 'strict'] },
-            final_action_approval_id: { type: 'string' },
-            max_depth: { type: 'integer' },
-            max_nodes: { type: 'integer' },
-            steps: { type: 'number' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'desktop_input',
-        description: 'Unified host-desktop input fallback wrapper. Use for global/capture/monitor coordinates, focused-window typing, keys, wait, and clipboard actions.',
-        parameters: {
-          type: 'object',
-          required: ['action'],
-          properties: {
-            action: { type: 'string', enum: ['click', 'drag', 'scroll', 'type', 'type_raw', 'key', 'press_key', 'wait', 'clipboard_get', 'clipboard_set'] },
-            x: { type: 'number' },
-            y: { type: 'number' },
-            from_x: { type: 'number' },
-            from_y: { type: 'number' },
-            to_x: { type: 'number' },
-            to_y: { type: 'number' },
-            element: { type: 'number' },
-            text: { type: 'string' },
-            key: { type: 'string' },
-            file_path: { type: 'string' },
-            file_paths: { type: 'array', items: { type: 'string' } },
-            mode: { type: 'string', enum: ['auto', 'text', 'image', 'files'] },
-            button: { type: 'string', enum: ['left', 'right'] },
-            double_click: { type: 'boolean' },
-            modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
-            direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
-            amount: { type: 'number' },
-            axis: { type: 'string', enum: ['vertical', 'horizontal'] },
-            coordinate_space: { type: 'string', enum: ['virtual', 'monitor', 'capture', 'window'] },
-            screenshot_id: { type: 'string' },
-            window_name: { type: 'string' },
-            window_handle: { type: 'number' },
-            monitor_relative: { type: 'boolean' },
-            monitor_index: { type: 'integer' },
-            verify: { type: 'string', enum: ['off', 'auto', 'strict'] },
-            final_action_approval_id: { type: 'string' },
-            capture_after: { type: 'boolean' },
-            steps: { type: 'number' },
-            ms: { type: 'number' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'desktop_macro',
-        description: 'Unified desktop macro wrapper. Use to record, stop, replay, and list saved host-desktop macros.',
-        parameters: {
-          type: 'object',
-          required: ['action'],
-          properties: {
-            action: { type: 'string', enum: ['record', 'stop', 'replay', 'list'] },
-            name: { type: 'string' },
-            speed_multiplier: { type: 'number' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'desktop_background',
-        description: 'Unified isolated background-desktop wrapper. This targets the sandbox worker, not the host desktop.',
-        parameters: {
-          type: 'object',
-          required: ['action'],
-          properties: {
-            action: { type: 'string', enum: ['status', 'prepare_sandbox', 'command'] },
-            command_action: { type: 'string', enum: ['screenshot', 'click', 'type', 'key', 'run', 'wait'], description: 'Sub-action for action="command".' },
-            launch: { type: 'boolean' },
-            networking: { type: 'string', enum: ['enable', 'disable', 'default'] },
-            vgpu: { type: 'string', enum: ['enable', 'disable', 'default'] },
-            memory_mb: { type: 'number' },
-            x: { type: 'number' },
-            y: { type: 'number' },
-            text: { type: 'string' },
-            key: { type: 'string' },
-            command: { type: 'string' },
-            ms: { type: 'number' },
-            timeout_ms: { type: 'number' },
-          },
-        },
-      },
-    },
+  const definitions: any[] = [
     {
       type: 'function',
       function: {
@@ -5794,7 +7340,7 @@ export function getDesktopToolDefinitions(): any[] {
       function: {
         name: 'desktop_window_click',
         description:
-          'Click inside a specific window identified by window_id (preferred), window_handle, app_id, or title. Restores + focuses the window first, then clicks. Coordinates default to window-space (top-left of the window is 0,0); pass coordinate_space + screenshot_id to use capture-space image pixels. Prefer this over desktop_click when you know the target window.',
+          'Click inside a specific window identified by window_id (preferred), window_handle, app_id, or title. Restores + focuses the window first, then clicks. With screenshot_id, omitted coordinate_space defaults to capture so normalized image pixels are scaled correctly; without screenshot_id it defaults to logical window-space. Prefer this over desktop_click when you know the target window.',
         parameters: {
           type: 'object',
           required: ['x', 'y'],
@@ -5803,10 +7349,10 @@ export function getDesktopToolDefinitions(): any[] {
             window_handle: { type: 'number', description: 'Exact window handle (HWND).' },
             app_id: { type: 'string', description: 'Target app_id (resolves to its active/only window).' },
             title: { type: 'string', description: 'Partial window title/process name (least precise).' },
-            x: { type: 'number', description: 'X coordinate (window-space by default).' },
-            y: { type: 'number', description: 'Y coordinate (window-space by default).' },
-            coordinate_space: { type: 'string', enum: ['window', 'capture', 'virtual', 'monitor'], description: 'Defaults to window.' },
-            screenshot_id: { type: 'string', description: 'Required when coordinate_space="capture".' },
+            x: { type: 'number', description: 'X coordinate in the declared/default coordinate space.' },
+            y: { type: 'number', description: 'Y coordinate in the declared/default coordinate space.' },
+            coordinate_space: { type: 'string', enum: ['window', 'capture', 'virtual', 'monitor'], description: 'Defaults to capture when screenshot_id is present; otherwise window.' },
+            screenshot_id: { type: 'string', description: 'Required for capture space. Supplying it makes capture the default coordinate space.' },
             button: { type: 'string', enum: ['left', 'right'] },
             double_click: { type: 'boolean' },
             modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
@@ -5905,5 +7451,81 @@ export function getDesktopToolDefinitions(): any[] {
         },
       },
     },
+  ];
+  definitions.push(
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_locate_text',
+        description: 'Locate visible text inside a fresh exact-window screenshot crop and return a confidence-scored capture-relative bounding box. Never guesses below the confidence threshold.',
+        parameters: {
+          type: 'object',
+          required: ['screenshot_id', 'query'],
+          properties: {
+            screenshot_id: { type: 'string' },
+            query: { type: 'string' },
+            min_confidence: { type: 'number', minimum: 0.5, maximum: 0.98 },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_click_text',
+        description: 'Locate visible text inside a fresh exact-window crop, reject low-confidence or ambiguous matches, click its center through the same screenshot anchor, and return a fresh full-window verification screenshot.',
+        parameters: {
+          type: 'object',
+          required: ['screenshot_id', 'query'],
+          properties: {
+            screenshot_id: { type: 'string' },
+            query: { type: 'string' },
+            min_confidence: { type: 'number', minimum: 0.5, maximum: 0.98 },
+            button: { type: 'string', enum: ['left', 'right'] },
+            verify: { type: 'string', enum: ['off', 'auto', 'strict'] },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_get_accessibility_state',
+        description: 'Return a flat structured UI Automation snapshot with state_id, snapshot-scoped element_id values, bounds, and supported semantic patterns.',
+        parameters: {
+          type: 'object',
+          properties: {
+            window_token: { type: 'string' },
+            window_id: { type: 'string' },
+            window_handle: { type: 'number' },
+            app_id: { type: 'string' },
+            title: { type: 'string' },
+            max_depth: { type: 'integer' },
+            max_nodes: { type: 'integer' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'desktop_accessibility_action',
+        description: 'Perform one semantic UIA action against an element from a fresh accessibility state.',
+        parameters: {
+          type: 'object',
+          required: ['state_id', 'element_id', 'semantic_action'],
+          properties: {
+            state_id: { type: 'string' },
+            element_id: { type: 'string' },
+            semantic_action: { type: 'string', enum: ['invoke', 'set_value', 'select', 'toggle', 'expand', 'collapse', 'focus', 'secondary_action'] },
+            value: { type: 'string' },
+          },
+        },
+      },
+    },
+  );
+  return [
+    ...getDesktopWrapperToolDefinitions(),
+    ...definitions.filter((definition: any) => !DESKTOP_WRAPPER_TOOL_NAME_SET.has(String(definition?.function?.name || ''))),
   ];
 }

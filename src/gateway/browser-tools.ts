@@ -1,3 +1,4 @@
+
 /**
  * browser-tools.ts - Browser Automation for Prometheus
  * 
@@ -251,6 +252,9 @@ export interface BrowserFeedItem {
   link?: string;
   title?: string;
   snippet?: string;
+  imageUrl?: string;
+  publisher?: string;
+  publishedAt?: string;
   source?: string;
   hasImage?: boolean;
   hasVideo?: boolean;
@@ -2872,16 +2876,30 @@ async function takeSnapshot(page: PwPage, maxElements: number = 100): Promise<st
       // Scanning the full DOM would expose background elements the AI cannot
       // actually click (they are aria-hidden or covered by the overlay).
       // Priority: aria-modal dialogs > role=dialog > data-testid dialogs.
-      const openModal = (
-        doc.querySelector('[role="dialog"][aria-modal="true"]')
-        || doc.querySelector('[role="dialog"]:not([aria-hidden="true"])')
-        || doc.querySelector('[data-testid="sheetDialog"], [data-testid="confirmationSheetDialog"], [data-testid="keyboardShortcutModal"]')
-        || doc.querySelector('dialog[open]')
-        // X.com reply-permission dropdown and other sheets that aren't role=dialog
-        || doc.querySelector('[data-testid="Dropdown"]')
-        || doc.querySelector('[role="menu"]')
-        || null
-      );
+      const modalCandidates = Array.from(doc.querySelectorAll([
+        '[role="dialog"][aria-modal="true"]',
+        '[role="dialog"]:not([aria-hidden="true"])',
+        '[data-testid="sheetDialog"]',
+        '[data-testid="confirmationSheetDialog"]',
+        '[data-testid="keyboardShortcutModal"]',
+        'dialog[open]',
+        '[data-testid="Dropdown"]',
+        '[role="menu"]',
+      ].join(', '))) as any[];
+      const openModal = modalCandidates.find((candidate: any) => {
+        if (!candidate || candidate.getAttribute?.('aria-hidden') === 'true' || candidate.hasAttribute?.('inert')) return false;
+        const rect = candidate.getBoundingClientRect?.();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+        const style = (globalThis as any).getComputedStyle?.(candidate);
+        if (style && (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0)) return false;
+        const viewportWidth = Number((globalThis as any).innerWidth || doc.documentElement?.clientWidth || 0);
+        const viewportHeight = Number((globalThis as any).innerHeight || doc.documentElement?.clientHeight || 0);
+        if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= viewportHeight || rect.left >= viewportWidth) return false;
+        const centerX = Math.max(0, Math.min(viewportWidth - 1, rect.left + rect.width / 2));
+        const centerY = Math.max(0, Math.min(viewportHeight - 1, rect.top + rect.height / 2));
+        const hit = doc.elementFromPoint?.(centerX, centerY);
+        return !hit || candidate === hit || candidate.contains?.(hit);
+      }) || null;
       const searchRoot = openModal || doc;
 
       // De-duplicate nodes (data-testid + input could match same element twice)
@@ -3297,7 +3315,7 @@ async function resolveViewportPointFromTarget(
 
 // Click a page element by its stable data-sc-ref number
 async function clickByRef(page: PwPage, ref: number, options?: { settleMs?: number }): Promise<{ role: string; name: string }> {
-  const settleMs = Math.max(0, Number(options?.settleMs ?? 1500) || 0);
+  const settleMs = Math.max(0, Number(options?.settleMs ?? 120) || 0);
   const locator = await findLocatorByStableRef(page, ref);
   if (locator) {
     const meta = await describeLocator(locator);
@@ -3346,7 +3364,7 @@ async function clickByRef(page: PwPage, ref: number, options?: { settleMs?: numb
 }
 
 async function clickBySelector(page: PwPage, selector: string, options?: { settleMs?: number }): Promise<{ role: string; name: string }> {
-  const settleMs = Math.max(0, Number(options?.settleMs ?? 1500) || 0);
+  const settleMs = Math.max(0, Number(options?.settleMs ?? 120) || 0);
   const locator = page.locator(selector).first();
   const count = await locator.count().catch(() => 0);
   if (!count) throw new Error(`No element found for selector "${selector}"`);
@@ -3391,8 +3409,12 @@ async function fillByRef(page: PwPage, ref: number, text: string): Promise<{ rol
         if (typeof el.click === 'function') el.click();
         return { role: role || tag, name: name || tag, needsNativeType: true };
       } else {
-        const nativeSetter = Object.getOwnPropertyDescriptor((globalThis as any).HTMLInputElement.prototype, 'value')?.set
-          || Object.getOwnPropertyDescriptor((globalThis as any).HTMLTextAreaElement.prototype, 'value')?.set;
+        const valuePrototype = tag === 'textarea'
+          ? (globalThis as any).HTMLTextAreaElement?.prototype
+          : (globalThis as any).HTMLInputElement?.prototype;
+        const nativeSetter = valuePrototype
+          ? Object.getOwnPropertyDescriptor(valuePrototype, 'value')?.set
+          : undefined;
         if (nativeSetter) nativeSetter.call(el, args.text);
         else el.value = args.text;
         el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -3427,7 +3449,8 @@ async function fillByRef(page: PwPage, ref: number, text: string): Promise<{ rol
           if (tag === 'select') { el.value = args.text; el.dispatchEvent(new Event('change', { bubbles: true })); }
           else if (isContentEditable) { el.click(); return { role: role || tag, name: name || tag, needsNativeType: true }; }
           else {
-            const nativeSetter = Object.getOwnPropertyDescriptor((globalThis as any).HTMLInputElement.prototype, 'value')?.set || Object.getOwnPropertyDescriptor((globalThis as any).HTMLTextAreaElement.prototype, 'value')?.set;
+            const valuePrototype = tag === 'textarea' ? (globalThis as any).HTMLTextAreaElement?.prototype : (globalThis as any).HTMLInputElement?.prototype;
+            const nativeSetter = valuePrototype ? Object.getOwnPropertyDescriptor(valuePrototype, 'value')?.set : undefined;
             if (nativeSetter) nativeSetter.call(el, args.text); else el.value = args.text;
             el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
           }
@@ -3465,8 +3488,6 @@ async function fillByRef(page: PwPage, ref: number, text: string): Promise<{ rol
     // events that React's synthetic event system correctly intercepts.
     await page.keyboard.type(text, { delay: 20 });
     await page.waitForTimeout(400);
-  } else {
-    await page.waitForTimeout(800);
   }
 
   return { role: result.role, name: result.name, needsNativeType: !!(result as any).needsNativeType };
@@ -3506,8 +3527,12 @@ async function fillBySelector(
       if (typeof el?.click === 'function') el.click();
       return { role: role || tag, name, needsNativeType: true };
     }
-    const nativeSetter = Object.getOwnPropertyDescriptor((globalThis as any).HTMLInputElement.prototype, 'value')?.set
-      || Object.getOwnPropertyDescriptor((globalThis as any).HTMLTextAreaElement.prototype, 'value')?.set;
+    const valuePrototype = tag === 'textarea'
+      ? (globalThis as any).HTMLTextAreaElement?.prototype
+      : (globalThis as any).HTMLInputElement?.prototype;
+    const nativeSetter = valuePrototype
+      ? Object.getOwnPropertyDescriptor(valuePrototype, 'value')?.set
+      : undefined;
     if (nativeSetter) nativeSetter.call(el, nextText);
     else el.value = nextText;
     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -3524,8 +3549,6 @@ async function fillBySelector(
     await page.waitForTimeout(100);
     await page.keyboard.type(text, { delay: 20 });
     await page.waitForTimeout(400);
-  } else {
-    await page.waitForTimeout(800);
   }
   return {
     role: String((result as any).role || 'element'),
@@ -3535,9 +3558,17 @@ async function fillBySelector(
 }
 
 // Press a key (e.g. Enter, Tab)
+function normalizeBrowserKey(key: string): string {
+  const aliases: Record<string, string> = {
+    left: 'ArrowLeft', right: 'ArrowRight', up: 'ArrowUp', down: 'ArrowDown',
+    esc: 'Escape', del: 'Delete', cmd: 'Meta', command: 'Meta', return: 'Enter',
+  };
+  return String(key || '').split('+').map((part) => aliases[part.trim().toLowerCase()] || part.trim()).join('+');
+}
+
 async function pressKey(page: PwPage, key: string, options?: { settleMs?: number }): Promise<void> {
   const settleMs = Math.max(0, Number(options?.settleMs ?? 1500) || 0);
-  await page.keyboard.press(key);
+  await page.keyboard.press(normalizeBrowserKey(key));
   // Allow page navigation / React state updates to settle
   if (settleMs > 0) await page.waitForTimeout(settleMs);
 }
@@ -3822,9 +3853,22 @@ async function extractStructuredFromPage(
         const titleEl = card.querySelector('h3, h2');
         const linkEl = card.querySelector('a[href]');
         const snippetEl = card.querySelector('.VwiC3b, .IsZvec, p, span');
+        const imageEl = card.querySelector('img[src], img[data-src], img[srcset]') as any;
+        const publisherEl = card.querySelector('cite, [data-testid*="source"], [class*="source"], [class*="publisher"]') as any;
+        const timeEl = card.querySelector('time, [datetime]') as any;
         const titleText = normalize(titleEl?.textContent || '', 220);
         const link = normalize(linkEl ? toAbs(linkEl.getAttribute('href') || '') : '', 500);
         const snippet = normalize(snippetEl?.textContent || '', 500);
+        const srcset = normalize(imageEl?.getAttribute?.('srcset') || '', 2000);
+        const srcsetUrl = srcset
+          ? srcset.split(',').map((entry: string) => entry.trim().split(/\s+/)[0]).filter(Boolean).pop()
+          : '';
+        const imageUrl = normalize(
+          imageEl ? toAbs(srcsetUrl || imageEl.currentSrc || imageEl.getAttribute('data-src') || imageEl.src || '') : '',
+          1200,
+        );
+        const publisher = normalize(publisherEl?.textContent || '', 120);
+        const publishedAt = normalize(timeEl?.getAttribute?.('datetime') || timeEl?.textContent || '', 100);
         if (!titleText && !snippet) continue;
         const key = link || `${titleText}|${snippet.slice(0, 120)}`;
         if (seen.has(key)) continue;
@@ -3833,6 +3877,9 @@ async function extractStructuredFromPage(
           title: titleText || undefined,
           link: link || undefined,
           snippet: snippet || undefined,
+          imageUrl: imageUrl || undefined,
+          publisher: publisher || undefined,
+          publishedAt: publishedAt || undefined,
           source: host,
         });
         if (out.extractedFeed.length >= max) break;
@@ -4429,8 +4476,21 @@ export async function browserNewTab(sessionId: string, url?: string): Promise<st
   const targetUrl = String(url || '').trim();
   if (targetUrl) {
     const normalizedUrl = /^[a-z][a-z0-9+.-]*:/i.test(targetUrl) ? targetUrl : `https://${targetUrl}`;
-    await page.goto(normalizedUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-    await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+    const response = await page.goto(normalizedUrl, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => null);
+    await Promise.race([
+      page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => null),
+      page.waitForFunction(() => {
+        const doc = (globalThis as any).document;
+        return doc.readyState !== 'loading' && !!(doc.title || doc.body?.innerText?.trim() || doc.body?.children?.length);
+      }, { timeout: 3000 }).catch(() => null),
+    ]);
+    const state = await page.evaluate(() => {
+      const doc = (globalThis as any).document;
+      return { url: String((globalThis as any).location?.href || ''), title: String(doc.title || ''), readyState: String(doc.readyState || ''), bodyChars: String(doc.body?.innerText || '').trim().length };
+    }).catch(() => ({ url: String(page.url?.() || ''), title: '', readyState: 'unknown', bodyChars: 0 }));
+    rememberPageMetadata(session, state);
+    persistBrowserSessionRecord(session);
+    return JSON.stringify({ ok: true, tab_index: session.context.pages().indexOf(page), navigation_generation: Date.now(), response_status: response?.status?.() ?? null, ...state }, null, 2);
   }
   await syncPageMetadata(session).catch(() => {});
   persistBrowserSessionRecord(session);
@@ -5570,7 +5630,8 @@ export async function browserGetFocusedItem(sessionId: string): Promise<string> 
     const info = await session.page.evaluate(() => {
       const doc = (globalThis as any).document;
       const focused = doc.activeElement;
-      if (!focused || focused === doc.body) {
+      const isX = /(^|\.)x\.com$|(^|\.)twitter\.com$/i.test(String((globalThis as any).location?.hostname || ''));
+      if ((!focused || focused === doc.body) && isX) {
         // On X.com, keyboard-focused tweet has data-testid="tweet" and a CSS highlight class
         // Check for X.com highlighted/focused tweet (has outline or aria-selected)
         const highlighted = doc.querySelector(
@@ -5594,8 +5655,10 @@ export async function browserGetFocusedItem(sessionId: string): Promise<string> 
             link,
           };
         }
-        return { type: 'none', message: 'No element focused. Press j to select first tweet, or click a tweet first.' };
+        return { type: 'element', tag: 'body', role: '', ariaLabel: '', text: '', testId: '', focused: true };
       }
+
+      if (!focused) return { type: 'none', focused: false };
 
       const tag = focused.tagName?.toLowerCase() || 'unknown';
       const role = focused.getAttribute('role') || '';
@@ -5651,11 +5714,7 @@ export async function browserGetFocusedItem(sessionId: string): Promise<string> 
       return lines.join('\n');
     }
 
-    if (info.type === 'none') {
-      return `⌨️ KEYBOARD FOCUS: No tweet selected\n${info.message}`;
-    }
-
-    return `⌨️ KEYBOARD FOCUS: ${info.type} — <${info.tag}> role="${info.role}" label="${info.ariaLabel}" text="${info.text?.slice(0,80)}" testid="${info.testId}"`;
+    return JSON.stringify({ tag: info.tag || null, role: info.role || null, name: info.ariaLabel || null, text: info.text || '', test_id: info.testId || null, focused: info.focused !== false, ...(info.type === 'tweet' ? { x_context: info } : {}) }, null, 2);
   } catch (err: any) {
     return `ERROR: getFocusedItem failed: ${err.message}`;
   }
@@ -5961,7 +6020,7 @@ export async function browserScrollCollect(
       }
 
       // Read visible text — with structured extraction for X.com/Twitter
-      const pageText = await session.page.evaluate(() => {
+      const pageText = await session.page.evaluate((characterBudget: number) => {
         const doc = (globalThis as any).document;
         const normalize = (value: any, maxLen: number = 1000) =>
           String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLen);
@@ -5992,7 +6051,7 @@ export async function browserScrollCollect(
               `Metrics: replies ${replies || '0'} | reposts ${reposts || '0'} | likes ${likes || '0'}${views ? ` | views ${views}` : ''}`,
             ].filter(Boolean);
             return lines.join('\n');
-          }).join('\n---TWEET---\n');
+          }).join('\n---TWEET---\n').slice(0, characterBudget);
         }
         // General fallback — use live body.innerText (not a detached clone)
         const body = doc.body;
@@ -6000,8 +6059,8 @@ export async function browserScrollCollect(
         return (body.innerText || '')
           .replace(/[^\S\n]{3,}/g, ' ')
           .replace(/\n{4,}/g, '\n\n')
-          .trim();
-      });
+          .trim().slice(0, characterBudget);
+      }, Math.max(0, maxChars - totalChars));
 
       const currentScrollY = await session.page.evaluate(() => Number((globalThis as any).scrollY || 0));
       let structuredPageType: BrowserPageType | '' = '';
@@ -6051,7 +6110,8 @@ export async function browserScrollCollect(
         }
       }
 
-      const newText = isStructuredTweets ? newLines.join('\n---TWEET---\n') : newLines.join('\n');
+      const remainingChars = Math.max(0, maxChars - totalChars);
+      const newText = (isStructuredTweets ? newLines.join('\n---TWEET---\n') : newLines.join('\n')).slice(0, remainingChars);
       const newChars = newText.length;
 
       const newSignals = newChars + structuredAdded + textBlockAdded;
@@ -6403,6 +6463,9 @@ export function getBrowserToolDefinitions(): any[] {
             action: { type: 'string', enum: ['snapshot', 'snapshot_delta', 'screenshot', 'page_text', 'focused_item', 'wait', 'element_watch'] },
             element: { type: 'string', description: 'Saved named element for page_text.' },
             element_name: { type: 'string' },
+            query: { type: 'string', description: 'For page_text, return lines matching this text plus nearby context.' },
+            max_chars: { type: 'number', description: 'For page_text, maximum returned characters. Default 6000.' },
+            max_lines: { type: 'number', description: 'For page_text, maximum returned lines. Default 200.' },
             selector: { type: 'string', description: 'CSS selector for element_watch.' },
             wait_for: { type: 'string', enum: ['appear', 'disappear', 'text_contains'] },
             text: { type: 'string', description: 'Text for text_contains watches.' },
@@ -6449,6 +6512,7 @@ export function getBrowserToolDefinitions(): any[] {
             final_action_approval_id: { type: 'string' },
             observe: { type: 'string', enum: OBSERVE_MODE_ENUM },
             capture_after: { type: 'boolean' },
+            fast: { type: 'boolean', description: 'Alias for observe="none" on deterministic actions.' },
           },
         },
       },
@@ -6470,8 +6534,16 @@ export function getBrowserToolDefinitions(): any[] {
             url: { type: 'string', description: 'URL for smoke_test.' },
             wait_ms: { type: 'number' },
             max_console_entries: { type: 'number' },
+            max_message_chars: { type: 'number', description: 'For console reads, maximum characters per message. Default 500.' },
+            since_ts: { type: 'number', description: 'Only console entries at or after this epoch millisecond timestamp.' },
+            page_only: { type: 'boolean', description: 'Scope console reads to the current page. Default true.' },
             max_a11y_results: { type: 'number' },
+            steps: { type: 'array', items: { type: 'object' }, description: 'Optional click/fill/key/assertText/assertVisible smoke workflow.' },
             max_entries: { type: 'number' },
+            include_bodies: { type: 'boolean', description: 'Opt in to text/JSON response bodies. Default false.' },
+            body_max_chars: { type: 'number', description: 'Per-response body cap when enabled. Default 1000.' },
+            status_min: { type: 'number' },
+            status_max: { type: 'number' },
             max_results: { type: 'number' },
             url_filter: { type: 'string' },
             scrolls: { type: 'number' },
@@ -7016,6 +7088,9 @@ export function getBrowserToolDefinitions(): any[] {
           properties: {
             action: { type: 'string', enum: ['read', 'clear'], description: 'read returns captured entries; clear empties the collector. Default read.' },
             max_entries: { type: 'number', description: 'Maximum console entries to return. Default 100.' },
+            since_ts: { type: 'number' },
+            page_only: { type: 'boolean', description: 'Default true.' },
+            url_filter: { type: 'string' },
           },
         },
       },
@@ -7048,6 +7123,7 @@ export function getBrowserToolDefinitions(): any[] {
             wait_ms: { type: 'number', description: 'Milliseconds to wait after navigation. Default 1500.' },
             max_console_entries: { type: 'number', description: 'Maximum console entries to include. Default 50.' },
             max_a11y_results: { type: 'number', description: 'Maximum accessibility findings. Default 50.' },
+            steps: { type: 'array', items: { type: 'object' }, description: 'Optional click/fill/key/assertText/assertVisible smoke workflow.' },
           },
         },
       },
@@ -7175,7 +7251,7 @@ export function getBrowserToolDefinitions(): any[] {
 
 export async function browserGetPageText(
   sessionId: string,
-  options?: { element?: string },
+  options?: { element?: string; query?: string; maxChars?: number; maxLines?: number },
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   if (getInHouseSession(resolved)) {
@@ -7327,8 +7403,17 @@ export async function browserGetPageText(
       parts.push('TIP: Use browser_open({url: "<iframe src above>"}) to navigate directly into the embedded menu/widget.');
     }
 
-    const result = parts.join('\n');
-    return result.length > 20 ? result : 'No readable text found on this page.';
+    let result = parts.join('\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
+    const query = String(options?.query || '').trim().toLowerCase();
+    if (query) {
+      const lines = result.split('\n');
+      const matched = lines.filter((line, index) => line.toLowerCase().includes(query) || lines[Math.max(0, index - 1)]?.toLowerCase().includes(query));
+      result = [`Page: ${title}`, `URL: ${url}`, '', ...matched].join('\n');
+    }
+    const maxLines = Math.max(1, Math.min(1000, Math.floor(Number(options?.maxLines || 200))));
+    const maxChars = Math.max(200, Math.min(50000, Math.floor(Number(options?.maxChars || 6000))));
+    const bounded = result.split('\n').slice(0, maxLines).join('\n').slice(0, maxChars);
+    return bounded.length > 20 ? bounded : 'No readable text found on this page.';
   } catch (err: any) {
     return `ERROR: browser_get_page_text failed: ${err.message}`;
   }
@@ -7499,7 +7584,7 @@ async function readInPageBrowserEventLog(page: any, action: 'read' | 'clear'): P
 
 export async function browserInspectConsole(
   sessionId: string,
-  options: { action?: 'read' | 'clear' | string; maxEntries?: number } = {},
+  options: { action?: 'read' | 'clear' | string; maxEntries?: number; sinceTs?: number; pageOnly?: boolean; urlFilter?: string; maxMessageChars?: number } = {},
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
@@ -7522,16 +7607,27 @@ export async function browserInspectConsole(
 
   const inPageEntries = await readInPageBrowserEventLog(session.page, 'read').catch(() => []);
   const controllerEntries = Array.isArray(session.consoleEntries) ? session.consoleEntries : [];
+  const currentUrl = safeBrowserPageUrl(session.page);
+  const sinceTs = Math.max(0, Number(options.sinceTs || 0));
+  const urlFilter = String(options.urlFilter || '').trim();
   const allEntries = [...controllerEntries, ...inPageEntries]
     .filter((entry) => entry && String(entry.message || '').trim())
+    .filter((entry) => !sinceTs || Number(entry.ts || 0) >= sinceTs)
+    .filter((entry) => !urlFilter || String(entry.url || '').includes(urlFilter))
+    .filter((entry) => options.pageOnly === false || !entry.url || String(entry.url) === currentUrl)
     .sort((a, b) => Number(a.ts || 0) - Number(b.ts || 0));
+  const maxMessageChars = Math.max(80, Math.min(4000, Math.floor(Number(options.maxMessageChars || 500))));
   const entries = allEntries.slice(-maxEntries).map((entry) => ({
     ts: entry.ts ? new Date(Number(entry.ts)).toISOString() : undefined,
     source: entry.source,
     level: entry.level,
-    message: entry.message,
-    url: entry.url,
-    location: entry.location,
+    message: String(entry.message || '').slice(0, maxMessageChars),
+    url: String(entry.url || '').slice(0, 500),
+    location: entry.location ? {
+      url: String(entry.location.url || entry.location.source || '').slice(0, 300),
+      lineNumber: entry.location.lineNumber,
+      columnNumber: entry.location.columnNumber,
+    } : undefined,
   }));
   const counts = entries.reduce((acc: Record<string, number>, entry: any) => {
     const key = String(entry.level || 'log');
@@ -7540,7 +7636,7 @@ export async function browserInspectConsole(
   }, {});
   const title = await session.page.title().catch(() => '');
   return JSON.stringify({
-    url: safeBrowserPageUrl(session.page),
+    url: currentUrl,
     title,
     count: allEntries.length,
     returned: entries.length,
@@ -7548,7 +7644,8 @@ export async function browserInspectConsole(
     in_page_entries: inPageEntries.length,
     counts,
     entries,
-    note: 'controller_entries come from Playwright console/pageerror listeners attached to the browser session, so page parse errors can appear even when in-page scripts fail.',
+    scope: { since_ts: sinceTs || null, page_only: options.pageOnly !== false, url_filter: urlFilter || null },
+    note: 'Console entries are scoped to the current page by default. Set page_only=false only for explicit session-global history.',
   }, null, 2);
 }
 
@@ -7592,6 +7689,55 @@ export async function browserRunJs(
   }
 }
 
+export async function browserRunSmokeSteps(sessionId: string, steps: any[] = []): Promise<string> {
+  const session = sessions.get(resolveSessionId(sessionId));
+  if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  const results: Array<{ index: number; action: string; ok: boolean; details: any }> = [];
+  for (const [index, raw] of steps.entries()) {
+    const incoming = raw && typeof raw === 'object' ? raw : {};
+    const actionName = String(incoming.action || incoming.type || '').trim();
+    const step = actionName
+      ? { ...incoming, [actionName]: incoming[actionName] ?? incoming }
+      : incoming;
+    let action = 'unsupported';
+    let ok = false;
+    let details: any = null;
+    if (step.click) {
+      action = 'click';
+      const value = typeof step.click === 'object' ? step.click : { selector: step.click };
+      const result = await browserClick(sessionId, { selector: String(value.selector || '') }, { observe: 'none' });
+      ok = !result.startsWith('ERROR'); details = result;
+    } else if (step.fill) {
+      action = 'fill';
+      const value = typeof step.fill === 'object' ? step.fill : {};
+      const result = await browserFill(sessionId, { selector: String(value.selector || '') }, String(value.text || ''), { observe: 'none' });
+      ok = !result.startsWith('ERROR'); details = result;
+    } else if (step.key) {
+      action = 'key';
+      const value = typeof step.key === 'object' ? step.key.key : step.key;
+      const result = await browserPressKey(sessionId, String(value || 'Enter'), { observe: 'none' });
+      ok = !result.startsWith('ERROR'); details = result;
+    } else if (step.assertText) {
+      action = 'assertText';
+      const value = typeof step.assertText === 'object' ? step.assertText : {};
+      const selector = String(value.selector || 'body');
+      const expected = value.contains ?? value.equals ?? value.text ?? '';
+      const actual = await session.page.locator(selector).first().textContent().catch(() => null);
+      const normalized = String(actual || '').trim();
+      ok = value.contains != null || value.text != null ? normalized.includes(String(expected)) : normalized === String(expected);
+      details = { selector, expected, actual: normalized };
+    } else if (step.assertVisible) {
+      action = 'assertVisible';
+      const value = typeof step.assertVisible === 'object' ? step.assertVisible : { selector: step.assertVisible };
+      ok = await session.page.locator(String(value.selector || '')).first().isVisible().catch(() => false);
+      details = { selector: value.selector };
+    }
+    results.push({ index, action, ok, details });
+    if (!ok) break;
+  }
+  return JSON.stringify({ ok: results.every((result) => result.ok), executed: results.length, results }, null, 2);
+}
+
 // ─── browser_intercept_network ────────────────────────────────────────────────
 
 /**
@@ -7606,6 +7752,7 @@ export async function browserInterceptNetwork(
   action: 'start' | 'stop' | 'read' | 'clear',
   urlFilter?: string,
   maxEntries = 200,
+  options: { includeBodies?: boolean; bodyMaxChars?: number; statusMin?: number; statusMax?: number } = {},
 ): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
@@ -7614,7 +7761,7 @@ export async function browserInterceptNetwork(
   if (action === 'start') {
     // Remove old handler if already intercepting
     const oldHandler = _networkInterceptHandlers.get(resolved);
-    if (oldHandler) session.page.off('response', oldHandler);
+    if (oldHandler) session.context.off('response', oldHandler);
     _networkInterceptLog.set(resolved, []);
 
     const handler = async (response: any) => {
@@ -7627,18 +7774,19 @@ export async function browserInterceptNetwork(
         const headers = response.headers();
         const contentType = (headers['content-type'] || '').split(';')[0].trim();
         let body: string | undefined;
-        // Capture body only for JSON / text to avoid large binaries
-        if (contentType.includes('json') || contentType.startsWith('text/')) {
+        // Bodies are opt-in so a diagnostic read cannot dominate model context.
+        if (options.includeBodies === true && (contentType.includes('json') || contentType.startsWith('text/'))) {
           try {
             body = await response.text();
-            if (body && body.length > 3000) body = body.slice(0, 3000) + '…[truncated]';
+            const bodyMaxChars = Math.max(0, Math.min(20_000, Number(options.bodyMaxChars ?? 1000)));
+            if (body && body.length > bodyMaxChars) body = body.slice(0, bodyMaxChars) + '…[truncated]';
           } catch { /* ignore */ }
         }
         log.push({ url, method: req.method(), status: response.status(), contentType, body, ts: Date.now() });
       } catch { /* ignore disposal errors */ }
     };
     _networkInterceptHandlers.set(resolved, handler);
-    session.page.on('response', handler);
+    session.context.on('response', handler);
     const limit = String(maxEntries);
     const filterNote = urlFilter ? ` (url filter: "${urlFilter}")` : '';
     return `Network interception started${filterNote}. Capturing up to ${limit} responses. Use browser_intercept_network(action="read") to inspect, "stop" to disable.`;
@@ -7646,7 +7794,7 @@ export async function browserInterceptNetwork(
 
   if (action === 'stop') {
     const handler = _networkInterceptHandlers.get(resolved);
-    if (handler) { session.page.off('response', handler); _networkInterceptHandlers.delete(resolved); }
+    if (handler) { session.context.off('response', handler); _networkInterceptHandlers.delete(resolved); }
     const count = (_networkInterceptLog.get(resolved) || []).length;
     return `Network interception stopped. ${count} entries in log — use action="read" to view.`;
   }
@@ -7657,7 +7805,11 @@ export async function browserInterceptNetwork(
   }
 
   if (action === 'read') {
-    const log = (_networkInterceptLog.get(resolved) || []).filter(e => !urlFilter || e.url.includes(urlFilter));
+    const statusMin = Math.max(0, Number(options.statusMin ?? 0));
+    const statusMax = Math.min(999, Number(options.statusMax ?? 999));
+    const allMatching = (_networkInterceptLog.get(resolved) || []).filter(e => (!urlFilter || e.url.includes(urlFilter)) && e.status >= statusMin && e.status <= statusMax);
+    const safeLimit = Math.max(1, Math.min(200, Number(maxEntries || 50)));
+    const log = allMatching.slice(-safeLimit);
     if (log.length === 0) {
       return _networkInterceptHandlers.has(resolved)
         ? 'No matching network responses captured yet (interception is active).'
@@ -7668,7 +7820,7 @@ export async function browserInterceptNetwork(
       const bodyLine = e.body ? `\n    Body: ${e.body.replace(/\n/g, ' ')}` : '';
       return `[${time}] ${e.method} ${e.status} ${e.contentType}\n    ${e.url}${bodyLine}`;
     });
-    return `Network log (${log.length} entries):\n\n${lines.join('\n\n')}`;
+    return `Network log (${log.length} returned of ${allMatching.length} matching; bodies=${options.includeBodies === true ? 'included' : 'omitted'}):\n\n${lines.join('\n\n')}`;
   }
 
   return 'ERROR: action must be "start", "stop", "read", or "clear".';
@@ -7799,9 +7951,11 @@ export async function browserSnapshotDelta(sessionId: string): Promise<string> {
  *   { "container_selector": ".product", "fields": {
  *       "name":  { "selector": "h2" },
  *       "price": { "selector": ".price" },
- *       "link":  { "selector": "a", "type": "href" }
+ *       "link":  { "selector": "a", "type": "href" },
+ *       "imageUrl": { "selector": "img", "type": "src" }
  *   }}
  *
+ * `src` resolves current/lazy/srcset/zoom/Amazon dynamic images to absolute URLs.
  * Returns JSON array of matched items. Fields not found return null.
  */
 export async function browserExtractStructured(
@@ -7858,7 +8012,9 @@ export async function browserExtractStructured(
         savedKind: 'schema',
         saved: savedResult.saved,
       });
-      prefixLines.push(`Saved extraction schema "${savedResult.saved.name}" for this site.`);
+      let schemaHost = 'this site';
+      try { schemaHost = new URL(session.page.url()).hostname; } catch {}
+      prefixLines.push(`Saved extraction schema "${savedResult.saved.name}" for ${schemaHost} (domain-scoped).`);
     }
 
     return `${prefixLines.length ? `${prefixLines.join('\n')}\n\n` : ''}${JSON.stringify(result, null, 2)}`;
@@ -8901,11 +9057,12 @@ function normalizeExtractionFieldsInput(raw: any): Record<string, BrowserKnowled
   return fields;
 }
 
-function resolveBrowserExtractionSchemaForUrl(
+export function resolveBrowserExtractionSchemaForUrl(
   url: string,
   schemaInput: Record<string, any>,
 ): { schema?: ResolvedBrowserExtractionSchema; error?: string } {
   const input = schemaInput && typeof schemaInput === 'object' ? { ...schemaInput } : {};
+  const example = JSON.stringify({ container_selector: '#content', fields: { title: { selector: 'h1', type: 'text' } } }, null, 2);
   const requestedSchemaName = String(input.schema_name || input.use_schema || input.schemaName || '').trim();
   const savedSchema = requestedSchemaName ? matchNamedBrowserExtractionSchemaForUrl(url, requestedSchemaName) : null;
   if (requestedSchemaName && !savedSchema) {
@@ -8917,9 +9074,17 @@ function resolveBrowserExtractionSchemaForUrl(
   }
 
   const inlineFields = normalizeExtractionFieldsInput(input.fields);
+  if (input.fields && typeof input.fields === 'object' && !Array.isArray(input.fields)) {
+    const supported = new Set(['text', 'href', 'src', 'attr', 'html']);
+    const invalid = Object.entries(input.fields).flatMap(([name, raw]: [string, any]) => {
+      const type = String(raw?.type || 'text').trim().toLowerCase();
+      return supported.has(type) ? [] : [`${name}.type="${type}"`];
+    });
+    if (invalid.length) return { error: `Unsupported extraction field type(s): ${invalid.join(', ')}. Supported: text, href, src, attr, html. For lists, use one container per item or run_js. Minimum valid schema:\n${example}` };
+  }
   const fields = Object.keys(inlineFields).length ? inlineFields : { ...(savedSchema?.fields || {}) };
   if (!Object.keys(fields).length) {
-    return { error: 'browser_extract_structured requires schema.fields or schema_name pointing to a saved schema with fields.' };
+    return { error: `browser_extract_structured requires both a container selector (or saved item root) and fields, unless schema_name resolves both. Minimum valid schema:\n${example}` };
   }
 
   const itemRootName = String(
@@ -8949,7 +9114,7 @@ function resolveBrowserExtractionSchemaForUrl(
   }
 
   if (!containerSelector) {
-    return { error: 'browser_extract_structured requires schema.container_selector, schema.item_root, or schema_name.' };
+    return { error: `browser_extract_structured requires both a container selector (or saved item root) and fields. Minimum valid schema:\n${example}` };
   }
 
   const overridesUsed = Object.keys(inlineFields).length > 0
@@ -9017,7 +9182,31 @@ async function extractStructuredItemsFromCurrentPage(
           const extractType: string = String(fieldDef?.type || 'text').trim().toLowerCase();
           let value: any = null;
           if (extractType === 'href') value = el.href || el.getAttribute('href') || null;
-          else if (extractType === 'src') value = el.src || el.getAttribute('src') || null;
+          else if (extractType === 'src') {
+            const dynamicRaw = el.getAttribute?.('data-a-dynamic-image') || '';
+            let dynamicUrl = '';
+            if (dynamicRaw) {
+              try {
+                const dynamic = JSON.parse(dynamicRaw) as Record<string, unknown>;
+                dynamicUrl = Object.entries(dynamic).sort((a, b) => {
+                  const area = (entry: [string, unknown]) => Array.isArray(entry[1])
+                    ? Number(entry[1][0] || 0) * Number(entry[1][1] || 0)
+                    : 0;
+                  return area(b) - area(a);
+                })[0]?.[0] || '';
+              } catch {}
+            }
+            const srcset = String(el.getAttribute?.('srcset') || el.getAttribute?.('data-srcset') || '');
+            const srcsetUrl = srcset.split(',').map((entry: string) => {
+              const parts = entry.trim().split(/\s+/);
+              return { url: parts[0], size: Number(String(parts[1] || '').replace(/[^0-9.]/g, '')) || 0 };
+            }).filter((entry: any) => entry.url).sort((a: any, b: any) => b.size - a.size)[0]?.url || '';
+            const rawSrc = dynamicUrl || el.getAttribute?.('data-old-hires') || el.getAttribute?.('data-zoom-hires')
+              || srcsetUrl || el.currentSrc || el.getAttribute?.('data-src') || el.getAttribute?.('data-lazy-src')
+              || el.src || el.getAttribute?.('src') || '';
+            try { value = rawSrc ? new URL(rawSrc, (globalThis as any).location?.href || '').href : null; }
+            catch { value = rawSrc || null; }
+          }
           else if (extractType === 'attr') value = el.getAttribute(fieldDef.attribute || 'value') || null;
           else if (extractType === 'html') value = (el.innerHTML || '').trim().slice(0, 1000);
           else value = ((el.innerText || el.textContent || '').trim()).slice(0, 500);

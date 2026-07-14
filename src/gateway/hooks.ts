@@ -22,6 +22,13 @@ export type HookEvent =
   | { type: 'command:reset'; sessionId: string; workspacePath: string; timestamp: number }
   | { type: 'command:stop'; sessionId: string; workspacePath: string; timestamp: number }
   | {
+      type: 'session:history_changed';
+      sessionId: string;
+      timestamp: number;
+      historyCount: number;
+      source: 'add_message' | 'replace_history' | 'clear_history';
+    }
+  | {
       type: 'agent:bootstrap';
       sessionId: string;
       workspacePath: string;

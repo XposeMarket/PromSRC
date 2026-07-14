@@ -97,3 +97,13 @@ Process supervisor facts:
 - supports overall timeout and no-output timeout termination
 - supports stdin pipe/write/submit/close for interactive commands
 - marks stale starting/running/exiting records as exited on supervisor startup
+
+## 24B) Gateway Liveness and Recovery
+
+- `npm run gateway` starts through the CLI gateway supervisor; supervision and health-based restart are enabled by default and can be explicitly disabled with `PROMETHEUS_SUPERVISOR=0` or `PROMETHEUS_SUPERVISOR_RESTART=0`
+- the supervisor probes `/api/health` every fifteen seconds after startup with a five-second timeout and restarts the gateway after two consecutive failed health checks; both values are configurable with `PROMETHEUS_SUPERVISOR_HEALTH_TIMEOUT_MS` and `PROMETHEUS_SUPERVISOR_HEALTH_FAILURE_LIMIT`
+- a current runtime heartbeat defers recovery briefly, but a frozen `modelBusyAgeMs` no longer grants unlimited busy grace; recovery also accounts for heartbeat age and `modelBusySince`
+- the gateway's internal event-loop stall recovery is enabled by default and requests a managed restart after a 45-second stall; set `PROMETHEUS_GATEWAY_STALL_AUTORESTART=0` only for diagnostics
+- supervised children hand graceful/internal stall restarts back to the existing supervisor instead of spawning a second detached `prom` tree; detached replacements explicitly clear the child-only supervision flag so supervision cannot be lost across restart
+- Electron has an independent main-process health watchdog, so a renderer-visible app with an unresponsive gateway is recovered even though the child process is still alive
+- recursive workspace `search_files` uses asynchronous filesystem calls and yields periodically, preventing large Brain/audit scans from monopolizing the Node event loop

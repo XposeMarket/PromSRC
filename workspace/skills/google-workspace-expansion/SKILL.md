@@ -1,3 +1,8 @@
+---
+name: "google-workspace-expansion"
+description: "Extend Prometheus Google Workspace connectors for Calendar, Docs, Sheets, Drive, Gmail, or Contacts using OAuth-backed typed tools. Use when implementing or broadening Google Workspace integration; do not invoke for ordinary email, document, or spreadsheet content work."
+---
+
 # Google Workspace Expansion
 
 Use this skill when adding or extending Google Workspace capabilities in Prometheus.

@@ -1,24 +1,15 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when adding, testing, operating, or hardening a Discord connector/bot/webhook integration for channels, messages, guilds, slash commands, notifications, or Discord auth.",
+  "description": "Build or extend a Discord bot or OAuth connector with typed server, channel, thread, message, member, and moderation tools. Use when implementing or hardening Discord integration in Prometheus; do not invoke for generic social-media work.",
+  "implicitInvocation": true,
   "triggers": [
-    "Discord connector",
-    "Discord bot",
-    "Discord webhook",
-    "send Discord message",
-    "read Discord channel",
-    "Discord integration",
-    "slash command",
-    "Discord auth",
-    "guild id",
-    "channel id",
-    "test Discord connector",
-    "Discord notifications",
-    "create Discord tool",
-    "Discord message history",
-    "Discord API",
-    "connect Discord"
+    "build discord connector",
+    "discord oauth integration",
+    "discord channel tools",
+    "discord message connector",
+    "connect discord bot",
+    "discord connector"
   ],
   "categories": [
     "connectors",
@@ -32,5 +23,6 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "discord-connector"
+  "id": "discord-connector",
+  "name": "discord-connector"
 }

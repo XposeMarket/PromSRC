@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "execution-mode-routing",
+  "name": "execution-mode-routing",
+  "description": "Choose how new Prometheus work should execute: inline, planned, ephemeral background, durable task, delegated subagent, coordinated team, or scheduled job. Use when execution mode, persistence, parallelism, ownership, or restart survival is unclear; do not use merely to inspect or control work already running.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "should this run in background",
+    "make this a durable task",
+    "schedule or run now",
+    "choose execution mode",
+    "use multiple agents",
+    "delegate this work"
+  ],
+  "categories": [
+    "tasks",
+    "routing",
+    "agents",
+    "automation"
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
+}

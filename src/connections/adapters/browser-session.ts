@@ -1,0 +1,11 @@
+import type { ConnectionAdapter, ConnectionAdapterContext, ConnectionAdapterResult, ConnectionRecord, ConnectionStrategy, ConnectionVerificationResult } from '../types.js';
+export interface BrowserSessionHost { open(context: ConnectionAdapterContext, url: string): Promise<void>; status(context: ConnectionAdapterContext): Promise<{ connected: boolean; details?: Record<string, unknown> }>; close?(context: ConnectionAdapterContext, connection?: ConnectionRecord): Promise<void>; }
+export class BrowserSessionConnectionAdapter implements ConnectionAdapter {
+  readonly id = 'browser-session'; readonly kind = 'browser-session'; readonly displayName = 'Browser login session'; readonly priority = 50;
+  constructor(private readonly host: BrowserSessionHost) {}
+  supports(strategy: ConnectionStrategy): boolean { return strategy.adapter === 'browser-session'; }
+  async connect(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> { const url = String(context.attempt.plan?.strategy.configuration?.loginUrl || ''); if (!url) return { state: 'failed', error: { code: 'LOGIN_URL_REQUIRED', message: 'Browser login URL is required.', phase: 'planning' } }; await this.host.open(context, url); return { state: 'awaiting_browser_login', userAction: { type: 'browser-login', label: `Sign in to ${context.attempt.serviceName || context.attempt.serviceId}`, url, completionHint: 'Complete sign-in in the trusted browser window. Prometheus will resume after the session is detected.' } }; }
+  async continue(context: ConnectionAdapterContext): Promise<ConnectionAdapterResult> { const state = await this.host.status(context); return state.connected ? { state: 'registering', connection: { authenticated: true, authState: 'healthy', configuration: state.details } } : { state: 'awaiting_browser_login' }; }
+  async verify(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<ConnectionVerificationResult[]> { const state = await this.host.status(context); return [{ id: `${connection.id}:browser`, check: 'browser.session', passed: state.connected, details: state.details, verifiedAt: new Date().toISOString() }]; }
+  async disconnect(context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<void> { await this.host.close?.(context, connection); }
+}

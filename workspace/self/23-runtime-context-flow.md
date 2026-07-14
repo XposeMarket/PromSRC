@@ -1,5 +1,7 @@
 ## 39) Runtime Context Build Pipeline
 
+> Re-verified 2026-07-12. Current source map and costs: [26-runtime-instruction-census.md](26-runtime-instruction-census.md). Current Stage 4 routing: [27-stage4-tool-menu-trigger-benchmark.md](27-stage4-tool-menu-trigger-benchmark.md).
+
 The actual assembly sequence for every `handleChat` turn. Not the architecture overview — just the pipeline in order.
 
 ---
@@ -8,17 +10,17 @@ The actual assembly sequence for every `handleChat` turn. Not the architecture o
 User Message
     │
     ▼
-Router ─────────────────────────────────── chat.router.ts:1756
+Router ─────────────────────────────────── chat.router.ts:2049
 handleChat()
     │
     ▼
-Execution Mode ─────────────────────────── chat.router.ts:1764, 3105–3158
+Execution Mode ─────────────────────────── chat.router.ts:2057, 3714–3770
 interactive / background_task / cron /
 team_subagent / team_manager / proposal_execution /
 background_agent / heartbeat
     │
     ▼
-buildBaseSystemPrompt() ────────────────── chat.router.ts:3191–3199
+buildBaseSystemPrompt() ────────────────── chat.router.ts:3802–3850
   execution mode block (one per mode)
   core identity: "You are Prom…"
   routing policies: HyperFrames / creative / team / skill recovery
@@ -119,6 +121,10 @@ base → model caps → tool obs → callerContext → browser → personalityCt
 ```
 
 Source: `chat.router.ts:3206–3209`
+
+### Subagent file/memory boundary (2026-07-10)
+
+For `direct_subagent`, `background_agent`, and `team_subagent`, `buildPersonalityContext()` emits the dedicated `[SUBAGENT_SOUL]` plus shared tool-category and skill context. The caller/system overlay supplies canonical `AGENT.md` and the explicit assignment/team context. Those branches do not emit main `[USER]`, `[SOUL]`, `[MEMORY]`, `[BUSINESS]`, `[TODAY_NOTES]`, `[PROJECT_CONTEXT]`, `[CIS_CONTEXT]`, or retrieved-memory blocks. A `switch_model` handoff stays on the full mode-appropriate subagent prompt instead of entering the main switch-model memory branch.
 
 ---
 

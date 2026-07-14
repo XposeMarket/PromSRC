@@ -1,28 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Raul asks Prometheus to change its own src, web-ui, mobile UI, gateway, routes, tool definitions, prompts, or internal behavior. It guides dev-edit/source-edit rigor, evidence, verification, and self-doc updates.",
+  "description": "Apply Prometheus self-source approval, proposal, scope, sandbox, verification, and promotion policy to changes under the Prometheus codebase. Use when governance of a Prometheus source edit is the primary concern; use file-surgery for ordinary workspace edits.",
   "triggers": [
-    "fix Prometheus",
-    "update Prometheus",
-    "change your source",
+    "change the mobile app",
     "improve your internals",
-    "Prometheus bug",
-    "self edit",
-    "dev edit",
     "web-ui source change",
+    "internal behavior change",
+    "change your source",
     "mobile source fix",
     "gateway route fix",
-    "tool schema bug",
-    "internal behavior change",
-    "edit src",
-    "edit web-ui",
-    "Prometheus feature",
-    "fix the app",
-    "change the mobile app",
-    "fix your UI",
     "update self docs",
-    "source edit approval"
+    "source edit approval",
+    "fix the app",
+    "fix your ui",
+    "tool schema bug"
   ],
   "categories": [
     "prometheus",
@@ -37,6 +29,7 @@
     "browser_automation"
   ],
   "lifecycle": "active",
-  "name": "Source Edit Proposal Rigor",
-  "id": "src-edit-proposal-rigor"
+  "name": "src-edit-proposal-rigor",
+  "id": "src-edit-proposal-rigor",
+  "implicitInvocation": false
 }

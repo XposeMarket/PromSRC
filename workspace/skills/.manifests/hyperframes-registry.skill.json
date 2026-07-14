@@ -1,21 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when registering, indexing, finding, updating, or maintaining reusable HyperFrames templates, clips, scenes, assets, project metadata, or export records.",
+  "description": "Install and wire registry blocks and components into HyperFrames compositions. Use when running hyperframes add, installing a block or component, wiring an installed item into index.html, or working with hyperframes.json. Covers the add command, install locations, block sub-composition wiring, component snippet merging, and registry discovery.",
   "triggers": [
-    "HyperFrames registry",
-    "register template",
-    "find HyperFrames project",
-    "index video templates",
+    "find previous promo video",
     "reusable clip registry",
     "update motion registry",
-    "HyperFrames metadata",
     "catalog a scene",
+    "find hyperframes project",
+    "index video templates",
     "saved video template",
     "motion project index",
-    "register clip",
-    "export record",
-    "find previous promo video"
+    "hyperframes registry",
+    "hyperframes metadata",
+    "register template",
+    "register clip"
   ],
   "categories": [
     "creative",
@@ -28,6 +27,20 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "HyperFrames Registry",
-  "id": "hyperframes-registry"
+  "name": "hyperframes-registry",
+  "id": "hyperframes-registry",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "Registry catalog reads and disposable component installation passed with the expected configured install path.",
+    "verifiedCapabilities": [
+      "catalog_read",
+      "registry_component_install",
+      "configured_install_path"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "ownership": "upstream-managed"
 }

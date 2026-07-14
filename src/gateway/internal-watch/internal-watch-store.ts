@@ -43,6 +43,9 @@ export interface InternalWatch {
   status: InternalWatchStatus;
   lastCheckedAt?: string;
   lastObservation?: Record<string, any>;
+  /** Latched matching observation waiting for delivery while the model is busy. */
+  pendingMatchObservation?: Record<string, any>;
+  matchPendingAt?: string;
   matchedAt?: string;
   timedOutAt?: string;
   completedAt?: string;
@@ -113,6 +116,8 @@ function normalizeWatch(raw: any): InternalWatch | null {
     status: normalizeStatus(raw?.status),
     lastCheckedAt: raw?.lastCheckedAt ? String(raw.lastCheckedAt) : undefined,
     lastObservation: raw?.lastObservation && typeof raw.lastObservation === 'object' ? raw.lastObservation : undefined,
+    pendingMatchObservation: raw?.pendingMatchObservation && typeof raw.pendingMatchObservation === 'object' ? raw.pendingMatchObservation : undefined,
+    matchPendingAt: raw?.matchPendingAt ? String(raw.matchPendingAt) : undefined,
     matchedAt: raw?.matchedAt ? String(raw.matchedAt) : undefined,
     timedOutAt: raw?.timedOutAt ? String(raw.timedOutAt) : undefined,
     completedAt: raw?.completedAt ? String(raw.completedAt) : undefined,
@@ -183,7 +188,12 @@ export function createInternalWatch(input: {
     },
     target: {
       type: input.target.type,
-      config: input.target.config || {},
+      config: {
+        ...(input.target.config || {}),
+        ...((input.target.type === 'file' || input.target.type === 'event_queue') && !(input.target.config || {}).workspaceRoot
+          ? { workspaceRoot: path.resolve(getConfig().getWorkspacePath()) }
+          : {}),
+      },
     },
     condition: input.condition || {},
     onMatch,

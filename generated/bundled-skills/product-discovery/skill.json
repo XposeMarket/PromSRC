@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "product-discovery",
+  "name": "product-discovery",
+  "description": "Turn a product opportunity or feature idea into an evidence-backed decision using problem framing, hypotheses, user research, opportunity sizing, prioritization, and a testable product brief. Use when deciding what or whether to build; do not use for implementing an already-approved feature.",
+  "version": "2.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "decide whether to build this",
+    "define jobs to be done",
+    "validate this feature idea",
+    "score this product opportunity",
+    "plan a product roadmap",
+    "write a discovery brief",
+    "run product discovery",
+    "prioritize product features"
+  ],
+  "categories": [
+    "product",
+    "discovery",
+    "strategy"
+  ],
+  "implicitInvocation": false,
+  "lifecycle": "active"
+}

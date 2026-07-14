@@ -157,7 +157,7 @@ Relevant skills:
 - `gsap`
 - `hyperframes-cli`
 - `hyperframes-registry`
-- `website-to-hyperframes`
+- `website-to-video`
 - `remotion-to-hyperframes`
 - `remotion-best-practices`
 - `html-motion-preset-author`

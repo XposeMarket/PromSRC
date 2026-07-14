@@ -1,0 +1,20 @@
+{
+  "ownership": "upstream-managed",
+  "implicitInvocation": false,
+  "status": "ready",
+  "health": {
+    "state": "ready",
+    "reason": "Official skill pinned from heygen-com/hyperframes and restricted to explicit specialist selection by the Creative Director.",
+    "verifiedCapabilities": [
+      "official_upstream_skill"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-11"
+  },
+  "id": "figma",
+  "name": "figma",
+  "description": "Import Figma content into a HyperFrames composition — rendered assets, brand tokens, components, storyboard sections → reconstructed motion (frames read as states, not slides) (REST/CLI), Figma Motion animations (MCP), and shaders (MCP source / native export). Use when the user pastes a figma.com link or asks to bring a Figma design, frame, logo, brand, or animation into a video/composition.",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "lifecycle": "active"
+}

@@ -1,3 +1,87 @@
+
+async function resolveDenoRuntimePath(): Promise<string> {
+  const executableName = path.basename(process.execPath).toLowerCase();
+  const directCandidates = [
+    process.env.PROMETHEUS_DENO_PATH || '',
+    executableName === 'deno' || executableName === 'deno.exe' ? process.execPath : '',
+    ...String(process.env.PATH || '')
+      .split(path.delimiter)
+      .filter(Boolean)
+      .map((dir) => path.join(dir, process.platform === 'win32' ? 'deno.exe' : 'deno')),
+    ...(process.platform === 'win32'
+      ? [
+          path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Prometheus', 'runtime', 'deno', 'deno.exe'),
+          path.join(process.env.LOCALAPPDATA || '', 'deno', 'bin', 'deno.exe'),
+        ]
+      : ['/usr/local/bin/deno', '/usr/bin/deno']),
+  ];
+  const direct = directCandidates.find((candidate) => {
+    try {
+      return Boolean(candidate && fs.existsSync(candidate) && /deno(?:\.exe)?$/i.test(path.basename(candidate)));
+    } catch {
+      return false;
+    }
+  });
+  if (direct) return direct;
+
+  try {
+    const locator = process.platform === 'win32' ? 'where.exe' : 'which';
+    const { stdout } = await execFileAsync(locator, ['deno'], {
+      timeout: 5_000,
+      windowsHide: true,
+      maxBuffer: 128 * 1024,
+    });
+    const located = String(stdout || '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
+    if (located && fs.existsSync(located)) return located;
+  } catch {
+    // A JavaScript runtime is optional for non-YouTube extractors.
+  }
+  return '';
+}
+
+  // Node remains a fallback, but current yt-dlp releases require a supported runtime version.
+
+
+
+async function resolveNodeRuntimePath(): Promise<string> {
+  const executableName = path.basename(process.execPath).toLowerCase();
+  const directCandidates = [
+    process.env.PROMETHEUS_NODE_PATH || '',
+    executableName === 'node' || executableName === 'node.exe' ? process.execPath : '',
+    ...String(process.env.PATH || '')
+      .split(path.delimiter)
+      .filter(Boolean)
+      .map((dir) => path.join(dir, process.platform === 'win32' ? 'node.exe' : 'node')),
+    ...(process.platform === 'win32'
+      ? [
+          path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe'),
+          path.join(process.env.LOCALAPPDATA || '', 'Programs', 'nodejs', 'node.exe'),
+        ]
+      : ['/usr/local/bin/node', '/usr/bin/node']),
+  ];
+  const direct = directCandidates.find((candidate) => {
+    try {
+      return Boolean(candidate && fs.existsSync(candidate) && /node(?:\.exe)?$/i.test(path.basename(candidate)));
+    } catch {
+      return false;
+    }
+  });
+  if (direct) return direct;
+
+  try {
+    const locator = process.platform === 'win32' ? 'where.exe' : 'which';
+    const { stdout } = await execFileAsync(locator, ['node'], {
+      timeout: 5_000,
+      windowsHide: true,
+      maxBuffer: 128 * 1024,
+    });
+    const located = String(stdout || '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
+    if (located && fs.existsSync(located)) return located;
+  } catch {
+    // Node is optional for yt-dlp; extraction still works without EJS support.
+  }
+  return '';
+}
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
@@ -6,6 +90,7 @@ import { promisify } from 'util';
 import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from './workspace-context.js';
 import type { ToolResult } from '../types.js';
+import { resolveRuntimeBinary } from '../runtime/dependencies.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -280,6 +365,14 @@ export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<Too
     const { absDir } = ensureOutputDir(workspaceRoot, args.output_dir || 'downloads/media');
     await fsp.mkdir(absDir, { recursive: true });
 
+    const ffmpegPath = resolveRuntimeBinary('ffmpeg', { allowPathFallback: true });
+    const ffprobePath = resolveRuntimeBinary('ffprobe', { allowPathFallback: true });
+    const mediaBinDirs = [...new Set([ffmpegPath, ffprobePath]
+      .filter((value) => path.isAbsolute(value))
+      .map((value) => path.dirname(value)))];
+    const denoPath = await resolveDenoRuntimePath();
+    const nodePath = denoPath ? '' : await resolveNodeRuntimePath();
+    const jsRuntime = denoPath ? `deno:${denoPath}` : (nodePath ? `node:${nodePath}` : '');
     const commandArgs = [
       ...runner.preArgs,
       '--no-playlist',
@@ -294,7 +387,10 @@ export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<Too
       '%(title).80s [%(id)s].%(ext)s',
       '--merge-output-format',
       'mp4',
+      '--ffmpeg-location',
+      ffmpegPath,
     ];
+    if (jsRuntime) commandArgs.push('--js-runtimes', jsRuntime);
 
     if (args.audio_only === true) {
       commandArgs.push('-x', '--audio-format', 'mp3');
@@ -304,6 +400,12 @@ export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<Too
 
     const { stdout, stderr } = await execFileAsync(runner.cmd, commandArgs, {
       cwd: workspaceRoot,
+      env: {
+        ...process.env,
+        PROMETHEUS_FFMPEG_PATH: ffmpegPath,
+        PROMETHEUS_FFPROBE_PATH: ffprobePath,
+        PATH: [...mediaBinDirs, process.env.PATH || ''].filter(Boolean).join(path.delimiter),
+      },
       timeout: 10 * 60 * 1000,
       windowsHide: true,
       maxBuffer: 8 * 1024 * 1024,
@@ -337,8 +439,9 @@ export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<Too
         url,
         audio_only: args.audio_only === true,
         runner: runner.label,
+        ffmpeg_available: true,
         files,
-        stderr: String(stderr || '').slice(0, 2000),
+        warnings: String(stderr || '').split(/\r?\n/).map((line) => line.trim()).filter((line) => /warning/i.test(line)).slice(0, 5),
       },
     };
   } catch (error: any) {

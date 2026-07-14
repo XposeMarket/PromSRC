@@ -37,6 +37,7 @@ interface AuthServerMetadata {
 interface StoredClient {
   client_id: string;
   client_secret?: string;
+  dynamically_registered?: boolean;
   metadata: AuthServerMetadata;
   resource: string;
   scope?: string;
@@ -92,6 +93,8 @@ function saveTokens(id: string, tokens: StoredTokens): void {
   vault().set(tokenKey(id), JSON.stringify(tokens), `mcp-oauth:tokens:${id}`);
 }
 export function clearMcpOAuth(id: string): void {
+  const flow = activeFlows.get(id);
+  if (flow) { try { flow.server.close(); } catch {} activeFlows.delete(id); }
   try { vault().delete(tokenKey(id), `mcp-oauth:clear:${id}`); } catch {}
   try { vault().delete(clientKey(id), `mcp-oauth:clear:${id}`); } catch {}
 }
@@ -131,28 +134,43 @@ export function parseResourceMetadataUrl(wwwAuthenticate?: string | null): strin
   return m ? m[1] : null;
 }
 
-async function discoverAuthServer(serverUrl: string, wwwAuthenticate?: string | null): Promise<AuthServerMetadata> {
+export function buildAuthMetadataCandidates(authServerUrl: string | undefined, resourceOrigin: string): string[] {
+  const candidates: string[] = [];
+  if (authServerUrl) {
+    const issuer = new URL(authServerUrl);
+    const issuerOrigin = `${issuer.protocol}//${issuer.host}`;
+    const issuerPath = issuer.pathname.replace(/\/$/, '');
+    // RFC 8414 path-bearing issuer form, plus common provider variants.
+    candidates.push(`${issuerOrigin}/.well-known/oauth-authorization-server${issuerPath}`);
+    candidates.push(`${issuerOrigin}${issuerPath}/.well-known/openid-configuration`);
+    candidates.push(`${issuerOrigin}/.well-known/oauth-authorization-server`);
+    candidates.push(`${issuerOrigin}/.well-known/openid-configuration`);
+  }
+  candidates.push(`${resourceOrigin}/.well-known/oauth-authorization-server`);
+  candidates.push(`${resourceOrigin}/.well-known/openid-configuration`);
+  return [...new Set(candidates)];
+}
+
+export async function discoverMcpAuthServer(serverUrl: string, wwwAuthenticate?: string | null): Promise<AuthServerMetadata> {
   const origin = originOf(serverUrl);
 
   // 1. Protected-resource metadata → authorization_servers[]
   let authServerUrl: string | undefined;
-  const rmUrl = parseResourceMetadataUrl(wwwAuthenticate) || `${origin}/.well-known/oauth-protected-resource`;
-  const rm = await fetchJson(rmUrl);
-  if (rm && Array.isArray(rm.authorization_servers) && rm.authorization_servers.length) {
-    authServerUrl = String(rm.authorization_servers[0]);
+  const resourcePath = new URL(serverUrl).pathname.replace(/\/$/, '');
+  const advertisedResourceMetadata = parseResourceMetadataUrl(wwwAuthenticate);
+  const resourceCandidates = advertisedResourceMetadata
+    ? [advertisedResourceMetadata]
+    : [`${origin}/.well-known/oauth-protected-resource${resourcePath}`, `${origin}/.well-known/oauth-protected-resource`];
+  for (const rmUrl of [...new Set(resourceCandidates)]) {
+    const rm = await fetchJson(rmUrl);
+    if (rm && Array.isArray(rm.authorization_servers) && rm.authorization_servers.length) {
+      authServerUrl = String(rm.authorization_servers[0]);
+      break;
+    }
   }
 
   // 2. Auth-server metadata (RFC 8414 / OIDC), with sensible fallbacks.
-  const candidates = authServerUrl
-    ? [
-        `${authServerUrl.replace(/\/$/, '')}/.well-known/oauth-authorization-server`,
-        `${authServerUrl.replace(/\/$/, '')}/.well-known/openid-configuration`,
-        authServerUrl,
-      ]
-    : [
-        `${origin}/.well-known/oauth-authorization-server`,
-        `${origin}/.well-known/openid-configuration`,
-      ];
+  const candidates = buildAuthMetadataCandidates(authServerUrl, origin);
 
   for (const url of candidates) {
     const meta = await fetchJson(url);
@@ -168,19 +186,17 @@ async function discoverAuthServer(serverUrl: string, wwwAuthenticate?: string | 
     }
   }
 
-  // 3. Last-resort convention (some servers don't publish metadata).
-  const base = (authServerUrl || origin).replace(/\/$/, '');
-  return {
-    authorization_endpoint: `${base}/authorize`,
-    token_endpoint: `${base}/token`,
-    registration_endpoint: `${base}/register`,
-  };
+  // Never invent authorization/token endpoints. A guessed URL can send users
+  // to the wrong origin/path and cannot establish a trustworthy OAuth flow.
+  throw new Error(`OAuth authorization-server metadata was not found. Checked: ${candidates.join(', ')}`);
 }
 
 // ─── dynamic client registration (RFC 7591) ───────────────────────────────────
 async function ensureClient(serverId: string, serverUrl: string, metadata: AuthServerMetadata, scope?: string): Promise<StoredClient> {
   const existing = loadClient(serverId);
-  if (existing?.client_id) return { ...existing, metadata, resource: serverUrl, scope: scope || existing.scope };
+  const metadataMatches = existing?.metadata?.authorization_endpoint === metadata.authorization_endpoint
+    && existing?.metadata?.token_endpoint === metadata.token_endpoint;
+  if (existing?.client_id && metadataMatches && existing.client_id !== 'prometheus') return { ...existing, metadata, resource: serverUrl, scope: scope || existing.scope };
 
   let clientId: string | undefined;
   let clientSecret: string | undefined;
@@ -203,11 +219,13 @@ async function ensureClient(serverId: string, serverUrl: string, metadata: AuthS
     }
   }
 
-  // Public-client fallback id (some servers accept an arbitrary public client_id
-  // with PKCE and no registration).
+  if (!clientId) throw new Error(metadata.registration_endpoint
+    ? 'Dynamic OAuth client registration did not return a client_id.'
+    : 'The authorization server does not advertise dynamic client registration and no valid registered client is stored.');
   const client: StoredClient = {
-    client_id: clientId || 'prometheus',
+    client_id: clientId,
     client_secret: clientSecret,
+    dynamically_registered: true,
     metadata,
     resource: serverUrl,
     scope,
@@ -291,7 +309,7 @@ export function getMcpOAuthFlowStatus(serverId: string): { status: FlowStatus; e
  * registers a client, starts a loopback callback server, opens the browser, and
  * returns the authorize URL. Poll getMcpOAuthFlowStatus() for completion.
  */
-export async function startMcpOAuthFlow(serverId: string, serverUrl: string, wwwAuthenticate?: string | null, scope?: string): Promise<StartFlowResult> {
+export async function startMcpOAuthFlow(serverId: string, serverUrl: string, wwwAuthenticate?: string | null, scope?: string, options?: { openBrowser?: boolean }): Promise<StartFlowResult> {
   // Tear down any prior in-flight attempt.
   const prev = activeFlows.get(serverId);
   if (prev) { try { prev.server.close(); } catch {} activeFlows.delete(serverId); }
@@ -299,7 +317,7 @@ export async function startMcpOAuthFlow(serverId: string, serverUrl: string, www
   let metadata: AuthServerMetadata;
   let client: StoredClient;
   try {
-    metadata = await discoverAuthServer(serverUrl, wwwAuthenticate);
+    metadata = await discoverMcpAuthServer(serverUrl, wwwAuthenticate);
     client = await ensureClient(serverId, serverUrl, metadata, scope);
   } catch (e: any) {
     return { status: 'error', error: `OAuth discovery failed: ${e?.message || e}` };
@@ -330,8 +348,8 @@ export async function startMcpOAuthFlow(serverId: string, serverUrl: string, www
       const err = url.searchParams.get('error');
 
       const finish = (ok: boolean, message: string) => {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(`<!doctype html><html><body style="font-family:system-ui;background:#0b0b12;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>${ok ? '✓ Connected' : '✗ Authorization failed'}</h2><p style="color:#9a9">${message}</p><p style="color:#667">You can close this tab and return to Prometheus.</p></div></body></html>`);
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`<!doctype html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui;background:#0b0b12;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>${ok ? '&#10003; Connected' : '&#10007; Authorization failed'}</h2><p style="color:#9a9">${message}</p><p style="color:#667">You can close this tab and return to Prometheus.</p></div></body></html>`);
       };
 
       if (err) { if (flow) { flow.status = 'error'; flow.error = err; } finish(false, err); server.close(); return; }
@@ -361,10 +379,13 @@ export async function startMcpOAuthFlow(serverId: string, serverUrl: string, www
     }
   });
 
-  await new Promise<void>((resolve, reject) => {
+  try { await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(REDIRECT_PORT, '127.0.0.1', () => resolve());
-  }).catch(() => {});
+  }); } catch (error: any) {
+    try { server.close(); } catch {}
+    return { status: 'error', error: `OAuth callback listener failed: ${error?.message || error}` };
+  }
 
   const flow: ActiveFlow = {
     serverId, state, codeVerifier: verifier, client, server,
@@ -378,6 +399,6 @@ export async function startMcpOAuthFlow(serverId: string, serverUrl: string, www
     if (f && f.status === 'pending') { f.status = 'error'; f.error = 'authorization timed out'; try { f.server.close(); } catch {} }
   }, FLOW_TIMEOUT_MS).unref?.();
 
-  openBrowser(flow.authorizeUrl);
+  if (options?.openBrowser !== false) openBrowser(flow.authorizeUrl);
   return { status: 'pending', authorizeUrl: flow.authorizeUrl };
 }

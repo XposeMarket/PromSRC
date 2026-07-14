@@ -1,23 +1,15 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when fetching, reading, analyzing, downloading, or summarizing a specific X/Twitter post and its attached images, videos, alt text, quoted posts, or reply context.",
+  "description": "Use when the user supplies an X/Twitter status URL and wants its post or thread fetched, read, inspected, or summarized without interaction. Do not use for posting, liking, replying, feed browsing, or generic web research.",
   "triggers": [
+    "inspect this x status",
+    "pull this x thread",
+    "download x post media",
+    "analyze x post media",
+    "read this x post",
     "fetch this tweet",
-    "read this X post",
-    "download tweet media",
-    "analyze this tweet image",
-    "summarize this X thread",
-    "get tweet video",
-    "inspect quoted tweet",
-    "pull X post text",
-    "X status URL",
-    "twitter.com status",
-    "x.com post",
-    "save tweet image",
-    "read tweet replies",
-    "get media from X",
-    "analyze attached media"
+    "x status url"
   ],
   "categories": [
     "x",
@@ -31,6 +23,22 @@
     "browser_automation"
   ],
   "lifecycle": "active",
-  "name": "X Post Fetch and Media",
-  "id": "x-post-fetch-and-media"
+  "name": "x-post-fetch-and-media",
+  "id": "x-post-fetch-and-media",
+  "status": "ready",
+  "implicitInvocation": true,
+  "health": {
+    "state": "ready",
+    "reason": "A known public X status resolved through the official oEmbed path; simple reads stayed bounded and thread/media expansion remained explicit opt-in.",
+    "verifiedCapabilities": [
+      "official_x_oembed",
+      "known_public_status",
+      "bounded_simple_read",
+      "explicit_thread_expansion",
+      "explicit_media_analysis",
+      "empty_result_rejection"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  }
 }

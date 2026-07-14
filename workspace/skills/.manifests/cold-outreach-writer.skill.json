@@ -1,25 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when writing or improving cold outreach: cold emails, LinkedIn DMs, X DMs, prospecting messages, follow-up sequences, outbound campaigns, lead-specific personalization, or sales openers.",
+  "description": "Write or improve cold emails and prospecting DMs using verified personalization, a relevant problem hypothesis, credible value, and a low-friction call to action. Use for message-level outreach copy; do not use for lead discovery, full SDR-system design, or sending messages without authorization.",
   "triggers": [
-    "write a cold email",
-    "cold outreach",
-    "prospecting message",
-    "LinkedIn DM",
-    "X DM for a lead",
-    "outbound campaign",
-    "follow-up sequence",
-    "sales email",
-    "personalize this outreach",
-    "first-touch email",
-    "reply bump",
-    "outreach opener",
-    "local business outreach",
-    "lead nurture email",
+    "x dm for a lead",
+    "make outreach less generic",
     "book a call message",
     "improve this cold email",
-    "make outreach less generic"
+    "write a cold email",
+    "personalize this outreach",
+    "local business outreach",
+    "lead nurture email",
+    "prospecting message",
+    "follow-up sequence",
+    "outbound campaign",
+    "outreach opener"
   ],
   "categories": [
     "sales",
@@ -31,6 +26,7 @@
     "skills"
   ],
   "lifecycle": "active",
-  "name": "Cold Outreach Writer",
-  "id": "cold-outreach-writer"
+  "name": "cold-outreach-writer",
+  "id": "cold-outreach-writer",
+  "implicitInvocation": true
 }

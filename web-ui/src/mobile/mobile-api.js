@@ -799,7 +799,7 @@ export async function loadMobileSubagentDetail(agentId) {
 }
 
 export async function loadSubagentSystemPrompt(agentId) {
-  const r = await api(`/api/agents/${encodeURIComponent(agentId)}/system-prompt-md`).catch(() => null);
+  const r = await api(`/api/agents/${encodeURIComponent(agentId)}/agent-md`).catch(() => null);
   return String(r?.content || '');
 }
 
@@ -1347,10 +1347,9 @@ export async function loadMobileSessionPage({ channel = 'mobile', limit = MOBILE
     limit: String(requestedLimit),
     offset: String(requestedOffset),
   });
-  // The "Computer" (web) channel mirrors the desktop main-chat view, which
-  // includes automated scheduled-task sessions (auto_*). Ask the server to
-  // fold those in so per-job scheduled threads appear on mobile too.
-  if (requestedChannel === 'web') {
+  // Scheduled-task threads are shared system-owned sessions, but on the mobile
+  // surface they belong in the primary chat list instead of Computer chats.
+  if (requestedChannel === 'mobile') {
     params.set('includeAutomated', '1');
   }
   const r = await mfetch(`/api/sessions?${params.toString()}`);
@@ -1417,6 +1416,7 @@ export async function loadLatestUsableSession() {
 
 // ── Session cache (30s TTL, invalidated on history writes) ────────────────────
 const _sessionCache = new Map(); // sessionId → { session, expiresAt }
+const _sessionRequests = new Map(); // `${sessionId}:${detail}` → in-flight Promise
 const _SESSION_CACHE_TTL = 30_000; // ms
 
 function _sessionCacheGet(sid) {
@@ -1447,14 +1447,22 @@ export async function loadMobileChatSession(sessionId, { force = false } = {}) {
     const cached = _sessionCacheGet(sid);
     if (cached) return cached;
   }
-  const historyLimit = force ? 160 : 70;
-  const processLimit = force ? 160 : 120;
-  const r = await mfetch(`/api/sessions/${encodeURIComponent(sid)}?mobile=1&historyLimit=${historyLimit}&processLimit=${processLimit}&includeToolLog=0${force ? '&_fresh=1' : ''}`, {
+  const requestKey = `${sid}:${force ? 'recovery' : 'normal'}`;
+  const existingRequest = _sessionRequests.get(requestKey);
+  if (existingRequest) return existingRequest;
+  const historyLimit = force ? 180 : 70;
+  const processLimit = force ? 500 : 120;
+  const request = mfetch(`/api/sessions/${encodeURIComponent(sid)}?mobile=1&historyLimit=${historyLimit}&processLimit=${processLimit}&includeToolLog=0${force ? '&fullProcess=1&_fresh=1' : ''}`, {
     timeoutMs: force ? 30000 : 20000,
+  }).then((r) => {
+    const session = r?.session || null;
+    if (session) _sessionCacheSet(sid, session);
+    return session;
+  }).finally(() => {
+    if (_sessionRequests.get(requestKey) === request) _sessionRequests.delete(requestKey);
   });
-  const session = r?.session || null;
-  if (session) _sessionCacheSet(sid, session);
-  return session;
+  _sessionRequests.set(requestKey, request);
+  return request;
 }
 
 

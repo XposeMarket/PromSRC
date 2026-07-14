@@ -1,3 +1,8 @@
+---
+name: "long-running-job-inspector"
+description: "Inspect, summarize, cancel, retry, or recover Prometheus background tasks, scheduled jobs, process runs, approvals, and stalled executions. Use when the user asks what is running or needs help with a specific active, stalled, or failed job."
+---
+
 # Long-Running Job Inspector
 
 Use this skill when Prometheus needs to understand or manage ongoing work.

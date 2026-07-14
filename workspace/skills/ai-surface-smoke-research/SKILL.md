@@ -1,12 +1,9 @@
 ---
-name: AI Surface Smoke Research
-description: >
-  Runs Raul's repeatable browser/desktop test workflow across native AI apps and live social surfaces. Use this when Raul asks to run an AI smoke research test, focus Codex and Claude, open Chrome/browser, search Reddit and/or X for AI topics like Claude/OpenClaw/Hermes, then summarize the current signals. Triggers on phrases like: run AI smoke research, test browser desktop research, focus Codex and Claude then search X, search Reddit and X for AI, Claude OpenClaw Hermes search, summarize AI chatter.
-version: 1.0.0
-triggers: run ai smoke research, ai surface test, codex claude reddit x test, search reddit and x for ai, focus codex and claude then search x, test browser desktop research, quick ai research workflow, claude openclaw hermes search, summarize ai chatter, browser desktop ai test
+name: "ai-surface-smoke-research"
+description: "Run the shared browser, desktop, and optional voice-agent smoke workflow across ChatGPT, Claude, Reddit, X, and other requested AI surfaces. Use for voice-triggered or typed end-to-end tool tests, AI chatter collection, browser scrolling, desktop focus, visible-action proof, and concise tool-grounded summaries."
 ---
 
-# AI Surface Smoke Research
+# AI Surface Browser and Desktop Smoke Test
 
 Run a quick end-to-end Prometheus test that proves desktop focus, browser navigation, social/search collection, and summary generation all work in one flow.
 
@@ -20,24 +17,23 @@ Good topics include `Claude`, `OpenClaw`, `Hermes`, `Codex`, `AI agents`, or any
 
 ## Default Workflow
 
-1. **Load supporting skills first**
-   - `desktop-automation-playbook`
-   - `browser-automation-playbook`
-   - `x-browser-automation-playbook` when X is included
-
-2. **Focus desktop AI apps**
-   - Find/focus Codex with `desktop_find_window({ name:"Codex" })` then `desktop_focus_window({ name:"Codex" })`.
+1. **Focus desktop AI apps**
+   - Find/focus ChatGPT with `desktop_find_window({ name:"ChatGPT" })` then `desktop_focus_window({ name:"ChatGPT" })`.
    - Find/focus Claude with `desktop_find_window({ name:"Claude" })` then prefer exact returned handle when needed, because Chrome/X titles may include the word Claude.
    - If a name collision happens, use `desktop_find_window` results and `desktop_window_screenshot({ handle })` to verify the real Claude app.
 
-3. **Search Reddit**
+2. **Exercise the browser**
+   - Open the user-requested search or AI surface. For a lightweight execution-only test, open X live search and perform one ordinary scroll.
+   - For a collection/research test, use `browser_scroll_collect` rather than manual scroll loops.
+
+3. **Search Reddit when research is requested**
    - Use browser automation, not plain web search, when the test goal is browser execution.
    - Default URL:
      `https://www.reddit.com/search/?q=<encoded query>&type=link`
    - Use `browser_scroll_collect` for 3-5 scrolls.
    - Capture post titles, subreddits, rough votes/comments, and repeated themes.
 
-4. **Search X**
+4. **Search X when research is requested**
    - Default URL:
      `https://x.com/search?q=<encoded query>&f=live`
    - Use `browser_scroll_collect` for 3-5 scrolls.
@@ -49,10 +45,11 @@ Good topics include `Claude`, `OpenClaw`, `Hermes`, `Codex`, `AI agents`, or any
    - If Reddit/X cannot be collected because browser or auth is blocked, use `web_search({ fetch_top_k: 2-4 })` for Reddit/web mentions or `web_fetch_batch` for selected URLs.
    - Clearly label this as fallback research, separate from the browser/desktop smoke-test result.
 
-6. **Summarize**
+6. **Summarize or prove completion**
    - Report after the actual tool sequence completes.
    - Keep it concise unless Raul asks for depth.
-   - Include: surfaces tested, app focus result, source highlights, and a short read on the AI chatter.
+   - For execution-only or voice-triggered tests, keep the reply to one short completion sentence and send fresh screenshot proof to the origin surface when requested.
+   - For research tests, include surfaces tested, app focus result, source highlights, and a short read on the AI chatter.
 
 ## Default Query
 
@@ -65,7 +62,7 @@ Claude OpenClaw Hermes AI
 ## Output Template
 
 ```markdown
-Done — focused Codex and Claude, searched Reddit + X for `<query>`, and collected live results.
+Done — focused ChatGPT and Claude, searched Reddit + X for `<query>`, and collected live results.
 
 Quick read:
 - Reddit: <2-4 bullets about repeated themes>
@@ -79,7 +76,7 @@ Tool check: browser collection worked; desktop focus worked/partially worked wit
 
 - This is a test flow, so skip `declare_plan` unless Raul explicitly asks for a plan.
 - Do not take external social actions. Read-only only.
-- Do not read or alter Codex/Claude chat content unless Raul explicitly asks.
+- Do not read or alter ChatGPT/Claude chat content unless Raul explicitly asks.
 - Prefer exact window handles when desktop window names collide with browser page titles.
 - If Reddit is logged out, continue; logged-out search results are still usable.
 - If X auth/search fails, report the exact blocker and continue with Reddit or web fallback.
@@ -91,14 +88,14 @@ Do not use this for:
 
 - Deep competitive intelligence reports.
 - Posting, liking, replying, or outreach.
-- Codex dev handoffs.
-- Voice-specific latency/interruption testing; Raul said that will get its own skill later.
+- ChatGPT coding handoffs.
+- Voice-model latency, interruption, or audio-quality benchmarking that does not exercise browser/desktop tools.
 
 ## Quality Check
 
 A successful run has evidence that:
 
-- Codex was focused or explicitly found missing.
+- ChatGPT was focused or explicitly found missing.
 - Claude was focused or explicitly found missing.
 - Reddit and/or X was opened in browser automation.
 - At least one collection pass returned real content.

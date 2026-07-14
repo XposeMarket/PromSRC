@@ -15,6 +15,7 @@ import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, res
 import { buildGatewayCorsOptions } from '../gateway-auth';
 import { isModelBusy, getLastMainSessionId } from '../comms/broadcaster';
 import { listLiveRuntimes } from '../live-runtime-registry';
+import { providerWebhookRawBodyMiddleware, resolveHookConfig } from '../comms/webhook-handler';
 
 const startedAt = Date.now();
 
@@ -35,6 +36,10 @@ export function createApp(): express.Application {
   const app = express();
 
   app.use(cors(buildGatewayCorsOptions()));
+  // Provider routes must enforce their smaller limit before the general JSON
+  // parser buffers or parses the request. The raw parser preserves exact HMAC bytes.
+  const hookPath = resolveHookConfig().path;
+  app.use(`${hookPath}/provider/:provider`, providerWebhookRawBodyMiddleware());
   app.use(express.json({ limit: '50mb' }));
 
   app.get('/api/health', (_req, res) => {

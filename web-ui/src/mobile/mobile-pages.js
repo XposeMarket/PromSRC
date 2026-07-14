@@ -43,6 +43,17 @@ import { checkSessionDetailed, getAccount, mountLoginScreen } from '../auth/acco
 import { renderMd } from '../utils.js';
 import { wsEventBus, wsSend } from '../ws.js';
 import {
+  appendCommandTerminalChunkToDom,
+  applyCommandProcessEvent,
+  applyToolActivityEvent,
+  coalesceToolActivityEntries,
+  installToolActivityExpansionPersistence,
+  renderToolActivityEntry,
+  setToolActivityDisclosureState,
+  toolActivitySummary,
+} from '../tool-activity.js';
+installToolActivityExpansionPersistence();
+import {
   renderAgentModelPicker as _renderAgentModelPicker,
   agentModelPickerHydrate,
   registerAgentModelPickerOnSaved,
@@ -58,6 +69,8 @@ const PM_MOBILE_BROWSE_CACHE_TTL_MS = 45_000;
 const pmMobileBrowseCache = new Map();
 
 function pmToast(msg, kind = 'info') {
+  const chatPage = document.getElementById('pm-composer')?.closest?.('.pm-page') || null;
+  const composer = document.getElementById('pm-composer');
   let host = document.getElementById('pm-toast-host');
   if (!host) {
     host = document.createElement('div');
@@ -65,13 +78,25 @@ function pmToast(msg, kind = 'info') {
     host.style.cssText = 'position:fixed;left:0;right:0;bottom:calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 16px);display:flex;flex-direction:column;align-items:center;gap:8px;z-index:9999;pointer-events:none;';
     document.body.appendChild(host);
   }
+  if (composer) {
+    const composerTop = Number(composer.getBoundingClientRect?.().top || 0);
+    if (composerTop > 0) host.style.bottom = `${Math.max(20, window.innerHeight - composerTop + 12)}px`;
+  }
+  chatPage?.classList.add('pm-toast-priority-active');
   const t = document.createElement('div');
   const bg = kind === 'error' ? '#d8473a' : kind === 'success' ? '#2fae66' : '#221a14';
   t.style.cssText = `background:${bg};color:#fff;padding:10px 16px;border-radius:999px;font-size:13px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,.18);max-width:88vw;text-align:center;opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s;`;
   t.textContent = msg;
   host.appendChild(t);
   requestAnimationFrame(() => { t.style.opacity = '1'; t.style.transform = 'translateY(0)'; });
-  setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateY(8px)'; setTimeout(() => t.remove(), 220); }, 2400);
+  setTimeout(() => {
+    t.style.opacity = '0';
+    t.style.transform = 'translateY(8px)';
+    setTimeout(() => {
+      t.remove();
+      if (!host.childElementCount) chatPage?.classList.remove('pm-toast-priority-active');
+    }, 220);
+  }, 2400);
 }
 // Expose so shared mobile modules (e.g. the header model badge) can toast too.
 try { window.pmToast = pmToast; } catch {}
@@ -174,8 +199,12 @@ async function _toggleMobileChatPushNotifications() {
 const PM_MOBILE_ACTIVE_RUN_KEY = 'pm_mobile_active_chat_run';
 const PM_MOBILE_ACTIVE_RUNS_KEY = 'pm_mobile_active_chat_runs';
 const PM_MOBILE_LAST_CHAT_SESSION_KEY = 'pm_mobile_last_chat_session';
-const PM_MOBILE_THREAD_CACHE_KEY = 'pm_mobile_thread_cache_v1';
-const PM_MOBILE_THREAD_CACHE_MAX = 30; // messages to persist per session
+const PM_MOBILE_THREAD_CACHE_KEY = 'pm_mobile_thread_cache_v2';
+const PM_MOBILE_THREAD_CACHE_LEGACY_KEY = 'pm_mobile_thread_cache_v1';
+const PM_MOBILE_THREAD_CACHE_MAX = 80;
+const PM_MOBILE_THREAD_CACHE_SESSION_MAX = 6;
+const PM_MOBILE_THREAD_CACHE_ENTRY_CHAR_BUDGET = 280_000;
+const PM_MOBILE_THREAD_CACHE_TOTAL_CHAR_BUDGET = 1_500_000;
 const PM_MOBILE_SIDE_CHAT_LINKS_KEY = 'prometheus_side_chat_links_v1';
 const PM_MOBILE_GOAL_CACHE_KEY = 'pm_mobile_main_chat_goals_v1';
 const PM_MOBILE_LAST_GOAL_SESSION_KEY = 'pm_mobile_last_goal_session';
@@ -277,7 +306,7 @@ function _mobileGoalElapsedMs(goal) {
   const startedAt = _mobileGoalStartedAtMs(goal);
   if (!startedAt) return 0;
   const status = String(goal?.status || 'active');
-  if (status === 'paused') {
+  if (status === 'paused' || status === 'restarting') {
     const pausedMs = _mobileGoalPausedMs(goal);
     const pauseStartedAt = _mobileGoalPauseStartedAtMs(goal);
     const totalPausedMs = pauseStartedAt ? pausedMs + Math.max(0, Date.now() - pauseStartedAt) : pausedMs;
@@ -305,6 +334,7 @@ function _mobileGoalStatusLabel(status) {
   const value = String(status || 'active').toLowerCase();
   if (value === 'done' || value === 'completed') return 'Completed goal';
   if (value === 'paused') return 'Paused goal';
+  if (value === 'restarting') return 'Applying changes';
   if (value === 'blocked') return 'Blocked goal';
   if (value === 'failed') return 'Failed goal';
   return 'Pursuing goal';
@@ -468,6 +498,7 @@ function _renderMobileGoalPill(target, sessionId = '', options = {}) {
     delete target.dataset.expanded;
     target.removeAttribute('data-status');
     _syncMobileGoalTimer();
+    _syncMobileRuntimePillPair(target);
     return;
   }
   target.dataset.sessionId = sid;
@@ -484,6 +515,7 @@ function _renderMobileGoalPill(target, sessionId = '', options = {}) {
       <span class="pm-mobile-goal-pill-icon" aria-hidden="true"></span>
       <span class="pm-mobile-goal-pill-label">${escapeHtml(_mobileGoalStatusLabel(status))}</span>
       <b data-pm-goal-elapsed data-session-id="${escapeHtml(sid)}">${escapeHtml(_formatMobileGoalElapsed(_mobileGoalElapsedMs(goal)))}</b>
+      <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
     </button>
     ${expanded ? `
       <div class="pm-mobile-goal-details">
@@ -505,7 +537,16 @@ function _renderMobileGoalPill(target, sessionId = '', options = {}) {
   target.querySelector('[data-mobile-goal-toggle]')?.addEventListener('click', () => {
     try { pmHaptic?.(12); } catch {}
     __pmChat.goalDetailsOpen[sid] = !__pmChat.goalDetailsOpen[sid];
+    if (__pmChat.goalDetailsOpen[sid]) {
+      const planState = _mobileMainPlanState(sid);
+      planState.open = false;
+      _renderMobileMainPlanDock(document.getElementById('pm-main-plan-dock'), sid);
+    }
     _renderMobileGoalPill(target, sid, { fallbackToLast });
+    // The goal card is fixed above the composer. Tell the active chat shell to
+    // remeasure it after both opening and closing so the conversation reserves
+    // the card's full height instead of being covered by it.
+    try { window.__pmMobileGoalChanged?.({ sessionId: sid, event: 'details_toggled' }); } catch {}
   });
   target.querySelectorAll('[data-mobile-goal-action]').forEach((button) => {
     button.addEventListener('click', (event) => {
@@ -515,6 +556,7 @@ function _renderMobileGoalPill(target, sessionId = '', options = {}) {
     });
   });
   _syncMobileGoalTimer();
+  _syncMobileRuntimePillPair(target);
 }
 
 function _refreshVisibleMobileGoalPills(sessionId = '') {
@@ -575,53 +617,178 @@ function _clearMobileDraftSessionState() {
 }
 
 // ── Thread skeleton cache (instant cold-open render) ─────────────────────────
-// Persists the last N non-streaming messages per session to localStorage so
-// reopening the app shows content immediately instead of a blank spinner.
+// This is deliberately a compact render skeleton, not a second durable history.
+// The gateway remains authoritative and replaces/merges it immediately on open.
+function _compactMobileThreadCacheMedia(items) {
+  return (Array.isArray(items) ? items : []).slice(-12).map((item) => {
+    if (!item || typeof item !== 'object') return null;
+    const path = String(item.path || item.workspacePath || item.relPath || item.rel_path || item.filePath || '').trim();
+    const rawUrl = String(item.url || item.src || item.imageUrl || item.productUrl || '').trim();
+    const url = rawUrl && !/^data:/i.test(rawUrl) ? rawUrl : '';
+    return {
+      kind: String(item.kind || item.type || '').trim() || undefined,
+      name: String(item.name || item.file_name || item.title || '').trim() || undefined,
+      mimeType: String(item.mimeType || item.mime_type || '').trim() || undefined,
+      path: path || undefined,
+      url: url || undefined,
+      productUrl: String(item.productUrl || '').trim() || undefined,
+    };
+  }).filter((item) => item && (item.path || item.url || item.name || item.productUrl));
+}
+
+function _compactMobileThreadCacheProcess(entries, limit = 10) {
+  return (Array.isArray(entries) ? entries : []).slice(-limit).map((entry) => ({
+    id: String(entry?.id || '').trim() || undefined,
+    type: String(entry?.type || entry?.kind || 'event').trim() || 'event',
+    text: String(entry?.text || entry?.content || entry?.message || '').slice(0, 900),
+    content: String(entry?.content || entry?.text || entry?.message || '').slice(0, 900),
+    toolName: String(entry?.toolName || entry?.action || entry?.name || '').trim() || undefined,
+    timestamp: Number(entry?.timestamp || entry?.t || entry?.ts || 0) || undefined,
+    time: String(entry?.time || '').trim() || undefined,
+    status: String(entry?.status || '').trim() || undefined,
+  })).filter((entry) => entry.text || entry.content || entry.toolName);
+}
+
+function _compactMobileThreadCacheWorkgroup(value) {
+  const workgroup = _normalizeMobileVoiceWorkgroup(value);
+  if (!workgroup) return undefined;
+  return {
+    ...workgroup,
+    workers: workgroup.workers.map((worker) => ({
+      ...worker,
+      prompt: String(worker.prompt || '').slice(0, 500),
+      finalResult: String(worker.finalResult || '').slice(0, 1000),
+      completedSteps: (worker.completedSteps || []).slice(-12),
+      processEntries: _compactMobileThreadCacheProcess(worker.processEntries, 8),
+    })),
+  };
+}
+
+function _compactMobileThreadCacheMessage(m) {
+  const content = String(m?.content || m?.body?.text || '');
+  const bodyAttachments = _compactMobileThreadCacheMedia(m?.body?.attachments);
+  const attachmentPreviews = _compactMobileThreadCacheMedia(m?.attachmentPreviews);
+  const compact = {
+    role: m?.role,
+    messageId: String(m?.messageId || '').trim() || undefined,
+    messageKind: String(m?.messageKind || '').trim() || undefined,
+    timestamp: Number(m?.timestamp || Date.now()) || Date.now(),
+    time: String(m?.time || '').trim() || undefined,
+    streaming: m?.streaming === true,
+    content,
+    body: {
+      text: String(m?.body?.text || content),
+      sender: String(m?.body?.sender || ''),
+      source: String(m?.body?.source || '').trim() || undefined,
+      attachments: bodyAttachments.length ? bodyAttachments : undefined,
+      selectedSkillRefs: Array.isArray(m?.body?.selectedSkillRefs) ? m.body.selectedSkillRefs.slice(-8) : undefined,
+    },
+    attachmentPreviews: attachmentPreviews.length ? attachmentPreviews : undefined,
+    processEntries: _compactMobileThreadCacheProcess(m?.processEntries, m?.streaming ? 16 : 8),
+    workStartedAt: Number(m?.workStartedAt || 0) || undefined,
+    workEndedAt: Number(m?.workEndedAt || 0) || undefined,
+    workDurationMs: Number.isFinite(Number(m?.workDurationMs)) ? Number(m.workDurationMs) : undefined,
+    _clientRequestId: String(m?._clientRequestId || '').trim() || undefined,
+    source: String(m?.source || '').trim() || undefined,
+    channelLabel: String(m?.channelLabel || '').trim() || undefined,
+    workflowGroupId: String(m?.workflowGroupId || '').trim() || undefined,
+    workflowPart: String(m?.workflowPart || '').trim() || undefined,
+    workflowLabel: String(m?.workflowLabel || '').trim() || undefined,
+    voiceAgentWorkerHandoff: m?.voiceAgentWorkerHandoff === true || undefined,
+    voiceWorkgroup: _compactMobileThreadCacheWorkgroup(m?.voiceWorkgroup),
+    generatedImages: _compactMobileThreadCacheMedia(m?.generatedImages),
+    generatedVideos: _compactMobileThreadCacheMedia(m?.generatedVideos),
+    files: _compactMobileThreadCacheMedia(m?.files),
+    artifacts: _compactMobileThreadCacheMedia(m?.artifacts),
+    productCarousel: m?.productCarousel && typeof m.productCarousel === 'object' ? {
+      title: String(m.productCarousel.title || '').slice(0, 160),
+      source: String(m.productCarousel.source || '').slice(0, 240),
+      items: (Array.isArray(m.productCarousel.items) ? m.productCarousel.items : []).slice(0, 12).map((item) => ({
+        title: String(item?.title || '').slice(0, 240),
+        price: String(item?.price || '').slice(0, 80),
+        description: String(item?.description || '').slice(0, 500),
+        imageUrl: /^data:/i.test(String(item?.imageUrl || '')) ? undefined : String(item?.imageUrl || '').slice(0, 1200),
+        imagePath: String(item?.imagePath || '').slice(0, 500),
+        productUrl: String(item?.productUrl || '').slice(0, 1200),
+        merchant: String(item?.merchant || '').slice(0, 120),
+      })),
+    } : undefined,
+  };
+  if (!compact.processEntries.length) delete compact.processEntries;
+  for (const key of ['generatedImages', 'generatedVideos', 'files', 'artifacts']) {
+    if (!compact[key]?.length) delete compact[key];
+  }
+  return compact;
+}
+
+function _trimMobileThreadCacheToBudget(thread) {
+  const safe = (Array.isArray(thread) ? thread : [])
+    .filter(_isMobileMessageCacheable)
+    .slice(-PM_MOBILE_THREAD_CACHE_MAX)
+    .map(_compactMobileThreadCacheMessage);
+  while (safe.length > 4 && JSON.stringify(safe).length > PM_MOBILE_THREAD_CACHE_ENTRY_CHAR_BUDGET) safe.shift();
+  return safe;
+}
+
 function _saveMobileThreadCache(sessionId, thread) {
   const sid = String(sessionId || '').trim();
   if (!sid || sid === MOBILE_CHAT_SESSION_ID) return;
   try {
-    const safe = (Array.isArray(thread) ? thread : [])
-      .filter(_isMobileMessagePersistable)
-      .slice(-PM_MOBILE_THREAD_CACHE_MAX)
-      .map((m) => {
-        const clone = _cloneMobileMessageForBranch(m) || {};
-        clone.role = m.role;
-        clone.content = m.content || m.body?.text || '';
-        clone.timestamp = m.timestamp;
-        clone.body = m.body ? {
-          text: m.body.text || '',
-          sender: m.body.sender || '',
-          attachments: Array.isArray(m.body.attachments)
-            ? m.body.attachments.slice(0, 4).map(_sanitizeMobileAttachmentPreviewForServer)
-            : undefined,
-        } : undefined;
-        clone.attachmentPreviews = Array.isArray(m.attachmentPreviews) && m.attachmentPreviews.length
-          ? m.attachmentPreviews.slice(0, 4).map(_sanitizeMobileAttachmentPreviewForServer)
-          : undefined;
-        clone.processEntries = Array.isArray(m.processEntries) && m.processEntries.length ? m.processEntries : undefined;
-        clone.liveTraceEntries = Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length ? m.liveTraceEntries : undefined;
-        clone.workStartedAt = Number(m.workStartedAt || 0) || undefined;
-        clone.workEndedAt = Number(m.workEndedAt || 0) || undefined;
-        clone.workDurationMs = Number.isFinite(Number(m.workDurationMs)) ? Number(m.workDurationMs) : undefined;
-        clone._clientRequestId = String(m._clientRequestId || '').trim() || undefined;
-        return clone;
-      });
+    let safe = _trimMobileThreadCacheToBudget(thread);
     const store = _readMobileThreadCacheStore();
-    store[sid] = { thread: safe, savedAt: Date.now() };
-    // Evict oldest entries if store is growing (keep ≤ 10 sessions)
+    const latestTimestamp = safe.reduce((latest, message) => Math.max(latest, Number(message?.timestamp || 0) || 0), 0);
+    store[sid] = {
+      schemaVersion: 2,
+      thread: safe,
+      savedAt: Date.now(),
+      latestTimestamp,
+      messageCount: safe.length,
+    };
+    // Keep a small recent-session set and a hard total payload budget.
     const keys = Object.keys(store).filter((k) => k !== sid);
-    if (keys.length >= 10) {
+    if (keys.length >= PM_MOBILE_THREAD_CACHE_SESSION_MAX) {
       const sorted = keys.sort((a, b) => (store[a]?.savedAt || 0) - (store[b]?.savedAt || 0));
-      sorted.slice(0, keys.length - 9).forEach((k) => delete store[k]);
+      sorted.slice(0, keys.length - (PM_MOBILE_THREAD_CACHE_SESSION_MAX - 1)).forEach((k) => delete store[k]);
     }
-    localStorage.setItem(PM_MOBILE_THREAD_CACHE_KEY, JSON.stringify(store));
-  } catch {}
+    while (Object.keys(store).length > 1 && JSON.stringify(store).length > PM_MOBILE_THREAD_CACHE_TOTAL_CHAR_BUDGET) {
+      const oldest = Object.keys(store)
+        .filter((key) => key !== sid)
+        .sort((a, b) => (store[a]?.savedAt || 0) - (store[b]?.savedAt || 0))[0];
+      if (!oldest) break;
+      delete store[oldest];
+    }
+    // Quota may be lower on an iOS PWA. Evict old sessions, then shrink this
+    // one and retry instead of silently leaving an ancient snapshot behind.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        localStorage.setItem(PM_MOBILE_THREAD_CACHE_KEY, JSON.stringify(store));
+        if (attempt > 0) console.info('[mobile cache] recovered after quota eviction', { sessionId: sid, attempt });
+        return;
+      } catch (err) {
+        const oldest = Object.keys(store)
+          .filter((key) => key !== sid)
+          .sort((a, b) => (store[a]?.savedAt || 0) - (store[b]?.savedAt || 0))[0];
+        if (oldest) {
+          delete store[oldest];
+          continue;
+        }
+        if (safe.length <= 4) {
+          console.warn('[mobile cache] snapshot could not be stored', { sessionId: sid, error: String(err?.message || err) });
+          return;
+        }
+        safe = safe.slice(Math.max(0, Math.floor(safe.length / 3)));
+        store[sid] = { ...store[sid], thread: safe, messageCount: safe.length };
+      }
+    }
+  } catch (err) {
+    console.warn('[mobile cache] snapshot serialization failed', { sessionId: sid, error: String(err?.message || err) });
+  }
 }
 
 function _readMobileThreadCacheStore() {
   try {
-    const raw = localStorage.getItem(PM_MOBILE_THREAD_CACHE_KEY);
+    const raw = localStorage.getItem(PM_MOBILE_THREAD_CACHE_KEY)
+      || localStorage.getItem(PM_MOBILE_THREAD_CACHE_LEGACY_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -644,6 +811,43 @@ function _loadMobileThreadCache(sessionId) {
     }
     return entry.thread;
   } catch { return []; }
+}
+
+const _mobileThreadCacheSaveTimers = new Map();
+
+function _scheduleMobileThreadCacheSave(sessionId, delayMs = 700) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === MOBILE_CHAT_SESSION_ID || !Array.isArray(__pmChat.threads?.[sid])) return;
+  const prior = _mobileThreadCacheSaveTimers.get(sid);
+  if (prior) clearTimeout(prior);
+  const timer = setTimeout(() => {
+    _mobileThreadCacheSaveTimers.delete(sid);
+    _saveMobileThreadCache(sid, __pmChat.threads?.[sid] || []);
+  }, Math.max(80, Number(delayMs) || 700));
+  _mobileThreadCacheSaveTimers.set(sid, timer);
+}
+
+function _flushMobileThreadCacheSave(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === MOBILE_CHAT_SESSION_ID || !Array.isArray(__pmChat.threads?.[sid])) return;
+  const prior = _mobileThreadCacheSaveTimers.get(sid);
+  if (prior) clearTimeout(prior);
+  _mobileThreadCacheSaveTimers.delete(sid);
+  _saveMobileThreadCache(sid, __pmChat.threads[sid]);
+}
+
+if (typeof window !== 'undefined' && !window.__pmMobileThreadCacheLifecycleInstalled) {
+  window.__pmMobileThreadCacheLifecycleInstalled = true;
+  const flushActive = () => _flushMobileThreadCacheSave(__pmChat.activeSessionId);
+  window.addEventListener('pagehide', flushActive);
+  window.addEventListener('beforeunload', flushActive);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      flushActive();
+    } else {
+      _scheduleMobileSessionFreshnessRefresh(__pmChat.activeSessionId, { delayMs: 80 });
+    }
+  });
 }
 
 function _markMobileSessionRunning(sessionId, running) {
@@ -829,20 +1033,67 @@ function _isMobileInternalServerMessage(m) {
 }
 
 function _mapServerHistoryToMobile(history) {
-  return (Array.isArray(history) ? history : [])
+  const mapped = (Array.isArray(history) ? history : [])
     .filter((msg) => !_isMobileInternalServerMessage(msg))
     .map((msg, index) => _mapServerMessageToMobile(msg, index))
     .filter(Boolean);
+  for (let index = 0; index < mapped.length; index += 1) {
+    const message = mapped[index];
+    const text = String(message?.body?.text || message?.content || '').trim();
+    const entries = Array.isArray(message?.processEntries) ? message.processEntries : [];
+    const hasRestartTool = entries.some((entry) => /prom_apply_dev_changes|gateway_restart/i.test(String(entry?.toolName || entry?.extra?.toolName || entry?.content || '')));
+    const longGoalTrace = entries.length >= 20 || Number(message?.workDurationMs || 0) >= 30_000;
+    if (!/^Started main-chat goal mode\b/i.test(text) || (!hasRestartTool && !longGoalTrace)) continue;
+    message.messageKind = 'goal_command_ack';
+    message.processEntries = [];
+    message.liveTraceEntries = undefined;
+    message.workStartedAt = undefined;
+    message.workEndedAt = undefined;
+    message.workDurationMs = undefined;
+    mapped.splice(index + 1, 0, {
+      role: 'ai',
+      messageKind: 'goal_restart_checkpoint',
+      activeRunKind: 'main_chat_goal',
+      agentRuntimeKind: 'main_chat_goal',
+      timestamp: Number(message.timestamp || Date.now()) + 1,
+      time: message.time || '',
+      body: { sender: 'Prometheus', text: 'Recovered goal activity from before the gateway restart.' },
+      content: 'Recovered goal activity from before the gateway restart.',
+      processEntries: entries,
+      streaming: false,
+    });
+    index += 1;
+  }
+  return mapped;
 }
 
 function _mapServerMessageToMobile(m, index = -1) {
   if (_isMobileInternalServerMessage(m)) return null;
-  const role = _serverRoleToMobileRole(m?.role);
-  const rawContent = String(m?.content || '');
+  const serverLabel = String(m?.channelLabel || m?.channel || m?.source || '').trim().toLowerCase();
+  const storedContent = String(m?.content || '');
+  const isLegacyGoalRuntimePrompt = serverLabel === 'goal'
+    && String(m?.role || '').toLowerCase() === 'user'
+    && /^\s*\[Continuing toward active main-chat goal\]/i.test(storedContent);
+  const legacyGoalRestart = isLegacyGoalRuntimePrompt
+    && /Restart recovery checkpoint:|Interrupted by (?:prom_apply_dev_changes|gateway_restart|build_deploy)/i.test(storedContent);
+  const role = isLegacyGoalRuntimePrompt ? 'ai' : _serverRoleToMobileRole(m?.role);
+  const rawContent = isLegacyGoalRuntimePrompt
+    ? (legacyGoalRestart ? 'Gateway restarted — goal continuing.' : 'Goal continuing.')
+    : storedContent;
   const content = role === 'user' ? _stripMobileInternalUploadContext(rawContent) : rawContent;
   const attachmentPreviews = Array.isArray(m?.attachmentPreviews) ? m.attachmentPreviews : [];
   return {
     role,
+    messageId: String(m?.messageId || '').trim() || undefined,
+    messageKind: isLegacyGoalRuntimePrompt
+      ? (legacyGoalRestart ? 'goal_restart_notice' : 'goal_continuation_notice')
+      : (String(m?.messageKind || '').trim() || undefined),
+    activeRunKind: String(m?.activeRunKind || '').trim() || undefined,
+    agentRuntimeKind: String(m?.activeRunKind || '').trim() || undefined,
+    goalId: String(m?.goalId || '').trim() || undefined,
+    goalTurnNumber: Number.isFinite(Number(m?.goalTurnNumber)) ? Number(m.goalTurnNumber) : undefined,
+    goalIterationNumber: Number.isFinite(Number(m?.goalIterationNumber)) ? Number(m.goalIterationNumber) : undefined,
+    goalTurnId: String(m?.goalTurnId || '').trim() || undefined,
     sourceIndex: Number.isFinite(Number(index)) ? Number(index) : -1,
     timestamp: Number(m?.timestamp || Date.now()) || Date.now(),
     workStartedAt: Number(m?.workStartedAt || 0) || undefined,
@@ -863,10 +1114,18 @@ function _mapServerMessageToMobile(m, index = -1) {
     generatedImages: Array.isArray(m?.generatedImages) ? m.generatedImages : [],
     generatedVideos: Array.isArray(m?.generatedVideos) ? m.generatedVideos : [],
     artifacts: Array.isArray(m?.artifacts) ? m.artifacts : [],
-    files: Array.isArray(m?.canvasFiles) ? m.canvasFiles : [],
+    // Live delivery/present_file events store normalized media in files/body.files,
+    // while gateway-finalized turns may use canvasFiles. Restore every durable
+    // descriptor source after a cold load instead of only canvasFiles.
+    files: _dedupeMobileMediaList(_normalizeMobileMediaList([
+      ...(Array.isArray(m?.canvasFiles) ? m.canvasFiles : []),
+      ...(Array.isArray(m?.files) ? m.files : []),
+      ...(Array.isArray(m?.body?.files) ? m.body.files : []),
+    ])),
     fileChanges: m?.fileChanges && typeof m.fileChanges === 'object' ? m.fileChanges : undefined,
     productCarousel: m?.productCarousel && typeof m.productCarousel === 'object' ? m.productCarousel : undefined,
     richArtifacts: Array.isArray(m?.richArtifacts) && m.richArtifacts.length ? m.richArtifacts : undefined,
+    voiceWorkgroup: m?.voiceWorkgroup && typeof m.voiceWorkgroup === 'object' ? _normalizeMobileVoiceWorkgroup(m.voiceWorkgroup) : undefined,
     questionRequest: m?.questionRequest && typeof m.questionRequest === 'object' ? m.questionRequest : undefined,
     sideChatBoundary: m?.sideChatBoundary === true,
     voiceAgentWorkerHandoff: m?.voiceAgentWorkerHandoff === true,
@@ -1055,6 +1314,7 @@ function _mobileHistoryForServer(thread = _activeMobileThread()) {
             ...clone.body,
             text: String(clone.body.text || content),
             attachments: Array.isArray(attachmentPreviews) && attachmentPreviews.length ? attachmentPreviews : undefined,
+            files: _sanitizeMobileDurableMediaList(clone.body.files),
           }
         : undefined;
       return {
@@ -1064,11 +1324,43 @@ function _mobileHistoryForServer(thread = _activeMobileThread()) {
         body,
         timestamp: Number(msg.timestamp) || Date.now(),
         attachmentPreviews,
+        files: _sanitizeMobileDurableMediaList(clone.files),
+        generatedImages: _sanitizeMobileDurableMediaList(clone.generatedImages),
+        generatedVideos: _sanitizeMobileDurableMediaList(clone.generatedVideos),
+        artifacts: _sanitizeMobileDurableMediaList(clone.artifacts),
         liveTraceEntries: Array.isArray(msg.liveTraceEntries) && msg.liveTraceEntries.length ? msg.liveTraceEntries : undefined,
       };
     })
     .filter((msg) => msg.content.trim())
     .map((msg, index) => ({ ...msg, sourceIndex: index }));
+}
+
+function _isMobileMessageCacheable(msg) {
+  if (_isMobileMessagePersistable(msg)) return true;
+  if (!msg || msg.role !== 'ai' || msg.streaming !== true) return false;
+  return !!(
+    String(msg.body?.text || msg.content || '').trim()
+    || (Array.isArray(msg.processEntries) && msg.processEntries.length)
+    || (Array.isArray(msg.liveTraceEntries) && msg.liveTraceEntries.length)
+  );
+}
+
+function _sanitizeMobileDurableMediaList(value) {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    const next = { ...item };
+    const durablePath = _mobileMediaPath(next);
+    if (durablePath) {
+      // The canvas endpoint streams this path on demand. Keeping the same image
+      // as base64 in session JSON makes chat hydration unnecessarily enormous.
+      delete next.dataUrl;
+      delete next.base64;
+      delete next.raw;
+      delete next.buffer;
+    }
+    return next;
+  });
 }
 
 function _sanitizeMobileAttachmentPreviewForServer(attachment) {
@@ -1751,6 +2043,14 @@ function _pruneMobileStaleStreamingTraceTurns(thread = _activeMobileThread()) {
   for (let i = 0; i < list.length; i += 1) {
     const msg = list[i];
     if (!_isMobileAssistantMessage(msg) || msg.streaming !== true || _mobileAssistantHasVisibleAnswer(msg)) continue;
+    // Autonomous /goal turns often begin with tool/thinking trace before any
+    // assistant text. Never collapse that live turn into the completed goal
+    // command acknowledgement that immediately precedes it.
+    if (
+      String(msg.activeRunKind || msg.agentRuntimeKind || '').trim() === 'main_chat_goal'
+      || !!String(msg.goalTurnId || '').trim()
+      || ['goal_turn', 'goal_restart_checkpoint'].includes(String(msg.messageKind || '').trim())
+    ) continue;
     let previousAssistantIndex = -1;
     let blockedByUser = false;
     for (let j = i - 1; j >= 0; j -= 1) {
@@ -1766,6 +2066,9 @@ function _pruneMobileStaleStreamingTraceTurns(thread = _activeMobileThread()) {
     }
     if (blockedByUser || previousAssistantIndex < 0) continue;
     const previous = list[previousAssistantIndex];
+    if (String(previous.messageKind || '').trim() === 'goal_command_ack') continue;
+    if (msg.goalId && previous.goalId && String(msg.goalId) !== String(previous.goalId)) continue;
+    if (msg.goalTurnId && String(msg.goalTurnId) !== String(previous.goalTurnId || '')) continue;
     if (previous.streaming === true || !_mobileAssistantHasVisibleAnswer(previous)) continue;
     _mergeMobileAssistantTurnDetails(previous, msg);
     previous.streaming = false;
@@ -2041,8 +2344,8 @@ function _flushMobilePendingThinkingBurst(message) {
   const text = String(message._pendingThinkingBurst || '').trim();
   message._pendingThinkingBurst = '';
   if (!text) return '';
-  // Desktop flush goes to process log only — not the live tool/thought stream.
-  _appendMobileProcess(message, 'think', text);
+  // Raw provider thinking remains private. It may be retained transiently for
+  // turn bookkeeping, but only explicit reasoning summaries enter the UI.
   return text;
 }
 
@@ -2068,6 +2371,17 @@ function _handleMobileThinkingDelta(message, evt) {
   if (String(evt?.source || '').toLowerCase() === 'reasoning_summary') {
     _appendMobileLiveTrace(message, 'think', chunk, { append: true });
   }
+  return true;
+}
+
+function _handleMobileReasoningSummaryDelta(message, evt) {
+  if (!message) return false;
+  const chunk = String(evt?.text || evt?.summary || '');
+  if (!chunk) return false;
+  _appendMobileLiveTrace(message, 'think', chunk, {
+    append: true,
+    extra: { visibility: 'user', source: 'reasoning_summary' },
+  });
   return true;
 }
 
@@ -2419,6 +2733,71 @@ function _appendMobileLiveTrace(message, type, text, { append = false, extra = n
   }
 }
 
+function _applyMobileToolActivity(message, phase, payload = {}) {
+  if (!message) return null;
+  if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
+  return applyToolActivityEvent(message.liveTraceEntries, phase, payload);
+}
+
+function _mobileCommandActivityCollections(sessionId) {
+  const sid = String(sessionId || '').trim();
+  const collections = [];
+  const add = (entries) => {
+    if (Array.isArray(entries) && !collections.includes(entries)) collections.push(entries);
+  };
+  for (const message of Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : []) {
+    add(message?.liveTraceEntries);
+    add(message?.metadata?.liveTraceEntries);
+    add(message?.body?.liveTraceEntries);
+  }
+  return collections;
+}
+
+function _handleMobileInlineCommandProcessEvent(eventType, message = {}, attempt = 0) {
+  const run = message.run && typeof message.run === 'object' ? message.run : {};
+  const sessionId = String(run.sessionId || message.sessionId || '').trim();
+  const runId = String(run.runId || message.runId || '').trim();
+  if (!sessionId || !runId) return;
+  if (eventType === 'process_run_exited') setToolActivityDisclosureState(`terminal:${runId}`, false);
+  let applied = false;
+  for (const entries of _mobileCommandActivityCollections(sessionId)) {
+    if (applyCommandProcessEvent(entries, eventType, message)) applied = true;
+  }
+  if (!applied && attempt < 12) {
+    setTimeout(() => _handleMobileInlineCommandProcessEvent(eventType, message, attempt + 1), 40 + attempt * 20);
+    return;
+  }
+  if (eventType === 'process_run_output') {
+    appendCommandTerminalChunkToDom(runId, message.chunk, message.sequence || run.outputSeq);
+    return;
+  }
+  if (applied && String(__pmChat.activeSessionId || '') === sessionId) window.__pmRenderActiveChatThread?.();
+}
+
+['process_run_started', 'process_run_update', 'process_run_exited'].forEach((eventType) => {
+  wsEventBus.on(eventType, (message = {}) => _handleMobileInlineCommandProcessEvent(eventType, message));
+});
+wsEventBus.on('process_run_output', (message = {}) => _handleMobileInlineCommandProcessEvent('process_run_output', message));
+
+document.addEventListener('toggle', async (event) => {
+  const terminal = event.target?.closest?.('.tool-command-terminal.is-complete');
+  if (!terminal?.open || terminal.dataset.logLoaded === '1' || terminal.dataset.logLoading === '1') return;
+  const runId = String(terminal.dataset.commandRunId || '').trim();
+  if (!runId) return;
+  terminal.dataset.logLoading = '1';
+  try {
+    const log = await loadMobileProcessRunLog(runId);
+    const output = terminal.querySelector('[data-command-terminal-output]');
+    if (output) output.textContent = String(log?.combined || '(no output)');
+    terminal.dataset.logLoaded = '1';
+  } catch {
+    const output = terminal.querySelector('[data-command-terminal-output]');
+    if (output && /Open to load output/.test(output.textContent || '')) output.textContent = 'Could not load terminal output.';
+  } finally {
+    delete terminal.dataset.logLoading;
+  }
+}, true);
+
 function _appendMobileCompactionTrace(message, status = 'compacting', summary = '', extra = null) {
   if (!message) return;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
@@ -2650,14 +3029,20 @@ function _mobileProcessEntriesWithLiveTrace(message, entries) {
 function _mobileWorkflowTraceEntriesForMessage(message) {
   const out = [];
   const seen = new Set();
+  const liveSources = Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : [];
+  const structuredActions = new Set(liveSources.map((entry) => String(entry?.activity?.action || '').trim()).filter(Boolean));
+  const structuredCallIds = new Set(liveSources.map((entry) => String(entry?.activity?.callId || '').trim()).filter(Boolean));
   const finalText = String(message?.body?.text || message?.content || '').replace(/\s+/g, ' ').trim();
-  const add = (entry, fallbackType = 'info') => {
+  const add = (entry, fallbackType = 'info', fromProcess = false) => {
     if (!entry || typeof entry !== 'object') return;
     if (_isInternalMobileRestartProcessEntry(entry)) return;
     let type = String(entry.type || entry.kind || fallbackType || 'info').toLowerCase();
     let text = String(entry.text || entry.content || entry.message || '').trim();
     const extra = entry.extra && typeof entry.extra === 'object' ? entry.extra : null;
     const action = String(extra?.action || extra?.toolName || entry.action || entry.toolName || '').trim();
+    const callId = String(extra?.toolCallId || extra?.tool_call_id || entry.toolCallId || '').trim();
+    if (fromProcess && action && (structuredActions.has(action) || (callId && structuredCallIds.has(callId)))
+      && ['tool', 'skill', 'result', 'error', 'info', 'progress'].includes(type)) return;
     if (action === 'context_compaction') {
       const status = String(extra?.extra?.status || extra?.status || '').toLowerCase()
         || (type === 'error' ? 'failed' : type === 'tool' ? 'compacting' : 'compacted');
@@ -2702,9 +3087,9 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
     });
   };
   (Array.isArray(message?.liveTraceEntries) ? message.liveTraceEntries : []).forEach((entry) => add(entry, 'info'));
-  (Array.isArray(message?.processEntries) ? message.processEntries : []).forEach((entry) => add(entry, 'process'));
+  (Array.isArray(message?.processEntries) ? message.processEntries : []).forEach((entry) => add(entry, 'process', true));
   const bodyEntries = Array.isArray(message?.body?.processEntries) ? message.body.processEntries : [];
-  bodyEntries.forEach((entry) => add(entry, 'process'));
+  bodyEntries.forEach((entry) => add(entry, 'process', true));
   return out;
 }
 
@@ -3042,6 +3427,7 @@ function _dedupeMobileTraceProseText(value) {
 }
 
 function _renderMobileLiveTraceEntry(entry) {
+  if (entry?.activity) return renderToolActivityEntry(entry, escapeHtml);
   const type = String(entry.type || 'info').toLowerCase();
   const text = String(entry.text || '').trim();
   const entryId = String(entry.id || `${type}_${text.replace(/\s+/g, ' ').slice(0, 80)}_${String(entry.time || entry.ts || '')}`).trim();
@@ -3085,7 +3471,7 @@ function _isMobilePreparedTraceEntry(entry) {
 
 function _mobileVisibleTraceEntries(entries) {
   const thoughtTexts = [];
-  return (Array.isArray(entries) ? entries : []).filter((entry) => {
+  return coalesceToolActivityEntries(entries).filter((entry) => {
     if (_isMobileImageGenerationStreamEntry(entry)) return false;
     if (_isMobilePreparedTraceEntry(entry)) return false;
     if (_isMobileBareThinkingTraceText(entry?.text)) return false;
@@ -3423,6 +3809,8 @@ function _mobileTraceLogicalGroupText(calls) {
 }
 
 function _mobileTraceToolSummary(entries) {
+  const structured = toolActivitySummary(entries);
+  if (structured) return structured;
   const calls = _mobileTraceLogicalTools(entries);
   const groups = new Map();
   calls.forEach((call) => {
@@ -3437,6 +3825,8 @@ function _mobileTraceToolSummary(entries) {
 }
 
 function _mobileTraceCurrentToolLabel(entries) {
+  const structured = toolActivitySummary(entries, { live: true });
+  if (structured) return structured;
   const calls = _mobileTraceLogicalTools(entries);
   const call = calls[calls.length - 1];
   if (call) {
@@ -3466,13 +3856,16 @@ function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent
     const isLiveCurrent = streaming && index === groups.length - 1;
     const summary = isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries);
     const summaryKey = _mobileTraceSummaryKey(summary);
-    const eventCount = _mobileVisibleTraceEntries(group.entries).length;
+    const visibleEntries = _mobileVisibleTraceEntries(group.entries);
+    const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
+    const itemCount = callCount || visibleEntries.length;
+    const itemLabel = callCount ? 'call' : 'item';
     const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
     return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
       <summary class="pm-trace-tool-summary">
         <span class="pm-trace-tool-icon" aria-hidden="true">›</span>
         <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
-        <em>${eventCount} event${eventCount === 1 ? '' : 's'}</em>
+        <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
       </summary>
       <div class="pm-trace-tool-body">${_renderMobileLiveTrace(group.entries)}</div>
     </details>`;
@@ -3624,6 +4017,30 @@ function _mergeMobileProductCarouselIntoMessage(message, carousel) {
   };
 }
 
+function _mobileMessagesRepresentSameTurn(a, b) {
+  if (!a || !b || String(a.role || '') !== String(b.role || '')) return false;
+  const aGoalTurn = String(a.goalTurnId || '').trim();
+  const bGoalTurn = String(b.goalTurnId || '').trim();
+  if (aGoalTurn || bGoalTurn) return !!aGoalTurn && aGoalTurn === bGoalTurn;
+  const aMessageId = String(a.messageId || '').trim();
+  const bMessageId = String(b.messageId || '').trim();
+  if (aMessageId || bMessageId) return !!aMessageId && aMessageId === bMessageId;
+  const aRequest = String(a._clientRequestId || '').trim();
+  const bRequest = String(b._clientRequestId || '').trim();
+  if (aRequest || bRequest) return !!aRequest && aRequest === bRequest;
+  const aKind = String(a.messageKind || '').trim();
+  const bKind = String(b.messageKind || '').trim();
+  if (aKind || bKind) {
+    if (!aKind || aKind !== bKind) return false;
+  }
+  const aText = _mobileMessageCopyText(a).replace(/\s+/g, ' ').trim();
+  const bText = _mobileMessageCopyText(b).replace(/\s+/g, ' ').trim();
+  if (aText && bText && aText === bText) return true;
+  const aSource = Number(a.sourceIndex);
+  const bSource = Number(b.sourceIndex);
+  return Number.isFinite(aSource) && aSource >= 0 && aSource === bSource;
+}
+
 function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   const next = Array.isArray(nextThread) ? nextThread : [];
   const local = Array.isArray(localThread) ? localThread : [];
@@ -3636,13 +4053,7 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   }
   next.forEach((msg, index) => {
     if (!msg || msg.role !== 'ai') return;
-    const localSameSlot = local[index]?.role === 'ai' ? local[index] : null;
-    const localBySource = local.find((candidate) => (
-      candidate?.role === 'ai'
-      && Number.isFinite(Number(candidate.sourceIndex))
-      && Number(candidate.sourceIndex) === Number(msg.sourceIndex)
-    ));
-    const localCandidate = localSameSlot || localBySource;
+    const localCandidate = local.find((candidate) => candidate?.role === 'ai' && _mobileMessagesRepresentSameTurn(msg, candidate));
     if (localCandidate) {
       _mergeMobileAssistantTurnDetails(msg, localCandidate);
       _mergeMobileMediaIntoMessage(msg, _collectMessageMedia(localCandidate));
@@ -3651,7 +4062,7 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   });
   const localLatest = _findLatestAssistantTurn(local);
   const nextLatest = _findLatestAssistantTurn(next);
-  if (localLatest && nextLatest) {
+  if (localLatest && nextLatest && _mobileMessagesRepresentSameTurn(nextLatest, localLatest)) {
     _mergeMobileAssistantTurnDetails(nextLatest, localLatest);
     _mergeMobileMediaIntoMessage(nextLatest, _collectMessageMedia(localLatest));
     _mergeMobileProductCarouselIntoMessage(nextLatest, localLatest.productCarousel);
@@ -3774,7 +4185,7 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   // or a real (non-draft) session. Never override an intentional new-chat state —
   // the user pressed New Chat and shouldn't be yanked back to an old session.
   const _restartActiveSid = String(__pmChat.activeSessionId || '').trim();
-  if (_restartActiveSid === sid || (_restartActiveSid !== MOBILE_CHAT_SESSION_ID && location.hash.startsWith('#mobile/chat'))) {
+  if (_restartActiveSid === sid) {
     __pmChat.activeSessionId = sid;
     _activeMobileThread();
     const threadEl = document.getElementById('pm-chat-thread');
@@ -3810,6 +4221,7 @@ async function _applyMobileHotRestartNotification(msg = {}) {
 async function _applyMobileScheduledNotification(msg = {}) {
   const sid = String(msg.sessionId || '').trim();
   if (!sid || !/^auto_/i.test(sid)) return;
+  invalidateMobileDrawerSessions('mobile');
   const session = await loadMobileChatSession(sid).catch(() => null);
   const history = Array.isArray(session?.history) ? session.history : [];
   const localThread = __pmChat.threads?.[sid] || [];
@@ -3826,14 +4238,57 @@ async function _applyMobileScheduledNotification(msg = {}) {
 if (!window.__pmMobileSessionNotificationBridgeInstalled) {
   window.__pmMobileSessionNotificationBridgeInstalled = true;
   wsEventBus.on('session_notification', (msg = {}) => {
-    if (String(msg.source || '') === 'hot_restart') {
+    if (['hot_restart', 'dev_apply'].includes(String(msg.source || ''))) {
       _applyMobileHotRestartNotification(msg).catch((err) => {
-        pmToast(`Restart message sync failed: ${err?.message || err}`, 'error');
+        pmToast(`Dev apply message sync failed: ${err?.message || err}`, 'error');
       });
     } else if (String(msg.source || '') === 'schedule') {
       _applyMobileScheduledNotification(msg).catch((err) => {
         console.warn('[mobile] scheduled notification sync failed:', err?.message || err);
       });
+    }
+  });
+}
+
+const _mobileSessionFreshnessTimers = new Map();
+
+function _scheduleMobileSessionFreshnessRefresh(sessionId, { delayMs = 180, attempt = 0 } = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid === MOBILE_CHAT_SESSION_ID) return;
+  invalidateMobileChatSessionCache(sid);
+  const prior = _mobileSessionFreshnessTimers.get(sid);
+  if (prior) clearTimeout(prior);
+  const timer = setTimeout(async () => {
+    _mobileSessionFreshnessTimers.delete(sid);
+    if (String(__pmChat.activeSessionId || '').trim() !== sid) return;
+    const busy = !!(__pmChat.activeRuns?.[sid]?.busy || __pmChat.drawerRunSessionIds?.has?.(sid));
+    const hasStreamingTurn = (__pmChat.threads?.[sid] || []).some((msg) => msg?.streaming === true);
+    if (busy || hasStreamingTurn) {
+      if (attempt < 30) {
+        _scheduleMobileSessionFreshnessRefresh(sid, { delayMs: 1500, attempt: attempt + 1 });
+      }
+      return;
+    }
+    const session = await loadMobileChatSession(sid, { force: true }).catch(() => null);
+    if (!session || String(__pmChat.activeSessionId || '').trim() !== sid) return;
+    const history = Array.isArray(session.history) ? session.history : [];
+    const localThread = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
+    __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread);
+    __pmChat.thread = __pmChat.threads[sid];
+    _renderMobileChatSessionNow(sid);
+    _flushMobileThreadCacheSave(sid);
+  }, Math.max(60, Number(delayMs) || 180));
+  _mobileSessionFreshnessTimers.set(sid, timer);
+}
+
+if (typeof window !== 'undefined' && !window.__pmMobileSessionHistoryBridgeInstalled) {
+  window.__pmMobileSessionHistoryBridgeInstalled = true;
+  wsEventBus.on('session_history_changed', (msg = {}) => {
+    const sid = String(msg.sessionId || '').trim();
+    if (!sid) return;
+    invalidateMobileChatSessionCache(sid);
+    if (String(__pmChat.activeSessionId || '').trim() === sid) {
+      _scheduleMobileSessionFreshnessRefresh(sid);
     }
   });
 }
@@ -3886,8 +4341,11 @@ function _appendMobileDeliveryNotification(msg = {}) {
   };
   if (media) _mergeMobileMediaIntoMessage(turn, [media]);
   __pmChat.threads[sid].push(turn);
-  if (String(__pmChat.activeSessionId || '') === sid || location.hash.startsWith('#mobile/chat')) {
-    __pmChat.activeSessionId = sid;
+  // Delivery notifications are session-scoped background updates. They may
+  // refresh the thread already on screen, but must never select their session.
+  // A tool finishing in chat A can emit a delivery while the user is composing
+  // a new chat B; selecting A here would discard the user's navigation intent.
+  if (String(__pmChat.activeSessionId || '') === sid) {
     _activeMobileThread();
     const threadEl = document.getElementById('pm-chat-thread');
     const bodyEl = document.getElementById('pm-chat-body');
@@ -3915,10 +4373,10 @@ function _renderMobileGeneratedImageBatch(mediaList) {
     const src = _mobileMediaUrl(media, 'inline');
     const download = _mobileMediaUrl(media, 'download');
     const attrs = `data-pm-generated-thumb data-kind="image" data-src="${escapeHtml(src)}" data-download="${escapeHtml(download)}" data-name="${escapeHtml(media.name)}" data-path="${escapeHtml(media.path || '')}" data-index="${idx}"`;
-    return `<button type="button" class="pm-generated-image-thumb${idx === 0 ? ' selected' : ''}" ${attrs} aria-label="Show generated image ${idx + 1}"><img src="${escapeHtml(src)}" alt="${escapeHtml(media.name)}" loading="eager" decoding="async"><span>${idx + 1}</span></button>`;
+    return `<button type="button" class="pm-generated-image-thumb${idx === 0 ? ' selected' : ''}" ${attrs} aria-label="Show generated image ${idx + 1}"><img src="${escapeHtml(src)}" alt="${escapeHtml(media.name)}" loading="lazy" decoding="async"><span>${idx + 1}</span></button>`;
   }).join('')}</div>` : '';
   return `<div class="pm-generated-image-batch" data-count="${escapeHtml(String(list.length))}">
-    <button type="button" class="pm-generated-image-primary" ${primaryAttrs}><img src="${escapeHtml(firstSrc)}" alt="${escapeHtml(first.name)}" loading="eager" decoding="async" fetchpriority="high"></button>
+    <button type="button" class="pm-generated-image-primary" ${primaryAttrs}><img src="${escapeHtml(firstSrc)}" alt="${escapeHtml(first.name)}" loading="lazy" decoding="async"></button>
     ${thumbs}
   </div>`;
 }
@@ -4029,7 +4487,7 @@ function _renderMobileMediaGallery(mediaList) {
       return `<button type="button" class="pm-media-card image" ${attrs}><img src="${escapeHtml(src)}" alt="${escapeHtml(media.name)}" loading="lazy"><span><strong>${escapeHtml(media.name)}</strong>${meta ? `<em>${escapeHtml(meta)}</em>` : ''}</span></button>`;
     }
     if (media.kind === 'video') {
-      return `<button type="button" class="pm-media-card video" ${attrs}><video src="${escapeHtml(src)}" muted playsinline preload="metadata"></video><span class="pm-media-play">${ICONS.play}</span><span><strong>${escapeHtml(media.name)}</strong>${meta ? `<em>${escapeHtml(meta)}</em>` : ''}</span></button>`;
+      return `<button type="button" class="pm-media-card video" ${attrs}><video src="${escapeHtml(src)}" muted playsinline preload="none"></video><span class="pm-media-play">${ICONS.play}</span><span><strong>${escapeHtml(media.name)}</strong>${meta ? `<em>${escapeHtml(meta)}</em>` : ''}</span></button>`;
     }
     return `<button type="button" class="pm-generated-file" ${attrs}><span class="pm-generated-file-icon">${ICONS.clipboard}</span><span class="pm-generated-file-info"><strong>${escapeHtml(media.name)}</strong><em>${escapeHtml(ext)} file${meta ? ` · ${escapeHtml(meta)}` : ''}</em></span></button>`;
   }).join('')}</div>` : '';
@@ -5057,12 +5515,14 @@ function _renderMobileSources(a) {
   const title = String(a?.title || '').trim();
   const cards = items.map((it) => {
     const url = String(it.url || '').trim();
-    const img = String(it.imageUrl || '').trim();
+    const img = it.imagePath
+      ? `/api/canvas/download?path=${encodeURIComponent(String(it.imagePath))}`
+      : String(it.imageUrl || '').trim();
     const publisher = String(it.publisher || '').trim();
     const headline = String(it.title || url || 'Source').trim();
     const date = String(it.publishedAt || '').trim();
     const inner = `
-      ${img ? `<div class="pm-src-img-wrap"><img class="pm-src-img" src="${escapeHtml(img)}" alt="" loading="lazy"></div>` : ''}
+      <div class="pm-src-img-wrap${img ? '' : ' pm-src-img-missing'}">${img ? `<img class="pm-src-img" src="${escapeHtml(img)}" alt="" loading="lazy" onerror="this.closest('.pm-src-img-wrap')?.classList.add('pm-src-img-missing');this.remove()">` : ''}<div class="pm-src-img-placeholder"><span>${escapeHtml(publisher || headline)}</span></div></div>
       <div class="pm-src-body">
         ${publisher ? `<div class="pm-src-publisher">${escapeHtml(publisher)}</div>` : ''}
         <strong class="pm-src-title">${escapeHtml(headline)}</strong>
@@ -5243,6 +5703,8 @@ if (typeof window !== 'undefined') {
 }
 
 // ── Prometheus questions (mobile) — mirrors the desktop inline question card ──
+const _mobileQuestionDrafts = new Map();
+
 function _normalizeMobileQuestion(input, extra = {}) {
   const src = input && typeof input === 'object' ? input : {};
   const id = String(src.id || extra.questionId || extra.id || '').trim();
@@ -5265,6 +5727,7 @@ function _normalizeMobileQuestion(input, extra = {}) {
     allowGeneralOther: src.allowGeneralOther !== false,
     status: String(extra.status || src.status || 'pending'),
     answers: Array.isArray(src.answers) ? src.answers : [],
+    generalOther: String(src.generalOther || extra.generalOther || '').trim(),
   };
 }
 
@@ -5287,8 +5750,8 @@ function _renderMobileQuestionCard(item) {
       return `<div class="pm-q-block"><div class="pm-q-label">${escapeHtml(qq.label)}</div><div class="pm-q-answered">${escapeHtml(txt)}</div></div>`;
     }
     const opts = (qq.options || []).map((opt) => `<button type="button" class="pm-q-opt" data-pm-q-opt="${escapeHtml(opt)}" onclick="_mobileQuestionToggleOption(this, '${escapeHtml(qq.mode)}')">${escapeHtml(opt)}</button>`).join('');
-    const textArea = qq.mode === 'text' ? `<textarea class="pm-q-input" data-pm-q-text rows="2" placeholder="Answer..."></textarea>` : '';
-    const otherArea = qq.allowOther ? `${qq.mode !== 'text' ? `<button type="button" class="pm-q-other-toggle" onclick="_mobileQuestionToggleOther(this)">Other…</button>` : ''}<textarea class="pm-q-input pm-q-other" data-pm-q-other rows="1" placeholder="Other..."${qq.mode !== 'text' ? ' hidden' : ''}></textarea>` : '';
+    const textArea = qq.mode === 'text' ? `<textarea class="pm-q-input" data-pm-q-text rows="2" placeholder="Answer..." oninput="_mobileQuestionRememberDraft(this)"></textarea>` : '';
+    const otherArea = qq.allowOther ? `${qq.mode !== 'text' ? `<button type="button" class="pm-q-other-toggle" onclick="_mobileQuestionToggleOther(this)">Other…</button>` : ''}<textarea class="pm-q-input pm-q-other" data-pm-q-other rows="1" placeholder="Other..." oninput="_mobileQuestionRememberDraft(this)"${qq.mode !== 'text' ? ' hidden' : ''}></textarea>` : '';
     return `<div class="pm-q-block" data-pm-q="${escapeHtml(qq.id)}" data-pm-q-mode="${escapeHtml(qq.mode)}">
       <div class="pm-q-label">${escapeHtml(qq.label)}${qq.required ? '' : ' <span class="pm-q-optional">(optional)</span>'}</div>
       ${qq.helpText ? `<div class="pm-q-help">${escapeHtml(qq.helpText)}</div>` : ''}
@@ -5302,7 +5765,8 @@ function _renderMobileQuestionCard(item) {
     ${q.prompt ? `<div class="pm-q-prompt">${escapeHtml(q.prompt)}</div>` : ''}
     ${q.context ? `<div class="pm-q-context">${escapeHtml(q.context)}</div>` : ''}
     ${blocks}
-    ${pending && q.allowGeneralOther ? `<textarea class="pm-q-input" data-pm-q-general rows="2" placeholder="Anything else..."></textarea>` : ''}
+    ${!pending && q.generalOther ? `<div class="pm-q-block"><div class="pm-q-label">Anything else</div><div class="pm-q-answered">${escapeHtml(q.generalOther)}</div></div>` : ''}
+    ${pending && q.allowGeneralOther ? `<textarea class="pm-q-input" data-pm-q-general rows="2" placeholder="Anything else..." oninput="_mobileQuestionRememberDraft(this)"></textarea>` : ''}
     ${pending
       ? `<div class="pm-q-actions"><button type="button" class="pm-q-submit" onclick="_submitMobileQuestion(${idJson})">Submit</button><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
       : `<div class="pm-q-resolved">This question was ${escapeHtml(q.status)}.</div>`}
@@ -5321,11 +5785,111 @@ function _mobileQuestionToggleOption(btn, mode) {
   } else {
     btn.classList.toggle('selected');
   }
+  _mobileQuestionRememberDraft(btn);
+}
+
+function _normalizeMobileVoiceWorkgroup(value) {
+  if (!value || typeof value !== 'object') return null;
+  const id = String(value.id || value.workgroupId || '').trim();
+  if (!id) return null;
+  const workers = (Array.isArray(value.workers) ? value.workers : Array.isArray(value.tasks) ? value.tasks : [])
+    .map((worker, index) => ({
+      taskId: String(worker?.taskId || worker?.id || '').trim(),
+      title: String(worker?.title || worker?.name || `Worker ${index + 1}`).trim(),
+      prompt: String(worker?.prompt || worker?.task || '').trim(),
+      index: Number.isFinite(Number(worker?.index)) ? Number(worker.index) : index,
+      status: String(worker?.status || 'queued').trim().toLowerCase() || 'queued',
+      kind: worker?.kind === 'primary_chat' ? 'primary_chat' : 'background_task',
+      currentStep: String(worker?.currentStep || '').trim(),
+      completedSteps: Array.isArray(worker?.completedSteps) ? worker.completedSteps.map((step) => String(step || '').trim()).filter(Boolean) : [],
+      finalResult: String(worker?.finalResult || '').trim(),
+      updatedAt: Number(worker?.updatedAt || worker?.timestamp || Date.now()) || Date.now(),
+      processEntries: (Array.isArray(worker?.processEntries) ? worker.processEntries : [])
+        .map((entry) => ({
+          t: Number(entry?.t || entry?.timestamp || Date.now()) || Date.now(),
+          type: String(entry?.type || 'event').trim() || 'event',
+          content: String(entry?.content || entry?.detail || '').trim(),
+          detail: String(entry?.detail || '').trim(),
+        }))
+        .filter((entry) => entry.content)
+        .slice(-40),
+    }))
+    .sort((a, b) => a.index - b.index);
+  return {
+    id,
+    parentSessionId: String(value.parentSessionId || value.sessionId || '').trim(),
+    mode: String(value.mode || 'parallel').trim() === 'sequential' ? 'sequential' : 'parallel',
+    delivery: String(value.delivery || 'report_each').trim(),
+    status: String(value.status || '').trim().toLowerCase() || _mobileVoiceWorkgroupStatus(workers),
+    createdAt: Number(value.createdAt || Date.now()) || Date.now(),
+    updatedAt: Number(value.updatedAt || Date.now()) || Date.now(),
+    workers,
+  };
+}
+
+function _mobileVoiceWorkgroupStatus(workers) {
+  const statuses = (Array.isArray(workers) ? workers : []).map((worker) => String(worker?.status || 'queued').toLowerCase());
+  if (!statuses.length) return 'queued';
+  if (statuses.every((status) => status === 'complete')) return 'complete';
+  if (statuses.every((status) => status === 'failed' || status === 'cancelled')) return 'failed';
+  if (statuses.some((status) => status === 'paused' || status === 'awaiting_input' || status === 'needs_assistance')) return 'paused';
+  if (statuses.some((status) => status === 'complete' || status === 'failed' || status === 'cancelled')) return 'partially_complete';
+  if (statuses.some((status) => status === 'running' || status === 'in_progress' || status === 'working')) return 'running';
+  return 'queued';
+}
+
+function _mobileWorkerStatusLabel(status) {
+  const clean = String(status || 'queued').toLowerCase();
+  if (clean === 'in_progress' || clean === 'working') return 'Running';
+  if (clean === 'awaiting_input' || clean === 'needs_assistance') return 'Needs input';
+  if (clean === 'partially_complete') return 'In progress';
+  return clean.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function _renderMobileVoiceWorkgroup(message) {
+  const workgroup = _normalizeMobileVoiceWorkgroup(message?.voiceWorkgroup);
+  const workers = workgroup?.workers || [];
+  if (!workgroup || !workers.length) return '';
+  const completeCount = workers.filter((worker) => worker.status === 'complete').length;
+  const cards = workers.map((worker, index) => {
+    const status = String(worker.status || 'queued').toLowerCase();
+    const journal = Array.isArray(worker.processEntries) ? worker.processEntries : [];
+    const emptyLabel = worker.kind === 'primary_chat'
+      ? 'Live tool activity from this chat will appear here.'
+      : (status === 'queued' ? 'Waiting for the worker to start.' : 'Waiting for tool activity.');
+    const processLog = journal.length
+      ? _pmRenderTaskJournal(journal)
+      : `<div class="pm-worker-process-empty">${escapeHtml(emptyLabel)}</div>`;
+    return `<article class="pm-worker-card is-${escapeHtml(status)}" data-pm-worker-card data-worker-index="${index}" data-worker-task-id="${escapeHtml(worker.taskId)}" tabindex="0" aria-label="${escapeHtml(`${worker.title}, ${_mobileWorkerStatusLabel(status)}`)}">
+      <div class="pm-worker-card-head">
+        <span class="pm-worker-status"><span></span>${escapeHtml(worker.kind === 'primary_chat' && ['queued', 'running', 'in_progress', 'working'].includes(status) ? 'In chat' : _mobileWorkerStatusLabel(status))}</span>
+        <span class="pm-worker-index">${String(index + 1).padStart(2, '0')}</span>
+      </div>
+      <strong class="pm-worker-title">${escapeHtml(worker.title || `Worker ${index + 1}`)}</strong>
+      <div class="pm-worker-process" data-pm-worker-process>${processLog}</div>
+    </article>`;
+  }).join('');
+  const dots = workers.map((worker, index) => `<button type="button" class="pm-worker-dot${index === 0 ? ' active' : ''}" data-pm-worker-dot="${index}" aria-label="Show worker ${index + 1}"></button>`).join('');
+  return `<section class="pm-worker-deck" data-pm-worker-deck="${escapeHtml(workgroup.id)}" aria-label="Voice worker group">
+    <div class="pm-worker-deck-head"><strong>${workers.length} worker${workers.length === 1 ? '' : 's'}</strong><span>${completeCount}/${workers.length} complete</span></div>
+    <div class="pm-worker-track" data-pm-worker-track>${cards}</div>
+    ${workers.length > 1 ? `<div class="pm-worker-pagination" aria-label="Worker carousel position">${dots}</div>` : ''}
+  </section>`;
 }
 function _mobileQuestionToggleOther(btn) {
   const ta = btn?.parentElement?.querySelector('[data-pm-q-other]') || btn?.nextElementSibling;
   if (!ta) return;
   if (ta.hasAttribute('hidden')) { ta.removeAttribute('hidden'); ta.focus(); } else { ta.setAttribute('hidden', ''); }
+  _mobileQuestionRememberDraft(btn);
+}
+
+function _mobileQuestionRememberDraft(el) {
+  const card = el?.closest?.('[data-pm-q-card]');
+  if (!card) return;
+  const qid = String(card.getAttribute('data-pm-q-card') || '').trim();
+  if (!qid) return;
+  const captured = _captureMobileQuestionDraftState(card.parentElement || card);
+  if (captured[qid]) _mobileQuestionDrafts.set(qid, captured[qid]);
 }
 
 // Preserve in-progress answers in pending question cards across the full
@@ -5375,17 +5939,19 @@ function _captureMobileQuestionDraftState(root) {
         }
       } catch {}
       out[qid] = state;
+      _mobileQuestionDrafts.set(qid, state);
     });
   } catch {}
   return out;
 }
 function _restoreMobileQuestionDraftState(root, map) {
-  if (!root || !map) return;
+  if (!root) return;
   try {
-    Object.keys(map).forEach((qid) => {
+    const combined = { ...Object.fromEntries(_mobileQuestionDrafts), ...(map || {}) };
+    Object.keys(combined).forEach((qid) => {
       const card = root.querySelector(`[data-pm-q-card="${_pmCssEscape(qid)}"]`);
       if (!card || !card.classList || !card.classList.contains('pm-question-card')) return;
-      const state = map[qid];
+      const state = combined[qid];
       Object.entries(state.selected || {}).forEach(([bid, vals]) => {
         const block = card.querySelector(`[data-pm-q="${_pmCssEscape(bid)}"]`);
         if (!block || !Array.isArray(vals) || !vals.length) return;
@@ -5428,6 +5994,21 @@ function _restoreMobileQuestionDraftState(root, map) {
       } catch {}
     });
   } catch {}
+}
+
+function _mobileQuestionPayloadFromDraft(q, state) {
+  if (!state) return null;
+  return {
+    answers: q.questions.map((qq) => ({
+      id: qq.id,
+      label: qq.label,
+      mode: qq.mode,
+      selected: qq.mode === 'text' ? [] : (Array.isArray(state.selected?.[qq.id]) ? state.selected[qq.id] : []),
+      text: String(state.texts?.[qq.id] || '').trim(),
+      other: String(state.others?.[qq.id]?.value || '').trim(),
+    })),
+    generalOther: String(state.general || '').trim(),
+  };
 }
 function _collectMobileQuestionAnswers(q) {
   const card = document.querySelector(`[data-pm-q-card="${(window.CSS && CSS.escape) ? CSS.escape(q.id) : q.id}"]`);
@@ -5475,10 +6056,16 @@ async function _submitMobileQuestion(id) {
     try { const data = await window.api('/api/questions?status=all'); record = (data.questions || []).find((it) => String(it.id || '') === qid) || null; } catch {}
   }
   const q = _normalizeMobileQuestion(record || { id: qid, questions: [] });
-  const payload = _collectMobileQuestionAnswers(q);
+  let payload = _collectMobileQuestionAnswers(q);
+  const savedPayload = _mobileQuestionPayloadFromDraft(q, _mobileQuestionDrafts.get(qid));
+  const hasDomAnswer = payload.answers.some((answer) => (answer.selected || []).length || answer.text || answer.other) || payload.generalOther;
+  if (!hasDomAnswer && savedPayload) payload = savedPayload;
   try {
     const result = await window.api(`/api/questions/${encodeURIComponent(qid)}/submit`, { method: 'POST', body: JSON.stringify(payload) });
-    _updateMobileQuestionStatus({ questionId: qid, sessionId: result?.question?.sessionId, question: result?.question }, 'answered');
+    const answeredQuestion = { ...(result?.question || q), answers: payload.answers, generalOther: payload.generalOther };
+    _mobileQuestionDrafts.delete(qid);
+    _updateMobileQuestionStatus({ questionId: qid, sessionId: answeredQuestion.sessionId, question: answeredQuestion }, 'answered');
+    _mobileQuestionDrafts.delete(qid);
     // When there was no live waiter (the normal async case on mobile, since the
     // original turn already ended), the backend returns a resumePrompt so the
     // agent can be continued with the answers. Mirror the approval-resume flow:
@@ -5511,9 +6098,9 @@ function _upsertMobileQuestion(q) {
   if (!sid || !q.id) return;
   if (!Array.isArray(__pmChat.threads[sid])) __pmChat.threads[sid] = [];
   const thread = __pmChat.threads[sid];
-  const existing = thread.find((m) => String(m?.questionRequest?.id || '') === q.id);
-  if (existing) {
-    existing.questionRequest = { ...(existing.questionRequest || {}), ...q };
+  const existing = thread.filter((m) => String(m?.questionRequest?.id || '') === q.id);
+  if (existing.length) {
+    existing.forEach((message) => { message.questionRequest = { ...(message.questionRequest || {}), ...q }; });
   } else {
     thread.push({ role: 'ai', timestamp: Date.now(), time: _nowTime(), body: { sender: 'Prometheus', text: '' }, content: '', questionRequest: q });
   }
@@ -5523,13 +6110,16 @@ function _updateMobileQuestionStatus(event, status) {
   const id = String(event.questionId || event.id || event.question?.id || '').trim();
   if (!id) return;
   const sessions = __pmChat.threads || {};
+  if (status && status !== 'pending') _mobileQuestionDrafts.delete(id);
   for (const sid of Object.keys(sessions)) {
     const thread = sessions[sid];
     if (!Array.isArray(thread)) continue;
-    const msg = thread.find((m) => String(m?.questionRequest?.id || '') === id);
-    if (!msg) continue;
-    msg.questionRequest = _normalizeMobileQuestion(event.question || msg.questionRequest, { id, status });
-    msg.questionRequest.status = status || msg.questionRequest.status || 'pending';
+    const matches = thread.filter((m) => String(m?.questionRequest?.id || '') === id);
+    if (!matches.length) continue;
+    matches.forEach((msg) => {
+      msg.questionRequest = _normalizeMobileQuestion(event.question || msg.questionRequest, { id, status });
+      msg.questionRequest.status = status || msg.questionRequest.status || 'pending';
+    });
     if (String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
   }
 }
@@ -5537,6 +6127,7 @@ if (typeof window !== 'undefined' && !window.__pmMobileQuestionBridgeInstalled) 
   window.__pmMobileQuestionBridgeInstalled = true;
   window._mobileQuestionToggleOption = _mobileQuestionToggleOption;
   window._mobileQuestionToggleOther = _mobileQuestionToggleOther;
+  window._mobileQuestionRememberDraft = _mobileQuestionRememberDraft;
   window._submitMobileQuestion = _submitMobileQuestion;
   window._cancelMobileQuestion = _cancelMobileQuestion;
   wsEventBus.on('question_created', (msg = {}) => {
@@ -5672,6 +6263,7 @@ function _renderChatMessageHtml(m, index = -1) {
   }
   if (b.browseState) inner += _renderBrowseCard(b.browseState);
   inner += _renderMobileRichArtifacts(m);
+  inner += _renderMobileVoiceWorkgroup(m);
   if (!(Array.isArray(m.richArtifacts) && m.richArtifacts.some((a) => a?.type === 'products'))) {
     inner += _renderMobileProductCarousel(m);
   }
@@ -6011,6 +6603,239 @@ function _threadForMobileSessionKey(key = '') {
   return { sid, thread: __pmChat.threads[sid] };
 }
 
+function _findMobileVoiceWorkgroupMessage(workgroupId) {
+  const id = String(workgroupId || '').trim();
+  if (!id) return null;
+  for (const [sessionId, thread] of Object.entries(__pmChat.threads || {})) {
+    if (!Array.isArray(thread)) continue;
+    const message = thread.find((item) => String(item?.voiceWorkgroup?.id || '') === id);
+    if (message) return { sessionId, thread, message };
+  }
+  return null;
+}
+
+function _findMobileVoiceWorkerByTaskId(taskId) {
+  const id = String(taskId || '').trim();
+  if (!id) return null;
+  for (const [sessionId, thread] of Object.entries(__pmChat.threads || {})) {
+    if (!Array.isArray(thread)) continue;
+    for (const message of thread) {
+      const workgroup = message?.voiceWorkgroup;
+      const worker = (Array.isArray(workgroup?.workers) ? workgroup.workers : [])
+        .find((item) => String(item?.taskId || '').trim() === id);
+      if (worker) return { sessionId, thread, message, workgroup, worker };
+    }
+  }
+  return null;
+}
+
+function _appendMobileVoiceWorkerProcess(taskId, type, content, source = {}) {
+  const found = _findMobileVoiceWorkerByTaskId(taskId);
+  const text = String(content || '').trim();
+  if (!found?.worker || !text) return false;
+  if (!Array.isArray(found.worker.processEntries)) found.worker.processEntries = [];
+  const entry = {
+    t: Number(source?.t || source?.timestamp || Date.now()) || Date.now(),
+    type: String(type || source?.type || 'event').trim() || 'event',
+    content: text,
+    detail: String(source?.detail || '').trim(),
+  };
+  const previous = found.worker.processEntries[found.worker.processEntries.length - 1];
+  if (!previous || previous.type !== entry.type || previous.content !== entry.content) {
+    found.worker.processEntries.push(entry);
+    found.worker.processEntries = found.worker.processEntries.slice(-40);
+  }
+  found.worker.updatedAt = Math.max(Number(found.worker.updatedAt || 0), entry.t);
+  if (String(__pmChat.activeSessionId || '').trim() === found.sessionId) _renderMobileChatSessionNow(found.sessionId);
+  if (String(__pmVoice?.targetSessionId || '').trim() === found.sessionId) __pmVoice.renderRecent?.();
+  return true;
+}
+
+function _appendMobilePrimaryWorkerProcess(link, type, content, source = {}) {
+  if (!link || typeof link !== 'object') return;
+  const text = String(content || '').trim();
+  if (!text) return;
+  if (!Array.isArray(link.processEntries)) link.processEntries = [];
+  const entry = {
+    t: Number(source?.t || source?.timestamp || Date.now()) || Date.now(),
+    type: String(type || 'event').trim() || 'event',
+    content: text,
+    detail: String(source?.detail || '').trim(),
+  };
+  const previous = link.processEntries[link.processEntries.length - 1];
+  if (!previous || previous.type !== entry.type || previous.content !== entry.content) {
+    link.processEntries.push(entry);
+    link.processEntries = link.processEntries.slice(-40);
+  }
+  _appendMobileVoiceWorkerProcess(link.taskId, entry.type, entry.content, entry);
+}
+
+const _mobileVoiceWorkerJournalTimers = new Map();
+function _refreshMobileVoiceWorkerJournal(taskId, delayMs = 120) {
+  const id = String(taskId || '').trim();
+  if (!id || !_findMobileVoiceWorkerByTaskId(id)) return;
+  const prior = _mobileVoiceWorkerJournalTimers.get(id);
+  if (prior) clearTimeout(prior);
+  const timer = setTimeout(async () => {
+    _mobileVoiceWorkerJournalTimers.delete(id);
+    try {
+      const detail = await loadBgTaskDetail(id);
+      const found = _findMobileVoiceWorkerByTaskId(id);
+      if (!found?.worker || !detail?.success || !detail.task) return;
+      found.worker.processEntries = (Array.isArray(detail.task.journal) ? detail.task.journal : [])
+        .map((entry) => ({
+          t: Number(entry?.t || entry?.timestamp || Date.now()) || Date.now(),
+          type: String(entry?.type || 'event').trim() || 'event',
+          content: String(entry?.content || entry?.detail || '').trim(),
+          detail: String(entry?.detail || '').trim(),
+        }))
+        .filter((entry) => entry.content)
+        .slice(-40);
+      found.worker.status = String(detail.task.status || found.worker.status || 'queued').toLowerCase();
+      found.workgroup.status = _mobileVoiceWorkgroupStatus(found.workgroup.workers);
+      if (String(__pmChat.activeSessionId || '').trim() === found.sessionId) _renderMobileChatSessionNow(found.sessionId);
+      if (String(__pmVoice?.targetSessionId || '').trim() === found.sessionId) __pmVoice.renderRecent?.();
+    } catch {}
+  }, Math.max(0, Number(delayMs) || 0));
+  _mobileVoiceWorkerJournalTimers.set(id, timer);
+}
+
+function _upsertMobileVoiceWorkgroup(sessionId, rawWorkgroup, acknowledgement = '') {
+  const sid = String(sessionId || rawWorkgroup?.parentSessionId || '').trim();
+  const workgroup = _normalizeMobileVoiceWorkgroup(rawWorkgroup);
+  if (!sid || !workgroup) return null;
+  if (!Array.isArray(__pmChat.threads[sid])) __pmChat.threads[sid] = [];
+  const thread = __pmChat.threads[sid];
+  let message = thread.find((item) => String(item?.voiceWorkgroup?.id || '') === workgroup.id);
+  if (message) {
+    const previousWorkers = new Map((message.voiceWorkgroup?.workers || []).map((worker) => [String(worker?.taskId || ''), worker]));
+    workgroup.workers.forEach((worker) => {
+      const previous = previousWorkers.get(String(worker.taskId || ''));
+      if (previous?.processEntries?.length && !worker.processEntries.length) {
+        worker.processEntries = previous.processEntries.slice(-40);
+      }
+    });
+    message.voiceWorkgroup = workgroup;
+    if (acknowledgement && !String(message.body?.text || message.content || '').trim()) {
+      message.body = { ...(message.body || {}), sender: message.body?.sender || 'Prometheus', text: acknowledgement };
+      message.content = acknowledgement;
+    }
+  } else {
+    const text = String(acknowledgement || (workgroup.workers.length === 1
+      ? `All right — I'm sending out a worker for this.`
+      : `All right — I'm sending out ${workgroup.workers.length} workers for this.`)).trim();
+    message = {
+      role: 'ai',
+      timestamp: Number(workgroup.createdAt || Date.now()) || Date.now(),
+      time: _nowTime(),
+      body: { sender: 'Prometheus', text },
+      content: text,
+      source: 'voice_workgroup_dispatch',
+      voiceWorkgroup: workgroup,
+    };
+    thread.push(message);
+  }
+  workgroup.workers
+    .filter((worker) => worker.kind === 'background_task' && worker.taskId)
+    .forEach((worker) => _refreshMobileVoiceWorkerJournal(worker.taskId, 40));
+  if (String(__pmChat.activeSessionId || '').trim() === sid) _renderMobileChatSessionNow(sid);
+  if (String(__pmVoice?.targetSessionId || '').trim() === sid) __pmVoice.renderRecent?.();
+  return message;
+}
+
+function _applyMobileVoiceWorkerUpdate(event = {}) {
+  const workgroupId = String(event.workgroupId || '').trim();
+  const taskId = String(event.taskId || '').trim();
+  if (!workgroupId || !taskId) return false;
+  const found = _findMobileVoiceWorkgroupMessage(workgroupId);
+  if (!found?.message?.voiceWorkgroup) return false;
+  const workgroup = found.message.voiceWorkgroup;
+  const worker = (workgroup.workers || []).find((item) => String(item.taskId || '') === taskId);
+  if (!worker) return false;
+  const kind = String(event.kind || '').toLowerCase();
+  worker.status = String(event.status || (kind === 'complete' ? 'complete' : kind === 'paused' ? 'paused' : 'running')).toLowerCase();
+  worker.currentStep = String(event.currentStep || worker.currentStep || '').trim();
+  worker.completedSteps = Array.isArray(event.completedSteps) ? event.completedSteps.map((step) => String(step || '').trim()).filter(Boolean) : worker.completedSteps;
+  worker.finalResult = String(event.finalResult || worker.finalResult || '').trim();
+  worker.updatedAt = Number(event.timestamp || Date.now()) || Date.now();
+  workgroup.updatedAt = worker.updatedAt;
+  workgroup.status = _mobileVoiceWorkgroupStatus(workgroup.workers);
+  if (String(__pmChat.activeSessionId || '').trim() === found.sessionId) _renderMobileChatSessionNow(found.sessionId);
+  if (String(__pmVoice?.targetSessionId || '').trim() === found.sessionId) __pmVoice.renderRecent?.();
+  return true;
+}
+
+function _updateMobilePrimaryWorkgroupLink(link, status, finalResult = '') {
+  if (!link || typeof link !== 'object') return Promise.resolve(null);
+  link.status = String(status || link.status || 'running').trim();
+  link.finalResult = String(finalResult || link.finalResult || '').trim();
+  if (!link.workgroupId || !link.taskId) return Promise.resolve(null);
+  return mobileGatewayFetch(`/api/voice-agent/workgroups/${encodeURIComponent(link.workgroupId)}/workers/${encodeURIComponent(link.taskId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      status: link.status,
+      currentStep: link.status === 'running' ? 'Working in this chat' : '',
+      finalResult: link.finalResult,
+    }),
+  }).then((data) => {
+    if (data?.workgroup) _upsertMobileVoiceWorkgroup(data.workgroup.parentSessionId, data.workgroup);
+    return data;
+  }).catch(() => null);
+}
+
+if (typeof window !== 'undefined' && !window.__pmMobileVoiceWorkgroupBridgeInstalled) {
+  window.__pmMobileVoiceWorkgroupBridgeInstalled = true;
+  wsEventBus.on('voice_workgroup_dispatched', (event = {}) => {
+    _upsertMobileVoiceWorkgroup(event.sessionId, event.workgroup || { id: event.workgroupId, workers: event.tasks, mode: event.mode, delivery: event.delivery }, event.acknowledgement);
+  });
+  wsEventBus.on('voice_worker_update', (event = {}) => {
+    if (_applyMobileVoiceWorkerUpdate(event)) return;
+    const workgroupId = String(event.workgroupId || '').trim();
+    if (!workgroupId) return;
+    mobileGatewayFetch(`/api/voice-agent/workgroups/${encodeURIComponent(workgroupId)}`)
+      .then((data) => {
+        const message = _upsertMobileVoiceWorkgroup(event.sessionId, data?.workgroup);
+        if (message) _applyMobileVoiceWorkerUpdate(event);
+      })
+      .catch(() => {});
+  });
+  wsEventBus.on('task_running', (event = {}) => {
+    const taskId = String(event.taskId || '').trim();
+    if (_appendMobileVoiceWorkerProcess(taskId, 'resume', 'Worker started.', event)) _refreshMobileVoiceWorkerJournal(taskId);
+  });
+  wsEventBus.on('task_tool_call', (event = {}) => {
+    const taskId = String(event.taskId || '').trim();
+    const tool = String(event.tool || event.action || 'tool').trim();
+    const args = _safeJsonPreview(event.args || {}, 100);
+    if (_appendMobileVoiceWorkerProcess(taskId, 'tool_call', `${tool}${args ? `(${args})` : '()'}`, event)) _refreshMobileVoiceWorkerJournal(taskId);
+  });
+  wsEventBus.on('task_tool_result', (event = {}) => {
+    const taskId = String(event.taskId || '').trim();
+    const tool = String(event.tool || event.action || 'tool').trim();
+    const result = _safeJsonPreview(event.result || event.output || event.error || '', 140);
+    if (_appendMobileVoiceWorkerProcess(taskId, event.error ? 'error' : 'tool_result', `${tool}: ${result || 'complete'}`, event)) _refreshMobileVoiceWorkerJournal(taskId);
+  });
+  wsEventBus.on('task_step_done', (event = {}) => {
+    const taskId = String(event.taskId || '').trim();
+    if (_appendMobileVoiceWorkerProcess(taskId, 'status_push', 'Step complete signal received.', event)) _refreshMobileVoiceWorkerJournal(taskId);
+  });
+  ['task_panel_update', 'task_complete', 'task_paused', 'task_awaiting_input', 'task_needs_assistance'].forEach((eventName) => {
+    wsEventBus.on(eventName, (event = {}) => _refreshMobileVoiceWorkerJournal(event.taskId, eventName === 'task_panel_update' ? 80 : 0));
+  });
+}
+
+if (!window.__pmMobileDevEditCoordinationBridgeInstalled) {
+  window.__pmMobileDevEditCoordinationBridgeInstalled = true;
+  wsEventBus.on('dev_edit_coordination_updated', (msg = {}) => {
+    const blockers = Array.isArray(msg.blockers) ? msg.blockers.length : 0;
+    if (msg.role === 'waiting') {
+      pmToast(`Dev edit verified — waiting for ${blockers || 'other'} coordinated edit${blockers === 1 ? '' : 's'}.`, 'info');
+    } else if (msg.role === 'leader' && msg.batchId) {
+      pmToast('All coordinated edits are ready. Building and applying once.', 'success');
+    }
+  });
+}
+
 function _isMobileSessionRenderCurrent(key = '') {
   const sid = String(key || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
   return sid === String(__pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
@@ -6021,6 +6846,7 @@ function _renderThread(threadEl, sessionKey = '') {
   __pmChat.thread = thread;
   _dedupeMobileAssistantTurns(thread);
   _reindexMobileThread(thread);
+  _captureMobileWorkerDeckViewState(threadEl);
   // Preserve which process-log <details> the user has opened or closed, plus inner
   // scroll, across this full innerHTML rebuild — otherwise streaming re-renders
   // reset panel state every tick.
@@ -6112,10 +6938,12 @@ function _renderThread(threadEl, sessionKey = '') {
   });
   _wireMobileProcessRunActions(threadEl);
   _wireMobileChatEnhancements(threadEl);
+  _scheduleMobileThreadCacheSave(sid);
 }
 
 function _patchMobileThreadMessage(threadEl, message, index) {
   if (!threadEl || !message) return false;
+  _captureMobileWorkerDeckViewState(threadEl);
   const msgIndex = Number.isFinite(Number(index)) ? Number(index) : _activeMobileThread().indexOf(message);
   if (msgIndex < 0) return false;
   const currentEl = threadEl.querySelector(`[data-msg-index="${msgIndex}"]`);
@@ -6271,6 +7099,7 @@ function _patchMobileThreadMessage(threadEl, message, index) {
   try {
     _markMobileLiveStreamMotion(patchedEl, String(__pmChat?.activeSessionId || ''));
   } catch {}
+  _scheduleMobileThreadCacheSave(__pmChat?.activeSessionId || '');
   return true;
 }
 
@@ -6353,7 +7182,7 @@ function _installMobileTimestampReveal(threadEl, onMessageAction) {
   const isInteractiveTarget = (target) => {
     if (!target) return false;
     if (target.closest?.(
-      'button,a,input,textarea,select,summary,details,[data-msg-action],[data-pm-command-action],[data-pm-file-change-path],[data-pm-restore-checkpoint],.pm-media-card,.pm-generated-file,.pm-product-carousel,.pm-product-track,.pm-product-card'
+      'button,a,input,textarea,select,summary,details,[data-msg-action],[data-pm-command-action],[data-pm-file-change-path],[data-pm-restore-checkpoint],.pm-media-card,.pm-generated-file,.pm-product-carousel,.pm-product-track,.pm-product-card,.pm-worker-deck,.pm-worker-track,.pm-worker-card,.pm-worker-process'
     )) return true;
     if (target.closest?.('.pm-md-table-scroll')) return true;
     return false;
@@ -7166,7 +7995,7 @@ function _pmSlashCommandSuggestions(input) {
   const state = _pmSlashCommandState(input);
   if (!state) return [];
   const query = state.query.toLowerCase();
-  return PM_CHAT_SLASH_COMMANDS.filter((item) => item.command.toLowerCase().startsWith(query)).slice(0, 7);
+  return PM_CHAT_SLASH_COMMANDS.filter((item) => item.command.toLowerCase().startsWith(query));
 }
 
 function _pmSkillCommandState(input) {
@@ -7323,7 +8152,7 @@ function _pmRenderSlashPopover(page, input) {
   `;
     }).join('');
     popover.querySelectorAll('.pm-chat-slash-item').forEach((btn) => {
-      btn.addEventListener('pointerdown', (event) => {
+      btn.addEventListener('click', (event) => {
         event.preventDefault();
         const id = btn.getAttribute('data-skill-id') || '';
         const skill = skillSuggestions.find((candidate) => String(candidate.id || '') === id) || skillSuggestions[0];
@@ -7347,7 +8176,7 @@ function _pmRenderSlashPopover(page, input) {
     </button>
   `).join('');
   popover.querySelectorAll('.pm-chat-slash-item').forEach((btn) => {
-    btn.addEventListener('pointerdown', (event) => {
+    btn.addEventListener('click', (event) => {
       event.preventDefault();
       _pmSelectSlashCommand(page, input, btn.getAttribute('data-command') || '');
     });
@@ -7601,6 +8430,97 @@ function _wireMobileChatEnhancements(root = document) {
   _wireMobileCheckpointRestoreButtons(root);
   _wireMobileSnippetCopyButtons(root);
   _wireMobileVisualSaveButtons(root);
+  _wireMobileWorkerDecks(root);
+}
+
+const _mobileWorkerDeckViewState = new Map();
+
+function _captureMobileWorkerDeckViewState(root = document) {
+  root?.querySelectorAll?.('[data-pm-worker-deck]')?.forEach((deck) => {
+    const workgroupId = String(deck.getAttribute('data-pm-worker-deck') || '').trim();
+    const track = deck.querySelector('[data-pm-worker-track]');
+    if (!workgroupId || !track) return;
+    const activeIndex = Math.max(0, Number(deck.dataset.activeWorker || 0) || 0);
+    _mobileWorkerDeckViewState.set(workgroupId, { activeIndex, scrollLeft: track.scrollLeft });
+  });
+}
+
+function _wireMobileWorkerDecks(root = document) {
+  root?.querySelectorAll?.('[data-pm-worker-deck]')?.forEach((deck) => {
+    if (deck.dataset.pmWorkerDeckWired === '1') return;
+    deck.dataset.pmWorkerDeckWired = '1';
+    const track = deck.querySelector('[data-pm-worker-track]');
+    const cards = Array.from(deck.querySelectorAll('[data-pm-worker-card]'));
+    const dots = Array.from(deck.querySelectorAll('[data-pm-worker-dot]'));
+    if (!track || !cards.length) return;
+    const workgroupId = String(deck.getAttribute('data-pm-worker-deck') || '').trim();
+    const savedView = workgroupId ? _mobileWorkerDeckViewState.get(workgroupId) : null;
+    if (savedView && Number.isFinite(Number(savedView.scrollLeft))) {
+      track.scrollLeft = Math.max(0, Number(savedView.scrollLeft));
+    }
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const trackRect = track.getBoundingClientRect();
+      const center = trackRect.left + trackRect.width / 2;
+      let activeIndex = 0;
+      let nearest = Infinity;
+      cards.forEach((card, index) => {
+        const rect = card.getBoundingClientRect();
+        const cardCenter = rect.left + rect.width / 2;
+        const distance = Math.max(-2, Math.min(2, (cardCenter - center) / Math.max(1, rect.width)));
+        const absolute = Math.abs(distance);
+        card.style.setProperty('--pm-worker-distance', absolute.toFixed(3));
+        card.style.setProperty('--pm-worker-direction', distance.toFixed(3));
+        card.style.zIndex = String(20 - Math.round(absolute * 5));
+        card.classList.toggle('is-active', absolute < 0.42);
+        if (absolute < nearest) { nearest = absolute; activeIndex = index; }
+      });
+      dots.forEach((dot, index) => dot.classList.toggle('active', index === activeIndex));
+      deck.dataset.activeWorker = String(activeIndex);
+      if (workgroupId) {
+        _mobileWorkerDeckViewState.set(workgroupId, { activeIndex, scrollLeft: track.scrollLeft });
+        if (_mobileWorkerDeckViewState.size > 60) {
+          _mobileWorkerDeckViewState.delete(_mobileWorkerDeckViewState.keys().next().value);
+        }
+      }
+    };
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(update);
+    };
+    track.addEventListener('scroll', () => {
+      if (workgroupId) {
+        const current = _mobileWorkerDeckViewState.get(workgroupId) || {};
+        _mobileWorkerDeckViewState.set(workgroupId, { ...current, scrollLeft: track.scrollLeft });
+      }
+      schedule();
+    }, { passive: true });
+    cards.forEach((card) => card.addEventListener('click', () => card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })));
+    dots.forEach((dot, index) => dot.addEventListener('click', () => cards[index]?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })));
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(schedule).observe(track);
+    requestAnimationFrame(() => {
+      if (savedView && Number.isFinite(Number(savedView.scrollLeft))) {
+        track.scrollLeft = Math.max(0, Number(savedView.scrollLeft));
+      } else if (savedView && Number.isFinite(Number(savedView.activeIndex))) {
+        const card = cards[Math.max(0, Math.min(cards.length - 1, Number(savedView.activeIndex)))];
+        if (card) track.scrollLeft = Math.max(0, card.offsetLeft - ((track.clientWidth - card.offsetWidth) / 2));
+      }
+      update();
+    });
+    if (workgroupId) {
+      mobileGatewayFetch(`/api/voice-agent/workgroups/${encodeURIComponent(workgroupId)}`)
+        .then((data) => {
+          const fresh = _normalizeMobileVoiceWorkgroup(data?.workgroup);
+          const found = _findMobileVoiceWorkgroupMessage(workgroupId);
+          const currentUpdatedAt = Number(found?.message?.voiceWorkgroup?.updatedAt || 0);
+          if (fresh && Number(fresh.updatedAt || 0) > currentUpdatedAt) {
+            _upsertMobileVoiceWorkgroup(found?.sessionId || fresh.parentSessionId, fresh);
+          }
+        })
+        .catch(() => {});
+    }
+  });
 }
 
 async function _restoreMobileWorkspaceCheckpoint(checkpointId, button = null) {
@@ -7765,7 +8685,11 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     <div class="pm-body pm-chat-body" id="pm-chat-body">
       <div class="pm-chat-thread" id="pm-chat-thread"></div>
     </div>
+    <button type="button" class="pm-scroll-latest" id="pm-scroll-latest" hidden aria-label="Jump to latest message">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 9.5 12 15l5.5-5.5" /></svg>
+    </button>
     <div class="pm-mobile-queued-prompts" id="pm-mobile-queued-prompts" hidden></div>
+    <div class="pm-main-plan-dock" id="pm-main-plan-dock" hidden></div>
     <div class="pm-background-spawn-dock" id="pm-background-spawn-dock" hidden></div>
     <div class="pm-mobile-goal-strip" id="pm-mobile-goal-strip" hidden></div>
     <div class="pm-chat-connection-status" id="pm-chat-connection-status" hidden aria-live="polite">
@@ -7864,8 +8788,10 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
 
   const body     = page.querySelector('#pm-chat-body');
   const threadEl = page.querySelector('#pm-chat-thread');
+  const scrollLatestBtn = page.querySelector('#pm-scroll-latest');
   const form     = page.querySelector('#pm-composer');
   const connectionStatus = page.querySelector('#pm-chat-connection-status');
+  const mainPlanDock = page.querySelector('#pm-main-plan-dock');
   const backgroundSpawnDock = page.querySelector('#pm-background-spawn-dock');
   const goalStrip = page.querySelector('#pm-mobile-goal-strip');
   const input    = page.querySelector('#pm-composer-input');
@@ -7955,6 +8881,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   window.__pmMobileBackgroundSpawnDockChanged = currentBackgroundDockBridge;
   window.__pmMobileQueuedPromptsChanged = currentQueuedPromptsBridge;
   window.__pmMobileGoalChanged = currentGoalBridge;
+  _renderMobileMainPlanDock(mainPlanDock, requestedSession);
   _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
   _renderMobileGoalPill(goalStrip, requestedSession);
 
@@ -7968,9 +8895,14 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     input.style.height = `${Math.max(30, nextHeight)}px`;
     input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
   };
+  // SpeechRecognition may deliver a final result after the composer has been
+  // cleared. Dictation installs this hook below so a send invalidates that
+  // recognition cycle before its captured starting text can be restored.
+  let resetChatDictationComposerState = () => {};
   const resetComposerInput = () => {
     if (!input) return;
     input.value = '';
+    resetChatDictationComposerState();
     input.style.height = '';
     input.style.overflowY = 'hidden';
     _pmClearSkillExclusions();
@@ -8766,6 +9698,7 @@ void main() {
       connectionStatus.hidden = !visible;
       connectionStatus.classList.toggle('visible', !!visible);
       connectionStatus.classList.toggle('success', visible && mode === 'success');
+      page?.classList.toggle('pm-chat-status-priority-active', !!visible);
       updateChatComposerSpace();
     };
     const delayMs = Math.max(0, Number(options.delayMs || 0) || 0);
@@ -8830,7 +9763,9 @@ void main() {
     renderChatPage(page, { navigate, sessionId: requestedSession });
   });
 
+  let initialSessionLoadPending = false;
   if (!__pmChat.threads[requestedSession]?.length && requestedSession !== MOBILE_CHAT_SESSION_ID) {
+    initialSessionLoadPending = true;
     // Render localStorage skeleton immediately so the user sees content at once
     const cachedThread = _loadMobileThreadCache(requestedSession);
     if (cachedThread.length) {
@@ -8845,7 +9780,9 @@ void main() {
     chatLoadRetryTimer = setTimeout(() => {
       showChatLoadRetry('Chat load timed out. Prometheus may be restarting or the session request stalled.');
     }, 20_000);
-    loadMobileChatSession(requestedSession)
+    // The local skeleton already provides the instant paint. Always reconcile
+    // the visible chat against the gateway instead of accepting a 30s API copy.
+    loadMobileChatSession(requestedSession, { force: true })
       .then((session) => {
         if (__pmChat.activeSessionId !== requestedSession) return;
         clearChatLoadRetryTimer();
@@ -8876,10 +9813,52 @@ void main() {
           pmToast('Showing cached chat while Prometheus reconnects.', 'info');
           setChatConnectionStatus(true, 'Reconnecting to Prometheus');
         }
+      })
+      .finally(() => {
+        initialSessionLoadPending = false;
       });
   }
 
-  async function refreshMobileRunRecovery({ silent = false, force = false, fullRefresh = false } = {}) {
+  let mobileRecoveryInFlight = null;
+  let mobileRecoveryInFlightOptions = null;
+  let queuedMobileRecovery = null;
+
+  function mergeMobileRecoveryOptions(current = null, next = {}) {
+    return {
+      silent: (current?.silent ?? true) && next.silent !== false,
+      force: current?.force === true || next.force === true,
+      fullRefresh: current?.fullRefresh === true || next.fullRefresh === true,
+    };
+  }
+
+  async function refreshMobileRunRecovery(options = {}) {
+    const requestedOptions = mergeMobileRecoveryOptions(null, options);
+    if (mobileRecoveryInFlight) {
+      const current = mobileRecoveryInFlightOptions || {};
+      const alreadyCovered = (current.force === true || requestedOptions.force !== true)
+        && (current.fullRefresh === true || requestedOptions.fullRefresh !== true)
+        && (current.silent === false || requestedOptions.silent !== false);
+      if (alreadyCovered) return mobileRecoveryInFlight;
+      queuedMobileRecovery = mergeMobileRecoveryOptions(queuedMobileRecovery, requestedOptions);
+      return mobileRecoveryInFlight;
+    }
+    const request = _performMobileRunRecovery(requestedOptions);
+    mobileRecoveryInFlight = request;
+    mobileRecoveryInFlightOptions = requestedOptions;
+    try {
+      return await request;
+    } finally {
+      if (mobileRecoveryInFlight === request) mobileRecoveryInFlight = null;
+      mobileRecoveryInFlightOptions = null;
+      const queued = queuedMobileRecovery;
+      queuedMobileRecovery = null;
+      if (queued && __pmChat.activeSessionId === requestedSession) {
+        setTimeout(() => refreshMobileRunRecovery(queued), 0);
+      }
+    }
+  }
+
+  async function _performMobileRunRecovery({ silent = false, force = false, fullRefresh = false } = {}) {
     const remembered = _readMobileActiveRun(requestedSession);
     try {
       // ── Parallel batch 1: run-status + session history (independent) ──────────
@@ -8982,12 +9961,20 @@ void main() {
             content: '',
             processEntries: [],
             liveTraceEntries: [],
+            activeRunKind,
+            agentRuntimeKind: activeRunKind,
           };
           activeThread.push(aiTurn);
           hasLocalLiveHistory = false;
         }
         aiTurn.streaming = true;
-        const activeRunProcessLog = _filterMobileProcessEntriesForActiveRun(recoveredSessionProcessLog, aiTurn, status, remembered);
+        const checkpointProcessLog = Array.isArray(status?.run?.checkpoint?.processEntries)
+          ? status.run.checkpoint.processEntries
+          : [];
+        const activeRunProcessLog = [
+          ...checkpointProcessLog,
+          ..._filterMobileProcessEntriesForActiveRun(recoveredSessionProcessLog, aiTurn, status, remembered),
+        ];
         if (activeRunProcessLog.length) _mergeMobileProcessEntries(aiTurn, activeRunProcessLog);
         _mergeMobileWorkflowTraceFromProcessEntries(aiTurn);
         const rememberedLastSeq = Math.max(
@@ -9010,7 +9997,8 @@ void main() {
         // whenever the aiTurn had even 1 stale process entry — so replayAfter
         // was set to e.g. seq 47 and only the tail of the stream ever showed.
         const isColdReopen = remembered?.disconnected === true;
-        let shouldResetForReplay = isColdReopen
+        let shouldResetForReplay = fullRefresh
+          || isColdReopen
           || (!hasLocalLiveHistory && (fullRefresh || force));
         // Full replay must also clear in-memory/local lastSeq; otherwise the
         // seq=0 frames are fetched but noteChatStreamSeq rejects them as stale.
@@ -9095,6 +10083,9 @@ void main() {
         });
         await recoverBackgroundDock(events);
         renderThreadNow();
+        // Preserve the complete in-progress trace across an immediate hard
+        // reload (service-worker takeover) or an iOS process eviction.
+        _saveMobileThreadCache(requestedSession, _activeMobileThread());
         setBusy(true);
         return;
       }
@@ -9127,7 +10118,11 @@ void main() {
     }
   }
 
-  refreshMobileRunRecovery({ silent: true, force: true, fullRefresh: true });
+  // A cold session load starts recovery after hydration. Do not race it with a
+  // second full refresh that can replace a complete replay with a partial tail.
+  if (!initialSessionLoadPending) {
+    refreshMobileRunRecovery({ silent: true, force: true, fullRefresh: true });
+  }
   if (requestedSession && requestedSession !== MOBILE_CHAT_SESSION_ID) {
     markMobileChatSessionRead(requestedSession, Date.now()).catch(() => {});
   }
@@ -9242,6 +10237,7 @@ void main() {
     requestAnimationFrame(() => {
       if (!body || !form) return;
       const scrollSnapshot = _mobileChatScrollSnapshot(body);
+      const previousSpace = Math.max(0, Number.parseFloat(body.style.getPropertyValue('--pm-chat-composer-space')) || 170);
       const height = Math.ceil(form.getBoundingClientRect?.().height || 0);
       const queuedPanel = page?.querySelector?.('#pm-mobile-queued-prompts');
       const queuedHeight = queuedPanel && !queuedPanel.hidden
@@ -9260,8 +10256,20 @@ void main() {
       const dockHeight = backgroundSpawnDock && !backgroundSpawnDock.hidden
         ? Math.ceil(backgroundSpawnDock.getBoundingClientRect?.().height || 0)
         : 0;
+      const planDockHeight = mainPlanDock && !mainPlanDock.hidden
+        ? Math.ceil(mainPlanDock.getBoundingClientRect?.().height || 0)
+        : 0;
+      const runtimeDockHeight = Math.max(dockHeight, planDockHeight);
       page?.style?.setProperty?.('--pm-background-dock-live-height', `${dockHeight}px`);
-      const space = Math.max(170, height + queuedHeight + goalHeight + dockHeight + connectionHeight + (dockHeight || connectionHeight ? 54 : 40));
+      page?.style?.setProperty?.('--pm-main-plan-live-height', `${planDockHeight}px`);
+      page?.style?.setProperty?.('--pm-scroll-latest-stack-height', `${queuedHeight + goalHeight + runtimeDockHeight + connectionHeight}px`);
+      const hasExpandedSurface = goalStrip?.dataset?.expanded === 'true'
+        || mainPlanDock?.classList?.contains('is-open')
+        || backgroundSpawnDock?.classList?.contains('is-open');
+      // Open cards get a larger reading gutter than their collapsed pills. The
+      // extra 32px keeps the final chat/tool line visibly above the glass edge.
+      const clearance = hasExpandedSurface || connectionHeight || queuedHeight ? 78 : (runtimeDockHeight ? 46 : 34);
+      const space = Math.max(170, height + queuedHeight + goalHeight + runtimeDockHeight + connectionHeight + clearance);
       body.style.setProperty('--pm-chat-composer-space', `${space}px`);
       if (form.classList.contains('is-voice-active') && chatVoiceShell && !chatVoiceShell.hidden) {
         const bodyRect = body.getBoundingClientRect?.();
@@ -9271,9 +10279,57 @@ void main() {
       } else {
         body.style.removeProperty('--pm-chat-voice-occlusion-top');
       }
+      // Reading scrollHeight forces the new inset to settle before restoring the
+      // bottom anchor. This avoids restoring against the old padding and leaving
+      // the newest chat line underneath an opening card.
+      void body.scrollHeight;
       _restoreMobileChatScroll(body, scrollSnapshot);
+      const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+      const shift = Math.max(-52, Math.min(52, space - previousSpace));
+      if (!reduceMotion && Math.abs(shift) >= 2 && typeof threadEl?.animate === 'function') {
+        threadEl.animate(
+          [{ transform: `translateY(${shift}px)` }, { transform: 'translateY(0)' }],
+          { duration: 230, easing: 'cubic-bezier(.22,.72,.26,1)' },
+        );
+      }
     });
   }
+
+  window.__pmRenderActiveChatThread = renderThreadSoon;
+
+  // These composer-adjacent surfaces can grow without a new render (live agent
+  // output, plan progress, font wrapping, viewport rotation). Observing their
+  // actual boxes keeps the chat inset correct for every open/close path rather
+  // than relying on each feature to remember to request a remeasurement.
+  const chatSurfaceResizeObserver = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => updateChatComposerSpace())
+    : null;
+  [form, connectionStatus, mainPlanDock, backgroundSpawnDock, goalStrip, page?.querySelector?.('#pm-mobile-queued-prompts')]
+    .filter(Boolean)
+    .forEach((surface) => chatSurfaceResizeObserver?.observe(surface));
+
+  const updateScrollLatestButton = () => {
+    if (!scrollLatestBtn || !body) return;
+    const { distanceFromBottom } = _mobileChatScrollSnapshot(body, 0);
+    scrollLatestBtn.hidden = distanceFromBottom < 150;
+  };
+  const jumpToLatest = () => {
+    const scrollTarget = _mobileChatScrollTarget(body);
+    if (!scrollTarget) return;
+    try { pmHaptic(12); } catch {}
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    try {
+      scrollTarget.scrollTo({ top: scrollTarget.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
+    } catch {
+      scrollTarget.scrollTop = scrollTarget.scrollHeight;
+    }
+    scrollLatestBtn.hidden = true;
+  };
+  body?.addEventListener('scroll', updateScrollLatestButton, { passive: true });
+  document.addEventListener('scroll', updateScrollLatestButton, { passive: true });
+  window.addEventListener('scroll', updateScrollLatestButton, { passive: true });
+  scrollLatestBtn?.addEventListener('click', jumpToLatest);
+  requestAnimationFrame(updateScrollLatestButton);
 
   function resizeSideInput() {
     if (!sideInput) return;
@@ -9441,6 +10497,10 @@ void main() {
         if (_handleMobileThinkingDelta(aiTurn, evt)) scheduleSideRenderSoon();
         return 'streaming';
       }
+      case 'reasoning_summary_delta': {
+        if (_handleMobileReasoningSummaryDelta(aiTurn, evt)) scheduleSideRenderSoon();
+        return 'streaming';
+      }
       case 'thinking':
       case 'agent_thought': {
         if (_handleMobileCleanThought(aiTurn, evt)) scheduleSideRenderSoon();
@@ -9459,7 +10519,8 @@ void main() {
           const isCompactionPreflight = String(evt.type || '') === 'ui_preflight' && /^Compacting the thread before continuing/i.test(messageText);
           if (!isCompactionPreflight) {
             _appendMobileProcess(aiTurn, 'info', messageText, evt);
-            _appendMobileLiveTrace(aiTurn, String(evt.type || '') === 'tool_progress' ? 'tool' : 'info', messageText);
+            if (String(evt.type || '') === 'tool_progress') _applyMobileToolActivity(aiTurn, 'progress', evt);
+            else _appendMobileLiveTrace(aiTurn, 'info', messageText);
           }
         }
         renderMobileSideSheet();
@@ -9475,7 +10536,7 @@ void main() {
         _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         aiTurn.toolActivityStarted = true;
         _appendMobileProcess(aiTurn, 'tool', _mobileToolLabel(evt), evt);
-        _appendMobileLiveTrace(aiTurn, 'tool', _mobileToolLabel(evt));
+        _applyMobileToolActivity(aiTurn, 'call', evt);
         renderMobileSideSheet();
         return 'streaming';
       case 'tool_result':
@@ -9490,7 +10551,7 @@ void main() {
         aiTurn.toolActivityStarted = true;
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${_mobileToolLabel(evt)}${evt.error ? ' failed' : ' complete'}`, evt);
-        _appendMobileLiveTrace(aiTurn, evt.error ? 'error' : 'result', `${_mobileToolLabel(evt)}${evt.error ? ' failed' : ' complete'}`);
+        _applyMobileToolActivity(aiTurn, 'result', evt);
         renderMobileSideSheet();
         return 'streaming';
       case 'vision_injected':
@@ -9643,6 +10704,11 @@ void main() {
   // forces the document back to the top every frame while the keyboard settles
   // — effectively performing the "scroll back" the user was doing by hand.
   const _pmKbApp = document.querySelector('.pm-app') || page;
+  const _pmKbTabbar = document.querySelector('.pm-tabbar');
+  let _pmKbBaselineHeight = Math.max(
+    Number(window.innerHeight || 0),
+    Number(window.visualViewport?.height || 0),
+  );
   let _pmKbRaf = 0;
   let _pmKbWasOpen = false;
   let _pmKbPinRaf = 0;
@@ -9663,12 +10729,26 @@ void main() {
     // Keyboard height = layout viewport height minus the visible (visual)
     // viewport height. The shell stays anchored to the layout viewport, so the
     // composer only needs to float up by this amount.
-    const offset = Math.max(0, Math.round(window.innerHeight - vv.height));
+    const layoutOffset = Math.max(0, Math.round(window.innerHeight - vv.height));
+    const baselineOffset = Math.max(0, Math.round(_pmKbBaselineHeight - vv.height));
+    const composerFocused = document.activeElement === input;
     // Ignore small deltas from Safari's collapsing URL bar; only treat a
-    // sizeable gap as a real keyboard.
-    const open = offset > 90;
-    _pmKbApp.style.setProperty('--pm-keyboard-offset', `${open ? offset : 0}px`);
+    // sizeable gap as a real keyboard. Some installed iOS PWAs shrink both
+    // innerHeight and visualViewport.height, so their difference stays zero;
+    // the pre-focus baseline catches that mode.
+    const open = layoutOffset > 90 || (composerFocused && baselineOffset > 90);
+    // Only compensate when the visual viewport shrinks independently. If iOS
+    // already resized the layout viewport, fixed composers naturally sit above
+    // the keyboard and adding baselineOffset would lift them twice.
+    _pmKbApp.style.setProperty('--pm-keyboard-offset', `${open ? layoutOffset : 0}px`);
     _pmKbApp.classList.toggle('pm-keyboard-open', open);
+    // Do this on the actual nav node instead of depending on ancestor CSS.
+    // Installed iOS PWAs may retain an older mobile stylesheet for one launch,
+    // while this controller still has the authoritative keyboard state.
+    if (_pmKbTabbar) {
+      if (open) _pmKbTabbar.style.setProperty('display', 'none', 'important');
+      else _pmKbTabbar.style.removeProperty('display');
+    }
     // While the keyboard is open, keep the document pinned to the top so iOS
     // can't leave the fixed shell lifted above the keyboard.
     if (open) _pmKbPinScroll();
@@ -9677,6 +10757,9 @@ void main() {
     if (open && !_pmKbWasOpen) {
       const snap = _mobileChatScrollSnapshot(body);
       if (snap.nearBottom) requestAnimationFrame(() => _scrollChat(body));
+    }
+    if (!open && !composerFocused) {
+      _pmKbBaselineHeight = Math.max(_pmKbBaselineHeight, Number(window.innerHeight || 0), Number(vv.height || 0));
     }
     _pmKbWasOpen = open;
   }
@@ -9699,15 +10782,19 @@ void main() {
   }
   const _onVvResize = () => { _scheduleKeyboardOffset(); _startKbPinLoop(400); };
   const _onVvScroll = () => { _scheduleKeyboardOffset(); };
+  const _onWindowKeyboardResize = () => { _scheduleKeyboardOffset(); };
   const _pmVisualViewport = window.visualViewport || null;
   if (_pmVisualViewport) {
     _pmVisualViewport.addEventListener('resize', _onVvResize);
     _pmVisualViewport.addEventListener('scroll', _onVvScroll);
   }
+  window.addEventListener('resize', _onWindowKeyboardResize, { passive: true });
   const _onComposerFocusKb = () => {
+    _pmKbBaselineHeight = Math.max(_pmKbBaselineHeight, Number(window.innerHeight || 0), Number(window.visualViewport?.height || 0));
     // Pin aggressively through the keyboard's open animation so the shell never
     // ends up stuck above the keyboard waiting for a manual scroll.
     _startKbPinLoop(800);
+    _scheduleKeyboardOffset();
   };
   const _onComposerBlurKb = () => {
     _pmKbPinUntil = 0;
@@ -9723,12 +10810,14 @@ void main() {
       _pmVisualViewport.removeEventListener('resize', _onVvResize);
       _pmVisualViewport.removeEventListener('scroll', _onVvScroll);
     }
+    window.removeEventListener('resize', _onWindowKeyboardResize);
     input?.removeEventListener('focus', _onComposerFocusKb);
     input?.removeEventListener('blur', _onComposerBlurKb);
     if (_pmKbApp) {
       _pmKbApp.classList.remove('pm-keyboard-open');
       _pmKbApp.style.removeProperty('--pm-keyboard-offset');
     }
+    _pmKbTabbar?.style.removeProperty('display');
   }
 
   function _closeChatVoiceMode() {
@@ -9848,15 +10937,18 @@ void main() {
 
   function _onChatVoiceUpdate(sessionId, detail = {}) {
     const sid = String(sessionId || __pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID).trim();
-    if (sid && requestedSession === MOBILE_CHAT_SESSION_ID && sid !== MOBILE_CHAT_SESSION_ID) {
+    const activeSid = String(__pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+    // A draft may be rotated to a durable id by the local voice flow. Adopt
+    // that id only after the flow itself has made it active. A late tool/voice
+    // event from the page's previous session is not navigation authority.
+    if (sid && requestedSession === MOBILE_CHAT_SESSION_ID && sid !== MOBILE_CHAT_SESSION_ID && activeSid === sid) {
       requestedSession = sid;
       _rememberMobileLastChatSession(sid);
       try { window.history.replaceState(null, '', `${window.location.pathname || '/'}${window.location.search || ''}#mobile/chat/${encodeURIComponent(sid)}`); } catch {}
       invalidateMobileDrawerSessions('mobile');
     }
-    if (!sid || sid === requestedSession || sid === __pmChat.activeSessionId) {
+    if (!sid || (sid === requestedSession && sid === activeSid)) {
       if (sid && __pmChat.threads?.[sid]) {
-        __pmChat.activeSessionId = sid;
         __pmChat.thread = __pmChat.threads[sid];
       } else {
         _activeMobileThread();
@@ -9869,14 +10961,8 @@ void main() {
       updateComposerSubmitState(sid || requestedSession);
       return;
     }
-    if (detail?.force === true) {
-      if (__pmChat.threads?.[sid]) {
-        __pmChat.activeSessionId = sid;
-        __pmChat.thread = __pmChat.threads[sid];
-      }
-      _flushThreadRender(threadEl, body, sid);
-      updateComposerSubmitState(sid);
-    }
+    // `force` means render immediately when visible; it does not grant a
+    // background stream permission to change the selected conversation.
   }
 
   const previousVoiceUpdateBridge = window.__pmMobileChatVoiceUpdate;
@@ -10220,6 +11306,11 @@ void main() {
           }
           break;
         }
+        case 'reasoning_summary_delta': {
+          const text = String(evt.text || evt.summary || '').trim();
+          if (text) entries.push({ type: 'think', text: text.slice(0, 1200), extra: evt });
+          break;
+        }
         case 'info':
         case 'ui_preflight':
           if (evt.message) entries.push({ type: 'info', text: String(evt.message), extra: evt });
@@ -10227,20 +11318,15 @@ void main() {
         case 'heartbeat':
           break;
         case 'tool_call': {
-          const label = _mobileToolLabel(evt);
-          const args = _safeJsonPreview(evt.args || evt.params || evt.input);
-          entries.push({ type: 'tool', text: `${label}${args ? `: ${args}` : ''}`, extra: evt });
+          applyToolActivityEvent(entries, 'call', evt);
           break;
         }
         case 'tool_result': {
-          const label = _mobileToolLabel(evt);
-          const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
-          entries.push({ type: evt.error ? 'error' : 'result', text: `${label}${result ? ` -> ${result}` : ' complete'}`, extra: evt });
+          applyToolActivityEvent(entries, 'result', evt);
           break;
         }
         case 'tool_progress': {
-          const progressText = `${_mobileToolLabel(evt)}: ${String(evt.message || '').trim()}`;
-          entries.push({ type: 'info', text: progressText, extra: evt });
+          applyToolActivityEvent(entries, 'progress', evt);
           break;
         }
         case 'canvas_present': {
@@ -10322,6 +11408,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         if (_handleMobileThinkingDelta(aiTurn, evt)) renderThreadSoon();
         return 'streaming';
       }
+      case 'reasoning_summary_delta': {
+        if (_handleMobileReasoningSummaryDelta(aiTurn, evt)) renderThreadSoon();
+        return 'streaming';
+      }
       case 'thinking':
       case 'agent_thought': {
         if (_handleMobileCleanThought(aiTurn, evt)) renderThreadSoon();
@@ -10342,6 +11432,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       case 'heartbeat':
         if (evt.message) setChatConnectionStatus(true, String(evt.message));
         return 'streaming';
+      case 'progress_state':
+        _applyMobileMainPlanProgress(evt, requestedSession);
+        _renderMobileMainPlanDock(mainPlanDock, requestedSession);
+        updateChatComposerSpace();
+        return 'streaming';
       case 'tool_call': {
         if (String(evt.action || evt.name || evt.toolName || '').trim() === 'context_compaction') {
           _appendMobileCompactionTrace(aiTurn, 'compacting', '', evt.args || evt);
@@ -10353,7 +11448,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         const label = _mobileToolLabel(evt);
         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
         _appendMobileProcess(aiTurn, 'tool', `${label}${args ? `: ${args}` : ''}`, evt);
-        _appendMobileLiveTrace(aiTurn, 'tool', `${label}${args ? `: ${args}` : ''}`);
+        _applyMobileToolActivity(aiTurn, 'call', evt);
         renderThreadNow();
         return 'streaming';
       }
@@ -10371,7 +11466,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
-        _appendMobileLiveTrace(aiTurn, evt.error ? 'error' : 'result', `${label}${evt.error ? ' failed' : ' complete'}`);
+        _applyMobileToolActivity(aiTurn, 'result', evt);
         renderThreadNow();
         return 'streaming';
       }
@@ -10389,7 +11484,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         const progressText = messageText ? `${_mobileToolLabel(evt)}: ${messageText}` : _mobileToolLabel(evt);
         if (messageText) {
           _appendMobileProcess(aiTurn, 'info', progressText, evt);
-          _appendMobileLiveTrace(aiTurn, 'tool', progressText);
+          _applyMobileToolActivity(aiTurn, 'progress', evt);
         }
         renderThreadNow();
         return 'streaming';
@@ -10417,8 +11512,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         if (eventType === 'tool_call_start' || eventType === 'tool_call_done') {
           _moveMobileWorkflowBubbleBeforeTool(aiTurn);
           aiTurn.toolActivityStarted = true;
-          const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
-          _appendMobileLiveTrace(aiTurn, 'tool', eventType === 'tool_call_start' ? `Preparing ${name}...` : `Prepared ${name}`);
+          _applyMobileToolActivity(aiTurn, eventType === 'tool_call_start' ? 'prepare' : 'prepared', {
+            ...modelEvent,
+            action: modelEvent.name,
+          });
           renderThreadNow();
         }
         return 'streaming';
@@ -11252,6 +12349,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     hideReconnectingStatus();
     const activeThread = _activeMobileThread();
     const data = msg.data && typeof msg.data === 'object' ? msg.data : msg;
+    const activeRunKind = String(msg.activeRunKind || data?.activeRunKind || data?.runKind || '').trim();
     const incomingClientRequestId = String(data?.clientRequestId || '').trim();
     const eventType = String(msg.event || data?.event || data?.type || '');
     if (eventType === 'user_message') {
@@ -11318,11 +12416,17 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         processEntries: [],
         liveTraceEntries: [],
         agentExecutionMode: 'execute',
+        activeRunKind,
+        agentRuntimeKind: activeRunKind,
         _clientRequestId: incomingClientRequestId,
       };
       activeThread.push(aiTurn);
     }
     aiTurn.streaming = true;
+    if (activeRunKind) {
+      aiTurn.activeRunKind = activeRunKind;
+      aiTurn.agentRuntimeKind = activeRunKind;
+    }
     const evt = {
       ...data,
       type: eventType,
@@ -11350,6 +12454,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     applyMainChatStreamPayload({
       sessionId: sid,
       event,
+      activeRunKind: 'main_chat_goal',
       streamId: msg.streamId,
       seq: msg.seq,
       at: msg.at,
@@ -11486,6 +12591,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   document.addEventListener('visibilitychange', onAppHideVisibility, { capture: true });
 
   window.addEventListener('focus', runRecoveryOnReturn);
+  window.addEventListener('pageshow', runRecoveryOnReturn);
   document.addEventListener('visibilitychange', runRecoveryOnVisibility);
   wsEventBus?.on?.('ws:open', runRecoveryOnWsOpen);
 
@@ -11505,9 +12611,15 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
     previousCleanup?.();
+    chatSurfaceResizeObserver?.disconnect();
+    body?.removeEventListener('scroll', updateScrollLatestButton);
+    document.removeEventListener('scroll', updateScrollLatestButton);
+    window.removeEventListener('scroll', updateScrollLatestButton);
+    scrollLatestBtn?.removeEventListener('click', jumpToLatest);
     window.removeEventListener('pagehide', onAppHide, { capture: true });
     document.removeEventListener('visibilitychange', onAppHideVisibility, { capture: true });
     window.removeEventListener('focus', runRecoveryOnReturn);
+    window.removeEventListener('pageshow', runRecoveryOnReturn);
     window.removeEventListener('prometheus:skills-cache-updated', onSkillsCacheUpdated);
     window.removeEventListener('prometheus:markdown-ready', onMarkdownReady);
     wsEventBus?.off?.('ws:open', runRecoveryOnWsOpen);
@@ -11970,60 +13082,136 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   });
 
   let chatSpeech = null;
+  let chatSpeechEnabled = false;
+  let chatSpeechRestartTimer = null;
+  let chatSpeechRecognition = null;
+  let chatSpeechCycleGeneration = 0;
+  const scheduleChatDictationCycle = (delay = 140) => {
+    if (chatSpeechRestartTimer) clearTimeout(chatSpeechRestartTimer);
+    chatSpeechRestartTimer = null;
+    if (!chatSpeechEnabled || !chatSpeechRecognition) return;
+    chatSpeechRestartTimer = setTimeout(() => {
+      chatSpeechRestartTimer = null;
+      startChatDictationCycle(chatSpeechRecognition);
+    }, delay);
+  };
+  resetChatDictationComposerState = () => {
+    chatSpeechCycleGeneration += 1;
+    if (chatSpeechRestartTimer) clearTimeout(chatSpeechRestartTimer);
+    chatSpeechRestartTimer = null;
+    const recognition = chatSpeech;
+    chatSpeech = null;
+    try { recognition?.abort?.(); } catch {
+      try { recognition?.stop?.(); } catch {}
+    }
+    // Keep transcription mode active, but make the next cycle start from the
+    // newly-cleared composer rather than the text that was just sent.
+    scheduleChatDictationCycle(80);
+  };
+  const stopChatDictation = () => {
+    chatSpeechEnabled = false;
+    chatSpeechCycleGeneration += 1;
+    if (chatSpeechRestartTimer) clearTimeout(chatSpeechRestartTimer);
+    chatSpeechRestartTimer = null;
+    const recognition = chatSpeech;
+    chatSpeech = null;
+    try { recognition?.stop?.(); } catch {}
+    micBtn?.classList.remove('listening');
+    input?.focus();
+    syncComposerAfterProgrammaticTextChange();
+  };
+  const startChatDictationCycle = (SpeechRecognition) => {
+    if (!chatSpeechEnabled || chatSpeech) return;
+    try {
+      const recognition = new SpeechRecognition();
+      const cycleGeneration = chatSpeechCycleGeneration;
+      chatSpeech = recognition;
+      recognition.lang = navigator.language || 'en-US';
+      recognition.interimResults = true;
+      recognition.continuous = true;
+      const cycleStartValue = String(input.value || '').trimEnd();
+      recognition.onstart = () => {
+        if (cycleGeneration === chatSpeechCycleGeneration) micBtn?.classList.add('listening');
+      };
+      recognition.onresult = (event) => {
+        if (cycleGeneration !== chatSpeechCycleGeneration) return;
+        let finalTranscript = '';
+        let interim = '';
+        for (let i = 0; i < event.results.length; i++) {
+          const transcript = String(event.results[i][0]?.transcript || '');
+          if (event.results[i].isFinal) finalTranscript += transcript;
+          else interim += transcript;
+        }
+        const spoken = `${finalTranscript}${interim}`.trim();
+        input.value = `${cycleStartValue}${cycleStartValue && spoken ? ' ' : ''}${spoken}`;
+        syncComposerAfterProgrammaticTextChange();
+      };
+      recognition.onerror = (event) => {
+        if (cycleGeneration !== chatSpeechCycleGeneration) return;
+        const error = String(event?.error || 'unknown');
+        if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(error)) {
+          const msg = error === 'not-allowed' || error === 'service-not-allowed'
+            ? 'Microphone permission was denied.'
+            : 'The microphone is not available.';
+          pmToast(msg, 'error');
+          chatSpeechEnabled = false;
+        } else if (!['no-speech', 'aborted'].includes(error)) {
+          console.warn('[mobile chat] dictation cycle error:', error);
+        }
+      };
+      recognition.onend = () => {
+        if (cycleGeneration !== chatSpeechCycleGeneration) return;
+        if (chatSpeech === recognition) chatSpeech = null;
+        syncComposerAfterProgrammaticTextChange();
+        if (!chatSpeechEnabled) {
+          micBtn?.classList.remove('listening');
+          input?.focus();
+          return;
+        }
+        // Mobile browsers end SpeechRecognition after a silence window even in
+        // continuous mode. Keep the user-controlled dictation session alive by
+        // starting a new cycle; only another mic tap switches it off.
+        scheduleChatDictationCycle();
+      };
+      recognition.start();
+    } catch (err) {
+      chatSpeech = null;
+      chatSpeechEnabled = false;
+      micBtn?.classList.remove('listening');
+      pmToast(err?.message || 'Could not start dictation.', 'error');
+    }
+  };
   micBtn?.addEventListener('click', () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       pmToast('Speech dictation is not available in this browser.', 'error');
       return;
     }
-    try {
-      if (chatSpeech) {
-        chatSpeech.stop();
-        chatSpeech = null;
-        micBtn.classList.remove('listening');
-        return;
-      }
-      const recognition = new SpeechRecognition();
-      chatSpeech = recognition;
-      recognition.lang = navigator.language || 'en-US';
-      recognition.interimResults = true;
-      recognition.continuous = false;
-      const startValue = String(input.value || '');
-      let finalTranscript = '';
-      recognition.onstart = () => {
-        micBtn.classList.add('listening');
-        pmToast('Listening...', 'info');
-      };
-      recognition.onresult = (event) => {
-        let interim = '';
-        finalTranscript = '';
-        for (let i = 0; i < event.results.length; i++) {
-          const transcript = String(event.results[i][0]?.transcript || '');
-          if (event.results[i].isFinal) finalTranscript += transcript;
-          else interim += transcript;
-        }
-        input.value = `${startValue}${startValue && (finalTranscript || interim) ? ' ' : ''}${finalTranscript || interim}`.trimStart();
-        syncComposerAfterProgrammaticTextChange();
-      };
-      recognition.onerror = (event) => {
-        const msg = event?.error === 'not-allowed'
-          ? 'Microphone permission was denied.'
-          : `Dictation failed: ${event?.error || 'unknown error'}`;
-        pmToast(msg, 'error');
-      };
-      recognition.onend = () => {
-        micBtn.classList.remove('listening');
-        chatSpeech = null;
-        input.focus();
-        syncComposerAfterProgrammaticTextChange();
-      };
-      recognition.start();
-    } catch (err) {
-      micBtn.classList.remove('listening');
-      chatSpeech = null;
-      pmToast(err?.message || 'Could not start dictation.', 'error');
+    chatSpeechRecognition = SpeechRecognition;
+    if (chatSpeechEnabled) {
+      stopChatDictation();
+      return;
     }
+    chatSpeechEnabled = true;
+    micBtn.classList.add('listening');
+    pmToast('Listening until you tap the mic again.', 'info');
+    startChatDictationCycle(SpeechRecognition);
   });
+
+  const cleanupChatPageBeforeDictation = page._pmCleanup;
+  page._pmCleanup = () => {
+    chatSpeechEnabled = false;
+    chatSpeechCycleGeneration += 1;
+    if (chatSpeechRestartTimer) clearTimeout(chatSpeechRestartTimer);
+    chatSpeechRestartTimer = null;
+    const recognition = chatSpeech;
+    chatSpeech = null;
+    try { recognition?.abort?.(); } catch {
+      try { recognition?.stop?.(); } catch {}
+    }
+    resetChatDictationComposerState = () => {};
+    cleanupChatPageBeforeDictation?.();
+  };
 }
 
 /* ---------------- VOICE ---------------- */
@@ -13574,10 +14762,13 @@ function _speakVoiceLiveStatus(text, options = {}) {
 
 function _speakMobileRealtimeAgentMilestone(text, options = {}) {
   const spoken = _cleanVoiceSpeechText(text);
+  if (!spoken || __pmVoice.dictation !== 'milestone') return;
+  if (_voiceWorkerOutputBusy()) {
+    setTimeout(() => _speakMobileRealtimeAgentMilestone(spoken, { ...options, force: true }), 750);
+    return;
+  }
   const dc = __pmRealtimeAgent?.conn?.dc;
-  if (!spoken || __pmVoice.dictation !== 'milestone' || !dc || dc.readyState !== 'open') return;
-  if (__pmRealtimeAgent?.quiet?.active) return;
-  if (__pmRealtimeAgent?.activeResponse || __pmVoice.realtimeSpeechActiveResponse || __pmVoice.speaking) return;
+  if (!dc || dc.readyState !== 'open') return;
   const now = Date.now();
   const recent = __pmVoice.milestoneRecent instanceof Map ? __pmVoice.milestoneRecent : new Map();
   for (const [key, at] of recent.entries()) {
@@ -14220,8 +15411,7 @@ async function _ensureRealtimeSpeechConnection() {
   audio.onended = () => { _markVoiceSpeakingEnd(); };
   audio.onerror = () => { console.warn('[voice] realtime audio element playback failed'); };
   pc.ontrack = (event) => {
-    audio.srcObject = event.streams[0];
-    audio.play?.().catch((err) => console.warn('[voice] realtime audio play blocked', err));
+    _attachMobileRealtimeOutput(audio, event.streams[0]);
   };
   try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
   const dc = pc.createDataChannel('oai-events');
@@ -14304,6 +15494,8 @@ const __pmRealtimeAgent = {
   listenMode: 'idle',                // 'idle' | 'push_to_talk' | 'always_listening'
   submitToWorker: null,
   submitToWorkerOwner: null,
+  submitToChatWorker: null,
+  submitToChatWorkerOwner: null,
   functionCallBuffers: new Map(),    // call_id -> { name, argsStr }
   // Quiet mode: keep OpenAI STT running but turn create_response off; wake phrase
   // in a completed transcript re-opens the agent. Mirrors the desktop approach.
@@ -15192,8 +16384,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
         streamCount: event.streams?.length || 0,
         trackState: event.track?.readyState || '',
       });
-      audio.srcObject = event.streams[0];
-      audio.play?.().catch(() => {});
+      _attachMobileRealtimeOutput(audio, event.streams[0]);
     };
 
     // Reuse the shared warm mic — the SAME stream xAI realtime + the soundwave
@@ -15510,20 +16701,75 @@ function _isMobileRealtimeOutputGuardActive() {
   return Date.now() < Number(guard.until || 0);
 }
 
+function _attachMobileRealtimeOutput(audio, stream) {
+  if (!audio || !stream) return false;
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) throw new Error('AudioContext unavailable');
+    const ctx = __pmVoice.realtimeOutputAudioCtx || new AudioCtx();
+    __pmVoice.realtimeOutputAudioCtx = ctx;
+    if (ctx.state === 'suspended') ctx.resume?.().catch?.(() => {});
+    try { __pmVoice.realtimeOutputSource?.disconnect?.(); } catch {}
+    try { __pmVoice.realtimeOutputGain?.disconnect?.(); } catch {}
+    try { __pmVoice.realtimeOutputCompressor?.disconnect?.(); } catch {}
+    const source = ctx.createMediaStreamSource(stream);
+    const gain = ctx.createGain();
+    const compressor = ctx.createDynamicsCompressor();
+    const destination = ctx.createMediaStreamDestination();
+    gain.gain.value = 1.65;
+    compressor.threshold.value = -12;
+    compressor.knee.value = 18;
+    compressor.ratio.value = 4;
+    compressor.attack.value = 0.003;
+    compressor.release.value = 0.2;
+    source.connect(gain);
+    gain.connect(compressor);
+    compressor.connect(destination);
+    __pmVoice.realtimeOutputSource = source;
+    __pmVoice.realtimeOutputGain = gain;
+    __pmVoice.realtimeOutputCompressor = compressor;
+    audio.srcObject = destination.stream;
+    audio.muted = false;
+    audio.volume = 1;
+    audio.play?.().catch(() => {});
+    return true;
+  } catch (err) {
+    _voiceDebug?.('realtime-agent-output-boost-fallback', { message: err?.message || String(err) });
+    audio.srcObject = stream;
+    audio.muted = false;
+    audio.volume = 1;
+    audio.play?.().catch(() => {});
+    return false;
+  }
+}
+
 function _shouldIgnoreMobileRealtimeSpeechStartedDuringOutput(provider = '') {
   const conn = __pmRealtimeAgent.conn;
   const stats = typeof conn?.playback?.stats === 'function' ? conn.playback.stats() : null;
   const playbackActive = _mobileRealtimePlaybackActive(conn);
   const active = __pmRealtimeAgent.activeResponse || __pmVoice.realtimeSpeechActiveResponse || playbackActive || _isMobileRealtimeOutputGuardActive();
   if (!active) return false;
-  _voiceDebug?.('realtime-agent-ignored-output-echo-speech-started', {
+  _voiceDebug?.('realtime-agent-barge-in-cancel', {
     provider,
     activeResponse: !!__pmRealtimeAgent.activeResponse,
     realtimeSpeechActive: !!__pmVoice.realtimeSpeechActiveResponse,
     playbackActive,
     queuedSamples: stats?.queuedSamples || 0,
   });
-  return true;
+  const dc = conn?.dc;
+  if (dc?.readyState === 'open') {
+    try { dc.send(JSON.stringify({ type: 'response.cancel' })); } catch {}
+    if (conn?.provider !== 'xai') {
+      try { dc.send(JSON.stringify({ type: 'output_audio_buffer.clear' })); } catch {}
+    }
+  }
+  try { conn?.playback?.interrupt?.(); } catch {}
+  __pmRealtimeAgent.activeResponse = false;
+  __pmRealtimeAgent.narrationPending = false;
+  __pmVoice.realtimeSpeechActiveResponse = false;
+  _markVoiceSpeakingEnd();
+  // Continue processing speech_started as a real user turn.
+  return false;
 }
 
 // --- xAI / Grok realtime (WebSocket transport) for mobile -------------------
@@ -15621,7 +16867,9 @@ function _createMobileXaiPlayback(options = {}) {
   driver.buffer = ctx.createBuffer(1, processorSize, outputRate);
   driver.loop = true;
   const mutedGain = ctx.createGain();
-  mutedGain.gain.value = 1;
+  // Mobile WebKit commonly routes realtime speech below media playback level.
+  // Give streamed xAI output the same useful headroom as WebRTC output.
+  mutedGain.gain.value = 1.5;
   const queue = [];
   let queuedSamples = 0;
   let current = null;
@@ -16142,7 +17390,9 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       if (type === 'error' || type === 'response.error' || /\.error$/.test(type)) {
         const msg = String(event?.error?.message || event?.error || event?.message || JSON.stringify(event)).slice(0, 300);
         _voiceDebug('xai-realtime-error', { type, msg });
-        try { pmToast(`xAI realtime error: ${msg}`, 'error'); } catch {}
+        if (!_isBenignRealtimeCancelError(event)) {
+          try { pmToast(`xAI realtime error: ${msg}`, 'error'); } catch {}
+        }
       }
       _handleMobileRealtimeAgentEvent(event, sid).catch(() => {});
     });
@@ -16804,6 +18054,7 @@ function _realtimeAgentToolLabel(name, args) {
     voice_desktop_screenshot: 'Desktop Screenshot',
     voice_send_screenshot: 'Send Screenshot',
     voice_worker_status: 'Worker Status',
+    restart_gateway_quick: 'Quick Gateway Restart',
 
     dispatch_prometheus_worker: 'Hand off to Worker',
     steer_active_worker: 'Steer Worker',
@@ -16906,6 +18157,47 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
   const args = call?.args && typeof call.args === 'object' ? call.args : {};
   _voiceDebug('realtime-agent-tool-call', { name, args });
 
+  if (name === 'restart_gateway_quick') {
+    try {
+      const data = await mobileGatewayFetch('/api/voice-agent/restart-gateway-quick', {
+        method: 'POST',
+        body: JSON.stringify({ sessionId, reason: String(args.reason || '').trim(), source: 'mobile_realtime_voice' }),
+      });
+      _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({
+        ok: data?.success === true,
+        restarting: data?.restarting === true,
+        note: 'The quick restart has been scheduled. Do not speak again before disconnect; the restarted gateway will confirm success.',
+        error: data?.error || '',
+      }), { createResponse: false });
+    } catch (err) {
+      _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: false, restarting: false, error: String(err?.message || err) }));
+    }
+    return;
+  }
+
+  if (name === 'send_to_prometheus_chat') {
+    const message = String(args.message || args.prompt || '').trim();
+    let started = false;
+    let error = '';
+    if (message && typeof __pmRealtimeAgent.submitToChatWorker === 'function') {
+      try {
+        const visibleTranscript = String(__pmRealtimeAgent.turn.lastUserTranscript || message).trim();
+        _removeMobileRealtimeAgentChatTurn(sessionId, 'user', visibleTranscript);
+        _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: true, started: true, mode: 'current_chat', spoken_confirmation_not_needed: true }), { createResponse: false });
+        started = true;
+        Promise.resolve(__pmRealtimeAgent.submitToChatWorker(message, { visibleTranscript })).catch((err) => {
+          _voiceDebug('realtime-agent-chat-handoff-failed', { message: err?.message || String(err) });
+        });
+      } catch (err) {
+        error = String(err?.message || err);
+      }
+    }
+    if (!started) {
+      _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: false, started: false, mode: 'current_chat', error: error || 'The current-chat bridge is unavailable.' }));
+    }
+    return;
+  }
+
   if (name === 'dispatch_prometheus_worker') {
     const workerTasks = Array.isArray(args.tasks)
       ? args.tasks.map((raw, index) => {
@@ -17001,30 +18293,59 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
           dispatched = true;
           setTimeout(() => _refreshMobileRealtimeAgentWorkerContext('worker_dispatched_fast'), 300);
           setTimeout(() => _refreshMobileRealtimeAgentWorkerContext('worker_dispatched'), 1200);
-        } else if (!subagentTarget) {
+        } else if (!subagentTarget && typeof __pmRealtimeAgent.submitToWorker === 'function') {
+          const primaryTask = workerTasks[0] || { title: String(args.title || '').trim() || 'Primary chat worker', prompt: task };
+          const backgroundTasks = workerTasks.slice(1);
+          const primaryLink = {
+            taskId: `voice_primary_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            title: primaryTask.title || 'Primary chat worker',
+            prompt: primaryTask.prompt || task,
+            status: 'running',
+            workgroupId: '',
+            finalResult: '',
+            processEntries: [],
+          };
           __pmRealtimeAgent.turn.dispatchedWorkerThisResponse = true;
           if (visibleTranscript) __pmRealtimeAgent.turn.lastUserTranscript = visibleTranscript;
           _cancelMobileRealtimeAgentResponseForDispatch();
           _removeMobileRealtimeAgentChatTurn(sessionId, 'user', visibleTranscript || task);
-          _markMobileRealtimeAgentWorkerDispatch(sessionId, batchTaskText || task);
-          dispatchResult = await mobileGatewayFetch('/api/voice-agent/dispatch-workers', {
-            method: 'POST',
-            body: JSON.stringify({
-              sessionId,
-              task,
-              tasks: workerTasks,
-              delivery: 'report_each',
-              sourceTranscript: visibleTranscript || task,
-              source: 'mobile_realtime_agent_dispatch',
-            }),
+          _markMobileRealtimeAgentWorkerDispatch(sessionId, primaryLink.prompt);
+          __pmRealtimeAgent.submitToWorker(primaryLink.prompt, {
+            source: 'realtime_agent_dispatch',
+            skipVoiceAgentHandoff: true,
+            visibleTranscript,
+            voicePrimaryLink: primaryLink,
           });
-          dispatched = dispatchResult?.success === true || dispatchResult?.ok === true;
-          dispatchError = dispatchResult?.error || '';
+          dispatched = true;
+          if (backgroundTasks.length) {
+            dispatchResult = await mobileGatewayFetch('/api/voice-agent/dispatch-workers', {
+              method: 'POST',
+              body: JSON.stringify({
+                sessionId,
+                tasks: backgroundTasks,
+                primaryWorker: primaryLink,
+                delivery: 'report_each',
+                sourceTranscript: visibleTranscript || task,
+                source: 'mobile_realtime_agent_hybrid_dispatch',
+              }),
+            });
+            const backgroundDispatched = dispatchResult?.success === true || dispatchResult?.ok === true;
+            dispatchError = backgroundDispatched ? '' : (dispatchResult?.error || 'Additional workers could not be started.');
+            primaryLink.workgroupId = backgroundDispatched ? String(dispatchResult?.workgroupId || '') : '';
+            if (primaryLink.workgroupId) {
+              const primaryWorker = dispatchResult?.workgroup?.workers?.find?.((worker) => String(worker?.taskId || '') === primaryLink.taskId);
+              if (primaryWorker) primaryWorker.processEntries = primaryLink.processEntries.slice(-40);
+              _updateMobilePrimaryWorkgroupLink(primaryLink, primaryLink.status, primaryLink.finalResult);
+              _upsertMobileVoiceWorkgroup(sessionId, dispatchResult?.workgroup, dispatchResult?.acknowledgement || '');
+            }
+          }
           if (dispatched) {
             _voiceDebug('realtime-agent-dispatch-workgroup', {
               workgroupId: dispatchResult?.workgroupId || '',
               taskIds: dispatchResult?.taskIds || [],
-              count: workerTasks.length,
+              count: workerTasks.length || 1,
+              primaryInChat: true,
+              backgroundCount: backgroundTasks.length,
             });
             setTimeout(() => _refreshMobileRealtimeAgentWorkerContext('worker_dispatched_fast'), 300);
             setTimeout(() => _refreshMobileRealtimeAgentWorkerContext('worker_dispatched'), 1200);
@@ -17047,7 +18368,9 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
       error: dispatchError,
       spoken_confirmation_not_needed: true,
       note: dispatched
-        ? 'Worker dispatch has started through the voice workgroup bridge. Do not speak another handoff acknowledgement.'
+        ? (workerTasks.length > 1
+          ? 'The primary Worker is linked to the current chat and the additional Workers are tracked as background tasks in one workgroup. Background completions will be surfaced while the primary Worker continues. Do not speak another handoff acknowledgement.'
+          : 'The primary Worker is linked to the current chat. No background task or workgroup was created. Do not speak another handoff acknowledgement.')
         : 'Worker dispatch failed before any worker started.',
     }), { createResponse: false });
     return;
@@ -17242,6 +18565,9 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
             processEntries: artifactProcessEntries.length ? artifactProcessEntries : undefined,
           });
           _renderMobileChatSessionNow(sid);
+        }
+        if (typeof __pmRealtimeAgent.enqueueArtifacts === 'function') {
+          __pmRealtimeAgent.enqueueArtifacts(voiceArtifacts);
         }
       } catch (err) { _voiceDebug('realtime-agent-artifact-render-failed', { error: String(err?.message || err) }); }
       const cardSummary = String(result.result.summary || 'Card shown.');
@@ -18612,6 +19938,12 @@ async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
       timings: result?.timings || null,
     });
     const reply = String(result?.voiceReply || '').trim();
+    const responseArtifacts = Array.isArray(result?.richArtifacts)
+      ? result.richArtifacts
+      : Array.isArray(result?.decision?.richArtifacts) ? result.decision.richArtifacts : [];
+    if (responseArtifacts.length && typeof __pmRealtimeAgent.enqueueArtifacts === 'function') {
+      __pmRealtimeAgent.enqueueArtifacts(responseArtifacts);
+    }
     const voiceProcessEntries = _voiceAgentProcessEntriesFromResult(sid, result);
     if (result?.action === 'handoff_new_work') {
       if (reply) {
@@ -18631,6 +19963,7 @@ async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
             body: { sender: 'Prometheus', text: reply },
             content: reply,
             source: 'voice_agent',
+            richArtifacts: responseArtifacts.length ? responseArtifacts : undefined,
             processEntries: voiceProcessEntries,
             voiceInterruptionEventId: eventId || undefined,
           });
@@ -18683,6 +20016,7 @@ async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
           body: { sender: 'Prometheus', text: reply },
           content: reply,
           source: 'voice_agent',
+          richArtifacts: responseArtifacts.length ? responseArtifacts : undefined,
           processEntries: voiceProcessEntries,
         });
         _persistMobileThreadSnapshot(sid);
@@ -18983,7 +20317,7 @@ export async function renderVoicePage(page, ctx) {
 
       <section class="pm-recent">
         <div class="pm-recent-head">
-          <h3>Recent Commands</h3>
+          <h3>Recent Commands &amp; Tasks</h3>
           <a href="#" id="pm-voice-clear" style="cursor:pointer;">Clear</a>
         </div>
         <div class="pm-recent-list" id="pm-voice-recent"></div>
@@ -19429,6 +20763,7 @@ void main() {
     _clearVoicePreviewTimer();
     const active = __pmVoice.activePreview;
     if (!active) return;
+    if (active.persistent) return;
     const remaining = Math.max(250, Number(active.expiresAt || 0) - Date.now());
     const token = active.id;
     __pmVoice.previewTimer = setTimeout(() => {
@@ -19498,7 +20833,10 @@ void main() {
         card.style.transition = 'transform .24s ease-out, opacity .22s ease-out';
         card.style.transform = `translate3d(${exitX}px, ${exitY}px, 0) rotate(${Math.max(-18, Math.min(18, dx / 10))}deg) scale(.94)`;
         card.style.opacity = '0';
-        setTimeout(() => _dequeueVoicePreview({ animate: false }), 210);
+        const recycle = __pmVoice.activePreview?.kind === 'artifact'
+          && Array.isArray(__pmVoice.previewQueue) && __pmVoice.previewQueue.length > 0
+          && Math.abs(dx) >= Math.abs(dy);
+        setTimeout(() => _dequeueVoicePreview({ animate: false, recycle }), 210);
         return;
       }
       resetTransform();
@@ -19524,8 +20862,15 @@ void main() {
       return;
     }
     const pending = queue.slice(0, 2);
-    const label = active?.transient ? 'Live view' : 'Attached file';
+    const label = active?.kind === 'artifact'
+      ? (active.artifact?.type === 'sources' ? 'Sources' : active.artifact?.type === 'products' ? 'Products' : 'Visual card')
+      : active?.transient ? 'Live view' : 'Attached file';
     const ghostHtml = (item, idx) => {
+      if (item?.kind === 'artifact') {
+        const artifact = item.artifact || {};
+        const title = artifact.title || artifact.items?.[0]?.title || artifact.items?.[0]?.label || 'Visual card';
+        return `<div class="pm-voice-preview-ghost pm-voice-preview-ghost-artifact ghost-${idx + 1}" aria-hidden="true"><span>${escapeHtml(String(artifact.type || 'card').replaceAll('_', ' '))}</span><strong>${escapeHtml(title)}</strong></div>`;
+      }
       const media = item?.media || {};
       const src = _mobileMediaUrl(media, 'inline');
       const name = media.name || 'Preview';
@@ -19539,7 +20884,9 @@ void main() {
       ${pending.map(ghostHtml).join('')}
       ${active ? `<div class="pm-voice-preview-card" data-preview-id="${escapeHtml(active.id)}">
         <div class="pm-voice-preview-label">${escapeHtml(label)}</div>
-        ${_renderMobileMediaGallery([active.media])}
+        ${active.kind === 'artifact'
+          ? `<div class="pm-voice-preview-artifact">${_renderMobileRichArtifacts({ richArtifacts: [active.artifact] })}</div>`
+          : _renderMobileMediaGallery([active.media])}
       </div>` : ''}
     `;
     _wireMobileMediaCards(previewHost);
@@ -19547,17 +20894,19 @@ void main() {
     if (active && !__pmVoice.previewTimer) _startVoicePreviewTimer();
   }
 
-  function _dequeueVoicePreview({ animate = true } = {}) {
+  function _dequeueVoicePreview({ animate = true, recycle = false } = {}) {
     _clearVoicePreviewTimer();
     const currentCard = previewHost?.querySelector?.('.pm-voice-preview-card');
     if (currentCard && animate) currentCard.classList.add('leaving');
     setTimeout(() => {
+      const previous = __pmVoice.activePreview;
       __pmVoice.activePreview = null;
       const queue = Array.isArray(__pmVoice.previewQueue) ? __pmVoice.previewQueue : [];
+      if (recycle && previous) queue.push(previous);
       const next = queue.shift();
       __pmVoice.previewQueue = queue;
       if (next) {
-        next.expiresAt = Date.now() + 7000;
+        if (!next.persistent) next.expiresAt = Date.now() + 7000;
         __pmVoice.activePreview = next;
         _renderVoicePreviewStack();
         _startVoicePreviewTimer();
@@ -19601,6 +20950,39 @@ void main() {
     _renderVoicePreviewStack();
   }
 
+  function _enqueueVoiceArtifacts(artifacts) {
+    // Chat-page voice keeps artifacts in the normal transcript. Only the
+    // dedicated voice page adds this over-orb deck.
+    if (inlineMode) return;
+    const expanded = (Array.isArray(artifacts) ? artifacts : []).flatMap((artifact) => {
+      if (!artifact || typeof artifact !== 'object') return [];
+      const items = Array.isArray(artifact.items) ? artifact.items.filter(Boolean) : [];
+      if ((artifact.type === 'products' || artifact.type === 'sources' || artifact.type === 'prediction_market') && items.length > 1) {
+        return items.map((item, index) => ({ ...artifact, id: `${artifact.id || artifact.type}_${index}`, items: [item] }));
+      }
+      return [artifact];
+    });
+    if (!expanded.length) return;
+    const existing = new Set([
+      __pmVoice.activePreview?.artifact?.id,
+      ...(Array.isArray(__pmVoice.previewQueue) ? __pmVoice.previewQueue.map((item) => item?.artifact?.id) : []),
+    ].filter(Boolean).map(String));
+    const additions = expanded
+      .filter((artifact) => !artifact.id || !existing.has(String(artifact.id)))
+      .map((artifact) => ({
+        id: `voice_artifact_${artifact.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`}`,
+        kind: 'artifact',
+        artifact,
+        persistent: true,
+        expiresAt: 0,
+      }));
+    if (!additions.length) return;
+    if (!Array.isArray(__pmVoice.previewQueue)) __pmVoice.previewQueue = [];
+    __pmVoice.previewQueue.push(...additions);
+    if (!__pmVoice.activePreview) __pmVoice.activePreview = __pmVoice.previewQueue.shift() || null;
+    _renderVoicePreviewStack();
+  }
+
   function _voicePreviewEventMatchesSession(msg = {}) {
     const target = String(msg.target || '').toLowerCase();
     if (target && target !== 'mobile' && target !== 'all') return false;
@@ -19626,9 +21008,92 @@ void main() {
   wsEventBus?.on?.('vision_injected', _voiceVisionInjectedHandler);
   wsEventBus?.on?.('delivery_notification', _voiceDeliveryNotificationHandler);
 
+  const _voiceWorkerAlertQueue = [];
+  const _voiceWorkerAlertRecent = new Map();
+  let _voiceWorkerAlertRunning = false;
+  const _voiceWorkerOutputBusy = () => !!(
+    __pmRealtimeAgent?.activeResponse
+    || __pmVoice.realtimeSpeechActiveResponse
+    || __pmVoice.speaking
+  );
+  const _waitForVoiceWorkerOutputIdle = async (timeoutMs = 90000) => {
+    const started = Date.now();
+    while (_voiceWorkerOutputBusy() && Date.now() - started < timeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  };
+  const _speakVoiceWorkerAlert = async (update) => {
+    await _waitForVoiceWorkerOutputIdle();
+    const text = String(update?.text || '').trim();
+    if (!text) return;
+    const dc = __pmRealtimeAgent?.conn?.dc;
+    if (dc?.readyState === 'open') {
+      dc.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message', role: 'user', content: [{ type: 'input_text', text: [
+            '[BACKGROUND_WORKER_UPDATE]',
+            JSON.stringify(update).slice(0, 7000),
+            'Give the user a natural operational update. Explain what was established, what is happening now, and any failure or recovery in plain language. Do not recite tool names or raw status fields. For completion, include the actual outcome. For a pause, clearly say what needs attention.',
+            'This alert is allowed while wake-phrase quiet mode is active. Speak it without changing or disabling that quiet mode.',
+            '[/BACKGROUND_WORKER_UPDATE]',
+          ].join('\n') }],
+        },
+      }));
+      dc.send(JSON.stringify({
+        type: 'response.create',
+        response: {
+          output_modalities: ['audio'],
+          instructions: 'Speak a grounded, natural worker update. Do not mention internal event fields, tool protocol, or JSON. Never interrupt existing speech.',
+        },
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await _waitForVoiceWorkerOutputIdle();
+      return;
+    }
+    await _ttsSpeak(text);
+  };
+  const _drainVoiceWorkerAlerts = async () => {
+    if (_voiceWorkerAlertRunning) return;
+    _voiceWorkerAlertRunning = true;
+    try {
+      while (_voiceWorkerAlertQueue.length) {
+        const update = _voiceWorkerAlertQueue.shift();
+        await _speakVoiceWorkerAlert(update);
+        if (_voiceWorkerAlertQueue.length) await new Promise((resolve) => setTimeout(resolve, 1200));
+      }
+    } finally {
+      _voiceWorkerAlertRunning = false;
+    }
+  };
+  const _voiceWorkerUpdateHandler = (msg = {}) => {
+    if (msg.silent === true) return;
+    const sessionId = String(msg.sessionId || '').trim();
+    const targetSessionId = String(__pmVoice.targetSessionId || __pmChat.activeSessionId || '').trim();
+    if (!sessionId || sessionId !== targetSessionId) return;
+    const critical = msg.critical === true || msg.kind === 'paused' || msg.kind === 'complete';
+    if (!critical && __pmVoice.dictation !== 'milestone') return;
+    const recentKey = `${msg.taskId || ''}:${msg.kind || ''}`;
+    const now = Date.now();
+    const recentAt = Number(_voiceWorkerAlertRecent.get(recentKey) || 0);
+    if (msg.kind !== 'complete' && recentAt && now - recentAt < 6000) return;
+    _voiceWorkerAlertRecent.set(recentKey, now);
+    if (_voiceWorkerAlertQueue.some((entry) => entry.id === msg.id)) return;
+    if (!critical) {
+      const staleIndex = _voiceWorkerAlertQueue.findIndex((entry) => entry.taskId === msg.taskId && entry.kind === 'milestone');
+      if (staleIndex >= 0) _voiceWorkerAlertQueue.splice(staleIndex, 1);
+    }
+    _voiceWorkerAlertQueue.push(msg);
+    _drainVoiceWorkerAlerts().catch((err) => console.warn('[voice worker update] narration failed', err));
+  };
+  wsEventBus?.on?.('voice_worker_update', _voiceWorkerUpdateHandler);
+
   // Bridge: the module-scope realtime agent overlays screenshot previews returned
   // by the realtime-tool endpoint directly onto the orb via this closure function.
   __pmRealtimeAgent.enqueuePreviews = (items, opts) => _enqueueVoicePreviews(items, opts || {});
+  __pmRealtimeAgent.enqueueArtifacts = (artifacts) => _enqueueVoiceArtifacts(artifacts);
+  __pmRealtimeAgent.previewBridgeOwner = voiceRenderToken;
 
   function _voiceApprovalPrompt(approval = {}) {
     const human = _pmHumanApproval(approval);
@@ -19918,6 +21383,15 @@ void main() {
       __pmRealtimeAgent.submitToWorker = null;
       __pmRealtimeAgent.submitToWorkerOwner = null;
     }
+    if (__pmRealtimeAgent.submitToChatWorkerOwner === voiceRenderToken) {
+      __pmRealtimeAgent.submitToChatWorker = null;
+      __pmRealtimeAgent.submitToChatWorkerOwner = null;
+    }
+    if (__pmRealtimeAgent.previewBridgeOwner === voiceRenderToken) {
+      __pmRealtimeAgent.enqueuePreviews = null;
+      __pmRealtimeAgent.enqueueArtifacts = null;
+      __pmRealtimeAgent.previewBridgeOwner = null;
+    }
     if (__pmVoice.statusEl === statusEl) __pmVoice.statusEl = null;
     if (__pmVoice.hintEl === hintEl) __pmVoice.hintEl = null;
     previousVoiceCleanup?.();
@@ -19936,6 +21410,7 @@ void main() {
     voiceWaveStream = null;
     wsEventBus?.off?.('vision_injected', _voiceVisionInjectedHandler);
     wsEventBus?.off?.('delivery_notification', _voiceDeliveryNotificationHandler);
+    wsEventBus?.off?.('voice_worker_update', _voiceWorkerUpdateHandler);
     wsEventBus?.off?.('process_run_exited', _voiceProcessExitHandler);
     wsEventBus?.off?.('timer_done', _voiceTimerDoneHandler);
     if (inlineMode) {
@@ -20598,12 +22073,54 @@ void main() {
   modeMile.addEventListener('click',  () => _setMode('milestone'));
 
   // ── Recent commands rendering ─────────────────────────────────────
+  function _voicePageWorkgroups() {
+    const sid = String(__pmVoice.targetSessionId || __pmChat.activeSessionId || '').trim();
+    const thread = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
+    const seen = new Set();
+    return thread
+      .map((message) => _normalizeMobileVoiceWorkgroup(message?.voiceWorkgroup))
+      .filter((workgroup) => {
+        if (!workgroup || seen.has(workgroup.id)) return false;
+        seen.add(workgroup.id);
+        return true;
+      })
+      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+      .slice(0, 4);
+  }
+
+  function _renderVoiceWorkerTask(worker, workgroup) {
+    const status = String(worker?.status || 'queued').toLowerCase();
+    const active = ['running', 'in_progress', 'working', 'queued', 'pending'].includes(status);
+    const detail = worker?.currentStep || worker?.finalResult || (status === 'queued' ? 'Ready to start' : 'Working in the background');
+    return `<div class="pm-voice-worker-task is-${escapeHtml(status)}" data-voice-worker-task="${escapeHtml(worker.taskId || '')}">
+      <span class="pm-voice-worker-task-icon${active ? ' is-active' : ''}" aria-hidden="true"><i></i></span>
+      <span class="pm-voice-worker-task-meta">
+        <strong>${escapeHtml(worker.title || 'Prometheus worker')}</strong>
+        <span>${escapeHtml(detail)}</span>
+      </span>
+      <span class="pm-voice-worker-task-status">${escapeHtml(worker?.kind === 'primary_chat' && active ? 'In chat' : _mobileWorkerStatusLabel(status))}</span>
+    </div>`;
+  }
+
+  function _renderVoiceWorkgroupsRecent(workgroups) {
+    if (!workgroups.length) return '';
+    return workgroups.map((workgroup) => {
+      const workers = workgroup.workers || [];
+      const completed = workers.filter((worker) => worker.status === 'complete').length;
+      return `<section class="pm-voice-worker-group" data-voice-workgroup="${escapeHtml(workgroup.id)}">
+        <div class="pm-voice-worker-group-head"><span><i></i>Worker group</span><span>${completed}/${workers.length}</span></div>
+        <div class="pm-voice-worker-task-list">${workers.map((worker) => _renderVoiceWorkerTask(worker, workgroup)).join('')}</div>
+      </section>`;
+    }).join('');
+  }
+
   function _renderRecent() {
-    if (!__pmVoice.recent.length) {
+    const workgroups = _voicePageWorkgroups();
+    if (!__pmVoice.recent.length && !workgroups.length) {
       recentEl.innerHTML = `<div style="text-align:center;color:var(--pm-muted);font-size:13px;padding:24px 8px;">No commands yet. Hold the mic to start.</div>`;
       return;
     }
-    recentEl.innerHTML = __pmVoice.recent.map(cmd => _renderVoiceCard(cmd)).join('');
+    recentEl.innerHTML = `${_renderVoiceWorkgroupsRecent(workgroups)}${__pmVoice.recent.map(cmd => _renderVoiceCard(cmd)).join('')}`;
     recentEl.querySelectorAll('[data-cmd-id]').forEach(cardEl => {
       const id = cardEl.getAttribute('data-cmd-id');
       cardEl.querySelector('[data-toggle]')?.addEventListener('click', () => {
@@ -20617,6 +22134,20 @@ void main() {
       });
     });
     _wireMobileMediaCards(recentEl);
+  }
+  __pmVoice.renderRecent = _renderRecent;
+
+  function _refreshVoicePageWorkgroups() {
+    _voicePageWorkgroups().forEach((workgroup) => {
+      mobileGatewayFetch(`/api/voice-agent/workgroups/${encodeURIComponent(workgroup.id)}`)
+        .then((data) => {
+          const fresh = _normalizeMobileVoiceWorkgroup(data?.workgroup);
+          if (fresh && Number(fresh.updatedAt || 0) > Number(workgroup.updatedAt || 0)) {
+            _upsertMobileVoiceWorkgroup(fresh.parentSessionId || __pmVoice.targetSessionId, fresh);
+          }
+        })
+        .catch(() => {});
+    });
   }
 
   function _renderVoiceCard(cmd) {
@@ -20654,7 +22185,7 @@ void main() {
             ${cmd.toolStream.length ? `
               <div style="margin-top:12px;font-size:11px;font-weight:800;color:var(--pm-orange);text-transform:uppercase;letter-spacing:1.2px;">Tool stream</div>
               <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">
-                ${cmd.toolStream.map(s => `<div style="font-size:12px;font-family:ui-monospace,monospace;color:var(--pm-text-soft);padding:4px 8px;background:#fff;border:1px solid var(--pm-border);border-radius:6px;">${escapeHtml(s)}</div>`).join('')}
+                ${cmd.toolStream.map(s => `<div class="pm-voice-tool-stream-item">${escapeHtml(s)}</div>`).join('')}
               </div>
             ` : ''}
 
@@ -20677,6 +22208,7 @@ void main() {
   }
 
   _renderRecent();
+  _refreshVoicePageWorkgroups();
 
   // Subtle flip animation hook: when the tool text changes, update DOM in place
   // with a CSS flip rather than full re-render.
@@ -21642,6 +23174,17 @@ void main() {
       skipVoiceAgentHandoff: options.skipVoiceAgentHandoff !== false,
     });
   };
+  __pmRealtimeAgent.submitToChatWorkerOwner = voiceRenderToken;
+  __pmRealtimeAgent.submitToChatWorker = (text, options = {}) => {
+    if (!_isActiveVoiceRender() || __pmRealtimeAgent.submitToChatWorkerOwner !== voiceRenderToken) {
+      return Promise.resolve(false);
+    }
+    return _submitSpeech(text, {
+      ...options,
+      source: 'realtime_agent_chat_handoff',
+      skipVoiceAgentHandoff: true,
+    });
+  };
 
   async function _submitSpeechToSubagentTarget(target, finalText, options = {}) {
     const agentId = String(target?.agentId || '').trim();
@@ -21898,16 +23441,18 @@ void main() {
       if (voiceAgentHandoff.result) __pmVoice.lastHandoffEvent = voiceAgentHandoff.result;
     }
     const realtimeAgentDispatch = String(options.source || '').includes('realtime_agent_dispatch');
+    const realtimeAgentChatHandoff = String(options.source || '').includes('realtime_agent_chat_handoff');
+    const realtimeAgentVoiceHandoff = realtimeAgentDispatch || realtimeAgentChatHandoff;
     if (!__pmChat.threads[targetSessionId]) __pmChat.threads[targetSessionId] = [];
     const chatThread = __pmChat.threads[targetSessionId];
     if (!interruptionResult?.classification) {
       chatThread.push({
         role: 'user',
         time: _nowTime(),
-        body: { text: finalText, source: realtimeAgentDispatch ? 'realtime_agent_dispatch' : 'voice' },
-        source: realtimeAgentDispatch ? 'realtime_agent_dispatch' : 'voice',
-        channelLabel: realtimeAgentDispatch ? 'Voice Agent handoff' : 'voice',
-        voiceAgentWorkerHandoff: realtimeAgentDispatch,
+        body: { text: finalText, source: realtimeAgentChatHandoff ? 'realtime_agent_chat_handoff' : (realtimeAgentDispatch ? 'realtime_agent_dispatch' : 'voice') },
+        source: realtimeAgentChatHandoff ? 'realtime_agent_chat_handoff' : (realtimeAgentDispatch ? 'realtime_agent_dispatch' : 'voice'),
+        channelLabel: realtimeAgentChatHandoff ? 'Voice Agent to Worker' : (realtimeAgentDispatch ? 'Voice Agent handoff' : 'voice'),
+        voiceAgentWorkerHandoff: realtimeAgentVoiceHandoff,
       });
     }
   const chatAiTurn = {
@@ -21919,6 +23464,7 @@ void main() {
     liveTraceEntries: [],
     source: 'voice',
     _voiceWorkerLocalTurn: true,
+    voicePrimaryLink: options.voicePrimaryLink && typeof options.voicePrimaryLink === 'object' ? options.voicePrimaryLink : undefined,
     ...(interruptionResult?.classification ? {
       workflowGroupId: [...chatThread].reverse().find((turn) => turn?.workflowPart === 'interruption')?.workflowGroupId || '',
       workflowPart: ['cancel', 'pause', 'unknown'].includes(String(interruptionResult?.classification?.intent || '')) ? 'abort_response' : 'interruption_response',
@@ -22029,12 +23575,12 @@ void main() {
     if (handoffProcessEntries.length) {
       chatAiTurn.processEntries.push(...handoffProcessEntries);
     }
-    if (realtimeAgentDispatch) {
-      _appendMobileProcess(chatAiTurn, 'info', `Voice Agent handoff to Worker: ${finalText.slice(0, 900)}`, {
+    if (realtimeAgentVoiceHandoff) {
+      _appendMobileProcess(chatAiTurn, 'info', `${realtimeAgentChatHandoff ? 'Voice Agent to Worker (current chat)' : 'Voice Agent handoff to Worker'}: ${finalText.slice(0, 900)}`, {
         actor: 'Voice Agent',
         stage: 'mobile_voice_worker_user_message',
         sessionId: targetSessionId,
-        source: 'realtime_agent_dispatch',
+        source: realtimeAgentChatHandoff ? 'realtime_agent_chat_handoff' : 'realtime_agent_dispatch',
         requestId: cmd.id,
       });
     } else {
@@ -22055,6 +23601,17 @@ void main() {
         '[/REALTIME_AGENT_HANDOFF]',
       ].join('\n')
       : '';
+    const realtimeAgentChatHandoffContext = realtimeAgentChatHandoff
+      ? [
+        '[VOICE_AGENT_HANDOFF]',
+        '[VOICE_AGENT_CHAT_HANDOFF]',
+        'The live Voice Agent routed this planning or discussion request to the Prometheus Worker in the current foreground chat.',
+        'Respond as a normal chat turn with the full reasoning and tool stream. Do not create or queue a background task for this turn.',
+        'Emit accurate meaningful progress for milestone narration and finish with a complete answer for the Voice Agent to summarize.',
+        '[/VOICE_AGENT_CHAT_HANDOFF]',
+        '[/VOICE_AGENT_HANDOFF]',
+      ].join('\n')
+      : '';
     const handoffContext = backendHandoffContext || (handoffResult
       ? [
         '[VOICE_AGENT_HANDOFF]',
@@ -22067,7 +23624,7 @@ void main() {
         '[/VOICE_AGENT_HANDOFF]',
       ].filter(Boolean).join('\n')
       : '');
-    const callerContext = [interruptionCallerContext || _consumeVoicePlaybackInterruptContext(targetSessionId), handoffContext, realtimeAgentDispatchContext]
+    const callerContext = [interruptionCallerContext || _consumeVoicePlaybackInterruptContext(targetSessionId), handoffContext, realtimeAgentDispatchContext, realtimeAgentChatHandoffContext]
       .filter(Boolean)
       .join('\n\n');
     const voiceWorkerHandoffStartedAt = Date.now();
@@ -22197,8 +23754,12 @@ void main() {
           if (cmd.expanded) _renderRecent();
         }
         const spokenMilestone = _voiceSpokenMilestone(text);
-        if (!realtimeAgentDispatch && __pmVoice.dictation === 'milestone' && spokenMilestone) {
-          _speakVoiceMilestone(spokenMilestone, { minGapMs: Number(evt?.minGapMs ?? 2500) || 2500 });
+        if (__pmVoice.dictation === 'milestone' && spokenMilestone) {
+          if (realtimeAgentVoiceHandoff) {
+            _speakMobileRealtimeAgentMilestone(spokenMilestone, { minGapMs: Number(evt?.minGapMs ?? 2500) || 2500 });
+          } else {
+            _speakVoiceMilestone(spokenMilestone, { minGapMs: Number(evt?.minGapMs ?? 2500) || 2500 });
+          }
         }
       },
       onThinking: (m, meta) => {
@@ -22224,7 +23785,8 @@ void main() {
         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
         const text = `${label}${args ? `: ${args}` : ''}`;
         _appendMobileProcess(chatAiTurn, 'tool', text, evt);
-        _appendMobileLiveTrace(chatAiTurn, 'tool', text);
+        _appendMobilePrimaryWorkerProcess(chatAiTurn.voicePrimaryLink, 'tool_call', text, evt);
+        _applyMobileToolActivity(chatAiTurn, 'call', evt);
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_call' });
         if (!realtimeAgentDispatch) {
           _speakVoiceLiveStatus(_voiceLiveToolStatus(evt, 'start'), { minGapMs: 650, staleMs: 3200 });
@@ -22248,7 +23810,8 @@ void main() {
         if (newMedia.length) _enqueueVoicePreviews(newMedia, { transient: false });
         const resultText = `${label}${result ? ` → ${result}` : ' complete'}`;
         _appendMobileProcess(chatAiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
-        _appendMobileLiveTrace(chatAiTurn, evt.error ? 'error' : 'result', `${label}${evt.error ? ' failed' : ' complete'}`);
+        _appendMobilePrimaryWorkerProcess(chatAiTurn.voicePrimaryLink, evt.error ? 'error' : 'tool_result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
+        _applyMobileToolActivity(chatAiTurn, 'result', evt);
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_result' });
         cmd.toolStream.push(`${evt.error ? '✗' : '✓'} ${resultText}`);
         if (cmd.expanded) _renderRecent();
@@ -22261,7 +23824,8 @@ void main() {
         chatAiTurn.toolActivityStarted = true;
         const progressText = `${_mobileToolLabel(evt)}: ${String(evt.message || '').trim()}`;
         _appendMobileProcess(chatAiTurn, 'info', progressText, evt);
-        _appendMobileLiveTrace(chatAiTurn, 'tool', progressText);
+        _appendMobilePrimaryWorkerProcess(chatAiTurn.voicePrimaryLink, 'status_push', progressText, evt);
+        _applyMobileToolActivity(chatAiTurn, 'progress', evt);
         _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_progress' });
         if (!realtimeAgentDispatch) {
           _speakVoiceLiveStatus(_voiceLiveToolStatus(evt, 'progress'), { minGapMs: 1200, staleMs: 2600 });
@@ -22294,8 +23858,10 @@ void main() {
           if (eventType === 'tool_call_start' || eventType === 'tool_call_done') {
             _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
             chatAiTurn.toolActivityStarted = true;
-            const name = String(modelEvent.name || 'tool').replace(/_/g, ' ');
-            _appendMobileLiveTrace(chatAiTurn, 'tool', eventType === 'tool_call_start' ? `Preparing ${name}...` : `Prepared ${name}`);
+            _applyMobileToolActivity(chatAiTurn, eventType === 'tool_call_start' ? 'prepare' : 'prepared', {
+              ...modelEvent,
+              action: modelEvent.name,
+            });
             _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_model_tool_event' });
           }
           return;
@@ -22325,10 +23891,10 @@ void main() {
         __pmVoice.pendingInterruptContext = null;
         _ttsStop();
         finalSpoken = true;
-        const spokeWithRealtimeAgent = realtimeAgentDispatch && _requestMobileRealtimeAgentFinalSummary(aiBuf);
-        if (!spokeWithRealtimeAgent && !realtimeAgentDispatch) _ttsSpeak(aiBuf);
+        const spokeWithRealtimeAgent = realtimeAgentVoiceHandoff && _requestMobileRealtimeAgentFinalSummary(aiBuf);
+        if (!spokeWithRealtimeAgent && !realtimeAgentVoiceHandoff) _ttsSpeak(aiBuf);
         _setOrbState('speaking');
-        _setVoiceResponseStatus(aiBuf, realtimeAgentDispatch ? 'Realtime agent is summarizing the result' : 'Speaking response');
+        _setVoiceResponseStatus(aiBuf, realtimeAgentVoiceHandoff ? 'Realtime agent is summarizing the result' : 'Speaking response');
         settleVoiceAfterFinalSpeech();
       },
       onError: (err) => {
@@ -22351,6 +23917,7 @@ void main() {
         _setOrbState(null);
         _setStatus('Error', 'Try again or tap repeat last response');
         window.__pmMobileContextTurnDone?.({ sessionId: targetSessionId });
+        _updateMobilePrimaryWorkgroupLink(chatAiTurn.voicePrimaryLink, 'failed', err.message || 'Chat worker failed');
       },
       onDone: () => {
         stopVoiceAgentNarration();
@@ -22375,14 +23942,15 @@ void main() {
           _ttsStop();                   // stop any milestone narration
           if (aiBuf) {
             finalSpoken = true;
-            const spokeWithRealtimeAgent = realtimeAgentDispatch && _requestMobileRealtimeAgentFinalSummary(aiBuf);
-            if (!spokeWithRealtimeAgent && !realtimeAgentDispatch) _ttsSpeak(aiBuf);
+            const spokeWithRealtimeAgent = realtimeAgentVoiceHandoff && _requestMobileRealtimeAgentFinalSummary(aiBuf);
+            if (!spokeWithRealtimeAgent && !realtimeAgentVoiceHandoff) _ttsSpeak(aiBuf);
           }
           _setOrbState('speaking');
-          _setVoiceResponseStatus(aiBuf, realtimeAgentDispatch ? 'Realtime agent is summarizing the result' : 'Speaking response');
+          _setVoiceResponseStatus(aiBuf, realtimeAgentVoiceHandoff ? 'Realtime agent is summarizing the result' : 'Speaking response');
           settleVoiceAfterFinalSpeech();
         }
         window.__pmMobileContextTurnDone?.({ sessionId: targetSessionId });
+        _updateMobilePrimaryWorkgroupLink(chatAiTurn.voicePrimaryLink, 'complete', aiBuf);
       },
     });
     let voiceStopSent = false;
@@ -23591,7 +25159,7 @@ function _mobileReplayFrameToEvent(frame) {
   return { type: String(frame.type || frame.event || ''), ...(frame.data || {}) };
 }
 
-function _pushMobileStreamProcessEntry(message, type, text, extra = null) {
+function _pushMobileStreamProcessEntry(message, type, text, extra = null, includeLiveTrace = true) {
   const clean = String(text || '').trim();
   if (!message || !clean) return;
   if (!Array.isArray(message.processEntries)) message.processEntries = [];
@@ -23608,8 +25176,8 @@ function _pushMobileStreamProcessEntry(message, type, text, extra = null) {
     message.processEntries.splice(0, message.processEntries.length - 80);
   }
   const traceType = String(type || 'info').toLowerCase();
-  if (traceType !== 'final' && traceType !== 'user') {
-    _appendMobileLiveTrace(message, traceType, clean);
+  if (includeLiveTrace && traceType !== 'final' && traceType !== 'user') {
+    _appendMobileLiveTrace(message, traceType, clean, { extra });
   }
 }
 
@@ -24117,13 +25685,14 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message);
       message.toolActivityStarted = true;
       message._progress = `Running ${action}...`;
-      _pushMobileStreamProcessEntry(message, 'tool', `${stepPrefix}${action}${args ? ` ${args}` : ''}`, evt.actor ? { actor: evt.actor } : null);
+      _pushMobileStreamProcessEntry(message, 'tool', `${stepPrefix}${action}${args ? ` ${args}` : ''}`, evt, false);
+      _applyMobileToolActivity(message, 'call', evt);
       return true;
     }
     case 'tool_result': {
       const action = String(evt.action || evt.name || evt.toolName || 'tool').trim();
       const text = String(evt.result || evt.output || '').trim();
-      const ok = evt.error === true ? false : !/^ERROR:/i.test(text);
+      const ok = evt.ok !== false && evt.success !== false && !evt.error;
       if (action === 'context_compaction') {
         const status = String(evt?.extra?.status || '').toLowerCase() || (ok ? 'compacted' : 'failed');
         _appendMobileCompactionTrace(message, status, evt?.extra?.summary || '', evt.extra || evt);
@@ -24137,7 +25706,8 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message);
       message.toolActivityStarted = true;
       message._progress = ok ? '' : `${action} failed`;
-      _pushMobileStreamProcessEntry(message, ok ? 'result' : 'error', `${action}${text ? ` -> ${text}` : ' complete'}`, evt.actor ? { actor: evt.actor } : null);
+      _pushMobileStreamProcessEntry(message, ok ? 'result' : 'error', `${action}${text ? ` -> ${text}` : ' complete'}`, { ...evt, error: !ok }, false);
+      _applyMobileToolActivity(message, 'result', { ...evt, error: !ok });
       return true;
     }
     case 'vision_injected': {
@@ -24154,7 +25724,8 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       _moveMobileAgentVisibleAnswerIntoWorkflowTrace(message);
       message.toolActivityStarted = true;
       message._progress = `${action}: ${text}`.slice(0, 140);
-      _pushMobileStreamProcessEntry(message, 'info', `${action}: ${text}`, evt.actor ? { actor: evt.actor } : null);
+      _pushMobileStreamProcessEntry(message, 'info', `${action}: ${text}`, { ...evt, event: 'tool_progress' }, false);
+      _applyMobileToolActivity(message, 'progress', evt);
       return true;
     }
     case 'approval_created': {
@@ -24227,11 +25798,134 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
   }
 }
 
+function _mobileMainPlanState(sessionId = __pmChat.activeSessionId) {
+  if (!__pmChat.mainPlanProgress || typeof __pmChat.mainPlanProgress !== 'object') {
+    __pmChat.mainPlanProgress = {};
+  }
+  const agentDc = __pmRealtimeAgent?.conn?.dc;
+  if (agentDc?.readyState === 'open') {
+    try { agentDc.send(JSON.stringify({ type: 'response.cancel' })); } catch {}
+    if (__pmRealtimeAgent?.conn?.provider !== 'xai') {
+      try { agentDc.send(JSON.stringify({ type: 'output_audio_buffer.clear' })); } catch {}
+    }
+  }
+  try { __pmRealtimeAgent?.conn?.playback?.interrupt?.(); } catch {}
+  __pmRealtimeAgent.activeResponse = false;
+  __pmRealtimeAgent.narrationPending = false;
+  const sid = String(sessionId || '');
+  if (!__pmChat.mainPlanProgress[sid]) {
+    __pmChat.mainPlanProgress[sid] = { items: [], activeIndex: -1, total: 0, open: false };
+  }
+  return __pmChat.mainPlanProgress[sid];
+}
+
+function _applyMobileMainPlanProgress(evt = {}, sessionId = __pmChat.activeSessionId) {
+  const state = _mobileMainPlanState(sessionId);
+  const source = String(evt.source || '').trim().toLowerCase();
+  const incoming = Array.isArray(evt.items) ? evt.items : [];
+  // Only an explicit declare_plan owns this UI. Internal preflight and inferred
+  // tool-sequence progress must never create or update the visible plan pill.
+  if (source !== 'declared' || !incoming.length || Number(evt.total || incoming.length) <= 0) {
+    state.items = [];
+    state.activeIndex = -1;
+    state.total = 0;
+    state.open = false;
+    return state;
+  }
+  state.items = incoming.map((item, index) => ({
+    text: String(item?.text || item?.label || `Step ${index + 1}`).trim(),
+    status: _mobileGoalStepStatus(item?.status),
+  }));
+  state.total = Math.max(state.items.length, Number(evt.total || 0) || 0);
+  state.activeIndex = Number.isFinite(Number(evt.activeIndex)) ? Number(evt.activeIndex) : state.items.findIndex((item) => item.status === 'in_progress');
+  return state;
+}
+
+function _syncMobileRuntimePillPair(host) {
+  const page = host?.closest?.('.pm-page');
+  if (!page) return;
+  const planDock = page.querySelector('#pm-main-plan-dock');
+  const bgDock = page.querySelector('#pm-background-spawn-dock');
+  const goalDock = page.querySelector('.pm-mobile-goal-strip:not(.pm-mobile-goal-strip-inline)');
+  const hasGoalPill = !!goalDock && !goalDock.hidden;
+  const paired = !hasGoalPill && !!planDock && !planDock.hidden && !planDock.classList.contains('is-open')
+    && !!bgDock && !bgDock.hidden && bgDock.classList.contains('is-collapsed');
+  page.classList.toggle('pm-runtime-pills-paired', paired);
+  page.classList.toggle('pm-goal-pill-active', hasGoalPill);
+  page.classList.remove('pm-goal-plan-pills-paired');
+}
+
+function _renderMobileMainPlanDock(dock, sessionId = __pmChat.activeSessionId) {
+  const host = dock || document.getElementById('pm-main-plan-dock');
+  if (!host) return;
+  const state = _mobileMainPlanState(sessionId);
+  const items = Array.isArray(state.items) ? state.items : [];
+  host.hidden = !items.length;
+  if (!items.length) {
+    host.innerHTML = '';
+    host.classList.remove('is-open');
+    _syncMobileRuntimePillPair(host);
+    return;
+  }
+  const done = items.filter((item) => ['done', 'skipped'].includes(_mobileGoalStepStatus(item.status))).length;
+  const total = Math.max(items.length, Number(state.total || 0) || items.length);
+  const percent = total ? Math.round((done / total) * 100) : 0;
+  host.classList.toggle('is-open', state.open === true);
+  host.innerHTML = `
+    ${state.open ? `<div class="pm-main-plan-popover" role="region" aria-label="Plan steps">
+      <div class="pm-main-plan-steps">
+        ${items.map((item, index) => {
+          const status = _mobileGoalStepStatus(item.status);
+          return `<div class="pm-main-plan-step ${escapeHtml(status)}">
+            <span>${status === 'done' || status === 'skipped' ? '&#10003;' : String(index + 1)}</span>
+            <p>${escapeHtml(item.text.slice(0, 240))}</p>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+    <button type="button" class="pm-main-plan-pill" data-pm-main-plan-toggle aria-expanded="${state.open === true}">
+      <span class="pm-main-plan-ring" style="--pm-plan-progress:${percent}%" aria-hidden="true"><i></i></span>
+      <strong>${done} of ${total}</strong>
+      <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
+    </button>
+  `;
+  host.querySelector('[data-pm-main-plan-toggle]')?.addEventListener('click', () => {
+    try { pmHaptic(12); } catch {}
+    state.open = !state.open;
+    if (state.open) {
+      const goal = _getMobileGoalForSession(sessionId);
+      if (goal) {
+        __pmChat.goalDetailsOpen[String(sessionId || '')] = false;
+        _renderMobileGoalPill(document.querySelector('.pm-mobile-goal-strip:not(.pm-mobile-goal-strip-inline)'), sessionId);
+      }
+      _setMobileBackgroundSpawnDockOpen(sessionId, false);
+      _renderMobileBackgroundSpawnDock(document.getElementById('pm-background-spawn-dock'), sessionId);
+    }
+    _renderMobileMainPlanDock(host, sessionId);
+    try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
+  });
+  _syncMobileRuntimePillPair(host);
+}
+
 function _mobileBackgroundSpawnLanes() {
   if (!__pmChat.backgroundSpawnLanes || typeof __pmChat.backgroundSpawnLanes !== 'object') {
     __pmChat.backgroundSpawnLanes = {};
   }
   return __pmChat.backgroundSpawnLanes;
+}
+
+function _mobileBackgroundSpawnDockOpen(sessionId = __pmChat.activeSessionId) {
+  if (!__pmChat.backgroundSpawnDockOpen || typeof __pmChat.backgroundSpawnDockOpen !== 'object') {
+    __pmChat.backgroundSpawnDockOpen = {};
+  }
+  return __pmChat.backgroundSpawnDockOpen[String(sessionId || '')] === true;
+}
+
+function _setMobileBackgroundSpawnDockOpen(sessionId, open) {
+  if (!__pmChat.backgroundSpawnDockOpen || typeof __pmChat.backgroundSpawnDockOpen !== 'object') {
+    __pmChat.backgroundSpawnDockOpen = {};
+  }
+  __pmChat.backgroundSpawnDockOpen[String(sessionId || '')] = open === true;
 }
 
 function _mobileBackgroundSpawnClearedIds() {
@@ -24726,9 +26420,40 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
   host.hidden = lanes.length === 0;
   if (!lanes.length) {
     host.innerHTML = '';
+    host.classList.remove('is-open', 'is-collapsed');
+    host.closest?.('.pm-page')?.classList.remove('pm-bg-agents-open');
+    _syncMobileRuntimePillPair(host);
     return;
   }
-  host.innerHTML = lanes.map((lane) => {
+  const dockOpen = _mobileBackgroundSpawnDockOpen(activeSession);
+  host.classList.toggle('is-open', dockOpen);
+  host.classList.toggle('is-collapsed', !dockOpen);
+  host.closest?.('.pm-page')?.classList.toggle('pm-bg-agents-open', dockOpen);
+  if (!dockOpen) {
+    host.innerHTML = `
+      <button type="button" class="pm-background-spawn-pill" data-pm-bg-open aria-label="Open ${lanes.length} background agents">
+        <span class="pm-background-spawn-pill-dot" aria-hidden="true"></span>
+        <strong>${lanes.length} ${lanes.length === 1 ? 'Agent' : 'Agents'}</strong>
+        <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
+      </button>
+    `;
+    host.querySelector('[data-pm-bg-open]')?.addEventListener('click', () => {
+      try { pmHaptic(16); } catch {}
+      const planState = _mobileMainPlanState(activeSession);
+      if (planState.open) {
+        planState.open = false;
+        _renderMobileMainPlanDock(document.getElementById('pm-main-plan-dock'), activeSession);
+      }
+      _setMobileBackgroundSpawnDockOpen(activeSession, true);
+      _renderMobileBackgroundSpawnDock(host, sessionId);
+      try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
+    });
+    _syncMobileRuntimePillPair(host);
+    return;
+  }
+  host.innerHTML = `
+    <button type="button" class="pm-background-spawn-close" data-pm-bg-close aria-label="Collapse background agents">&times;<input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" /></button>
+    ${lanes.map((lane) => {
     const entries = Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [];
     const latest = entries[entries.length - 1];
     const status = String(lane.status || 'running').toLowerCase();
@@ -24756,16 +26481,25 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
           </span>
           <span class="pm-background-spawn-status">${escapeHtml(statusLabel)}</span>
           <span class="pm-background-spawn-chevron">${lane.expanded ? '^' : 'v'}</span>
+          <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
         </button>
         ${!lane.expanded && lane.task ? `<div class="pm-background-spawn-task">${escapeHtml(lane.task)}</div>` : ''}
         <div class="pm-background-spawn-panel">${panelHtml}</div>
       </section>
     `;
-  }).join('');
+    }).join('')}
+  `;
+  host.querySelector('[data-pm-bg-close]')?.addEventListener('click', () => {
+    try { pmHaptic(16); } catch {}
+    _setMobileBackgroundSpawnDockOpen(activeSession, false);
+    _renderMobileBackgroundSpawnDock(host, sessionId);
+    try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
+  });
   host.querySelectorAll('[data-pm-bg-toggle]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const lane = _mobileBackgroundSpawnLanes()[String(btn.getAttribute('data-pm-bg-toggle') || '')];
       if (!lane) return;
+      try { pmHaptic(12); } catch {}
       lane.expanded = !lane.expanded;
       _renderMobileBackgroundSpawnDock(host, sessionId);
       try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
@@ -24784,6 +26518,7 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     if (panel) panel.scrollTop = saved.panelNearBottom ? panel.scrollHeight : saved.panelTop;
     if (processFull) processFull.scrollTop = saved.processNearBottom ? processFull.scrollHeight : saved.processTop;
   });
+  _syncMobileRuntimePillPair(host);
 }
 
 function _clearMobileBackgroundSpawnDockForSession(sessionId = __pmChat.activeSessionId) {
@@ -27127,12 +28862,13 @@ function _pmRenderTaskProgress(items) {
 function _pmRenderTaskJournal(journal) {
   const entries = Array.isArray(journal) ? journal.slice().reverse() : [];
   if (!entries.length) return `<div class="pm-card-body">No process log entries yet.</div>`;
-  return `<div class="pm-task-journal" data-pm-task-journal style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;border:1px solid var(--pm-border);border-radius:8px;max-height:360px;overflow:auto;background:#fff;">${entries.map(entry => {
+  return `<div class="pm-task-journal" data-pm-task-journal>${entries.map(entry => {
     const time = entry?.t ? _formatChatTime(entry.t) : '';
     const type = String(entry?.type || 'event');
     const content = String(entry?.content || entry?.detail || '').trim();
     const color = type === 'error' ? '#d8473a' : type === 'tool_call' ? '#0d4faf' : type === 'tool_result' ? '#2f7d44' : type === 'pause' ? '#7c4d00' : 'var(--pm-muted)';
-    return `<div style="display:grid;grid-template-columns:54px 82px 1fr;gap:6px;padding:7px 8px;border-bottom:1px solid var(--pm-border);">
+    const typeClass = type.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
+    return `<div class="pm-task-journal-row type-${escapeHtml(typeClass)}" style="display:grid;grid-template-columns:54px 82px 1fr;gap:6px;padding:7px 8px;border-bottom:1px solid var(--pm-border);">
       <span style="color:var(--pm-muted);">${escapeHtml(time)}</span>
       <span style="color:${color};font-weight:800;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(type)}</span>
       <span style="white-space:pre-wrap;word-break:break-word;color:var(--pm-text-soft);">${escapeHtml(content)}</span>
@@ -27141,18 +28877,38 @@ function _pmRenderTaskJournal(journal) {
 }
 
 function _pmRenderTaskRecovery(task) {
-  const turns = Array.isArray(task?.recoveryConversation) ? task.recoveryConversation.slice(-12) : [];
+  const rawTurns = Array.isArray(task?.recoveryConversation) ? task.recoveryConversation.slice(-12) : [];
   const pending = task?.pendingClarificationQuestion ? String(task.pendingClarificationQuestion) : '';
-  const pauseMessage = task?.pauseAnalysis?.message || '';
+  const pauseMessage = String(task?.pauseAnalysis?.message || '').trim();
+  const recoveryKey = (value) => String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[#*_`~>-]+/g, '')
+    .trim()
+    .toLowerCase();
+  const pauseKey = recoveryKey(pauseMessage);
+  const seenTurnKeys = new Set();
+  const turns = rawTurns.filter((turn) => {
+    const content = String(turn?.content || '').trim();
+    const key = recoveryKey(content);
+    if (!key || seenTurnKeys.has(key)) return false;
+    seenTurnKeys.add(key);
+    // pauseAnalysis.message is often also appended as Prometheus's latest
+    // recovery-conversation turn. Render it once, in the primary plan card.
+    if (pauseKey && (key === pauseKey || (key.length > 160 && pauseKey.includes(key)) || (pauseKey.length > 160 && key.includes(pauseKey)))) return false;
+    return true;
+  });
   const bits = [];
   if (pending) bits.push(`<div class="pm-card-body"><strong>Pending question:</strong> ${escapeHtml(pending)}</div>`);
-  if (pauseMessage) bits.push(`<div class="pm-card-body"><strong>Recovery plan:</strong><br>${escapeHtml(String(pauseMessage).slice(0, 1200))}</div>`);
+  if (pauseMessage) bits.push(`<div class="pm-card-body pm-task-recovery-copy">
+    <div class="pm-task-recovery-label">Recovery plan</div>
+    <div class="markdown-body pm-task-markdown">${_renderMobileMarkdown(pauseMessage)}</div>
+  </div>`);
   if (turns.length) {
     bits.push(`<div style="display:flex;flex-direction:column;gap:8px;">${turns.map(turn => {
       const isUser = turn?.role === 'user';
-      return `<div style="align-self:${isUser ? 'flex-end' : 'flex-start'};max-width:92%;background:${isUser ? '#efe5ff' : 'var(--pm-surface)'};border:1px solid var(--pm-border);border-radius:8px;padding:8px 10px;">
+      return `<div class="pm-task-recovery-message ${isUser ? 'from-user' : 'from-prometheus'}" style="align-self:${isUser ? 'flex-end' : 'flex-start'};max-width:92%;">
         <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:var(--pm-muted);margin-bottom:4px;">${escapeHtml(isUser ? 'You' : 'Prometheus')}</div>
-        <div style="font-size:12px;line-height:1.5;white-space:pre-wrap;">${escapeHtml(turn?.content || '')}</div>
+        <div class="markdown-body pm-task-markdown pm-task-recovery-turn">${_renderMobileMarkdown(turn?.content || '')}</div>
       </div>`;
     }).join('')}</div>`);
   }
@@ -27161,7 +28917,7 @@ function _pmRenderTaskRecovery(task) {
 
 function _pmRenderTaskEvidence(entries) {
   if (!entries?.length) return `<div class="pm-card-body">No evidence bus entries yet.</div>`;
-  return `<div style="display:flex;flex-direction:column;gap:8px;">${entries.slice().reverse().map(entry => `<div style="border:1px solid var(--pm-border);border-radius:8px;padding:8px 10px;background:#fff;">
+  return `<div class="pm-task-evidence-list">${entries.slice().reverse().map(entry => `<div class="pm-task-evidence-entry">
     <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:4px;">
       <strong style="font-size:12px;">${escapeHtml(entry?.title || entry?.type || 'Evidence')}</strong>
       <span style="font-size:10px;color:var(--pm-muted);">${entry?.t || entry?.timestamp ? escapeHtml(_formatChatTime(entry.t || entry.timestamp)) : ''}</span>
@@ -27256,9 +29012,9 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
                 ${action ? `<button class="pm-btn ghost" data-task-action="${action.action}" data-task-id="${escapeHtml(id)}">${escapeHtml(action.label)}</button>` : ''}
                 ${['failed','complete'].includes(_pmTaskFilter(detail.status)) ? `<button class="pm-btn ghost danger" data-task-action="delete" data-task-id="${escapeHtml(id)}">${ICONS.trash} Remove</button>` : ''}
               </div>
-              ${detail.finalSummary ? `<section><div class="pm-card-head">Final Response</div><div class="pm-card-body" style="white-space:pre-wrap;">${escapeHtml(detail.finalSummary)}</div></section>` : ''}
-              ${['needs_assistance','awaiting_user_input','paused','stalled','failed'].includes(String(detail.status || '').toLowerCase()) ? `<section style="background:#f5eeff;border:1px solid #e0c8ff;border-radius:8px;padding:10px;">
-                <div class="pm-card-head" style="color:#6d2d9e;">Needs You / Recovery</div>
+              ${detail.finalSummary ? `<section><div class="pm-card-head">Final Response</div><div class="pm-card-body pm-task-final-response markdown-body pm-task-markdown">${_renderMobileMarkdown(detail.finalSummary)}</div></section>` : ''}
+              ${['needs_assistance','awaiting_user_input','paused','stalled','failed'].includes(String(detail.status || '').toLowerCase()) ? `<section class="pm-task-recovery-panel">
+                <div class="pm-card-head pm-task-recovery-head">Needs You / Recovery</div>
                 ${_pmRenderTaskRecovery(detail)}
                 <div style="display:flex;gap:8px;margin-top:10px;">
                   <textarea class="pm-textarea" data-task-reply="${escapeHtml(id)}" rows="2" placeholder="Reply to this task..." style="min-height:58px;"></textarea>
@@ -28319,7 +30075,7 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
   }
 
   const pill = SUBAGENT_STATUS_PILL[agent.status] || SUBAGENT_STATUS_PILL.idle;
-  const tabs = ['Overview', 'Chat', 'System Prompt', 'Runs', 'Heartbeat'];
+  const tabs = ['Overview', 'Chat', 'AGENT.md', 'Runs', 'Heartbeat'];
   const modelPickerScope = `pm-sa-model-${agent.id}`;
   const voicePickerScope = `pm-sa-voice-${agent.id}`;
   const displayModel = String(agent.effectiveModel || agent.model || '').trim();
@@ -28421,7 +30177,7 @@ export async function renderSubagentDetailPage(page, { agentId, navigate, initia
     tabSlot.innerHTML = `<div class="pm-card" style="text-align:center;padding:24px;color:var(--pm-muted);">Loading ${escapeHtml(tabName)}…</div>`;
     try {
       if (tabName === 'Chat')              await _renderSubagentChatTab(tabSlot, agent, (s) => { currentStream = s; });
-      else if (tabName === 'System Prompt') await _renderSubagentSystemPromptTab(tabSlot, agentId);
+      else if (tabName === 'AGENT.md') await _renderSubagentSystemPromptTab(tabSlot, agentId);
       else if (tabName === 'Runs')          await _renderSubagentRunsTab(tabSlot, agentId);
       else if (tabName === 'Heartbeat')     await _renderSubagentHeartbeatTab(tabSlot, agentId);
     } catch (err) {
@@ -28520,13 +30276,13 @@ function openDispatchSheet(agentId, anchorBtn) {
 async function _renderSubagentSystemPromptTab(slot, agentId) {
   const md = await loadSubagentSystemPrompt(agentId);
   if (!md) {
-    slot.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.doc}</div><h2>No system prompt set</h2><p>Edit this agent from the desktop Settings → Agents page.</p></div>`;
+    slot.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.doc}</div><h2>No AGENT.md set</h2><p>Edit this agent from the desktop Settings → Agents page.</p></div>`;
     return;
   }
   slot.innerHTML = `
     <div class="pm-card" style="padding:0;overflow:hidden;">
       <div class="pm-card-head" style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--pm-border);">
-        <span>${ICONS.doc} System Prompt</span>
+        <span>${ICONS.doc} AGENT.md</span>
         <button class="pm-btn ghost" id="pm-sp-copy" style="padding:4px 10px;font-size:12px;">${ICONS.check} Copy</button>
       </div>
       <pre class="pm-subagent-md">${escapeHtml(md)}</pre>

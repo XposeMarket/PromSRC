@@ -21,6 +21,7 @@ import { spawnAgent } from '../../agents/spawner';
 import { getAgentById, getConfig } from '../../config/config';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { Reactor } from '../../agents/reactor';
+import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 
 export const internalAgentTaskRouter = express.Router();
 
@@ -83,22 +84,6 @@ function loadDef(agentId: string): SubagentDef | null {
     if (!fs.existsSync(p)) return null;
     return JSON.parse(fs.readFileSync(p, 'utf-8'));
   } catch { return null; }
-}
-
-/** Read memory files from <agentDir>/memory/ and return them as a combined block. */
-function readMemoryBlock(agentId: string): string {
-  const memDir = path.join(resolveSubagentDir(agentId), 'memory');
-  if (!fs.existsSync(memDir)) return '';
-  const files = ['topics.md', 'history.md'];
-  const blocks: string[] = [];
-  for (const fname of files) {
-    const fp = path.join(memDir, fname);
-    if (fs.existsSync(fp)) {
-      const content = fs.readFileSync(fp, 'utf-8').trim();
-      if (content) blocks.push(`### ${fname}\n${content}`);
-    }
-  }
-  return blocks.length ? `\n\n--- Subagent Memory ---\n${blocks.join('\n\n')}\n--- End Memory ---` : '';
 }
 
 /**
@@ -214,11 +199,8 @@ async function runAgent(
     };
   }
 
-  const memory = readMemoryBlock(agentId);
-  const systemPromptPath = path.join(resolveSubagentDir(agentId), 'system_prompt.md');
-  const systemPrompt = fs.existsSync(systemPromptPath)
-    ? fs.readFileSync(systemPromptPath, 'utf-8')
-    : def.system_instructions;
+  const systemPrompt = readAgentPromptFile(resolveSubagentDir(agentId), { migrateLegacy: true })?.content
+    || def.system_instructions;
 
   const outputField = def.output_field || 'result';
 
@@ -226,7 +208,6 @@ async function runAgent(
     `[SUBAGENT: ${def.name}]`,
     '',
     systemPrompt,
-    memory,
     '',
     '--- TASK ---',
     task,

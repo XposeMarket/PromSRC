@@ -1,22 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating or extracting an exact brand kit from a provided logo or reference, including color palette, typography direction, logo-safe usage, assets, and brand-kit documentation.",
+  "description": "Create brand-kit boards and mockups that preserve an exact supplied logo asset without AI redrawing or altering it. Use when logo fidelity is mandatory and generated layouts must reserve space for deterministic compositing; do not use for inventing a new logo.",
   "triggers": [
-    "brand kit from logo",
-    "exact logo colors",
     "extract palette from logo",
     "use this logo exactly",
-    "logo brand kit",
-    "create brand guidelines",
     "brand assets from logo",
-    "match this logo",
-    "color palette from image",
     "typography for brand kit",
-    "logo usage rules",
-    "make a brand kit",
     "visual identity from logo",
-    "exact brand workflow"
+    "brand kit from logo",
+    "make a brand kit",
+    "color palette from image",
+    "create brand guidelines",
+    "exact logo colors",
+    "logo usage rules",
+    "match this logo"
   ],
   "categories": [
     "brand",
@@ -29,6 +27,7 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "Exact Logo Brand Kit Workflow",
-  "id": "exact-logo-brand-kit-workflow"
+  "name": "exact-logo-brand-kit-workflow",
+  "id": "exact-logo-brand-kit-workflow",
+  "implicitInvocation": true
 }

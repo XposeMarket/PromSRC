@@ -8,8 +8,11 @@
 
 import fs from 'fs';
 import path from 'path';
-import { addMessage, getHistoryForApiCall, getRecentToolObservationsForContext, type ChatMessage } from './session';
+import { addMessage, getHistoryForApiCall, getMainChatGoal, getRecentToolObservationsForContext, type ChatMessage } from './session';
 import { readRestartContext, clearRestartContext, queueStartupNotification, type RestartContext } from './lifecycle';
+import { markDevSourceEditContinuationComplete, type DevSourceEditContinuation } from './dev-source-approvals';
+import { markCoordinatedDevApplyBatch } from './dev-edit-coordinator';
+import { finalizeMainChatGoalRestartRecovery } from './main-chat-goals';
 import {
   listHotRestartMainChatRecoveries,
   type HotRestartMainChatRecovery,
@@ -36,6 +39,7 @@ type BootResult =
       source: 'boot_startup' | 'hot_restart';
       automatedSession?: BootAutomatedSession | null;
       notificationId?: string;
+      resumableGoalSessionIds?: string[];
     }
   | { status: 'failed'; reason: string };
 
@@ -54,6 +58,7 @@ type BootRunState = {
 type HotRestartTarget = {
   sessionId: string;
   recoverySummary: string;
+  devEdit?: DevSourceEditContinuation;
   telegram: {
     enabled: boolean;
     chatId?: number;
@@ -192,8 +197,13 @@ function isPlainManualGatewayRestartRequest(value: string): boolean {
     || /^(please )?(quickly )?(just )?(gateway|server|prometheus gateway|prometheus server|prometheus) (restart|reboot)$/.test(normalized);
 }
 
-function buildHotRestartPrompt(lastUserRequest: string, lastAssistantResponse: string, ctx?: RestartContext): string {
-  const devEdit = ctx?.devEditContinuation;
+function buildHotRestartPrompt(
+  lastUserRequest: string,
+  lastAssistantResponse: string,
+  ctx?: RestartContext,
+  targetDevEdit?: DevSourceEditContinuation,
+): string {
+  const devEdit = targetDevEdit;
   if (devEdit) {
     const tag = devEdit.completionNoteTag || 'dev_edit_complete';
     return [
@@ -248,12 +258,12 @@ function buildHotRestartPrompt(lastUserRequest: string, lastAssistantResponse: s
   ].filter(Boolean).join('\n').trim();
 }
 
-function buildHotRestartCallerContext(ctx: RestartContext, recentConversation: string, lastUserRequest: string, lastAssistantResponse: string, recentToolLog: string, recoverySummary: string): string {
+function buildHotRestartCallerContext(ctx: RestartContext, recentConversation: string, lastUserRequest: string, lastAssistantResponse: string, recentToolLog: string, recoverySummary: string, targetDevEdit?: DevSourceEditContinuation): string {
   const didBuild = ctx.buildOutput !== undefined;
   const affectedFiles = Array.isArray(ctx.affectedFiles) && ctx.affectedFiles.length > 0
     ? ctx.affectedFiles.slice(0, 10).join('\n')
     : '(none recorded)';
-  const devEdit = ctx.devEditContinuation;
+  const devEdit = targetDevEdit;
   const devEditLines = devEdit ? [
     '',
     '[DEV EDIT CONTINUATION]',
@@ -416,11 +426,37 @@ function buildHotRestartTargets(restartCtx: RestartContext): HotRestartTarget[] 
   }
 
   const targets = new Map<string, HotRestartTarget>();
+  const batchMembers = Array.isArray(restartCtx.devApplyBatch?.members) ? restartCtx.devApplyBatch.members : [];
+  const batchMemberBySession = new Map(batchMembers.map((member) => [String(member.sessionId || '').trim(), member]));
+  // A durable task owns its restart lifecycle. Startup recovery relaunches the
+  // task and its normal delivery path reports the result; a separate boot chat
+  // message would leak internal task-session state and race the task status.
+  if (
+    restartCtx.taskId
+    && restartCtx.suppressStandaloneRestartMessage
+    && restartCtx.taskInitiatedTool === 'gateway_restart'
+  ) {
+    return [];
+  }
   for (const recovery of recoveries) {
     targets.set(recovery.sessionId, {
       sessionId: recovery.sessionId,
       recoverySummary: buildTargetRecoverySummary(recovery.sessionId, recovery, recoveries),
       telegram: telegramTargetForRestartSession(restartCtx, recovery.sessionId, recovery),
+      devEdit: batchMemberBySession.get(recovery.sessionId)
+        || (restartCtx.devEditContinuation?.sessionId === recovery.sessionId ? restartCtx.devEditContinuation : undefined),
+    });
+  }
+
+  for (const member of batchMembers) {
+    const memberSessionId = String(member.sessionId || '').trim();
+    if (!memberSessionId || targets.has(memberSessionId)) continue;
+    const recovery = bySession.get(memberSessionId);
+    targets.set(memberSessionId, {
+      sessionId: memberSessionId,
+      recoverySummary: buildTargetRecoverySummary(memberSessionId, recovery, recoveries),
+      telegram: telegramTargetForRestartSession(restartCtx, memberSessionId, recovery),
+      devEdit: member,
     });
   }
 
@@ -431,6 +467,8 @@ function buildHotRestartTargets(restartCtx: RestartContext): HotRestartTarget[] 
       sessionId: previousSessionId,
       recoverySummary: buildTargetRecoverySummary(previousSessionId, previousRecovery, recoveries),
       telegram: telegramTargetForRestartSession(restartCtx, previousSessionId, previousRecovery),
+      devEdit: batchMemberBySession.get(previousSessionId)
+        || (restartCtx.devEditContinuation?.sessionId === previousSessionId ? restartCtx.devEditContinuation : undefined),
     });
   }
 
@@ -445,6 +483,9 @@ export async function runBootMd(
   if (restartCtx) {
     console.log(`[boot-md] Hot restart detected: ${restartCtx.reason} (${restartCtx.title || 'no title'})`);
     clearRestartContext();
+    if (restartCtx.devApplyBatch?.id) {
+      try { markCoordinatedDevApplyBatch(restartCtx.devApplyBatch.id, 'applied'); } catch {}
+    }
 
     const sessionMeta = buildAutoSessionMeta('restart', restartCtx);
     const targets = buildHotRestartTargets(restartCtx);
@@ -458,18 +499,46 @@ export async function runBootMd(
         lastAssistantResponse,
         recentToolLog,
         target.recoverySummary,
+        target.devEdit,
       );
       let finalText = '';
+      const targetGoal = getMainChatGoal(target.sessionId);
+      const targetRestartCheckpoint = targetGoal?.restartCheckpoint;
+      const goalOwnedRestart = !!targetGoal
+        && ['restarting', 'paused'].includes(String(targetGoal.status || ''))
+        && !!targetRestartCheckpoint
+        && /restart|prom_apply_dev_changes/i.test(`${targetGoal.pausedReason || ''} ${targetRestartCheckpoint.reason || ''}`);
       const plainManualGatewayRestart = isPlainManualGatewayRestartRequest(lastUserRequest)
-        && !restartCtx.devEditContinuation
+        && !target.devEdit
         && (!Array.isArray(restartCtx.affectedFiles) || restartCtx.affectedFiles.length === 0);
 
-      if (plainManualGatewayRestart) {
+      if (goalOwnedRestart) {
+        const devEdit = target.devEdit;
+        if (devEdit) {
+          markDevSourceEditContinuationComplete({
+            id: devEdit.id,
+            sessionId: target.sessionId,
+            tag: devEdit.completionNoteTag || 'dev_edit_complete',
+            note: `Gateway restart completed successfully. ${restartCtx.summary || devEdit.summary || 'Approved dev changes are live.'}`,
+          });
+        }
+        finalizeMainChatGoalRestartRecovery(target.sessionId, {
+          reason: String(restartCtx.reason || targetRestartCheckpoint?.reason || 'gateway_restart'),
+          devEditId: devEdit?.id || targetRestartCheckpoint?.devEditId,
+          affectedFiles: restartCtx.affectedFiles || devEdit?.affectedFiles || devEdit?.allowedFiles,
+          changedSurfaces: devEdit?.changedSurfaces,
+          verificationSummary: devEdit?.lastVerification?.summary,
+        });
+        finalText = devEdit
+          ? 'Dev changes are live and the gateway is healthy. Resuming the same goal iteration for post-restart verification.'
+          : 'Gateway restart completed successfully. Resuming the same goal iteration from its persisted checkpoint.';
+      } else if (plainManualGatewayRestart) {
         finalText = 'Restarted. Prometheus is back online.';
       } else {
         try {
           const result = await handleChat(
-            buildHotRestartPrompt(lastUserRequest, lastAssistantResponse, restartCtx),
+            // Each interrupted thread receives only its own dev-edit member.
+            buildHotRestartPrompt(lastUserRequest, lastAssistantResponse, restartCtx, target.devEdit),
             internalSessionId,
             (evt, data) => {
               if (evt === 'tool_call') {
@@ -492,6 +561,8 @@ export async function runBootMd(
       try {
         addMessage(target.sessionId, {
           role: 'assistant',
+          messageKind: goalOwnedRestart ? 'restart_status' : undefined,
+          goalId: goalOwnedRestart ? targetGoal?.id : undefined,
           content: finalText,
           timestamp: Date.now(),
           toolLog: hotRestartContextPacket,
@@ -503,7 +574,7 @@ export async function runBootMd(
             extra: {
               packetType: 'hot_restart_context',
               restartReason: restartCtx.reason,
-              devEditId: restartCtx.devEditContinuation?.id,
+              devEditId: target.devEdit?.id,
             },
           }],
         });
@@ -526,6 +597,7 @@ export async function runBootMd(
         finalText,
         targetSessionId: target.sessionId,
         notificationId: notification.id,
+        goalOwnedRestart,
       };
     }));
 
@@ -543,6 +615,9 @@ export async function runBootMd(
       source: sessionMeta.source,
       automatedSession: null,
       notificationId: primary.notificationId,
+      resumableGoalSessionIds: results
+        .filter((result) => result.goalOwnedRestart)
+        .map((result) => result.targetSessionId),
     };
   }
 

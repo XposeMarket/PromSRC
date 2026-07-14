@@ -16,6 +16,7 @@ import { addMessage, clearHistory } from '../session';
 import { broadcastTeamEvent, broadcastWS } from '../comms/broadcaster';
 import { appendTeamChat, getManagedTeam } from '../teams/managed-teams';
 import { BackgroundTaskRunner } from './background-task-runner';
+import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { type TaskControlResponse } from '../tool-builder';
 import {
   buildTaskPauseSnapshot,
@@ -568,6 +569,61 @@ export function launchBackgroundTaskRunner(taskId: string): void {
   runner.start().catch(err => console.error(`[BackgroundTaskRunner] task_control start ${taskId} error:`, err.message));
 }
 
+export function completePlainGatewayRestartTask(taskId: string): boolean {
+  const task = loadTask(taskId);
+  if (!task || task.status === 'complete' || task.status === 'failed') return false;
+  const { makeBroadcastForTask } = getDeps();
+  const broadcast = makeBroadcastForTask(task.id);
+  const finalSummary = 'Gateway restarted successfully using the quick restart path. No npm build was run.';
+  task.status = 'complete';
+  task.pauseReason = undefined;
+  task.pausedAt = undefined;
+  task.pausedAtStepIndex = undefined;
+  task.completedAt = Date.now();
+  task.lastProgressAt = Date.now();
+  task.finalSummary = finalSummary;
+  task.verificationStatus = task.taskKind === 'run_once' ? 'complete' : task.verificationStatus;
+  task.plan = (Array.isArray(task.plan) ? task.plan : []).map((step) => ({ ...step, status: 'done', completedAt: step.completedAt || Date.now() }));
+  task.currentStepIndex = task.plan.length;
+  saveTask(task);
+  appendJournal(task.id, { type: 'status_push', content: 'Quick gateway restart succeeded; task completed at the persisted restart boundary.' });
+  if (task.voiceDispatch?.workgroupId) {
+    updateVoiceWorkgroupWorkerStatus(task.voiceDispatch.workgroupId, task.id, 'complete', {
+      completedSteps: task.plan.map((step) => step.description).filter(Boolean),
+      finalResult: finalSummary,
+      updatedAt: Date.now(),
+    });
+  }
+  if (task.originatingSessionId && task.suppressOriginDelivery !== true) {
+    addMessage(task.originatingSessionId, { role: 'assistant', content: finalSummary, timestamp: Date.now() } as any, {
+      disableMemoryFlushCheck: true,
+      disableCompactionCheck: true,
+    } as any);
+  }
+  broadcast({ type: 'task_complete', taskId: task.id, summary: finalSummary });
+  broadcast({ type: 'task_notification', taskId: task.id, sessionId: task.originatingSessionId || task.sessionId, channel: task.channel, message: finalSummary });
+  if (task.voiceDispatch?.workgroupId && task.originatingSessionId) {
+    broadcast({
+      type: 'voice_worker_update',
+      id: `voice_worker_${task.id}_restart_complete_${Date.now()}`,
+      sessionId: task.originatingSessionId,
+      workgroupId: task.voiceDispatch.workgroupId,
+      taskId: task.id,
+      title: task.title,
+      kind: 'complete',
+      critical: true,
+      status: 'complete',
+      text: `${task.title} completed. ${finalSummary}`,
+      currentStep: '',
+      completedSteps: task.plan.map((step) => step.description).filter(Boolean),
+      recentActivity: task.journal.slice(-6).map((entry) => ({ at: entry.t, type: entry.type, detail: entry.content })),
+      finalResult: finalSummary,
+      timestamp: Date.now(),
+    });
+  }
+  return true;
+}
+
 export async function handleTaskControlAction(sessionId: string, args: any): Promise<TaskControlResponse> {
   const action = String(args?.action || '').trim().toLowerCase();
   const taskId = String(args?.task_id || args?.id || '').trim();
@@ -602,7 +658,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     // Also include scheduled (cron) jobs so the agent can answer questions like
     // "what scheduled tasks do we have" without needing a separate schedule_job(list) call
     const { cronScheduler: _cs } = getDeps();
-    const scheduledJobs = _cs.getJobs().map((j: any) => ({
+    const scheduledJobs = args?.include_scheduled === true ? _cs.getJobs().slice(0, limit).map((j: any) => ({
       id: j.id,
       kind: 'scheduled_job',
       name: j.name,
@@ -615,7 +671,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       nextRun: j.nextRun || null,
       lastRun: j.lastRun || null,
       lastResult: j.lastResult ? String(j.lastResult).slice(0, 120) : null,
-    }));
+    })) : [];
 
     const totalMsg = [
       summarized.length > 0 ? `${summarized.length} background task(s)` : null,

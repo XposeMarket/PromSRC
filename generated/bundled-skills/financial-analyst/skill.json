@@ -1,25 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when analyzing financial statements, business performance, unit economics, revenue/cost trends, margins, valuations, investment metrics, or company financial health.",
+  "description": "Analyze financial statements, operating performance, cash flow, unit economics, margins, variance, runway, and business KPIs. Use only when the user explicitly requests financial analysis; use financial-model for constructing a forecast model and day-trading skills for market-trading workflows.",
   "triggers": [
+    "company financial health",
+    "business performance numbers",
+    "investment analysis",
     "analyze financials",
     "financial analysis",
-    "income statement",
-    "balance sheet",
-    "cash flow",
-    "profit margin",
-    "revenue trend",
-    "unit economics",
     "valuation metrics",
-    "company financial health",
-    "financial KPI",
+    "income statement",
     "expense analysis",
-    "gross margin",
-    "EBITDA",
-    "break-even",
-    "investment analysis",
-    "business performance numbers"
+    "unit economics",
+    "balance sheet",
+    "profit margin",
+    "revenue trend"
   ],
   "categories": [
     "finance",
@@ -32,6 +27,7 @@
     "show_ui_card"
   ],
   "lifecycle": "active",
-  "name": "Financial Analyst",
-  "id": "financial-analyst"
+  "name": "financial-analyst",
+  "id": "financial-analyst",
+  "implicitInvocation": false
 }

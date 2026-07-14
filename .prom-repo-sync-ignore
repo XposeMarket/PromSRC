@@ -16,9 +16,20 @@ workspace/downloads/
 workspace/uploads/
 workspace/video-debug/
 workspace/logs/
+workspace/temp/
 workspace/tmp/
 workspace/generated/
 workspace/creative-projects/
+workspace/videos/
+workspace/workspace/
+workspace/scratch/
+workspace/tool-bench-lab/
+workspace/automation-bench-cleanup-*/
+workspace/automation-retest-*/
+workspace/games/**/build*/
+videos/
+captures/
+**/node_modules/
 native/desktop-helper-macos/.build/
 
 .prometheus/

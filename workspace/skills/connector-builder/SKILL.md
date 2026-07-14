@@ -1,3 +1,8 @@
+---
+name: "connector-builder"
+description: "Use this skill when building, editing, or designing a Prometheus connector/plugin for an external app or service, including tool contracts, auth, polling, webhooks, data mapping, tests, and integration UX."
+---
+
 # Connector & Plugin Builder
 
 Build a new connector, MCP server, or tool plugin for Prometheus **on demand**, when
@@ -17,8 +22,9 @@ build because user plugins live in `<DATA_DIR>/plugins/`, never in `src/`.
 | Service has a plain REST/HTTP API + a key/token | **REST connector** | manifest + `index.js` |
 | User pasted a plugin URL/repo | **Install from URL** | fetch, validate, install |
 
-Always prefer an MCP preset when an official MCP server exists — it's zero code and
-maintained upstream. Fall back to a REST connector otherwise.
+Always prefer an MCP preset when an official MCP server exists. The preset must
+contribute to the universal `connection_ops` lifecycle; registration alone is not setup.
+Fall back to a REST connector otherwise.
 
 ## Workflow (REST connector)
 
@@ -58,8 +64,9 @@ GET  /api/extensions/user            # list installed user plugins
 GET  /api/extensions/catalog?kind=connector   # full catalog (incl. built-ins)
 ```
 
-For an **MCP preset**, install the same way but the manifest has `kind: "mcp_preset"`
-and an `mcpPreset` block, with **no `indexJs`**. See `references/mcp-preset.md`.
+For an **MCP preset**, install the same way but the manifest has `kind: "mcp_preset"`,
+an `mcpPreset` block, and a `connection` contribution, with **no `indexJs`**. See
+`references/mcp-preset.md`.
 
 ## Rules
 
@@ -68,8 +75,8 @@ and an `mcpPreset` block, with **no `indexJs`**. See `references/mcp-preset.md`.
 - One connector = one folder = one id. Keep tool names prefixed with the id
   (`airtable_list_bases`) so they're easy to attribute.
 - Keep each tool's `description` one line, starting with `[ServiceName]`.
-- After install, **always** verify with `connector_list` before telling the user
-  it's ready. Don't claim success from the install response alone.
+- After install, use `connection_ops` to plan/connect/verify and run a safe real
+  tool. Neither install nor OAuth completion proves readiness.
 - If the user just wants to remove something they added, use the remove endpoint —
   built-in connectors cannot be removed and will error, which is expected.
 

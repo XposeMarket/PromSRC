@@ -23,6 +23,8 @@ import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry
 import { _activeAgentSessions, type RunAgentResult } from './team-dispatch-runtime';
 import { runWithWorkspace } from '../../tools/workspace-context';
 import { setActivatedToolCategories } from '../session';
+import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
+import { setRuntimeActorContext } from '../runtime-actor.js';
 
 type HandleChatFn = (
   message: string,
@@ -495,10 +497,7 @@ function readTeamMemberRoleBlock(teamId: string, agentId: string, agentName: str
   try {
     const globalWorkspace = String(agent?.workspace || ensureAgentWorkspace(agent) || '').trim();
     const identityWorkspace = ensureTeamAgentIdentity(teamId, agentId, globalWorkspace || undefined);
-    const promptFile = [path.join(identityWorkspace, 'system_prompt.md'), path.join(identityWorkspace, 'HEARTBEAT.md')]
-      .find((filePath) => fs.existsSync(filePath));
-    if (!promptFile) return '';
-    const raw = String(fs.readFileSync(promptFile, 'utf-8') || '').trim();
+    const raw = String(readAgentPromptFile(identityWorkspace, { migrateLegacy: true })?.content || '').trim();
     if (!raw) return '';
     return `[YOUR ROLE ON THIS TEAM — ${agentName}]\n${raw}`;
   } catch {
@@ -744,6 +743,13 @@ export async function runTeamMemberRoomTurn(
   } catch { /* best effort */ }
 
   const callerContext = buildTeamMemberCallerContext(teamId, agentId, prompt);
+  const identityRoot = ensureTeamAgentIdentity(teamId, agentId, agent ? ensureAgentWorkspace(agent) : undefined);
+  setRuntimeActorContext(sessionId, {
+    kind: 'agent', surface: 'team_room', agentId, displayName: agentName,
+    teamId, teamName: team.name, identityRoot, memoryRoot: identityRoot,
+    executionRoot: getTeamWorkspacePath(teamId),
+    allowedWorkPaths: resolveTeamMemberAllowedWorkPaths(agentId, teamId),
+  });
   const tracker = createTeamMemberTurnTracker(teamId, agentId);
   const toolFilter = buildTeamMemberToolFilter(deps, 'room');
   const agentRouting = resolveTeamMemberModelRouting(agentId);
@@ -979,6 +985,13 @@ export async function runTeamMemberDirectTurn(
 
   const prompt = buildDirectWakePrompt(pendingMessages);
   const callerContext = buildTeamMemberDirectCallerContext(teamId, agentId, threadId);
+  const identityRoot = ensureTeamAgentIdentity(teamId, agentId, agent ? ensureAgentWorkspace(agent) : undefined);
+  setRuntimeActorContext(thread.sessionId, {
+    kind: 'agent', surface: 'direct_chat', agentId, displayName: agentName,
+    teamId, teamName: team.name, identityRoot, memoryRoot: identityRoot,
+    executionRoot: getTeamWorkspacePath(teamId),
+    allowedWorkPaths: resolveTeamMemberAllowedWorkPaths(agentId, teamId),
+  });
   const tracker = createTeamMemberTurnTracker(teamId, agentId);
   const toolFilter = buildTeamMemberToolFilter(deps, 'direct');
   const agentRouting = resolveTeamMemberModelRouting(agentId);

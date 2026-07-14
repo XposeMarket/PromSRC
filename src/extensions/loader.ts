@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { getConfig } from '../config/config.js';
+import os from 'os';
 import { parseExtensionDescriptor } from './schema.js';
 import type { LoadedExtensionDescriptor } from './types.js';
 
@@ -30,7 +30,13 @@ function walkForDescriptorFiles(rootDir: string): string[] {
 }
 
 export function resolveUserPluginsDir(): string {
-  return path.join(getConfig().getConfigDir(), 'user-plugins');
+  // Keep extension discovery independent from ConfigManager initialization;
+  // config itself consults provider extension manifests during startup.
+  const projectConfig = path.join(__dirname, '..', '..', '.prometheus');
+  const configDir = process.env.PROMETHEUS_DATA_DIR
+    ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus')
+    : fs.existsSync(projectConfig) ? projectConfig : path.join(os.homedir(), '.prometheus');
+  return path.join(configDir, 'user-plugins');
 }
 
 export function loadUserExtensionDescriptors(): LoadedExtensionDescriptor[] {

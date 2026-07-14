@@ -1,43 +1,40 @@
+---
+name: "local-media-utilities"
+description: "Inspect and transform local audio, video, and image files with Prometheus-bundled FFmpeg and FFprobe. Use for metadata inspection, audio extraction, frame capture, trimming, transcoding, resizing, compression, thumbnails, contact sheets, or other safe local media operations."
+---
+
 # Local Media Utilities
 
-Use this skill when Prometheus needs local audio/video/image utility work through tools like ffmpeg, ffprobe, transcription binaries, waveform extraction, frame capture, or compression.
+Use Prometheus’s runtime dependency resolver or the installed npm binary packages; do not assume `ffmpeg` or `ffprobe` is globally available on `PATH`.
 
-## Prometheus Fit
+## Binary resolution
 
-Media utilities are CLI-heavy, so route them through `cli-adapter-framework`. The user should see installed/missing status, output artifact paths, and progress instead of raw command text.
+Within Prometheus source, use `resolveRuntimeBinary('ffmpeg', { allowPathFallback: true })` and the corresponding `ffprobe` call. In a standalone Node diagnostic, use:
 
-## Tool Scope
+```js
+const ffmpeg = require('@ffmpeg-installer/ffmpeg').path;
+const ffprobe = require('@ffprobe-installer/ffprobe').path;
+```
 
-Start with:
+Do not tell the user to install system binaries when the bundled executables resolve successfully.
 
-- `media_status`
-- `media_probe`
-- `media_extract_audio`
-- `media_extract_frames`
-- `media_transcode`
-- `media_compress`
-- `media_trim`
-- `media_transcribe`
-- `media_make_contact_sheet`
+## Workflow
 
-## Rules
+1. Resolve and verify both binaries.
+2. Validate the source path and keep the source read-only.
+3. Probe with FFprobe JSON before transforming media.
+4. Write to a distinct output path inside the requested workspace or artifact directory.
+5. Run FFmpeg without shell-built interpolation when possible; pass an argument array through the process executor.
+6. Verify exit code, output existence, nonzero size, and output metadata.
+7. Report the actual output path and any codec/container limitations.
 
-- Never assume ffmpeg or transcription binaries are installed. Check first.
-- Keep source media read-only; write outputs to an artifact directory.
-- Validate input paths and output extensions before running a command.
-- Use progress-capable execution for long media jobs.
-- Prefer `ffprobe` JSON output for inspection.
-- Do not overwrite outputs unless the user confirms.
-- Preserve metadata where requested; strip metadata only when requested.
+## Guardrails
 
-## Implementation Route
+- Never overwrite input media unless the user explicitly requests it.
+- Resolve and verify recursive or cleanup targets before removing temporary files.
+- Use progress-capable execution and cancellation for long jobs.
+- Preserve metadata when requested; strip it only when requested.
+- Treat transcription as a separate capability requiring its own model/binary check.
+- Prefer native Creative Mode media tools when the operation is part of an active creative project.
 
-1. Build a typed CLI adapter with status/setup/run.
-2. Add `ffprobe` support before transformation tools.
-3. Add output naming that avoids collisions.
-4. Add cancellation support through Prometheus jobs/process control.
-5. Add smoke tests using a tiny fixture media file.
-
-## Acceptance Check
-
-Prometheus can inspect and transform local media while every generated output is visible as a workspace artifact.
+The bundled Windows binaries have been verified for source generation, FFprobe JSON, audio extraction, frame capture, trimming, scaling, and H.264/AAC transcoding.

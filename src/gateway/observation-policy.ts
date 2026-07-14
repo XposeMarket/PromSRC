@@ -22,7 +22,7 @@ export interface DesktopObservationPacketState {
   activeWindowHandle?: number;
   activeMonitorIndex?: number | null;
   contentHash?: string;
-  captureMode?: 'all' | 'primary' | 'monitor';
+  captureMode?: 'all' | 'primary' | 'monitor' | 'window';
   captureMonitorIndex?: number;
 }
 

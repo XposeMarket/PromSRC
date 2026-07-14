@@ -1,0 +1,11 @@
+PROMETHEUS VITA INSTALL
+
+1. In VitaShell USB mode, copy prometheus_vita.vpk to ux0:downloads/ and install it.
+2. For USB screen viewing, copy udcd_uvc.skprx to ur0:tai/udcd_uvc.skprx.
+3. Back up ur0:tai/config.txt, then add under the existing *KERNEL section:
+   ur0:tai/udcd_uvc.skprx
+4. Reboot. Hold L during boot to skip plugins if recovery is ever needed.
+5. Connect USB. Windows should expose the Vita as a UVC camera. Configure FFmpeg/OBS or pc-bridge VITA_VIDEO_DEVICE.
+6. Launch Prometheus. Press TRIANGLE and enter the PC LAN gateway URL plus a paired-device token. Press X to chat.
+
+Do not add a second *KERNEL header if one already exists.

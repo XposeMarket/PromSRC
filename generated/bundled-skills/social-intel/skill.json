@@ -1,23 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when researching social platforms, audiences, creators, accounts, content opportunities, competitor social strategy, profile positioning, engagement patterns, or social growth insights.",
+  "description": "Full playbook for running social analysis and delivering actionable growth coaching.",
   "triggers": [
-    "social intelligence",
-    "audience research",
-    "creator analysis",
+    "what should i post",
     "analyze this profile",
     "social profile strategy",
-    "content opportunity",
     "competitor social analysis",
     "social growth insights",
+    "social strategy research",
+    "content opportunity",
     "account positioning",
     "engagement patterns",
+    "creator analysis",
     "profile audit",
-    "what should I post",
-    "social strategy research",
-    "creator research",
-    "social listening"
+    "social intelligence"
   ],
   "categories": [
     "social",
@@ -30,5 +27,7 @@
     "social_intelligence"
   ],
   "lifecycle": "active",
-  "id": "social-intel"
+  "id": "social-intel",
+  "name": "social-intel",
+  "implicitInvocation": false
 }

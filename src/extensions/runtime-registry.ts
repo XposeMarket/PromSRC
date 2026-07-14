@@ -14,6 +14,9 @@ import type {
   PrometheusRouteRuntime,
   PrometheusToolExecutionResult,
 } from './runtime-api.js';
+import type { ConnectionAdapter } from '../connections/types.js';
+import type { ConnectionToolClassifier } from '../connections/tool-classifier.js';
+import type { ConnectionVerifier } from '../connections/verification-service.js';
 import type { LoadedExtensionDescriptor } from './types.js';
 
 type RegisteredTool = PrometheusExtensionTool & {
@@ -57,12 +60,17 @@ export class PrometheusExtensionRuntimeRegistry {
   private tools = new Map<string, RegisteredTool>();
   private connectors = new Map<string, PrometheusConnectorRuntime & { extensionId: string }>();
   private connectorStatusCache: { at: number; text: string } | null = null;
+  private connectorHealth = new Map<string, { authState: 'expired_or_invalid'; lastAuthError: string; reauthRequired: true; at: number }>();
   private providers = new Map<string, PrometheusProviderRuntime & { extensionId: string }>();
   private mcpPresets = new Map<string, PrometheusMcpPresetRuntime & { extensionId: string }>();
   private routes: Array<PrometheusRouteRuntime & { extensionId: string }> = [];
   private hooks: Array<PrometheusHookRuntime & { extensionId: string }> = [];
   private memorySources = new Map<string, PrometheusMemorySourceRuntime & { extensionId: string }>();
   private contextProviders = new Map<string, PrometheusContextProviderRuntime & { extensionId: string }>();
+  private connectionAdapters = new Map<string, ConnectionAdapter & { extensionId: string }>();
+  private connectionVerifiers = new Map<string, ConnectionVerifier & { extensionId: string }>();
+  private toolClassifiers = new Map<string, ConnectionToolClassifier & { extensionId: string }>();
+  private deactivators = new Map<string, () => void | Promise<void>>();
 
   registerManifest(manifest: LoadedExtensionDescriptor): void {
     if (this.extensions.has(manifest.id)) return;
@@ -87,6 +95,15 @@ export class PrometheusExtensionRuntimeRegistry {
 
     const api = this.createApi(definition.id);
     void definition.register(api);
+    if (definition.deactivate) this.deactivators.set(definition.id, () => definition.deactivate!());
+  }
+
+  disposeAll(): void {
+    for (const [id, deactivate] of this.deactivators) {
+      try { void Promise.resolve(deactivate()).catch((error) => console.warn(`[extensions] Failed to deactivate ${id}: ${String(error?.message || error)}`)); }
+      catch (error: any) { console.warn(`[extensions] Failed to deactivate ${id}: ${String(error?.message || error)}`); }
+    }
+    this.deactivators.clear();
   }
 
   private createApi(extensionId: string): PrometheusExtensionApi {
@@ -100,6 +117,9 @@ export class PrometheusExtensionRuntimeRegistry {
       registerHook: (hook) => this.hooks.push({ ...hook, extensionId }),
       registerMemorySource: (source) => this.memorySources.set(source.id, { ...source, extensionId }),
       registerContextProvider: (provider) => this.contextProviders.set(provider.id, { ...provider, extensionId }),
+      registerConnectionAdapter: (adapter) => this.connectionAdapters.set(adapter.id, Object.assign(adapter, { extensionId })),
+      registerConnectionVerifier: (verifier) => this.connectionVerifiers.set(verifier.id, Object.assign(verifier, { extensionId })),
+      registerToolClassifier: (classifier) => this.toolClassifiers.set(classifier.id, Object.assign(classifier, { extensionId })),
     };
   }
 
@@ -188,12 +208,29 @@ export class PrometheusExtensionRuntimeRegistry {
     }
     const extension = this.extensions.get(tool.extensionId);
     const connectorScope = String((tool as any).connectorId || tool.extensionId);
-    return tool.execute(args || {}, {
+    try {
+      const result = await tool.execute(args || {}, {
       extensionId: tool.extensionId,
       trustLevel: extension?.trustLevel || 'local',
       getCredential: (fieldKey: string, connectorId?: string) =>
         resolveConnectorCredential(connectorId || connectorScope, fieldKey),
-    });
+      });
+      const message = String(result?.result || '');
+      if (result?.error && /token refresh failed|invalid_request|token was invalid|unauthori[sz]ed|invalid token/i.test(message)) {
+        this.connectorHealth.set(connectorScope, { authState: 'expired_or_invalid', lastAuthError: message.slice(0, 500), reauthRequired: true, at: Date.now() });
+        this.connectorStatusCache = null;
+      } else if (!result?.error) {
+        this.connectorHealth.delete(connectorScope);
+      }
+      return result;
+    } catch (error: any) {
+      const message = String(error?.message || error);
+      if (/token refresh failed|invalid_request|token was invalid|unauthori[sz]ed|invalid token/i.test(message)) {
+        this.connectorHealth.set(connectorScope, { authState: 'expired_or_invalid', lastAuthError: message.slice(0, 500), reauthRequired: true, at: Date.now() });
+        this.connectorStatusCache = null;
+      }
+      throw error;
+    }
   }
 
   buildConnectorStatus(): string {
@@ -220,8 +257,14 @@ export class PrometheusExtensionRuntimeRegistry {
       const described = connector.describeStatus?.();
       lines.push(`  ${connector.id}${typeof described === 'string' && described ? ` - ${described}` : ''}`);
       if (connector.toolNames?.length) {
-        lines.push(`    Tools: ${connector.toolNames.join(', ')}`);
+        const registered = connector.toolNames.filter((name) => this.tools.has(name));
+        const missing = connector.toolNames.filter((name) => !this.tools.has(name));
+        lines.push(`    Tools advertised: ${connector.toolNames.length}; registered: ${registered.length}; exposed after external_apps activation: ${registered.length}`);
+        lines.push(`    Registered tools: ${registered.join(', ') || '(none)'}`);
+        if (missing.length) lines.push(`    Registration error - missing: ${missing.join(', ')}`);
       }
+      const health = this.connectorHealth.get(connector.id);
+      if (health) lines.push(`    Auth health: ${health.authState}; reauthRequired=true; lastAuthError=${health.lastAuthError.split(/\r?\n/)[0]}`);
     }
     if (disconnected.length > 0) {
       lines.push(`\nNot connected (${disconnected.length}): ${disconnected.map((row) => row.connector.id).join(', ')}`);
@@ -231,6 +274,10 @@ export class PrometheusExtensionRuntimeRegistry {
     this.connectorStatusCache = { at: now, text };
     return text;
   }
+
+  listConnectionAdapters(): Array<ConnectionAdapter & { extensionId: string }> { return [...this.connectionAdapters.values()]; }
+  listConnectionVerifiers(): Array<ConnectionVerifier & { extensionId: string }> { return [...this.connectionVerifiers.values()]; }
+  listToolClassifiers(): Array<ConnectionToolClassifier & { extensionId: string }> { return [...this.toolClassifiers.values()]; }
 }
 
 let runtimeRegistry: PrometheusExtensionRuntimeRegistry | null = null;
@@ -243,6 +290,7 @@ export function getExtensionRuntimeRegistry(): PrometheusExtensionRuntimeRegistr
 }
 
 export function clearExtensionRuntimeRegistry(): void {
+  runtimeRegistry?.disposeAll();
   runtimeRegistry = null;
 }
 

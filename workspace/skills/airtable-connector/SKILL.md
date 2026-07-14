@@ -1,11 +1,7 @@
 ---
-name: airtable-connector
-description: Use this skill when Prometheus needs to add, operate, or harden an Airtable connector for reading, searching, creating, updating, exporting, or schema-inspecting Airtable bases, tables, fields, and records. Triggers on phrases like Airtable connector, connect Airtable, Airtable records, Airtable base, Airtable table schema, export Airtable, create Airtable record, update Airtable record, and Airtable integration. Use it to design schema-aware, credential-safe Airtable tools with clear read/write boundaries.
-emoji: "🧩"
-version: 1.1.0
-triggers: Airtable connector, connect Airtable, Airtable records, Airtable base, Airtable table schema, export Airtable, create Airtable record, update Airtable record, Airtable integration, Airtable API, Airtable fields, search Airtable
+name: "airtable-connector"
+description: "Build, operate, or harden a schema-aware Airtable connector for bases, tables, fields, record queries, exports, and confirmed writes. Use when a request explicitly concerns Airtable integration or Airtable record operations; do not use for generic database or spreadsheet work."
 ---
-
 
 # Airtable Connector
 

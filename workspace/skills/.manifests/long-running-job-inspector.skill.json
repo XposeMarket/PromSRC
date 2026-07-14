@@ -1,23 +1,16 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks what a background task, scheduled job, agent run, process, automation, or long-running workflow is doing, whether it is stuck, what it produced, or how to resume/stop it. It gathers live state before summarizing.",
+  "description": "Inspect, summarize, cancel, retry, or recover Prometheus background tasks, scheduled jobs, process runs, approvals, and stalled executions. Use when the user asks what is running or needs help with a specific active, stalled, or failed job.",
+  "implicitInvocation": true,
   "triggers": [
-    "long running job",
-    "background task status",
-    "scheduled job status",
-    "is it stuck",
-    "what is running",
-    "task output",
-    "agent run status",
-    "automation status",
-    "inspect job",
-    "resume task",
-    "stop task",
-    "process log",
-    "job result",
-    "task lifecycle",
-    "running workflow"
+    "long running job status",
+    "cancel running background task",
+    "inspect running jobs",
+    "background job inspector",
+    "process run log",
+    "stuck background task",
+    "retry stalled task"
   ],
   "categories": [
     "automation",
@@ -29,5 +22,6 @@
     "automations"
   ],
   "lifecycle": "active",
-  "id": "long-running-job-inspector"
+  "id": "long-running-job-inspector",
+  "name": "long-running-job-inspector"
 }

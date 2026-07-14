@@ -48,7 +48,24 @@ export async function executeDeliverySendScreenshot(
         : await desktopScreenshotWithHistory(sessionId, parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined));
       if (capture.startsWith('ERROR')) return { result: capture, error: true };
     }
-    const packet = getDesktopAdvisorPacket(sessionId);
+    let packet = getDesktopAdvisorPacket(sessionId);
+    // A narrow inspection crop is useful for targeting, but it is misleading
+    // as completion proof for an action that claims a window/page was opened.
+    // Re-capture the full exact window so the delivered image proves the final
+    // state instead of showing only a toolbar strip or mostly empty padding.
+    const completionClaim = /\b(opened|completed|done|finished|success|now showing|navigated)\b/i.test(caption);
+    const target = packet?.targetWindow;
+    const region = packet?.captureRegion;
+    const targetArea = Math.max(0, Number(target?.width) || 0) * Math.max(0, Number(target?.height) || 0);
+    const regionArea = Math.max(0, Number(region?.width) || 0) * Math.max(0, Number(region?.height) || 0);
+    const isNarrowProof = !!target && targetArea > 0 && regionArea > 0 && regionArea < targetArea * 0.65;
+    if (source === 'desktop_last' && completionClaim && isNarrowProof) {
+      const recapture = await desktopWindowScreenshot(sessionId, {
+        handle: target.handle,
+        focus_first: false,
+      });
+      if (!recapture.startsWith('ERROR')) packet = getDesktopAdvisorPacket(sessionId);
+    }
     if (!packet?.screenshotBase64) {
       return { result: 'ERROR: No desktop screenshot available. Call desktop_screenshot first or use source="desktop_new".', error: true };
     }

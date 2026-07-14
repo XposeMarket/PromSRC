@@ -10,6 +10,10 @@
 
 import type { Tool } from './registry.js';
 import type { ToolResult } from '../types.js';
+import {
+  getDesktopWrapperToolDefinitions,
+  normalizeDesktopWrapperTool,
+} from '../gateway/desktop-wrappers.js';
 
 // ─── Lazy imports ─────────────────────────────────────────────────────────────
 // Desktop tools import heavy PS/OCR machinery; we import lazily so the
@@ -44,6 +48,24 @@ function wrapResult(raw: string): ToolResult {
   return raw.startsWith('ERROR') ? fail(raw) : ok(raw);
 }
 
+function windowSelector(args: any) {
+  return {
+    window_token: args?.window_token == null ? undefined : String(args.window_token),
+    window_id: args?.window_id == null ? undefined : String(args.window_id),
+    window_handle: args?.window_handle == null ? undefined : Number(args.window_handle),
+    app_id: args?.app_id == null ? undefined : String(args.app_id),
+    title: args?.title == null ? undefined : String(args.title),
+  };
+}
+
+const windowSelectorSchema = {
+  window_token: { type: 'string', description: 'Strong HWND+PID+process-start identity from fresh state; preferred.' },
+  window_id: { type: 'string', description: 'Compatibility window id (win_<handle>).' },
+  window_handle: { type: 'number', description: 'Exact native window handle.' },
+  app_id: { type: 'string', description: 'Target app_id.' },
+  title: { type: 'string', description: 'Partial window title/process name.' },
+};
+
 // ─── Tool definitions ─────────────────────────────────────────────────────────
 
 export const desktopScreenshotTool: Tool = {
@@ -57,6 +79,7 @@ export const desktopScreenshotTool: Tool = {
     properties: {
       capture: { type: 'string', enum: ['all', 'primary'], description: 'Virtual desktop vs primary only' },
       monitor_index: { type: 'integer', description: '0-based display to capture (overrides capture)' },
+      region: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: 'Virtual-desktop crop [x1,y1,x2,y2], applied before normalization.' },
       mode: { type: 'string', enum: ['normal', 'som'], description: 'Use som to overlay numbered UI Automation elements and enable desktop_click(element=N).' },
       som: { type: 'boolean', description: 'Alias for mode="som".' },
     },
@@ -75,17 +98,17 @@ export const desktopScreenshotTool: Tool = {
 
 export const desktopDoctorTool: Tool = {
   name: 'desktop_doctor',
-  description: 'Diagnose Windows desktop automation health: monitors/DPI, screenshot budget, OCR, UI Automation, active window, and stale screenshot state.',
-  schema: {},
+  description: 'Fast desktop health check by default; pass deep=true for live screenshot, OCR, and UI Automation probes.',
+  schema: { deep: 'Run expensive live screenshot/OCR/UI Automation probes (default false)' },
   jsonSchema: {
     type: 'object',
-    properties: {},
+    properties: { deep: { type: 'boolean' } },
     additionalProperties: false,
   },
-  execute: async (): Promise<ToolResult> => {
+  execute: async (args: any): Promise<ToolResult> => {
     try {
       const { desktopDoctor } = await dt();
-      return ok(await desktopDoctor(DESKTOP_SESSION));
+      return ok(await desktopDoctor(DESKTOP_SESSION, { deep: args?.deep === true }));
     } catch (e: any) {
       return fail(String(e?.message || e));
     }
@@ -128,11 +151,13 @@ export const desktopWindowScreenshotTool: Tool = {
   jsonSchema: {
     type: 'object',
     properties: {
+      ...windowSelectorSchema,
       name: { type: 'string' },
       handle: { type: 'number' },
       active: { type: 'boolean' },
       focus_first: { type: 'boolean' },
       padding: { type: 'number' },
+      region: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: 'Window-relative crop [x1,y1,x2,y2], applied to the native window capture before normalization.' },
       mode: { type: 'string', enum: ['normal', 'som'] },
       som: { type: 'boolean' },
     },
@@ -143,11 +168,15 @@ export const desktopWindowScreenshotTool: Tool = {
       const { desktopWindowScreenshot } = await dt();
       return wrapResult(
         await desktopWindowScreenshot(DESKTOP_SESSION, {
+          ...windowSelector(args),
           name: args?.name == null ? undefined : String(args.name),
           handle: args?.handle == null ? undefined : Number(args.handle),
           active: args?.active === true,
-          focus_first: args?.focus_first === true,
+          focus_first: args?.focus_first == null ? undefined : args.focus_first === true,
           padding: args?.padding == null ? undefined : Number(args.padding),
+          region: Array.isArray(args?.region) && args.region.length === 4
+            ? args.region.map(Number) as [number, number, number, number]
+            : undefined,
           mode: String(args?.mode || '').toLowerCase() === 'som' || args?.som === true ? 'som' : 'normal',
           som: args?.som === true || String(args?.mode || '').toLowerCase() === 'som',
         }),
@@ -166,16 +195,18 @@ export const desktopFindWindowTool: Tool = {
   },
   jsonSchema: {
     type: 'object',
-    required: ['name'],
     properties: {
       name: { type: 'string', description: 'Partial window title or process name' },
+      title: { type: 'string' },
+      app: { type: 'string' },
+      query: { type: 'string' },
     },
     additionalProperties: false,
   },
   execute: async (args: any): Promise<ToolResult> => {
     try {
       const { desktopFindWindow } = await dt();
-      return wrapResult(await desktopFindWindow(String(args?.name || '')));
+      return wrapResult(await desktopFindWindow(String(args?.name || args?.title || args?.app || args?.query || '')));
     } catch (e: any) {
       return fail(String(e?.message || e));
     }
@@ -193,8 +224,8 @@ export const desktopFocusWindowTool: Tool = {
   },
   jsonSchema: {
     type: 'object',
-    required: ['name'],
     properties: {
+      ...windowSelectorSchema,
       name: { type: 'string', description: 'Partial window title or process name' },
       include_screenshot: { type: 'boolean', description: 'Capture a verification screenshot after focus (default true)' },
     },
@@ -202,7 +233,10 @@ export const desktopFocusWindowTool: Tool = {
   },
   execute: async (args: any): Promise<ToolResult> => {
     try {
-      const { desktopFocusWindowVerified } = await dt();
+      const { desktopFocusWindowVerified, desktopFocusWindowCanonical } = await dt();
+      if (args?.window_token || args?.window_id || args?.window_handle || args?.app_id || args?.title) {
+        return wrapResult(await desktopFocusWindowCanonical(DESKTOP_SESSION, windowSelector(args), args?.include_screenshot !== false));
+      }
       const verification = await desktopFocusWindowVerified(DESKTOP_SESSION, String(args?.name || ''), {
         includeScreenshot: args?.include_screenshot !== false,
       });
@@ -573,17 +607,20 @@ export const desktopPressKeyTool: Tool = {
 
 export const desktopGetClipboardTool: Tool = {
   name: 'desktop_get_clipboard',
-  description: 'Read the current clipboard text content.',
-  schema: {},
+  description: 'Read bounded current clipboard text content, optionally filtered or metadata-only.',
+  schema: { query: 'Optional matching-line query', max_chars: 'Maximum returned characters', head: 'First N characters', tail: 'Last N characters', metadata_only: 'Return presence/length only', include_length: 'Include total length' },
   jsonSchema: {
     type: 'object',
-    properties: {},
+    properties: {
+      query: { type: 'string' }, max_chars: { type: 'integer' }, head: { type: 'integer' }, tail: { type: 'integer' },
+      metadata_only: { type: 'boolean' }, include_length: { type: 'boolean' },
+    },
     additionalProperties: false,
   },
-  execute: async (): Promise<ToolResult> => {
+  execute: async (args): Promise<ToolResult> => {
     try {
       const { desktopGetClipboard } = await dt();
-      return ok(await desktopGetClipboard());
+      return ok(await desktopGetClipboard(args || {}));
     } catch (e: any) {
       return fail(String(e?.message || e));
     }
@@ -685,6 +722,7 @@ export const desktopFindInstalledAppTool: Tool = {
         String(args?.query || ''),
         Number(args?.limit || 10),
         args?.refresh === true,
+        args?.exact === true,
       ));
     } catch (e: any) {
       return fail(String(e?.message || e));
@@ -739,9 +777,11 @@ export const desktopCloseAppTool: Tool = {
   },
   jsonSchema: {
     type: 'object',
-    required: ['name'],
     properties: {
       name: { type: 'string', description: 'Partial window title or process name' },
+      app: { type: 'string' },
+      title: { type: 'string' },
+      query: { type: 'string' },
       force: { type: 'boolean', description: 'Force-kill the process' },
     },
     additionalProperties: false,
@@ -749,7 +789,7 @@ export const desktopCloseAppTool: Tool = {
   execute: async (args: any): Promise<ToolResult> => {
     try {
       const { desktopCloseApp } = await dt();
-      return wrapResult(await desktopCloseApp(String(args?.name || ''), args?.force === true));
+      return wrapResult(await desktopCloseApp(String(args?.name || args?.app || args?.title || args?.query || ''), args?.force === true));
     } catch (e: any) {
       return fail(String(e?.message || e));
     }
@@ -898,9 +938,9 @@ export const desktopBackgroundCommandTool: Tool = {
   name: 'desktop_background_command',
   description:
     'Send a command to the isolated background desktop worker through the bridge. ' +
-    'Supported actions: screenshot, click, type, key, run, wait. This targets the sandbox/VM worker, not the host desktop.',
+    'Supports window discovery/state/accessibility plus global or window-scoped input. This targets the sandbox/VM worker, not the host desktop.',
   schema: {
-    action: 'screenshot | click | type | key | run | wait',
+    action: 'screenshot | list_windows | get_window_state | accessibility_tree | click | window_click | type | window_type | key | window_key | run | wait',
     x: 'X coordinate for click inside the background desktop',
     y: 'Y coordinate for click inside the background desktop',
     text: 'Text for type action',
@@ -913,7 +953,10 @@ export const desktopBackgroundCommandTool: Tool = {
     type: 'object',
     required: ['action'],
     properties: {
-      action: { type: 'string', enum: ['screenshot', 'click', 'type', 'key', 'run', 'wait'] },
+      action: { type: 'string', enum: ['screenshot', 'list_windows', 'get_window_state', 'accessibility_tree', 'click', 'window_click', 'type', 'window_type', 'key', 'window_key', 'run', 'wait'] },
+      window_id: { type: 'string' },
+      title: { type: 'string' },
+      filter: { type: 'string' },
       x: { type: 'number' },
       y: { type: 'number' },
       text: { type: 'string' },
@@ -921,6 +964,10 @@ export const desktopBackgroundCommandTool: Tool = {
       command: { type: 'string' },
       ms: { type: 'number' },
       timeout_ms: { type: 'number' },
+      include_screenshot: { type: 'boolean' },
+      include_text: { type: 'boolean' },
+      max_depth: { type: 'integer' },
+      max_nodes: { type: 'integer' },
     },
     additionalProperties: false,
   },
@@ -929,6 +976,8 @@ export const desktopBackgroundCommandTool: Tool = {
       const { desktopBackgroundCommand } = await bg();
       return wrapResult(await desktopBackgroundCommand({
         action: args?.action,
+        window_id: args?.window_id == null ? undefined : String(args.window_id),
+        title: args?.title == null ? undefined : String(args.title),
         x: args?.x == null ? undefined : Number(args.x),
         y: args?.y == null ? undefined : Number(args.y),
         text: args?.text == null ? undefined : String(args.text),
@@ -936,6 +985,10 @@ export const desktopBackgroundCommandTool: Tool = {
         command: args?.command == null ? undefined : String(args.command),
         ms: args?.ms == null ? undefined : Number(args.ms),
         timeout_ms: args?.timeout_ms == null ? undefined : Number(args.timeout_ms),
+        include_screenshot: args?.include_screenshot !== false,
+        include_text: args?.include_text === true,
+        max_depth: args?.max_depth == null ? undefined : Number(args.max_depth),
+        max_nodes: args?.max_nodes == null ? undefined : Number(args.max_nodes),
       } as any));
     } catch (e: any) {
       return fail(String(e?.message || e));
@@ -954,6 +1007,7 @@ export const desktopWindowControlTool: Tool = {
     type: 'object',
     required: ['action'],
     properties: {
+      ...windowSelectorSchema,
       action: { type: 'string', enum: ['minimize', 'maximize', 'restore', 'close'] },
       name: { type: 'string', description: 'Partial window title or process name.' },
       handle: { type: 'number', description: 'Exact window handle (HWND).' },
@@ -967,6 +1021,7 @@ export const desktopWindowControlTool: Tool = {
       const actionRaw = String(args?.action || '').toLowerCase();
       const action = actionRaw === 'minimize' || actionRaw === 'maximize' || actionRaw === 'restore' || actionRaw === 'close' ? actionRaw : 'restore';
       return wrapResult(await desktopWindowControl(action, {
+        ...windowSelector(args),
         name: args?.name == null ? undefined : String(args.name),
         handle: args?.handle == null ? undefined : Number(args.handle),
         active: args?.active === true,
@@ -983,13 +1038,19 @@ export const desktopGetWindowTextTool: Tool = {
   schema: {},
   jsonSchema: {
     type: 'object',
-    properties: { window_name: { type: 'string' } },
+    properties: { ...windowSelectorSchema, window_name: { type: 'string' } },
     additionalProperties: false,
   },
   execute: async (args: any): Promise<ToolResult> => {
     try {
-      const { desktopGetWindowText } = await dt();
-      return wrapResult(await desktopGetWindowText(args?.window_name == null ? undefined : String(args.window_name)));
+      const { desktopGetWindowText, resolveCanonicalWindow } = await dt();
+      let windowName = args?.window_name == null ? undefined : String(args.window_name);
+      if (args?.window_token || args?.window_id || args?.window_handle || args?.app_id || args?.title) {
+        const resolved = await resolveCanonicalWindow(windowSelector(args));
+        if (!resolved.ok) return fail(`[${resolved.code}] ${resolved.message}`);
+        windowName = resolved.window.title;
+      }
+      return wrapResult(await desktopGetWindowText(windowName));
     } catch (e: any) {
       return fail(String(e?.message || e));
     }
@@ -1003,6 +1064,7 @@ export const desktopGetAccessibilityTreeTool: Tool = {
   jsonSchema: {
     type: 'object',
     properties: {
+      ...windowSelectorSchema,
       window_name: { type: 'string' },
       max_depth: { type: 'integer', description: '1-10, default 5.' },
       max_nodes: { type: 'integer', description: '10-1000, default 300.' },
@@ -1011,9 +1073,15 @@ export const desktopGetAccessibilityTreeTool: Tool = {
   },
   execute: async (args: any): Promise<ToolResult> => {
     try {
-      const { desktopGetAccessibilityTree } = await dt();
+      const { desktopGetAccessibilityTree, resolveCanonicalWindow } = await dt();
+      let windowName = args?.window_name == null ? undefined : String(args.window_name);
+      if (args?.window_token || args?.window_id || args?.window_handle || args?.app_id || args?.title) {
+        const resolved = await resolveCanonicalWindow(windowSelector(args));
+        if (!resolved.ok) return fail(`[${resolved.code}] ${resolved.message}`);
+        windowName = resolved.window.title;
+      }
       return wrapResult(await desktopGetAccessibilityTree(
-        args?.window_name == null ? undefined : String(args.window_name),
+        windowName,
         args?.max_depth == null ? undefined : Number(args.max_depth),
         args?.max_nodes == null ? undefined : Number(args.max_nodes),
       ));
@@ -1149,7 +1217,12 @@ export const desktopListAppsTool: Tool = {
   execute: async (args: any): Promise<ToolResult> => {
     try {
       const { desktopListApps } = await dt();
-      return wrapResult(await desktopListApps(String(args?.filter || ''), args?.include_windows !== false));
+      return wrapResult(await desktopListApps(String(args?.filter || ''), args?.include_windows !== false, {
+        scope: args?.scope,
+        compact: args?.compact !== false,
+        limit: args?.limit,
+        cursor: args?.cursor,
+      }));
     } catch (e: any) {
       return fail(String(e?.message || e));
     }
@@ -1166,6 +1239,7 @@ export const desktopListWindowsTool: Tool = {
       app_id: { type: 'string' },
       process_name: { type: 'string' },
       title: { type: 'string' },
+      filter: { type: 'string' },
     },
     additionalProperties: false,
   },
@@ -1176,6 +1250,7 @@ export const desktopListWindowsTool: Tool = {
         app_id: args?.app_id == null ? undefined : String(args.app_id),
         process_name: args?.process_name == null ? undefined : String(args.process_name),
         title: args?.title == null ? undefined : String(args.title),
+        filter: args?.filter == null ? undefined : String(args.filter),
       }));
     } catch (e: any) {
       return fail(String(e?.message || e));
@@ -1190,6 +1265,7 @@ export const desktopGetWindowStateTool: Tool = {
   jsonSchema: {
     type: 'object',
     properties: {
+      window_token: { type: 'string' },
       window_id: { type: 'string' },
       window_handle: { type: 'number' },
       app_id: { type: 'string' },
@@ -1204,6 +1280,7 @@ export const desktopGetWindowStateTool: Tool = {
     try {
       const { desktopGetWindowState } = await dt();
       return wrapResult(await desktopGetWindowState(DESKTOP_SESSION, {
+        window_token: args?.window_token == null ? undefined : String(args.window_token),
         window_id: args?.window_id == null ? undefined : String(args.window_id),
         window_handle: args?.window_handle == null ? undefined : Number(args.window_handle),
         app_id: args?.app_id == null ? undefined : String(args.app_id),
@@ -1218,22 +1295,135 @@ export const desktopGetWindowStateTool: Tool = {
   },
 };
 
+export const desktopGetAccessibilityStateTool: Tool = {
+  name: 'desktop_get_accessibility_state',
+  description: 'Structured UIA snapshot with state_id, element_id values, bounds, and supported semantic patterns.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      window_token: { type: 'string' },
+      window_id: { type: 'string' },
+      window_handle: { type: 'number' },
+      app_id: { type: 'string' },
+      title: { type: 'string' },
+      max_depth: { type: 'integer' },
+      max_nodes: { type: 'integer' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopGetAccessibilityState } = await dt();
+      return wrapResult(await desktopGetAccessibilityState(windowSelector(args), Number(args?.max_depth || 7), Number(args?.max_nodes || 500), undefined, { limit: args?.limit, cursor: args?.cursor, compact: args?.compact !== false }));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
+export const desktopAccessibilityActionTool: Tool = {
+  name: 'desktop_accessibility_action',
+  description: 'Perform a semantic UIA action against an element from a fresh accessibility snapshot.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      state_id: { type: 'string' },
+      element_id: { type: 'string' },
+      semantic_action: { type: 'string', enum: ['invoke', 'set_value', 'select', 'toggle', 'expand', 'collapse', 'focus', 'secondary_action'] },
+      value: { type: 'string' },
+      window_token: { type: 'string' },
+      window_id: { type: 'string' },
+      window_handle: { type: 'number' },
+      app_id: { type: 'string' },
+      title: { type: 'string' },
+      element_name: { type: 'string' },
+      automation_id: { type: 'string' },
+      role: { type: 'string' },
+      match_mode: { type: 'string', enum: ['exact', 'contains'] },
+      atomic: { type: 'boolean' },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopAccessibilityAction, desktopAccessibilityFindAndAct } = await dt();
+      if (args?.atomic === true || (args?.state_id == null && (args?.element_name != null || args?.automation_id != null))) {
+        return wrapResult(await desktopAccessibilityFindAndAct({ selector: windowSelector(args), name: args?.element_name, automation_id: args?.automation_id, role: args?.role, match_mode: args?.match_mode, action: args?.semantic_action || 'invoke', value: args?.value }));
+      }
+      return wrapResult(await desktopAccessibilityAction({
+        state_id: String(args?.state_id || ''),
+        element_id: String(args?.element_id || ''),
+        action: String(args?.semantic_action || '') as any,
+        value: args?.value == null ? undefined : String(args.value),
+      }));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
+
 // ─── Window-scoped input (Phase 2) ─────────────────────────────────────────────
 
-function windowSelector(args: any) {
-  return {
-    window_id: args?.window_id == null ? undefined : String(args.window_id),
-    window_handle: args?.window_handle == null ? undefined : Number(args.window_handle),
-    app_id: args?.app_id == null ? undefined : String(args.app_id),
-    title: args?.title == null ? undefined : String(args.title),
-  };
-}
+export const desktopLocateTextTool: Tool = {
+  name: 'desktop_locate_text',
+  description: 'Locate visible text within a fresh exact-window screenshot crop and return a confidence-scored capture-relative box.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['screenshot_id', 'query'],
+    properties: {
+      screenshot_id: { type: 'string' },
+      query: { type: 'string' },
+      min_confidence: { type: 'number', minimum: 0.5, maximum: 0.98 },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopLocateText } = await dt();
+      return wrapResult(await desktopLocateText(DESKTOP_SESSION, {
+        screenshot_id: String(args?.screenshot_id || ''),
+        query: String(args?.query || ''),
+        min_confidence: args?.min_confidence == null ? undefined : Number(args.min_confidence),
+      }));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
+};
 
-const windowSelectorSchema = {
-  window_id: { type: 'string', description: 'Stable window id (win_<handle>).' },
-  window_handle: { type: 'number', description: 'Exact window handle (HWND).' },
-  app_id: { type: 'string', description: 'Target app_id.' },
-  title: { type: 'string', description: 'Partial window title/process name.' },
+export const desktopClickTextTool: Tool = {
+  name: 'desktop_click_text',
+  description: 'Locate and click high-confidence visible text from an exact-window crop, then capture full-window verification evidence.',
+  schema: {},
+  jsonSchema: {
+    type: 'object',
+    required: ['screenshot_id', 'query'],
+    properties: {
+      screenshot_id: { type: 'string' },
+      query: { type: 'string' },
+      min_confidence: { type: 'number', minimum: 0.5, maximum: 0.98 },
+      button: { type: 'string', enum: ['left', 'right'] },
+      verify: { type: 'string', enum: ['off', 'auto', 'strict'] },
+    },
+    additionalProperties: false,
+  },
+  execute: async (args: any): Promise<ToolResult> => {
+    try {
+      const { desktopClickText } = await dt();
+      return wrapResult(await desktopClickText(DESKTOP_SESSION, {
+        screenshot_id: String(args?.screenshot_id || ''),
+        query: String(args?.query || ''),
+        min_confidence: args?.min_confidence == null ? undefined : Number(args.min_confidence),
+        button: String(args?.button || 'left').toLowerCase() === 'right' ? 'right' : 'left',
+        verify: args?.verify,
+      }));
+    } catch (e: any) {
+      return fail(String(e?.message || e));
+    }
+  },
 };
 
 export const desktopWindowClickTool: Tool = {
@@ -1438,6 +1628,8 @@ export const allDesktopTools: Tool[] = [
   desktopWindowControlTool,
   desktopGetWindowTextTool,
   desktopGetAccessibilityTreeTool,
+  desktopGetAccessibilityStateTool,
+  desktopAccessibilityActionTool,
   desktopPixelWatchTool,
   desktopRecordMacroTool,
   desktopStopMacroTool,
@@ -1447,6 +1639,8 @@ export const allDesktopTools: Tool[] = [
   desktopListAppsTool,
   desktopListWindowsTool,
   desktopGetWindowStateTool,
+  desktopLocateTextTool,
+  desktopClickTextTool,
   // Window-scoped input (Phase 2)
   desktopWindowClickTool,
   desktopWindowTypeTool,
@@ -1454,3 +1648,33 @@ export const allDesktopTools: Tool[] = [
   desktopWindowScrollTool,
   desktopWindowDragTool,
 ];
+
+/**
+ * Model-facing Reactor tools. These delegate to the granular compatibility
+ * tools above, so Reactor/background agents use the same six-tool dialect as
+ * the main gateway without duplicating desktop behavior.
+ */
+export const desktopWrapperTools: Tool[] = getDesktopWrapperToolDefinitions().map((definition: any) => {
+  const fn = definition.function || {};
+  const properties = fn.parameters?.properties || {};
+  const schema = Object.fromEntries(
+    Object.entries(properties).map(([key, value]: [string, any]) => [
+      key,
+      String(value?.description || (Array.isArray(value?.enum) ? value.enum.join(' | ') : value?.type || 'value')),
+    ]),
+  );
+  return {
+    name: String(fn.name || ''),
+    description: String(fn.description || ''),
+    schema,
+    jsonSchema: fn.parameters || { type: 'object', properties: {} },
+    execute: async (args: any): Promise<ToolResult> => {
+      const normalized = normalizeDesktopWrapperTool(String(fn.name || ''), args);
+      if (!normalized) return fail(`Unknown desktop wrapper: ${String(fn.name || '')}`);
+      if (normalized.error) return fail(normalized.error);
+      const target = allDesktopTools.find((tool) => tool.name === normalized.name);
+      if (!target) return fail(`Desktop wrapper target is unavailable: ${normalized.name}`);
+      return target.execute(normalized.args);
+    },
+  } satisfies Tool;
+});

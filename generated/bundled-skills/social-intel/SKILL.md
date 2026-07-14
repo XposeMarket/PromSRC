@@ -1,8 +1,6 @@
 ---
-name: social-intel
-description: Full playbook for running social analysis and delivering actionable growth coaching.
-emoji: "🧩"
-version: 1.0.0
+name: "social-intel"
+description: "Full playbook for running social analysis and delivering actionable growth coaching."
 ---
 
 # Social Media Intelligence

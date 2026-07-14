@@ -1,12 +1,36 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "connector-smoke-test-harness",
-  "name": "Connector Smoke-Test Harness",
-  "description": "Verify Prometheus connectors with status, credential, read, dry-run write, pagination, and rate-limit checks before they are treated as usable.",
-  "version": "1.0.0",
+  "name": "connector-smoke-test-harness",
+  "description": "Verify an existing Prometheus connector with status, authentication, read, pagination, rate-limit, error-shape, and dry-run write checks. Use when testing connector readiness or diagnosing an installed integration. Only use after a connector exists; exclude implementation and setup work.",
+  "version": "2.0.0",
   "entrypoint": "SKILL.md",
-  "triggers": ["test connector", "connector smoke test", "verify integration", "is this connector working"],
-  "categories": ["prometheus", "connectors", "qa", "integrations"],
-  "requiredTools": ["connector_list", "external_apps", "integration_admin"],
-  "permissions": { "workspaceRead": true, "workspaceWrite": true, "externalSideEffects": true }
+  "implicitInvocation": true,
+  "triggers": [
+    "run connector smoke test",
+    "test connector dry run",
+    "validate connector health",
+    "verify connector auth",
+    "test connector pagination",
+    "connector readiness check"
+  ],
+  "categories": [
+    "prometheus",
+    "connectors",
+    "qa",
+    "integrations"
+  ],
+  "requiredTools": [
+    "connection_ops",
+    "mcp_server_tools",
+    "connector_list",
+    "external_apps",
+    "integration_admin"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": true
+  },
+  "lifecycle": "active"
 }

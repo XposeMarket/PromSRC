@@ -124,7 +124,8 @@ export class ProcessSupervisor {
   log(runId: string, maxChars = 200_000): ProcessLogResult {
     const stdout = this.store.readLogFile(this.store.stdoutPath(runId), maxChars);
     const stderr = this.store.readLogFile(this.store.stderrPath(runId), maxChars);
-    const combined = [stdout.text, stderr.text].filter(Boolean).join('\n');
+    const chronological = this.store.readLogFile(this.store.combinedPath(runId), maxChars);
+    const combined = chronological.text || [stdout.text, stderr.text].filter(Boolean).join('\n');
     return {
       runId,
       stdout: stdout.text,
@@ -132,7 +133,7 @@ export class ProcessSupervisor {
       combined,
       stdoutBytes: stdout.bytes,
       stderrBytes: stderr.bytes,
-      truncated: stdout.truncated || stderr.truncated,
+      truncated: chronological.truncated || stdout.truncated || stderr.truncated,
     };
   }
 
@@ -146,6 +147,7 @@ export class ProcessSupervisor {
     const record: ProcessRunRecord = {
       runId,
       sessionId: input.sessionId,
+      toolCallId: input.toolCallId,
       taskId: input.taskId,
       codingSessionId: input.codingSessionId,
       approvalId: input.approvalId,
@@ -164,6 +166,7 @@ export class ProcessSupervisor {
       stdoutBytes: 0,
       stderrBytes: 0,
       outputPreview: '',
+      outputSeq: 0,
     };
     this.persistAndBroadcast(record, 'process_run_started');
 
@@ -218,9 +221,11 @@ export class ProcessSupervisor {
         record.stderrBytes += Buffer.byteLength(text);
         this.store.appendStderr(runId, text);
       }
+      this.store.appendCombined(runId, text);
       record.outputPreview = trimPreview(`${record.outputPreview}${text}`);
+      record.outputSeq = Number(record.outputSeq || 0) + 1;
       touchOutput();
-      this.persistAndBroadcast(record, 'process_run_output', { stream: kind, chunk: text });
+      this.persistAndBroadcast(record, 'process_run_output', { stream: kind, chunk: text, sequence: record.outputSeq });
     };
 
     child.stdout.on('data', (chunk) => onChunk('stdout', chunk));
@@ -356,10 +361,12 @@ export class ProcessSupervisor {
       if (captureOutput) stdout += text;
       record.stdoutBytes += Buffer.byteLength(text);
       this.store.appendStdout(runId, text);
+      this.store.appendCombined(runId, text);
       record.outputPreview = trimPreview(`${record.outputPreview}${text}`);
+      record.outputSeq = Number(record.outputSeq || 0) + 1;
       record.waitingForInputHint = /(?:press any key|password|passphrase|enter .*:|continue\?|y\/n|\[y\/n\]|waiting for input)/i.test(record.outputPreview);
       touchOutput();
-      this.persistAndBroadcast(record, 'process_run_output', { stream: 'stdout', chunk: text });
+      this.persistAndBroadcast(record, 'process_run_output', { stream: 'stdout', chunk: text, sequence: record.outputSeq });
     };
 
     ptyProcess.onData(onChunk);

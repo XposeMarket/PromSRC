@@ -24,6 +24,7 @@ import { getConfig } from '../../config/config';
 import { getAgentById } from '../../config/config';
 import type { ManagedTeam } from './managed-teams';
 import { buildAgentIdentity, renderIdentityPrompt } from '../../agents/identity-generator.js';
+import { ensureAgentPromptFile, readAgentPromptFile, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ export interface WorkspaceMetadata {
 
 /**
  * Returns the identity directory for a specific agent scoped to a specific team.
- * This is where system_prompt.md and agent-specific config live for that team.
+ * This is where AGENT.md and agent-specific config live for that team.
  *
  * Layout: <globalWorkspace>/teams/<teamId>/subagents/<agentId>/
  *
@@ -82,7 +83,7 @@ export function getTeamAgentIdentityPath(teamId: string, agentId: string): strin
 /**
  * Ensures the per-team agent identity directory exists.
  * On first creation, bootstraps identity files from an optional source workspace
- * (copies system_prompt.md, HEARTBEAT.md, and TOOLS.md if they exist).
+ * (copies AGENT.md, HEARTBEAT.md, and TOOLS.md if they exist).
  * After that, the team-scoped files are independent and can diverge.
  *
  * Returns the identity path.
@@ -95,18 +96,25 @@ export function ensureTeamAgentIdentity(
   const identityPath = getTeamAgentIdentityPath(teamId, agentId);
   const firstTime = !fs.existsSync(identityPath);
   fs.mkdirSync(identityPath, { recursive: true });
+  const sourceIsTeamScoped = !!globalAgentWorkspace && fs.existsSync(path.join(globalAgentWorkspace, '.team-identity.json'));
 
   // Files to sync from an optional source workspace.
   // These are identity files — copied once on first use, then re-synced if the
   // team-scoped copy is still empty/blank.
-  const filesToSync = [
-    'system_prompt.md',
-    'HEARTBEAT.md',
-    'TOOLS.md',
-  ];
+  if (globalAgentWorkspace && !sourceIsTeamScoped) {
+    const sourcePrompt = readAgentPromptFile(globalAgentWorkspace, { migrateLegacy: true });
+    const destinationPrompt = readAgentPromptFile(identityPath, { migrateLegacy: true });
+    if (sourcePrompt?.content.trim() && (!destinationPrompt || !destinationPrompt.content.trim())) {
+      try { writeAgentPromptFile(identityPath, sourcePrompt.content); } catch {}
+    }
+  }
+
+  // MEMORY.md is copied once when an agent joins a team so existing personal
+  // continuity is preserved. The team-scoped copy then diverges independently.
+  const filesToSync = ['HEARTBEAT.md', 'TOOLS.md', 'MEMORY.md'];
 
   for (const filename of filesToSync) {
-    if (!globalAgentWorkspace) continue;
+    if (!globalAgentWorkspace || sourceIsTeamScoped) continue;
     const src = path.join(globalAgentWorkspace, filename);
     const dst = path.join(identityPath, filename);
     if (path.resolve(src) === path.resolve(dst)) continue;
@@ -163,27 +171,7 @@ function bootstrapTeamAgentIdentityFiles(teamId: string, agentId: string, identi
     identity: agent?.identity,
   });
 
-  const agentsMd = path.join(identityPath, 'AGENTS.md');
-  if (!fs.existsSync(agentsMd)) {
-    fs.writeFileSync(agentsMd, [
-      `# AGENTS.md - ${displayName}`,
-      '',
-      '## Role',
-      description,
-      '',
-      '## Team Assignment',
-      teamAssignment,
-      '',
-      renderIdentityPrompt(identity),
-      '',
-      '## Output Format',
-      'Return a concise summary of what was accomplished.',
-    ].join('\n'), 'utf-8');
-  }
-
-  const systemPrompt = path.join(identityPath, 'system_prompt.md');
-  if (!fs.existsSync(systemPrompt)) {
-    fs.writeFileSync(systemPrompt, [
+  ensureAgentPromptFile(identityPath, [
       `# ${displayName}`,
       '',
       description,
@@ -195,8 +183,7 @@ function bootstrapTeamAgentIdentityFiles(teamId: string, agentId: string, identi
       '',
       '## Team-Specific Assignment',
       teamAssignment,
-    ].join('\n'), 'utf-8');
-  }
+    ].join('\n'));
 
   const heartbeat = path.join(identityPath, 'HEARTBEAT.md');
   if (!fs.existsSync(heartbeat)) {
@@ -208,6 +195,18 @@ function bootstrapTeamAgentIdentityFiles(teamId: string, agentId: string, identi
       '- Persist outputs to the team workspace.',
       '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
       '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
+    ].join('\n'), 'utf-8');
+  }
+
+  const memory = path.join(identityPath, 'MEMORY.md');
+  if (!fs.existsSync(memory)) {
+    fs.writeFileSync(memory, [
+      `# MEMORY.md - ${displayName}`,
+      '',
+      `Durable personal memory for ${displayName} inside team ${teamId}.`,
+      '',
+      'Keep role-specific lessons, decisions, corrections, preferences, and open threads here.',
+      'Shared team truth belongs in the team workspace memory.json, not in this private file.',
     ].join('\n'), 'utf-8');
   }
 
@@ -224,16 +223,6 @@ function bootstrapTeamAgentIdentityFiles(teamId: string, agentId: string, identi
       teamScoped: true,
       createdAt: Date.now(),
     }, null, 2), 'utf-8');
-  }
-}
-
-function isGlobalSubagentPath(candidate: string, agentId: string): boolean {
-  try {
-    const workspace = getConfig().getWorkspacePath() || process.cwd();
-    const expected = path.join(workspace, '.prometheus', 'subagents', sanitizeId(agentId));
-    return path.resolve(candidate) === path.resolve(expected);
-  } catch {
-    return false;
   }
 }
 
@@ -259,27 +248,14 @@ export function claimAgentForTeamWorkspace(teamId: string, agentId: string): { i
 
   ensureTeamAgentIdentity(teamId, safeAgentId, sourceWorkspace);
 
-  if (idx >= 0) {
-    agents[idx] = {
-      ...agents[idx],
-      workspace: identityPath,
-    };
-    cm.updateConfig({ agents } as any);
-  }
+  // Keep the global agent workspace canonical. Team-specific identity and
+  // memory are resolved by teamId at runtime; repointing the global config to
+  // one team would leak that team's private context into another team.
 
-  let removedGlobalPath: string | undefined;
-  if (sourceWorkspace && isGlobalSubagentPath(sourceWorkspace, safeAgentId) && path.resolve(sourceWorkspace) !== path.resolve(identityPath)) {
-    try {
-      if (fs.existsSync(sourceWorkspace)) {
-        fs.rmSync(sourceWorkspace, { recursive: true, force: true });
-        removedGlobalPath = sourceWorkspace;
-      }
-    } catch {
-      // Non-fatal; config now points at the team identity path.
-    }
-  }
-
-  return { identityPath, removedGlobalPath };
+  // Never delete the previous global identity directory automatically. It may
+  // contain personal memory or legacy files that are required for rollback.
+  // Explicit archival/cleanup is a separate, user-visible operation.
+  return { identityPath };
 }
 
 export function getTeamWorkspaceRoot(): string {
@@ -382,6 +358,8 @@ export function initTeamMemoryFiles(teamId: string): void {
 
 export function readTeamMemoryContext(teamId: string): string {
   const wsPath = getTeamWorkspacePath(teamId);
+  const totalBudget = 12000;
+  let usedChars = 0;
   const parts: string[] = [
     `The following file snapshots were read by the system before this manager turn.`,
     `Treat them as the current contents of the memory files; do not call file_stats or read_file on these files just to inspect them.`,
@@ -394,12 +372,18 @@ export function readTeamMemoryContext(teamId: string): string {
       const content = fs.readFileSync(filePath, 'utf-8').trim();
       const lineCount = content ? content.split(/\r?\n/).length : 0;
       const bytes = Buffer.byteLength(content, 'utf-8');
-      const truncated = content.length > 8000;
+      const remaining = Math.max(0, totalBudget - usedChars);
+      if (remaining <= 0) break;
+      const perFileBudget = filename === 'memory.json' ? 4500 : filename === 'team_info.md' ? 3500 : 2500;
+      const sliceChars = Math.min(remaining, perFileBudget);
+      const truncated = content.length > sliceChars;
+      const excerpt = content.slice(0, sliceChars);
+      usedChars += excerpt.length;
       parts.push([
         `[${filename}]`,
         `path: ${filePath}`,
-        `lines: ${lineCount}, bytes: ${bytes}${truncated ? ', truncated to first 8000 chars' : ''}`,
-        content.slice(0, 8000),
+        `lines: ${lineCount}, bytes: ${bytes}${truncated ? `, truncated to first ${sliceChars} chars` : ''}`,
+        excerpt,
       ].join('\n'));
     } catch { /* skip unreadable */ }
   }

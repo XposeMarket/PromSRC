@@ -118,7 +118,7 @@ export function getFileWebMemoryTools(): any[] {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit', 'test', 'lint', 'format', 'typecheck'], description: 'Command/process/check action.' },
+            action: { type: 'string', enum: ['run', 'start', 'status', 'log', 'wait', 'kill', 'submit', 'test', 'lint', 'format', 'typecheck', 'telemetry', 'benchmark_summary'], description: 'Command/process/check/telemetry action.' },
             command: { type: 'string', description: 'Command to run, or explicit check command.' },
             cwd: { type: 'string', description: 'Working directory relative to the workspace, or an absolute computer path. Outside-workspace paths require approval in default permissions and run directly in Lite permissions.' },
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'] },
@@ -134,6 +134,9 @@ export function getFileWebMemoryTools(): any[] {
             max_chars: { type: 'number', description: 'Alias for maxChars.' },
             maxChars: { type: 'number' },
             data: { type: 'string', description: 'Text to submit to stdin.' },
+            health_url: { type: 'string', description: 'Optional HTTP URL to probe during status.' },
+            health_timeout_ms: { type: 'number' },
+            port: { type: 'number', description: 'Optional local service port; status probes localhost and reports the listening PID.' },
           },
         },
       },
@@ -317,6 +320,7 @@ export function getFileWebMemoryTools(): any[] {
             case_insensitive: { type: 'boolean', description: 'Case-insensitive match (default false)' },
             include_lockfiles: { type: 'boolean', description: 'Include lockfiles. Default false.' },
             exclude: { type: 'string', description: 'Comma-separated names to exclude in addition to defaults.' },
+            max_file_bytes: { type: 'number', description: 'Maximum size of each file searched. Default 5 MiB, hard cap 25 MiB. Larger files are reported as skipped; narrow to a file and use file_stats/read_file instead of broadly scanning giant indexes/logs.' },
             max_results: { type: 'number', description: 'Max total matches to return (default 50, hard cap 80). Narrow directory/glob/pattern instead of requesting huge result sets.' },
           },
         },
@@ -648,11 +652,11 @@ export function getFileWebMemoryTools(): any[] {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['patchset', 'find_replace', 'replace_lines', 'insert_after', 'delete_lines', 'write', 'create', 'delete_file', 'verify', 'verify_only', 'apply_live', 'apply'], description: 'Approved edit or apply-live action.' },
+            action: { type: 'string', enum: ['patchset', 'find_replace', 'replace_lines', 'insert_after', 'delete_lines', 'write', 'create', 'delete_file', 'await_files', 'await_handoff', 'verify', 'verify_only', 'apply_live', 'apply'], description: 'Approved edit, overlapping-file handoff wait, verification, or apply-live readiness action.' },
             surface: { type: 'string', enum: ['src', 'web-ui'], description: 'Target source surface. Defaults to src unless path starts with web-ui/.' },
             file: { type: 'string', description: 'File path. Use src/... or web-ui/... prefixes when convenient.' },
             path: { type: 'string', description: 'Alias for file.' },
-            edits: { type: 'array', items: { type: 'object' }, description: 'Patchset edits for action=patchset.' },
+            edits: { type: 'array', items: { type: 'object' }, description: 'Patchset edits for action=patchset. Canonical fields are file, op, find, replace, content, and line coordinates. Common aliases are accepted: operation/action/type for op, old/before for find, and new/after/replacement for replace.' },
             find: { type: 'string' },
             replace: { type: 'string' },
             replace_all: { type: 'boolean' },
@@ -676,6 +680,7 @@ export function getFileWebMemoryTools(): any[] {
             verification_profiles: { type: 'array', items: { type: 'string', enum: ['backend_build', 'webui_sync_check', 'full_build', 'route_smoke', 'desktop_ui_smoke', 'mobile_ui_smoke', 'none'] } },
             refresh_desktop: { type: 'boolean' },
             test_instructions: { type: 'string' },
+            timeout_seconds: { type: 'number', description: 'For await_files/await_handoff, maximum time to wait before returning the current queue state. Defaults to 900 seconds.' },
           },
         },
       },
@@ -1507,7 +1512,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'web_search',
-        description: 'Search the web for current information. Defaults to multi-engine search across all configured providers, including xAI X Search when xAI credentials are present. Use provider to force one engine, provider:"multi" to force all configured engines, or multi_engine:false for preferred-provider-only search. Use fetch_top_k to fetch top result URLs in the same call.',
+        description: 'Search the web for current information. Provider thumbnails/publisher/date fields are preserved when available. Defaults to multi-engine search across all configured providers, including xAI X Search when xAI credentials are present. Use provider to force one engine, provider:"multi" to force all configured engines, or multi_engine:false for preferred-provider-only search. fetch_top_k also fetches pages and merges preview metadata/images back into results.',
         parameters: {
           type: 'object', required: ['query'],
           properties: {
@@ -1563,7 +1568,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'web_fetch',
-        description: 'Fetch the full text content of one webpage URL, or multiple URLs in parallel when urls is provided. Use this AFTER web_search to read actual page content instead of snippets. For X/Twitter status URLs, it returns structured post data and will attempt attached-media download plus analysis automatically.',
+        description: 'Fetch the full text content and structured page preview metadata (title, description, publisher, date, hero image, icon) for one webpage URL, or multiple URLs in parallel when urls is provided. Use this AFTER web_search to read actual page content instead of snippets. Exact X/Twitter statuses use official X oEmbed; thread expansion is opt-in with include_thread=true and attached-media analysis is opt-in with include_media=true.',
         parameters: {
           type: 'object',
           properties: {
@@ -1576,6 +1581,8 @@ export function getFileWebMemoryTools(): any[] {
             },
             max_chars: { type: 'number', description: 'Single fetch max characters, or max characters per URL for urls. Default 10000 single / 6000 batch.' },
             concurrency: { type: 'number', description: 'Batch-only parallel fetch count. Default 4, max 8.' },
+            include_media: { type: 'boolean', description: 'X status URLs only. Default false. Download and analyze attached media only when explicitly requested.' },
+            include_thread: { type: 'boolean', description: 'X status URLs only. Default false. Use browser extraction to expand the surrounding thread.' },
           },
         },
       },
@@ -2150,7 +2157,8 @@ export function getFileWebMemoryTools(): any[] {
             max_detail_frames: { type: 'number', description: 'Hard cap for automatic detail extraction when detail_frame_budget is omitted (default 42, max 72)' },
             output_dir: { type: 'string', description: 'Optional workspace-relative output directory for extracted artifacts' },
             extract_audio: { type: 'boolean', description: 'If true, extract audio when ffmpeg is available (default true)' },
-            transcribe: { type: 'boolean', description: 'If true, attempt local whisper transcription when available (default true)' },
+            transcribe: { type: 'boolean', description: 'If true, use the configured speech-to-text provider when audio is available (default true)' },
+            include_raw_probe: { type: 'boolean', description: 'If true, include full ffprobe JSON. Default false keeps model-facing output compact.' },
           },
         },
       },
@@ -2160,7 +2168,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory_write',
-        description: 'Write a fact or update to USER.md, SOUL.md, or MEMORY.md under a specific category section. Creates the category if it does not exist. Use memory_browse first to pick the right category.',
+        description: 'Write a durable fact under a category. In main Prometheus this can target USER.md, SOUL.md, or MEMORY.md. In a distinct manager/agent runtime only file="memory" is allowed and resolves to that actor’s private MEMORY.md; it never falls back to main memory.',
         parameters: {
           type: 'object',
           required: ['file', 'category', 'content'],
@@ -2176,7 +2184,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory_read',
-        description: 'Read the full contents of USER.md, SOUL.md, or MEMORY.md. Use when you need complete context before making changes.',
+        description: 'Read a markdown memory file. In a distinct manager/agent runtime only file="memory" is allowed and resolves to that actor’s private MEMORY.md.',
         parameters: {
           type: 'object',
           required: ['file'],

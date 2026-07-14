@@ -13,6 +13,11 @@
 
 import { z } from 'zod';
 
+const OptionalReasoningEffortSchema = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
+);
+
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
 const ProviderIDSchema = z.string().min(1);
@@ -39,24 +44,27 @@ const LMStudioProviderSchema = z.object({
 // Accepted reasoning effort levels for providers that expose one.
 // Anthropic additionally accepts "max"; providers that do not support it must
 // clamp or reject it at their adapter/UI boundary.
-const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional();
+const ReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional();
 
 const OpenAIProviderSchema = z.object({
   api_key: z.string(),   // may be "vault:<key>" or "env:VAR"
   model: z.string(),
   reasoning_effort: ReasoningEffortSchema,
+  speed: z.enum(['standard', 'fast']).optional(),
   tool_choice: z.enum(['auto', 'required']).optional(),
 });
 
 const OpenAICodexProviderSchema = z.object({
   model: z.string(),
   reasoning_effort: ReasoningEffortSchema,
+  speed: z.enum(['standard', 'fast']).optional(),
   tool_choice: z.enum(['auto', 'required']).optional(),
 });
 
 const AnthropicProviderSchema_LLM = z.object({
   model: z.string(),
   reasoning_effort: ReasoningEffortSchema,
+  speed: z.enum(['standard', 'fast']).optional(),
   extended_thinking: z.boolean().optional(),
   thinking_budget: z.number().int().min(1024).optional(),
   // Claude Fast Mode — faster output on the same Opus model (no quality
@@ -160,12 +168,14 @@ const AgentDefinitionSchema = z.object({
   roleType:    z.string().optional(),
   teamRole:    z.string().optional(),
   teamAssignment: z.string().optional(),
+  teamId: z.string().optional(),
   workspace:   z.string().optional(),
   executionWorkspace: z.string().optional(),
   allowedWorkPaths: z.array(z.string()).optional(),
   marketplaceProfile: z.record(z.unknown()).optional(),
   skillIds:    z.array(z.string()).optional(),
   model:       z.string().optional(),
+  reasoning_effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
   tools:       AgentToolPolicySchema.optional(),
   default:     z.boolean().optional(),
   isTeamManager: z.boolean().optional(),
@@ -297,6 +307,7 @@ export const PrometheusConfigSchema = z.object({
     subagent:                      z.string().optional(),
     team_subagent:                 z.string().optional(),
     background_task:               z.string().optional(),
+    background_spawn:              z.string().optional(),
     // Per-role-type subagent defaults (checked before generic 'subagent' fallback)
     subagent_planner:              z.string().optional(),
     subagent_orchestrator:         z.string().optional(),
@@ -312,6 +323,8 @@ export const PrometheusConfigSchema = z.object({
     coordinator:                   z.string().optional(),
   }).optional(),
 
+  agent_model_default_reasoning: z.record(z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).optional(),
+
   agent_model_default_templates: z.array(z.object({
     id: z.string(),
     name: z.string(),
@@ -324,6 +337,7 @@ export const PrometheusConfigSchema = z.object({
       subagent:                      z.string().optional(),
       team_subagent:                 z.string().optional(),
       background_task:               z.string().optional(),
+      background_spawn:              z.string().optional(),
       subagent_planner:              z.string().optional(),
       subagent_orchestrator:         z.string().optional(),
       subagent_researcher:           z.string().optional(),
@@ -335,6 +349,7 @@ export const PrometheusConfigSchema = z.object({
       switch_model_medium:           z.string().optional(),
       coordinator:                   z.string().optional(),
     }).optional().default({}),
+    reasoning: z.record(z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).optional().default({}),
     created_at: z.string().optional(),
     updated_at: z.string().optional(),
   })).optional(),
@@ -398,9 +413,14 @@ export const PrometheusConfigSchema = z.object({
       summaryEveryTurns: z.number().int().min(1).max(50).optional(),
       summaryMaxWords: z.number().int().min(120).max(1200).optional(),
       judgeModel: z.string().optional(),
+      judgeReasoning: OptionalReasoningEffortSchema,
       compactionModel: z.string().optional(),
+      compactionReasoning: OptionalReasoningEffortSchema,
       maxConsecutiveJudgeFailures: z.number().int().min(1).max(20).optional(),
       maxConsecutiveRuntimeFailures: z.number().int().min(1).max(20).optional(),
+      maxIterations: z.number().int().min(1).max(500).optional(),
+      maxNoProgressTurns: z.number().int().min(1).max(50).optional(),
+      completionVerificationEnabled: z.boolean().optional(),
       permissions: z.object({
         approvalMode: z.enum(['normal', 'never']).optional(),
         hardDenyEnabled: z.boolean().optional(),
@@ -439,6 +459,12 @@ export const PrometheusConfigSchema = z.object({
     enabled: z.boolean(),
     token:   z.string(),
     path:    z.string(),
+    providers: z.record(z.object({
+      enabled: z.boolean().optional(),
+      secret: z.string().optional(),
+      events: z.record(z.enum(['audit', 'wake', 'agent', 'ignore'])).optional(),
+      deliver: z.boolean().optional(),
+    })).optional(),
   }).optional(),
 
   agent_policy: z.object({

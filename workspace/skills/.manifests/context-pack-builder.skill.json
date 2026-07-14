@@ -1,24 +1,14 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating or updating compact context packs for agents, teams, schedules, tasks, projects, or handoffs so future runs receive the right facts without bloating prompts.",
+  "description": "Assemble reusable Prometheus briefing packs from memory, project and team context, sessions, files, and cited sources. Use only when the user explicitly asks for a context pack, briefing pack, or reusable agent handoff; do not invoke for ordinary prompt context.",
+  "implicitInvocation": false,
   "triggers": [
-    "context pack",
-    "build context for agent",
-    "handoff context",
-    "compact project context",
-    "schedule context card",
-    "team context",
-    "task context",
-    "create a run context",
-    "summarize for future agent",
-    "agent briefing",
-    "reusable context bundle",
-    "reduce prompt bloat",
-    "context card",
-    "preserve context",
-    "pack these notes",
-    "make a handoff"
+    "context pack builder",
+    "client briefing pack",
+    "project context pack",
+    "reusable agent briefing",
+    "workflow context bundle"
   ],
   "categories": [
     "context",
@@ -31,5 +21,6 @@
     "advanced_memory"
   ],
   "lifecycle": "active",
-  "id": "context-pack-builder"
+  "id": "context-pack-builder",
+  "name": "context-pack-builder"
 }

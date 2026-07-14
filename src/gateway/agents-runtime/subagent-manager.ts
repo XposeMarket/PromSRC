@@ -17,6 +17,7 @@ import { appendSubagentChatMessage } from './subagent-chat-store';
 import type { AgentIdentity, AgentPersonality } from '../../types.js';
 import { buildAgentIdentity, renderIdentityPrompt } from '../../agents/identity-generator.js';
 import { resolveConfiguredAgentModel } from '../../agents/model-routing.js';
+import { writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 
 export interface SubagentDefinition {
   id: string;
@@ -27,6 +28,7 @@ export interface SubagentDefinition {
   max_steps: number;
   timeout_ms: number;
   model?: string;  // Override from main config
+  reasoning_effort?: string;
   voice?: Record<string, any>;
   executionWorkspace?: string;
   allowedWorkPaths?: string[];
@@ -66,7 +68,7 @@ export interface SubagentContextReference {
 
 export interface SubagentCallRequest {
   // Identify or create subagent
-  subagent_id: string;            // e.g., "news_researcher_v1"
+  subagent_id?: string;           // e.g., "news_researcher_v1"; generated for create_if_missing when omitted
   subagent_name?: string;         // If different from ID
   
   // Task for this subagent
@@ -96,6 +98,7 @@ export interface SubagentCallRequest {
     max_steps?: number;
     timeout_ms?: number;
     model?: string;
+    reasoning_effort?: string;
     roleType?: string;          // Set when created from_role — drives model resolution
     teamRole?: string;
     teamAssignment?: string;
@@ -307,7 +310,8 @@ export class SubagentManager {
     request: SubagentCallRequest,
     parentTaskId: string,
   ): Promise<SubagentResult> {
-    const subagentId = request.subagent_id;
+    const subagentId = String(request.subagent_id || '').trim();
+    if (!subagentId) throw new Error('subagent_id is required unless the caller generates one for create_if_missing');
     const runNow = request.run_now !== false;
     
     // Load existing or create new
@@ -353,7 +357,7 @@ export class SubagentManager {
 
     // Build task for this subagent. Standalone subagents use a declared
     // allowlist for project edits, while their own subagent directory is the
-    // artifact/memory/log home.
+    // artifact/log home.
     const subagentPrompt = this.buildSubagentPrompt(definition, taskPrompt, request.context_data, {
       mainWorkspace: executionWorkspace,
       artifactWorkspace: agentArtifactWorkspace,
@@ -382,6 +386,7 @@ export class SubagentManager {
       agentWorkspace,
       agentAllowedWorkPaths: allowedWorkPaths,
       executorProvider: executorModel || undefined,
+      executorReasoningEffort: agentDefinition?.reasoning_effort || definition.reasoning_effort || undefined,
       plan: this.buildDefaultPlan(definition),
     });
 
@@ -468,13 +473,20 @@ export class SubagentManager {
    */
   private createSubagent(id: string, params: SubagentCallRequest['create_if_missing']): SubagentDefinition {
     if (!params) throw new Error('create_if_missing required');
+    const description = String(params.description || '').trim();
+    const systemInstructions = String(params.system_instructions || '').trim();
+    const successCriteria = String(params.success_criteria || '').trim();
+    const constraints = Array.isArray(params.constraints) ? params.constraints.map((value: any) => String(value || '').trim()).filter(Boolean) : [];
+    if (!description) throw new Error('create_if_missing.description is required');
+    if (!systemInstructions) throw new Error('create_if_missing.system_instructions is required');
+    if (!successCriteria) throw new Error('create_if_missing.success_criteria is required');
     const allowedWorkPaths = this.normalizeAllowedWorkPaths(params.allowedWorkPaths ?? params.allowed_work_paths);
     const executionWorkspace = this.normalizeExecutionWorkspace(params.executionWorkspace ?? params.execution_workspace, allowedWorkPaths);
 
     const identity = buildAgentIdentity({
       id,
       explicitName: params.name,
-      description: params.description,
+      description,
       roleType: params.roleType,
       teamRole: params.teamRole,
       teamAssignment: params.teamAssignment,
@@ -490,16 +502,17 @@ export class SubagentManager {
       max_steps: params.max_steps ?? 20,
       timeout_ms: params.timeout_ms ?? 300_000,
       model: params.model,
+      reasoning_effort: params.reasoning_effort,
       voice: (params as any).voice && typeof (params as any).voice === 'object' ? (params as any).voice : undefined,
       executionWorkspace,
       allowedWorkPaths,
-      allowed_tools: params.allowed_tools ?? [],
-      forbidden_tools: params.forbidden_tools ?? [],
-      mcp_servers: params.mcp_servers ?? [],
+      allowed_tools: Array.isArray(params.allowed_tools) ? params.allowed_tools.map(String) : [],
+      forbidden_tools: Array.isArray(params.forbidden_tools) ? params.forbidden_tools.map(String) : [],
+      mcp_servers: Array.isArray(params.mcp_servers) ? params.mcp_servers.map(String) : [],
       skillIds: Array.isArray(params.skillIds) ? Array.from(new Set(params.skillIds.map((s: any) => String(s || '').trim()).filter(Boolean))) : [],
-      system_instructions: params.system_instructions,
-      constraints: params.constraints,
-      success_criteria: params.success_criteria,
+      system_instructions: systemInstructions,
+      constraints,
+      success_criteria: successCriteria,
       roleType: params.roleType,
       teamRole: params.teamRole,
       teamAssignment: params.teamAssignment,
@@ -519,11 +532,8 @@ export class SubagentManager {
       JSON.stringify(definition, null, 2),
     );
 
-    // Write editable system prompt file
-    fs.writeFileSync(
-      path.join(agentDir, 'system_prompt.md'),
-      this.buildSystemPromptFile(definition),
-    );
+    // Write the editable, per-agent identity contract.
+    writeAgentPromptFile(agentDir, this.buildAgentPromptFile(definition));
 
     // Keep a legacy HEARTBEAT.md instructions file for schedule-job previews and imports.
     const heartbeatPath = path.join(agentDir, 'HEARTBEAT.md');
@@ -569,7 +579,7 @@ export class SubagentManager {
   /**
    * Build system prompt file that user can edit
    */
-  private buildSystemPromptFile(def: SubagentDefinition): string {
+  private buildAgentPromptFile(def: SubagentDefinition): string {
     const hasTeamAssignment = !!(def.teamRole || def.teamAssignment);
     const identityBlock = hasTeamAssignment
       ? [
@@ -582,8 +592,8 @@ export class SubagentManager {
       : [
           `## Standalone Subagent Identity`,
           `You are a standalone one-off subagent, not a member of a managed team.`,
-          `You are main-chat-like in capability: use the normal runtime, tools, memory context, and workspace access.`,
-          `Your difference from main chat is assignment and ownership: you answer as this named subagent, keep your own durable notes in this subagent workspace, and keep generated support artifacts separated there when practical.`,
+          `You use the standard Prometheus runtime policies, tools, wrappers, and skill rules without inheriting the main chat's soul, user profile, or memory context.`,
+          `Answer as this named subagent and keep generated support artifacts separated in this subagent workspace when practical.`,
         ];
 
     return [
@@ -607,9 +617,6 @@ export class SubagentManager {
       ``,
       `## Success Criteria`,
       def.success_criteria,
-      ``,
-	      `## Tool Access`,
-	      `Full standard core + category tool access. Commit-tier actions still require approval.`,
       ``,
       `## Forbidden Tools`,
       def.forbidden_tools?.map((t: string) => `- ${t}`).join('\n') || '(none)',
@@ -651,11 +658,7 @@ export class SubagentManager {
     return [
       `[SUBAGENT: ${def.name}]`,
       ``,
-      `IDENTITY: You are a standalone subagent unless this prompt explicitly says you are serving inside a managed team. You keep your own artifacts and MEMORY.md in your subagent workspace, but you may read/edit project files in the main workspace when the task requires it.`,
-      def.identity ? `\n${renderIdentityPrompt(def.identity)}` : '',
-      ``,
-      `SYSTEM INSTRUCTIONS:`,
-      def.system_instructions,
+      `IDENTITY: Follow your AGENT.md identity. You are a standalone subagent unless this task explicitly says you are serving inside a managed team.`,
       ``,
       workspaceInfo
         ? [
@@ -663,7 +666,7 @@ export class SubagentManager {
             `- Default execution workspace: ${workspaceInfo.mainWorkspace}`,
             `- Allowed work paths:`,
             ...(workspaceInfo.allowedWorkPaths || [workspaceInfo.mainWorkspace]).map((p) => `  - ${p}`),
-            `- Subagent artifact workspace for your own outputs, notes, logs, scratch files, and MEMORY.md updates: ${workspaceInfo.artifactWorkspace}`,
+            `- Subagent artifact workspace for your own outputs, logs, and scratch files: ${workspaceInfo.artifactWorkspace}`,
             `- File tools and run_command must stay inside the allowed work paths.`,
             ``,
           ].join('\n')
@@ -855,7 +858,7 @@ export class SubagentManager {
     const agentDir = path.join(this.storePath, safeId);
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(path.join(agentDir, 'config.json'), JSON.stringify(next, null, 2), 'utf-8');
-    fs.writeFileSync(path.join(agentDir, 'system_prompt.md'), this.buildSystemPromptFile(next), 'utf-8');
+    writeAgentPromptFile(agentDir, this.buildAgentPromptFile(next));
 
     if (patch.heartbeat_instructions !== undefined) {
       const heartbeat = ensureHeartbeatSilenceRule(String(patch.heartbeat_instructions || '').trim(), next.name);
@@ -1004,11 +1007,11 @@ export const subagentSpawnTool = {
     'Create a specialized sub-agent for a specific task (research, analysis, etc). The subagent runs as a full agent with explicit role guidance and constraints. Perfect for delegating work while maintaining quality control.',
   schema: {
     type: 'object',
-    required: ['subagent_id'],
+    required: [],
     properties: {
       subagent_id: {
         type: 'string',
-        description: 'Identifier for this subagent. Use persistent names like "news_researcher_v1" so you can call it again later.',
+        description: 'Identifier for this subagent. Optional only when create_if_missing is supplied; Prometheus then generates a disposable-safe ID.',
       },
       task_prompt: {
         type: 'string',
@@ -1060,7 +1063,7 @@ export const subagentSpawnTool = {
           },
           teamAssignment: {
             type: 'string',
-            description: 'Concrete team-specific mission for this agent. This is persisted into system_prompt.md alongside the base preset role.',
+            description: 'Concrete team-specific mission for this agent. This is persisted into AGENT.md alongside the base preset role.',
           },
           allowed_tools: {
             type: 'array',
@@ -1105,6 +1108,12 @@ export const subagentSpawnTool = {
           max_steps: {
             type: 'number',
             description: 'Maximum tool calls before stopping (default 20)',
+          },
+          model: { type: 'string', description: 'Optional provider/model override.' },
+          reasoning_effort: {
+            type: 'string',
+            enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+            description: 'Optional provider/model-aware reasoning effort.',
           },
         },
         required: ['description', 'system_instructions', 'constraints', 'success_criteria'],

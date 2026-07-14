@@ -167,3 +167,6 @@ Memory refresh notes:
 - the larger unsolved design is a dedicated workspace inventory/search layer: all files should be searchable/browsable from the Memory page, while the graph should render high-signal clusters and promoted search results instead of tens of thousands of always-visible particles
 
 
+## Subagent injection boundary
+
+Main-chat memory remains available to the main Prometheus runtime, but it is not automatically injected into standalone or team subagents. The direct-subagent, background-agent, and team-subagent prompt branches exclude `USER.md`, workspace `SOUL.md`, `MEMORY.md`, `BUSINESS.md`, intraday notes, project/CIS context, and retrieved long-term memory. Subagents may still use an explicitly available memory tool when a task genuinely calls for it; that is an intentional tool action, not inherited prompt context.

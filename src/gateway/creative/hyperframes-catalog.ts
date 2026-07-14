@@ -186,6 +186,18 @@ function parseCatalogLines(source: string): HyperframesCatalogItem[] {
 
 export const BUNDLED_HYPERFRAMES_CATALOG: HyperframesCatalogItem[] = parseCatalogLines(CATALOG_LINES);
 
+export type HyperframesCatalogBrowseState = 'ready' | 'unavailable' | 'unsynced' | 'empty' | 'no_match';
+
+export type HyperframesCatalogBrowseResult = {
+  state: HyperframesCatalogBrowseState;
+  available: boolean;
+  synced: boolean;
+  catalogTotal: number;
+  matchedTotal: number;
+  items: HyperframesCatalogItem[];
+  message: string;
+};
+
 function normalizeQuery(value: any): string {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ');
 }
@@ -202,6 +214,61 @@ export function listHyperframesCatalogItems(filters: { query?: string; kind?: st
     const haystack = normalizeQuery([item.id, item.name, item.description, item.registrySection, item.importKind, ...item.tags].join(' '));
     return tokens.every((token) => haystack.includes(token));
   });
+}
+
+/**
+ * Describe catalog health separately from search results. This prevents an empty
+ * result array from hiding whether the catalog is unavailable, has not synced,
+ * is genuinely empty, or simply has no item matching the supplied filters.
+ * The lifecycle overrides are primarily used by remote/synced catalog adapters.
+ */
+export function browseHyperframesCatalog(
+  filters: { query?: string; kind?: string; tag?: string } = {},
+  options: {
+    available?: boolean;
+    synced?: boolean;
+    catalog?: HyperframesCatalogItem[];
+  } = {},
+): HyperframesCatalogBrowseResult {
+  const available = options.available !== false;
+  const synced = options.synced !== false;
+  const catalog = options.catalog || BUNDLED_HYPERFRAMES_CATALOG;
+  const query = normalizeQuery(filters.query);
+  const kind = String(filters.kind || '').trim().toLowerCase();
+  const tag = String(filters.tag || '').trim().toLowerCase();
+  const items = catalog.filter((item) => {
+    if (kind && item.importKind !== kind && item.registrySection !== kind && item.registrySection.replace(/s$/, '') !== kind) return false;
+    if (tag && !item.tags.includes(tag)) return false;
+    if (!query) return true;
+    const haystack = normalizeQuery([item.id, item.name, item.description, item.registrySection, item.importKind, ...item.tags].join(' '));
+    return query.split(/\s+/).filter(Boolean).every((token) => haystack.includes(token));
+  });
+
+  let state: HyperframesCatalogBrowseState = 'ready';
+  let message = `${items.length} catalog item(s) matched.`;
+  if (!available) {
+    state = 'unavailable';
+    message = 'HyperFrames catalog is unavailable.';
+  } else if (!synced) {
+    state = 'unsynced';
+    message = 'HyperFrames catalog has not been synced yet.';
+  } else if (catalog.length === 0) {
+    state = 'empty';
+    message = 'HyperFrames catalog is synced but contains no items.';
+  } else if (items.length === 0) {
+    state = 'no_match';
+    message = 'HyperFrames catalog is available, but no items matched the requested filters.';
+  }
+
+  return {
+    state,
+    available,
+    synced,
+    catalogTotal: catalog.length,
+    matchedTotal: items.length,
+    items: available && synced ? items : [],
+    message,
+  };
 }
 
 export function getHyperframesCatalogItem(id: string): HyperframesCatalogItem | null {

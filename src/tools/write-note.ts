@@ -15,6 +15,7 @@ import { getConfig } from '../config/config.js';
 import { ToolResult } from '../types.js';
 import { getSharedToolExecutionContext } from './execution-context.js';
 import { formatIntradayNoteSourceInline, inferIntradayNoteSource } from '../gateway/intraday-note-source.js';
+import { getRuntimeActorContext } from '../gateway/runtime-actor.js';
 
 export async function executeWriteNote(args: {
   content: string;
@@ -28,8 +29,12 @@ export async function executeWriteNote(args: {
   const tag = args?.tag ? String(args.tag).trim().replace(/[^a-z0-9_\-]/gi, '') : '';
 
   try {
+    const executionContext = getSharedToolExecutionContext();
+    const actor = getRuntimeActorContext(executionContext.sessionId || '');
     const workspacePath = getConfig().getWorkspacePath();
-    const memDir = path.join(workspacePath, 'memory');
+    const memDir = actor && (actor.kind === 'agent' || actor.kind === 'manager') && (actor.memoryRoot || actor.identityRoot)
+      ? path.join(String(actor.memoryRoot || actor.identityRoot), 'notes')
+      : path.join(workspacePath, 'memory');
 
     // Ensure memory directory exists
     if (!fs.existsSync(memDir)) {
@@ -47,7 +52,7 @@ export async function executeWriteNote(args: {
     });
 
     const tagStr = tag ? ` [${tag}]` : '';
-    const source = inferIntradayNoteSource(getSharedToolExecutionContext().sessionId, args);
+    const source = inferIntradayNoteSource(executionContext.sessionId, args);
     const entry = `[${ts}]${tagStr} ${formatIntradayNoteSourceInline(source)} ${content}\n`;
 
     fs.appendFileSync(notesPath, entry, 'utf-8');
@@ -56,7 +61,9 @@ export async function executeWriteNote(args: {
       success: true,
       stdout: `Note written to ${today}-intraday-notes.md: ${content.slice(0, 80)}${content.length > 80 ? '...' : ''}`,
       data: {
-        file: `memory/${today}-intraday-notes.md`,
+        file: actor && (actor.kind === 'agent' || actor.kind === 'manager')
+          ? `${actor.kind}:${actor.agentId || 'unknown'}/notes/${today}-intraday-notes.md`
+          : `memory/${today}-intraday-notes.md`,
         tag: tag || undefined,
         timestamp: ts,
         source,

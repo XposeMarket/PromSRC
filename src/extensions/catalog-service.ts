@@ -17,6 +17,7 @@ import type {
   ExtensionKind,
   LoadedExtensionDescriptor,
 } from './types.js';
+import { ConnectionStore } from '../connections/connection-store.js';
 
 type CatalogState = Record<string, unknown>;
 
@@ -187,15 +188,20 @@ function safeGetConnectorStatuses(): ConnectorStatusMap {
 
 function buildCatalogItems(kind: ExtensionKind): CatalogItem[] {
   const descriptors = listExtensionDescriptors(kind);
+  const canonical = new ConnectionStore(getConfig().getConfigDir());
 
   if (kind === 'connector') {
     const savedConnections = loadSavedConnections();
     const statuses = safeGetConnectorStatuses();
     const vercelCredentials = getVercelCredentials();
-    return descriptors.map((descriptor) => ({
-      ...stripSourcePath(descriptor),
-      state: buildConnectorState(descriptor, savedConnections, statuses, vercelCredentials),
-    }));
+    return descriptors.map((descriptor) => {
+      const records = canonical.findByService(descriptor.id);
+      const latest = records[0];
+      return {
+        ...stripSourcePath(descriptor),
+        state: latest ? { ...buildConnectorState(descriptor, savedConnections, statuses, vercelCredentials), connectionId: latest.id, connected: latest.authenticated, configured: latest.configured, authenticated: latest.authenticated, registered: latest.registered, exposed: latest.exposed, verified: latest.verified, authState: latest.authState, health: latest.health, lastError: latest.lastError } : buildConnectorState(descriptor, savedConnections, statuses, vercelCredentials),
+      };
+    });
   }
 
   return descriptors.map((descriptor) => {
@@ -205,7 +211,8 @@ function buildCatalogItems(kind: ExtensionKind): CatalogItem[] {
     } else {
       state = buildMcpPresetState(descriptor);
     }
-    return { ...stripSourcePath(descriptor), state };
+    const latest = canonical.findByService(descriptor.id)[0];
+    return { ...stripSourcePath(descriptor), state: latest ? { ...state, connectionId: latest.id, connected: latest.authenticated, configured: latest.configured, authenticated: latest.authenticated, registered: latest.registered, exposed: latest.exposed, verified: latest.verified, authState: latest.authState, health: latest.health, lastError: latest.lastError } : state };
   });
 }
 
@@ -222,5 +229,6 @@ export function buildExtensionsCatalog(kind?: ExtensionKind) {
     providers: buildCatalogItems('provider'),
     connectors: buildCatalogItems('connector'),
     mcpPresets: buildCatalogItems('mcp_preset'),
+    integrations: buildCatalogItems('integration'),
   };
 }

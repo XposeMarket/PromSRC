@@ -39,6 +39,10 @@ const ICON_PATH    = path.join(APP_ROOT, 'assets', 'Prometheus.ico');
 const ICON_IMAGE   = nativeImage.createFromPath(ICON_PATH);
 const MAX_RETRIES  = 200;  // 200 x 300ms = 60s max wait (dev tsx startup can be slow)
 const RETRY_DELAY  = 300;
+const GATEWAY_HEALTH_INTERVAL_MS = 15_000;
+const GATEWAY_HEALTH_TIMEOUT_MS = 5_000;
+const GATEWAY_HEALTH_FAILURE_LIMIT = 2;
+const GATEWAY_BUSY_RECOVERY_GRACE_MS = 45_000;
 const PACKAGE_JSON = require(path.join(APP_ROOT, 'package.json'));
 const IS_PUBLIC_BUILD = String(process.env.PROMETHEUS_PUBLIC_BUILD || PACKAGE_JSON.prometheusBuild || '').trim().toLowerCase() === 'public';
 const IS_PACKAGED_RUNTIME = app.isPackaged;
@@ -133,6 +137,9 @@ let updaterChecking     = false;
 let updaterInstalling   = false;
 let updaterProgress     = 0;
 let isGatewayRestarting = false;
+let gatewayHealthTimer = null;
+let gatewayHealthCheckInFlight = false;
+let gatewayHealthFailures = 0;
 const GATEWAY_RESTART_EXIT_CODE = 42;
 const NATIVE_BROWSER_RPC_TOKEN = crypto.randomBytes(32).toString('hex');
 const PAIRING_ADMIN_TOKEN = crypto.randomBytes(32).toString('hex');
@@ -472,6 +479,118 @@ function resolveVaultMasterKey() {
 }
 
 // ─── Gateway ───────────────────────────────────────────────────────────────
+function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    const req = http.request(`${GATEWAY_URL}/api/health`, {
+      method: 'GET',
+      headers: { Connection: 'close' },
+    }, (res) => {
+      const ok = Number(res.statusCode || 0) >= 200 && Number(res.statusCode || 0) < 300;
+      res.resume();
+      res.once('end', () => done(ok));
+      res.once('close', () => done(ok));
+    });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      done(false);
+    });
+    req.once('error', () => done(false));
+    req.end();
+  });
+}
+
+function readGatewayRuntimeStatus() {
+  try {
+    const statusPath = path.join(USER_DATA_DIR, '.prometheus', 'gateway-runtime-status.json');
+    if (!fs.existsSync(statusPath)) return null;
+    return JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function shouldDeferGatewayHealthRecovery(status) {
+  if (!status || !Number.isFinite(Number(status.timestamp))) return false;
+  const heartbeatAgeMs = Math.max(0, Date.now() - Number(status.timestamp));
+  if (heartbeatAgeMs < 20_000) return true;
+  if (!status.modelBusy) return false;
+  const busyAgeAtHeartbeatMs = Number.isFinite(Number(status.modelBusyAgeMs))
+    ? Number(status.modelBusyAgeMs)
+    : 0;
+  const busyAgeFromStartMs = Number.isFinite(Number(status.modelBusySince))
+    ? Math.max(0, Date.now() - Number(status.modelBusySince))
+    : 0;
+  const effectiveBusyAgeMs = Math.max(
+    busyAgeFromStartMs,
+    busyAgeAtHeartbeatMs + heartbeatAgeMs,
+  );
+  return effectiveBusyAgeMs < GATEWAY_BUSY_RECOVERY_GRACE_MS;
+}
+
+function killGatewayProcessTree(child = gatewayProcess) {
+  if (!child || !child.pid) return;
+  if (process.platform === 'win32') {
+    try {
+      execSync(`taskkill /PID ${child.pid} /F /T`, { stdio: 'pipe', timeout: 8_000 });
+      return;
+    } catch {}
+  }
+  try { child.kill('SIGKILL'); } catch {}
+}
+
+function waitForGatewayProcessExit(child, timeoutMs = 10_000) {
+  if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(done, timeoutMs);
+    child.once('exit', done);
+  });
+}
+
+function startGatewayHealthWatchdog() {
+  if (gatewayHealthTimer) return;
+  gatewayHealthTimer = setInterval(async () => {
+    if (isQuitting || isGatewayRestarting || gatewayHealthCheckInFlight || !gatewayProcess) return;
+    gatewayHealthCheckInFlight = true;
+    try {
+      if (await checkGatewayHealth()) {
+        gatewayHealthFailures = 0;
+        return;
+      }
+      const status = readGatewayRuntimeStatus();
+      if (shouldDeferGatewayHealthRecovery(status)) {
+        gatewayHealthFailures = 0;
+        writeGatewayLog('[main] Gateway health timed out, but runtime heartbeat/busy grace is still current; deferring recovery\n');
+        return;
+      }
+      gatewayHealthFailures += 1;
+      writeGatewayLog(`[main] Gateway health failure ${gatewayHealthFailures}/${GATEWAY_HEALTH_FAILURE_LIMIT}\n`);
+      if (gatewayHealthFailures >= GATEWAY_HEALTH_FAILURE_LIMIT) {
+        gatewayHealthFailures = 0;
+        await restartGatewayFromElectron({
+          terminateExisting: true,
+          reason: 'health watchdog detected an unresponsive gateway',
+        });
+      }
+    } finally {
+      gatewayHealthCheckInFlight = false;
+    }
+  }, GATEWAY_HEALTH_INTERVAL_MS);
+  gatewayHealthTimer.unref?.();
+}
+
 function startGateway() {
   console.log('[Prometheus] Starting gateway...');
   console.log(`[Prometheus] User data: ${USER_DATA_DIR}`);
@@ -566,6 +685,7 @@ function startGateway() {
 
   gatewayProcess.on('exit', (code, signal) => {
     writeGatewayLog(`[main] Gateway exited (code=${code}, signal=${signal})\n`);
+    if (!isQuitting && isGatewayRestarting) return;
     if (!isQuitting && code === GATEWAY_RESTART_EXIT_CODE) {
       restartGatewayFromElectron();
       return;
@@ -581,10 +701,12 @@ function startGateway() {
   });
 }
 
-async function restartGatewayFromElectron() {
+async function restartGatewayFromElectron(options = {}) {
   if (isGatewayRestarting) return;
   isGatewayRestarting = true;
-  writeGatewayLog('[main] Electron-managed gateway restart requested\n');
+  const terminateExisting = options.terminateExisting === true;
+  const reason = String(options.reason || 'gateway requested restart');
+  writeGatewayLog(`[main] Electron-managed gateway restart requested: ${reason}\n`);
 
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -593,6 +715,12 @@ async function restartGatewayFromElectron() {
   } catch {}
 
   try {
+    if (terminateExisting && gatewayProcess) {
+      const staleProcess = gatewayProcess;
+      writeGatewayLog(`[main] Terminating unresponsive gateway tree (pid=${staleProcess.pid || 'unknown'})\n`);
+      killGatewayProcessTree(staleProcess);
+      await waitForGatewayProcessExit(staleProcess);
+    }
     gatewayProcess = null;
     startGateway();
     await waitForGateway();
@@ -1585,6 +1713,7 @@ app.whenReady().then(async () => {
     createWindow();
     loader.close();
     setupAutoUpdater();
+    startGatewayHealthWatchdog();
   } catch (err) {
     loader.close();
     const lastOutput = getLastGatewayOutput();
@@ -1603,6 +1732,10 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', (event) => {
   isQuitting = true;
+  if (gatewayHealthTimer) {
+    clearInterval(gatewayHealthTimer);
+    gatewayHealthTimer = null;
+  }
 
   // If gateway is already gone or we already started shutdown, let quit proceed.
   if (!gatewayProcess || gatewayProcess.killed || gatewayShuttingDown) return;

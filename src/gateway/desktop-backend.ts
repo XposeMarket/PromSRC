@@ -1,8 +1,9 @@
 // ─── DesktopBackend: cross-platform desktop automation contract ───────────────
 //
 // This is the single seam that makes Prometheus desktop tools dual-capable
-// (Windows + macOS, Linux later). The 40+ `desktop_*` tools in desktop-tools.ts
-// are thin orchestration — coordinate resolution, click-verification, macro
+// (Windows + macOS, Linux later). The six public desktop wrappers route into
+// granular compatibility handlers in desktop-tools.ts; those handlers are thin
+// orchestration — coordinate resolution, click-verification, macro
 // recording, monitor math — written ONCE, above this interface. Everything that
 // actually touches the OS bottoms out in the ~14 primitives below.
 //
@@ -111,7 +112,7 @@ export interface DesktopBackend {
   // ── Context / capture ──────────────────────────────────────────────────────
   gatherContext(): Promise<DesktopContext>;
   enumerateMonitors(): Promise<DesktopMonitorInfo[]>;
-  capture(req: DesktopCaptureRequest): Promise<DesktopCaptureResult>;
+  capture(req: DesktopCaptureRequest, signal?: AbortSignal): Promise<DesktopCaptureResult>;
 
   // ── Pointer ────────────────────────────────────────────────────────────────
   /** Move the pointer to a logical virtual-coord point (no click). */

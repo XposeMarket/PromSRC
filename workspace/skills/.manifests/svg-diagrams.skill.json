@@ -1,23 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to create clean SVG diagrams, architecture visuals, system maps, process graphics, icon-like diagrams, technical schematics, or custom vector visuals. It emphasizes readable layout, scalable SVG, and polished visual hierarchy.",
+  "description": "Create or edit a precise standalone SVG diagram, architecture visual, process map, annotated schematic, or system illustration. Use only when SVG is explicitly requested or is the existing artifact format; use Mermaid for text-native diagrams and chart tools for quantitative plots.",
   "triggers": [
-    "SVG diagram",
-    "create SVG",
-    "vector diagram",
+    "design a diagram",
     "architecture visual",
-    "system map",
-    "process graphic",
     "technical schematic",
-    "custom diagram",
     "visual schematic",
     "scalable graphic",
+    "process graphic",
+    "vector diagram",
+    "custom diagram",
+    "vector visual",
     "icon diagram",
-    "flow visual",
-    "SVG chart",
-    "design a diagram",
-    "vector visual"
+    "svg diagram",
+    "flow visual"
   ],
   "categories": [
     "visualization",
@@ -28,5 +25,7 @@
     "creative_mode"
   ],
   "lifecycle": "active",
-  "id": "svg-diagrams"
+  "id": "svg-diagrams",
+  "name": "svg-diagrams",
+  "implicitInvocation": false
 }

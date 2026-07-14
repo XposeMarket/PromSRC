@@ -301,16 +301,37 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'connection_ops',
+        description: 'Preferred universal plugin-backed setup orchestrator. discover resolves a natural service name without creating an attempt; plan creates/reuses a durable attempt and returns approval/research state; connect starts an approved strategy; continue resumes user-assisted auth; verify is the only authority for claiming readiness. Credentials must use secure input, never chat arguments.',
+        parameters: {
+          type: 'object', required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['discover', 'plan', 'connect', 'continue', 'verify', 'repair', 'status', 'cancel', 'disconnect', 'list', 'list_connections'] },
+            service: { type: 'string' }, service_id: { type: 'string' }, service_name: { type: 'string' },
+            connection_attempt_id: { type: 'string' }, connection_id: { type: 'string' },
+            requested_capabilities: { type: 'array', items: { type: 'string' } }, read_only: { type: 'boolean' },
+            approved: { type: 'boolean' }, metadata: { type: 'object' }, input: { type: 'object' },
+          }, additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'webhook_manage',
-        description: 'Manage webhook settings. Actions: get, set, test.',
+        description: 'Manage core and provider webhook settings without exposing stored secrets. Actions: get, set, set_provider, test.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', description: 'Action: get | set | test' },
+            action: { type: 'string', description: 'Action: get | set | set_provider | test' },
             enabled: { type: 'boolean', description: 'Enable/disable webhook endpoint (set action)' },
             token: { type: 'string', description: 'Webhook auth token (set action)' },
             path: { type: 'string', description: 'Webhook base path, e.g. /hooks (set action)' },
+            provider: { type: 'string', enum: ['github', 'stripe', 'slack'], description: 'Provider for set_provider or provider-specific test.' },
+            secret: { type: 'string', description: 'Provider signing secret for set_provider. Stored in the vault and never returned.' },
+            events: { type: 'object', description: 'Provider event-to-action map. Values: audit | wake | agent | ignore.' },
+            deliver: { type: 'boolean', description: 'Allow configured provider agent results to be delivered to Telegram. Default false.' },
           },
         },
       },
@@ -319,12 +340,12 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'mcp_server_manage',
-        description: 'Manage MCP server config and connection lifecycle. Actions: list, status, upsert, import, connect, disconnect, delete, list_tools, start_enabled.',
+        description: 'Advanced MCP administration/debug control plane. For normal user requests to set up or connect an MCP service, use connection_ops so identity resolution, durable cards, secure input, cross-device continuation, and verification are preserved.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', description: 'Action to run: list | status | upsert | import | connect | disconnect | delete | list_tools | start_enabled' },
+            action: { type: 'string', description: 'Action: list | status | upsert | import | connect | disconnect | delete | list_tools | start_enabled | oauth_start | oauth_status | oauth_clear' },
             id: { type: 'string', description: 'Server ID for connect/disconnect/delete/upsert' },
             name: { type: 'string', description: 'Human-readable server name (defaults to id)' },
             transport: { type: 'string', description: 'stdio, sse, or http (http is accepted as alias for streamable HTTP MCP)' },
@@ -340,6 +361,7 @@ export function getCisSystemTools(): any[] {
             json: { description: 'JSON object or JSON string for import action. Supports {mcpServers:{...}} format.' },
             connect: { type: 'boolean', description: 'If true on upsert/import, attempt connection immediately' },
             confirm: { type: 'boolean', description: 'Required for delete action' },
+            scope: { type: 'string', description: 'Optional OAuth scope for oauth_start.' },
           },
         },
       },
@@ -465,7 +487,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'get_agent_models',
         description:
-          'Read the current model routing configuration: active/current primary model, agent_model_defaults, and per-agent model overrides. ' +
+          'Read the current model routing configuration: active/current primary model, per-slot model and reasoning defaults, and per-agent overrides. ' +
           'Use this before changing proposal executor, background, coordinator, switch_model, or subagent defaults.',
         parameters: {
           type: 'object',
@@ -504,17 +526,26 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'set_agent_model',
         description:
-          'Safely update live model routing in .prometheus/config.json without raw file writes. ' +
-          'Use agent_type to update an allowlisted agent_model_defaults key, or agent_id to update a specific configured agent override. ' +
+          'Safely update provider, model, and reasoning routing in .prometheus/config.json without raw file writes. ' +
+          'Use agent_type to update an allowlisted agent model route, including goal_compactor and goal_judge, or agent_id to update a specific configured agent override. ' +
           'Critical outage use: when proposals/background work are blocked by a provider quota event, set proposal_executor_low_risk, coordinator, or subagent_* defaults to a working provider/model such as openai_codex/gpt-5.5. ' +
-          'Changes are persisted through the Settings API and take effect for new proposal executions, scheduled background tasks, subagents, and model switches. background_spawn agents always use the same route as the main agent.',
+          'Changes are persisted through the Settings API and take effect for new proposal executions, scheduled background tasks, direct background spawns, team agents, subagents, and model switches.',
         parameters: {
           type: 'object',
-          required: ['model'],
+          required: [],
           properties: {
+            provider: {
+              type: 'string',
+              description: 'Optional provider ID when model is supplied without a provider prefix, e.g. openai_codex.',
+            },
             model: {
               type: 'string',
-              description: 'Provider/model route in "provider/model" format, e.g. "openai_codex/gpt-5.5".',
+              description: 'Model name, or full provider/model route, e.g. "gpt-5.6-terra" with provider or "openai_codex/gpt-5.6-terra".',
+            },
+            reasoning_effort: {
+              type: 'string',
+              enum: ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+              description: 'Provider/model-aware reasoning effort. Empty string clears the override. May be updated without changing model.',
             },
             agent_type: {
               type: 'string',
@@ -537,8 +568,11 @@ export function getCisSystemTools(): any[] {
                 'switch_model_medium',
                 'coordinator',
                 'background_task',
+                'background_spawn',
+                'goal_compactor',
+                'goal_judge',
               ],
-              description: 'Allowlisted default route to update in agent_model_defaults.',
+              description: 'Allowlisted durable model route. goal_compactor and goal_judge update Session > Goal Support; other values update agent_model_defaults.',
             },
             agent_id: {
               type: 'string',
@@ -567,7 +601,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'save_agent_model_template',
         description:
-          'Create or update a named template snapshot for agent_model_defaults. ' +
+          'Create or update a named template snapshot for agent model and reasoning defaults. ' +
           'If defaults is omitted, the current live defaults are saved. Use id or an existing name to modify a saved template. ' +
           'This only saves the template; use select_agent_model_template/apply_agent_model_template to make it live.',
         parameters: {
@@ -587,6 +621,11 @@ export function getCisSystemTools(): any[] {
               description: 'Optional full agent_model_defaults map to save. Values use "provider/model"; omit to snapshot current defaults.',
               additionalProperties: { type: 'string' },
             },
+            reasoning: {
+              type: 'object',
+              description: 'Optional per-slot reasoning effort map keyed like defaults.',
+              additionalProperties: { type: 'string' },
+            },
           },
         },
       },
@@ -597,7 +636,7 @@ export function getCisSystemTools(): any[] {
         name: 'update_agent_model_template',
         description:
           'Modify an existing agent model default template by id or exact name without applying it. ' +
-          'Use this to rename a template or replace its saved defaults while leaving current live agent_model_defaults unchanged.',
+          'Use this to rename a template or replace its saved model/reasoning defaults without applying it.',
         parameters: {
           type: 'object',
           required: ['id'],
@@ -613,6 +652,11 @@ export function getCisSystemTools(): any[] {
             defaults: {
               type: 'object',
               description: 'Optional replacement agent_model_defaults map. Values use "provider/model"; omit to rename only.',
+              additionalProperties: { type: 'string' },
+            },
+            reasoning: {
+              type: 'object',
+              description: 'Optional replacement per-slot reasoning effort map.',
               additionalProperties: { type: 'string' },
             },
           },
@@ -678,7 +722,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'ask_prometheus_questions',
         description:
-          'Ask the user 1-5 structured questions as an interactive card, then wait for the response. Use when a missing decision/preference materially affects the next step.',
+          'Ask the user 1-5 structured questions as a durable interactive card. The tool returns after queuing the card; end the turn, and the submitted answer automatically resumes the interrupted work even after a mobile disconnect/reconnect. Use when a missing decision/preference materially affects the next step.',
         parameters: {
           type: 'object',
           required: ['title', 'prompt', 'questions'],
@@ -944,6 +988,7 @@ export function getCisSystemTools(): any[] {
         name: 'prom_apply_dev_changes',
         description:
           'Smart dev-only helper that makes Prometheus code/UI edits live. Use after applying approved source or web-ui/mobile changes. ' +
+          'apply_live is a coordination readiness boundary: when other active edits or overlapping-file successors exist, it queues this edit without restarting, hands verified files to the next queued editor, and deploys only after the shared batch is ready. ' +
           'For web-ui/mobile changes it runs npm run sync:web-ui and requests connected web/mobile UI reload. ' +
           'For backend/src/gateway changes it runs the build and gracefully restarts the gateway. ' +
           'For mixed backend + web-ui/mobile changes it syncs web-ui first, then builds/restarts, then the restarted gateway asks connected desktop and mobile UI clients to reload. ' +
@@ -976,7 +1021,7 @@ export function getCisSystemTools(): any[] {
             mode: {
               type: 'string',
               enum: ['apply_live', 'verify_only'],
-              description: 'apply_live (default) syncs/builds/restarts/reloads as needed. verify_only runs the narrow safe verification/sync commands and does not restart the gateway.',
+              description: 'apply_live (default) marks this verified edit ready for the shared batch and syncs/builds/restarts/reloads only when elected batch leader. verify_only records verification against exact current file hashes and does not restart the gateway.',
             },
             reason: { type: 'string', description: 'Why these changes are being applied live.' },
             proposal_id: { type: 'string', description: 'Proposal ID if this is proposal execution.' },
@@ -1396,6 +1441,58 @@ export function getCisSystemTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'skill_curator',
+        description:
+          'Inspect or run the Brain Skill Curator. Runs default to dry-run. Applying a pending suggestion is the only autonomous-system path that may mutate a skill.',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: { type: 'string', enum: ['status', 'run', 'apply', 'reject'] },
+            mode: { type: 'string', enum: ['dry-run', 'pending', 'auto-safe'], description: 'For action=run. Defaults to dry-run; auto-safe is currently mutation-frozen.' },
+            id: { type: 'string', description: 'Suggestion id for apply/reject.' },
+            limit: { type: 'number', description: 'For status. Compact rows to return; defaults to 5, maximum 100.' },
+            cursor: { type: 'number', description: 'For status pagination. Zero-based offset.' },
+            statusFilter: { type: 'string', description: 'For status. Restrict to one suggestion status.' },
+            skillId: { type: 'string', description: 'For status. Restrict to one skill id.' },
+            includeContent: { type: 'boolean', description: 'For status. Include full suggestion bodies; defaults false.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'skill_candidate_submit',
+        description:
+          'Submit a structured, candidate-only skill improvement for Brain Curator review. This never changes skill files. ' +
+          'Use it from Thought, Dream, cleanup, or normal workflows instead of autonomously creating or updating a skill.',
+        parameters: {
+          type: 'object',
+          required: ['type', 'reason', 'suggestedAction'],
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['update_existing_skill', 'add_resource_or_template', 'add_trigger', 'create_new_skill_candidate'],
+            },
+            skillId: { type: 'string', description: 'Required for existing-skill, resource, and trigger candidates.' },
+            resourcePath: { type: 'string', description: 'Optional proposed resource path; Curator may replace it.' },
+            confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+            risk: { type: 'string', enum: ['low', 'medium', 'high'] },
+            reason: { type: 'string', description: 'Observed evidence-backed gap or repeated workflow.' },
+            suggestedAction: { type: 'string', description: 'Candidate action for Curator review, not an instruction to mutate immediately.' },
+            requestExcerpt: { type: 'string', description: 'Optional user-authored excerpt. Do not put assistant-authored approval here.' },
+            evidence: { type: 'array', items: { type: 'string' }, description: 'Workspace-relative evidence references.' },
+            submittedBy: { type: 'string', description: 'Actor label such as brain_thought or brain_dream.' },
+            triggerPositivePrompts: { type: 'array', items: { type: 'string' }, description: 'Required for add_trigger: prompts that should route to the target skill.' },
+            triggerNegativePrompts: { type: 'array', items: { type: 'string' }, description: 'Required for add_trigger: unrelated prompts that must not route to the target skill.' },
+            proposedTrigger: { type: 'string', description: 'Required for add_trigger: the exact multiword trigger phrase to evaluate.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'skill_manifest_write',
         description:
           'Write a Prometheus-owned manifest overlay for an installed skill without modifying the downloaded skill folder. ' +
@@ -1413,6 +1510,8 @@ export function getCisSystemTools(): any[] {
             evidence: { type: 'array', items: { type: 'string' }, description: 'Optional evidence refs for the skill change ledger.' },
             appliedBy: { type: 'string', description: 'Optional actor label. Brain auto-updates should use brain_dream.' },
             reason: { type: 'string', description: 'Optional short rationale for the ledger.' },
+            triggerPositivePrompts: { type: 'array', items: { type: 'string' }, description: 'Required when triggers change: prompts that must rank this skill first with high confidence.' },
+            triggerNegativePrompts: { type: 'array', items: { type: 'string' }, description: 'Required when triggers change: unrelated prompts that must not suggest this skill.' },
           },
         },
       },
@@ -1434,9 +1533,12 @@ export function getCisSystemTools(): any[] {
             instructions: { type: 'string', description: 'Full SKILL.md instructions.' },
             version: { type: 'string', description: 'Version string. Default 1.0.0.' },
             triggers: { type: 'string', description: 'Comma-separated trigger phrases.' },
+            triggerPositivePrompts: { type: 'array', items: { type: 'string' }, description: 'Required when triggers are provided.' },
+            triggerNegativePrompts: { type: 'array', items: { type: 'string' }, description: 'Required when triggers are provided.' },
             categories: { type: 'string', description: 'Comma-separated categories.' },
             requiredTools: { type: 'string', description: 'Comma-separated required tool/category names.' },
             permissions: { type: 'object', description: 'Permission hints such as browser, workspaceRead, workspaceWrite, shell, externalSideEffects.' },
+            implicitInvocation: { type: 'boolean', description: 'Default true. Set false for broad, role, style, persona, or manually invoked skills.' },
             resources: {
               type: 'array',
               description: 'Optional text resources to create.',
@@ -1542,6 +1644,9 @@ export function getCisSystemTools(): any[] {
             description: { type: 'string', description: 'One-sentence summary of what this skill does' },
             instructions: { type: 'string', description: 'Full markdown instructions for using this skill - be thorough, as this is what you will read with skill_read when relevant' },
             triggers: { type: 'string', description: 'Comma-separated keywords used as discovery metadata, e.g. "python,debug,traceback"' },
+            triggerPositivePrompts: { type: 'array', items: { type: 'string' }, description: 'Required when triggers are provided.' },
+            triggerNegativePrompts: { type: 'array', items: { type: 'string' }, description: 'Required when triggers are provided.' },
+            implicitInvocation: { type: 'boolean', description: 'Set false for explicit-only skills.' },
           },
         },
       },
@@ -1580,6 +1685,9 @@ export function getCisSystemTools(): any[] {
             categories: { type: 'string', description: 'Comma-separated categories.' },
             requiredTools: { type: 'string', description: 'Comma-separated required tool/category names.' },
             lifecycle: { type: 'string', description: 'Lifecycle state: draft, active, experimental, deprecated, archived.' },
+            implicitInvocation: { type: 'boolean', description: 'Set false for broad, role, style, persona, or manually invoked skills so lexical matches never auto-route them.' },
+            triggerPositivePrompts: { type: 'array', items: { type: 'string' }, description: 'Required when triggers change.' },
+            triggerNegativePrompts: { type: 'array', items: { type: 'string' }, description: 'Required when triggers change.' },
             name: { type: 'string', description: 'New human-readable name.' },
             reason: { type: 'string', description: 'Optional short rationale for the change ledger.' },
           },
@@ -1651,7 +1759,7 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'show_product_carousel',
-        description: 'Display normalized product cards in a horizontal scrollable carousel in the chat UI. Prefer already-structured shopping/product search results from APIs, search indexes, connectors, or cached provider output. Use browser/page extraction only as a fallback for missing fields or deeper verification. You decide which products to show (aim for 3-8, curated by relevance/quality). Each item needs at minimum a title and productUrl. Use imageUrl for provider/page images, or imagePath for images downloaded to the workspace.',
+        description: 'Display normalized product cards in a horizontal scrollable carousel in the chat UI. Prefer shopping_search_products or already-structured provider results. The renderer normalizes common field aliases, fills missing product metadata from each productUrl, extracts JSON-LD/Open Graph/large page images, and caches discovered images locally for reliable display. Curate 3-8 relevant products; each item needs a title and productUrl.',
         parameters: {
           type: 'object',
           required: ['title', 'items'],
@@ -1667,6 +1775,7 @@ export function getCisSystemTools(): any[] {
                 properties: {
                   title:       { type: 'string', description: 'Product name' },
                   price:       { type: 'string', description: 'Price string, e.g. "$38.49"' },
+                  listPrice:   { type: 'string', description: 'Optional original/list price before discount.' },
                   description: { type: 'string', description: 'One short line about the product, e.g. "Top-rated for overall cleaning and durability."' },
                   rating:      { type: 'number', description: '0–5 star rating as a number' },
                   reviews:     { type: 'number', description: 'Number of reviews' },
@@ -1677,6 +1786,10 @@ export function getCisSystemTools(): any[] {
                   imagePath:   { type: 'string', description: 'Workspace-relative path if you downloaded the image with browser tools' },
                   productUrl:  { type: 'string', description: 'URL to the product page — used as the card link' },
                   merchant:    { type: 'string', description: 'Store name, e.g. "Amazon", "Best Buy"' },
+                  availability:{ type: 'string', description: 'Optional stock state such as InStock or OutOfStock.' },
+                  seller:      { type: 'string', description: 'Optional seller/marketplace vendor.' },
+                  sku:         { type: 'string', description: 'Optional merchant SKU or product id.' },
+                  asin:        { type: 'string', description: 'Optional Amazon ASIN.' },
                   confidence:  { type: 'number', description: 'Optional provider/model confidence from 0-1 when available' },
                 },
               },
@@ -1769,7 +1882,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'show_sources',
         description:
-          'Display a row of source/news/research cards in the chat UI (like a news carousel). Use after web_search / web_fetch / browser research when you want to present the sources visually — articles, references, citations, or findings. You curate the list (3–8 recommended). Each item needs at least a title or url.',
+          'Display source/news/research cards in the chat UI. Use after web_search, web_fetch, or browser research. Pass the source URLs and any data already gathered; the tool normalizes provider/browser aliases, fills missing title/publisher/snippet/date metadata, extracts a hero/thumbnail (or site icon fallback), and caches images locally for reliable display. Curate 3-8 sources.',
         parameters: {
           type: 'object',
           required: ['items'],
@@ -1781,12 +1894,13 @@ export function getCisSystemTools(): any[] {
               description: 'Source cards to display (3–8 recommended).',
               items: {
                 type: 'object',
-                required: ['title'],
+                required: ['url'],
                 properties: {
-                  title: { type: 'string', description: 'Headline / source title.' },
+                  title: { type: 'string', description: 'Optional headline; extracted from the page when omitted.' },
                   publisher: { type: 'string', description: 'Publisher or site name, e.g. "Reuters".' },
                   url: { type: 'string', description: 'Link to the source — used as the card link.' },
                   imageUrl: { type: 'string', description: 'Optional thumbnail/hero image URL.' },
+                  imagePath: { type: 'string', description: 'Optional workspace-relative cached image path.' },
                   snippet: { type: 'string', description: 'Short summary/excerpt.' },
                   publishedAt: { type: 'string', description: 'Optional human or ISO date, e.g. "Yesterday" or "2026-06-04".' },
                   badge: { type: 'string', description: 'Optional small label, e.g. "Reddit", "Official".' },

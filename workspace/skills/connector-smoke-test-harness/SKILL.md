@@ -1,3 +1,8 @@
+---
+name: "connector-smoke-test-harness"
+description: "Verify an existing Prometheus connector with status, authentication, read, pagination, rate-limit, error-shape, and dry-run write checks. Use when testing connector readiness or diagnosing an installed integration. Only use after a connector exists; exclude implementation and setup work."
+---
+
 # Connector Smoke-Test Harness
 
 Use this skill when validating a connector before Prometheus relies on it.
@@ -17,11 +22,11 @@ Current support:
 
 ## Procedure
 
-1. Run `connector_list` and confirm the connector is visible.
-2. If disconnected, guide setup through the Connections panel or `/api/connections/*`.
-3. Request `external_apps` only after confirming credentials/status.
-4. Run a read-only status or self/profile call.
-5. Run a small list/search call with pagination.
+1. Run `connection_ops(action:"list_connections")` and inspect the canonical record.
+2. If setup is incomplete, resume its durable attempt; do not start a parallel auth/config flow.
+3. Require authenticated, registered, verified, and exposed states—not merely OAuth success.
+4. Confirm discovered tools and conservative exposure classification.
+5. Run a read-only status/self/profile call, then a small list/search call with pagination.
 6. For write tools, run dry-run/preview first. If no dry-run exists, treat that as a connector gap.
 7. Confirm:
    - auth status
@@ -33,4 +38,4 @@ Current support:
 
 ## Gap To Implement
 
-Add a generic `connector_smoke_test` tool that discovers a connector's declared status/read/dry-run tools and writes a standard report artifact.
+Add a generic `connector_smoke_test` tool that consumes canonical connection records, checks transport/tool exposure, runs declared safe reads/dry-runs, and writes a standard report artifact.

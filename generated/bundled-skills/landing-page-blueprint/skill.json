@@ -1,23 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating, editing, improving, or blueprinting a landing page, SaaS homepage, waitlist page, product splash page, lead-gen page, or one-page marketing site.",
+  "description": "Plan or improve a conversion-focused landing page’s audience, offer, message hierarchy, sections, proof, objections, calls to action, and measurement. Use when landing-page structure and conversion are primary; use web-design-skill for visual-system work and frontend engineering for implementation.",
   "triggers": [
-    "landing page blueprint",
-    "create landing page",
-    "SaaS homepage",
-    "waitlist page",
-    "product splash page",
-    "lead-gen page",
     "single page marketing site",
+    "landing page blueprint",
     "improve landing page",
-    "homepage sections",
     "landing page structure",
-    "hero offer CTA",
-    "conversion page",
-    "page wireframe",
     "landing page outline",
-    "website blueprint"
+    "create landing page",
+    "product splash page",
+    "hero offer cta",
+    "homepage sections",
+    "website blueprint",
+    "conversion page",
+    "page wireframe"
   ],
   "categories": [
     "website",
@@ -30,6 +27,7 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "Landing Page Blueprint",
-  "id": "landing-page-blueprint"
+  "name": "landing-page-blueprint",
+  "id": "landing-page-blueprint",
+  "implicitInvocation": true
 }

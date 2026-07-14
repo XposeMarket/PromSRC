@@ -1,33 +1,33 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when working with TypeGPU, WebGPU, GPU pipelines, shader compute/render experiments, high-performance browser graphics, or GPU-backed creative visuals.",
+  "name": "typegpu",
+  "description": "TypeGPU and raw WebGPU adapter patterns for deterministic HyperFrames compositions. Use only when a HyperFrames canvas layer uses TypeGPU, navigator.gpu, WGSL, compute/render pipelines, or GPU-driven effects.",
   "triggers": [
-    "TypeGPU",
-    "WebGPU",
-    "GPU pipeline",
-    "compute shader",
-    "render shader",
-    "browser GPU graphics",
-    "GPU-backed visuals",
-    "high-performance canvas",
-    "WebGPU experiment",
-    "shader compute",
-    "GPU render pipeline",
-    "TypeGPU docs",
-    "graphics pipeline",
-    "GPU creative visual"
+    "webgpu liquid glass in hyperframes",
+    "wgsl shader in hyperframes",
+    "gpu pipeline in hyperframes",
+    "webgpu particles in hyperframes",
+    "deterministic webgpu composition",
+    "navigator.gpu in hyperframes",
+    "typegpu canvas layer",
+    "hyperframes typegpu",
+    "hyperframes webgpu",
+    "typegpu hf-seek",
+    "webgpu hf-seek"
   ],
   "categories": [
     "creative",
     "webgpu",
-    "graphics"
+    "graphics",
+    "hyperframes"
   ],
   "requiredTools": [
     "creative_basic",
     "workspace_write",
     "browser_automation"
   ],
+  "implicitInvocation": false,
   "lifecycle": "active",
   "id": "typegpu"
 }

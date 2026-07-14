@@ -54,6 +54,16 @@ import { markProviderStatus, markProviderStatusChecking, resolveProviderStatus }
 import { getProvider } from '../../providers/factory';
 import type { spawnAgent as SpawnAgentFn } from '../../agents/spawner';
 
+function retireLegacySelfRepairStore(configDir: string): void {
+  const legacy = path.join(configDir, 'pending-repairs');
+  if (!fs.existsSync(legacy)) return;
+  const retiredRoot = path.join(configDir, 'retired-self-repair-patches');
+  fs.mkdirSync(retiredRoot, { recursive: true });
+  const target = path.join(retiredRoot, `retired-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  fs.renameSync(legacy, target);
+  console.warn(`[SelfRepair] Retired legacy patch records to ${target}. They are inert and cannot be approved or applied.`);
+}
+
 const STARTUP_PROFILE = process.env.PROMETHEUS_STARTUP_PROFILE === '1';
 let startupT0 = 0;
 let startupLast = 0;
@@ -218,6 +228,9 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     handleChat, buildTools, runTeamAgentViaChat,
   } = deps;
 
+  try { retireLegacySelfRepairStore(getConfig().getConfigDir()); }
+  catch (err: any) { console.warn('[SelfRepair] Could not archive legacy patch records:', err?.message || err); }
+
   // Detect GPU hardware once — caches result for /api/system-stats, no repeated probes.
   setImmediate(() => {
     try {
@@ -243,7 +256,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       if (!template?.defaults) return;
       const keys = [
         'main_chat', 'proposal_executor_high_risk', 'proposal_executor_low_risk',
-        'manager', 'team_manager', 'subagent', 'team_subagent', 'background_task', 'background_agent',
+        'manager', 'team_manager', 'subagent', 'team_subagent', 'background_task', 'background_spawn',
         'subagent_planner', 'subagent_orchestrator', 'subagent_researcher', 'subagent_analyst',
         'subagent_builder', 'subagent_operator', 'subagent_verifier',
         'switch_model_low', 'switch_model_medium', 'coordinator',
@@ -256,6 +269,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       }
       cm2.updateConfig({
         agent_model_defaults: defaults,
+        agent_model_default_reasoning: template.reasoning && typeof template.reasoning === 'object' ? template.reasoning : {},
         active_agent_model_default_template: template.id,
       } as any);
     } catch (err: any) {
@@ -317,23 +331,18 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   }
 
   try {
-    const { launchBackgroundTaskRunner } = require('../tasks/task-router') as typeof import('../tasks/task-router');
+    const { launchBackgroundTaskRunner, completePlainGatewayRestartTask } = require('../tasks/task-router') as typeof import('../tasks/task-router');
     const recovery = recoverInterruptedRuntimes({
       launchBackgroundTaskRunner,
+      completePlainGatewayRestartTask,
       notify: (message) => console.log(`[RuntimeRecovery] ${message}`),
     });
     if (recovery.inspected > 0) {
       console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), preserved ${recovery.interruptedChats.length} chat checkpoint(s).`);
     }
-    try {
-      const { resumeMainChatGoalsInterruptedForRestart } = require('../routes/chat.router') as typeof import('../routes/chat.router');
-      const resumedGoals = resumeMainChatGoalsInterruptedForRestart();
-      if (resumedGoals.length > 0) {
-        console.log(`[RuntimeRecovery] Auto-resumed ${resumedGoals.length} main-chat goal(s) after restart.`);
-      }
-    } catch (err: any) {
-      console.warn('[RuntimeRecovery] Main-chat goal auto-resume failed:', err?.message || err);
-    }
+    // Main-chat goals resume only after the gateway:startup/BOOT restart
+    // finalizer has recorded the post-restart checkpoint. Starting them here
+    // races the restart follow-up and gives two runtimes ownership of one chat.
   } catch (err: any) {
     console.warn('[RuntimeRecovery] Startup recovery failed:', err?.message || err);
   }
@@ -529,32 +538,6 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     console.log('[Telegram] Team deps injected (/teams command active).');
   } catch (e: any) {
     console.warn('[Telegram] Could not inject team deps:', e.message);
-  }
-
-  // Wire repair proposal hook so pending repairs can send Telegram buttons automatically
-  if (!isPublicDistributionBuild()) {
-    try {
-      const { setRepairProposalHook } = require('../../tools/self-repair.js');
-      setRepairProposalHook((repairId: string) => {
-        const telegramCfg = getConfig().getConfig() as any;
-        const tgEnabled =
-          telegramCfg?.channels?.telegram?.enabled ||
-          telegramCfg?.telegram?.enabled;
-        if (!tgEnabled) return;
-        const allowedIds: number[] =
-          telegramCfg?.channels?.telegram?.allowedUserIds ||
-          telegramCfg?.telegram?.allowedUserIds ||
-          [];
-        for (const userId of allowedIds) {
-          telegramChannel.sendRepairWithButtons(userId, repairId).catch((err: any) =>
-            console.warn('[Telegram] Could not send repair buttons:', err?.message)
-          );
-        }
-      });
-      console.log('[SelfRepair] Telegram button hook wired — pending repairs will send ✅/❌ buttons.');
-    } catch (e: any) {
-      console.warn('[SelfRepair] Could not wire repair proposal hook:', e.message);
-    }
   }
 
   // Wire setDispatchDeps so team-dispatch-runtime has all it needs to run agents

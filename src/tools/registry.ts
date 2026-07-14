@@ -6,7 +6,7 @@ import { allSkillTools } from './skills.js';
 import { timeNowTool } from './time.js';
 import { personaReadTool, personaUpdateTool } from './persona.js';
 import { agentListTool, agentInfoTool } from './agent-control.js';
-import { allDesktopTools } from './desktop.js';
+import { allDesktopTools, desktopWrapperTools } from './desktop.js';
 import { scheduleMemoryTool } from './schedule-memory-tool.js';
 import { talkToManagerTool, getTeamLogsTool, scheduleJobTool, manageTeamGoalTool, manageTeamContextRefTool } from './team-tools.js';
 import { uploadImageTool, fetchImageTool } from './image-tools.js';
@@ -139,31 +139,12 @@ export function getSubagentToolFilter(profile: string | undefined): string[] | u
 
 const TOOL_PROFILE_TOOL_NAMES: Record<Exclude<ToolProfile, 'full'>, ReadonlySet<string>> = {
   desktop: new Set([
-    'desktop_doctor',
-    'desktop_screenshot',
-    'desktop_get_monitors',
-    'desktop_window_screenshot',
-    'desktop_find_window',
-    'desktop_focus_window',
-    'desktop_click',
-    'desktop_drag',
-    'desktop_scroll',
-    'desktop_wait',
-    'desktop_type',
-    'desktop_type_raw',
-    'desktop_press_key',
-    'desktop_get_clipboard',
-    'desktop_set_clipboard',
-    'desktop_list_installed_apps',
-    'desktop_find_installed_app',
-    'desktop_launch_app',
-    'desktop_close_app',
-    'desktop_get_process_list',
-    'desktop_wait_for_change',
-    'desktop_diff_screenshot',
-    'desktop_background_status',
-    'desktop_background_prepare_sandbox',
-    'desktop_background_command',
+    'desktop_screen',
+    'desktop_apps',
+    'desktop_window',
+    'desktop_input',
+    'desktop_macro',
+    'desktop_background',
     'write_note',
     'time_now',
     'manage_team_goal',
@@ -203,6 +184,8 @@ const TOOL_PROFILE_TOOL_NAMES: Record<Exclude<ToolProfile, 'full'>, ReadonlySet<
     'manage_team_context_ref',
   ]),
 };
+
+const MODEL_HIDDEN_GRANULAR_DESKTOP_TOOL_NAMES = new Set(allDesktopTools.map((tool) => tool.name));
 
 function isToolProfile(value: string): value is ToolProfile {
   return value === 'minimal' || value === 'coding' || value === 'web' || value === 'full' || value === 'desktop';
@@ -329,6 +312,9 @@ class ToolRegistry {
     for (const tool of allDesktopTools) {
       this.registerSafe(tool);
     }
+    for (const tool of desktopWrapperTools) {
+      this.registerSafe(tool);
+    }
   }
 
   register(tool: Tool): void {
@@ -377,7 +363,9 @@ class ToolRegistry {
   }
 
   private listByProfile(profile: ToolProfile = 'full'): Tool[] {
-    if (profile === 'full') return this.list();
+    if (profile === 'full') {
+      return this.list().filter((tool) => !MODEL_HIDDEN_GRANULAR_DESKTOP_TOOL_NAMES.has(tool.name));
+    }
     const toolNames = TOOL_PROFILE_TOOL_NAMES[profile];
     return this.list().filter((tool) => toolNames.has(tool.name));
   }

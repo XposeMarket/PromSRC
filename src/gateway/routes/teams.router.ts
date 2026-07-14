@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { getBrainRunnerInstance } from '../brain/brain-runner';
 import { getBrainDir } from '../brain/brain-state';
-import { getConfig, getAgentById } from '../../config/config';
+import { getConfig, getAgentById, ensureAgentWorkspace } from '../../config/config';
 import { broadcastTeamEvent, addTeamSseClient, removeTeamSseClient } from '../comms/broadcaster';
 import {
   listManagedTeams, getManagedTeam, saveManagedTeam, createManagedTeam,
@@ -24,7 +24,8 @@ import {
 import { routeTeamEvent } from '../teams/team-event-router';
 import { runTeamMemberRoomTurn, scheduleTeamMemberAutoWake, scheduleTeamMemberDirectWake } from '../teams/team-member-room';
 import { dismissTeamSuggestion } from '../teams/team-detector';
-import { claimAgentForTeamWorkspace } from '../teams/team-workspace';
+import { claimAgentForTeamWorkspace, ensureTeamAgentIdentity } from '../teams/team-workspace';
+import { AGENT_PROMPT_FILENAME, readAgentPromptFile, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
 import { normalizeScheduleSpec, parseSchedulePattern } from '../scheduling/schedule-pattern';
 import * as fs from 'fs';
@@ -35,6 +36,40 @@ import { abortLiveRuntime, listLiveRuntimes } from '../live-runtime-registry';
 import { deleteTeamCompletely } from '../agents-runtime/entity-delete';
 
 export const router = Router();
+
+router.get('/api/teams/:id/agents/:agentId/agent-md', (req, res) => {
+  const teamId = String(req.params.id || '').trim();
+  const agentId = String(req.params.agentId || '').trim();
+  const team = getManagedTeam(teamId);
+  if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
+  if (!team.subagentIds.includes(agentId)) return res.status(404).json({ success: false, error: 'Agent is not a member of this team' });
+  const agent = getAgentById(agentId) as any;
+  if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
+  const globalWorkspace = String(agent?.workspace || ensureAgentWorkspace(agent) || '').trim();
+  const workspace = ensureTeamAgentIdentity(teamId, agentId, globalWorkspace || undefined);
+  const prompt = readAgentPromptFile(workspace, { migrateLegacy: true });
+  res.json({
+    success: true,
+    teamId,
+    agentId,
+    path: prompt?.path || path.join(workspace, AGENT_PROMPT_FILENAME),
+    content: prompt?.content || '',
+  });
+});
+
+router.put('/api/teams/:id/agents/:agentId/agent-md', (req, res) => {
+  const teamId = String(req.params.id || '').trim();
+  const agentId = String(req.params.agentId || '').trim();
+  const team = getManagedTeam(teamId);
+  if (!team) return res.status(404).json({ success: false, error: 'Team not found' });
+  if (!team.subagentIds.includes(agentId)) return res.status(404).json({ success: false, error: 'Agent is not a member of this team' });
+  const agent = getAgentById(agentId) as any;
+  if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
+  const globalWorkspace = String(agent?.workspace || ensureAgentWorkspace(agent) || '').trim();
+  const workspace = ensureTeamAgentIdentity(teamId, agentId, globalWorkspace || undefined);
+  const filePath = writeAgentPromptFile(workspace, String(req.body?.content || ''));
+  res.json({ success: true, teamId, agentId, path: filePath });
+});
 
 const getAttachmentContext = () => require('../chat/attachment-context') as typeof import('../chat/attachment-context');
 const getTeamDispatchRuntime = () => require('../teams/team-dispatch-runtime') as typeof import('../teams/team-dispatch-runtime');

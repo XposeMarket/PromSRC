@@ -22,6 +22,7 @@ import {
 } from './managed-teams';
 import { getAgentById, ensureAgentWorkspace, getConfig } from '../../config/config';
 import { runTeamAgentViaChat } from './team-dispatch-runtime';
+import { writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import {
   runCoordinatorReview,
   runCoordinatorConversation,
@@ -178,7 +179,7 @@ function buildSchedulePromptForAgent(agent: any): string {
   return [
     role || `You are ${agent?.id || 'the assigned subagent'}.`,
     '',
-    'This is a recurring scheduled team task. Follow your system_prompt.md role, check the team workspace for current memory and pending context, do the useful scheduled work for your role, and return a concise result. The scheduler will post your result into team chat for the manager to continue the workflow.',
+    'This is a recurring scheduled team task. Follow your AGENT.md role, check the team workspace for pending task context, do the useful scheduled work for your role, and return a concise result. The scheduler will post your result into team chat for the manager to continue the workflow.',
   ].join('\n');
 }
 
@@ -343,10 +344,7 @@ export async function applyChangeToAgent(change: TeamChange, teamId?: string): P
         const prompt = resolvePromptAfter(change?.diff?.after);
         if (!prompt) return false;
         const ws = ensureAgentWorkspace(agent);
-        const systemPromptPath = path.join(ws, 'system_prompt.md');
-        const heartbeatPath = path.join(ws, 'HEARTBEAT.md');
-        const targetPath = fs.existsSync(systemPromptPath) ? systemPromptPath : heartbeatPath;
-        fs.writeFileSync(targetPath, prompt, 'utf-8');
+        writeAgentPromptFile(ws, prompt);
         if (change?.diff) change.diff.after = prompt;
         break;
       }

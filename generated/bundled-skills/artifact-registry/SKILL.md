@@ -1,11 +1,7 @@
 ---
-name: artifact-registry
-description: Use this skill when Prometheus needs to find, index, normalize, retrieve, or reason about generated artifacts from chats, tool observations, background tasks, teams, Brain runs, processes, media generations, canvas exports, or Creative outputs. Triggers on phrases like find artifact, artifact registry, generated outputs, where did that file go, task artifacts, team artifacts, index outputs, artifact search, canvas export, and generated media history. Use it to map scattered Prometheus output sources into durable searchable artifact records.
-emoji: "🗂️"
-version: 1.1.0
-triggers: find artifact, artifact registry, generated outputs, where did that file go, task artifacts, team artifacts, index outputs, artifact search, canvas export, generated media history, output registry, artifact index
+name: "artifact-registry"
+description: "Find, normalize, index, and retrieve generated Prometheus artifacts across chats, tasks, teams, Brain runs, processes, media, and Canvas. Use when locating an output, building an artifact index, or tracing an artifact to its originating run; do not use for ordinary filesystem search."
 ---
-
 
 # Artifact Registry
 

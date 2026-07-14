@@ -93,15 +93,22 @@
 - Hub is implemented as a usage/skill surface, but achievements remain stubbed
 - the old self-improvement API/engine files are gone; use Brain runner plus prompt mutation as the current mental model
 - skill-guided failures should be recovered through an alternate route first; only after the alternate route works should Prometheus offer a skill update
-- existing skill evolution is automatic only for low-risk, evidence-backed, scoped changes and is snapshotted plus ledgered; Thought and Dream can both apply it
-- the dedicated Skill Curator is lesson-first and auto-safe; it should not preserve raw tool lists or workflow transcripts unless they become a concrete future behavior rule
-- the curator should auto-apply only typed low-risk lessons and auto-reject weak legacy workflow/troubleshooting dumps
-- Dream cleanup is the model-backed Skill Curator Critic and may revert/refine bad auto-applied curator resources while preserving high-risk work for review
+- autonomous skill evolution is frozen: Thought, Dream, cleanup, and normal chat submit candidates; only explicit Curator apply may mutate a reviewed suggestion
+- the dedicated Skill Curator defaults to dry-run, clusters semantic duplicates, and never treats assistant-written praise/success as user approval
+- Curator lesson files use stable topic paths and merge equivalent content; dates, sessions, confidence, and evidence stay in Brain, while stale/rejected/duplicate candidates expire or remain suppressed
+- routing permits one high-confidence mandatory skill at most; all additional matches are advisory, and unrelated cross-domain or `implicitInvocation: false` skills must not be auto-read
+- triggers are capped at 12, generic single-word triggers are invalid, and every trigger mutation needs passing positive and negative routing cases
+- deprecated and archived skills are excluded by the shared relevance ranker even when explicitly named; compatibility folders are retained only for recovery/history
+- exact skill mention matching is boundary-aware: short IDs such as `three` cannot match ordinary prose, and longer exact names outrank contained shorter names
+- catalog migrations must smoke-test claimed commands/dependencies before editing that skill; failed or partial workflows stay untouched and enter the migration correction report
+- consolidated skill-resource provenance belongs in `workspace/Brain/skill-curator/catalog-migration-evidence.jsonl`, not in the canonical instruction file
+- behavioral suggestions never auto-apply during the freeze; weak legacy workflow/troubleshooting dumps may still be rejected
+- Dream cleanup is candidate-only and may reject weak pending suggestions or submit repair candidates, but it cannot edit skill resources
 - public builds must resolve required runtime dependencies from bundled paths first; do not rely on user `PATH`, global `npx`, system Chrome, CDN scripts, or manually installed ffmpeg/ffprobe for required public features
 - Playwright Chromium is intentionally packaged as `extraResources/playwright-browsers`, not inside `app.asar`; installer compression can be slow and may outlive Codex tool timeouts
 - Fabric is browser-vendored at `web-ui/vendor/fabric/fabric.min.js`; do not re-add npm `fabric` as a production dependency unless native `canvas` packaging is intentionally handled
-- Thought-applied skill updates are provisional until Dream audits them for usefulness, scope, duplication, and skill-bloat risk
-- new skill creation remains Dream-only and proposal-gated; Brain Dream should automatically file `skill_evolution` proposals when warranted, not directly create new skills
+- Thought and Dream never apply skill updates; their structured candidate ids are recorded for Curator review
+- new skill creation requires repeated validated evidence, Curator overlap analysis, explicit approval, and only then a separate `skill_evolution` proposal
 - procedural workflow/tool-order rules should become skill updates, skill resources, or skill proposals rather than memory pollution
 - imported and upstream-managed skills need extra care; prefer overlays or additive Prometheus-owned resources for routine evolution
 - Telegram help text is partially stale relative to implemented handlers

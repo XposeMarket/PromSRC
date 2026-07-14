@@ -19,7 +19,8 @@ import path from 'path';
 import { OllamaClient } from './ollama-client.js';
 import { getToolRegistry, ToolProfile } from '../tools/registry.js';
 import { executeSkillTool } from '../tools/skills.js';
-import { buildSystemPrompt, loadSubagentSoul, selectSkillSlugsForMessage } from '../config/soul-loader.js';
+import { buildSystemPrompt, loadPrometheusRuntimeContract, selectSkillSlugsForMessage } from '../config/soul-loader.js';
+import { readAgentPromptFile } from './agent-prompt-file.js';
 import { AgentRole } from '../types.js';
 import { runWithWorkspace, getActiveWorkspace } from '../tools/workspace-context.js';
 
@@ -53,14 +54,14 @@ export interface ReactOptions {
   promptMode?: 'full' | 'minimal' | 'none';
   workspacePath?: string;
   /**
-   * Separate path where agent identity files live (system_prompt.md).
+   * Separate path where agent identity files live (AGENT.md).
    * Used when workspacePath points to a team workspace but the agent's
    * own subagent dir has the system prompt. Falls back to workspacePath.
    */
   systemPromptWorkspacePath?: string;
   /** Add the agent identity file on top of the regular runtime prompt. */
   includeAgentSystemPrompt?: boolean;
-  /** Sub-agent mode: identity comes from subagent soul plus system_prompt.md. */
+  /** Sub-agent mode: identity comes from the shared runtime contract plus AGENT.md. */
   subagentSystemPromptOnly?: boolean;
 }
 
@@ -120,10 +121,10 @@ const SKILL_RUNTIME_GUIDE = `
 SKILLS:
 - Skill tools are core tools: skill_list, skill_read, skill_resource_list, skill_resource_read, skill_import_bundle, skill_inspect, skill_update_metadata, skill_manifest_write, skill_create_bundle, skill_resource_write, skill_resource_delete, skill_export_bundle, skill_update_from_source, and skill_create.
 - For greetings, small talk, quick Q&A, or confirmations, respond directly without skill_list.
-- Before browser/desktop automation, file edits, or other execution-heavy work, call skill_list first.
-- If a relevant skill exists, call skill_read(id) and follow it before acting.
-- Treat skills as living workflow playbooks: after real work, notice missing triggers, clearer steps, better tool order, reusable examples/templates/resources, and guardrails that would make the skill better next time. Use skill_update_metadata({ id, addTriggers }) for trigger-only fixes so existing trigger metadata is preserved.
-- If a completed workflow is reusable but no skill fit, briefly offer to turn it into a skill or add it to an existing skill; skip this for casual conversation.
+- Use skill_list only for unfamiliar or specialized work when no high-confidence skill match is already supplied.
+- Never read a skill because of a broad lexical hit. Compare its description to the full request and read at most one clearly relevant skill.
+- Ignore unrelated cross-domain matches such as creative/video or email skills during an ordinary coding task.
+- Submit evidence-backed improvements as Curator candidates; do not mutate skills as a routine completion step.
 - For bundled templates/examples/schemas/references, use skill_resource_list(id) and skill_resource_read(id,path), loading only the specific resource needed.
 - Use skill_inspect(id) for normalized metadata/provenance.
 - When creating reusable workflows, prefer skill_create_bundle if resources or rich metadata would help; use skill_create only for simple one-file playbooks.
@@ -418,8 +419,9 @@ function buildNodeCallSystemPrompt(
   const subagentSystemPromptOnly = options.subagentSystemPromptOnly === true;
   const includeAgentSystemPrompt = subagentSystemPromptOnly || options.includeAgentSystemPrompt === true;
   const agentSystemPrompt = includeAgentSystemPrompt ? loadAgentSystemPrompt(options) : '';
+  const agentMemoryPrompt = subagentSystemPromptOnly ? loadAgentMemoryPrompt(options) : '';
   const mergedExtraInstructions = subagentSystemPromptOnly
-    ? [agentSystemPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim()
+    ? [agentSystemPrompt, agentMemoryPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim()
     : [agentSystemPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim();
   // Subagents now support skills — use explicitly passed skillSlugs (set by spawner
   // from agent.skills config or relevance-based fallback). Only fall back to [] if
@@ -433,7 +435,7 @@ function buildNodeCallSystemPrompt(
     includeSkillSlugs: selectedSkillSlugs,
     includeMemory: subagentSystemPromptOnly ? false : options.promptMode !== 'minimal',
     includeSoul: true,
-    soulOverride: subagentSystemPromptOnly ? loadSubagentSoul() : undefined,
+    soulOverride: subagentSystemPromptOnly ? loadPrometheusRuntimeContract() : undefined,
     extraInstructions: mergedExtraInstructions || undefined,
     workspacePath: subagentSystemPromptOnly ? undefined : workspacePath,
     promptMode: subagentSystemPromptOnly ? 'none' : (options.promptMode ?? 'full'),
@@ -534,8 +536,9 @@ function buildNativeToolSystemPrompt(
   const subagentSystemPromptOnly = options.subagentSystemPromptOnly === true;
   const includeAgentSystemPrompt = subagentSystemPromptOnly || options.includeAgentSystemPrompt === true;
   const agentSystemPrompt = includeAgentSystemPrompt ? loadAgentSystemPrompt(options) : '';
+  const agentMemoryPrompt = subagentSystemPromptOnly ? loadAgentMemoryPrompt(options) : '';
   const mergedExtraInstructions = subagentSystemPromptOnly
-    ? [agentSystemPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim()
+    ? [agentSystemPrompt, agentMemoryPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim()
     : (agentSystemPrompt || String(options.extraInstructions || '').trim());
   const selectedSkillSlugs = Array.isArray(options.skillSlugs) && options.skillSlugs.length
     ? options.skillSlugs
@@ -545,7 +548,7 @@ function buildNativeToolSystemPrompt(
     includeSkillSlugs: selectedSkillSlugs,
     includeMemory: false,
     includeSoul: true,
-    soulOverride: subagentSystemPromptOnly ? loadSubagentSoul() : undefined,
+    soulOverride: subagentSystemPromptOnly ? loadPrometheusRuntimeContract() : undefined,
     extraInstructions: mergedExtraInstructions || undefined,
     workspacePath: subagentSystemPromptOnly ? undefined : options.workspacePath,
     promptMode: subagentSystemPromptOnly ? 'none' : (options.promptMode ?? 'full'),
@@ -568,8 +571,8 @@ RULES:
  * Loads an agent's identity prompt from its workspace directory.
  *
  * Fallback chain (first non-empty result wins):
- *   1. system_prompt.md  — canonical identity file for subagents
- *   2. HEARTBEAT.md      — at minimum gives the agent its task schedule as context
+ *   1. AGENT.md          — canonical identity file for subagents
+ *   2. Legacy migration  — old identity files are copied to AGENT.md
  *   3. Minimal stub      — ensures the agent always knows it is a tool-using subagent,
  *                          not a plain assistant. Prevents "I have no tools" responses.
  *
@@ -580,25 +583,28 @@ function loadAgentSystemPrompt(options: ReactOptions): string {
   const spLookupPath = options.systemPromptWorkspacePath || options.workspacePath;
   if (!spLookupPath) return SUBAGENT_IDENTITY_STUB;
 
-  // Ordered fallback chain
-  const candidates = [
-    path.join(spLookupPath, 'system_prompt.md'),
-    path.join(spLookupPath, 'HEARTBEAT.md'),
-  ];
-
-  for (const filePath of candidates) {
-    try {
-      if (!fs.existsSync(filePath)) continue;
-      const content = fs.readFileSync(filePath, 'utf-8').trim();
-      if (content) return content;
-    } catch {
-      // continue to next candidate
-    }
-  }
+  const resolved = readAgentPromptFile(spLookupPath, { migrateLegacy: true });
+  const content = String(resolved?.content || '').trim();
+  if (content) return content;
 
   // No identity file found — inject stub so agent behaves correctly
   console.warn(`[reactor] loadAgentSystemPrompt: no identity file found in ${spLookupPath} — using stub`);
   return SUBAGENT_IDENTITY_STUB;
+}
+
+function loadAgentMemoryPrompt(options: ReactOptions): string {
+  const root = options.systemPromptWorkspacePath || options.workspacePath;
+  if (!root) return '';
+  const memoryPath = path.join(root, 'MEMORY.md');
+  try {
+    if (!fs.existsSync(memoryPath)) return '';
+    const content = fs.readFileSync(memoryPath, 'utf-8').trim();
+    if (!content) return '';
+    const capped = content.length <= 6000 ? content : `${content.slice(0, 5960).trimEnd()}\n...[personal memory truncated]`;
+    return `[AGENT_MEMORY]\n${capped}`;
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -607,9 +613,9 @@ function loadAgentSystemPrompt(options: ReactOptions): string {
  * chat assistant. Prevents "I have no tools / I cannot access files" responses.
  * Generic — applies to any subagent in any team or pipeline.
  */
-const SUBAGENT_IDENTITY_STUB = `You are an autonomous subagent with full access to tools and the filesystem.
-You operate in EXECUTE mode: use node_call<> blocks to read/write files, run code, and call APIs.
-Never say you cannot use tools or access files — you have full tool access.
+const SUBAGENT_IDENTITY_STUB = `You are a distinct autonomous agent operating inside Prometheus, not Prom or the main chat.
+You operate in EXECUTE mode: use the tools actually exposed in this runtime to read/write files, run code, and call APIs.
+Inspect the available tools before claiming a capability is unavailable.
 Always verify your work with a tool call before reporting completion.
 If you are unsure what to do, list the workspace directory first, then act.`.trim();
 

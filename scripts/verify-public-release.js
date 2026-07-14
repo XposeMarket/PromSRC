@@ -48,7 +48,6 @@ const BANNED_PUBLIC_SKILLS = [
   'file-surgery',
   'json-and-config-surgery',
   'prometheus-team-design',
-  'self-repair-protocol',
   'src-edit-proposal-rigor',
   'subagent-system-prompt-design',
   'voice-browser-desktop-smoke-test',

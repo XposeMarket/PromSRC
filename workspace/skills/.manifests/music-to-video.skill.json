@@ -1,0 +1,20 @@
+{
+  "ownership": "upstream-managed",
+  "implicitInvocation": false,
+  "status": "ready",
+  "health": {
+    "state": "ready",
+    "reason": "Official skill pinned from heygen-com/hyperframes and restricted to explicit specialist selection by the Creative Director.",
+    "verifiedCapabilities": [
+      "official_upstream_skill"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-11"
+  },
+  "id": "music-to-video",
+  "name": "music-to-video",
+  "description": "Turn a music track (an audio file, a video to pull audio from, or a track generated from a mood brief) into a beat-synced video — lyric video, slideshow, or kinetic promo. The music drives all pacing; any user-supplied images/videos are cut onto the same beat grid, and a complete video needs zero assets. Narrated pieces → the input-matched workflow (see /hyperframes). Unclear → /hyperframes.",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "lifecycle": "active"
+}

@@ -19,19 +19,21 @@
 
 import fs from 'fs';
 import path from 'path';
-import { spawn, execSync, execFileSync } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
 import { flushSession } from './session';
 import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
+import { recordActiveMainChatGoalsInterruptedForRestart } from './main-chat-goals';
 import { getLastMainSessionId } from './comms/broadcaster';
 import type { DevSourceEditContinuation } from './dev-source-approvals';
+import { listCoordinatedRestartBlockers } from './dev-edit-coordinator';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface RestartContext {
   reason: 'proposal' | 'repair' | 'self_update' | 'manual' | 'build_deploy';
   timestamp: number;
-  restartLauncher?: 'electron' | 'prom_gateway_start';
+  restartLauncher?: 'electron' | 'external_supervisor' | 'prom_gateway_start';
   electronManaged?: boolean;
   proposalId?: string;
   repairId?: string;
@@ -41,17 +43,30 @@ export interface RestartContext {
   buildOutput?: string;
   testInstructions?: string;
   previousSessionId?: string;
+  /** Present when the restart was initiated from a durable background task. */
+  taskId?: string;
+  taskOriginatingSessionId?: string;
+  taskInitiatedTool?: 'gateway_restart' | 'prom_apply_dev_changes';
+  suppressStandaloneRestartMessage?: boolean;
   originChannel?: 'web' | 'mobile' | 'telegram' | 'discord' | 'whatsapp' | 'unknown';
   respondToTelegram?: boolean;
   previousTelegramChatId?: string;
   previousTelegramUserId?: number;
   devReload?: {
     enabled: boolean;
+    batchId?: string;
     reason?: string;
     surfaces?: string[];
     delayMs?: number;
   };
   devEditContinuation?: DevSourceEditContinuation;
+  devApplyBatch?: {
+    id: string;
+    memberIds: string[];
+    memberSessionIds: string[];
+    files: string[];
+    members: DevSourceEditContinuation[];
+  };
 }
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
@@ -231,6 +246,8 @@ function buildRestartCompletionMessage(ctx: RestartContext): string {
 
   if (ctx.restartLauncher === 'electron') {
     lines.push('Launcher: Electron app');
+  } else if (ctx.restartLauncher === 'external_supervisor') {
+    lines.push('Launcher: external gateway supervisor');
   } else if (ctx.restartLauncher === 'prom_gateway_start') {
     lines.push('Launcher: prom gateway start');
   }
@@ -317,29 +334,39 @@ export interface BuildResult {
  * Run `npm run build` in-process (captured, same terminal).
  * Returns the build output and success status.
  */
-export function runBuild(): BuildResult {
+export function runBuild(): Promise<BuildResult> {
   const root = getProjectRoot();
   const start = Date.now();
-  try {
-    const output = execSync('npm run build', {
+  return new Promise((resolve) => {
+    const child = spawn('npm', ['run', 'build'], {
       cwd: root,
-      encoding: 'utf-8',
-      timeout: 180_000, // 3 min build timeout
-      stdio: 'pipe',
+      shell: true,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return {
-      success: true,
-      output: output.slice(-2000), // last 2KB of build output
-      durationMs: Date.now() - start,
+    let output = '';
+    let settled = false;
+    let timer: NodeJS.Timeout;
+    const append = (chunk: any) => {
+      output = `${output}${String(chunk || '')}`.slice(-16_000);
     };
-  } catch (err: any) {
-    const output = [err?.stdout, err?.stderr, err?.message].filter(Boolean).join('\n');
-    return {
-      success: false,
-      output: output.slice(-2000),
-      durationMs: Date.now() - start,
+    const finish = (success: boolean, extra = '') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (extra) append(`\n${extra}`);
+      resolve({ success, output: output.slice(-2000), durationMs: Date.now() - start });
     };
-  }
+    child.stdout?.on('data', append);
+    child.stderr?.on('data', append);
+    child.once('error', (err) => finish(false, err.message));
+    child.once('exit', (code, signal) => finish(code === 0, code === 0 ? '' : `Build exited with ${signal || code}.`));
+    timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      finish(false, 'Build timed out after 180000ms.');
+    }, 180_000);
+    timer.unref?.();
+  });
 }
 
 // ─── Shutdown Hooks ───────────────────────────────────────────────────────────
@@ -464,6 +491,17 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
 
   // 1. Stop accepting new work
   try {
+    // A goal runner has brief idle gaps between turns. Those gaps have no live
+    // runtime for runtime-recovery to discover, but the goal still owns the
+    // restart and must resume on the replacement gateway.
+    const checkpointedGoals = recordActiveMainChatGoalsInterruptedForRestart(restartTrigger);
+    if (checkpointedGoals.length) {
+      console.log(`[lifecycle] Preserved ${checkpointedGoals.length} active main-chat goal(s) across restart.`);
+    }
+  } catch (e: any) {
+    console.warn('[lifecycle] Main-chat goal restart checkpoint error:', e.message);
+  }
+  try {
     const interrupted = prepareActiveRuntimesForGatewayShutdown(restartTrigger);
     if (interrupted.length) {
       console.log(`[lifecycle] Preserved ${interrupted.length} active runtime(s) for restart recovery.`);
@@ -519,13 +557,24 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
  * The new process will pick up the restart-context.json on boot.
  */
 export async function gracefulRestart(ctx: RestartContext): Promise<void> {
+  if (!ctx.devApplyBatch) {
+    const blockers = listCoordinatedRestartBlockers();
+    if (blockers.length) {
+      const summary = blockers.slice(0, 5).map((edit) => `${edit.id} (${edit.phase})`).join(', ');
+      throw new Error(
+        `Gateway restart deferred because ${blockers.length} coordinated Prometheus dev edit(s) are active: ${summary}. ` +
+        'Let them reach the shared apply barrier, or explicitly resolve/abandon the blocked edits before restarting.',
+      );
+    }
+  }
   const root = getProjectRoot();
   const electronManaged = process.env.PROMETHEUS_ELECTRON_MANAGED === '1';
+  const externallySupervised = process.env.PROMETHEUS_SUPERVISED_GATEWAY_CHILD === '1';
   const fallbackPreviousSessionId = String(ctx.previousSessionId || getLastMainSessionId?.() || '').trim();
   const restartCtx: RestartContext = {
     ...ctx,
     previousSessionId: fallbackPreviousSessionId || ctx.previousSessionId,
-    restartLauncher: electronManaged ? 'electron' : 'prom_gateway_start',
+    restartLauncher: electronManaged ? 'electron' : externallySupervised ? 'external_supervisor' : 'prom_gateway_start',
     electronManaged,
   };
   console.log(`[lifecycle] Launcher: ${restartCtx.restartLauncher}`);
@@ -547,6 +596,7 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   // Step 2: Shut down current gateway
   const restartTrigger = (
     restartCtx.devEditContinuation
+    || restartCtx.devApplyBatch
     || restartCtx.devReload
     || restartCtx.reason === 'build_deploy'
   )
@@ -564,6 +614,18 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
     return;
   }
 
+  // A supervised gateway must never spawn a second detached `prom` tree. Exit
+  // back to the parent that already owns health checks and restart backoff.
+  // This also prevents the child-only environment flag from leaking into a
+  // replacement and silently disabling supervision.
+  if (externallySupervised) {
+    console.log('[lifecycle] Externally supervised gateway detected. Handing restart to the supervisor...');
+    setTimeout(() => {
+      process.exit(42);
+    }, 250);
+    return;
+  }
+
   // Step 3: Spawn new gateway process.
   //
   // Use `prom gateway start` via shell so the global prom command is resolved
@@ -573,12 +635,14 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   // detached: true + stdio: 'ignore' + unref() = fully independent child that
   // survives the parent exiting on both Windows and Unix.
   try {
+    const replacementEnv = { ...process.env, PROMETHEUS_HOT_RESTART: '1' } as NodeJS.ProcessEnv;
+    delete replacementEnv.PROMETHEUS_SUPERVISED_GATEWAY_CHILD;
     const child = spawn('prom', ['gateway', 'start'], {
       cwd: root,
       detached: true,
       stdio: 'ignore',
       shell: true,
-      env: { ...process.env, PROMETHEUS_HOT_RESTART: '1' },
+      env: replacementEnv,
     });
     child.unref();
     console.log('[lifecycle] New gateway process spawned. Exiting old process...');
@@ -611,7 +675,7 @@ export async function buildAndRestart(
   };
 
   emit('Running build before restart...');
-  const buildResult = runBuild();
+  const buildResult = await runBuild();
 
   if (!buildResult.success) {
     emit(`Build FAILED (${buildResult.durationMs}ms). Gateway will stay online.`);

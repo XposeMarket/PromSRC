@@ -2,19 +2,44 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "scrape this site",
-    "scrape this website",
-    "crawl these pages",
-    "extract from website",
-    "extract data from this site",
-    "get data from site",
-    "parse html",
-    "web extraction",
-    "harvest data",
-    "fetch page content",
     "collect listings from this page",
-    "build a web scraper",
-    "intercept api responses"
+    "scroll and collect this page",
+    "search and fetch sources",
+    "extract this full page",
+    "read this javascript page",
+    "fetch these web pages",
+    "extract structured website data",
+    "scrape this site"
   ],
-  "id": "web-scraper"
+  "id": "web-scraper",
+  "status": "ready",
+  "implicitInvocation": true,
+  "health": {
+    "state": "ready",
+    "reason": "Prometheus-native page text, JavaScript-rendered structured extraction, missing-field handling, and full-page scroll collection passed against a permitted local fixture.",
+    "verifiedCapabilities": [
+      "web_tool_routing",
+      "browser_get_page_text",
+      "browser_extract_structured",
+      "browser_scroll_collect",
+      "javascript_rendered_content",
+      "missing_field_nulls",
+      "full_page_collection"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "web-scraper",
+  "categories": [
+    "web",
+    "research",
+    "browser",
+    "extraction"
+  ],
+  "requiredTools": [
+    "web",
+    "browser_automation"
+  ],
+  "lifecycle": "active",
+  "description": "Search, fetch, read, scrape, or extract information from websites with Prometheus-native web and browser tools. Use for web research, source collection, full-page extraction, repeated listings, JavaScript-rendered pages, infinite scrolling, structured DOM data, or clean summaries derived from extracted content."
 }

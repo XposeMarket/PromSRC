@@ -62,6 +62,12 @@ export interface ProductArtifactItem {
   imagePath?: string;
   productUrl: string;
   merchant?: string;
+  listPrice?: string;
+  availability?: string;
+  seller?: string;
+  sku?: string;
+  asin?: string;
+  confidence?: number;
 }
 
 export interface ProductArtifact extends BaseRichArtifact {
@@ -127,6 +133,7 @@ export interface SourceItem {
   publisher?: string;
   url: string;
   imageUrl?: string;
+  imagePath?: string;
   snippet?: string;
   publishedAt?: string;
   badge?: string;
@@ -355,17 +362,143 @@ export function collectRichArtifacts(allToolResults: any[]): RichArtifact[] {
   return out;
 }
 
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+    if (Array.isArray(value)) {
+      const nested = firstString(...value);
+      if (nested) return nested;
+    }
+    if (value && typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      const nested = firstString(obj.url, obj.src, obj.href, obj.contentUrl, obj.thumbnailUrl);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value !== 'string') continue;
+    const match = value.trim().toLowerCase().match(/([0-9]+(?:\.[0-9]+)?)\s*([km])?/);
+    if (!match) continue;
+    const multiplier = match[2] === 'm' ? 1_000_000 : match[2] === 'k' ? 1_000 : 1;
+    const parsed = Number(match[1]) * multiplier;
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function httpUrl(...values: unknown[]): string | undefined {
+  const raw = firstString(...values);
+  if (!raw) return undefined;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function publisherFromUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    const host = new URL(url).hostname.replace(/^www\./i, '');
+    const label = (host.split('.')[0] || host).replace(/[-_]+/g, ' ').trim();
+    return label.replace(/\b\w/g, (char) => char.toUpperCase());
+  } catch {
+    return undefined;
+  }
+}
+
+/** Normalize common provider, browser, connector, snake_case, and model aliases. */
+export function normalizeSourceArtifactItems(rawItems: unknown[]): SourceItem[] {
+  const out: SourceItem[] = [];
+  const seen = new Set<string>();
+  for (const raw of Array.isArray(rawItems) ? rawItems : []) {
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as Record<string, any>;
+    const url = httpUrl(item.url, item.link, item.href, item.canonicalUrl, item.canonical_url);
+    const title = firstString(item.title, item.name, item.headline, item.label, item.text, url);
+    if (!title && !url) continue;
+    const key = `${url || ''}|${String(title || '').toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      title: String(title || url || 'Source'),
+      publisher: firstString(item.publisher, item.siteName, item.site_name, item.source, item.domain) || publisherFromUrl(url),
+      url: url || '',
+      imageUrl: httpUrl(item.imageUrl, item.image_url, item.thumbnailUrl, item.thumbnail_url, item.thumbnail, item.ogImage, item.og_image, item.image, item.images, item.media),
+      imagePath: firstString(item.imagePath, item.image_path, item.thumbnailPath, item.thumbnail_path),
+      snippet: firstString(item.snippet, item.description, item.summary, item.excerpt, item.content),
+      publishedAt: firstString(item.publishedAt, item.published_at, item.publishedDate, item.published_date, item.datePublished, item.date),
+      badge: firstString(item.badge, item.tag, item.category),
+    });
+  }
+  return out;
+}
+
+export function normalizeProductArtifactItems(rawItems: unknown[]): ProductArtifactItem[] {
+  const out: ProductArtifactItem[] = [];
+  const seen = new Set<string>();
+  for (const raw of Array.isArray(rawItems) ? rawItems : []) {
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as Record<string, any>;
+    const productUrl = httpUrl(item.productUrl, item.product_url, item.url, item.link, item.href);
+    const title = firstString(item.title, item.name, item.productName, item.product_name, item.label);
+    if (!productUrl || !title) continue;
+    const key = `${productUrl.replace(/[?#].*$/, '')}|${title.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const rating = firstNumber(item.rating, item.ratingValue, item.rating_value, item.stars);
+    const reviews = firstNumber(item.reviews, item.reviewCount, item.review_count, item.ratingCount, item.rating_count, item.ratings);
+    const confidence = firstNumber(item.confidence);
+    out.push({
+      title,
+      price: firstString(item.price, item.salePrice, item.sale_price, item.currentPrice, item.current_price, item.offerPrice),
+      description: firstString(item.description, item.snippet, item.summary, item.subtitle),
+      rating: rating != null ? Math.max(0, Math.min(5, rating)) : undefined,
+      reviews,
+      reviewCount: reviews,
+      tag: firstString(item.tag, item.badge, item.labelBadge, item.label_badge),
+      badge: firstString(item.badge, item.tag, item.labelBadge, item.label_badge),
+      imageUrl: httpUrl(item.imageUrl, item.image_url, item.thumbnailUrl, item.thumbnail_url, item.thumbnail, item.primaryImage, item.primary_image, item.image, item.images, item.media),
+      imagePath: firstString(item.imagePath, item.image_path, item.thumbnailPath, item.thumbnail_path),
+      productUrl,
+      merchant: firstString(item.merchant, item.store, item.seller, item.retailer, item.source) || publisherFromUrl(productUrl),
+      listPrice: firstString(item.listPrice, item.list_price, item.originalPrice, item.original_price, item.msrp),
+      availability: firstString(item.availability, item.stockStatus, item.stock_status),
+      seller: firstString(item.seller, item.soldBy, item.sold_by),
+      sku: firstString(item.sku, item.productId, item.product_id, item.itemId, item.item_id),
+      asin: firstString(item.asin, item.ASIN),
+      confidence: confidence != null ? Math.max(0, Math.min(1, confidence)) : undefined,
+    });
+  }
+  return out;
+}
+
+export function isUsableProductArtifactItem(item: ProductArtifactItem): boolean {
+  const hasIdentity = !!item.title?.trim() && /^https?:\/\//i.test(String(item.productUrl || ''));
+  const hasVisual = !!String(item.imagePath || item.imageUrl || '').trim();
+  const hasProductMetadata = !!String(item.price || item.description || item.sku || item.asin || '').trim()
+    || item.rating != null || item.reviews != null || item.reviewCount != null;
+  return hasIdentity && hasVisual && hasProductMetadata;
+}
+
 /** Build a `products` rich artifact from the legacy productCarousel shape. */
 export function productCarouselToArtifact(
   carousel: { title?: string; source?: string; items?: any[] } | null | undefined,
 ): ProductArtifact | null {
-  const items = Array.isArray(carousel?.items) ? carousel!.items : [];
+  const items = normalizeProductArtifactItems(Array.isArray(carousel?.items) ? carousel!.items : []);
   if (!items.length) return null;
   return {
     id: `products-${Date.now()}`,
     type: 'products',
     title: carousel?.title || undefined,
     source: carousel?.source || undefined,
-    items: items as ProductArtifactItem[],
+    items,
   };
 }

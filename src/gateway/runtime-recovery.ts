@@ -59,6 +59,20 @@ function plannedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefine
   return undefined;
 }
 
+function taskOwnedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefined {
+  const checkpointTool = String(runtime.checkpoint?.toolName || '').trim();
+  if (checkpointTool === 'gateway_restart' || checkpointTool === 'prom_apply_dev_changes') {
+    return checkpointTool;
+  }
+  return undefined;
+}
+
+function isPlainGatewayRestartTask(task: TaskRecord): boolean {
+  const text = `${task.title || ''} ${task.prompt || ''}`.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!/\b(restart|reboot)\b.*\b(gateway|prometheus|server)\b|\b(gateway|prometheus|server)\b.*\b(restart|reboot)\b/.test(text)) return false;
+  return !/\b(build|compile|update|upgrade|apply|edit|change|fix|install|deploy|then|afterwards?|after that|and then|verify files?|run tests?)\b/.test(text);
+}
+
 type RestartCheckpointPhase = 'initiated' | 'recovered';
 type RestartCheckpointTextOptions = {
   includeProcessPacket?: boolean;
@@ -177,6 +191,12 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
   const workEndedAt = Number(runtime.interruptedAt || runtime.updatedAt || Date.now()) || Date.now();
   addMessage(runtime.sessionId, {
     role: 'assistant',
+    messageKind: runtime.kind === 'main_chat_goal' ? 'goal_restart_checkpoint' : undefined,
+    activeRunKind: runtime.kind === 'main_chat_goal' ? 'main_chat_goal' : undefined,
+    goalId: runtime.checkpoint?.goalId,
+    goalTurnNumber: runtime.checkpoint?.goalTurnNumber,
+    goalIterationNumber: runtime.checkpoint?.goalIterationNumber,
+    goalTurnId: runtime.checkpoint?.goalTurnId,
     content,
     timestamp: workEndedAt,
     workStartedAt,
@@ -246,12 +266,14 @@ export function prepareActiveRuntimesForGatewayShutdown(reason = 'gateway_shutdo
   return interrupted;
 }
 
-function shouldAutoResumeTask(task: TaskRecord): boolean {
-  if (process.env.PROMETHEUS_AUTO_RESUME_INTERRUPTED_TASKS !== '1') return false;
+function shouldAutoResumeTask(task: TaskRecord, runtime: LiveRuntimeSnapshot): boolean {
   if (task.status !== 'paused') return false;
   if (task.pauseReason !== 'gateway_restart') return false;
   if (task.pendingClarificationQuestion) return false;
-  return true;
+  // A task that intentionally crossed a restart boundary must continue on the
+  // replacement gateway. Other interrupted tasks retain the global opt-in.
+  return !!taskOwnedRestartToolName(runtime)
+    || process.env.PROMETHEUS_AUTO_RESUME_INTERRUPTED_TASKS === '1';
 }
 
 function runtimeTimestamp(runtime: LiveRuntimeSnapshot): number {
@@ -434,6 +456,7 @@ export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs =
 
 export function recoverInterruptedRuntimes(opts: {
   launchBackgroundTaskRunner?: (taskId: string) => void;
+  completePlainGatewayRestartTask?: (taskId: string) => boolean;
   notify?: (message: string) => void;
 } = {}): { inspected: number; resumedTasks: string[]; interruptedChats: string[] } {
   const runtimes = listInterruptedRuntimes()
@@ -453,7 +476,19 @@ export function recoverInterruptedRuntimes(opts: {
           pauseTaskForRestart(task, runtime, runtime.interruptReason || 'gateway_crash');
         }
         const latest = loadTask(task.id) || task;
-        if (shouldAutoResumeTask(latest) && opts.launchBackgroundTaskRunner) {
+        if (
+          taskOwnedRestartToolName(runtime) === 'gateway_restart'
+          && isPlainGatewayRestartTask(latest)
+          && opts.completePlainGatewayRestartTask?.(latest.id)
+        ) {
+          resumedTasks.push(latest.id);
+          markDurableRuntimeRecovered(runtime.id, 'interrupted', { recovery: 'task_restart_completed', taskId: latest.id });
+          continue;
+        }
+        if (shouldAutoResumeTask(latest, runtime) && opts.launchBackgroundTaskRunner) {
+          const ownedRestartTool = taskOwnedRestartToolName(runtime);
+          const restartArgs = compactCheckpointValue(runtime.checkpoint?.args || {}, 1200);
+          const restartResult = compactCheckpointValue(runtime.checkpoint?.result || '', 1200);
           latest.status = 'queued';
           latest.pauseReason = undefined;
           latest.lastProgressAt = Date.now();
@@ -461,10 +496,27 @@ export function recoverInterruptedRuntimes(opts: {
             ...(latest.resumeContext || {}),
             onResumeInstruction: [
               latest.resumeContext?.onResumeInstruction,
-              'Startup recovery: this task was interrupted by a gateway restart and has been automatically resumed. Continue from the latest journal/resumeContext.',
+              ownedRestartTool === 'prom_apply_dev_changes'
+                ? [
+                    'Startup recovery: prom_apply_dev_changes completed its build/apply phase and the replacement gateway is now running.',
+                    restartArgs ? `Persisted apply arguments: ${restartArgs}` : '',
+                    restartResult ? `Persisted apply result: ${restartResult}` : '',
+                    'Continue immediately after the successful apply/restart boundary. Do not call prom_apply_dev_changes or gateway_restart again for these same changes.',
+                    'Perform only the remaining post-restart verification and required completion write_note, then complete the task and deliver its final result.',
+                  ].filter(Boolean).join('\n')
+                : ownedRestartTool
+                  ? 'Startup recovery: the gateway restart requested by this task succeeded. Continue immediately after the restart tool boundary, verify the gateway is healthy if relevant, and finish the remaining task steps. Do not call gateway_restart again unless a new restart is genuinely required.'
+                : 'Startup recovery: this task was interrupted by a gateway restart and has been automatically resumed. Continue from the latest journal/resumeContext.',
             ].filter(Boolean).join('\n\n'),
           };
           saveTask(latest);
+          if (ownedRestartTool === 'prom_apply_dev_changes') {
+            appendJournal(latest.id, {
+              type: 'tool_result',
+              content: 'prom_apply_dev_changes: build/apply succeeded and gateway restart completed; continuing with post-restart verification.',
+              detail: [restartArgs, restartResult].filter(Boolean).join('\n').slice(0, 2400) || undefined,
+            });
+          }
           appendJournal(latest.id, { type: 'resume', content: 'Auto-resumed after gateway restart.' });
           opts.launchBackgroundTaskRunner(latest.id);
           resumedTasks.push(latest.id);

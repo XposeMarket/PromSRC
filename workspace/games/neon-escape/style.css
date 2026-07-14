@@ -1,0 +1,154 @@
+:root {
+  --bg: #06070f;
+  --panel: rgba(8, 10, 24, 0.65);
+  --accent: #5ef1ff;
+  --accent2: #8f57ff;
+  --text: #e6ecff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at 20% 20%, #0b1030 0%, #06070f 45%, #03050b 100%);
+  color: var(--text);
+  overflow: hidden;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+#game-wrap {
+  position: fixed;
+  inset: 0;
+}
+
+#game {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: transparent;
+}
+
+#ui {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid rgba(94, 241, 255, 0.3);
+  border-radius: 12px;
+  padding: 10px;
+  font-size: 13px;
+  letter-spacing: 0.4px;
+  backdrop-filter: blur(6px);
+}
+
+#stats {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+#status {
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, rgba(6, 10, 20, 0.78), rgba(3, 3, 10, 0.92));
+  text-align: center;
+  z-index: 20;
+}
+
+#overlay.hidden,
+#game.start-hidden {
+  display: none;
+}
+
+#overlay h1 {
+  margin: 0;
+  font-size: 34px;
+  letter-spacing: 1px;
+  color: var(--accent);
+}
+
+#overlay p {
+  margin: 12px auto;
+  max-width: 48ch;
+  color: #d5dbff;
+}
+
+#startBtn {
+  border: 0;
+  margin-top: 12px;
+  background: linear-gradient(120deg, var(--accent), var(--accent2));
+  color: #050714;
+  padding: 12px 26px;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+#controls {
+  position: fixed;
+  inset: auto 8px 18px 8px;
+  display: grid;
+  grid-template-columns: 52px 52px;
+  grid-template-rows: 52px 52px;
+  gap: 8px;
+  width: 112px;
+  height: 112px;
+  margin-left: auto;
+}
+
+#controls button {
+  border: 1px solid rgba(142, 252, 255, 0.45);
+  background: rgba(10, 18, 45, 0.64);
+  color: var(--accent);
+  border-radius: 14px;
+  font-size: 22px;
+  font-weight: 900;
+}
+
+#upBtn {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+#downBtn {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+#boostBtn {
+  position: fixed;
+  right: 16px;
+  bottom: 130px;
+  width: 72px;
+  height: 72px;
+}
+
+@media (min-width: 700px) {
+  #controls {
+    display: none;
+  }
+  #boostBtn {
+    right: 24px;
+    bottom: 24px;
+    width: 84px;
+    height: 84px;
+  }
+}

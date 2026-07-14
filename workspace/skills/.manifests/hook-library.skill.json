@@ -1,24 +1,19 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating or improving hooks, headlines, openers, social post starts, email subject lines, landing-page hero lines, ad hooks, or attention-grabbing first lines.",
+  "description": "Generate and evaluate opening hooks for social posts, short-form video, ads, newsletters, and creator content. Use only when the user explicitly wants hook ideation or optimization; do not auto-invoke for full articles, generic copywriting, or unrelated writing.",
   "triggers": [
-    "write a hook",
-    "better headline",
-    "opening line",
-    "tweet hook",
-    "email subject line",
     "landing page headline",
-    "ad hook",
-    "first line",
-    "attention grabber",
     "improve the opener",
     "make this punchier",
-    "hook library",
-    "headline ideas",
-    "scroll-stopping hook",
     "social media opener",
-    "stronger angle"
+    "write a hook",
+    "scroll-stopping hook",
+    "attention grabber",
+    "better headline",
+    "headline ideas",
+    "stronger angle",
+    "opening line"
   ],
   "categories": [
     "writing",
@@ -29,5 +24,7 @@
     "skills"
   ],
   "lifecycle": "active",
-  "id": "hook-library"
+  "id": "hook-library",
+  "name": "hook-library",
+  "implicitInvocation": false
 }

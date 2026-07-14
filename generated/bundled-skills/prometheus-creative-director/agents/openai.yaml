@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prometheus Creative Director"
+  short_description: "Route complete image and video production"
+  default_prompt: "Use $prometheus-creative-director to plan and execute this video with the right Creative Mode and HyperFrames tools."

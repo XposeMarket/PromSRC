@@ -138,6 +138,8 @@ Current source facts:
 - `src/gateway/brain/brain-runner.ts` schedules thought cycles about every six hours
 - dream cycles are scheduled nightly around 23:30 local time, with cleanup about thirty minutes later
 - a fifteen-minute checker handles catch-up and retry behavior
+- failed Thought and Dream runs back off for six hours, and failed Dream cleanup runs back off for twelve hours, so a missing/stale artifact cannot create a 30-60 minute model retry storm
+- recurring Brain sessions have model/tool-round safety budgets (Thought 32, Dream 48, cleanup 32 by default); these are independently configurable with `PROMETHEUS_BRAIN_THOUGHT_MAX_ROUNDS`, `PROMETHEUS_BRAIN_DREAM_MAX_ROUNDS`, and `PROMETHEUS_BRAIN_CLEANUP_MAX_ROUNDS`
 - brain state, thought, dream, and cleanup artifacts live under `workspace/Brain/`
 - **the brain runs as `executionMode: 'cron'`, which (post Plan-B/cron rework) takes the interactive personality path — so thought and dream already receive USER.md + SOUL.md + MEMORY.md + intraday notes + config soul.** The prompts now reason proactively from that context ("the user planned X with me — is it actually built yet?") rather than only auditing the activity window.
 - **research tools (2026-06-10):** the Thought toolFilter now includes `web_search`/`web_fetch` (core tools) for light current-state + prior-art lookups, plus private-build-only source/prom read tools (`read_source`, `grep_source`, `read_prom_file`, …) so it can inspect Prometheus's own code/tools for current-state checks and tool-failure diagnosis. The Dream additionally gets `browser_open`/`browser_get_page_text` for deep competitor/OSS research. All Prometheus-source tools are stripped in public builds by `brainDreamToolFilter`.
@@ -150,14 +152,13 @@ Current source facts:
 - thoughts scan chats, sessions, transcripts, tasks, cron/team/proposal evidence, memory notes, `Brain/skill-episodes/`, and `Brain/skill-gardener/`
 - dreams read the thought queue, memory roots, proposals, pending proposals, skill episodes, and live skill/workflow candidates before acting
 - dreams run a Skill Gardener Review phase that compares actual session behavior against current skill docs
-- dreams audit Thought-applied skill updates and may accept, modify, remove/supersede, or defer them to prevent skill bloat
-- dreams may automatically evolve an existing skill when the change is low-risk, evidence-backed, and scoped to an existing skill
-- dreams must automatically file `skill_evolution` proposals for new skills when the proposal quality gate passes; they should not directly create brand-new skills
-- procedural workflow and tool-order learnings should route into existing skill updates or new-skill proposals, not into `USER.md`, `SOUL.md`, or `MEMORY.md`
+- Thought, Dream, cleanup, and normal chat are candidate-only skill observers; they submit structured evidence with `skill_candidate_submit`
+- the scheduled Curator runs in `dry-run` mode and behavioral changes default to pending review
+- Dream cannot automatically file `skill_evolution`; new-skill candidates first require Curator overlap analysis and explicit approval
+- procedural workflow and tool-order learnings route into Curator candidates, not into `USER.md`, `SOUL.md`, or `MEMORY.md`
 - dream output artifact handling is resilient: if a model-backed Dream returns usable text but misses/stales the dream markdown or `Brain/proposals.md`, the runner writes fallback recovery artifacts instead of failing only because an expected file was missing
 - dream cleanup is now both memory solidifier and Skill Curator Critic; it should not create new memories, proposals, new skills, archives, merges, broad rewrites, or high-risk skill changes
-- Dream cleanup may inspect the skill curator queue and recent auto-applied skill resources; it can accept, reject, revert, refine, or mark skill-curator items as needs_review
-- Dream cleanup can reject weak pending curator items, delete/revert clearly bad auto-applied curator resources with `skill_resource_delete`, or refine an applied resource in place with `skill_resource_write` only when the correction is obvious and low-risk
+- Dream cleanup may inspect the Curator queue, reject weak pending items, or submit a repair candidate; it cannot mutate skill files
 - prompt mutations still flow through `src/gateway/scheduling/prompt-mutation.ts`
 - the main chat prompt includes a skill recovery policy: if a skill-guided path fails, recover through another viable route, and after confirming the alternate route works, offer to update the skill with the corrected steps or guardrail
 - the older `src/gateway/proposals/self-improvement-api.ts` and `src/gateway/scheduling/self-improvement-engine.ts` files are no longer present in the working source
@@ -174,6 +175,8 @@ Current artifact paths:
 - `workspace/Brain/skill-curator/suggestions.json`
 - `workspace/Brain/skill-curator/reports/<runId>.md`
 
+Curator resources use stable canonical destinations instead of dated filenames: `references/recovery/<topic>.md`, `references/styles/<skill>.md`, and `references/workflows/<skill>.md`. Equivalent lessons merge into the existing canonical resource. Capture date, source sessions, confidence, and raw evidence remain in the Brain suggestion/evidence ledger rather than being copied into skill instructions.
+
 Current candidate classes:
 
 - `update_existing_skill`
@@ -188,7 +191,7 @@ Important signals:
 - a skill was listed but not read, suggesting a missing trigger or routing gap
 - a multi-tool workflow succeeded without a skill, suggesting a possible new skill candidate
 - a workflow involved durable browser, desktop, coding, creative, migration, or external-system steps
-- user correction, repeated recurrence, or positive feedback increases confidence
+- user-authored reusable instruction or validated recurrence across distinct sessions increases confidence; assistant final-response language and tool count do not
 
 Current Skill Curator behavior is implemented in `src/gateway/skills-runtime/skill-curator.ts` and is lesson-first, not transcript-first.
 
@@ -208,10 +211,12 @@ Curator quality rules:
 - raw request/outcome excerpts, long tool lists, and generic "workflow completed" notes are not enough
 - completed workflow alone should usually become `no_action` unless a reusable lesson exists
 - deterministic gates should reject or ignore weak legacy workflow/troubleshooting dumps before they pollute skills
-- low-risk, additive typed lessons can auto-apply in `auto-safe` mode
+- behavioral lessons, triggers, resources, instructions, and new skills never auto-apply during the mutation freeze
 - high-risk edits, broad instruction rewrites, archives, merges, skill deletion, and new skill creation require review/proposal flow
+- pending suggestions expire after 45 days; rejected suggestions are suppressed for 90 days, and semantic duplicates point to and remain suppressed behind the existing suggestion
+- trigger patches must name the proposed trigger, include positive and negative prompt sets, pass deterministic routing checks, respect the trigger cap, and target a skill that permits implicit invocation
 
-Current auto-safe examples:
+Historical lesson patterns now requiring review:
 
 - Creative/HyperFrames export says `Failed to fetch` but MP4 exists: add a recovery resource to `prometheus-creative-mode` that tells future runs to verify artifact path, nonzero file size, snapshots, and QA before treating the export as failed
 - file edit/patch context drift or exact-text-not-found: route the recovery lesson to `file-surgery`, not whichever skill happened to be active

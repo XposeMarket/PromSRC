@@ -1,12 +1,36 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "mcp-server-builder",
-  "name": "MCP Server Builder",
-  "description": "Create or register MCP server presets so Prometheus can use local/remote tool servers through its dynamic MCP tool surface.",
-  "version": "1.0.0",
+  "name": "mcp-server-builder",
+  "description": "Build or register a local or remote MCP server with typed tools and a Prometheus MCP preset. Use when creating an MCP server, wrapping a local service as MCP, or defining its transport and security boundary; do not use merely to connect an already-defined integration.",
+  "version": "2.0.0",
   "entrypoint": "SKILL.md",
-  "triggers": ["mcp server", "mcp preset", "add mcp", "wrap local service as mcp", "mcp tools"],
-  "categories": ["prometheus", "mcp", "integrations", "tooling"],
-  "requiredTools": ["mcp_server_tools", "integration_admin", "workspace_write"],
-  "permissions": { "workspaceRead": true, "workspaceWrite": true, "shell": true, "externalSideEffects": true }
+  "implicitInvocation": true,
+  "triggers": [
+    "wrap local service as mcp",
+    "mcp server transport",
+    "register mcp preset",
+    "create mcp server",
+    "build mcp server",
+    "design mcp tools"
+  ],
+  "categories": [
+    "prometheus",
+    "mcp",
+    "integrations",
+    "tooling"
+  ],
+  "requiredTools": [
+    "connection_ops",
+    "mcp_server_tools",
+    "integration_admin",
+    "workspace_write"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": true,
+    "externalSideEffects": true
+  },
+  "lifecycle": "active"
 }

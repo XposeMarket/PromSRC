@@ -3,21 +3,16 @@
   "entrypoint": "SKILL.md",
   "description": "Use this skill when building, editing, or designing a Prometheus connector/plugin for an external app or service, including tool contracts, auth, polling, webhooks, data mapping, tests, and integration UX.",
   "triggers": [
+    "make a tool for this service",
+    "create prometheus plugin",
+    "external app integration",
     "build a connector",
     "add a connector",
-    "create Prometheus plugin",
-    "connector tool",
     "integration connector",
-    "external app integration",
-    "connector auth",
-    "connector schema",
-    "connector tests",
-    "tool contract",
-    "plugin architecture",
-    "add connected app",
-    "make a tool for this service",
     "connector implementation",
+    "plugin architecture",
     "integration plugin",
+    "connector schema",
     "harden connector"
   ],
   "categories": [
@@ -27,11 +22,14 @@
     "coding"
   ],
   "requiredTools": [
+    "connection_ops",
     "workspace_write",
     "prometheus_source_read",
     "prometheus_source_write",
     "connector_list"
   ],
   "lifecycle": "active",
-  "id": "connector-builder"
+  "id": "connector-builder",
+  "name": "connector-builder",
+  "implicitInvocation": true
 }

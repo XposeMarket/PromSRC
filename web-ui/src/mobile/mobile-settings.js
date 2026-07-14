@@ -1,12 +1,13 @@
 import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=slash-command-style-align-v1';
 import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile-api.js';
 import { prettifyModelName } from './mobile-model-badge.js';
+import { effortOptions, reasoningCapability, supportsFastSpeed, validEffort } from '../reasoning-capabilities.js';
 
 // Fallback model lists when /api/extensions/catalog is unavailable.
 // Keep xAI order aligned with the xAI extension staticModels catalog.
 const BUILTIN_STATIC_MODELS = {
-  openai: ['gpt-5.5','gpt-5.4-pro','gpt-5.4','gpt-5.4-mini','gpt-5.4-nano','gpt-5-pro','gpt-5','gpt-5-mini','gpt-5-nano','gpt-5-chat-latest','gpt-4.1','gpt-4.1-mini','gpt-4o','gpt-4o-mini','o4-mini','o3','o1'],
-  openai_codex: ['gpt-5.5','gpt-5.4-codex','gpt-5.4-codex-mini','gpt-5.4','gpt-5.4-mini','gpt-5.3-codex','gpt-5.3-codex-spark','gpt-5.3','gpt-5.2-codex','gpt-5.2','gpt-5.1-codex-max','gpt-5.1-codex-mini','gpt-5.1-codex','gpt-5.1'],
+  openai: ['gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4-pro','gpt-5.4','gpt-5.4-mini','gpt-5.4-nano','gpt-5-pro','gpt-5','gpt-5-mini','gpt-5-nano','gpt-5-chat-latest','gpt-4.1','gpt-4.1-mini','gpt-4o','gpt-4o-mini','o4-mini','o3','o1'],
+  openai_codex: ['gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4-codex','gpt-5.4-codex-mini','gpt-5.4','gpt-5.4-mini','gpt-5.3-codex','gpt-5.3-codex-spark','gpt-5.3','gpt-5.2-codex','gpt-5.2','gpt-5.1-codex-max','gpt-5.1-codex-mini','gpt-5.1-codex','gpt-5.1'],
   anthropic: ['claude-fable-5','claude-opus-4-8','claude-opus-4-7','claude-opus-4-6','claude-sonnet-5','claude-sonnet-4-6','claude-sonnet-4-5-20250514','claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro','sonar','sonar-reasoning-pro','sonar-reasoning','sonar-deep-research'],
   gemini: ['gemini-2.5-pro','gemini-2.5-flash','gemini-2.5-flash-lite','gemini-2.0-flash','gemini-1.5-pro','gemini-1.5-flash'],
@@ -324,14 +325,17 @@ function buildProviderPayload(page, currentLlm) {
   const apiKey = val(page, apiKeyInputId(provider));
   if (apiKey) cfg.api_key = apiKey;
   const effort = val(page, effortInputId(provider));
-  if (effort) cfg.reasoning_effort = effort;
+  if (effort && validEffort(provider, cfg.model, effort)) cfg.reasoning_effort = effort;
   else delete cfg.reasoning_effort;
   if (provider === 'anthropic') {
     cfg.extended_thinking = boolValue(page, 'pm-anthropic-thinking');
-    cfg.fast_mode = boolValue(page, 'pm-anthropic-fast');
     const budget = Number(val(page, 'pm-anthropic-budget'));
     if (budget) cfg.thinking_budget = budget;
   }
+  const speed = val(page, `pm-speed-${provider}`);
+  if (supportsFastSpeed(provider, cfg.model)) cfg.speed = speed === 'fast' ? 'fast' : 'standard';
+  else delete cfg.speed;
+  delete cfg.fast_mode;
   return { ...currentLlm, provider, providers };
 }
 
@@ -361,26 +365,32 @@ function renderProviderFields(provider, cfg = {}) {
     return `${field('Endpoint', input(endpointId, cfg.endpoint || 'http://localhost:1234'))}${field('Model name', input(modelId, cfg.model || '', 'placeholder="qwen2.5-7b-instruct"'))}`;
   }
   if (provider === 'openai') {
+    const efforts = effortOptions(provider, cfg.model || 'gpt-5.5').map(v => ({ value: v, label: v || 'provider default' }));
     return `
       ${field('API Key', input(keyId, cfg.api_key || '', 'type="password" placeholder="sk-..."'))}
       ${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'gpt-5.5')), cfg.model || 'gpt-5.5'))}
-      ${field('Reasoning Effort', select(effortId, efforts.slice(0, 5), cfg.reasoning_effort || ''))}
+      ${efforts.length > 1 ? field('Reasoning Effort', select(effortId, efforts, cfg.reasoning_effort || '')) : ''}
+      ${supportsFastSpeed(provider, cfg.model || 'gpt-5.5') ? field('Speed', select(`pm-speed-${provider}`, [{value:'standard',label:'Standard'},{value:'fast',label:'Fast'}], cfg.speed || 'standard')) : ''}
     `;
   }
   if (provider === 'openai_codex') {
+    const codexEfforts = effortOptions(provider, cfg.model || 'gpt-5.5').map(v => ({ value: v, label: v || 'provider default' }));
     return `
       ${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'gpt-5.5')), cfg.model || 'gpt-5.5'))}
       ${field('Reasoning Effort', select(effortId, codexEfforts, cfg.reasoning_effort || ''))}
+      ${supportsFastSpeed(provider, cfg.model || 'gpt-5.5') ? field('Speed', select(`pm-speed-${provider}`, [{value:'standard',label:'Standard'},{value:'fast',label:'Fast'}], cfg.speed || 'standard')) : ''}
       <div class="pm-settings-callout">Connect or disconnect the ChatGPT account from Credentials/Auth controls on desktop if OAuth needs renewal.</div>
     `;
   }
   if (provider === 'anthropic') {
+    const cap = reasoningCapability(provider, cfg.model || 'claude-sonnet-5');
+    const anthropicEfforts = effortOptions(provider, cfg.model || 'claude-sonnet-5').map(v => ({ value: v, label: v || 'provider default' }));
     return `
       ${field('Model', select(modelId, modelOptions(provider, modelsForProvider(provider, cfg.model || 'claude-sonnet-5')), cfg.model || 'claude-sonnet-5'))}
-      ${field('Thinking Effort', select(effortId, anthropicEfforts, cfg.reasoning_effort || ''))}
+      ${anthropicEfforts.length > 1 ? field('Thinking Effort', select(effortId, anthropicEfforts, cfg.reasoning_effort || '')) : ''}
       ${toggleRow('pm-anthropic-thinking', 'Extended thinking', cfg.extended_thinking === true)}
-      ${toggleRow('pm-anthropic-fast', 'Fast mode (Opus 4.6/4.7/4.8)', cfg.fast_mode === true)}
-      ${field('Legacy Thinking Budget', select('pm-anthropic-budget', ['2048','5000','10000','16000','24000','32000'], String(cfg.thinking_budget || '10000')))}
+      ${supportsFastSpeed(provider, cfg.model || 'claude-sonnet-5') ? field('Speed', select(`pm-speed-${provider}`, [{value:'standard',label:'Standard'},{value:'fast',label:'Fast'}], cfg.speed || (cfg.fast_mode === true ? 'fast' : 'standard'))) : ''}
+      ${cap.thinkingMode === 'manual' ? field('Thinking Budget', select('pm-anthropic-budget', ['2048','5000','10000','16000','24000','32000'], String(cfg.thinking_budget || '10000'))) : ''}
     `;
   }
   if (provider === 'perplexity') {

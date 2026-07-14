@@ -17,6 +17,7 @@ import { normalizeAgentVoiceProfile } from '../components/agent-voice-picker.js'
 import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
 import { showTutorial } from '../onboarding/tutorial-overlay.js';
 import { renderProviderUsageCard } from './HubPage.js';
+import { effortOptions, validEffort } from '../reasoning-capabilities.js';
 
 const SETTINGS_ICON_PATHS = {
   keyboard: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 9h.01"></path><path d="M10 9h.01"></path><path d="M13 9h.01"></path><path d="M16 9h.01"></path><path d="M7 13h.01"></path><path d="M10 13h.01"></path><path d="M13 13h4"></path><path d="M7 17h10"></path>',
@@ -855,8 +856,8 @@ function toggleCredVis(inputId, btn) {
 const BUILTIN_PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini'];
 const ACCOUNT_AWARE_PROVIDER_IDS = new Set(['xai', 'openai_codex', 'anthropic']);
 const BUILTIN_STATIC_MODEL_FALLBACKS = {
-  openai: ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
@@ -1219,7 +1220,10 @@ async function fetchProviderModelsForPicker(providerId, options = {}) {
     } catch {}
   }
 
-  if (includeLive) {
+  // Codex OAuth and OpenAI API-key catalogs are separate products. The generic
+  // model-test endpoint can reflect the active OpenAI API config, so never merge
+  // that response into an openai_codex picker.
+  if (includeLive && providerId !== 'openai_codex') {
     try {
       const llm = buildProviderPayload();
       llm.provider = providerId;
@@ -1368,6 +1372,7 @@ function renderProviderSelectors() {
     document.getElementById('agent-edit-provider'),
     ...document.querySelectorAll('select[id^="amd-"][id$="-prov"]'),
     ...document.querySelectorAll('select[id^="brain-"][id$="-prov"]'),
+    ...document.querySelectorAll('select[id^="goal-"][id$="-prov"]'),
   ].filter(Boolean);
   const credentialedProviders = filterCredentialedProviderCatalogItems(providers);
   sharedSelects.forEach((select) => {
@@ -1525,9 +1530,11 @@ async function loadModelSettings() {
       v('settings-openai-key',        pc.openai?.api_key);
       if (pc.openai?.model) { const s = document.getElementById('settings-openai-model'); if (s) s.value = pc.openai.model; }
       { const s = document.getElementById('settings-openai-effort'); if (s) s.value = pc.openai?.reasoning_effort || ''; }
+      { const s = document.getElementById('settings-openai-speed'); if (s) s.value = pc.openai?.speed || 'standard'; }
       { const s = document.getElementById('settings-openai-tool-choice'); if (s) s.value = pc.openai?.tool_choice || 'required'; }
       if (pc.openai_codex?.model) { const s = document.getElementById('settings-codex-model'); if (s) s.value = pc.openai_codex.model; }
       { const s = document.getElementById('settings-codex-effort'); if (s) s.value = pc.openai_codex?.reasoning_effort || ''; }
+      { const s = document.getElementById('settings-codex-speed'); if (s) s.value = pc.openai_codex?.speed || 'standard'; }
       { const s = document.getElementById('settings-codex-tool-choice'); if (s) s.value = pc.openai_codex?.tool_choice || 'auto'; }
       if (pc.anthropic?.model) { const s = document.getElementById('settings-anthropic-model'); if (s) s.value = pc.anthropic.model; }
       { const s = document.getElementById('settings-anthropic-effort'); if (s) s.value = pc.anthropic?.reasoning_effort || ''; }
@@ -1548,8 +1555,8 @@ async function loadModelSettings() {
           const sel = document.getElementById('settings-anthropic-thinking-budget');
           if (sel) sel.value = String(pc.anthropic.thinking_budget);
         }
-        const fastChk = document.getElementById('settings-anthropic-fast-mode');
-        if (fastChk) fastChk.checked = !!pc.anthropic.fast_mode;
+        const speedSel = document.getElementById('settings-anthropic-speed');
+        if (speedSel) speedSel.value = pc.anthropic.speed || (pc.anthropic.fast_mode ? 'fast' : 'standard');
         syncAnthropicReasoningControls();
       }
 
@@ -1562,6 +1569,9 @@ async function loadModelSettings() {
       if (typeof window.applyReasoningPrefsFromProviderConfig === 'function') {
         window.applyReasoningPrefsFromProviderConfig(llm, prov);
       }
+      window.syncProviderReasoningControls?.('openai');
+      window.syncProviderReasoningControls?.('openai_codex');
+      window.syncProviderReasoningControls?.('anthropic');
 
       Promise.allSettled([
         loadAgentModelDefaults(),
@@ -1621,6 +1631,7 @@ function collectInUseProviders() {
   if (main && main.value) push(main.value);
   document.querySelectorAll('select[id^="amd-"][id$="-prov"]').forEach(s => { if (s.value) push(s.value); });
   document.querySelectorAll('select[id^="brain-"][id$="-prov"]').forEach(s => { if (s.value) push(s.value); });
+  document.querySelectorAll('select[id^="goal-"][id$="-prov"]').forEach(s => { if (s.value) push(s.value); });
   return ids;
 }
 
@@ -1677,6 +1688,8 @@ async function loadSessionCompactionSettings() {
     if (toolsEl) toolsEl.value = String(Number(s.rollingCompactionToolTurns) || 5);
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
+    await applyGoalRoutingToForm('compactor', s?.mainChatGoals?.compactionModel || '', s?.mainChatGoals?.compactionReasoning || '');
+    await applyGoalRoutingToForm('judge', s?.mainChatGoals?.judgeModel || '', s?.mainChatGoals?.judgeReasoning || '');
     renderContextBudgetSummary(s.contextProfile, s.contextBudget, s);
     window._settingsSessionLoadedToUI = true;
   } catch (e) {
@@ -1840,7 +1853,11 @@ async function refreshProviderModels(providerOverride) {
     const llm = buildProviderPayload();
     if (llm.provider !== provider) llm.provider = provider;
     const data = await api('/api/models/test', { method: 'POST', body: JSON.stringify({ llm }) });
-    let models = (data?.models || []).map(m => typeof m === 'string' ? m : (m.name || String(m))).filter(Boolean);
+    let models = uniqueStrings([
+      ...getProviderModelFallbacks(provider),
+      ...normalizeModelList(data?.models),
+      ...getProviderModelsFromUI(provider),
+    ]);
     const primarySel = document.getElementById('settings-primary-model');
     if (provider === 'ollama' && primarySel) {
       const preferredValue = String(primarySel.dataset.savedValue || primarySel.value || '').trim();
@@ -1936,22 +1953,23 @@ function buildProviderPayload(providerOverride) {
   const openaiToolChoice = document.getElementById('settings-openai-tool-choice')?.value || 'required';
   providers.openai    = { api_key:  document.getElementById('settings-openai-key')?.value         || '',                       model: document.getElementById('settings-openai-model')?.value      || 'gpt-4o' };
   if (openaiEffort) providers.openai.reasoning_effort = openaiEffort;
+  providers.openai.speed = document.getElementById('settings-openai-speed')?.value === 'fast' ? 'fast' : 'standard';
   providers.openai.tool_choice = openaiToolChoice;
   const codexEffort = document.getElementById('settings-codex-effort')?.value || '';
   const codexToolChoice = document.getElementById('settings-codex-tool-choice')?.value || 'auto';
   providers.openai_codex = { model: document.getElementById('settings-codex-model')?.value         || 'gpt-5.4-codex' };
   if (codexEffort) providers.openai_codex.reasoning_effort = codexEffort;
+  providers.openai_codex.speed = document.getElementById('settings-codex-speed')?.value === 'fast' ? 'fast' : 'standard';
   providers.openai_codex.tool_choice = codexToolChoice;
   const anthropicExtThinking = document.getElementById('settings-anthropic-extended-thinking')?.checked || false;
   const anthropicBudget = parseInt(document.getElementById('settings-anthropic-thinking-budget')?.value || '10000', 10);
   const anthropicEffortEl = document.getElementById('settings-anthropic-effort');
   const anthropicEffort = anthropicEffortEl?.disabled ? '' : (anthropicEffortEl?.value || '');
-  const anthropicFastMode = document.getElementById('settings-anthropic-fast-mode')?.checked || false;
   providers.anthropic = {
     model: document.getElementById('settings-anthropic-model')?.value || 'claude-sonnet-4-6',
     extended_thinking: anthropicExtThinking,
     thinking_budget: anthropicBudget,
-    fast_mode: anthropicFastMode,
+    speed: document.getElementById('settings-anthropic-speed')?.value === 'fast' ? 'fast' : 'standard',
   };
   if (anthropicEffort) providers.anthropic.reasoning_effort = anthropicEffort;
   const perplexityEffort = document.getElementById('settings-perplexity-effort')?.value || '';
@@ -2990,9 +3008,11 @@ function getAgentFromForm() {
       if (!prov) return mdl; // bare model, use global provider
       return mdl ? `${prov}/${mdl}` : ''; // must include model when provider is selected
     })(),
+    reasoning_effort: (document.getElementById('agent-edit-reasoning')?.value || '').trim(),
     default: document.getElementById('agent-edit-id').value.trim() === 'main',
   };
   const voice = getAgentVoiceFromForm();
+  if (!agent.reasoning_effort) delete agent.reasoning_effort;
   agent.voice = Object.keys(voice).length ? voice : null;
   if (workspaceValue && !isTeamScoped) agent.workspace = workspaceValue;
   if (Number.isFinite(maxSteps) && maxSteps > 0) agent.maxSteps = Math.floor(maxSteps);
@@ -3028,6 +3048,7 @@ function setAgentForm(agent) {
       }
       mdlSel.value = selectedModel || '';
     }
+    syncAgentReasoningControl(a.reasoning_effort || '');
   })();
   setAgentVoiceForm(a.voice || null);
   document.getElementById('agent-edit-max-steps').value = (a.maxSteps || '') + '';
@@ -3099,7 +3120,7 @@ function renderAgentsList() {
     //   3. Agent with isTeamManager=true whose id ends in '_manager' and name/id loosely matches team
     //   4. Fallback: any agent whose id is exactly '<keyword>_manager' for a keyword in team name/id
     const teamKeyword = t.id.replace(/^team_/, '').replace(/_[a-z0-9]{4,}$/, '').split('_')[0];
-    const managerId = t.managerId ||
+    const managerId = t.managerAgentId || t.managerId ||
       window.agentsConfigList.find(a => a.isTeamManager && a.teamId === t.id)?.id ||
       window.agentsConfigList.find(a => a.isTeamManager && a.id.endsWith('_manager') && a.id.includes(teamKeyword))?.id ||
       window.agentsConfigList.find(a => a.id === `${teamKeyword}_manager`)?.id ||
@@ -3234,7 +3255,7 @@ function agentFormNew() {
   });
   if (window.agentMdEditor) window.agentMdEditor.setValue('');
   const mdPath = document.getElementById('agent-md-path');
-  if (mdPath) mdPath.textContent = 'Select or save an agent to load AGENTS.md';
+  if (mdPath) mdPath.textContent = 'Select or save an agent to load AGENT.md';
   const resultEl = document.getElementById('agent-spawn-result');
   if (resultEl) resultEl.textContent = '';
   renderAgentsList();
@@ -3294,6 +3315,18 @@ async function loadAgentDetailsForCurrentSelection(force = false) {
 
 // --- Agent model picker ------------------------------------------------------
 
+function syncAgentReasoningControl(selectedValue) {
+  const provider = document.getElementById('agent-edit-provider')?.value?.trim() || '';
+  const model = document.getElementById('agent-edit-model-select')?.value?.trim() || '';
+  const select = document.getElementById('agent-edit-reasoning');
+  if (!select) return;
+  const current = selectedValue !== undefined ? String(selectedValue || '') : String(select.value || '');
+  const options = provider && model ? effortOptions(provider, model, true) : [''];
+  select.innerHTML = options.map((effort) => `<option value="${escHtml(effort)}">${escHtml(effort || 'provider default')}</option>`).join('');
+  select.disabled = !provider || !model || options.length <= 1;
+  select.value = current && validEffort(provider, model, current) ? current : '';
+}
+
 /**
  * Called when the provider dropdown changes — clears model list and kicks off a fetch.
  */
@@ -3306,6 +3339,7 @@ async function onAgentProviderChange() {
   if (!prov) {
     mdlSel.innerHTML = '<option value="">— use effective default —</option>';
     if (status) status.textContent = '';
+    syncAgentReasoningControl();
     return;
   }
   mdlSel.innerHTML = '<option value="">Loading…</option>';
@@ -3335,8 +3369,8 @@ async function loadAgentModelOptions(preserveSelected = false) {
 
   // Static fallback model lists per provider (used when live fetch returns nothing)
   const STATIC_MODEL_FALLBACKS = {
-    openai:       ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-    openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+    openai:       ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+    openai_codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
     anthropic:    ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
     perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
     gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
@@ -3388,9 +3422,11 @@ async function loadAgentModelOptions(preserveSelected = false) {
     else mdlSel.value = models[0];
 
     if (status) status.textContent = `${models.length} model(s) available`;
+    syncAgentReasoningControl();
   } catch (err) {
     mdlSel.innerHTML = '<option value="">— fetch failed —</option>';
     if (status) status.textContent = `Error: ${err.message}`;
+    syncAgentReasoningControl();
   }
 }
 
@@ -3585,17 +3621,17 @@ function applyAgentEditorLayout() {
 
   if (isMain) {
     if (promptCard) promptCard.style.display = 'none';
-    if (titleEl) titleEl.textContent = 'System Prompt (CodeMirror)';
-    if (saveBtn) saveBtn.textContent = 'Save system_prompt.md';
+    if (titleEl) titleEl.textContent = 'AGENT.md (CodeMirror)';
+    if (saveBtn) saveBtn.textContent = 'Save AGENT.md';
     if (noteEl) noteEl.style.display = 'none';
     if (badgeEl) badgeEl.style.display = 'none';
   } else {
     if (promptCard) promptCard.style.display = '';
-    if (titleEl) titleEl.textContent = 'System Prompt (CodeMirror)';
-    if (saveBtn) saveBtn.textContent = 'Save system_prompt.md';
+    if (titleEl) titleEl.textContent = 'AGENT.md (CodeMirror)';
+    if (saveBtn) saveBtn.textContent = 'Save AGENT.md';
     if (noteEl) {
       noteEl.style.display = 'block';
-      noteEl.innerHTML = 'This subagent prompt comes from <strong>system_prompt.md</strong>. Recurring work is configured from Scheduled Tasks by assigning this subagent.';
+      noteEl.innerHTML = 'This subagent identity and operating prompt comes from <strong>AGENT.md</strong>. Recurring work is configured from Scheduled Tasks by assigning this subagent.';
     }
     if (badgeEl) badgeEl.style.display = 'inline-flex';
   }
@@ -3614,9 +3650,9 @@ async function loadSelectedAgentMd() {
     return;
   }
 
-  const endpoint = 'system-prompt-md';
-  const label = 'System Prompt (CodeMirror)';
-  const saveLabel = 'Save system_prompt.md';
+  const endpoint = 'agent-md';
+  const label = 'AGENT.md (CodeMirror)';
+  const saveLabel = 'Save AGENT.md';
 
   // Update UI labels
   const titleEl = document.getElementById('agent-md-editor-title');
@@ -3641,8 +3677,8 @@ async function loadSelectedAgentMd() {
 async function saveSelectedAgentMd() {
   if (!window.selectedAgentId || !window.agentMdEditor) return;
   if (isSelectedMainAgent()) return;
-  const endpoint = 'system-prompt-md';
-  const label = 'system_prompt.md';
+  const endpoint = 'agent-md';
+  const label = 'AGENT.md';
   try {
     const content = window.agentMdEditor.getValue();
     await api(`/api/agents/${encodeURIComponent(window.selectedAgentId)}/${endpoint}`, {
@@ -4045,12 +4081,23 @@ function buildLegacyModelPayload() {
 }
 
 function buildSessionSettingsPayload() {
+  const goalRoute = (type) => {
+    const provider = getSettingsValue(`goal-${type}-prov`).trim();
+    const model = getSettingsValue(`goal-${type}-model`).trim();
+    return provider && model ? `${provider}/${model}` : '';
+  };
   return {
     rollingCompactionEnabled: document.getElementById('settings-rolling-compaction-enabled')?.checked !== false,
     rollingCompactionMessageCount: Number(getSettingsValue('settings-rolling-compaction-count', '20') || 20),
     rollingCompactionToolTurns: Number(getSettingsValue('settings-rolling-compaction-tools', '5') || 5),
     rollingCompactionSummaryMaxWords: Number(getSettingsValue('settings-rolling-compaction-words', '900') || 900),
     rollingCompactionModel: getSettingsValue('settings-rolling-compaction-model').trim(),
+    mainChatGoals: {
+      compactionModel: goalRoute('compactor'),
+      compactionReasoning: getSettingsValue('goal-compactor-reasoning').trim(),
+      judgeModel: goalRoute('judge'),
+      judgeReasoning: getSettingsValue('goal-judge-reasoning').trim(),
+    },
   };
 }
 
@@ -4378,17 +4425,17 @@ function copyWebhookCurl() {
 
 let _mcpEditingId = null;
 
-const MCP_PRESETS = {
-  filesystem: { name: 'Filesystem', transport: 'stdio', command: 'npx', args: '-y\n@modelcontextprotocol/server-filesystem\nC:\\Users', env: '', description: 'Read/write local files' },
-  github:     { name: 'GitHub', transport: 'stdio', command: 'npx', args: '-y\n@modelcontextprotocol/server-github', env: 'GITHUB_PERSONAL_ACCESS_TOKEN=', description: 'Repos, PRs, issues' },
-  windows:    { name: 'Windows MCP', transport: 'stdio', command: 'uvx', args: 'windows-mcp', env: '', description: 'Native Windows desktop automation' },
-  postgres:   { name: 'PostgreSQL', transport: 'stdio', command: 'npx', args: '-y\n@modelcontextprotocol/server-postgres\npostgresql://localhost/mydb', env: '', description: 'Query PostgreSQL' },
-  sqlite:     { name: 'SQLite', transport: 'stdio', command: 'npx', args: '-y\n@modelcontextprotocol/server-sqlite\n--db-path\nC:\\path\\to\\db.sqlite', env: '', description: 'Local database' },
-  brave:      { name: 'Brave Search', transport: 'stdio', command: 'npx', args: '-y\n@modelcontextprotocol/server-brave-search', env: 'BRAVE_API_KEY=', description: 'Web search' },
-  memory:     { name: 'Memory', transport: 'stdio', command: 'npx', args: '-y\n@modelcontextprotocol/server-memory', env: '', description: 'Persistent knowledge store' },
-};
+let MCP_PRESETS = null;
+
+async function loadMCPPresetCatalog() {
+  if (MCP_PRESETS) return MCP_PRESETS;
+  const result = await api('/api/extensions/mcp-presets');
+  MCP_PRESETS = Object.fromEntries((result?.presets || []).map((preset) => [preset.id, preset]));
+  return MCP_PRESETS;
+}
 
 async function loadMCPServers() {
+  renderMCPPresetCatalog().catch(() => {});
   const el = document.getElementById('mcp-server-list');
   if (!el) return;
   const cached = _withSettingsCache({
@@ -4444,6 +4491,13 @@ async function loadMCPServers() {
   }
 }
 
+async function renderMCPPresetCatalog() {
+  const grid = document.getElementById('mcp-preset-grid');
+  if (!grid) return;
+  const presets = Object.values(await loadMCPPresetCatalog());
+  grid.innerHTML = presets.map((preset) => `<button onclick="prefillMCPServer(${JSON.stringify(String(preset.id)).replace(/</g, '\\u003c')})" style="text-align:left;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fafafa;cursor:pointer;font-size:11px"><div style="font-weight:600;color:var(--text)">${escHtml(String(preset.name || preset.id))}</div><div style="color:var(--muted)">${escHtml(String(preset.transport || 'MCP'))}${preset.credentialFields?.length ? ` · ${preset.credentialFields.length} credential field(s)` : ''}</div></button>`).join('') || '<div style="color:var(--muted)">No presets registered.</div>';
+}
+
 function showMCPAddForm(editData) {
   _mcpEditingId = editData?.id || null;
   document.getElementById('mcp-add-form').style.display = 'block';
@@ -4484,19 +4538,22 @@ function onMCPTransportChange() {
   document.getElementById('mcp-sse-fields').style.display = t === 'sse' ? 'block' : 'none';
 }
 
-function prefillMCPServer(presetKey) {
-  const p = MCP_PRESETS[presetKey];
+async function prefillMCPServer(presetKey) {
+  const catalog = await loadMCPPresetCatalog();
+  const p = catalog[presetKey];
   if (!p) return;
+  const built = await api('/api/extensions/mcp-presets/build', { method: 'POST', body: JSON.stringify({ id: presetKey, credentials: {} }) });
+  const config = built?.config || {};
   showMCPAddForm();
   const v = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
   v('mcp-f-id', presetKey);
   v('mcp-f-name', p.name);
-  document.getElementById('mcp-f-transport').value = p.transport;
+  document.getElementById('mcp-f-transport').value = config.transport || p.transport;
   onMCPTransportChange();
-  v('mcp-f-command', p.command || '');
-  v('mcp-f-args', p.args || '');
-  v('mcp-f-env', p.env || '');
-  v('mcp-f-url', p.url || '');
+  v('mcp-f-command', config.command || '');
+  v('mcp-f-args', Array.isArray(config.args) ? config.args.join('\n') : '');
+  v('mcp-f-env', config.env ? Object.entries(config.env).map(([key, value]) => `${key}=${value}`).join('\n') : '');
+  v('mcp-f-url', config.url || '');
   setIntegTab('mcp');
 }
 
@@ -4648,6 +4705,7 @@ window.ensureHeartbeatEditor = ensureHeartbeatEditor;
 window.findSelectedAgent = findSelectedAgent;
 window.generateWebhookToken = generateWebhookToken;
 window.getAgentFromForm = getAgentFromForm;
+window.syncAgentReasoningControl = syncAgentReasoningControl;
 window.getSelectedChannelType = getSelectedChannelType;
 window.hideMCPAddForm = hideMCPAddForm;
 window.isSelectedAgentTeamMember = isSelectedAgentTeamMember;
@@ -4676,8 +4734,8 @@ const AMD_SLOTS = {
 };
 
 const AMD_STATIC_MODELS = {
-  openai:       ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai:       ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic:    ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
@@ -4688,7 +4746,42 @@ let amdTemplatesCache = [];
 let amdActiveTemplateId = '';
 let amdDefaultTemplateId = '';
 
+function ensureAmdReasoningControls() {
+  for (const slotId of Object.keys(AMD_SLOTS)) {
+    const modelSel = document.getElementById('amd-' + slotId + '-model');
+    if (!modelSel) continue;
+    let select = document.getElementById('amd-' + slotId + '-reasoning');
+    if (!select) {
+      const wrapper = document.createElement('div');
+      wrapper.style.marginTop = '4px';
+      wrapper.innerHTML = `<div style="font-size:10px;color:var(--muted);margin-bottom:3px">Reasoning</div><select id="amd-${escHtml(slotId)}-reasoning" class="settings-input" style="width:100%"><option value="">provider default</option></select>`;
+      modelSel.insertAdjacentElement('afterend', wrapper);
+      select = wrapper.querySelector('select');
+    }
+    if (!modelSel.dataset.reasoningBound) {
+      modelSel.addEventListener('change', () => syncAmdReasoning(slotId));
+      modelSel.dataset.reasoningBound = '1';
+    }
+  }
+}
+
+function syncAmdReasoning(slotId, selectedValue) {
+  ensureAmdReasoningControls();
+  const prov = document.getElementById('amd-' + slotId + '-prov')?.value?.trim() || '';
+  const model = document.getElementById('amd-' + slotId + '-model')?.value?.trim() || '';
+  const select = document.getElementById('amd-' + slotId + '-reasoning');
+  if (!select) return;
+  const current = selectedValue !== undefined ? String(selectedValue || '') : String(select.value || '');
+  const options = prov && model ? effortOptions(prov, model, true) : [''];
+  select.innerHTML = options.map((effort) => `<option value="${escHtml(effort)}">${escHtml(effort || 'provider default')}</option>`).join('');
+  select.disabled = !prov || !model || options.length <= 1;
+  if (current && validEffort(prov, model, current)) select.value = current;
+  else select.value = '';
+  select.title = select.disabled ? 'This provider/model does not expose selectable reasoning effort.' : 'Reasoning effort for this agent default.';
+}
+
 async function amdProviderChange(slotId) {
+  ensureAmdReasoningControls();
   const provSel  = document.getElementById('amd-' + slotId + '-prov');
   const modelSel = document.getElementById('amd-' + slotId + '-model');
   if (!provSel || !modelSel) return;
@@ -4696,6 +4789,7 @@ async function amdProviderChange(slotId) {
   if (typeof renderModelsUsage === 'function') renderModelsUsage();
   if (!prov) {
     modelSel.innerHTML = '<option value="">— same as main agent —</option>';
+    syncAmdReasoning(slotId);
     return;
   }
   modelSel.innerHTML = '<option value="">Loading…</option>';
@@ -4706,11 +4800,13 @@ async function amdProviderChange(slotId) {
       modelSel.innerHTML = '<option value="">— provider not connected —</option>';
       return;
     }
-    const models = await fetchProviderModelsForPicker(prov, { refreshOpenAI: prov === 'openai', includeLive: true });
+    const models = await fetchProviderModelsForPicker(prov, { refreshOpenAI: prov === 'openai', includeLive: prov !== 'openai_codex' });
     if (!models.length) { modelSel.innerHTML = '<option value="">— no models found —</option>'; return; }
     modelSel.innerHTML = models.map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('');
+    syncAmdReasoning(slotId);
   } catch (e) {
     modelSel.innerHTML = '<option value="">— fetch failed —</option>';
+    syncAmdReasoning(slotId);
     console.warn('amdProviderChange error:', e);
   }
 }
@@ -4725,7 +4821,17 @@ function getAgentModelDefaultsFromForm() {
   return payload;
 }
 
-async function applyAgentModelDefaultsToForm(defaults = {}) {
+function getAgentReasoningDefaultsFromForm() {
+  const payload = {};
+  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+    const value = document.getElementById('amd-' + slotId + '-reasoning')?.value?.trim() || '';
+    payload[field] = value;
+  }
+  return payload;
+}
+
+async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}) {
+  ensureAmdReasoningControls();
   await ensureProviderCatalogUIReady();
   await fetchCredentialedModelProviderIds();
   renderProviderSelectors();
@@ -4735,6 +4841,7 @@ async function applyAgentModelDefaultsToForm(defaults = {}) {
     const modelSel = document.getElementById('amd-' + slotId + '-model');
     if (provSel) provSel.value = '';
     if (modelSel) modelSel.innerHTML = '<option value="">select provider first</option>';
+    syncAmdReasoning(slotId);
   }
   for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
     const val = d[field] || '';
@@ -4766,6 +4873,7 @@ async function applyAgentModelDefaultsToForm(defaults = {}) {
       }
       modelSel.value = model;
     }
+    syncAmdReasoning(slotId, reasoning?.[field] || '');
   }
 }
 
@@ -4835,7 +4943,7 @@ function onAgentModelTemplateSelect() {
 async function loadAgentModelDefaults() {
   try {
     const data = await api('/api/settings/agent-model-defaults');
-    await applyAgentModelDefaultsToForm(data?.defaults || {});
+    await applyAgentModelDefaultsToForm(data?.defaults || {}, data?.reasoning || {});
     if (data?.defaultTemplateId !== undefined) amdDefaultTemplateId = String(data.defaultTemplateId || '');
     updateAgentModelTemplateCache(data);
     window._agentModelDefaultsLoadedToUI = true;
@@ -4844,9 +4952,10 @@ async function loadAgentModelDefaults() {
 
 async function persistAgentModelDefaultsFromForm({ showStatus = true } = {}) {
   const payload = getAgentModelDefaultsFromForm();
+  const reasoning = getAgentReasoningDefaultsFromForm();
   const status = document.getElementById('amd-status');
   try {
-    const data = await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify(payload) });
+    const data = await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify({ ...payload, reasoning }) });
     if (showStatus && status) {
       status.style.color = 'var(--ok)';
       setSettingsStatus(status, 'success', 'Saved');
@@ -4887,6 +4996,7 @@ async function saveAgentModelDefaultTemplate() {
         id: selectedId || undefined,
         name,
         defaults: getAgentModelDefaultsFromForm(),
+        reasoning: getAgentReasoningDefaultsFromForm(),
       }),
     });
     updateAgentModelTemplateCache(data);
@@ -4926,7 +5036,7 @@ async function applyAgentModelDefaultTemplate() {
     const data = await api(`/api/settings/agent-model-default-templates/${encodeURIComponent(id)}/apply`, {
       method: 'POST',
     });
-    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {});
+    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {}, data?.reasoning || data?.template?.reasoning || {});
     await loadAgentModelDefaultTemplates();
     setAgentModelTemplateStatus('success', `Applied "${data?.template?.name || id}".`);
     showToast('Model template applied', data?.template?.name || id, 'success', 4000);
@@ -4966,7 +5076,7 @@ async function applyAsDefaultTemplate() {
       method: 'POST',
     });
     amdDefaultTemplateId = String(data?.defaultTemplateId || data?.template?.id || id);
-    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {});
+    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {}, data?.reasoning || data?.template?.reasoning || {});
     await loadAgentModelDefaultTemplates();
     updateApplyAsDefaultButtonState(id);
     setAgentModelTemplateStatus('success', `"${data?.template?.name || id}" set as startup default.`);
@@ -5002,6 +5112,81 @@ function deleteAgentModelDefaultTemplate() {
   );
 }
 
++
+function syncGoalRoutingReasoning(type, selectedValue) {
+  const provider = getSettingsValue(`goal-${type}-prov`).trim();
+  const model = getSettingsValue(`goal-${type}-model`).trim();
+  const select = document.getElementById(`goal-${type}-reasoning`);
+  if (!select) return;
+  const current = selectedValue !== undefined ? String(selectedValue || '') : String(select.value || '');
+  const options = provider && model ? effortOptions(provider, model, true) : [''];
+  select.innerHTML = options.map((effort) => `<option value="${escHtml(effort)}">${escHtml(effort || 'provider default')}</option>`).join('');
+  select.disabled = !provider || !model || options.length <= 1;
+  select.value = current && validEffort(provider, model, current) ? current : '';
+}
+
+async function goalRoutingProviderChange(type) {
+  const providerSelect = document.getElementById(`goal-${type}-prov`);
+  const modelSelect = document.getElementById(`goal-${type}-model`);
+  if (!providerSelect || !modelSelect) return;
+  const provider = String(providerSelect.value || '').trim();
+  if (!provider) {
+    modelSelect.innerHTML = '<option value="">uses current main-chat model</option>';
+    syncGoalRoutingReasoning(type);
+    return;
+  }
+  modelSelect.innerHTML = '<option value="">Loading...</option>';
+  try {
+    const models = await fetchProviderModelsForPicker(provider, {
+      refreshOpenAI: provider === 'openai',
+      includeLive: provider !== 'openai_codex',
+    });
+    modelSelect.innerHTML = models.length
+      ? models.map((model) => `<option value="${escHtml(model)}">${escHtml(model)}</option>`).join('')
+      : '<option value="">no models found</option>';
+  } catch (err) {
+    modelSelect.innerHTML = '<option value="">fetch failed</option>';
+    console.warn('goalRoutingProviderChange error:', err);
+  }
+  syncGoalRoutingReasoning(type);
+}
+
+async function applyGoalRoutingToForm(type, modelRef, reasoning) {
+  await ensureProviderCatalogUIReady();
+  await fetchCredentialedModelProviderIds();
+  renderProviderSelectors();
+  const raw = String(modelRef || '').trim();
+  const slash = raw.indexOf('/');
+  const provider = slash > 0 ? raw.slice(0, slash) : '';
+  const model = slash > 0 ? raw.slice(slash + 1) : raw;
+  const providerSelect = document.getElementById(`goal-${type}-prov`);
+  const modelSelect = document.getElementById(`goal-${type}-model`);
+  if (!providerSelect || !modelSelect) return;
+  if (!provider || !model) {
+    providerSelect.value = '';
+    modelSelect.innerHTML = '<option value="">uses current main-chat model</option>';
+    syncGoalRoutingReasoning(type);
+    return;
+  }
+  if (!Array.from(providerSelect.options).some((option) => option.value === provider)) {
+    const option = document.createElement('option');
+    option.value = provider;
+    option.textContent = `${provider} (not currently connected)`;
+    providerSelect.appendChild(option);
+  }
+  providerSelect.value = provider;
+  await goalRoutingProviderChange(type);
+  if (!Array.from(modelSelect.options).some((option) => option.value === model)) {
+    const option = document.createElement('option');
+    option.value = model;
+    option.textContent = model;
+    modelSelect.appendChild(option);
+  }
+  modelSelect.value = model;
+  syncGoalRoutingReasoning(type, reasoning);
+}
+
+
 // --- Brain System Model Config --------------------------------------------
 
 async function brainProviderChange(type) {
@@ -5012,24 +5197,11 @@ async function brainProviderChange(type) {
   if (!prov) { modelSel.innerHTML = '<option value="">— use primary model —</option>'; return; }
   modelSel.innerHTML = '<option value="">Loading…</option>';
   try {
-    let models = [];
-    if (prov === 'anthropic') {
-      models = ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'];
-    } else if (prov === 'openai') {
-      models = Array.from(document.getElementById('settings-openai-model')?.options || []).map(o => o.value).filter(Boolean);
-      if (!models.length) models = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'];
-    } else if (prov === 'openai_codex') {
-      models = ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'];
-    } else if (prov === 'perplexity') {
-      models = ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'];
-    } else if (prov === 'gemini') {
-      models = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'];
-    } else {
-      const llm = typeof buildProviderPayload === 'function' ? buildProviderPayload() : {};
-      llm.provider = prov;
-      const data = await api('/api/models/test', { method: 'POST', body: JSON.stringify({ llm }) });
-      models = (data?.models || []).map(m => typeof m === 'string' ? m : (m.name || String(m)));
-    }
+    await ensureProviderCatalogUIReady();
+    const models = await fetchProviderModelsForPicker(prov, {
+      refreshOpenAI: prov === 'openai',
+      includeLive: prov !== 'openai_codex',
+    });
     if (!models.length) { modelSel.innerHTML = '<option value="">— no models found —</option>'; return; }
     modelSel.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
   } catch (e) {
@@ -5106,6 +5278,8 @@ async function saveModelTabLiveSettings({ showStatus = false } = {}) {
 window.amdProviderChange = amdProviderChange;
 window.loadAgentModelDefaults = loadAgentModelDefaults;
 window.brainProviderChange = brainProviderChange;
+window.goalRoutingProviderChange = goalRoutingProviderChange;
+window.syncGoalRoutingReasoning = syncGoalRoutingReasoning;
 window.loadBrainModelConfig = loadBrainModelConfig;
 window.saveBrainModelConfig = saveBrainModelConfig;
 window.loadAgentHeartbeat = loadAgentHeartbeat;

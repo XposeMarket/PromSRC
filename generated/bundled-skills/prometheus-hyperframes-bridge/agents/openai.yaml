@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prometheus HyperFrames Bridge"
+  short_description: "Run HyperFrames inside Creative Mode"
+  default_prompt: "Use $prometheus-hyperframes-bridge to build and render this HyperFrames composition through Prometheus Creative Mode."

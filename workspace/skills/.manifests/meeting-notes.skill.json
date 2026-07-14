@@ -1,23 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when turning meeting transcripts, calls, voice notes, or messy discussion notes into summaries, decisions, action items, follow-ups, agendas, or clean meeting documentation.",
+  "description": "Use this skill when the user provides a transcript, rough notes, voice-note summary, email recap, call summary, or messy meeting dump and wants clean meeting notes. Triggers on phrases like summarize this meeting, meeting notes, extract action items, decisions made, clean up these notes, call recap, standup notes, sales call notes, 1:1 notes, retrospective notes, and turn this transcript into notes. Use it to separate context, decisions, action items, discussion points, owners, deadlines, and open questions.",
   "triggers": [
-    "meeting notes",
-    "summarize this meeting",
-    "call summary",
-    "action items",
-    "decisions from meeting",
-    "meeting transcript",
-    "clean up notes",
+    "next steps from call",
     "follow-up email from meeting",
-    "agenda",
-    "minutes",
+    "summarize this meeting",
+    "decisions from meeting",
     "voice note summary",
-    "extract tasks",
     "recap this call",
+    "clean up notes",
     "meeting documentation",
-    "next steps from call"
+    "meeting transcript",
+    "meeting notes",
+    "extract tasks",
+    "call summary"
   ],
   "categories": [
     "notes",
@@ -29,6 +26,7 @@
     "skills"
   ],
   "lifecycle": "active",
-  "name": "Meeting Notes",
-  "id": "meeting-notes"
+  "name": "meeting-notes",
+  "id": "meeting-notes",
+  "implicitInvocation": true
 }

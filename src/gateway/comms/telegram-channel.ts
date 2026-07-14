@@ -21,6 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { getConfig } from '../../config/config';
+import { readAgentPromptFile, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { getVault } from '../../security/vault';
 import {
   getProviderStaticModels,
@@ -164,42 +165,6 @@ const RESUME_CHANNEL_DEFS: Array<{ key: ResumeChannelKey; label: string; icon: s
   { key: 'whatsapp', label: 'WhatsApp', icon: '🟢', emptyLabel: 'WhatsApp chats' },
   { key: 'terminal', label: 'CLI', icon: '🖥️', emptyLabel: 'Terminal sessions' },
 ];
-
-function getSelfRepairApi(): null | typeof import('../../tools/self-repair') {
-  if (isPublicDistributionBuild()) return null;
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  return require('../../tools/self-repair.js');
-}
-
-function loadPendingRepairSafe(repairId: string): any | null {
-  return getSelfRepairApi()?.loadPendingRepair(repairId) ?? null;
-}
-
-function listPendingRepairsSafe(): any[] {
-  return getSelfRepairApi()?.listPendingRepairs() ?? [];
-}
-
-async function applyApprovedRepairSafe(repairId: string): Promise<{ success: boolean; message: string }> {
-  const api = getSelfRepairApi();
-  if (!api) {
-    return { success: false, message: 'Self-repair is unavailable in the public distribution build.' };
-  }
-  return api.applyApprovedRepair(repairId);
-}
-
-function deletePendingRepairSafe(repairId: string): boolean {
-  return getSelfRepairApi()?.deletePendingRepair(repairId) ?? false;
-}
-
-function formatRepairProposalSafe(repair: any): string {
-  const api = getSelfRepairApi();
-  return api ? api.formatRepairProposal(repair) : 'Self-repair is unavailable in the public distribution build.';
-}
-
-function getRepairButtonPayloadSafe(repair: any): { text: string } | null {
-  const api = getSelfRepairApi();
-  return api ? api.getRepairButtonPayload(repair) : null;
-}
 
 // ─── Telegram callback_data 64-byte limit workaround ─────────────────────────
 // We keep a small in-process map: short key → full IDs.
@@ -1269,9 +1234,8 @@ export class TelegramChannel {
 	      `/models — provider &amp; model picker`,
 	      `/reasoning — current provider reasoning controls`,
 	      ``,
-      `📋 <b>Proposals &amp; Repairs</b>`,
+      `📋 <b>Proposals &amp; Approvals</b>`,
       `/proposals [pending|done|id] — inbox`,
-      `/repairs — pending repairs`,
       `/approve &lt;id&gt; · /reject &lt;id&gt; — act on proposal`,
       ``,
       `🔌 <b>Integrations</b>`,
@@ -2650,7 +2614,6 @@ export class TelegramChannel {
 	          { command: 'screenshot',   description: 'Take a browser or desktop screenshot' },
 	          { command: 'download',     description: 'Download a workspace file' },
           { command: 'proposals',    description: 'List pending code proposals' },
-          { command: 'repairs',      description: 'List self-repair items' },
           { command: 'integrations', description: 'Show configured integrations' },
           { command: 'mcp_status',   description: 'Show MCP server status' },
           { command: 'setup',        description: 'Connect a service (github, slack, …)' },
@@ -3302,39 +3265,6 @@ export class TelegramChannel {
     });
   }
 
-  /**
-   * Send a repair/feature proposal with inline ✅ Approve / ❌ Reject buttons.
-   * Called from server-v2 after a pending repair is created.
-   */
-  async sendRepairWithButtons(chatId: number, repairId: string): Promise<void> {
-    const repair = loadPendingRepairSafe(repairId);
-    if (!repair) {
-      await this.sendMessage(chatId, `❌ Repair <code>#${repairId}</code> not found in pending store.`);
-      return;
-    }
-    const payload = getRepairButtonPayloadSafe(repair);
-    if (!payload) {
-      await this.sendMessage(chatId, '❌ Self-repair is unavailable in this build.');
-      return;
-    }
-    // Telegram max message length is 4096 — truncate if needed
-    const text = payload.text.slice(0, 3800);
-    await this.apiCall('sendMessage', {
-      chat_id: chatId,
-      text,
-      parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [[
-          { text: '✅ Approve — Apply & Rebuild', callback_data: `rp:ap:${repairId}` },
-          { text: '❌ Reject', callback_data: `rp:rj:${repairId}` },
-        ]],
-      },
-    }).catch(async () => {
-      // Fallback: send as plain text if HTML parse fails
-      await this.sendMessage(chatId, text).catch(() => {});
-    });
-  }
-
   /** Test the bot token — returns bot info or throws */
   async testConnection(): Promise<{ username: string; firstName: string }> {
     const info = await this.apiCall('getMe');
@@ -3944,7 +3874,6 @@ export class TelegramChannel {
 	      }
 	    }
 
-	    // ── rp: repair approve/reject buttons ──────────────────────────────────
 	    if (data.startsWith('pq:')) {
       const parts = data.split(':');
       const action = parts[1];
@@ -4063,55 +3992,6 @@ export class TelegramChannel {
         return;
       }
 
-      return;
-    }
-
-	    // ── rp: repair approve/reject buttons ──────────────────────────────────
-	    if (data.startsWith('rp:')) {
-      const parts = data.split(':');
-      const action = parts[1]; // 'ap' or 'rj'
-      const repairId = parts[2];
-      if (!repairId) {
-        await this.apiCall('editMessageText', {
-          chat_id: chatId, message_id: messageId,
-          text: '\u274c Invalid repair button — no repair ID.',
-          reply_markup: { inline_keyboard: [] },
-        }).catch(() => {});
-        return;
-      }
-      if (action === 'ap') {
-        // Disable buttons immediately to prevent double-tap
-        await this.apiCall('editMessageReplyMarkup', {
-          chat_id: chatId, message_id: messageId,
-          reply_markup: { inline_keyboard: [[{ text: '\u23f3 Applying...', callback_data: 'noop' }]] },
-        }).catch(() => {});
-        await this.sendMessage(chatId,
-          `🔧 Applying repair <code>#${repairId}</code>... patching, rebuilding, restarting. Takes 30–60s.`
-        );
-        applyApprovedRepairSafe(repairId).then(async (result) => {
-          try {
-            // Update the original message to show the outcome
-            await this.apiCall('editMessageReplyMarkup', {
-              chat_id: chatId, message_id: messageId,
-              reply_markup: { inline_keyboard: [[{ text: result.success ? '\u2705 Applied' : '\u274c Failed', callback_data: 'noop' }]] },
-            }).catch(() => {});
-            await this.sendMessage(chatId, result.message);
-          } catch {}
-        }).catch(async (err) => {
-          try { await this.sendMessage(chatId, `❌ Repair error: ${err.message}`); } catch {}
-        });
-      } else if (action === 'rj') {
-        const repair = loadPendingRepairSafe(repairId);
-        const deleted = repair ? deletePendingRepairSafe(repairId) : false;
-        await this.apiCall('editMessageReplyMarkup', {
-          chat_id: chatId, message_id: messageId,
-          reply_markup: { inline_keyboard: [[{ text: '\u274c Rejected', callback_data: 'noop' }]] },
-        }).catch(() => {});
-        await this.sendMessage(chatId, deleted
-          ? `🗑️ Repair <code>#${repairId}</code> rejected and discarded.`
-          : `❌ Could not find repair <code>#${repairId}</code> to reject.`
-        );
-      }
       return;
     }
 
@@ -4820,17 +4700,15 @@ export class TelegramChannel {
       }
     };
 
-    // Helper: read a workspace file for an agent (prompt/system_prompt.md or HEARTBEAT.md)
+    // Helper: read the canonical per-agent AGENT.md identity prompt.
     const readAgentPrompt = (agentId: string): { text: string; filePath: string } => {
       try {
         const { getAgentById, resolveAgentWorkspace } = require('../config/config.js');
         const agent = getAgentById(agentId);
         if (!agent) return { text: '(agent not found)', filePath: '' };
         const ws = resolveAgentWorkspace(agent);
-        for (const name of ['system_prompt.md', 'HEARTBEAT.md', 'SOUL.md', 'IDENTITY.md']) {
-          const fp = path.join(ws, name);
-          if (fs.existsSync(fp)) return { text: fs.readFileSync(fp, 'utf-8'), filePath: fp };
-        }
+        const prompt = readAgentPromptFile(ws, { migrateLegacy: true });
+        if (prompt) return { text: prompt.content, filePath: prompt.path };
         return { text: '(no prompt file found in workspace)', filePath: '' };
       } catch { return { text: '(error reading prompt)', filePath: '' }; }
     };
@@ -5341,10 +5219,7 @@ export class TelegramChannel {
         const ag = getAgentById(agentId);
         if (!ag) return '';
         const ws = resolveAgentWorkspace(ag);
-        for (const name of ['system_prompt.md', 'HEARTBEAT.md', 'SOUL.md', 'AGENTS.md']) {
-          const fp = path.join(ws, name);
-          if (fs.existsSync(fp)) return fs.readFileSync(fp, 'utf-8');
-        }
+        return readAgentPromptFile(ws, { migrateLegacy: true })?.content || '';
       } catch {}
       return '';
     };
@@ -5464,7 +5339,7 @@ export class TelegramChannel {
       const ag = getAgentById(agentId);
       this.pendingChat.set(userId, { type: 'agent_edit_prompt', agentId, agentName: ag?.name || agentId });
       await edit(
-        `✏️ Send the NEW full prompt for <b>${ag?.name || agentId}</b>.\nIt will replace system_prompt.md (or HEARTBEAT.md fallback).\n\nSend /cancel to abort.`,
+        `✏️ Send the NEW full prompt for <b>${ag?.name || agentId}</b>.\nIt will replace AGENT.md.\n\nSend /cancel to abort.`,
         [[{ text: '❌ Cancel', callback_data: `tm:cancel_chat:${userId}` }]],
       );
       return;
@@ -6332,10 +6207,7 @@ export class TelegramChannel {
             return;
           }
           const ws = resolveAgentWorkspace(ag);
-          const target = fs.existsSync(path.join(ws, 'system_prompt.md'))
-            ? path.join(ws, 'system_prompt.md')
-            : path.join(ws, 'HEARTBEAT.md');
-          fs.writeFileSync(target, text, 'utf-8');
+          const target = writeAgentPromptFile(ws, text);
           await this.sendMessage(chatId, `✅ Prompt updated for <b>${ag.name || ag.id}</b>.\n<code>${target}</code>`);
         } catch (err: any) {
           await this.sendMessage(chatId, `❌ Prompt update failed: ${err.message}`);
@@ -6723,7 +6595,7 @@ export class TelegramChannel {
 	    // ── Built-in commands ──────────────────────────────────────────────────────
 	    if (text === '/start') {
 	      await this.sendMessage(chatId, `🔥 <b>Prometheus connected!</b>\n\nYour Telegram user ID: <code>${userId}</code>\n\nJust send me a message and I'll respond using your local LLM.\n\nUse <code>/commands</code> any time for the full command catalog.\n\n<b>Core Commands:</b>\n/status — check connection\n/clear — reset chat history\n/new — start a new Telegram channel session\n/resume — browse older chats, channels, and projects\n/stop_now — abort current main chat turn\n/stop — inspect and abort live AI flows\n/browse — browse workspace files\n/download &lt;path&gt; — download a file\n/teams — view and manage agent teams\n/agents — browse all agents (chat/dispatch/edit prompt/model)\n/tasks — list queued/paused/stalled tasks (chat/resume/cancel/delete)\n/schedule — list schedules (run now/edit/delete)\n/models — switch provider/model\n/reasoning — adjust the active provider reasoning settings\n/screenshot — browser screenshot or per-monitor desktop screenshot\n/restart — choose full or quick gateway restart\n/update — check and apply updates (with confirmation)\n\n<b>Integrations:</b>\n/integrations — list configured integrations\n/mcp-status — show MCP server status\n/setup &lt;service&gt; — connect any service (github, slack, jira, etc.)\n\n<b>Proposals:</b>\n/proposals — list pending proposals (pending/done)
-/proposals [id] — show proposal details\n\n<b>Self-Repair:</b>\n/repairs — list pending repair proposals\n/repair &lt;id&gt; — show full details of a repair\n/approve &lt;id&gt; — apply a repair, rebuild &amp; restart\n/reject &lt;id&gt; — discard a repair`);
+/proposals [id] — show proposal details\n/approve &lt;id&gt; — approve a proposal or command approval\n/reject &lt;id&gt; — reject a proposal or command approval`);
 	      return;
 	    }
     if (text === '/commands' || text === '/commands ' || text === '/help' || text === '/help ') {
@@ -6934,120 +6806,58 @@ export class TelegramChannel {
 	      return;
 	    }
 
-	    // ── /repairs — list pending self-repair proposals ───────────────────────────
-	    if (text === '/repairs') {
-      const pending = listPendingRepairsSafe();
-      if (pending.length === 0) {
-        await this.sendMessage(chatId, '🔥 No pending repairs.');
-        return;
-      }
-      const lines = pending.map(r =>
-        `🔧 <b>#${r.id}</b> — <code>${r.affectedFile}</code>\n   ${r.errorSummary.slice(0, 80)}`
-      );
-      await this.sendMessage(chatId, `🔥 <b>Pending Repairs (${pending.length})</b>\n\n${lines.join('\n\n')}\n\nUse /approve &lt;id&gt; or /reject &lt;id&gt;`);
-      return;
-    }
-
-    // ── /approve <id> — apply a pending repair ──────────────────────────────────
+    // ── /approve <id> — approve a proposal or command approval ─────────────────
     if (/^\/approve(?:\s|$)/.test(text)) {
       const repairId = text.slice('/approve'.length).trim();
       if (!repairId) {
-        await this.sendMessage(chatId, '❌ Usage: /approve &lt;id&gt;\n\nWorks for pending repairs, proposals, and command approvals.');
+        await this.sendMessage(chatId, '❌ Usage: /approve &lt;id&gt;\n\nWorks for proposals and command approvals.');
         return;
       }
-      const repair = loadPendingRepairSafe(repairId);
-      if (!repair) {
-        const { loadProposal } = await import('../proposals/proposal-store');
-        const proposal = loadProposal(repairId);
-        if (proposal) {
-          try {
-            const { approveProposalAction } = await import('../routes/proposals.router');
-            const result = await approveProposalAction(repairId, {
-              dispatch: { channel: 'telegram', telegramChatId: chatId },
-            });
-            await this.sendMessage(
-              chatId,
-              result.dispatched
-                ? `🚀 Proposal <code>#${repairId}</code> approved and dispatched for execution.`
-                : `✅ Proposal <code>#${repairId}</code> approved. Ready for execution.`,
-            );
-          } catch (err: any) {
-            await this.sendMessage(chatId, `❌ Proposal approval error: ${err.message}`);
-          }
-          return;
-        }
-        const { getApprovalQueue } = await import('../verification-flow');
-        const approval = getApprovalQueue().get(repairId);
-        if (approval) {
-          const { resolveApprovalDecision } = await import('../approval-actions');
-          const result = resolveApprovalDecision({ approvalId: repairId, decision: 'approved', resolvedBy: 'telegram' });
-          await this.sendMessage(chatId, result.success
-            ? `✅ Approval <code>#${repairId}</code> approved. The paused run will continue now.`
-            : `❌ Approval error: ${this.tgEscape(result.error || 'Approval could not be resolved.')}`);
-          return;
-        }
-        await this.sendMessage(chatId, `❌ No pending repair, proposal, or approval found with ID: <code>${repairId}</code>.`);
-        return;
-      }
-      if (repair.status !== 'pending') {
-        await this.sendMessage(chatId, `❌ Repair <code>#${repairId}</code> is not pending (status: ${repair.status}).`);
-        return;
-      }
-
-      await this.sendMessage(chatId, `🔧 Applying repair <code>#${repairId}</code>...\n\nPatching <code>${repair.affectedFile}</code>, then rebuilding. This may take 30–60 seconds.`);
-
-      // Run in background so Telegram doesn't time out
-      applyApprovedRepairSafe(repairId).then(async (result) => {
+      const { loadProposal } = await import('../proposals/proposal-store');
+      const proposal = loadProposal(repairId);
+      if (proposal) {
         try {
-          await this.sendMessage(chatId, result.message);
-        } catch {}
-      }).catch(async (err) => {
-        try {
-          await this.sendMessage(chatId, `❌ Unexpected error during repair: ${err.message}`);
-        } catch {}
-      });
+          const { approveProposalAction } = await import('../routes/proposals.router');
+          const result = await approveProposalAction(repairId, { dispatch: { channel: 'telegram', telegramChatId: chatId } });
+          await this.sendMessage(chatId, result.dispatched ? `🚀 Proposal <code>#${repairId}</code> approved and dispatched for execution.` : `✅ Proposal <code>#${repairId}</code> approved. Ready for execution.`);
+        } catch (err: any) { await this.sendMessage(chatId, `❌ Proposal approval error: ${err.message}`); }
+        return;
+      }
+      const { getApprovalQueue } = await import('../verification-flow');
+      const approval = getApprovalQueue().get(repairId);
+      if (approval) {
+        const { resolveApprovalDecision } = await import('../approval-actions');
+        const result = resolveApprovalDecision({ approvalId: repairId, decision: 'approved', resolvedBy: 'telegram' });
+        await this.sendMessage(chatId, result.success ? `✅ Approval <code>#${repairId}</code> approved. The paused run will continue now.` : `❌ Approval error: ${this.tgEscape(result.error || 'Approval could not be resolved.')}`);
+        return;
+      }
+      await this.sendMessage(chatId, `❌ No proposal or approval found with ID: <code>${repairId}</code>.`);
       return;
     }
 
-    // ── /reject <id> — discard a pending repair ─────────────────────────────────
+    // ── /reject <id> — reject a proposal or command approval ───────────────────
     if (/^\/reject(?:\s|$)/.test(text)) {
       const repairId = text.slice('/reject'.length).trim();
       if (!repairId) {
         await this.sendMessage(chatId, '❌ Usage: /reject &lt;id&gt;');
         return;
       }
-      const repair = loadPendingRepairSafe(repairId);
-      if (!repair) {
-        const { loadProposal } = await import('../proposals/proposal-store');
-        const proposal = loadProposal(repairId);
-        if (proposal) {
-          try {
-            const { denyProposalAction } = await import('../routes/proposals.router');
-            denyProposalAction(repairId);
-            await this.sendMessage(chatId, `🗑️ Proposal <code>#${repairId}</code> rejected.`);
-          } catch (err: any) {
-            await this.sendMessage(chatId, `❌ Proposal rejection error: ${err.message}`);
-          }
-          return;
-        }
-        const { getApprovalQueue } = await import('../verification-flow');
-        const approval = getApprovalQueue().get(repairId);
-        if (approval) {
-          const { resolveApprovalDecision } = await import('../approval-actions');
-          const result = resolveApprovalDecision({ approvalId: repairId, decision: 'rejected', resolvedBy: 'telegram' });
-          await this.sendMessage(chatId, result.success
-            ? `🗑️ Approval <code>#${repairId}</code> rejected.`
-            : `❌ Rejection error: ${this.tgEscape(result.error || 'Approval could not be resolved.')}`);
-          return;
-        }
-        await this.sendMessage(chatId, `❌ No repair, proposal, or approval found with ID: <code>${repairId}</code>.`);
+      const { loadProposal } = await import('../proposals/proposal-store');
+      const proposal = loadProposal(repairId);
+      if (proposal) {
+        try { const { denyProposalAction } = await import('../routes/proposals.router'); denyProposalAction(repairId); await this.sendMessage(chatId, `🗑️ Proposal <code>#${repairId}</code> rejected.`); }
+        catch (err: any) { await this.sendMessage(chatId, `❌ Proposal rejection error: ${err.message}`); }
         return;
       }
-      const deleted = deletePendingRepairSafe(repairId);
-      await this.sendMessage(chatId, deleted
-        ? `🗑️ Repair <code>#${repairId}</code> discarded.\n\n<i>Fixed: ${repair.affectedFile}</i>`
-        : `❌ Could not delete repair <code>#${repairId}</code>.`
-      );
+      const { getApprovalQueue } = await import('../verification-flow');
+      const approval = getApprovalQueue().get(repairId);
+      if (approval) {
+        const { resolveApprovalDecision } = await import('../approval-actions');
+        const result = resolveApprovalDecision({ approvalId: repairId, decision: 'rejected', resolvedBy: 'telegram' });
+        await this.sendMessage(chatId, result.success ? `🗑️ Approval <code>#${repairId}</code> rejected.` : `❌ Rejection error: ${this.tgEscape(result.error || 'Approval could not be resolved.')}`);
+        return;
+      }
+      await this.sendMessage(chatId, `❌ No proposal or approval found with ID: <code>${repairId}</code>.`);
       return;
     }
 
@@ -7189,18 +6999,6 @@ export class TelegramChannel {
       } catch (err: any) {
         await this.sendMessage(chatId, `❌ Goal rejection error: ${err.message}`);
       }
-      return;
-    }
-
-    // ── /repair <id> — show full details of a pending repair ────────────────────
-    if (text.startsWith('/repair ')) {
-      const repairId = text.slice('/repair '.length).trim();
-      const repair = loadPendingRepairSafe(repairId);
-      if (!repair) {
-        await this.sendMessage(chatId, `❌ No repair found with ID: <code>${repairId}</code>. Use /repairs to list all.`);
-        return;
-      }
-      await this.sendMessage(chatId, formatRepairProposalSafe(repair));
       return;
     }
 

@@ -19,6 +19,7 @@ import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, Ge
 import { loadTokens, getValidToken, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
 import { contentToString, stripCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
+import { normalizeReasoningEffort, normalizeSpeed } from './reasoning-capabilities';
 
 const CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
 function envMs(name: string, fallback: number, minimum: number): number {
@@ -340,13 +341,15 @@ export class OpenAICodexAdapter implements LLMProvider {
       // Precedence: options.think (per-call override) → config reasoning_effort → default 'medium'.
       const cfgRoot = getConfig().getConfig() as any;
       const codexCfg = cfgRoot?.llm?.providers?.openai_codex || {};
+      if (normalizeSpeed('openai_codex', requestedModel, codexCfg.speed) === 'fast') body.service_tier = 'priority';
       const configuredEffort = typeof codexCfg.reasoning_effort === 'string' ? codexCfg.reasoning_effort.trim() : '';
       if (options?.think !== false && (options?.think || configuredEffort)) {
         const rawEffort = options?.think
           ? (typeof options.think === 'string' ? options.think : 'medium')
           : configuredEffort;
-        const effort = CODEX_EFFORT_MAP[rawEffort] || 'medium';
-        if (effort !== 'none') {
+        const mappedEffort = CODEX_EFFORT_MAP[rawEffort] || rawEffort;
+        const effort = normalizeReasoningEffort('openai_codex', requestedModel, mappedEffort);
+        if (effort) {
           body.reasoning = { effort, summary: 'auto' };
         }
       }

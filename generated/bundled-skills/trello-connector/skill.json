@@ -1,16 +1,18 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "trello-connector",
-  "name": "Trello Connector",
-  "description": "Expose Trello boards, lists, cards, labels, comments, checklists, and card movement as Prometheus connector tools.",
+  "name": "trello-connector",
+  "description": "Build or operate a Trello connector for boards, lists, cards, labels, comments, checklists, movement, and explicit Prometheus task links. Use when a request specifically concerns Trello integration or Trello card operations; do not invoke for generic task planning.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
+  "implicitInvocation": true,
   "triggers": [
-    "trello connector",
-    "trello board",
-    "trello card",
+    "trello board integration",
+    "create trello card",
+    "trello card tools",
     "move trello card",
-    "create trello card"
+    "trello task sync",
+    "trello connector"
   ],
   "categories": [
     "prometheus",
@@ -29,5 +31,6 @@
     "workspaceRead": true,
     "workspaceWrite": true,
     "externalSideEffects": true
-  }
+  },
+  "lifecycle": "active"
 }

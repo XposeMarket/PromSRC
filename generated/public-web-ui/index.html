@@ -133,7 +133,7 @@
       };
     };
 
-    window.__PROM_LOAD_SETTINGS = makeModuleLoader(() => import('./static/pages/SettingsPage.js'));
+    window.__PROM_LOAD_SETTINGS = makeModuleLoader(() => import('./static/pages/SettingsPage.js?v=goal-support-routing-v11'));
     window.__PROM_LOAD_CONNECTIONS = makeModuleLoader(() => import('./static/pages/ConnectionsPage.js'));
 
     const openSettingsShim = async function openSettingsShim(tab) {
@@ -280,7 +280,7 @@
         if (!mobileCssTag) {
           const cssTag = document.createElement('link');
           cssTag.rel = 'stylesheet';
-          cssTag.href = 'static/styles/mobile.css?v=mobile-document-scroll-v1';
+          cssTag.href = 'static/styles/mobile.css?v=goal-restart-continuity-v15';
           cssTag.dataset.promMobileStyle = '1';
           document.head.appendChild(cssTag);
         }
@@ -2240,7 +2240,7 @@
       <span id="ollama-status">Checking...</span>
     </div>
     <div class="status-pill" id="model-pill" onclick="openSettings('models')" title="Click to change model" style="cursor:pointer">
-      <span id="current-provider-badge" style="font-size:10px;font-weight:700;color:var(--muted);margin-right:4px"></span><span id="current-model">-</span>
+      <span id="current-provider-badge" style="font-size:10px;font-weight:700;color:var(--muted);margin-right:4px"></span><span id="header-model-speed-icon" class="model-speed-icon" title="Fast mode" aria-label="Fast mode" hidden>⚡</span><span id="current-model">-</span>
     </div>
     <div class="status-pill stat-compact" id="system-pill">
       <span id="quick-system-stats">CPU --% • RAM --% • GPU --%</span>
@@ -2351,6 +2351,7 @@
         </div>
         <div class="chat-model-switcher-wrap">
           <button id="model-switcher-btn" onclick="toggleModelSwitcher()" style="background:none;border:none;padding:0;cursor:pointer;color:var(--muted);font-size:11px;font-family:inherit;display:inline-flex;align-items:center;gap:3px" title="Switch model">
+            <span id="chat-model-speed-icon" class="model-speed-icon" title="Fast mode" aria-label="Fast mode" hidden>⚡</span>
             <span id="chat-model-name">your model</span>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
             <span style="color:var(--muted)">via <span id="chat-provider-name">Prometheus</span></span>
@@ -3861,7 +3862,10 @@
             <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">API Key</label>
             <input id="settings-openai-key" type="password" placeholder="sk-..." style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace" />
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Model</label>
-            <select id="settings-openai-model" class="settings-input" style="font-size:13px">
+            <select id="settings-openai-model" class="settings-input" style="font-size:13px" onchange="syncProviderReasoningControls('openai')">
+              <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+              <option value="gpt-5.6-terra">gpt-5.6-terra</option>
+              <option value="gpt-5.6-luna">gpt-5.6-luna</option>
               <option value="gpt-5.5">gpt-5.5 (flagship)</option>
               <option value="gpt-5.4-pro">gpt-5.4-pro</option>
               <option value="gpt-5.4">gpt-5.4</option>
@@ -3888,6 +3892,10 @@
               <option value="medium" selected>medium</option>
               <option value="high">high</option>
             </select>
+            <div id="settings-openai-speed-row" style="display:none">
+              <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Speed</label>
+              <select id="settings-openai-speed" class="settings-input"><option value="standard">Standard</option><option value="fast">Fast</option></select>
+            </div>
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Tool Choice <span style="color:var(--muted);font-weight:400">(when to force tool use)</span></label>
             <select id="settings-openai-tool-choice" class="settings-input" style="font-size:13px">
               <option value="required">required — force tool call on first turn</option>
@@ -3914,7 +3922,10 @@
                 <div id="codex-account-id" style="font-size:11px;color:var(--muted);margin-top:2px"></div>
               </div>
               <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Model</label>
-              <select id="settings-codex-model" class="settings-input" style="font-size:13px">
+              <select id="settings-codex-model" class="settings-input" style="font-size:13px" onchange="syncProviderReasoningControls('openai_codex')">
+                <option value="gpt-5.6-sol">gpt-5.6-sol</option>
+                <option value="gpt-5.6-terra">gpt-5.6-terra</option>
+                <option value="gpt-5.6-luna">gpt-5.6-luna</option>
                 <option value="gpt-5.5">gpt-5.5</option>
                 <option value="gpt-5.4-codex">gpt-5.4-codex (flagship)</option>
                 <option value="gpt-5.4-codex-mini">gpt-5.4-codex-mini</option>
@@ -3939,6 +3950,10 @@
                 <option value="high">high</option>
                 <option value="xhigh">xhigh (extra high)</option>
               </select>
+              <div id="settings-codex-speed-row" style="display:none">
+                <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Speed</label>
+                <select id="settings-codex-speed" class="settings-input"><option value="standard">Standard</option><option value="fast">Fast</option></select>
+              </div>
               <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Tool Choice <span style="color:var(--muted);font-weight:400">(when to force tool use)</span></label>
               <select id="settings-codex-tool-choice" class="settings-input" style="font-size:13px">
                 <option value="auto" selected>auto — let model decide (enables preamble)</option>
@@ -4003,10 +4018,10 @@
                     <option value="32000">32,000 tokens</option>
                   </select>
                 </div>
-                <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);margin-top:10px;cursor:pointer">
-                  <input id="settings-anthropic-fast-mode" type="checkbox" />
-                  <span>Fast mode <span style="color:var(--muted);font-weight:400">(faster output, same model — Opus 4.6/4.7/4.8)</span></span>
-                </label>
+                <div id="settings-anthropic-speed-row" style="display:none">
+                  <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Speed</label>
+                  <select id="settings-anthropic-speed" class="settings-input"><option value="standard">Standard</option><option value="fast">Fast</option></select>
+                </div>
 	              <div style="display:flex;gap:8px;margin-top:10px">
 	                <button class="btn btn-sm" onclick="testAnthropicConnection()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Test Connection</button>
 	                <button class="btn btn-sm" onclick="disconnectAnthropic()" style="background:#fff;border:1px solid var(--err);color:var(--err)">Disconnect</button>
@@ -4341,6 +4356,37 @@
             </div>
           </div>
 
++          <!-- Goal Support Models -->
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Goal Support</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Models used to compact autonomous goal progress and judge completion. Leave blank to use the currently active main-chat provider and model.</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+            <div>
+              <div data-settings-icon-label="layers" style="font-size:11px;color:var(--muted);margin-bottom:4px">Summary Compactor</div>
+              <select id="goal-compactor-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="goalRoutingProviderChange('compactor')">
+                <option value="">use current main chat</option>
+              </select>
+              <select id="goal-compactor-model" class="settings-input" style="width:100%;margin-bottom:4px" onchange="syncGoalRoutingReasoning('compactor')">
+                <option value="">select provider first</option>
+              </select>
+              <select id="goal-compactor-reasoning" class="settings-input" style="width:100%">
+                <option value="">provider default</option>
+              </select>
+            </div>
+            <div>
+              <div data-settings-icon-label="checkCircle" style="font-size:11px;color:var(--muted);margin-bottom:4px">Goal Judge</div>
+              <select id="goal-judge-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="goalRoutingProviderChange('judge')">
+                <option value="">use current main chat</option>
+              </select>
+              <select id="goal-judge-model" class="settings-input" style="width:100%;margin-bottom:4px" onchange="syncGoalRoutingReasoning('judge')">
+                <option value="">select provider first</option>
+              </select>
+              <select id="goal-judge-reasoning" class="settings-input" style="width:100%">
+                <option value="">provider default</option>
+              </select>
+            </div>
+          </div>
+
+
           <!-- Brain System Models -->
           <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Brain System</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Models used for autonomous Thought and Dream runs. Leave blank to use the primary model.</div>
@@ -4576,11 +4622,13 @@
                     <option value="perplexity">perplexity</option>
                     <option value="gemini">gemini</option>
                   </select>
-                  <select id="agent-edit-model-select" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
+                  <select id="agent-edit-model-select" onchange="syncAgentReasoningControl()" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
                     <option value="">select provider first</option>
                   </select>
                   <button onclick="loadAgentModelOptions()" title="Refresh models for selected provider" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:11px;background:#fff;color:var(--text);cursor:pointer;white-space:nowrap">&#8635;</button>
                 </div>
+                <label style="display:block;font-size:10px;color:var(--muted);margin:5px 0 3px">Reasoning</label>
+                <select id="agent-edit-reasoning" class="settings-input" style="width:100%"><option value="">provider default</option></select>
                 <div id="agent-model-status" style="font-size:10px;color:var(--muted);margin-top:3px"></div>
               </div>
               <div style="grid-column:1/-1">
@@ -4621,17 +4669,17 @@
           </div>
           <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <div class="right-section-title" id="agent-md-editor-title">AGENTS.md (CodeMirror)</div>
+              <div class="right-section-title" id="agent-md-editor-title">AGENT.md (CodeMirror)</div>
               <span id="agent-md-team-badge" style="display:none;font-size:10px;padding:2px 8px;border-radius:999px;background:#fdf4ff;color:#6b21a8;border:1px solid #e9d5ff;align-items:center;gap:4px">
                 <span id="agent-md-team-badge-icon" style="display:inline-flex" aria-hidden="true"></span>
                 <span>Team Subagent</span>
               </span>
             </div>
-            <div id="agent-md-team-note" style="display:none;font-size:11px;color:var(--muted);background:#fdf4ff;border:1px solid #e9d5ff;border-radius:6px;padding:6px 10px;margin-bottom:8px">This agent is managed by a team. Its task instructions come from <strong>system_prompt.md</strong> (fallback: HEARTBEAT.md) — this is what the manager writes to tell it what to do each run.</div>
+            <div id="agent-md-team-note" style="display:none;font-size:11px;color:var(--muted);background:#fdf4ff;border:1px solid #e9d5ff;border-radius:6px;padding:6px 10px;margin-bottom:8px">This agent is managed by a team. Its identity and operating instructions come from <strong>AGENT.md</strong>.</div>
             <div id="agent-md-editor-wrap" style="border:1px solid var(--line);border-radius:8px;overflow:hidden"></div>
             <div style="display:flex;gap:8px;margin-top:8px">
               <button class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)" onclick="loadSelectedAgentMd()">Reload File</button>
-              <button class="btn btn-sm" id="agent-md-save-btn" onclick="saveSelectedAgentMd()">Save AGENTS.md</button>
+              <button class="btn btn-sm" id="agent-md-save-btn" onclick="saveSelectedAgentMd()">Save AGENT.md</button>
             </div>
             <div id="agent-md-path" style="margin-top:6px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace"></div>
           </div>
@@ -4822,36 +4870,7 @@
             <div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff">
               <div class="right-section-title" style="margin-bottom:8px">Popular Servers</div>
               <div style="font-size:12px;color:var(--muted);line-height:1">
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-                  <button onclick="prefillMCPServer('filesystem')" style="text-align:left;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fafafa;cursor:pointer;font-size:11px">
-                    <div style="font-weight:600;color:var(--text)">Filesystem</div>
-                    <div style="color:var(--muted)">Read/write local files</div>
-                  </button>
-                  <button onclick="prefillMCPServer('github')" style="text-align:left;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fafafa;cursor:pointer;font-size:11px">
-                    <div style="font-weight:600;color:var(--text)">GitHub</div>
-                    <div style="color:var(--muted)">Repos, PRs, issues</div>
-                  </button>
-                  <button onclick="prefillMCPServer('windows')" style="text-align:left;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fafafa;cursor:pointer;font-size:11px">
-                    <div style="font-weight:600;color:var(--text)">Windows MCP</div>
-                    <div style="color:var(--muted)">Native desktop control</div>
-                  </button>
-                  <button onclick="prefillMCPServer('postgres')" style="text-align:left;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fafafa;cursor:pointer;font-size:11px">
-                    <div style="font-weight:600;color:var(--text)">PostgreSQL</div>
-                    <div style="color:var(--muted)">Query your DB</div>
-                  </button>
-                  <button onclick="prefillMCPServer('sqlite')" style="text-align:left;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fafafa;cursor:pointer;font-size:11px">
-                    <div style="font-weight:600;color:var(--text)">SQLite</div>
-                    <div style="color:var(--muted)">Local database queries</div>
-                  </button>
-                  <button onclick="prefillMCPServer('brave')" style="text-align:left;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fafafa;cursor:pointer;font-size:11px">
-                    <div style="font-weight:600;color:var(--text)">Brave Search</div>
-                    <div style="color:var(--muted)">Web search via MCP</div>
-                  </button>
-                  <button onclick="prefillMCPServer('memory')" style="text-align:left;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fafafa;cursor:pointer;font-size:11px">
-                    <div style="font-weight:600;color:var(--text)">Memory</div>
-                    <div style="color:var(--muted)">Persistent knowledge store</div>
-                  </button>
-                </div>
+                <div id="mcp-preset-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><div style="color:var(--muted)">Loading registry presets…</div></div>
                 <div style="margin-top:8px;font-size:11px">
                   <a href="https://github.com/modelcontextprotocol/servers" target="_blank" style="color:var(--brand)">Browse all official servers ?</a>
                 </div>
@@ -5914,6 +5933,63 @@ const LOCAL_PROVIDERS = new Set(['ollama', 'llama_cpp', 'lm_studio']);
 const EFFORT_CAPABLE_PROVIDERS = new Set(['openai', 'openai_codex', 'anthropic', 'perplexity', 'xai']);
 const THINKING_CAPABLE_PROVIDERS = new Set(['anthropic']);
 
+function _documentedReasoningCapability(provider, model) {
+  const name = String(model || '').trim().toLowerCase().split('/').filter(Boolean).pop() || '';
+  if (provider === 'openai' || provider === 'openai_codex') {
+    if (/^gpt-5\.6(?:-(?:sol|terra|luna))?(?:-|$)/.test(name)) return { efforts: provider === 'openai_codex' ? ['none','low','medium','high','xhigh','max','ultra'] : ['none','low','medium','high','xhigh','max'], defaultEffort: 'medium' };
+    if (/^gpt-5\.5(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'medium' };
+    if (/^gpt-5\.(?:[234])(?:-|$)/.test(name)) return { efforts: ['none','low','medium','high','xhigh'], defaultEffort: 'none' };
+    if (/^gpt-5(?:-(?:mini|nano|pro))?(?:-|$)/.test(name)) return { efforts: ['minimal','low','medium','high'], defaultEffort: 'medium' };
+    if (/^o(?:1|3|4-mini)(?:-|$)/.test(name)) return { efforts: ['low','medium','high'], defaultEffort: 'medium' };
+    return { efforts: [] };
+  }
+  if (provider === 'anthropic') {
+    if (!/^claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:5|6|7|8)|sonnet-(?:5|4-6))(?:-|$)/.test(name)) {
+      return { efforts: [], thinkingMode: /^claude-(?:haiku-4-5|sonnet-4-5|opus-4-[01])(?:-|$)/.test(name) ? 'manual' : '' };
+    }
+    const efforts = ['low','medium','high'];
+    if (/^claude-(?:fable-5|mythos-5|opus-4-(?:7|8)|sonnet-5)(?:-|$)/.test(name)) efforts.push('xhigh');
+    if (!/^claude-opus-4-5(?:-|$)/.test(name)) efforts.push('max');
+    return { efforts, defaultEffort: 'high', thinkingMode: /^claude-opus-4-5(?:-|$)/.test(name) ? 'manual' : 'adaptive' };
+  }
+  return { efforts: [] };
+}
+
+function _supportsFastSpeed(provider, model) {
+  const name = String(model || '').trim().toLowerCase().split('/').filter(Boolean).pop() || '';
+  if (provider === 'anthropic') return /^claude-opus-4-(?:7|8)(?:-|$)/.test(name);
+  if (provider === 'openai' || provider === 'openai_codex') return /^(?:gpt-5\.6(?:-(?:sol|terra|luna))?|gpt-5\.5|gpt-5\.4(?:-mini)?|gpt-5\.2|gpt-5\.1|gpt-5(?:-mini)?|gpt-4\.1(?:-mini|-nano)?|gpt-4o(?:-mini)?|o3|o4-mini)(?:-\d{4}.*|$)/.test(name);
+  return false;
+}
+
+function syncProviderReasoningControls(provider) {
+  const modelId = provider === 'openai' ? 'settings-openai-model' : provider === 'openai_codex' ? 'settings-codex-model' : 'settings-anthropic-model';
+  const effortId = _getProviderReasoningControlId(provider);
+  const model = document.getElementById(modelId)?.value || '';
+  const select = document.getElementById(effortId);
+  const cap = _documentedReasoningCapability(provider, model);
+  if (select) {
+    const previous = select.value;
+    select.innerHTML = `<option value="">Provider default${cap.defaultEffort ? ` (${cap.defaultEffort})` : ''}</option>`
+      + cap.efforts.map(v => `<option value="${v}">${v === 'xhigh' ? 'Extra High' : v[0].toUpperCase() + v.slice(1)}</option>`).join('');
+    select.value = cap.efforts.includes(previous) ? previous : '';
+    select.closest('label')?.toggleAttribute?.('hidden', cap.efforts.length === 0);
+    select.style.display = cap.efforts.length ? '' : 'none';
+  }
+  if (provider === 'anthropic') {
+    const row = document.getElementById('anthropic-thinking-budget-row');
+    const checked = document.getElementById('settings-anthropic-extended-thinking')?.checked;
+    if (row) row.style.display = checked && cap.thinkingMode === 'manual' ? 'block' : 'none';
+  }
+  const speedRow = document.getElementById(`settings-${provider === 'openai_codex' ? 'codex' : provider}-speed-row`);
+  if (speedRow) speedRow.style.display = _supportsFastSpeed(provider, model) ? 'block' : 'none';
+}
+function syncAnthropicReasoningControls() { syncProviderReasoningControls('anthropic'); }
+function onAnthropicThinkingToggle() { syncAnthropicReasoningControls(); }
+window.syncProviderReasoningControls = syncProviderReasoningControls;
+window.syncAnthropicReasoningControls = syncAnthropicReasoningControls;
+window.onAnthropicThinkingToggle = onAnthropicThinkingToggle;
+
 function _activeModelForProvider(provider, llm) {
   const providers = llm?.providers && typeof llm.providers === 'object' ? llm.providers : {};
   const configured = providers?.[provider]?.model;
@@ -5921,9 +5997,7 @@ function _activeModelForProvider(provider, llm) {
 }
 
 function _supportsAnthropicEffort(model) {
-  return /^claude-opus-4-(5|6|7|8)(?:\b|[-_])/.test(String(model || ''))
-    || /^claude-sonnet-4-6(?:\b|[-_])/.test(String(model || ''))
-    || /^claude-mythos-preview(?:\b|[-_])/.test(String(model || ''));
+  return _documentedReasoningCapability('anthropic', model).efforts.length > 0;
 }
 
 function _supportsAnthropicXHigh(model) {
@@ -5931,27 +6005,15 @@ function _supportsAnthropicXHigh(model) {
 }
 
 function _effortLevelsForProvider(provider, model) {
-  if (provider === 'anthropic') {
-    const levels = [
-      { v: '',       label: 'Provider Default', desc: 'Anthropic default (High)' },
-      { v: 'low',    label: 'Low',              desc: 'Fastest, lowest token spend' },
-      { v: 'medium', label: 'Medium',           desc: 'Balanced speed and quality' },
-      { v: 'high',   label: 'High',             desc: 'Default deep reasoning' },
-      { v: 'xhigh',  label: 'Extra High',       desc: 'Opus 4.7/4.8 coding work' },
-      { v: 'max',    label: 'Max',              desc: 'Highest capability' },
-    ];
-    return _supportsAnthropicXHigh(model) ? levels : levels.filter((level) => level.v !== 'xhigh');
+  if (provider === 'openai' || provider === 'openai_codex') {
+    const cap = _documentedReasoningCapability(provider, model);
+    return [{ v: '', label: 'Provider Default', desc: cap.defaultEffort ? `Model default: ${cap.defaultEffort}` : 'Use provider default' }]
+      .concat(cap.efforts.map(v => ({ v, label: v === 'xhigh' ? 'Extra High' : v[0].toUpperCase() + v.slice(1), desc: 'Supported by this model' })));
   }
-  // Codex supports xhigh; other effort-capable providers cap at high.
-  if (provider === 'openai_codex') {
-    return [
-      { v: '',        label: 'None',           desc: 'No reasoning' },
-      { v: 'minimal', label: 'Minimal (fast)', desc: 'Snappy replies' },
-      { v: 'low',     label: 'Low',            desc: 'Light thinking' },
-      { v: 'medium',  label: 'Medium',         desc: 'Balanced' },
-      { v: 'high',    label: 'High',           desc: 'Deep reasoning' },
-      { v: 'xhigh',   label: 'Extra High',     desc: 'Maximum effort' },
-    ];
+  if (provider === 'anthropic') {
+    const cap = _documentedReasoningCapability(provider, model);
+    return [{ v: '', label: 'Provider Default', desc: 'Anthropic default (High)' }]
+      .concat(cap.efforts.map(v => ({ v, label: v === 'xhigh' ? 'Extra High' : v[0].toUpperCase() + v.slice(1), desc: 'Supported by this Claude model' })));
   }
   if (provider === 'xai') {
     if (/^grok-4\.20-multi-agent(?:-|$)/i.test(String(model || '').trim())) {
@@ -5998,15 +6060,25 @@ function applyReasoningPrefsFromProviderConfig(llm, providerOverride) {
   const providers = llmCfg.providers && typeof llmCfg.providers === 'object' ? llmCfg.providers : {};
   const providerCfg = providers[provider] && typeof providers[provider] === 'object' ? providers[provider] : {};
   window._llmSettingsCache = llmCfg;
+  const activeModel = _activeModelForProvider(provider, llmCfg);
+  const fast = _supportsFastSpeed(provider, activeModel) && (providerCfg.speed === 'fast' || providerCfg.fast_mode === true);
+  ['chat-model-speed-icon', 'header-model-speed-icon'].forEach(id => {
+    const icon = document.getElementById(id);
+    if (icon) icon.hidden = !fast;
+  });
 
   if (EFFORT_CAPABLE_PROVIDERS.has(provider)) {
     const configuredLevel = typeof providerCfg.reasoning_effort === 'string'
       ? providerCfg.reasoning_effort.trim()
       : '';
-    window.reasoningLevel = configuredLevel;
+    const model = _activeModelForProvider(provider, llmCfg);
+    const validLevels = provider === 'perplexity' || provider === 'xai'
+      ? _effortLevelsForProvider(provider, model).map(level => level.v)
+      : _documentedReasoningCapability(provider, model).efforts;
+    window.reasoningLevel = validLevels.includes(configuredLevel) ? configuredLevel : '';
     const selectId = _getProviderReasoningControlId(provider);
     const select = selectId ? document.getElementById(selectId) : null;
-    if (select) select.value = configuredLevel;
+    if (select) select.value = window.reasoningLevel;
   }
 
   if (provider === 'anthropic') {
@@ -6057,7 +6129,11 @@ function _buildLlmForReasoningUpdate(baseLlm, provider, patch) {
     const level = typeof patch?.reasoning_effort === 'string'
       ? patch.reasoning_effort.trim()
       : (typeof patch?.level === 'string' ? patch.level.trim() : '');
-    if (level) providerCfg.reasoning_effort = level;
+    const model = String(providerCfg.model || currentCfg.model || '');
+    const allowed = provider === 'perplexity' || provider === 'xai'
+      ? _effortLevelsForProvider(provider, model).map(option => option.v)
+      : _documentedReasoningCapability(provider, model).efforts;
+    if (level && allowed.includes(level)) providerCfg.reasoning_effort = level;
     else delete providerCfg.reasoning_effort;
   }
 
@@ -7659,7 +7735,7 @@ let _errBackdrop = null;
     './static/api.js',
     './static/utils.js',
     './static/ws.js',
-    './static/app.js?v=sidebar-width-reset',
+    './static/app.js?v=desktop-declared-plan-only-v2',
   ];
   const mobileSurface = document.body.classList.contains('pm-mobile-active')
     && !window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled;
@@ -7867,7 +7943,7 @@ let _errBackdrop = null;
     ? window.__PROM_SHOULD_BOOT_MOBILE()
     : document.body.classList.contains('pm-mobile-active');
   if (shouldBootMobile) {
-    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=mobile-document-scroll-v1')
+    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=stream-focus-isolation-v16')
       .catch((err) => {
         console.error('[mobile] router import failed:', err);
         throw err;
@@ -7903,6 +7979,13 @@ let _errBackdrop = null;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (_swReloadGuard) return;
       _swReloadGuard = true;
+      try {
+        const pendingUntil = Number(sessionStorage.getItem('pm_reload_pending_until') || 0);
+        // ws.js already owns the pending explicit reload. Let that single path
+        // finish instead of issuing a second navigation from controllerchange.
+        if (pendingUntil > Date.now()) return;
+        sessionStorage.setItem('pm_reload_pending_until', String(Date.now() + 15000));
+      } catch {}
       try { window.location.reload(); } catch {}
     });
 

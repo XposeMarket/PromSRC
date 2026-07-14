@@ -18,6 +18,7 @@ function normalizeAgentDefinition(raw: any, fallbackId?: string): any {
   if (raw?.roleType !== undefined) normalized.roleType = String(raw.roleType || '').trim();
   if (raw?.teamRole !== undefined) normalized.teamRole = String(raw.teamRole || '').trim();
   if (raw?.teamAssignment !== undefined) normalized.teamAssignment = String(raw.teamAssignment || '').trim();
+  if (raw?.teamId !== undefined) normalized.teamId = String(raw.teamId || '').trim();
   if (raw?.workspace !== undefined) normalized.workspace = String(raw.workspace || '').trim();
   if (raw?.executionWorkspace !== undefined) normalized.executionWorkspace = String(raw.executionWorkspace || '').trim();
   if (Array.isArray(raw?.allowedWorkPaths)) normalized.allowedWorkPaths = raw.allowedWorkPaths.map((s: any) => String(s || '').trim()).filter(Boolean);

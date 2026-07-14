@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-hyperframes-bridge",
+  "entrypoint": "SKILL.md",
+  "categories": [
+    "creative",
+    "video",
+    "hyperframes",
+    "integration"
+  ],
+  "triggers": [
+    "edit hyperframes on the prometheus timeline",
+    "use hyperframes in creative mode",
+    "import hyperframes into prometheus",
+    "hyperframes creative mode bridge"
+  ],
+  "requiredTools": [
+    "creative"
+  ],
+  "status": "ready",
+  "implicitInvocation": false,
+  "lifecycle": "active",
+  "health": {
+    "state": "ready",
+    "reason": "Maps official HyperFrames authoring to Prometheus Creative Mode tools and ownership boundaries.",
+    "verifiedCapabilities": [
+      "tool_crosswalk",
+      "hybrid_workflow"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-11"
+  },
+  "name": "prometheus-hyperframes-bridge",
+  "description": "Integrate official HyperFrames authoring workflows with Prometheus Creative Mode’s canvas, asset library, native timeline, audio pipeline, QA, and export system. Use when building, importing, editing, compositing, validating, or rendering a HyperFrames composition inside a Prometheus creative project rather than operating only through the standalone CLI."
+}

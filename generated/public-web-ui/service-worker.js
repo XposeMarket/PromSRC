@@ -17,7 +17,7 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const VERSION = 'pm-v131-2026-07-10-untrusted-content-boundary';
+const VERSION = 'pm-v151-2026-07-14-worker-carousel-focus-persistence';
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 

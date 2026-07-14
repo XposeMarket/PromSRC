@@ -16,6 +16,7 @@ import { listManagedTeams } from '../teams/managed-teams';
 import { getBuildStatus } from '../../runtime/build-status';
 import { ensureScheduleRuntimeForAgent } from './schedule-agent';
 import { normalizeScheduleSpec } from './schedule-pattern';
+import { findArchivedScheduledJob } from './schedule-archive';
 
 export interface SchedulerAdminResult {
   success: boolean;
@@ -103,7 +104,7 @@ function findJob(scheduler: SchedulerLike, rawId: any): CronJob | null {
   return scheduler.getJobs().find((job) =>
     String(job.id || '') === id ||
     String(job.name || '').toLowerCase() === lower
-  ) || null;
+  ) || findArchivedScheduledJob(id);
 }
 
 function summarizeJob(job: CronJob): Record<string, any> {
@@ -113,11 +114,12 @@ function summarizeJob(job: CronJob): Record<string, any> {
     type: job.type,
     status: job.status,
     enabled: job.enabled !== false,
-    schedule: job.schedule,
+    schedule: job.type === 'one-shot' ? null : job.schedule,
     runAt: job.runAt,
     tz: job.tz || null,
     nextRun: job.nextRun,
     lastRun: job.lastRun,
+    lastRunStartedAt: (job as any).lastRunStartedAt || null,
     lastDuration: job.lastDuration,
     consecutiveErrors: job.consecutiveErrors || 0,
     pausedReason: job.pausedReason || null,
@@ -276,10 +278,11 @@ function checkExpectedOutput(job: CronJob, expected: ExpectedOutput): Record<str
 
   let status = 'ok';
   const issues: string[] = [];
-  const lastRunMs = job.lastRun ? new Date(job.lastRun).getTime() : 0;
-  if (lastRunMs && stat.mtimeMs + 1000 < lastRunMs) {
+  const latestRun = getRunHistory(job, 1)[0];
+  const runStartMs = new Date((job as any).lastRunStartedAt || latestRun?.startedAt || latestRun?.scheduledAt || 0).getTime();
+  if (Number.isFinite(runStartMs) && runStartMs > 0 && stat.mtimeMs + 1000 < runStartMs) {
     status = 'outdated';
-    issues.push('file is older than the latest job run');
+    issues.push('file is older than the start of the latest job run');
   }
 
   let textPreview: string | undefined;
@@ -391,7 +394,7 @@ export function scheduleJobDetailTool(scheduler: SchedulerLike, args: any): Sche
       prompt: job.prompt,
       schedule: {
         type: job.type,
-        cron: job.schedule,
+        cron: job.type === 'one-shot' ? null : job.schedule,
         runAt: job.runAt,
         timezone: job.tz || null,
         nextRun: job.nextRun,

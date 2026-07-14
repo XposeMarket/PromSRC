@@ -31,6 +31,7 @@ type AnalyzeVideoArgs = {
   output_dir?: string;
   extract_audio?: boolean;
   transcribe?: boolean;
+  include_raw_probe?: boolean;
 };
 
 export type VisionFrameInput = {
@@ -180,6 +181,35 @@ async function detectPythonRunner(): Promise<PythonRunner | null> {
   return null;
 }
 
+function compactTranscriptionError(error: unknown): string {
+  const text = String((error as any)?.message || error || '').replace(/\s+/g, ' ').trim();
+  if (/quota|usage.limit|billing/i.test(text)) return 'Configured cloud transcription is unavailable because its quota or billing limit was reached.';
+  if (/auth|unauthorized|api.key|access.token/i.test(text)) return 'Configured cloud transcription is unavailable because authentication failed.';
+  return text.slice(0, 220) || 'Configured cloud transcription was unavailable.';
+}
+
+async function transcribeWithLocalWhisper(sourcePath: string): Promise<string> {
+  const runner = await detectPythonRunner();
+  if (!runner) return '';
+  const python = [
+    'import json, sys, whisper',
+    "model = whisper.load_model('tiny')",
+    "result = model.transcribe(sys.argv[1], fp16=False)",
+    "print(json.dumps({'text': str(result.get('text', '')).strip()}))",
+  ].join('; ');
+  const ffmpegPath = resolveRuntimeBinary('ffmpeg', { allowPathFallback: true });
+  const { stdout } = await execFileAsync(runner.cmd, [...runner.preArgs, '-c', python, sourcePath], {
+    timeout: 3 * 60 * 1000,
+    windowsHide: true,
+    maxBuffer: 2 * 1024 * 1024,
+    env: {
+      ...process.env,
+      PATH: [path.dirname(ffmpegPath), process.env.PATH || ''].filter(Boolean).join(path.delimiter),
+    },
+  });
+  return String(parseJsonFromStdout(stdout)?.text || '').trim();
+}
+
 async function runVideoAnalyzer(scriptPath: string, args: string[]): Promise<any> {
   const runner = await detectPythonRunner();
   if (!runner) throw new Error('Python was not found on this machine.');
@@ -212,7 +242,7 @@ async function readFileAsVisionPart(filePath: string): Promise<any> {
   return buildVisionImagePart(base64, mimeType);
 }
 
-async function analyzeWithPrimaryVision(messages: any[]): Promise<string> {
+async function analyzeWithPrimaryVision(messages: any[], options: { maxTokens?: number; think?: 'none' | 'minimal' | 'low' | 'medium' | 'high' } = {}): Promise<string> {
   if (!primarySupportsVision()) {
     throw new Error('The active primary model is not vision-capable. Switch to a vision-capable model first.');
   }
@@ -220,8 +250,8 @@ async function analyzeWithPrimaryVision(messages: any[]): Promise<string> {
   const model = getPrimaryModel();
   const result = await provider.chat(messages, model, {
     temperature: 0.2,
-    max_tokens: 1400,
-    think: 'medium',
+    max_tokens: options.maxTokens || 900,
+    think: options.think || 'low',
   });
   return contentToString(result.message.content).trim();
 }
@@ -408,20 +438,36 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       };
     }
 
+    const transcriptionRequested = args?.transcribe !== false;
     let transcript = analyzerResult?.transcript?.available ? String(analyzerResult.transcript.text || '').trim() : '';
-    
-    // Fallback to creative transcription if Python script didn't provide transcript
-    if (!transcript && args?.transcribe !== false) {
+    let transcriptionProvider = transcript ? 'local' : null;
+    let transcriptionNote = transcriptionRequested ? 'No transcript was produced.' : 'Transcription was not requested.';
+
+    if (!transcript && transcriptionRequested) {
       try {
         const storage = buildCreativeStorage();
         const result = await creativeTranscribeAudio(storage, {
           source: absPath,
-          provider: 'openai', // Use OpenAI Whisper by default
+          provider: 'openai',
         });
-        transcript = result.text;
-      } catch (error) {
-        // Silent fallback - if creative transcription fails, continue without transcript
-        console.warn(`Creative transcription fallback failed for ${absPath}:`, error);
+        transcript = String(result.text || '').trim();
+        transcriptionProvider = transcript ? String(result.provider || 'openai') : null;
+        transcriptionNote = transcript ? 'Transcript produced by the configured speech-to-text provider.' : 'Speech-to-text completed but returned no text.';
+      } catch (error: any) {
+        const cloudFailure = compactTranscriptionError(error);
+        try {
+          const localSource = analyzerResult?.audio?.path && fs.existsSync(analyzerResult.audio.path)
+            ? String(analyzerResult.audio.path)
+            : absPath;
+          transcript = await transcribeWithLocalWhisper(localSource);
+          transcriptionProvider = transcript ? 'local-whisper-tiny' : null;
+          transcriptionNote = transcript
+            ? 'Configured cloud speech-to-text was unavailable; transcript produced locally with Whisper tiny.'
+            : `${cloudFailure} Local Whisper returned no speech.`;
+        } catch (localError: any) {
+          transcriptionNote = `${cloudFailure} Local Whisper unavailable: ${compactTranscriptionError(localError)}`.slice(0, 320);
+          console.warn(`Local transcription fallback failed for ${absPath}:`, localError);
+        }
       }
     }
     
@@ -439,6 +485,29 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       : framePaths.slice(0, analysisMode === 'quick' ? 8 : 12);
     const prompt = String(args?.prompt || '').trim();
     const durationSeconds = videoSummary?.duration_seconds ?? analyzerResult?.probe?.json?.format?.duration ?? 'unknown';
+    const probeJson = analyzerResult?.probe?.json || {};
+    const streams = Array.isArray(probeJson?.streams) ? probeJson.streams : [];
+    const videoStream = streams.find((stream: any) => stream?.codec_type === 'video') || null;
+    const audioStream = streams.find((stream: any) => stream?.codec_type === 'audio') || null;
+    const technicalSummary = {
+      duration_seconds: Number(durationSeconds) || null,
+      container: String(probeJson?.format?.format_name || '').trim() || null,
+      size_bytes: Number(probeJson?.format?.size) || null,
+      bitrate_bps: Number(probeJson?.format?.bit_rate) || null,
+      video: videoStream ? {
+        codec: videoStream.codec_name || null,
+        width: Number(videoStream.width) || null,
+        height: Number(videoStream.height) || null,
+        frame_rate: videoStream.avg_frame_rate || videoStream.r_frame_rate || null,
+        pixel_format: videoStream.pix_fmt || null,
+      } : null,
+      audio: audioStream ? {
+        codec: audioStream.codec_name || null,
+        sample_rate_hz: Number(audioStream.sample_rate) || null,
+        channels: Number(audioStream.channels) || null,
+      } : null,
+    };
+    const technicalLine = `Technical metadata: ${JSON.stringify(technicalSummary)}`;
     const detailPlan = detail?.sampling_plan
       ? `\nDetail sampling plan: ${JSON.stringify(detail.sampling_plan)}`
       : '';
@@ -451,6 +520,7 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
           `Video file: ${path.basename(absPath)}\n` +
           `Analysis mode: ${analysisMode}\n` +
           `Duration: ${durationSeconds} seconds\n` +
+          `${technicalLine}\n` +
           `Frame samples extracted: ${framePaths.length}\n` +
           `Contact sheets provided: ${visualSheetPaths.length}${detailPlan}\n` +
           `If transcript is missing, rely on the visuals and say audio/transcript was unavailable.\n` +
@@ -494,7 +564,25 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
         role: 'user',
         content: userContent,
       },
-    ]);
+    ], { maxTokens: 1100, think: 'low' });
+
+    const compactExtraction: any = {
+      ok: analyzerResult?.ok === true,
+      video_summary: {
+        duration_seconds: Number(durationSeconds) || null,
+        mode: String(videoSummary?.mode || analysisMode),
+        frame_count: framePaths.length,
+        errors: Array.isArray(videoSummary?.errors) ? videoSummary.errors.slice(0, 8) : [],
+      },
+      audio: {
+        requested: analyzerResult?.audio?.requested === true,
+        available: analyzerResult?.audio?.available === true,
+        rel_path: analyzerResult?.audio?.path ? relPath(workspaceRoot, String(analyzerResult.audio.path)) : null,
+        error: analyzerResult?.audio?.error ? String(analyzerResult.audio.error).slice(0, 500) : null,
+      },
+      technical: technicalSummary,
+    };
+    if (args?.include_raw_probe === true) compactExtraction.raw_probe = probeJson;
 
     return {
       success: true,
@@ -513,7 +601,13 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
         })),
         detail_sampling_plan: detail?.sampling_plan || null,
         transcript: transcript || null,
-        extraction: analyzerResult,
+        transcription: {
+          requested: transcriptionRequested,
+          available: Boolean(transcript),
+          provider: transcriptionProvider,
+          note: transcriptionNote,
+        },
+        extraction: compactExtraction,
         analysis,
       },
     };
@@ -555,7 +649,8 @@ export const analyzeVideoTool = {
     max_detail_frames: 'Hard cap for auto detail extraction (default 42, max 72)',
     output_dir: 'Optional workspace-relative output directory for extracted artifacts',
     extract_audio: 'If true, extract audio when ffmpeg is available (default true)',
-    transcribe: 'If true, attempt local whisper transcription when available (default true)',
+    transcribe: 'If true, use the configured speech-to-text provider when audio is available (default true)',
+    include_raw_probe: 'If true, include full ffprobe JSON; default false keeps output compact',
   },
   jsonSchema: {
     type: 'object',
@@ -570,7 +665,8 @@ export const analyzeVideoTool = {
       max_detail_frames: { type: 'number', description: 'Hard cap for automatic detail extraction (default 42, max 72)' },
       output_dir: { type: 'string', description: 'Optional workspace-relative output directory for extracted artifacts' },
       extract_audio: { type: 'boolean', description: 'Extract audio when ffmpeg is available' },
-      transcribe: { type: 'boolean', description: 'Attempt local whisper transcription when available' },
+      transcribe: { type: 'boolean', description: 'Use the configured speech-to-text provider when audio is available' },
+      include_raw_probe: { type: 'boolean', description: 'Include full ffprobe JSON. Default false for compact output.' },
     },
     additionalProperties: false,
   },

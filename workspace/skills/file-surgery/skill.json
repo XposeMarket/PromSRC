@@ -1,51 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "file-surgery",
-  "name": "File Surgery",
-  "description": "Codex-style file editing and cautious engineering playbook for workspace files, markdown, configs, skills, docs, scripts, UI files, and source-adjacent assets. Forces repo-grounded inspection, minimal patches, verification, repair loops, git hygiene, and honest reporting.",
+  "name": "file-surgery",
+  "description": "Make precise, evidence-backed edits to workspace files, source files, Markdown, JSON, YAML, and configuration while preserving unrelated user changes. Use for local file modification and patch recovery; use src-edit-proposal-rigor when Prometheus self-source approval or proposal policy is the primary task.",
   "version": "3.0.0",
-  "entrypoint": "skill.md",
+  "entrypoint": "SKILL.md",
   "triggers": [
-    "update file",
-    "edit file",
-    "patch file",
-    "file edit",
-    "file surgery",
-    "edit markdown",
-    "update skill",
-    "patch skill",
-    "replace lines",
-    "add section",
-    "remove section",
-    "fix config",
-    "rewrite document",
-    "verify file edit",
-    "clean up file",
-    "careful code edit",
+    "clean up this document",
+    "verify the file change",
+    "make this file change",
+    "edit the prompt file",
     "inspect before editing",
-    "verify build",
-    "edit this file",
-    "fix this bug",
-    "implement this feature",
-    "refactor this",
-    "update the UI",
-    "patch the repo",
-    "change Prometheus source code",
-    "self-edit Prometheus",
-    "run tests",
-    "make this work",
-    "src",
-    "web-ui",
-    "generated",
-    "package.json",
-    "tsconfig",
-    "server files",
-    "routes",
-    "tools",
-    "agents",
-    "skills",
-    "connectors",
-    "Prometheus internal code"
+    "update workspace docs",
+    "update generated docs",
+    "rewrite this markdown",
+    "modify the markdown",
+    "replace these lines",
+    "remove a section",
+    "change this json"
   ],
   "categories": [],
   "requiredTools": [],
@@ -57,51 +29,51 @@
       "description": "Quick Codex-style engineering checklist for code/file edits, verification, repair loops, and final reporting."
     },
     {
-      "path": "references/recovery/recovery-note-find-replace-source-failed-text-not-found-in-src-gateway-r-2026-05-23.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Refined recovery note for source/file patch text-not-found context drift."
     },
     {
-      "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-skills-brand-s-2026-06-12.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     },
     {
-      "path": "references/workflows/file-surgery-2026-06-13.md",
+      "path": "references/workflows/file-surgery.md",
       "type": "doc",
       "description": "Add workflow recipe to file-surgery"
     },
     {
-      "path": "references/recovery/recovery-note-apply-dev-source-patchset-failed-web-ui-src-mobile-mobile--2026-06-13.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     },
     {
-      "path": "references/recovery/recovery-note-apply-dev-source-patchset-failed-error-text-not-found-in-w-2026-06-13.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     },
     {
-      "path": "references/recovery/recovery-note-apply-workspace-patchset-failed-applied-0-failed-1-results-2026-06-24.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     },
     {
-      "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-games-mobile-s-2026-06-28.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     },
     {
-      "path": "references/recovery/minified-js-invalid-optional-chaining-2026-07-03.md",
+      "path": "references/recovery/minified-js-invalid-optional-chaining.md",
       "type": "doc"
     },
     {
-      "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-self-16-mobile-2026-07-04.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     },
     {
-      "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-repos-nebulax--2026-07-05.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     },
@@ -111,24 +83,26 @@
       "description": "File tool routing, grep no-match, src-edit pointer"
     },
     {
-      "path": "references/recovery/recovery-note-find-replace-failed-error-text-not-found-in-repos-promsrc--2026-07-08.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     },
     {
-      "path": "references/recovery/recovery-note-find-replace-webui-source-failed-error-text-not-found-in-w-2026-07-08.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     },
     {
-      "path": "references/recovery/recovery-note-find-replace-webui-source-failed-error-text-not-found-in-w-2026-07-09.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     },
     {
-      "path": "references/recovery/recovery-note-find-replace-webui-source-failed-error-text-not-found-in-w-2026-07-10.md",
+      "path": "references/recovery/text-match-failures.md",
       "type": "doc",
       "description": "Add recovery to file-surgery"
     }
-  ]
+  ],
+  "implicitInvocation": false,
+  "lifecycle": "active"
 }

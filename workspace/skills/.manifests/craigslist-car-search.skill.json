@@ -1,24 +1,8 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when searching Craigslist or similar local classifieds for cars, filtering listings, comparing vehicle deals, checking price/mileage/title risk, or building a shortlist of used cars.",
-  "triggers": [
-    "search Craigslist cars",
-    "find a used car",
-    "Craigslist car search",
-    "local car listings",
-    "compare used cars",
-    "cheap car near me",
-    "filter car listings",
-    "used truck Craigslist",
-    "inspect car deal",
-    "vehicle listing analysis",
-    "mileage price check",
-    "title status on listing",
-    "car shortlist",
-    "find cars under budget",
-    "marketplace car search"
-  ],
+  "description": "Search Craigslist cars+trucks for specific models (especially LS400) using the public JSON API. Returns structured listings with title, price, location, date, URL, and direct links. Optimized for \"find me LS400 under $2000\" style requests.",
+  "triggers": [],
   "categories": [
     "shopping",
     "cars",
@@ -30,6 +14,8 @@
     "web_search",
     "workspace_write"
   ],
-  "lifecycle": "active",
-  "id": "craigslist-car-search"
+  "lifecycle": "archived",
+  "id": "craigslist-car-search",
+  "implicitInvocation": false,
+  "name": "craigslist-car-search"
 }

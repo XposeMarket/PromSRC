@@ -1,23 +1,16 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to create, configure, test, debug, secure, or document webhook receivers, incoming event endpoints, callback URLs, signature verification, retry handling, or event ingestion pipelines. It covers payload contracts and verification.",
+  "description": "Use when configuring or extending Prometheus inbound webhook endpoints, including authenticated wake events and agent dispatch. Do not invoke for ordinary API calls or outbound integrations.",
   "triggers": [
-    "webhook receiver",
-    "webhook framework",
-    "incoming webhook",
-    "callback URL",
-    "signature verification",
-    "event ingestion",
-    "webhook endpoint",
-    "webhook payload",
-    "retry handling",
-    "webhook security",
-    "test webhook",
-    "configure webhook",
-    "webhook route",
-    "receive events",
-    "webhook debug"
+    "configure inbound webhook",
+    "receive signed webhook",
+    "github webhook receiver",
+    "stripe webhook receiver",
+    "slack webhook receiver",
+    "webhook signature verification",
+    "webhook replay protection",
+    "test webhook receiver"
   ],
   "categories": [
     "integrations",
@@ -29,5 +22,26 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "webhook-receiver-framework"
+  "id": "webhook-receiver-framework",
+  "status": "ready",
+  "implicitInvocation": true,
+  "health": {
+    "state": "ready",
+    "reason": "Authenticated provider delivery passed adversarial raw-body signature, replay, retry, lease, pruning, least-privilege, and provider-only mount tests.",
+    "verifiedCapabilities": [
+      "raw_body_hmac",
+      "preparse_size_limit",
+      "compressed_body_rejection",
+      "prototype_key_rejection",
+      "least_privilege_provider_agent",
+      "durable_idempotency",
+      "bounded_retry",
+      "lease_recovery",
+      "retention_pruning",
+      "provider_only_mount"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "webhook-receiver-framework"
 }

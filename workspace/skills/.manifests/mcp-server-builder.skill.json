@@ -1,24 +1,15 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when building, configuring, debugging, or packaging MCP servers/tools, including server manifests, tool schemas, transport setup, integration testing, and Prometheus MCP connections.",
+  "description": "Build or register a local or remote MCP server with typed tools and a Prometheus MCP preset. Use when creating an MCP server, wrapping a local service as MCP, or defining its transport and security boundary; do not use merely to connect an already-defined integration.",
+  "implicitInvocation": true,
   "triggers": [
-    "build MCP server",
-    "MCP tool",
-    "add MCP server",
-    "Model Context Protocol",
-    "MCP manifest",
-    "MCP transport",
-    "MCP schema",
-    "debug MCP server",
-    "connect MCP",
-    "MCP integration",
-    "expose tool via MCP",
-    "MCP server config",
-    "test MCP tool",
-    "install MCP server",
-    "MCP stdio",
-    "MCP webhook"
+    "wrap local service as mcp",
+    "mcp server transport",
+    "register mcp preset",
+    "create mcp server",
+    "build mcp server",
+    "design mcp tools"
   ],
   "categories": [
     "integrations",
@@ -26,10 +17,12 @@
     "engineering"
   ],
   "requiredTools": [
+    "connection_ops",
     "integration_admin",
     "mcp_server_tools",
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "mcp-server-builder"
+  "id": "mcp-server-builder",
+  "name": "mcp-server-builder"
 }

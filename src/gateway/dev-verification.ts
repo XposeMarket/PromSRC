@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config';
@@ -198,21 +198,37 @@ function parseChangedSyntax(rootDir: string, files: string[]): string | null {
   }
 }
 
-function runCommandStep(rootDir: string, step: DevVerificationStep): DevVerificationStepResult {
+function runCommandStep(rootDir: string, step: DevVerificationStep): Promise<DevVerificationStepResult> {
   const start = Date.now();
-  try {
-    const output = execSync(step.command || '', {
+  return new Promise((resolve) => {
+    const child = spawn(step.command || '', {
       cwd: rootDir,
-      encoding: 'utf-8',
-      timeout: step.timeoutMs || 120_000,
-      stdio: 'pipe',
+      shell: true,
       windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return { id: step.id, label: step.label, command: step.command, success: true, durationMs: Date.now() - start, output: String(output || '').slice(-2500) };
-  } catch (err: any) {
-    const output = [err?.stdout, err?.stderr, err?.message].filter(Boolean).join('\n');
-    return { id: step.id, label: step.label, command: step.command, success: false, durationMs: Date.now() - start, output: String(output || '').slice(-2500) };
-  }
+    let output = '';
+    let settled = false;
+    let timer: NodeJS.Timeout;
+    const append = (chunk: any) => { output = `${output}${String(chunk || '')}`.slice(-16_000); };
+    const finish = (success: boolean, extra = '') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (extra) append(`\n${extra}`);
+      resolve({ id: step.id, label: step.label, command: step.command, success, durationMs: Date.now() - start, output: output.slice(-2500) });
+    };
+    child.stdout?.on('data', append);
+    child.stderr?.on('data', append);
+    child.once('error', (err) => finish(false, err.message));
+    child.once('exit', (code, signal) => finish(code === 0, code === 0 ? '' : `Command exited with ${signal || code}.`));
+    const timeoutMs = step.timeoutMs || 120_000;
+    timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      finish(false, `Command timed out after ${timeoutMs}ms.`);
+    }, timeoutMs);
+    timer.unref?.();
+  });
 }
 
 function getGatewayBaseUrl(): string {
@@ -290,7 +306,7 @@ export async function runDevVerificationPlan(plan: DevVerificationPlan, rootDir:
         output: syntaxError || 'ok',
       });
     } else if (step.command) {
-      results.push(runCommandStep(rootDir, step));
+      results.push(await runCommandStep(rootDir, step));
     } else if (step.id === 'route_smoke') {
       results.push(await runRouteSmoke(step));
     } else if (step.id === 'desktop_ui_smoke') {

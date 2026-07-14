@@ -94,6 +94,8 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 const GATEWAY_STARTUP_TIMEOUT_MS = parsePositiveInt(process.env.PROMETHEUS_GATEWAY_STARTUP_TIMEOUT_MS, 180_000);
 const GATEWAY_START_ATTEMPTS = parsePositiveInt(process.env.PROMETHEUS_GATEWAY_START_ATTEMPTS, 3);
 const GATEWAY_BUSY_RESTART_GRACE_MS = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_BUSY_GRACE_MS, 45_000);
+const GATEWAY_HEALTH_TIMEOUT_MS = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_HEALTH_TIMEOUT_MS, 5_000);
+const GATEWAY_HEALTH_FAILURE_LIMIT = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_HEALTH_FAILURE_LIMIT, 2);
 
 function gatewaySupervisorEnabled(): boolean {
   return process.env.PROMETHEUS_SUPERVISOR === '1'
@@ -106,9 +108,10 @@ function gatewaySupervisorRestartEnabled(): boolean {
 }
 
 function gatewayChildArgs(): string[] {
-  const entry = process.argv[1];
-  const passthroughArgs = process.argv.slice(2).length > 0 ? process.argv.slice(2) : ['gateway', 'start'];
-  return [...process.execArgv, entry, ...passthroughArgs];
+  // Supervise the gateway server itself. Recursively spawning another CLI
+  // created a CLI -> server grandchild tree, so killing a frozen server left
+  // the watched CLI alive and forced recovery to wait for health timeouts.
+  return [...process.execArgv, resolveGatewayEntryForTerminal()];
 }
 
 function killGatewayChild(child: ChildProcess): void {
@@ -127,7 +130,7 @@ function killGatewayChild(child: ChildProcess): void {
   }, 2500).unref?.();
 }
 
-async function checkGatewayHealth(timeoutMs = 8000): Promise<boolean> {
+async function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
     const done = (ok: boolean) => {
@@ -163,6 +166,7 @@ interface GatewayRuntimeStatus {
   timestamp?: number;
   reason?: string;
   modelBusy?: boolean;
+  modelBusySince?: number;
   modelBusyAgeMs?: number;
   lastMainSessionId?: string;
 }
@@ -181,9 +185,15 @@ function shouldDeferGatewayRestart(status: GatewayRuntimeStatus | null): boolean
   if (!status || !Number.isFinite(Number(status.timestamp))) return false;
   const ageMs = Date.now() - Number(status.timestamp);
   if (ageMs < 20_000) return true;
-  const busyAgeMs = Number.isFinite(Number(status.modelBusyAgeMs))
+  const busyAgeAtHeartbeatMs = Number.isFinite(Number(status.modelBusyAgeMs))
     ? Number(status.modelBusyAgeMs)
-    : ageMs;
+    : 0;
+  const busyAgeFromStartMs = Number.isFinite(Number(status.modelBusySince))
+    ? Math.max(0, Date.now() - Number(status.modelBusySince))
+    : 0;
+  // A frozen gateway cannot update modelBusyAgeMs. Include heartbeat staleness
+  // so a turn that froze early does not receive an infinite busy grace period.
+  const busyAgeMs = Math.max(busyAgeFromStartMs, busyAgeAtHeartbeatMs + Math.max(0, ageMs));
   if (status.modelBusy && busyAgeMs < GATEWAY_BUSY_RESTART_GRACE_MS) return true;
   return false;
 }
@@ -462,31 +472,55 @@ async function runSupervisedGateway(): Promise<void> {
   let stopping = false;
   let restartCount = 0;
   let child: ChildProcess | null = null;
+  let launchInFlight = false;
+  let restartTimer: NodeJS.Timeout | null = null;
+
+  const scheduleLaunch = () => {
+    if (stopping || restartTimer || launchInFlight) return;
+    restartCount++;
+    const delayMs = Math.min(10_000, 1000 + restartCount * 1000);
+    console.error(`[GatewaySupervisor] Scheduling gateway restart in ${delayMs}ms...`);
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      launch().catch((err: any) => {
+        console.error(`[GatewaySupervisor] Restart failed: ${err?.message || err}`);
+        scheduleLaunch();
+      });
+    }, delayMs);
+  };
 
   const launch = async () => {
+    if (stopping || launchInFlight || (child && child.exitCode === null && child.signalCode === null)) return;
+    launchInFlight = true;
+    try {
     await clearUnhealthyGatewayPort(child?.pid ? [child.pid] : []);
-    child = spawn(process.execPath, gatewayChildArgs(), {
+    if (stopping) return;
+    const launched = spawn(process.execPath, gatewayChildArgs(), {
       cwd: process.cwd(),
       env: { ...process.env, PROMETHEUS_SUPERVISED_GATEWAY_CHILD: '1' },
       stdio: 'inherit',
       windowsHide: false,
     });
-    child.on('exit', (code, signal) => {
+    child = launched;
+    launched.once('exit', (code, signal) => {
       if (stopping) return;
-      restartCount++;
-      const delayMs = Math.min(10_000, 1000 + restartCount * 1000);
-      console.error(`[GatewaySupervisor] Gateway exited (${signal || (code ?? 'unknown')}). Restarting in ${delayMs}ms...`);
-      setTimeout(() => {
-        launch().catch((err: any) => {
-          console.error(`[GatewaySupervisor] Restart failed: ${err?.message || err}`);
-        });
-      }, delayMs);
+      if (child === launched) child = null;
+      console.error(`[GatewaySupervisor] Gateway exited (${signal || (code ?? 'unknown')}).`);
+      scheduleLaunch();
     });
+    } finally {
+      launchInFlight = false;
+      if (!stopping && !child) scheduleLaunch();
+    }
   };
 
   const stop = () => {
     if (stopping) return;
     stopping = true;
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
     if (child) killGatewayChild(child);
   };
   process.on('SIGINT', stop);
@@ -502,6 +536,7 @@ async function runSupervisedGateway(): Promise<void> {
     const healthy = await checkGatewayHealth();
     if (healthy) {
       consecutiveFailures = 0;
+      restartCount = 0;
       continue;
     }
     const runtimeStatus = readGatewayRuntimeStatus();
@@ -513,16 +548,16 @@ async function runSupervisedGateway(): Promise<void> {
       continue;
     }
     consecutiveFailures++;
-    if (consecutiveFailures < 3) continue;
+    if (consecutiveFailures < GATEWAY_HEALTH_FAILURE_LIMIT) continue;
 
     consecutiveFailures = 0;
     if (!gatewaySupervisorRestartEnabled()) {
       console.error('[GatewaySupervisor] Gateway health checks timed out. Auto-restart is disabled; leaving the gateway process running. Set PROMETHEUS_SUPERVISOR_RESTART=1 to enable restart-on-failed-health.');
       continue;
     }
-    restartCount++;
     console.error('[GatewaySupervisor] Gateway health checks timed out. Restarting frozen gateway process...');
     if (child) killGatewayChild(child);
+    else scheduleLaunch();
   }
 }
 

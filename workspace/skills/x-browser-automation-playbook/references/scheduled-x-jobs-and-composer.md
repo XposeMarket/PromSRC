@@ -39,4 +39,4 @@ Prefer verified **`x_post_text`** composite for standard posts when exposed (see
 
 ## Draft-only
 
-If Raul says draft only / don't post: do not click Post/Submit; stop at filled composer + screenshot proof.
+If the user says draft only / don't post: do not click Post/Submit; stop at filled composer + screenshot proof.

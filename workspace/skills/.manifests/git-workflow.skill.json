@@ -1,27 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the task involves git status, diffs, branches, commits, pulls, pushes, merges, conflict resolution, repo hygiene, release tagging, or preserving unrelated dirty work.",
+  "description": "Inspect and operate Git repositories safely: status, diffs, commits, branches, remotes, conflict recovery, submodules, GitHub CLI, and authenticated publication. Use for concrete Git or GitHub operations, not generic coding.",
   "triggers": [
-    "git status",
-    "check the diff",
-    "commit this",
-    "push to GitHub",
-    "pull latest",
-    "merge conflict",
-    "create a branch",
-    "repo dirty",
-    "git log",
-    "revert my change",
-    "stash changes",
     "preserve dirty work",
+    "revert my change",
+    "create a branch",
+    "check the diff",
+    "push to github",
     "sync the repo",
     "make a commit",
     "push the site",
-    "resolve conflicts",
     "tag a release",
+    "resolve conflicts",
     "compare branches",
-    "git workflow"
+    "merge conflict"
   ],
   "categories": [
     "git",
@@ -32,5 +25,27 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "git-workflow"
+  "id": "git-workflow",
+  "status": "ready",
+  "implicitInvocation": true,
+  "health": {
+    "state": "ready",
+    "reason": "Disposable bare-remote tests passed for clone, tracking, push, fetch, fast-forward pull, commits, tags, logs, diffs, and clean-worktree verification.",
+    "verifiedCapabilities": [
+      "git_status",
+      "git_log",
+      "git_diff",
+      "git_commit",
+      "git_branch",
+      "git_tag",
+      "git_clone",
+      "git_push",
+      "git_fetch",
+      "git_pull_ff_only",
+      "remote_tracking"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "git-workflow"
 }

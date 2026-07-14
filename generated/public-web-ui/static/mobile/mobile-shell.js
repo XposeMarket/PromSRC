@@ -130,6 +130,10 @@ const PM_NO_SELECT_INTERACTIVE_SELECTOR = [
   '.pm-command-chip',
   '.pm-mobile-queued-text',
   '.pm-mobile-queued-icon',
+  '.pm-scroll-latest',
+  '.pm-main-plan-pill',
+  '.pm-background-spawn-pill',
+  '.pm-background-spawn-close',
   '.pm-background-spawn-summary',
   '.pm-msg-action',
   '.pm-msg-lp-btn',
@@ -1209,10 +1213,13 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
       closeDrawer();
       if (typeof onOpenSession === 'function') onOpenSession(sessionId);
     };
-    btn.addEventListener('click', openSession);
-    try {
-      attachMobileButtonHaptic(btn, openSession);
-    } catch {}
+    // A native switch overlay can turn the end of an iOS scroll into a click.
+    // Keep rows native so WebKit suppresses activation after a drag, and only
+    // trigger haptics after an actual button click.
+    btn.addEventListener('click', () => {
+      pmHaptic(10);
+      openSession();
+    });
   });
   _wireDrawerLongPress({ onOpenSession, loadSessions, searchSessions, onNewChat });
 }
@@ -1299,10 +1306,10 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
         closeDrawer();
         if (typeof onOpenSession === 'function') onOpenSession(sessionId);
       };
-      btn.addEventListener('click', openSession);
-      try {
-        attachMobileButtonHaptic(btn, openSession);
-      } catch {}
+      btn.addEventListener('click', () => {
+        pmHaptic(10);
+        openSession();
+      });
     });
     _wireDrawerLongPress({ onOpenSession, loadSessions, searchSessions, onNewChat });
 
@@ -1763,6 +1770,7 @@ export function closeDrawer() {
 export function renderMobileHeader({ title, online = true, leftIcon = 'menu', onLeft, onSettings, extras = '', rightActions = '', hideTitle = false, hideBrand = false }) {
   const settingsButton = `<button class="pm-icon-btn" data-action="settings" aria-label="More">${ICONS.dots}</button>`;
   const modelBadge = online ? `<button type="button" class="pm-online pm-model-badge" aria-live="polite" aria-label="Current model — tap for reasoning, hold to switch model">
+          <span class="pm-model-speed-icon" aria-label="Fast mode" title="Fast mode" ${window.__pmModelBadgeFast ? '' : 'hidden'}>⚡</span>
           <span class="pm-model-badge-label">${escapeHtml(mobileModelBadgeSeedLabel())}</span>
           <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
         </button>` : '';

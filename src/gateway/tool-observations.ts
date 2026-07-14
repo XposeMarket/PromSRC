@@ -333,6 +333,70 @@ export function readToolObservations(sessionId: string, maxObservations = 80): T
   return out;
 }
 
+export function buildToolBenchmarkAggregate(sessionId: string, maxObservations = 5000): Record<string, any> {
+  const observations = readToolObservations(sessionId, Math.max(1, Math.min(20_000, maxObservations)))
+    .sort((a, b) => a.createdAt - b.createdAt);
+  const percentile = (values: number[], p: number) => {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    return Math.round(sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p))]);
+  };
+  const buckets = new Map<string, any>();
+  const actionBuckets = new Map<string, any>();
+  for (const obs of observations) {
+    const args = (() => { try { return JSON.parse(obs.argsPreview || '{}'); } catch { return {}; } })();
+    const action = String(args?.action || '').trim() || '(none)';
+    for (const [key, map] of [[obs.toolName, buckets], [`${obs.toolName}:${action}`, actionBuckets]] as const) {
+      const bucket = map.get(key) || { calls: 0, successes: 0, failures: 0, toolExecutionMs: 0, argumentTokens: 0, resultTokens: 0, contextTokens: 0, estimatedCostMicros: 0, durations: [] as number[] };
+      bucket.calls++;
+      bucket.successes += obs.status === 'ok' ? 1 : 0;
+      bucket.failures += obs.status === 'error' ? 1 : 0;
+      const duration = Number(obs.durationMs || 0);
+      bucket.toolExecutionMs += duration;
+      if (duration > 0) bucket.durations.push(duration);
+      bucket.argumentTokens += Number(obs.tokenEstimate?.argsTokens || 0);
+      bucket.resultTokens += Number(obs.tokenEstimate?.resultTokens || 0);
+      bucket.contextTokens += Number(obs.tokenEstimate?.totalTokens || 0);
+      bucket.estimatedCostMicros += Number(obs.tokenEstimate?.totalCostMicros || obs.tokenEstimate?.contextCostMicros || 0);
+      map.set(key, bucket);
+    }
+  }
+  const finishBuckets = (map: Map<string, any>) => Object.fromEntries([...map.entries()].map(([key, value]) => [key, { ...value, p50Ms: percentile(value.durations, 0.5), p95Ms: percentile(value.durations, 0.95), durations: undefined }]));
+  const durations = observations.map((obs) => Number(obs.durationMs || 0)).filter((value) => value > 0);
+  let retries = 0;
+  const lastStatusBySignature = new Map<string, ToolObservationStatus>();
+  for (const obs of observations) {
+    let action = '(none)';
+    try { action = String(JSON.parse(obs.argsPreview || '{}')?.action || '(none)'); } catch {}
+    const signature = `${obs.toolName}:${action}`;
+    if (lastStatusBySignature.get(signature) === 'error') retries++;
+    lastStatusBySignature.set(signature, obs.status);
+  }
+  const startedAtMs = observations.length ? Math.min(...observations.map((obs) => Number(obs.startedAt || obs.createdAt))) : 0;
+  const completedAtMs = observations.length ? Math.max(...observations.map((obs) => Number(obs.finishedAt || obs.createdAt))) : 0;
+  const largestPayloads = [...observations].sort((a, b) => Number(b.tokenEstimate?.resultBytes || 0) - Number(a.tokenEstimate?.resultBytes || 0)).slice(0, 10).map((obs) => ({ tool: obs.toolName, action: (() => { try { return JSON.parse(obs.argsPreview || '{}')?.action || null; } catch { return null; } })(), resultBytes: obs.tokenEstimate?.resultBytes || 0, resultTokens: obs.tokenEstimate?.resultTokens || 0, status: obs.status }));
+  return {
+    startedAt: startedAtMs ? new Date(startedAtMs).toISOString() : null,
+    completedAt: completedAtMs ? new Date(completedAtMs).toISOString() : null,
+    wallClockMs: Math.max(0, completedAtMs - startedAtMs),
+    toolExecutionMs: observations.reduce((sum, obs) => sum + Number(obs.durationMs || 0), 0),
+    calls: observations.length,
+    successes: observations.filter((obs) => obs.status === 'ok').length,
+    failures: observations.filter((obs) => obs.status === 'error').length,
+    retries,
+    argumentTokens: observations.reduce((sum, obs) => sum + Number(obs.tokenEstimate?.argsTokens || 0), 0),
+    resultTokens: observations.reduce((sum, obs) => sum + Number(obs.tokenEstimate?.resultTokens || 0), 0),
+    contextTokens: observations.reduce((sum, obs) => sum + Number(obs.tokenEstimate?.totalTokens || 0), 0),
+    estimatedCostUsd: observations.reduce((sum, obs) => sum + Number(obs.tokenEstimate?.totalCostMicros || obs.tokenEstimate?.contextCostMicros || 0), 0) / 1_000_000,
+    p50Ms: percentile(durations, 0.5),
+    p95Ms: percentile(durations, 0.95),
+    byTool: finishBuckets(buckets),
+    byAction: finishBuckets(actionBuckets),
+    largestPayloads,
+    errorTaxonomy: observations.filter((obs) => obs.status === 'error').reduce((acc: Record<string, number>, obs) => { const key = obs.category || 'unknown'; acc[key] = (acc[key] || 0) + 1; return acc; }, {}),
+  };
+}
+
 export function readAllToolObservations(maxObservations = 50_000): ToolObservation[] {
   try {
     const root = observationRoot();

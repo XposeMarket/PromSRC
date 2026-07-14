@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scraper Fixture</title>
+  <style>
+    body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #172026; background: #f4f4f1; }
+    main { width: min(760px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0; }
+    article { padding: 24px 0; border-bottom: 1px solid #c9ccc8; }
+    h1, h2, p { margin-top: 0; }
+    a { color: #16615c; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Permitted extraction fixture</h1>
+    <p>Static and JavaScript-generated records for Prometheus browser extraction tests.</p>
+    <section id="records" aria-label="Records"></section>
+    <p id="complete">End of fixture</p>
+  </main>
+  <script>
+    const root = document.querySelector('#records');
+    for (let index = 1; index <= 30; index += 1) {
+      const article = document.createElement('article');
+      article.className = 'record';
+      article.dataset.id = `record-${index}`;
+      article.innerHTML = `
+        <h2>Record ${index}</h2>
+        ${index === 7 ? '' : `<p class="category">${index % 2 ? 'Odd' : 'Even'}</p>`}
+        <p class="summary">Fixture summary number ${index}.</p>
+        <a href="/records/${index}">Read record ${index}</a>`;
+      root.appendChild(article);
+    }
+  </script>
+</body>
+</html>

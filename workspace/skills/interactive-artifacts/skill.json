@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "interactive-artifacts",
+  "name": "interactive-artifacts",
+  "description": "Create polished interactive HTML artifacts, dashboards, cards, comparison tools, and lightweight visual explainers with real user interaction. Use when the deliverable itself should be an interactive browser artifact; do not use for ordinary website implementation, static charts, or slide/document output.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "build an interactive html report",
+    "create an interactive artifact",
+    "make an explorable dashboard",
+    "build an interactive explainer",
+    "create a comparison tool",
+    "add adjustable inputs"
+  ],
+  "categories": [
+    "interactive",
+    "html",
+    "visualization"
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
+}

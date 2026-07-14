@@ -18,6 +18,7 @@ Bundled skill manifests use `skill.json`. V1 supported fields include:
 - `entrypoint`
 - `prompt`
 - `triggers`
+- `implicitInvocation` (set `false` for broad, role, style, persona, mode, and manually invoked skills)
 - `categories`
 - `requiredTools`
 - `permissions`
@@ -88,16 +89,27 @@ Skill write safety is built into `SkillsManager`:
 
 Brain Dream skill evolution rules:
 
-- existing skills can be updated automatically by Brain Thought or Brain Dream only when the change is low-risk, bounded, and backed by session evidence
-- automatic existing-skill updates should prefer additive triggers, clarified guardrails, corrected tool order, or scoped resource/template additions
-- Brain Thought may apply existing-skill maintenance immediately but must explain the change and evidence in its thought artifact for Dream audit
-- Brain Dream audits Thought-applied skill changes and may keep, refine, remove/supersede, or defer them if they add noise or duplicate guidance
-- the dedicated Brain Skill Curator runs after Dream in `auto-safe` mode and applies only low-risk typed lessons that pass deterministic quality gates
+- Brain Thought, Dream, cleanup, and normal chat submit structured candidates instead of mutating skills autonomously
+- the dedicated Brain Skill Curator runs after Dream in `dry-run` mode during the mutation freeze
+- Curator clusters equivalent candidates and defaults behavioral changes to pending review
+- assistant response text is never user approval; confidence comes from explicit user instruction or validated recurrence across distinct sessions
 - the Skill Curator auto-rejects weak legacy suggestions that are only raw workflow examples, generic troubleshooting notes, request/outcome dumps, or tool-sequence receipts
-- Dream cleanup acts as the model-backed Skill Curator Critic about thirty minutes later; it reviews curator state and can accept, reject, revert, refine, or mark items `needs_review`
-- cleanup critic may delete/revert an auto-applied curator resource when it clearly fails the quality gate, but must not rewrite skills broadly, archive/merge/delete skills, or create new skills
-- new skills are Dream-only and proposal-based: Dream automatically files `skill_evolution` proposals when the quality gate passes, but does not directly create the skill
+- Dream cleanup may reject weak pending suggestions or submit repair candidates, but cannot mutate skill files
+- new skills require overlap analysis and explicit Curator approval before a separate `skill_evolution` proposal
 - imported or upstream-managed skills should usually receive Prometheus overlays or additive resources instead of broad upstream file rewrites
+
+Skill routing is relevance-ranked rather than registry-ordered. A turn may receive at most one high-confidence mandatory skill read; other plausible matches are advisory and must not be read automatically. Cross-domain lexical matches are discarded, so a coding task does not load an email, HyperFrames, or other unrelated specialist skill. Explicit-only skills (`implicitInvocation: false`) enter routing only when the user names them or a review explicitly requests overlap analysis.
+
+Triggers are normalized, deduplicated, capped at 12 per skill, and generic single-word triggers are rejected. Creating or changing triggers requires positive and negative prompt sets; the proposed route must win its positive cases and stay absent or low-confidence in its negative cases before activation.
+
+2026-07-11 catalog migration:
+
+- the original 123 folders were classified and migrated into a 128-entry catalog with 112 active, 15 deprecated compatibility entries, and 1 archived entry
+- the nine original 2,000+ word entrypoints are below 750 words and retain full detail in stable `references/detailed-guide.md` files
+- canonical `docx`, `pdf`, `spreadsheets`, `interactive-artifacts`, and `execution-mode-routing` skills were added; merged source entries remain triggerless/unroutable compatibility redirects
+- 92 dated resources were consolidated with original path/date/hash evidence in `Brain/skill-curator/catalog-migration-evidence.jsonl`; 32 remain only in dependency-blocked skills that were intentionally not edited
+- `npm run test:skill-catalog` validates all migrated triggers against positive cases and two cross-domain negative cases, resource existence, frontmatter, invocation policy, lifecycle routing, and collision boundaries
+- the full classification, smoke-test ledger, and 27 untouched dependency exceptions are documented in `docs/SKILL_CATALOG_MIGRATION_2026-07-11.md`
 
 Important V1 boundaries:
 
@@ -118,7 +130,7 @@ The HyperFrames skill pack from `https://github.com/heygen-com/hyperframes/tree/
 - `gsap`
 - `hyperframes-cli`
 - `hyperframes-registry`
-- `website-to-hyperframes`
+- `website-to-video`
 - `remotion-to-hyperframes`
 
 Prometheus also has a local bridge skill, `prometheus-hyperframes-bridge`, that maps HyperFrames resources into Prometheus Creative Video mode. It tells agents to prefer Prometheus Creative HTML Motion tools for in-app video creation and use HyperFrames/GSAP resources as guidance rather than assuming the external HyperFrames CLI is installed.
@@ -134,10 +146,13 @@ Skill authoring now supports first-class bundle creation:
 `skill_curator` is the tool surface for the dedicated Brain Skill Curator:
 
 - `skill_curator action=status` returns current curator suggestions
-- `skill_curator action=run mode=auto-safe` is the default run mode and can auto-apply safe typed lessons
+- `skill_curator action=run` defaults to `dry-run`; the scheduled post-Dream run also uses `dry-run`
+- `skill_curator action=run mode=pending` persists reviewable suggestions without mutating skills
+- `skill_curator action=run mode=auto-safe` remains compatibility-visible, but behavioral auto-application is frozen
 - `skill_curator action=run mode=dry-run` previews without mutation
 - `skill_curator action=apply id=<id>` manually applies a suggestion
 - `skill_curator action=reject id=<id>` rejects a suggestion
+- `skill_candidate_submit` records a structured candidate without changing skill files
 
 Resource authoring is intentionally text-only and path-scoped. Absolute paths, `../` traversal, unsupported extensions, and oversized resources are rejected.
 

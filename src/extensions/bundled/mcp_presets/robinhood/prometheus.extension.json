@@ -1,0 +1,46 @@
+{
+  "id": "robinhood-trading",
+  "kind": "mcp_preset",
+  "name": "Robinhood Trading MCP",
+  "description": "Official remote Robinhood MCP connection. Setup uses OAuth and defaults to exposing only verified read-only tools.",
+  "category": "Finance",
+  "enabledByDefault": true,
+  "docsUrl": "https://agent.robinhood.com/mcp/trading",
+  "tags": ["mcp", "robinhood", "finance", "oauth"],
+  "runtime": { "binding": "gateway/mcp-presets/robinhood" },
+  "activation": { "whenCapabilityRequested": ["mcp-server", "finance"] },
+  "contracts": { "mcpPresets": ["robinhood-trading"], "capabilities": ["mcp-server", "finance"] },
+  "setup": {
+    "authType": "oauth",
+    "scopes": [],
+    "docsHint": "Authorization occurs on Robinhood's site. Prometheus never receives the user's password or MFA code."
+  },
+  "mcpPreset": {
+    "transport": "http",
+    "urlTemplate": "https://agent.robinhood.com/mcp/trading"
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["Robinhood", "Robinhood MCP", "Robinhood Trading", "Robinhood Agentic", "Robinhood Agentic Trading"],
+    "domains": ["agent.robinhood.com", "robinhood.com"],
+    "strategies": [{
+      "id": "robinhood-mcp-oauth",
+      "adapter": "mcp-oauth",
+      "priority": 100,
+      "capabilities": ["portfolio.read", "market-data.read"],
+      "readOnlyDefault": true,
+      "authentication": { "type": "oauth2-pkce", "scopes": [] },
+      "verification": ["mcp.initialize", "mcp.tools.discover", "safe-read"],
+      "config": { "mcpServerId": "robinhood-trading", "url": "https://agent.robinhood.com/mcp/trading", "desktopRequired": true, "desktopReason": "Robinhood requires this authorization and Agentic account onboarding in a desktop browser." }
+    }],
+    "requestedCapabilities": [
+      { "id": "portfolio.read", "label": "Portfolio and holdings", "risk": "read" },
+      { "id": "market-data.read", "label": "Market data", "risk": "read" },
+      { "id": "orders.write", "label": "Place or cancel orders", "risk": "high_impact" }
+    ],
+    "verification": ["mcp.initialize", "mcp.tools.discover", "safe-read"],
+    "toolPolicy": { "defaultExposure": "read-only", "unknownTools": "blocked" }
+  },
+  "permissions": { "network": ["agent.robinhood.com"], "filesystem": [], "process": false, "credentials": ["oauth_tokens"] },
+  "compatibility": { "pluginApi": "1", "prometheus": ">=1.0.9" }
+}

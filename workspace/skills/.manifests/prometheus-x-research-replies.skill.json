@@ -1,23 +1,8 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Mara or a scheduled/delegated @raulinvests workflow researches X/Twitter, finds reply/repost/quote opportunities, drafts engagement, or monitors AI/trading conversations for growth.",
-  "triggers": [
-    "X research replies",
-    "Mara reply workflow",
-    "find reply opportunities",
-    "X engagement workflow",
-    "research posts to reply to",
-    "quote repost candidates",
-    "regular repost workflow",
-    "@raulinvests replies",
-    "X growth replies",
-    "scheduled X research",
-    "monitor X conversations",
-    "draft X replies",
-    "reply target list",
-    "engagement packet"
-  ],
+  "description": "Deprecated compatibility entry for the scheduled Prometheus X research-and-reply workflow. Use the explicit prometheus-x-growth-operator skill and its research-replies reference.",
+  "triggers": [],
   "categories": [
     "social",
     "x",
@@ -29,6 +14,8 @@
     "workspace_write",
     "skills"
   ],
-  "lifecycle": "active",
-  "id": "prometheus-x-research-replies"
+  "lifecycle": "deprecated",
+  "id": "prometheus-x-research-replies",
+  "implicitInvocation": false,
+  "name": "prometheus-x-research-replies"
 }

@@ -1,22 +1,16 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when finding, organizing, importing, or using HyperFrames catalog assets, reusable components, scene templates, visual assets, typography packs, or motion snippets.",
+  "description": "Find, inspect, import, and adapt verified official HyperFrames registry blocks and components into Prometheus Creative Mode. Use for explicit catalog asset, registry source, reusable scene, or HyperFrames component requests; do not invoke for ordinary video creation.",
   "triggers": [
-    "HyperFrames assets",
-    "catalog assets",
-    "scene template",
-    "reusable motion asset",
-    "import asset to HyperFrames",
-    "asset pack",
-    "motion component",
-    "HyperFrames catalog",
-    "video template",
-    "use existing assets",
-    "visual asset library",
-    "typography asset",
-    "reusable scene",
-    "catalog component"
+    "hyperframes catalog component",
+    "hyperframes registry block",
+    "reuse hyperframes component",
+    "import hyperframes asset",
+    "catalog scene template",
+    "hyperframes shader transition",
+    "hyperframes social overlay",
+    "hyperframes catalog"
   ],
   "categories": [
     "creative",
@@ -28,5 +22,19 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "hyperframes-catalog-assets"
+  "id": "hyperframes-catalog-assets",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "The bundled HyperFrames catalog was refreshed from the verified current source and passed local/live entry parity checks.",
+    "verifiedCapabilities": [
+      "catalog_refresh",
+      "catalog_read",
+      "source_parity"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "hyperframes-catalog-assets"
 }

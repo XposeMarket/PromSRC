@@ -1,0 +1,20 @@
+{
+  "ownership": "upstream-managed",
+  "implicitInvocation": false,
+  "status": "ready",
+  "health": {
+    "state": "ready",
+    "reason": "Official skill pinned from heygen-com/hyperframes and restricted to explicit specialist selection by the Creative Director.",
+    "verifiedCapabilities": [
+      "official_upstream_skill"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-11"
+  },
+  "id": "embedded-captions",
+  "name": "embedded-captions",
+  "description": "Add designed captions to a talking-head video through the 36-identity CATALOG.md. Supports column-flow captions composited into the scene with matte occlusion and themed constitutions such as anchor, terminal, neonsign, stardust, dossier, hologram, spectrum, papercut, and nightcity. Route by named identity, never by engine mode. Use for captions/subtitles, cinematic or VFX captions, a named identity, or top-tier motion-graphics caption asks. The verbatim default is the quiet anchor rail; embedding every word is usually wrong. Runs locally end to end, including transcription and subject matting, with no API key. Requires HyperFrames and a single-subject clip; multi-shot clips are split per shot.",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "lifecycle": "active"
+}

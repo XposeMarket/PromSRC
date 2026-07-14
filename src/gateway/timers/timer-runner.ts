@@ -5,7 +5,6 @@ import {
 } from './timer-store';
 import {
   broadcastWS,
-  isModelBusy,
   setModelBusy,
 } from '../comms/broadcaster';
 import { deliverToTargets, type DeliveryDeps } from '../delivery-router';
@@ -59,15 +58,6 @@ export class MainChatTimerRunner {
 
   private async tick(): Promise<void> {
     if (this.runningTimerId) return;
-    if (isModelBusy()) {
-      for (const due of getDueMainChatTimers().slice(0, 10)) {
-        if (due.status === 'pending') {
-          updateMainChatTimer(due.id, { status: 'due_waiting' });
-          broadcastWS({ type: 'timer_waiting', timer: due, sessionId: due.sessionId });
-        }
-      }
-      return;
-    }
     const next = getDueMainChatTimers()[0];
     if (!next) return;
     await this.fireTimer(next);

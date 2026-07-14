@@ -1,27 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks for current web research, fact gathering, source-backed summaries, news/context lookup, competitive scans, article synthesis, or finding credible sources online.",
+  "description": "Answer a research question with current web sources using search, batched or single-page fetch, source evaluation, triangulation, synthesis, and citations. Use for web research and current facts; do not use browser automation unless interactive/authenticated UI state is necessary.",
   "triggers": [
-    "research this",
-    "look this up",
-    "find sources",
-    "current information",
-    "latest news",
-    "source-backed answer",
-    "web research",
     "what are people saying",
-    "compare sources",
-    "investigate online",
-    "find articles",
     "summarize these links",
     "read this webpage",
     "fact check this",
+    "look this up",
     "search the web",
-    "gather evidence",
+    "source-backed answer",
+    "current information",
+    "investigate online",
     "credible sources",
-    "recent updates",
-    "online research"
+    "compare sources",
+    "gather evidence"
   ],
   "categories": [
     "research",
@@ -33,5 +26,7 @@
     "web_fetch"
   ],
   "lifecycle": "active",
-  "id": "web-researcher"
+  "id": "web-researcher",
+  "name": "web-researcher",
+  "implicitInvocation": true
 }

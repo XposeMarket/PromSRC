@@ -306,7 +306,7 @@ export function previewAgentProfilePack(inputPath: string, workspacePath: string
   };
 
   const files: AgentProfilePackPreview['installPlan']['files'] = [
-    { source: personaPath, target: path.join(agentWorkspace, 'system_prompt.md'), action: 'copy' as const },
+    { source: personaPath, target: path.join(agentWorkspace, 'AGENT.md'), action: 'copy' as const },
     { source: path.join(root, 'README.md'), target: path.join(agentWorkspace, 'README.md'), action: 'copy' as const },
     { source: path.join(root, 'SECURITY.md'), target: path.join(agentWorkspace, 'SECURITY.md'), action: 'copy' as const },
     { source: path.join(root, 'manifest.yaml'), target: path.join(agentWorkspace, 'manifest.yaml'), action: 'copy' as const },

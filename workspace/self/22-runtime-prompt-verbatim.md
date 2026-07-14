@@ -1,5 +1,7 @@
 ## 38) Runtime Prompt Verbatim Inventory
 
+> Re-verified 2026-07-12 against canonical `PromSRC`. The authoritative current source/role/cost map is [26-runtime-instruction-census.md](26-runtime-instruction-census.md). Historical verbatim strings below remain useful for diffing, but stale line numbers and pre-isolation matrices are not authoritative.
+
 ---
 
 ## Prompt Size Budget
@@ -14,21 +16,21 @@ Approximate token contribution by source for a typical **main chat (interactive)
 | `[RECENT_TOOL_OBSERVATIONS]` | ~0–500 | grows with long tool logs; resets each session |
 | Caller context overlay | ~0–1,500 | zero for main chat; team_manager caller is the heaviest (~1,500) |
 | `[BROWSER SESSION ACTIVE]` | ~50 | only when a tab is open |
-| `[PROMETHEUS_SOUL]` config soul | ~200–800 | workspace-specific; absent in background_task / cron / heartbeat |
-| `[USER]` USER.md | ~300–1,500 | workspace-specific; capped at 3k chars in team_subagent |
-| `[SOUL]` SOUL.md | ~300–1,500 | workspace-specific; capped at 4k chars in team_subagent |
-| `[MEMORY]` MEMORY.md | ~500–2,000 | 8k char cap in interactive; capped at 5k in team_subagent |
+| `[PROMETHEUS_SOUL]` config soul | ~2,408 raw | 8,906 characters; main/switch/proposal paths |
+| `[USER]` USER.md | ~977 raw | main/teach/voice/switch only; excluded from subagents |
+| `[SOUL]` SOUL.md | ~958 raw | Prometheus-owned paths; excluded from subagents |
+| `[MEMORY]` MEMORY.md | ~8,125 raw | 30,061 characters; main interactive currently supplies no explicit cap; excluded from subagents |
 | `[BUSINESS]` BUSINESS.md | ~200–1,000 | only when business_context_mode is on |
 | `[TODAY_NOTES]` intraday | ~100–500 | interactive + team_manager only; grows through the day |
 | `[PROJECT_CONTEXT]` | ~100–500 | only when session is project-bound |
-| `buildToolsContext()` always-on menu | ~800–1,200 | fixed tool menu + always-on TOOL_BLOCKS.skills |
-| `TOOL_BLOCKS.*` activated categories | ~500–3,000 each | per-category policies; the full block pool is ~15 KB; only loaded categories are injected |
+| `buildToolsContext()` always-on menu | ~3,219–3,480 | 12,876 characters in legacy/all-segments mode |
+| `TOOL_BLOCKS.*` activated categories | ~88–1,503 each | full static pool is 25,683 characters / ~6,942 tokens |
 | Skills hint + active skills | ~200–300 | [SKILLS] playbook count + [ACTIVE_SKILLS] recently used |
 | `[CIS_CONTEXT]` | ~150–300 | entity-aware business profile |
 | Memory search results | ~0–800 | auto-triggered on history-style messages; interactive + background_agent only |
 | `[REFERENCE_FILES]` hint | ~50 | single-line pointer to self/index.md |
 
-**Typical main chat with no special categories active:** ~3,500–8,000 tokens (before user message and conversation history).
+**Recent real main chat before Stage 4:** about 19,643 estimated system-prompt tokens plus 19,132 estimated tool-schema tokens on the sampled provider calls.
 
 **With browser tools active + team_manager caller:** can reach 10,000–14,000 tokens before conversation history.
 
@@ -38,7 +40,7 @@ Approximate token contribution by source for a typical **main chat (interactive)
 
 ---
 
-Last verified against `src/gateway/routes/chat.router.ts`, `src/gateway/prompt-context.ts`, `src/gateway/tasks/background-task-runner.ts`, `src/gateway/tasks/task-runner.ts`, `src/gateway/scheduling/cron-scheduler.ts`, `src/gateway/scheduling/heartbeat-runner.ts`, `src/gateway/teams/team-coordinator.ts`, `src/gateway/teams/team-dispatch-runtime.ts`, `src/gateway/teams/team-member-room.ts`, `src/gateway/agents-runtime/subagent-manager.ts`, `src/gateway/boot.ts`, `src/gateway/onboarding/meet-prompt.ts`, `src/gateway/routes/realtime.router.ts`, `src/config/local-model-prompts.ts`, and `src/config/self-reflection.ts` on: 2026-06-08.
+Last fully re-audited against those runtime surfaces on: 2026-07-12. See document 26 for current symbol locations and disagreements.
 
 Companion to [21-runtime-prompt-map.md](21-runtime-prompt-map.md). That file maps architecture and overlap; **this file lists the literal fixed strings** each builder emits, where they land (system vs user message), and which runtime receives them.
 
@@ -757,3 +759,4 @@ See [21-runtime-prompt-map.md](21-runtime-prompt-map.md) §10 for full gap analy
 - [21-runtime-prompt-map.md](21-runtime-prompt-map.md) — architecture and overlap
 - [03-execution-and-prompting.md](03-execution-and-prompting.md) — execution modes overview
 - [08-tasks-and-agents.md](08-tasks-and-agents.md) — tasks and subagents
+> 2026-07-10 subagent isolation update: the historical verbatim inventory below contains pre-change snapshots. For standalone/direct/background and team subagents, `AGENT.md` is now the only per-agent identity file and is combined with the dedicated subagent soul plus shared runtime/tool/skill rules. Main `USER.md`, workspace `SOUL.md`, `MEMORY.md`, `BUSINESS.md`, intraday/project/CIS context, and retrieved memory are excluded. `system_prompt.md`/`AGENTS.md` migrate non-destructively to `AGENT.md`; `HEARTBEAT.md` is not an identity fallback. Re-verify any older subagent matrix below against `prompt-context.ts` and `agent-prompt-file.ts` before relying on it.

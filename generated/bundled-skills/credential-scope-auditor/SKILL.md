@@ -1,3 +1,8 @@
+---
+name: "credential-scope-auditor"
+description: "Audit connector manifests, OAuth scopes, setup fields, vault access, and runtime credential handling for least privilege. Use before installing, expanding, or trusting an integration, or when the user requests a credential-scope or connector-security review."
+---
+
 # Credential Scope Auditor
 
 Use this skill before installing, expanding, or enabling a connector with credentials.

@@ -1,7 +1,17 @@
 import fs from 'fs';
 import { parseJsonLike, type ToolResult } from '../../tool-builder';
 import { activateSkillForSession, activateSkillResourceForSession } from '../../session';
+import { submitSkillGardenerCandidate } from '../../brain/skill-episodes';
+import {
+  applySkillCuratorSuggestion,
+  listSkillCuratorSuggestions,
+  getSkillCuratorStatus,
+  rejectSkillCuratorSuggestion,
+  runSkillCurator,
+  type SkillCuratorMode,
+} from '../../skills-runtime/skill-curator';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
+import { rankSkillMatches } from '../../skills-runtime/skills-manager';
 
 const SKILL_TOOL_NAMES = new Set([
   'skill_list',
@@ -20,6 +30,8 @@ const SKILL_TOOL_NAMES = new Set([
   'skill_audit_all',
   'skill_update_metadata',
   'skill_repair_metadata',
+  'skill_candidate_submit',
+  'skill_curator',
 ]);
 
 export function splitCsv(value: any): string[] {
@@ -48,6 +60,8 @@ export interface SkillMetadataAudit {
   description: string;
   triggers: string[];
   hasManifestOverlay: boolean;
+  lifecycle: string;
+  compatibilityEntry: boolean;
 }
 
 const PLACEHOLDER_DESCRIPTION_RE = /^(\(no description\)|tbd|todo|placeholder|description|skill|n\/a|none)\.?$/i;
@@ -61,6 +75,9 @@ export function scoreSkillMetadata(skill: any): SkillMetadataAudit {
     ? skill.triggers.map((t: any) => String(t || '').trim()).filter(Boolean)
     : [];
   const issues: string[] = [];
+  const lifecycle = String(skill?.lifecycle || 'active').toLowerCase();
+  const compatibilityEntry = ['deprecated', 'archived', 'compatibility', 'redirect', 'redirect-only'].includes(lifecycle)
+    || /compatibility|deprecated|redirect[- ]only/i.test(String(skill?.description || ''));
   let score = 100;
 
   if (!description) {
@@ -115,6 +132,8 @@ export function scoreSkillMetadata(skill: any): SkillMetadataAudit {
     description,
     triggers,
     hasManifestOverlay: skill?.manifestSource === 'overlay' || !!skill?.overlayPath,
+    lifecycle,
+    compatibilityEntry,
   };
 }
 
@@ -187,6 +206,13 @@ export function buildMetadataManifest(skill: any, args: any): Record<string, unk
   if (args.name !== undefined && args.name !== null) {
     const n = String(args.name).trim();
     if (n && n !== String(skill?.name || '').trim()) { manifest.name = n; changed = true; }
+  }
+  if (args.implicitInvocation !== undefined || args.implicit_invocation !== undefined) {
+    const implicitInvocation = args.implicitInvocation ?? args.implicit_invocation;
+    if (typeof implicitInvocation === 'boolean' && implicitInvocation !== skill?.implicitInvocation) {
+      manifest.implicitInvocation = implicitInvocation;
+      changed = true;
+    }
   }
   return changed ? manifest : null;
 }
@@ -376,22 +402,33 @@ export function rankSkillsForQuery(skills: any[], query: string): RankedSkill[] 
   if (!q) {
     return skills.map((skill) => ({ skill, score: 0, confidence: 'strong', matchedTerms: [], matchedFields: [] }));
   }
-  return skills
-    .map((skill) => rankSkillForQuery(skill, q))
-    .filter((ranked) => ranked.score > 0)
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return String(a.skill?.id || '').localeCompare(String(b.skill?.id || ''));
-    });
+  return rankSkillMatches(skills, q, { limit: Math.max(1, skills.length) }).map((match) => ({
+    skill: match.skill,
+    score: match.score,
+    confidence: match.confidence === 'low' ? 'weak' : 'strong',
+    matchedTerms: [...match.matchedTriggers, ...match.matchedDomains].slice(0, 8),
+    matchedFields: [
+      ...(match.matchedTriggers.length ? ['triggers'] : []),
+      ...(match.matchedDomains.length ? ['domain'] : []),
+      ...(match.explicitMention ? ['explicit-name'] : []),
+    ],
+  }));
 }
 
 export function formatCompactSkillList(skills: any[], args: any): string {
+  const installedCount = skills.length;
+  const availableSkills = skills.filter((skill) =>
+    skill.executionEnabled !== false
+    && !['deprecated', 'archived'].includes(String(skill.lifecycle || '').toLowerCase())
+    && skill.eligibility?.status === 'ready'
+    && !['blocked', 'quarantined', 'unsupported'].includes(String(skill.status || '').toLowerCase())
+  );
   const query = String(args?.query || args?.q || '').trim().toLowerCase();
   const includeDescriptions = args?.include_descriptions === true || args?.includeDescriptions === true;
   const includeMatchDetails = args?.include_match_details === true || args?.includeMatchDetails === true;
   const requestedLimit = Math.floor(Number(args?.limit) || 24);
   const limit = Math.max(1, Math.min(80, requestedLimit));
-  const ranked = query ? rankSkillsForQuery(skills, query) : skills.map((skill) => ({ skill, score: 0, confidence: 'strong' as const, matchedTerms: [], matchedFields: [] }));
+  const ranked = query ? rankSkillsForQuery(availableSkills, query) : availableSkills.map((skill) => ({ skill, score: 0, confidence: 'strong' as const, matchedTerms: [], matchedFields: [] }));
   const strongCount = query ? ranked.filter((item) => item.confidence === 'strong').length : ranked.length;
   const weakCount = query ? ranked.length - strongCount : 0;
   const matched = ranked.map((item) => item.skill);
@@ -402,10 +439,12 @@ export function formatCompactSkillList(skills: any[], args: any): string {
       id: String(s.id || ''),
       name: String(s.name || s.id || ''),
       status: status ? String(s.eligibility.status || '') : undefined,
+      health: s.health?.state !== 'ready' ? s.health : undefined,
       confidence: query ? rankedSkill.confidence : undefined,
       score: query ? rankedSkill.score : undefined,
       categories: Array.isArray(s.categories) ? s.categories.slice(0, 4) : undefined,
       requiredTools: Array.isArray(s.requiredTools) ? s.requiredTools.slice(0, 6) : undefined,
+      implicitInvocation: s.implicitInvocation === false ? false : undefined,
       description: includeDescriptions ? String(s.description || '').slice(0, 180) : undefined,
       matchedTerms: includeMatchDetails ? rankedSkill.matchedTerms : undefined,
       matchedFields: includeMatchDetails ? rankedSkill.matchedFields : undefined,
@@ -415,7 +454,9 @@ export function formatCompactSkillList(skills: any[], args: any): string {
     ));
   });
   return JSON.stringify({
-    totalInstalled: skills.length,
+    totalInstalled: installedCount,
+    availableCount: availableSkills.length,
+    unavailableOmittedCount: installedCount - availableSkills.length,
     query: query || undefined,
     matchedCount: matched.length,
     strongMatchCount: query ? strongCount : undefined,
@@ -426,7 +467,7 @@ export function formatCompactSkillList(skills: any[], args: any): string {
     retrieval: query ? 'weighted token/alias OR match with weak candidates instead of exact full-query substring matching' : undefined,
     note: query && strongCount === 0 && weakCount > 0
       ? 'No strong matches. Returning weak candidates; try a shorter query or call skill_read on the most plausible candidate.'
-      : 'Compact skill discovery. Natural task queries are matched across id/name/description/triggers/categories/requiredTools. Call skill_read(id) for one relevant skill.',
+      : `${installedCount - availableSkills.length ? `${installedCount - availableSkills.length} unavailable, quarantined, disabled, or deprecated skill(s) omitted. ` : ''}Compact skill discovery. Natural task queries are matched across id/name/description/triggers/categories/requiredTools. Call skill_read(id) for one relevant skill.`,
     skills: rows,
   }, null, 2);
 }
@@ -465,6 +506,10 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         activateSkillForSession(sessionId, skill.id);
         try {
           const content = stripSkillEmojiFrontmatter(fs.readFileSync(skill.filePath, 'utf-8'));
+          const autoLoadedResources = deps.skillsManager.readAutoLoadedResources(skill.id);
+          const contentWithAutoLoaded = content + autoLoadedResources.map((resource: any) =>
+            `\n\n---\n\n[Auto-loaded development resource: ${resource.path}]\n\n${resource.content}`
+          ).join('');
           const header = [
             `${skill.name} (${skill.id}) ${skill.kind === 'bundle' ? `v${skill.version} bundle` : 'simple skill'}`,
             skill.description ? `Description: ${skill.description}` : '',
@@ -473,32 +518,26 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             skill.validation && !skill.validation.ok ? `Validation errors: ${skill.validation.errors.join('; ')}` : '',
           ].filter(Boolean).join('\n');
 
-          // For bundle skills, inline the ENTIRE bundle this turn — SKILL.md plus
-          // every bundled resource — and mark each resource active for the session.
-          // Because they're activated, subsequent turns only show the [ACTIVE_SKILLS]
-          // pointer instead of re-injecting the full bundle (one-time full load).
+          // Keep bundle resources lazy. Large operational skills can contain years
+          // of historical examples; injecting all of them obscures the current
+          // instructions and wastes context. Return a compact resource menu and let
+          // the model read only the files needed for the current workflow.
           let resourceBlock = '';
           if (skill.kind === 'bundle' && Array.isArray(skill.resources) && skill.resources.length) {
-            const PER_RESOURCE_CAP = 8000;
-            const TOTAL_CAP = 48000;
-            const parts: string[] = ['', '', `Bundled resources (${skill.resources.length}) — full contents:`];
-            let used = 0;
-            const overflow: string[] = [];
-            for (const r of skill.resources as any[]) {
-              if (used >= TOTAL_CAP) { overflow.push(r.path); continue; }
-              const res = deps.skillsManager.readResource(skillId, r.path, PER_RESOURCE_CAP);
-              if (!res.ok) { overflow.push(r.path); continue; }
-              activateSkillResourceForSession(sessionId, skill.id, res.path);
-              used += (res.content || '').length;
-              parts.push('', `--- ${r.path}${r.description ? ` (${r.description})` : ''}${res.truncated ? ' [truncated]' : ''} ---`, res.content);
-            }
-            if (overflow.length) {
-              parts.push('', `Not inlined (over budget — read individually with skill_resource_read if needed): ${overflow.join(', ')}`);
-            }
-            resourceBlock = parts.join('\n');
+            const rows = (skill.resources as any[]).map((resource) =>
+              `- ${resource.path}${resource.description ? ` — ${resource.description}` : ''}`
+            );
+            resourceBlock = [
+              '',
+              '',
+              `Bundled resources (${skill.resources.length}; load only when relevant):`,
+              ...rows,
+              '',
+              `Read one with skill_resource_read({"id":"${skill.id}","path":"<resource path>"}).`,
+            ].join('\n');
           }
 
-          return { name, args, result: `${header}\n\nInstructions:\n${content}${resourceBlock}`, error: false };
+          return { name, args, result: `${header}\n\nInstructions:\n${contentWithAutoLoaded}${resourceBlock}`, error: false };
         } catch {
           return { name, args, result: `${skill.name} (${skillId})\n\n${skill.instructions}`, error: false };
         }
@@ -573,6 +612,70 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         };
       }
 
+      case 'skill_candidate_submit': {
+        try {
+          const candidate = submitSkillGardenerCandidate({
+            workspacePath: ctx.workspacePath,
+            sessionId,
+            executionMode: String(args.executionMode || args.execution_mode || 'candidate_submission'),
+            type: String(args.type || '').trim() as any,
+            skillId: args.skillId || args.skill_id ? String(args.skillId || args.skill_id).trim() : undefined,
+            resourcePath: args.resourcePath || args.resource_path ? String(args.resourcePath || args.resource_path).trim() : undefined,
+            confidence: args.confidence,
+            risk: args.risk,
+            reason: String(args.reason || '').trim(),
+            suggestedAction: String(args.suggestedAction || args.suggested_action || '').trim(),
+            requestExcerpt: args.requestExcerpt || args.request_excerpt ? String(args.requestExcerpt || args.request_excerpt) : undefined,
+            evidence: splitCsv(args.evidence),
+            submittedBy: args.submittedBy || args.submitted_by ? String(args.submittedBy || args.submitted_by) : sessionId,
+            triggerPositivePrompts: splitCsv(args.triggerPositivePrompts || args.trigger_positive_prompts),
+            triggerNegativePrompts: splitCsv(args.triggerNegativePrompts || args.trigger_negative_prompts),
+            proposedTrigger: args.proposedTrigger || args.proposed_trigger ? String(args.proposedTrigger || args.proposed_trigger) : undefined,
+          });
+          return {
+            name,
+            args,
+            result: `Submitted skill candidate ${candidate.id} for Curator review. No skill files were changed.`,
+            error: false,
+          };
+        } catch (candidateErr: any) {
+          return { name, args, result: `skill_candidate_submit failed: ${candidateErr.message}`, error: true };
+        }
+      }
+
+      case 'skill_curator': {
+        const action = String(args.action || 'status').trim().toLowerCase();
+        try {
+          if (action === 'status') {
+            const status = getSkillCuratorStatus(ctx.workspacePath, { limit: args.limit, cursor: args.cursor, statusFilter: args.statusFilter || args.status_filter, skillId: args.skillId || args.skill_id, includeContent: args.includeContent === true || args.include_content === true });
+            return { name, args, result: JSON.stringify(status, null, 2), error: false };
+          }
+          if (action === 'run') {
+            const rawMode = String(args.mode || 'dry-run').trim();
+            const mode: SkillCuratorMode = rawMode === 'auto-safe' || rawMode === 'pending' ? rawMode : 'dry-run';
+            const result = runSkillCurator({ workspacePath: ctx.workspacePath, skillsManager: deps.skillsManager, mode });
+            return { name, args, result: JSON.stringify(result, null, 2), error: false };
+          }
+          if (action === 'apply') {
+            const id = String(args.id || '').trim();
+            if (!id) return { name, args, result: 'skill_curator: id is required for apply', error: true };
+            const suggestion = applySkillCuratorSuggestion(ctx.workspacePath, deps.skillsManager, id);
+            if (!suggestion) return { name, args, result: `Suggestion "${id}" not found.`, error: true };
+            return { name, args, result: `Applied skill curator suggestion ${id}.`, error: false };
+          }
+          if (action === 'reject') {
+            const id = String(args.id || '').trim();
+            if (!id) return { name, args, result: 'skill_curator: id is required for reject', error: true };
+            const suggestion = rejectSkillCuratorSuggestion(ctx.workspacePath, id);
+            if (!suggestion) return { name, args, result: `Suggestion "${id}" not found.`, error: true };
+            return { name, args, result: `Rejected skill curator suggestion ${id}.`, error: false };
+          }
+          return { name, args, result: `Unknown skill_curator action: ${action}`, error: true };
+        } catch (curatorErr: any) {
+          return { name, args, result: `skill_curator failed: ${curatorErr.message}`, error: true };
+        }
+      }
+
       case 'skill_manifest_write': {
         const skillId = String(args.id || args.skill_id || '').trim();
         if (!skillId) return { name, args, result: 'ERROR: id is required.', error: true };
@@ -587,6 +690,8 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             evidence: Array.isArray(args.evidence) ? args.evidence.map((v: any) => String(v || '').trim()).filter(Boolean) : (args.evidence ? [String(args.evidence)] : undefined),
             appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
             reason: args.reason ? String(args.reason) : undefined,
+            triggerPositivePrompts: splitCsv(args.triggerPositivePrompts || args.trigger_positive_prompts),
+            triggerNegativePrompts: splitCsv(args.triggerNegativePrompts || args.trigger_negative_prompts),
           });
           return {
             name, args,
@@ -613,9 +718,12 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             instructions: scInstructions,
             version: args.version ? String(args.version) : undefined,
             triggers: splitCsv(args.triggers),
+            triggerPositivePrompts: splitCsv(args.triggerPositivePrompts || args.trigger_positive_prompts),
+            triggerNegativePrompts: splitCsv(args.triggerNegativePrompts || args.trigger_negative_prompts),
             categories: splitCsv(args.categories),
             requiredTools: splitCsv(args.requiredTools || args.required_tools),
             permissions: args.permissions && typeof args.permissions === 'object' ? args.permissions : undefined,
+            implicitInvocation: args.implicitInvocation ?? args.implicit_invocation,
             resources: Array.isArray(args.resources) ? args.resources : [],
             overwrite: args.overwrite === true,
           });
@@ -720,6 +828,9 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             name: scName,
             description: args.description ? String(args.description).trim() : '',
             triggers: splitCsv(args.triggers),
+            triggerPositivePrompts: splitCsv(args.triggerPositivePrompts || args.trigger_positive_prompts),
+            triggerNegativePrompts: splitCsv(args.triggerNegativePrompts || args.trigger_negative_prompts),
+            implicitInvocation: args.implicitInvocation ?? args.implicit_invocation,
             instructions: scInstructions,
           });
           return {
@@ -739,14 +850,18 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         const threshold = Number.isFinite(Number(args.threshold)) ? Number(args.threshold) : 80;
         const all = deps.skillsManager.getAll().filter((s: any) => skillMatchesScope(s, scope));
         const audits = all.map((s: any) => scoreSkillMetadata(s)).sort((a: SkillMetadataAudit, b: SkillMetadataAudit) => a.score - b.score);
-        const flagged = audits.filter((a: SkillMetadataAudit) => a.score < threshold || a.issues.length > 0);
-        const list = onlyProblems ? flagged : audits;
+        const activeAudits = audits.filter((a: SkillMetadataAudit) => !a.compatibilityEntry);
+        const compatibilityAudits = audits.filter((a: SkillMetadataAudit) => a.compatibilityEntry);
+        const flagged = activeAudits.filter((a: SkillMetadataAudit) => a.score < threshold || a.issues.length > 0);
+        const list = onlyProblems ? flagged : activeAudits;
         const summary = {
           scope,
           totalScanned: all.length,
           flagged: flagged.length,
           threshold,
-          avgScore: audits.length ? Math.round(audits.reduce((n: number, a: SkillMetadataAudit) => n + a.score, 0) / audits.length) : 100,
+          activeDiscoverableSkills: activeAudits.length,
+          compatibilityEntries: compatibilityAudits.length,
+          avgScore: activeAudits.length ? Math.round(activeAudits.reduce((n: number, a: SkillMetadataAudit) => n + a.score, 0) / activeAudits.length) : 100,
           skills: list.map((a: SkillMetadataAudit) => ({ id: a.id, name: a.name, score: a.score, issues: a.issues })),
         };
         return { name, args, result: JSON.stringify(summary, null, 2), error: false };
@@ -759,7 +874,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         if (!skill) return { name, args, result: `Skill "${skillId}" not found. Call skill_list to see available IDs.`, error: true };
         const manifest = buildMetadataManifest(skill, args);
         if (!manifest) {
-          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, addTriggers, removeTriggers, categories, requiredTools, lifecycle, or name).`, error: true };
+          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, addTriggers, removeTriggers, categories, requiredTools, lifecycle, implicitInvocation, or name).`, error: true };
         }
         try {
           const updated = deps.skillsManager.writeManifestOverlay(skillId, manifest, {
@@ -767,6 +882,8 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             evidence: Array.isArray(args.evidence) ? args.evidence.map((v: any) => String(v || '').trim()).filter(Boolean) : (args.evidence ? [String(args.evidence)] : undefined),
             appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
             reason: args.reason ? String(args.reason) : undefined,
+            triggerPositivePrompts: splitCsv(args.triggerPositivePrompts || args.trigger_positive_prompts),
+            triggerNegativePrompts: splitCsv(args.triggerNegativePrompts || args.trigger_negative_prompts),
           });
           const after = scoreSkillMetadata(updated);
           return {
@@ -822,7 +939,7 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         });
         const flagged = all
           .map((s: any) => ({ skill: s, audit: scoreSkillMetadata(s) }))
-          .filter(({ audit }: { skill: any; audit: SkillMetadataAudit }) => audit.score < threshold || audit.issues.length > 0)
+          .filter(({ audit }: { skill: any; audit: SkillMetadataAudit }) => !audit.compatibilityEntry && (audit.score < threshold || audit.issues.length > 0))
           .sort((a: { skill: any; audit: SkillMetadataAudit }, b: { skill: any; audit: SkillMetadataAudit }) => a.audit.score - b.audit.score);
         const template = flagged.map(({ skill, audit }: { skill: any; audit: SkillMetadataAudit }) => ({
           id: audit.id,

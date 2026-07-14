@@ -65,7 +65,7 @@ interface MCPSession {
   initialized: boolean;
 }
 
-async function readJsonRpcResponse(resp: Response, timeoutMs: number): Promise<any> {
+export async function readJsonRpcResponse(resp: Response, timeoutMs: number): Promise<any> {
   const contentType = resp.headers.get('content-type') || '';
   if (!contentType.includes('text/event-stream')) {
     return resp.json();
@@ -84,24 +84,32 @@ async function readJsonRpcResponse(resp: Response, timeoutMs: number): Promise<a
   try {
     while (Date.now() - started < timeoutMs) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) { buffer += decoder.decode(); break; }
       buffer += decoder.decode(value, { stream: true });
 
-      const eventEnd = buffer.indexOf('\n\n');
-      const eventText = eventEnd >= 0 ? buffer.slice(0, eventEnd) : buffer;
-      const dataLines = eventText
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice('data:'.length).trim())
-        .filter(Boolean);
-
-      if (dataLines.length > 0) {
+      // A ReadableStream chunk is not an SSE event boundary. Only parse fully
+      // framed events; providers commonly split large tools/list payloads in
+      // the middle of JSON strings.
+      while (true) {
+        const boundary = buffer.match(/\r?\n\r?\n/);
+        if (!boundary || boundary.index == null) break;
+        const eventText = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        const dataLines = eventText
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice('data:'.length).replace(/^ /, ''));
+        if (!dataLines.length) continue;
         const data = dataLines.join('\n');
-        if (data === '[DONE]') return {};
-        return JSON.parse(data);
+        if (data.trim() === '[DONE]') return {};
+        try { return JSON.parse(data); }
+        catch (error: any) { throw new Error(`Invalid complete MCP SSE JSON event (${Buffer.byteLength(data, 'utf8')} bytes): ${error?.message || error}`); }
       }
     }
+    // Tolerate a final standards-compatible event whose stream closed without
+    // a trailing blank line, but never parse a still-open partial chunk.
+    const finalLines = buffer.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice('data:'.length).replace(/^ /, ''));
+    if (finalLines.length) return JSON.parse(finalLines.join('\n'));
     throw new Error(`SSE response timeout after ${timeoutMs}ms`);
   } finally {
     clearTimeout(timer);

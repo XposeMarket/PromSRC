@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1280,height=720" />
+  <title>Prometheus Creative Benchmark</title>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 1280px; height: 720px; overflow: hidden; background: #17120d; font-family: Arial, sans-serif; }
+    #root { position: relative; width: 1280px; height: 720px; overflow: hidden; background: radial-gradient(circle at 78% 28%, #6b2c0b 0%, #26180e 24%, #17120d 60%); color: #f5ead8; }
+    .frame { position: absolute; inset: 34px; border: 1px solid #9c5724; opacity: .7; }
+    .eyebrow { position: absolute; top: 104px; left: 108px; color: #e58a38; font-size: 18px; letter-spacing: 7px; font-weight: bold; }
+    h1 { position: absolute; top: 145px; left: 100px; margin: 0; font-size: 112px; line-height: .9; letter-spacing: -4px; }
+    .tagline { position: absolute; top: 390px; left: 108px; font-size: 31px; color: #d8c6ad; }
+    .ember { position: absolute; right: 128px; top: 170px; width: 260px; height: 260px; border-radius: 50%; background: #e8792c; box-shadow: 0 0 0 34px #7f3514, 0 0 90px #d65a17; }
+    .rule { position: absolute; left: 108px; top: 465px; width: 460px; height: 4px; background: #e8792c; transform-origin: left; }
+  </style>
+</head>
+<body>
+  <main id="root" data-composition-id="prometheus-benchmark" data-start="0" data-width="1280" data-height="720" data-duration="5">
+    <div class="frame"></div><div class="ember"></div>
+    <div class="eyebrow">LOCAL AI COMMAND CENTER</div>
+    <h1>PROMETHEUS</h1>
+    <p class="tagline">Moves after the answer.</p>
+    <div class="rule"></div>
+  </main>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    tl.from('.eyebrow', { opacity: 0, y: 18, duration: .5 }, 0)
+      .from('h1', { opacity: 0, x: -50, duration: .7 }, .2)
+      .from('.tagline', { opacity: 0, y: 18, duration: .5 }, .7)
+      .from('.ember', { opacity: 0, scale: .4, duration: .8 }, .15)
+      .from('.rule', { scaleX: 0, duration: .7 }, .9);
+    window.__timelines = window.__timelines || {};
+    window.__timelines["prometheus-benchmark"] = tl;
+  </script>
+</body>
+</html>

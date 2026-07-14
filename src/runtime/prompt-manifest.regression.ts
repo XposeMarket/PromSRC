@@ -159,10 +159,9 @@ function testWorkerAndProviderGolden(): void {
       role: 'system',
       content: [
         'EXECUTION MODE: Team subagent task.',
-        'You are a subagent operating under Prometheus — not the main Prometheus chat.',
-        '[SUBAGENT_SOUL]\nworker soul',
-        '[USER]\nprofile',
-        '[MEMORY]\nagent memory',
+        'You are researcher, a distinct member of Research Team operating inside Prometheus. You are not Prom or the main chat.',
+        '[PROMETHEUS_RUNTIME_CONTRACT]\nshared capability and execution contract',
+        '[AGENT_MEMORY - PRIVATE TO THIS AGENT]\nagent memory',
         '[TOOLS]\ncore tools',
         '[TEAM DISPATCH — Research Team | agent: researcher]',
       ].join('\n\n'),
@@ -184,10 +183,9 @@ function testWorkerAndProviderGolden(): void {
     'caller.context',
     'caller.team_subagent',
     'core.identity.worker',
-    'memory.workspace',
+    'memory.agent',
     'mode.team_subagent',
-    'persona.subagent_soul',
-    'persona.user',
+    'runtime.prometheus_contract',
     'tools.menu.categories',
   ]);
 }

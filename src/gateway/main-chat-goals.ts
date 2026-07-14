@@ -1,8 +1,10 @@
 import { randomUUID } from 'crypto';
 import { getConfig } from '../config/config';
 import { getOllamaClient } from '../agents/ollama-client';
+import { getLatestPendingDevSourceEditContinuation } from './dev-source-approvals';
 import {
   archiveMainChatGoal,
+  flushSession,
   getMainChatGoal,
   getRecentToolObservationsForContext,
   getSession,
@@ -21,9 +23,14 @@ export interface MainChatGoalPolicy {
   summaryEveryTurns: number;
   summaryMaxWords: number;
   judgeModel: string;
+  judgeReasoning: string;
   compactionModel: string;
+  compactionReasoning: string;
   maxConsecutiveJudgeFailures: number;
   maxConsecutiveRuntimeFailures: number;
+  maxIterations: number;
+  maxNoProgressTurns: number;
+  completionVerificationEnabled: boolean;
   permissions: {
     approvalMode: 'normal' | 'never';
     hardDenyEnabled: boolean;
@@ -129,15 +136,22 @@ export function resolveMainChatGoalPolicy(): MainChatGoalPolicy {
   const summaryMaxWordsRaw = Number(cfg.summaryMaxWords);
   const maxJudgeRaw = Number(cfg.maxConsecutiveJudgeFailures);
   const maxRuntimeRaw = Number(cfg.maxConsecutiveRuntimeFailures);
+  const maxIterationsRaw = Number(cfg.maxIterations);
+  const maxNoProgressRaw = Number(cfg.maxNoProgressTurns);
   return {
     enabled: cfg.enabled !== false,
     autoResumeOnRestart: cfg.autoResumeOnRestart !== false,
     summaryEveryTurns: Number.isFinite(summaryEveryTurnsRaw) ? Math.max(1, Math.min(50, Math.floor(summaryEveryTurnsRaw))) : 5,
     summaryMaxWords: Number.isFinite(summaryMaxWordsRaw) ? Math.max(120, Math.min(1200, Math.floor(summaryMaxWordsRaw))) : 450,
     judgeModel: String(cfg.judgeModel || '').trim(),
+    judgeReasoning: String(cfg.judgeReasoning || '').trim(),
     compactionModel: String(cfg.compactionModel || '').trim(),
+    compactionReasoning: String(cfg.compactionReasoning || '').trim(),
     maxConsecutiveJudgeFailures: Number.isFinite(maxJudgeRaw) ? Math.max(1, Math.min(20, Math.floor(maxJudgeRaw))) : 3,
     maxConsecutiveRuntimeFailures: Number.isFinite(maxRuntimeRaw) ? Math.max(1, Math.min(20, Math.floor(maxRuntimeRaw))) : 3,
+    maxIterations: Number.isFinite(maxIterationsRaw) ? Math.max(1, Math.min(500, Math.floor(maxIterationsRaw))) : 100,
+    maxNoProgressTurns: Number.isFinite(maxNoProgressRaw) ? Math.max(1, Math.min(50, Math.floor(maxNoProgressRaw))) : 8,
+    completionVerificationEnabled: cfg.completionVerificationEnabled !== false,
     permissions: {
       approvalMode: cfg?.permissions?.approvalMode === 'normal' ? 'normal' : 'never',
       hardDenyEnabled: cfg?.permissions?.hardDenyEnabled !== false,
@@ -164,9 +178,26 @@ function nowGoal(sessionId: string, goal: string): MainChatGoalState {
     createdAt: now,
     updatedAt: now,
     turnPlans: [],
+    currentIteration: 1,
+    iterations: [{
+      iterationNumber: 1,
+      turnNumber: 1,
+      status: 'running',
+      startedAt: now,
+      updatedAt: now,
+      restartCount: 0,
+    }],
+    consecutiveNoProgressTurns: 0,
     consecutiveJudgeFailures: 0,
     consecutiveRuntimeFailures: 0,
   };
+}
+
+function resolveLiveMainChatModelRef(): string {
+  const cfg = getConfig().getConfig() as any;
+  const provider = String(cfg?.llm?.provider || '').trim();
+  const model = String(cfg?.llm?.providers?.[provider]?.model || cfg?.models?.primary || '').trim();
+  return provider && model ? `${provider}/${model}` : model;
 }
 
 function cloneGoal(goal: MainChatGoalState): MainChatGoalState {
@@ -274,7 +305,7 @@ export function handleMainChatGoalCommand(sessionId: string, message: string): M
       if (!goal) return null;
       const now = Date.now();
       const status = String(goal.status || '').toLowerCase();
-      if (!['paused', 'blocked', 'failed'].includes(status) && !goalPauseStartedAt(goal) && String(goal.lastVerdict || '') !== 'failed') {
+      if (!['restarting', 'paused', 'blocked', 'failed'].includes(status) && !goalPauseStartedAt(goal) && String(goal.lastVerdict || '') !== 'failed') {
         return goal;
       }
       return {
@@ -284,6 +315,11 @@ export function handleMainChatGoalCommand(sessionId: string, message: string): M
         blockedReason: undefined,
         failureReason: undefined,
         consecutiveRuntimeFailures: 0,
+        restartCheckpoint: goal.restartCheckpoint ? {
+          ...goal.restartCheckpoint,
+          phase: 'resuming',
+          recoveredAt: goal.restartCheckpoint.recoveredAt || now,
+        } : undefined,
         updatedAt: now,
       };
     });
@@ -311,12 +347,42 @@ export function handleMainChatGoalCommand(sessionId: string, message: string): M
     const next = updateMainChatGoal(sessionId, (goal) => {
       if (!goal) return null;
       const now = Date.now();
+      const plans = Array.isArray(goal.turnPlans) ? goal.turnPlans.map((plan) => ({ ...plan, steps: [...(plan.steps || [])] })) : undefined;
+      if (plans?.length) {
+        let planIndex = plans.map((plan) => isOpenGoalTurnPlan(plan)).lastIndexOf(true);
+        if (planIndex < 0) planIndex = plans.length - 1;
+        plans[planIndex] = {
+          ...plans[planIndex],
+          status: 'complete',
+          activeIndex: -1,
+          updatedAt: now,
+          completedAt: plans[planIndex].completedAt || now,
+          judgeReason: note || 'Marked done by user.',
+          judgeDirective: undefined,
+          steps: plans[planIndex].steps.map((step) => (
+            step.status === 'done' || step.status === 'skipped'
+              ? step
+              : {
+                  ...step,
+                  status: 'skipped' as const,
+                  note: step.note || `Superseded by owner closeout: ${oneLine(note || 'Marked done by user.', 420)}`,
+                  updatedAt: now,
+                }
+          )),
+        };
+      }
       return {
         ...goal,
         ...finalizePause(goal, now),
         status: 'done',
         lastVerdict: 'done',
         lastReason: note || 'Marked done by user.',
+        nextStepDirective: undefined,
+        blockedReason: undefined,
+        pausedReason: undefined,
+        failureReason: undefined,
+        turnPlans: plans,
+        restartCheckpoint: goal.restartCheckpoint ? { ...goal.restartCheckpoint, phase: 'complete', completedAt: now } : undefined,
         completedAt: now,
         updatedAt: now,
       };
@@ -354,9 +420,11 @@ export function recordMainChatGoalTurnPlanProgress(
     activeIndex?: number;
     items?: Array<{ id?: string; text?: string; status?: string; note?: string }>;
   },
+  expectedGoalId?: string,
 ): MainChatGoalState | null {
   return updateMainChatGoal(sessionId, (goal) => {
     if (!goal || goal.status !== 'active') return goal;
+    if (expectedGoalId && goal.id !== expectedGoalId) return goal;
     const rawItems = Array.isArray(progress.items) ? progress.items : [];
     const now = Date.now();
     const resumablePlan = findResumableGoalTurnPlan(goal);
@@ -489,6 +557,18 @@ function formatGoalTurnPlans(goal: MainChatGoalState): string {
   }).join('\n');
 }
 
+function formatGoalIterations(goal: MainChatGoalState): string {
+  const rows = Array.isArray(goal.iterations) ? goal.iterations.slice(-12) : [];
+  if (!rows.length) return '(none)';
+  return rows.map((item) => [
+    `Iteration ${item.iterationNumber} / turn ${item.turnNumber}: status=${item.status}, restarts=${item.restartCount}, verdict=${item.verdict || '(pending)'}, grade=${item.qualityGrade || '(pending)'}`,
+    item.reason ? `  reason: ${oneLine(item.reason, 320)}` : '',
+    item.evidence?.length ? `  evidence: ${item.evidence.map((entry) => oneLine(entry, 180)).join(' | ')}` : '',
+    item.unresolvedIssues?.length ? `  unresolved: ${item.unresolvedIssues.map((entry) => oneLine(entry, 180)).join(' | ')}` : '',
+    item.verificationGaps?.length ? `  verification gaps: ${item.verificationGaps.map((entry) => oneLine(entry, 180)).join(' | ')}` : '',
+  ].filter(Boolean).join('\n')).join('\n');
+}
+
 function isOpenGoalTurnPlan(plan: MainChatGoalTurnPlan | null | undefined): boolean {
   const status = String(plan?.status || '').trim().toLowerCase();
   return !!plan && !['complete', 'blocked'].includes(status);
@@ -509,6 +589,11 @@ function findResumableGoalTurnPlan(goal: MainChatGoalState): MainChatGoalTurnPla
   if (!shouldResumeExistingTurnPlan(goal)) return null;
   const plans = Array.isArray(goal.turnPlans) ? [...goal.turnPlans] : [];
   if (!plans.length) return null;
+  const checkpointPlanId = String(goal.restartCheckpoint?.planId || '').trim();
+  if (checkpointPlanId) {
+    const checkpointPlan = plans.find((plan) => plan.id === checkpointPlanId && isOpenGoalTurnPlan(plan));
+    if (checkpointPlan) return checkpointPlan;
+  }
   const nextTurn = Number(goal.turnsUsed || 0) + 1;
   const exact = [...plans].reverse().find((plan) => Number(plan.turnNumber) === nextTurn && isOpenGoalTurnPlan(plan));
   if (exact) return exact;
@@ -588,6 +673,8 @@ export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: s
     'If the result is functional but rough, missing expected polish, missing planned features, has inverted/broken controls, has console errors, or has unverified core paths, choose continue. "Done but not good enough" means continue.',
     'Use blocked only when work cannot continue without user input, credentials, approval, an unavailable external system, or a hard policy/tool constraint.',
     'Use continue for partial progress, insufficient verification, weak quality, unresolved defects, missing acceptance criteria, or unclear evidence.',
+    'A restart acknowledgement is never completion evidence by itself. If a restart checkpoint exists, require evidence from the recovered post-restart turn that the new gateway is healthy and the changed behavior was actually retested before choosing done.',
+    'Use the durable iteration ledger to compare the latest result with earlier baselines. Repeated claims without new measurements, artifacts, or verified behavior are not material progress.',
     'The directive field is the instruction that will be given to the next worker turn. Make it concrete, imperative, and focused on the next missing work. Do not ask the user unless status is blocked.',
     'quality_grade is A, B, C, D, or F. Only A/B with no unresolved issues, no missing acceptance criteria, and no verification gaps may be done.',
     'If the goal is complete and verified, return status="done", quality_grade="B" or "A", and empty arrays for unresolved_issues, missing_acceptance_criteria, and verification_gaps. Do not carry forward stale gaps from earlier turns after the latest turn fixed or verified them.',
@@ -608,6 +695,12 @@ export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: s
     '',
     '[GOAL_TURN_PLANS]',
     formatGoalTurnPlans(goal).slice(0, 5000),
+    '',
+    '[DURABLE_ITERATION_LEDGER]',
+    formatGoalIterations(goal).slice(0, 5000),
+    '',
+    '[RESTART_CHECKPOINT]',
+    goal.restartCheckpoint ? JSON.stringify(goal.restartCheckpoint).slice(0, 3500) : '(none)',
     '',
     '[RELEVANT_CHAT_CONTEXT]',
     sessionContext,
@@ -633,7 +726,8 @@ export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: s
         temperature: 0,
         num_ctx: 16384,
         num_predict: 700,
-        ...(policy.judgeModel ? { model: policy.judgeModel } : {}),
+        ...(policy.judgeModel || resolveLiveMainChatModelRef() ? { model: policy.judgeModel || resolveLiveMainChatModelRef() } : {}),
+        ...(policy.judgeReasoning ? { think: policy.judgeReasoning as any } : {}),
         usageContext: { sessionId: goal.sessionId, agentId: 'main_chat_goal_judge' },
       },
     );
@@ -696,7 +790,7 @@ export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: s
       reason,
       directive: 'The judge errored. Continue with the next concrete step toward the goal and gather clear evidence for the next evaluation.',
       confidence: 0,
-      parseFailed: false,
+      parseFailed: true,
     };
   }
 }
@@ -716,7 +810,7 @@ function buildFallbackGoalSummary(goal: MainChatGoalState, messages: ChatMessage
     `Goal: ${goal.goal}`,
     goal.progressSummary ? `Previous progress: ${oneLine(goal.progressSummary, 900)}` : '',
     latestAssistant ? `Latest work: ${oneLine(latestAssistant.content, 700)}` : '',
-    goal.lastReason ? `Still incomplete because: ${goal.lastReason}` : 'Still incomplete because: the goal judge has not marked it done.',
+    goal.lastReason ? `Still incomplete because: ${goal.lastReason}` : 'Still incomplete because: Prometheus has not submitted an accepted evidence-backed completion.',
     goal.nextStepDirective ? `Next best step: ${oneLine(goal.nextStepDirective, 700)}` : 'Next best step: continue from the latest work without restarting completed steps.',
   ].filter(Boolean).join('\n');
 }
@@ -753,10 +847,10 @@ export async function maybeSummarizeMainChatGoal(sessionId: string): Promise<Mai
     '[PREVIOUS_GOAL_PROGRESS_SUMMARY]',
     current.progressSummary || '(none)',
     '',
-    '[LAST_JUDGE_REASON]',
+    '[LAST_LIFECYCLE_OR_VERIFIER_REASON]',
     current.lastReason || '(none)',
     '',
-    '[LAST_JUDGE_DIRECTIVE]',
+    '[LAST_COMPLETION_VERIFIER_DIRECTIVE]',
     current.nextStepDirective || '(none)',
     '',
     '[DENIED_ACTIONS]',
@@ -781,7 +875,8 @@ export async function maybeSummarizeMainChatGoal(sessionId: string): Promise<Mai
         temperature: 0.1,
         num_ctx: 8192,
         num_predict: Math.max(500, Math.min(1600, policy.summaryMaxWords * 3)),
-        ...(policy.compactionModel ? { model: policy.compactionModel } : {}),
+        ...(policy.compactionModel || resolveLiveMainChatModelRef() ? { model: policy.compactionModel || resolveLiveMainChatModelRef() } : {}),
+        ...(policy.compactionReasoning ? { think: policy.compactionReasoning as any } : {}),
         usageContext: { sessionId, agentId: 'main_chat_goal_compactor' },
       },
     );
@@ -808,6 +903,7 @@ export function buildMainChatGoalContinuationPrompt(goal: MainChatGoalState): st
   const nextTurn = Number(goal.turnsUsed || 0) + 1;
   const resumablePlan = findResumableGoalTurnPlan(goal);
   const resumableSteps = Array.isArray(resumablePlan?.steps) ? resumablePlan.steps : [];
+  const hasDeclaredGoalPlan = Array.isArray(goal.turnPlans) && goal.turnPlans.some((plan) => Array.isArray(plan.steps) && plan.steps.length >= 2);
   const planInstruction = resumablePlan
     ? [
         `This is autonomous goal turn ${Number(resumablePlan.turnNumber) || nextTurn}, resuming an interrupted unfinished turn plan.`,
@@ -816,23 +912,54 @@ export function buildMainChatGoalContinuationPrompt(goal: MainChatGoalState): st
         'Stored active turn plan:',
         ...resumableSteps.map((step, index) => `${index + 1}. [${step.status || 'pending'}] ${oneLine(step.text, 220)}${step.note ? ` | evidence: ${oneLine(step.note, 260)}` : ''}`),
       ].join('\n')
-    : `This is autonomous goal turn ${nextTurn}. Start by calling declare_plan with 2-6 concrete steps for this turn, then execute the plan. Keep each step in_progress until it is truly done and call complete_plan_step with concrete evidence after each completed step. Do not reuse a previous judged turn plan; make a fresh plan for this turn based on current remaining work.`;
+    : !hasDeclaredGoalPlan
+      ? [
+          `This is autonomous goal turn ${nextTurn}, and the Goal does not have a declared plan yet.`,
+          'Before doing substantive work, call declare_plan with 2-6 concrete steps that cover the current path to completion, then execute them in order. Keep each step in_progress until it is truly done and call complete_plan_step with concrete evidence after each completed step.',
+          'This first declared plan becomes the durable Goal plan shown in the progress UI and must survive continuation and restart boundaries.',
+        ].join('\n')
+      : `This is autonomous goal continuation ${nextTurn}. Continue directly from the thread and evidence already gathered. Call declare_plan only when a new tracked multi-step plan would materially help; it is not required at every continuation boundary.`;
+  const restart = goal.restartCheckpoint && goal.restartCheckpoint.phase !== 'complete'
+    ? [
+        '',
+        'Restart recovery checkpoint:',
+        `- checkpoint_id: ${goal.restartCheckpoint.id}`,
+        `- reason: ${goal.restartCheckpoint.reason}`,
+        `- phase: ${goal.restartCheckpoint.phase}`,
+        `- dev_edit_id: ${goal.restartCheckpoint.devEditId || '(none)'}`,
+        `- affected_files: ${(goal.restartCheckpoint.affectedFiles || []).join(', ') || '(none recorded)'}`,
+        `- changed_surfaces: ${(goal.restartCheckpoint.changedSurfaces || []).join(', ') || '(none recorded)'}`,
+        `- pre_restart_verification: ${goal.restartCheckpoint.verificationSummary || '(none recorded)'}`,
+        'This was an intentional restart boundary inside the same goal. Do not stop after acknowledging it. Confirm the new gateway is healthy, perform the post-restart verification or benchmark required by the goal, continue the stored unfinished plan, and include concrete evidence in the eventual completion attempt.',
+      ].join('\n')
+    : '';
   return [
     CONTINUATION_HEADER,
+    '',
+    'ACTIVE GOAL EXECUTION CONTRACT:',
+    'You are operating inside an active Goal. Own the objective end to end.',
+    'Do not ask the user for confirmation, permission, preferences, or next steps when the existing request and available context are enough to proceed. Make reasonable in-scope assumptions, use the available tools, revise your approach when necessary, and finish every requested part with concrete verification.',
+    'Do not stop at partial progress, a plan, an edit, a build, a successful command, or a restart acknowledgement. Continue until the complete requested outcome is implemented and verified.',
+    'Do not claim the Goal is finished in prose alone. When you decide the objective is complete, call complete_goal with a completion note and the concrete steps you took.',
+    'The declared plan is progress tracking, not a completion authority. If the objective is complete, call complete_goal even when plan items are stale, overly broad, or still marked open; owner completion supersedes that bookkeeping.',
+    'A finished, verified, ready-to-use deliverable may be completed with clearly documented user activation or physical handoff steps when Prometheus cannot perform those steps itself. Do not use block_goal for that handoff unless the user explicitly made live activation or physical-device verification a required acceptance criterion.',
+    'Use block_goal only after exhausting safe in-scope alternatives and only when missing user authority, credentials, an essential user choice, an unavailable external system, or a hard policy boundary makes further progress impossible. Include what you tried and the exact missing requirement.',
+    'A Goal does not expand your permissions. Never bypass approval, credential, safety, or scope boundaries.',
     '',
     'Goal:',
     goal.goal,
     '',
     planInstruction,
+    restart,
     '',
     'Tool routing:',
     'This autonomous goal turn uses the normal main-chat tool route. Core tools such as request_tool_category, skill_list, skill_read, and declare_plan are available; complete_plan_step is injected after declare_plan or when a stored manual plan is resumed. If the current step needs tools that are not currently visible, call request_tool_category with the right category before describing tool use. For workspace files/directories/builds/games, use request_tool_category({"category":"workspace_write","scope":"turn"}) when workspace_read/workspace_edit/workspace_run tools are needed. Do not narrate or claim a tool call unless you actually call the tool.',
     '',
-    'Judge message:',
-    goal.nextStepDirective || '(No judge message yet. Infer the next concrete step from the goal and chat context.)',
+    'Goal continuation note:',
+    goal.nextStepDirective || '(Continue the most useful concrete work toward the goal.)',
     '',
-    'Last judge reason:',
-    goal.lastReason || '(No judge reason yet.)',
+    'Last lifecycle reason:',
+    goal.lastReason || '(No prior lifecycle reason.)',
     '',
     'Progress so far:',
     goal.progressSummary || '(No compacted progress summary yet.)',
@@ -851,6 +978,44 @@ export function applyMainChatGoalJudgeResult(
     const resumablePlan = findResumableGoalTurnPlan(goal);
     const turnNumber = Number(resumablePlan?.turnNumber || 0) || goal.turnsUsed + 1;
     const nextTurnsUsed = Math.max(goal.turnsUsed, turnNumber);
+    const iterationNumber = Math.max(1, Number(goal.currentIteration || 0) || (goal.iterations?.length || 0) || 1);
+    const judgeFingerprint = [
+      judge.qualityGrade,
+      ...(judge.unresolvedIssues || []),
+      ...(judge.missingAcceptanceCriteria || []),
+      ...(judge.verificationGaps || []),
+      judge.reason,
+    ].join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
+    const previousJudged = [...(goal.iterations || [])].reverse().find((item) => item.status === 'judged' || item.status === 'done' || item.status === 'blocked');
+    const previousFingerprint = previousJudged
+      ? [previousJudged.qualityGrade, ...(previousJudged.unresolvedIssues || []), ...(previousJudged.verificationGaps || []), previousJudged.reason]
+          .join(' ').replace(/\s+/g, ' ').trim().toLowerCase()
+      : '';
+    const noProgress = judge.status === 'continue' && !!previousFingerprint && previousFingerprint === judgeFingerprint;
+    const consecutiveNoProgressTurns = noProgress ? Number(goal.consecutiveNoProgressTurns || 0) + 1 : 0;
+    const stampIteration = (status: 'judged' | 'blocked' | 'done' | 'failed') => {
+      const rows = [...(goal.iterations || [])];
+      let index = rows.findIndex((item) => item.iterationNumber === iterationNumber);
+      if (index < 0) {
+        rows.push({ iterationNumber, turnNumber, status: 'running', startedAt: now, updatedAt: now, restartCount: 0 });
+        index = rows.length - 1;
+      }
+      rows[index] = {
+        ...rows[index],
+        turnNumber,
+        status,
+        updatedAt: now,
+        completedAt: now,
+        qualityGrade: judge.qualityGrade || undefined,
+        verdict: status === 'judged' ? 'continue' : status === 'done' ? 'done' : status === 'blocked' ? 'blocked' : 'failed',
+        reason: judge.reason,
+        directive: judge.directive || undefined,
+        evidence: judge.evidence || [],
+        unresolvedIssues: judge.unresolvedIssues || [],
+        verificationGaps: judge.verificationGaps || [],
+      };
+      return rows.slice(-100);
+    };
     const stampLatestPlan = (status: MainChatGoalTurnPlan['status']): MainChatGoalTurnPlan[] | undefined => {
       const plans = Array.isArray(goal.turnPlans) ? [...goal.turnPlans] : [];
       const index = plans.findIndex((plan) => Number(plan.turnNumber) === turnNumber);
@@ -891,6 +1056,9 @@ export function applyMainChatGoalJudgeResult(
         turnPlans: stampLatestPlan('complete'),
         consecutiveJudgeFailures,
         consecutiveRuntimeFailures: 0,
+        consecutiveNoProgressTurns: 0,
+        iterations: stampIteration('done'),
+        restartCheckpoint: goal.restartCheckpoint ? { ...goal.restartCheckpoint, phase: 'complete', completedAt: now } : undefined,
         updatedAt: now,
       };
     }
@@ -910,6 +1078,38 @@ export function applyMainChatGoalJudgeResult(
         turnPlans: stampLatestPlan('blocked'),
         consecutiveJudgeFailures,
         consecutiveRuntimeFailures: 0,
+        consecutiveNoProgressTurns,
+        iterations: stampIteration('blocked'),
+        restartCheckpoint: goal.restartCheckpoint ? { ...goal.restartCheckpoint, phase: 'complete', completedAt: now } : undefined,
+        updatedAt: now,
+      };
+    }
+    const policy = resolveMainChatGoalPolicy();
+    const iterationLimitReached = iterationNumber >= policy.maxIterations;
+    const plateauReached = consecutiveNoProgressTurns >= policy.maxNoProgressTurns;
+    const judgeFailureLimitReached = consecutiveJudgeFailures >= policy.maxConsecutiveJudgeFailures;
+    if (iterationLimitReached || plateauReached || judgeFailureLimitReached) {
+      const reason = judgeFailureLimitReached
+        ? `Goal judge failed to return usable output ${consecutiveJudgeFailures} consecutive times.`
+        : plateauReached
+          ? `No material progress was detected across ${consecutiveNoProgressTurns} consecutive judged turns.`
+          : `The goal reached its configured ${policy.maxIterations}-iteration safety budget.`;
+      return {
+        ...finalizePause(goal, now),
+        ...judgeDiagnostics,
+        status: 'blocked',
+        turnsUsed: nextTurnsUsed,
+        lastTurnAt: now,
+        lastVerdict: 'blocked',
+        lastReason: reason,
+        blockedReason: reason,
+        nextStepDirective: judge.directive || goal.nextStepDirective,
+        turnPlans: stampLatestPlan('blocked'),
+        consecutiveJudgeFailures,
+        consecutiveRuntimeFailures: 0,
+        consecutiveNoProgressTurns,
+        iterations: stampIteration('blocked'),
+        restartCheckpoint: goal.restartCheckpoint ? { ...goal.restartCheckpoint, phase: 'complete', completedAt: now } : undefined,
         updatedAt: now,
       };
     }
@@ -925,9 +1125,201 @@ export function applyMainChatGoalJudgeResult(
       turnPlans: stampLatestPlan('incomplete'),
       consecutiveJudgeFailures,
       consecutiveRuntimeFailures: 0,
+      consecutiveNoProgressTurns,
+      iterations: stampIteration('judged'),
+      currentIteration: iterationNumber + 1,
+      restartCheckpoint: goal.restartCheckpoint ? { ...goal.restartCheckpoint, phase: 'complete', completedAt: now } : undefined,
       updatedAt: now,
     };
   });
+}
+
+export interface MainChatGoalCompletionAttempt {
+  note: string;
+  stepsTaken: string[];
+}
+
+export async function completeMainChatGoalFromOwner(
+  sessionId: string,
+  expectedGoalId: string,
+  attempt: MainChatGoalCompletionAttempt,
+): Promise<{ accepted: boolean; goal: MainChatGoalState | null; verification: MainChatGoalJudgeResult }> {
+  const current = snapshotMainChatGoal(sessionId);
+  if (!current || current.id !== expectedGoalId || current.status !== 'active') {
+    const verification: MainChatGoalJudgeResult = {
+      status: 'continue',
+      reason: 'The active Goal changed before this completion attempt could be verified.',
+      directive: 'Refresh the active Goal state and continue only if it is still active.',
+      confidence: 0,
+      parseFailed: false,
+    };
+    return { accepted: false, goal: current, verification };
+  }
+  // Prometheus owns the Goal and explicitly called complete_goal after the
+  // handler's deterministic evidence checks. Do not send that decision to a
+  // second LLM or the legacy Goal Judge; persist the owner's closeout directly.
+  const verification: MainChatGoalJudgeResult = {
+    status: 'done',
+    reason: attempt.note,
+    directive: '',
+    confidence: 1,
+    parseFailed: false,
+    qualityGrade: 'owner_completed',
+    evidence: attempt.stepsTaken.map((item) => `Step taken: ${item}`),
+    unresolvedIssues: [],
+    missingAcceptanceCriteria: [],
+    verificationGaps: [],
+  };
+  const appliedGoal = applyMainChatGoalJudgeResult(sessionId, expectedGoalId, verification);
+  const goal = appliedGoal?.status === 'done'
+    ? updateMainChatGoal(sessionId, (latest) => {
+        if (!latest || latest.id !== expectedGoalId || latest.status !== 'done') return latest;
+        const plans = Array.isArray(latest.turnPlans) ? latest.turnPlans.map((plan) => ({ ...plan, steps: [...(plan.steps || [])] })) : [];
+        const planIndex = plans.map((plan) => Number(plan.turnNumber) === Number(latest.turnsUsed) && plan.status === 'complete').lastIndexOf(true);
+        if (planIndex < 0) return latest;
+        const now = Date.now();
+        plans[planIndex] = {
+          ...plans[planIndex],
+          status: 'complete',
+          activeIndex: -1,
+          updatedAt: now,
+          completedAt: plans[planIndex].completedAt || now,
+          steps: plans[planIndex].steps.map((step) => (
+            step.status === 'done' || step.status === 'skipped'
+              ? step
+              : {
+                  ...step,
+                  status: 'skipped' as const,
+                  note: step.note || `Superseded by Prometheus owner completion: ${oneLine(attempt.note, 420)}`,
+                  updatedAt: now,
+                }
+          )),
+        };
+        return { ...latest, turnPlans: plans.slice(-50), updatedAt: now };
+      })
+    : appliedGoal;
+  return { accepted: goal?.status === 'done', goal, verification };
+}
+
+export function blockMainChatGoalFromOwner(
+  sessionId: string,
+  expectedGoalId: string,
+  input: { reason: string; missingRequirement: string; attemptedAlternatives: string[] },
+): MainChatGoalState | null {
+  return updateMainChatGoal(sessionId, (goal) => {
+    if (!goal || goal.id !== expectedGoalId || goal.status !== 'active') return goal;
+    const now = Date.now();
+    const reason = oneLine(input.reason, 900) || 'Prometheus reported a genuine blocker.';
+    const missing = oneLine(input.missingRequirement, 700);
+    const attempted = input.attemptedAlternatives.map((item) => oneLine(item, 500)).filter(Boolean).slice(0, 12);
+    const fullReason = [reason, missing ? `Missing requirement: ${missing}` : '', attempted.length ? `Safe alternatives exhausted: ${attempted.join(' | ')}` : ''].filter(Boolean).join(' ');
+    const plans = Array.isArray(goal.turnPlans) ? goal.turnPlans.map((plan) => ({ ...plan, steps: [...(plan.steps || [])] })) : undefined;
+    if (plans?.length) {
+      const checkpointPlanId = String(goal.restartCheckpoint?.planId || '').trim();
+      let planIndex = checkpointPlanId ? plans.findIndex((plan) => plan.id === checkpointPlanId) : -1;
+      if (planIndex < 0) planIndex = plans.map((plan) => isOpenGoalTurnPlan(plan)).lastIndexOf(true);
+      if (planIndex >= 0) {
+        plans[planIndex] = {
+          ...plans[planIndex],
+          status: 'blocked',
+          judgeReason: fullReason,
+          updatedAt: now,
+          completedAt: plans[planIndex].completedAt || now,
+        };
+      }
+    }
+    return {
+      ...finalizePause(goal, now),
+      status: 'blocked',
+      turnsUsed: Math.max(goal.turnsUsed, Number(goal.restartCheckpoint?.turnNumber || goal.turnsUsed + 1)),
+      lastTurnAt: now,
+      lastVerdict: 'blocked',
+      lastReason: fullReason,
+      blockedReason: fullReason,
+      nextStepDirective: missing || reason,
+      turnPlans: plans,
+      updatedAt: now,
+    };
+  });
+}
+
+export function recordMainChatGoalContinuationBoundary(
+  sessionId: string,
+  expectedGoalId: string,
+  input: {
+    successfulToolCalls: number;
+    meaningfulToolCalls: number;
+    failedToolCalls: number;
+    responseText?: string;
+  },
+): { goal: MainChatGoalState | null; shouldContinue: boolean; reason: string } {
+  const policy = resolveMainChatGoalPolicy();
+  let decisionReason = 'continue';
+  let shouldContinue = true;
+  const goal = updateMainChatGoal(sessionId, (current) => {
+    if (!current || current.id !== expectedGoalId || current.status !== 'active') {
+      shouldContinue = false;
+      decisionReason = current?.status || 'goal_changed';
+      return current;
+    }
+    const now = Date.now();
+    const turnNumber = Math.max(current.turnsUsed + 1, Number(current.restartCheckpoint?.turnNumber || 0));
+    const iterationNumber = Math.max(1, Number(current.currentIteration || turnNumber));
+    if (turnNumber >= policy.maxIterations) {
+      shouldContinue = false;
+      decisionReason = 'budget_limited';
+      const reason = `The Goal reached its configured ${policy.maxIterations}-continuation safety budget without an accepted completion attempt.`;
+      return {
+        ...finalizePause(current, now),
+        status: 'blocked',
+        turnsUsed: turnNumber,
+        lastTurnAt: now,
+        lastVerdict: 'blocked',
+        lastReason: reason,
+        blockedReason: reason,
+        updatedAt: now,
+      };
+    }
+    if (input.meaningfulToolCalls <= 0 || input.successfulToolCalls <= 0) {
+      shouldContinue = false;
+      decisionReason = 'no_measurable_progress';
+      return {
+        ...startPause(current, 'no_measurable_progress', now),
+        status: 'paused',
+        turnsUsed: turnNumber,
+        lastTurnAt: now,
+        lastVerdict: 'continue',
+        lastReason: 'Automatic continuation was suppressed because the previous Goal turn produced no successful measurable tool progress.',
+        nextStepDirective: 'Resume only with a concrete next action that uses tools or produces verifiable progress.',
+        updatedAt: now,
+      };
+    }
+    const rows = [...(current.iterations || [])];
+    rows.push({
+      iterationNumber,
+      turnNumber,
+      status: 'continued',
+      startedAt: Number(current.lastTurnAt || now),
+      updatedAt: now,
+      completedAt: now,
+      restartCount: 0,
+      verdict: 'continue',
+      reason: `${input.successfulToolCalls} successful tool call(s), ${input.meaningfulToolCalls} measurable, ${input.failedToolCalls} failed.`,
+      evidence: input.responseText ? [oneLine(input.responseText, 500)] : [],
+    });
+    return {
+      ...current,
+      turnsUsed: turnNumber,
+      currentIteration: iterationNumber + 1,
+      lastTurnAt: now,
+      lastVerdict: 'continue',
+      lastReason: `Continuation boundary passed with ${input.meaningfulToolCalls} measurable tool action(s).`,
+      iterations: rows.slice(-100),
+      consecutiveRuntimeFailures: 0,
+      updatedAt: now,
+    };
+  });
+  return { goal, shouldContinue: shouldContinue && goal?.status === 'active', reason: decisionReason };
 }
 
 export function recordMainChatGoalRuntimeFailure(sessionId: string, expectedGoalId: string, reason: string): MainChatGoalState | null {
@@ -985,14 +1377,111 @@ export function recordMainChatGoalInterruptedForRestart(
   return updateMainChatGoal(sessionId, (goal) => {
     if (!goal || goal.status !== 'active') return goal;
     const now = Date.now();
+    const resumablePlan = findResumableGoalTurnPlan(goal)
+      || [...(goal.turnPlans || [])].reverse().find((plan) => isOpenGoalTurnPlan(plan));
+    const pendingDevEdit = getLatestPendingDevSourceEditContinuation(sessionId);
+    const iterationNumber = Math.max(1, Number(goal.currentIteration || 0) || (goal.iterations?.length || 0) || 1);
+    const iterations = [...(goal.iterations || [])];
+    let iterationIndex = iterations.findIndex((item) => item.iterationNumber === iterationNumber);
+    if (iterationIndex < 0) {
+      iterations.push({
+        iterationNumber,
+        turnNumber: Number(resumablePlan?.turnNumber || goal.turnsUsed + 1),
+        status: 'running',
+        startedAt: Number(runtimeStartedAt || now) || now,
+        updatedAt: now,
+        restartCount: 0,
+      });
+      iterationIndex = iterations.length - 1;
+    }
+    iterations[iterationIndex] = {
+      ...iterations[iterationIndex],
+      status: 'restarting',
+      updatedAt: now,
+      restartCount: Number(iterations[iterationIndex].restartCount || 0) + 1,
+    };
     return {
       ...startPause(goal, reason, now),
-      status: 'paused',
+      status: 'restarting',
       turnsUsed: goal.turnsUsed,
       lastTurnAt: goal.lastTurnAt,
       lastVerdict: 'continue',
       lastReason: `Interrupted by ${reason}.`,
       failureReason: undefined,
+      restartCheckpoint: {
+        id: `goal_restart_${now}_${randomUUID().slice(0, 8)}`,
+        reason,
+        phase: 'interrupted',
+        turnNumber: Number(resumablePlan?.turnNumber || goal.turnsUsed + 1),
+        planId: resumablePlan?.id,
+        activeStepIndex: resumablePlan?.activeIndex,
+        runtimeStartedAt: Number(runtimeStartedAt || 0) || undefined,
+        devEditId: pendingDevEdit?.id,
+        affectedFiles: pendingDevEdit?.affectedFiles || pendingDevEdit?.allowedFiles,
+        changedSurfaces: pendingDevEdit?.changedSurfaces,
+        verificationSummary: pendingDevEdit?.lastVerification?.summary,
+        createdAt: now,
+      },
+      iterations: iterations.slice(-100),
+      currentIteration: iterationNumber,
+      updatedAt: now,
+    };
+  });
+}
+
+/**
+ * Persist restart ownership for every currently active goal, including the
+ * short idle gaps between autonomous turns when no live runtime exists yet.
+ * Active runtime recovery calls the single-session helper too; that second
+ * call is intentionally a no-op once the goal has entered `restarting`.
+ */
+export function recordActiveMainChatGoalsInterruptedForRestart(
+  reason = 'gateway_restart',
+): string[] {
+  const checkpointed: string[] = [];
+  for (const record of listMainChatGoalRecords()) {
+    if ((record as any)?.current === false || String(record?.status || '') !== 'active') continue;
+    const sessionId = String(record?.sessionId || '').trim();
+    if (!sessionId) continue;
+    const next = recordMainChatGoalInterruptedForRestart(sessionId, reason);
+    if (next?.status === 'restarting' && next.restartCheckpoint) {
+      // gracefulRestart flushed the initiating session before shutdown began.
+      // This transition happens during shutdown, so persist it synchronously
+      // rather than relying on the normal debounced session writer.
+      flushSession(sessionId);
+      checkpointed.push(sessionId);
+    }
+  }
+  return Array.from(new Set(checkpointed));
+}
+
+export function finalizeMainChatGoalRestartRecovery(
+  sessionId: string,
+  input: {
+    reason?: string;
+    devEditId?: string;
+    affectedFiles?: string[];
+    changedSurfaces?: string[];
+    verificationSummary?: string;
+  } = {},
+): MainChatGoalState | null {
+  return updateMainChatGoal(sessionId, (goal) => {
+    if (!goal || !goal.restartCheckpoint || !['restarting', 'paused'].includes(String(goal.status || ''))) return goal;
+    const now = Date.now();
+    return {
+      ...goal,
+      status: 'restarting',
+      pausedReason: input.reason || goal.pausedReason || goal.restartCheckpoint.reason,
+      restartCheckpoint: {
+        ...goal.restartCheckpoint,
+        phase: 'boot_finalized',
+        reason: input.reason || goal.restartCheckpoint.reason,
+        devEditId: input.devEditId || goal.restartCheckpoint.devEditId,
+        affectedFiles: input.affectedFiles?.length ? input.affectedFiles : goal.restartCheckpoint.affectedFiles,
+        changedSurfaces: input.changedSurfaces?.length ? input.changedSurfaces : goal.restartCheckpoint.changedSurfaces,
+        verificationSummary: input.verificationSummary || goal.restartCheckpoint.verificationSummary,
+        recoveredAt: now,
+      },
       updatedAt: now,
     };
   });
@@ -1125,7 +1614,8 @@ export async function judgeGoalApprovalRequest(
         temperature: 0,
         num_ctx: 8192,
         num_predict: 400,
-        ...(policy.judgeModel ? { model: policy.judgeModel } : {}),
+        ...(policy.judgeModel || resolveLiveMainChatModelRef() ? { model: policy.judgeModel || resolveLiveMainChatModelRef() } : {}),
+        ...(policy.judgeReasoning ? { think: policy.judgeReasoning as any } : {}),
         usageContext: { sessionId, agentId: 'main_chat_goal_approval_judge' },
       },
     );

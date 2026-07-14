@@ -1,3 +1,8 @@
+---
+name: "discord-connector"
+description: "Build or extend a Discord bot or OAuth connector with typed server, channel, thread, message, member, and moderation tools. Use when implementing or hardening Discord integration in Prometheus; do not invoke for generic social-media work."
+---
+
 # Discord Connector
 
 Use this skill when Prometheus needs Discord access for communities, support servers, team rooms, announcements, or message research.

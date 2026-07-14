@@ -56,8 +56,8 @@ const IDS = [
   'core.identity.main', 'core.identity.worker', 'core.action_posture', 'core.visual_grounding.vision', 'core.visual_grounding.text', 'core.skills_recovery', 'core.team_routing', 'core.creative_routing', 'core.plan_protocol',
   'mode.background_task', 'mode.proposal_execution', 'mode.background_agent', 'mode.heartbeat', 'mode.cron', 'mode.team_subagent', 'mode.team_manager',
   'model.capabilities', 'model.current', 'onboarding.meet',
-  'persona.prometheus_soul', 'persona.subagent_soul', 'persona.voice_soul', 'persona.user', 'persona.workspace_soul',
-  'memory.workspace', 'memory.routing', 'memory.retrieved',
+  'persona.prometheus_soul', 'persona.subagent_soul', 'runtime.prometheus_contract', 'persona.voice_soul', 'persona.user', 'persona.workspace_soul',
+  'memory.workspace', 'memory.agent', 'memory.routing', 'memory.retrieved',
   'context.business', 'context.project', 'context.intraday', 'context.cis', 'context.reference_files', 'context.boot', 'context.self_index', 'context.self_voice', 'context.recent_tool_observations', 'context.browser_session', 'context.caller',
   'tools.menu.categories', 'tools.file_edit_routing', 'tools.run_command_routing', 'tools.proposal_lanes', 'tools.search_strategy', 'tools.write_note', 'tools.memory_continuity', 'tools.business_context', 'tools.teams_agents', 'tools.model_routing', 'tools.background_agents', 'skills.tool_block_always', 'tools.active_categories', 'tools.category_match',
   'tools.category.browser_automation', 'tools.category.desktop_automation', 'tools.category.workspace_write', 'tools.category.prometheus_source_read', 'tools.category.prometheus_source_write', 'tools.category.advanced_memory', 'tools.category.media_assets', 'tools.category.automations', 'tools.category.agents_and_teams', 'tools.category.external_apps', 'tools.category.integration_admin', 'tools.category.social_intelligence', 'tools.category.proposal_admin', 'tools.category.mcp_server_tools', 'tools.category.composite_tools', 'tools.category.creative_basic', 'tools.category.creative_image', 'tools.category.creative_video', 'tools.category.creative_hyperframes', 'tools.category.creative_quality', 'tools.category.skills', 'tools.category.model_management', 'tools.category.business',
@@ -72,7 +72,7 @@ const IDS = [
 export type InstructionSegmentId = typeof IDS[number];
 
 const TOKEN_ESTIMATES: Partial<Record<InstructionSegmentId, number>> = {
-  'persona.prometheus_soul': 2397, 'persona.subagent_soul': 904, 'persona.voice_soul': 430,
+  'persona.prometheus_soul': 2397, 'persona.subagent_soul': 904, 'runtime.prometheus_contract': 300, 'persona.voice_soul': 430,
   'persona.user': 3820, 'persona.workspace_soul': 1668, 'memory.workspace': 2170, 'context.business': 813,
   'tools.menu.categories': 180, 'tools.file_edit_routing': 76, 'tools.run_command_routing': 80,
   'tools.proposal_lanes': 204, 'tools.search_strategy': 359, 'tools.write_note': 210,
@@ -94,6 +94,7 @@ function segmentSource(id: string): string {
   if (id.startsWith('skills.')) return 'src/gateway/skills-runtime/skills-manager.ts';
   if (id.startsWith('provider.')) return 'src/providers';
   if (id.startsWith('voice.') || id.startsWith('core.') || id.startsWith('mode.') || id.startsWith('model.') || id.startsWith('compactor.')) return 'src/gateway/routes/chat.router.ts';
+  if (id === 'runtime.prometheus_contract') return 'src/config/prometheus-runtime-contract.md';
   if (id.startsWith('persona.') || id.startsWith('memory.') || id.startsWith('context.')) return 'src/gateway/prompt-context.ts';
   if (id.startsWith('caller.')) return 'src/gateway/agents-runtime|teams';
   if (id.startsWith('wrapper.')) return 'src/gateway/chat/chat-helpers.ts';
@@ -102,7 +103,7 @@ function segmentSource(id: string): string {
 }
 
 function ownerFor(id: string): InstructionSegmentOwner {
-  if (id.startsWith('core.') || id.startsWith('mode.') || id.startsWith('model.') || id === 'onboarding.meet') return 'core_runtime';
+  if (id.startsWith('core.') || id.startsWith('mode.') || id.startsWith('model.') || id === 'runtime.prometheus_contract' || id === 'onboarding.meet') return 'core_runtime';
   if (id.startsWith('persona.')) return 'personality';
   if (id.startsWith('memory.') || id.startsWith('context.')) return 'memory';
   if (id.startsWith('tools.category.')) return 'category_policy';
@@ -118,6 +119,7 @@ function ownerFor(id: string): InstructionSegmentOwner {
 }
 
 function triggerFor(id: string): InstructionTriggerClass {
+  if (id === 'runtime.prometheus_contract') return 'role';
   if (id.startsWith('mode.')) return 'role';
   if (id.startsWith('tools.category.')) return 'category';
   if (id.startsWith('provider.')) return 'provider';
@@ -222,6 +224,8 @@ function recommendedDecision(segment: InstructionSegmentDefinition, facts: Instr
   const role = String(facts.runtimeRole || 'unknown');
   if (segment.id === 'core.identity.main') return { included: !isWorkerRole(role) && role !== 'context_compactor', reason: `runtime_role=${role}` };
   if (segment.id === 'core.identity.worker') return { included: isWorkerRole(role), reason: `worker_role=${role}` };
+  if (segment.id === 'runtime.prometheus_contract') return { included: isWorkerRole(role) || role === 'team_manager', reason: `distinct_actor_role=${role}` };
+  if (segment.id === 'memory.agent') return { included: isWorkerRole(role) || role === 'team_manager', reason: `personal_memory_role=${role}` };
   if (segment.id === 'core.action_posture' || segment.id === 'core.plan_protocol') return { included: role !== 'context_compactor', reason: `primary_runtime_role=${role}` };
   if (segment.id === 'core.visual_grounding.vision') return { included: facts.capabilities?.vision === true, reason: `vision=${facts.capabilities?.vision === true}` };
   if (segment.id === 'core.visual_grounding.text') return { included: facts.capabilities?.vision !== true, reason: `vision=${facts.capabilities?.vision === true}` };

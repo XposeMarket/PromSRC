@@ -1,21 +1,13 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating Prometheus visual direction, Ash & Archive styling, non-generic AI visuals, brand art direction, promo design taste, release graphics, or avoiding purple/blue SaaS AI aesthetics.",
+  "description": "Apply Prometheus's named Ash and Archive brand direction to visuals, interfaces, promos, and HyperFrames work only when the user explicitly requests Prometheus house style or this aesthetic.",
   "triggers": [
-    "Ash and Archive style",
-    "Prometheus visual direction",
-    "non-generic AI visuals",
-    "avoid purple blue gradients",
-    "release graphic",
-    "promo design taste",
-    "brand art direction",
-    "industrial editorial style",
-    "human art direction",
-    "avoid SaaS gradients",
-    "Prometheus brand visuals",
-    "launch graphic style",
-    "make it less AI-looking"
+    "ash and archive style",
+    "make it less ai-looking",
+    "prometheus visual direction",
+    "prometheus brand visuals",
+    "industrial editorial style"
   ],
   "categories": [
     "creative",
@@ -28,5 +20,22 @@
     "generate_video"
   ],
   "lifecycle": "active",
-  "id": "prometheus-ash-archive-style"
+  "id": "prometheus-ash-archive-style",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "The explicit-only house style rendered a disposable 4-second 1920x1080 H.264 artifact and passed snapshot/contact-sheet visual review.",
+    "verifiedCapabilities": [
+      "style_reference",
+      "palette_reference",
+      "creative_brief_template",
+      "explicit_only_routing",
+      "representative_render",
+      "visual_review"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "prometheus-ash-archive-style"
 }

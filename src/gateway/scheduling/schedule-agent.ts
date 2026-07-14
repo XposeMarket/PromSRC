@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
+import { ensureAgentPromptFile } from '../../agents/agent-prompt-file.js';
 
 export interface EnsureScheduleOwnerAgentOptions {
   scheduleId: string;
@@ -77,8 +78,8 @@ function ensureSubagentRuntimeFiles(agent: any, prompt: string): void {
     JSON.stringify(runtimeConfig, null, 2),
   );
 
-  writeFileIfMissing(
-    path.join(subagentRoot, 'system_prompt.md'),
+  ensureAgentPromptFile(
+    subagentRoot,
     [
       `# ${agent.name}`,
       '',

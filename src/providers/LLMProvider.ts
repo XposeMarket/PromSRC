@@ -61,7 +61,7 @@ export interface ChatOptions {
   max_tokens?: number;
   num_ctx?: number;
   tools?: any[];
-  think?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+  think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
   /** Called with each text token as it streams from the model. */
   onToken?: (chunk: string) => void;
   /** Called with provider-visible reasoning/thinking deltas as they stream. */
@@ -82,7 +82,7 @@ export interface GenerateOptions {
   num_ctx?: number;
   format?: 'json';
   system?: string;
-  think?: boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+  think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 }
 
 export interface ModelUsage {

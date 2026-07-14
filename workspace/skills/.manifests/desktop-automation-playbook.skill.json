@@ -1,26 +1,21 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Prometheus needs to operate local desktop apps or Windows UI with screenshots, coordinate clicks, scrolling, typing, window focus, OCR/UI Automation, or visible app verification.",
+  "version": "6.4.0",
+  "description": "Inspect or operate native Windows applications through Prometheus's six desktop wrappers, including exact-window actions, native-resolution region recapture, accessibility controls, deterministic waits, macros, and isolated background automation. Use for native apps, OS UI, or desktop modals; use browser tools for ordinary web pages and terminal tools for shell work.",
   "triggers": [
-    "use my desktop",
-    "click on my screen",
-    "desktop automation",
-    "focus the app",
-    "take a desktop screenshot",
-    "operate Windows",
-    "click that button",
-    "scroll in the app",
+    "inspect the toolbar or ribbon",
     "type into the desktop app",
-    "open local app",
-    "use Codex desktop",
-    "use Claude desktop",
-    "read the screen",
+    "click in the desktop app",
+    "capture the app sidebar",
+    "take a desktop screenshot",
+    "inspect tiny desktop controls",
     "inspect active window",
-    "window screenshot",
-    "coordinate click",
-    "move the mouse",
-    "verify desktop UI"
+    "open local app",
+    "use chatgpt desktop",
+    "use claude desktop",
+    "focus desktop app",
+    "use desktop app"
   ],
   "categories": [
     "desktop",
@@ -29,8 +24,15 @@
     "qa"
   ],
   "requiredTools": [
-    "desktop_automation"
+    "desktop_screen",
+    "desktop_apps",
+    "desktop_window",
+    "desktop_input",
+    "desktop_macro",
+    "desktop_background"
   ],
   "lifecycle": "active",
-  "id": "desktop-automation-playbook"
+  "id": "desktop-automation-playbook",
+  "name": "desktop-automation-playbook",
+  "implicitInvocation": true
 }

@@ -52,6 +52,10 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 37 | Runtime Prompt Map (all agent surfaces, files, overlaps) | [21-runtime-prompt-map.md](21-runtime-prompt-map.md) |
 | 38 | Runtime Prompt Verbatim Inventory (literal strings + injection map) | [22-runtime-prompt-verbatim.md](22-runtime-prompt-verbatim.md) |
 | 39 | Runtime Context Build Pipeline (assembly order, block by block) | [23-runtime-context-flow.md](23-runtime-context-flow.md) |
+| 40 | Runtime Instruction Census (verified injection ownership, costs, overlaps, role matrix) | [26-runtime-instruction-census.md](26-runtime-instruction-census.md) |
+| 41 | Stage 4 Tool-Menu Trigger Benchmark (deterministic triggers, rollback, savings, test corpus) | [27-stage4-tool-menu-trigger-benchmark.md](27-stage4-tool-menu-trigger-benchmark.md) |
+| 42 | Stage 5 Deterministic Skill Routing (inventory, relevance decisions, discovery, rollback, benchmark) | [28-deterministic-skill-routing.md](28-deterministic-skill-routing.md) |
+| 43 | Canonical Agent Identity and Memory Runtime (main, manager, standalone/team agents, compatibility) | [29-agent-identity-and-memory-runtime.md](29-agent-identity-and-memory-runtime.md) |
 | Feature Index | Product/feature catalog for copy, launch posts, onboarding, and capability lookup | [feature-index/README.md](feature-index/README.md) |
 
 Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realtime voice-agent context for routing and spoken behavior notes without loading those notes into the main worker prompt.

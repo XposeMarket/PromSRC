@@ -24,6 +24,7 @@ function buildRegistry(): ExtensionRegistry {
     provider: [],
     connector: [],
     mcp_preset: [],
+    integration: [],
   };
 
   for (const descriptor of bundled) {

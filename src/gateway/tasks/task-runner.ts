@@ -14,6 +14,7 @@ import crypto from 'crypto';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
+import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
@@ -79,6 +80,9 @@ export interface EphemeralBackgroundStatus {
   providerId?: string;
   model?: string;
   modelSource?: string;
+  reasoningEffort?: string;
+  /** Stable snake_case field exposed to tool callers and benchmark runners. */
+  executor_reasoning_effort?: string;
   startedAt: number;
   completedAt?: number;
   result?: string;
@@ -389,6 +393,7 @@ export interface EphemeralBackgroundSpawnInput {
   spawnerSessionId?: string;  // Session ID of the main chat that spawned this — for SSE forwarding
   modelOverride?: string;
   providerOverride?: string;
+  reasoningEffort?: string;
 }
 
 export interface EphemeralBackgroundJoinResult {
@@ -494,27 +499,46 @@ function clampBackgroundTimeoutMs(raw: number | undefined): number {
   return Math.max(500, Math.min(BACKGROUND_WAIT_ALL_CAP_MS, Math.floor(n)));
 }
 
-function resolveBackgroundAgentModelRouting(): { providerId?: string; model?: string; source: string } {
+export function resolveBackgroundAgentModelRouting(record?: Pick<EphemeralBackgroundRecord, 'providerId' | 'model' | 'reasoningEffort'>): { providerId?: string; model?: string; reasoningEffort?: string; source: string } {
+  if (record?.providerId || record?.model) {
+    const rawProvider = String(record.providerId || '').trim();
+    const rawModel = String(record.model || '').trim();
+    const parsed = parseProviderModelRef(rawModel);
+    const providerId = parsed?.providerId || rawProvider || undefined;
+    const model = parsed?.model || rawModel || undefined;
+    const reasoningEffort = normalizeReasoningEffort(String(providerId || ''), String(model || ''), record.reasoningEffort);
+    if (record.reasoningEffort && !reasoningEffort) {
+      throw new Error(`Reasoning effort "${record.reasoningEffort}" is not supported by ${providerId || 'the selected provider'}/${model || 'the selected model'}.`);
+    }
+    return { providerId, model, reasoningEffort, source: 'background_spawn.override' };
+  }
   try {
     const cfg = getConfig().getConfig() as any;
     const defaults = cfg?.agent_model_defaults || {};
-    const ref = String(defaults.main_chat || '').trim();
+    const slot = defaults.background_task ? 'background_task' : 'background_spawn';
+    const ref = String(defaults[slot] || '').trim();
     if (ref) {
       const parsed = parseProviderModelRef(ref);
       if (parsed) {
         return {
           providerId: parsed.providerId,
           model: parsed.model,
-          source: 'agent_model_defaults.main_chat',
+          reasoningEffort: normalizeReasoningEffort(parsed.providerId, parsed.model, record?.reasoningEffort || cfg?.agent_model_default_reasoning?.[slot]),
+          source: `agent_model_defaults.${slot}`,
         };
       }
-      return { model: ref, source: 'agent_model_defaults.main_chat' };
+      return { model: ref, source: `agent_model_defaults.${slot}` };
     }
 
     const activeProvider = String(cfg?.llm?.provider || '').trim();
     const activeModel = activeProvider ? String(cfg?.llm?.providers?.[activeProvider]?.model || '').trim() : '';
     if (activeProvider || activeModel) {
-      return { providerId: activeProvider || undefined, model: activeModel || undefined, source: 'llm.primary' };
+      return {
+        providerId: activeProvider || undefined,
+        model: activeModel || undefined,
+        reasoningEffort: normalizeReasoningEffort(activeProvider, activeModel, record?.reasoningEffort),
+        source: 'llm.primary',
+      };
     }
   } catch {
     // Fall through to the normal chat router default.
@@ -590,10 +614,18 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         taskPrompt: prompt,
         spawnerSessionId,
       });
-      const modelRouting = resolveBackgroundAgentModelRouting();
+      const modelRouting = record.modelSource
+        ? {
+            providerId: record.providerId,
+            model: record.model,
+            reasoningEffort: record.reasoningEffort,
+            source: record.modelSource,
+          }
+        : resolveBackgroundAgentModelRouting(record);
       record.providerId = modelRouting.providerId;
       record.model = modelRouting.model;
       record.modelSource = modelRouting.source;
+      record.reasoningEffort = modelRouting.reasoningEffort;
       const toolCallLog: string[] = [];
 
       if (spawnerSessionId) {
@@ -646,12 +678,14 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           sendSSE,
           undefined,   // extra
           abortSignal,
-          `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly.`,
+          `[Background Agent ${record.id}] You are executing a one-time ephemeral background task in parallel with the main chat. Complete the task using tools as needed and report the outcome clearly. Effective routing: provider=${record.providerId || 'default'}, model=${record.model || 'default'}, reasoning=${record.reasoningEffort || 'provider_default'}.`,
           record.model,   // modelOverride
-          'background_agent',
+          'background_task',
           undefined,   // toolFilter — full tool access
           undefined,
-          undefined,
+          record.reasoningEffort
+            ? { enabled: record.reasoningEffort !== 'none', level: record.reasoningEffort }
+            : undefined,
           record.providerId,
         );
         record.fileChanges = (chatResult as any)?.fileChanges || undefined;
@@ -662,7 +696,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           record.state = 'failed';
           record.completedAt = Date.now();
           if (spawnerSessionId) {
-            broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
+            broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
           }
           finishLiveRuntime(runtimeId);
           return;
@@ -677,7 +711,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         console.log(`[Background Agent] ${record.id} completed`);
 
         if (spawnerSessionId) {
-          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'completed', result: record.result, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
+          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'completed', result: record.result, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
         }
       } catch (err: any) {
         record.error = String(err?.message || err || 'Background execution failed');
@@ -685,7 +719,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.completedAt = Date.now();
         console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
         if (spawnerSessionId) {
-          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource });
+          broadcastWS({ type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
         }
       }
       finishLiveRuntime(runtimeId);
@@ -729,6 +763,11 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
       ? input.joinPolicy
       : 'wait_all';
   const timeoutMs = clampBackgroundTimeoutMs(input?.timeoutMs);
+  const resolvedRouting = resolveBackgroundAgentModelRouting({
+    providerId: input.providerOverride,
+    model: input.modelOverride,
+    reasoningEffort: input.reasoningEffort,
+  });
 
   const record: EphemeralBackgroundRecord = {
     id,
@@ -741,6 +780,10 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     abortSignal: { aborted: false },
     prompt,
     promptPreview: prompt.slice(0, 160),
+    providerId: resolvedRouting.providerId,
+    model: resolvedRouting.model,
+    modelSource: resolvedRouting.source,
+    reasoningEffort: resolvedRouting.reasoningEffort,
   };
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
@@ -761,6 +804,8 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     providerId: record.providerId,
     model: record.model,
     modelSource: record.modelSource,
+    reasoningEffort: record.reasoningEffort,
+    executor_reasoning_effort: record.reasoningEffort,
     startedAt: record.startedAt,
   };
 }
@@ -781,6 +826,8 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
     providerId: rec.providerId,
     model: rec.model,
     modelSource: rec.modelSource,
+    reasoningEffort: rec.reasoningEffort,
+    executor_reasoning_effort: rec.reasoningEffort,
     startedAt: rec.startedAt,
     completedAt: rec.completedAt,
     result: rec.result,
@@ -860,6 +907,8 @@ function statusFromRecord(rec: EphemeralBackgroundRecord): EphemeralBackgroundSt
     providerId: rec.providerId,
     model: rec.model,
     modelSource: rec.modelSource,
+    reasoningEffort: rec.reasoningEffort,
+    executor_reasoning_effort: rec.reasoningEffort,
     startedAt: rec.startedAt,
     completedAt: rec.completedAt,
     result: rec.result,

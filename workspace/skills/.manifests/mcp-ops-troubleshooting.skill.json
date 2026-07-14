@@ -1,22 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when troubleshooting MCP server operations, failed MCP tool calls, connection errors, auth/config issues, schema mismatches, server logs, or runtime health for connected MCP tools.",
+  "description": "Diagnose an existing MCP server, preset, connection, discovery, authentication, schema, transport, or tool-execution failure. Use for MCP operations and recovery; use mcp-server-builder to create/register a new MCP server and integration-setup for broader service setup.",
   "triggers": [
-    "MCP error",
-    "MCP tool failed",
-    "troubleshoot MCP",
-    "MCP server not connecting",
-    "MCP logs",
-    "MCP config issue",
-    "MCP schema mismatch",
-    "MCP auth problem",
-    "MCP tool unavailable",
-    "restart MCP server",
-    "MCP timeout",
-    "debug connected MCP",
-    "MCP transport failure",
-    "MCP health check"
+    "mcp server not connecting",
+    "mcp transport failure",
+    "mcp schema mismatch",
+    "debug connected mcp",
+    "restart mcp server",
+    "mcp config issue",
+    "mcp auth problem",
+    "mcp health check",
+    "mcp tool unavailable",
+    "mcp tool failed",
+    "troubleshoot mcp",
+    "mcp timeout"
   ],
   "categories": [
     "mcp",
@@ -25,11 +23,13 @@
     "operations"
   ],
   "requiredTools": [
+    "connection_ops",
     "integration_admin",
     "mcp_server_tools",
     "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "MCP Ops Troubleshooting",
-  "id": "mcp-ops-troubleshooting"
+  "name": "mcp-ops-troubleshooting",
+  "id": "mcp-ops-troubleshooting",
+  "implicitInvocation": true
 }

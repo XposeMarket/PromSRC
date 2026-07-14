@@ -1,0 +1,1495 @@
+{
+  "schemaVersion": "prometheus-skill-catalog-classification-v1",
+  "generatedAt": "2026-07-12T20:04:01.933Z",
+  "counts": {
+    "total": 145,
+    "dispositions": {
+      "archived": 1,
+      "deprecated": 16,
+      "keep": 67,
+      "merge": 11,
+      "narrow": 48,
+      "split": 2
+    },
+    "explicitOnly": 76,
+    "implicitEligible": 69,
+    "healthReady": 145,
+    "eligibilityReady": 145
+  },
+  "removed": [
+    {
+      "id": "xpose-lead-outreach-packet",
+      "reason": "User-requested removal; missing-input workflow retired."
+    },
+    {
+      "id": "hyperframes-media",
+      "reason": "Merged into official media-use."
+    },
+    {
+      "id": "website-to-hyperframes",
+      "reason": "Replaced by official website-to-video and product-launch-video routing."
+    }
+  ],
+  "renamed": [
+    {
+      "from": "codex-desktop-restart",
+      "to": "chatgpt-desktop-restart"
+    },
+    {
+      "from": "codex-frontend-engineer",
+      "to": "frontend-quality-guard"
+    }
+  ],
+  "skills": [
+    {
+      "id": "ai-surface-smoke-research",
+      "migrationDisposition": "merge",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 8
+    },
+    {
+      "id": "airtable-connector",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 10
+    },
+    {
+      "id": "animejs",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "api-integration",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "approval-policy-designer",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "artifact-registry",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 9
+    },
+    {
+      "id": "background-coding-agent-lanes",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "brand-strategist",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "browse-sh-web-skills",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "browser-automation-playbook",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "browser-to-connector-migration",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 9
+    },
+    {
+      "id": "chart-visualizer",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "chatgpt-desktop-restart",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "cli-adapter-framework",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 9
+    },
+    {
+      "id": "cold-outreach-writer",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "competitive-intelligence",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "competitor-profile",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "connector-builder",
+      "migrationDisposition": "merge",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 11
+    },
+    {
+      "id": "connector-recipe-library",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "connector-smoke-test-harness",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "context-pack-builder",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 5
+    },
+    {
+      "id": "contribute-catalog",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 3
+    },
+    {
+      "id": "craigslist-car-search",
+      "migrationDisposition": "archived",
+      "explicitOnly": true,
+      "lifecycle": "archived",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "credential-scope-auditor",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "css-animations",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 8
+    },
+    {
+      "id": "data-pipeline",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "database-query",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 8
+    },
+    {
+      "id": "day-trading-mnq-mgc",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "deal-analyzer",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "desktop-automation-playbook",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "dev-debugging",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 3
+    },
+    {
+      "id": "discord-connector",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "doc-ingestion",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "docx",
+      "migrationDisposition": "merge",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "docx-reader",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "docx-writer",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "email-composer",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "embedded-captions",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "embedding-search",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "error-budget-tracker",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "exact-logo-brand-kit-workflow",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "execution-mode-routing",
+      "migrationDisposition": "split",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "faceless-explainer",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "figma",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "file-surgery",
+      "migrationDisposition": "merge",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "financial-analyst",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "financial-model",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "frontend-quality-guard",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "general-video",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "ghostwriter",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "git-workflow",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "google-workspace-expansion",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 8
+    },
+    {
+      "id": "gsap",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "hook-library",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 11
+    },
+    {
+      "id": "hr-recruiter",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "html-interactive",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "hyperframes",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "hyperframes-animation",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "hyperframes-catalog-assets",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 8
+    },
+    {
+      "id": "hyperframes-cli",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "hyperframes-core",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "hyperframes-creative",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "hyperframes-keyframes",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "hyperframes-registry",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "image-analyst",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "integration-setup",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "interactive-artifacts",
+      "migrationDisposition": "merge",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "interactive-visuals",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "json-and-config-surgery",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "knowledge-import-pipeline",
+      "migrationDisposition": "merge",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 7
+    },
+    {
+      "id": "landing-page-blueprint",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "legal-drafting",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "linear-connector",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "local-file-browser-verification",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "local-lead-hunting",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 10
+    },
+    {
+      "id": "local-media-utilities",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "long-running-job-inspector",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 7
+    },
+    {
+      "id": "lottie",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "market-research",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "marketing-campaign-builder",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "mcp-ops-troubleshooting",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "mcp-server-builder",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "media-use",
+      "migrationDisposition": "merge",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "meeting-notes",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "memory-governance-playbook",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "mermaid-diagrams",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "motion-graphics",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "music-to-video",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "operations-manager",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "pdf",
+      "migrationDisposition": "merge",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 7
+    },
+    {
+      "id": "pdf-reader",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "pdf-writer",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "pitch-deck-builder",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "polymarket-research",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "pptx-writer",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 4
+    },
+    {
+      "id": "pr-to-video",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "product-carousel-builder",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "product-discovery",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 8
+    },
+    {
+      "id": "product-launch-video",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "professional-blog-posting-engine",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "prometheus-ash-archive-style",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 5
+    },
+    {
+      "id": "prometheus-creative-director",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "prometheus-hyperframes-bridge",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 4
+    },
+    {
+      "id": "prometheus-x-growth-operator",
+      "migrationDisposition": "merge",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "prometheus-x-posts-workflow",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "prometheus-x-research-replies",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "remotion-to-hyperframes",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "report-generator",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "revenue-manager",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "scheduler-operations-playbook",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 10
+    },
+    {
+      "id": "sdr-sales",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "secret-and-token-ops",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "self-repair-protocol",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 3
+    },
+    {
+      "id": "skill-creator",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "slideshow",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "social-intel",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "spreadsheets",
+      "migrationDisposition": "merge",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "src-edit-proposal-rigor",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "subagent-system-prompt-design",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "local",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "svg-diagrams",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "tailwind",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "talking-head-recut",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "task-lifecycle",
+      "migrationDisposition": "split",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "taskflow-enhancement",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 7
+    },
+    {
+      "id": "teams-meeting-pipeline",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "three",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 9
+    },
+    {
+      "id": "threejs-mobile-webgl",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 11
+    },
+    {
+      "id": "trello-connector",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 6
+    },
+    {
+      "id": "twitter-thread",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "typegpu",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 11
+    },
+    {
+      "id": "voice-browser-desktop-smoke-test",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "waapi",
+      "migrationDisposition": "keep",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 8
+    },
+    {
+      "id": "web-design-skill",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "web-researcher",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "web-scraper",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 8
+    },
+    {
+      "id": "webhook-receiver-framework",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 8
+    },
+    {
+      "id": "website-intelligence",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "website-to-video",
+      "migrationDisposition": "merge",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "upstream-managed",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "windows-shell-playbook",
+      "migrationDisposition": "narrow",
+      "explicitOnly": true,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "workflow-replay-runbook-recorder",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "x-browser-automation-playbook",
+      "migrationDisposition": "narrow",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 12
+    },
+    {
+      "id": "x-larp-posting-guidelines",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "x-post-fetch-and-media",
+      "migrationDisposition": "keep",
+      "explicitOnly": false,
+      "lifecycle": "active",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 7
+    },
+    {
+      "id": "xlsx-reader",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    },
+    {
+      "id": "xlsx-writer",
+      "migrationDisposition": "deprecated",
+      "explicitOnly": true,
+      "lifecycle": "deprecated",
+      "ownership": "prometheus-owned-overlay",
+      "health": "ready",
+      "eligibility": "ready",
+      "triggerCount": 0
+    }
+  ]
+}

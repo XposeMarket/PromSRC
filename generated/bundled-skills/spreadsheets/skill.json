@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "spreadsheets",
+  "name": "spreadsheets",
+  "description": "Read, analyze, create, and edit XLSX, XLS, and CSV spreadsheet artifacts with SheetJS. Use when the task directly involves workbook sheets, tabular spreadsheet data, formulas, or an Excel-compatible deliverable; do not use for database queries or prose reports without a workbook.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "create an excel workbook",
+    "analyze this excel file",
+    "read this spreadsheet",
+    "summarize this workbook",
+    "export spreadsheet data",
+    "edit this xlsx"
+  ],
+  "categories": [
+    "spreadsheets",
+    "xlsx",
+    "csv"
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
+}

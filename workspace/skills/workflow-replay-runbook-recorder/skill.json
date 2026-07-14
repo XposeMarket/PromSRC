@@ -1,12 +1,26 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "workflow-replay-runbook-recorder",
-  "name": "Workflow Replay and Runbook Recorder",
-  "description": "Turn completed Prometheus tasks, session histories, tool observations, journals, evidence bus entries, and Brain workflow episodes into reusable runbooks, skills, or composites.",
+  "name": "workflow-replay-runbook-recorder",
+  "description": "Deprecated compatibility entry for converting completed sessions into reusable skill instructions. Submit structured Brain candidates and let the Skill Curator cluster, review, and apply durable lessons instead.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
-  "triggers": ["workflow replay", "make a runbook", "completed task", "turn this task into a skill", "replay tool log"],
-  "categories": ["prometheus", "workflow", "tasks", "skills"],
-  "requiredTools": ["advanced_memory", "automations", "workspace_write"],
-  "permissions": { "workspaceRead": true, "workspaceWrite": true }
+  "triggers": [],
+  "categories": [
+    "prometheus",
+    "workflow",
+    "tasks",
+    "skills"
+  ],
+  "requiredTools": [
+    "advanced_memory",
+    "automations",
+    "workspace_write"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true
+  },
+  "implicitInvocation": false,
+  "lifecycle": "deprecated"
 }

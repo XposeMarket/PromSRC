@@ -1,23 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when the user asks to create, update, package, repair, import, export, or improve a Prometheus skill, skill trigger set, skill description, bundled resources, examples, templates, schemas, or reusable workflow playbook. It ensures skills are discoverable and reusable.",
+  "description": "Design or revise a focused Prometheus skill when the user explicitly asks to create, update, improve, review, or troubleshoot a skill. Route inferred reusable lessons through candidate submission and Brain Curator review; do not mutate skills after ordinary workflows.",
   "triggers": [
+    "improve this skill",
+    "add a skill",
+    "reusable playbook",
+    "skill description",
+    "skill triggers",
+    "skill metadata",
+    "package skill",
+    "skill catalog",
     "create skill",
     "update skill",
     "repair skill",
-    "skill triggers",
-    "skill description",
-    "skill metadata",
-    "skill bundle",
-    "package skill",
-    "import skill",
-    "export skill",
-    "reusable playbook",
-    "workflow skill",
-    "skill catalog",
-    "add a skill",
-    "improve this skill"
+    "skill bundle"
   ],
   "categories": [
     "skills",
@@ -33,6 +30,21 @@
     "skill_repair_metadata"
   ],
   "lifecycle": "active",
-  "name": "Skill Creator",
-  "id": "skill-creator"
+  "name": "skill-creator",
+  "id": "skill-creator",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "The skill now separates explicit user-authorized edits from inferred candidate-only learning and routes behavioral evolution through Curator review with overlap and trigger testing.",
+    "verifiedCapabilities": [
+      "candidate_only_learning",
+      "curator_review",
+      "user_evidence_gate",
+      "overlap_analysis",
+      "positive_negative_trigger_tests"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  }
 }

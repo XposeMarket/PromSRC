@@ -12,6 +12,7 @@ import { stripInternalToolNotes } from './comms/reply-processor';
 import { resolveActiveModelContextProfile } from './context/model-context';
 import { getUsageCalibration } from '../providers/model-usage';
 import { getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
+import { hookBus } from './hooks';
 import {
   assertSafeStorageId,
   isSafeStorageId,
@@ -20,6 +21,13 @@ import {
 } from './storage/storage-paths';
 
 export interface ChatMessage {
+  messageId?: string;
+  messageKind?: 'goal_command_ack' | 'goal_turn' | 'goal_restart_checkpoint' | 'restart_status' | string;
+  activeRunKind?: string;
+  goalId?: string;
+  goalTurnNumber?: number;
+  goalIterationNumber?: number;
+  goalTurnId?: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
@@ -37,12 +45,14 @@ export interface ChatMessage {
   fileChanges?: any;
   processEntries?: any[];
   toolLog?: string; // full tool call log for this turn (injected by chat.router after turn completes)
-  productCarousel?: { title: string; items: Array<{
+  productCarousel?: { title: string; source?: string; items: Array<{
     title: string; price?: string; description?: string; rating?: number;
-    reviews?: number; tag?: string; imageUrl?: string; imagePath?: string;
-    productUrl: string; merchant?: string;
+    reviews?: number; reviewCount?: number; tag?: string; badge?: string; imageUrl?: string; imagePath?: string;
+    productUrl: string; merchant?: string; listPrice?: string; availability?: string;
+    seller?: string; sku?: string; asin?: string; confidence?: number;
   }> };
   richArtifacts?: import('./rich-artifacts').RichArtifact[];
+  voiceWorkgroup?: any;
 }
 
 export interface TurnOrigin {
@@ -55,7 +65,41 @@ export interface TurnOrigin {
   source?: string;
 }
 
-export type MainChatGoalStatus = 'active' | 'paused' | 'blocked' | 'done' | 'cleared' | 'failed';
+export type MainChatGoalStatus = 'active' | 'restarting' | 'paused' | 'blocked' | 'done' | 'cleared' | 'failed';
+
+export interface MainChatGoalRestartCheckpoint {
+  id: string;
+  reason: string;
+  phase: 'interrupted' | 'boot_finalized' | 'resuming' | 'complete';
+  turnNumber: number;
+  planId?: string;
+  activeStepIndex?: number;
+  runtimeStartedAt?: number;
+  devEditId?: string;
+  affectedFiles?: string[];
+  changedSurfaces?: string[];
+  verificationSummary?: string;
+  createdAt: number;
+  recoveredAt?: number;
+  completedAt?: number;
+}
+
+export interface MainChatGoalIteration {
+  iterationNumber: number;
+  turnNumber: number;
+  status: 'running' | 'restarting' | 'continued' | 'judged' | 'blocked' | 'done' | 'failed';
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  restartCount: number;
+  qualityGrade?: string;
+  verdict?: 'done' | 'continue' | 'blocked' | 'failed';
+  reason?: string;
+  directive?: string;
+  evidence?: string[];
+  unresolvedIssues?: string[];
+  verificationGaps?: string[];
+}
 
 export type MainChatGoalPlanStepStatus = 'pending' | 'in_progress' | 'done' | 'failed' | 'skipped';
 
@@ -107,6 +151,10 @@ export interface MainChatGoalState {
   pauseStartedAt?: number;
   pausedMs?: number;
   turnPlans?: MainChatGoalTurnPlan[];
+  restartCheckpoint?: MainChatGoalRestartCheckpoint;
+  iterations?: MainChatGoalIteration[];
+  currentIteration?: number;
+  consecutiveNoProgressTurns?: number;
   deniedActions?: Array<{
     at: number;
     toolName: string;
@@ -242,9 +290,9 @@ export interface SessionListOptions {
   channel?: Session['channel'];
   limit?: number;
   offset?: number;
-  // When true and channel is 'web', also include automated scheduled-task
-  // sessions (auto_*, stored under the 'system' channel) so the mobile
-  // "Computer" view surfaces the same scheduled-task threads as desktop.
+  // When true and a first-party chat channel is requested, also include
+  // automated scheduled-task sessions (auto_*, stored under 'system'). This
+  // lets each client surface those shared threads in its primary chat list.
   includeAutomated?: boolean;
 }
 
@@ -356,6 +404,8 @@ function scrubMainChatGoal(goal: MainChatGoalState | null | undefined): MainChat
             : plan.steps,
         }))
       : goal.turnPlans,
+    restartCheckpoint: goal.restartCheckpoint ? scrubPersistedData(goal.restartCheckpoint) : goal.restartCheckpoint,
+    iterations: Array.isArray(goal.iterations) ? scrubPersistedData(goal.iterations) : goal.iterations,
     deniedActions: Array.isArray(goal.deniedActions)
       ? goal.deniedActions.map((item) => ({
           ...item,
@@ -552,6 +602,65 @@ function normalizeMainChatGoalTurnPlans(input: any, now: number): MainChatGoalTu
   return plans.length ? plans.slice(-50) : undefined;
 }
 
+function normalizeMainChatGoalRestartCheckpoint(input: any, now: number): MainChatGoalRestartCheckpoint | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const rawPhase = String(input.phase || 'interrupted').trim().toLowerCase();
+  const phase: MainChatGoalRestartCheckpoint['phase'] = ['interrupted', 'boot_finalized', 'resuming', 'complete'].includes(rawPhase)
+    ? rawPhase as MainChatGoalRestartCheckpoint['phase']
+    : 'interrupted';
+  const list = (value: any) => Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 50)
+    : undefined;
+  return {
+    id: String(input.id || `goal_restart_${now}`),
+    reason: String(input.reason || 'gateway_restart').slice(0, 240),
+    phase,
+    turnNumber: Math.max(1, Math.floor(Number(input.turnNumber ?? input.turn_number ?? 1) || 1)),
+    planId: String(input.planId || input.plan_id || '').trim() || undefined,
+    activeStepIndex: Number.isFinite(Number(input.activeStepIndex ?? input.active_step_index)) ? Number(input.activeStepIndex ?? input.active_step_index) : undefined,
+    runtimeStartedAt: Number.isFinite(Number(input.runtimeStartedAt ?? input.runtime_started_at)) ? Number(input.runtimeStartedAt ?? input.runtime_started_at) : undefined,
+    devEditId: String(input.devEditId || input.dev_edit_id || '').trim() || undefined,
+    affectedFiles: list(input.affectedFiles ?? input.affected_files),
+    changedSurfaces: list(input.changedSurfaces ?? input.changed_surfaces),
+    verificationSummary: String(input.verificationSummary || input.verification_summary || '').trim().slice(0, 4000) || undefined,
+    createdAt: Number.isFinite(Number(input.createdAt ?? input.created_at)) ? Number(input.createdAt ?? input.created_at) : now,
+    recoveredAt: Number.isFinite(Number(input.recoveredAt ?? input.recovered_at)) ? Number(input.recoveredAt ?? input.recovered_at) : undefined,
+    completedAt: Number.isFinite(Number(input.completedAt ?? input.completed_at)) ? Number(input.completedAt ?? input.completed_at) : undefined,
+  };
+}
+
+function normalizeMainChatGoalIterations(input: any, now: number): MainChatGoalIteration[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const rows = input.map((item: any, index: number) => {
+    if (!item || typeof item !== 'object') return null;
+    const rawStatus = String(item.status || 'running').trim().toLowerCase();
+    const status: MainChatGoalIteration['status'] = ['running', 'restarting', 'continued', 'judged', 'blocked', 'done', 'failed'].includes(rawStatus)
+      ? rawStatus as MainChatGoalIteration['status']
+      : 'running';
+    const rawVerdict = String(item.verdict || '').trim().toLowerCase();
+    const verdict = ['done', 'continue', 'blocked', 'failed'].includes(rawVerdict)
+      ? rawVerdict as MainChatGoalIteration['verdict']
+      : undefined;
+    return {
+      iterationNumber: Math.max(1, Math.floor(Number(item.iterationNumber ?? item.iteration_number ?? index + 1) || index + 1)),
+      turnNumber: Math.max(1, Math.floor(Number(item.turnNumber ?? item.turn_number ?? index + 1) || index + 1)),
+      status,
+      startedAt: Number.isFinite(Number(item.startedAt ?? item.started_at)) ? Number(item.startedAt ?? item.started_at) : now,
+      updatedAt: Number.isFinite(Number(item.updatedAt ?? item.updated_at)) ? Number(item.updatedAt ?? item.updated_at) : now,
+      completedAt: Number.isFinite(Number(item.completedAt ?? item.completed_at)) ? Number(item.completedAt ?? item.completed_at) : undefined,
+      restartCount: Math.max(0, Math.floor(Number(item.restartCount ?? item.restart_count ?? 0) || 0)),
+      qualityGrade: String(item.qualityGrade || item.quality_grade || '').trim().slice(0, 12) || undefined,
+      verdict,
+      reason: String(item.reason || '').trim().slice(0, 1200) || undefined,
+      directive: String(item.directive || '').trim().slice(0, 1200) || undefined,
+      evidence: normalizeTextArray(item.evidence),
+      unresolvedIssues: normalizeTextArray(item.unresolvedIssues ?? item.unresolved_issues),
+      verificationGaps: normalizeTextArray(item.verificationGaps ?? item.verification_gaps),
+    } as MainChatGoalIteration;
+  }).filter(Boolean) as MainChatGoalIteration[];
+  return rows.length ? rows.slice(-100) : undefined;
+}
+
 function normalizeMainChatGoal(input: any, sessionId: string): MainChatGoalState | null {
   if (!input || typeof input !== 'object') return null;
   const goal = String(input.goal || '').trim();
@@ -559,6 +668,7 @@ function normalizeMainChatGoal(input: any, sessionId: string): MainChatGoalState
   const rawStatus = String(input.status || 'active').trim().toLowerCase();
   const status: MainChatGoalStatus = (
     rawStatus === 'active'
+    || rawStatus === 'restarting'
     || rawStatus === 'paused'
     || rawStatus === 'blocked'
     || rawStatus === 'done'
@@ -607,6 +717,10 @@ function normalizeMainChatGoal(input: any, sessionId: string): MainChatGoalState
     pauseStartedAt: Number.isFinite(Number(input.pauseStartedAt ?? input.pause_started_at)) ? Number(input.pauseStartedAt ?? input.pause_started_at) : undefined,
     pausedMs: Number.isFinite(Number(input.pausedMs ?? input.paused_ms)) ? Math.max(0, Math.floor(Number(input.pausedMs ?? input.paused_ms))) : undefined,
     turnPlans: normalizeMainChatGoalTurnPlans(input.turnPlans ?? input.turn_plans, now),
+    restartCheckpoint: normalizeMainChatGoalRestartCheckpoint(input.restartCheckpoint ?? input.restart_checkpoint, now),
+    iterations: normalizeMainChatGoalIterations(input.iterations, now),
+    currentIteration: Math.max(0, Math.floor(Number(input.currentIteration ?? input.current_iteration ?? 0) || 0)),
+    consecutiveNoProgressTurns: Math.max(0, Math.floor(Number(input.consecutiveNoProgressTurns ?? input.consecutive_no_progress_turns ?? 0) || 0)),
     deniedActions,
     lastSummaryAt: Number.isFinite(Number(input.lastSummaryAt ?? input.last_summary_at)) ? Number(input.lastSummaryAt ?? input.last_summary_at) : undefined,
     lastSummaryMessageIndex: Number.isFinite(Number(input.lastSummaryMessageIndex ?? input.last_summary_message_index))
@@ -987,10 +1101,10 @@ function getSortedSessionSummaries(
       index = rebuildSessionIndex();
     }
   }
-  // When the 'web' (Computer) channel is requested with includeAutomated,
-  // also admit automated scheduled-task sessions (auto_*) that live under the
-  // 'system' channel — they are the per-job continuous threads.
-  const admitAutomated = includeAutomated === true && channel === 'web';
+  // Automated sessions remain system-owned on disk. Callers can opt into
+  // projecting them into either first-party main-chat list without mutating
+  // their durable channel or affecting connector/CLI channel lists.
+  const admitAutomated = includeAutomated === true && (channel === 'web' || channel === 'mobile');
   return Object.values(index.summaries)
     .filter((summary) => !INTERNAL_SESSION_ID_RE.test(summary.id))
     .filter((summary) => {
@@ -1806,6 +1920,15 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
   if (!options.disableAutoSave) {
     saveSession(id);
   }
+  if (!options.disableAutoSave && (compactionInjected || memoryFlushInjected || (!deferredForCompaction && !deferredForMemoryFlush))) {
+    void hookBus.fire({
+      type: 'session:history_changed',
+      sessionId: id,
+      timestamp: session.lastActiveAt,
+      historyCount: session.history.length,
+      source: 'add_message',
+    });
+  }
 
   return {
     added: !deferredForCompaction && !deferredForMemoryFlush,
@@ -1977,6 +2100,13 @@ export function clearHistory(id: string): void {
   session.contextSummaryUpdatedAt = undefined;
   session.lastActiveAt = Date.now();
   saveSession(id);
+  void hookBus.fire({
+    type: 'session:history_changed',
+    sessionId: id,
+    timestamp: session.lastActiveAt,
+    historyCount: 0,
+    source: 'clear_history',
+  });
 }
 
 export function replaceHistory(
@@ -2019,6 +2149,13 @@ export function replaceHistory(
   session.contextTokenEstimate = estimateActiveContextTokens(session);
   session.lastActiveAt = Date.now();
   saveSession(id);
+  void hookBus.fire({
+    type: 'session:history_changed',
+    sessionId: id,
+    timestamp: session.lastActiveAt,
+    historyCount: session.history.length,
+    source: 'replace_history',
+  });
 }
 
 export function getCreativeMode(id: string): CreativeMode | null {

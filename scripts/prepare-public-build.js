@@ -118,11 +118,15 @@ const SKILLS_EXCLUDE = new Set([
   'file-surgery',
   'json-and-config-surgery',
   'prometheus-team-design',
-  'self-repair-protocol',
   'src-edit-proposal-rigor',
   'subagent-system-prompt-design',
   'voice-browser-desktop-smoke-test',
   'windows-shell-playbook',
+]);
+
+const PUBLIC_SKILL_RESOURCE_EXCLUDES = new Map([
+  ['git-workflow', new Set(['references/prometheus-public-release-pointer.md'])],
+  ['self-repair-protocol', new Set(['references/dev-escalation.md'])],
 ]);
 
 const PRIVATE_SKILL_CONTENT_PATTERNS = [
@@ -145,10 +149,12 @@ const PRIVATE_SKILL_CONTENT_PATTERNS = [
   /\bsrc_edit\b/i,
 ];
 
-function skillContainsPrivateContent(skillDir) {
+function skillContainsPrivateContent(skillDir, ignoredRelativePaths = new Set()) {
   const stack = [skillDir];
   while (stack.length) {
     const current = stack.pop();
+    const relative = path.relative(skillDir, current).replace(/\\/g, '/');
+    if (ignoredRelativePaths.has(relative)) continue;
     const stat = fs.statSync(current);
     if (stat.isDirectory()) {
       for (const entry of fs.readdirSync(current)) {
@@ -188,7 +194,8 @@ function bundleSkills() {
     const srcMdLower = path.join(srcSkillDir, 'skill.md');
     const srcManifest = path.join(srcSkillDir, 'skill.json');
     if (!fs.existsSync(srcMd) && !fs.existsSync(srcMdLower) && !fs.existsSync(srcManifest)) continue;
-    if (skillContainsPrivateContent(srcSkillDir)) {
+    const privateScanIgnores = PUBLIC_SKILL_RESOURCE_EXCLUDES.get(entry.name) || new Set();
+    if (skillContainsPrivateContent(srcSkillDir, privateScanIgnores)) {
       console.log(`[prepare-public-build] Skipping private/local skill: ${entry.name}`);
       continue;
     }
@@ -204,6 +211,14 @@ function bundleSkills() {
     const overlayManifest = path.join(srcManifests, `${entry.name}.skill.json`);
     if (!fs.existsSync(destManifest) && fs.existsSync(overlayManifest)) {
       copyFileForPublicBuild(overlayManifest, destManifest, { normalizeText: true });
+    }
+    const excludedResources = PUBLIC_SKILL_RESOURCE_EXCLUDES.get(entry.name) || new Set();
+    for (const relativePath of excludedResources) rmrf(path.join(destSkillDir, relativePath));
+    if (excludedResources.size && fs.existsSync(destManifest)) {
+      const manifest = JSON.parse(fs.readFileSync(destManifest, 'utf-8'));
+      manifest.resources = (Array.isArray(manifest.resources) ? manifest.resources : [])
+        .filter((resource) => !excludedResources.has(resource?.path));
+      fs.writeFileSync(destManifest, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
     }
     count++;
   }

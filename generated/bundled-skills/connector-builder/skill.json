@@ -1,20 +1,23 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "connector-builder",
-  "name": "Connector & Plugin Builder",
-  "description": "Use this skill when the user asks Prometheus to integrate, connect to, or build a plugin for a service Prometheus doesn't already support (e.g. \"connect to Airtable\", \"add my company's REST API\", \"hook up Shopify\", \"make an MCP for X\", \"add a custom connector\"). Prometheus researches the API, writes a manifest (+ index.js for REST APIs, or an MCP preset for services with an MCP server) into the user data dir, installs it via the extensions API, hot-reloads, and verifies — no source access or restart needed. The user then enters credentials in the Connections panel.",
+  "name": "connector-builder",
+  "description": "Use this skill when building, editing, or designing a Prometheus connector/plugin for an external app or service, including tool contracts, auth, polling, webhooks, data mapping, tests, and integration UX.",
   "emoji": "🧩",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "entrypoint": "SKILL.md",
   "triggers": [
-    "add connector",
-    "build connector",
-    "connect to",
-    "integrate",
-    "make a plugin",
-    "add mcp",
-    "custom api",
-    "hook up"
+    "make a tool for this service",
+    "create prometheus plugin",
+    "external app integration",
+    "build a connector",
+    "add a connector",
+    "integration connector",
+    "connector implementation",
+    "plugin architecture",
+    "integration plugin",
+    "connector schema",
+    "harden connector"
   ],
   "categories": [
     "integrations",
@@ -22,6 +25,7 @@
     "prometheus"
   ],
   "requiredTools": [
+    "connection_ops",
     "web_search",
     "web_fetch",
     "web_fetch_batch",
@@ -51,9 +55,11 @@
       "description": "Zero-code MCP server connectors via kind=mcp_preset manifests with credential env templating."
     },
     {
-      "path": "references/workflows/connector-builder-2026-06-13.md",
+      "path": "references/workflows/connector-builder.md",
       "type": "doc",
       "description": "Add workflow recipe to connector-builder"
     }
-  ]
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
 }

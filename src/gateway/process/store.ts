@@ -35,6 +35,10 @@ export class ProcessRunStore {
     return path.join(this.logsDir, `${safeFileName(runId)}.stderr.log`);
   }
 
+  combinedPath(runId: string): string {
+    return path.join(this.logsDir, `${safeFileName(runId)}.combined.log`);
+  }
+
   writeRecord(record: ProcessRunRecord): void {
     ensureDir(this.recordsDir);
     const tmp = `${this.recordPath(record.runId)}.tmp`;
@@ -50,6 +54,11 @@ export class ProcessRunStore {
   appendStderr(runId: string, chunk: string): void {
     ensureDir(this.logsDir);
     fs.appendFileSync(this.stderrPath(runId), chunk, 'utf-8');
+  }
+
+  appendCombined(runId: string, chunk: string): void {
+    ensureDir(this.logsDir);
+    fs.appendFileSync(this.combinedPath(runId), chunk, 'utf-8');
   }
 
   readLogFile(filePath: string, maxChars = 200_000): { text: string; bytes: number; truncated: boolean } {

@@ -1,35 +1,28 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when building or polishing CSS-only animations, transitions, keyframes, hover effects, loaders, responsive motion, reduced-motion handling, or lightweight web UI animation without JavaScript libraries.",
+  "name": "css-animations",
+  "description": "HyperFrames-specific CSS keyframe adapter patterns. Use only when a HyperFrames composition must seek CSS animations deterministically through computed animation handles or negative animation-delay, including data-start timing, finite iteration counts, and animation-fill-mode. Do not use for general CSS transitions or ordinary frontend styling.",
   "triggers": [
-    "CSS animation",
-    "keyframes",
-    "transition effect",
-    "hover animation",
-    "loading spinner CSS",
-    "animate with CSS",
-    "reduced motion",
-    "CSS motion",
-    "button hover effect",
-    "page entrance animation",
-    "pure CSS animation",
-    "smooth transition",
-    "animation timing",
-    "CSS keyframe loop",
-    "microinteraction",
-    "responsive animation"
+    "seek css animation in hyperframes",
+    "deterministic css keyframes for hyperframes",
+    "finite css animation in hyperframes",
+    "hyperframes data-start css timing",
+    "hyperframes negative animation delay",
+    "hyperframes animation fill mode",
+    "hyperframes css animation",
+    "hyperframes css adapter"
   ],
   "categories": [
     "css",
     "animation",
-    "frontend",
-    "creative"
+    "hyperframes"
   ],
   "requiredTools": [
     "workspace_write",
     "browser_automation"
   ],
+  "implicitInvocation": false,
   "lifecycle": "active",
   "id": "css-animations"
 }

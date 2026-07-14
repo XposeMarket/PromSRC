@@ -20,6 +20,11 @@ export interface VoiceWorkgroupWorker {
   index: number;
   status: string;
   createdAt: number;
+  kind?: 'primary_chat' | 'background_task';
+  currentStep?: string;
+  completedSteps?: string[];
+  finalResult?: string;
+  updatedAt?: number;
 }
 
 export interface VoiceWorkgroupRecord {
@@ -127,6 +132,13 @@ export function loadVoiceWorkgroup(id: string): VoiceWorkgroupRecord | null {
           index: Number.isFinite(Number(worker?.index)) ? Number(worker.index) : index,
           status: String(worker?.status || 'queued').trim() || 'queued',
           createdAt: Number.isFinite(Number(worker?.createdAt)) ? Number(worker.createdAt) : Date.now(),
+          kind: worker?.kind === 'primary_chat' ? 'primary_chat' : 'background_task',
+          currentStep: String(worker?.currentStep || '').trim() || undefined,
+          completedSteps: Array.isArray(worker?.completedSteps)
+            ? worker.completedSteps.map((step: unknown) => String(step || '').trim()).filter(Boolean).slice(-12)
+            : undefined,
+          finalResult: String(worker?.finalResult || '').trim() || undefined,
+          updatedAt: Number.isFinite(Number(worker?.updatedAt)) ? Number(worker.updatedAt) : undefined,
         })).filter((worker: VoiceWorkgroupWorker) => isSafeStorageId(worker.taskId))
       : [];
     return {
@@ -157,6 +169,11 @@ export function addVoiceWorkgroupWorker(workgroupId: string, worker: Omit<VoiceW
     index: Number.isFinite(Number(worker.index)) ? Number(worker.index) : record.workers.length,
     status: String(worker.status || 'queued').trim() || 'queued',
     createdAt: Number.isFinite(Number(worker.createdAt)) ? Number(worker.createdAt) : Date.now(),
+    kind: worker.kind === 'primary_chat' ? 'primary_chat' : 'background_task',
+    currentStep: String(worker.currentStep || '').trim() || undefined,
+    completedSteps: Array.isArray(worker.completedSteps) ? worker.completedSteps.map((step) => String(step || '').trim()).filter(Boolean).slice(-12) : undefined,
+    finalResult: String(worker.finalResult || '').trim() || undefined,
+    updatedAt: Number.isFinite(Number(worker.updatedAt)) ? Number(worker.updatedAt) : undefined,
   };
   const workers = record.workers.filter((entry) => entry.taskId !== taskId);
   workers.push(nextWorker);
@@ -164,7 +181,12 @@ export function addVoiceWorkgroupWorker(workgroupId: string, worker: Omit<VoiceW
   return saveVoiceWorkgroup({ ...record, workers });
 }
 
-export function updateVoiceWorkgroupWorkerStatus(workgroupId: string, taskId: string, status: string): VoiceWorkgroupRecord | null {
+export function updateVoiceWorkgroupWorkerStatus(
+  workgroupId: string,
+  taskId: string,
+  status: string,
+  details: { currentStep?: string; completedSteps?: string[]; finalResult?: string; updatedAt?: number } = {},
+): VoiceWorkgroupRecord | null {
   const record = loadVoiceWorkgroup(workgroupId);
   if (!record) return null;
   const cleanTaskId = assertSafeStorageId(taskId, 'task id');
@@ -174,7 +196,16 @@ export function updateVoiceWorkgroupWorkerStatus(workgroupId: string, taskId: st
   const workers = record.workers.map((worker) => {
     if (worker.taskId !== cleanTaskId) return worker;
     changed = true;
-    return { ...worker, status: cleanStatus };
+    return {
+      ...worker,
+      status: cleanStatus,
+      currentStep: String(details.currentStep ?? worker.currentStep ?? '').trim() || undefined,
+      completedSteps: Array.isArray(details.completedSteps)
+        ? details.completedSteps.map((step) => String(step || '').trim()).filter(Boolean).slice(-12)
+        : worker.completedSteps,
+      finalResult: String(details.finalResult ?? worker.finalResult ?? '').trim() || undefined,
+      updatedAt: Number.isFinite(Number(details.updatedAt)) ? Number(details.updatedAt) : Date.now(),
+    };
   });
   return changed ? saveVoiceWorkgroup({ ...record, workers }) : record;
 }

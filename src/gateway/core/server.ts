@@ -39,7 +39,7 @@ import {
 } from '../browser-tools';
 import { evaluateGatewayRequest } from '../gateway-auth';
 import { getSessionStatus } from '../routes/account.router';
-import { handleCreativeCommandResult } from '../creative/command-bus';
+import { handleCreativeCommandAck, handleCreativeCommandResult, markCreativeBridgeReady } from '../creative/command-bus';
 import { isProviderStatusChecking, readProviderStatusCache } from '../provider-status';
 import { readCachedGpuInfo } from '../gpu-detector';
 
@@ -524,6 +524,7 @@ export function createServer(
                   source: 'hot_restart',
                   reason: item.devReload?.reason || item.title || 'Prometheus restart complete',
                   surfaces: item.devReload?.surfaces || ['restart'],
+                  batchId: item.devReload?.batchId,
                   timestamp: Date.now(),
                 }));
               }
@@ -567,6 +568,14 @@ export function createServer(
         }
         if (msg?.type === 'creative_command_result' && msg?.commandId) {
           handleCreativeCommandResult(msg);
+          return;
+        }
+        if (msg?.type === 'creative_command_ack' && msg?.commandId) {
+          handleCreativeCommandAck(msg);
+          return;
+        }
+        if (msg?.type === 'creative_bridge_ready') {
+          markCreativeBridgeReady(msg);
           return;
         }
         if (msg?.type === 'browser:mode:set' && msg?.sessionId) {

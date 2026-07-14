@@ -18,6 +18,8 @@ import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry
 import { registerBrowserSessionMetadata } from '../browser-tools';
 import { buildSubagentAssignmentBlock } from '../agents-runtime/subagent-context';
 import { setActivatedToolCategories } from '../session';
+import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
+import { setRuntimeActorContext } from '../runtime-actor.js';
 
 // ─── Injected dependencies (set by server-v2 at startup) ───────────────────────────────────────────
 // These are injected at runtime to avoid circular imports with server-v2.ts
@@ -112,12 +114,8 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
       const identityWs = teamId
         ? ensureTeamAgentIdentity(teamId, agentId, globalAgentWs || undefined)
         : globalAgentWs;
-      const spFile = [path.join(identityWs, 'system_prompt.md'), path.join(identityWs, 'HEARTBEAT.md')]
-        .find(f => fs.existsSync(f));
-      if (spFile) {
-        const raw = fs.readFileSync(spFile, 'utf-8').trim();
-        if (raw) agentRoleBlock = `[YOUR ROLE ON THIS TEAM - ${agentName}]\n${raw}`;
-      }
+      const raw = String(readAgentPromptFile(identityWs, { migrateLegacy: true })?.content || '').trim();
+      if (raw) agentRoleBlock = `[YOUR ROLE ON THIS TEAM - ${agentName}]\n${raw}`;
     } catch {}
   }
 
@@ -152,7 +150,7 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
 
   const callerContext = [
     `[${sourceLabel} - ${team?.name || teamId} | agent: ${agentId}]`,
-    `You are Prometheus. You have been assigned a specific role on this team for this session.`,
+    `You are ${agentName}, a distinct agent on this managed team operating inside Prometheus — not Prom and not the main chat.`,
     ``,
     teamWorkspacePath
       ? [
@@ -315,7 +313,7 @@ export async function runTeamAgentViaChat(
   const allowedWorkPaths = resolveTeamAgentAllowedWorkPaths(team, teamWorkspacePath);
 
   // Load agent role from the team-scoped identity directory.
-  // ensureTeamAgentIdentity bootstraps system_prompt.md from the global agent workspace
+  // ensureTeamAgentIdentity bootstraps AGENT.md from the global agent workspace
   // on first use, then keeps it isolated — so the same agent ID on two different teams
   // can have independent roles without any context bleed.
   let agentRoleBlock = '';
@@ -329,12 +327,8 @@ export async function runTeamAgentViaChat(
         ? ensureTeamAgentIdentity(teamId, agentId, globalAgentWs || undefined)
         : globalAgentWs;
       agentIdentityPath = identityWs;
-      const spFile = [path.join(identityWs, 'system_prompt.md'), path.join(identityWs, 'HEARTBEAT.md')]
-        .find(f => fs.existsSync(f));
-      if (spFile) {
-        const raw = fs.readFileSync(spFile, 'utf-8').trim();
-        if (raw) agentRoleBlock = `[YOUR ROLE ON THIS TEAM — ${agentName}]\n${raw}`;
-      }
+      const raw = String(readAgentPromptFile(identityWs, { migrateLegacy: true })?.content || '').trim();
+      if (raw) agentRoleBlock = `[YOUR ROLE ON THIS TEAM — ${agentName}]\n${raw}`;
     } catch {}
   }
 
@@ -434,7 +428,7 @@ export async function runTeamAgentViaChat(
   // room plus direct queued messages so execution stays focused and affordable.
   const callerContext = [
     `[TEAM DISPATCH — ${team?.name || teamId} | agent: ${agentId}]`,
-    `You are Prometheus. You have been assigned a specific role on this team for this session.`,
+    `You are ${agentName}, a distinct agent on this managed team operating inside Prometheus — not Prom and not the main chat.`,
     ``,
     teamWorkspacePath
       ? [
@@ -482,6 +476,19 @@ export async function runTeamAgentViaChat(
     cronTask.agentWorkspace = teamWorkspacePath;
     cronTask.agentAllowedWorkPaths = allowedWorkPaths;
   }
+  const identityRoot = ensureTeamAgentIdentity(teamId, agentId, agent ? ensureAgentWorkspace(agent as any) : undefined);
+  setRuntimeActorContext(sessionId, {
+    kind: 'agent',
+    surface: 'team_dispatch',
+    agentId,
+    displayName: agentName,
+    teamId,
+    teamName: team?.name || teamId,
+    identityRoot,
+    memoryRoot: identityRoot,
+    executionRoot: teamWorkspacePath || getConfig().getWorkspacePath(),
+    allowedWorkPaths,
+  });
   if (agentRouting.modelOverride) {
     cronTask.executorProvider = agentRouting.providerOverride
       ? `${agentRouting.providerOverride}/${agentRouting.modelOverride}`
@@ -951,11 +958,8 @@ export function buildTeamDispatchTask(input: TeamDispatchBuildInput): TeamDispat
   const workspace = ensureAgentWorkspace(agent as any);
   const dynamicConfig = readSubagentConfig(input.agentId, workspace);
 
-  const systemPromptPath = path.join(workspace, 'system_prompt.md');
-  const agentsMdPath = path.join(workspace, 'AGENTS.md');
-  const systemPrompt = tryReadText(systemPromptPath)
-    || String(dynamicConfig?.system_instructions || (agent as any).system_instructions || '').trim()
-    || tryReadText(agentsMdPath);
+  const systemPrompt = String(readAgentPromptFile(workspace, { migrateLegacy: true })?.content || '').trim()
+    || String(dynamicConfig?.system_instructions || (agent as any).system_instructions || '').trim();
 
   const constraints = normalizeList(dynamicConfig?.constraints ?? (agent as any).constraints);
   const successCriteria = String(
@@ -1005,14 +1009,8 @@ export function buildTeamDispatchTask(input: TeamDispatchBuildInput): TeamDispat
     } catch { /* non-fatal */ }
   } else {
     // No team — use global agent workspace paths as usual
-    const agMdFile = path.join(workspace, 'AGENTS.md');
-    if (fs.existsSync(agMdFile)) focusedPaths.push(`  - Your role prompt:  ${agMdFile}`);
-    const userFile = path.join(workspace, 'USER.md');
-    if (fs.existsSync(userFile)) focusedPaths.push(`  - User profile:      ${userFile}`);
-    const soulFile = path.join(workspace, 'SOUL.md');
-    if (fs.existsSync(soulFile)) focusedPaths.push(`  - Core identity:     ${soulFile}`);
-    const memoryFile = path.join(workspace, 'MEMORY.md');
-    if (fs.existsSync(memoryFile)) focusedPaths.push(`  - Long-term memory:  ${memoryFile}`);
+    const agentPrompt = readAgentPromptFile(workspace, { migrateLegacy: true });
+    if (agentPrompt) focusedPaths.push(`  - Your role prompt:  ${agentPrompt.path}`);
   }
 
   sections.push(

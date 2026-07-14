@@ -20,6 +20,10 @@ const SUBAGENT_SOUL_PATHS = [
   path.join(CONFIG_DIR, 'subagent-soul.md'),
   path.join(process.cwd(), 'src', 'config', 'subagent-soul.md'),
 ];
+const RUNTIME_CONTRACT_PATHS = [
+  path.join(CONFIG_DIR, 'prometheus-runtime-contract.md'),
+  path.join(process.cwd(), 'src', 'config', 'prometheus-runtime-contract.md'),
+];
 const VOICE_SOUL_PATHS = [
   path.join(CONFIG_DIR, 'voice-soul.md'),
   path.join(process.cwd(), 'src', 'config', 'voice-soul.md'),
@@ -52,12 +56,12 @@ const SOUL_EMBODIMENT_GUIDANCE = [
 ].join('\n');
 
 const PROMPT_BUDGET_MINIMAL = {
-  totalChars: intEnv('PROMETHEUS_SUBAGENT_PROMPT_TOTAL_CHARS', 2000),
-  soulChars: 0,
+  totalChars: intEnv('PROMETHEUS_SUBAGENT_PROMPT_TOTAL_CHARS', 14000),
+  soulChars: intEnv('PROMETHEUS_RUNTIME_CONTRACT_CHARS', 3000),
   memoryChars: 0,
   skillsTotalChars: 0,
   skillEachChars: 0,
-  extraChars: 600,
+  extraChars: intEnv('PROMETHEUS_SUBAGENT_EXTRA_CHARS', 10000),
 };
 
 function clampText(text: string, maxChars: number): string {
@@ -80,10 +84,17 @@ export function loadSoul(): string {
 }
 
 // Subagent identity contract — parallel to loadSoul() but written for delegated
-// subagent runs (team + standalone). Falls back to the main soul if a subagent
-// soul file is not present, so behavior degrades gracefully.
+// subagent runs (team + standalone). It intentionally never falls back to the
+// main Prometheus soul: missing subagent configuration must not leak main-agent
+// identity or memory into an isolated worker.
 export function loadSubagentSoul(): string {
-  return readFirstExisting(SUBAGENT_SOUL_PATHS) || readFirstExisting(SOUL_PATHS);
+  return readFirstExisting(SUBAGENT_SOUL_PATHS);
+}
+
+// Canonical capability and quality contract shared by distinct Prometheus actors.
+// Keep loadSubagentSoul during migration so packaged/legacy runtimes can roll back.
+export function loadPrometheusRuntimeContract(): string {
+  return readFirstExisting(RUNTIME_CONTRACT_PATHS) || readFirstExisting(SUBAGENT_SOUL_PATHS);
 }
 
 // Voice identity contract — parallel to loadSoul() but written for the live voice

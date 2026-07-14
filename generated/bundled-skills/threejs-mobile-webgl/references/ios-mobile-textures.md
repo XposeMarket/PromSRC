@@ -31,6 +31,10 @@ texture.needsUpdate = true;
 
 Do not use `LinearMipmapLinearFilter`, `RepeatWrapping`, or mipmaps for NPOT mobile sprite textures.
 
+### flipY orientation exception
+
+Default **`flipY = false`** for CanvasTexture and uploaded sprites. If textures **render upside-down** on device while otherwise correct on desktop, try **`flipY = true`** on the CanvasTexture after the canvas redraw, then `needsUpdate = true`. Evidence: 2026-07-03 Pocket Zombies non-weapon sprites fixed with flipY true on dynamic canvas path. Revert if only some meshes break—per-asset flip may differ.
+
 ## Most Reliable iOS Workaround
 
 If safe NPOT settings are not enough, draw the image into a same-origin power-of-two canvas first, then create a `CanvasTexture`.
@@ -88,3 +92,5 @@ If the scene is opened inside a mobile canvas iframe or PWA, cache-bust the ifra
 ## Control Overlay Check
 
 For mobile games, also inspect touch overlays. A full-screen look pad can steal taps from fire/reload/buy buttons if it has a higher stacking order. Ensure action buttons have a higher `z-index`, `pointer-events:auto`, `touch-action:none`, and stop event propagation in `pointerdown`/`pointerup`.
+
+If the user **cannot look while holding fire**, verify separate touch identifiers: look pad should not use `preventDefault` on the same pointer that fires, and fire button handlers should not block multi-touch on the look region. Intermittent weapon HUD PNG often means race between texture `onload` and UI swap—debounce HUD updates until `needsUpdate` has fired.

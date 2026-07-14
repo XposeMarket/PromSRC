@@ -3943,7 +3943,7 @@ function renderTeamSubagentDetail(team, agentId) {
   if (!agentId) return '<div style="padding:24px;color:var(--muted);font-size:13px;text-align:center">Select a subagent to view details.</div>';
   const ag = _findAgentInTeam(agentId);
   const tabs = ['overview','systemprompt','heartbeat'];
-  const labels = { overview:'Overview', systemprompt:'System Prompt', heartbeat:'Heartbeat' };
+  const labels = { overview:'Overview', systemprompt:'AGENT.md', heartbeat:'Heartbeat' };
   return `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--line);flex-shrink:0">
       <div style="min-width:0">
@@ -4025,7 +4025,7 @@ function renderTeamSubagentSystemPrompt(team, agentId) {
     <div style="display:flex;flex-direction:column;gap:10px;height:100%">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div>
-          <div style="font-size:12px;font-weight:800">system_prompt.md</div>
+          <div style="font-size:12px;font-weight:800">AGENT.md</div>
           <div style="font-size:11px;color:var(--muted);margin-top:2px">Defines this agent's persona, role, and constraints</div>
         </div>
         <div style="display:flex;gap:6px">
@@ -4108,7 +4108,7 @@ async function openTeamSubagentDetail(teamId, agentId) {
 
   // Fetch in parallel
   const [sp, hbMd, hbCfg, refs] = await Promise.all([
-    api(`/api/agents/${encodeURIComponent(agentId)}/system-prompt-md`).catch(() => ({ content: '' })),
+    api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`).catch(() => ({ content: '' })),
     api(`/api/agents/${encodeURIComponent(agentId)}/heartbeat-md`).catch(() => ({ content: '' })),
     api(`/api/heartbeat/agents/${encodeURIComponent(agentId)}`).catch(() => ({ config: {} })),
     api(`/api/agents/${encodeURIComponent(agentId)}/context-refs`).catch(() => ({ references: [] })),
@@ -4164,14 +4164,14 @@ async function saveTeamSubagentSystemPrompt(teamId, agentId) {
   const status = document.getElementById(`ts-sysprompt-status-${agentId}`);
   if (status) status.textContent = 'Saving…';
   try {
-    await api(`/api/agents/${encodeURIComponent(agentId)}/system-prompt-md`, {
+    await api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: cm.getValue() }),
     });
     teamSubagentDetail.systemPrompt = cm.getValue();
     if (status) status.textContent = 'Saved.';
-    bgtToast('Saved', `system_prompt.md updated for ${agentId}`);
+    bgtToast('Saved', `AGENT.md updated for ${agentId}`);
   } catch (err) {
     if (status) status.textContent = `Error: ${err?.message || err}`;
   }
@@ -4179,7 +4179,7 @@ async function saveTeamSubagentSystemPrompt(teamId, agentId) {
 
 async function reloadTeamSubagentSystemPrompt(teamId, agentId) {
   try {
-    const d = await api(`/api/agents/${encodeURIComponent(agentId)}/system-prompt-md`);
+    const d = await api(`/api/teams/${encodeURIComponent(teamId)}/agents/${encodeURIComponent(agentId)}/agent-md`);
     teamSubagentDetail.systemPrompt = d.content || '';
     const cm = _teamCmEditors[`sysprompt:${agentId}`];
     if (cm) cm.setValue(teamSubagentDetail.systemPrompt);

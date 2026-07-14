@@ -1,23 +1,15 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating, running, or improving smoke tests for connectors and integrations: connection status, auth sanity checks, read/write probes, fixture accounts, safe test operations, and result reporting.",
+  "description": "Verify an existing Prometheus connector with status, authentication, read, pagination, rate-limit, error-shape, and dry-run write checks. Use when testing connector readiness or diagnosing an installed integration. Only use after a connector exists; exclude implementation and setup work.",
+  "implicitInvocation": true,
   "triggers": [
-    "connector smoke test",
-    "test connector",
-    "integration smoke test",
-    "verify connector works",
-    "connection status check",
-    "auth sanity test",
-    "safe read probe",
-    "safe write probe",
-    "connector test harness",
-    "integration health check",
-    "connected app test",
-    "smoke test Gmail",
-    "smoke test Slack",
-    "test external app tool",
-    "connector regression test"
+    "run connector smoke test",
+    "test connector dry run",
+    "validate connector health",
+    "verify connector auth",
+    "test connector pagination",
+    "connector readiness check"
   ],
   "categories": [
     "prometheus",
@@ -26,10 +18,13 @@
     "integrations"
   ],
   "requiredTools": [
+    "connection_ops",
+    "mcp_server_tools",
     "connector_list",
     "external_apps",
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "connector-smoke-test-harness"
+  "id": "connector-smoke-test-harness",
+  "name": "connector-smoke-test-harness"
 }

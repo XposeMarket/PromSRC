@@ -19,7 +19,7 @@ import {
   parseHtml,
   validateCompositionHtml,
 } from '@hyperframes/core';
-import { createRenderJob, executeRenderJob } from '@hyperframes/producer';
+import { renderHyperframesWithProducer } from '../dist/gateway/creative/hyperframes-producer.js';
 
 if (typeof globalThis.DOMParser === 'undefined') globalThis.DOMParser = LinkedomDOMParser;
 if (typeof globalThis.document === 'undefined') {
@@ -169,8 +169,6 @@ async function screenshotPreview(browser, label, html, width, height) {
 }
 
 async function renderFixture() {
-  const projectDir = path.join(outDir, 'producer-fixture');
-  fs.mkdirSync(projectDir, { recursive: true });
   const html = normalizeHtml(`<!doctype html><html><head><meta charset="utf-8"><style>
 html,body,#stage{margin:0;width:320px;height:180px;overflow:hidden;background:#111;color:white;font-family:Arial}
 .clip{position:absolute;left:30px;top:70px;font-size:30px;transform:translateX(calc(var(--t, 0) * 180px))}
@@ -182,12 +180,21 @@ html,body,#stage{margin:0;width:320px;height:180px;overflow:hidden;background:#1
     height: 180,
     duration: 1,
   });
-  fs.writeFileSync(path.join(projectDir, 'index.html'), html, 'utf8');
   const outputPath = path.join(outDir, 'producer-fixture.mp4');
-  const job = createRenderJob({ fps: 24, quality: 'draft', format: 'mp4', entryFile: 'index.html' });
-  await executeRenderJob(job, projectDir, outputPath);
+  const rendered = await renderHyperframesWithProducer({
+    html,
+    workspacePath: repoRoot,
+    outputPath,
+    compositionId: 'producer-fixture',
+    fps: 24,
+    quality: 'draft',
+    format: 'mp4',
+    workers: 1,
+    timeoutMs: 120_000,
+  });
   const bytes = fs.statSync(outputPath).size;
   if (bytes < 5000) throw new Error(`producer output looks empty (${bytes} bytes)`);
+  fs.rmSync(rendered.projectDir, { recursive: true, force: true });
   return outputPath;
 }
 
@@ -256,4 +263,5 @@ if (renderSample) {
   }
 }
 
+if (ok) fs.rmSync(outDir, { recursive: true, force: true });
 process.exit(ok ? 0 : 1);

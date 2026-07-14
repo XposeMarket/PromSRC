@@ -1,17 +1,18 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "teams-meeting-pipeline",
-  "name": "Teams Meeting Pipeline",
-  "description": "Add Microsoft Teams meeting discovery, transcript/recording ingestion, action extraction, follow-up drafting, and task sync through Graph-backed connectors.",
+  "name": "teams-meeting-pipeline",
+  "description": "Build a Microsoft Graph-backed Teams meeting pipeline for meeting discovery, transcript or recording ingestion, action extraction, follow-up drafting, and explicit task sync. Use when implementing Teams meeting integration or processing Teams meeting data with user intent.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
+  "implicitInvocation": true,
   "triggers": [
-    "teams meeting",
-    "microsoft teams",
-    "meeting transcript",
-    "meeting notes",
-    "teams connector",
-    "meeting actions"
+    "teams follow up workflow",
+    "teams meeting pipeline",
+    "microsoft teams connector",
+    "teams meeting transcript",
+    "teams recording ingestion",
+    "teams meeting actions"
   ],
   "categories": [
     "prometheus",
@@ -30,5 +31,6 @@
     "workspaceRead": true,
     "workspaceWrite": true,
     "externalSideEffects": true
-  }
+  },
+  "lifecycle": "active"
 }

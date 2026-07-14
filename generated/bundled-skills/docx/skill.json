@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "docx",
+  "name": "docx",
+  "description": "Read, extract, create, and edit Microsoft Word DOCX documents with the installed Node document stack. Use when a task directly involves a .docx file or requires an editable Word deliverable; do not use for PDFs, spreadsheets, or generic prose that does not need a Word artifact.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "summarize this word document",
+    "extract word document text",
+    "create a word document",
+    "read this docx",
+    "export as docx",
+    "edit this docx"
+  ],
+  "categories": [
+    "documents",
+    "docx"
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
+}

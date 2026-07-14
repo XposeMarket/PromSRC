@@ -1,24 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating or editing Mermaid diagrams such as flowcharts, sequence diagrams, ERDs, state diagrams, architecture diagrams, journey maps, or markdown-embedded diagrams.",
+  "description": "Create or edit a Mermaid flowchart, sequence diagram, state diagram, ERD, class diagram, timeline, or other text-native diagram. Use only when Mermaid is explicitly requested or already used in the target document; use SVG for bespoke visual composition.",
   "triggers": [
-    "Mermaid diagram",
-    "flowchart",
-    "sequence diagram",
-    "ERD",
-    "state diagram",
-    "architecture diagram",
-    "draw the workflow",
     "diagram this process",
-    "markdown diagram",
-    "journey map",
-    "graph TD",
+    "draw the workflow",
+    "architecture diagram",
     "visualize architecture",
-    "class diagram",
     "dependency diagram",
-    "process map",
-    "render Mermaid"
+    "sequence diagram",
+    "markdown diagram",
+    "mermaid diagram",
+    "render mermaid",
+    "state diagram",
+    "class diagram",
+    "journey map"
   ],
   "categories": [
     "visualization",
@@ -30,6 +26,7 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "Mermaid Diagrams",
-  "id": "mermaid-diagrams"
+  "name": "mermaid-diagrams",
+  "id": "mermaid-diagrams",
+  "implicitInvocation": false
 }

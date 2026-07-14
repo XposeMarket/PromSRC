@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { ExtensionDescriptor } from './types.js';
 
-const ExtensionKindSchema = z.enum(['provider', 'connector', 'mcp_preset']);
+const ExtensionKindSchema = z.enum(['provider', 'connector', 'mcp_preset', 'integration']);
 const ExtensionTrustLevelSchema = z.enum(['core', 'bundled', 'local', 'third_party', 'marketplace']);
 const ExtensionSetupFieldInputSchema = z.enum([
   'text',
@@ -78,6 +78,7 @@ export const ExtensionDescriptorSchema = z.object({
   runtime: z.object({
     binding: z.string().min(1),
     entrypoint: z.string().min(1).optional(),
+    setupEntrypoint: z.string().min(1).optional(),
     options: ExtensionRuntimeOptionsSchema.optional(),
   }),
   ui: z
@@ -135,6 +136,31 @@ export const ExtensionDescriptorSchema = z.object({
       headersTemplate: z.record(z.string()).optional(),
     })
     .optional(),
+  compatibility: z.object({ pluginApi: z.string().optional(), prometheus: z.string().optional() }).optional(),
+  permissions: z.object({
+    network: z.array(z.string()).optional(), filesystem: z.array(z.string()).optional(),
+    process: z.boolean().optional(), credentials: z.array(z.string()).optional(),
+  }).optional(),
+  connection: z.object({
+    schemaVersion: z.literal(1),
+    aliases: z.array(z.string().min(1)).optional(),
+    domains: z.array(z.string().min(1)).optional(),
+    strategies: z.array(z.object({
+      id: z.string().min(1), adapter: z.string().min(1), priority: z.number().optional(),
+      capabilities: z.array(z.string()).optional(), readOnlyDefault: z.boolean().optional(),
+      authentication: z.object({ type: z.string().min(1), scopes: z.array(z.string()).optional(), audience: z.string().optional() }).optional(),
+      verification: z.array(z.string()).optional(), config: z.record(z.unknown()).optional(),
+    })).min(1),
+    requestedCapabilities: z.array(z.object({
+      id: z.string().min(1), label: z.string().optional(), description: z.string().optional(),
+      risk: z.enum(['read', 'write', 'high_impact']).optional(),
+    })).optional(),
+    verification: z.array(z.string()).optional(),
+    toolPolicy: z.object({
+      defaultExposure: z.enum(['all', 'read-only', 'none']).optional(),
+      unknownTools: z.enum(['allow', 'review', 'blocked']).optional(),
+    }).optional(),
+  }).optional(),
 });
 
 export function parseExtensionDescriptor(raw: unknown, sourcePath: string): ExtensionDescriptor {

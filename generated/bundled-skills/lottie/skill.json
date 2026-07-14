@@ -1,22 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when using, inspecting, embedding, creating, optimizing, or troubleshooting Lottie animations, JSON animation assets, Bodymovin exports, animated icons, or lightweight web motion assets.",
+  "description": "Lottie and dotLottie adapter patterns for HyperFrames. Use when embedding lottie-web JSON animations, .lottie files, @lottiefiles/dotlottie-web players, registering instances on window.__hfLottie, or making After Effects exports deterministic in HyperFrames.",
   "triggers": [
-    "Lottie animation",
-    "Bodymovin export",
-    "Lottie JSON",
-    "animated icon",
-    "embed Lottie",
-    "optimize Lottie",
-    "inspect Lottie file",
-    "create Lottie",
-    "troubleshoot Lottie",
+    "convert animation to lottie",
     "lightweight animation asset",
-    "Lottie web animation",
-    "convert animation to Lottie",
-    "Lottie player",
-    "animation JSON asset"
+    "animation json asset",
+    "lottie web animation",
+    "inspect lottie file",
+    "troubleshoot lottie",
+    "lottie animation",
+    "bodymovin export",
+    "optimize lottie",
+    "animated icon",
+    "create lottie",
+    "lottie player"
   ],
   "categories": [
     "creative",
@@ -29,5 +27,21 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "lottie"
+  "id": "lottie",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "A real .lottie asset rendered through dotLottie Web 0.77.1 into a deterministic 60-frame H.264 export with distinct sampled frame hashes.",
+    "verifiedCapabilities": [
+      "dotlottie_web_0_77",
+      "real_lottie_asset",
+      "deterministic_seek",
+      "h264_export",
+      "distinct_frame_validation"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "name": "lottie"
 }

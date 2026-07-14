@@ -1,3 +1,8 @@
+---
+name: "mcp-server-builder"
+description: "Build or register a local or remote MCP server with typed tools and a Prometheus MCP preset. Use when creating an MCP server, wrapping a local service as MCP, or defining its transport and security boundary; do not use merely to connect an already-defined integration."
+---
+
 # MCP Server Builder
 
 Use this skill when Prometheus should add tools through MCP.
@@ -17,11 +22,11 @@ Current support:
 ## Procedure
 
 1. Decide whether this is better as MCP or a native connector.
-2. For existing MCP servers, create an MCP preset manifest.
+2. For existing MCP servers, create a plugin-owned MCP preset manifest with connection aliases/domains, strategies, auth, verification, and conservative tool policy.
 3. For local scripts/services, prefer a small MCP server with typed tools over arbitrary shell.
-4. Register through `/api/mcp/servers` or extension MCP preset.
-5. Connect, list tools, then activate `mcp_server_tools`.
-6. Smoke-test one read-only tool before any side effect.
+4. Register the preset, then use `connection_ops` for discovery, planning, user auth, connection, and verification.
+5. Reserve `mcp_server_manage` for advanced lifecycle/debug work.
+6. Verify initialization, complete Streamable HTTP/SSE framing, tool discovery, approved exposure, and one safe read.
 
 ## Guardrails
 

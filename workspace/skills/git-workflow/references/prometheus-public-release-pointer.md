@@ -5,7 +5,7 @@ Migrated from **MEMORY.md** `key_decisions` (2026-05-05) on 2026-07-07. Do not d
 ## Canonical runbooks
 
 - **workspace/self/18-public-release.md** — owner-approved flow: scope review, `check:web-ui`, `build`, `build:public`, smoke-test unpacked app, explicit staging, commit/push, publish, verify `releases/latest` and PromSite download routing.
-- **git-workflow** skill — `notes/github-cli-full-access-setup-2026-05-16.md` for `gh` auth and token hygiene (never paste tokens into chat or memory files).
+- **git-workflow** skill — `references/github-authentication.md` for `gh` auth and token hygiene (never paste tokens into chat or memory files).
 
 ## One-line decision (keep in MEMORY if needed)
 

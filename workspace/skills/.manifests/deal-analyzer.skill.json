@@ -1,25 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when evaluating whether a purchase, business deal, used item, SaaS plan, vendor quote, service package, or listing is worth it based on price, value, risk, alternatives, and negotiation angle.",
+  "description": "Analyze the economics, obligations, incentives, risks, leverage, and negotiation options in a proposed business deal, offer, term sheet, acquisition, or partnership. Use for decision analysis; use legal-drafting for clause language and financial-model for a full quantitative model.",
   "triggers": [
     "is this a good deal",
-    "analyze this deal",
-    "compare this offer",
-    "vendor quote",
-    "negotiate price",
-    "worth buying",
-    "price value check",
-    "deal analysis",
-    "used item deal",
-    "SaaS plan comparison",
-    "service package price",
-    "quote review",
     "alternatives to this deal",
-    "should I buy this",
+    "should i buy this",
+    "saas plan comparison",
+    "service package price",
+    "compare this offer",
+    "analyze this deal",
+    "price value check",
     "value for money",
-    "overpaying",
-    "discount negotiation"
+    "used item deal",
+    "discount negotiation",
+    "negotiate price"
   ],
   "categories": [
     "shopping",
@@ -32,6 +27,7 @@
     "shopping_search_products"
   ],
   "lifecycle": "active",
-  "name": "Deal Analyzer",
-  "id": "deal-analyzer"
+  "name": "deal-analyzer",
+  "id": "deal-analyzer",
+  "implicitInvocation": true
 }

@@ -229,20 +229,25 @@ router.post('/api/mcp/servers/:id/oauth/clear', async (req, res) => {
     console.log('[Webhooks] Disabled — set hooks.enabled=true in config to activate.');
     return;
   }
-  if (!hookCfg.token) {
-    console.warn('[Webhooks] hooks.enabled=true but no hooks.token set — webhooks will be disabled until a token is configured.');
+  const providerReady = Object.values(hookCfg.providers || {}).some((provider) =>
+    provider?.enabled === true
+    && Boolean(provider.secret)
+    && Object.keys(provider.events || {}).length > 0
+  );
+  if (!hookCfg.token && !providerReady) {
+    console.warn('[Webhooks] hooks.enabled=true but neither a core token nor a ready provider is configured.');
     return;
   }
   const webhookRouter = buildWebhookRouter({
-    handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode) =>
-      _handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode),
+    handleChat: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter) =>
+      _handleChat(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode, toolFilter),
     addMessage,
     getIsModelBusy: isModelBusy,
     broadcast: broadcastWS,
     deliverTelegram: (text: string) => _telegramChannel.sendToAllowed(text),
   });
   router.use(hookCfg.path, webhookRouter);
-  console.log(`[Webhooks] Listening at ${hookCfg.path} (wake, agent, status)`);
+  console.log(`[Webhooks] Listening at ${hookCfg.path} (${hookCfg.token ? 'core + provider routes' : 'provider routes only'})`);
 })();
 
 // ─── Internal Agent Task endpoint (called by Agent Builder for AI-authoring nodes)

@@ -1,6 +1,10 @@
 ## 37) Runtime Prompt Map (All Agent Surfaces)
 
-Last verified against `src/gateway/routes/chat.router.ts`, `src/gateway/prompt-context.ts`, `src/gateway/tasks/background-task-runner.ts`, `src/gateway/scheduling/cron-scheduler.ts`, `src/gateway/teams/*`, `src/gateway/agents-runtime/subagent-manager.ts`, `src/gateway/boot.ts`, `src/gateway/brain/brain-runner.ts`, and `src/config/soul-loader.ts` on: 2026-06-08.
+Last verified against the active `C:\Users\rafel\PromSRC` working tree and provider/runtime telemetry on: 2026-07-12.
+
+> Authoritative current census: [26-runtime-instruction-census.md](26-runtime-instruction-census.md). It supersedes any older line number, role matrix, token estimate, AGENTS/TOOLS injection claim, or `system_prompt.md` reference still present in the historical detail below.
+
+> 2026-07-10 isolation correction: any older matrix or line-number note below that says a standalone/direct/background or team subagent receives main `USER.md`, workspace `SOUL.md`, `MEMORY.md`, `BUSINESS.md`, intraday/project/CIS context, or retrieved memory is superseded. Subagents now receive the dedicated subagent soul, canonical per-agent `AGENT.md`, explicit assignment/caller/team context, and shared runtime/tool/skill policies only. `system_prompt.md` and `AGENTS.md` are non-destructive migration inputs; `HEARTBEAT.md` is scheduler-only.
 
 This file is the source-verified map of **where runtime prompts live**, **what each agent/runtime receives**, and **what overlaps**. It supplements [03-execution-and-prompting.md](03-execution-and-prompting.md), which describes layers at a high level but does not enumerate every surface, file, or injection difference.
 
@@ -10,29 +14,29 @@ This file is the source-verified map of **where runtime prompts live**, **what e
 
 Almost every live agent turn goes through one function:
 
-- **Entry:** `src/gateway/routes/chat.router.ts` — `handleChat()` at line 1756
-- **Default mode:** `executionMode = 'interactive'` (line 1764)
+- **Entry:** `src/gateway/routes/chat.router.ts` — `handleChat()` at line 2049
+- **Default mode:** `executionMode = 'interactive'` (line 2057)
 
 Each turn's system message is built from **four layers**:
 
 | Layer | Source file | Lines | What it is |
 |-------|-------------|-------|------------|
-| 1. Execution-mode block | `src/gateway/routes/chat.router.ts` | 3105–3158 | `EXECUTION MODE: …` per mode |
-| 2. Core base policy | `src/gateway/routes/chat.router.ts` | 3160–3199 | "You are Prom…", creative/browser/team routing, plan protocol |
-| 3. Personality / memory / tools | `src/gateway/prompt-context.ts` | 964–1320 | `[USER]`, `[SOUL]`, `[MEMORY]`, `[TOOLS]`, skills, CIS, retrieved memory |
+| 1. Execution-mode block | `src/gateway/routes/chat.router.ts` | 3714–3770 | `EXECUTION MODE: …` per mode |
+| 2. Core base policy | `src/gateway/routes/chat.router.ts` | 3802–3850 | identity, capability/visual/creative/team/skill/plan/response policy |
+| 3. Personality / memory / tools | `src/gateway/prompt-context.ts` | 1130–1568 | `[USER]`, `[SOUL]`, `[MEMORY]`, `[TOOLS]`, skills, CIS, retrieved memory |
 | 4. Per-run caller overlay | various (see §4) | — | task context, team dispatch, schedule owner, boot, etc. |
 
 Final system-prompt assembly (`buildSystemPrompt`):
 
 - **File:** `src/gateway/routes/chat.router.ts`
-- **Lines:** 3201–3212
+- **Lines:** 3851–3867
 
 **Ordering difference (important):**
 
 - **`team_subagent`:** `baseSystemPrompt` → model block → recent tool log → **personalityCtx** → **callerContext** → browser state
 - **Everything else:** `baseSystemPrompt` → model block → recent tool log → **callerContext** → browser state → **personalityCtx** → onboarding block (if applicable)
 
-`buildPersonalityContext()` is called at `chat.router.ts:3070` before `buildSystemPrompt()`.
+`buildPersonalityContext()` is called at `chat.router.ts:3677` before `buildSystemPrompt()`.
 
 ---
 
@@ -43,18 +47,18 @@ These are the **on-disk instruction sources** the runtime reads:
 | File | Path | Loaded by | Injected into |
 |------|------|-----------|---------------|
 | Config soul | `src/config/soul.md` or `.prometheus/soul.md` | `loadSoul()` — `src/config/soul-loader.ts:70–72` | `[PROMETHEUS_SOUL]` in interactive, switch_model, voice, proposal execution |
-| USER.md | `workspace/USER.md` | `loadFullMemoryProfile()` — `prompt-context.ts:429–451` | Main chat, background_agent, team_manager, team_subagent, switch_model, voice, scheduled subagent-owner |
+| USER.md | `workspace/USER.md` | `loadFullMemoryProfile()` | Main chat and other Prometheus-owned paths; never standalone/team subagents |
 | SOUL.md | `workspace/SOUL.md` | same | Same as USER (with mode-specific exceptions below) |
 | MEMORY.md | `workspace/MEMORY.md` | same | Same, with per-path char caps |
 | BUSINESS.md | `workspace/BUSINESS.md` | `loadBusinessContextProfile()` — `prompt-context.ts:394–396` | When business context mode is enabled for the session |
 | Intraday notes | `workspace/memory/YYYY-MM-DD-intraday-notes.md` | `prompt-context.ts:1219–1222` | Interactive main chat; skipped for background_agent and all autonomous paths |
-| AGENTS.md | `workspace/AGENTS.md` | `loadWorkspaceBootstrap()` — `soul-loader.ts:247–249` | **Not main chat.** Used by Realtime voice + legacy reactor path |
-| TOOLS.md | `workspace/TOOLS.md` | referenced in `buildToolsContext()` — `prompt-context.ts:864` | Hint only ("read_file('TOOLS.md')"), not full file inject in main chat |
+| AGENTS.md | `workspace/AGENTS.md` | no current bootstrap read | Not injected by current `loadWorkspaceBootstrap()`; legacy documentation only |
+| TOOLS.md | `workspace/TOOLS.md` | explicitly skipped by `loadWorkspaceBootstrap()` | Not injected; live menu/category blocks are authoritative |
 | BOOT.md | `workspace/BOOT.md` | boot snapshot `prompt-context.ts:339–372`; voice `prompt-context.ts:1051` | Boot startup user message; voice agent |
 | HEARTBEAT.md | per-agent workspace | `heartbeat-runner.ts:449–458` | Inlined into heartbeat **user message** |
 | VOICEAGENT.md | `workspace/VOICEAGENT.md` | `loadVoiceAgentMemory()` — `prompt-context.ts:385–392` | Voice/realtime only |
-| Subagent role | `.prometheus/subagents/<id>/system_prompt.md` | `subagent-manager.ts:425–477` (written), `483–520` (read into user prompt) | **User turn**, not system prompt |
-| Team agent role | team-scoped `system_prompt.md` | `team-dispatch-runtime.ts:330–335` | In `callerContext` |
+| Subagent role | `.prometheus/subagents/<id>/AGENT.md` | `agent-prompt-file.ts`, `subagent-manager.ts` | System/caller role overlay |
+| Team agent role | team-scoped `AGENT.md` | `team-workspace.ts`, `team-dispatch-runtime.ts` | In `callerContext` |
 
 **Correction vs older docs:** `workspace/AGENTS.md` is **not** auto-injected into main-chat `handleChat` turns. Main chat gets USER/SOUL/MEMORY via `buildPersonalityContext`, not `loadWorkspaceBootstrap`.
 
@@ -124,12 +128,11 @@ This is the main branching logic for memory, tools, and skills.
 - **Lines:** 1090–1119
 - **Gets:** config soul, USER, SOUL, BUSINESS, MEMORY, clean tool menu (no inherited session categories), CIS, retrieved memory, skills
 
-### Path: `team_subagent`
+### Path: `direct_subagent`, `background_agent`, and `team_subagent`
 
 - **Lines:** 1121–1151
-- **Gets:** USER (3k cap), SOUL (4k), MEMORY (5k), BUSINESS, tools, CIS, skills
-- **Skips:** config soul (`[PROMETHEUS_SOUL]`), long-term memory search, intraday notes
-- **Note:** may fall back to main workspace for memory files if team workspace differs (lines 1124–1127)
+- **Gets:** `[SUBAGENT_SOUL]`, `AGENT.md` via caller/system role overlay, explicit task/team context, tools, wrappers, and skills
+- **Skips:** main config/workspace soul, USER, MEMORY, BUSINESS, CIS, project context, intraday notes, and retrieved memory
 
 ### Path: Autonomous (`background_task`, `proposal_execution`, `cron`, `heartbeat`)
 
@@ -228,11 +231,11 @@ Gets SOUL + MEMORY (no USER), cron execution block, schedule-learned context in 
 
 | Component | File:lines |
 |-----------|------------|
-| Identity load | `cron-scheduler.ts:185–200` — `system_prompt.md` → `AGENTS.md` → `HEARTBEAT.md` |
+| Identity load | `cron-scheduler.ts` → canonical `AGENT.md` with legacy migration |
 | Caller context | `cron-scheduler.ts:203–220` — `[SUBAGENT CHAT CONTEXT]` |
 | Execution | `cron-scheduler.ts:1364–1380` → **`'interactive'`** (not `cron`) |
 
-**Important:** subagent-owned scheduled runs use the **full interactive personality path** (USER + SOUL + MEMORY + config soul), not the lean cron path. Subagent identity is inlined in `callerContext`.
+**Important:** subagent-owned scheduled runs use direct-subagent isolation even though the conversation mechanics are interactive. They receive subagent soul + `AGENT.md` + schedule/task context and do not inherit the main interactive memory stack.
 
 #### Team-owned schedule
 
@@ -251,7 +254,7 @@ Gets SOUL + MEMORY (no USER), cron execution block, schedule-learned context in 
 | Execution mode | `background-task-runner.ts:2094` → `'background_agent'` |
 | Plan protocol | `chat.router.ts:3163–3164` — `bg_plan_*` |
 
-Role instructions live in the **user message**. System prompt still gets interactive-tier personality (USER + SOUL + MEMORY + config soul + tools) because `background_agent` is not in the autonomous list.
+Role instructions come from canonical `AGENT.md` in the system/caller overlay. The `background_agent` personality branch supplies subagent soul, runtime tools, and skills without main USER/SOUL/MEMORY/config-soul inheritance.
 
 Fallback (no handleChat): `task-runner.ts:519–532` — tiny isolated system string.
 
@@ -262,7 +265,7 @@ Fallback (no handleChat): `task-runner.ts:519–532` — tiny isolated system st
 | Caller context | `task-runner.ts:636` |
 | Mode | `task-runner.ts:638` → `'background_agent'` |
 
-Same personality as standalone subagents plus `[Background Agent …]` caller overlay.
+Same isolated subagent personality as standalone subagents plus `[Background Agent …]` caller overlay.
 
 ### 5G) Team manager (`team_manager`)
 
@@ -285,7 +288,7 @@ Gets **full main-chat memory stack** plus large manager workflow overlay.
 | Build helper | `team-dispatch-runtime.ts:93–189` (`buildTeamSubagentCallerContext`) |
 | Personality | `prompt-context.ts:1121–1151` |
 
-Gets lean memory (capped USER/SOUL/MEMORY) + team role in `callerContext`. Skips config soul, intraday, memory search.
+Gets subagent soul + team-scoped `AGENT.md` + team/task context and shared runtime/tool/skill rules. Skips main USER/SOUL/MEMORY/BUSINESS, config soul, project/CIS context, intraday, and memory search.
 
 ### 5I) Heartbeat
 

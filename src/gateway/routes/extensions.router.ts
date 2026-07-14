@@ -13,7 +13,7 @@ import type { ExtensionKind } from '../../extensions/types.js';
 export const router = Router();
 
 function isExtensionKind(value: string): value is ExtensionKind {
-  return value === 'provider' || value === 'connector' || value === 'mcp_preset';
+  return value === 'provider' || value === 'connector' || value === 'mcp_preset' || value === 'integration';
 }
 
 router.get('/api/extensions/catalog', (req, res) => {

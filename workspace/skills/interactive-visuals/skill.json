@@ -1,31 +1,11 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "interactive-visuals",
-  "name": "Interactive Visuals",
-  "description": "Use this skill when the user asks for a polished visual, interactive card, dashboard, chart, comparison table, sources card, map, product carousel, or scannable rich output instead of plain text.",
+  "name": "interactive-visuals",
+  "description": "Deprecated compatibility entry for interactive visual deliverables. Use the canonical interactive-artifacts skill.",
   "version": "1.0.0",
   "entrypoint": "SKILL.md",
-  "triggers": [
-    "show this visually",
-    "make it interactive",
-    "visual card",
-    "rich output",
-    "comparison table",
-    "sources card",
-    "map card",
-    "dashboard view",
-    "chart this",
-    "product carousel",
-    "polished visual",
-    "scannable output",
-    "visual summary",
-    "interactive card",
-    "data card",
-    "present this nicely",
-    "ui card",
-    "make a dashboard",
-    "visualize the results"
-  ],
+  "triggers": [],
   "categories": [
     "visuals",
     "router",
@@ -43,5 +23,7 @@
       "type": "doc",
       "description": "When to use which visual skill; migrated from SOUL Visuals section"
     }
-  ]
+  ],
+  "implicitInvocation": false,
+  "lifecycle": "deprecated"
 }

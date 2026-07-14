@@ -1,6 +1,6 @@
 ---
-name: animejs
-description: Anime.js adapter patterns for HyperFrames. Use when writing Anime.js animations or timelines inside HyperFrames compositions, registering animations on window.__hfAnime, making Anime.js seek-driven and deterministic, or translating Anime.js examples into render-safe HyperFrames HTML.
+name: "animejs"
+description: "Anime.js adapter patterns for HyperFrames. Use when writing Anime.js animations or timelines inside HyperFrames compositions, registering animations on window.__hfAnime, making Anime.js seek-driven and deterministic, or translating Anime.js examples into render-safe HyperFrames HTML."
 ---
 
 # Anime.js for HyperFrames
@@ -22,13 +22,12 @@ The adapter seeks every registered instance with `instance.seek(timeMs)`, where 
 ```html
 <script src="https://cdn.jsdelivr.net/npm/animejs@4.0.2/lib/anime.iife.min.js"></script>
 <script>
-  const anim = anime({
-    targets: ".mark",
+  const anim = anime.animate(".mark", {
     translateX: 280,
     rotate: "1turn",
     opacity: [0, 1],
     duration: 1200,
-    easing: "easeOutExpo",
+    ease: "outExpo",
     autoplay: false,
   });
 
@@ -41,23 +40,22 @@ The adapter seeks every registered instance with `instance.seek(timeMs)`, where 
 
 ```html
 <script>
-  const tl = anime.timeline({
+  const tl = anime.createTimeline({
     autoplay: false,
-    easing: "easeOutCubic",
+    defaults: { ease: "outCubic" },
   });
 
-  tl.add({
-    targets: ".title",
+  tl.add(".title", {
     translateY: [40, 0],
     opacity: [0, 1],
     duration: 650,
-  }).add(
+  }, 0).add(
+    ".accent",
     {
-      targets: ".accent",
       scaleX: [0, 1],
       duration: 450,
     },
-    250,
+    250
   );
 
   window.__hfAnime = window.__hfAnime || [];
@@ -71,7 +69,7 @@ If you use an ES module build, the adapter does not care how the instance was cr
 
 ```html
 <script type="module">
-  import { animate } from "https://cdn.jsdelivr.net/npm/animejs/+esm";
+  import { animate } from "https://cdn.jsdelivr.net/npm/animejs@4.0.2/+esm";
 
   const anim = animate(".chip", {
     x: "18rem",
@@ -111,4 +109,5 @@ npx hyperframes validate
 ## Credits And References
 
 - HyperFrames adapter source: `packages/core/src/runtime/adapters/animejs.ts`.
+- Anime.js v4 exposes an object in its IIFE build. Call `anime.animate()` and `anime.createTimeline()`; do not call `anime()` or `anime.timeline()` as in v3 examples.
 - Anime.js documentation for `autoplay`, `pause()`, and `seek()`: https://animejs.com/documentation/

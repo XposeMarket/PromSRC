@@ -1,27 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when creating or choosing charts, graphs, KPI visuals, market charts, trend lines, comparisons, bar/line/pie/radar charts, or numeric visualizations.",
+  "description": "Render a live inline Chart.js chart in chat when the user asks to chart, graph, plot, or visualize numeric data, KPI trends, comparisons, distributions, or correlations. Use only for inline charts; do not save files or use this for dashboards, interactive apps, or presentation decks.",
   "triggers": [
-    "make a chart",
-    "graph this",
-    "visualize the data",
-    "KPI chart",
-    "trend line",
-    "bar chart",
-    "line chart",
-    "pie chart",
-    "radar chart",
     "compare these numbers",
-    "financial chart",
-    "analytics visual",
-    "plot this data",
-    "show a graph",
-    "chart card",
-    "data visualization",
-    "sparkline",
     "time series chart",
-    "dashboard chart"
+    "make a chart",
+    "show a graph",
+    "visualize the data",
+    "plot this data",
+    "analytics visual",
+    "financial chart",
+    "dashboard chart",
+    "radar chart",
+    "graph this",
+    "trend line"
   ],
   "categories": [
     "charts",
@@ -32,6 +25,7 @@
     "show_ui_card"
   ],
   "lifecycle": "active",
-  "name": "Chart Visualizer",
-  "id": "chart-visualizer"
+  "name": "chart-visualizer",
+  "id": "chart-visualizer",
+  "implicitInvocation": true
 }

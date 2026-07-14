@@ -7,6 +7,7 @@ import { getConfigErrors } from './config-schema.js';
 import { ensurePublicWorkspaceScaffold } from './public-workspace.js';
 import { isPublicDistributionBuild } from '../runtime/distribution.js';
 import { listProviderSecretFieldPaths } from '../providers/provider-registry.js';
+import { ensureAgentPromptFile } from '../agents/agent-prompt-file.js';
 
 function migrateLegacyDir(legacyDir: string, targetDir: string): void {
   try {
@@ -342,6 +343,7 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   },
   agents: [] as AgentDefinition[],
   agent_model_defaults: {},
+  agent_model_default_reasoning: {},
   agent_model_default_templates: [],
   active_agent_model_default_template: '',
   default_agent_model_template: '',
@@ -364,6 +366,9 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       compactionModel: '',
       maxConsecutiveJudgeFailures: 3,
       maxConsecutiveRuntimeFailures: 3,
+      maxIterations: 100,
+      maxNoProgressTurns: 8,
+      completionVerificationEnabled: true,
       permissions: {
         approvalMode: 'never',
         hardDenyEnabled: true,
@@ -697,6 +702,9 @@ const SECRET_FIELD_MAP: Array<[string[], string]> = [
     [['llm', 'providers', providerId, field], `llm.${providerId}.${field}`] as [string[], string]
   )),
   [['hooks', 'token'],                             'hooks.token'],
+  [['hooks', 'providers', 'github', 'secret'],     'hooks.providers.github.secret'],
+  [['hooks', 'providers', 'stripe', 'secret'],     'hooks.providers.stripe.secret'],
+  [['hooks', 'providers', 'slack', 'secret'],      'hooks.providers.slack.secret'],
 ];
 
 function deepGet(obj: any, keys: string[]): string | undefined {
@@ -977,7 +985,7 @@ export function getAgentById(id: string): AgentDefinition | null {
 
 /**
  * Ensures the workspace directory exists for an agent.
- * Also bootstraps missing AGENTS.md with a blank template if the
+ * Also bootstraps missing AGENT.md with a role template if the
  * workspace is brand new.
  */
 export function ensureAgentWorkspace(agent: AgentDefinition): string {
@@ -986,11 +994,9 @@ export function ensureAgentWorkspace(agent: AgentDefinition): string {
     fs.mkdirSync(ws, { recursive: true });
   }
 
-  // Bootstrap AGENTS.md so the agent has editable role guidance.
-  const agentsMd = path.join(ws, 'AGENTS.md');
-  if (!fs.existsSync(agentsMd)) {
-    fs.writeFileSync(agentsMd, [
-      `# AGENTS.md - ${agent.name}`,
+  // Bootstrap or migrate the canonical per-agent identity prompt.
+  ensureAgentPromptFile(ws, [
+      `# ${agent.name}`,
       '',
       '## Role',
       agent.description ?? 'No description set. Update this file to define your role.',
@@ -1002,6 +1008,17 @@ export function ensureAgentWorkspace(agent: AgentDefinition): string {
       '',
       '## Output Format',
       'Return a concise summary of what was accomplished.',
+    ].join('\n'));
+
+  const memoryMd = path.join(ws, 'MEMORY.md');
+  if (!fs.existsSync(memoryMd)) {
+    fs.writeFileSync(memoryMd, [
+      `# MEMORY.md - ${agent.name}`,
+      '',
+      'Durable personal memory for this agent.',
+      '',
+      'Store role-specific lessons, decisions, corrections, preferences, and open threads that should survive future runs.',
+      'Do not copy main-user memory or unrelated shared-team truth into this file.',
     ].join('\n'), 'utf-8');
   }
 
@@ -1018,7 +1035,7 @@ export function ensureAgentWorkspace(agent: AgentDefinition): string {
       '## Example Tasks',
       '- Check for new trends in [topic] and write a brief to workspace/reports/',
       '- Post a draft to workspace/drafts/ for human review',
-      '- Update USER.md, SOUL.md, or MEMORY.md with anything new learned',
+      '- Record any task-specific output in this agent workspace when appropriate',
       '',
       '## Rules',
       '- Always write outputs to files, never just respond in chat',

@@ -1,0 +1,24 @@
+{
+  "name": "chatgpt-desktop-restart",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "ChatGPT installation and visible process discovery, registered desktop-tool contracts, fail-closed reporting, and a disposable process restart lifecycle passed; the real app remains correctly confirmation-bound.",
+    "verifiedCapabilities": [
+      "chatgpt_app_discovery",
+      "chatgpt_process_discovery",
+      "registered_desktop_tools",
+      "disposable_process_lifecycle",
+      "confirmation_boundary",
+      "fail_closed_completion_contract"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  },
+  "id": "chatgpt-desktop-restart",
+  "description": "Close, relaunch, refocus, and visually verify the ChatGPT desktop app on Windows when the user explicitly asks to restart or reopen it. Do not invoke for ordinary ChatGPT or coding requests.",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "lifecycle": "active"
+}

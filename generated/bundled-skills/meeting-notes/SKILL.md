@@ -1,9 +1,6 @@
 ---
-name: meeting-notes
-description: Use this skill when the user provides a transcript, rough notes, voice-note summary, email recap, call summary, or messy meeting dump and wants clean meeting notes. Triggers on phrases like summarize this meeting, meeting notes, extract action items, decisions made, clean up these notes, call recap, standup notes, sales call notes, 1:1 notes, retrospective notes, and turn this transcript into notes. Use it to separate context, decisions, action items, discussion points, owners, deadlines, and open questions.
-emoji: "🧩"
-version: 1.1.0
-triggers: meeting notes, summarize meeting, extract action items, decisions made, clean up notes, call recap, standup notes, sales call notes, 1:1 notes, retrospective notes, transcript to notes, meeting summary, action items, follow-ups, open questions
+name: "meeting-notes"
+description: "Use this skill when the user provides a transcript, rough notes, voice-note summary, email recap, call summary, or messy meeting dump and wants clean meeting notes. Triggers on phrases like summarize this meeting, meeting notes, extract action items, decisions made, clean up these notes, call recap, standup notes, sales call notes, 1:1 notes, retrospective notes, and turn this transcript into notes. Use it to separate context, decisions, action items, discussion points, owners, deadlines, and open questions."
 ---
 
 # Meeting Notes

@@ -1,24 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when building or editing GSAP animations, timelines, ScrollTrigger effects, staggered motion, landing-page motion, SVG animation, or advanced JavaScript animation sequencing.",
+  "description": "GSAP animation reference for HyperFrames compositions. Use for paused timelines, deterministic seeking, tween methods, easing, stagger, labels, nesting, transforms, and performance when a HyperFrames motion task specifically uses GSAP.",
   "triggers": [
-    "GSAP animation",
-    "use GSAP",
-    "ScrollTrigger",
-    "GSAP timeline",
-    "animate with GSAP",
+    "landing page animation",
+    "pin section animation",
+    "animate with gsap",
+    "reveal on scroll",
+    "advanced web animation",
+    "timeline animation",
     "stagger animation",
     "scroll animation",
-    "SVG GSAP",
-    "landing page animation",
     "motion sequence",
-    "timeline animation",
-    "GreenSock",
-    "GSAP easing",
-    "pin section animation",
-    "reveal on scroll",
-    "advanced web animation"
+    "gsap animation",
+    "gsap timeline",
+    "gsap easing"
   ],
   "categories": [
     "creative",
@@ -31,6 +27,19 @@
     "browser_automation"
   ],
   "lifecycle": "active",
-  "name": "GSAP",
-  "id": "gsap"
+  "name": "gsap",
+  "id": "gsap",
+  "status": "ready",
+  "implicitInvocation": false,
+  "health": {
+    "state": "ready",
+    "reason": "GSAP package import, paused timeline construction, deterministic seek, and visible browser snapshot passed.",
+    "verifiedCapabilities": [
+      "package_import",
+      "paused_timeline",
+      "browser_seek_snapshot"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  }
 }

@@ -28,12 +28,12 @@ export interface SpawnOptions {
   /**
    * Override the workspace path for this agent run.
    * For team dispatches: pass the team workspace so file tools operate on
-   * the shared team workspace, while system_prompt.md is read from the
+   * the shared team workspace, while AGENT.md is read from the
    * team-scoped subagent identity directory.
    */
   workspacePath?: string;
   /**
-   * Team ID for this dispatch. When set, the agent's identity (system_prompt.md)
+   * Team ID for this dispatch. When set, the agent's identity (AGENT.md)
    * is loaded from a per-team isolated directory. This makes
    * the same agent act as completely
    * separate entities in different teams — no context bleed between teams.
@@ -273,7 +273,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
     : ensureAgentWorkspace(agent);
   // If a teamId is provided, use a per-team isolated identity directory so the
   // same agent can serve multiple teams as completely separate entities.
-  // This prevents any cross-team context bleed via shared system_prompt.md.
+  // This prevents any cross-team context bleed via shared AGENT.md.
   const identityWorkspace = options.teamId
     ? ensureTeamAgentIdentity(options.teamId, options.agentId, agentOwnWorkspace)
     : agentOwnWorkspace;
@@ -285,7 +285,8 @@ export async function spawnAgent(options: SpawnOptions): Promise<SpawnResult> {
   // to a specific project directory while identity/artifacts stay separate.
   const workspacePath = options.workspacePath || agentExecutionWorkspace;
   const maxSteps = options.maxSteps ?? agent.maxSteps ?? 8;
-  // Subagents use the subagent soul plus their own system_prompt.md identity.
+  // Subagents use the shared runtime contract plus their own AGENT.md identity
+  // and private MEMORY.md. They never inherit Prom's persona files.
   const promptMode = 'minimal';
   // Sub-agents run with full tool access.
   const agentToolProfile = 'full';

@@ -710,6 +710,8 @@ export function renderProviderUsageCard(p) {
   if (windows.length) {
     body += windows.map(w => renderUsageGauge(w.label, w.used_percent, w.reset_at)
       + (w.detail ? `<div class="usage-gauge-reset">${escHtml(w.detail)}</div>` : '')).join('');
+  } else if (p.usage_scope === 'model') {
+    body = `<div class="usage-provider-note">Codex Spark limit data is currently unavailable.</div>`;
   } else if (p.budget && p.budget.limit_tokens > 0) {
     body = renderUsageGauge('Monthly budget', p.budget.used_percent, null)
       + `<div class="usage-gauge-reset">${compactNumber(p.budget.used_tokens)} / ${compactNumber(p.budget.limit_tokens)} tokens</div>`;

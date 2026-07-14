@@ -43,11 +43,15 @@ Key rules:
 - `deploy_analysis_team` lives under `agents_and_teams`
 - `browser_automation` is wrapper-first: the model-facing surface is `browser_session`, `browser_observe`, `browser_act`, and `browser_extract`
 - `desktop_automation` is wrapper-first: the model-facing surface is `desktop_screen`, `desktop_apps`, `desktop_window`, `desktop_input`, `desktop_macro`, and `desktop_background`
+- Desktop wrapper performance behavior (2026-07-13): `desktop_screen(action:"doctor")` is a fast health check by default; pass `deep:true` only for live screenshot/OCR/UI Automation probes. Exact-window input skips redundant focus when the target is already foreground. `desktop_window(action:"text")` supports `query`, `max_chars`, and `max_lines`; `desktop_input(action:"clipboard_get")` supports `query`, `max_chars`, `head`, `tail`, and `metadata_only` to bound model-facing output. A conservative 250ms desktop-context cache and 500ms generation-safe exact-window frame cache remove duplicate enumeration/capture inside tightly grouped actions. Structured accessibility results classify chrome-only surfaces and direct callers to screenshot/OCR instead of a redundant full-tree probe.
+
+- Windows exact-window input uses strong `window_token` identity (HWND + PID + process start), persistent native capture/input helpers, and a single prepared-window hot path. Screenshot-anchored clicks reuse the freshly validated window for coordinate safety instead of re-enumerating the whole desktop; stale token, geometry, generation, and screenshot checks still fail closed. Ordinary wrapper screenshots discard degenerate/1×1 schema-placeholder regions, while `region_screenshot` preserves explicit native crops.
 - `external_apps` is wrapper-first for the large bundled connectors: X/xAI uses `x_search_ops`, `x_posts`, `x_users`, `x_lists`, `x_dm`, and `x_admin`; Vercel uses `vercel_ops`
 - `agents_and_teams` is wrapper-first for non-core agent/team operations: `agent_ops`, `agent_chat_ops`, `team_ops_wrapper`, and `team_collab_ops`
 - `team_ops_wrapper` is the current model-facing managed-team wrapper name; a future cleanup may expose `team_ops` as the friendlier primary name while keeping `team_ops_wrapper` as an alias
 - `workspace_write` is wrapper-first: the model-facing surface is `workspace_read`, `workspace_edit`, `workspace_run`, `workspace_git`, `workspace_safety`, and `workspace_code_nav`
 - `workspace_run` is the canonical model-facing command/process/check wrapper under `workspace_write`; hidden compatibility tools `terminal`, `run_command`, `start_process`, `process_status`, `process_log`, `process_wait`, `process_kill`, and `process_submit` remain executable internals
+- Media-assets behavior (2026-07-13): `analyze_video` preserves `analysis_mode` (`quick`, `detail`, or `both`) and detail budgets through the shared executor, uses compact probe/audio summaries by default, and only returns full ffprobe JSON when `include_raw_probe:true`. Transcription uses the configured speech-to-text provider and returns explicit requested/available/provider/note status. `download_media` resolves Prometheus-bundled FFmpeg/FFprobe and passes their location to yt-dlp, including audio-only extraction.
 - `prometheus_source_read` is wrapper-first: `dev_source_read` covers src/, web-ui/, and allowlisted prom-root list/stats/read/batch/grep actions; old granular read helpers remain executable internals
 - `prometheus_source_write` is wrapper-first after approval: `dev_source_edit` covers approved src/web-ui patchsets, surgical edits, full writes, deletes, verification, and apply-live; old granular write helpers remain executable internals
 - `schedule_job` is core; deeper schedule operator tools such as history/detail/output/patch/stuck-control live under `automations`
@@ -188,6 +192,16 @@ Direct executor switch handlers still own lower-level or specialized families:
 - supervised process tools
 - browser and desktop automation tools
 - Creative, HTML Motion, HyperFrames, and composition tools
+
+Desktop wrapper performance/behavior notes (2026-07-13):
+
+- `desktop_screen(action:"doctor", deep:false)` is the routine health path; deep screenshot/OCR/UIA probes remain opt-in with `deep:true`.
+- Exact-window screenshot capture keeps a short-lived native frame cache keyed by strong `window_token` plus visual generation and bounds. Reuse is intentionally invalidated by input/window mutations so speed does not weaken stale-state safety.
+- A successful exact-window focus updates the active-window cache, allowing the next matching click to skip redundant foreground activation while retaining strong PID/process-start identity validation.
+- `desktop_input(action:"clipboard_get")` supports `query`, `max_chars`, `head`, `tail`, `metadata_only`, and `include_length`; use bounded or metadata-only reads unless full clipboard content is necessary.
+- `desktop_window(action:"accessibility_state")` classifies shallow UIA results as `chrome_only` and returns a screenshot/OCR routing hint. Avoid following that with a redundant full accessibility-tree probe.
+- Model-facing desktop wrappers remain six unified tools; runtime argument normalization forwards only action-relevant values to canonical executors even though the provider-visible JSON schema is intentionally broad for compatibility.
+
 - proposal/admin fallback tools and legacy compatibility names
 
 Video-mode tool guard to preserve:
@@ -249,7 +263,7 @@ Current model-facing web/media tool surface includes:
 
 Current behavior:
 
-- `web_search` handles preferred-provider, forced-provider, and multi-provider search. Use `provider: "multi"` or `multi_engine: true` for all configured providers; use `provider: "tinyfish" | "tavily" | "google" | "brave" | "ddg" | "xai"` for a single provider check.
+- `web_search` defaults to the preferred provider from Settings for low-latency searches. Use `provider: "multi"` or `multi_engine: true` for wide/deep research across all configured providers; use `provider: "tinyfish" | "tavily" | "google" | "brave" | "ddg" | "xai"` for a forced single-provider check. `shopping_search_products` follows the same fast preferred-provider default and accepts `provider: "multi"` when broader product discovery is worth the extra latency.
 - `web_search` accepts `fetch_top_k` and `fetch_max_chars` so a search can fetch its top result URLs in the same call
 - `web_search` accepts `provider_timeout_ms` for diagnostics/provider checks. Default per-provider timeout is 6000ms, clamped to 1000-15000ms, so single-provider failures such as TinyFish timeouts fail fast instead of dragging the whole tool loop.
 - `web_fetch` reads full page content for one URL after `web_search`, or reads several URLs in parallel when called with `urls`
@@ -275,6 +289,7 @@ Implementation facts for the 2026-06-17 workspace batch-file-tools update:
 - `src/gateway/tool-builder.ts` exposes `dev_source_read` under `prometheus_source_read` and `dev_source_edit` under `prometheus_source_write`, while hiding the granular source/web-ui/prom-root read/write schemas through `SCHEMA_HIDDEN_COMPAT_TOOL_NAMES`
 - `src/gateway/tool-builder.ts` exposes wrapper-only browser/desktop schemas under `browser_automation` and `desktop_automation`, while hiding granular browser/desktop schemas through `SCHEMA_HIDDEN_COMPAT_TOOL_NAMES`
 - `search_files(directory:"src/..."|"web-ui/...")` delegates to `grep_source`/`grep_webui_source` in the direct executor; `file_tree(path:"src/..."|"web-ui/...")` renders compact trees from the Prometheus project source roots
+- broad workspace `search_files` is asynchronous and yields to the event loop; it skips individual files larger than 5 MiB by default (configurable per call with `max_file_bytes`, hard cap 25 MiB) and reports representative skipped paths so giant audit indexes/logs cannot freeze gateway health
 - `read_files_batch` accepts `src/...` and `web-ui/...` entries and delegates those reads through the source-read handlers, keeping Prometheus self-edit inspection batched and read-only
 
 - `workspace_read(action:"batch_read")` should be preferred over serial reads when inspecting two or more workspace files before an edit
@@ -300,14 +315,15 @@ Implementation facts for the 2026-06-05 batch research update:
 **When to use:** Any time the user asks to find, compare, or show products from a website (Amazon, Best Buy, Google Shopping, etc.).
 
 **The correct workflow (always do this in order):**
-1. Use `browser_open` to navigate to the site/search results
-2. Use `browser_extract_structured`, `browser_scroll_collect_v2`, or `browser_run_js` to extract product data (title, price, rating, image URL, product URL)
-3. Curate: pick the 3–8 best/most relevant items — do NOT dump all results
-4. Call `show_ui_card({ type: "product_carousel", payload: { title: "...", items: [...] } })` — the UI renders the cards automatically
+1. Call `shopping_search_products` first. It preserves provider thumbnails, fetches page metadata, extracts JSON-LD/Open Graph/large page images, and caches usable images locally.
+2. Use `browser_open` plus `browser_extract_structured`, `browser_scroll_collect_v2`, or `browser_run_js` only when the structured result is incomplete, the page is JS-only, or visual/login verification is needed.
+3. Curate the 3–8 best/most relevant items — do NOT dump all results.
+4. Call `show_ui_card({ type: "product_carousel", payload: { title: "...", items: [...] } })`. The display tool normalizes common field aliases and performs a final best-effort metadata/image enrichment pass.
 
 **Item fields:**
 - `title` (required), `productUrl` (required)
 - `price` — string like "$38.49"
+- `listPrice` — optional original/MSRP price
 - `description` — one short line, e.g. "Top-rated for overall cleaning and durability."
 - `rating` — number 0–5
 - `reviews` — review count
@@ -315,10 +331,11 @@ Implementation facts for the 2026-06-05 batch research update:
 - `imageUrl` — direct image URL from the page (preferred — use the product image src you find in the DOM)
 - `imagePath` — only if you downloaded the image to workspace with browser tools
 - `merchant` — "Amazon", "Best Buy", etc.
+- `availability`, `seller`, `sku`, `asin`, `confidence` — optional normalized provider/product metadata retained on the card payload
 
 **Important rules:**
-- Always call `show_ui_card` AFTER doing your own extraction — the tool is just the display step
+- Always gather real product URLs first; the display tool may fill missing fields, but it does not invent products.
 - You decide the curation (which products, how many, what tags) — not the tool
-- `imageUrl` from the page is fine to pass directly; you do NOT need to download images unless the URL is behind auth
+- Pass any image already supplied by the provider/page. The tool caches it under `downloads/product-carousel/` when possible so expiring or hotlink-protected URLs remain renderable.
 - Keep descriptions short and factual — one line per card maximum
 - If the user says "show me X on Amazon" and you can browse, always use the carousel rather than a plain list

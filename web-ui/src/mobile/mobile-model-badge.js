@@ -17,6 +17,7 @@
 // threshold as best-effort. All paths degrade silently.
 
 import { mobileGatewayFetch } from './mobile-api.js';
+import { effortOptions, supportsFastSpeed } from '../reasoning-capabilities.js';
 
 // ── Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ──
 const BUILTIN_LABELS = {
@@ -32,8 +33,8 @@ const BUILTIN_LABELS = {
 };
 
 const BUILTIN_STATIC_MODELS = {
-  openai: ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
@@ -257,6 +258,13 @@ function _setBadgeLabel(label) {
   return safe;
 }
 
+function _setBadgeFast(fast) {
+  window.__pmModelBadgeFast = !!fast;
+  document.querySelectorAll('.pm-model-badge .pm-model-speed-icon').forEach((el) => {
+    el.hidden = !fast;
+  });
+}
+
 // ── Badge label refresh ──────────────────────────────────────────────────────
 export async function refreshMobileModelBadge(force = false, modelChangeDetail = null) {
   const eventModel = _modelDetail(modelChangeDetail || {});
@@ -271,6 +279,8 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
   }
   const llm = await _loadLlm(force);
   const { provider, model } = _activeModel(llm);
+  const cfg = llm?.providers?.[provider] || {};
+  _setBadgeFast(supportsFastSpeed(provider, model) && (cfg.speed === 'fast' || cfg.fast_mode === true));
   return _setBadgeLabel(prettifyModelName(model, provider));
 }
 
@@ -381,14 +391,14 @@ let _reasoningSaveTimer = null;
 let _reasoningSaveChain = Promise.resolve();
 
 function _effortOptions(provider, cfg = {}) {
-  if (provider === 'openai') return EFFORT_OPTIONS;
-  if (provider === 'openai_codex') return CODEX_EFFORT_OPTIONS;
+  if (provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic') {
+    return effortOptions(provider, cfg.model || '');
+  }
   if (provider === 'perplexity') return PERPLEXITY_EFFORT_OPTIONS;
   if (provider === 'xai') {
     const model = String(cfg.model || '').trim();
     return /^grok-4\.20-multi-agent(?:-|$)/i.test(model) ? XAI_MULTI_AGENT_EFFORT_OPTIONS : XAI_EFFORT_OPTIONS;
   }
-  if (provider === 'anthropic') return ANTHROPIC_EFFORT_OPTIONS;
   return null;
 }
 
@@ -569,21 +579,31 @@ function _renderAdvancedSheet() {
     _advancedRow('Model', prettifyModelName(model, provider), 'model'),
     _advancedRow('Intelligence', options ? _effortLabel(effortValue, provider) : 'Default', 'intelligence', { disabled: !options }),
   ];
-  if (provider === 'anthropic') {
-    rows.push(_advancedRow('Speed', cfg.fast_mode === true ? 'Fast' : 'Standard', 'speed'));
-  }
+  if (supportsFastSpeed(provider, model)) rows.push(_advancedRow('Speed', cfg.speed === 'fast' || cfg.fast_mode === true ? 'Fast' : 'Standard', 'speed'));
   const body = _setSheetBody(`<div class="pm-advanced-panel">${rows.join('')}</div>`);
   if (!body) return;
   body.querySelector('[data-action="provider"]')?.addEventListener('click', _renderProviderList);
   body.querySelector('[data-action="model"]')?.addEventListener('click', () => _renderModelList(provider));
   body.querySelector('[data-action="intelligence"]')?.addEventListener('click', () => _renderEffortList(provider));
-  body.querySelector('[data-action="speed"]')?.addEventListener('click', () => {
-    const nextFastMode = cfg.fast_mode !== true;
-    _queueReasoningSave(provider, { fast_mode: nextFastMode }, true);
-    const merged = { ...cfg, fast_mode: nextFastMode };
+  body.querySelector('[data-action="speed"]')?.addEventListener('click', () => _renderSpeedList(provider));
+}
+
+function _renderSpeedList(provider) {
+  const cfg = (_llmCache?.providers || {})[provider] || {};
+  if (!supportsFastSpeed(provider, cfg.model || '')) return _renderAdvancedSheet();
+  const current = cfg.speed === 'fast' || cfg.fast_mode === true ? 'fast' : 'standard';
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">‹</button> Speed`);
+  const rows = ['standard', 'fast'].map(value => `<button type="button" class="pm-msheet-row" data-speed="${value}"><span class="pm-msheet-row-label">${value === 'fast' ? 'Fast' : 'Standard'}</span>${value === current ? '<span class="pm-msheet-check">✓</span>' : ''}</button>`).join('');
+  const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
+  document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
+  body?.querySelectorAll('[data-speed]').forEach(btn => btn.addEventListener('click', () => {
+    const speed = btn.getAttribute('data-speed') === 'fast' ? 'fast' : 'standard';
+    _queueReasoningSave(provider, { speed }, true);
+    const merged = { ...cfg, speed }; delete merged.fast_mode;
     if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+    _setBadgeFast(speed === 'fast');
     _renderAdvancedSheet();
-  });
+  }));
 }
 
 function _renderProviderList() {

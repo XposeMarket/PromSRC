@@ -26,30 +26,35 @@ const FINDING_RULES: Array<{
   severity: SkillSafetySeverity;
   message: string;
   pattern: RegExp;
+  ignoreWhenNegated?: boolean;
 }> = [
   {
     id: 'prompt-injection-ignore-instructions',
     severity: 'critical',
     message: 'Tells the agent to ignore or override higher-priority instructions.',
     pattern: /\b(ignore|disregard|forget)\s+(all\s+)?(previous|prior|above|system|developer)\s+instructions?\b/i,
+    ignoreWhenNegated: true,
   },
   {
     id: 'prompt-injection-system-prompt',
     severity: 'critical',
     message: 'References hidden/system/developer prompt extraction or replacement.',
-    pattern: /\b(system prompt|developer message|hidden instructions?|reveal.*instructions?|print.*system)\b/i,
+    pattern: /(?:\b(reveal|extract|dump|print|expose|leak|steal|replace|override)\b[\s\S]{0,80}\b(system prompts?|developer messages?|hidden instructions?)\b|\b(system prompts?|developer messages?|hidden instructions?)\b[\s\S]{0,80}\b(reveal|extract|dump|print|expose|leak|steal|replace|override)\b)/i,
+    ignoreWhenNegated: true,
   },
   {
     id: 'permission-bypass',
     severity: 'critical',
     message: 'Encourages bypassing tool permissions, approval, sandbox, or policy checks.',
     pattern: /\b(bypass|disable|circumvent)\s+(approval|permission|sandbox|policy|guardrail|safety)\b/i,
+    ignoreWhenNegated: true,
   },
   {
     id: 'secret-exfiltration',
     severity: 'critical',
     message: 'Appears to send secrets or process environment data to an external endpoint.',
-    pattern: /\b(process\.env|env\s*\||\$[A-Z0-9_]{6,}|secret|api[_-]?key|token)\b[\s\S]{0,140}\b(curl|wget|fetch|http|https|post|upload)\b/i,
+    pattern: /(?:\b(process\.env|printenv|\.env\b|secrets?\s+(?:file|store)|api[_-]?keys?)\b[\s\S]{0,160}\b(exfiltrat\w*|steal\w*|dump\w*|upload\s+(?:all|raw)|send\s+(?:all|raw)|attacker|pastebin|webhook\.site)\b|\b(exfiltrat\w*|steal\w*|dump\w*|upload\s+(?:all|raw)|send\s+(?:all|raw)|attacker|pastebin|webhook\.site)\b[\s\S]{0,160}\b(process\.env|printenv|\.env\b|secrets?\s+(?:file|store)|api[_-]?keys?)\b)/i,
+    ignoreWhenNegated: true,
   },
   {
     id: 'shell-pipe-to-shell',
@@ -92,6 +97,11 @@ function excerptFor(text: string, matchIndex: number): string {
   return text.slice(start, end).replace(/\s+/g, ' ').trim();
 }
 
+function isNegated(text: string, matchIndex: number): boolean {
+  const prefix = text.slice(Math.max(0, matchIndex - 48), matchIndex);
+  return /(?:\bdo\s+not|\bdon['’]t|\bnever|\bmust\s+not|\bcannot|\bcan['’]t|\bwithout)\s+(?:silently\s+|ever\s+|attempting\s+to\s+)?$/i.test(prefix);
+}
+
 function verdictFor(findings: SkillSafetyFinding[]): SkillSafetyVerdict {
   if (findings.some((f) => f.severity === 'critical')) return 'critical';
   if (findings.some((f) => f.severity === 'warn')) return 'warn';
@@ -104,6 +114,7 @@ export function scanSkillText(content: string, file = 'SKILL.md'): SkillSafetySc
   for (const rule of FINDING_RULES) {
     const match = rule.pattern.exec(text);
     if (!match) continue;
+    if (rule.ignoreWhenNegated && isNegated(text, match.index)) continue;
     findings.push({
       id: rule.id,
       severity: rule.severity,

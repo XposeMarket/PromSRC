@@ -1,0 +1,20 @@
+{
+  "ownership": "upstream-managed",
+  "implicitInvocation": false,
+  "status": "ready",
+  "health": {
+    "state": "ready",
+    "reason": "Official skill pinned from heygen-com/hyperframes and restricted to explicit specialist selection by the Creative Director.",
+    "verifiedCapabilities": [
+      "official_upstream_skill"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-11"
+  },
+  "id": "general-video",
+  "name": "general-video",
+  "description": "The fallback workflow for authoring or editing any custom HyperFrames composition at any length or format — longer / multi-scene pieces, brand and sizzle reels, montages, title cards, static loops, freeform builds. Use only when no specialized workflow fits the input; routing table at /hyperframes.",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "lifecycle": "active"
+}

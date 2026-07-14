@@ -1,27 +1,16 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when writing, reviewing, optimizing, or debugging SQL/database queries, schema inspection, migrations, joins, indexes, filters, aggregation, query performance, or database result interpretation.",
+  "description": "Use when the user asks to author, review, optimize, or safely execute SQL for an explicitly identified SQLite, PostgreSQL, or Supabase database. Live execution requires an existing database file, a connected database MCP tool, or a user-provided connection plus an available client. Use read-only behavior by default and require explicit approval before writes.",
   "triggers": [
-    "write SQL",
-    "database query",
-    "query the database",
-    "SQL join",
-    "optimize query",
-    "slow query",
-    "database schema",
-    "migration SQL",
-    "inspect table",
-    "aggregate records",
-    "filter rows",
-    "query error",
-    "index suggestion",
-    "SQLite query",
-    "Postgres query",
-    "MySQL query",
-    "count records",
-    "group by",
-    "database results"
+    "inspect database schema",
+    "run database migration",
+    "query this database",
+    "supabase sql query",
+    "optimize this sql",
+    "write sql query",
+    "postgresql query",
+    "sqlite query"
   ],
   "categories": [
     "database",
@@ -33,6 +22,23 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "name": "Database Query",
-  "id": "database-query"
+  "name": "database-query",
+  "id": "database-query",
+  "status": "ready",
+  "implicitInvocation": true,
+  "health": {
+    "state": "ready",
+    "reason": "Parameterized SQLite reads, EXPLAIN, read-only enforcement, write approval gating, mutation rejection, and missing-input failure behavior passed; external engines are capability-gated by request-specific connections.",
+    "verifiedCapabilities": [
+      "sqlite_parameterized_read",
+      "query_explain",
+      "read_only_default",
+      "explicit_write_gate",
+      "mutation_rejection",
+      "missing_connection_failure",
+      "external_backend_capability_gate"
+    ],
+    "blockedCapabilities": {},
+    "lastVerified": "2026-07-12"
+  }
 }

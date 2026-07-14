@@ -1,27 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when Raul asks for trading preparation, futures context, MNQ/MGC/NQ/Gold levels, trading psychology guardrails, open-session reminders, bias/execution review, or post-trade analysis.",
+  "description": "Prepare an explicit, user-requested intraday MNQ or MGC futures plan using current market context, levels, catalysts, scenarios, invalidation, and risk controls. Use only when directly named or requested; never auto-invoke for general finance questions or present a setup as guaranteed advice.",
   "triggers": [
-    "morning trading brief",
-    "MNQ levels",
-    "MGC levels",
-    "NQ bias",
-    "gold futures",
-    "trading plan",
-    "market open reminder",
     "no trades first 15 minutes",
+    "morning trading brief",
+    "market open reminder",
+    "stop trading reminder",
+    "hold time collapse",
     "review my trades",
     "trading psychology",
+    "trader discipline",
+    "premarket levels",
     "execution state",
     "revenge scalp",
-    "futures open",
-    "NY open",
-    "premarket levels",
-    "daily bias",
-    "hold time collapse",
-    "stop trading reminder",
-    "trader discipline"
+    "gold futures"
   ],
   "categories": [
     "trading",
@@ -35,6 +28,7 @@
     "show_ui_card"
   ],
   "lifecycle": "active",
-  "name": "Day Trading MNQ & MGC",
-  "id": "day-trading-mnq-mgc"
+  "name": "day-trading-mnq-mgc",
+  "id": "day-trading-mnq-mgc",
+  "implicitInvocation": false
 }

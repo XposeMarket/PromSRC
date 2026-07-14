@@ -1,9 +1,6 @@
 ---
-name: image-analyst
-description: Use this skill when the user uploads an image, screenshot, chart, diagram, whiteboard photo, design mockup, document photo, error screenshot, or asks Prometheus to visually inspect a local image file. Triggers on phrases like analyze this image, what is in this screenshot, read this chart, extract text from this image, inspect this mockup, diagnose this error screenshot, OCR this photo, compare these images, and what do you see here. Use it to describe, extract, interpret, and recommend next actions from visual evidence.
-emoji: "🧩"
-version: 1.1.0
-triggers: analyze this image, inspect screenshot, what is in this screenshot, read this chart, extract text from image, OCR this photo, inspect mockup, diagnose error screenshot, compare images, visual analysis, what do you see here, analyze uploaded image, image QA, screenshot critique
+name: "image-analyst"
+description: "Use this skill when the user uploads an image, screenshot, chart, diagram, whiteboard photo, design mockup, document photo, error screenshot, or asks Prometheus to visually inspect a local image file. Triggers on phrases like analyze this image, what is in this screenshot, read this chart, extract text from this image, inspect this mockup, diagnose this error screenshot, OCR this photo, compare these images, and what do you see here. Use it to describe, extract, interpret, and recommend next actions from visual evidence."
 ---
 
 # Image Analyst

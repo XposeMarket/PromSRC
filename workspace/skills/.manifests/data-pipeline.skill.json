@@ -1,26 +1,20 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when designing, debugging, or implementing ETL/ELT workflows, data ingestion, transformations, scheduled data jobs, exports/imports, normalization, validation, or moving data between systems.",
+  "description": "Process, clean, transform, merge, validate, deduplicate, aggregate, convert, or export CSV, JSON, JSONL, Excel, logs, and other datasets. Use for repeatable ETL-style file workflows, especially when data quality and output verification matter.",
   "triggers": [
-    "data pipeline",
-    "ETL",
-    "ELT",
-    "ingest data",
-    "transform data",
-    "normalize dataset",
-    "scheduled data job",
-    "import export workflow",
-    "sync records",
-    "data validation",
-    "pipeline failed",
-    "batch processing",
-    "CSV pipeline",
-    "API to database",
     "clean this dataset",
+    "api to database",
+    "import export workflow",
+    "scheduled data job",
     "automate data flow",
     "data job retry",
-    "pipeline architecture"
+    "pipeline architecture",
+    "normalize dataset",
+    "batch processing",
+    "pipeline failed",
+    "sync records",
+    "csv pipeline"
   ],
   "categories": [
     "data",
@@ -33,6 +27,7 @@
     "web_search"
   ],
   "lifecycle": "active",
-  "name": "Data Pipeline",
-  "id": "data-pipeline"
+  "name": "data-pipeline",
+  "id": "data-pipeline",
+  "implicitInvocation": true
 }

@@ -1,27 +1,22 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when improving Prometheus task flow UX, workflow routing, task cards, progress display, agent task handling, task lifecycle behavior, or automation orchestration.",
+  "description": "Build, implement, or extend Prometheus task orchestration with child tasks, dependencies, waits, checkpoints, resumable summaries, progress, artifacts, and retry policy. Use for durable multi-step task flows or task-engine changes; do not use for a simple one-step task.",
+  "implicitInvocation": true,
   "triggers": [
-    "improve task flow",
-    "task card UX",
-    "workflow routing",
-    "progress display",
-    "agent task handling",
-    "task lifecycle behavior",
-    "automation orchestration",
-    "task panel improvement",
-    "task UI bug",
-    "task status display",
-    "better task experience",
-    "taskflow feature",
-    "task routing bug"
+    "implement task flow orchestration",
+    "wait for dependent task",
+    "multi step task workflow",
+    "child task orchestration",
+    "task checkpoint recovery",
+    "resumable task workflow",
+    "prometheus taskflow"
   ],
   "categories": [
-    "product",
-    "automation",
-    "ux",
-    "prometheus"
+    "prometheus",
+    "workflow",
+    "tasks",
+    "agents"
   ],
   "requiredTools": [
     "prometheus_source_read",
@@ -29,5 +24,6 @@
     "workspace_write"
   ],
   "lifecycle": "active",
-  "id": "taskflow-enhancement"
+  "id": "taskflow-enhancement",
+  "name": "taskflow-enhancement"
 }

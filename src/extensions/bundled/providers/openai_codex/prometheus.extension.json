@@ -50,7 +50,8 @@
     },
     "schema": {
       "model": "string",
-      "reasoning_effort": "none|minimal|low|medium|high|xhigh|max?"
+      "reasoning_effort": "model-dependent OpenAI reasoning effort?",
+      "speed": "standard|fast?"
     },
     "uiHints": {
       "model": {

@@ -1,25 +1,8 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "description": "Use this skill when drafting, editing, or evaluating X/Twitter posts for Raul's @Raulinvests persona, especially market commentary, LARP-style voice, anti-AI tells, hooks, reply style, or engagement tone.",
-  "triggers": [
-    "write a tweet in my voice",
-    "make this sound less AI",
-    "RaulInvests post",
-    "X LARP",
-    "trading tweet",
-    "market commentary tweet",
-    "rewrite this tweet",
-    "tweet hook",
-    "make it sound human",
-    "no em dash",
-    "reply like me",
-    "X persona",
-    "social post voice",
-    "Twitter thread voice",
-    "make this punchier for X",
-    "draft market post"
-  ],
+  "description": "Deprecated compatibility entry for a manually selected X account style. Use the explicit prometheus-x-growth-operator skill and load its LARP guidelines only for that account mode.",
+  "triggers": [],
   "categories": [
     "x",
     "twitter",
@@ -29,6 +12,8 @@
   "requiredTools": [
     "skills"
   ],
-  "lifecycle": "active",
-  "id": "x-larp-posting-guidelines"
+  "lifecycle": "deprecated",
+  "id": "x-larp-posting-guidelines",
+  "implicitInvocation": false,
+  "name": "x-larp-posting-guidelines"
 }

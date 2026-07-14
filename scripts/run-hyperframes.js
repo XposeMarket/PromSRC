@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -30,6 +31,36 @@ function exposeBinary(env, packageName, envName) {
   }
 }
 
+function exposeCachedWhisper(env) {
+  const configured = String(env.HYPERFRAMES_WHISPER_PATH || '').trim();
+  if (configured && fs.existsSync(configured)) {
+    prependPathDir(env, path.dirname(configured));
+    return;
+  }
+
+  const buildRoot = path.join(
+    os.homedir(),
+    '.cache',
+    'hyperframes',
+    'whisper',
+    'whisper.cpp',
+    'build',
+  );
+  const executable = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
+  const candidates = process.platform === 'win32'
+    ? [
+        path.join(buildRoot, 'bin', 'Release', executable),
+        path.join(buildRoot, 'Release', executable),
+        path.join(buildRoot, 'bin', executable),
+        path.join(buildRoot, executable),
+      ]
+    : [path.join(buildRoot, 'bin', executable), path.join(buildRoot, executable)];
+  const discovered = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!discovered) return;
+  env.HYPERFRAMES_WHISPER_PATH = discovered;
+  prependPathDir(env, path.dirname(discovered));
+}
+
 function resolveHyperframesCli() {
   const pkgPath = require.resolve('hyperframes/package.json');
   const pkg = require(pkgPath);
@@ -45,6 +76,7 @@ function resolveHyperframesCli() {
 const env = { ...process.env };
 exposeBinary(env, '@ffmpeg-installer/ffmpeg', 'FFMPEG_PATH');
 exposeBinary(env, '@ffprobe-installer/ffprobe', 'FFPROBE_PATH');
+exposeCachedWhisper(env);
 
 const cliPath = resolveHyperframesCli();
 const child = spawnSync(process.execPath, [cliPath, ...process.argv.slice(2)], {

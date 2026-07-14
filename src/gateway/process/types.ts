@@ -14,6 +14,7 @@ export type ProcessShell = 'auto' | 'powershell' | 'cmd' | 'bash';
 export interface ProcessRunRecord {
   runId: string;
   sessionId?: string;
+  toolCallId?: string;
   taskId?: string;
   codingSessionId?: string;
   command: string;
@@ -44,6 +45,7 @@ export interface ProcessRunRecord {
   stdoutBytes: number;
   stderrBytes: number;
   outputPreview: string;
+  outputSeq?: number;
 }
 
 export interface ProcessRunExit {
@@ -65,6 +67,7 @@ export interface ProcessSpawnInput {
   pty?: boolean;
   title?: string;
   sessionId?: string;
+  toolCallId?: string;
   taskId?: string;
   codingSessionId?: string;
   approvalId?: string;

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Neon Escape</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="game-wrap">
+      <canvas id="game" aria-label="Neon Escape game canvas"></canvas>
+
+      <div id="ui">
+        <div id="stats">
+          <span id="score">Score: 0</span>
+          <span id="speed">Speed: 1.0x</span>
+          <span id="best">Best: 0</span>
+        </div>
+        <div id="status">Press START to begin</div>
+      </div>
+
+      <div id="overlay" class="hidden">
+        <div>
+          <h1>NEON ESCAPE</h1>
+          <p>Dodge the neon mines and collect data nodes to build speed. Survive as long as you can.</p>
+          <button id="startBtn" type="button">Start</button>
+        </div>
+      </div>
+
+      <div id="controls">
+        <button id="upBtn" type="button">▲</button>
+        <button id="downBtn" type="button">▼</button>
+        <button id="boostBtn" type="button">⚡</button>
+      </div>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>

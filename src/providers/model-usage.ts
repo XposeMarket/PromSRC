@@ -36,6 +36,13 @@ export interface ModelUsageEvent {
   estimatedConversationTokens?: number;
   estimatedToolSchemaTokens?: number;
   estimatedProviderInputTokens?: number;
+  promptManifestId?: string;
+  promptManifestHash?: string;
+  promptManifestVersion?: number;
+  runtimeRole?: string;
+  executionMode?: string;
+  systemSegmentIds?: string[];
+  activeToolCategories?: string[];
 }
 
 function usageLogPath(): string {
