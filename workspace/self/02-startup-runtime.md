@@ -31,6 +31,14 @@
 - `src/gateway/routes/coding.router.ts` exposes coding workspace/session, diff, branch, stage, and commit operations
 - `src/gateway/routes/onboarding.router.ts` owns account-scoped onboarding/tutorial/model/memory-seed state
 
+Main-chat turn safety:
+
+- `src/gateway/chat/turn-coordinator.ts` is the canonical in-process per-session turn lock. `runInteractiveTurn(...)` callers queue FIFO for the same session, while different sessions remain parallel.
+- `/api/chat` does not queue a different browser/mobile request behind an active turn: it returns `409 SESSION_TURN_ACTIVE`, preserving explicit interrupt/steer semantics and preventing overlapping history/tool mutation.
+- `clientRequestId` / `X-Client-Request-Id` is an idempotency key scoped to the session. An exact duplicate attaches to or acknowledges the original stream; using the same key with a changed message, attachments, reasoning, caller context, pins, or skill selection returns `409 IDEMPOTENCY_KEY_REUSED`.
+- Completed request fingerprints remain for a two-minute replay window. Do not shorten this to a few seconds or delete the entry immediately after completion; delayed mobile/PWA retries must not duplicate tool or external side effects.
+- Run `npm run test:turn-safety` after changing chat admission, stream retention, the turn coordinator, process termination, or captured command results.
+
 ## 3A) Electron desktop trust boundary
 
 - `electron/security.js` is the pure URL/port parsing boundary used by the desktop main process. Renderer trust is an exact parsed-origin comparison against `http://127.0.0.1:18789`; credentials, malformed URLs, alternate ports/hosts/schemes, child frames, and non-main-window senders are rejected.

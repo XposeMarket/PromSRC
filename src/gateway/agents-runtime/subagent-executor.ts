@@ -342,6 +342,7 @@ import {
 } from '../creative/custom-registries';
 import { buildConnectorStatus } from '../tool-builder';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/legacy-connector-adapter';
+import { classifyCommandTermination } from '../process/command-outcome';
 import { getExtensionRuntimeRegistry } from '../../extensions/runtime-registry';
 import { appendJournal, createTask, getEvidenceBusSnapshot, listTasks, loadTask, saveTask, setTaskStepRunning, updateTaskStatus, type TaskRecord, type TaskStatus } from '../tasks/task-store';
 import { ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
@@ -511,7 +512,7 @@ export interface ExecuteToolDeps {
   buildBrowserLaunchCommand: (app: string, url: string) => string;
   normalizeWorkspacePathAliases: (rawCmd: string, workspacePath: string) => string;
   isAllowedShellCommand: (command: string) => boolean;
-  runCommandCaptured: (command: string, cwd: string, timeoutMs?: number, options?: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string }) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; runId?: string }>;
+  runCommandCaptured: (command: string, cwd: string, timeoutMs?: number, options?: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string }) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason?: string; signal?: NodeJS.Signals | number | null; noOutputTimedOut?: boolean; runId?: string }>;
   toolCallId?: string;
   skillsManager: any;
   getSessionSkillWindows: (sessionId: string) => Map<string, SkillWindow>;
@@ -3829,13 +3830,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
   async function runCapturedToolCommand(command: string, cwd: string, timeoutMs = 120000): Promise<ToolResult> {
     const captured = await deps.runCommandCaptured(command, cwd, timeoutMs, { sessionId, toolCallId: deps.toolCallId });
     const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
-    const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
+    const outcome = classifyCommandTermination(captured);
     return {
       name,
       args,
-      result: `${command} [${exitLabel}]\n${truncateText(output || '(no output)', 12000)}`,
-      error: (captured.code !== 0 && !captured.timedOut),
-      extra: captured.runId ? { runId: captured.runId } : undefined,
+      result: `${command} [${outcome.label}]\n${truncateText(output || '(no output)', 12000)}`,
+      error: !outcome.ok,
+      extra: { ...(captured.runId ? { runId: captured.runId } : {}), terminationReason: outcome.reason, signal: captured.signal ?? undefined },
     };
   }
   function readPackageScripts(cwd: string): Record<string, string> {
@@ -13659,11 +13660,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const exit = await getProcessSupervisor().wait(runId);
         if (!exit) return { name, args, result: `No active process found for ${runId}`, error: true };
         const output = [exit.stdout, exit.stderr].filter(Boolean).join('\n').trim();
+        const outcome = classifyCommandTermination({ code: exit.exitCode, timedOut: exit.timedOut, reason: exit.reason, signal: exit.exitSignal });
         return {
           name,
           args,
-          result: `${runId} [${exit.timedOut ? 'TIMED OUT' : `exit ${exit.exitCode ?? '?'}`}]\n${output.slice(0, 4000) || '(no output)'}`,
-          error: exit.exitCode !== 0,
+          result: `${runId} [${outcome.label}]\n${output.slice(0, 4000) || '(no output)'}`,
+          error: !outcome.ok,
+          extra: { runId, terminationReason: outcome.reason, signal: exit.exitSignal ?? undefined },
         };
       }
 
@@ -13764,12 +13767,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 toolCallId: deps.toolCallId,
               });
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
-              const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
+              const outcome = classifyCommandTermination(captured);
               return {
                 name, args,
-                result: `${normalizedCmd} [${exitLabel}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
-                error: (captured.code !== 0 && !captured.timedOut),
-                extra: captured.runId ? { runId: captured.runId } : undefined,
+                result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
+                error: !outcome.ok,
+                extra: { ...(captured.runId ? { runId: captured.runId } : {}), terminationReason: outcome.reason, signal: captured.signal ?? undefined },
               };
             } catch (capErr: any) {
               return { name, args, result: `run_command capture failed: ${capErr.message}`, error: true };
@@ -13796,12 +13799,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 toolCallId: deps.toolCallId,
               });
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
-              const exitLabel = captured.timedOut ? 'TIMED OUT' : `exit ${captured.code ?? '?'}`;
+              const outcome = classifyCommandTermination(captured);
               return {
                 name, args,
-                result: `${normalizedCmd} [${exitLabel}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
-                error: (captured.code !== 0 && !captured.timedOut),
-                extra: captured.runId ? { runId: captured.runId } : undefined,
+                result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
+                error: !outcome.ok,
+                extra: { ...(captured.runId ? { runId: captured.runId } : {}), terminationReason: outcome.reason, signal: captured.signal ?? undefined },
               };
             } catch (capErr: any) {
               return { name, args, result: `run_command capture failed: ${capErr.message}`, error: true };

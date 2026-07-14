@@ -6,6 +6,7 @@ import pty from 'node-pty';
 import { getConfig } from '../../config/config';
 import { broadcastWS } from '../comms/broadcaster';
 import { ProcessRunStore } from './store';
+import { classifyCommandTermination } from './command-outcome';
 import type {
   ManagedProcessRun,
   ProcessLogResult,
@@ -267,6 +268,7 @@ export class ProcessSupervisor {
           timedOut: reason === 'overall_timeout' || reason === 'no_output_timeout',
           noOutputTimedOut: reason === 'no_output_timeout',
         };
+        const outcome = classifyCommandTermination({ code, timedOut: exit.timedOut, reason, signal });
         updateRecord({
           state: 'exited',
           completedAt: nowIso(),
@@ -278,8 +280,8 @@ export class ProcessSupervisor {
           noOutputTimedOut: exit.noOutputTimedOut,
           stdinOpen: false,
           waitingForInputHint: false,
-          completionSummary: code === 0 ? buildSummary(code, stderr, stdout) : undefined,
-          failureSummary: code === 0 ? undefined : buildSummary(code, stderr, stdout),
+          completionSummary: outcome.ok ? buildSummary(code, stderr, stdout) : undefined,
+          failureSummary: outcome.ok ? undefined : (buildSummary(code, stderr, stdout) || outcome.label),
         }, 'process_run_exited');
         this.active.delete(runId);
         resolve(exit);
@@ -399,6 +401,7 @@ export class ProcessSupervisor {
           timedOut: reason === 'overall_timeout' || reason === 'no_output_timeout',
           noOutputTimedOut: reason === 'no_output_timeout',
         };
+        const outcome = classifyCommandTermination({ code: exitCode, timedOut: exit.timedOut, reason, signal: signal || null });
         updateRecord({
           state: 'exited',
           completedAt: nowIso(),
@@ -410,8 +413,8 @@ export class ProcessSupervisor {
           noOutputTimedOut: exit.noOutputTimedOut,
           stdinOpen: false,
           waitingForInputHint: false,
-          completionSummary: exitCode === 0 ? buildSummary(exitCode, stderr, stdout) : undefined,
-          failureSummary: exitCode === 0 ? undefined : buildSummary(exitCode, stderr, stdout),
+          completionSummary: outcome.ok ? buildSummary(exitCode, stderr, stdout) : undefined,
+          failureSummary: outcome.ok ? undefined : (buildSummary(exitCode, stderr, stdout) || outcome.label),
         }, 'process_run_exited');
         this.active.delete(runId);
         resolve(exit);

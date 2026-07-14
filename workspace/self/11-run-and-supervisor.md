@@ -95,6 +95,8 @@ Process supervisor facts:
 - captures stdout/stderr into persisted log files
 - broadcasts `process_run_started`, `process_run_update`, `process_run_output`, and `process_run_exited` WebSocket events
 - supports overall timeout and no-output timeout termination
+- `src/gateway/process/command-outcome.ts` is the canonical success classifier. Success requires a normal `exit` with code 0; overall/no-output timeout, signal, manual cancellation, spawn failure, nonzero exit, and unknown/null termination all fail closed even if an exit code happens to be 0.
+- Captured `run_command`, wrapper command execution, and `process_wait` surface the structured termination reason/signal in `ToolResult.extra`; persisted process records use the same classifier for completion/failure summaries.
 - supports stdin pipe/write/submit/close for interactive commands
 - marks stale starting/running/exiting records as exited on supervisor startup
 

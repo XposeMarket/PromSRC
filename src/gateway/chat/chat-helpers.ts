@@ -54,6 +54,7 @@ import {
   lastFilenameUsed,
   type ExecuteToolDeps,
 } from '../agents-runtime/subagent-executor';
+import type { ProcessTerminationReason } from '../process/types';
 import {
   broadcastWS,
   broadcastTeamEvent,
@@ -336,7 +337,7 @@ async function runCommandCaptured(
   cwd: string,
   timeoutMs = 120000,
   options: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string } = {},
-): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; runId?: string }> {
+): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason: ProcessTerminationReason; signal: NodeJS.Signals | number | null; noOutputTimedOut: boolean; runId?: string }> {
   const resolvedCwd = path.resolve(String(cwd || getConfig().getWorkspacePath() || process.cwd()));
   const run = await getProcessSupervisor().spawn({
     command,
@@ -355,6 +356,9 @@ async function runCommandCaptured(
     stderr: exit.stderr.trim(),
     code: exit.exitCode,
     timedOut: exit.timedOut,
+    reason: exit.reason,
+    signal: exit.exitSignal,
+    noOutputTimedOut: exit.noOutputTimedOut,
     runId: exit.runId,
   };
 }

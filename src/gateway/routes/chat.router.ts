@@ -96,6 +96,7 @@ import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
+import { decideTurnAdmission, mainChatTurnCoordinator } from '../chat/turn-coordinator';
 import {
   browserOpen,
   browserSnapshot,
@@ -328,22 +329,37 @@ const checkOrchestrationEligibility: any = () => false;
 const shouldRunPreflight: any = () => false;
 const secondarySupportsVision: any = () => false;
 
-const mobileChatRequestDedupe = new Map<string, { at: number; streamId: string; message: string }>();
-const MOBILE_CHAT_REQUEST_DEDUPE_TTL_MS = 2 * 60 * 1000;
+const mainChatRequestDedupe = new Map<string, { at: number; sessionId: string; streamId: string; fingerprint: string }>();
+const MAIN_CHAT_REQUEST_DEDUPE_TTL_MS = 2 * 60 * 1000;
 
 function normalizeClientRequestId(input: unknown): string {
   return String(input || '').trim().replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 160);
 }
 
-function pruneMobileChatRequestDedupe(now = Date.now()): void {
-  for (const [key, entry] of mobileChatRequestDedupe.entries()) {
-    if (now - Number(entry?.at || 0) > MOBILE_CHAT_REQUEST_DEDUPE_TTL_MS) {
-      mobileChatRequestDedupe.delete(key);
+function fingerprintMainChatRequest(input: Record<string, any>): string {
+  return crypto.createHash('sha256').update(JSON.stringify({
+    message: input.message,
+    pinnedMessages: input.pinnedMessages,
+    attachments: input.attachments,
+    attachmentPreviews: input.attachmentPreviews,
+    reasoning: input.reasoning,
+    callerContext: input.callerContext,
+    excludedSkillIds: input.excludedSkillIds || input.excludedMatchingSkillIds,
+    selectedSkillIds: input.selectedSkillIds || input.forcedSkillIds || input.matchedSkillIds,
+  })).digest('hex');
+}
+
+function pruneMainChatRequestDedupe(now = Date.now()): void {
+  for (const [key, entry] of mainChatRequestDedupe.entries()) {
+    const activeStream = getMainChatStream(entry.sessionId);
+    if (activeStream?.active && activeStream.streamId === entry.streamId) continue;
+    if (now - Number(entry?.at || 0) > MAIN_CHAT_REQUEST_DEDUPE_TTL_MS) {
+      mainChatRequestDedupe.delete(key);
     }
   }
 }
 
-function mobileChatRequestDedupeKey(sessionId: string, clientRequestId: string): string {
+function mainChatRequestDedupeKey(sessionId: string, clientRequestId: string): string {
   return `${String(sessionId || 'default')}::${clientRequestId}`;
 }
 
@@ -8760,6 +8776,8 @@ async function runInteractiveTurn(
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
     callerOnToken?: (token: string) => void,
 ): Promise<HandleChatResult> {
+  const turnLease = await mainChatTurnCoordinator.acquire(sessionId, abortSignal?.signal);
+  try {
   const isSubagentChatSession = /^subagent_chat_/i.test(String(sessionId || ''));
   const isDirectSubagentChatTurn = isSubagentChatSession && flags?.directSubagentChat === true;
   const turnExcludedSkillIds = Array.isArray(flags?.excludedSkillIds)
@@ -9203,6 +9221,9 @@ async function runInteractiveTurn(
       localMainChatStreamCompleted = true;
     }
     if (localMainChatStream) finishMainChatStream(sessionId, localMainChatStream.streamId);
+  }
+  } finally {
+    mainChatTurnCoordinator.release(turnLease);
   }
 }
 
@@ -18340,6 +18361,7 @@ router.post('/api/chat', async (req, res) => {
   const excludedSkillIds = normalizeExcludedSkillIdsInput(req.body?.excludedSkillIds || req.body?.excludedMatchingSkillIds);
   const forcedSkillIds = normalizeForcedSkillIdsInput(req.body?.selectedSkillIds || req.body?.forcedSkillIds || req.body?.matchedSkillIds);
   const clientRequestId = normalizeClientRequestId(req.body?.clientRequestId || req.headers['x-client-request-id']);
+  const requestFingerprint = fingerprintMainChatRequest(req.body || {});
   setLastMainSessionId(resolvedSessionId);
   const turnOrigin = normalizeTurnOrigin(req.body?.origin, resolvedSessionId, {
     channel: req.headers['x-pairing-token'] ? 'mobile' : undefined,
@@ -18350,22 +18372,55 @@ router.post('/api/chat', async (req, res) => {
   persistTurnOriginChannelHint(resolvedSessionId, turnOrigin);
   const isMobileChatRequest = turnOrigin.channel === 'mobile' || !!req.headers['x-pairing-token'];
 
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-  try { (res as any).flushHeaders?.(); } catch {}
-  try { res.write(': connected\n\n'); } catch {}
+  pruneMainChatRequestDedupe();
+  const activeStream = getMainChatStream(resolvedSessionId);
+  const priorRequest = clientRequestId
+    ? mainChatRequestDedupe.get(mainChatRequestDedupeKey(resolvedSessionId, clientRequestId))
+    : null;
+  const admission = decideTurnAdmission({
+    active: mainChatTurnCoordinator.isActive(resolvedSessionId) || activeStream?.active === true,
+    activeStreamId: activeStream?.active ? activeStream.streamId : undefined,
+    clientRequestId,
+    fingerprint: requestFingerprint,
+    previous: priorRequest,
+  });
 
-  if (clientRequestId) {
-    const now = Date.now();
-    pruneMobileChatRequestDedupe(now);
-    const dedupeKey = mobileChatRequestDedupeKey(resolvedSessionId, clientRequestId);
-    const duplicate = mobileChatRequestDedupe.get(dedupeKey);
-    if (duplicate && duplicate.message === message) {
+  if (admission.kind === 'busy') {
+    res.status(409).json({
+      success: false,
+      code: 'SESSION_TURN_ACTIVE',
+      error: 'Another turn is already active for this session. Wait for it to finish or interrupt it before sending a different request.',
+      sessionId: resolvedSessionId,
+      streamId: admission.streamId,
+    });
+    return;
+  }
+  if (admission.kind === 'idempotency_conflict') {
+    res.status(409).json({
+      success: false,
+      code: 'IDEMPOTENCY_KEY_REUSED',
+      error: 'This client request ID was already used for a different chat payload.',
+      sessionId: resolvedSessionId,
+      clientRequestId,
+      streamId: admission.streamId,
+    });
+    return;
+  }
+
+  const startSseResponse = () => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    try { (res as any).flushHeaders?.(); } catch {}
+    try { res.write(': connected\n\n'); } catch {}
+  };
+  startSseResponse();
+
+  if (admission.kind === 'duplicate') {
       const stream = getMainChatStream(resolvedSessionId);
-      res.write(`data: ${JSON.stringify({ type: 'info', message: 'Duplicate chat send ignored; original request is already running.', clientRequestId })}\n\n`);
-      if (stream?.streamId === duplicate.streamId && stream.active) {
+      res.write(`data: ${JSON.stringify({ type: 'info', message: 'Duplicate chat send ignored; the original request was already accepted.', clientRequestId })}\n\n`);
+      if (stream?.streamId === admission.streamId && stream.active) {
         await streamExistingMainChatToResponse({
           res,
           sessionId: resolvedSessionId,
@@ -18374,22 +18429,22 @@ router.post('/api/chat', async (req, res) => {
         });
       } else {
         for (const frame of stream?.events || []) {
-          if (stream?.streamId !== duplicate.streamId) continue;
+          if (stream?.streamId !== admission.streamId) continue;
           res.write(`data: ${JSON.stringify({ type: frame.type, ...(frame.data || {}), seq: frame.seq, streamId: stream.streamId, at: frame.at, clientRequestId })}\n\n`);
         }
         res.write(`data: ${JSON.stringify({ type: 'done', duplicate: true, clientRequestId })}\n\n`);
       }
       res.end();
       return;
-    }
   }
 
   const chatStream = beginMainChatStream(resolvedSessionId);
   if (clientRequestId) {
-    mobileChatRequestDedupe.set(mobileChatRequestDedupeKey(resolvedSessionId, clientRequestId), {
+    mainChatRequestDedupe.set(mainChatRequestDedupeKey(resolvedSessionId, clientRequestId), {
       at: Date.now(),
+      sessionId: resolvedSessionId,
       streamId: chatStream.streamId,
-      message,
+      fingerprint: requestFingerprint,
     });
   }
 
@@ -18584,9 +18639,8 @@ router.post('/api/chat', async (req, res) => {
     requestCompleted = true;
     editRerunAbortResetSessions.delete(resolvedSessionId);
     if (clientRequestId) {
-      setTimeout(() => {
-        mobileChatRequestDedupe.delete(mobileChatRequestDedupeKey(resolvedSessionId, clientRequestId));
-      }, 5000);
+      const dedupeEntry = mainChatRequestDedupe.get(mainChatRequestDedupeKey(resolvedSessionId, clientRequestId));
+      if (dedupeEntry?.streamId === chatStream.streamId) dedupeEntry.at = Date.now();
     }
     clearInterval(heartbeat);
     finishLiveRuntime(runtimeId);
