@@ -553,4 +553,3 @@ export function getRecentToolStateSummaryForContext(sessionId: string, opts: Obs
   const filtered = observations.filter((obs) => turnIds.includes(obs.turnId));
   return formatToolStateSummaryForContext(filtered, opts);
 }
-

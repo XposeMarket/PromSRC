@@ -13197,6 +13197,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	            ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'analyze_image complete' }, null, 2)
 	            : `ERROR: ${toolResult.error || 'analyze_image failed'}`,
 	          error: toolResult.success !== true,
+	          data: toolResult.success === true ? toolResult.data : undefined,
 	        };
 	      }
 
@@ -13216,6 +13217,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	            ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'analyze_video complete' }, null, 2)
 	            : `ERROR: ${toolResult.error || 'analyze_video failed'}`,
           error: toolResult.success !== true,
+          data: toolResult.success === true ? toolResult.data : undefined,
         };
       }
 

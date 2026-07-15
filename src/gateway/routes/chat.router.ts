@@ -383,6 +383,56 @@ function buildCapturedScreenshotPreviewPayload(
   };
 }
 
+function inferAnalysisPreviewMimeType(filePath: string): string {
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.bmp') return 'image/bmp';
+  if (ext === '.svg') return 'image/svg+xml';
+  return 'image/png';
+}
+
+function buildMediaAnalysisPreviewPayloads(
+  toolName: string,
+  toolResult?: { error?: boolean; data?: any },
+): Record<string, any>[] {
+  if (toolResult?.error || !['analyze_image', 'analyze_video'].includes(String(toolName || ''))) return [];
+  const data = toolResult?.data && typeof toolResult.data === 'object' ? toolResult.data : {};
+  const previews: Record<string, any>[] = [];
+  const seen = new Set<string>();
+  const add = (candidate: unknown, title: string, artifactKind: string): void => {
+    const raw = String(candidate || '').trim();
+    if (!raw) return;
+    const workspacePath = raw.replace(/\\/g, '/');
+    const key = workspacePath.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    previews.push({
+      dataUrl: `/api/canvas/inline?path=${encodeURIComponent(workspacePath)}`,
+      workspacePath,
+      mimeType: inferAnalysisPreviewMimeType(workspacePath),
+      title,
+      artifactKind,
+    });
+  };
+
+  if (toolName === 'analyze_image') {
+    add(data.rel_path || data.file_path, path.basename(String(data.rel_path || data.file_path || 'analyzed image')), 'analyzed_image');
+    return previews;
+  }
+
+  const sheets = Array.isArray(data.contact_sheets) ? data.contact_sheets : [];
+  sheets.slice(0, 8).forEach((sheet: any, index: number) => {
+    add(sheet?.rel_path || sheet?.path, `Contact sheet ${index + 1}`, 'contact_sheet');
+  });
+  if (!previews.length) {
+    const frames = Array.isArray(data.sample_frames) ? data.sample_frames : [];
+    frames.slice(0, 8).forEach((frame: any, index: number) => add(frame, `Sample frame ${index + 1}`, 'sample_frame'));
+  }
+  return previews;
+}
+
 function pruneMainChatRequestDedupe(now = Date.now()): void {
   for (const [key, entry] of mainChatRequestDedupe.entries()) {
     const activeStream = getMainChatStream(entry.sessionId);
@@ -979,15 +1029,17 @@ function buildDurableToolStreamTrace(sessionId: string): Record<string, any>[] |
     if (frame.type === 'vision_injected') {
       const preview = data.preview && typeof data.preview === 'object' ? data.preview : null;
       const dataUrl = String(preview?.dataUrl || data.dataUrl || '').trim();
-      if (!/^data:image\//i.test(dataUrl)) continue;
-      const source = String(data.source || '').toLowerCase() === 'browser' ? 'Browser' : 'Desktop';
+      if (!/^data:image\//i.test(dataUrl) && !/^\/api\/canvas\/inline\?path=/i.test(dataUrl)) continue;
+      const sourceValue = String(data.source || '').toLowerCase();
+      const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : 'Desktop';
+      const previewTitle = String(data.previewTitle || preview?.title || `${source} preview`).trim();
       entries.push({
         id: `trace_${stream.streamId}_${frame.seq}`,
         type: 'vision',
-        text: `Vision captured: ${action}`,
+        text: String(data.label || `Vision captured: ${action}`).trim(),
         time: frame.at,
         preview,
-        previewTitle: `${source} screenshot`,
+        previewTitle,
       });
     }
   }
@@ -4537,22 +4589,38 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     toolResult: ToolResult,
     preContext: PreActionObservationContext,
   ): Promise<AppliedObservationContext> => {
+    const executedToolName = String(toolResult?.name || toolName || '').trim() || toolName;
+    const executedToolArgs = toolResult?.args && typeof toolResult.args === 'object'
+      ? toolResult.args
+      : toolArgs;
+    const analysisPreviews = buildMediaAnalysisPreviewPayloads(executedToolName, toolResult);
+    analysisPreviews.forEach((preview, index) => {
+      const isVideo = executedToolName === 'analyze_video';
+      sendSSE('vision_injected', {
+        source: 'media_analysis',
+        tool: executedToolName,
+        preview,
+        previewTitle: String(preview.title || (isVideo ? `Video analysis visual ${index + 1}` : 'Analyzed image')),
+        label: isVideo ? `Analyzed video visual ${index + 1}` : 'Analyzed image',
+        injected: true,
+      });
+    });
     const { decision, browserAfterPacket } = await buildObservationDecisionForTool(
-      toolName,
-      toolArgs,
+      executedToolName,
+      executedToolArgs,
       toolResult,
       preContext,
     );
 
-    let advisorTriggerToolName = toolName;
-    let advisorTriggerToolArgs = toolArgs;
+    let advisorTriggerToolName = executedToolName;
+    let advisorTriggerToolArgs = executedToolArgs;
     let advisorTriggerToolResult = toolResult;
 
-    await appendObservationArtifacts(toolName, toolArgs, toolResult, decision);
+    await appendObservationArtifacts(executedToolName, executedToolArgs, toolResult, decision);
 
     if (
-      isDesktopToolName(toolName)
-      && !isDesktopVisualToolName(toolName)
+      isDesktopToolName(executedToolName)
+      && !isDesktopVisualToolName(executedToolName)
       && decision.mode === 'screenshot'
     ) {
       try {
