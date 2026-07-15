@@ -16,7 +16,7 @@ import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { registerBrowserSessionMetadata } from '../browser-tools';
-import { finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
+import { addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 
@@ -456,6 +456,28 @@ function persistBackgroundVoiceWorker(record: EphemeralBackgroundRecord): void {
   }
 }
 
+function queueBackgroundResultForForeground(record: EphemeralBackgroundRecord): boolean {
+  const spawnerSessionId = String(record.spawnerSessionId || '').trim();
+  if (!spawnerSessionId || (record.state !== 'completed' && record.state !== 'failed')) return false;
+  const outcome = record.state === 'completed'
+    ? String(record.result || 'Background task completed with no textual output.').trim()
+    : String(record.error || 'Background task failed without an error message.').trim();
+  const queued = addPendingRuntimeSteerForSession(spawnerSessionId, {
+    message: outcome,
+    source: 'background_spawn_completion',
+    kind: 'background_agent_result',
+    requiresWorkerResponse: true,
+    clientRequestId: `background_agent_result:${record.id}`,
+    backgroundAgentId: record.id,
+    backgroundAgentState: record.state,
+    contextSummary: `One-shot background agent ${record.id} finished the delegated task: ${String(record.prompt || record.promptPreview || '').slice(0, 1200)}`,
+  });
+  if (!queued.ok) {
+    console.warn(`[Background Agent] ${record.id} could not inject completion into foreground runtime: ${queued.error || 'unknown error'}`);
+  }
+  return queued.ok;
+}
+
 // ─── Background Agent deps (injected at startup via setBackgroundAgentDeps) ──
 type BgHandleChat = (
   prompt: string,
@@ -738,6 +760,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.state = 'completed';
         record.completedAt = Date.now();
         persistBackgroundVoiceWorker(record);
+        queueBackgroundResultForForeground(record);
         console.log(`[Background Agent] ${record.id} completed`);
 
         if (spawnerSessionId) {
@@ -748,6 +771,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         record.state = 'failed';
         record.completedAt = Date.now();
         persistBackgroundVoiceWorker(record);
+        queueBackgroundResultForForeground(record);
         console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
         if (spawnerSessionId) {
           broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
@@ -779,6 +803,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
     } finally {
       persistBackgroundVoiceWorker(record);
+      queueBackgroundResultForForeground(record);
       finishLiveRuntime(runtimeId);
     }
   })();

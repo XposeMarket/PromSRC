@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
 
 type StartAuditMaterializerOpts = {
   workspacePath: string;
@@ -616,12 +617,42 @@ export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {
   const runSafe = (): void => {
     if (_running) return;
     _running = true;
-    try {
-      materializeAuditSnapshot(opts.configDir, opts.workspacePath);
-    } catch (err: any) {
-      console.warn('[AuditMaterializer] Sync failed:', String(err?.message || err));
-    } finally {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       _running = false;
+    };
+    try {
+      // The audit mirror can parse and redact tens of megabytes of append-only
+      // logs. Keep that synchronous filesystem/JSON work off the gateway event
+      // loop so WebSocket, SSE, HTTP, and Telegram traffic remain responsive.
+      const worker = new Worker(__filename, {
+        execArgv: process.execArgv,
+        workerData: {
+          type: 'prometheus_audit_materializer',
+          workspacePath: opts.workspacePath,
+          configDir: opts.configDir,
+          intervalMs,
+        },
+      });
+      worker.unref();
+      worker.on('message', (message: any) => {
+        if (message?.ok === false) {
+          console.warn('[AuditMaterializer] Worker sync failed:', String(message?.error || 'unknown error'));
+        }
+      });
+      worker.on('error', (err) => {
+        console.warn('[AuditMaterializer] Worker failed:', String(err?.message || err));
+        finish();
+      });
+      worker.on('exit', (code) => {
+        if (code !== 0) console.warn(`[AuditMaterializer] Worker exited with code ${code}`);
+        finish();
+      });
+    } catch (err: any) {
+      console.warn('[AuditMaterializer] Could not start worker:', String(err?.message || err));
+      finish();
     }
   };
 
@@ -639,4 +670,15 @@ export function stopAuditMaterializer(): void {
     _timer = null;
   }
   _intervalMs = null;
+}
+
+if (!isMainThread && workerData?.type === 'prometheus_audit_materializer') {
+  try {
+    _intervalMs = Number(workerData.intervalMs) || DEFAULT_INTERVAL_MS;
+    materializeAuditSnapshot(String(workerData.configDir || ''), String(workerData.workspacePath || ''));
+    parentPort?.postMessage({ ok: true });
+  } catch (err: any) {
+    parentPort?.postMessage({ ok: false, error: String(err?.message || err) });
+    process.exitCode = 1;
+  }
 }

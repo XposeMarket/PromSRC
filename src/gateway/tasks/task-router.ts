@@ -59,9 +59,14 @@ export interface TaskRouterDeps {
 
 let _deps: TaskRouterDeps | null = null;
 export function initTaskRouter(deps: TaskRouterDeps): void { _deps = deps; }
+export function isTaskRouterInitialized(): boolean { return _deps !== null; }
 
 function getDeps(): TaskRouterDeps {
-  if (!_deps) throw new Error('[task-router] Not initialized — call initTaskRouter() first');
+  if (!_deps) {
+    const error = new Error('[task-router] Not initialized — recovery runtime is not ready');
+    (error as any).code = 'task_router_not_ready';
+    throw error;
+  }
   return _deps;
 }
 

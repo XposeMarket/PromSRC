@@ -3,7 +3,17 @@ import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { getRelatedMemory, readMemoryRecord, refreshMemoryIndexFromAudit, scheduleMemoryIndexRefresh, searchMemoryIndex } from './index.js';
+import {
+  getMemoryIndexRefreshWorkerStatus,
+  closeSqliteMemoryConnections,
+  getRelatedMemory,
+  readMemoryRecord,
+  refreshMemoryIndexInWorker,
+  refreshMemoryIndexFromAudit,
+  scheduleMemoryIndexRefresh,
+  searchMemoryIndex,
+  shutdownMemoryIndexRefreshWorker,
+} from './index.js';
 import { getSqliteMemoryStatus } from './sqlite-store.js';
 
 function writeJson(filePath: string, value: unknown): void {
@@ -65,7 +75,7 @@ function makeOperationalRecord(input: {
   };
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 4000): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 15_000): Promise<void> {
   const started = Date.now();
   while (!predicate()) {
     if (Date.now() - started > timeoutMs) throw new Error(`Timed out after ${timeoutMs}ms`);
@@ -153,6 +163,23 @@ async function main(): Promise<void> {
     assert.equal(fs.existsSync(storePath), false, 'hot-path search must not synchronously build the evidence store');
 
     await waitFor(() => fs.existsSync(storePath));
+    await waitFor(() => !!getMemoryIndexRefreshWorkerStatus().lastRunCompletedAt);
+    const workerStatus = getMemoryIndexRefreshWorkerStatus();
+    assert.equal(workerStatus.isolation, 'child_process');
+    assert.ok(workerStatus.lastWorkerPid && workerStatus.lastWorkerPid !== process.pid, 'scheduled refresh must run outside the caller process');
+
+    fs.appendFileSync(
+      path.join(auditRoot, 'MEMORY.md'),
+      '\n- Manual refresh calls cross the serialized maintenance process boundary.\n',
+      'utf-8',
+    );
+    const [manualRefreshA, manualRefreshB] = await Promise.all([
+      refreshMemoryIndexInWorker(workspaceB, { force: true, minIntervalMs: 0, maxChangedFiles: 500 }),
+      refreshMemoryIndexInWorker(workspaceB, { force: true, minIntervalMs: 0, maxChangedFiles: 500 }),
+    ]);
+    assert.ok(manualRefreshA.indexedFiles >= 1, 'awaited refresh must return the child result');
+    assert.deepEqual(manualRefreshA, manualRefreshB, 'same-workspace refreshes queued together should coalesce');
+
     scheduleMemoryIndexRefresh(workspaceB, { minIntervalMs: 0, maxChangedFiles: 500 });
     await waitFor(() => {
       try {
@@ -182,6 +209,8 @@ async function main(): Promise<void> {
       console.warn(`sqlite memory backend unavailable; skipped SQLite sync assertion: ${sqliteStatus.error}`);
     }
   } finally {
+    await shutdownMemoryIndexRefreshWorker();
+    closeSqliteMemoryConnections();
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 }

@@ -61,6 +61,7 @@ import { CronScheduler, setCronSchedulerInstance } from './scheduling/cron-sched
 import { HeartbeatRunner, setHeartbeatRunnerInstance } from './scheduling/heartbeat-runner';
 import { MainChatTimerRunner } from './timers/timer-runner';
 import { InternalWatchRunner } from './internal-watch/internal-watch-runner';
+import { startThreadSupervisionRunner } from './threads/thread-supervision';
 import { BrainRunner, setBrainRunnerInstance } from './brain/brain-runner';
 import {
   getAgentRunHistory, getAgentLastRun, recordAgentRun,
@@ -82,7 +83,7 @@ import {
 import {
   loadScheduleMemory, loadRunLog, startRunLogEntry, completeScheduledRun, formatScheduleMemoryForPrompt,
 } from './scheduling/schedule-memory';
-import { BackgroundTaskRunner } from './tasks/background-task-runner';
+import { BackgroundTaskRunner, setStandaloneSubagentCompletionTurn } from './tasks/background-task-runner';
 import { analyzeRunForImprovement, applyPromptMutation } from './scheduling/prompt-mutation';
 import { processTaskFailure, buildSelfRepairTriggerPrompt } from './errors/error-watchdog';
 import { goalDecomposeTool, executeGoalDecompose, approveGoal, loadGoal, listGoals } from './goal-decomposer';
@@ -122,7 +123,7 @@ import {
 } from './skills-runtime/skill-windows';
 import { separateThinkingFromContent, sanitizeFinalReply, stripExplicitThinkTags, normalizeForDedup, isGreetingLikeMessage } from './comms/reply-processor';
 import {
-  initTaskRouter, latestTaskForSession, findBlockedTaskForSession, findClarificationWaitingTask,
+  initTaskRouter, isTaskRouterInitialized, latestTaskForSession, findBlockedTaskForSession, findClarificationWaitingTask,
   isResumeIntent, isRerunIntent, isCancelIntent, isStatusQuestion, isTaskListIntent, isAdjustmentIntent,
   getLatestPauseContext, summarizeTaskRecord, buildBlockedTaskStatusMessage,
   parseTaskStatusFilter, getTaskScopeBuckets, parseTaskIdFromText,
@@ -175,7 +176,7 @@ import {
 import { createApp } from './core/app';
 import { createServer } from './core/server';
 import { runStartup } from './core/startup';
-import { scheduleMemoryIndexRefresh } from './memory-index/index';
+import { scheduleMemoryIndexRefresh, shutdownMemoryIndexRefreshWorker } from './memory-index/index';
 import { requireGatewayAuth } from './gateway-auth';
 import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
 import {
@@ -320,6 +321,7 @@ const handleChat: ChatRouterModule['handleChat'] = (...args: Parameters<ChatRout
   getChatRouterModule().handleChat(...args);
 const runInteractiveTurn: ChatRouterModule['runInteractiveTurn'] = (...args: Parameters<ChatRouterModule['runInteractiveTurn']>) =>
   getChatRouterModule().runInteractiveTurn(...args);
+setStandaloneSubagentCompletionTurn((...args) => runInteractiveTurn(...args as Parameters<ChatRouterModule['runInteractiveTurn']>));
 const bindTeamNotificationTargetFromSession: ChatRouterModule['bindTeamNotificationTargetFromSession'] = (
   ...args: Parameters<ChatRouterModule['bindTeamNotificationTargetFromSession']>
 ) => getChatRouterModule().bindTeamNotificationTargetFromSession(...args);
@@ -659,6 +661,9 @@ startupMark('heartbeat agents registered');
 // ─── B6: Wire chat router ──────────────────────────────────────────────────────
 initChatRouterLazy({ cronScheduler, telegramChannel, skillsManager });
 initTaskRouter({ handleChat, telegramChannel, makeBroadcastForTask, cronScheduler });
+if (!isTaskRouterInitialized()) {
+  throw new Error('[startup] Task recovery router failed to initialize');
+}
 startupMark('chat router init deferred');
 
 const mainChatTimerRunner = new MainChatTimerRunner({
@@ -675,6 +680,7 @@ const internalWatchRunner = new InternalWatchRunner({
   cronScheduler,
 });
 internalWatchRunner.start();
+const stopThreadSupervisionRunner = startThreadSupervisionRunner(broadcastWS);
 startupMark('timers started');
 
 // ─── A2 + A5: CIS tool dependency injection ────────────────────────────────
@@ -743,6 +749,7 @@ app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => 
     providerChecking,
     provider,
     currentModel: activeModel,
+    reasoningEffort: String(providerCfg.reasoning_effort || '').trim(),
     workspace: rawCfg.workspace?.path || '',
     search: rawCfg.search?.tinyfish_api_key ? 'tinyfish' : rawCfg.search?.google_api_key ? 'google' : (rawCfg.search?.tavily_api_key ? 'tavily' : 'none'),
     orchestration: null,
@@ -850,6 +857,10 @@ setShutdownHooks({
   stopInternalWatches: () => internalWatchRunner.stop(),
   stopHeartbeat: () => heartbeatRunner.stop(),
   stopBrain: () => brainRunner.stop(),
+  stopRuntimeWorkers: () => {
+    stopThreadSupervisionRunner();
+    return shutdownMemoryIndexRefreshWorker();
+  },
   closeWebSocket: () => { try { wss.close(); } catch {}; try { secureBundle?.wss.close(); } catch {}; try { xaiVoiceStreaming.close(); } catch {}; try { secureXaiVoiceStreaming?.close(); } catch {}; try { openAiRealtimeProxy.close(); } catch {}; try { secureOpenAiRealtimeProxy?.close(); } catch {} },
   closeHttpServer: () => new Promise<void>((resolve) => {
     try {
@@ -932,9 +943,11 @@ function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   try { cronScheduler.stop(); } catch {}
   try { mainChatTimerRunner.stop(); } catch {}
   try { internalWatchRunner.stop(); } catch {}
+  try { stopThreadSupervisionRunner(); } catch {}
   try { stopAgentSchedules(); } catch {}
   try { heartbeatRunner.stop(); } catch {}
   try { brainRunner.stop(); } catch {}
+  void shutdownMemoryIndexRefreshWorker().catch(() => undefined);
   try { if (wss) wss.close(); } catch {}
   try { secureBundle?.wss.close(); } catch {}
   try { xaiVoiceStreaming.close(); } catch {}

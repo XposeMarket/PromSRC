@@ -8,6 +8,7 @@ import { getConfig } from '../config/config.js';
 import { getActiveWorkspace, getActiveAllowedWorkspaces, hasActiveWorkspaceScope, isPathInAnyWorkspace } from './workspace-context.js';
 import { ToolResult } from '../types.js';
 import { createWorkspaceSnapshot, toSnapshotRef } from '../workspace-history';
+import { isCanonicalPathInsideSync } from './workspace-boundary.js';
 import {
   DEFAULT_FILE_TOOL_EXCLUDES,
   buildFileIntelligence,
@@ -142,9 +143,9 @@ function resolveWorkspaceRoot(): string {
   return getActiveWorkspace(config.workspace.path);
 }
 
-function snapshotBeforeMutation(absPath: string, operation: string, displayPath?: string) {
+function snapshotBeforeMutation(absPath: string, operation: string, displayPath?: string, workspacePath = resolveWorkspaceRoot()) {
   return toSnapshotRef(createWorkspaceSnapshot({
-    workspacePath: resolveWorkspaceRoot(),
+    workspacePath,
     targetPath: absPath,
     displayPath,
     operation,
@@ -163,18 +164,12 @@ function withWorkspaceSnapshots<T extends ToolResult>(result: T, snapshots: Arra
   };
 }
 
-function normalizePathForCompare(p: string): string {
-  const resolved = path.resolve(String(p || ''));
-  if (process.platform === 'win32') return resolved.toLowerCase();
-  return resolved;
-}
-
 function isPathInside(basePath: string, targetPath: string): boolean {
-  const base = normalizePathForCompare(basePath);
-  const target = normalizePathForCompare(targetPath);
-  if (!base || !target) return false;
-  const rel = path.relative(base, target);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  try {
+    return isCanonicalPathInsideSync(basePath, targetPath);
+  } catch {
+    return false;
+  }
 }
 
 function isPathAllowed(targetPath: string): { allowed: boolean; reason?: string } {
@@ -296,7 +291,7 @@ function extractPatchTargetPaths(patchText: string): string[] {
   return Array.from(paths);
 }
 
-function validatePatchPaths(paths: string[]): { ok: true; relativePaths: string[] } | { ok: false; error: string } {
+function validatePatchPaths(paths: string[], workspacePath: string): { ok: true; relativePaths: string[] } | { ok: false; error: string } {
   if (!Array.isArray(paths) || paths.length === 0) {
     return { ok: false, error: 'No target paths found in patch. Include standard unified diff headers (---/+++).' };
   }
@@ -306,7 +301,7 @@ function validatePatchPaths(paths: string[]): { ok: true; relativePaths: string[
     if (path.isAbsolute(relPath)) {
       return { ok: false, error: `Patch path must be relative: ${relPath}` };
     }
-    const absPath = resolveWorkspacePath(relPath);
+    const absPath = path.resolve(workspacePath, relPath);
     const pathCheck = isPathAllowed(absPath);
     if (!pathCheck.allowed) {
       return { ok: false, error: `Patch path not allowed (${relPath}): ${pathCheck.reason}` };
@@ -354,6 +349,30 @@ export interface ReadToolArgs {
   no_spool?: boolean;
   max_result_tokens?: number;
   hard_max_result_tokens?: number;
+}
+
+async function validateGitApplyRoot(workspacePath: string): Promise<string | null> {
+  let gitRoot = '';
+  try {
+    const out = await execFileAsync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: workspacePath,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+      encoding: 'utf8',
+    } as any);
+    gitRoot = String((out as any)?.stdout || '').trim();
+  } catch {
+    // `git apply` also works outside a repository. The actual apply invocation
+    // below remains rooted at workspacePath and will report operational errors.
+  }
+  if (!gitRoot) return null;
+  try {
+    return isCanonicalPathInsideSync(workspacePath, gitRoot)
+      ? null
+      : `Git worktree root is outside the active workspace: ${gitRoot}`;
+  } catch (error: any) {
+    return `Git worktree root could not be canonicalized safely: ${String(error?.message || error)}`;
+  }
 }
 
 type RetrievalMode = 'fast' | 'standard' | 'deep';
@@ -1181,11 +1200,13 @@ export async function executeApplyPatch(args: ApplyPatchArgs): Promise<ToolResul
     return { success: false, error: 'patch is required (unified diff string).' };
   }
 
+  const workspacePath = resolveWorkspaceRoot();
   const targetPaths = extractPatchTargetPaths(patchText);
-  const validation = validatePatchPaths(targetPaths);
+  const validation = validatePatchPaths(targetPaths, workspacePath);
   if (!validation.ok) return { success: false, error: validation.error };
+  const gitRootError = await validateGitApplyRoot(workspacePath);
+  if (gitRootError) return { success: false, error: `apply_patch refused: ${gitRootError}` };
 
-  const workspacePath = getConfig().getConfig().workspace.path;
   const tempPatchPath = path.join(
     os.tmpdir(),
     `prometheus-apply-${Date.now()}-${Math.random().toString(36).slice(2)}.patch`
@@ -1213,9 +1234,16 @@ export async function executeApplyPatch(args: ApplyPatchArgs): Promise<ToolResul
       };
     }
 
+    // Recheck immediately before mutation so a link introduced between the
+    // initial validation and `git apply --check` cannot silently redirect it.
+    const finalValidation = validatePatchPaths(targetPaths, workspacePath);
+    if (!finalValidation.ok) {
+      return { success: false, error: `apply_patch refused before mutation: ${finalValidation.error}` };
+    }
+
     const snapshots = validation.relativePaths.map((relPath) => {
-      const absPath = resolveWorkspacePath(relPath);
-      return snapshotBeforeMutation(absPath, 'apply_patch', relPath);
+      const absPath = path.resolve(workspacePath, relPath);
+      return snapshotBeforeMutation(absPath, 'apply_patch', relPath, workspacePath);
     });
     const applied = await runGitApply(workspacePath, ['apply', '--whitespace=nowarn', '--recount', '--verbose', tempPatchPath]);
     const rawOutput = [applied.stdout, applied.stderr].filter(Boolean).join('\n');

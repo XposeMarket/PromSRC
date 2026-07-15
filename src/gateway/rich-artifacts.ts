@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+
 // Rich Chat Artifacts — a parallel, additive rich-result layer for the main chat.
 //
 // This is intentionally separate from approvals, file changes, Canvas/workspace,
@@ -21,6 +23,7 @@ export type RichArtifactType =
   | 'map'
   | 'email_composer'
   | 'prediction_market'
+  | 'visual'
   // Declared for forward-compatibility; renderers not implemented yet.
   | 'jobs'
   | 'places'
@@ -226,6 +229,22 @@ export interface ChartArtifact extends BaseRichArtifact {
   unit?: string;
 }
 
+// ─── visual (model-authored chart / Mermaid / SVG / HTML) ───────────────────
+
+export type VisualArtifactRenderer = 'chart' | 'mermaid' | 'svg' | 'html';
+
+export interface VisualArtifact extends BaseRichArtifact {
+  type: 'visual';
+  renderer: VisualArtifactRenderer;
+  version: number;
+  ordinal: number;
+  source: string;
+  sourceHash: string;
+  state?: Record<string, unknown>;
+  stateUpdatedAt?: number;
+  parentVersion?: number;
+}
+
 // ─── run_result (finished task output) ───────────────────────────────────────
 
 export interface RunResultFile {
@@ -331,7 +350,58 @@ export type RichArtifact =
   | RunResultArtifact
   | MapArtifact
   | EmailComposerArtifact
-  | PredictionMarketArtifact;
+  | PredictionMarketArtifact
+  | VisualArtifact;
+
+export function extractVisualArtifactsFromMarkdown(
+  markdown: unknown,
+  existingArtifacts: RichArtifact[] = [],
+  options: { reuseIdentityOnChange?: boolean } = {},
+): VisualArtifact[] {
+  const text = String(markdown || '');
+  if (!text) return [];
+  const existing = (Array.isArray(existingArtifacts) ? existingArtifacts : [])
+    .filter((artifact): artifact is VisualArtifact => artifact?.type === 'visual');
+  const out: VisualArtifact[] = [];
+  const fence = /```(chart|svg|html|mermaid)\r?\n([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  let ordinal = 0;
+  while ((match = fence.exec(text)) !== null) {
+    const renderer = String(match[1] || '').toLowerCase() as VisualArtifactRenderer;
+    const source = String(match[2] || '').trim();
+    if (!source) continue;
+    const sourceHash = crypto.createHash('sha256').update(`${renderer}\0${source}`).digest('hex');
+    const exactPrior = existing.find((artifact) => (
+      artifact.ordinal === ordinal
+      && artifact.renderer === renderer
+      && artifact.sourceHash === sourceHash
+    ));
+    const revisionPrior = options.reuseIdentityOnChange
+      ? existing.find((artifact) => artifact.ordinal === ordinal && artifact.renderer === renderer)
+      : undefined;
+    const prior = exactPrior || revisionPrior;
+    out.push(prior ? {
+      ...prior,
+      source,
+      sourceHash,
+      ordinal,
+      version: exactPrior ? Math.max(1, Number(prior.version) || 1) : Math.max(1, Number(prior.version) || 1) + 1,
+      parentVersion: exactPrior ? prior.parentVersion : Math.max(1, Number(prior.version) || 1),
+    } : {
+      id: `visual_${crypto.randomUUID()}`,
+      type: 'visual',
+      renderer,
+      version: 1,
+      ordinal,
+      source,
+      sourceHash,
+      state: {},
+      createdAt: new Date().toISOString(),
+    });
+    ordinal += 1;
+  }
+  return out;
+}
 
 // ─── collection ──────────────────────────────────────────────────────────────
 

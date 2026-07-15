@@ -5,6 +5,15 @@ import { getConfig } from '../../config/config.js';
 import { refreshOperationalIndex, searchOperationalLayer, getOperationalRecord, getRelatedOperationalRecords } from './operational.js';
 import { parseMemoryNoteDocument } from './memory-note.js';
 import {
+  backfillMemoryEmbeddingsInWorker,
+  getMemoryIndexRefreshWorkerStatus,
+  refreshMemoryIndexInWorker,
+  scheduleMemoryIndexRefreshInWorker,
+  shutdownMemoryIndexRefreshWorker,
+  type MemoryEmbeddingBackfillResult,
+  type MemoryRefreshOptions,
+} from './refresh-worker-client.js';
+import {
   autoBackfillSqliteMemoryEmbeddings,
   backfillSqliteMemoryEmbeddings,
   getRelatedSqliteMemory,
@@ -16,7 +25,8 @@ import {
   syncSqliteMemoryIndex,
 } from './sqlite-store.js';
 export { getOperationalRecord } from './operational.js';
-export { autoBackfillSqliteMemoryEmbeddings, backfillSqliteMemoryEmbeddings, getSqliteMemoryStatus } from './sqlite-store.js';
+export { autoBackfillSqliteMemoryEmbeddings, backfillSqliteMemoryEmbeddings, closeSqliteMemoryConnections, getSqliteMemoryStatus } from './sqlite-store.js';
+export { backfillMemoryEmbeddingsInWorker, getMemoryIndexRefreshWorkerStatus, refreshMemoryIndexInWorker, shutdownMemoryIndexRefreshWorker } from './refresh-worker-client.js';
 
 export type MemoryIndexSourceType =
   | 'chat_session'
@@ -244,20 +254,6 @@ function readIndexStatsFromLightFiles(workspacePath: string, fallbackUpdatedAt?:
   };
 }
 
-type MemoryRefreshOptions = {
-  force?: boolean;
-  minIntervalMs?: number;
-  maxChangedFiles?: number;
-  syncSqlite?: boolean;
-};
-
-type MemoryRefreshState = {
-  running: boolean;
-  queued: boolean;
-  options: MemoryRefreshOptions;
-};
-
-const memoryRefreshStates = new Map<string, MemoryRefreshState>();
 const automaticEmbeddingBackfills = new Set<string>();
 
 function automaticEmbeddingLimit(): number {
@@ -267,13 +263,11 @@ function automaticEmbeddingLimit(): number {
 }
 
 function scheduleAutomaticEmbeddingBackfill(workspacePath: string): void {
-  const cfg = getConfig().getConfig() as any;
-  if (process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDINGS === '0' || cfg.memory?.embeddings?.auto_backfill === false) return;
-  const limit = automaticEmbeddingLimit();
-  if (limit <= 0 || automaticEmbeddingBackfills.has(workspacePath)) return;
+  if (process.env.PROMETHEUS_MEMORY_REFRESH_WORKER === '1') return;
+  if (automaticEmbeddingBackfills.has(workspacePath)) return;
   automaticEmbeddingBackfills.add(workspacePath);
   setTimeout(() => {
-    autoBackfillSqliteMemoryEmbeddings(workspacePath, { limit })
+    runAutomaticMemoryEmbeddingBackfill(workspacePath)
       .catch(() => undefined)
       .finally(() => {
         automaticEmbeddingBackfills.delete(workspacePath);
@@ -281,56 +275,18 @@ function scheduleAutomaticEmbeddingBackfill(workspacePath: string): void {
   }, 250);
 }
 
-function mergeMemoryRefreshOptions(current: MemoryRefreshOptions, next?: MemoryRefreshOptions): MemoryRefreshOptions {
-  const merged: MemoryRefreshOptions = {
-    force: Boolean(current.force || next?.force),
-  };
-  if (current.syncSqlite === true || next?.syncSqlite === true) merged.syncSqlite = true;
-  else if (current.syncSqlite === false || next?.syncSqlite === false) merged.syncSqlite = false;
-  const currentMin = Number.isFinite(Number(current.minIntervalMs)) ? Number(current.minIntervalMs) : null;
-  const nextMin = Number.isFinite(Number(next?.minIntervalMs)) ? Number(next?.minIntervalMs) : null;
-  if (currentMin !== null && nextMin !== null) merged.minIntervalMs = Math.min(currentMin, nextMin);
-  else if (currentMin !== null) merged.minIntervalMs = currentMin;
-  else if (nextMin !== null) merged.minIntervalMs = nextMin;
-
-  const currentMax = Number.isFinite(Number(current.maxChangedFiles)) ? Number(current.maxChangedFiles) : null;
-  const nextMax = Number.isFinite(Number(next?.maxChangedFiles)) ? Number(next?.maxChangedFiles) : null;
-  if (currentMax !== null && nextMax !== null) merged.maxChangedFiles = Math.max(currentMax, nextMax);
-  else if (currentMax !== null) merged.maxChangedFiles = currentMax;
-  else if (nextMax !== null) merged.maxChangedFiles = nextMax;
-  return merged;
+export async function runAutomaticMemoryEmbeddingBackfill(workspacePath: string): Promise<MemoryEmbeddingBackfillResult> {
+  const cfg = getConfig().getConfig() as any;
+  if (process.env.PROMETHEUS_MEMORY_AUTO_EMBEDDINGS === '0' || cfg.memory?.embeddings?.auto_backfill === false) {
+    return { ok: true, provider: 'disabled', model: '', scanned: 0, updated: 0, skipped: 0 };
+  }
+  const limit = automaticEmbeddingLimit();
+  if (limit <= 0) return { ok: true, provider: 'disabled', model: '', scanned: 0, updated: 0, skipped: 0 };
+  return autoBackfillSqliteMemoryEmbeddings(workspacePath, { limit });
 }
 
 export function scheduleMemoryIndexRefresh(workspacePath: string, options?: MemoryRefreshOptions): void {
-  const state = memoryRefreshStates.get(workspacePath) || {
-    running: false,
-    queued: false,
-    options: {},
-  };
-  state.options = mergeMemoryRefreshOptions(state.options, options);
-  state.queued = true;
-  memoryRefreshStates.set(workspacePath, state);
-  if (state.running) return;
-
-  state.running = true;
-  setImmediate(() => {
-    const active = memoryRefreshStates.get(workspacePath);
-    if (!active) return;
-    const runOptions = active.options;
-    active.queued = false;
-    active.options = {};
-    try {
-      refreshMemoryIndexFromAudit(workspacePath, runOptions);
-    } catch {
-      // Best effort only; callers always read the latest on-disk snapshot.
-    } finally {
-      const nextState = memoryRefreshStates.get(workspacePath);
-      if (!nextState) return;
-      nextState.running = false;
-      memoryRefreshStates.set(workspacePath, nextState);
-      if (nextState.queued) scheduleMemoryIndexRefresh(workspacePath, nextState.options);
-    }
-  });
+  scheduleMemoryIndexRefreshInWorker(workspacePath, options);
 }
 function ensureDir(d: string): void { fs.mkdirSync(d, { recursive: true }); }
 function readJson<T>(p: string, fallback: T): T { try { return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf-8')) as T : fallback; } catch { return fallback; } }
@@ -906,6 +862,7 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
         memoryMark('missing or empty sqlite synced from existing store');
       }
     }
+    try { refreshOperationalIndex(workspacePath, { force: options?.force, minIntervalMs: 60000 }); } catch { /* non-fatal */ }
     const stats = readIndexStatsFromLightFiles(workspacePath, manifest.updatedAt);
     memoryMark('no-op refresh complete');
     return { indexedFiles: 0, skippedFiles: skipped, removedFiles: 0, deferredFiles: deferred, ...stats };

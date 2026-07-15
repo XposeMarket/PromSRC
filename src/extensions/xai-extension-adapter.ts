@@ -32,6 +32,8 @@ export function refreshXAITools(): void {
   const hasXApiCredentials = getXApiOAuthStatus(configDir()).connected;
   let changed = false;
 
+  // xai_live_search is intentionally absent: xAI retired the Live Search endpoint.
+  registry.unregisterTool('xai_live_search', 'xai');
   for (const definition of getXAIToolDefs()) {
     const fn = definition?.function;
     const name = String(fn?.name || '').trim();

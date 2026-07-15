@@ -249,7 +249,9 @@ export interface ProposalExecutionState {
 export interface TaskRecord {
   id: string;
   title: string;
-  prompt: string;                    // verbatim original user message
+  prompt: string;                    // canonical immutable assignment envelope
+  originalAssignment?: string;       // verbatim standalone/team assignment, preserved across every round
+  resolvedToolManifest?: string[];   // launch-time resolved tool names for diagnostics/restart consistency
   sessionId: string;                 // originating chat session
   channel: 'web' | 'telegram';
   telegramChatId?: number;
@@ -356,6 +358,8 @@ export interface TaskSummary {
   id: string;
   title: string;
   prompt: string;
+  originalAssignment?: string;
+  resolvedToolManifest?: string[];
   sessionId: string;
   channel: 'web' | 'telegram';
   telegramChatId?: number;
@@ -756,7 +760,7 @@ function rebuildTaskIndex(): TaskIndex {
   return idx;
 }
 
-export function listTaskSummaries(filter?: { status?: TaskStatus[] }): TaskSummary[] {
+export function listTaskSummaries(filter?: { status?: TaskStatus[]; limit?: number }): TaskSummary[] {
   let idx = loadIndex();
   const summaryIds = Object.keys(idx.summaries);
   let hasTaskFiles = false;
@@ -772,10 +776,12 @@ export function listTaskSummaries(filter?: { status?: TaskStatus[] }): TaskSumma
   if (needsRebuild) {
     idx = rebuildTaskIndex();
   }
-  return Object.values(idx.summaries)
-    .map(maybeRepairStaleRunningTaskSummary)
+  const requestedLimit = Number(filter?.limit || 0);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.max(1, Math.floor(requestedLimit)) : 0;
+  const summaries = Object.values(idx.summaries)
     .filter((task) => !filter?.status || filter.status.includes(task.status))
     .sort((a, b) => b.startedAt - a.startedAt);
+  return (limit ? summaries.slice(0, limit) : summaries).map(maybeRepairStaleRunningTaskSummary);
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ CRUD Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -783,6 +789,8 @@ export function listTaskSummaries(filter?: { status?: TaskStatus[] }): TaskSumma
 export function createTask(params: {
   title: string;
   prompt: string;
+  originalAssignment?: string;
+  resolvedToolManifest?: string[];
   sessionId: string;
   channel: 'web' | 'telegram';
   telegramChatId?: number;
@@ -818,6 +826,8 @@ export function createTask(params: {
     id,
     title: params.title,
     prompt: params.prompt,
+    originalAssignment: params.originalAssignment,
+    resolvedToolManifest: params.resolvedToolManifest,
     sessionId: params.sessionId,
     channel: params.channel,
     telegramChatId: params.telegramChatId,

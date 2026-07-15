@@ -548,7 +548,7 @@ body.pm-mobile-drawer-open .pm-app {
   font-family: inherit;
   font-size: 13px;
   line-height: 1.2;
-  max-width: min(42vw, 152px);
+  max-width: min(54vw, 210px);
   -webkit-user-select: none; user-select: none;
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
@@ -562,7 +562,7 @@ body.pm-mobile-drawer-open .pm-app {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: min(31vw, 106px);
+  max-width: min(42vw, 164px);
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
@@ -1323,6 +1323,105 @@ body.pm-model-badge-pressing * {
 .pm-body.pm-no-pad-top { padding-top: 0; }
 .pm-body.pm-voice-body {
   padding-top: calc(max(env(safe-area-inset-top), 12px) + 54px);
+}
+
+/* The standalone voice page is two deliberate, full-screen stops. Its own
+   viewport-height scroller makes iOS honor mandatory snapping consistently. */
+body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap {
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+}
+body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-app,
+body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-page {
+  height: 100dvh;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm-voice-body--page {
+  flex: none;
+  width: 100%;
+  height: 100dvh;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  scroll-snap-type: y mandatory;
+  scroll-padding: 0;
+}
+.pm-voice-body--page .pm-voice-snap-section {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100dvh;
+  min-height: 100dvh;
+  max-height: 100dvh;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+.pm-voice-body--page .pm-voice-snap-primary {
+  display: grid;
+  align-items: start;
+  padding: calc(max(env(safe-area-inset-top), 12px) + 58px) 14px calc(env(safe-area-inset-bottom) + var(--pm-tabbar-h) + 18px);
+}
+.pm-voice-body--page .pm-voice-snap-secondary {
+  position: relative;
+  overflow-y: auto;
+  padding: calc(max(env(safe-area-inset-top), 12px) + 72px) 14px calc(env(safe-area-inset-bottom) + var(--pm-tabbar-h) + 28px);
+}
+.pm-voice-secondary-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.pm-voice-snap-arrow {
+  appearance: none;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 54px;
+  min-height: 42px;
+  padding: 3px 10px;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--pm-text) 72%, transparent);
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-voice-snap-arrow span {
+  font-size: 24px;
+  font-weight: 300;
+  line-height: .9;
+}
+.pm-voice-snap-arrow small {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .09em;
+  line-height: 1;
+  text-transform: uppercase;
+  opacity: .72;
+}
+.pm-voice-snap-arrow-down {
+  position: relative;
+  top: 20px;
+  margin: 8px auto 0;
+  animation: pm-voice-swipe-cue 1.8s ease-in-out infinite;
+}
+.pm-voice-snap-arrow-up {
+  display: flex;
+  margin: 0 auto 8px;
+}
+@keyframes pm-voice-swipe-cue {
+  0%, 100% { transform: translateY(0); opacity: .62; }
+  50% { transform: translateY(5px); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-voice-snap-arrow-down { animation: none; }
 }
 
 /* ---------- bottom tab nav ---------- */
@@ -5071,6 +5170,22 @@ body.pm-model-badge-pressing * {
 .pm-live-segment.error {
   border-color: rgba(229,74,58,.62);
 }
+.pm-trace-tool-group-shell {
+  width: 100%;
+  min-width: 0;
+}
+.pm-trace-collapsed-vision-previews {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin: 6px 0 4px 12px;
+}
+.pm-trace-tool-group[open] + .pm-trace-collapsed-vision-previews {
+  display: none;
+}
+.pm-trace-collapsed-vision-previews .pm-live-vision-preview {
+  margin-top: 0;
+}
 .pm-live-md > :first-child { margin-top: 0; }
 .pm-live-md > :last-child { margin-bottom: 0; }
 .pm-live-stream-enter {
@@ -8762,8 +8877,17 @@ body.pm-model-badge-pressing * {
   inset: 0;
   z-index: 10040;
   pointer-events: none;
+  visibility: hidden;
+  overflow: hidden;
+  opacity: 0;
+  transition: visibility 0s linear .28s, opacity 0s linear .28s;
 }
-.pm-mobile-side-sheet.open { pointer-events: all; }
+.pm-mobile-side-sheet.open {
+  pointer-events: all;
+  visibility: visible;
+  opacity: 1;
+  transition-delay: 0s;
+}
 .pm-mobile-side-scrim {
   position: absolute;
   inset: 0;
@@ -8883,6 +9007,29 @@ body.pm-model-badge-pressing * {
 }
 .pm-mobile-side-composer .pm-composer-row { transform: translateY(0); }
 .pm-mobile-side-composer .pm-composer-input { min-height: 34px; }
+
+.pm-team-chat-card {
+  padding: 0;
+  overflow: hidden;
+}
+.pm-team-chat-list {
+  min-height: min(42svh, 340px);
+  max-height: 55svh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 14px 8px;
+  scrollbar-width: thin;
+}
+.pm-team-chat-status {
+  min-height: min(34svh, 260px);
+  display: grid;
+  place-items: center;
+  padding: 24px 8px;
+  box-sizing: border-box;
+  color: var(--pm-muted);
+  font-size: 13px;
+  text-align: center;
+}
 
 /* Voice mode now reaches the very bottom of the page (behind the floating
    tab capsule), so the glow/glass sheet runs to the screen edge. The controls
@@ -9187,6 +9334,27 @@ body.pm-model-badge-pressing * {
   will-change: transform, opacity;
   animation: pm-voice-preview-pop .28s cubic-bezier(.2,1.3,.32,1) both;
 }
+.pm-voice-preview-close {
+  position: absolute;
+  z-index: 12;
+  top: 26px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 999px;
+  background: rgba(8,9,12,.76);
+  color: rgba(255,255,255,.92);
+  box-shadow: 0 5px 16px rgba(0,0,0,.28);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font: 400 22px/27px var(--pm-font);
+  text-align: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-voice-preview-close:active { transform: scale(.92); }
 .pm-voice-preview-card.dragging {
   cursor: grabbing;
   animation: none;
@@ -9213,6 +9381,18 @@ body.pm-model-badge-pressing * {
 .pm-voice-preview-card .pm-media-card video {
   aspect-ratio: 16 / 9;
 }
+.pm-voice-body--page .pm-voice-snap-primary .pm-voice-stage {
+  width: 100%;
+  min-height: calc(100dvh - max(env(safe-area-inset-top), 12px) - var(--pm-tabbar-h) - env(safe-area-inset-bottom) - 76px);
+  justify-content: center;
+  padding-bottom: 0;
+}
+.pm-voice-body--page .pm-voice-overlay-anchor {
+  width: min(78vw, 320px);
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
 .pm-voice-preview-artifact {
   max-height: min(62vh, 560px);
   overflow: auto;
@@ -9227,6 +9407,39 @@ body.pm-model-badge-pressing * {
 }
 .pm-voice-preview-artifact::-webkit-scrollbar { display: none; }
 .pm-voice-preview-artifact > * { margin: 0 !important; max-width: 100% !important; }
+.pm-voice-preview-products .pm-voice-preview-artifact,
+.pm-voice-preview-sources .pm-voice-preview-artifact {
+  padding: 12px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.pm-voice-preview-products .pm-product-carousel,
+.pm-voice-preview-sources .pm-sources {
+  width: 100%;
+  margin: 0 !important;
+}
+.pm-voice-preview-products .pm-product-heading,
+.pm-voice-preview-sources .pm-src-heading {
+  padding: 0 38px 9px 0;
+  margin: 0;
+  line-height: 1.25;
+}
+.pm-voice-preview-products .pm-product-track,
+.pm-voice-preview-sources .pm-src-track {
+  display: block;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+.pm-voice-preview-products .pm-product-card,
+.pm-voice-preview-sources .pm-src-card {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.pm-voice-preview-products .pm-product-img-wrap { aspect-ratio: 16 / 9; }
+.pm-voice-preview-sources .pm-src-card { min-height: 250px; }
 .pm-voice-preview-label {
   display: inline-flex;
   margin: 0 0 6px 10px;
@@ -9506,6 +9719,51 @@ body.pm-model-badge-pressing * {
 }
 .pm-voice-status { margin-top: 22px; font-size: 18px; font-weight: 700; color: var(--pm-text); }
 .pm-voice-hint { margin-top: 4px; font-size: 13px; color: var(--pm-muted); }
+.pm-voice-body--page .pm-voice-status-region {
+  position: absolute;
+  z-index: 18;
+  left: 50%;
+  bottom: 166px;
+  width: min(88vw, 460px);
+  min-height: 92px;
+  max-height: 122px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: hidden;
+  pointer-events: none;
+  text-align: center;
+  opacity: 1;
+  transition: opacity .24s ease, transform .24s ease;
+}
+.pm-voice-body--page .pm-voice-stage.pm-voice-tool-active .pm-voice-status-region {
+  animation: pm-voice-tool-in .22s ease-out both;
+}
+.pm-voice-body--page .pm-voice-stage.pm-voice-tool-fading .pm-voice-status-region {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-5px);
+}
+@keyframes pm-voice-tool-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.pm-voice-body--page .pm-voice-status-region .pm-voice-status { margin-top: 0; }
+.pm-voice-body--page .pm-voice-status,
+.pm-voice-body--page .pm-voice-hint {
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity .36s ease, visibility 0s linear .36s;
+}
+.pm-voice-body--page .pm-voice-stage.pm-voice-status-visible .pm-voice-status,
+.pm-voice-body--page .pm-voice-stage.pm-voice-status-visible .pm-voice-hint,
+.pm-voice-body--page .pm-voice-stage.pm-voice-mode-intro .pm-voice-status,
+.pm-voice-body--page .pm-voice-stage.pm-voice-mode-intro .pm-voice-hint {
+  visibility: visible;
+  opacity: 1;
+  transition-delay: 0s;
+}
 .pm-voice-status.pm-voice-live-text,
 .pm-voice-status.pm-voice-agent-text {
   max-width: min(86vw, 460px);
@@ -9710,6 +9968,68 @@ body.pm-model-badge-pressing * {
 }
 .pm-voice-body--page .pm-voice-mic.pm-voice-page-mic.confirmed {
   --pm-voice-page-ring: rgba(56,189,248,.82);
+}
+.pm-voice-body--page .pm-voice-mic.pm-voice-page-mic.pm-voice-orb-mic {
+  position: relative;
+  top: 0;
+  width: 116px;
+  height: 116px;
+  aspect-ratio: 1;
+  margin: 0 auto 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: block;
+  filter: drop-shadow(0 14px 30px rgba(234,106,31,.32));
+  box-shadow: none;
+}
+.pm-voice-body--page .pm-voice-orb-dock {
+  position: absolute;
+  z-index: 16;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+.pm-voice-body--page .pm-voice-orb-dock .pm-voice-orb-mic,
+.pm-voice-body--page .pm-voice-orb-dock .pm-voice-snap-arrow-down {
+  pointer-events: auto;
+}
+.pm-voice-body--page .pm-voice-orb-dock .pm-voice-snap-arrow-down {
+  top: 0;
+  margin: 0 auto;
+}
+.pm-voice-body--page .pm-voice-orb-mic .pm-orb-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scale(calc(1 + var(--pm-orb-audio, 0) * .055));
+  filter:
+    brightness(calc(1 + var(--pm-orb-audio, 0) * .22))
+    saturate(calc(1 + var(--pm-orb-audio, 0) * .18))
+    drop-shadow(0 0 calc(2px + var(--pm-orb-audio, 0) * 18px) rgba(255,145,69,.48));
+  transition: transform 42ms linear, filter 42ms linear;
+  transform-origin: center;
+}
+.pm-voice-body--page .pm-voice-orb-mic.pm-orb-sound-reactive .pm-wave-main,
+.pm-voice-body--page .pm-voice-orb-mic.pm-orb-sound-reactive .pm-wave-bright {
+  stroke-width: calc(2.2px + var(--pm-orb-audio, 0) * 2.4px);
+}
+.pm-voice-body--page .pm-voice-orb-mic .pm-orb-grid > circle {
+  display: none;
+}
+.pm-voice-body--page .pm-voice-mic.pm-voice-page-mic.pm-voice-orb-mic::before {
+  display: none;
+}
+.pm-voice-body--page .pm-voice-mic.pm-voice-page-mic.pm-voice-orb-mic.pressed,
+.pm-voice-body--page .pm-voice-mic.pm-voice-page-mic.pm-voice-orb-mic.recording,
+.pm-voice-body--page .pm-voice-mic.pm-voice-page-mic.pm-voice-orb-mic.live,
+.pm-voice-body--page .pm-voice-mic.pm-voice-page-mic.pm-voice-orb-mic.always-listening {
+  background: transparent;
+  box-shadow: none;
 }
 @keyframes pm-mic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
 @keyframes pm-voice-ambient-float {

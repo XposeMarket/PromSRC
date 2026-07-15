@@ -122,6 +122,7 @@ export function getFileWebMemoryTools(): any[] {
             command: { type: 'string', description: 'Command to run, or explicit check command.' },
             cwd: { type: 'string', description: 'Working directory relative to the workspace, or an absolute computer path. Outside-workspace paths require approval in default permissions and run directly in Lite permissions.' },
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'] },
+            elevated: { type: 'boolean', description: 'Windows only. Run this bounded command through the administrator broker. Always requires a fresh one-shot user approval; Lite mode, goals, and saved permissions cannot bypass it. Broker installation may require UAC once; later commands do not. Not supported with action=start.' },
             pty: { type: 'boolean' },
             timeout_ms: { type: 'number', description: 'Timeout in milliseconds for run/check actions.' },
             timeoutMs: { type: 'number', description: 'Legacy camelCase timeout alias.' },

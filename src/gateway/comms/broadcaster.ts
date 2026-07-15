@@ -37,6 +37,7 @@ let _lastHeartbeatDriftEventMs = 0;
 let _lastRestartableHeartbeatDriftAt = 0;
 let _lastRestartableHeartbeatDriftMs = 0;
 let _eventLoopStallRestartScheduled = false;
+let _lastHeartbeatCpuUsage = process.cpuUsage();
 
 function parseNonNegativeIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -50,6 +51,43 @@ const EVENT_LOOP_STALL_RESTART_MIN_UPTIME_MS = parseNonNegativeIntEnv('PROMETHEU
 const EVENT_LOOP_STALL_AUTORESTART_ENABLED =
   process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART === '1'
   || process.env.PROMETHEUS_GATEWAY_STALL_AUTORESTART === 'true';
+const EVENT_LOOP_STALL_DIAGNOSTIC_MS = parseNonNegativeIntEnv('PROMETHEUS_GATEWAY_STALL_DIAGNOSTIC_MS', 5_000);
+
+function appendEventLoopStallDiagnostic(configDir: string, now: number, heartbeatDriftMs: number, elapsedMs: number): void {
+  if (EVENT_LOOP_STALL_DIAGNOSTIC_MS <= 0 || heartbeatDriftMs < EVENT_LOOP_STALL_DIAGNOSTIC_MS) return;
+  try {
+    const cpu = process.cpuUsage(_lastHeartbeatCpuUsage);
+    const cpuMs = (cpu.user + cpu.system) / 1000;
+    let runtimes: any[] = [];
+    try {
+      const runtimePath = path.join(configDir, 'runtimes', 'active-runtimes.json');
+      const parsed = JSON.parse(fs.readFileSync(runtimePath, 'utf-8'));
+      runtimes = Object.values(parsed?.runtimes || {}).map((runtime: any) => ({
+        id: runtime?.id,
+        kind: runtime?.kind,
+        status: runtime?.status,
+        sessionId: runtime?.sessionId,
+        taskId: runtime?.taskId,
+        agentId: runtime?.agentId,
+        ageMs: Number(runtime?.startedAt) > 0 ? Math.max(0, now - Number(runtime.startedAt)) : undefined,
+      })).slice(0, 25);
+    } catch {}
+    const record = {
+      timestamp: new Date(now).toISOString(),
+      pid: process.pid,
+      heartbeatDriftMs,
+      elapsedMs,
+      cpuMs,
+      eventLoopCpuPercent: elapsedMs > 0 ? Math.round((cpuMs / elapsedMs) * 10_000) / 100 : 0,
+      memory: process.memoryUsage(),
+      modelBusy: _modelBusyCount > 0,
+      modelBusyAgeMs: _modelBusySince > 0 ? now - _modelBusySince : 0,
+      lastMainSessionId: _lastMainSessionId,
+      runtimes,
+    };
+    fs.appendFileSync(path.join(configDir, 'gateway-event-loop-stalls.ndjson'), `${JSON.stringify(record)}\n`, 'utf-8');
+  } catch {}
+}
 
 function maybeScheduleEventLoopStallRecovery(heartbeatDriftMs: number, now: number): void {
   if (!EVENT_LOOP_STALL_AUTORESTART_ENABLED) return;
@@ -84,10 +122,10 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
   try {
     const now = Date.now();
     const expectedIntervalMs = 5000;
+    const elapsedMs = _lastHeartbeatAt > 0 ? Math.max(0, now - _lastHeartbeatAt) : expectedIntervalMs;
     const heartbeatDriftMs = _lastHeartbeatAt > 0
-      ? Math.max(0, now - _lastHeartbeatAt - expectedIntervalMs)
+      ? Math.max(0, elapsedMs - expectedIntervalMs)
       : 0;
-    _lastHeartbeatAt = now;
     _maxHeartbeatDriftMs = Math.max(_maxHeartbeatDriftMs, heartbeatDriftMs);
     if (heartbeatDriftMs >= 1000) {
       _lastHeartbeatDriftEventAt = now;
@@ -99,6 +137,9 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
     }
     const configDir = getConfig().getConfigDir();
     fs.mkdirSync(configDir, { recursive: true });
+    appendEventLoopStallDiagnostic(configDir, now, heartbeatDriftMs, elapsedMs);
+    _lastHeartbeatCpuUsage = process.cpuUsage();
+    _lastHeartbeatAt = now;
     fs.writeFileSync(path.join(configDir, 'gateway-runtime-status.json'), JSON.stringify({
       pid: process.pid,
       timestamp: now,

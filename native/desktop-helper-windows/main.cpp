@@ -1,5 +1,10 @@
+#include <winsock2.h>
+#include <ws2ipdef.h>
 #include <windows.h>
+#include <sddl.h>
+#include <iphlpapi.h>
 #include <d3d11.h>
+#include <bcrypt.h>
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <windows.graphics.capture.interop.h>
@@ -16,12 +21,16 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 using namespace winrt;
@@ -100,6 +109,261 @@ std::wstring utf16_from_utf8(const std::string& value) {
   std::wstring result(static_cast<size_t>(size), L'\0');
   MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), result.data(), size);
   return result;
+}
+
+std::string read_binary_file(const std::wstring& file_path) {
+  std::ifstream input(file_path, std::ios::binary);
+  if (!input) throw std::runtime_error("Could not open elevated command request file");
+  return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+std::string sha256_hex(const std::string& value) {
+  BCRYPT_ALG_HANDLE algorithm = nullptr;
+  BCRYPT_HASH_HANDLE hash = nullptr;
+  DWORD object_size = 0;
+  DWORD hash_size = 0;
+  DWORD received = 0;
+  if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) {
+    throw std::runtime_error("Could not initialize SHA-256");
+  }
+  if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&object_size), sizeof(object_size), &received, 0) != 0
+      || BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hash_size), sizeof(hash_size), &received, 0) != 0) {
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    throw std::runtime_error("Could not inspect SHA-256 provider");
+  }
+  std::vector<unsigned char> object(object_size);
+  std::vector<unsigned char> digest(hash_size);
+  if (BCryptCreateHash(algorithm, &hash, object.data(), object_size, nullptr, 0, 0) != 0) {
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    throw std::runtime_error("Could not create SHA-256 hash");
+  }
+  if (BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(value.data())), static_cast<ULONG>(value.size()), 0) != 0
+      || BCryptFinishHash(hash, digest.data(), hash_size, 0) != 0) {
+    BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(algorithm, 0);
+    throw std::runtime_error("Could not calculate request SHA-256");
+  }
+  BCryptDestroyHash(hash);
+  BCryptCloseAlgorithmProvider(algorithm, 0);
+  std::ostringstream output;
+  output << std::hex << std::setfill('0');
+  for (const unsigned char byte : digest) output << std::setw(2) << static_cast<int>(byte);
+  return output.str();
+}
+
+bool is_running_as_administrator() {
+  SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
+  PSID administrators = nullptr;
+  if (!AllocateAndInitializeSid(&authority, 2, SECURITY_BUILTIN_DOMAIN_RID,
+        DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &administrators)) return false;
+  BOOL member = FALSE;
+  CheckTokenMembership(nullptr, administrators, &member);
+  FreeSid(administrators);
+  return member == TRUE;
+}
+
+void write_elevated_result(const std::wstring& result_path, const std::string& json) {
+  std::ofstream output(result_path, std::ios::binary | std::ios::trunc);
+  if (!output) throw std::runtime_error("Could not write elevated command result");
+  output << json;
+  output.flush();
+}
+
+int run_elevated_command(const std::wstring& request_path, const std::wstring& expected_hash, const std::wstring& result_path) {
+  try {
+    if (!is_running_as_administrator()) throw std::runtime_error("Elevated helper did not receive an administrator token");
+    const std::string request = read_binary_file(request_path);
+    std::string expected = utf8(expected_hash);
+    std::transform(expected.begin(), expected.end(), expected.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (sha256_hex(request) != expected) throw std::runtime_error("Elevated command request integrity check failed");
+
+    const std::wstring command = utf16_from_utf8(decode_base64(string_field(request, "commandBase64")));
+    const std::wstring cwd = utf16_from_utf8(decode_base64(string_field(request, "cwdBase64")));
+    const std::string shell = string_field(request, "shell");
+    const DWORD timeout_ms = static_cast<DWORD>(std::clamp<long long>(number_field(request, "timeoutMs", 120000), 1000, 86400000));
+    if (command.empty() || cwd.empty()) throw std::runtime_error("Elevated command request is incomplete");
+
+    std::wstring command_line;
+    if (shell == "cmd") {
+      command_line = L"cmd.exe /d /s /c " + command;
+    } else if (shell == "bash") {
+      command_line = L"bash.exe -lc \"" + command + L"\"";
+    } else {
+      command_line = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -Command " + command;
+    }
+    std::vector<wchar_t> mutable_command(command_line.begin(), command_line.end());
+    mutable_command.push_back(L'\0');
+
+    SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    const std::wstring stdout_path = result_path + L".stdout";
+    const std::wstring stderr_path = result_path + L".stderr";
+    HANDLE stdout_file = CreateFileW(stdout_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE stderr_file = CreateFileW(stderr_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE null_input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (stdout_file == INVALID_HANDLE_VALUE || stderr_file == INVALID_HANDLE_VALUE || null_input == INVALID_HANDLE_VALUE) {
+      if (stdout_file != INVALID_HANDLE_VALUE) CloseHandle(stdout_file);
+      if (stderr_file != INVALID_HANDLE_VALUE) CloseHandle(stderr_file);
+      if (null_input != INVALID_HANDLE_VALUE) CloseHandle(null_input);
+      throw std::runtime_error("Could not create elevated command capture files");
+    }
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = null_input;
+    startup.hStdOutput = stdout_file;
+    startup.hStdError = stderr_file;
+    PROCESS_INFORMATION process{};
+    const BOOL created = CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, cwd.c_str(), &startup, &process);
+    CloseHandle(stdout_file);
+    CloseHandle(stderr_file);
+    CloseHandle(null_input);
+    if (!created) throw std::runtime_error("Could not start elevated command (Windows error " + std::to_string(GetLastError()) + ")");
+
+    const DWORD wait_result = WaitForSingleObject(process.hProcess, timeout_ms);
+    bool timed_out = wait_result == WAIT_TIMEOUT;
+    if (timed_out) {
+      TerminateProcess(process.hProcess, 124);
+      WaitForSingleObject(process.hProcess, 5000);
+    }
+    DWORD exit_code = 1;
+    GetExitCodeProcess(process.hProcess, &exit_code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+
+    write_elevated_result(result_path,
+      std::string("{\"ok\":true,\"elevated\":true,\"exitCode\":") + std::to_string(exit_code)
+      + ",\"timedOut\":" + (timed_out ? "true" : "false") + "}");
+    return timed_out ? 124 : static_cast<int>(exit_code);
+  } catch (const std::exception& error) {
+    try {
+      write_elevated_result(result_path, std::string("{\"ok\":false,\"elevated\":true,\"error\":\"") + json_escape(error.what()) + "\"}");
+    } catch (...) {}
+    return 2;
+  }
+}
+
+std::wstring normalized_full_path(const std::wstring& input) {
+  const DWORD required = GetFullPathNameW(input.c_str(), 0, nullptr, nullptr);
+  if (!required) throw std::runtime_error("Could not normalize broker path");
+  std::wstring output(static_cast<size_t>(required), L'\0');
+  const DWORD written = GetFullPathNameW(input.c_str(), required, output.data(), nullptr);
+  if (!written || written >= required) throw std::runtime_error("Could not normalize broker path");
+  output.resize(written);
+  std::transform(output.begin(), output.end(), output.begin(), ::towlower);
+  return output;
+}
+
+bool path_is_inside(const std::wstring& root, const std::wstring& candidate) {
+  std::wstring base = normalized_full_path(root);
+  const std::wstring target = normalized_full_path(candidate);
+  if (!base.empty() && base.back() != L'\\') base.push_back(L'\\');
+  return target.size() > base.size() && target.compare(0, base.size(), base) == 0;
+}
+
+std::wstring client_process_path(HANDLE pipe) {
+  ULONG pid = 0;
+  if (!GetNamedPipeClientProcessId(pipe, &pid) || !pid) throw std::runtime_error("Could not identify elevated broker client");
+  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process) throw std::runtime_error("Could not inspect elevated broker client");
+  std::wstring image(32768, L'\0');
+  DWORD size = static_cast<DWORD>(image.size());
+  const BOOL ok = QueryFullProcessImageNameW(process, 0, image.data(), &size);
+  CloseHandle(process);
+  if (!ok) throw std::runtime_error("Could not resolve elevated broker client image");
+  image.resize(size);
+  return normalized_full_path(image);
+}
+
+bool process_owns_listening_port(DWORD pid, unsigned short port) {
+  ULONG ipv4_size = 0;
+  GetExtendedTcpTable(nullptr, &ipv4_size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0);
+  std::vector<unsigned char> ipv4_buffer(ipv4_size);
+  if (GetExtendedTcpTable(ipv4_buffer.data(), &ipv4_size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) == NO_ERROR) {
+    const auto* table = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(ipv4_buffer.data());
+    for (DWORD index = 0; index < table->dwNumEntries; ++index) {
+      const auto& row = table->table[index];
+      if (row.dwOwningPid == pid && ntohs(static_cast<u_short>(row.dwLocalPort)) == port) return true;
+    }
+  }
+
+  ULONG ipv6_size = 0;
+  GetExtendedTcpTable(nullptr, &ipv6_size, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_LISTENER, 0);
+  std::vector<unsigned char> ipv6_buffer(ipv6_size);
+  if (GetExtendedTcpTable(ipv6_buffer.data(), &ipv6_size, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_LISTENER, 0) == NO_ERROR) {
+    const auto* table = reinterpret_cast<const MIB_TCP6TABLE_OWNER_PID*>(ipv6_buffer.data());
+    for (DWORD index = 0; index < table->dwNumEntries; ++index) {
+      const auto& row = table->table[index];
+      if (row.dwOwningPid == pid && ntohs(static_cast<u_short>(row.dwLocalPort)) == port) return true;
+    }
+  }
+  return false;
+}
+
+std::string read_pipe_message(HANDLE pipe) {
+  std::string message;
+  char buffer[4096];
+  DWORD received = 0;
+  while (message.size() < 1024 * 1024) {
+    const BOOL ok = ReadFile(pipe, buffer, sizeof(buffer), &received, nullptr);
+    if (received) message.append(buffer, buffer + received);
+    if (ok) break;
+    if (GetLastError() != ERROR_MORE_DATA) throw std::runtime_error("Could not read elevated broker request");
+  }
+  if (message.size() >= 1024 * 1024) throw std::runtime_error("Elevated broker request is too large");
+  return message;
+}
+
+int run_elevated_broker(const std::wstring& pipe_name, const std::wstring& queue_dir,
+                        const std::wstring& allowed_client, const std::wstring& user_sid, unsigned short gateway_port) {
+  if (!is_running_as_administrator()) return 3;
+  const std::wstring allowed_image = normalized_full_path(allowed_client);
+  const std::wstring sddl = L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;" + user_sid + L")";
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr)) return 4;
+  SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), descriptor, FALSE};
+
+  for (;;) {
+    HANDLE pipe = CreateNamedPipeW(pipe_name.c_str(), PIPE_ACCESS_DUPLEX,
+      PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+      1, 4096, 4096, 0, &security);
+    if (pipe == INVALID_HANDLE_VALUE) {
+      LocalFree(descriptor);
+      return 5;
+    }
+    const BOOL connected = ConnectNamedPipe(pipe, nullptr) ? TRUE : GetLastError() == ERROR_PIPE_CONNECTED;
+    if (!connected) {
+      CloseHandle(pipe);
+      continue;
+    }
+
+    std::string response = "{\"ok\":false,\"error\":\"Elevated broker request failed\"}";
+    try {
+      // Read the complete message before authenticating the client. If authentication
+      // fails, the connected gateway then receives the precise broker error instead
+      // of seeing an opaque EPIPE while it is still writing the request.
+      const std::string request = read_pipe_message(pipe);
+      ULONG client_pid = 0;
+      if (!GetNamedPipeClientProcessId(pipe, &client_pid) || !client_pid) throw std::runtime_error("Could not identify elevated broker client");
+      if (client_process_path(pipe) != allowed_image) throw std::runtime_error("Elevated broker rejected an unexpected client executable");
+      if (!process_owns_listening_port(client_pid, gateway_port)) throw std::runtime_error("Elevated broker client does not own the configured Prometheus gateway port");
+      const std::wstring command_request = utf16_from_utf8(decode_base64(string_field(request, "requestPathBase64")));
+      const std::wstring result_path = utf16_from_utf8(decode_base64(string_field(request, "resultPathBase64")));
+      const std::wstring request_hash = utf16_from_utf8(string_field(request, "requestHash"));
+      if (!path_is_inside(queue_dir, command_request) || !path_is_inside(queue_dir, result_path)) {
+        throw std::runtime_error("Elevated broker request paths escaped the broker queue");
+      }
+      run_elevated_command(command_request, request_hash, result_path);
+      response = "{\"ok\":true}";
+    } catch (const std::exception& error) {
+      response = std::string("{\"ok\":false,\"error\":\"") + json_escape(error.what()) + "\"}";
+    }
+    DWORD written = 0;
+    WriteFile(pipe, response.data(), static_cast<DWORD>(response.size()), &written, nullptr);
+    FlushFileBuffers(pipe);
+    DisconnectNamedPipe(pipe);
+    CloseHandle(pipe);
+  }
 }
 
 void send_keyboard(WORD virtual_key, DWORD flags = 0, WORD scan = 0) {
@@ -376,7 +640,16 @@ void write_error(long long id, int code, const std::string& message) {
 
 } // namespace
 
-int main() {
+int wmain(int argc, wchar_t* argv[]) {
+  if (argc == 5 && std::wstring(argv[1]) == L"--elevated-run") {
+    return run_elevated_command(argv[2], argv[3], argv[4]);
+  }
+  if (argc == 7 && std::wstring(argv[1]) == L"--elevated-broker") {
+    if (HWND console = GetConsoleWindow()) ShowWindow(console, SW_HIDE);
+    const int port = _wtoi(argv[6]);
+    if (port <= 0 || port > 65535) return 6;
+    return run_elevated_broker(argv[2], argv[3], argv[4], argv[5], static_cast<unsigned short>(port));
+  }
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   try {
     init_apartment(apartment_type::multi_threaded);

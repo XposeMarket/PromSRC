@@ -26,6 +26,7 @@ export interface ToolPermissionCandidate {
   packageManager?: string;
   requiresExplicitApproval?: boolean;
   requiresAdmin?: boolean;
+  oneShot?: boolean;
 }
 
 export interface CommandPermissionCandidate extends ToolPermissionCandidate {
@@ -230,6 +231,8 @@ function matchesGrant(grant: CommandPermissionGrant, candidate: ReturnType<typeo
 }
 
 export function findCommandPermissionGrant(input: ToolPermissionCandidate): CommandPermissionGrant | null {
+  // One-shot actions are deliberately never trustable.
+  if (input.oneShot === true) return null;
   const candidate = buildToolPermissionCandidate(input);
   const grant = loadGrants().find((item) => matchesGrant(item, candidate)) || null;
   if (grant) {
@@ -245,6 +248,9 @@ export function addCommandPermissionGrant(
   scope: ToolPermissionScope,
   createdBy = 'web',
 ): CommandPermissionGrant {
+  if (input.oneShot === true) {
+    throw new Error('Administrator commands are one-shot and cannot be saved as session or always permissions.');
+  }
   const candidate = buildToolPermissionCandidate(input);
   const grant: CommandPermissionGrant = {
     id: crypto.randomUUID(),

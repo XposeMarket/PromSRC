@@ -252,11 +252,37 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
         const { getConnectionRuntime } = await import('../../../connections/runtime.js');
         const runtime = getConnectionRuntime();
         const action = String(args.action || 'list').trim().toLowerCase();
-        if (action === 'list' || action === 'list_connections') return { name, args, result: JSON.stringify({ connections: runtime.orchestrator.listConnections() }, null, 2), error: false };
+        const summarizeConnection = (connection: any) => {
+          const mcpServerId = String(connection.configuration?.mcpServerId || connection.serviceId || '').trim();
+          const mcpStatus = mcpServerId ? getMCPManager().getStatus().find((item: any) => item.id === mcpServerId) : undefined;
+          const runtimeInvalid = mcpStatus && (mcpStatus.status === 'error' || /401|unauthori[sz]ed|revoked|invalid token/i.test(String(mcpStatus.error || '')));
+          return {
+            id: connection.id,
+            serviceId: connection.serviceId,
+            serviceName: connection.serviceName,
+            connected: !runtimeInvalid && connection.enabled && connection.authenticated && connection.registered,
+            authState: runtimeInvalid ? 'reauth_required' : connection.authState,
+            health: runtimeInvalid ? 'unavailable' : connection.health,
+            verified: runtimeInvalid ? false : connection.verified,
+            toolCount: Array.isArray(connection.exposedTools) ? connection.exposedTools.length : 0,
+            ...(runtimeInvalid ? { error: String(mcpStatus?.error || 'MCP runtime unavailable').slice(0, 240), action: 'reauthenticate' } : {}),
+          };
+        };
+        if (action === 'list' || action === 'list_connections') {
+          const connections = runtime.orchestrator.listConnections();
+          const result = args.detail === 'full' ? connections : connections.map(summarizeConnection);
+          return { name, args, result: JSON.stringify({ connections: result }), error: false };
+        }
         if (action === 'status') {
           const attemptId = String(args.connection_attempt_id || args.attempt_id || '').trim();
-          const attempt = runtime.orchestrator.getAttempt(attemptId);
-          return attempt ? { name, args, result: JSON.stringify({ attempt }, null, 2), artifacts: [{ type: 'connection_card', title: attempt.serviceName || attempt.serviceId, status: attempt.state, summary: attempt.plan?.summary, attempt }], error: false } : { name, args, result: `Connection attempt "${attemptId}" not found.`, error: true };
+          if (attemptId) {
+            const attempt = runtime.orchestrator.getAttempt(attemptId);
+            return attempt ? { name, args, result: JSON.stringify({ attempt }), artifacts: [{ type: 'connection_card', title: attempt.serviceName || attempt.serviceId, status: attempt.state, summary: attempt.plan?.summary, attempt }], error: false } : { name, args, result: `Connection attempt "${attemptId}" not found.`, error: true };
+          }
+          const query = String(args.connection_id || args.service || args.service_id || '').trim().toLowerCase();
+          if (!query) return { name, args, result: 'status requires connection_attempt_id, connection_id, or service', error: true };
+          const connection = runtime.orchestrator.listConnections().find((item: any) => item.id.toLowerCase() === query || item.serviceId.toLowerCase() === query || String(item.serviceName || '').toLowerCase() === query);
+          return connection ? { name, args, result: JSON.stringify({ connection: args.detail === 'full' ? connection : summarizeConnection(connection) }), error: false } : { name, args, result: `Connection "${query}" not found.`, error: true };
         }
         if (action === 'discover') {
           const service = String(args.service || args.service_id || '').trim();

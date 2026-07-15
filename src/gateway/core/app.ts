@@ -15,6 +15,7 @@ import { getPublicWebUiRoot, hasPublicWebUiBuild, isPublicDistributionBuild, res
 import { buildGatewayCorsOptions } from '../gateway-auth';
 import { isModelBusy, getLastMainSessionId } from '../comms/broadcaster';
 import { listLiveRuntimes } from '../live-runtime-registry';
+import { getMemoryIndexRefreshWorkerStatus } from '../memory-index/refresh-worker-client';
 import { providerWebhookRawBodyMiddleware, resolveHookConfig } from '../comms/webhook-handler';
 
 const startedAt = Date.now();
@@ -43,6 +44,7 @@ export function createApp(): express.Application {
   app.use(express.json({ limit: '50mb' }));
 
   app.get('/api/health', (_req, res) => {
+    const memoryMaintenance = getMemoryIndexRefreshWorkerStatus();
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       ok: true,
@@ -58,6 +60,17 @@ export function createApp(): express.Application {
         startedAt: runtime.startedAt,
         sessionId: runtime.sessionId,
       })),
+      memoryMaintenance: {
+        isolation: memoryMaintenance.isolation,
+        state: memoryMaintenance.broker.state,
+        pid: memoryMaintenance.broker.pid,
+        active: !!memoryMaintenance.runningWorkspace,
+        activeKind: memoryMaintenance.runningKind,
+        queuedWorkspaces: memoryMaintenance.queuedWorkspaces,
+        queuedJobs: memoryMaintenance.queuedJobs,
+        lastRunStartedAt: memoryMaintenance.lastRunStartedAt,
+        lastRunCompletedAt: memoryMaintenance.lastRunCompletedAt,
+      },
     });
   });
 

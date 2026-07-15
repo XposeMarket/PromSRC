@@ -17,6 +17,7 @@ import { getBuildStatus } from '../../runtime/build-status';
 import { ensureScheduleRuntimeForAgent } from './schedule-agent';
 import { normalizeScheduleSpec } from './schedule-pattern';
 import { findArchivedScheduledJob } from './schedule-archive';
+import { listThreadSupervisions } from '../threads/thread-supervision';
 
 export interface SchedulerAdminResult {
   success: boolean;
@@ -36,6 +37,17 @@ type ExpectedOutput = {
   requiredText?: string;
   absentText?: string;
 };
+
+type ExpectedResult = {
+  requiredText?: string;
+  absentText?: string;
+};
+
+function normalizeExpectedResult(value: any): ExpectedResult | undefined {
+  const requiredText = String(value?.requiredText ?? value?.required_text ?? '').trim();
+  const absentText = String(value?.absentText ?? value?.absent_text ?? '').trim();
+  return requiredText || absentText ? { requiredText: requiredText || undefined, absentText: absentText || undefined } : undefined;
+}
 
 function configDir(): string {
   try {
@@ -121,6 +133,9 @@ function summarizeJob(job: CronJob): Record<string, any> {
     lastRun: job.lastRun,
     lastRunStartedAt: (job as any).lastRunStartedAt || null,
     lastDuration: job.lastDuration,
+    lastQueueDurationMs: job.lastQueueDurationMs ?? null,
+    lastRunnerDurationMs: job.lastRunnerDurationMs ?? job.lastDuration ?? null,
+    lastOrchestrationDurationMs: job.lastOrchestrationDurationMs ?? job.lastDuration ?? null,
     consecutiveErrors: job.consecutiveErrors || 0,
     pausedReason: job.pausedReason || null,
     lastOutputSessionId: job.lastOutputSessionId || null,
@@ -131,6 +146,7 @@ function summarizeJob(job: CronJob): Record<string, any> {
     model: job.model || null,
     sessionTarget: job.sessionTarget || 'isolated',
     expectedOutputs: normalizeExpectedOutputs((job as any).expectedOutputs || []),
+    expectedResult: normalizeExpectedResult((job as any).expectedResult) || null,
   };
 }
 
@@ -625,12 +641,13 @@ export function scheduleJobOutputsTool(scheduler: SchedulerLike, args: any): Sch
     return { success: false, error: 'schedule_job_outputs action must be get, set, or check' };
   }
   if (action === 'get') {
-    return { success: true, data: { job: summarizeJob(job), expectedOutputs: normalizeExpectedOutputs((job as any).expectedOutputs || []) } };
+    return { success: true, data: { job: summarizeJob(job), expectedOutputs: normalizeExpectedOutputs((job as any).expectedOutputs || []), expectedResult: normalizeExpectedResult((job as any).expectedResult) || null } };
   }
   if (action === 'set') {
     if (args?.confirm !== true) return { success: false, error: 'schedule_job_outputs(set) requires confirm=true' };
     const expectedOutputs = normalizeExpectedOutputs(args?.expected_outputs ?? args?.expectedOutputs ?? []);
-    const updated = scheduler.updateJob(job.id, { expectedOutputs } as any);
+    const expectedResult = normalizeExpectedResult(args?.expected_result ?? args?.expectedResult);
+    const updated = scheduler.updateJob(job.id, { expectedOutputs, expectedResult } as any);
     if (!updated) return { success: false, error: `Job not found: ${job.id}` };
     return {
       success: true,
@@ -639,13 +656,17 @@ export function scheduleJobOutputsTool(scheduler: SchedulerLike, args: any): Sch
     };
   }
   const outputChecks = checkExpectedOutputs(job);
+  const expectedResult = normalizeExpectedResult((job as any).expectedResult);
+  const configured = outputChecks.length > 0 || !!expectedResult;
   const alerts = outputChecks.filter((check) => check.status !== 'ok');
   return {
     success: true,
-    message: alerts.length
-      ? `${alerts.length} expected output alert(s) for "${job.name}".`
-      : `All expected outputs look current for "${job.name}".`,
-    data: { job: summarizeJob(job), outputChecks, alerts },
+    message: !configured
+      ? `No output contract is configured for "${job.name}"; semantic health is unverified.`
+      : alerts.length
+        ? `${alerts.length} expected output alert(s) for "${job.name}".`
+        : `Configured output checks passed for "${job.name}".`,
+    data: { job: summarizeJob(job), configured, verificationState: configured ? (alerts.length ? 'failed' : 'passed') : 'unconfigured', outputChecks, expectedResult: expectedResult || null, alerts },
   };
 }
 
@@ -705,7 +726,9 @@ function jobHealth(job: CronJob): Record<string, any> {
   const now = Date.now();
   const nextRunMs = job.nextRun ? new Date(job.nextRun).getTime() : 0;
   const overdue = job.enabled && job.status === 'scheduled' && nextRunMs > 0 && nextRunMs < now;
-  const outputAlerts = checkExpectedOutputs(job).filter((check) => check.status !== 'ok');
+  const outputChecks = checkExpectedOutputs(job);
+  const outputAlerts = outputChecks.filter((check) => check.status !== 'ok');
+  const contractConfigured = outputChecks.length > 0 || !!normalizeExpectedResult((job as any).expectedResult);
   return {
     state: job.status === 'running'
       ? 'running'
@@ -717,10 +740,13 @@ function jobHealth(job: CronJob): Record<string, any> {
             ? 'overdue'
             : outputAlerts.length
               ? 'output_alert'
-              : 'healthy',
+              : !contractConfigured
+                ? 'unverified'
+                : 'healthy',
     overdue,
     consecutiveErrors: job.consecutiveErrors || 0,
     outputAlertCount: outputAlerts.length,
+    outputContractConfigured: contractConfigured,
     blockerReason: classifyBlocker(job.lastResult || ''),
   };
 }
@@ -769,9 +795,9 @@ export function automationDashboardTool(scheduler: SchedulerLike, args: any): Sc
   const agentFilter = String(args?.agent_id || args?.agentId || '').trim() || null;
   const includeRaw = Array.isArray(args?.include)
     ? args.include.map((s: any) => String(s || '').trim().toLowerCase()).filter(Boolean)
-    : null;
+    : [];
   // Default: every section on. `include` narrows to the requested sections.
-  const wants = (section: string): boolean => !includeRaw || includeRaw.includes(section);
+  const wants = (section: string): boolean => includeRaw.includes(section);
   const withOutputs = wants('outputs');
 
   const allJobs = scheduler.getJobs();
@@ -783,6 +809,10 @@ export function automationDashboardTool(scheduler: SchedulerLike, args: any): Sc
     lastResult: (job as any).lastResult ? String((job as any).lastResult).slice(0, resultCap) : null,
   }));
   const tasks = allTasks.slice(0, limit).map((task) => snapshotTask(task, outputCap));
+  const managedThreads = listThreadSupervisions({
+    includeTerminal: args?.include_done === true || args?.includeDone === true,
+    limit,
+  });
 
   const watches = listInternalWatches({ includeDone: args?.include_done === true || args?.includeDone === true })
     .slice(0, limit)
@@ -896,6 +926,7 @@ export function automationDashboardTool(scheduler: SchedulerLike, args: any): Sc
     agents: agents ? agents.length : undefined,
     teams: teams ? teams.length : undefined,
     watches: watches.length,
+    managedThreads: managedThreads.length,
     events: events.length,
   };
   const build = getBuildStatus();
@@ -912,6 +943,7 @@ export function automationDashboardTool(scheduler: SchedulerLike, args: any): Sc
       ...(teams ? { teams } : {}),
       scheduledJobs: jobs,
       tasks,
+      managedThreads,
       internalWatches: watches,
       eventQueue: events,
     },

@@ -452,10 +452,13 @@ export function createServer(
 
   wss.on('connection', (ws: WebSocket, req) => {
     let heartbeatTimer: NodeJS.Timeout | null = null;
+    let appHeartbeatTimer: NodeJS.Timeout | null = null;
     let missedPongs = 0;
     const clearHeartbeat = () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (appHeartbeatTimer) clearInterval(appHeartbeatTimer);
       heartbeatTimer = null;
+      appHeartbeatTimer = null;
     };
 
     const auth = evaluateGatewayRequest({
@@ -475,6 +478,21 @@ export function createServer(
     console.log('[Prom] WS connected');
     ws.on('pong', () => { missedPongs = 0; });
     ws.on('message', () => { missedPongs = 0; });
+    // Browser JavaScript cannot observe protocol-level ping/pong frames. Send a
+    // small application frame as well so mobile clients and network
+    // intermediaries see real traffic and can replace an OPEN-but-silent socket.
+    const sendAppHeartbeat = () => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      try {
+        ws.send(JSON.stringify({ type: 'gateway_heartbeat', timestamp: Date.now() }));
+      } catch {
+        try { ws.terminate(); } catch {}
+        clearHeartbeat();
+      }
+    };
+    sendAppHeartbeat();
+    appHeartbeatTimer = setInterval(sendAppHeartbeat, 10_000);
+    if (typeof (appHeartbeatTimer as any).unref === 'function') (appHeartbeatTimer as any).unref();
     heartbeatTimer = setInterval(() => {
       if (ws.readyState !== WebSocket.OPEN) {
         clearHeartbeat();

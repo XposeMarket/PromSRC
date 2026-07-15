@@ -15,6 +15,12 @@ export interface ModelUsageEvent {
   callType: 'chat' | 'generate';
   sessionId?: string;
   agentId?: string;
+  taskId?: string;
+  runId?: string;
+  teamId?: string;
+  jobId?: string;
+  attempt?: number;
+  phase?: 'queue' | 'model' | 'tool' | 'synthesis' | 'delivery' | 'unknown';
   inputTokens: number;
   outputTokens: number;
   reasoningTokens: number;
@@ -220,6 +226,12 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       callType: event.callType,
       sessionId: event.sessionId,
       agentId: event.agentId,
+      taskId: event.taskId ? String(event.taskId) : undefined,
+      runId: event.runId ? String(event.runId) : undefined,
+      teamId: event.teamId ? String(event.teamId) : undefined,
+      jobId: event.jobId ? String(event.jobId) : undefined,
+      attempt: normalizeCount(event.attempt),
+      phase: event.phase || 'unknown',
       inputTokens: normalizeCount(event.inputTokens),
       outputTokens: normalizeCount(event.outputTokens),
       reasoningTokens: normalizeCount(event.reasoningTokens),

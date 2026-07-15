@@ -381,6 +381,7 @@ interface ShutdownHooks {
   stopInternalWatches?: () => void;
   stopHeartbeat?: () => void;
   stopBrain?: () => void;
+  stopRuntimeWorkers?: () => void | Promise<void>;
   closeHttpServer?: () => Promise<void>;
   closeWebSocket?: () => void;
   flushSessions?: () => void;
@@ -526,6 +527,9 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
   }
   try { _shutdownHooks.stopTelegram?.(); } catch (e: any) {
     console.warn('[lifecycle] Telegram stop error:', e.message);
+  }
+  try { await _shutdownHooks.stopRuntimeWorkers?.(); } catch (e: any) {
+    console.warn('[lifecycle] Runtime worker stop error:', e.message);
   }
 
   // 2. Flush sessions to disk

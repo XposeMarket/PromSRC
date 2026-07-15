@@ -33,6 +33,7 @@ import { getManagedTeam } from '../../teams/managed-teams';
 import { ensureScheduleRuntimeForAgent } from '../../scheduling/schedule-agent';
 import { systemDiagnosticsTool } from '../../diagnostics/system-diagnostics';
 import { createDiagnosticPacket, getDiagnosticPacket, listDiagnosticPackets, updateDiagnosticPacketStatus } from '../../diagnostics/diagnostic-packet-store';
+import { executePrometheusThreadOps } from '../../threads/thread-ops';
 
 const AUTOMATION_TOOL_NAMES = new Set([
   'background_spawn',
@@ -51,6 +52,7 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'schedule_job_outputs',
   'schedule_job_stuck_control',
   'automation_dashboard',
+  'prometheus_thread_ops',
   'system_diagnostics',
   'diagnostic_packet',
 ]);
@@ -864,6 +866,18 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           result: JSON.stringify(out, null, 2),
           error: !out.success,
         };
+      }
+
+      case 'prometheus_thread_ops': {
+        try {
+          const out = await executePrometheusThreadOps(sessionId, args, {
+            runInteractiveTurn: deps.runInteractiveTurn,
+            broadcastWS: deps.broadcastWS,
+          });
+          return { name, args, result: JSON.stringify({ success: true, ...out }, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `prometheus_thread_ops error: ${String(err?.message || err)}`, error: true };
+        }
       }
 
       default:

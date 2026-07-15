@@ -2,7 +2,7 @@ import {
   getMemoryGraphSnapshot,
   getRelatedMemory,
   readMemoryRecord,
-  refreshMemoryIndexFromAudit,
+  refreshMemoryIndexInWorker,
   searchMemoryIndexAsync,
 } from '../../memory-index';
 import { getSqliteMemoryStatus } from '../../memory-index/sqlite-store';
@@ -37,7 +37,7 @@ export function createSqliteLocalMemoryProvider(workspacePath: string): MemoryPr
 
     async sync(options) {
       try {
-        const result = refreshMemoryIndexFromAudit(workspacePath, {
+        const result = await refreshMemoryIndexInWorker(workspacePath, {
           force: options?.force,
           maxChangedFiles: options?.limit || 500,
           minIntervalMs: 0,

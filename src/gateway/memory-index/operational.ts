@@ -17,6 +17,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { scheduleMemoryIndexRefreshInWorker } from './refresh-worker-client.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -251,61 +252,18 @@ type OperationalRefreshOptions = {
   minIntervalMs?: number;
 };
 
-type OperationalRefreshState = {
-  running: boolean;
-  queued: boolean;
-  options: OperationalRefreshOptions;
-};
-
-const operationalRefreshStates = new Map<string, OperationalRefreshState>();
-
-function mergeOperationalRefreshOptions(
-  current: OperationalRefreshOptions,
-  next?: OperationalRefreshOptions,
-): OperationalRefreshOptions {
-  const merged: OperationalRefreshOptions = {
-    force: Boolean(current.force || next?.force),
-  };
-  const currentMin = Number.isFinite(Number(current.minIntervalMs)) ? Number(current.minIntervalMs) : null;
-  const nextMin = Number.isFinite(Number(next?.minIntervalMs)) ? Number(next?.minIntervalMs) : null;
-  if (currentMin !== null && nextMin !== null) merged.minIntervalMs = Math.min(currentMin, nextMin);
-  else if (currentMin !== null) merged.minIntervalMs = currentMin;
-  else if (nextMin !== null) merged.minIntervalMs = nextMin;
-  return merged;
-}
-
 export function scheduleOperationalIndexRefresh(
   workspacePath: string,
   opts?: OperationalRefreshOptions,
 ): void {
-  const state = operationalRefreshStates.get(workspacePath) || {
-    running: false,
-    queued: false,
-    options: {},
-  };
-  state.options = mergeOperationalRefreshOptions(state.options, opts);
-  state.queued = true;
-  operationalRefreshStates.set(workspacePath, state);
-  if (state.running) return;
-
-  state.running = true;
-  setImmediate(() => {
-    const active = operationalRefreshStates.get(workspacePath);
-    if (!active) return;
-    const runOpts = active.options;
-    active.queued = false;
-    active.options = {};
-    try {
-      refreshOperationalIndex(workspacePath, runOpts);
-    } catch {
-      // Best effort only; callers read the latest on-disk snapshot.
-    } finally {
-      const nextState = operationalRefreshStates.get(workspacePath);
-      if (!nextState) return;
-      nextState.running = false;
-      operationalRefreshStates.set(workspacePath, nextState);
-      if (nextState.queued) scheduleOperationalIndexRefresh(workspacePath, nextState.options);
-    }
+  // Operational records are rebuilt by the evidence maintenance worker. Route
+  // this compatibility API through that process boundary so a future caller
+  // cannot accidentally reintroduce an in-gateway synchronous scan.
+  scheduleMemoryIndexRefreshInWorker(workspacePath, {
+    force: opts?.force,
+    minIntervalMs: opts?.minIntervalMs,
+    maxChangedFiles: 500,
+    syncSqlite: false,
   });
 }
 

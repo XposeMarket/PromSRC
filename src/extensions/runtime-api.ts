@@ -69,6 +69,8 @@ export interface PrometheusExtensionTool {
   connectorId?: string;
   capability?: PrometheusExtensionCapability;
   optional?: boolean;
+  /** Explicit side-effect declaration used by the approval policy. Omitted metadata fails closed. */
+  sideEffects?: import('../gateway/tool-capabilities.js').ToolCapabilityMetadata;
   execute: (args: any, context: PrometheusToolContext) => Promise<PrometheusToolExecutionResult>;
 }
 

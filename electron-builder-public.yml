@@ -144,6 +144,8 @@ asarUnpack:
   - "node_modules/@ffprobe-installer/**/*"
 
 extraResources:
+  - from: "bin/prometheus-desktop-helper.exe"
+    to: "prometheus-desktop-helper.exe"
   - from: "generated/bundled-skills"
     to: "bundled-skills"
     filter:

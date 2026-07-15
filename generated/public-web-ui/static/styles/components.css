@@ -3566,6 +3566,23 @@ button.chat-context-window-row {
   padding-left: 10px;
   color: var(--text);
 }
+.live-turn-tool-group-shell {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.live-turn-collapsed-vision-previews {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin: 5px 0 3px 13px;
+}
+.live-turn-tool-group[open] + .live-turn-collapsed-vision-previews {
+  display: none;
+}
+.live-turn-collapsed-vision-previews .live-turn-vision-preview {
+  margin-top: 0;
+}
 .live-turn-tool-summary {
   display: flex;
   align-items: center;

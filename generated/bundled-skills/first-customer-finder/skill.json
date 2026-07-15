@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "description": "Find and qualify evidence-backed potential first customers, early adopters, beta users, design partners, or B2B prospects from recent public pain and buying signals. Defines the ICP, researches original public sources, scores fit, timing, reachability, and evidence quality, drafts personalized openers, and generates a shareable HTML report without sending outreach.",
+  "categories": [
+    "sales",
+    "lead-generation",
+    "customer-discovery",
+    "startups",
+    "research",
+    "prospecting"
+  ],
+  "requiredTools": [
+    "web_search",
+    "web_fetch",
+    "workspace_write"
+  ],
+  "lifecycle": "experimental",
+  "name": "First Customer Finder",
+  "id": "first-customer-finder"
+}

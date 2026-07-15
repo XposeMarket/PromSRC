@@ -6,7 +6,7 @@ import { getConfig } from '../../config/config';
 import {
   readMemoryRecord,
   getRelatedMemory,
-  refreshMemoryIndexFromAudit,
+  refreshMemoryIndexInWorker,
   scheduleMemoryIndexRefresh,
 } from '../memory-index';
 import { getSqliteMemoryStatus } from '../memory-index/sqlite-store.js';
@@ -241,7 +241,7 @@ router.get('/api/memory/record/:recordId', (req: Request, res: Response) => {
   }
 });
 
-router.post('/api/memory/create', (req: Request, res: Response) => {
+router.post('/api/memory/create', async (req: Request, res: Response) => {
   try {
     const workspacePath = getWorkspacePath();
     const title = String(req.body?.title || '').trim();
@@ -300,7 +300,7 @@ router.post('/api/memory/create', (req: Request, res: Response) => {
       body: content,
     }), 'utf-8');
 
-    refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 12000, syncSqlite: true });
+    await refreshMemoryIndexInWorker(workspacePath, { force: true, maxChangedFiles: 12000, syncSqlite: true });
     const store = readIndexStore(workspacePath);
     const record = Object.values(store.records || {}).find((item) => item.sourcePath === sourcePath) || null;
 
@@ -318,10 +318,10 @@ router.post('/api/memory/create', (req: Request, res: Response) => {
   }
 });
 
-router.post('/api/memory/refresh', (_req: Request, res: Response) => {
+router.post('/api/memory/refresh', async (_req: Request, res: Response) => {
   try {
     const workspacePath = getWorkspacePath();
-    const result = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 12000, syncSqlite: true });
+    const result = await refreshMemoryIndexInWorker(workspacePath, { force: true, maxChangedFiles: 12000, syncSqlite: true });
     res.json({ success: true, ...result, sqlite: getSqliteMemoryStatus(workspacePath) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to refresh memory index' });

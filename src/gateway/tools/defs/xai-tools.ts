@@ -332,7 +332,6 @@ export function getXApiCreatePostToolDef(): any {
 export function getXAIToolDefs(): any[] {
   return [
     getXSearchToolDef(),
-    getXAILiveSearchToolDef(),
     getXApiMeToolDef(),
     getXApiRequestToolDef(),
     ...getXApiReadToolDefs(),
@@ -345,7 +344,6 @@ export function getXAIToolDefs(): any[] {
 
 export const XAI_TOOL_NAMES = [
   X_SEARCH_TOOL_NAME,
-  XAI_LIVE_SEARCH_TOOL_NAME,
   X_API_ME_TOOL_NAME,
   X_API_REQUEST_TOOL_NAME,
   X_API_GET_POST_TOOL_NAME,

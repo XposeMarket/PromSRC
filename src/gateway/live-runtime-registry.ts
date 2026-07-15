@@ -73,8 +73,12 @@ export interface RuntimeSteerEvent {
   source?: string;
   createdAt: number;
   clientRequestId?: string;
-  kind?: 'correction' | 'question' | 'status' | 'constraint' | 'cancel' | 'pause' | 'continue' | 'clarification' | 'unknown';
+  kind?: 'correction' | 'question' | 'status' | 'constraint' | 'cancel' | 'pause' | 'continue' | 'clarification' | 'background_agent_result' | 'internal_watch_result' | 'unknown';
   requiresWorkerResponse?: boolean;
+  backgroundAgentId?: string;
+  backgroundAgentState?: 'completed' | 'failed';
+  internalWatchId?: string;
+  internalWatchKind?: 'match' | 'timeout';
   voiceContextPacketId?: string;
   spokenAck?: string;
   responseMode?: 'silent' | 'narrate' | 'worker_reply';
@@ -449,6 +453,10 @@ export function addPendingRuntimeSteer(
     clientRequestId: input.clientRequestId ? String(input.clientRequestId) : undefined,
     kind: input.kind,
     requiresWorkerResponse: input.requiresWorkerResponse === true,
+    backgroundAgentId: input.backgroundAgentId ? String(input.backgroundAgentId) : undefined,
+    backgroundAgentState: input.backgroundAgentState,
+    internalWatchId: input.internalWatchId ? String(input.internalWatchId) : undefined,
+    internalWatchKind: input.internalWatchKind,
     voiceContextPacketId: input.voiceContextPacketId ? String(input.voiceContextPacketId) : undefined,
     spokenAck: input.spokenAck ? String(input.spokenAck).slice(0, 1000) : undefined,
     responseMode: input.responseMode,
@@ -521,6 +529,24 @@ function cancelCheckpointFlush(id: string): void {
   if (!existing) return;
   clearTimeout(existing);
   _pendingLedgerFlush.delete(key);
+}
+
+/**
+ * Queue an event on the newest active foreground runtime for a chat session.
+ * Background agents use this so their completion enters the same live inbox as
+ * a user steer while retaining distinct provenance and instruction priority.
+ */
+export function addPendingRuntimeSteerForSession(
+  sessionId: string,
+  input: Omit<RuntimeSteerEvent, 'id' | 'sessionId' | 'createdAt'> & { id?: string; createdAt?: number },
+): { ok: boolean; runtime?: LiveRuntimeSnapshot; event?: RuntimeSteerEvent; error?: string } {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return { ok: false, error: 'Session id is required.' };
+  const runtime = Array.from(activeRuntimes.values())
+    .filter((record) => isSteerableChatRuntimeKind(record.kind) && String(record.sessionId || '') === sid)
+    .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+  if (!runtime) return { ok: false, error: 'No active steerable chat runtime for this session.' };
+  return addPendingRuntimeSteer(runtime.id, { ...input, sessionId: sid });
 }
 
 function scheduleCheckpointFlush(id: string, snapshot: LiveRuntimeSnapshot): void {

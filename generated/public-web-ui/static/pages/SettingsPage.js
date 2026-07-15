@@ -18,6 +18,7 @@ import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
 import { showTutorial } from '../onboarding/tutorial-overlay.js';
 import { renderProviderUsageCard } from './HubPage.js';
 import { effortOptions, validEffort } from '../reasoning-capabilities.js';
+import { formatModelDisplayName, relabelModelSelect } from '../model-display.js';
 
 const SETTINGS_ICON_PATHS = {
   keyboard: '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 9h.01"></path><path d="M10 9h.01"></path><path d="M13 9h.01"></path><path d="M16 9h.01"></path><path d="M7 13h.01"></path><path d="M10 13h.01"></path><path d="M13 13h4"></path><path d="M7 17h10"></path>',
@@ -983,7 +984,9 @@ function ensureSelectOption(selectOrId, value) {
   if (getSelectOptionValues(select).includes(normalized)) return;
   const option = document.createElement('option');
   option.value = normalized;
-  option.textContent = normalized;
+  const provider = select.id === 'settings-openai-model' ? 'openai'
+    : select.id === 'settings-codex-model' ? 'openai_codex' : '';
+  option.textContent = provider ? formatModelDisplayName(normalized, provider) : normalized;
   select.appendChild(option);
 }
 
@@ -1242,7 +1245,7 @@ function setProviderModelOptions(providerId, models) {
   if (!unique.length) return;
   const current = String(control.value || '').trim();
   if (control.tagName === 'SELECT') {
-    control.innerHTML = unique.map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('');
+    control.innerHTML = unique.map(m => `<option value="${escHtml(m)}">${escHtml(formatModelDisplayName(m, providerId))}</option>`).join('');
     if (current && unique.includes(current)) control.value = current;
     else control.value = unique[0];
   } else if (!current) {
@@ -1267,7 +1270,7 @@ function renderProviderField(provider, field) {
     ? `<div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5">${escHtml(help)}</div>`
     : '';
   if (field.key === 'model' && staticModels.length) {
-    return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><select id="${fieldId}" class="settings-input" style="font-size:13px">${staticModels.map(model => `<option value="${escHtml(model)}">${escHtml(model)}</option>`).join('')}</select>${helpHtml}`;
+    return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><select id="${fieldId}" class="settings-input" style="font-size:13px">${staticModels.map(model => `<option value="${escHtml(model)}">${escHtml(formatModelDisplayName(model, provider.id))}</option>`).join('')}</select>${helpHtml}`;
   }
   if (field.input === 'textarea') {
     return `<label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">${label}</label><textarea id="${fieldId}" style="width:100%;min-height:90px;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;font-family:'IBM Plex Mono',monospace"></textarea>${helpHtml}`;
@@ -1528,6 +1531,8 @@ async function loadModelSettings() {
       v('settings-lmstudio-endpoint', pc.lm_studio?.endpoint);
       v('settings-lmstudio-model',    pc.lm_studio?.model);
       v('settings-openai-key',        pc.openai?.api_key);
+      relabelModelSelect(document.getElementById('settings-openai-model'), 'openai');
+      relabelModelSelect(document.getElementById('settings-codex-model'), 'openai_codex');
       if (pc.openai?.model) { const s = document.getElementById('settings-openai-model'); if (s) s.value = pc.openai.model; }
       { const s = document.getElementById('settings-openai-effort'); if (s) s.value = pc.openai?.reasoning_effort || ''; }
       { const s = document.getElementById('settings-openai-speed'); if (s) s.value = pc.openai?.speed || 'standard'; }
@@ -1782,7 +1787,7 @@ async function loadSecuritySettings() {
   try {
     if (statusEl) statusEl.textContent = 'Loading...';
     const data = await api('/api/settings/security', { timeoutMs: 5000 });
-    const mode = data?.terminalPermissionMode === 'lite' ? 'lite' : 'default';
+    const mode = (data?.toolPermissionMode ?? data?.terminalPermissionMode) === 'lite' ? 'lite' : 'default';
     const defaultEl = document.getElementById('settings-terminal-permission-default');
     const liteEl = document.getElementById('settings-terminal-permission-lite');
     if (defaultEl) defaultEl.checked = mode === 'default';
@@ -1808,7 +1813,7 @@ async function saveSecuritySettings({ showStatus = false } = {}) {
     if (showStatus && statusEl) statusEl.textContent = 'Saving...';
     const data = await api('/api/settings/security', {
       method: 'POST',
-      body: JSON.stringify({ terminalPermissionMode: getTerminalPermissionModeFromUI() }),
+      body: JSON.stringify({ toolPermissionMode: getTerminalPermissionModeFromUI() }),
     });
     if (!data?.success) throw new Error(data?.error || 'Failed to save security settings');
     if (showStatus && statusEl) statusEl.textContent = 'Saved.';
@@ -1914,7 +1919,7 @@ function updateOpenAIModelDropdown(models) {
   const unique = Array.from(new Set((models || []).filter(Boolean).map(m => String(m).trim()).filter(Boolean)));
   if (!unique.length) return;
   if (current && !unique.includes(current)) unique.unshift(current);
-  sel.innerHTML = unique.slice(0, 500).map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('');
+  sel.innerHTML = unique.slice(0, 500).map(m => `<option value="${escHtml(m)}">${escHtml(formatModelDisplayName(m, 'openai'))}</option>`).join('');
   if (current) sel.value = current;
 }
 
@@ -5112,7 +5117,6 @@ function deleteAgentModelDefaultTemplate() {
   );
 }
 
-+
 function syncGoalRoutingReasoning(type, selectedValue) {
   const provider = getSettingsValue(`goal-${type}-prov`).trim();
   const model = getSettingsValue(`goal-${type}-model`).trim();

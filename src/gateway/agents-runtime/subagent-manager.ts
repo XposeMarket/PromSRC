@@ -377,6 +377,7 @@ export class SubagentManager {
     const subagentTask = createTask({
       title: `[Subagent] ${definition.name}`,
       prompt: subagentPrompt,
+      originalAssignment: taskPrompt,
       sessionId: subagentSessionId,
       channel: 'web',
       subagentProfile: definition.id,  // Mark as a standalone subagent runtime.

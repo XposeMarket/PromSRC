@@ -1381,6 +1381,9 @@ router.get('/api/approvals', requireGatewayAuth, (req, res) => {
     .map((record) => ({
       ...record,
       command: String(record.toolArgs?.command || ''),
+      oneShot: record.approvalKind === 'elevated_command'
+        || record.approvalKind === 'dev_source_edit'
+        || record.approvalKind === 'final_action',
       scopedAction: record.commandPermissionCandidate?.action || '',
       scopedTarget: record.commandPermissionCandidate?.targetDisplay || '',
       commandBoundary: record.commandPermissionCandidate ? {
@@ -1391,6 +1394,14 @@ router.get('/api/approvals', requireGatewayAuth, (req, res) => {
         packageManager: record.commandPermissionCandidate.packageManager || '',
         requiresExplicitApproval: record.commandPermissionCandidate.requiresExplicitApproval === true,
         requiresAdmin: record.commandPermissionCandidate.requiresAdmin === true,
+      } : record.approvalKind === 'elevated_command' ? {
+        scope: 'admin_required',
+        reason: 'This exact command will run through the installed administrator broker after one-shot approval. Broker setup may require UAC once.',
+        externalPaths: [],
+        environmentChanges: [],
+        packageManager: '',
+        requiresExplicitApproval: true,
+        requiresAdmin: true,
       } : undefined,
       sourceSessionId: record.sessionId,
     }));
@@ -1460,6 +1471,7 @@ router.get('/api/settings/security', requireGatewayAuth, (_req, res) => {
   const mode = shell.approval_mode === 'lite' ? 'lite' : 'default';
   res.json({
     success: true,
+    toolPermissionMode: mode,
     terminalPermissionMode: mode,
     hardBlockedPatterns: Array.isArray(shell.blocked_patterns) ? shell.blocked_patterns : [],
     commandPermissions: listCommandPermissionGrants(),
@@ -1468,7 +1480,8 @@ router.get('/api/settings/security', requireGatewayAuth, (_req, res) => {
 
 router.post('/api/settings/security', requireGatewayAuth, (req, res) => {
   try {
-    const mode = req.body?.terminalPermissionMode === 'lite' ? 'lite' : 'default';
+    const requestedMode = req.body?.toolPermissionMode ?? req.body?.terminalPermissionMode;
+    const mode = requestedMode === 'lite' ? 'lite' : 'default';
     const cm = getConfig();
     const current = cm.getConfig() as any;
     cm.updateConfig({
@@ -1487,9 +1500,9 @@ router.post('/api/settings/security', requireGatewayAuth, (req, res) => {
       actionType: 'approval_resolved',
       toolName: 'settings_security',
       approvalStatus: 'auto_allowed',
-      resultSummary: `Terminal permission mode set to ${mode}`,
+      resultSummary: `Tool permission mode set to ${mode}`,
     });
-    res.json({ success: true, terminalPermissionMode: mode });
+    res.json({ success: true, toolPermissionMode: mode, terminalPermissionMode: mode });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || 'Failed to save security settings' });
   }

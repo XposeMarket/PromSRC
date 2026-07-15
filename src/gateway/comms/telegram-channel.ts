@@ -2958,6 +2958,7 @@ export class TelegramChannel {
 	    if (!this.config.enabled || !this.config.botToken) return;
       const isDevSource = record.approvalKind === 'dev_source_edit' || record.toolName === 'request_dev_source_edit';
       const isFinalAction = record.approvalKind === 'final_action' || record.toolName === 'request_final_action_approval';
+      const isOneShot = record.approvalKind === 'elevated_command' || isDevSource || isFinalAction;
 	    const command = String(record.toolArgs?.command || '');
 	    const systems = Array.isArray(record.affectedSystems) && record.affectedSystems.length
 	      ? record.affectedSystems.join(', ')
@@ -2969,7 +2970,7 @@ export class TelegramChannel {
     const devSteps = Array.isArray(devPlan?.steps) ? devPlan.steps : [];
     const devExpectedWorkflow = Array.isArray(devPlan?.expectedWorkflow) ? devPlan.expectedWorkflow : [];
     const body = [
-      isDevSource ? `⏳ <b>Dev Source Edit Approval Required</b>` : (isFinalAction ? `⏳ <b>Final Action Approval Required</b>` : `⏳ <b>Command Approval Required</b>`),
+      isDevSource ? `⏳ <b>Dev Source Edit Approval Required</b>` : (isFinalAction ? `⏳ <b>Final Action Approval Required</b>` : (record.approvalKind === 'elevated_command' ? `⏳ <b>Administrator Command Approval Required</b>` : `⏳ <b>Command Approval Required</b>`)),
       ``,
 	      `<b>ID:</b> <code>${this.tgEscape(record.id)}</code>`,
 	      `<b>Status:</b> ${this.tgEscape(record.status || 'pending')}`,
@@ -2997,7 +2998,7 @@ export class TelegramChannel {
 	      !isDevSource && !isFinalAction ? `<code>${this.tgEscape(command.slice(0, 700))}</code>` : '',
 	    ].join('\n');
     const replyMarkup = {
-      inline_keyboard: (isDevSource || isFinalAction)
+      inline_keyboard: isOneShot
         ? [[
           { text: '✅ Approve', callback_data: `ca:ap:${record.id}` },
           { text: '❌ Reject', callback_data: `ca:rj:${record.id}` },
@@ -3750,6 +3751,7 @@ export class TelegramChannel {
 		        const statusEmoji: Record<string, string> = { pending: '⏳', approved: '✅', rejected: '❌' };
             const isDevSource = approval.approvalKind === 'dev_source_edit' || approval.toolName === 'request_dev_source_edit';
             const isFinalAction = approval.approvalKind === 'final_action' || approval.toolName === 'request_final_action_approval';
+            const isOneShot = approval.approvalKind === 'elevated_command' || isDevSource || isFinalAction;
             const devFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
             const devDirs = Array.isArray((approval.devSourceEdit as any)?.allowedDirs) ? (approval.devSourceEdit as any).allowedDirs : [];
 		        const detail = [
@@ -3773,8 +3775,8 @@ export class TelegramChannel {
 		        ].filter(Boolean).join('\n');
 	        const kb: any[][] = [];
 	        if (approval.status === 'pending') {
-	          kb.push([{ text: isDevSource || isFinalAction ? '✅ Approve' : '✅ Approve Once', callback_data: `ca:ap:${approval.id}` }, { text: '❌ Reject', callback_data: `ca:rj:${approval.id}` }]);
-            if (!isDevSource && !isFinalAction) {
+	          kb.push([{ text: isOneShot ? '✅ Approve' : '✅ Approve Once', callback_data: `ca:ap:${approval.id}` }, { text: '❌ Reject', callback_data: `ca:rj:${approval.id}` }]);
+            if (!isOneShot) {
 	            kb.push([{ text: 'This Session', callback_data: `ca:session:${approval.id}` }, { text: 'Always Allow', callback_data: `ca:always:${approval.id}` }]);
             }
 	        }
@@ -3808,7 +3810,8 @@ export class TelegramChannel {
 	        }
             const isDevSource = existing.approvalKind === 'dev_source_edit' || existing.toolName === 'request_dev_source_edit';
             const isFinalAction = existing.approvalKind === 'final_action' || existing.toolName === 'request_final_action_approval';
-            if ((isDevSource || isFinalAction) && (action === 'session' || action === 'always')) {
+            const isOneShot = existing.approvalKind === 'elevated_command' || isDevSource || isFinalAction;
+            if (isOneShot && (action === 'session' || action === 'always')) {
               await this.sendMessage(chatId, `❌ One-shot approvals cannot be saved as session/always command permissions. Use Approve or Reject.`);
               return;
             }

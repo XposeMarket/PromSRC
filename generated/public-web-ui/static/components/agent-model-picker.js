@@ -21,6 +21,7 @@
 import { api } from '../api.js';
 import { escHtml, bgtToast } from '../utils.js';
 import { fetchCredentialedModelProviderIds, filterCredentialedProviderCatalogItems, hasLoadedCredentialedModelProviderIds, isCredentialedModelProviderId } from './model-provider-credentials.js';
+import { formatModelDisplayName } from '../model-display.js';
 
 // ── Built-in fallbacks (mirror SettingsPage) ────────────────────────────────
 const BUILTIN_PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini', 'xai'];
@@ -148,7 +149,7 @@ function _modelOptionsHtml(provider, currentModel) {
   if (merged.length === 0) {
     return `<option value="">— enter a model id below —</option>`;
   }
-  return merged.map((m) => `<option value="${escHtml(m)}" ${m===currentModel?'selected':''}>${escHtml(m)}</option>`).join('');
+  return merged.map((m) => `<option value="${escHtml(m)}" ${m===currentModel?'selected':''}>${escHtml(formatModelDisplayName(m, provider))}</option>`).join('');
 }
 
 function _reasoningRowHtml(prefix, agentId, provider, providerConfig, model = '') {

@@ -834,7 +834,7 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
   function approvalCanSave(a: any): boolean {
     const kind = String(a.approvalKind || '');
     const tool = String(a.toolName || '');
-    return kind !== 'dev_source_edit' && kind !== 'final_action'
+    return kind !== 'elevated_command' && kind !== 'dev_source_edit' && kind !== 'final_action'
       && tool !== 'request_dev_source_edit' && tool !== 'request_final_action_approval'
       && !!a.commandPermissionCandidate;
   }
@@ -853,6 +853,7 @@ async function runREPL(opts: StatusBoardOptions): Promise<void> {
 
     const kindLabel: Record<string, string> = {
       command:         'Shell command',
+      elevated_command:'Administrator command',
       tool:            'Tool action',
       dev_source_edit: 'Source code edit',
       final_action:    'Final action',

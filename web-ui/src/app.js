@@ -18,8 +18,20 @@
 import { state, THEME_KEY } from './state.js';
 import { runIfNeeded as runOnboardingIfNeeded } from './onboarding/onboarding-controller.js';
 import { initGlobalShortcuts } from './shortcuts.js';
+import { formatModelDisplayName, formatModelWithReasoning, relabelModelSelect } from './model-display.js';
 
 initGlobalShortcuts();
+
+window.formatModelDisplayName = formatModelDisplayName;
+window.formatModelWithReasoning = formatModelWithReasoning;
+window.relabelModelSelect = relabelModelSelect;
+
+for (const [id, provider] of [
+  ['settings-openai-model', 'openai'],
+  ['settings-codex-model', 'openai_codex'],
+]) {
+  relabelModelSelect(document.getElementById(id), provider);
+}
 
 // Theme registry is defined in index.html (window.PROM_THEMES) so it loads
 // before any script. Fall back to dark/light if it is somehow unavailable.

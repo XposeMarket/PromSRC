@@ -28,6 +28,7 @@
 
 import { AsyncLocalStorage } from 'async_hooks';
 import path from 'path';
+import { isCanonicalPathInsideSync } from './workspace-boundary.js';
 
 // ── Storage ───────────────────────────────────────────────────────────────────
 
@@ -103,15 +104,11 @@ export function getActiveAllowedWorkspaces(globalFallback: string, configuredAll
  * Works cross-platform using case-insensitive compare on Windows.
  */
 export function isPathInWorkspace(workspaceRoot: string, targetPath: string): boolean {
-  const normalise = (p: string) => {
-    const resolved = path.resolve(p);
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-  };
-  const base = normalise(workspaceRoot);
-  const target = normalise(targetPath);
-  if (base === target) return true;
-  const rel = path.relative(base, target);
-  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  try {
+    return isCanonicalPathInsideSync(workspaceRoot, targetPath);
+  } catch {
+    return false;
+  }
 }
 
 export function isPathInAnyWorkspace(workspaceRoots: string[], targetPath: string): boolean {

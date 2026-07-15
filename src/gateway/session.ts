@@ -232,6 +232,7 @@ export interface Session {
   createdAt: number;
   lastActiveAt: number;
   lastAssistantAt?: number;
+  pinnedAt?: number;
   mobileLastReadAt?: number;
   pendingMemoryFlush?: boolean;
   pendingCompaction?: boolean;
@@ -267,6 +268,7 @@ export interface SessionSummary {
   lastActiveAt: number;
   lastMessageAt?: number;
   lastAssistantAt?: number;
+  pinnedAt?: number;
   mobileLastReadAt?: number;
   mobileUnread?: boolean;
   activeRun?: boolean;
@@ -774,6 +776,7 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
     createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
     lastActiveAt: Number.isFinite(lastActiveAt) ? lastActiveAt : Date.now(),
     lastAssistantAt: Number.isFinite(Number(input?.lastAssistantAt)) ? Number(input.lastAssistantAt) : undefined,
+    pinnedAt: Number.isFinite(Number(input?.pinnedAt)) && Number(input.pinnedAt) > 0 ? Number(input.pinnedAt) : undefined,
     mobileLastReadAt: Number.isFinite(Number(input?.mobileLastReadAt)) ? Number(input.mobileLastReadAt) : undefined,
     mobileUnread: input?.mobileUnread === true,
     activeRun: input?.activeRun === true,
@@ -960,6 +963,7 @@ function buildSessionSummary(session: Session): SessionSummary {
       createdAt: Number(session.createdAt || Date.now()),
       lastActiveAt: Number(session.lastActiveAt || Date.now()),
       lastAssistantAt: undefined,
+      pinnedAt: undefined,
       mobileLastReadAt: undefined,
       mobileUnread: false,
       activeRun: false,
@@ -984,6 +988,7 @@ function buildSessionSummary(session: Session): SessionSummary {
     lastActiveAt: Number(session.lastActiveAt || Date.now()),
     lastMessageAt,
     lastAssistantAt,
+    pinnedAt: Number.isFinite(Number(session.pinnedAt)) && Number(session.pinnedAt) > 0 ? Number(session.pinnedAt) : undefined,
     mobileLastReadAt,
     mobileUnread: getMobileUnreadState(lastAssistantAt, mobileLastReadAt),
     activeRun: false,
@@ -1001,7 +1006,7 @@ function buildSessionSummary(session: Session): SessionSummary {
 function upsertSessionSummary(session: Session): void {
   const index = loadSessionIndex();
   const summary = buildSessionSummary(session);
-  const shouldIndex = summary.messageCount > 0;
+  const shouldIndex = summary.messageCount > 0 || !!summary.pinnedAt;
   if (shouldIndex) {
     index.summaries[summary.id] = summary;
   } else {
@@ -1044,6 +1049,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
       lastActiveAt: Number.isFinite(Number(data?.lastActiveAt)) ? Number(data.lastActiveAt) : Date.now(),
       lastMessageAt,
       lastAssistantAt,
+      pinnedAt: Number.isFinite(Number(data?.pinnedAt)) && Number(data.pinnedAt) > 0 ? Number(data.pinnedAt) : undefined,
       mobileLastReadAt,
       mobileUnread: getMobileUnreadState(lastAssistantAt, mobileLastReadAt),
       activeRun: false,
@@ -1073,7 +1079,7 @@ function rebuildSessionIndex(): SessionIndex {
     const sessionId = file.slice(0, -5);
     if (!isSafeStorageId(sessionId)) continue;
     const summary = buildSessionSummaryFromFile(sessionId);
-    if (summary && summary.messageCount > 0) {
+    if (summary && (summary.messageCount > 0 || !!summary.pinnedAt)) {
       index.summaries[summary.id] = summary;
     }
   }
@@ -1112,7 +1118,7 @@ function getSortedSessionSummaries(
       if (summary.channel === channel) return true;
       return admitAutomated && summary.channel === 'system' && /^auto_/i.test(summary.id);
     })
-    .filter((summary) => summary.messageCount > 0)
+    .filter((summary) => summary.messageCount > 0 || !!summary.pinnedAt)
     .sort((a, b) => Number(b.lastMessageAt || b.lastActiveAt || b.createdAt || 0) - Number(a.lastMessageAt || a.lastActiveAt || a.createdAt || 0));
 }
 
@@ -1155,6 +1161,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
       createdAt: Number.isFinite(Number(data?.createdAt)) ? Number(data.createdAt) : Date.now(),
       lastActiveAt: Number.isFinite(Number(data?.lastActiveAt)) ? Number(data.lastActiveAt) : Date.now(),
       lastAssistantAt: Number.isFinite(Number(data?.lastAssistantAt)) ? Number(data.lastAssistantAt) : undefined,
+      pinnedAt: Number.isFinite(Number(data?.pinnedAt)) && Number(data.pinnedAt) > 0 ? Number(data.pinnedAt) : undefined,
       mobileLastReadAt: Number.isFinite(Number(data?.mobileLastReadAt)) ? Number(data.mobileLastReadAt) : undefined,
       pendingMemoryFlush: data?.pendingMemoryFlush === true,
       pendingCompaction: data?.pendingCompaction === true,
@@ -1707,6 +1714,7 @@ export function getSession(id: string): Session {
         createdAt: data.createdAt || Date.now(),
         lastActiveAt: data.lastActiveAt || Date.now(),
         lastAssistantAt: Number.isFinite(Number(data.lastAssistantAt)) ? Number(data.lastAssistantAt) : undefined,
+        pinnedAt: Number.isFinite(Number(data.pinnedAt)) && Number(data.pinnedAt) > 0 ? Number(data.pinnedAt) : undefined,
         mobileLastReadAt: Number.isFinite(Number(data.mobileLastReadAt)) ? Number(data.mobileLastReadAt) : undefined,
         pendingMemoryFlush: data.pendingMemoryFlush === true,
         pendingCompaction: data.pendingCompaction === true,
@@ -1761,6 +1769,7 @@ export function getSession(id: string): Session {
     createdAt: Date.now(),
     lastActiveAt: Date.now(),
     lastAssistantAt: undefined,
+    pinnedAt: undefined,
     mobileLastReadAt: undefined,
     pendingMemoryFlush: false,
     pendingCompaction: false,
@@ -2586,6 +2595,15 @@ function getSessionUserTurnCounter(session: Session): number {
   const derived = (session.history || []).filter((msg) => msg.role === 'user').length;
   session.userTurnCounter = derived;
   return derived;
+}
+
+export function setSessionPinned(id: string, pinned: boolean): SessionSummary | null {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return null;
+  const session = getSession(sessionId);
+  session.pinnedAt = pinned ? (Number(session.pinnedAt) || Date.now()) : undefined;
+  flushSession(sessionId);
+  return buildSessionSummary(session);
 }
 
 function pruneScopedToolCategoryActivations(session: Session): boolean {

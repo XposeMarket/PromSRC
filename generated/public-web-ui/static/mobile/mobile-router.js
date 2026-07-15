@@ -12,6 +12,7 @@ import {
 import {
   getDeviceToken,
   loadMobileSessionGroups,
+  prefetchMobileSecondaryPages,
   searchMobileChatSessions,
 } from './mobile-api.js?v=slash-command-style-align-v1';
 import { connectWS, ensureWSConnected } from '../ws.js';
@@ -154,7 +155,7 @@ function openMobileSettings(tab) {
     try { window.openSettings(tab || undefined); } catch (err) { console.warn('[mobile settings] openSettings failed', err); }
     return true;
   }
-  import('../pages/SettingsPage.js?v=goal-support-routing-v11')
+  import('../pages/SettingsPage.js?v=settings-boot-recovery-v12')
     .then(() => openMobileSettings(tab))
     .catch((err) => console.warn('[mobile settings] could not lazy-load SettingsPage.js', err));
   console.warn('[mobile settings] desktop Settings modal not available yet');
@@ -287,6 +288,12 @@ function render() {
         try { connectWS({ force: true, timeoutMs: 6000, reconnectDelayMs: 0 }); } catch {}
       }
     });
+    if (Date.now() - Number(window.__pmMobileSecondaryPrefetchedAt || 0) > 60_000) {
+      window.__pmMobileSecondaryPrefetchedAt = Date.now();
+      const prefetch = () => prefetchMobileSecondaryPages().catch(() => {});
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(prefetch, { timeout: 1800 });
+      else setTimeout(prefetch, 900);
+    }
   }
 
   switch (page) {

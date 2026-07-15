@@ -67,6 +67,8 @@ function buildWsUrl() {
 // ─── Reconnect state (exponential backoff + online awareness) ──
 const _WS_BACKOFF_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000]; // ms, capped at 30s
 const _WS_CONNECT_TIMEOUT_MS = 10000;
+const _WS_STALE_AFTER_MS = 35000;
+const _WS_LIVENESS_CHECK_MS = 10000;
 let _wsBackoffIdx = 0;
 let _wsReconnectTimer = null;
 let _wsConnectTimer = null;
@@ -74,6 +76,7 @@ let _wsWaitingForOnline = false;
 let _wsConnecting = false;
 let _wsGeneration = 0;
 let _wsLastResumeProbeAt = 0;
+let _wsLastMessageAt = 0;
 
 function _wsNextDelay() {
   const d = _WS_BACKOFF_DELAYS[Math.min(_wsBackoffIdx, _WS_BACKOFF_DELAYS.length - 1)];
@@ -151,11 +154,13 @@ export function connectWS(options = {}) {
     _wsConnecting = false;
     _wsClearConnectTimer();
     _wsResetBackoff();
+    _wsLastMessageAt = Date.now();
     wsEventBus._dispatch({ type: 'ws:open', timestamp: Date.now() });
   };
 
   ws.onmessage = (e) => {
     if (!_isCurrentWs(ws, generation)) return;
+    _wsLastMessageAt = Date.now();
     try {
       const msg = JSON.parse(e.data);
       wsEventBus._dispatch(msg);
@@ -209,12 +214,34 @@ function probeWsOnResume() {
   if (now - _wsLastResumeProbeAt < 1000) return;
   _wsLastResumeProbeAt = now;
   const current = window.ws;
-  if (current && current.readyState === WebSocket.OPEN) {
+  const inboundAgeMs = _wsLastMessageAt > 0 ? now - _wsLastMessageAt : Number.POSITIVE_INFINITY;
+  if (current && current.readyState === WebSocket.OPEN && inboundAgeMs <= _WS_STALE_AFTER_MS) {
     wsEventBus._dispatch({ type: 'ws:resume_probe_ok', timestamp: now });
+    return;
+  }
+  if (current && current.readyState === WebSocket.OPEN) {
+    wsEventBus._dispatch({ type: 'ws:stale', timestamp: now, inboundAgeMs, source: 'resume' });
+    connectWS({ force: true, timeoutMs: 6000, reconnectDelayMs: 0 });
     return;
   }
   ensureWSConnected({ timeoutMs: 6000 });
 }
+
+// readyState can remain OPEN after a mobile network handoff or an intermediary
+// silently drops the route. The server sends gateway_heartbeat application
+// frames every 10s; if none arrive, replace the socket instead of waiting for a
+// close event that may never come.
+const _wsLivenessTimer = setInterval(() => {
+  if (document.visibilityState === 'hidden') return;
+  const current = window.ws;
+  if (!current || current.readyState !== WebSocket.OPEN || _wsLastMessageAt <= 0) return;
+  const now = Date.now();
+  const inboundAgeMs = now - _wsLastMessageAt;
+  if (inboundAgeMs <= _WS_STALE_AFTER_MS) return;
+  wsEventBus._dispatch({ type: 'ws:stale', timestamp: now, inboundAgeMs, source: 'watchdog' });
+  connectWS({ force: true, timeoutMs: 6000, reconnectDelayMs: 0 });
+}, _WS_LIVENESS_CHECK_MS);
+try { _wsLivenessTimer?.unref?.(); } catch {}
 
 window.addEventListener('online', () => {
   _wsWaitingForOnline = false;

@@ -354,25 +354,44 @@ router.post('/api/heartbeat/agents/:agentId/tick', async (req, res) => {
     res.status(500).json({ success: false, error: err?.message });
   }
 });
-router.get('/api/bg-tasks', (_req, res) => {
-  const tasks = listTaskSummaries().map((task: any) => ({
+router.get('/api/bg-tasks', (req, res) => {
+  const requestedLimit = Number(req.query.limit || 0);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.max(1, Math.min(500, Math.floor(requestedLimit))) : undefined;
+  const compact = String(req.query.mobile || '') === '1' || String(req.query.compact || '') === '1';
+  const tasks = listTaskSummaries({ limit }).map((task: any) => ({
     id: task.id,
     title: task.title,
     sessionId: task.sessionId,
     channel: task.channel,
     telegramChatId: task.telegramChatId,
-    teamSubagent: task.teamSubagent,
+    teamSubagent: compact && task.teamSubagent ? {
+      teamId: task.teamSubagent.teamId,
+      agentId: task.teamSubagent.agentId,
+      agentName: task.teamSubagent.agentName,
+    } : task.teamSubagent,
     status: task.status,
     pauseReason: task.pauseReason,
     pausedByScheduleId: task.pausedByScheduleId,
     shouldResumeAfterSchedule: task.shouldResumeAfterSchedule,
-    plan: Array.isArray(task.plan) ? task.plan.slice(0, 20) : [],
+    plan: Array.isArray(task.plan) ? task.plan.slice(0, compact ? 10 : 20).map((step: any) => compact ? {
+      index: step.index,
+      description: String(step.description || step.text || '').slice(0, 280),
+      status: step.status,
+    } : step) : [],
     currentStepIndex: task.currentStepIndex,
-    runtimeProgress: task.runtimeProgress,
+    runtimeProgress: compact && task.runtimeProgress ? {
+      source: task.runtimeProgress.source,
+      activeIndex: task.runtimeProgress.activeIndex,
+      updatedAt: task.runtimeProgress.updatedAt,
+      items: (Array.isArray(task.runtimeProgress.items) ? task.runtimeProgress.items : []).slice(0, 12).map((item: any) => ({
+        text: String(item?.text || item?.description || '').slice(0, 280),
+        status: item?.status,
+      })),
+    } : task.runtimeProgress,
     lastProgressAt: task.lastProgressAt,
     startedAt: task.startedAt,
     completedAt: task.completedAt,
-    pendingClarificationQuestion: task.pendingClarificationQuestion,
+    pendingClarificationQuestion: compact ? String(task.pendingClarificationQuestion || '').slice(0, 320) || undefined : task.pendingClarificationQuestion,
     scheduleId: task.scheduleId,
     taskKind: task.taskKind,
     verificationStatus: task.verificationStatus,

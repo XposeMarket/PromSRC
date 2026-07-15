@@ -44,7 +44,7 @@ function testRepresentativeClassification(): void {
     ['schedule_job_history', 'automations'],
     ['connector_gmail_search', 'external_apps'],
     ['x_search_ops', 'external_apps'],
-    ['xai_live_search', null],
+    ['xai_live_search', null], // deprecated and no longer registered
     ['mcp__github__search', 'mcp_server_tools'],
     // Preserve the current classifier exactly in shadow mode. "storyboard"
     // is not yet one of its creative-video routing signals.

@@ -60,7 +60,7 @@ export const TOOL_CATEGORY_MANIFEST: Readonly<Record<ToolCategoryId, ToolCategor
   workspace_write: entry('workspace_write', ['file_ops', 'files', 'shell', 'commands', 'run_commands'], 'unified workspace read/edit/run/git/safety/code-nav wrappers', 'workspace changes or command execution'),
   advanced_memory: entry('advanced_memory', ['memory'], 'memory graph, timeline, related records, project search, index refresh', 'advanced memory operations'),
   media_assets: entry('media_assets', ['media'], 'download/analyze images, video, audio, remote assets', 'media download or analysis'),
-  automations: entry('automations', ['schedule', 'scheduling'], 'schedule detail/history/outputs/patch/stuck control/dashboard', 'advanced automation management'),
+  automations: entry('automations', ['schedule', 'scheduling'], 'schedule detail/history/outputs/patch/stuck control/dashboard and Prometheus peer-session control', 'advanced automation and managed-thread operations'),
   external_apps: entry('external_apps', ['connectors'], 'connected app wrappers: X/xAI, Vercel, and other connected tools', 'connected application use'),
   integration_admin: entry('integration_admin', ['integrations'], 'MCP server setup, webhooks, integration quick setup', 'integration administration'),
   social_intelligence: entry('social_intelligence', [], 'social profile analysis and recommendations', 'social intelligence analysis'),

@@ -361,6 +361,15 @@ function sqlitePath(workspacePath: string): string {
 // connection as before so they never share state with the read cache.
 const _readDbCache = new Map<string, SqliteDatabase>();
 
+export function closeSqliteMemoryConnections(workspacePath?: string): void {
+  const target = workspacePath ? path.resolve(workspacePath) : '';
+  for (const [cachedWorkspace, db] of _readDbCache.entries()) {
+    if (target && path.resolve(cachedWorkspace) !== target) continue;
+    try { if (db?.open) db.close(); } catch { /* best effort shutdown */ }
+    _readDbCache.delete(cachedWorkspace);
+  }
+}
+
 function getCachedDb(workspacePath: string): SqliteDatabase | null {
   const existing = _readDbCache.get(workspacePath);
   if (existing && existing.open) return existing;

@@ -216,7 +216,7 @@ export class PrometheusExtensionRuntimeRegistry {
         resolveConnectorCredential(connectorId || connectorScope, fieldKey),
       });
       const message = String(result?.result || '');
-      if (result?.error && /token refresh failed|invalid_request|token was invalid|unauthori[sz]ed|invalid token/i.test(message)) {
+      if (result?.error && /token refresh failed|invalid_request|invalid_grant|token was invalid|unauthori[sz]ed|invalid token|token revoked|\b401\b/i.test(message)) {
         this.connectorHealth.set(connectorScope, { authState: 'expired_or_invalid', lastAuthError: message.slice(0, 500), reauthRequired: true, at: Date.now() });
         this.connectorStatusCache = null;
       } else if (!result?.error) {
@@ -225,7 +225,7 @@ export class PrometheusExtensionRuntimeRegistry {
       return result;
     } catch (error: any) {
       const message = String(error?.message || error);
-      if (/token refresh failed|invalid_request|token was invalid|unauthori[sz]ed|invalid token/i.test(message)) {
+      if (/token refresh failed|invalid_request|invalid_grant|token was invalid|unauthori[sz]ed|invalid token|token revoked|\b401\b/i.test(message)) {
         this.connectorHealth.set(connectorScope, { authState: 'expired_or_invalid', lastAuthError: message.slice(0, 500), reauthRequired: true, at: Date.now() });
         this.connectorStatusCache = null;
       }
@@ -259,9 +259,7 @@ export class PrometheusExtensionRuntimeRegistry {
       if (connector.toolNames?.length) {
         const registered = connector.toolNames.filter((name) => this.tools.has(name));
         const missing = connector.toolNames.filter((name) => !this.tools.has(name));
-        lines.push(`    Tools advertised: ${connector.toolNames.length}; registered: ${registered.length}; exposed after external_apps activation: ${registered.length}`);
-        lines.push(`    Registered tools: ${registered.join(', ') || '(none)'}`);
-        if (missing.length) lines.push(`    Registration error - missing: ${missing.join(', ')}`);
+        lines.push(`    Tools: ${registered.length}/${connector.toolNames.length} registered${missing.length ? `; ${missing.length} missing` : ''}`);
       }
       const health = this.connectorHealth.get(connector.id);
       if (health) lines.push(`    Auth health: ${health.authState}; reauthRequired=true; lastAuthError=${health.lastAuthError.split(/\r?\n/)[0]}`);

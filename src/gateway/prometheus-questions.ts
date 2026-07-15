@@ -206,6 +206,7 @@ function normalizeAnswers(record: PrometheusQuestionRecord, answers: any): Prome
 class PrometheusQuestionQueue {
   private records: Map<string, PrometheusQuestionRecord> = new Map();
   private callbacks: Map<string, (answers: { answers: PrometheusQuestionAnswer[]; generalOther?: string }) => void> = new Map();
+  private cancelCallbacks: Map<string, () => void> = new Map();
   private steerCallbacks: Map<string, (steerMessage: string) => void> = new Map();
 
   constructor() {
@@ -302,6 +303,15 @@ class PrometheusQuestionQueue {
     this.callbacks.set(id, callback);
   }
 
+  onCancel(id: string, callback: () => void): void {
+    const record = this.records.get(id);
+    if (record && (record.status === 'cancelled' || record.status === 'expired')) {
+      callback();
+      return;
+    }
+    if (record?.status === 'pending') this.cancelCallbacks.set(id, callback);
+  }
+
   onSteer(id: string, callback: (steerMessage: string) => void): void {
     this.steerCallbacks.set(id, callback);
   }
@@ -332,6 +342,7 @@ class PrometheusQuestionQueue {
       cb({ answers: record.answers || [], generalOther: record.generalOther });
       this.callbacks.delete(id);
     }
+    this.cancelCallbacks.delete(id);
 
     try {
       appendAuditEntry({
@@ -356,8 +367,11 @@ class PrometheusQuestionQueue {
     record.status = 'cancelled';
     record.resolvedAt = new Date().toISOString();
     record.resolvedBy = resolvedBy;
+    const cancelCb = this.cancelCallbacks.get(id);
     this.callbacks.delete(id);
+    this.cancelCallbacks.delete(id);
     this.steerCallbacks.delete(id);
+    if (cancelCb) cancelCb();
     this.persistDurableRecords();
     return record;
   }

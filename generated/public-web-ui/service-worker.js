@@ -17,7 +17,7 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const VERSION = 'pm-v154-2026-07-14-mobile-tabbar-drop-navigation';
+const VERSION = 'pm-v157-2026-07-14-settings-boot-recovery';
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 
@@ -36,6 +36,7 @@ const PRECACHE = [
   '/src/mobile/mobile-pages.js',
   '/src/mobile/mobile-data.js',
   '/src/mobile/mobile-api.js',
+  '/src/model-display.js',
   '/static/styles/mobile.css',
   '/static/styles/base.css',
   '/static/mobile/mobile-router.js',
@@ -43,6 +44,7 @@ const PRECACHE = [
   '/static/mobile/mobile-pages.js',
   '/static/mobile/mobile-data.js',
   '/static/mobile/mobile-api.js',
+  '/static/model-display.js',
   '/src/api.js',
   '/src/state.js',
   '/src/utils.js',

@@ -454,10 +454,26 @@ function escapeAttr(value) {
   return String(value || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
-function injectVisualResizeBridge(srcdoc) {
-  const bridge = `<script>(function(){var last=0;function send(){try{var d=document.documentElement,b=document.body;var h=Math.min(10000,Math.max(280,d?d.scrollHeight:0,b?b.scrollHeight:0,d?d.offsetHeight:0,b?b.offsetHeight:0));if(Math.abs(h-last)>1){last=h;parent.postMessage({type:'prometheus:visual-resize',height:h},'*')}}catch(e){}}if('ResizeObserver'in window){var ro=new ResizeObserver(send);if(document.documentElement)ro.observe(document.documentElement);if(document.body)ro.observe(document.body)}addEventListener('load',send);setTimeout(send,50);setTimeout(send,250);setTimeout(send,1000)})();<\/script>`;
+function visualScriptJson(value) {
+  return JSON.stringify(value == null ? null : value).replace(/</g, '\\u003c');
+}
+
+function injectVisualResizeBridge(srcdoc, options = {}) {
+  const visualId = String(options.visualId || '');
+  const initialState = options.state && typeof options.state === 'object' ? options.state : {};
+  const bridge = `<script>(function(){
+var visualId=${visualScriptJson(visualId)},last=0,state=${visualScriptJson(initialState)}||{};
+function post(type,extra){try{parent.postMessage(Object.assign({type:type,visualId:visualId},extra||{}),'*')}catch(e){}}
+function send(){try{var d=document.documentElement,b=document.body;var h=Math.min(10000,Math.max(280,d?d.scrollHeight:0,b?b.scrollHeight:0,d?d.offsetHeight:0,b?b.offsetHeight:0));if(Math.abs(h-last)>1){last=h;post('prometheus:visual-resize',{height:h})}}catch(e){}}
+function keyFor(el,index){return el.getAttribute('data-state-key')||el.id||el.name||('control-'+index)}
+function captureControls(){var controls={};document.querySelectorAll('input,select,textarea').forEach(function(el,index){var key=keyFor(el,index);controls[key]={value:el.value};if(el.type==='checkbox'||el.type==='radio')controls[key].checked=!!el.checked});var details={};document.querySelectorAll('details').forEach(function(el,index){details[el.id||('details-'+index)]=!!el.open});state=Object.assign({},state,{controls:controls,details:details});if(window.openai)window.openai.widgetState=state;post('prometheus:visual-state',{state:state});return state}
+function restoreControls(){var controls=state&&state.controls||{};document.querySelectorAll('input,select,textarea').forEach(function(el,index){var saved=controls[keyFor(el,index)];if(!saved)return;if(Object.prototype.hasOwnProperty.call(saved,'value'))el.value=saved.value;if(Object.prototype.hasOwnProperty.call(saved,'checked'))el.checked=!!saved.checked});var details=state&&state.details||{};document.querySelectorAll('details').forEach(function(el,index){var key=el.id||('details-'+index);if(Object.prototype.hasOwnProperty.call(details,key))el.open=!!details[key]})}
+window.prometheusVisual={id:visualId,getState:function(){return state},setState:function(next){state=next&&typeof next==='object'?next:{};restoreControls();if(window.openai)window.openai.widgetState=state;post('prometheus:visual-state',{state:state});send()},sendFollowUpMessage:function(input){post('prometheus:visual-followup',{prompt:String(input&&input.prompt||''),title:String(input&&input.title||'')})}};
+window.openai=window.openai||{};window.openai.widgetState=state;window.openai.setWidgetState=function(next){window.prometheusVisual.setState(next)};window.openai.sendFollowUpMessage=function(input){window.prometheusVisual.sendFollowUpMessage(input);return Promise.resolve()};
+restoreControls();document.addEventListener('input',captureControls,true);document.addEventListener('change',captureControls,true);document.addEventListener('toggle',captureControls,true);
+if('ResizeObserver'in window){var ro=new ResizeObserver(send);if(document.documentElement)ro.observe(document.documentElement);if(document.body)ro.observe(document.body)}addEventListener('load',function(){restoreControls();send();post('prometheus:visual-ready')});setTimeout(send,50);setTimeout(send,250);setTimeout(send,1000)})();<\/script>`;
   const html = String(srcdoc || '');
-  return /<\/body\s*>/i.test(html) ? html.replace(/<\/body\s*>/i, `${bridge}</body>`) : `${html}${bridge}`;
+  return /<head\b[^>]*>/i.test(html) ? html.replace(/<head\b[^>]*>/i, (head) => `${head}${bridge}`) : `${bridge}${html}`;
 }
 
 function installVisualMessageBridge() {
@@ -465,16 +481,38 @@ function installVisualMessageBridge() {
   window.__PROM_VISUAL_MESSAGE_BRIDGE_INSTALLED__ = true;
   window.addEventListener('message', (event) => {
     const data = event?.data;
-    if (!data || data.type !== 'prometheus:visual-resize') return;
-    const height = Number(data.height);
-    if (!Number.isFinite(height)) return;
+    if (!data || !String(data.type || '').startsWith('prometheus:visual-')) return;
     const frame = Array.from(document.querySelectorAll('iframe[data-prom-visual="true"]'))
       .find((candidate) => candidate.contentWindow === event.source);
     if (!frame) return;
-    const bounded = Math.min(10000, Math.max(280, Math.ceil(height) + 16));
-    frame.style.height = `${bounded}px`;
-    frame.style.minHeight = `${bounded}px`;
+    const visualId = String(frame.getAttribute('data-visual-id') || '');
+    if (String(data.visualId || '') !== visualId) return;
+    if (data.type === 'prometheus:visual-resize') {
+      const height = Number(data.height);
+      if (!Number.isFinite(height)) return;
+      const bounded = Math.min(10000, Math.max(280, Math.ceil(height) + 16));
+      frame.style.height = `${bounded}px`;
+      frame.style.minHeight = `${bounded}px`;
+      return;
+    }
+    if (data.type === 'prometheus:visual-state' && data.state && typeof data.state === 'object') {
+      window.dispatchEvent(new CustomEvent('prometheus:visual-state-change', { detail: { visualId, state: data.state } }));
+      return;
+    }
+    if (data.type === 'prometheus:visual-followup' && data.prompt) {
+      window.dispatchEvent(new CustomEvent('prometheus:visual-followup', { detail: { visualId, prompt: String(data.prompt), title: String(data.title || '') } }));
+    }
   });
+}
+
+function fallbackVisualId(lang, code, ordinal = 0) {
+  const input = `${lang}\0${ordinal}\0${code}`;
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `visual_local_${(hash >>> 0).toString(36)}`;
 }
 
 function buildPartialHtmlPreviewCode(partialCode) {
@@ -522,11 +560,13 @@ function buildPartialHtmlSrcdoc(partialCode, isDark) {
 <\/head><body>${previewCode || emptyState}<\/body><\/html>`;
 }
 
-export function buildVisualIframe(lang, code) {
+export function buildVisualIframe(lang, code, options = {}) {
   installVisualMessageBridge();
-  const id = 'vis_' + Math.random().toString(36).slice(2);
+  const artifact = options.artifact && typeof options.artifact === 'object' ? options.artifact : null;
+  const visualId = String(artifact?.id || options.visualId || fallbackVisualId(lang, code, options.ordinal || 0));
+  const id = `vis_${visualId.replace(/[^a-z0-9_-]/gi, '_')}`;
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  const srcdoc = injectVisualResizeBridge(buildVisualSrcdoc(lang, code, isDark));
+  const srcdoc = injectVisualResizeBridge(buildVisualSrcdoc(lang, code, isDark), { visualId, state: artifact?.state || options.state || {} });
   const encoded = escapeAttr(srcdoc);
   const escapedLang = lang.replace(/"/g, '');
   const escapedCode = escapeAttr(code);
@@ -535,6 +575,8 @@ export function buildVisualIframe(lang, code) {
   <iframe
     id="${id}"
     data-prom-visual="true"
+    data-visual-id="${escapeAttr(visualId)}"
+    data-visual-version="${escapeAttr(artifact?.version || 1)}"
     srcdoc="${encoded}"
     sandbox="allow-scripts allow-downloads"
     style="width:100%;min-height:${minHeight}px;border:none;display:block;background:transparent"
@@ -579,7 +621,7 @@ export function sanitizeHtml(html) {
   });
 }
 
-export function renderMd(text) {
+export function renderMd(text, options = {}) {
   if (!text) return '';
   try {
     const visuals = [];
@@ -587,9 +629,14 @@ export function renderMd(text) {
 
     // Match COMPLETE fenced visual blocks
     const FENCE_RE = /```(chart|svg|html|mermaid)\n([\s\S]*?)```/g;
+    let visualOrdinal = 0;
+    const persistedVisuals = Array.isArray(options.visualArtifacts) ? options.visualArtifacts.filter((artifact) => artifact?.type === 'visual') : [];
     let withPlaceholders = String(text).replace(FENCE_RE, (_, lang, code) => {
       const idx = visuals.length;
-      visuals.push({ lang: lang.toLowerCase(), code: code.trim(), partial: false });
+      const normalizedLang = lang.toLowerCase();
+      const artifact = persistedVisuals.find((item) => Number(item.ordinal) === visualOrdinal && String(item.renderer || '') === normalizedLang) || null;
+      visuals.push({ lang: normalizedLang, code: code.trim(), partial: false, artifact, ordinal: visualOrdinal });
+      visualOrdinal += 1;
       return `${placeholderPrefix}${idx}END`;
     });
 
@@ -610,7 +657,7 @@ export function renderMd(text) {
       html = html.replace(placeholderRe, (_, i) => {
         const v = visuals[+i];
         if (!v) return '';
-        return v.partial ? buildPartialVisual(v.lang, v.code) : buildVisualIframe(v.lang, v.code);
+        return v.partial ? buildPartialVisual(v.lang, v.code) : buildVisualIframe(v.lang, v.code, { artifact: v.artifact, ordinal: v.ordinal });
       });
       html = html.replace(/<p>\s*(<div class="visual-block"[\s\S]*?<\/div>)\s*<\/p>/g, '$1');
     }

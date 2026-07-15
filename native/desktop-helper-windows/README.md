@@ -26,3 +26,19 @@ currently implements `ping` and `capture` for `{ "kind": "window", "handle":
 The repository does not check in a generated executable. Release packaging
 should build/sign the helper and place it in `bin/prometheus-desktop-helper.exe`.
 
+## One-shot administrator commands
+
+The same binary provides an `--elevated-broker` mode used only after the existing
+Prometheus approval card resolves an `elevated_command` request. Prometheus uses
+Windows `runas` once to copy the helper into a protected ProgramData directory
+and register a per-user, highest-privilege Scheduled Task. Later approved
+administrator commands use an ACL-protected named pipe and do not show UAC.
+
+The broker checks the connecting executable and independently verifies that the
+client process owns the configured Prometheus gateway port. This keeps the dev
+gateway safe even though both it and agent-spawned scripts may use `node.exe`.
+Each command request remains SHA-256 bound, output-captured, and time-bounded.
+
+Elevated commands cannot be background processes, cannot create session or
+always permission grants, and cannot be auto-approved by Lite terminal mode,
+goals, schedules, subagents, or trusted-command grants.

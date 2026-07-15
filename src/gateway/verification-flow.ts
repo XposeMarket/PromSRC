@@ -31,7 +31,7 @@ export interface ApprovalRecord {
   /** The tool that is waiting for approval */
   toolName: string;
   toolArgs: Record<string, any>;
-  approvalKind?: 'command' | 'tool' | 'dev_source_edit' | 'final_action' | 'path_access';
+  approvalKind?: 'command' | 'elevated_command' | 'tool' | 'dev_source_edit' | 'final_action' | 'path_access';
   /** Path approval fields — populated when approvalKind === 'path_access' */
   pathAccess?: { requestedPath: string };
   /** Human-readable description of what will happen */
@@ -109,6 +109,9 @@ export function serializeApprovalForClient(record: ApprovalRecord): Record<strin
     toolName: record.toolName,
     toolArgs: truncateApprovalValue(record.toolArgs || {}),
     approvalKind: record.approvalKind,
+    oneShot: record.approvalKind === 'elevated_command'
+      || record.approvalKind === 'dev_source_edit'
+      || record.approvalKind === 'final_action',
     action: record.action,
     summary: record.action,
     reason: record.reason,
@@ -123,6 +126,14 @@ export function serializeApprovalForClient(record: ApprovalRecord): Record<strin
       packageManager: record.commandPermissionCandidate.packageManager || '',
       requiresExplicitApproval: record.commandPermissionCandidate.requiresExplicitApproval === true,
       requiresAdmin: record.commandPermissionCandidate.requiresAdmin === true,
+    } : record.approvalKind === 'elevated_command' ? {
+      scope: 'admin_required',
+      reason: 'This exact command will run through the installed administrator broker after one-shot approval. Broker setup may require UAC once.',
+      externalPaths: [],
+      environmentChanges: [],
+      packageManager: '',
+      requiresExplicitApproval: true,
+      requiresAdmin: true,
     } : undefined,
     devSourceEdit: record.devSourceEdit ? truncateApprovalValue(record.devSourceEdit) : undefined,
     finalAction: record.finalAction ? truncateApprovalValue(record.finalAction) : undefined,

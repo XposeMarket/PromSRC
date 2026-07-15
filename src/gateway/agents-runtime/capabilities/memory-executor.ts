@@ -2,11 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../../config/config';
 import {
-  backfillSqliteMemoryEmbeddings,
+  backfillMemoryEmbeddingsInWorker,
   getMemoryGraphSnapshot,
   getRelatedMemory,
   readMemoryRecord,
-  refreshMemoryIndexFromAudit,
+  refreshMemoryIndexInWorker,
   searchMemoryIndexAsync,
   searchMemoryTimeline,
   searchProjectMemory,
@@ -351,7 +351,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
 
       case 'memory_index_refresh': {
         try {
-          const out = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500, minIntervalMs: 0, syncSqlite: true });
+          const out = await refreshMemoryIndexInWorker(workspacePath, { force: true, maxChangedFiles: 500, minIntervalMs: 0, syncSqlite: true });
           return { name, args, result: JSON.stringify(out, null, 2), error: false };
         } catch (err: any) {
           return { name, args, result: `memory_index_refresh failed: ${String(err?.message || err)}`, error: true };
@@ -376,7 +376,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
 
       case 'memory_embedding_backfill': {
         try {
-          const out = await backfillSqliteMemoryEmbeddings(workspacePath, {
+          const out = await backfillMemoryEmbeddingsInWorker(workspacePath, {
             limit: args.limit != null ? Number(args.limit) : undefined,
             provider: args.provider ? String(args.provider) : undefined,
             force: args.force === true,

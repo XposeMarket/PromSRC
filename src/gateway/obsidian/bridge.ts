@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../../config/config';
-import { refreshMemoryIndexFromAudit } from '../memory-index';
+import { scheduleMemoryIndexRefresh } from '../memory-index';
 
 export type ObsidianBridgeMode = 'read_only' | 'assisted' | 'full';
 
@@ -395,7 +395,7 @@ export function removeObsidianVault(vaultId: string, opts?: { removeIndexedNotes
   }
   saveManifest(manifest);
   saveObsidianBridgeState(state);
-  if (vault) refreshMemoryIndexFromAudit(getConfig().getWorkspacePath(), { force: true, minIntervalMs: 0, maxChangedFiles: 500 });
+  if (vault) scheduleMemoryIndexRefresh(getConfig().getWorkspacePath(), { force: true, minIntervalMs: 0, maxChangedFiles: 500 });
   return state;
 }
 
@@ -473,7 +473,7 @@ export function syncObsidianVaults(options?: { vaultId?: string; force?: boolean
   });
   saveObsidianBridgeState(nextState);
   if (result.indexed || result.removed || options?.force) {
-    refreshMemoryIndexFromAudit(getConfig().getWorkspacePath(), { force: true, minIntervalMs: 0, maxChangedFiles: 800 });
+    scheduleMemoryIndexRefresh(getConfig().getWorkspacePath(), { force: true, minIntervalMs: 0, maxChangedFiles: 800 });
   }
   return result;
 }

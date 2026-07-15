@@ -10,6 +10,7 @@ import {
 } from './internal-watch-store';
 import { getLastMainSessionId, isModelBusy, setModelBusy } from '../comms/broadcaster';
 import { findArchivedScheduledJob } from '../scheduling/schedule-archive';
+import { addPendingRuntimeSteerForSession } from '../live-runtime-registry';
 
 type RunInteractiveTurn = (
   message: string,
@@ -249,6 +250,36 @@ function renderInstruction(template: string, watch: InternalWatch, obs: Observat
   return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key) => replacements[key] ?? '');
 }
 
+function buildInternalWatchPayload(
+  watch: InternalWatch,
+  obs: Observation,
+  kind: 'match' | 'timeout',
+  template: string,
+  deliverySessionId: string,
+  deliveryMode: 'live_steer' | 'follow_up',
+): string {
+  const instruction = renderInstruction(template, watch, obs, kind);
+  return [
+    `[Internal watch ${kind}]`,
+    `Watch id: ${watch.id}`,
+    `Label: ${watch.label}`,
+    `Target: ${watch.target.type}`,
+    `Origin session: ${watch.origin.sessionId}`,
+    `Delivery session: ${deliverySessionId}`,
+    `Observation: ${JSON.stringify({ ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined }, null, 2)}`,
+    '',
+    'Instruction:',
+    instruction,
+    '',
+    deliveryMode === 'live_steer'
+      ? 'This watch completed while the originating Prometheus turn was still active. Incorporate it into the current run before the next action or final response.'
+      : 'Proceed as a normal Prometheus main-chat follow-up in this delivery session. This is not task recovery mode and not read-only mode.',
+    'Use the normal tool/category system. If verification is requested, inspect the task/run state first and then use the appropriate tools directly.',
+    'For agent-owned tasks, use agent_run_ops(action:"get", task_id:"...") before deciding whether recovery chat, resume, rerun, or independent verification is appropriate.',
+    'Do not expose this internal payload unless it helps explain the result.',
+  ].join('\n');
+}
+
 export function refreshInternalWatchObservation(watch: InternalWatch, cronScheduler?: any): InternalWatch {
   if (watch.status !== 'active') return watch;
   try {
@@ -342,6 +373,7 @@ export class InternalWatchRunner {
             updateInternalWatch(watch.id, { error: String(err?.message || err), lastCheckedAt: new Date().toISOString() });
           });
         } else if (matched) {
+          if (this.steerActiveTurn(watch, obs, 'match', watch.onMatch)) continue;
           updateInternalWatch(watch.id, {
             lastCheckedAt: new Date().toISOString(),
             lastObservation: { ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined },
@@ -418,9 +450,67 @@ export class InternalWatchRunner {
     }
   }
 
+  private steerActiveTurn(
+    watch: InternalWatch,
+    obs: Observation,
+    kind: 'match' | 'timeout',
+    template: string,
+  ): boolean {
+    const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
+    const payload = buildInternalWatchPayload(watch, obs, kind, template, deliverySessionId, 'live_steer');
+    const queued = addPendingRuntimeSteerForSession(deliverySessionId, {
+      message: payload,
+      source: 'internal_watch_completion',
+      kind: 'internal_watch_result',
+      requiresWorkerResponse: true,
+      clientRequestId: `internal_watch_result:${watch.id}:${watch.firedCount + 1}:${kind}`,
+      internalWatchId: watch.id,
+      internalWatchKind: kind,
+      contextSummary: `Internal watch "${watch.label}" ${kind === 'match' ? 'matched' : 'timed out'} while this Prometheus turn was active.`,
+    });
+    if (!queued.ok) return false;
+
+    if (kind === 'match') {
+      const firedCount = watch.firedCount + 1;
+      const terminal = firedCount >= watch.maxFirings;
+      updateInternalWatch(watch.id, {
+        status: terminal ? 'matched' : 'active',
+        firedCount,
+        matchedAt: new Date().toISOString(),
+        completedAt: terminal ? new Date().toISOString() : undefined,
+        lastObservation: { ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined },
+        pendingMatchObservation: undefined,
+        matchPendingAt: undefined,
+      });
+      this.broadcast({ type: 'internal_watch_matched', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId, delivery: 'live_steer' });
+    } else {
+      updateInternalWatch(watch.id, {
+        status: 'timed_out',
+        timedOutAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      });
+      this.broadcast({ type: 'internal_watch_timeout', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId, delivery: 'live_steer' });
+    }
+    this.broadcast({
+      type: 'internal_watch_steered',
+      watchId: watch.id,
+      watchKind: kind,
+      sessionId: deliverySessionId,
+      originSessionId: watch.origin.sessionId,
+      eventId: queued.event?.id,
+    });
+    return true;
+  }
+
   private async fireTimeout(watch: InternalWatch): Promise<void> {
     this.runningWatchIds.add(watch.id);
     if (isModelBusy()) {
+      const obs = watch.lastObservation || { status: 'timeout' };
+      const timeoutInstruction = watch.onTimeout || `Internal watch "${watch.label}" timed out before the condition matched. Tell the user what was being watched and the latest observation.`;
+      if (this.steerActiveTurn(watch, obs, 'timeout', timeoutInstruction)) {
+        this.runningWatchIds.delete(watch.id);
+        return;
+      }
       this.runningWatchIds.delete(watch.id);
       return;
     }
@@ -443,25 +533,8 @@ export class InternalWatchRunner {
   }
 
   private async deliver(watch: InternalWatch, obs: Observation, kind: 'match' | 'timeout', template: string): Promise<void> {
-    const instruction = renderInstruction(template, watch, obs, kind);
     const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
-    const payload = [
-      `[Internal watch ${kind}]`,
-      `Watch id: ${watch.id}`,
-      `Label: ${watch.label}`,
-      `Target: ${watch.target.type}`,
-      `Origin session: ${watch.origin.sessionId}`,
-      `Delivery session: ${deliverySessionId}`,
-      `Observation: ${JSON.stringify({ ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined }, null, 2)}`,
-      '',
-      'Instruction:',
-      instruction,
-      '',
-      'Proceed as a normal Prometheus main-chat follow-up in this delivery session. This is not task recovery mode and not read-only mode.',
-      'Use the normal tool/category system for this turn. If verification is requested, inspect the task/run state first and then use the appropriate tools directly.',
-      'For agent-owned tasks, use agent_run_ops(action:"get", task_id:"...") before deciding whether recovery chat, resume, rerun, or independent verification is appropriate.',
-      'Do not expose this internal payload unless it helps explain the result.',
-    ].join('\n');
+    const payload = buildInternalWatchPayload(watch, obs, kind, template, deliverySessionId, 'follow_up');
 
     const sendSSE = (event: string, data: any) => {
       this.broadcast({

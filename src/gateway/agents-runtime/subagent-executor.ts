@@ -12,6 +12,7 @@ import { getConfig, getAgents, getAgentById } from '../../config/config';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { resetProvider } from '../../providers/factory.js';
 import { getPolicyEngine } from '../policy';
+import { getToolPermissionMode, shouldBypassGenericToolApproval } from '../tool-approval-mode';
 import { scoreSkillMetadata, skillMatchesScope, buildMetadataManifest, splitCsv, formatCompactSkillList, type SkillMetadataAudit } from './capabilities/skills-executor';
 import { appendAuditEntry } from '../audit-log';
 import { webSearch } from '../../tools/web';
@@ -34,6 +35,7 @@ import { executeAnalyzeImage, executeAnalyzeVideo } from '../../tools/media-anal
 import { executeGenerateImage } from '../../tools/generate-image';
 import { executeGenerateVideo } from '../../tools/generate-video';
 import { getActiveAllowedWorkspaces, hasActiveWorkspaceScope } from '../../tools/workspace-context';
+import { isCanonicalPathInsideSync } from '../../tools/workspace-boundary';
 import { createWorkspaceSnapshot, listWorkspaceHistory, restoreWorkspaceCheckpoint, restoreWorkspaceSnapshot, toSnapshotRef } from '../../workspace-history';
 import {
   DEFAULT_FILE_TOOL_EXCLUDES,
@@ -58,6 +60,7 @@ import {
 } from '../../tools/file-intelligence';
 import { getMCPManager } from '../mcp-manager';
 import { getProcessSupervisor } from '../process/supervisor';
+import { runElevatedCommand } from '../process/elevated-command';
 import { executePromRepoSyncTool } from '../prom-repo-sync';
 import { buildToolBenchmarkAggregate } from '../tool-observations';
 import {
@@ -297,7 +300,7 @@ import { isDesktopCancellationError } from '../desktop-cancellation';
 import { deliverToTargets, readAttachmentBuffer } from '../delivery-router';
 import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
 import {
-  refreshMemoryIndexFromAudit,
+  refreshMemoryIndexInWorker,
   searchMemoryIndex,
   readMemoryRecord,
   searchProjectMemory,
@@ -493,6 +496,7 @@ export interface ExecuteToolDeps {
   broadcastWS: (data: any) => void;
   sendSSE?: (event: string, data: any) => void;
   handleChat: (...args: any[]) => Promise<any>;
+  runInteractiveTurn?: (...args: any[]) => Promise<any>;
   telegramChannel: any;
   dispatchToAgent: (agentId: string, message: string, context: string | undefined, parentSessionId: string) => Promise<{ task_id: string; agent_id: string; status: string }>;
   sanitizeAgentId: (value: any) => string;
@@ -2428,7 +2432,6 @@ function normalizeExternalAppWrapperTool(name: string, rawArgs: any): { name: st
   const actionMaps: Record<string, Record<string, string>> = {
     x_search_ops: {
       x_search: 'x_search',
-      live_search: 'xai_live_search',
       search_recent: 'x_api_search_recent',
       search_all: 'x_api_search_all',
       search_spaces: 'x_api_search_spaces',
@@ -2561,8 +2564,26 @@ function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: stri
   delete args.action;
   const target = map[action];
   if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
+  if (name === 'agent_chat_ops') {
+    if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
+    if (args.message == null && args.task_prompt != null) args.message = args.task_prompt;
+  }
+  if (target === 'agent_update') {
+    const nestedPatch = isPlainObjectArg(args.patch) ? args.patch : {};
+    delete args.patch;
+    Object.assign(args, nestedPatch);
+    if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
+    if (args.max_steps == null && args.maxSteps != null) args.max_steps = args.maxSteps;
+    if (args.timeout_ms == null && args.timeoutMs != null) args.timeout_ms = args.timeoutMs;
+    delete args.maxSteps;
+    delete args.timeoutMs;
+  }
   if (target === 'team_manage') {
     if (args.team_action != null && args.action == null) args.action = args.team_action;
+    if (action === 'delete' && args.action == null) args.action = 'delete';
+    if (args.team_context == null && args.teamContext != null) args.team_context = args.teamContext;
+    if (args.team_context == null && args.context != null) args.team_context = args.context;
+    if (args.subagent_ids == null && Array.isArray(args.subagentIds)) args.subagent_ids = args.subagentIds;
     delete args.team_action;
   }
   return { name: target, args };
@@ -3641,11 +3662,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
   }
   function isPathInsideForPermissions(basePath: string, targetPath: string): boolean {
-    const base = normalizePathForPermissionCompare(basePath);
-    const target = normalizePathForPermissionCompare(targetPath);
-    if (!base || !target) return false;
-    const rel = path.relative(base, target);
-    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    try {
+      return isCanonicalPathInsideSync(basePath, targetPath);
+    } catch {
+      return false;
+    }
   }
   function resolveAllowedWorkspacePath(relPath: string, opts: { requireFile?: boolean; requireDirectory?: boolean; allowEmpty?: boolean } = {}): { absPath: string; normalizedRel: string; displayPath: string } {
     const raw = String(relPath ?? '').trim();
@@ -4054,26 +4075,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
   // [A4] Policy evaluation + audit trail — log every tool call, non-blocking
   let evaluation = {
-    tier: 'read' as 'read' | 'propose' | 'commit',
-    riskScore: 0,
-    reason: 'policy engine unavailable',
+    tier: 'commit' as 'read' | 'propose' | 'commit',
+    riskScore: 10,
+    reason: 'policy engine unavailable — failing closed',
     affectedSystems: [] as string[],
     matchedRule: null as any,
+    capabilities: null as any,
   };
-
-  const isRoutineDesktopApprovalFreeTool = (toolName: string): boolean =>
-    /^desktop_(doctor|screenshot|get_monitors|window_screenshot|find_window|focus_window|window_control|click|drag|wait|type|type_raw|press_key|get_clipboard|set_clipboard|list_installed_apps|find_installed_app|launch_app|close_app|get_process_list|wait_for_change|diff_screenshot|background_status|scroll)$/i.test(String(toolName || ''));
 
   try {
     evaluation = getPolicyEngine().evaluateAction(sessionId, name, args);
-    if (evaluation.tier === 'commit' && isRoutineDesktopApprovalFreeTool(name)) {
-      evaluation = {
-        ...evaluation,
-        tier: 'read',
-        riskScore: Math.min(Number(evaluation.riskScore || 0), 3),
-        reason: 'Routine desktop automation is allowed without approval; final high-impact submissions should use explicit final-action approval.',
-      };
-    }
     const inferredAgentId = inferAgentIdFromSession(sessionId, args);
     appendAuditEntry({
       timestamp: new Date().toISOString(),
@@ -4086,7 +4097,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       approvalStatus: evaluation.tier === 'read' ? 'auto' : 'pending',
       resultSummary: evaluation.reason,
     });
-  } catch { /* policy evaluation is non-blocking — never fail a tool call because of it */ }
+  } catch { /* retain the fail-closed COMMIT evaluation */ }
 
   const isGoalAutonomousApprovalBypass =
     deps.executionPolicy?.mode === 'goal_autonomous'
@@ -4367,9 +4378,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
   }
 
   function getShellApprovalMode(): 'default' | 'lite' {
-    return String((getConfig().getConfig() as any)?.tools?.permissions?.shell?.approval_mode || 'default') === 'lite'
-      ? 'lite'
-      : 'default';
+    return getToolPermissionMode();
   }
 
   function maybeBlockShellTokenPolicy(rawCmd: string, normalizedCmd: string): ToolResult | null {
@@ -4432,7 +4441,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
   }
 
 	  let approvedCommandApprovalId = '';
-	  if ((name === 'run_command' || name === 'start_process') && (evaluation.tier === 'commit' || getShellApprovalMode() !== 'lite')) {
+    const isElevatedCommand = args?.elevated === true;
+    const bypassGenericToolApproval = shouldBypassGenericToolApproval(getShellApprovalMode(), name, args);
+    if (isElevatedCommand && name === 'start_process') {
+      return { name, args, result: 'Elevated commands must be bounded foreground runs. Administrator background processes and interactive PTYs are not supported.', error: true };
+    }
+    if (isElevatedCommand && process.platform !== 'win32') {
+      return { name, args, result: 'Administrator command execution is currently supported on Windows only.', error: true };
+    }
+	  if ((name === 'run_command' || name === 'start_process') && !bypassGenericToolApproval) {
 	    const rawCmd = String(args?.command || '').trim();
 	    if (!rawCmd) return { name, args, result: 'command is required', error: true };
     if (looksLikeNativeFileToolBypass(rawCmd)) {
@@ -4467,20 +4484,23 @@ export async function executeTool(name: string, args: any, workspacePath: string
       cwd: commandCwdForApproval.cwd,
       cwdDisplay: commandCwdForApproval.displayCwd,
       workspaceRoot: path.resolve(workspacePath),
-      riskScore: Math.max(Number(evaluation.riskScore || 0), commandBoundary.requiresExplicitApproval ? 7 : 0),
-      boundaryScope: commandBoundary.scope,
-      boundaryReason: commandBoundary.reason,
+      riskScore: Math.max(Number(evaluation.riskScore || 0), isElevatedCommand ? 10 : commandBoundary.requiresExplicitApproval ? 7 : 0),
+      boundaryScope: isElevatedCommand ? 'admin_required' : commandBoundary.scope,
+      boundaryReason: isElevatedCommand
+        ? 'This command will run through the installed Windows administrator broker after explicit one-shot approval. Broker setup may require UAC once.'
+        : commandBoundary.reason,
       externalPaths: commandBoundary.externalPaths,
       environmentChanges: commandBoundary.environmentChanges,
       packageManager: commandBoundary.packageManager,
-      requiresExplicitApproval: commandBoundary.requiresExplicitApproval,
-      requiresAdmin: commandBoundary.requiresAdmin,
+      requiresExplicitApproval: isElevatedCommand || commandBoundary.requiresExplicitApproval,
+      requiresAdmin: isElevatedCommand || commandBoundary.requiresAdmin,
+      oneShot: isElevatedCommand || undefined,
     };
     const shellApprovalMode = getShellApprovalMode();
-    const needsCommandApproval = evaluation.tier === 'commit' || (shellApprovalMode !== 'lite' && commandBoundary.requiresExplicitApproval);
-    const isLiteCommandApprovalBypass = shellApprovalMode === 'lite';
-    const existingCommandGrant = findCommandPermissionGrant(permissionCandidate);
-    const isAutonomousCommandApprovalBypass = isGoalAutonomousApprovalBypass && !commandBoundary.requiresExplicitApproval;
+    const needsCommandApproval = isElevatedCommand || evaluation.tier === 'commit' || (shellApprovalMode !== 'lite' && commandBoundary.requiresExplicitApproval);
+    const isLiteCommandApprovalBypass = !isElevatedCommand && shellApprovalMode === 'lite';
+    const existingCommandGrant = isElevatedCommand ? null : findCommandPermissionGrant(permissionCandidate);
+    const isAutonomousCommandApprovalBypass = !isElevatedCommand && isGoalAutonomousApprovalBypass && !commandBoundary.requiresExplicitApproval;
     if (!needsCommandApproval || existingCommandGrant || isAutonomousCommandApprovalBypass || isLiteCommandApprovalBypass) {
       try {
         appendAuditEntry({
@@ -4540,9 +4560,12 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	      originType: approvalOrigin.originType,
 	      originLabel: approvalOrigin.originLabel,
 	      toolName: approvalDisplayToolName,
+      approvalKind: isElevatedCommand ? 'elevated_command' : 'command',
       toolArgs: { ...args, command: rawCmd },
-      commandPermissionCandidate: permissionCandidate,
-      action: commandBoundary.requiresExplicitApproval
+      commandPermissionCandidate: isElevatedCommand ? undefined : permissionCandidate,
+      action: isElevatedCommand
+        ? `Run as administrator in ${approvalCwd}: ${rawCmd}`
+        : commandBoundary.requiresExplicitApproval
         ? `Run terminal command outside workspace in ${approvalCwd}: ${rawCmd}`
         : `Run terminal command in ${approvalCwd}: ${rawCmd}`,
       reason: [evaluation.reason, boundaryDetails].filter(Boolean).join('\n\n'),
@@ -4550,6 +4573,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       riskScore: permissionCandidate.riskScore,
       affectedSystems: uniqueStrings([
         ...(Array.isArray(evaluation.affectedSystems) ? evaluation.affectedSystems : []),
+        ...(isElevatedCommand ? ['windows_administrator', 'uac'] : []),
         ...(commandBoundary.requiresExplicitApproval ? ['outside_workspace', commandBoundary.scope] : []),
       ]),
     });
@@ -4630,7 +4654,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
     }
 	  }
 
-  if (name !== 'run_command' && evaluation.tier === 'commit') {
+  if (name !== 'run_command' && name !== 'start_process' && evaluation.tier !== 'read' && !bypassGenericToolApproval) {
     const approvalQueue = getApprovalQueue();
     const activeTask = resolveTaskForSession(sessionId);
     const activeTaskId = String(activeTask?.id || '').trim() || undefined;
@@ -5135,12 +5159,28 @@ export async function executeTool(name: string, args: any, workspacePath: string
               const deleted = await deps.handleTaskControlAction(sessionId, { action: 'delete', task_id: taskId, confirm: true }).catch(() => null);
               cleanedTask = deleted?.success === true;
             }
-            cleanedAgent = manager.deleteSubagent(agentId);
-            return { name, args, result: JSON.stringify({ ...response, cleanup: { agent_deleted: cleanedAgent, task_deleted: cleanedTask } }, null, 2), error: response.ok !== true };
+            const agentDelete = deleteAgentCompletely({
+              agentId,
+              cronScheduler: deps.cronScheduler,
+              broadcastTeamEvent: deps.broadcastTeamEvent,
+            });
+            cleanedAgent = agentDelete.success === true && !getAgentById(agentId);
+            cleanedTask = cleanedTask && !loadTask(taskId);
+            const cleanupVerified = cleanedAgent && cleanedTask;
+            return { name, args, result: JSON.stringify({ ...response, cleanup: { agent_deleted: cleanedAgent, task_deleted: cleanedTask, verified: cleanupVerified } }, null, 2), error: response.ok !== true || !cleanupVerified };
           } catch (error: any) {
-            if (taskId) await deps.handleTaskControlAction(sessionId, { action: 'cancel', task_id: taskId, confirm: true }).catch(() => null);
-            cleanedAgent = manager.deleteSubagent(agentId);
-            return { name, args, result: JSON.stringify({ ok: false, agent_id: agentId, task_id: taskId || null, error: String(error?.message || error), cleanup: { agent_deleted: cleanedAgent } }, null, 2), error: true };
+            if (taskId) {
+              await deps.handleTaskControlAction(sessionId, { action: 'cancel', task_id: taskId, confirm: true }).catch(() => null);
+              await deps.handleTaskControlAction(sessionId, { action: 'delete', task_id: taskId, confirm: true }).catch(() => null);
+              cleanedTask = !loadTask(taskId);
+            }
+            const agentDelete = deleteAgentCompletely({
+              agentId,
+              cronScheduler: deps.cronScheduler,
+              broadcastTeamEvent: deps.broadcastTeamEvent,
+            });
+            cleanedAgent = agentDelete.success === true && !getAgentById(agentId);
+            return { name, args, result: JSON.stringify({ ok: false, agent_id: agentId, task_id: taskId || null, error: String(error?.message || error), cleanup: { agent_deleted: cleanedAgent, task_deleted: cleanedTask, verified: cleanedAgent && (!taskId || cleanedTask) } }, null, 2), error: true };
           }
         }
 
@@ -5218,7 +5258,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const validSources = new Set(['chat', 'subagent_chat', 'team_chat', 'team_manager']);
           const recoverySource = (validSources.has(sourceRaw) ? sourceRaw : 'chat') as 'chat' | 'subagent_chat' | 'team_chat' | 'team_manager';
           try {
-            const { handleTaskRecoveryMessage } = await import('../tasks/task-router');
+            const { handleTaskRecoveryMessage, isTaskRouterInitialized } = await import('../tasks/task-router');
+            if (!isTaskRouterInitialized()) {
+              return { name, args, result: JSON.stringify({ success: false, action, code: 'task_router_not_ready', message: 'Task recovery runtime is not initialized yet. Retry after gateway startup completes.' }, null, 2), error: true };
+            }
             const recovery = await handleTaskRecoveryMessage(resolved.task.id, message, {
               sourceSessionId: String(args?.source_session_id || args?.sourceSessionId || sessionId || '').trim(),
               source: recoverySource,
@@ -5633,7 +5676,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const targetType = String(args?.target_type || (args?.team_id ? 'team_member' : 'standalone_subagent')).trim();
         const afterTs = Math.max(0, Number(args?.after_ts || args?.after || 0) || 0);
         const block = args?.block !== false;
-        const timeoutMs = block ? clampAgentChatTimeoutMs(args?.timeout_ms, 30000) : 0;
+        const timeoutMs = block ? clampAgentChatTimeoutMs(args?.timeout_ms, 15000) : 0;
         const pollMs = Math.max(250, Math.min(5000, Number(args?.poll_ms) || 1000));
         const deadline = Date.now() + timeoutMs;
 
@@ -5705,12 +5748,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (snapshot.error) return { name, args, result: snapshot.error, error: true };
         const replies = Array.isArray((snapshot as any).replies) ? (snapshot as any).replies : [];
         const latestTs = replies.reduce((max: number, msg: any) => Math.max(max, Number(msg?.ts || 0)), afterTs);
+        const completed = replies.length > 0;
         return {
           name,
           args,
           result: JSON.stringify({
             ...(snapshot as any),
-            status: replies.length ? 'reply_available' : 'no_reply',
+            success: completed,
+            completed,
+            status: replies.length ? 'reply_available' : block && timeoutMs > 0 ? 'timed_out' : 'no_reply',
+            delivered: true,
+            waited_ms: block ? Math.min(timeoutMs, Math.max(0, Date.now() - (deadline - timeoutMs))) : 0,
+            timeout_ms: timeoutMs,
             latest_ts: latestTs,
           }, null, 2),
           error: false,
@@ -5762,7 +5811,29 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const { listManagedTeams: lmt, queueAgentMessage } = require('../teams/managed-teams');
           const teams = lmt();
           const team = teams.find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(targetAgentId));
-          if (!team) return { name, args, result: `ERROR: Could not find a team containing agent "${targetAgentId}". Check the agent ID.`, error: true };
+          if (!team) {
+            const standalone = getStandaloneSubagentForChat(targetAgentId);
+            if (standalone.error) return { name, args, result: standalone.error, error: true };
+            const delegated = await executeTool('chat_with_subagent', {
+              agent_id: targetAgentId,
+              message,
+              context: args?.context,
+              timeout_ms: args?.timeout_ms,
+              user_label: args?.user_label || 'Main Agent',
+            }, workspacePath, deps, sessionId);
+            if (delegated.error) return { name, args, result: delegated.result, error: true };
+            try {
+              const parsed = JSON.parse(String(delegated.result || '{}'));
+              return {
+                name,
+                args,
+                result: JSON.stringify({ ...parsed, resolved_target_type: 'standalone_subagent' }, null, 2),
+                error: false,
+              };
+            } catch {
+              return { name, args, result: delegated.result, error: false };
+            }
+          }
           queueAgentMessage(team.id, targetAgentId, message);
           appendAndBroadcastTeamChat(deps, team, {
             from: 'manager',
@@ -5820,7 +5891,21 @@ export async function executeTool(name: string, args: any, workspacePath: string
             }
           }
           console.log(`[talk_to_subagent] Queued message for "${targetAgentId}" in team "${team.name}"`);
-          return { name, args, result: pausedTask ? `Message delivered to ${targetAgentId} (team: ${team.name}) and their paused task is resuming.` : `Message queued for ${targetAgentId} (team: ${team.name}). They will receive it on their next run.`, error: false };
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: true,
+              resolved_target_type: 'team_member',
+              team_id: team.id,
+              agent_id: targetAgentId,
+              status: pausedTask ? 'delivered_and_resuming' : 'queued',
+              message: pausedTask
+                ? `Message delivered to ${targetAgentId} (team: ${team.name}) and their paused task is resuming.`
+                : `Message queued for ${targetAgentId} (team: ${team.name}). They will receive it on their next run.`,
+            }, null, 2),
+            error: false,
+          };
         } catch (e: any) {
           return { name, args, result: `ERROR: ${e.message}`, error: true };
         }
@@ -13716,6 +13801,30 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (commandBoundary.blocked) return commandBoundary.blocked;
         const shellTokenPolicyBlock = maybeBlockShellTokenPolicy(rawCmd, normalizedCmd);
         if (shellTokenPolicyBlock) return shellTokenPolicyBlock;
+        if (args.elevated === true) {
+          if (!approvedCommandApprovalId) {
+            return { name, args, result: 'Blocked: administrator execution requires a fresh one-shot approval.', error: true };
+          }
+          try {
+            const elevated = await runElevatedCommand({
+              command: normalizedCmd,
+              cwd: commandCwd.cwd,
+              shell: args.shell || 'auto',
+              timeoutMs: Number(args.timeoutMs || args.timeout_ms || 120_000),
+            });
+            const output = [elevated.stdout, elevated.stderr].filter(Boolean).join('\n').trim();
+            const ok = !elevated.timedOut && elevated.exitCode === 0;
+            return {
+              name,
+              args,
+              result: `${normalizedCmd} [${elevated.timedOut ? 'administrator timeout' : `administrator exit ${elevated.exitCode}`}] cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
+              error: !ok,
+              extra: { elevated: true, approvalId: approvedCommandApprovalId, exitCode: elevated.exitCode, timedOut: elevated.timedOut },
+            };
+          } catch (error: any) {
+            return { name, args, result: `Administrator command failed: ${error?.message || error}`, error: true };
+          }
+        }
         let execCmd = '';
 
         // 1. Check allowlist (exact match)
@@ -16564,8 +16673,16 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          }
 	          const workspacePath = getConfig().getConfig().workspace?.path || process.cwd();
 	          const subagentMgr = new SubagentManager(workspacePath, deps.broadcastWS, deps.handleChat, deps.telegramChannel);
-	          const patch = { ...args };
+	          const patch = {
+                ...args,
+                ...(isPlainObjectArg(args.patch) ? args.patch : {}),
+              };
 	          delete (patch as any).agent_id;
+	          delete (patch as any).patch;
+              if ((patch as any).max_steps == null && (patch as any).maxSteps != null) (patch as any).max_steps = (patch as any).maxSteps;
+              if ((patch as any).timeout_ms == null && (patch as any).timeoutMs != null) (patch as any).timeout_ms = (patch as any).timeoutMs;
+	          delete (patch as any).maxSteps;
+	          delete (patch as any).timeoutMs;
 	          const updated = subagentMgr.updateSubagent(agentId, patch);
 	          return {
 	            name,
@@ -16805,7 +16922,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
       case 'memory_index_refresh': {
         try {
-          const out = refreshMemoryIndexFromAudit(workspacePath, { force: true, maxChangedFiles: 500, minIntervalMs: 0 });
+          const out = await refreshMemoryIndexInWorker(workspacePath, { force: true, maxChangedFiles: 500, minIntervalMs: 0 });
           return { name, args, result: JSON.stringify(out, null, 2), error: false };
         } catch (err: any) {
           return { name, args, result: `memory_index_refresh failed: ${String(err?.message || err)}`, error: true };
@@ -19595,17 +19712,22 @@ export async function executeTool(name: string, args: any, workspacePath: string
               return { name, args, result: `Prometheus question ${questionId} is ${existing.status}.`, error: true };
             }
 
-            const waitResult = await new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string }>((resolve) => {
+            const waitResult = await new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string } | { cancelled: true }>((resolve) => {
               let settled = false;
-              const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string }) => {
+              const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { steerInterrupt: string } | { cancelled: true }) => {
                 if (settled) return;
                 settled = true;
                 questionQueue.clearSteerCallback(questionId);
                 resolve(value);
               };
               questionQueue.onResolve(questionId, (answerPayload) => safeResolve(answerPayload));
+              questionQueue.onCancel(questionId, () => safeResolve({ cancelled: true }));
               questionQueue.onSteer(questionId, (steerMessage) => safeResolve({ steerInterrupt: steerMessage }));
             });
+
+            if ('cancelled' in waitResult) {
+              return { name, args, result: `Prometheus question ${questionId} was cancelled by the user.`, error: true };
+            }
 
             if ('steerInterrupt' in waitResult) {
               try {
@@ -19703,18 +19825,53 @@ export async function executeTool(name: string, args: any, workspacePath: string
             console.warn('[prometheus_questions] Could not send Telegram question:', err?.message || err);
           }
 
-          // Do not keep the chat HTTP/SSE turn open while a human considers the
-          // card. Mobile radios routinely suspend or reconnect, and coupling the
-          // question to that transport made the turn look timed out even though
-          // the durable question was still valid. The submit endpoint resumes
-          // the chat with a resumePrompt when no live waiter is attached.
+          // This is a hard suspension point, like an approval card. Do not return
+          // a normal tool result while the question is pending: doing so lets the
+          // model continue the tool loop and emit a follow-up assistant message.
+          // The record remains durable, so after a gateway restart the submit
+          // endpoint can still resume a question that no longer has this waiter.
+          const waitResult = await new Promise<{ answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }>((resolve) => {
+            let settled = false;
+            const safeResolve = (value: { answers: PrometheusQuestionAnswer[]; generalOther?: string } | { cancelled: true }) => {
+              if (settled) return;
+              settled = true;
+              resolve(value);
+            };
+            questionQueue.onResolve(question.id, (answerPayload) => safeResolve(answerPayload));
+            questionQueue.onCancel(question.id, () => safeResolve({ cancelled: true }));
+          });
+
+          const wasCancelled = 'cancelled' in waitResult;
+          if (activeTaskId) {
+            updateTaskStatus(activeTaskId, 'running', { pauseReason: undefined });
+            appendJournal(activeTaskId, {
+              type: wasCancelled ? 'status_push' : 'resume',
+              content: wasCancelled
+                ? `Prometheus question cancelled: ${question.title.slice(0, 220)}`
+                : `Prometheus question answered: ${question.title.slice(0, 220)}`,
+            });
+            try {
+              deps.broadcastWS({ type: 'task_running', taskId: activeTaskId, title: activeTask?.title });
+              deps.broadcastWS({ type: 'task_panel_update', taskId: activeTaskId });
+            } catch {}
+          }
+
+          if (wasCancelled) {
+            return {
+              name,
+              args,
+              result: `Prometheus question ${question.id} was cancelled by the user.`,
+              data: { question_id: question.id, status: 'cancelled' },
+              error: true,
+            };
+          }
+
           return {
             name,
             args,
             result:
-              `Prometheus question ${question.id} is pending. The card is durable across reconnects. ` +
-              'End this turn now; the submitted answer will resume the interrupted work automatically.',
-            data: { question_id: question.id, status: 'pending', expires_at: question.expiresAt },
+              `Prometheus question ${question.id} answered.\n${JSON.stringify(waitResult, null, 2)}`,
+            data: { question_id: question.id, status: 'answered', ...waitResult },
             error: false,
           };
         }
@@ -20462,10 +20619,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
             scope: requestedScope,
             turns: requestedScope === 'ttl' ? requestedTurns : undefined,
           });
-          // For connectors category: also return connected connector status
+          // Keep category activation bounded. connector_list is the explicit inventory surface.
           if (requestedCategory === 'external_apps') {
-            const status = buildConnectorStatus();
-            return { name, args, result: `Tool category "external_apps" activated for ${requestedScope} scope in session ${sessionId}.\n\n${status}`, error: false };
+            return { name, args, result: `Tool category "external_apps" activated for ${requestedScope} scope. Use connector_list only if inventory is needed.`, error: false };
           }
 
           const suffix = requestedScope === 'ttl' ? ` (${requestedTurns} user turns)` : '';

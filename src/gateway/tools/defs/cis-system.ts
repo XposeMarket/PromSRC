@@ -309,6 +309,7 @@ export function getCisSystemTools(): any[] {
             action: { type: 'string', enum: ['discover', 'plan', 'connect', 'continue', 'verify', 'repair', 'status', 'cancel', 'disconnect', 'list', 'list_connections'] },
             service: { type: 'string' }, service_id: { type: 'string' }, service_name: { type: 'string' },
             connection_attempt_id: { type: 'string' }, connection_id: { type: 'string' },
+            detail: { type: 'string', enum: ['compact', 'full'], description: 'compact (default) returns bounded summaries; full returns complete canonical records.' },
             requested_capabilities: { type: 'array', items: { type: 'string' } }, read_only: { type: 'boolean' },
             approved: { type: 'boolean' }, metadata: { type: 'object' }, input: { type: 'object' },
           }, additionalProperties: false,
@@ -722,7 +723,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'ask_prometheus_questions',
         description:
-          'Ask the user 1-5 structured questions as a durable interactive card. The tool returns after queuing the card; end the turn, and the submitted answer automatically resumes the interrupted work even after a mobile disconnect/reconnect. Use when a missing decision/preference materially affects the next step.',
+          'Ask the user 1-5 structured questions as a durable interactive card. This call blocks and the current turn remains suspended until the user answers or cancels the card; do not send a follow-up message while it is pending. Use when a missing decision/preference materially affects the next step.',
         parameters: {
           type: 'object',
           required: ['title', 'prompt', 'questions'],

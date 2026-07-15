@@ -18,6 +18,7 @@
 
 import { mobileGatewayFetch } from './mobile-api.js';
 import { effortOptions, supportsFastSpeed } from '../reasoning-capabilities.js';
+import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
 
 // ── Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ──
 const BUILTIN_LABELS = {
@@ -34,7 +35,7 @@ const BUILTIN_LABELS = {
 
 const BUILTIN_STATIC_MODELS = {
   openai: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai_codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
@@ -65,45 +66,7 @@ function _esc(s) {
 // claude-haiku-4-5-20251001 → "Claude Haiku 4.5"
 // gpt-5.5 → "GPT 5.5"   ·   grok-4.20-reasoning → "Grok 4.20"
 export function prettifyModelName(model, provider) {
-  const raw = String(model || '').trim();
-  const providerId = String(provider || '').trim().toLowerCase();
-  if (!raw) return _providerLabel(providerId) || 'Model';
-  let s = raw.toLowerCase();
-  // Drop date stamps like -20251001 / 20250514.
-  s = s.replace(/-?20\d{6}\b/g, '');
-  // Drop trailing qualifier words that add noise on a tiny badge.
-  s = s.replace(/-(reasoning|non-reasoning|latest|preview|exp|instruct|thinking|online)\b/g, '');
-  s = s.replace(/-\d{4}\b/g, '');
-  // Strip the redundant "claude-" family prefix (anthropic).
-  s = s.replace(/^claude-/, '');
-  // Version dashes between digits become dots: 4-5 → 4.5.
-  s = s.replace(/(\d)-(\d)/g, '$1.$2');
-  // Remaining separators → spaces.
-  s = s.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!s) s = raw;
-
-  if (/^gpt\b/.test(s)) {
-    s = s.replace(/^gpt\b/i, 'GPT');
-  } else if (/^o\d\b/.test(s)) {
-    s = s.toUpperCase();
-  } else if (providerId === 'anthropic' || /^(opus|sonnet|haiku)\b/.test(s)) {
-    s = s.replace(/^(opus|sonnet|haiku)\b/i, 'Claude $1');
-  } else if (providerId === 'gemini' || /^gemini\b/.test(s)) {
-    s = s.replace(/^gemini\b/i, 'Gemini');
-  } else if (providerId === 'xai' || /^grok\b/.test(s)) {
-    s = s.replace(/^grok\b/i, 'Grok');
-  } else if (providerId === 'perplexity' || /^sonar\b/.test(s)) {
-    s = s.replace(/^sonar\b/i, 'Sonar');
-  } else {
-    s = s.replace(/\b[a-z]/g, (ch) => ch.toUpperCase());
-  }
-
-  s = s.replace(/\bmini\b/gi, 'mini')
-    .replace(/\b(Pro|Flash|Lite|Build|Codex|Max|Haiku|Opus|Sonnet|Deep|Research|Multi|Agent)\b/gi, (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (s.length > 24) s = s.slice(0, 23).trim() + '…';
-  return s;
+  return formatModelDisplayName(model, provider);
 }
 
 // ── Haptic feedback ──────────────────────────────────────────────────────────
@@ -268,8 +231,11 @@ function _setBadgeFast(fast) {
 // ── Badge label refresh ──────────────────────────────────────────────────────
 export async function refreshMobileModelBadge(force = false, modelChangeDetail = null) {
   const eventModel = _modelDetail(modelChangeDetail || {});
+  const llm = await _loadLlm(force);
   if (eventModel.model || eventModel.provider) {
-    const label = _setBadgeLabel(prettifyModelName(eventModel.model, eventModel.provider));
+    const eventCfg = llm?.providers?.[eventModel.provider] || {};
+    const eventEffort = String(modelChangeDetail?.reasoningEffort || modelChangeDetail?.reasoning_effort || eventCfg.reasoning_effort || '').trim();
+    const label = _setBadgeLabel(formatModelWithReasoning(eventModel.model, eventModel.provider, eventEffort));
     // switch_model is turn-scoped and does not mutate /api/settings/provider, so
     // keep the streamed active-model label instead of overwriting it from config.
     if (String(modelChangeDetail?.sourceEventType || '') === 'model_switched') {
@@ -277,11 +243,10 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
       return label;
     }
   }
-  const llm = await _loadLlm(force);
   const { provider, model } = _activeModel(llm);
   const cfg = llm?.providers?.[provider] || {};
   _setBadgeFast(supportsFastSpeed(provider, model) && (cfg.speed === 'fast' || cfg.fast_mode === true));
-  return _setBadgeLabel(prettifyModelName(model, provider));
+  return _setBadgeLabel(formatModelWithReasoning(model, provider, cfg.reasoning_effort));
 }
 
 // Seed text used by renderMobileHeader so the badge isn't empty on first paint.
@@ -532,6 +497,7 @@ function _queueReasoningSave(provider, patch, immediate = false) {
   const merged = { ...existing, ...patch };
   if (merged.reasoning_effort === '') delete merged.reasoning_effort;
   if (_llmCache) _llmCache.providers = { ...(_llmCache.providers || {}), [provider]: merged };
+  _setBadgeLabel(formatModelWithReasoning(merged.model || _activeModel(_llmCache).model, provider, merged.reasoning_effort));
   clearTimeout(_reasoningSaveTimer);
   const commit = () => {
     _reasoningSaveChain = _reasoningSaveChain.then(() => mobileGatewayFetch('/api/settings/provider', {

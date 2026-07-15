@@ -1,4 +1,4 @@
-import { refreshMemoryIndexFromAudit } from '../../memory-index';
+import { scheduleMemoryIndexRefresh } from '../../memory-index';
 import { extractMemoryClaims } from './claim-extractor';
 import { applyClaimConflicts } from './conflict-detector';
 import {
@@ -34,7 +34,7 @@ export function consolidateMemory(workspacePath: string, options?: {
     }
   }
   writeConsolidationStore(workspacePath, store);
-  if (accepted > 0) refreshMemoryIndexFromAudit(workspacePath, { force: true, minIntervalMs: 0, maxChangedFiles: 500 });
+  if (accepted > 0) scheduleMemoryIndexRefresh(workspacePath, { force: true, minIntervalMs: 0, maxChangedFiles: 500 });
   const pending = Object.values(store.claims).filter(claim => claim.status === 'proposed');
   return {
     proposed: claims.length,
@@ -70,6 +70,6 @@ export function reviewMemoryClaim(workspacePath: string, claimId: string, action
     sourcePath = writeAcceptedClaimDocument(workspacePath, claim);
   }
   writeConsolidationStore(workspacePath, applyClaimConflicts(store));
-  if (action === 'accept') refreshMemoryIndexFromAudit(workspacePath, { force: true, minIntervalMs: 0, maxChangedFiles: 500 });
+  if (action === 'accept') scheduleMemoryIndexRefresh(workspacePath, { force: true, minIntervalMs: 0, maxChangedFiles: 500 });
   return { ok: true, claim, sourcePath };
 }

@@ -2,20 +2,24 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "interactive-visuals",
   "name": "interactive-visuals",
-  "description": "Deprecated compatibility entry for interactive visual deliverables. Use the canonical interactive-artifacts skill.",
-  "version": "1.0.0",
+  "description": "Route /visual and general visualization requests to the smallest best-fit native widget, chart, Mermaid diagram, SVG, or interactive HTML artifact.",
+  "version": "2.0.0",
   "entrypoint": "SKILL.md",
-  "triggers": [],
+  "triggers": [
+    "/visual",
+    "visualize this",
+    "turn this into a visual",
+    "show this visually",
+    "make a diagram",
+    "make this interactive"
+  ],
   "categories": [
     "visuals",
     "router",
     "cards",
     "dashboards"
   ],
-  "requiredTools": [
-    "show_ui_card",
-    "skills"
-  ],
+  "requiredTools": ["skills"],
   "permissions": {},
   "resources": [
     {
@@ -24,6 +28,6 @@
       "description": "When to use which visual skill; migrated from SOUL Visuals section"
     }
   ],
-  "implicitInvocation": false,
-  "lifecycle": "deprecated"
+  "implicitInvocation": true,
+  "lifecycle": "active"
 }

@@ -11,6 +11,62 @@ import { API } from '../state.js';
 
 const PM_TOKEN_KEY = 'pm_device_token';
 const PM_DEVICE_KEY = 'pm_device_id';
+const PM_MOBILE_PAGE_CACHE_KEY = 'pm_mobile_page_data_v1';
+const _mobilePageMemoryCache = new Map();
+const _mobilePageRequests = new Map();
+
+function _readMobilePageCacheStore() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PM_MOBILE_PAGE_CACHE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch { return {}; }
+}
+
+export function getCachedMobilePageData(key, maxAgeMs = 300_000) {
+  const id = String(key || '').trim();
+  if (!id) return null;
+  const memory = _mobilePageMemoryCache.get(id);
+  if (memory && Date.now() - Number(memory.savedAt || 0) <= maxAgeMs) return memory.value;
+  const entry = _readMobilePageCacheStore()[id];
+  if (!entry || Date.now() - Number(entry.savedAt || 0) > maxAgeMs) return null;
+  _mobilePageMemoryCache.set(id, entry);
+  return entry.value;
+}
+
+function _saveMobilePageData(key, value) {
+  const id = String(key || '').trim();
+  if (!id || value == null) return value;
+  const entry = { savedAt: Date.now(), value };
+  _mobilePageMemoryCache.set(id, entry);
+  try {
+    const store = _readMobilePageCacheStore();
+    if (id === 'tasks' && Date.now() - Number(store[id]?.savedAt || 0) < 20_000) return value;
+    store[id] = entry;
+    const keys = Object.keys(store).sort((a, b) => Number(store[b]?.savedAt || 0) - Number(store[a]?.savedAt || 0));
+    keys.slice(8).forEach((oldKey) => delete store[oldKey]);
+    localStorage.setItem(PM_MOBILE_PAGE_CACHE_KEY, JSON.stringify(store));
+  } catch {}
+  return value;
+}
+
+function _invalidateMobilePageData(key) {
+  const id = String(key || '').trim();
+  _mobilePageMemoryCache.delete(id);
+  try {
+    const store = _readMobilePageCacheStore();
+    delete store[id];
+    localStorage.setItem(PM_MOBILE_PAGE_CACHE_KEY, JSON.stringify(store));
+  } catch {}
+}
+
+function _coalesceMobilePageRequest(key, factory) {
+  const id = String(key || '').trim();
+  const existing = _mobilePageRequests.get(id);
+  if (existing) return existing;
+  const request = Promise.resolve().then(factory).finally(() => _mobilePageRequests.delete(id));
+  _mobilePageRequests.set(id, request);
+  return request;
+}
 
 export function getDeviceToken() { try { return localStorage.getItem(PM_TOKEN_KEY) || ''; } catch { return ''; } }
 export function setDeviceToken(token, deviceId) {
@@ -465,11 +521,19 @@ function _normalizeCronJob(job) {
   };
 }
 
-export async function loadMobileSchedules() {
+export async function loadMobileSchedules({ force = false } = {}) {
+  const cached = !force ? getCachedMobilePageData('schedules', 21_600_000) : null;
+  if (cached) return cached;
+  return _coalesceMobilePageRequest('schedules', async () => {
   const [schedResult, brainResult] = await Promise.all([
     api('/api/schedules').catch(() => null),
     api('/api/brain/status').catch(() => null),
   ]);
+
+  if (!schedResult && !brainResult) {
+    const fallback = getCachedMobilePageData('schedules', 86_400_000);
+    if (fallback) return fallback;
+  }
 
   const items = [];
   if (brainResult?.success) {
@@ -481,7 +545,8 @@ export async function loadMobileSchedules() {
   if (schedResult?.success && Array.isArray(schedResult.schedules)) {
     for (const job of schedResult.schedules) items.push(_normalizeCronJob(job));
   }
-  return items;
+  return _saveMobilePageData('schedules', items);
+  });
 }
 
 export async function toggleSchedule(item, nextEnabled) {
@@ -489,11 +554,15 @@ export async function toggleSchedule(item, nextEnabled) {
     const body = item.brainType === 'thought'
       ? { thoughtEnabled: !!nextEnabled }
       : { dreamEnabled:   !!nextEnabled };
-    return api('/api/brain/config', { method: 'PATCH', body: JSON.stringify(body) });
+    const result = await api('/api/brain/config', { method: 'PATCH', body: JSON.stringify(body) });
+    _invalidateMobilePageData('schedules');
+    return result;
   }
-  return api(`/api/schedules/${encodeURIComponent(item.id)}`, {
+  const result = await api(`/api/schedules/${encodeURIComponent(item.id)}`, {
     method: 'PATCH', body: JSON.stringify({ enabled: !!nextEnabled }),
   });
+  _invalidateMobilePageData('schedules');
+  return result;
 }
 
 export async function runScheduleNow(item) {
@@ -507,10 +576,12 @@ export async function runScheduleNow(item) {
 
 export async function updateMobileSchedule(item, fields) {
   if (!item || item.kind !== 'cron') throw new Error('This schedule cannot be edited here');
-  return api(`/api/schedules/${encodeURIComponent(item.id)}`, {
+  const result = await api(`/api/schedules/${encodeURIComponent(item.id)}`, {
     method: 'PUT',
     body: JSON.stringify(fields || {}),
   });
+  _invalidateMobilePageData('schedules');
+  return result;
 }
 
 /* ---------------- teams ---------------- */
@@ -520,18 +591,30 @@ const MEMBER_AVATARS = ['🤖','👹','🍄','✨','🎯','🛰️'];
 
 let _teamsCache = { at: 0, list: null };
 
-async function _fetchTeamsList() {
-  if (_teamsCache.list && Date.now() - _teamsCache.at < 10_000) return _teamsCache.list;
-  const r = await api('/api/teams').catch(() => null);
+async function _fetchTeamsList(force = false) {
+  if (!force && _teamsCache.list && Date.now() - _teamsCache.at < 10_000) return _teamsCache.list;
+  const diskCached = !force ? getCachedMobilePageData('teams_raw', 21_600_000) : null;
+  if (diskCached) {
+    _teamsCache = { at: Date.now(), list: diskCached };
+    return diskCached;
+  }
+  const r = await _coalesceMobilePageRequest('teams_raw', () => api('/api/teams')).catch(() => null);
+  if (!r?.success) {
+    const fallback = getCachedMobilePageData('teams_raw', 86_400_000);
+    if (fallback) return fallback;
+  }
   const list = (r?.success && Array.isArray(r.teams)) ? r.teams : [];
   _teamsCache = { at: Date.now(), list };
-  return list;
+  return _saveMobilePageData('teams_raw', list);
 }
 
-export function invalidateTeamsCache() { _teamsCache = { at: 0, list: null }; }
+export function invalidateTeamsCache() {
+  _teamsCache = { at: 0, list: null };
+  _invalidateMobilePageData('teams_raw');
+}
 
-export async function loadMobileTeams() {
-  const list = await _fetchTeamsList();
+export async function loadMobileTeams({ force = false } = {}) {
+  const list = await _fetchTeamsList(force);
   return list.map((t, i) => ({
     id: t.id,
     name: t.name || t.id,
@@ -574,8 +657,8 @@ function _normalizeTeam(t) {
   };
 }
 
-export async function loadMobileTeamDetail(teamId) {
-  const list = await _fetchTeamsList();
+export async function loadMobileTeamDetail(teamId, { force = false } = {}) {
+  const list = await _fetchTeamsList(force);
   return _normalizeTeam(list.find(t => t.id === teamId));
 }
 
@@ -607,8 +690,8 @@ export async function loadTeamRuns(teamId, limit = 30) {
 }
 
 export async function loadTeamChat(teamId, limit = 80) {
-  const r = await api(`/api/teams/${encodeURIComponent(teamId)}/chat?limit=${limit}`).catch(() => null);
-  if (!r?.success) return [];
+  const r = await mfetch(`/api/teams/${encodeURIComponent(teamId)}/chat?limit=${limit}`, { timeoutMs: 12000 });
+  if (!r?.success) throw new Error(r?.error || 'Failed to load team chat');
   return Array.isArray(r.messages) ? r.messages : [];
 }
 
@@ -621,7 +704,7 @@ export async function postTeamChat(teamId, text) {
 
 export async function loadTeamChatStreamReplay(teamId, after = 0) {
   const qs = Number(after || 0) > 0 ? `?after=${encodeURIComponent(Math.floor(Number(after)))}` : '';
-  const r = await api(`/api/teams/${encodeURIComponent(teamId)}/chat/stream${qs}`).catch(() => null);
+  const r = await mfetch(`/api/teams/${encodeURIComponent(teamId)}/chat/stream${qs}`, { timeoutMs: 12000 }).catch(() => null);
   if (!r?.success) return { active: false, stream: null, events: [] };
   return {
     active: r.active === true,
@@ -765,12 +848,18 @@ function _subagentStatus(agent) {
   return 'idle';
 }
 
-export async function loadMobileSubagents() {
-  const r = await api('/api/agents', { timeoutMs: 8000 }).catch(() => null);
+export async function loadMobileSubagents({ force = false } = {}) {
+  const cached = !force ? getCachedMobilePageData('subagents', 21_600_000) : null;
+  if (cached) return cached;
+  const r = await _coalesceMobilePageRequest('subagents', () => api('/api/agents', { timeoutMs: 8000 })).catch(() => null);
+  if (!r) {
+    const fallback = getCachedMobilePageData('subagents', 86_400_000);
+    if (fallback) return fallback;
+  }
   const rawAgents = Array.isArray(r?.agents) ? r.agents : [];
   // Match desktop: hide default and synthetic shells; show team members with a badge instead.
   const agents = rawAgents.filter(a => !a.default && !a.isSynthetic);
-  return agents.map((a, idx) => {
+  const normalized = agents.map((a, idx) => {
     const { avatar, color } = _subagentAvatarFor(a.id, idx);
     return {
       id: a.id,
@@ -791,10 +880,11 @@ export async function loadMobileSubagents() {
       raw: a,
     };
   });
+  return _saveMobilePageData('subagents', normalized);
 }
 
-export async function loadMobileSubagentDetail(agentId) {
-  const list = await loadMobileSubagents();
+export async function loadMobileSubagentDetail(agentId, { force = false } = {}) {
+  const list = await loadMobileSubagents({ force });
   return list.find(a => a.id === agentId) || null;
 }
 
@@ -1197,19 +1287,23 @@ export async function denyMobileProposal(id) {
   });
 }
 
-export async function loadBgTasks() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const r = await api('/api/bg-tasks', { timeoutMs: attempt === 0 ? 15000 : 30000 });
-      if (r?.success && Array.isArray(r.tasks)) return r.tasks;
-      throw new Error(r?.error || 'Invalid tasks response');
-    } catch (err) {
-      lastError = err;
-      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
-    }
-  }
-  throw lastError || new Error('Could not load tasks');
+export async function loadBgTasks({ force = false } = {}) {
+  const cached = !force ? getCachedMobilePageData('tasks', 8_000) : null;
+  if (cached) return cached;
+  return _coalesceMobilePageRequest('tasks', async () => {
+    const r = await api('/api/bg-tasks?mobile=1', { timeoutMs: 9000 });
+    if (!r?.success || !Array.isArray(r.tasks)) throw new Error(r?.error || 'Invalid tasks response');
+    return _saveMobilePageData('tasks', r.tasks);
+  });
+}
+
+export function prefetchMobileSecondaryPages() {
+  return Promise.allSettled([
+    loadBgTasks({ force: true }),
+    loadMobileSchedules({ force: true }),
+    loadMobileTeams({ force: true }),
+    loadMobileSubagents({ force: true }),
+  ]);
 }
 
 export async function loadBgTaskDetail(taskId) {
@@ -1854,7 +1948,11 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
       }
     } catch (err) {
       if (err.name === 'AbortError') { cb('onDone'); return; }
-      cb('onError', toChatStreamError(err));
+      // A final frame is the durable answer. Some mobile browsers report a
+      // transport error while the server is closing an otherwise-complete SSE
+      // response; surfacing that late error would replace the answer with the
+      // recovery UI even though nothing remains to recover.
+      if (!gotFinal) cb('onError', toChatStreamError(err));
     } finally {
       cb('onDone');
     }

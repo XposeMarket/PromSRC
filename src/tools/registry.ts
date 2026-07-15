@@ -32,10 +32,12 @@ import {
   setSharedToolExecutionContext,
 } from './execution-context.js';
 import { findCommandPermissionGrant } from '../gateway/command-permissions.js';
-import { commandMatchesAllowlist, commandMatchesTrustedDev } from './shell.js';
+import { commandMatchesAllowlist } from './shell.js';
 import { getConfig } from '../config/config.js';
 import { addSessionAllowedPath, addPersistentAllowedPath } from '../gateway/path-permissions.js';
 import { getApprovalQueue } from '../gateway/verification-flow.js';
+import { resolveToolCapabilityMetadata, type ToolCapabilityMetadata } from '../gateway/tool-capabilities.js';
+import { getToolPermissionMode, shouldBypassGenericToolApproval } from '../gateway/tool-approval-mode.js';
 
 export interface Tool {
   name: string;
@@ -45,6 +47,7 @@ export interface Tool {
   // Optional explicit OpenAPI-style JSON schema for native function-call parameters.
   // When provided, this is used instead of description-based type inference.
   jsonSchema?: Record<string, any>;
+  capabilities?: ToolCapabilityMetadata;
 }
 
 export type ToolProfile = 'minimal' | 'coding' | 'web' | 'full' | 'desktop';
@@ -318,7 +321,10 @@ class ToolRegistry {
   }
 
   register(tool: Tool): void {
-    this.tools.set(tool.name, tool);
+    this.tools.set(tool.name, {
+      ...tool,
+      capabilities: resolveToolCapabilityMetadata(tool.name, tool.capabilities),
+    });
   }
 
   refreshExtensionTools(): void {
@@ -329,13 +335,21 @@ class ToolRegistry {
 
     try {
       ensurePrometheusExtensionRuntimeLoaded();
-      for (const extensionTool of getExtensionRuntimeRegistry().listTools()) {
+      const extensionRegistry = getExtensionRuntimeRegistry();
+      for (const extensionTool of extensionRegistry.listTools()) {
         const name = extensionTool.name;
+        const extensionTrust = extensionRegistry.getExtension(extensionTool.extensionId)?.trustLevel;
+        const capabilities = extensionTool.sideEffects
+          ? resolveToolCapabilityMetadata(name, extensionTool.sideEffects)
+          : extensionTrust === 'bundled'
+            ? resolveToolCapabilityMetadata(name)
+            : resolveToolCapabilityMetadata('__unclassified_extension_tool__');
         this.registerSafe({
           name,
           description: extensionTool.description,
           schema: {},
           jsonSchema: extensionTool.parameters,
+          capabilities,
           execute: async (args: any) => {
             const result = await getExtensionRuntimeRegistry().executeTool(name, args);
             return {
@@ -399,12 +413,21 @@ class ToolRegistry {
     // ── Policy evaluation ──────────────────────────────────────────────────
     let policy;
     try {
-      policy = getPolicyEngine().evaluateAction(_currentAgentId || 'main', toolName, args || {});
+      policy = getPolicyEngine().evaluateAction(_currentAgentId || 'main', toolName, args || {}, tool.capabilities);
     } catch {
-      policy = { tier: 'read' as const, riskScore: 0, reason: 'policy engine unavailable', affectedSystems: [], matchedRule: null };
+      policy = {
+        tier: 'commit' as const,
+        riskScore: 10,
+        reason: 'Policy engine unavailable — failing closed',
+        affectedSystems: [],
+        matchedRule: null,
+        capabilities: resolveToolCapabilityMetadata(toolName),
+      };
     }
 
     const tier = policy.tier;
+    const permissionMode = getToolPermissionMode();
+    const bypassGenericApproval = shouldBypassGenericToolApproval(permissionMode, toolName, args || {});
 
     // ── Audit: record the intent ───────────────────────────────────────────
     appendAuditEntry({
@@ -414,12 +437,19 @@ class ToolRegistry {
       toolName,
       toolArgs: args,
       policyTier: tier,
-      approvalStatus: tier === 'read' ? 'auto' : 'pending',
+      approvalStatus: tier === 'read' || bypassGenericApproval ? 'auto_allowed' : 'pending',
     });
 
     // ── Rotate log occasionally ────────────────────────────────────────────
     // Do it asynchronously so we don't slow down tool execution
     setImmediate(() => { try { maybeRotateLog(); } catch { /* best-effort */ } });
+
+    // Lite mode bypasses generic policy/path approval wrappers for every
+    // non-elevated tool. Explicit approval-request tools also pass through so
+    // their handlers can create the intended final-action/dev-edit cards.
+    if (bypassGenericApproval) {
+      return this._runTool(tool, args, toolName);
+    }
 
     // ── READ tier: just execute ────────────────────────────────────────────
     if (tier === 'read') {
@@ -522,21 +552,6 @@ class ToolRegistry {
         return this._runToolWithPathApproval(tool, args, toolName);
       }
 
-      // 3. Lite mode + trusted dev commands — no approval needed
-      const approvalMode = String((getConfig().getConfig() as any)?.tools?.permissions?.shell?.approval_mode || 'default');
-      if (approvalMode === 'lite' && commandMatchesTrustedDev(rawCmd)) {
-        appendAuditEntry({
-          sessionId: _currentSessionId,
-          agentId: _currentAgentId,
-          actionType: 'approval_resolved',
-          toolName,
-          toolArgs: args,
-          policyTier: 'commit',
-          approvalStatus: 'auto_allowed',
-          resultSummary: 'Auto-allowed: trusted dev command in lite mode',
-        });
-        return this._runToolWithPathApproval(tool, args, toolName);
-      }
     }
 
     // ── COMMIT tier: route to existing verification flow ──────────────────

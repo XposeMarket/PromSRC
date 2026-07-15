@@ -316,6 +316,7 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'schedule_job_outputs',
   'schedule_job_patch',
   'schedule_job_stuck_control',
+  'prometheus_thread_ops',
   // Advanced automation management/diagnostics (schedule_job, automation_dashboard,
   // and timer remain core; only execution-level scheduling stays always-on).
   'task_control',
@@ -1139,6 +1140,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
             cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute computer path. Outside-workspace paths require approval in default permissions and run directly in Lite permissions.' },
             mode: { type: 'string', enum: ['auto', 'foreground', 'background'], description: 'Legacy alias: background maps to action=start.' },
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'], description: 'Shell to use.' },
+            elevated: { type: 'boolean', description: 'Windows only. Run this bounded command as administrator through the installed broker. Always requires a fresh one-shot user approval and is never auto-approved. Broker installation may require UAC once; later approved commands do not. Not supported for background/start actions.' },
             pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth/REPLs.' },
             timeoutMs: { type: 'number', description: 'Foreground timeout in milliseconds.' },
             noOutputTimeoutMs: { type: 'number', description: 'Kill if no output arrives within this many milliseconds.' },
@@ -1163,6 +1165,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
             command: { type: 'string', description: 'Examples: "notepad", "git init", "npm install", "npm run build", "git push origin main", "code D:\\project", "git -C workspace/xposemarket-site status", "git status". **CRITICAL FOR GIT**: (1) Submodule at workspace/xposemarket-site — NEVER use `cd xposemarket-site` alone. Use `git -C workspace/xposemarket-site status` instead. (2) Do NOT use "chrome" or "msedge" — use browser_open instead.' },
             cwd: { type: 'string', description: 'Optional working directory relative to the active workspace, or an absolute computer path. Outside-workspace paths require approval in default permissions and run directly in Lite permissions. Use this for repo folders with spaces, e.g. "Prometheus Website/prometheus-site".' },
             shell: { type: 'string', enum: ['auto', 'powershell', 'cmd', 'bash'], description: 'Shell to use. On Windows, use powershell for PowerShell-native commands.' },
+            elevated: { type: 'boolean', description: 'Windows only. Run through the administrator broker after a mandatory fresh one-shot approval. Goals, Lite mode, and saved permissions cannot bypass it. Broker installation may require UAC once; later commands do not.' },
             pty: { type: 'boolean', description: 'Use a pseudo-terminal for interactive CLIs/auth flows/REPLs.' },
             timeoutMs: { type: 'number', description: 'Timeout in milliseconds. Default 120000.' },
             visible: { type: 'boolean', description: 'If true, opens a visible terminal window instead of capturing output. Default: false (captured).' },
@@ -1328,12 +1331,12 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       type: 'function',
       function: {
         name: 'x_search_ops',
-        description: 'Unified X/xAI search wrapper. Delegates to X API search/trends/space tools or xAI live/X search tools.',
+        description: 'Unified X/xAI search wrapper. Delegates to current X API search/trends/space tools or xAI X search.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['x_search', 'live_search', 'search_recent', 'search_all', 'search_spaces', 'get_trends', 'get_personalized_trends', 'get_space'] },
+            action: { type: 'string', enum: ['x_search', 'search_recent', 'search_all', 'search_spaces', 'get_trends', 'get_personalized_trends', 'get_space'] },
             query: { type: 'string' },
             q: { type: 'string' },
             space_id: { type: 'string' },

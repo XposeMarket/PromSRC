@@ -29,7 +29,8 @@ export interface ResolveApprovalDecisionResult {
 }
 
 function isOneShotApproval(approval: ApprovalRecord): boolean {
-  return approval.approvalKind === 'dev_source_edit'
+  return approval.approvalKind === 'elevated_command'
+    || approval.approvalKind === 'dev_source_edit'
     || approval.toolName === 'request_dev_source_edit'
     || approval.approvalKind === 'final_action'
     || approval.toolName === 'request_final_action_approval';
@@ -109,6 +110,14 @@ export function resolveApprovalDecision(input: ResolveApprovalDecisionInput): Re
     } catch (err: any) {
       resumePrompt = `The command approval "${approval.id}" was approved after restart, but Prometheus could not restore the command permission automatically: ${String(err?.message || err)}. Continue from the checkpoint and request a fresh approval only if needed.`;
     }
+  }
+
+  if (decision === 'approved' && !hadLiveWaiter && approval.approvalKind === 'elevated_command') {
+    resumePrompt = [
+      `The one-shot elevated command approval "${approval.id}" was approved after a gateway restart.`,
+      'For safety, elevated approvals are never restored, saved, or replayed after a restart.',
+      'If the administrator command is still needed, request a fresh elevated command approval so the user can review the exact command again.',
+    ].join('\n');
   }
 
   if (decision === 'approved' && !hadLiveWaiter && (

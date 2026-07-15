@@ -17,6 +17,11 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config.js';
 import { AuditLogEntry, PolicyRule } from '../types.js';
+import {
+  capabilityPolicyTier,
+  resolveToolCapabilityMetadata,
+  type ToolCapabilityMetadata,
+} from './tool-capabilities.js';
 
 // ─── Default rules ──────────────────────────────────────────────────────────
 
@@ -120,6 +125,7 @@ export interface PolicyEvaluation {
   reason: string;
   affectedSystems: string[];
   matchedRule: PolicyRule | null;
+  capabilities: ToolCapabilityMetadata;
   /** For PROPOSE tier: a human-readable draft summary */
   proposalSummary?: string;
 }
@@ -178,45 +184,65 @@ class PolicyEngine {
   evaluateAction(
     actor: string,
     toolName: string,
-    args: Record<string, any>
+    args: Record<string, any>,
+    declaredCapabilities?: ToolCapabilityMetadata,
   ): PolicyEvaluation {
+    const capabilities = resolveToolCapabilityMetadata(toolName, declaredCapabilities, args);
+    if (!capabilities.known) {
+      return {
+        tier: 'commit',
+        riskScore: 10,
+        reason: 'Tool has no explicit capability metadata — failing closed to COMMIT',
+        affectedSystems: [],
+        matchedRule: null,
+        capabilities,
+        proposalSummary: this.buildProposalSummary(toolName, args),
+      };
+    }
     const matchedRule = this.matchRule(toolName);
 
     if (matchedRule) {
+      const capabilityTier = capabilityPolicyTier(capabilities);
+      const tierRank: Record<PolicyTier, number> = { read: 0, propose: 1, commit: 2 };
+      const tier = tierRank[matchedRule.tier] >= tierRank[capabilityTier]
+        ? matchedRule.tier
+        : capabilityTier;
       return {
-        tier: matchedRule.tier,
-        riskScore: matchedRule.riskScore,
-        reason: matchedRule.description,
+        tier,
+        riskScore: Math.max(matchedRule.riskScore, tier === 'commit' ? 8 : tier === 'propose' ? 4 : 0),
+        reason: tier === matchedRule.tier
+          ? matchedRule.description
+          : `${matchedRule.description}; explicit capabilities require ${tier.toUpperCase()} handling`,
         affectedSystems: this.inferAffectedSystems(toolName, args),
         matchedRule,
-        proposalSummary: matchedRule.tier !== 'read'
+        capabilities,
+        proposalSummary: tier !== 'read'
           ? this.buildProposalSummary(toolName, args)
           : undefined,
       };
     }
 
-    // No matching rule → default to READ (least restrictive safe default)
+    const tier = capabilityPolicyTier(capabilities);
     return {
-      tier: 'read',
-      riskScore: 0,
-      reason: 'No policy rule matched — defaulting to READ (pass-through)',
+      tier,
+      riskScore: tier === 'commit' ? 10 : tier === 'propose' ? 5 : 0,
+      reason: capabilities.known
+        ? `Explicit tool capabilities require ${tier.toUpperCase()} handling`
+        : 'Tool has no explicit capability metadata — failing closed to COMMIT',
       affectedSystems: [],
       matchedRule: null,
+      capabilities,
     };
   }
 
   // Find the most specific matching rule for a tool name
   private matchRule(toolName: string): PolicyRule | null {
-    // Match in order; first match wins (rules are ordered by specificity above)
+    // Policy rules are exact tool-name overrides. Substring/prefix matching can
+    // misclassify mutations (for example, a delete tool containing "list").
     for (const rule of this.rules) {
       const patterns = rule.toolPattern.split('|').map(p => p.trim());
       for (const pattern of patterns) {
-        // Support glob-style prefix matching (e.g. "read" matches "read_file")
-        if (
-          toolName === pattern ||
-          toolName.startsWith(pattern + '_') ||
-          toolName.includes(pattern)
-        ) {
+        if (toolName === pattern) {
           return rule;
         }
       }

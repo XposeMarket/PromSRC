@@ -87,7 +87,10 @@ export interface CronJob {
   /** Start timestamp of the most recent run; used for output freshness checks. */
   lastRunStartedAt?: string | null;
   lastResult: string | null;
-  lastDuration: number | null;
+  lastDuration: number | null; // legacy alias of lastOrchestrationDurationMs
+  lastQueueDurationMs?: number | null;
+  lastRunnerDurationMs?: number | null;
+  lastOrchestrationDurationMs?: number | null;
   consecutiveErrors?: number;
   deleteAfterRun?: boolean;
   nextRun: string | null;
@@ -99,6 +102,10 @@ export interface CronJob {
     requiredText?: string;
     absentText?: string;
   }>;
+  expectedResult?: {
+    requiredText?: string;
+    absentText?: string;
+  };
   createdAt: string;
 }
 
@@ -150,7 +157,7 @@ function getScheduleNote(mem: ScheduleAgentMemory | null, key: string): string {
   return String(mem?.notes?.[key] || '').replace(/\s+/g, ' ').trim();
 }
 
-function verifyScheduledExpectedOutputs(job: CronJob): { configured: boolean; allPassed: boolean; paths: string[] } {
+export function verifyScheduledExpectedOutputs(job: CronJob): { configured: boolean; allPassed: boolean; paths: string[] } {
   const expected = Array.isArray(job.expectedOutputs) ? job.expectedOutputs : [];
   if (!expected.length) return { configured: false, allPassed: false, paths: [] };
   const workspaceRoot = path.resolve(getConfig().getWorkspacePath());
@@ -170,6 +177,21 @@ function verifyScheduledExpectedOutputs(job: CronJob): { configured: boolean; al
     paths.push(rel);
   }
   return { configured: true, allPassed: allPassed && paths.length === expected.length, paths };
+}
+
+export function verifyScheduledExpectedResult(job: CronJob, resultText: string): { configured: boolean; allPassed: boolean; requiredText?: string; absentText?: string } {
+  const contract = job.expectedResult;
+  const requiredText = String(contract?.requiredText || '').trim();
+  const absentText = String(contract?.absentText || '').trim();
+  const configured = !!(requiredText || absentText);
+  if (!configured) return { configured: false, allPassed: false };
+  const text = String(resultText || '');
+  return {
+    configured: true,
+    allPassed: (!requiredText || text.includes(requiredText)) && (!absentText || !text.includes(absentText)),
+    requiredText: requiredText || undefined,
+    absentText: absentText || undefined,
+  };
 }
 
 function buildLastRunContext(job: CronJob, mem: ScheduleAgentMemory | null): string {
@@ -1935,6 +1957,10 @@ export class CronScheduler {
     }
 
     const expectedOutputVerification = verifyScheduledExpectedOutputs(job);
+    const expectedResultVerification = verifyScheduledExpectedResult(job, resultText);
+    if (expectedResultVerification.configured && !expectedResultVerification.allPassed) {
+      resultText = `ERROR: Scheduled result contract failed.${expectedResultVerification.requiredText ? ` Missing required text: ${expectedResultVerification.requiredText}.` : ''}${expectedResultVerification.absentText ? ` Forbidden text present: ${expectedResultVerification.absentText}.` : ''}\n\n${resultText}`;
+    }
     if (
       expectedOutputVerification.allPassed
       && (resultText.length > 1200 || /^(done\.?|complete\.?|finished\.?|task complete\.?)$/i.test(resultText.trim()))
@@ -1952,6 +1978,9 @@ export class CronScheduler {
     job.lastRun = new Date().toISOString();
     job.lastResult = resultText.slice(0, 3000);
     job.lastDuration = duration;
+    job.lastRunnerDurationMs = duration;
+    job.lastOrchestrationDurationMs = duration;
+    job.lastQueueDurationMs = Math.max(0, new Date(job.lastRunStartedAt || job.lastRun || Date.now()).getTime() - new Date(job.lastRunStartedAt || job.lastRun || Date.now()).getTime());
 
     if (job.type === 'one-shot' || job.deleteAfterRun) {
       this.store.jobs = this.store.jobs.filter(j => j.id !== job.id);

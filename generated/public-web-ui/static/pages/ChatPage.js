@@ -15,6 +15,8 @@
 import { api } from '../api.js';
 import { escHtml, renderMd, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm } from '../utils.js';
 import { wsEventBus, wsSend } from '../ws.js';
+import { formatModelDisplayName } from '../model-display.js';
+import { getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
 import { CREATIVE_LIBRARY_PACKS, CREATIVE_SIZE_PRESETS, CREATIVE_STYLE_PRESETS, createSceneDocument, applySceneGraphOps, executeSceneGraphOps, buildSceneSelectionContext, parseCreativeOpsFromText, getCreativePatchInstruction, resolveElementAtTime, measureTextBlock, buildTextFontSpec, getCreativeElementLibrary, getCreativeAnimationPresetCatalog, getEnabledCreativeLibraryIds, getCreativeLibraryPackCatalog, setCreativeLibraryRuntimePacks, validateCreativeSceneLayout } from '../components/creative/sceneGraph.js';
 import { normalizeCreativeAudioTrackConfig as normalizeCreativeAudioTrackConfigEngine, hasCreativeAudioTrackConfig as hasCreativeAudioTrackConfigEngine, stopCreativeAudioPreview as stopCreativeAudioPreviewEngine, ensureCreativeAudioPreviewElement as ensureCreativeAudioPreviewElementEngine, syncCreativeAudioPreviewToTimeline as syncCreativeAudioPreviewToTimelineEngine, getCreativeAudioTrackWindow as getCreativeAudioTrackWindowEngine, waitForCreativeMediaReady as waitForCreativeMediaReadyEngine, createCreativeExportAudioSession as createCreativeExportAudioSessionEngine, fetchCreativeAudioAnalysis } from '../components/creative/audioEngine.js';
 import { normalizeCreativeRenderJobStatus as normalizeCreativeRenderJobStatusEngine, isCreativeRenderJobTerminalStatus as isCreativeRenderJobTerminalStatusEngine, sortCreativeRenderJobEntries as sortCreativeRenderJobEntriesEngine, createCreativeRenderJobClient, createCreativeRenderWorkerController } from '../components/creative/renderJobs.js';
@@ -6259,6 +6261,39 @@ function isInternalChatMessage(msg) {
     || /^Restart Context Packet\b/i.test(text);
 }
 
+let visualArtifactStateSyncTimer = null;
+
+function persistDesktopVisualArtifactState(visualId, state) {
+  const id = String(visualId || '').trim();
+  if (!id || !state || typeof state !== 'object') return;
+  const history = Array.isArray(window.chatHistory) ? window.chatHistory : [];
+  let artifact = null;
+  for (const message of history) {
+    artifact = Array.isArray(message?.richArtifacts)
+      ? message.richArtifacts.find((item) => item?.type === 'visual' && String(item.id || '') === id)
+      : null;
+    if (artifact) break;
+  }
+  if (!artifact) return;
+  const nextState = JSON.parse(JSON.stringify(state));
+  if (JSON.stringify(artifact.state || {}) === JSON.stringify(nextState)) return;
+  artifact.state = nextState;
+  artifact.stateUpdatedAt = Date.now();
+  saveChatSessions();
+  if (visualArtifactStateSyncTimer) clearTimeout(visualArtifactStateSyncTimer);
+  visualArtifactStateSyncTimer = setTimeout(() => {
+    visualArtifactStateSyncTimer = null;
+    syncActiveSessionHistoryToServer(window.chatHistory || []).catch(() => {});
+  }, 450);
+}
+
+if (typeof window !== 'undefined' && !window.__PROM_DESKTOP_VISUAL_STATE_LISTENER__) {
+  window.__PROM_DESKTOP_VISUAL_STATE_LISTENER__ = true;
+  window.addEventListener('prometheus:visual-state-change', (event) => {
+    persistDesktopVisualArtifactState(event?.detail?.visualId, event?.detail?.state);
+  });
+}
+
 function setChatSessions(next) {
   const sessions = (Array.isArray(next) ? next : [])
     .filter((session) => !isInternalChatSession(session))
@@ -6354,6 +6389,7 @@ function sessionStubFromServer(s) {
     creativeHistoryFuture: Array.isArray(s.creativeHistoryFuture) ? s.creativeHistoryFuture : [],
     creativeHtmlMotionClip: s.creativeHtmlMotionClip || null,
     mainChatGoal: s.mainChatGoal || null,
+    pinnedAt: Number(s.pinnedAt || 0) || null,
     activeRun: s.activeRun === true,
     createdAt: s.createdAt || Date.now(),
     updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
@@ -6368,9 +6404,21 @@ function mergeServerSessionSummaries(summaries) {
   if (!Array.isArray(summaries) || summaries.length === 0) return;
   window.chatSessions = Array.isArray(window.chatSessions) ? window.chatSessions : [];
   const byId = new Map(window.chatSessions.map(s => [String(s.id), s]));
+  let pinsChanged = false;
   for (const serverSession of summaries) {
     if (!serverSession?.id) continue;
     if (isInternalChatSession(serverSession)) continue;
+    if (Array.isArray(_pinnedChats)) {
+      const pinIndex = _pinnedChats.indexOf(String(serverSession.id));
+      const serverPinned = Number(serverSession.pinnedAt || 0) > 0;
+      if (serverPinned && pinIndex === -1) {
+        _pinnedChats.push(String(serverSession.id));
+        pinsChanged = true;
+      } else if (!serverPinned && pinIndex !== -1) {
+        _pinnedChats.splice(pinIndex, 1);
+        pinsChanged = true;
+      }
+    }
     const serverStub = sessionStubFromServer(serverSession);
     const existing = byId.get(String(serverSession.id));
     if (existing) {
@@ -6391,6 +6439,7 @@ function mergeServerSessionSummaries(summaries) {
         canvasProjectLabel: existing.canvasProjectLabel || serverStub.canvasProjectLabel,
         canvasProjectLink: existing.canvasProjectLink || serverStub.canvasProjectLink,
         mainChatGoal: serverStub.mainChatGoal || existing.mainChatGoal || null,
+        pinnedAt: serverStub.pinnedAt || null,
         activeRun: serverStub.activeRun === true,
       });
       const hasHistoryButNoProcessLog = Array.isArray(existing.history) && existing.history.length > 0
@@ -6403,6 +6452,7 @@ function mergeServerSessionSummaries(summaries) {
       byId.set(String(serverSession.id), serverStub);
     }
   }
+  if (pinsChanged) localStorage.setItem('prometheus_pinned_chats', JSON.stringify(_pinnedChats));
   window.chatSessions.sort((a, b) => getSessionLastMessageAt(b) - getSessionLastMessageAt(a));
 }
 
@@ -6448,6 +6498,7 @@ async function _loadSessionFromServer(id, options = {}) {
     sess.creativeTimelineMs = Number.isFinite(Number(s.creativeTimelineMs)) ? Number(s.creativeTimelineMs) : 0;
     sess.creativeHtmlMotionClip = s.creativeHtmlMotionClip || null;
     sess.mainChatGoal = s.mainChatGoal || null;
+    sess.pinnedAt = Number(s.pinnedAt || 0) || null;
     sess.mainChatGoalHistory = Array.isArray(s.mainChatGoalHistory) ? s.mainChatGoalHistory : [];
     if (s.autoTitleLocked === true && String(s.title || '').trim()) {
       sess.title = String(s.title || '').trim();
@@ -7329,8 +7380,9 @@ function toggleSteps(id) {
   el.previousElementSibling.textContent = `${visible ? '?' : '?'} ${el.querySelectorAll('.react-step').length} tool step${el.querySelectorAll('.react-step').length !== 1 ? 's' : ''} used`;
 }
 
-function renderAssistantContent(content) {
+function renderAssistantContent(content, message = null) {
   const text = String(content || '');
+  const markdownOptions = { visualArtifacts: Array.isArray(message?.richArtifacts) ? message.richArtifacts : [] };
   const bgHeaderMatch = text.match(/\nBackground agent response:\s*\n?/i) || text.match(/^Background agent response:\s*\n?/i);
   if (bgHeaderMatch && typeof bgHeaderMatch.index === 'number') {
     const splitAt = bgHeaderMatch.index;
@@ -7338,16 +7390,16 @@ function renderAssistantContent(content) {
     const bgBody = text.slice(splitAt + bgHeaderMatch[0].length).trim();
     return `
       <div class="msg-staged">
-        ${head ? `<div class="msg-content markdown-body">${renderMd(head)}</div>` : ''}
+        ${head ? `<div class="msg-content markdown-body">${renderMd(head, markdownOptions)}</div>` : ''}
         <div class="msg-stage">
           <div class="msg-stage-title">Background agent response</div>
-          <div class="msg-content markdown-body">${renderMd(bgBody || 'No background details provided.')}</div>
+          <div class="msg-content markdown-body">${renderMd(bgBody || 'No background details provided.', markdownOptions)}</div>
         </div>
       </div>
     `;
   }
   const hasStaged = /(^|\n)(Initial chat|Execution result|Final chat):\s*/i.test(text);
-  if (!hasStaged) return `<div class="msg-content markdown-body">${renderMd(text)}</div>`;
+  if (!hasStaged) return `<div class="msg-content markdown-body">${renderMd(text, markdownOptions)}</div>`;
   const chunks = text
     .split(/\n\s*---\s*\n/g)
     .map(s => String(s || '').trim())
@@ -7359,7 +7411,7 @@ function renderAssistantContent(content) {
     return `
       <div class="msg-stage">
         <div class="msg-stage-title">${escHtml(title)}</div>
-        <div class="msg-content markdown-body">${renderMd(body)}</div>
+        <div class="msg-content markdown-body">${renderMd(body, markdownOptions)}</div>
       </div>
     `;
   }).join('');
@@ -11219,14 +11271,26 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
     const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
     const itemCount = callCount || visibleEntries.length;
     const itemLabel = callCount ? 'call' : 'item';
-    return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
-      <summary class="live-turn-tool-summary">
-        <span class="live-turn-tool-icon" aria-hidden="true">›</span>
-        <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
-        <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
-      </summary>
-      <div class="live-turn-tool-body">${renderLiveTraceList(group.entries)}</div>
-    </details>`;
+    // Screenshot previews must remain visible even though the redesigned tool
+    // stream collapses the verbose call/result rows.  Keep the canonical entry
+    // in the details body (so expanded order is tool -> result -> screenshot),
+    // and mirror only its thumbnail directly below the collapsed summary.
+    const collapsedPreviews = visibleEntries
+      .filter((entry) => String(entry?.type || '').toLowerCase() === 'vision')
+      .map(renderLiveTracePreview)
+      .filter(Boolean)
+      .join('');
+    return `<div class="live-turn-tool-group-shell${collapsedPreviews ? ' has-vision-preview' : ''}">
+      <details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+        <summary class="live-turn-tool-summary">
+          <span class="live-turn-tool-icon" aria-hidden="true">›</span>
+          <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
+          <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
+        </summary>
+        <div class="live-turn-tool-body">${renderLiveTraceList(group.entries)}</div>
+      </details>
+      ${collapsedPreviews ? `<div class="live-turn-collapsed-vision-previews">${collapsedPreviews}</div>` : ''}
+    </div>`;
   }).join('')}</div>`;
 }
 
@@ -11578,7 +11642,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
     if (suppressDockedQuestion && !msg.content && !msg.approvalRequest) return '';
     const assistantQuestionHtml = (!isUser && !suppressDockedQuestion) ? renderInlinePrometheusQuestion(msg.questionRequest) : '';
     const assistantContentHtml = !isUser
-      ? `${assistantApprovalHtml}${assistantQuestionHtml}${msg.content ? renderAssistantContent(msg.content) : ''}`
+      ? `${assistantApprovalHtml}${assistantQuestionHtml}${msg.content ? renderAssistantContent(msg.content, msg) : ''}`
       : userContentHtml;
     const hasVisualContent = !isUser && /\bvisual-block\b/.test(assistantContentHtml);
     const actionsHtml = options.readonly || isSideBoundary ? '' : renderMessageActions(msg, originalIndex);
@@ -13470,18 +13534,7 @@ function isFailedTurnReply(text) {
   return false;
 }
 
-const CHAT_SLASH_COMMANDS = [
-  { command: '/side', label: 'Open a linked side chat', placeholder: 'Optional first side-chat message...' },
-  { command: '/skill', label: 'Insert a skill reference', placeholder: 'Search installed skills...' },
-  { command: '/goal', label: 'Start goal mode in this chat', placeholder: 'Describe the goal Prometheus should keep working toward...' },
-  { command: '/goal status', label: 'Show the active goal state', placeholder: 'Optional note for the status check...' },
-  { command: '/goal pause', label: 'Pause the active goal runner', placeholder: 'Optional reason...' },
-  { command: '/goal resume', label: 'Resume a paused goal', placeholder: 'Optional note before resuming...' },
-  { command: '/goal done', label: 'Mark the goal completed', placeholder: 'Optional completion note...' },
-  { command: '/goal clear', label: 'Stop and archive the goal', placeholder: 'Optional archive note...' },
-  { command: '/goal revise', label: 'Rewrite the active goal', placeholder: 'Write the revised goal...' },
-  { command: '/new', label: 'Start a fresh chat', placeholder: 'Use without extra text to open a new chat...' },
-];
+const CHAT_SLASH_COMMANDS = getChatSlashCommands('desktop');
 let activeSlashCommand = null;
 let slashCommandSelectionIndex = 0;
 let skillTriggerPillExpanded = false;
@@ -14110,9 +14163,9 @@ async function sendChat(queuedMessage = null, options = {}) {
   const excludedSkillIds = queuedTurn
     ? (Array.isArray(queuedTurn.excludedSkillIds) ? queuedTurn.excludedSkillIds.slice() : [])
     : getSkillTriggerExcludedIds();
-  const selectedSkillIds = queuedTurn
+  const selectedSkillIds = mergeSlashCommandSkillIds(message, queuedTurn
     ? normalizeSelectedSkillIds(queuedTurn.selectedSkillIds || queuedTurn.forcedSkillIds || queuedTurn.matchedSkillIds)
-    : normalizeSelectedSkillIds(selectedComposerSkillIds);
+    : normalizeSelectedSkillIds(selectedComposerSkillIds));
   const forcedSessionId = String(options.sessionIdOverride || '').trim();
   if (!forcedSessionId) ensureActiveChatSessionExists();
   const thisSessionId = forcedSessionId || window.activeChatSessionId; // capture at send time — stable through async closure
@@ -14667,6 +14720,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 		      mode: window.useAgentMode ? 'agentic' : 'chat',
 		      thinking: streamedThinking || undefined,
 		      processEntries: mergeLiveTraceProcessEntries(streamState.liveTraceEntries, turnEntries),
+		      liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries.slice() : undefined,
 		    });
 		  };
 	  try {
@@ -15278,7 +15332,7 @@ async function sendChat(queuedMessage = null, options = {}) {
             const switchedReason = String(event.reason || '').trim();
             // Show a compact badge-style line in the process log and the streaming bubble.
             const isHaiku = switchedModel.toLowerCase().includes('haiku');
-            const modelLabel = isHaiku ? `⚡ Haiku` : switchedModel.split('/').pop() || switchedModel;
+            const modelLabel = isHaiku ? `⚡ Haiku` : formatModelDisplayName(switchedModel, switchedProvider);
             const badgeText = `${modelLabel}${switchedReason ? ` — ${switchedReason}` : ''}`;
             pushProgressLine(badgeText);
             streamState.activeModelBadge = { label: modelLabel, reason: switchedReason, provider: switchedProvider };
@@ -15291,7 +15345,7 @@ async function sendChat(queuedMessage = null, options = {}) {
             const modelRef = String(event.modelRef || '').trim();
             const model = String(event.model || modelRef).trim();
             const provider = String(event.providerId || '').trim();
-            const label = model.split('/').pop() || model || 'main model';
+            const label = formatModelDisplayName(model || 'main model', provider);
             pushProgressLine(`Main chat model set to ${provider ? `${provider}/` : ''}${model}`);
             streamState.activeModelBadge = { label, reason: 'main chat default', provider };
             showToast('Main model changed', modelRef || `${provider ? `${provider}/` : ''}${model}`, 'success', 5000);
@@ -15358,7 +15412,8 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
 	        steps: allSteps,
 	        mode: window.useAgentMode ? 'agentic' : 'chat',
-	        processEntries: turnEntries
+	        processEntries: turnEntries,
+	        liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries.slice() : undefined,
 	      });
 	    } else {
 	      const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
@@ -15368,6 +15423,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
 	        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
 	        processEntries: turnEntries,
+	        liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries.slice() : undefined,
 	      });
 	    }
     persistSession(thisSessionId);
@@ -15414,6 +15470,7 @@ async function sendChat(queuedMessage = null, options = {}) {
         generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
         generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
         processEntries: turnEntries,
+        liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries.slice() : undefined,
       });
     }
     persistSession(thisSessionId);
@@ -38059,6 +38116,15 @@ function summarizeApprovalForHumans(record = {}, fallback = {}) {
   const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
   const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
 
+  if (approvalKind === 'elevated_command') {
+    const command = String(args.command || record.command || '').trim();
+    return {
+      title: 'Administrator command',
+      summary: 'Run this exact command with Windows administrator privileges after your one-shot approval.',
+      detail: command,
+    };
+  }
+
   if (isFinalAction) {
     const target = String(finalAction?.targetLabel || args.target_label || 'final action').trim();
     const summary = String(finalAction?.summary || record.reason || fallback.summary || '').trim();
@@ -38129,6 +38195,7 @@ function renderSessionApprovalCard(item) {
   const isProposal = item.approvalType === 'proposal';
   const isDevSource = item.approvalKind === 'dev_source_edit' || item.toolName === 'request_dev_source_edit';
   const isFinalAction = item.approvalKind === 'final_action' || item.toolName === 'request_final_action_approval';
+  const isOneShot = item.oneShot === true || item.approvalKind === 'elevated_command' || isDevSource || isFinalAction;
   const approveEndpoint = isProposal ? `/api/proposals/${item.id}/approve` : `/api/approvals/${item.id}/approve`;
   const denyEndpoint = isProposal ? `/api/proposals/${item.id}/deny` : `/api/approvals/${item.id}/deny`;
   return `<div class="approval-card" style="background:${palette.bg};border-color:${palette.border};padding:10px 12px">
@@ -38149,7 +38216,7 @@ function renderSessionApprovalCard(item) {
           <button onclick="resolveSessionApproval('${item.id}','approve','${approveEndpoint}')" style="flex:1;border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Approve</button>
           <button onclick="resolveSessionApproval('${item.id}','deny','${denyEndpoint}')" style="flex:1;border:1px solid ${palette.border};background:transparent;color:${palette.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Deny</button>
         </div>`
-      : (isDevSource || isFinalAction)
+      : isOneShot
         ? `<div style="display:flex;gap:6px">
           <button onclick="resolveSessionApproval('${item.id}','approve','${approveEndpoint}')" style="flex:1;border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Approve</button>
           <button onclick="resolveSessionApproval('${item.id}','deny','${denyEndpoint}')" style="flex:1;border:1px solid ${palette.border};background:transparent;color:${palette.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Reject</button>
@@ -38192,6 +38259,7 @@ function normalizeChatApprovalRecord(record = {}, fallback = {}) {
     commandBoundary: record.commandBoundary || fallback.commandBoundary || null,
     devSourceEdit: record.devSourceEdit || fallback.devSourceEdit || null,
     finalAction: record.finalAction || fallback.finalAction || null,
+    oneShot: record.oneShot === true || fallback.oneShot === true || approvalKind === 'elevated_command' || isDevSource || isFinalAction,
     status: status || 'pending',
   };
 }
@@ -38209,7 +38277,8 @@ function renderInlineApprovalRequest(item) {
   const technicalText = approval.command || approval.scopedAction || approval.action;
   const isDevSource = approval.approvalKind === 'dev_source_edit' || approval.toolName === 'request_dev_source_edit';
   const isFinalAction = approval.approvalKind === 'final_action' || approval.toolName === 'request_final_action_approval';
-  const isCommandApproval = approval.toolName === 'run_command';
+  const isOneShot = approval.oneShot === true || approval.approvalKind === 'elevated_command' || isDevSource || isFinalAction;
+  const isCommandApproval = approval.toolName === 'run_command' && approval.approvalKind !== 'elevated_command';
   const sourceFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
   const sourceDirs = Array.isArray(approval.devSourceEdit?.allowedDirs) ? approval.devSourceEdit.allowedDirs : [];
   const verificationCommand = approval.devSourceEdit?.verificationCommand || '';
@@ -38275,7 +38344,7 @@ function renderInlineApprovalRequest(item) {
       ? `<div class="chat-approval-actions">
           <button class="chat-approval-btn chat-approval-approve" type="button" onclick="resolveInlineApproval(${idArg}, 'approve', ${approveEndpoint})">Approve</button>
           <button class="chat-approval-btn chat-approval-deny" type="button" onclick="resolveInlineApproval(${idArg}, 'deny', ${denyEndpoint})">Reject</button>
-          ${isDevSource || isFinalAction ? '' : `<button class="chat-approval-link" type="button" onclick="resolveInlineApproval(${idArg}, 'approve_session', ${approveEndpoint}, 'session')">Trust this session</button>
+          ${isOneShot ? '' : `<button class="chat-approval-link" type="button" onclick="resolveInlineApproval(${idArg}, 'approve_session', ${approveEndpoint}, 'session')">Trust this session</button>
           <button class="chat-approval-link" type="button" onclick="resolveInlineApproval(${idArg}, 'approve_always', ${approveEndpoint}, 'always')">Always allow</button>`}
         </div>`
       : `<div class="chat-approval-resolved">This request was ${escHtml(statusLabel)}.</div>`}

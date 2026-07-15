@@ -8,6 +8,7 @@ import { runTerminal } from '../gateway/terminal-service.js';
 import type { ProcessShell } from '../gateway/process/types.js';
 import { isSessionAllowedPath } from '../gateway/path-permissions.js';
 import { getSharedToolExecutionContext } from './execution-context.js';
+import { isCanonicalPathInsideSync } from './workspace-boundary.js';
 
 /**
  * Commands that are trusted in lite mode and bypass per-command approval.
@@ -49,13 +50,7 @@ export interface ShellToolArgs {
 // Uses proper path.resolve + path.relative — immune to case, trailing-slash,
 // and "../" traversal bypasses that defeat simple startsWith() checks.
 function isPathInsideDir(base: string, target: string): boolean {
-  const resolvedBase   = path.resolve(base);
-  const resolvedTarget = path.resolve(target);
-  const compareBase = process.platform === 'win32' ? resolvedBase.toLowerCase() : resolvedBase;
-  const compareTarget = process.platform === 'win32' ? resolvedTarget.toLowerCase() : resolvedTarget;
-  if (compareBase === compareTarget) return true;
-  const rel = path.relative(compareBase, compareTarget);
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  return isCanonicalPathInsideSync(base, target);
 }
 
 function isPathInsideAnyDir(basePaths: string[], target: string): boolean {

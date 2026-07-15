@@ -75,7 +75,8 @@ function normalizeSubagentChatApproval(input = {}, fallback = {}) {
   const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
   const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
   const isCommand = toolName === 'run_command';
-  const title = isDevSource ? 'Dev source edit approval'
+  const title = approvalKind === 'elevated_command' ? 'Administrator command'
+    : isDevSource ? 'Dev source edit approval'
     : isFinalAction ? 'Final action approval'
       : isCommand ? 'Command approval'
         : toolName ? `${toolName.replace(/_/g, ' ')} approval` : 'Approval required';
@@ -100,6 +101,7 @@ function normalizeSubagentChatApproval(input = {}, fallback = {}) {
     commandBoundary: source.commandBoundary || fallback.commandBoundary || null,
     devSourceEdit: source.devSourceEdit || fallback.devSourceEdit || null,
     finalAction: source.finalAction || fallback.finalAction || null,
+    oneShot: source.oneShot === true || fallback.oneShot === true || approvalKind === 'elevated_command' || isDevSource || isFinalAction,
     status: String(source.status || fallback.status || 'pending').toLowerCase(),
     agentId: String(source.agentId || fallback.agentId || '').trim(),
   };
@@ -123,6 +125,7 @@ function renderSubagentInlineApprovalCard(input = {}) {
   const denyEndpoint = subagentChatJsArg(`/api/approvals/${approval.id}/deny`);
   const isDevSource = approval.approvalKind === 'dev_source_edit' || approval.toolName === 'request_dev_source_edit';
   const isFinalAction = approval.approvalKind === 'final_action' || approval.toolName === 'request_final_action_approval';
+  const isOneShot = approval.oneShot === true || approval.approvalKind === 'elevated_command' || isDevSource || isFinalAction;
   const technicalText = approval.command || approval.scopedAction || approval.action;
   const sourceFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
   const sourceDirs = Array.isArray(approval.devSourceEdit?.allowedDirs) ? approval.devSourceEdit.allowedDirs : [];
@@ -150,7 +153,7 @@ function renderSubagentInlineApprovalCard(input = {}) {
       ? `<div class="chat-approval-actions">
           <button class="chat-approval-btn chat-approval-approve" type="button" onclick="resolveSubagentInlineApproval(${idArg}, 'approve', ${approveEndpoint})">Approve</button>
           <button class="chat-approval-btn chat-approval-deny" type="button" onclick="resolveSubagentInlineApproval(${idArg}, 'deny', ${denyEndpoint})">Reject</button>
-          ${isDevSource || isFinalAction ? '' : `<button class="chat-approval-link" type="button" onclick="resolveSubagentInlineApproval(${idArg}, 'approve_session', ${approveEndpoint}, 'session')">Trust this session</button>
+          ${isOneShot ? '' : `<button class="chat-approval-link" type="button" onclick="resolveSubagentInlineApproval(${idArg}, 'approve_session', ${approveEndpoint}, 'session')">Trust this session</button>
           <button class="chat-approval-link" type="button" onclick="resolveSubagentInlineApproval(${idArg}, 'approve_always', ${approveEndpoint}, 'always')">Always allow</button>`}
         </div>`
       : `<div class="chat-approval-resolved">This request was ${escHtml(statusLabel)}.</div>`}

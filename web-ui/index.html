@@ -133,32 +133,61 @@
       };
     };
 
-    window.__PROM_LOAD_SETTINGS = makeModuleLoader(() => import('./src/pages/SettingsPage.js?v=goal-support-routing-v11'));
+    window.__PROM_LOAD_SETTINGS = makeModuleLoader(() => import('./src/pages/SettingsPage.js?v=settings-boot-recovery-v12'));
     window.__PROM_LOAD_CONNECTIONS = makeModuleLoader(() => import('./src/pages/ConnectionsPage.js'));
 
+    const SETTINGS_TABS = ['system', 'heartbeat', 'search', 'credentials', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
+
+    // Keep the settings shell interactive while the full controller is loading.
+    // This is also a graceful fallback if one of the controller's dependencies
+    // fails to load: users can still switch panels and close the modal.
+    const applySettingsTabFallback = function applySettingsTabFallback(tab) {
+      const activeTab = SETTINGS_TABS.includes(tab) ? tab : 'system';
+      window.settingsTab = activeTab;
+      SETTINGS_TABS.forEach((candidate) => {
+        const btn = document.getElementById(`settings-tab-${candidate}`);
+        const panel = document.getElementById(`settings-panel-${candidate}`);
+        if (btn) {
+          btn.style.background = candidate === activeTab ? '#eaf2ff' : '#fff';
+          btn.style.borderColor = candidate === activeTab ? '#bdd3f6' : 'var(--line)';
+          btn.style.color = candidate === activeTab ? '#0d4faf' : 'var(--muted)';
+        }
+        if (panel) panel.style.display = candidate === activeTab ? 'block' : 'none';
+      });
+      return activeTab;
+    };
+
+    const closeSettingsShim = function closeSettingsShim() {
+      const modal = document.getElementById('settings-modal');
+      if (modal) modal.style.display = 'none';
+    };
+    window.closeSettings = closeSettingsShim;
+
     const openSettingsShim = async function openSettingsShim(tab) {
+      const modal = document.getElementById('settings-modal');
+      if (modal) modal.style.display = 'flex';
+      const activeTab = applySettingsTabFallback(tab || window.settingsTab || 'system');
       try {
         await window.__PROM_LOAD_SETTINGS();
         const loadedFn = window.openSettings;
         if (typeof loadedFn === 'function' && loadedFn !== openSettingsShim) {
-          return loadedFn(tab);
+          return loadedFn(activeTab);
         }
       } catch (err) {
         console.warn('[settings] Failed to load SettingsPage:', err);
       }
-      const modal = document.getElementById('settings-modal');
-      if (modal) modal.style.display = 'flex';
       return undefined;
     };
     openSettingsShim.__PROM_SHIM = true;
     window.openSettings = openSettingsShim;
 
     const setSettingsTabShim = async function setSettingsTabShim(tab) {
+      const activeTab = applySettingsTabFallback(tab);
       try {
         await window.__PROM_LOAD_SETTINGS();
         const loadedFn = window.setSettingsTab;
         if (typeof loadedFn === 'function' && loadedFn !== setSettingsTabShim) {
-          return loadedFn(tab);
+          return loadedFn(activeTab);
         }
       } catch (err) {
         console.warn('[settings] Failed to load SettingsPage:', err);
@@ -2735,7 +2764,7 @@
 <div id="bgtasks-view" class="page-view" style="display:none;flex-direction:column;gap:0;padding:16px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-shrink:0">
     <div style="display:flex;align-items:center;gap:12px">
-      <span style="font-size:16px;font-weight:800;letter-spacing:-0.01em">Background Tasks</span>
+      <span style="font-size:16px;font-weight:800;letter-spacing:-0.01em">Automation &amp; Tasks</span>
       <span id="bgt-count" style="font-size:11px;background:#eaf2ff;color:#0d4faf;border-radius:999px;padding:2px 10px;font-weight:700">0 tasks</span>
     </div>
     <div style="display:flex;gap:8px;align-items:center">
@@ -2748,6 +2777,17 @@
       <button id="bgt-edit-btn" onclick="toggleBgtEditMode()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer">Edit</button>
       <button onclick="refreshBgTasks()" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer">Refresh</button>
     </div>
+  </div>
+
+  <div id="managed-threads-section" style="display:none;flex-direction:column;gap:8px;margin-bottom:16px;flex-shrink:0">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:12px;font-weight:800;letter-spacing:0.01em">Managed Threads</span>
+        <span id="managed-threads-count" style="font-size:10px;background:#f1edff;color:#6240a8;border-radius:999px;padding:2px 8px;font-weight:700">0 active</span>
+      </div>
+      <span style="font-size:10px;color:var(--muted)">Prometheus sessions being followed by another thread</span>
+    </div>
+    <div id="managed-threads-list" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:2px"></div>
   </div>
 
   <!-- Kanban columns -->
@@ -3742,8 +3782,8 @@
       <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
           <div>
-            <div class="right-section-title" style="margin-bottom:4px">Terminal Permissions</div>
-            <div style="font-size:12px;color:var(--muted);line-height:1.45">Choose how Prometheus handles command approvals after hard blocks and path checks pass.</div>
+            <div class="right-section-title" style="margin-bottom:4px">Tool Permissions</div>
+            <div style="font-size:12px;color:var(--muted);line-height:1.45">Choose whether ordinary tool policy gates pause for approval. Explicit Prometheus approval cards, dev-source edits, and administrator commands remain gated.</div>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
@@ -3751,14 +3791,14 @@
             <input id="settings-terminal-permission-default" type="radio" name="settings-terminal-permission-mode" value="default" checked style="margin-top:3px" />
             <span>
               <span style="display:block;font-size:13px;font-weight:700;color:var(--text)">Default Permissions</span>
-              <span style="display:block;font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px">Ask for command approval unless an exact command was trusted for this session or always.</span>
+              <span style="display:block;font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px">Apply capability-based approvals to writes, destructive actions, external actions, and terminal commands.</span>
             </span>
           </label>
           <label style="display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:10px;cursor:pointer;background:var(--panel-2)">
             <input id="settings-terminal-permission-lite" type="radio" name="settings-terminal-permission-mode" value="lite" style="margin-top:3px" />
             <span>
               <span style="display:block;font-size:13px;font-weight:700;color:var(--text)">Lite Permissions</span>
-              <span style="display:block;font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px">Auto-approve allowed terminal commands so long tasks keep moving. Hard-blocked commands still stop immediately.</span>
+              <span style="display:block;font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:2px">Run non-elevated tools without generic approval pauses. Explicit approval cards, dev edits, admin commands, and hard blocks still apply.</span>
             </span>
           </label>
         </div>
@@ -5542,14 +5582,34 @@ function _backToChannelHub() {
   _renderChannelHub();
 }
 
-function toggleChatPin(id, ev) {
+async function toggleChatPin(id, ev) {
   if (ev) ev.stopPropagation();
   const idx = _pinnedChats.indexOf(id);
-  if (idx === -1) _pinnedChats.push(id);
+  const shouldPin = idx === -1;
+  if (shouldPin) _pinnedChats.push(id);
   else _pinnedChats.splice(idx, 1);
   localStorage.setItem('prometheus_pinned_chats', JSON.stringify(_pinnedChats));
   renderSessionsList();
   if (_channelsViewOpen) renderChannelsList();
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned: shouldPin }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const session = (window.chatSessions || []).find(item => String(item.id) === String(id));
+    if (session) session.pinnedAt = data?.session?.pinnedAt || null;
+  } catch (err) {
+    const currentIdx = _pinnedChats.indexOf(id);
+    if (shouldPin && currentIdx !== -1) _pinnedChats.splice(currentIdx, 1);
+    if (!shouldPin && currentIdx === -1) _pinnedChats.push(id);
+    localStorage.setItem('prometheus_pinned_chats', JSON.stringify(_pinnedChats));
+    renderSessionsList();
+    if (_channelsViewOpen) renderChannelsList();
+    if (typeof showToast === 'function') showToast('Could not update this pin', 'error');
+  }
 }
 
 function renderSessionEditActions(id, isPinned) {
@@ -6051,6 +6111,40 @@ function _getProviderReasoningControlId(provider) {
   }[provider] || '';
 }
 
+function _formatActiveModelLabel(model, provider, effort = '') {
+  if (typeof window.formatModelWithReasoning === 'function') {
+    return window.formatModelWithReasoning(model, provider, effort);
+  }
+  const raw = String(model || '').trim();
+  const lower = raw.toLowerCase();
+  const special = lower.match(/^gpt-5\.6-(sol|terra|luna)$/);
+  const base = special
+    ? `5.6 ${special[1].charAt(0).toUpperCase()}${special[1].slice(1)}`
+    : lower === 'gpt-5.3-codex-spark' && provider === 'openai_codex'
+      ? '5.3 Spark'
+      : raw.replace(/^gpt-/i, 'GPT ').replace(/-/g, ' ');
+  const reasoning = String(effort || '').trim();
+  return reasoning ? `${base} ${reasoning === 'xhigh' ? 'Extra High' : reasoning.charAt(0).toUpperCase() + reasoning.slice(1)}` : base;
+}
+
+function _renderActiveModelLabels(model, provider, effort = '') {
+  const rawModel = String(model || '').trim();
+  const baseName = typeof window.formatModelDisplayName === 'function'
+    ? window.formatModelDisplayName(rawModel, provider)
+    : _formatActiveModelLabel(rawModel, provider, '');
+  const fullName = _formatActiveModelLabel(rawModel, provider, effort);
+  const header = document.getElementById('current-model');
+  if (header) header.textContent = fullName;
+  const runtime = document.getElementById('r-model');
+  if (runtime) runtime.textContent = fullName;
+  const composer = document.getElementById('chat-model-name');
+  if (composer) {
+    composer.dataset.baseName = baseName;
+    composer.dataset.rawModel = rawModel;
+    composer.textContent = fullName;
+  }
+}
+
 function applyReasoningPrefsFromProviderConfig(llm, providerOverride) {
   const llmCfg = llm && typeof llm === 'object' ? llm : window._llmSettingsCache;
   if (!llmCfg || typeof llmCfg !== 'object') return;
@@ -6097,6 +6191,7 @@ function applyReasoningPrefsFromProviderConfig(llm, providerOverride) {
       row.style.display = enabled ? 'block' : 'none';
     }
   }
+  _renderActiveModelLabels(activeModel, provider, EFFORT_CAPABLE_PROVIDERS.has(provider) ? (window.reasoningLevel || '') : '');
 }
 
 async function refreshReasoningPrefsFromSettings(providerOverride) {
@@ -6256,11 +6351,7 @@ async function switchModel(modelName) {
   _closeModelSwitcher();
   try {
     await api('/api/settings/model', { method: 'POST', body: JSON.stringify({ primary: modelName }) });
-    const label = document.getElementById('chat-model-name');
-    if (label) {
-      label.dataset.baseName = modelName;
-      label.textContent = modelName;
-    }
+    _renderActiveModelLabels(modelName, window._activeProvider || '', window.reasoningLevel || '');
     if (typeof window.scheduleChatContextWindowRefresh === 'function') window.scheduleChatContextWindowRefresh(250);
   } catch {
     // silent fail — model will still update on next status poll
@@ -6271,11 +6362,8 @@ function setReasoningLevel(level) {
   window.reasoningLevel = level;
   try { localStorage.setItem('prometheus.reasoningLevel', level); } catch {}
   _closeModelSwitcher();
-  // Surface the choice next to the model name.
-  const el = document.getElementById('chat-model-name');
-  if (el && !el.dataset.baseName) el.dataset.baseName = el.textContent;
-  const base = el?.dataset.baseName || el?.textContent || '';
-  if (el) el.textContent = `${base} · ${level}`;
+  const rawModel = document.getElementById('chat-model-name')?.dataset?.rawModel || window._activeModel || '';
+  _renderActiveModelLabels(rawModel, window._activeProvider || '', level);
 }
 
 function setAnthropicThinking(enabled) {
@@ -6316,12 +6404,8 @@ async function setReasoningLevel(level) {
       if (level === 'xhigh' && !_supportsAnthropicXHigh(model)) level = 'high';
     }
     await persistProviderReasoningPrefs(provider, { reasoning_effort: level });
-    const el = document.getElementById('chat-model-name');
-    if (el) {
-      const base = el.dataset.baseName || el.textContent || '';
-      el.dataset.baseName = base;
-      el.textContent = level ? `${base} · ${level}` : base;
-    }
+    const rawModel = document.getElementById('chat-model-name')?.dataset?.rawModel || window._activeModel || '';
+    _renderActiveModelLabels(rawModel, provider, level);
     _closeModelSwitcher();
   } catch (err) {
     console.warn('setReasoningLevel:', err);
@@ -6696,15 +6780,9 @@ async function checkStatus() {
 	    }
 
     const modelName = status.currentModel || '-';
+	    const reasoningEffort = String(status.reasoningEffort || '').trim();
 	    window._activeModel = modelName;
-	    const rm = document.getElementById('r-model');
-	    if (rm) rm.textContent = modelName;
-	    document.getElementById('current-model').textContent = modelName;
-	    const chatModelLabel = document.getElementById('chat-model-name');
-	    if (chatModelLabel) {
-	      chatModelLabel.dataset.baseName = modelName;
-	      chatModelLabel.textContent = modelName;
-	    }
+	    _renderActiveModelLabels(modelName, provider, reasoningEffort);
 	    const badge = document.getElementById('current-provider-badge');
 	    if (badge) badge.textContent = isCloud ? providerLabel.toUpperCase() : '';
 	    const cpn = document.getElementById('chat-provider-name');
@@ -6737,8 +6815,8 @@ const AMD_SLOTS = {
 
 // Static model fallbacks (mirrors what loadAgentModelOptions uses)
 const AMD_STATIC_MODELS = {
-  openai:       ['gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
-  openai_codex: ['gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
+  openai:       ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
+  openai_codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
   anthropic:    ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
   perplexity:   ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini:       ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
@@ -6783,7 +6861,7 @@ async function amdProviderChange(slotId) {
       modelSel.innerHTML = '<option value="">— no models found —</option>';
       return;
     }
-    modelSel.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+    modelSel.innerHTML = models.map(m => `<option value="${m}">${typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(m, prov) : m}</option>`).join('');
   } catch (e) {
     modelSel.innerHTML = '<option value="">— fetch failed —</option>';
     console.warn('amdProviderChange error:', e);
@@ -6809,7 +6887,8 @@ async function loadAgentModelDefaults() {
         if (modelSel && model) {
           // ensure the saved model exists as an option; add if not
           if (!Array.from(modelSel.options).find(o => o.value === model)) {
-            modelSel.innerHTML += `<option value="${model}">${model}</option>`;
+            const display = typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(model, prov) : model;
+            modelSel.innerHTML += `<option value="${model}">${display}</option>`;
           }
           modelSel.value = model;
         }

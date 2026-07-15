@@ -77,6 +77,7 @@ window.normalizeProgressStatus = normalizeProgressStatus;
 // ---------------------------------------------------------------------------
 
 let bgtTasks = [];           // all task records from server
+let bgtManagedThreads = [];  // Prometheus peer-session supervision records
 let bgtOpenTaskId = null;    // currently open panel task id
 window.bgtOpenTaskId = null;
 let bgtEditMode = false;
@@ -287,16 +288,73 @@ async function bgtHandleColumnDrop(e, targetStatus) {
 
 // --- Fetch & Render ----------------------------------------------------------
 async function refreshBgTasks() {
-  try {
-    const data = await api('/api/bg-tasks', { timeoutMs: 8000 });
-    if (data.success) {
-      bgtTasks = data.tasks || [];
-    }
-  } catch (err) {
-    console.error('[BGT] refreshBgTasks error:', err);
+  const [tasksResult, threadsResult] = await Promise.allSettled([
+    api('/api/bg-tasks', { timeoutMs: 8000 }),
+    api('/api/thread-supervisions?includeTerminal=true&limit=100', { timeoutMs: 8000 }),
+  ]);
+  if (tasksResult.status === 'fulfilled' && tasksResult.value?.success) {
+    bgtTasks = tasksResult.value.tasks || [];
+  } else if (tasksResult.status === 'rejected') {
+    console.error('[BGT] refreshBgTasks error:', tasksResult.reason);
+  }
+  if (threadsResult.status === 'fulfilled' && threadsResult.value?.success) {
+    bgtManagedThreads = threadsResult.value.supervisions || [];
+  } else if (threadsResult.status === 'rejected') {
+    console.error('[BGT] managed threads refresh error:', threadsResult.reason);
   }
   if (typeof window.refreshHeartbeatSummary === 'function') window.refreshHeartbeatSummary().catch(() => {});
   renderBgTasks();
+  renderManagedThreads();
+}
+
+function managedThreadStatusStyle(status) {
+  const styles = {
+    active: ['#eaf2ff', '#0d4faf', 'Working'],
+    complete: ['#efffea', '#1a6e35', 'Complete'],
+    blocked: ['#fff8e1', '#7c4d00', 'Blocked'],
+    failed: ['#fff0f0', '#9c1a1a', 'Failed'],
+    cancelled: ['#f5f5f5', '#555', 'Stopped'],
+  };
+  return styles[String(status || '').toLowerCase()] || styles.cancelled;
+}
+
+function renderManagedThreads() {
+  const section = document.getElementById('managed-threads-section');
+  const list = document.getElementById('managed-threads-list');
+  const count = document.getElementById('managed-threads-count');
+  if (!section || !list || !count) return;
+  section.style.display = bgtManagedThreads.length ? 'flex' : 'none';
+  const activeCount = bgtManagedThreads.filter(record => record.status === 'active').length;
+  count.textContent = `${activeCount} active`;
+  list.innerHTML = bgtManagedThreads.map((record) => {
+    const [bg, color, label] = managedThreadStatusStyle(record.status);
+    const objective = String(record.objective || record.finalSummary || '').trim();
+    return `<div style="min-width:250px;max-width:330px;flex:0 0 auto;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:10px 12px;cursor:pointer" onclick="openManagedThread('${escHtml(record.targetSessionId)}')">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:5px">
+        <span style="font-size:12px;font-weight:750;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(record.targetTitle || record.targetSessionId)}</span>
+        <span style="font-size:9px;background:${bg};color:${color};border-radius:999px;padding:2px 7px;font-weight:800;flex-shrink:0">${label}</span>
+      </div>
+      <div style="font-size:10px;color:var(--muted);line-height:1.4;min-height:28px">${escHtml(objective.slice(0, 120) || 'Managed Prometheus thread')}${objective.length > 120 ? '…' : ''}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+        <span style="font-size:10px;color:var(--brand);font-weight:700">Open thread</span>
+        ${record.status === 'active' ? `<button onclick="event.stopPropagation();cancelManagedThread('${escHtml(record.id)}')" style="border:0;background:none;color:var(--muted);font-size:10px;cursor:pointer;padding:2px">Stop following</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function openManagedThread(sessionId) {
+  if (typeof window.openSession === 'function') await window.openSession(sessionId);
+}
+
+async function cancelManagedThread(supervisionId) {
+  try {
+    await api(`/api/thread-supervisions/${encodeURIComponent(supervisionId)}`, { method: 'DELETE', timeoutMs: 8000 });
+    bgtToast('Stopped following thread', 'The Prometheus session itself was not deleted.');
+    await refreshBgTasks();
+  } catch (err) {
+    bgtToast('Could not stop following', String(err?.message || err));
+  }
 }
 
 async function loadTaskApprovals(taskId) {
@@ -1260,6 +1318,8 @@ function handleErrorResponseWsEvent(e) {
 
 // ─── Expose on window for HTML onclick handlers ────────────────
 window.refreshBgTasks = refreshBgTasks;
+window.openManagedThread = openManagedThread;
+window.cancelManagedThread = cancelManagedThread;
 window.toggleBgtEditMode = toggleBgtEditMode;
 window.bgtHideTask = bgtHideTask;
 window.bgtOpenCardFromClick = bgtOpenCardFromClick;
@@ -1314,6 +1374,12 @@ _taskEvents.forEach(evt => {
 
 wsEventBus.on('task_panel_update', (msg) => {
   if (window.bgtOpenTaskId && msg.taskId === window.bgtOpenTaskId) bgtRefreshOpenPanel();
+});
+wsEventBus.on('managed_thread_update', () => {
+  if (window.currentMode === 'bgtasks') refreshBgTasks();
+});
+wsEventBus.on('managed_thread_turn_complete', () => {
+  if (window.currentMode === 'bgtasks') refreshBgTasks();
 });
 ['approval_created', 'approval_approved', 'approval_denied'].forEach((eventName) => {
   wsEventBus.on(eventName, (msg) => {
