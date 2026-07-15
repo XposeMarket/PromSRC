@@ -1508,6 +1508,7 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
     detail: message.slice(0, 160),
     abortSignal,
     onAbort: abortRun,
+    onShutdownInterrupt: abortRun,
     recoveryPolicy: 'mark_interrupted',
     recoveryData: {
       message,

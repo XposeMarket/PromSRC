@@ -115,6 +115,12 @@ const activeFlows = new Map<string, OAuthFlowState>();
 const nonTtlTokenMigrated = new Set<string>();
 const refreshInFlight = new Map<string, Promise<OAuthTokens>>();
 
+function assertGatewayCredentialWriter(operation: string): void {
+  if (process.env.PROMETHEUS_RUNTIME_WORKER === '1') {
+    throw new Error(`Runtime workers are read-only OAuth credential consumers and cannot ${operation}; gateway preflight must refresh credentials.`);
+  }
+}
+
 function setFlow(configDir: string, flow: OAuthFlowState) {
   activeFlows.set(path.resolve(configDir), flow);
 }
@@ -140,6 +146,7 @@ const accountVaultKey = (accountId?: string): string => {
 
 /** Migrate legacy plaintext credentials file into vault, then delete it */
 function migrateLegacyCredentials(configDir: string): void {
+  if (process.env.PROMETHEUS_RUNTIME_WORKER === '1') return;
   const legacyPath = path.join(configDir, 'credentials', 'oauth-openai.json');
   if (!fs.existsSync(legacyPath)) return;
   try {
@@ -163,8 +170,11 @@ export function loadTokens(configDir: string, accountId?: string): OAuthTokens |
   try {
     const tokens = JSON.parse(secret.expose()) as OAuthTokens;
     const key = `${path.resolve(configDir)}:${String(accountId || '')}`;
-    if (!nonTtlTokenMigrated.has(key)) {
+    if (!nonTtlTokenMigrated.has(key) && process.env.PROMETHEUS_RUNTIME_WORKER !== '1') {
       // One-time in-process migration: rewrite entry without vault TTL.
+      // Runtime/model children are credential readers only; letting every
+      // child rewrite the shared vault on its first read creates needless
+      // cross-process write races.
       vault.set(accountVaultKey(accountId), JSON.stringify(tokens), 'oauth:migrate_non_ttl');
       nonTtlTokenMigrated.add(key);
     }
@@ -175,6 +185,7 @@ export function loadTokens(configDir: string, accountId?: string): OAuthTokens |
 }
 
 export function saveTokens(configDir: string, tokens: OAuthTokens, accountId?: string): void {
+  assertGatewayCredentialWriter('persist OpenAI OAuth credentials');
   // access_token and refresh_token must NEVER appear in any log
   const vault = getVault(configDir);
   // Persist OAuth credentials without vault TTL.
@@ -185,6 +196,7 @@ export function saveTokens(configDir: string, tokens: OAuthTokens, accountId?: s
 }
 
 export function clearTokens(configDir: string, accountId?: string): void {
+  assertGatewayCredentialWriter('clear OpenAI OAuth credentials');
   getVault(configDir).delete(accountVaultKey(accountId), 'oauth:clear');
   log.security('[oauth] Tokens cleared from vault');
 }
@@ -205,6 +217,7 @@ function generateChallenge(verifier: string): string {
 // ─── Token refresh ──────────────────────────────────────────────────────────────
 
 export async function refreshTokens(configDir: string, accountId?: string): Promise<OAuthTokens> {
+  assertGatewayCredentialWriter('refresh OpenAI OAuth credentials');
   const key = `${path.resolve(configDir)}:${String(accountId || '')}`;
   const existingRefresh = refreshInFlight.get(key);
   if (existingRefresh) return existingRefresh;

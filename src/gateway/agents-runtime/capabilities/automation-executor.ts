@@ -33,7 +33,7 @@ import { getManagedTeam } from '../../teams/managed-teams';
 import { ensureScheduleRuntimeForAgent } from '../../scheduling/schedule-agent';
 import { systemDiagnosticsTool } from '../../diagnostics/system-diagnostics';
 import { createDiagnosticPacket, getDiagnosticPacket, listDiagnosticPackets, updateDiagnosticPacketStatus } from '../../diagnostics/diagnostic-packet-store';
-import { executePrometheusThreadOps } from '../../threads/thread-ops';
+import { buildPrometheusThreadLinksArtifact, executePrometheusThreadOps } from '../../threads/thread-ops';
 
 const AUTOMATION_TOOL_NAMES = new Set([
   'background_spawn',
@@ -874,7 +874,14 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             runInteractiveTurn: deps.runInteractiveTurn,
             broadcastWS: deps.broadcastWS,
           });
-          return { name, args, result: JSON.stringify({ success: true, ...out }, null, 2), error: false };
+          const threadLinks = buildPrometheusThreadLinksArtifact(args, out);
+          return {
+            name,
+            args,
+            result: JSON.stringify({ success: true, ...out }, null, 2),
+            error: false,
+            extra: threadLinks ? { richArtifacts: [threadLinks] } : undefined,
+          };
         } catch (err: any) {
           return { name, args, result: `prometheus_thread_ops error: ${String(err?.message || err)}`, error: true };
         }

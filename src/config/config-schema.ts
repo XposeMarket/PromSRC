@@ -361,6 +361,20 @@ export const PrometheusConfigSchema = z.object({
     permissions: ToolPermissionsSchema,
   }),
 
+  work_context: z.object({
+    enabled: z.boolean().optional(),
+    shadow_mode: z.boolean().optional(),
+    max_packet_bytes: z.number().int().min(24000).max(512000).optional(),
+    max_age_hours: z.number().int().min(1).max(8760).optional(),
+    fast_paths: z.object({
+      coding: z.boolean().optional(),
+      browser: z.boolean().optional(),
+      desktop: z.boolean().optional(),
+      creative: z.boolean().optional(),
+      generic: z.boolean().optional(),
+    }).optional(),
+  }).optional(),
+
   skills: z.object({
     directory:    z.string(),
     registries:   z.array(z.string()),

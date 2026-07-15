@@ -33,7 +33,7 @@ import {
   type PauseReason,
   type TaskPauseSnapshot,
 } from './task-store';
-import { clearHistory, addMessage, getHistory, flushSession, activateToolCategory, clearSessionMutationScope, setSessionMutationScope, setWorkspace } from '../session';
+import { clearHistory, addMessage, getHistory, flushSessionAsync, activateToolCategory, clearSessionMutationScope, setSessionMutationScope, setWorkspace } from '../session';
 import {
   buildTaskPauseSnapshot,
   formatTaskPauseSnapshot,
@@ -83,7 +83,14 @@ import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store
 // ─── Globals ──────────────────────────────────────────────────────────────────
 const pauseRequests = new Set<string>();
 const activeRunners = new Set<string>();
-const taskAbortSignals = new Map<string, { aborted: boolean }>();  // Per-task abort signals for immediate pause
+type TaskAbortSignal = {
+  aborted: boolean;
+  interrupted?: boolean;
+  signal?: AbortSignal;
+  abort?: () => void;
+};
+
+const taskAbortSignals = new Map<string, TaskAbortSignal>();  // Per-task abort signals for immediate pause/restart
 
 const MAX_RESUME_MESSAGES = 10;
 const BACKGROUND_SESSION_MAX_MESSAGES = 40;
@@ -447,7 +454,7 @@ export class BackgroundTaskRunner {
     sessionId: string,
     sendSSE: (event: string, data: any) => void,
     pinnedMessages?: Array<{ role: string; content: string }>,
-    abortSignal?: { aborted: boolean },
+    abortSignal?: TaskAbortSignal,
     callerContext?: string,
     modelOverride?: string,
     executionMode?: 'interactive' | 'background_task' | 'proposal_execution' | 'background_agent' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent',
@@ -487,6 +494,7 @@ export class BackgroundTaskRunner {
     const signal = taskAbortSignals.get(taskId);
     if (signal) {
       signal.aborted = true;
+      signal.abort?.();
       console.log(`[Background Task] Pause requested for ${taskId} - abort signal set`);
     }
   }
@@ -498,6 +506,7 @@ export class BackgroundTaskRunner {
     const signal = taskAbortSignals.get(taskId);
     if (signal) {
       signal.aborted = true;
+      signal.abort?.();
     }
     updateTaskStatus(taskId, 'failed', { finalSummary: reason });
     appendJournal(taskId, { type: 'status_push', content: reason });
@@ -571,6 +580,13 @@ export class BackgroundTaskRunner {
 
     activeRunners.add(taskId);
     pauseRequests.delete(taskId);
+    const abortController = new AbortController();
+    const abortSignal: TaskAbortSignal = {
+      aborted: false,
+      signal: abortController.signal,
+      abort: () => abortController.abort(),
+    };
+    taskAbortSignals.set(taskId, abortSignal);
     const runtimeId = registerLiveRuntime({
       kind: task.scheduleId || task.taskKind === 'scheduled' ? 'scheduled_task' : task.parentTaskId || task.subagentProfile || task.teamSubagent ? 'subagent' : 'background_task',
       label: task.title || 'Background task',
@@ -581,6 +597,15 @@ export class BackgroundTaskRunner {
       scheduleId: task.scheduleId,
       source: task.channel,
       detail: String(task.prompt || task.title || '').slice(0, 500),
+      onShutdownInterrupt: () => {
+        // The live-runtime registry has already marked this as an interruption
+        // and persisted its recovery checkpoint. Abort only the owned I/O here;
+        // task pause/resume state is applied by runtime-recovery, not this hook.
+        abortSignal.interrupted = true;
+        abortSignal.aborted = true;
+        abortController.abort();
+        try { this._persistResumeContextSnapshot(taskId, `task_${taskId}`); } catch {}
+      },
       recoveryPolicy: 'resume',
     });
     this.runtimeId = runtimeId;
@@ -635,9 +660,9 @@ export class BackgroundTaskRunner {
 
     try {
       if (agentWs) {
-        await runWithWorkspace(agentWs, () => this._run(), agentAllowedWorkPaths);
+        await runWithWorkspace(agentWs, () => this._run(abortSignal), agentAllowedWorkPaths);
       } else {
-        await this._run();
+        await this._run(abortSignal);
       }
     } finally {
       finishLiveRuntime(runtimeId);
@@ -1385,7 +1410,7 @@ export class BackgroundTaskRunner {
   private async _withRoundTimeout<T>(
     op: Promise<T>,
     timeoutMs: number,
-    abortSignal?: { aborted: boolean },
+    abortSignal?: TaskAbortSignal,
     // Optional callback to subscribe to activity pings that reset the inactivity clock.
     // Pass a function; it receives a "ping" callback the caller should invoke on each
     // tool_call SSE event. When present, timeoutMs starts after the first ping and then
@@ -1422,7 +1447,7 @@ export class BackgroundTaskRunner {
     prompt: string,
     sessionId: string,
     sendSSE: (event: string, data: any) => void,
-    abortSignal: { aborted: boolean },
+    abortSignal: TaskAbortSignal,
     callerContextOverride?: string,
     modelOverride?: string,
     toolFilter?: string[],
@@ -1432,7 +1457,7 @@ export class BackgroundTaskRunner {
     reasoningEffortOverride?: string,
   ): Promise<
     | { ok: true; result: { type: string; text: string; thinking?: string } }
-    | { ok: false; reason: string; detail: string }
+    | { ok: false; reason: string; detail: string; interrupted?: boolean }
   > {
     const MAX_TRANSPORT_RETRIES = 2;
     const RETRY_DELAY_MS = 4000;
@@ -1444,6 +1469,9 @@ export class BackgroundTaskRunner {
     const callerContext = callerContextOverride ?? this._buildCallerContext(task);
 
     for (let attempt = 0; attempt <= MAX_TRANSPORT_RETRIES; attempt++) {
+      if (abortSignal.interrupted) {
+        return { ok: false, interrupted: true, reason: 'Gateway restart interrupted the task.', detail: 'The current task checkpoint remains resumable.' };
+      }
       if (pauseRequests.has(task.id)) {
         return { ok: false, reason: 'Task paused by request.', detail: 'A pause request interrupted the running task.' };
       }
@@ -1508,6 +1536,9 @@ export class BackgroundTaskRunner {
           (ping) => { pingInactivityTimeout = ping; },
         );
       } catch (retryErr: any) {
+        if (abortSignal.interrupted) {
+          return { ok: false, interrupted: true, reason: 'Gateway restart interrupted the task.', detail: 'The current task checkpoint remains resumable.' };
+        }
         const errMsg = String(retryErr?.message || retryErr || 'unknown');
         appendJournal(task.id, { type: 'error', content: `Attempt ${attempt + 1} threw: ${errMsg.slice(0, 200)}` });
         if (pauseRequests.has(task.id)) {
@@ -1558,7 +1589,7 @@ export class BackgroundTaskRunner {
     return { ok: false, reason: 'Task paused — no valid result produced.', detail: 'No result after retry loop.' };
   }
 
-  private async _run(): Promise<void> {
+  private async _run(abortSignal: TaskAbortSignal): Promise<void> {
     const { taskId } = this;
 
     updateTaskStatus(taskId, 'running');
@@ -1668,10 +1699,8 @@ export class BackgroundTaskRunner {
     let lastProgressSignature = '';
     let currentRoundToolEventCount = 0;
     let consecutiveNoProgressRounds = 0;
-    const abortSignal = { aborted: false };
-    taskAbortSignals.set(taskId, abortSignal);  // Store so requestPause can access it
-
     const sendSSE = (event: string, data: any) => {
+      if (abortSignal.interrupted) return;
       if (this.runtimeId) {
         updateLiveRuntimeCheckpoint(this.runtimeId, {
           event,
@@ -2048,6 +2077,11 @@ export class BackgroundTaskRunner {
     let firstRound = true;
 
     while (true) {
+      if (abortSignal.interrupted) {
+        this._persistResumeContextSnapshot(taskId, sessionId);
+        await flushSessionAsync(sessionId);
+        return;
+      }
       const task = loadTask(taskId);
       if (!task) return;
       if (task.status === 'complete' || task.status === 'failed') return;
@@ -2064,14 +2098,14 @@ export class BackgroundTaskRunner {
         appendJournal(taskId, { type: 'pause', content: pauseMsg });
         this._broadcast('task_paused', { taskId, reason: pauseReason, scheduleId });
         notifyTaskWebPush(loadTask(taskId) || task, 'paused', pauseMsg);
-        flushSession(sessionId);
+        await flushSessionAsync(sessionId);
         return;
       }
 
       if (task.status === 'waiting_subagent') {
         activeRunners.delete(taskId);
         appendJournal(taskId, { type: 'pause', content: 'Waiting for sub-agents to complete.' });
-        flushSession(sessionId);
+        await flushSessionAsync(sessionId);
         return;
       }
 
@@ -2081,6 +2115,7 @@ export class BackgroundTaskRunner {
       // lastResultSummary captures the last text the AI returned, which is the
       // summary it wrote after completing write_note. Deliver it as-is.
 	      if (task.currentStepIndex >= task.plan.length) {
+	        if (abortSignal.interrupted) return;
 		        let finalMsg = task.finalSummary
 		          || lastResultSummary
 		          || 'Task completed all planned steps.';
@@ -2089,13 +2124,14 @@ export class BackgroundTaskRunner {
               appendJournal(taskId, { type: 'error', content: reason });
               updateTaskStatus(taskId, 'failed', { finalSummary: reason });
               notifyTaskWebPush(loadTask(taskId) || task, 'failed', reason);
-              flushSession(sessionId);
+              await flushSessionAsync(sessionId);
               return;
             }
 	            const repairHandoffResult = await this._finalizeDevSrcSelfEditRepairHandoff(task, finalMsg);
+	            if (abortSignal.interrupted) return;
 	            if (repairHandoffResult.handled) {
 	              if (!repairHandoffResult.ok) {
-	                flushSession(sessionId);
+	                await flushSessionAsync(sessionId);
 	                return;
 	              }
 	              if (repairHandoffResult.summarySuffix) {
@@ -2103,8 +2139,9 @@ export class BackgroundTaskRunner {
 	              }
 	            }
 	            const promotionResult = await this._finalizeDevSrcSelfEditPromotion(task);
+	            if (abortSignal.interrupted) return;
 	            if (!promotionResult.ok) {
-	              flushSession(sessionId);
+	              await flushSessionAsync(sessionId);
 	              return;
             }
             if (promotionResult.summarySuffix) {
@@ -2130,7 +2167,7 @@ export class BackgroundTaskRunner {
         notifyTaskWebPush(loadTask(taskId) || task, 'complete', finalMsg);
         await this._deliverToChannel(task, finalMsg);
         this._persistResumeContextSnapshot(taskId, sessionId);
-        flushSession(sessionId);
+        await flushSessionAsync(sessionId);
         return;
       }
 
@@ -2249,11 +2286,21 @@ export class BackgroundTaskRunner {
 	      );
 
       if (!roundOutcome.ok) {
+        if (roundOutcome.interrupted || abortSignal.interrupted) {
+          this._persistResumeContextSnapshot(taskId, sessionId);
+          await flushSessionAsync(sessionId);
+          return;
+        }
         await this._pauseForAssistance(task, roundOutcome.reason, roundOutcome.detail);
         return;
       }
 
       const result = roundOutcome.result;
+      if (abortSignal.interrupted) {
+        this._persistResumeContextSnapshot(taskId, sessionId);
+        await flushSessionAsync(sessionId);
+        return;
+      }
       lastResultSummary = String(result.text || '').replace(/\s+/g, ' ').trim();
       sendSSE('final', { text: String(result.text || '') });
       sendSSE('done', {
@@ -2269,7 +2316,7 @@ export class BackgroundTaskRunner {
         const question = extractClarificationQuestion(lastResultSummary);
         appendJournal(taskId, { type: 'status_push', content: `Task paused — agent asked a clarification question.` });
         await this._pauseForClarification(taskAfterRound, question);
-        flushSession(sessionId);
+        await flushSessionAsync(sessionId);
         return;
       }
 
@@ -2283,7 +2330,7 @@ export class BackgroundTaskRunner {
         })),
         round: (Number(task.resumeContext?.round) || 0) + 1,
       });
-      flushSession(sessionId);
+      await flushSessionAsync(sessionId);
 
       if (pauseRequests.has(taskId)) {
         const t2 = loadTask(taskId);
@@ -2291,7 +2338,7 @@ export class BackgroundTaskRunner {
         updateTaskStatus(taskId, 'paused', { pauseReason });
         appendJournal(taskId, { type: 'pause', content: 'Paused by user request.' });
         this._broadcast('task_paused', { taskId, reason: pauseReason });
-        flushSession(sessionId);
+        await flushSessionAsync(sessionId);
         return;
       }
 
@@ -2421,7 +2468,7 @@ export class BackgroundTaskRunner {
             `Task paused because the runner made no progress on step ${reloadedTask.currentStepIndex + 1}.`,
             noProgressDetail,
           );
-          flushSession(sessionId);
+          await flushSessionAsync(sessionId);
           return;
         }
         await delay(NO_PROGRESS_ROUND_DELAY_MS * consecutiveNoProgressRounds);

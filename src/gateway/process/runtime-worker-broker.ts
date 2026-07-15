@@ -2,6 +2,7 @@ import { fork, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { getInjectedMasterKey } from '../../security/vault-key-bootstrap.js';
 import {
   DEFAULT_RUNTIME_WORKER_MAX_MESSAGE_BYTES,
   RUNTIME_WORKER_PROTOCOL_VERSION,
@@ -38,6 +39,7 @@ export interface RuntimeWorkerBrokerOptions {
   maxMessageBytes?: number;
   startupTimeoutMs?: number;
   defaultJobTimeoutMs?: number;
+  maxOldSpaceMb?: number;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -73,6 +75,21 @@ function appendTail(current: string, chunk: unknown): string {
   return `${current}${String(chunk || '')}`.slice(-OUTPUT_TAIL_MAX_CHARS);
 }
 
+function execArgvWithHeapLimit(maxOldSpaceMb?: number): string[] {
+  if (!maxOldSpaceMb) return process.execArgv;
+  const inherited: string[] = [];
+  for (let index = 0; index < process.execArgv.length; index += 1) {
+    const argument = process.execArgv[index];
+    if (argument === '--max-old-space-size' || argument === '--max_old_space_size') {
+      index += 1;
+      continue;
+    }
+    if (/^--max[-_]old[-_]space[-_]size=/.test(argument)) continue;
+    inherited.push(argument);
+  }
+  return [...inherited, `--max-old-space-size=${maxOldSpaceMb}`];
+}
+
 function resolveWorkerEntry(entryBasename: string): string {
   const candidates = [
     path.join(__dirname, `${entryBasename}.js`),
@@ -84,7 +101,7 @@ function resolveWorkerEntry(entryBasename: string): string {
 }
 
 export class RuntimeWorkerBroker {
-  private readonly options: Required<Pick<RuntimeWorkerBrokerOptions, 'name' | 'entryBasename' | 'maxMessageBytes' | 'startupTimeoutMs' | 'defaultJobTimeoutMs'>> & Pick<RuntimeWorkerBrokerOptions, 'env'>;
+  private readonly options: Required<Pick<RuntimeWorkerBrokerOptions, 'name' | 'entryBasename' | 'maxMessageBytes' | 'startupTimeoutMs' | 'defaultJobTimeoutMs'>> & Pick<RuntimeWorkerBrokerOptions, 'env' | 'maxOldSpaceMb'>;
   private child: ChildProcess | null = null;
   private state: RuntimeWorkerBrokerState = 'stopped';
   private readyPromise: Promise<void> | null = null;
@@ -102,6 +119,9 @@ export class RuntimeWorkerBroker {
       maxMessageBytes: Math.max(16 * 1024, Number(options.maxMessageBytes || DEFAULT_RUNTIME_WORKER_MAX_MESSAGE_BYTES)),
       startupTimeoutMs: Math.max(1000, Number(options.startupTimeoutMs || 30_000)),
       defaultJobTimeoutMs: Math.max(1000, Number(options.defaultJobTimeoutMs || 15 * 60_000)),
+      maxOldSpaceMb: Number.isFinite(Number(options.maxOldSpaceMb))
+        ? Math.max(64, Math.min(4096, Math.floor(Number(options.maxOldSpaceMb))))
+        : undefined,
       env: options.env,
     };
     this.status = { name: this.options.name, state: 'stopped' };
@@ -249,6 +269,7 @@ export class RuntimeWorkerBroker {
     });
 
     try {
+      const execArgv = execArgvWithHeapLimit(this.options.maxOldSpaceMb);
       const child = fork(entry, [], {
         cwd: process.cwd(),
         env: {
@@ -257,12 +278,21 @@ export class RuntimeWorkerBroker {
           PROMETHEUS_RUNTIME_WORKER: '1',
           PROMETHEUS_RUNTIME_WORKER_NAME: this.options.name,
         },
-        execArgv: process.execArgv,
+        execArgv,
         serialization: 'json',
-        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+        stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       });
       this.child = child;
       registerActiveBroker(this);
+      // Electron keeps the vault key OS-sealed and gives it to the gateway only
+      // through stdin. Internal workers need the same one-line in-memory handoff
+      // before they import config/provider modules; never place it in argv/env.
+      const injectedKey = getInjectedMasterKey();
+      try {
+        child.stdin?.end(`${injectedKey ? injectedKey.toString('hex') : ''}\n`);
+      } finally {
+        injectedKey?.fill(0);
+      }
       this.status.pid = child.pid;
       child.stdout?.on('data', (chunk) => {
         this.status.lastStdoutTail = appendTail(this.status.lastStdoutTail || '', chunk);

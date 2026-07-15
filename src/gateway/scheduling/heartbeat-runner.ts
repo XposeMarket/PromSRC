@@ -69,7 +69,7 @@ interface HeartbeatRunnerDeps {
     sessionId: string,
     sendSSE: (event: string, data: any) => void,
     pinnedMessages?: Array<{ role: string; content: string }>,
-    abortSignal?: { aborted: boolean },
+    abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal },
     callerContext?: string,
     modelOverride?: string,
     executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron',
@@ -383,8 +383,9 @@ export class SubagentHeartbeatManager {
   private _scheduleNext(entry: AgentHeartbeatEntry): void {
     this._stopTimer(entry);
 
-    // Only schedule if this specific agent is enabled
-    if (!entry.config.enabled) return;
+    // An active run can unwind after stop() during gateway shutdown. Do not let
+    // its finally block resurrect a timer in the draining process.
+    if (!this.started || !entry.config.enabled) return;
 
     const delayMs = this._effectiveInterval(entry);
     entry.timer = setTimeout(() => {
@@ -462,7 +463,12 @@ export class SubagentHeartbeatManager {
       rawMd!.trim(),
     ].join('\n');
     const sessionId = `heartbeat_${entry.agentId}`;
-    const abortSignal = { aborted: false };
+    const abortController = new AbortController();
+    const abortSignal: { aborted: boolean; interrupted?: boolean; signal: AbortSignal } = {
+      aborted: false,
+      interrupted: false,
+      signal: abortController.signal,
+    };
     const runtimeId = registerLiveRuntime({
       kind: 'heartbeat',
       label: `Heartbeat - ${entry.agentId}`,
@@ -471,6 +477,7 @@ export class SubagentHeartbeatManager {
       source: 'system',
       detail: prompt.slice(0, 160),
       abortSignal,
+      onShutdownInterrupt: () => abortController.abort(),
     });
 
     // Effective model: per-agent override → main agent model → default
@@ -501,6 +508,7 @@ export class SubagentHeartbeatManager {
         'heartbeat',
       );
       if (abortSignal.aborted) {
+        if (abortSignal.interrupted) return;
         entry.lastResult = 'error';
         return;
       }
@@ -565,8 +573,10 @@ export class SubagentHeartbeatManager {
       } catch { /* non-fatal */ }
 
     } catch (err: any) {
-      entry.lastResult = 'error';
-      console.warn(`[HeartbeatRunner] Heartbeat failed for "${entry.agentId}":`, err?.message);
+      if (!abortSignal.interrupted) {
+        entry.lastResult = 'error';
+        console.warn(`[HeartbeatRunner] Heartbeat failed for "${entry.agentId}":`, err?.message);
+      }
     } finally {
       finishLiveRuntime(runtimeId);
       entry.running = false;

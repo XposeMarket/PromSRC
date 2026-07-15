@@ -111,6 +111,20 @@ function requireApiKey(id: string, cfg: Record<string, unknown>): string {
 
 let cachedProvider: LLMProvider | null = null;
 let cachedProviderKey: string | null = null;
+const providerAccountIds = new WeakMap<object, string>();
+
+function rememberProviderAccount(provider: LLMProvider, accountId?: string): LLMProvider {
+  const normalized = String(accountId || '').trim();
+  if (normalized) providerAccountIds.set(provider as object, normalized);
+  return provider;
+}
+
+/** Preserve the credential identity when a provider instance crosses a worker boundary. */
+export function getProviderAccountId(provider: LLMProvider): string | undefined {
+  return providerAccountIds.get(provider as object)
+    || String((provider as any)?.accountId || '').trim()
+    || undefined;
+}
 
 export function getProvider(): LLMProvider {
   const { active, providers, accountId } = getProviderConfig();
@@ -126,7 +140,10 @@ export function getProvider(): LLMProvider {
   }
 
   cachedProviderKey = cacheKey;
-  cachedProvider = buildProvider(active, providers, selectedAccountId);
+  cachedProvider = rememberProviderAccount(
+    buildProvider(active, providers, selectedAccountId),
+    selectedAccountId,
+  );
   return cachedProvider;
 }
 
@@ -138,13 +155,21 @@ export function resetProvider(): void {
 export function buildProviderById(providerId: string, accountId?: string): LLMProvider {
   const raw = getConfig().getConfig() as any;
   const providers = raw.llm?.providers || {};
-  return buildProvider(providerId, providers, accountId);
+  const selectedAccountId = readAccountId(providerId, providers, accountId);
+  return rememberProviderAccount(
+    buildProvider(providerId, providers, selectedAccountId),
+    selectedAccountId,
+  );
 }
 
 export function buildProviderForLLM(llm: any): LLMProvider {
   const active = String(llm?.provider || 'ollama');
   const providers = llm?.providers || {};
-  return buildProvider(active, providers, llm?.accountId);
+  const selectedAccountId = readAccountId(active, providers, llm?.accountId);
+  return rememberProviderAccount(
+    buildProvider(active, providers, selectedAccountId),
+    selectedAccountId,
+  );
 }
 
 function buildProvider(id: ProviderID, providers: any, accountId?: string): LLMProvider {

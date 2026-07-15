@@ -14,7 +14,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { execFile } from 'child_process';
 
 // ── TEMP latency bisection probe ──────────────────────────────────────────
 const TURN_TIMING_ENABLED = process.env.PROMETHEUS_TURN_TIMING === '1';
@@ -52,7 +51,7 @@ import { readModelUsageEvents, getUsageCalibration } from '../../providers/model
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, type TurnOrigin } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContextAsync, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, autoNameSessionAsync, replaceHistory, touchSession, flushSession, flushSessionAsync, attachAssistantToolObservationMetadataAsync, getDurableTurnSessionReceipt, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, type TurnOrigin } from '../session';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import {
   collectRichArtifacts,
@@ -69,7 +68,9 @@ import { executeWeatherLookup } from '../../tools/weather';
 import { executePolymarketLookup } from '../../tools/polymarket';
 import { executeMapLookup } from '../../tools/mapcard';
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../context/model-context';
-import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
+import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservationsAsync, type ToolObservation } from '../tool-observations';
+import { calculateStoredThreadFootprintIsolated } from '../context-window/context-footprint-client.js';
+import { observeWorkContextToolResult, prepareWorkContextForTurn } from '../work-context/manager';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
@@ -98,6 +99,47 @@ import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntim
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
 import { decideTurnAdmission, mainChatTurnCoordinator } from '../chat/turn-coordinator';
+import { fingerprintMainChatRequest } from '../chat/request-fingerprint.js';
+import { boundTurnDeliveryFrame } from '../turn-delivery/bounded-payload.js';
+import {
+  getTurnJobBlobStore,
+  isSafeInlineTurnBlobContentType,
+  readTurnBlobByHash,
+  reuseExistingTurnDeliveryReference,
+} from '../turn-jobs/blob-runtime.js';
+import {
+  adoptPreparedDurableTurnFinal,
+  assertDurableTurnLease,
+  beginDurableTurn,
+  acquireDurableResourceLeases,
+  cancelDurableTurn,
+  commitPreparedDurableTurnFinal,
+  completeDurableToolEffect,
+  completeDurableToolEffectAsync,
+  completePersistedDurableTurn,
+  completeDurableTurn,
+  createDurableTurnAbortView,
+  failDurableToolEffect,
+  failDurableTurn,
+  findDurableTurnFinalReplay,
+  getCurrentDurableTurn,
+  getDurableTurnFinalDeliveryPayload,
+  interruptDurableTurn,
+  isDurableTurnFenceError,
+  persistDurableTurnFinal,
+  prepareDurableTurnFinal,
+  prepareDurableToolEffect,
+  prepareDurableToolEffectAsync,
+  readDurableToolEffectResult,
+  recordDurableTurnEvent,
+  releaseDurableResourceLeases,
+  runWithDurableTurn,
+  type DurableTurnExecution,
+} from '../turn-jobs/execution-context.js';
+import type { JsonValue, TurnJobKind } from '../turn-jobs/types.js';
+import { classifyToolReplayPolicy, inferToolResourceKeys } from '../turn-jobs/resource-policy.js';
+import { collectTurnFileChangesIsolated } from '../turn-workers/turn-file-change-dispatcher.js';
+import { FILE_MUTATION_TOOL_NAMES } from '../turn-workers/turn-file-change-collector.js';
 import {
   browserOpen,
   browserSnapshot,
@@ -339,19 +381,6 @@ function normalizeClientRequestId(input: unknown): string {
   return String(input || '').trim().replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 160);
 }
 
-function fingerprintMainChatRequest(input: Record<string, any>): string {
-  return crypto.createHash('sha256').update(JSON.stringify({
-    message: input.message,
-    pinnedMessages: input.pinnedMessages,
-    attachments: input.attachments,
-    attachmentPreviews: input.attachmentPreviews,
-    reasoning: input.reasoning,
-    callerContext: input.callerContext,
-    excludedSkillIds: input.excludedSkillIds || input.excludedMatchingSkillIds,
-    selectedSkillIds: input.selectedSkillIds || input.forcedSkillIds || input.matchedSkillIds,
-  })).digest('hex');
-}
-
 function buildCapturedScreenshotPreviewPayload(
   sessionId: string,
   source: 'desktop' | 'browser',
@@ -381,6 +410,61 @@ function buildCapturedScreenshotPreviewPayload(
     width: Number(screenshot?.width || 0) || undefined,
     height: Number(screenshot?.height || 0) || undefined,
   };
+}
+
+function inferAnalysisPreviewMimeType(filePath: string): string {
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.bmp') return 'image/bmp';
+  if (ext === '.svg') return 'image/svg+xml';
+  return 'image/png';
+}
+
+function buildMediaAnalysisPreviewPayloads(
+  toolName: string,
+  toolResult?: { error?: boolean; data?: any },
+): Record<string, any>[] {
+  if (toolResult?.error || !['analyze_image', 'analyze_video'].includes(String(toolName || ''))) return [];
+  const data = toolResult?.data && typeof toolResult.data === 'object' ? toolResult.data : {};
+  const previews: Record<string, any>[] = [];
+  const seen = new Set<string>();
+  const add = (candidate: unknown, title: string, artifactKind: string): void => {
+    const raw = String(candidate || '').trim();
+    if (!raw) return;
+    const workspacePath = raw.replace(/\\/g, '/');
+    const key = workspacePath.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    previews.push({
+      // Keep large analysis artifacts out of SSE/history payloads. The existing
+      // authenticated canvas-inline route serves the pixels on demand.
+      dataUrl: `/api/canvas/inline?path=${encodeURIComponent(workspacePath)}`,
+      workspacePath,
+      mimeType: inferAnalysisPreviewMimeType(workspacePath),
+      title,
+      artifactKind,
+    });
+  };
+
+  if (toolName === 'analyze_image') {
+    add(data.rel_path || data.file_path, path.basename(String(data.rel_path || data.file_path || 'analyzed image')), 'analyzed_image');
+    return previews;
+  }
+
+  const sheets = Array.isArray(data.contact_sheets) ? data.contact_sheets : [];
+  sheets.slice(0, 8).forEach((sheet: any, index: number) => {
+    const sheetPath = sheet?.rel_path || sheet?.path;
+    add(sheetPath, `Contact sheet ${index + 1}`, 'contact_sheet');
+  });
+  // Some analyzer modes do not create sheets. Show a bounded representative
+  // frame set in that case rather than silently rendering no visual evidence.
+  if (!previews.length) {
+    const frames = Array.isArray(data.sample_frames) ? data.sample_frames : [];
+    frames.slice(0, 8).forEach((frame: any, index: number) => add(frame, `Sample frame ${index + 1}`, 'sample_frame'));
+  }
+  return previews;
 }
 
 function pruneMainChatRequestDedupe(now = Date.now()): void {
@@ -470,81 +554,6 @@ function formatTurnOriginContext(origin: TurnOrigin, sessionId: string): string 
   return lines.join('\n');
 }
 
-type TurnFileChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
-
-type TurnFileChange = {
-  path: string;
-  displayPath: string;
-  status: TurnFileChangeStatus;
-  insertions: number;
-  deletions: number;
-  oldPath?: string;
-  diffPreview?: string;
-  binary?: boolean;
-};
-
-type TurnFileChanges = {
-  summary: {
-    fileCount: number;
-    insertions: number;
-    deletions: number;
-  };
-  files: TurnFileChange[];
-  generatedAt: number;
-};
-
-const FILE_MUTATION_TOOL_NAMES = new Set([
-  'create_file',
-  'write',
-  'write_file',
-  'append_file',
-  'replace_lines',
-  'insert_after',
-  'delete_lines',
-  'find_replace',
-  'apply_patchset',
-  'apply_workspace_patchset',
-  'workspace_edit',
-  'rename_file',
-  'delete_file',
-  'copy_file',
-  'move_file',
-  'mkdir',
-  'apply_patch',
-  'write_source',
-  'find_replace_source',
-  'apply_dev_source_patchset',
-  'replace_lines_source',
-  'insert_after_source',
-  'delete_lines_source',
-  'delete_source',
-  'write_webui_source',
-  'find_replace_webui_source',
-  'replace_lines_webui_source',
-  'insert_after_webui_source',
-  'delete_lines_webui_source',
-  'delete_webui_source',
-  'write_prom_file',
-  'find_replace_prom',
-  'replace_lines_prom',
-  'insert_after_prom',
-  'delete_lines_prom',
-  'delete_prom_file',
-  'skill_manifest_write',
-  'skill_update_metadata',
-  'skill_resource_write',
-  'skill_resource_delete',
-  'prom_apply_dev_changes',
-]);
-
-function isTurnFileMutationTool(toolName: string): boolean {
-  const name = String(toolName || '').trim();
-  if (!name) return false;
-  if (FILE_MUTATION_TOOL_NAMES.has(name)) return true;
-  if (/^(write|delete|find_replace|replace_lines|insert_after)_/.test(name) && /(source|webui|prom|file)$/.test(name)) return true;
-  return false;
-}
-
 function isPlannedRestartToolName(toolName: string): boolean {
   const name = String(toolName || '').trim();
   return name === 'gateway_restart'
@@ -553,258 +562,12 @@ function isPlannedRestartToolName(toolName: string): boolean {
     || /^(apply_)?dev_source_(changes|edit|patch)$/i.test(name);
 }
 
-function normalizeDisplayPath(filePath: string, workspacePath: string): string {
-  const value = String(filePath || '').trim();
-  if (!value) return '';
-  try {
-    const abs = path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspacePath, value);
-    const rel = path.relative(workspacePath, abs).replace(/\\/g, '/');
-    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
-    return abs.replace(/\\/g, '/');
-  } catch {
-    return value.replace(/\\/g, '/');
-  }
-}
-
-function resolveTurnFilePath(rawPath: any, workspacePath: string): string {
-  const value = String(rawPath || '').trim();
-  if (!value || value === '.' || value === '/dev/null') return '';
-  try {
-    if (path.isAbsolute(value)) return path.resolve(value);
-    const normalized = value.replace(/\\/g, '/').replace(/^\.?\//, '');
-    const workspaceAbs = path.resolve(path.join(workspacePath, normalized));
-    if (fs.existsSync(workspaceAbs)) return workspaceAbs;
-    if (/^(src|web-ui)\//i.test(normalized)) {
-      const projectRoot = path.resolve(workspacePath, '..');
-      const projectAbs = path.resolve(path.join(projectRoot, normalized));
-      if (
-        fs.existsSync(path.join(projectRoot, 'package.json'))
-        && fs.existsSync(path.join(projectRoot, 'src'))
-        && fs.existsSync(path.join(projectRoot, 'web-ui'))
-      ) {
-        return projectAbs;
-      }
-    }
-    return workspaceAbs;
-  } catch {
-    return '';
-  }
-}
-
-function expandRawPathCandidates(rawPath: any, toolName: string, args: any): string[] {
-  const raw = String(rawPath || '').trim().replace(/\\/g, '/');
-  if (!raw) return [];
-  const out = new Set<string>([raw]);
-  const surfaces = Array.isArray(args?.changed_surfaces)
-    ? args.changed_surfaces.map((surface: any) => String(surface || '').trim().toLowerCase())
-    : [];
-  const isDevApply = toolName === 'prom_apply_dev_changes';
-  const isMobileish = surfaces.includes('mobile') || /^src\/mobile\//i.test(raw) || /^mobile\//i.test(raw);
-  if (isMobileish && /^src\/mobile\//i.test(raw)) out.add(`web-ui/${raw}`);
-  if (isMobileish && /^mobile\//i.test(raw)) out.add(`web-ui/src/${raw}`);
-  if (isDevApply && /^src\/(pages|styles|components|mobile|utils|app\.js|ws\.js)/i.test(raw)) out.add(`web-ui/${raw}`);
-  return Array.from(out);
-}
-
-function extractPatchTargetPaths(patchText: string): string[] {
-  const paths = new Set<string>();
-  for (const rawLine of String(patchText || '').split(/\r?\n/)) {
-    const line = rawLine.trimEnd();
-    if (line.startsWith('diff --git ')) {
-      const parts = line.split(/\s+/).slice(2, 4).map((part) => part.replace(/^"|"$/g, ''));
-      for (let item of parts) {
-        if (item.startsWith('a/') || item.startsWith('b/')) item = item.slice(2);
-        if (item && item !== '/dev/null') paths.add(item);
-      }
-    } else if (line.startsWith('+++ ') || line.startsWith('--- ')) {
-      let item = line.slice(4).trim().replace(/^"|"$/g, '').split(/\s+/)[0] || '';
-      if (item.startsWith('a/') || item.startsWith('b/')) item = item.slice(2);
-      if (item && item !== '/dev/null') paths.add(item);
-    } else if (line.startsWith('rename from ')) {
-      paths.add(line.slice('rename from '.length).trim());
-    } else if (line.startsWith('rename to ')) {
-      paths.add(line.slice('rename to '.length).trim());
-    }
-  }
-  return Array.from(paths);
-}
-
-function extractTouchedFilesFromToolResult(result: any, workspacePath: string): string[] {
-  const toolName = String(result?.name || result?.toolName || '').trim();
-  if (!isTurnFileMutationTool(toolName)) return [];
-  if (result?.error === true) return [];
-  const args = result?.args && typeof result.args === 'object' ? result.args : {};
-  const candidates: any[] = [];
-  for (const source of [result?.extra, result?.data, result]) {
-    if (!source || typeof source !== 'object') continue;
-    for (const key of [
-      'touchedFiles', 'changedFiles', 'affectedFiles', 'files',
-      'touched_files', 'changed_files', 'affected_files',
-    ]) {
-      if (source[key] != null) candidates.push(source[key]);
-    }
-  }
-  for (const key of [
-    'path', 'file', 'filename', 'name', 'target', 'target_path', 'targetPath',
-    'old_path', 'oldPath', 'new_path', 'newPath', 'source', 'destination',
-    'files', 'allowedFiles', 'affected_files', 'affectedFiles', 'changed_files', 'changedFiles',
-  ]) {
-    if (args[key] != null) candidates.push(args[key]);
-  }
-  if (toolName.includes('webui_source')) {
-    candidates.push(...candidates.map((item) => {
-      const s = String(item || '').trim();
-      return s && !/^web-ui[\\/]/i.test(s) ? path.join('web-ui', s) : s;
-    }));
-  } else if (/_source$/.test(toolName) && !toolName.includes('webui')) {
-    candidates.push(...candidates.map((item) => {
-      const s = String(item || '').trim();
-      return s && !/^src[\\/]/i.test(s) ? path.join('src', s) : s;
-    }));
-  }
-  if (toolName === 'apply_patch' && typeof args.patch === 'string') {
-    candidates.push(...extractPatchTargetPaths(args.patch));
-  }
-  return Array.from(new Set(
-    candidates
-      .flatMap((item) => Array.isArray(item) ? item : [item])
-      .flatMap((item) => expandRawPathCandidates(item, toolName, args))
-      .map((item) => resolveTurnFilePath(item, workspacePath))
-      .filter(Boolean),
-  ));
-}
-
-function runGitText(cwd: string, args: string[], maxBuffer = 2 * 1024 * 1024): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile('git', args, {
-      cwd,
-      encoding: 'utf8',
-      windowsHide: true,
-      maxBuffer,
-      timeout: 15_000,
-    }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(String(stdout || ''));
-    });
-  });
-}
-
-async function findGitRootForPath(filePath: string, workspacePath: string): Promise<string | null> {
-  const cwd = fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()
-    ? filePath
-    : (fs.existsSync(filePath) ? path.dirname(filePath) : workspacePath);
-  try {
-    return path.resolve((await runGitText(cwd, ['rev-parse', '--show-toplevel'])).trim());
-  } catch {
-    try {
-      return path.resolve((await runGitText(workspacePath, ['rev-parse', '--show-toplevel'])).trim());
-    } catch {
-      return null;
-    }
-  }
-}
-
-function countTextFileLines(filePath: string): number {
-  try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile() || stat.size > 1_000_000) return 0;
-    const content = fs.readFileSync(filePath, 'utf8');
-    if (content.includes('\0')) return 0;
-    return content.length ? content.split(/\r?\n/).length : 0;
-  } catch {
-    return 0;
-  }
-}
-
-async function inferGitStatus(root: string, relPath: string, absPath: string): Promise<TurnFileChangeStatus> {
-  try {
-    const status = (await runGitText(root, ['status', '--porcelain', '--', relPath])).trim();
-    if (/^R/.test(status)) return 'renamed';
-    if (/^\?\?/.test(status) || /^A/.test(status)) return 'added';
-    if (/^D|^.D/.test(status)) return 'deleted';
-  } catch {}
-  return 'modified';
-}
-
-async function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: string): Promise<TurnFileChanges | undefined> {
-  const touched = Array.from(new Set(
-    (Array.isArray(toolResults) ? toolResults : [])
-      .flatMap((result) => extractTouchedFilesFromToolResult(result, workspacePath)),
-  ));
-  if (!touched.length) return undefined;
-
-  const candidates = touched.slice(0, 40);
-  const collected: Array<TurnFileChange | undefined> = new Array(candidates.length);
-  let nextIndex = 0;
-  const collectOne = async (absPath: string): Promise<TurnFileChange | undefined> => {
-    const gitRoot = await findGitRootForPath(absPath, workspacePath);
-    let insertions = 0;
-    let deletions = 0;
-    let status: TurnFileChangeStatus = fs.existsSync(absPath) ? 'modified' : 'deleted';
-    let diffPreview = '';
-    let binary = false;
-
-    if (gitRoot) {
-      const relPath = path.relative(gitRoot, absPath).replace(/\\/g, '/');
-      status = await inferGitStatus(gitRoot, relPath, absPath);
-      try {
-        const numstat = (await runGitText(gitRoot, ['diff', '--numstat', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0] || '';
-        const parts = numstat.split(/\s+/);
-        if (parts[0] === '-' || parts[1] === '-') {
-          binary = true;
-        } else {
-          insertions = Math.max(0, Number(parts[0]) || 0);
-          deletions = Math.max(0, Number(parts[1]) || 0);
-        }
-      } catch {}
-      if (status === 'added' && insertions === 0 && deletions === 0 && fs.existsSync(absPath)) {
-        insertions = countTextFileLines(absPath);
-      }
-      try {
-        diffPreview = (await runGitText(gitRoot, ['diff', '--unified=2', '--', relPath], 512 * 1024)).slice(0, 12000);
-      } catch {}
-    } else if (fs.existsSync(absPath)) {
-      insertions = countTextFileLines(absPath);
-      status = 'added';
-    }
-
-    if (!fs.existsSync(absPath) && status !== 'deleted') return undefined;
-    if (status === 'deleted' && insertions === 0 && deletions === 0 && !binary && !diffPreview) return undefined;
-    if (insertions === 0 && deletions === 0 && !binary && status === 'modified' && !diffPreview) return undefined;
-    return {
-      path: absPath,
-      displayPath: normalizeDisplayPath(absPath, workspacePath),
-      status,
-      insertions,
-      deletions,
-      diffPreview: diffPreview || undefined,
-      binary: binary || undefined,
-    };
-  };
-  const workers = Array.from({ length: Math.min(4, candidates.length) }, async () => {
-    while (nextIndex < candidates.length) {
-      const index = nextIndex++;
-      collected[index] = await collectOne(candidates[index]);
-    }
-  });
-  await Promise.all(workers);
-  const changes = collected.filter((change): change is TurnFileChange => !!change);
-
-  if (!changes.length) return undefined;
-  const insertions = changes.reduce((sum, file) => sum + Math.max(0, Number(file.insertions) || 0), 0);
-  const deletions = changes.reduce((sum, file) => sum + Math.max(0, Number(file.deletions) || 0), 0);
-  return {
-    summary: { fileCount: changes.length, insertions, deletions },
-    files: changes,
-    generatedAt: Date.now(),
-  };
-}
-
 type MainChatStreamFrame = {
   seq: number;
   type: string;
   at: number;
   data: Record<string, any>;
+  bytes: number;
 };
 
 type MainChatStreamState = {
@@ -815,11 +578,13 @@ type MainChatStreamState = {
   active: boolean;
   nextSeq: number;
   events: MainChatStreamFrame[];
+  eventBytes: number;
   completedAt?: number;
 };
 
 const mainChatStreams = new Map<string, MainChatStreamState>();
 const MAIN_CHAT_STREAM_MAX_EVENTS = 12000;
+const MAIN_CHAT_STREAM_MAX_BYTES = 16 * 1024 * 1024;
 const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
 const MAIN_CHAT_WS_UPDATE_THROTTLE_MS = 900;
 const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
@@ -868,6 +633,7 @@ function beginMainChatStream(sessionId: string): MainChatStreamState {
     active: true,
     nextSeq: 1,
     events: [],
+    eventBytes: 0,
   };
   mainChatStreams.set(sid, stream);
   return stream;
@@ -918,16 +684,36 @@ function finishMainChatStream(sessionId: string, streamId: string): void {
 function appendMainChatStreamEvent(sessionId: string, streamId: string, type: string, data: any): MainChatStreamFrame | null {
   const stream = getMainChatStream(sessionId);
   if (!stream || stream.streamId !== streamId) return null;
-  const cleanData = data && typeof data === 'object' ? { ...data } : {};
+  const rawData = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+  const normalizedType = String(type || 'event').toLowerCase();
+  const deliveryLimits = normalizedType === 'final'
+    ? { maxInlineBinaryBytes: 240 * 1024, maxStringBytes: 340 * 1024 }
+    : normalizedType === 'done'
+      ? { maxInlineBinaryBytes: 160 * 1024, maxStringBytes: 220 * 1024 }
+      : { maxInlineBinaryBytes: 48 * 1024, maxStringBytes: 80 * 1024 };
+  const bounded = boundTurnDeliveryFrame(String(type || 'event'), rawData, {
+    // Stream buffering/replay is a control-plane operation. Large content is
+    // written by durable final persistence first; this path only reuses it.
+    createReference: reuseExistingTurnDeliveryReference,
+    limits: deliveryLimits,
+  });
+  const cleanData = bounded.data;
   const frame: MainChatStreamFrame = {
     seq: stream.nextSeq++,
     type: String(type || 'event'),
     at: Date.now(),
     data: cleanData,
+    bytes: 0,
   };
+  frame.bytes = Buffer.byteLength(JSON.stringify(frame), 'utf8');
   stream.events.push(frame);
-  if (stream.events.length > MAIN_CHAT_STREAM_MAX_EVENTS) {
-    stream.events.splice(0, stream.events.length - MAIN_CHAT_STREAM_MAX_EVENTS);
+  stream.eventBytes += frame.bytes;
+  while (
+    stream.events.length > 0
+    && (stream.events.length > MAIN_CHAT_STREAM_MAX_EVENTS || stream.eventBytes > MAIN_CHAT_STREAM_MAX_BYTES)
+  ) {
+    const removed = stream.events.shift();
+    stream.eventBytes = Math.max(0, stream.eventBytes - Number(removed?.bytes || 0));
   }
   stream.updatedAt = frame.at;
   if (MAIN_CHAT_WS_DIRECT_EVENTS.has(frame.type)) {
@@ -961,7 +747,7 @@ function buildDurableToolStreamTrace(sessionId: string): Record<string, any>[] |
         type: 'tool',
         text: action,
         time: frame.at,
-        extra: data,
+        extra: boundedRuntimeProcessArgs(data),
       });
       continue;
     }
@@ -972,22 +758,24 @@ function buildDurableToolStreamTrace(sessionId: string): Record<string, any>[] |
         type: data.error ? 'error' : 'result',
         text: `${action}${result ? ` -> ${result}` : ' complete'}`,
         time: frame.at,
-        extra: data,
+        extra: boundedRuntimeProcessArgs(data),
       });
       continue;
     }
     if (frame.type === 'vision_injected') {
       const preview = data.preview && typeof data.preview === 'object' ? data.preview : null;
       const dataUrl = String(preview?.dataUrl || data.dataUrl || '').trim();
-      if (!/^data:image\//i.test(dataUrl)) continue;
-      const source = String(data.source || '').toLowerCase() === 'browser' ? 'Browser' : 'Desktop';
+      if (!/^data:image\//i.test(dataUrl) && !/^\/api\/canvas\/inline\?path=/i.test(dataUrl)) continue;
+      const sourceValue = String(data.source || '').toLowerCase();
+      const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : 'Desktop';
+      const previewTitle = String(data.previewTitle || preview?.title || `${source} preview`).trim();
       entries.push({
         id: `trace_${stream.streamId}_${frame.seq}`,
         type: 'vision',
-        text: `Vision captured: ${action}`,
+        text: String(data.label || `Vision captured: ${action}`).trim(),
         time: frame.at,
         preview,
-        previewTitle: `${source} screenshot`,
+        previewTitle,
       });
     }
   }
@@ -998,6 +786,53 @@ function truncateRuntimeProcessText(value: unknown, max = 4000): string {
   const text = String(value ?? '').trim();
   if (!text) return '';
   return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function boundedRuntimeProcessArgs(value: unknown): unknown {
+  const state = { chars: 0 };
+  const maxChars = 6_000;
+  const visit = (input: unknown, depth: number): unknown => {
+    if (state.chars >= maxChars) return '[argument preview truncated]';
+    if (input == null || typeof input === 'number' || typeof input === 'boolean') return input;
+    if (typeof input === 'string') {
+      if (input.length > 2_000 && (/^data:/i.test(input) || /^[A-Za-z0-9+/=_-]{512,}$/.test(input.slice(0, 2_000)))) {
+        state.chars += 40;
+        return `[large encoded string omitted: ${input.length} chars]`;
+      }
+      const remaining = Math.max(0, Math.min(1_000, maxChars - state.chars));
+      state.chars += Math.min(input.length, remaining);
+      return input.length <= remaining ? input : `${input.slice(0, Math.max(0, remaining - 14))}...[truncated]`;
+    }
+    if (depth >= 4) return '[nested arguments omitted]';
+    if (Array.isArray(input)) {
+      const output: unknown[] = [];
+      for (let index = 0; index < input.length && index < 12 && state.chars < maxChars; index += 1) {
+        output.push(visit(input[index], depth + 1));
+      }
+      if (input.length > output.length) output.push(`[${input.length - output.length} more item(s)]`);
+      return output;
+    }
+    if (typeof input === 'object') {
+      const output: Record<string, unknown> = {};
+      let count = 0;
+      for (const key in input as Record<string, unknown>) {
+        if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
+        if (count >= 24 || state.chars >= maxChars) {
+          output.__truncated__ = true;
+          break;
+        }
+        const safeKey = String(key).slice(0, 120);
+        state.chars += safeKey.length;
+        output[safeKey] = /(password|token|secret|api[_-]?key|authorization|credential)/i.test(safeKey)
+          ? '[REDACTED]'
+          : visit((input as Record<string, unknown>)[key], depth + 1);
+        count += 1;
+      }
+      return output;
+    }
+    return String(input).slice(0, 200);
+  };
+  return visit(value, 0);
 }
 
 function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
@@ -1015,7 +850,7 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
         source: 'runtime_checkpoint',
         event: eventType,
         toolName: action,
-        args: data?.args,
+        args: boundedRuntimeProcessArgs(data?.args),
         toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
         stepNum: data?.stepNum,
       },
@@ -1031,7 +866,7 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
         source: 'runtime_checkpoint',
         event: eventType,
         toolName: action,
-        args: data?.args,
+        args: boundedRuntimeProcessArgs(data?.args),
         error: data?.ok === false || data?.success === false || Boolean(data?.error),
         toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
         stepNum: data?.stepNum,
@@ -1508,6 +1343,32 @@ export function initChatRouter(deps: ChatRouterDeps): void {
 }
 
 export const router = express.Router();
+
+// Large screenshots/generated media are content-addressed before they enter a
+// replay/final frame. Keep the URL under the authenticated chat router so a
+// bounded dataUrl can remain directly renderable without exposing blob files.
+router.get('/api/turn-blobs/:hash', (req, res) => {
+  try {
+    const { descriptor, body } = readTurnBlobByHash(String(req.params.hash || ''));
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (isSafeInlineTurnBlobContentType(descriptor.contentType)) {
+      res.type(descriptor.contentType);
+    } else {
+      // A signed blob capability must never turn attacker-controlled HTML/SVG
+      // into executable same-origin content. Non-passive blobs are downloads.
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.setHeader('Content-Disposition', `attachment; filename="${descriptor.hash}.bin"`);
+      res.type('application/octet-stream');
+    }
+    res.send(body);
+  } catch (error: any) {
+    res.status(error instanceof TypeError ? 400 : 404).json({
+      success: false,
+      error: error instanceof TypeError ? 'Invalid turn blob reference.' : 'Turn blob not found.',
+    });
+  }
+});
 
 function requireSafeSessionParam(req: express.Request, res: express.Response, next: express.NextFunction): void {
   const key = Object.prototype.hasOwnProperty.call(req.params, 'sessionId') ? 'sessionId' : 'id';
@@ -1988,7 +1849,7 @@ async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ c
 async function maybeRunRollingCompaction(
   sessionId: string,
   incomingUserMsg: { role: 'user'; content: string; timestamp: number },
-  abortSignal?: { aborted: boolean; signal?: AbortSignal },
+  abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal },
 ): Promise<{ compacted: boolean; summaryText?: string; mode?: 'llm' | 'fallback' }> {
   const policy = resolveRollingCompactionPolicy();
   if (!policy.enabled) return { compacted: false };
@@ -2006,7 +1867,7 @@ async function maybeRunRollingCompaction(
     maxWords: policy.summaryMaxWords,
     previousSummary,
     recentMessagesBlock: formatCompactionMessages(recentWindow),
-    recentToolLogsBlock: getRecentToolObservationsForContext(sessionId, policy.toolTurns, 12000)
+    recentToolLogsBlock: await getRecentToolObservationsForContextAsync(sessionId, policy.toolTurns, 12000)
       || formatCompactionToolLogs(recentWindow, policy.toolTurns),
     reasoningTrailBlock: '',
     artifactPathsBlock: formatCompactionArtifactPaths(sessionId),
@@ -2174,12 +2035,12 @@ async function maybeRunMidWorkflowCompaction(input: {
   }
 }
 
-async function handleChat(
+async function handleChatInGateway(
   message: string,
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   pinnedMessages?: Array<{ role: string; content: string }>,
-  abortSignal?: { aborted: boolean; signal?: AbortSignal },
+  abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal },
   callerContext?: string,
   modelOverride?: string,
   executionMode: ExecutionMode = 'interactive',
@@ -2367,8 +2228,20 @@ async function handleChat(
   const activeContextBudget = buildContextBudget(activeContextProfile);
   const recentToolLogMaxChars = Math.max(1000, Math.min(2200, activeContextBudget.toolContextBudgetTokens * 2));
   htime('before getRecentToolObservationsForContext');
-  const recentToolLog = executionMode === 'cron' ? '' : getRecentToolObservationsForContext(sessionId, 3, recentToolLogMaxChars, true);
+  const recentToolLog = executionMode === 'cron' ? '' : await getRecentToolObservationsForContextAsync(sessionId, 3, recentToolLogMaxChars, true);
   htime('after getRecentToolObservationsForContext');
+  htime('before prepareWorkContextForTurn');
+  const preparedWorkContext = executionMode === 'cron'
+    ? { packet: null, block: '', domain: 'generic' as const, continuation: false, fastPathEligible: false, reason: 'disabled for cron' }
+    : await prepareWorkContextForTurn(sessionId, message, workspacePath).catch((error: any) => ({
+        packet: null,
+        block: '',
+        domain: 'generic' as const,
+        continuation: false,
+        fastPathEligible: false,
+        reason: `work context unavailable: ${error?.message || String(error)}`,
+      }));
+  htime('after prepareWorkContextForTurn');
   const inferReferenceImageMimeType = (filePath: string): string => {
     const ext = path.extname(filePath).toLowerCase();
     if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
@@ -2376,42 +2249,79 @@ async function handleChat(
     if (ext === '.gif') return 'image/gif';
     return 'image/png';
   };
-  const resolveReferenceImagePath = (rawPath: string): string | null => {
+  const resolveReferenceImagePath = async (rawPath: string): Promise<string | null> => {
     const value = String(rawPath || '').trim();
     if (!value) return null;
     const absPath = path.isAbsolute(value) ? value : path.resolve(workspacePath, value);
     try {
-      if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) return absPath;
+      if ((await fs.promises.stat(absPath)).isFile()) return absPath;
     } catch {
       return null;
     }
     return null;
   };
-  const buildCreativeReferenceVisionMessage = (): any | null => {
+  const readReferenceImageBase64 = async (filePath: string, maxBytes: number): Promise<string> => {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile() || stat.size > maxBytes) throw new RangeError('Creative reference image exceeds its per-file limit.');
+    const pieces: string[] = [];
+    let remainder = Buffer.alloc(0);
+    let total = 0;
+    for await (const rawChunk of fs.createReadStream(filePath, { highWaterMark: 256 * 1024 })) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      total += chunk.byteLength;
+      if (total > maxBytes) throw new RangeError('Creative reference image changed beyond its per-file limit while reading.');
+      const combined = remainder.byteLength ? Buffer.concat([remainder, chunk]) : chunk;
+      const completeBytes = combined.byteLength - (combined.byteLength % 3);
+      if (completeBytes > 0) pieces.push(combined.subarray(0, completeBytes).toString('base64'));
+      remainder = completeBytes < combined.byteLength ? Buffer.from(combined.subarray(completeBytes)) : Buffer.alloc(0);
+    }
+    if (remainder.byteLength) pieces.push(remainder.toString('base64'));
+    return pieces.join('');
+  };
+  const buildCreativeReferenceVisionMessage = async (): Promise<any | null> => {
     if (!creativeMode || !currentModelCapabilities.hasVision) return null;
     const refs = getCreativeReferences(sessionId);
-    const images: Array<{ path: string; label: string; mimeType: string; base64: string }> = [];
+    const candidates: Array<{ path: string; label: string }> = [];
     for (const ref of refs) {
-      const candidates = ref.selectedFrames.length > 0
+      const refCandidates = ref.selectedFrames.length > 0
         ? ref.selectedFrames
         : (ref.kind === 'image' && ref.path ? [ref.path] : []);
-      for (const candidate of candidates.slice(0, 4)) {
-        const absPath = resolveReferenceImagePath(candidate);
-        if (!absPath) continue;
+      for (const candidate of refCandidates.slice(0, 4)) {
+        candidates.push({ path: candidate, label: `${ref.kind} ${ref.authority} ${ref.intent}` });
+      }
+    }
+    const perFileMaxBytes = Math.max(1 * 1024 * 1024, Math.min(64 * 1024 * 1024, Number(process.env.PROMETHEUS_CREATIVE_REFERENCE_MAX_BYTES || 24 * 1024 * 1024)));
+    const totalMaxBytes = Math.max(perFileMaxBytes, Math.min(256 * 1024 * 1024, Number(process.env.PROMETHEUS_CREATIVE_REFERENCE_TOTAL_BYTES || 96 * 1024 * 1024)));
+    const loaded: Array<{ path: string; label: string; mimeType: string; base64: string; bytes: number } | null> = new Array(candidates.length).fill(null);
+    let nextCandidate = 0;
+    let admittedBytes = 0;
+    const readers = Array.from({ length: Math.min(2, candidates.length) }, async () => {
+      while (nextCandidate < candidates.length) {
+        const index = nextCandidate++;
+        const candidate = candidates[index];
+        let reservedBytes = 0;
         try {
-          images.push({
-            path: candidate,
-            label: `${ref.kind} ${ref.authority} ${ref.intent}`,
+          const absPath = await resolveReferenceImagePath(candidate.path);
+          if (!absPath) continue;
+          const stat = await fs.promises.stat(absPath);
+          if (stat.size > perFileMaxBytes || admittedBytes + stat.size > totalMaxBytes) continue;
+          admittedBytes += stat.size;
+          reservedBytes = stat.size;
+          loaded[index] = {
+            path: candidate.path,
+            label: candidate.label,
             mimeType: inferReferenceImageMimeType(absPath),
-            base64: fs.readFileSync(absPath).toString('base64'),
-          });
+            base64: await readReferenceImageBase64(absPath, perFileMaxBytes),
+            bytes: stat.size,
+          };
         } catch {
+          admittedBytes = Math.max(0, admittedBytes - reservedBytes);
           // Skip unreadable reference frames; the text path remains in the prompt.
         }
-        if (images.length >= 10) break;
       }
-      if (images.length >= 10) break;
-    }
+    });
+    await Promise.all(readers);
+    const images = loaded.filter((image): image is NonNullable<typeof image> => !!image).slice(0, 10);
     if (!images.length) return null;
     return {
       role: 'user',
@@ -2464,10 +2374,44 @@ async function handleChat(
     if (currentModelCapabilities.hasVision) return toolDefs;
     return toolDefs.filter((t: any) => !isVisionToolName(String(t?.function?.name || '')));
   };
+  const workContextFastPathToolNames = (): Set<string> => {
+    const common = [
+      'work_context_execute', 'request_tool_category', 'switch_model', 'set_current_model',
+      'write_note', 'memory_write', 'complete_goal', 'block_goal',
+    ];
+    if (preparedWorkContext.domain === 'coding') return new Set([
+      ...common,
+      'workspace_read', 'workspace_edit', 'workspace_run', 'workspace_git', 'workspace_code_nav',
+      'read_file', 'read_files_batch', 'grep_file', 'grep_files', 'search_files', 'file_stats', 'file_tree',
+      'validate_file', 'apply_workspace_patchset', 'show_diff', 'git_status', 'git_diff',
+      'read_source', 'grep_source', 'source_stats', 'source_stats_batch', 'validate_source',
+      'read_webui_source', 'grep_webui_source', 'webui_source_stats', 'validate_webui_source',
+      'apply_dev_source_patchset', 'run_command', 'terminal',
+    ]);
+    if (preparedWorkContext.domain === 'browser') return new Set([
+      ...common, 'browser_session', 'browser_observe', 'browser_act', 'browser_extract',
+      'browser_snapshot', 'browser_snapshot_delta', 'browser_get_page_text', 'browser_get_url',
+      'browser_scroll', 'browser_wait', 'browser_open', 'browser_back', 'browser_forward',
+    ]);
+    if (preparedWorkContext.domain === 'desktop') return new Set([
+      ...common, 'desktop_screen', 'desktop_apps', 'desktop_window', 'desktop_input',
+      'desktop_screenshot', 'desktop_list_windows', 'desktop_get_active_window', 'desktop_focus_window',
+      'desktop_wait', 'desktop_wait_for_change', 'desktop_diff_screenshot',
+    ]);
+    if (preparedWorkContext.domain === 'creative') return new Set([
+      ...common, 'get_creative_mode', 'switch_creative_mode', 'creative_get_state', 'creative_render_snapshot',
+      'creative_project', 'creative_scene', 'creative_image_ops', 'creative_video_ops',
+      'creative_hyperframes_ops', 'creative_quality_ops', 'generate_image', 'generate_video',
+    ]);
+    return new Set(common);
+  };
   const buildCurrentTurnBaseTools = (categoryOverride?: Set<string>): any[] => {
-	    const allBuiltTools = categoryOverride
+	    const allBuiltToolsUnfiltered = categoryOverride
         ? _buildTools({ getMCPManager }, categoryOverride)
         : buildTools(sessionId);
+	    const allBuiltTools = preparedWorkContext.fastPathEligible
+        ? allBuiltToolsUnfiltered.filter((tool: any) => workContextFastPathToolNames().has(String(tool?.function?.name || '')))
+        : allBuiltToolsUnfiltered;
 	    return isBootStartupTurn
 	      ? allBuiltTools.filter((t: any) => bootAllowedTools.has(String(t?.function?.name || '')))
 	      : isHotRestartTurn
@@ -3494,25 +3438,109 @@ async function handleChat(
   const loopBlockNudged = new Set<string>();
   const loopContinueAllowed = new Set<string>();
   const recentToolCalls: Array<{ name: string; argsHash: string }> = [];
-  const hashArgs = (args: any): string => {
-    try {
-      const normalize = (v: any): any => {
-        if (Array.isArray(v)) return v.map(normalize);
-        if (v && typeof v === 'object') {
-          const out: Record<string, any> = {};
-          for (const k of Object.keys(v).sort()) out[k] = normalize(v[k]);
-          return out;
-        }
-        return v;
-      };
-      return JSON.stringify(normalize(args || {})).slice(0, 200);
-    } catch {
-      return String(args || '').slice(0, 200);
+  type ToolArgsSummary = { key: string; preview: string; exact: boolean; estimatedChars: number };
+  const toolArgsSummaryCache = new WeakMap<object, ToolArgsSummary>();
+  let oversizedToolArgsSequence = 0;
+  const summarizeToolArgs = (args: any): ToolArgsSummary => {
+    if (args && typeof args === 'object') {
+      const cached = toolArgsSummaryCache.get(args);
+      if (cached) return cached;
     }
+    let exact = true;
+    let visited = 0;
+    let estimatedChars = 0;
+    const seen = new WeakSet<object>();
+    const normalize = (value: any, depth = 0): any => {
+      visited += 1;
+      if (visited > 128 || depth > 6) {
+        exact = false;
+        return '[bounded]';
+      }
+      if (value == null || typeof value === 'boolean' || typeof value === 'number') {
+        estimatedChars += String(value).length;
+        return value;
+      }
+      if (typeof value === 'string') {
+        estimatedChars += value.length;
+        if (value.length <= 512) return value;
+        exact = false;
+        return `${value.slice(0, 240)}...[${value.length} chars]...${value.slice(-120)}`;
+      }
+      if (typeof value === 'bigint') {
+        const text = value.toString();
+        estimatedChars += text.length;
+        return text;
+      }
+      if (typeof value === 'function' || typeof value === 'symbol' || value === undefined) {
+        exact = false;
+        return undefined;
+      }
+      if (Buffer.isBuffer(value)) {
+        estimatedChars += value.byteLength;
+        exact = false;
+        return { type: 'Buffer', bytes: value.byteLength };
+      }
+      if (!value || typeof value !== 'object') return String(value ?? '');
+      if (seen.has(value)) {
+        exact = false;
+        return '[cycle]';
+      }
+      seen.add(value);
+      try {
+        if (Array.isArray(value)) {
+          const limit = Math.min(value.length, 32);
+          if (value.length > limit) exact = false;
+          const output = new Array(limit);
+          for (let index = 0; index < limit; index += 1) output[index] = normalize(value[index], depth + 1);
+          if (value.length > limit) output.push(`[${value.length - limit} more items]`);
+          return output;
+        }
+        const keys: string[] = [];
+        for (const key in value as Record<string, unknown>) {
+          if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+          keys.push(key);
+          if (keys.length > 32) break;
+        }
+        if (keys.length > 32) {
+          exact = false;
+          keys.length = 32;
+        }
+        keys.sort();
+        const output: Record<string, unknown> = {};
+        for (const key of keys) {
+          estimatedChars += key.length;
+          output[key] = normalize(value[key], depth + 1);
+        }
+        if (!exact) output.$prometheusArgsPreview = 'bounded';
+        return output;
+      } catch {
+        exact = false;
+        return '[unreadable]';
+      } finally {
+        seen.delete(value);
+      }
+    };
+    let canonical = '';
+    try { canonical = JSON.stringify(normalize(args || {})); } catch { exact = false; canonical = '[unreadable]'; }
+    const key = exact
+      ? canonical
+      : `oversized:${++oversizedToolArgsSequence}`;
+    const summary = { key, preview: canonical.slice(0, 600), exact, estimatedChars };
+    if (args && typeof args === 'object') toolArgsSummaryCache.set(args, summary);
+    return summary;
+  };
+  const toolArgsPreview = (args: any, maxChars = 200): string => summarizeToolArgs(args).preview.slice(0, maxChars);
+  const hashArgs = (args: any): string => {
+    return summarizeToolArgs(args).key;
   };
   const checkLoopDetection = (toolName: string, args: any): { state: 'ok' | 'warn' | 'block'; repeats: number } => {
     if (!loopDetectionEnabled) return { state: 'ok', repeats: 1 };
-    const argsHash = hashArgs(args);
+    const summary = summarizeToolArgs(args);
+    // Never suppress a call whose complete identity was intentionally not
+    // materialized. Durable effect hashing still covers it cooperatively; loop
+    // detection simply opts out rather than risking a false duplicate.
+    if (!summary.exact) return { state: 'ok', repeats: 1 };
+    const argsHash = summary.key;
     const loopSig = `${toolName}:${argsHash}`;
     if (loopContinueAllowed.has(loopSig)) return { state: 'ok', repeats: 1 };
     // Count includes this current attempt so thresholds are exact:
@@ -3525,15 +3553,27 @@ async function handleChat(
     return { state: 'ok', repeats };
   };
   const attachUniversalToolTelemetry = (toolResult: ToolResult, toolName: string, toolArgs: any, startedAt: number, finishedAt = Date.now()): ToolResult => {
-    const argsText = (() => { try { return JSON.stringify(toolArgs || {}); } catch { return String(toolArgs || ''); } })();
+    const argsSummary = summarizeToolArgs(toolArgs);
+    const argsText = argsSummary.preview;
     const resultText = String(toolResult?.result ?? '');
+    const resultSample = resultText.slice(0, 4_096);
+    const resultBytesAreEstimated = resultText.length > 256 * 1024;
+    const estimatedResultBytes = resultBytesAreEstimated
+      ? Math.min(Number.MAX_SAFE_INTEGER, resultText.length * 2)
+      : Buffer.byteLength(resultText, 'utf8');
     const existingTelemetry = toolResult.extra?.telemetry || toolResult.data?.telemetry || {};
     const argsTokens = Number.isFinite(Number(existingTelemetry.argsTokens))
       ? Number(existingTelemetry.argsTokens)
-      : estimateTextTokensForModel(argsText, 'openai');
+      : argsSummary.exact
+        ? estimateTextTokensForModel(argsText, 'openai')
+        : Math.max(1, Math.ceil(argsSummary.estimatedChars / 4));
     const resultTokens = Number.isFinite(Number(existingTelemetry.resultTokens))
       ? Number(existingTelemetry.resultTokens)
-      : estimateTextTokensForModel(resultText, 'openai');
+      : resultText.length <= resultSample.length
+        ? estimateTextTokensForModel(resultSample, 'openai')
+        : Math.max(1, Math.ceil(
+          estimateTextTokensForModel(resultSample, 'openai') * (resultText.length / Math.max(1, resultSample.length)),
+        ));
     const tokenTotal = Number.isFinite(Number(existingTelemetry.totalTokens))
       ? Number(existingTelemetry.totalTokens)
       : argsTokens + resultTokens;
@@ -3553,9 +3593,10 @@ async function handleChat(
       startedAt: Number.isFinite(Number(existingTelemetry.startedAt)) ? Number(existingTelemetry.startedAt) : startedAt,
       finishedAt: Number.isFinite(Number(existingTelemetry.finishedAt)) ? Number(existingTelemetry.finishedAt) : finishedAt,
       durationMs: Number.isFinite(Number(existingTelemetry.durationMs)) ? Number(existingTelemetry.durationMs) : Math.max(0, finishedAt - startedAt),
-      argsChars: Number.isFinite(Number(existingTelemetry.argsChars)) ? Number(existingTelemetry.argsChars) : argsText.length,
+      argsChars: Number.isFinite(Number(existingTelemetry.argsChars)) ? Number(existingTelemetry.argsChars) : argsSummary.estimatedChars,
       resultChars: Number.isFinite(Number(existingTelemetry.resultChars)) ? Number(existingTelemetry.resultChars) : resultText.length,
-      resultBytes: Number.isFinite(Number(existingTelemetry.resultBytes)) ? Number(existingTelemetry.resultBytes) : Buffer.byteLength(resultText, 'utf8'),
+      resultBytes: Number.isFinite(Number(existingTelemetry.resultBytes)) ? Number(existingTelemetry.resultBytes) : estimatedResultBytes,
+      ...(!Number.isFinite(Number(existingTelemetry.resultBytes)) && resultBytesAreEstimated ? { resultBytesEstimated: true } : {}),
       argsTokens,
       resultTokens,
       totalTokens: tokenTotal,
@@ -3681,8 +3722,38 @@ async function handleChat(
           ])).slice(0, 12),
         }
       : toolArgs;
+    const durableExecution = getCurrentDurableTurn();
+    let durableEffect: ReturnType<typeof prepareDurableToolEffect> = null;
+    let acquiredResourceKeys: string[] = [];
     try {
+      durableEffect = await prepareDurableToolEffectAsync(
+        toolName,
+        toolCallId,
+        effectiveToolArgs,
+        classifyToolReplayPolicy(toolName),
+        durableExecution,
+      );
+      if (durableEffect?.begin.disposition === 'reuse_result' && durableEffect.begin.effect.resultRef) {
+        return readDurableToolEffectResult(durableEffect.begin.effect.resultRef) as ToolResult;
+      }
+      if (durableEffect && durableEffect.begin.disposition !== 'execute') {
+        return makeInstrumentedToolResult(
+          toolName,
+          effectiveToolArgs,
+          durableEffect.begin.disposition === 'needs_review'
+            ? 'Tool outcome is uncertain after a worker interruption and requires review before it can be replayed.'
+            : 'This tool call is already running in the owning turn.',
+          true,
+          startedAt,
+        );
+      }
+      acquiredResourceKeys = await acquireDurableResourceLeases(
+        inferToolResourceKeys(toolName, effectiveToolArgs, workspacePath, sessionId),
+        { signal: abortSignal?.signal, timeoutMs: 60_000 },
+        durableExecution,
+      );
       const toolResult = await executeTool(toolName, effectiveToolArgs, workspacePath, buildExecuteToolDeps(toolCallId), sessionId);
+      assertDurableTurnLease(durableExecution);
       if (isBackgroundSpawn && linkedVoiceWorkgroup && !toolResult?.error) {
         try {
           const parsed = typeof toolResult.result === 'string' ? JSON.parse(toolResult.result) : toolResult.result;
@@ -3719,8 +3790,14 @@ async function handleChat(
           console.warn('[VoiceDispatch] Could not attach background spawn to voice workgroup:', err?.message || err);
         }
       }
-      return attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt);
+      const instrumented = attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt);
+      if (durableEffect) {
+        await completeDurableToolEffectAsync(durableEffect.record.effectId, instrumented, durableExecution);
+      }
+      return instrumented;
     } catch (err: any) {
+      if (isDurableTurnFenceError(err)) throw err;
+      if (durableEffect) failDurableToolEffect(durableEffect.record.effectId, err, durableExecution);
       return makeInstrumentedToolResult(
         toolName,
         effectiveToolArgs,
@@ -3728,7 +3805,42 @@ async function handleChat(
         true,
         startedAt,
       );
+    } finally {
+      releaseDurableResourceLeases(acquiredResourceKeys, durableExecution);
     }
+  };
+
+  const INLINE_DURABLE_TOOL_NAMES = new Set([
+    'complete_goal',
+    'block_goal',
+    'declare_plan',
+    'bg_plan_declare',
+    'bg_plan_advance',
+    'complete_plan_step',
+    'step_complete',
+    'subagent_spawn',
+  ]);
+  let pendingInlineDurableEffect: {
+    prepared: NonNullable<ReturnType<typeof prepareDurableToolEffect>>;
+    toolName: string;
+    toolArgs: any;
+    startedAt: number;
+  } | null = null;
+  const sendSSEBeforeInlineDurability = sendSSE;
+  sendSSE = (event: string, data: any) => {
+    if (event === 'tool_result' && pendingInlineDurableEffect) {
+      const pending = pendingInlineDurableEffect;
+      pendingInlineDurableEffect = null;
+      const result = makeInstrumentedToolResult(
+        pending.toolName,
+        pending.toolArgs,
+        String(data?.result || ''),
+        data?.error === true,
+        pending.startedAt,
+      );
+      completeDurableToolEffect(pending.prepared.record.effectId, result, getCurrentDurableTurn());
+    }
+    sendSSEBeforeInlineDurability(event, data);
   };
 
   const orchestrationState = new OrchestrationTriggerState();
@@ -4116,10 +4228,10 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     if (executionMode === 'team_subagent' || executionMode === 'team_manager' || executionMode === 'background_agent' || isDirectSubagentChatTurn) {
       // Subagents receive subagent personality context first, then their role file
       // and task/chat context from callerContext as the final, most specific layer.
-      return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}`;
+      return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${preparedWorkContext.block ? '\n\n' + preparedWorkContext.block : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}`;
     }
     const onboardingBlock = isOnboardingSession(sessionId) ? '\n\n' + getMeetAndGreetSystemPrompt() : '';
-    return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${personalityCtx}${onboardingBlock}`;
+    return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${preparedWorkContext.block ? '\n\n' + preparedWorkContext.block : ''}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${personalityCtx}${onboardingBlock}`;
   };
   const messages: any[] = [
     {
@@ -4139,7 +4251,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   for (const msg of history) {
     messages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
   }
-  const creativeReferenceVisionMessage = buildCreativeReferenceVisionMessage();
+  const creativeReferenceVisionMessage = await buildCreativeReferenceVisionMessage();
   if (creativeReferenceVisionMessage) {
     messages.push(creativeReferenceVisionMessage);
     sendSSE('vision_injected', { source: 'creative_references', frames: Array.isArray(creativeReferenceVisionMessage.content) ? creativeReferenceVisionMessage.content.length - 1 : 0 });
@@ -4537,22 +4649,43 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     toolResult: ToolResult,
     preContext: PreActionObservationContext,
   ): Promise<AppliedObservationContext> => {
+    // Unified wrappers (browser_observe, browser_act, desktop_control, etc.) are
+    // normalized inside executeTool. Observation/vision handling must use that
+    // executed identity; using the public wrapper name caused screenshot calls
+    // such as browser_observe(action:"screenshot") to capture pixels but skip
+    // the vision_injected preview event entirely.
+    const executedToolName = String(toolResult?.name || toolName || '').trim() || toolName;
+    const executedToolArgs = toolResult?.args && typeof toolResult.args === 'object'
+      ? toolResult.args
+      : toolArgs;
+    const analysisPreviews = buildMediaAnalysisPreviewPayloads(executedToolName, toolResult);
+    analysisPreviews.forEach((preview, index) => {
+      const isVideo = executedToolName === 'analyze_video';
+      sendSSE('vision_injected', {
+        source: 'media_analysis',
+        tool: executedToolName,
+        preview,
+        previewTitle: String(preview.title || (isVideo ? `Video analysis visual ${index + 1}` : 'Analyzed image')),
+        label: isVideo ? `Analyzed video visual ${index + 1}` : 'Analyzed image',
+        injected: true,
+      });
+    });
     const { decision, browserAfterPacket } = await buildObservationDecisionForTool(
-      toolName,
-      toolArgs,
+      executedToolName,
+      executedToolArgs,
       toolResult,
       preContext,
     );
 
-    let advisorTriggerToolName = toolName;
-    let advisorTriggerToolArgs = toolArgs;
+    let advisorTriggerToolName = executedToolName;
+    let advisorTriggerToolArgs = executedToolArgs;
     let advisorTriggerToolResult = toolResult;
 
-    await appendObservationArtifacts(toolName, toolArgs, toolResult, decision);
+    await appendObservationArtifacts(executedToolName, executedToolArgs, toolResult, decision);
 
     if (
-      isDesktopToolName(toolName)
-      && !isDesktopVisualToolName(toolName)
+      isDesktopToolName(executedToolName)
+      && !isDesktopVisualToolName(executedToolName)
       && decision.mode === 'screenshot'
     ) {
       try {
@@ -5843,7 +5976,7 @@ RULES:
         const toolCallId = String((call as any)?.id || '').trim();
         const toolName = call.function?.name || 'unknown';
         const toolArgs = normalizeToolArgsForTool(toolName, call.function?.arguments);
-        console.log(`[v2] SYNTHETIC TOOL: ${toolName}(${JSON.stringify(toolArgs).slice(0, 100)})`);
+        console.log(`[v2] SYNTHETIC TOOL: ${toolName}(${toolArgsPreview(toolArgs, 100)})`);
         markProgressStepStart(toolName);
         sendSSE('tool_call', { action: toolName, args: toolArgs, stepNum: allToolResults.length + 1, synthetic: true });
 
@@ -5890,6 +6023,20 @@ RULES:
           toolResult,
           preObservationContext,
         );
+        await observeWorkContextToolResult({
+          sessionId,
+          workspacePath,
+          userMessage: message,
+          toolName,
+          args: toolArgs,
+          result: toolResult.result,
+          error: toolResult.error,
+          data: toolResult.data,
+          extra: toolResult.extra,
+          artifacts: (toolResult as any).artifacts,
+        }).catch((error: any) => {
+          console.warn(`[work-context] synthetic observation failed for ${toolName}: ${error?.message || String(error)}`);
+        });
 
         if (isBrowserTool && !toolResult.error) {
           browserForcedRetries = 0;
@@ -7167,7 +7314,11 @@ RULES:
         }
         finalRichArtifacts.push(...visualArtifacts);
       }
-      const rawFileChanges = await collectTurnFileChanges(allToolResults as any[], workspacePath);
+      const rawFileChanges = await collectTurnFileChangesIsolated(
+        allToolResults as any[],
+        workspacePath,
+        { signal: abortSignal?.signal },
+      );
       const finalFileChanges = attachWorkspaceCheckpoint(
         rawFileChanges,
         rawFileChanges
@@ -7345,7 +7496,7 @@ RULES:
       if (loopCheck.state === 'block') {
         loopGateToolActive = true;
         const blockMsg = `${loopPivotNudge} Gate raised: ${toolName} with identical arguments has run ${loopCheck.repeats} times (critical threshold ${loopCriticalThreshold}). To continue intentionally, call tool_loop_continue with tool_name="${toolName}", args equal to the exact arguments you still need to repeat, and a concrete reason.`;
-        console.warn(`[v2] LOOP BLOCK: ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)}) x${loopCheck.repeats}`);
+        console.warn(`[v2] LOOP BLOCK: ${toolName}(${toolArgsPreview(toolArgs, 80)}) x${loopCheck.repeats}`);
         const blockedResult: ToolResult = {
           name: toolName,
           args: toolArgs,
@@ -7381,7 +7532,7 @@ RULES:
       if (loopCheck.state === 'warn') {
         loopGateToolActive = true;
         const warnMsg = `${loopPivotNudge} Warning: ${toolName} with identical arguments repeated ${loopCheck.repeats} times (warning threshold ${loopWarningThreshold}).`;
-        console.warn(`[v2] LOOP WARN: ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)}) x${loopCheck.repeats}`);
+        console.warn(`[v2] LOOP WARN: ${toolName}(${toolArgsPreview(toolArgs, 80)}) x${loopCheck.repeats}`);
         sendSSE('info', { message: warnMsg });
         if (!loopWarnNudged.has(loopSig)) {
           loopWarnNudged.add(loopSig);
@@ -7471,8 +7622,8 @@ RULES:
       // browser_* and desktop_* tools are always allowed to repeat — the browser page
       // and the desktop screen change on every call so caching/blocking makes no sense.
       const allowRepeatedTool =
-        toolName.startsWith('browser_') || toolName.startsWith('desktop_');
-      const callKey = `${toolName}:${JSON.stringify(toolArgs)}`;
+        toolName.startsWith('browser_') || toolName.startsWith('desktop_') || !summarizeToolArgs(toolArgs).exact;
+      const callKey = `${toolName}:${hashArgs(toolArgs)}`;
       if (!allowRepeatedTool) {
         const callCount = (seenToolCalls.get(callKey) ?? 0) + 1;
         seenToolCalls.set(callKey, callCount);
@@ -7492,7 +7643,7 @@ RULES:
             allToolResults.push(replayedResult);
             if (!replayedResult.error) roundHadProgress = true;
             logToolCall(workspacePath, toolName, toolArgs, replayedResult.result, replayedResult.error);
-            console.log(`[v2] REPLAY: duplicate ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)}) [x${callCount}]`);
+            console.log(`[v2] REPLAY: duplicate ${toolName}(${toolArgsPreview(toolArgs, 80)}) [x${callCount}]`);
             markProgressStepStart(toolName);
             markProgressStepResult(!replayedResult.error, toolName);
             sendSSE('tool_result', {
@@ -7509,7 +7660,7 @@ RULES:
             });
             continue;
           }
-          console.log(`[v2] SKIP: duplicate tool call ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)}) [x${callCount}]`);
+          console.log(`[v2] SKIP: duplicate tool call ${toolName}(${toolArgsPreview(toolArgs, 80)}) [x${callCount}]`);
           messages.push({
             role: 'tool',
             tool_name: toolName,
@@ -7633,7 +7784,7 @@ RULES:
         }
       }
 
-      console.log(`[v2] TOOL[${round + 1}]: ${toolName}(${JSON.stringify(toolArgs).slice(0, 150)})`);
+      console.log(`[v2] TOOL[${round + 1}]: ${toolName}(${toolArgsPreview(toolArgs, 150)})`);
       if (!PROGRESS_LIFECYCLE_TOOLS.has(toolName)) {
         markProgressStepStart(toolName);
       }
@@ -7644,6 +7795,56 @@ RULES:
         toolCallId: toolCallId || undefined,
         tool_call_id: toolCallId || undefined,
       });
+
+      if (INLINE_DURABLE_TOOL_NAMES.has(toolName)) {
+        if (pendingInlineDurableEffect) {
+          throw new Error(`Inline durable effect ${pendingInlineDurableEffect.toolName} did not publish a terminal tool result.`);
+        }
+        const startedAt = Date.now();
+        const prepared = prepareDurableToolEffect(
+          toolName,
+          toolCallId,
+          toolArgs,
+          classifyToolReplayPolicy(toolName),
+          getCurrentDurableTurn(),
+        );
+        if (prepared?.begin.disposition === 'reuse_result' && prepared.begin.effect.resultRef) {
+          const stored = readDurableToolEffectResult(prepared.begin.effect.resultRef) as Partial<ToolResult>;
+          const replayed = typeof stored?.result === 'string'
+            ? stored as ToolResult
+            : makeInstrumentedToolResult(toolName, toolArgs, 'The previously completed inline tool result was unreadable.', true, startedAt);
+          allToolResults.push(replayed);
+          sendSSE('tool_result', {
+            action: toolName,
+            result: replayed.result,
+            error: replayed.error,
+            stepNum: allToolResults.length,
+            replayed: true,
+          });
+          messages.push({
+            role: 'tool',
+            tool_name: toolName,
+            tool_call_id: toolCallId || undefined,
+            content: replayed.result,
+          });
+          markProgressStepResult(!replayed.error, toolName);
+          if (!replayed.error && (toolName === 'complete_goal' || toolName === 'block_goal')) tools = [];
+          if (toolName === 'subagent_spawn' && !replayed.error) break;
+          continue;
+        }
+        if (prepared && prepared.begin.disposition !== 'execute') {
+          const refusal = prepared.begin.disposition === 'needs_review'
+            ? 'Inline tool outcome is uncertain after interruption and requires review before replay.'
+            : 'Inline tool is already running in the owning turn.';
+          const refused = makeInstrumentedToolResult(toolName, toolArgs, refusal, true, startedAt);
+          allToolResults.push(refused);
+          sendSSE('tool_result', { action: toolName, result: refusal, error: true, stepNum: allToolResults.length });
+          messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content: refusal });
+          markProgressStepResult(false, toolName);
+          continue;
+        }
+        if (prepared) pendingInlineDurableEffect = { prepared, toolName, toolArgs, startedAt };
+      }
 
       // ── Goal lifecycle: Prometheus owns completion and blocking. ───────────
       if (toolName === 'complete_goal') {
@@ -7928,47 +8129,88 @@ RULES:
       }
 
       if (toolName === 'start_task') {
+        const startedAt = Date.now();
+        const durableExecution = getCurrentDurableTurn();
+        const durableEffect = await prepareDurableToolEffectAsync(
+          toolName,
+          toolCallId,
+          toolArgs,
+          classifyToolReplayPolicy(toolName),
+          durableExecution,
+        );
+        if (durableEffect?.begin.disposition === 'reuse_result' && durableEffect.begin.effect.resultRef) {
+          const stored = readDurableToolEffectResult(durableEffect.begin.effect.resultRef) as Partial<HandleChatResult>;
+          if (stored && typeof stored === 'object' && typeof stored.type === 'string' && typeof stored.text === 'string') {
+            sendSSE('info', { message: 'Reusing the durably completed multi-step task result.' });
+            markProgressStepResult(true, toolName);
+            finalizeProgressRound();
+            return stored as HandleChatResult;
+          }
+          throw new Error('The durably completed multi-step task result was unreadable.');
+        }
+        if (durableEffect && durableEffect.begin.disposition !== 'execute') {
+          const refusal = durableEffect.begin.disposition === 'needs_review'
+            ? 'The multi-step task outcome is uncertain after interruption and requires review before it can be run again.'
+            : 'The multi-step task is already running in the owning turn.';
+          markProgressStepResult(false, toolName);
+          finalizeProgressRound();
+          return {
+            type: 'execute',
+            text: refusal,
+            thinking: allThinking || undefined,
+            toolResults: [makeInstrumentedToolResult(toolName, toolArgs, refusal, true, startedAt)],
+          };
+        }
         const taskGoal = toolArgs.goal || message;
         const maxSteps = toolArgs.max_steps || 25;
         sendSSE('info', { message: `Starting multi-step task: ${taskGoal}` });
 
         const taskTools = tools.filter((t: any) => t.function.name !== 'start_task') as any[];
+        try {
+          const taskResult = await runTask({
+            goal: taskGoal,
+            tools: taskTools,
+            executor: async (name, args) => {
+              const r = await executeToolWithTelemetry(name, args);
+              return { result: r.result, error: r.error };
+            },
+            onProgress: sendSSE,
+            systemContext: personalityCtx.slice(0, 500),
+            maxSteps,
+          });
+          markProgressStepResult(taskResult.status !== 'failed');
+          finalizeProgressRound();
 
-        const taskResult = await runTask({
-          goal: taskGoal,
-          tools: taskTools,
-          executor: async (name, args) => {
-            const r = await executeToolWithTelemetry(name, args);
-            return { result: r.result, error: r.error };
-          },
-          onProgress: sendSSE,
-          systemContext: personalityCtx.slice(0, 500),
-          maxSteps,
-        });
-        markProgressStepResult(taskResult.status !== 'failed');
-        finalizeProgressRound();
+          activeTasks.set(sessionId, taskResult);
 
-        activeTasks.set(sessionId, taskResult);
+          const summary = taskResult.status === 'complete'
+            ? `Task completed in ${taskResult.currentStep} steps!`
+            : taskResult.status === 'failed'
+              ? `Task failed at step ${taskResult.currentStep}: ${taskResult.error}`
+              : `Task paused at step ${taskResult.currentStep}/${taskResult.maxSteps}`;
 
-        const summary = taskResult.status === 'complete'
-          ? `Task completed in ${taskResult.currentStep} steps!`
-          : taskResult.status === 'failed'
-            ? `Task failed at step ${taskResult.currentStep}: ${taskResult.error}`
-            : `Task paused at step ${taskResult.currentStep}/${taskResult.maxSteps}`;
-
-        const journalSummary = taskResult.journal.slice(-5).map(j => j.result).join('\n');
-
-        return {
-          type: 'execute',
-          text: `${summary}\n\nRecent steps:\n${journalSummary}`,
-          thinking: allThinking || undefined,
-          toolResults: taskResult.journal.map(j => ({
-            name: j.action.split('(')[0],
-            args: {},
-            result: j.result,
-            error: j.result.startsWith('❌'),
-          })),
-        };
+          const journalSummary = taskResult.journal.slice(-5).map(j => j.result).join('\n');
+          const completedResult: HandleChatResult = {
+            type: 'execute',
+            text: `${summary}\n\nRecent steps:\n${journalSummary}`,
+            thinking: allThinking || undefined,
+            toolResults: taskResult.journal.map(j => ({
+              name: j.action.split('(')[0],
+              args: {},
+              result: j.result,
+              error: j.result.startsWith('❌'),
+            })),
+          };
+          if (durableEffect) {
+            await completeDurableToolEffectAsync(durableEffect.record.effectId, completedResult, durableExecution);
+          }
+          return completedResult;
+        } catch (error) {
+          if (durableEffect && !isDurableTurnFenceError(error)) {
+            failDurableToolEffect(durableEffect.record.effectId, error, durableExecution);
+          }
+          throw error;
+        }
       }
 
       // ── Sub-agent spawn ────────────────────────────────────────────────────────────────────
@@ -7984,11 +8226,14 @@ RULES:
         ].join('').trim();
 
         if (!subPrompt) {
+          const failText = 'Sub-agent spawn failed: no task_prompt provided.';
+          allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, failText, true));
+          sendSSE('tool_result', { action: toolName, result: failText, error: true, stepNum: allToolResults.length });
           messages.push({
             role: 'tool',
             tool_name: toolName,
             tool_call_id: toolCallId || undefined,
-            content: 'Sub-agent spawn failed: no task_prompt provided.',
+            content: failText,
           });
           markProgressStepResult(false);
           continue;
@@ -7999,11 +8244,14 @@ RULES:
         if (parentTaskId) {
           const parentTask = loadTask(parentTaskId);
           if (parentTask?.parentTaskId) {
+            const failText = 'Sub-agent recursion blocked: sub-agents cannot spawn further sub-agents.';
+            allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, failText, true));
+            sendSSE('tool_result', { action: toolName, result: failText, error: true, stepNum: allToolResults.length });
             messages.push({
               role: 'tool',
               tool_name: toolName,
               tool_call_id: toolCallId || undefined,
-              content: 'Sub-agent recursion blocked: sub-agents cannot spawn further sub-agents.',
+              content: failText,
             });
             markProgressStepResult(false);
             continue;
@@ -8052,6 +8300,8 @@ RULES:
         console.log(`[SubagentSpawn] ${ackMsg}`);
         appendJournal(parentTaskId || childTask.id, { type: 'status_push', content: ackMsg });
         broadcastWS({ type: 'task_subagent_spawned', parentTaskId, childTaskId: childTask.id, subTitle, profile });
+        allToolResults.push(makeInstrumentedToolResult(toolName, toolArgs, ackMsg, false));
+        sendSSE('tool_result', { action: toolName, result: ackMsg, error: false, stepNum: allToolResults.length });
 
         messages.push({
           role: 'tool',
@@ -8067,76 +8317,107 @@ RULES:
 
       // ── Orchestration: explicit request from primary
       if (toolName === 'request_secondary_assist') {
-        const orchCfg = getOrchestrationConfig();
-        if (orchestrationSkillEnabled && orchCfg?.enabled) {
-          if (orchestrationStats.assistCount >= orchCfg.limits.max_assists_per_session) {
-            messages.push({
-              role: 'tool',
-              tool_name: toolName,
-              tool_call_id: toolCallId || undefined,
-              content: `Secondary advisor session cap reached (${orchCfg.limits.max_assists_per_session}). Continue without escalation.`,
-            });
-            markProgressStepResult(false);
-            continue;
-          }
-
-          const mode   = (toolArgs.mode || 'rescue') as 'planner' | 'rescue';
-          const reason = toolArgs.reason || 'Explicitly requested by executor';
-          sendSSE('info', { message: `Consulting secondary advisor (${mode} mode)...` });
-          console.log(`[Orchestrator] Explicit trigger: ${reason}`);
-          const advice = await callSecondaryAdvisor(
-            message,
-            orchestrationLog,
-            reason,
-            mode,
-            undefined,
-            buildSecondaryAssistContext(),
-          );
-          if (advice) {
-            const hint = formatAdvisoryHint(advice);
-            orchestrationState.markFired(round);
-            const stats = recordOrchestrationEvent(
-              sessionId,
-              { trigger: 'explicit', reason, mode },
-              orchCfg,
-            );
-            sendSSE('orchestration', {
-              trigger: 'explicit',
-              reason,
-              mode,
-              advice,
-              assist_count: stats.assistCount,
-              assist_cap: orchCfg.limits.max_assists_per_session,
-            });
-            console.log(
-              `[Orchestrator] Explicit assist complete (${stats.assistCount}/${orchCfg.limits.max_assists_per_session})`,
-            );
-            messages.push({
-              role: 'tool',
-              tool_name: toolName,
-              tool_call_id: toolCallId || undefined,
-              content: hint,
-            });
-            markProgressStepResult(true);
-          } else {
-            messages.push({
-              role: 'tool',
-              tool_name: toolName,
-              tool_call_id: toolCallId || undefined,
-              content: 'Secondary advisor unavailable. Continue with your best judgment.',
-            });
-            markProgressStepResult(false);
-          }
+        const startedAt = Date.now();
+        const durableExecution = getCurrentDurableTurn();
+        const durableEffect = await prepareDurableToolEffectAsync(
+          toolName,
+          toolCallId,
+          toolArgs,
+          classifyToolReplayPolicy(toolName),
+          durableExecution,
+        );
+        if (durableEffect?.begin.disposition === 'reuse_result' && durableEffect.begin.effect.resultRef) {
+          const stored = readDurableToolEffectResult(durableEffect.begin.effect.resultRef) as Partial<ToolResult>;
+          const content = typeof stored?.result === 'string'
+            ? stored.result
+            : 'The previously completed secondary-advisor result was unreadable.';
+          messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content });
+          markProgressStepResult(stored?.error !== true);
           continue;
         }
-        messages.push({
-          role: 'tool',
-          tool_name: toolName,
-          tool_call_id: toolCallId || undefined,
-          content: 'Multi-agent orchestration is not enabled.',
-        });
-        markProgressStepResult(false);
-        continue;
+        if (durableEffect && durableEffect.begin.disposition !== 'execute') {
+          const content = durableEffect.begin.disposition === 'needs_review'
+            ? 'The secondary-advisor outcome is uncertain after interruption and requires review before another assist is requested.'
+            : 'A secondary-advisor request is already running in the owning turn.';
+          messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content });
+          markProgressStepResult(false);
+          continue;
+        }
+
+        let durableEffectSettled = false;
+        const persistAssistOutcome = async (content: string, error: boolean): Promise<void> => {
+          if (!durableEffect) return;
+          await completeDurableToolEffectAsync(
+            durableEffect.record.effectId,
+            makeInstrumentedToolResult(toolName, toolArgs, content, error, startedAt),
+            durableExecution,
+          );
+          durableEffectSettled = true;
+        };
+        try {
+          const orchCfg = getOrchestrationConfig();
+          if (orchestrationSkillEnabled && orchCfg?.enabled) {
+            if (orchestrationStats.assistCount >= orchCfg.limits.max_assists_per_session) {
+              const content = `Secondary advisor session cap reached (${orchCfg.limits.max_assists_per_session}). Continue without escalation.`;
+              await persistAssistOutcome(content, true);
+              messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content });
+              markProgressStepResult(false);
+              continue;
+            }
+
+            const mode   = (toolArgs.mode || 'rescue') as 'planner' | 'rescue';
+            const reason = toolArgs.reason || 'Explicitly requested by executor';
+            sendSSE('info', { message: `Consulting secondary advisor (${mode} mode)...` });
+            console.log(`[Orchestrator] Explicit trigger: ${reason}`);
+            const advice = await callSecondaryAdvisor(
+              message,
+              orchestrationLog,
+              reason,
+              mode,
+              undefined,
+              buildSecondaryAssistContext(),
+            );
+            if (advice) {
+              const hint = formatAdvisoryHint(advice);
+              orchestrationState.markFired(round);
+              const stats = recordOrchestrationEvent(
+                sessionId,
+                { trigger: 'explicit', reason, mode },
+                orchCfg,
+              );
+              await persistAssistOutcome(hint, false);
+              sendSSE('orchestration', {
+                trigger: 'explicit',
+                reason,
+                mode,
+                advice,
+                assist_count: stats.assistCount,
+                assist_cap: orchCfg.limits.max_assists_per_session,
+              });
+              console.log(
+                `[Orchestrator] Explicit assist complete (${stats.assistCount}/${orchCfg.limits.max_assists_per_session})`,
+              );
+              messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content: hint });
+              markProgressStepResult(true);
+            } else {
+              const content = 'Secondary advisor unavailable. Continue with your best judgment.';
+              await persistAssistOutcome(content, true);
+              messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content });
+              markProgressStepResult(false);
+            }
+            continue;
+          }
+          const content = 'Multi-agent orchestration is not enabled.';
+          await persistAssistOutcome(content, true);
+          messages.push({ role: 'tool', tool_name: toolName, tool_call_id: toolCallId || undefined, content });
+          markProgressStepResult(false);
+          continue;
+        } catch (error) {
+          if (durableEffect && !durableEffectSettled && !isDurableTurnFenceError(error)) {
+            failDurableToolEffect(durableEffect.record.effectId, error, durableExecution);
+          }
+          throw error;
+        }
       }
 
 
@@ -8184,8 +8465,8 @@ RULES:
       orchestrationState.recordToolResult(round, toolName, toolArgs, toolResult.error);
       orchestrationLog.push(
         toolResult.error
-          ? `✗ ${toolName}(${JSON.stringify(toolArgs).slice(0, 60)}): ${toolResult.result.slice(0, 100)}`
-          : `✓ ${toolName}(${JSON.stringify(toolArgs).slice(0, 60)}): ${toolResult.result.slice(0, 80)}`
+          ? `✗ ${toolName}(${toolArgsPreview(toolArgs, 60)}): ${toolResult.result.slice(0, 100)}`
+          : `✓ ${toolName}(${toolArgsPreview(toolArgs, 60)}): ${toolResult.result.slice(0, 80)}`
       );
 
       console.log(toolResult.error ? `[v2] TOOL FAIL: ${toolResult.result.slice(0, 100)}` : `[v2] TOOL OK: ${toolResult.result.slice(0, 100)}`);
@@ -8316,6 +8597,20 @@ RULES:
 	        toolResult,
 	        preObservationContext,
 	      );
+      await observeWorkContextToolResult({
+        sessionId,
+        workspacePath,
+        userMessage: message,
+        toolName,
+        args: toolArgs,
+        result: toolResult.result,
+        error: toolResult.error,
+        data: toolResult.data,
+        extra: toolResult.extra,
+        artifacts: (toolResult as any).artifacts,
+      }).catch((error: any) => {
+        console.warn(`[work-context] observation failed for ${toolName}: ${error?.message || String(error)}`);
+      });
 
       if (isBrowserTool && !toolResult.error) {
         browserForcedRetries = 0;
@@ -8458,6 +8753,133 @@ RULES:
     }
   }
 }
+
+function durableKindForHandleChat(executionMode: ExecutionMode, sessionId: string): TurnJobKind {
+  if (/^brain_thought_/i.test(sessionId)) return 'brain_thought';
+  if (/^brain_dream/i.test(sessionId)) return 'brain_dream';
+  if (executionMode === 'background_task') return 'background_task';
+  if (executionMode === 'background_agent') return 'background_agent';
+  if (executionMode === 'proposal_execution') return 'proposal_execution';
+  if (executionMode === 'cron') return 'cron';
+  if (executionMode === 'team_manager') return 'team_manager';
+  if (executionMode === 'team_subagent') return 'team_subagent';
+  if (executionMode === 'heartbeat') return 'scheduled_task';
+  return 'interactive';
+}
+
+async function persistTurnAttachmentRefs(
+  attachments: Array<{ base64: string; mimeType: string; name: string }> | undefined,
+): Promise<JsonValue[]> {
+  if (!Array.isArray(attachments) || attachments.length === 0) return [];
+  const blobs = getTurnJobBlobStore();
+  const candidates = attachments.slice(0, 32);
+  const references: JsonValue[] = new Array(candidates.length);
+  let nextIndex = 0;
+  const writers = Array.from({ length: Math.min(2, candidates.length) }, async () => {
+    while (nextIndex < candidates.length) {
+      const index = nextIndex++;
+      const attachment = candidates[index];
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const raw = String(attachment?.base64 || '');
+      const body = Buffer.from(raw.replace(/^data:[^;,]+;base64,/i, ''), 'base64');
+      const descriptor = await blobs.putBufferAsync(body, {
+        contentType: String(attachment?.mimeType || 'application/octet-stream'),
+        compress: false,
+      });
+      references[index] = {
+        name: String(attachment?.name || 'attachment').slice(0, 512),
+        mimeType: String(attachment?.mimeType || 'application/octet-stream').slice(0, 256),
+        ref: descriptor.ref,
+        bytes: descriptor.sizeBytes,
+      };
+    }
+  });
+  await Promise.all(writers);
+  return references;
+}
+
+function parseDurableHandleChatReplay(value: JsonValue | undefined): HandleChatResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Persisted durable turn final is not an object.');
+  }
+  const record = value as Record<string, JsonValue>;
+  if (typeof record.type !== 'string' || typeof record.text !== 'string') {
+    throw new Error('Persisted durable turn final is missing its response type or text.');
+  }
+  if (record.toolResults !== undefined && !Array.isArray(record.toolResults)) {
+    throw new Error('Persisted durable turn final has an invalid toolResults field.');
+  }
+  return record as unknown as HandleChatResult;
+}
+
+const handleChat: typeof handleChatInGateway = async (...args) => {
+  const [message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, modelOverride, executionMode = 'interactive', toolFilter, attachments, reasoningOptions, providerOverride, callerOnToken, runtimeOptions] = args;
+  const active = getCurrentDurableTurn();
+  // Recursive compaction/continuation calls in the same session stay in the
+  // owning job. A newly spawned task uses a different session and receives its
+  // own durable lease even when its promise inherited AsyncLocalStorage state.
+  if (active?.sessionId === sessionId) assertDurableTurnLease(active);
+  if (active?.sessionId === sessionId || process.env.PROMETHEUS_DISABLE_TURN_JOURNAL === '1') {
+    return handleChatInGateway(...args);
+  }
+  const payload = {
+    message,
+    sessionId,
+    executionMode,
+    pinnedMessages: pinnedMessages || null,
+    callerContext: callerContext || null,
+    modelOverride: modelOverride || null,
+    providerOverride: providerOverride || null,
+    toolFilter: toolFilter || null,
+    reasoningOptions: reasoningOptions || null,
+    runtimeOptions: runtimeOptions || null,
+    attachments: await persistTurnAttachmentRefs(attachments),
+  } as unknown as JsonValue;
+  const execution = await beginDurableTurn({
+    sessionId,
+    kind: durableKindForHandleChat(executionMode, sessionId),
+    payload,
+  });
+  if (execution.replayed) return parseDurableHandleChatReplay(execution.replayedResult);
+  const durableAbort = createDurableTurnAbortView(execution, abortSignal);
+  const journalSendSSE = (event: string, data: any) => {
+    recordDurableTurnEvent(event, data, execution);
+    sendSSE(event, data);
+  };
+  try {
+    const result = await runWithDurableTurn(execution, () => handleChatInGateway(
+      message,
+      sessionId,
+      journalSendSSE,
+      pinnedMessages,
+      durableAbort.state,
+      callerContext,
+      modelOverride,
+      executionMode,
+      toolFilter,
+      attachments,
+      reasoningOptions,
+      providerOverride,
+      callerOnToken,
+      runtimeOptions,
+    ));
+    assertDurableTurnLease(execution);
+    if (abortSignal?.interrupted) interruptDurableTurn('Gateway restart interrupted the turn.', execution);
+    else if (abortSignal?.aborted) cancelDurableTurn('Turn cancelled.', execution);
+    else {
+      await persistDurableTurnFinal(result, [], execution);
+      completeDurableTurn(execution);
+    }
+    return result;
+  } catch (error) {
+    if (abortSignal?.interrupted) interruptDurableTurn('Gateway restart interrupted the turn.', execution);
+    else if (abortSignal?.aborted) cancelDurableTurn('Turn cancelled.', execution);
+    else failDurableTurn(error, true, execution);
+    throw error;
+  } finally {
+    durableAbort.dispose();
+  }
+};
 // Wire chat-helpers and task-router deps moved into initChatRouter() (B6)
 
 const editRerunAbortResetSessions = new Set<string>();
@@ -8643,7 +9065,10 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
 
         const prompt = buildMainChatGoalContinuationPrompt(current);
         const abortController = new AbortController();
-        const abortSignal = { aborted: false, signal: abortController.signal };
+        const abortSignal: { aborted: boolean; interrupted?: boolean; signal: AbortSignal } = {
+          aborted: false,
+          signal: abortController.signal,
+        };
         const runtimeId = registerLiveRuntime({
           kind: 'main_chat_goal',
           label: 'Main chat goal',
@@ -8652,6 +9077,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
           detail: current.goal.slice(0, 160),
           abortSignal,
           onAbort: () => abortController.abort(),
+          onShutdownInterrupt: () => abortController.abort(),
         });
         const runtimeGoalTurnNumber = Math.max(1, Number(current.restartCheckpoint?.turnNumber || current.turnsUsed + 1));
         const runtimeGoalIterationNumber = Math.max(1, Number(current.currentIteration || 1));
@@ -8679,7 +9105,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
               const checkpoint: Record<string, any> = { event, at: Date.now() };
               if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
               if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
-              if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
+              if (data?.args && typeof data.args === 'object') checkpoint.args = boundedRuntimeProcessArgs(data.args);
               if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
               if (event === 'thinking_delta') {
                 const delta = String(data?.thinking || data?.text || '').trim();
@@ -8712,16 +9138,10 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
             undefined,
             undefined,
             undefined,
-            { syntheticGoalContinuation: true } as any,
+            { syntheticGoalContinuation: true, runtimeProcessEntries } as any,
           );
-          const goalTurnNumber = Math.max(1, Number(current.restartCheckpoint?.turnNumber || current.turnsUsed + 1));
-          const goalIterationNumber = Math.max(1, Number(current.currentIteration || 1));
-          attachRuntimeProcessEntriesToLatestAssistant(sid, runtimeProcessEntries, {
-            goalId: current.id,
-            goalTurnNumber,
-            goalTurnId: `${current.id}:turn:${goalTurnNumber}:iteration:${goalIterationNumber}`,
-          });
         } catch (err: any) {
+          if (abortSignal.interrupted) return;
           const failed = recordMainChatGoalRuntimeFailure(sid, current.id, err?.message || String(err));
           broadcastMainChatGoalState(sid, 'runtime_failure', { error: err?.message || String(err), goal: failed });
           if (!failed || failed.status !== 'active') return;
@@ -8802,6 +9222,24 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
   })();
 }
 
+function schedulePostTerminalTurnMaintenance(sessionId: string): void {
+  setImmediate(() => {
+    void Promise.allSettled([
+      maybeRefreshProjectLearning(sessionId),
+      maybeAutoNameChatSession(sessionId),
+    ]).then((results) => {
+      const titleResult = results[1];
+      if (titleResult?.status !== 'fulfilled' || !titleResult.value) return;
+      broadcastWS({
+        type: 'session_title',
+        sessionId,
+        title: titleResult.value,
+        autoTitleLocked: true,
+      });
+    }).catch(() => undefined);
+  });
+}
+
 export function resumeMainChatGoalsInterruptedForRestart(targetSessionIds?: string[]): string[] {
   const policy = resolveMainChatGoalPolicy();
   if (!policy.enabled || !policy.autoResumeOnRestart) return [];
@@ -8855,16 +9293,15 @@ function cleanGeneratedSessionTitle(raw: unknown): string {
 
 function sessionTitleTranscript(session: ReturnType<typeof getSession>): { transcript: string; userCount: number; hasSubstantiveUserText: boolean } {
   const messages = Array.isArray(session?.history) ? session.history : [];
-  const visible = messages
-    .filter((msg: any) => {
-      const role = String(msg?.role || '').toLowerCase();
-      if (role !== 'user' && role !== 'assistant' && role !== 'ai') return false;
-      const content = String(msg?.content || '').trim();
-      if (!content) return false;
-      if (/^\s*(?:\[Title:|Title:)/i.test(content)) return false;
-      return true;
-    })
-    .slice(0, 6);
+  const visible: any[] = [];
+  for (const msg of messages) {
+    const role = String(msg?.role || '').toLowerCase();
+    if (role !== 'user' && role !== 'assistant' && role !== 'ai') continue;
+    const content = String(msg?.content || '').trim();
+    if (!content || /^\s*(?:\[Title:|Title:)/i.test(content)) continue;
+    visible.push(msg);
+    if (visible.length >= 6) break;
+  }
   const userMessages = visible.filter((msg: any) => String(msg?.role || '').toLowerCase() === 'user');
   const hasSubstantiveUserText = userMessages.some((msg: any) => {
     const text = String(msg?.content || '').trim();
@@ -8881,54 +9318,76 @@ function sessionTitleTranscript(session: ReturnType<typeof getSession>): { trans
   return { transcript, userCount: userMessages.length, hasSubstantiveUserText };
 }
 
-async function maybeAutoNameChatSession(sessionId: string): Promise<string | null> {
-  const session = getSession(sessionId);
-  if (!session || session.autoTitleLocked === true) return null;
-  const { transcript, userCount, hasSubstantiveUserText } = sessionTitleTranscript(session);
-  if (!transcript || !hasSubstantiveUserText || userCount < 1 || userCount > 3) return null;
+const autoTitleInFlight = new Map<string, Promise<string | null>>();
+let autoTitleGenerationActive = false;
 
-  const prompt = [
-    'Name this Prometheus chat thread based on the context so far.',
-    'Return ONLY this exact shape: [Title:Short Helpful Title]',
-    'Rules: 3-7 words, specific to the task, no quotes, no markdown, no trailing punctuation, never use "New chat".',
-    '',
-    'Transcript:',
-    transcript,
-  ].join('\n');
-
+async function generateAutoNameChatSession(sessionId: string, transcript: string): Promise<string | null> {
+  if (process.env.PROMETHEUS_DISABLE_MODEL_WORKERS === '1') return null;
+  const configuredTimeout = Number(process.env.PROMETHEUS_AUTO_TITLE_TIMEOUT_MS || 8_000);
+  const timeoutMs = Number.isFinite(configuredTimeout) ? Math.max(1_000, Math.min(30_000, configuredTimeout)) : 8_000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error('Automatic title generation timed out.')), timeoutMs);
+  timeout.unref?.();
   let title = '';
   try {
-    const generated = await Promise.race([
-      getOllamaClient().generate(prompt, 'executor', {
-        temperature: 0,
-        num_predict: 32,
-        think: 'none',
-        usageContext: { sessionId },
-      } as any),
-      new Promise<string>((resolve) => setTimeout(() => resolve(''), 3000)),
-    ]);
+    const prompt = [
+      'Name this Prometheus chat thread based on the context so far.',
+      'Return ONLY this exact shape: [Title:Short Helpful Title]',
+      'Rules: 3-7 words, specific to the task, no quotes, no markdown, no trailing punctuation, never use "New chat".',
+      '',
+      'Transcript:',
+      transcript,
+    ].join('\n');
+    const generated = await getOllamaClient().generate(prompt, 'executor', {
+      temperature: 0,
+      num_predict: 32,
+      think: 'none',
+      abortSignal: controller.signal,
+      usageContext: { sessionId },
+    } as any);
     title = cleanGeneratedSessionTitle(generated);
   } catch (err: any) {
-    console.warn('[chat-title] failed to generate session title:', err?.message || err);
+    if (!controller.signal.aborted) console.warn('[chat-title] failed to generate session title:', err?.message || err);
+  } finally {
+    clearTimeout(timeout);
   }
 
   if (!title) return null;
-  const summary = autoNameSession(sessionId, title);
+  const summary = await autoNameSessionAsync(sessionId, title);
   return summary?.title || null;
 }
 
-async function runInteractiveTurn(
+function maybeAutoNameChatSession(sessionId: string): Promise<string | null> {
+  const session = getSession(sessionId);
+  if (!session || session.autoTitleLocked === true) return Promise.resolve(null);
+  const { transcript, userCount, hasSubstantiveUserText } = sessionTitleTranscript(session);
+  if (!transcript || !hasSubstantiveUserText || userCount < 1 || userCount > 3) return Promise.resolve(null);
+  const existing = autoTitleInFlight.get(sessionId);
+  if (existing) return existing;
+  // Titles are best-effort background polish. Never queue them behind each
+  // other and starve real user turns in the shared model-worker pool.
+  if (autoTitleGenerationActive) return Promise.resolve(null);
+  autoTitleGenerationActive = true;
+  const task = generateAutoNameChatSession(sessionId, transcript).finally(() => {
+    autoTitleGenerationActive = false;
+    if (autoTitleInFlight.get(sessionId) === task) autoTitleInFlight.delete(sessionId);
+  });
+  autoTitleInFlight.set(sessionId, task);
+  return task;
+}
+
+async function runInteractiveTurnInGateway(
   message: string,
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   pinnedMessages?: Array<{ role: string; content: string }>,
-	  abortSignal?: { aborted: boolean; signal?: AbortSignal },
+	  abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal },
 	  callerContext?: string,
 	  reasoningOptions?: ReasoningOptions,
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-	    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
+    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; runtimeProcessEntries?: Record<string, any>[] },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -8969,23 +9428,62 @@ async function runInteractiveTurn(
       ? null
       : beginMainChatStream(sessionId);
   let localMainChatStreamCompleted = false;
-  const completeLocalMainChatStream = (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any; richArtifacts?: any[] } | null | undefined): void => {
-    if (!localMainChatStream || localMainChatStreamCompleted) return;
+  let localMainChatStreamDurabilityFailed = false;
+  let sessionFlushForDelivery: Promise<void> | null = null;
+  const flushSessionForDelivery = (): Promise<void> => {
+    if (sessionFlushForDelivery) return sessionFlushForDelivery;
+    sessionFlushForDelivery = flushSessionAsync(sessionId).catch((error) => {
+      localMainChatStreamDurabilityFailed = true;
+      throw error;
+    });
+    return sessionFlushForDelivery;
+  };
+  const completeLocalMainChatStream = async (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any; richArtifacts?: any[] } | null | undefined): Promise<void> => {
+    if (localMainChatStream && localMainChatStreamCompleted) return;
+    const durableExecution = getCurrentDurableTurn();
+    if (durableExecution && !abortSignal?.aborted) {
+      try {
+        await prepareDurableTurnFinal(result || {}, durableExecution);
+      } catch (error) {
+        localMainChatStreamDurabilityFailed = true;
+        throw error;
+      }
+    }
+    // The prepared final reference is attached to the assistant message before
+    // this flush. Only after that authoritative session receipt is durable may
+    // the journal cross its final_persisted boundary.
+    await flushSessionForDelivery();
+    if (durableExecution && !abortSignal?.aborted && !durableExecution.finalRef) {
+      try {
+        commitPreparedDurableTurnFinal([], durableExecution);
+      } catch (error) {
+        localMainChatStreamDurabilityFailed = true;
+        throw error;
+      }
+    }
+    if (!localMainChatStream) return;
+    const deliveryResult = (durableExecution
+      ? getDurableTurnFinalDeliveryPayload(durableExecution)
+      : null) as any || result;
     localMainChatStreamCompleted = true;
     appendMainChatStreamEvent(sessionId, localMainChatStream.streamId, 'done', {
-      reply: String(result?.text || ''),
-      mode: String(result?.type || 'chat'),
-      sections: [{ type: result?.type === 'execute' ? 'tool_results' : 'text', content: String(result?.text || '') }],
-      thinking: result?.thinking,
-      results: result?.toolResults,
-      artifacts: result?.artifacts,
-      generatedImages: result?.generatedImages,
-      generatedVideos: result?.generatedVideos,
-      canvasFiles: result?.canvasFiles,
-      fileChanges: result?.fileChanges,
-      productCarousel: result?.productCarousel,
-      richArtifacts: result?.richArtifacts,
+      reply: String(deliveryResult?.text || ''),
+      mode: String(deliveryResult?.type || 'chat'),
+      sections: [{ type: deliveryResult?.type === 'execute' ? 'tool_results' : 'text', content: String(deliveryResult?.text || '') }],
+      thinking: deliveryResult?.thinking,
+      results: deliveryResult?.toolResults,
+      artifacts: deliveryResult?.artifacts,
+      generatedImages: deliveryResult?.generatedImages,
+      generatedVideos: deliveryResult?.generatedVideos,
+      canvasFiles: deliveryResult?.canvasFiles,
+      fileChanges: deliveryResult?.fileChanges,
+      productCarousel: deliveryResult?.productCarousel,
+      richArtifacts: deliveryResult?.richArtifacts,
+      deliveryReplacements: deliveryResult?.deliveryReplacements,
     });
+    if (durableExecution?.finalRef && !durableExecution.settled) {
+      completeDurableTurn(durableExecution);
+    }
   };
   const upstreamSendSSE = sendSSE;
   sendSSE = (event: string, data: any) => {
@@ -8994,7 +9492,7 @@ async function runInteractiveTurn(
       const frame = appendMainChatStreamEvent(sessionId, localMainChatStream.streamId, event, data);
       if (frame) {
         streamData = {
-          ...(data && typeof data === 'object' ? data : {}),
+          ...frame.data,
           seq: frame.seq,
           streamId: localMainChatStream.streamId,
           at: frame.at,
@@ -9003,7 +9501,30 @@ async function runInteractiveTurn(
     }
     upstreamSendSSE(event, streamData);
   };
+  const durableTurnExecution = getCurrentDurableTurn();
+  const durableUserMessageId = durableTurnExecution
+    ? `durable_turn_${durableTurnExecution.jobId}_user`
+    : undefined;
+  const assistantMessageId = durableTurnExecution
+    ? `durable_turn_${durableTurnExecution.jobId}_assistant`
+    : `assistant_${Date.now().toString(36)}_${crypto.randomBytes(5).toString('hex')}`;
+  const prepareFinalForSession = async (result: unknown): Promise<string | null> => {
+    if (!durableTurnExecution || abortSignal?.aborted) return null;
+    try {
+      return await prepareDurableTurnFinal(result, durableTurnExecution);
+    } catch (error) {
+      localMainChatStreamDurabilityFailed = true;
+      throw error;
+    }
+  };
+  const durableAssistantReceipt = (finalRef: string | null): Record<string, string> => ({
+    messageId: assistantMessageId,
+    ...(durableTurnExecution && finalRef
+      ? { durableTurnJobId: durableTurnExecution.jobId, durableFinalRef: finalRef }
+      : {}),
+  });
   const userMsg = {
+    ...(durableUserMessageId ? { messageId: durableUserMessageId } : {}),
     role: 'user' as const,
     content: message,
     timestamp: Date.now(),
@@ -9026,12 +9547,13 @@ async function runInteractiveTurn(
   if (!isSubagentChatSession && !isGoalContinuationTurn && /^\/goal(?:\s|$)/i.test(String(message || '').trim())) {
     const command = handleMainChatGoalCommand(sessionId, message);
     const reply = command.message || 'Goal command handled.';
+    const commandResult = { type: 'chat' as const, text: reply };
+    const preparedFinalRef = await prepareFinalForSession(commandResult);
     addMessage(sessionId, userMsg, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
-    addMessage(sessionId, { role: 'assistant', content: reply, timestamp: Date.now(), messageKind: 'goal_command_ack' }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+    addMessage(sessionId, { role: 'assistant', ...durableAssistantReceipt(preparedFinalRef), content: reply, timestamp: Date.now(), messageKind: 'goal_command_ack' }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     broadcastMainChatGoalState(sessionId, 'command', { goal: command.goal });
     if (command.shouldStartRunner) startMainChatGoalRunner(sessionId, 'goal_command');
-    const commandResult = { type: 'chat' as const, text: reply };
-    completeLocalMainChatStream(commandResult);
+    await completeLocalMainChatStream(commandResult);
     return commandResult;
   }
 
@@ -9115,7 +9637,6 @@ async function runInteractiveTurn(
           { role: 'assistant', content: compactResult.text, timestamp: Date.now() },
           { disableMemoryFlushCheck: true, disableCompactionCheck: true },
         );
-        await maybeRefreshProjectLearning(sessionId, [compactResult.text]);
         sendSSE('tool_result', {
           action: CONTEXT_COMPACTION_TOOL_NAME,
           result: 'Thread compacted before continuing.',
@@ -9200,12 +9721,18 @@ async function runInteractiveTurn(
     followupHandled = await tryHandleBlockedTaskFollowup(sessionId, message);
   }
   if (followupHandled) {
-    if (!abortSignal?.aborted) {
-      addMessage(sessionId, { role: 'assistant', content: followupHandled, timestamp: Date.now() });
-      await maybeRefreshProjectLearning(sessionId);
-    }
     const followupResult = { type: 'chat' as const, text: followupHandled };
-    completeLocalMainChatStream(followupResult);
+    const preparedFinalRef = await prepareFinalForSession(followupResult);
+    if (!abortSignal?.aborted) {
+      addMessage(sessionId, {
+        role: 'assistant',
+        ...durableAssistantReceipt(preparedFinalRef),
+        content: followupHandled,
+        timestamp: Date.now(),
+        processEntries: flags?.runtimeProcessEntries?.slice(-300),
+      });
+    }
+    await completeLocalMainChatStream(followupResult);
     return followupResult;
   }
 
@@ -9253,21 +9780,85 @@ async function runInteractiveTurn(
 	  );
 
   const turnObservationId = `turn_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
-  const toolObservations: ToolObservation[] = result.toolResults && result.toolResults.length > 0
-    ? persistToolResultsAsObservations(sessionId, turnObservationId, result.toolResults)
-    : [];
+  const toolCallCount = Array.isArray(result.toolResults) ? result.toolResults.length : 0;
+  const observationPersistence = toolCallCount > 0
+    ? persistToolResultsAsObservationsAsync(sessionId, turnObservationId, result.toolResults).catch((error) => {
+        const message = String((error as Error)?.message || error || 'unknown failure').slice(0, 500);
+        console.warn(`[tool-observations] Optional persistence failed for ${sessionId}: ${message}`);
+        try {
+          recordDurableTurnEvent('tool_observation_persistence_failed', {
+            message,
+            toolCallCount,
+          }, getCurrentDurableTurn());
+        } catch {}
+        return {
+          observations: [] as ToolObservation[],
+          toolLogText: [
+            '[TOOL_STATE_SUMMARY]',
+            'observation_persistence: unavailable for this turn',
+            `completed_tool_calls: ${toolCallCount}`,
+          ].join('\n'),
+        };
+      })
+    : null;
   const providerUsageAfterTurn = aggregateSessionModelUsage(sessionId);
   const turnProviderUsage = diffModelUsage(providerUsageBeforeTurn, providerUsageAfterTurn);
+  // Run optional observation persistence alongside the file-change worker. It
+  // must not add seconds to terminal delivery for a very large tool result.
+  const resultFileChanges = result.fileChanges || await collectTurnFileChangesIsolated(
+    result.toolResults as any[] | undefined,
+    getWorkspace(sessionId) || process.cwd(),
+    { signal: abortSignal?.signal },
+  );
+  let persistedToolObservations: { observations: ToolObservation[]; toolLogText: string } = {
+    observations: [],
+    toolLogText: '',
+  };
+  let observationPersistencePending = false;
+  if (observationPersistence) {
+    const configuredFastPathMs = Number(process.env.PROMETHEUS_TOOL_OBSERVATION_FAST_PATH_MS);
+    const fastPathMs = Number.isFinite(configuredFastPathMs)
+      ? Math.max(0, Math.min(250, Math.floor(configuredFastPathMs)))
+      : 25;
+    let timer: NodeJS.Timeout | null = null;
+    const fastResult = await Promise.race([
+      observationPersistence.then((value) => ({ settled: true as const, value })),
+      new Promise<{ settled: false }>((resolve) => {
+        timer = setTimeout(() => resolve({ settled: false }), fastPathMs);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (fastResult.settled) persistedToolObservations = fastResult.value;
+    else observationPersistencePending = true;
+  }
+  const toolObservations = persistedToolObservations.observations;
   const toolResultBudget = summarizeTurnToolResultBudget(toolObservations);
-  const toolLogText = toolObservations.length > 0
-    ? formatToolStateSummaryForContext(toolObservations, { includeHeader: true, maxChars: 2200, maxObservations: 14, includeTelemetry: true })
-    : '';
-  const resultFileChanges = result.fileChanges || await collectTurnFileChanges(result.toolResults as any[] | undefined, getWorkspace(sessionId) || process.cwd());
+  const toolLogText = persistedToolObservations.toolLogText;
+  const attachDeferredObservationMetadata = (): void => {
+    if (!observationPersistencePending || !observationPersistence) return;
+    void observationPersistence.then(async (metadata) => {
+      await attachAssistantToolObservationMetadataAsync(
+        sessionId,
+        assistantMessageId,
+        metadata.toolLogText,
+        summarizeTurnToolResultBudget(metadata.observations),
+      );
+    }).catch((error) => {
+      console.warn(`[tool-observations] Deferred metadata attachment failed for ${sessionId}:`, (error as Error)?.message || error);
+    });
+  };
   const durableToolStreamTrace = buildDurableToolStreamTrace(sessionId);
   if (resultFileChanges && !result.fileChanges) {
     (result as any).fileChanges = resultFileChanges;
   }
+  const preparedFinalRef = abortSignal?.aborted
+    ? null
+    : await prepareFinalForSession(result);
   if (abortSignal?.aborted) {
+    // Orderly restart recovery already owns the continuation record. Do not
+    // append a misleading user-abort message into the conversation history.
+    if (abortSignal.interrupted) return result;
     if (editRerunAbortResetSessions.has(String(sessionId || ''))) {
       return result;
     }
@@ -9309,6 +9900,7 @@ async function runInteractiveTurn(
     ].join('\n');
     addMessage(sessionId, {
       role: 'assistant',
+      ...durableAssistantReceipt(preparedFinalRef),
       ...goalMessageIdentity,
       content: visibleCheckpointText,
       timestamp: Date.now(),
@@ -9317,7 +9909,7 @@ async function runInteractiveTurn(
       toolResultBudget,
       fileChanges: resultFileChanges || undefined,
       liveTraceEntries: durableToolStreamTrace,
-      processEntries: [{
+      processEntries: [...(flags?.runtimeProcessEntries || []).slice(-299), {
         ts: new Date().toLocaleTimeString(),
         type: 'warn',
         actor: 'Prom',
@@ -9332,10 +9924,11 @@ async function runInteractiveTurn(
     if (toolLogText) {
       persistToolLog(sessionId, toolLogText);
     }
-    if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
+    attachDeferredObservationMetadata();
   } else {
     addMessage(sessionId, {
       role: 'assistant',
+      ...durableAssistantReceipt(preparedFinalRef),
       ...goalMessageIdentity,
       content: result.text,
       timestamp: Date.now(),
@@ -9350,6 +9943,7 @@ async function runInteractiveTurn(
       liveTraceEntries: durableToolStreamTrace,
       turnProviderUsage,
       toolResultBudget,
+      processEntries: flags?.runtimeProcessEntries?.slice(-300),
     } as any, {
       disableCompactionCheck: isSubagentChatSession,
       disableMemoryFlushCheck: isSubagentChatSession,
@@ -9358,44 +9952,240 @@ async function runInteractiveTurn(
     if (toolLogText) {
       persistToolLog(sessionId, toolLogText);
     }
-    if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId);
-    if (!isSubagentChatSession) {
-      const generatedSessionTitle = await maybeAutoNameChatSession(sessionId);
-      if (generatedSessionTitle && !abortSignal?.aborted) {
-        sendSSE('session_title', {
-          sessionId,
-          title: generatedSessionTitle,
-          autoTitleLocked: true,
-        });
-      }
-    }
+    attachDeferredObservationMetadata();
   }
 
-    completeLocalMainChatStream(result);
+    await completeLocalMainChatStream(result);
     return result;
   } finally {
+    // Commit the authoritative session before any caller can publish `final` or
+    // `done`. This makes recovery distinguish a delivered final from a worker
+    // result that never reached durable conversation state.
+    let finalFlushError: unknown;
+    try {
+      await flushSessionForDelivery();
+    } catch (error) {
+      finalFlushError = error;
+      localMainChatStreamDurabilityFailed = true;
+    }
     if (localMainChatStream && !localMainChatStreamCompleted) {
-      appendMainChatStreamEvent(sessionId, localMainChatStream.streamId, 'done', {
-        reply: '',
-        mode: 'chat',
-        sections: [],
-      });
+      appendMainChatStreamEvent(
+        sessionId,
+        localMainChatStream.streamId,
+        localMainChatStreamDurabilityFailed ? 'error' : 'done',
+        localMainChatStreamDurabilityFailed
+          ? { message: 'The turn result could not be committed durably.' }
+          : { reply: '', mode: 'chat', sections: [] },
+      );
       localMainChatStreamCompleted = true;
     }
     if (localMainChatStream) finishMainChatStream(sessionId, localMainChatStream.streamId);
+    if (finalFlushError) throw finalFlushError;
   }
   } finally {
     mainChatTurnCoordinator.release(turnLease);
   }
 }
 
-function createSSESender(res: express.Response): (event: string, data: any) => void {
-  return (type: string, data: any) => {
-    try {
-      if (res.destroyed || res.writableEnded) return;
-      res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
-    } catch {}
+const durableInteractiveResults = new WeakMap<object, DurableTurnExecution>();
+
+function durableKindForInteractiveTurn(
+  message: string,
+  sessionId: string,
+  flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; directSubagentChat?: boolean; runtimeProcessEntries?: Record<string, any>[] },
+): TurnJobKind {
+  if (flags?.syntheticGoalContinuation || isMainChatGoalContinuation(message)) return 'main_chat_goal';
+  if (/^subagent_chat_/i.test(sessionId) || flags?.directSubagentChat) return 'background_agent';
+  if (/^\s*\[Timer fired\]/i.test(message)) return 'scheduled_task';
+  return 'interactive';
+}
+
+const runInteractiveTurn: typeof runInteractiveTurnInGateway = async (...args) => {
+  const [message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput, requestMeta, callerOnToken] = args;
+  const active = getCurrentDurableTurn();
+  if (active?.sessionId === sessionId) assertDurableTurnLease(active);
+  if (active?.sessionId === sessionId || process.env.PROMETHEUS_DISABLE_TURN_JOURNAL === '1') {
+    const result = await runInteractiveTurnInGateway(...args);
+    if (!abortSignal?.aborted && !/^subagent_chat_/i.test(String(sessionId || ''))) schedulePostTerminalTurnMaintenance(sessionId);
+    return result;
+  }
+  const payload = {
+    message,
+    sessionId,
+    pinnedMessages: pinnedMessages || null,
+    callerContext: callerContext || null,
+    reasoningOptions: reasoningOptions || null,
+    attachmentPreviews: attachmentPreviews || null,
+    attachments: await persistTurnAttachmentRefs(attachments),
+    modelOverride: modelOverride || null,
+    flags: flags || null,
+    turnOrigin: turnOriginInput || null,
+    requestMeta: requestMeta || null,
+  } as unknown as JsonValue;
+  const execution = await beginDurableTurn({
+    sessionId,
+    kind: durableKindForInteractiveTurn(message, sessionId, flags),
+    payload,
+    clientRequestId: requestMeta?.clientRequestId || null,
+    actorContext: turnOriginInput && typeof turnOriginInput === 'object'
+      ? turnOriginInput as unknown as any
+      : null,
+  });
+  if (execution.replayed) {
+    const replayed = parseDurableHandleChatReplay(execution.replayedResult);
+    if (replayed && typeof replayed === 'object' && !execution.settled) {
+      durableInteractiveResults.set(replayed, execution);
+    }
+    return replayed;
+  }
+  const durableAbort = createDurableTurnAbortView(execution, abortSignal);
+  const journalSendSSE = (event: string, data: any) => {
+    recordDurableTurnEvent(event, data, execution);
+    sendSSE(event, data);
   };
+  try {
+    // A prior attempt may have durably flushed the assistant message and its
+    // prepared final reference, then stopped before advancing the journal. In
+    // that exact window, adopt the session receipt instead of rerunning models
+    // or tools and creating a second logical turn.
+    const sessionReceipt = getDurableTurnSessionReceipt(sessionId, execution.jobId);
+    if (sessionReceipt) {
+      const recoveredPayload = adoptPreparedDurableTurnFinal(sessionReceipt.finalRef, execution);
+      commitPreparedDurableTurnFinal([], execution);
+      const recovered = parseDurableHandleChatReplay(recoveredPayload);
+      if (recovered && typeof recovered === 'object' && !execution.settled) {
+        durableInteractiveResults.set(recovered, execution);
+      }
+      if (!/^subagent_chat_/i.test(String(sessionId || ''))) schedulePostTerminalTurnMaintenance(sessionId);
+      return recovered;
+    }
+    const result = await runWithDurableTurn(execution, () => runInteractiveTurnInGateway(
+      message,
+      sessionId,
+      journalSendSSE,
+      pinnedMessages,
+      durableAbort.state,
+      callerContext,
+      reasoningOptions,
+      attachments,
+      attachmentPreviews,
+      modelOverride,
+      flags,
+      turnOriginInput,
+      requestMeta,
+      callerOnToken,
+    ));
+    assertDurableTurnLease(execution);
+    if (abortSignal?.interrupted) {
+      interruptDurableTurn('Gateway restart interrupted the interactive turn.', execution);
+    } else if (abortSignal?.aborted) {
+      cancelDurableTurn('Interactive turn cancelled.', execution);
+    } else {
+      await persistDurableTurnFinal(result, [], execution);
+      if (result && typeof result === 'object' && !execution.settled) {
+        durableInteractiveResults.set(result, execution);
+      }
+    }
+    if (!abortSignal?.aborted && !/^subagent_chat_/i.test(String(sessionId || ''))) schedulePostTerminalTurnMaintenance(sessionId);
+    return result;
+  } catch (error) {
+    if (abortSignal?.interrupted) interruptDurableTurn('Gateway restart interrupted the interactive turn.', execution);
+    else if (abortSignal?.aborted) cancelDurableTurn('Interactive turn cancelled.', execution);
+    else failDurableTurn(error, true, execution);
+    throw error;
+  } finally {
+    durableAbort.dispose();
+  }
+};
+
+type BoundedSSESender = ((event: string, data: any) => void) & {
+  /** Hand any privately queued terminal frames to Node before response end. */
+  flushTerminalFrames: () => void;
+};
+
+function createSSESender(res: express.Response): BoundedSSESender {
+  let closed = false;
+  let backpressured = false;
+  const pendingTerminalFrames: Array<{ type: string; frame: string }> = [];
+  let backpressureTimer: NodeJS.Timeout | null = null;
+  const clearBackpressureTimer = () => {
+    if (backpressureTimer) clearTimeout(backpressureTimer);
+    backpressureTimer = null;
+  };
+  const armBackpressureTimer = () => {
+    clearBackpressureTimer();
+    backpressureTimer = setTimeout(() => {
+      // The stream is replayable by sequence. Disconnecting a consumer that has
+      // not drained for 30 seconds protects the gateway without cancelling work.
+      if (backpressured && !res.destroyed && !res.writableEnded) {
+        try { res.destroy(); } catch {}
+      }
+    }, 30_000);
+    backpressureTimer.unref?.();
+  };
+  res.on('close', () => {
+    closed = true;
+    pendingTerminalFrames.length = 0;
+    clearBackpressureTimer();
+  });
+  res.on('drain', () => {
+    if (closed || res.destroyed || res.writableEnded) return;
+    backpressured = false;
+    clearBackpressureTimer();
+    try {
+      while (pendingTerminalFrames.length > 0) {
+        const next = pendingTerminalFrames.shift()!;
+        if (!res.write(next.frame)) {
+          backpressured = true;
+          armBackpressureTimer();
+          break;
+        }
+      }
+    } catch {
+      closed = true;
+    }
+  });
+  const send = ((type: string, data: any) => {
+    try {
+      if (closed || res.destroyed || res.writableEnded) return;
+      const frame = `data: ${JSON.stringify({ type, ...data })}\n\n`;
+      if (backpressured) {
+        if (type === 'final' || type === 'done' || type === 'error') {
+          const existing = pendingTerminalFrames.findIndex((entry) => entry.type === type);
+          if (existing >= 0) pendingTerminalFrames[existing] = { type, frame };
+          else pendingTerminalFrames.push({ type, frame });
+          // Preserve the normal final -> done pair. Error supersedes done, and
+          // the queue never retains more than two bounded terminal frames.
+          if (type === 'error') {
+            const doneIndex = pendingTerminalFrames.findIndex((entry) => entry.type === 'done');
+            if (doneIndex >= 0) pendingTerminalFrames.splice(doneIndex, 1);
+          }
+          while (pendingTerminalFrames.length > 2) pendingTerminalFrames.shift();
+        }
+        return;
+      }
+      if (!res.write(frame)) {
+        backpressured = true;
+        armBackpressureTimer();
+      }
+    } catch {}
+  }) as BoundedSSESender;
+  send.flushTerminalFrames = () => {
+    if (closed || res.destroyed || res.writableEnded) return;
+    // res.write(false) means "stop producing unbounded data", not that the
+    // frame was rejected. At response completion the private queue contains at
+    // most two already-bounded terminal frames; hand those frames to Node so
+    // res.end() flushes them instead of silently discarding them on `close`.
+    try {
+      while (pendingTerminalFrames.length > 0) {
+        const next = pendingTerminalFrames.shift()!;
+        res.write(next.frame);
+      }
+    } catch {
+      closed = true;
+    }
+  };
+  return send;
 }
 
 async function streamExistingMainChatToResponse(params: {
@@ -9410,7 +10200,37 @@ async function streamExistingMainChatToResponse(params: {
   let closed = false;
   let terminalSeen = false;
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-  const writeFrame = (frame: MainChatStreamFrame) => {
+  const writeChunk = async (chunk: string): Promise<boolean> => {
+    if (closed || res.destroyed || res.writableEnded) return false;
+    try {
+      if (res.write(chunk)) return true;
+    } catch {
+      closed = true;
+      return false;
+    }
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        res.off('drain', onDrain);
+        res.off('close', onClosed);
+        resolve(ok);
+      };
+      const onDrain = () => finish(true);
+      const onClosed = () => { closed = true; finish(false); };
+      const timer = setTimeout(() => {
+        closed = true;
+        try { res.destroy(); } catch {}
+        finish(false);
+      }, 30_000);
+      timer.unref?.();
+      res.once('drain', onDrain);
+      res.once('close', onClosed);
+    });
+  };
+  const writeFrame = async (frame: MainChatStreamFrame) => {
     if (closed || res.destroyed || res.writableEnded) return;
     const data = frame.data && typeof frame.data === 'object' ? frame.data : {};
     const payload = {
@@ -9421,13 +10241,14 @@ async function streamExistingMainChatToResponse(params: {
       at: frame.at,
       ...(clientRequestId && !data.clientRequestId ? { clientRequestId } : {}),
     };
-    try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { closed = true; }
+    const written = await writeChunk(`data: ${JSON.stringify(payload)}\n\n`);
+    if (!written) return;
     lastSeq = Math.max(lastSeq, Number(frame.seq || 0) || 0);
     if (frame.type === 'done' || frame.type === 'final' || frame.type === 'error') terminalSeen = true;
   };
-  const writePing = () => {
+  const writePing = async () => {
     if (closed || res.destroyed || res.writableEnded) return;
-    try { res.write(': ping\n\n'); } catch { closed = true; }
+    await writeChunk(': ping\n\n');
   };
   const onClose = () => { closed = true; };
   res.on('close', onClose);
@@ -9436,9 +10257,9 @@ async function streamExistingMainChatToResponse(params: {
       const stream = getMainChatStream(sessionId);
       if (!stream || stream.streamId !== streamId) break;
       const frames = stream.events.filter((frame) => Number(frame.seq || 0) > lastSeq);
-      for (const frame of frames) writeFrame(frame);
+      for (const frame of frames) await writeFrame(frame);
       if (terminalSeen || !stream.active) break;
-      writePing();
+      await writePing();
       await sleep(750);
     }
     if (!terminalSeen && !closed && !res.destroyed && !res.writableEnded) {
@@ -14447,57 +15268,6 @@ function voiceRuntimeContextText(value: any): string {
   return `Mobile voice wake phrase is currently "${wakePhrase}". Quiet mode is ${gateActive ? 'active' : 'not active'}; setting the phrase alone may be acknowledged naturally, and quiet mode should only start through a quiet-mode tool or a strict local command.`;
 }
 
-function attachRuntimeProcessEntriesToLatestAssistant(
-  sessionId: string,
-  entries: Record<string, any>[],
-  identity?: { goalId?: string; goalTurnId?: string; goalTurnNumber?: number },
-): void {
-  const sid = String(sessionId || '').trim();
-  const processEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
-  if (!sid || !processEntries.length) return;
-  try {
-    const session = getSession(sid);
-    const history = Array.isArray(session.history) ? session.history.slice() : [];
-    for (let i = history.length - 1; i >= 0; i -= 1) {
-      const msg: any = history[i];
-      if (msg?.role !== 'assistant' && msg?.role !== 'ai') continue;
-      if (identity?.goalTurnId && String(msg.goalTurnId || '') !== identity.goalTurnId) continue;
-      if (!identity?.goalTurnId && identity?.goalId && String(msg.goalId || '') !== identity.goalId) continue;
-      if (!identity?.goalTurnId && Number.isFinite(Number(identity?.goalTurnNumber)) && Number(msg.goalTurnNumber || 0) !== Number(identity?.goalTurnNumber)) continue;
-      const existing = Array.isArray(msg.processEntries) ? msg.processEntries : [];
-      const merged = [...existing];
-      const seen = new Set(merged.map((entry: any) => JSON.stringify({
-        ts: entry?.ts,
-        type: entry?.type,
-        actor: entry?.actor,
-        content: entry?.content,
-        toolName: entry?.toolName,
-      })));
-      for (const entry of processEntries) {
-        const key = JSON.stringify({
-          ts: entry?.ts,
-          type: entry?.type,
-          actor: entry?.actor,
-          content: entry?.content,
-          toolName: entry?.toolName,
-        });
-        if (seen.has(key)) continue;
-        seen.add(key);
-        merged.push(entry);
-      }
-      if (merged.length === existing.length) return;
-      history[i] = {
-        ...msg,
-        processEntries: merged.slice(-300),
-      };
-      replaceHistory(sid, history);
-      return;
-    }
-  } catch (err: any) {
-    console.warn('[main chat] failed to attach runtime process entries:', err?.message || err);
-  }
-}
-
 function historyMessageMergeKey(msg: any): string {
   const role = msg?.role === 'assistant' || msg?.role === 'ai' ? 'assistant' : msg?.role === 'user' ? 'user' : '';
   const content = String(msg?.content || '').replace(/\s+/g, ' ').trim().slice(0, 500);
@@ -14709,74 +15479,6 @@ function estimateJsonTokensForModel(value: unknown, profile: { tokenizer: any })
   } catch {
     return estimateTextTokensForModel(String(value || ''), profile.tokenizer);
   }
-}
-
-function safeTokenSessionFileName(sessionId: string): string {
-  return String(sessionId || 'unknown').replace(/[^a-zA-Z0-9._-]/g, '_') || 'unknown';
-}
-
-function estimateToolObservationRawTokens(sessionId: string, profile: { tokenizer: any }): { tokens: number; bytes: number; files: number } {
-  let tokens = 0;
-  let bytes = 0;
-  let files = 0;
-  try {
-    const dir = path.join(getConfig().getConfigDir(), 'tool-observations', 'raw', safeTokenSessionFileName(sessionId));
-    if (!fs.existsSync(dir)) return { tokens, bytes, files };
-    for (const name of fs.readdirSync(dir)) {
-      const full = path.join(dir, name);
-      let st: fs.Stats;
-      try { st = fs.statSync(full); } catch { continue; }
-      if (!st.isFile()) continue;
-      files += 1;
-      bytes += st.size;
-      try {
-        tokens += estimateTextTokensForModel(fs.readFileSync(full, 'utf-8'), profile.tokenizer);
-      } catch {
-        tokens += Math.ceil(st.size / 3.5);
-      }
-    }
-  } catch {}
-  return { tokens, bytes, files };
-}
-
-function estimateStoredThreadFootprint(sessionId: string, session: any, profile: { tokenizer: any }) {
-  const history = Array.isArray(session?.history) ? session.history : [];
-  let visibleChatTokens = 0;
-  let processEntryTokens = 0;
-  let legacyToolLogTokens = 0;
-  let attachmentMetadataTokens = 0;
-  for (const msg of history) {
-    visibleChatTokens += estimateTextTokensForModel(msg?.content || '', profile.tokenizer);
-    if (Array.isArray(msg?.processEntries)) processEntryTokens += estimateJsonTokensForModel(msg.processEntries, profile);
-    if (msg?.toolLog) legacyToolLogTokens += estimateTextTokensForModel(msg.toolLog, profile.tokenizer);
-    const attachmentBits = {
-      artifacts: msg?.artifacts,
-      generatedImages: msg?.generatedImages,
-      generatedVideos: msg?.generatedVideos,
-      attachmentPreviews: msg?.attachmentPreviews,
-      canvasFiles: msg?.canvasFiles,
-      fileChanges: msg?.fileChanges,
-      productCarousel: msg?.productCarousel,
-      richArtifacts: msg?.richArtifacts,
-    };
-    attachmentMetadataTokens += estimateJsonTokensForModel(attachmentBits, profile);
-  }
-  const sessionJsonTokens = estimateJsonTokensForModel(session, profile);
-  const observations = readToolObservations(sessionId, 100000);
-  const toolObservationStoredTokens = estimateJsonTokensForModel(observations, profile);
-  const raw = estimateToolObservationRawTokens(sessionId, profile);
-  return {
-    visibleChatTokens,
-    processEntryTokens,
-    legacyToolLogTokens,
-    attachmentMetadataTokens,
-    sessionJsonTokens,
-    toolObservationStoredTokens,
-    rawToolResultTokens: raw.tokens,
-    rawToolResultBytes: raw.bytes,
-    rawToolResultFiles: raw.files,
-    fullStoredThreadTokens: sessionJsonTokens + toolObservationStoredTokens + raw.tokens,
-  };
 }
 
 function aggregateSessionModelUsage(sessionId: string) {
@@ -18558,7 +19260,7 @@ router.post('/api/chat', async (req, res) => {
   const excludedSkillIds = normalizeExcludedSkillIdsInput(req.body?.excludedSkillIds || req.body?.excludedMatchingSkillIds);
   const forcedSkillIds = normalizeForcedSkillIdsInput(req.body?.selectedSkillIds || req.body?.forcedSkillIds || req.body?.matchedSkillIds);
   const clientRequestId = normalizeClientRequestId(req.body?.clientRequestId || req.headers['x-client-request-id']);
-  const requestFingerprint = fingerprintMainChatRequest(req.body || {});
+  const requestFingerprint = await fingerprintMainChatRequest(req.body || {});
   setLastMainSessionId(resolvedSessionId);
   const turnOrigin = normalizeTurnOrigin(req.body?.origin, resolvedSessionId, {
     channel: req.headers['x-pairing-token'] ? 'mobile' : undefined,
@@ -18625,11 +19327,66 @@ router.post('/api/chat', async (req, res) => {
           clientRequestId,
         });
       } else {
-        for (const frame of stream?.events || []) {
-          if (stream?.streamId !== admission.streamId) continue;
-          res.write(`data: ${JSON.stringify({ type: frame.type, ...(frame.data || {}), seq: frame.seq, streamId: stream.streamId, at: frame.at, clientRequestId })}\n\n`);
+        if (stream?.streamId === admission.streamId) {
+          for (const frame of stream.events || []) {
+            res.write(`data: ${JSON.stringify({ type: frame.type, ...(frame.data || {}), seq: frame.seq, streamId: stream.streamId, at: frame.at, clientRequestId })}\n\n`);
+          }
+          res.write(`data: ${JSON.stringify({ type: 'done', duplicate: true, clientRequestId })}\n\n`);
+        } else {
+          // The one-slot in-memory stream may now belong to a newer request.
+          // Replay this idempotency key directly from its durable journal final;
+          // never append to, finish, or otherwise mutate that newer stream.
+          let durableReplay: ReturnType<typeof findDurableTurnFinalReplay> = null;
+          try {
+            durableReplay = findDurableTurnFinalReplay(resolvedSessionId, clientRequestId);
+          } catch (error) {
+            console.warn('[chat] Durable duplicate replay lookup failed:', (error as Error)?.message || error);
+          }
+          if (durableReplay) {
+            const terminalResult = parseDurableHandleChatReplay(durableReplay.result) as any;
+            const replaySender = createSSESender(res);
+            const sendBoundedReplay = (event: 'final' | 'done', data: Record<string, unknown>) => {
+              const frame = boundTurnDeliveryFrame(event, data, {
+                createReference: reuseExistingTurnDeliveryReference,
+              });
+              replaySender(frame.type, frame.data);
+            };
+            sendBoundedReplay('final', {
+              text: terminalResult.text,
+              artifacts: terminalResult.artifacts,
+              generatedImages: terminalResult.generatedImages,
+              generatedVideos: terminalResult.generatedVideos,
+              canvasFiles: terminalResult.canvasFiles,
+              fileChanges: terminalResult.fileChanges,
+              productCarousel: terminalResult.productCarousel,
+              richArtifacts: terminalResult.richArtifacts,
+              deliveryReplacements: terminalResult.deliveryReplacements,
+              duplicate: true,
+              clientRequestId,
+            });
+            sendBoundedReplay('done', {
+              reply: terminalResult.text,
+              mode: terminalResult.type,
+              sections: [{ type: terminalResult.type === 'execute' ? 'tool_results' : 'text', content: terminalResult.text }],
+              thinking: terminalResult.thinking,
+              results: terminalResult.toolResults,
+              artifacts: terminalResult.artifacts,
+              generatedImages: terminalResult.generatedImages,
+              generatedVideos: terminalResult.generatedVideos,
+              canvasFiles: terminalResult.canvasFiles,
+              fileChanges: terminalResult.fileChanges,
+              productCarousel: terminalResult.productCarousel,
+              richArtifacts: terminalResult.richArtifacts,
+              deliveryReplacements: terminalResult.deliveryReplacements,
+              duplicate: true,
+              clientRequestId,
+            });
+            replaySender.flushTerminalFrames();
+            completePersistedDurableTurn(durableReplay.job.id);
+          } else {
+            res.write(`data: ${JSON.stringify({ type: 'done', duplicate: true, clientRequestId })}\n\n`);
+          }
         }
-        res.write(`data: ${JSON.stringify({ type: 'done', duplicate: true, clientRequestId })}\n\n`);
       }
       res.end();
       return;
@@ -18650,7 +19407,7 @@ router.post('/api/chat', async (req, res) => {
     const eventData = clientRequestId ? { ...(data || {}), clientRequestId } : data;
     const frame = appendMainChatStreamEvent(resolvedSessionId, chatStream.streamId, event, eventData);
     const payload = frame
-      ? { ...(eventData || {}), seq: frame.seq, streamId: chatStream.streamId }
+      ? { ...frame.data, seq: frame.seq, streamId: chatStream.streamId, at: frame.at }
       : eventData;
     httpSendSSE(event, payload);
   };
@@ -18677,9 +19434,6 @@ router.post('/api/chat', async (req, res) => {
         ? `Still connected. Prometheus is working (${Math.round(idleMs / 1000)}s since the last visible update).`
         : 'Still connected. Prometheus is working...';
     }
-    try {
-      if (!res.destroyed && !res.writableEnded) res.write(': ping\n\n');
-    } catch {}
     sendSSE('heartbeat', payload);
   }, 5000);
 
@@ -18696,6 +19450,7 @@ router.post('/api/chat', async (req, res) => {
     detail: String(message || '').slice(0, 160),
     abortSignal,
     onAbort: () => abortController.abort(),
+    onShutdownInterrupt: () => abortController.abort(),
     recoveryPolicy: 'mark_interrupted',
     recoveryData: {
       message: String(message || ''),
@@ -18746,7 +19501,7 @@ router.post('/api/chat', async (req, res) => {
     const checkpoint: Record<string, any> = { event, at: Date.now() };
     if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
     if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
-    if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
+    if (data?.args && typeof data.args === 'object') checkpoint.args = boundedRuntimeProcessArgs(data.args);
     if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
     if (event === 'thinking') {
       const thinking = String(data?.thinking || data?.text || '').trim();
@@ -18786,45 +19541,61 @@ router.post('/api/chat', async (req, res) => {
 		      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
           Array.isArray(attachmentPreviews) && attachmentPreviews.length > 0 ? attachmentPreviews : undefined,
           undefined,
-          (excludedSkillIds.length || forcedSkillIds.length) ? { excludedSkillIds, forcedSkillIds } : undefined,
+	          {
+                ...(excludedSkillIds.length ? { excludedSkillIds } : {}),
+                ...(forcedSkillIds.length ? { forcedSkillIds } : {}),
+                runtimeProcessEntries,
+              },
           turnOrigin,
           { clientRequestId },
 			    );
-        attachRuntimeProcessEntriesToLatestAssistant(resolvedSessionId, runtimeProcessEntries);
 		    if (!abortSignal.aborted) {
 		      markProviderStatus(true);
-          const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim() || 'http';
-          const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-          notifyChatCompletion({
-            sessionId: resolvedSessionId,
-            source: turnOrigin.channel === 'mobile' ? 'mobile' : 'desktop',
-            finalText: result.text,
-            requestOrigin: host ? `${proto}://${host}` : undefined,
-            clientRequestId,
-          });
+	      const durableExecution = result && typeof result === 'object'
+	        ? durableInteractiveResults.get(result)
+	        : undefined;
+        const terminalResult = (durableExecution
+          ? getDurableTurnFinalDeliveryPayload(durableExecution)
+          : null) as any || result;
 	      sendSSE('final', {
-        text: result.text,
-        artifacts: result.artifacts,
-        generatedImages: result.generatedImages,
-        generatedVideos: result.generatedVideos,
-        canvasFiles: result.canvasFiles,
-        fileChanges: result.fileChanges,
-        productCarousel: result.productCarousel,
-        richArtifacts: result.richArtifacts,
+        text: terminalResult.text,
+        artifacts: terminalResult.artifacts,
+        generatedImages: terminalResult.generatedImages,
+        generatedVideos: terminalResult.generatedVideos,
+        canvasFiles: terminalResult.canvasFiles,
+        fileChanges: terminalResult.fileChanges,
+        productCarousel: terminalResult.productCarousel,
+        richArtifacts: terminalResult.richArtifacts,
+        deliveryReplacements: terminalResult.deliveryReplacements,
       });
 	      sendSSE('done', {
-        reply: result.text, mode: result.type,
-        sections: [{ type: result.type === 'execute' ? 'tool_results' : 'text', content: result.text }],
-        thinking: result.thinking,
-        results: result.toolResults,
-        artifacts: result.artifacts,
-        generatedImages: result.generatedImages,
-        generatedVideos: result.generatedVideos,
-        canvasFiles: result.canvasFiles,
-        fileChanges: result.fileChanges,
-        productCarousel: result.productCarousel,
-        richArtifacts: result.richArtifacts,
+        reply: terminalResult.text, mode: terminalResult.type,
+        sections: [{ type: terminalResult.type === 'execute' ? 'tool_results' : 'text', content: terminalResult.text }],
+        thinking: terminalResult.thinking,
+        results: terminalResult.toolResults,
+        artifacts: terminalResult.artifacts,
+        generatedImages: terminalResult.generatedImages,
+        generatedVideos: terminalResult.generatedVideos,
+        canvasFiles: terminalResult.canvasFiles,
+        fileChanges: terminalResult.fileChanges,
+        productCarousel: terminalResult.productCarousel,
+        richArtifacts: terminalResult.richArtifacts,
+        deliveryReplacements: terminalResult.deliveryReplacements,
       });
+      if (durableExecution?.finalRef && !durableExecution.settled) {
+        completeDurableTurn(durableExecution);
+        durableInteractiveResults.delete(result);
+      }
+      const completionPreview = String(result.text || '').slice(0, 4_000);
+      const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim() || 'http';
+      const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+      setImmediate(() => notifyChatCompletion({
+        sessionId: resolvedSessionId,
+        source: turnOrigin.channel === 'mobile' ? 'mobile' : 'desktop',
+        finalText: completionPreview,
+        requestOrigin: host ? `${proto}://${host}` : undefined,
+        clientRequestId,
+      }));
     }
 		  } catch (err: any) {
 		    if (!abortSignal.aborted) markProviderStatus(false);
@@ -18848,7 +19619,10 @@ router.post('/api/chat', async (req, res) => {
       const resumeTimer = setTimeout(() => startMainChatGoalRunner(resolvedSessionId, 'post_user_turn'), 450);
       resumeTimer.unref?.();
     }
-    if (!res.destroyed && !res.writableEnded) res.end();
+    if (!res.destroyed && !res.writableEnded) {
+      httpSendSSE.flushTerminalFrames();
+      res.end();
+    }
   }
 });
 
@@ -19184,7 +19958,7 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
   }
 });
 
-router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, res) => {
+router.get('/api/sessions/:id/context-window', requireSafeSessionParam, async (req, res) => {
   try {
     const id = req.params.id;
     if (!id) {
@@ -19195,7 +19969,7 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
     const budget = buildContextBudget(profile);
     const messageCount = resolveRollingCompactionPolicy().messageCount;
     const history = getHistoryForApiCall(id, Math.ceil(messageCount / 2), { maxMessages: messageCount });
-    const recentToolContext = getRecentToolObservationsForContext(
+    const recentToolContext = await getRecentToolObservationsForContextAsync(
       id,
       5,
       Math.max(2500, Math.min(16000, budget.toolContextBudgetTokens * 3)),
@@ -19206,7 +19980,14 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
     const toolTokens = Math.round(estimateTextTokensForModel(recentToolContext, profile.tokenizer) * calibrationFactor);
     const currentInputTokens = messageTokens + toolTokens;
     const session = getSession(id);
-    const storedThread = estimateStoredThreadFootprint(id, session, profile);
+    let storedThread: any = null;
+    let storedThreadDiagnosticError = '';
+    try {
+      storedThread = await calculateStoredThreadFootprintIsolated(id, session, profile.tokenizer);
+    } catch (error) {
+      storedThreadDiagnosticError = String((error as Error)?.message || error || 'Stored-thread diagnostic unavailable').slice(0, 500);
+      console.warn(`[context-window] Stored-thread diagnostic unavailable for ${id}: ${storedThreadDiagnosticError}`);
+    }
     const modelUsage = aggregateSessionModelUsage(id);
     const turnTelemetry = getLastTurnUsageTelemetry(session);
     const currentState = buildContextWindowCurrentState({
@@ -19234,6 +20015,10 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
       messageTokens,
       toolObservationTokens: toolTokens,
       storedThread,
+      storedThreadDiagnostic: {
+        available: !!storedThread,
+        error: storedThreadDiagnosticError || undefined,
+      },
       modelUsage,
       turnTelemetry,
       calibration,

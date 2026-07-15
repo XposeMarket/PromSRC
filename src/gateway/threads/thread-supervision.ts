@@ -241,6 +241,19 @@ export function refreshThreadSupervisions(broadcast?: (data: any) => void): Thre
           chatId: record.targetSessionId,
           label: record.targetTitle,
         },
+        richArtifacts: [{
+          id: `thread-links:supervision:${record.id}:${record.status}`,
+          type: 'thread_links',
+          title: `Managed thread ${heading}`,
+          createdAt: new Date().toISOString(),
+          items: [{
+            sessionId: record.targetSessionId,
+            title: record.targetTitle,
+            label: `Thread ${heading}`,
+            subtitle: record.finalSummary ? String(record.finalSummary).replace(/\s+/g, ' ').slice(0, 140) : 'Open the Prometheus thread',
+            status: record.status,
+          }],
+        }],
       }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
       flushSession(record.ownerSessionId);
       record.notifiedAt = Date.now();

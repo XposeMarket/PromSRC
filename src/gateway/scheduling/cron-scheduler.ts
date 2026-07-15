@@ -12,8 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Cron } from 'croner';
-import { BackgroundTaskRunner } from '../tasks/background-task-runner';
-import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSession, getHistory, getSession, setActivatedToolCategories, setWorkspace } from '../session';
+import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSessionAsync, getHistory, getSession, setActivatedToolCategories, setWorkspace } from '../session';
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
@@ -779,7 +778,6 @@ export class CronScheduler {
   private deps: SchedulerDeps;
   private tickInterval: NodeJS.Timeout | null = null;
   private runningJobIds: Set<string> = new Set(); // job IDs currently executing (parallel)
-  private interruptedTasksBySchedule: Map<string, string[]> = new Map(); // scheduleId -> [taskIds]
   private pendingRunHistoryCompactions: Map<string, NodeJS.Timeout> = new Map();
 
   private defaultStore(): CronStore {
@@ -1185,6 +1183,29 @@ export class CronScheduler {
   }
 
   private async executeJobInner(job: CronJob): Promise<void> {
+    const shutdownState = { interrupted: false };
+    const orchestrationRuntimeId = registerLiveRuntime({
+      kind: 'cron',
+      label: `Scheduled orchestration - ${job.name}`,
+      scheduleId: job.id,
+      source: 'scheduler',
+      detail: String(job.prompt || job.name || '').slice(0, 160),
+      onShutdownInterrupt: () => {
+        // This outer runtime spans every schedule assignment path (main,
+        // standalone owner, team member, and team manager). Child runtimes own
+        // their provider I/O; this hook fences scheduler-side finalization.
+        shutdownState.interrupted = true;
+      },
+      recoveryPolicy: 'rerun',
+    });
+    try {
+      await this.executeJobInnerOwned(job, shutdownState);
+    } finally {
+      finishLiveRuntime(orchestrationRuntimeId);
+    }
+  }
+
+  private async executeJobInnerOwned(job: CronJob, shutdownState: { interrupted: boolean }): Promise<void> {
     const start = Date.now();
 
     // Mark as running
@@ -1194,27 +1215,11 @@ export class CronScheduler {
     this.deps.broadcast({ type: 'tasks_update', jobs: this.store.jobs, config: this.store.heartbeat });
     this.deps.broadcast({ type: 'task_running', jobId: job.id, jobName: job.name });
 
-    // Check for running background tasks and interrupt them if this schedule requires it
-    const interruptedTasks: string[] = [];
-    const runningTasks = BackgroundTaskRunner.getRunningTasks();
-    if (runningTasks.length > 0) {
-      console.log(`[CronScheduler] Schedule "${job.name}" found ${runningTasks.length} running background task(s) - interrupting...`);
-      for (const taskId of runningTasks) {
-        const interrupted = BackgroundTaskRunner.interruptTaskForSchedule(taskId, job.id);
-        if (interrupted) {
-          interruptedTasks.push(taskId);
-          console.log(`[CronScheduler] Interrupted background task ${taskId} for schedule ${job.id}`);
-        }
-      }
-      // Store interrupted tasks by schedule ID for later resumption
-      if (interruptedTasks.length > 0) {
-        this.interruptedTasksBySchedule.set(job.id, interruptedTasks);
-      }
-      // Give tasks a moment to pause at round boundary
-      if (interruptedTasks.length > 0) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    }
+    // Scheduled jobs are independent runs. Do not pause unrelated background
+    // tasks merely because a schedule fired: that made one thread's admission
+    // mutate every other active thread and was especially disruptive for
+    // hour-long work. Shared-resource contention is handled by bounded runtime
+    // capacity and resource leases instead.
 
     // Fake sessionId for the cron call — isolated from user sessions
     const mainSessionId = this.deps.getMainSessionId?.() || 'default';
@@ -1261,6 +1266,7 @@ export class CronScheduler {
     // Collect SSE events emitted during the run
     const events: Array<{ type: string; data: any }> = [];
     const sendSSE = (type: string, data: any) => {
+      if (shutdownState.interrupted) return;
       events.push({ type, data });
       // Forward tool_call/tool_result events to UI so NOW card shows live progress
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(type)) {
@@ -1381,6 +1387,7 @@ export class CronScheduler {
             true,
             { suppressOriginatingSessionProgress: true },
           );
+          if (shutdownState.interrupted) return;
           const reason = String(managerResult?.reason || 'completed');
           const turns = Number(managerResult?.turns || 0);
           const managerMessage = String(managerResult?.managerMessage || '').trim();
@@ -1428,6 +1435,7 @@ export class CronScheduler {
               teamId,
               'cron'
             );
+            if (shutdownState.interrupted) return;
             scheduledSubagentTaskId = teamResult.taskId;
             if (scheduledSubagentTaskId) {
               runId = startRunLogEntry({ scheduleId: job.id, taskId: scheduledSubagentTaskId, scheduledAt });
@@ -1499,7 +1507,11 @@ export class CronScheduler {
               message: scheduledUserMessage,
             });
 
-            const abortSignal = { aborted: false };
+            const abortController = new AbortController();
+            const abortSignal: { aborted: boolean; interrupted?: boolean; signal: AbortSignal } = {
+              aborted: false,
+              signal: abortController.signal,
+            };
             const runtimeId = registerLiveRuntime({
               kind: 'cron',
               label: `Scheduled owner chat - ${job.name}`,
@@ -1510,11 +1522,17 @@ export class CronScheduler {
               detail: effectivePrompt.slice(0, 160),
               abortSignal,
               onAbort: () => {
+                abortController.abort();
                 updateTaskStatus(cronTask.id, 'failed', { finalSummary: 'Aborted via Telegram /stop.' });
                 appendJournal(cronTask.id, { type: 'status_push', content: 'Aborted via Telegram /stop.' });
               },
+              onShutdownInterrupt: () => {
+                shutdownState.interrupted = true;
+                abortController.abort();
+              },
             });
             const taskSendSSE = (event: string, data: any) => {
+              if (shutdownState.interrupted) return;
               sendSSE(event, data);
               this.deps.broadcast({
                 type: 'subagent_chat_stream_event',
@@ -1599,12 +1617,19 @@ export class CronScheduler {
                 modelOverride || String((agentDef as any)?.model || '').trim() || undefined,
                 'cron'
               );
+              if (abortSignal.interrupted) {
+                shutdownState.interrupted = true;
+                return;
+              }
               resultText = abortSignal.aborted
                 ? 'ERROR: Run aborted by operator.'
                 : String(ownerResult?.text || '').trim();
             } finally {
+              if (abortSignal.interrupted) shutdownState.interrupted = true;
               finishLiveRuntime(runtimeId);
             }
+
+            if (shutdownState.interrupted) return;
 
             if (!resultText) resultText = 'Scheduled subagent task completed.';
             if (containsObsoleteProductBrand(resultText)) {
@@ -1711,6 +1736,7 @@ export class CronScheduler {
         // Mirror sendSSE events into the task journal so the kanban panel shows live tool calls
         // Also intercepts write_note tool calls to persist schedule-scoped insights into schedule memory
         const taskSendSSE = (event: string, data: any) => {
+          if (shutdownState.interrupted) return;
           sendSSE(event, data); // still feeds the cron broadcast pipeline
           if (event === 'tool_call') {
             appendJournal(cronTask.id, {
@@ -1777,7 +1803,11 @@ export class CronScheduler {
         const runId = startRunLogEntry({ scheduleId: job.id, taskId: cronTask.id, scheduledAt });
         activeRunId = runId;
         activeScheduledAt = scheduledAt;
-        const abortSignal = { aborted: false };
+        const abortController = new AbortController();
+        const abortSignal: { aborted: boolean; interrupted?: boolean; signal: AbortSignal } = {
+          aborted: false,
+          signal: abortController.signal,
+        };
         const runtimeId = registerLiveRuntime({
           kind: 'cron',
           label: `Scheduled task - ${job.name}`,
@@ -1788,8 +1818,13 @@ export class CronScheduler {
           detail: effectivePrompt.slice(0, 160),
           abortSignal,
           onAbort: () => {
+            abortController.abort();
             updateTaskStatus(cronTask.id, 'failed', { finalSummary: 'Aborted via Telegram /stop.' });
             appendJournal(cronTask.id, { type: 'status_push', content: 'Aborted via Telegram /stop.' });
+          },
+          onShutdownInterrupt: () => {
+            shutdownState.interrupted = true;
+            abortController.abort();
           },
         });
 
@@ -1816,6 +1851,10 @@ export class CronScheduler {
           modelOverride,
           'cron'
         );
+        if (abortSignal.interrupted) {
+          shutdownState.interrupted = true;
+          return;
+        }
         resultText = abortSignal.aborted
           ? 'ERROR: Run aborted by operator.'
           : (result.text || '');
@@ -1848,8 +1887,17 @@ export class CronScheduler {
               resultText = synthText;
             }
           } catch (synthErr: any) {
+            if (abortSignal.interrupted) {
+              shutdownState.interrupted = true;
+              return;
+            }
             console.warn(`[CronScheduler] Synthesis round failed for "${job.name}":`, synthErr.message);
           }
+        }
+
+        if (abortSignal.interrupted) {
+          shutdownState.interrupted = true;
+          return;
         }
 
         if (containsObsoleteProductBrand(resultText)) {
@@ -1889,6 +1937,7 @@ export class CronScheduler {
           });
         } catch { /* best effort */ }
         } finally {
+          if (abortSignal.interrupted) shutdownState.interrupted = true;
           finishLiveRuntime(runtimeId);
         }
 
@@ -1896,6 +1945,11 @@ export class CronScheduler {
       }
       duration = Date.now() - start;
     } catch (err: any) {
+      if (shutdownState.interrupted) {
+        // runtime-recovery owns the paused/checkpointed state. Do not convert a
+        // planned gateway restart into a failed scheduled task or run-history row.
+        return;
+      }
       resultText = `ERROR: ${err.message}`;
       duration = Date.now() - start;
       console.error(`[CronScheduler] Job "${job.name}" error:`, err.message);
@@ -1956,6 +2010,8 @@ export class CronScheduler {
       }
     }
 
+    if (shutdownState.interrupted) return;
+
     const expectedOutputVerification = verifyScheduledExpectedOutputs(job);
     const expectedResultVerification = verifyScheduledExpectedResult(job, resultText);
     if (expectedResultVerification.configured && !expectedResultVerification.allPassed) {
@@ -2008,7 +2064,8 @@ export class CronScheduler {
     }
 
     let automatedSession: AutomatedSession | null = null;
-    const createAutomatedOutputSession = (): AutomatedSession => {
+    let deferredManagerReviewTeamId: string | undefined;
+    const createAutomatedOutputSession = async (): Promise<AutomatedSession> => {
       // Stable, deterministic session id per job: every run for the same job
       // appends to one continuous thread instead of spawning a fresh session.
       const sessionId = `auto_${job.id}`;
@@ -2044,7 +2101,7 @@ export class CronScheduler {
         const liveSession = getSession(sessionId);
         liveSession.title = title;
         liveSession.autoTitleLocked = true;
-        flushSession(sessionId);
+        await flushSessionAsync(sessionId);
         // Broadcast the full accumulated thread so the UI shows the whole history.
         fullHistory = (liveSession.history || []).map((m: any) => ({
           role: m.role === 'assistant' ? 'ai' : String(m.role || 'user'),
@@ -2129,20 +2186,23 @@ export class CronScheduler {
           trigger: 'cron',
         });
         console.log(`[CronScheduler] Job "${job.name}" produced output -> routed to team chat ${teamId}`);
-        await triggerManagerReview(teamId!, broadcastTeamEvent);
+        // Manager review is ancillary follow-up work. Start it only after this
+        // schedule's own result/history/store commit is durable below so a
+        // restart during review cannot leave the cron run half-finalized.
+        deferredManagerReviewTeamId = teamId!;
       } catch (teamRouteErr: any) {
         console.error(`[CronScheduler] Failed to route "${job.name}" output to team chat:`, teamRouteErr?.message || teamRouteErr);
       }
     } else if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent' && shouldRouteToStandaloneSubagent) {
       if (shouldAlsoDeliverStandaloneToMain) {
-        automatedSession = createAutomatedOutputSession();
+        automatedSession = await createAutomatedOutputSession();
         console.log(`[CronScheduler] Job "${job.name}" also delivered main-channel output for owner subagent ${teamSubagentId}`);
       } else {
         job.lastOutputSessionId = null;
       }
       console.log(`[CronScheduler] Job "${job.name}" produced output -> routed to subagent ${teamSubagentId} task ${scheduledSubagentTaskId || 'unknown'}`);
     } else if (!isOk && resultText.trim() && job.payloadKind !== 'systemEvent') {
-      automatedSession = createAutomatedOutputSession();
+      automatedSession = await createAutomatedOutputSession();
     } else {
       console.log(`[CronScheduler] Job "${job.name}" → HEARTBEAT_OK (suppressed)`);
     }
@@ -2164,21 +2224,6 @@ export class CronScheduler {
       clearHistory(targetSessionId);
     }
 
-    // After schedule completes, resume any tasks that were interrupted by this schedule
-    const tasksToResume = this.interruptedTasksBySchedule.get(job.id);
-    if (tasksToResume && tasksToResume.length > 0) {
-      console.log(`[CronScheduler] Schedule "${job.name}" completed - scheduling resumption of ${tasksToResume.length} task(s)`);
-      // Schedule resumption for next heartbeat cycle or shortly after
-      setTimeout(() => {
-        for (const taskId of tasksToResume) {
-          if (BackgroundTaskRunner.resumeTaskAfterSchedule(taskId, job.id)) {
-            console.log(`[CronScheduler] Resumed task ${taskId} after schedule ${job.id} completed`);
-          }
-        }
-        this.interruptedTasksBySchedule.delete(job.id);
-      }, 2000); // 2 second delay to ensure final state is persisted
-    }
-
     // Broadcast final state to all WebSocket clients
     this.deps.broadcast({
       type: 'task_done',
@@ -2190,6 +2235,12 @@ export class CronScheduler {
       jobs: this.store.jobs,
       config: this.store.heartbeat,
     });
+
+    if (deferredManagerReviewTeamId) {
+      void triggerManagerReview(deferredManagerReviewTeamId, broadcastTeamEvent).catch((err: any) => {
+        console.error(`[CronScheduler] Deferred manager review failed for team ${deferredManagerReviewTeamId}:`, err?.message || err);
+      });
+    }
   }
 
   // ─── Task Pause/Resume/Interrupt ─────────────────────────────────────────────

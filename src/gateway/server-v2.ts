@@ -26,7 +26,7 @@ import {
 } from '../config/config';
 import { getVault } from '../security/vault';
 import { getOllamaClient } from '../agents/ollama-client';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions } from './session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, shutdownSessionPersistence } from './session';
 import { hookBus } from './hooks';
 import { loadWorkspaceHooks } from './hook-loader';
 import { runBootMd } from './boot';
@@ -71,8 +71,10 @@ import { TelegramChannel } from './comms/telegram-channel';
 import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
 import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { setShutdownHooks } from './lifecycle';
+import { recordActiveMainChatGoalsInterruptedForRestart } from './main-chat-goals';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
 import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
+import { listLiveRuntimes } from './live-runtime-registry';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
 import {
   createTask, loadTask, saveTask, updateTaskStatus, setTaskStepRunning,
@@ -177,6 +179,12 @@ import { createApp } from './core/app';
 import { createServer } from './core/server';
 import { runStartup } from './core/startup';
 import { scheduleMemoryIndexRefresh, shutdownMemoryIndexRefreshWorker } from './memory-index/index';
+import { shutdownModelTurnWorkerPool } from './turn-workers/model-call-dispatcher.js';
+import { shutdownTurnFileChangeWorkerPool } from './turn-workers/turn-file-change-dispatcher.js';
+import { getTurnJobStore, shutdownTurnJobRuntime } from './turn-jobs/runtime.js';
+import { scheduleTurnJournalRetention, shutdownTurnJournalRetention } from './turn-jobs/retention-client.js';
+import { shutdownContextFootprintWorker } from './context-window/context-footprint-client.js';
+import { shutdownToolObservationPersistence } from './tool-observation-persistence-client.js';
 import { requireGatewayAuth } from './gateway-auth';
 import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
 import {
@@ -330,6 +338,14 @@ const bindTeamNotificationTargetFromSession: ChatRouterModule['bindTeamNotificat
 // scaffold here rather than relying on the CLI onboarding flow.
 configManager.ensureDirectories();
 startupMark('config directories ensured');
+try {
+  getTurnJobStore();
+  scheduleTurnJournalRetention();
+  startupMark('durable turn journal reconciled');
+} catch (error: any) {
+  console.error('[TurnJournal] Failed to initialize durable turn journal:', error?.message || error);
+  throw error;
+}
 
 {
   const cleaned = cleanupSessions();
@@ -850,6 +866,44 @@ startupMark('error endpoints setup');
 
 // ── Wire lifecycle shutdown hooks for gracefulRestart() ────────────────────
 // These enable lifecycle.ts to cleanly shut down all subsystems before respawning.
+let httpServerClosePromise: Promise<void> | null = null;
+function beginHttpServerShutdown(): Promise<void> {
+  if (httpServerClosePromise) return httpServerClosePromise;
+  httpServerClosePromise = new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    try {
+      server.close(finish);
+      try { secureBundle?.server.close(); } catch {}
+      const timer = setTimeout(finish, 2_000);
+      timer.unref?.();
+    } catch { finish(); }
+  });
+  return httpServerClosePromise;
+}
+
+function closeGatewaySockets(): void {
+  try { wss.close(); } catch {}
+  try { secureBundle?.wss.close(); } catch {}
+  try { xaiVoiceStreaming.close(); } catch {}
+  try { secureXaiVoiceStreaming?.close(); } catch {}
+  try { openAiRealtimeProxy.close(); } catch {}
+  try { secureOpenAiRealtimeProxy?.close(); } catch {}
+}
+
+async function drainAbortedLiveRuntimes(timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  while (Date.now() < deadline) {
+    const active = listLiveRuntimes().filter((runtime) => runtime.status === 'running' || runtime.status === 'interrupted');
+    if (active.length === 0) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 setShutdownHooks({
   stopTelegram: () => { telegramChannel.stop(); telegramPersonaBots.stop().catch(() => {}); },
   stopCron: () => { cronScheduler.stop(); stopAgentSchedules(); },
@@ -857,24 +911,22 @@ setShutdownHooks({
   stopInternalWatches: () => internalWatchRunner.stop(),
   stopHeartbeat: () => heartbeatRunner.stop(),
   stopBrain: () => brainRunner.stop(),
-  stopRuntimeWorkers: () => {
+  drainActiveWork: () => drainAbortedLiveRuntimes(),
+  stopRuntimeWorkers: async () => {
     stopThreadSupervisionRunner();
-    return shutdownMemoryIndexRefreshWorker();
+    await Promise.allSettled([
+      shutdownMemoryIndexRefreshWorker(),
+      shutdownModelTurnWorkerPool(),
+      shutdownTurnFileChangeWorkerPool(),
+      shutdownContextFootprintWorker(),
+      shutdownToolObservationPersistence(),
+      shutdownTurnJournalRetention(),
+    ]);
   },
-  closeWebSocket: () => { try { wss.close(); } catch {}; try { secureBundle?.wss.close(); } catch {}; try { xaiVoiceStreaming.close(); } catch {}; try { secureXaiVoiceStreaming?.close(); } catch {}; try { openAiRealtimeProxy.close(); } catch {}; try { secureOpenAiRealtimeProxy?.close(); } catch {} },
-  closeHttpServer: () => new Promise<void>((resolve) => {
-    try {
-      server.close(() => resolve());
-      try { secureBundle?.server.close(); } catch {}
-      setTimeout(resolve, 2000); // force-resolve after 2s
-    } catch { resolve(); }
-  }),
-  flushSessions: () => {
-    try {
-      const { flushSession } = require('./session');
-      // Flush is best-effort — sessions auto-save on debounce already
-    } catch {}
-  },
+  closeTurnJournal: () => shutdownTurnJobRuntime(),
+  closeWebSocket: closeGatewaySockets,
+  closeHttpServer: beginHttpServerShutdown,
+  flushSessions: () => shutdownSessionPersistence(),
 });
 
 // ─── Initialize Advanced Error Response Systems ────────────────────────────────
@@ -923,10 +975,40 @@ if (secureBundle && httpsGateway) {
 }
 
 let shuttingDown = false;
-function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
+function resolveGatewayShutdownDeadlineMs(): number {
+  const configured = Number(process.env.PROMETHEUS_GATEWAY_SHUTDOWN_TIMEOUT_MS || 30_000);
+  if (!Number.isFinite(configured)) return 30_000;
+  return Math.max(5_000, Math.min(120_000, Math.floor(configured)));
+}
+
+async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  // Network drain, runtime interruption, child-worker reap, and cooperative
+  // session persistence each have their own bounded phase. Five seconds could
+  // expire in the middle of the final durability flush, so retain a larger but
+  // still hard-bounded operator-configurable deadline.
+  const forceExitTimer = setTimeout(() => {
+    console.error('[Gateway] Graceful shutdown deadline expired; forcing process exit.');
+    process.exit(0);
+  }, resolveGatewayShutdownDeadlineMs()) as NodeJS.Timeout;
+  forceExitTimer.unref?.();
   console.log('[Gateway] Shutting down...');
+  // Close listeners first so no new request can race worker/session/journal
+  // teardown. Existing work is aborted and given a bounded drain below.
+  closeGatewaySockets();
+  const networkClosing = beginHttpServerShutdown();
+  try {
+    // Goal runners can be idle between turns and therefore have no live-runtime
+    // record to snapshot. Preserve those goals before runtime interruption just
+    // like the coordinated hot-restart path does.
+    const checkpointedGoals = recordActiveMainChatGoalsInterruptedForRestart(`signal_${signal.toLowerCase()}`);
+    if (checkpointedGoals.length) {
+      console.log(`[Gateway] Preserved ${checkpointedGoals.length} active main-chat goal(s) before ${signal}.`);
+    }
+  } catch (err: any) {
+    console.warn('[Gateway] Main-chat goal preservation failed:', err?.message || err);
+  }
   try {
     const interrupted = prepareActiveRuntimesForGatewayShutdown(`signal_${signal.toLowerCase()}`);
     if (interrupted.length) console.log(`[Gateway] Preserved ${interrupted.length} runtime(s) before ${signal}.`);
@@ -947,20 +1029,28 @@ function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   try { stopAgentSchedules(); } catch {}
   try { heartbeatRunner.stop(); } catch {}
   try { brainRunner.stop(); } catch {}
-  void shutdownMemoryIndexRefreshWorker().catch(() => undefined);
-  try { if (wss) wss.close(); } catch {}
-  try { secureBundle?.wss.close(); } catch {}
-  try { xaiVoiceStreaming.close(); } catch {}
-  try { secureXaiVoiceStreaming?.close(); } catch {}
-  try {
-    try { secureBundle?.server.close(); } catch {}
-    server.close(() => process.exit(0));
-    const forceExitTimer = setTimeout(() => process.exit(0), 1200) as any;
-    if (typeof forceExitTimer?.unref === 'function') forceExitTimer.unref();
-  } catch { process.exit(0); }
+  await drainAbortedLiveRuntimes().catch(() => {});
+  // Children can still emit their terminal/error callbacks while shutting
+  // down. Drain them before closing the journal they fence those callbacks
+  // against; the signal path must preserve the same ordering as restart.
+  await Promise.allSettled([
+    shutdownMemoryIndexRefreshWorker(),
+    shutdownModelTurnWorkerPool(),
+    shutdownTurnFileChangeWorkerPool(),
+    shutdownContextFootprintWorker(),
+    shutdownToolObservationPersistence(),
+    shutdownTurnJournalRetention(),
+  ]);
+  await shutdownSessionPersistence().catch((error) => {
+    console.warn('[Gateway] Session persistence shutdown failed:', (error as Error)?.message || error);
+  });
+  try { shutdownTurnJobRuntime(); } catch {}
+  try { await networkClosing; } catch { process.exit(0); }
+  clearTimeout(forceExitTimer);
+  process.exit(0);
 }
 
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
+process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
 
 export { app, server };

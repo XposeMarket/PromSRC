@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+
+const chat = read('src/gateway/routes/chat.router.ts');
+const session = read('src/gateway/session.ts');
+const observations = read('src/gateway/tool-observations.ts');
+const projectLearning = read('src/gateway/projects/project-learning.ts');
+const projectStore = read('src/gateway/projects/project-store.ts');
+const mainChatGoals = read('src/gateway/main-chat-goals.ts');
+const promptContext = read('src/gateway/prompt-context.ts');
+const coreApp = read('src/gateway/core/app.ts');
+const server = read('src/gateway/server-v2.ts');
+
+assert.match(chat, /persistToolResultsAsObservationsAsync\([\s\S]*?\.catch\(/, 'turn completion must start child-process observation persistence with failure degradation');
+assert.match(chat, /await calculateStoredThreadFootprintIsolated\(/, 'context diagnostic must use its isolated calculator');
+assert.match(chat, /await flushSessionForDelivery\(\)[\s\S]*?persistDurableTurnFinal/, 'session state must commit before the durable final');
+assert.match(chat, /schedulePostTerminalTurnMaintenance\(sessionId\)/, 'non-critical title and project learning must be post-terminal');
+assert.doesNotMatch(chat, /await maybeRefreshProjectLearning\(/, 'project learning must never gate a terminal or continuation path');
+assert.match(chat, /abortSignal: controller\.signal/, 'background auto-title must be cancellable');
+assert.match(chat, /autoTitleInFlight/, 'background auto-title must be single-flight per session');
+assert.match(chat, /autoTitleGenerationActive/, 'background auto-title must have a global one-job admission guard');
+assert.match(chat, /args: boundedRuntimeProcessArgs\(data\?\.args\)/, 'persisted process entries must bound tool arguments');
+assert.doesNotMatch(chat, /args: data\?\.args/, 'persisted process entries must not retain raw tool arguments');
+assert.match(chat, /processEntries: flags\?\.runtimeProcessEntries\?\.slice\(-300\)/, 'runtime process entries must attach before the authoritative session flush');
+assert.match(chat, /Promise\.race\(\[[\s\S]*?observationPersistence\.then/, 'observation persistence must have a bounded fast path');
+assert.match(chat, /attachAssistantToolObservationMetadataAsync/, 'slow observation metadata must attach after terminal delivery');
+assert.match(chat, /Optional persistence failed[\s\S]*?observation_persistence: unavailable/, 'observation worker failure must degrade instead of failing the final');
+assert.match(chat, /setImmediate\(\(\) => notifyChatCompletion/, 'completion notifications must run after terminal publication');
+assert.doesNotMatch(chat.slice(chat.indexOf('async function maybeAutoNameChatSession'), chat.indexOf('async function runInteractiveTurnInGateway')), /Promise\.race/, 'auto-title must not leak a losing model promise');
+assert.match(session, /export async function flushSessionAsync/, 'session module must expose an awaited cooperative final flush');
+assert.match(session, /writeJsonAtomicCooperatively\(getSessionPath\(id\)/, 'large sessions must use cooperative atomic JSON persistence');
+assert.match(session, /attachAssistantToolObservationMetadataAsync/, 'session module must support safe post-terminal metadata attachment');
+assert.match(observations, /export async function readToolObservationsAsync/, 'prompt assembly must have an async last-N observation reader');
+assert.match(promptContext, /await searchMemoryIndexAsync\(/, 'memory retrieval must not synchronously scan the gateway');
+assert.match(projectLearning, /\.slice\(0, remaining\)/, 'project-learning transcript must be bounded before it is joined');
+assert.match(projectStore, /export async function findProjectBySessionIdAsync/, 'post-terminal project lookup must use async filesystem reads');
+assert.doesNotMatch(mainChatGoals, /getRecentToolObservationsForContext\(/, 'goal routines must not use the synchronous whole-file observation reader');
+assert.match(coreApp, /contextFootprint:/, 'health output must expose context isolation state');
+assert.match(coreApp, /toolObservationPersistence:/, 'health output must expose observation persistence state');
+assert.match(coreApp, /sessionPersistence:/, 'health output must expose cooperative session persistence state');
+assert.match(server, /shutdownContextFootprintWorker\(\)/, 'gateway shutdown must reap the context worker');
+assert.match(server, /shutdownToolObservationPersistence\(\)/, 'gateway shutdown must reap observation workers');
+assert.match(server, /shutdownSessionPersistence\(\)/, 'gateway shutdown must await session durability');
+
+console.log('gateway smoothness contract checks passed');

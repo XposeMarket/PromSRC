@@ -9,6 +9,7 @@ import {
   drainAgentMessages,
   drainTeamDirectThreadUserMessages,
   getManagedTeam,
+  saveManagedTeam,
   getTeamRoomEventsSince,
   getTeamDirectThreadById,
   hasPendingAgentMessages,
@@ -31,7 +32,7 @@ type HandleChatFn = (
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   pinnedMessages?: Array<{ role: string; content: string }>,
-  abortSignal?: { aborted: boolean },
+  abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal },
   callerContext?: string,
   modelOverride?: string,
   executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron' | 'team_subagent',
@@ -48,7 +49,7 @@ interface TeamMemberRoomDeps {
 }
 
 export interface TeamMemberRoomTurnOptions {
-  abortSignal?: { aborted: boolean };
+  abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal };
   autoWakeReason?: string;
   autoWakeSource?: 'teammate_message' | 'dispatch_followup' | 'room_followup' | 'manager_message';
   autoWakeChainDepth?: number;
@@ -83,6 +84,83 @@ const activeTeamMemberDirectTurns = new Set<string>();
 const pendingTeamMemberWakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingTeamMemberDirectWakeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let _teamMemberRoomDeps: TeamMemberRoomDeps | null = null;
+
+type TeamMemberAbortSignal = { aborted: boolean; interrupted?: boolean; signal?: AbortSignal };
+type DrainedDirectMessage = {
+  id?: string;
+  content?: string;
+  createdAt?: number;
+  chatMessageId?: string;
+};
+
+const TEAM_MEMBER_SHUTDOWN_HOLD = new Promise<never>(() => {});
+
+function createTeamMemberShutdownBridge(existing?: TeamMemberAbortSignal): {
+  abortSignal: TeamMemberAbortSignal;
+  interruptForShutdown: () => void;
+  dispose: () => void;
+} {
+  const abortSignal = existing || { aborted: false };
+  const controller = new AbortController();
+  const upstreamSignal = abortSignal.signal;
+  const forwardUpstreamAbort = () => {
+    if (!controller.signal.aborted) controller.abort(upstreamSignal?.reason);
+  };
+  if (upstreamSignal?.aborted) forwardUpstreamAbort();
+  else upstreamSignal?.addEventListener('abort', forwardUpstreamAbort, { once: true });
+  abortSignal.signal = controller.signal;
+  return {
+    abortSignal,
+    interruptForShutdown: () => {
+      abortSignal.interrupted = true;
+      abortSignal.aborted = true;
+      if (!controller.signal.aborted) {
+        controller.abort(new Error('Gateway shutdown interrupted the team member.'));
+      }
+    },
+    dispose: () => upstreamSignal?.removeEventListener('abort', forwardUpstreamAbort),
+  };
+}
+
+function restoreMemberMessagesForShutdown(teamId: string, agentId: string, messages: string[]): void {
+  if (messages.length === 0) return;
+  try {
+    const team = getManagedTeam(teamId);
+    if (!team) return;
+    if (!team.pendingMessages) team.pendingMessages = {};
+    const newerMessages = Array.isArray(team.pendingMessages[agentId])
+      ? team.pendingMessages[agentId]
+      : [];
+    team.pendingMessages[agentId] = [...messages, ...newerMessages];
+    saveManagedTeam(team);
+  } catch (error: any) {
+    console.warn('[TeamMemberRoom] Could not restore member inbox for restart:', error?.message || error);
+  }
+}
+
+function restoreDirectMessagesForShutdown(teamId: string, threadId: string, messages: DrainedDirectMessage[]): void {
+  if (messages.length === 0) return;
+  try {
+    const team = getManagedTeam(teamId);
+    if (!team?.roomState?.directThreads) return;
+    const entry = Object.entries(team.roomState.directThreads)
+      .find(([, thread]: [string, any]) => String(thread?.id || '').trim() === String(threadId || '').trim());
+    if (!entry) return;
+    const [key, thread] = entry as [string, any];
+    const newerMessages = Array.isArray(thread.pendingUserMessages)
+      ? thread.pendingUserMessages
+      : [];
+    thread.pendingUserMessages = [...messages, ...newerMessages];
+    team.roomState.directThreads[key] = thread;
+    saveManagedTeam(team);
+  } catch (error: any) {
+    console.warn('[TeamMemberRoom] Could not restore direct inbox for restart:', error?.message || error);
+  }
+}
+
+async function holdTeamMemberForGatewayShutdown(): Promise<never> {
+  return TEAM_MEMBER_SHUTDOWN_HOLD;
+}
 
 export function setTeamMemberRoomDeps(deps: TeamMemberRoomDeps): void {
   _teamMemberRoomDeps = deps;
@@ -505,7 +583,12 @@ function readTeamMemberRoleBlock(teamId: string, agentId: string, agentName: str
   }
 }
 
-function buildTeamMemberCallerContext(teamId: string, agentId: string, prompt: string): string {
+function buildTeamMemberCallerContext(
+  teamId: string,
+  agentId: string,
+  prompt: string,
+  drainedMessages?: string[],
+): string {
   const team = getManagedTeam(teamId);
   const agent = getAgentById(agentId) as any;
   const agentName = String(agent?.name || agentId).trim();
@@ -536,6 +619,9 @@ function buildTeamMemberCallerContext(teamId: string, agentId: string, prompt: s
     markTeamMemberRoomEventsSeen(teamId, agentId);
   }
   const pendingMessages = drainAgentMessages(teamId, agentId);
+  if (drainedMessages && pendingMessages.length > 0) {
+    drainedMessages.push(...pendingMessages);
+  }
   const roleBlock = readTeamMemberRoleBlock(teamId, agentId, agentName);
 
   return [
@@ -742,7 +828,8 @@ export async function runTeamMemberRoomTurn(
     ensureTeamWorkspace(teamId);
   } catch { /* best effort */ }
 
-  const callerContext = buildTeamMemberCallerContext(teamId, agentId, prompt);
+  let shutdownReplayMemberMessages: string[] = [];
+  const callerContext = buildTeamMemberCallerContext(teamId, agentId, prompt, shutdownReplayMemberMessages);
   const identityRoot = ensureTeamAgentIdentity(teamId, agentId, agent ? ensureAgentWorkspace(agent) : undefined);
   setRuntimeActorContext(sessionId, {
     kind: 'agent', surface: 'team_room', agentId, displayName: agentName,
@@ -753,7 +840,9 @@ export async function runTeamMemberRoomTurn(
   const tracker = createTeamMemberTurnTracker(teamId, agentId);
   const toolFilter = buildTeamMemberToolFilter(deps, 'room');
   const agentRouting = resolveTeamMemberModelRouting(agentId);
-  const abortSignal = options.abortSignal || { aborted: false };
+  const shutdownBridge = createTeamMemberShutdownBridge(options.abortSignal);
+  const abortSignal = shutdownBridge.abortSignal;
+  let shutdownMessagesRestored = false;
   const autoWakeReason = String(options.autoWakeReason || '').trim();
   const autoWakeSource = options.autoWakeSource || 'teammate_message';
   const autoWakeChainDepth = Math.max(0, Math.floor(Number(options.autoWakeChainDepth ?? 0)));
@@ -769,6 +858,22 @@ export async function runTeamMemberRoomTurn(
     source: 'system',
     detail: String(prompt || '').slice(0, 160),
     abortSignal,
+    onShutdownInterrupt: () => {
+      if (!shutdownMessagesRestored) {
+        shutdownMessagesRestored = true;
+        restoreMemberMessagesForShutdown(teamId, agentId, shutdownReplayMemberMessages);
+      }
+      shutdownBridge.interruptForShutdown();
+    },
+    recoveryPolicy: 'mark_interrupted',
+    recoveryData: {
+      teamId,
+      agentId,
+      mode: 'room',
+      prompt: String(prompt || '').slice(0, 8_000),
+      autoWakeReason: String(options.autoWakeReason || '').slice(0, 1_000) || undefined,
+      queuedMessageCount: shutdownReplayMemberMessages.length,
+    },
   });
   const memberStateBefore = getManagedTeam(teamId)?.roomState?.memberStates?.[agentId];
 
@@ -824,6 +929,11 @@ export async function runTeamMemberRoomTurn(
       resolveTeamMemberAllowedWorkPaths(agentId, teamId),
     );
 
+    if (abortSignal.interrupted) {
+      await holdTeamMemberForGatewayShutdown();
+    }
+    shutdownReplayMemberMessages = [];
+
     const responseText = String(result.text || '').trim() || `${agentName} is ready for the next step.`;
     const resultThinking = String(result.thinking || '').trim();
     if (resultThinking) {
@@ -876,6 +986,9 @@ export async function runTeamMemberRoomTurn(
       taskId: tracker.streamId,
     };
   } catch (err: any) {
+    if (abortSignal.interrupted) {
+      await holdTeamMemberForGatewayShutdown();
+    }
     const errorText = String(err?.message || err || 'Unknown room turn error').trim();
     pushTeamMemberProcessEntry(tracker, 'error', errorText);
     const chatMsg = appendTeamChat(teamId, {
@@ -914,25 +1027,28 @@ export async function runTeamMemberRoomTurn(
       taskId: tracker.streamId,
     };
   } finally {
-    activeTeamMemberRoomSessions.delete(sessionId);
-    const pendingDirectThreads = listPendingTeamDirectThreadsForParticipant(teamId, 'member', agentId);
-    for (const thread of pendingDirectThreads) {
-      scheduleTeamMemberDirectWake(teamId, agentId, thread.id, {
-        reason: 'The team owner sent you a new direct follow-up while you were busy in the room.',
-        delayMs: TEAM_MEMBER_AUTO_WAKE_FOLLOWUP_MS,
-      });
+    if (!abortSignal.interrupted) {
+      shutdownBridge.dispose();
+      activeTeamMemberRoomSessions.delete(sessionId);
+      const pendingDirectThreads = listPendingTeamDirectThreadsForParticipant(teamId, 'member', agentId);
+      for (const thread of pendingDirectThreads) {
+        scheduleTeamMemberDirectWake(teamId, agentId, thread.id, {
+          reason: 'The team owner sent you a new direct follow-up while you were busy in the room.',
+          delayMs: TEAM_MEMBER_AUTO_WAKE_FOLLOWUP_MS,
+        });
+      }
+      if (hasPendingAgentMessages(teamId, agentId) && autoWakeChainDepth < TEAM_MEMBER_AUTO_WAKE_MAX_CHAIN_DEPTH) {
+        scheduleTeamMemberAutoWake(teamId, agentId, {
+          reason: 'New teammate messages arrived while you were already responding in the room.',
+          delayMs: TEAM_MEMBER_AUTO_WAKE_FOLLOWUP_MS,
+          chainDepth: autoWakeChainDepth + 1,
+          source: 'room_followup',
+        });
+      } else if (!hasPendingAgentMessages(teamId, agentId)) {
+        clearPendingTeamMemberWake(teamId, agentId);
+      }
+      finishLiveRuntime(runtimeId);
     }
-    if (hasPendingAgentMessages(teamId, agentId) && autoWakeChainDepth < TEAM_MEMBER_AUTO_WAKE_MAX_CHAIN_DEPTH) {
-      scheduleTeamMemberAutoWake(teamId, agentId, {
-        reason: 'New teammate messages arrived while you were already responding in the room.',
-        delayMs: TEAM_MEMBER_AUTO_WAKE_FOLLOWUP_MS,
-        chainDepth: autoWakeChainDepth + 1,
-        source: 'room_followup',
-      });
-    } else if (!hasPendingAgentMessages(teamId, agentId)) {
-      clearPendingTeamMemberWake(teamId, agentId);
-    }
-    finishLiveRuntime(runtimeId);
   }
 }
 
@@ -984,6 +1100,7 @@ export async function runTeamMemberDirectTurn(
   } catch { /* best effort */ }
 
   const prompt = buildDirectWakePrompt(pendingMessages);
+  let shutdownReplayDirectMessages: DrainedDirectMessage[] = [...pendingMessages];
   const callerContext = buildTeamMemberDirectCallerContext(teamId, agentId, threadId);
   const identityRoot = ensureTeamAgentIdentity(teamId, agentId, agent ? ensureAgentWorkspace(agent) : undefined);
   setRuntimeActorContext(thread.sessionId, {
@@ -995,7 +1112,9 @@ export async function runTeamMemberDirectTurn(
   const tracker = createTeamMemberTurnTracker(teamId, agentId);
   const toolFilter = buildTeamMemberToolFilter(deps, 'direct');
   const agentRouting = resolveTeamMemberModelRouting(agentId);
-  const abortSignal = options.abortSignal || { aborted: false };
+  const shutdownBridge = createTeamMemberShutdownBridge(options.abortSignal);
+  const abortSignal = shutdownBridge.abortSignal;
+  let shutdownMessagesRestored = false;
   const autoWakeReason = String(options.autoWakeReason || '').trim();
   const autoWakeChainDepth = Math.max(0, Math.floor(Number(options.autoWakeChainDepth ?? 0)));
   const currentTaskLabel = `Direct team chat with team owner`;
@@ -1008,6 +1127,22 @@ export async function runTeamMemberDirectTurn(
     source: 'system',
     detail: String(prompt || '').slice(0, 160),
     abortSignal,
+    onShutdownInterrupt: () => {
+      if (!shutdownMessagesRestored) {
+        shutdownMessagesRestored = true;
+        restoreDirectMessagesForShutdown(teamId, threadId, shutdownReplayDirectMessages);
+      }
+      shutdownBridge.interruptForShutdown();
+    },
+    recoveryPolicy: 'mark_interrupted',
+    recoveryData: {
+      teamId,
+      agentId,
+      threadId,
+      mode: 'direct',
+      prompt: String(prompt || '').slice(0, 8_000),
+      queuedMessageCount: pendingMessages.length,
+    },
   });
   const memberStateBefore = getManagedTeam(teamId)?.roomState?.memberStates?.[agentId];
 
@@ -1059,6 +1194,11 @@ export async function runTeamMemberDirectTurn(
       ),
       resolveTeamMemberAllowedWorkPaths(agentId, teamId),
     );
+
+    if (abortSignal.interrupted) {
+      await holdTeamMemberForGatewayShutdown();
+    }
+    shutdownReplayDirectMessages = [];
 
     const responseText = String(result.text || '').trim() || `${agentName} is here and ready to help.`;
     const resultThinking = String(result.thinking || '').trim();
@@ -1117,6 +1257,9 @@ export async function runTeamMemberDirectTurn(
       taskId: tracker.streamId,
     };
   } catch (err: any) {
+    if (abortSignal.interrupted) {
+      await holdTeamMemberForGatewayShutdown();
+    }
     const errorText = String(err?.message || err || 'Unknown direct chat error').trim();
     pushTeamMemberProcessEntry(tracker, 'error', errorText);
     const chatMsg = appendTeamChat(teamId, {
@@ -1159,23 +1302,26 @@ export async function runTeamMemberDirectTurn(
       taskId: tracker.streamId,
     };
   } finally {
-    activeTeamMemberDirectTurns.delete(conversationKey);
-    if (hasPendingTeamDirectThreadUserMessages(teamId, threadId) && autoWakeChainDepth < TEAM_MEMBER_AUTO_WAKE_MAX_CHAIN_DEPTH) {
-      scheduleTeamMemberDirectWake(teamId, agentId, threadId, {
-        reason: 'The team owner sent another direct follow-up while you were already replying.',
-        delayMs: TEAM_MEMBER_AUTO_WAKE_FOLLOWUP_MS,
-        chainDepth: autoWakeChainDepth + 1,
-      });
-    } else {
-      clearPendingTeamMemberDirectWake(teamId, agentId, threadId);
+    if (!abortSignal.interrupted) {
+      shutdownBridge.dispose();
+      activeTeamMemberDirectTurns.delete(conversationKey);
+      if (hasPendingTeamDirectThreadUserMessages(teamId, threadId) && autoWakeChainDepth < TEAM_MEMBER_AUTO_WAKE_MAX_CHAIN_DEPTH) {
+        scheduleTeamMemberDirectWake(teamId, agentId, threadId, {
+          reason: 'The team owner sent another direct follow-up while you were already replying.',
+          delayMs: TEAM_MEMBER_AUTO_WAKE_FOLLOWUP_MS,
+          chainDepth: autoWakeChainDepth + 1,
+        });
+      } else {
+        clearPendingTeamMemberDirectWake(teamId, agentId, threadId);
+      }
+      if (hasPendingAgentMessages(teamId, agentId)) {
+        scheduleTeamMemberAutoWake(teamId, agentId, {
+          reason: 'New teammate messages arrived while you were in a direct chat.',
+          delayMs: TEAM_MEMBER_AUTO_WAKE_FOLLOWUP_MS,
+          source: 'room_followup',
+        });
+      }
+      finishLiveRuntime(runtimeId);
     }
-    if (hasPendingAgentMessages(teamId, agentId)) {
-      scheduleTeamMemberAutoWake(teamId, agentId, {
-        reason: 'New teammate messages arrived while you were in a direct chat.',
-        delayMs: TEAM_MEMBER_AUTO_WAKE_FOLLOWUP_MS,
-        source: 'room_followup',
-      });
-    }
-    finishLiveRuntime(runtimeId);
   }
 }

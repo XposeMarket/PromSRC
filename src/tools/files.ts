@@ -30,6 +30,7 @@ import {
   validateFileSyntax,
   type SearchMatcher,
 } from './file-intelligence';
+import { applyTransactionalPatchset } from './transactional-patch';
 
 const execFileAsync = promisify(execFile);
 const PATCH_OUTPUT_MAX_CHARS = 8000;
@@ -1406,7 +1407,7 @@ export const readFilesBatchTool = {
 // ── APPLY WORKSPACE PATCHSET ─────────────────────────────────────────────────
 export interface WorkspacePatchEdit {
   filename: string;
-  op: 'find_replace' | 'replace_lines' | 'insert_after' | 'delete_lines' | 'write_file' | 'create_file';
+  op: 'find_replace' | 'replace_lines' | 'insert_after' | 'insert_after_anchor' | 'delete_lines' | 'write_file' | 'create_file';
   find?: string;
   replace?: string;
   replace_all?: boolean;
@@ -1415,6 +1416,9 @@ export interface WorkspacePatchEdit {
   new_content?: string;
   after_line?: number;
   content?: string;
+  anchor?: string;
+  expected_hash?: string;
+  expected_before?: string;
 }
 export interface ApplyWorkspacePatchsetArgs {
   edits: WorkspacePatchEdit[];
@@ -1434,6 +1438,7 @@ function normalizeWorkspacePatchOp(value: unknown): WorkspacePatchEdit['op'] | s
     replace_lines: 'replace_lines',
     line_replace: 'replace_lines',
     insert_after: 'insert_after',
+    insert_after_anchor: 'insert_after_anchor',
     insert: 'insert_after',
     delete_lines: 'delete_lines',
     delete: 'delete_lines',
@@ -1443,109 +1448,58 @@ function normalizeWorkspacePatchOp(value: unknown): WorkspacePatchEdit['op'] | s
 }
 
 export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchsetArgs): Promise<ToolResult> {
-  if (!Array.isArray(args.edits) || !args.edits.length) {
-    return { success: false, error: 'edits array is required and must not be empty' };
-  }
-  const results: Array<{ filename: string; op: string; ok: boolean; result?: string; error?: string }> = [];
   const snapshots: Array<ReturnType<typeof snapshotBeforeMutation>> = [];
-  for (const rawEdit of args.edits) {
-    const edit: any = rawEdit && typeof rawEdit === 'object' ? rawEdit : {};
-    const filename = edit?.filename ?? edit?.path ?? edit?.file ?? edit?.name;
-    const op = normalizeWorkspacePatchOp(edit?.op ?? edit?.action ?? edit?.type);
-    if (!filename || !op) { results.push({ filename: String(filename || ''), op, ok: false, error: 'filename and op are required' }); continue; }
-    try {
-      const absPath = resolveWorkspacePath(String(filename));
-      const pathCheck = isPathAllowed(absPath);
-      if (!pathCheck.allowed) { results.push({ filename: String(filename), op, ok: false, error: pathCheck.reason }); continue; }
-
-      if (op === 'create_file') {
-        const c = String(edit.content ?? '');
-        if (fsSync.existsSync(absPath)) { results.push({ filename: String(filename), op, ok: false, error: `File already exists. Use write_file to overwrite.` }); continue; }
-        snapshots.push(snapshotBeforeMutation(absPath, 'patchset:create_file', String(filename)));
-        await fs.mkdir(path.dirname(absPath), { recursive: true });
-        await fs.writeFile(absPath, c, 'utf-8');
-        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), c, 1, Math.max(1, c.split('\n').length), `Created ${filename}.`) });
-
-      } else if (op === 'write_file') {
-        const c = String(edit.content ?? '');
-        snapshots.push(snapshotBeforeMutation(absPath, 'patchset:write_file', String(filename)));
-        await fs.mkdir(path.dirname(absPath), { recursive: true });
-        await fs.writeFile(absPath, c, 'utf-8');
-        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), c, 1, Math.max(1, Math.min(8, c.split('\n').length)), `Wrote ${filename}.`) });
-
-      } else if (op === 'find_replace') {
-        const findStr = String(edit.find ?? edit.old_text ?? edit.oldText ?? '');
-        const replaceStr = String(edit.replace ?? edit.new_text ?? edit.newText ?? '');
-        if (!findStr) { results.push({ filename: String(filename), op, ok: false, error: 'find is required' }); continue; }
-        const content = await fs.readFile(absPath, 'utf-8');
-        if (!content.includes(findStr)) { results.push({ filename: String(filename), op, ok: false, error: `Text not found: "${findStr.slice(0, 60)}"` }); continue; }
-        const newContent = edit.replace_all
-          ? content.split(findStr).join(replaceStr)
-          : content.replace(findStr, replaceStr);
-        snapshots.push(snapshotBeforeMutation(absPath, 'patchset:find_replace', String(filename)));
-        await fs.writeFile(absPath, newContent, 'utf-8');
-        const startLine = lineNumberAtOffset(content, content.indexOf(findStr));
-        const replacementLines = Math.max(1, replaceStr.replace(/\r\n/g, '\n').split('\n').length);
-        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), newContent, startLine, Math.max(startLine, startLine + replacementLines - 1), `Updated ${filename}: find_replace applied.`) });
-
-      } else if (op === 'replace_lines') {
-        const startL = Math.max(1, Number(edit.start_line ?? edit.startLine) || 1);
-        const endL = Math.max(startL, Number(edit.end_line ?? edit.endLine) || startL);
-        const newContent = String(edit.new_content ?? edit.content ?? '');
-        const content = await fs.readFile(absPath, 'utf-8');
-        const lines = content.split('\n');
-        const newLines = newContent.split('\n');
-        lines.splice(startL - 1, endL - startL + 1, ...newLines);
-        const updated = lines.join('\n');
-        snapshots.push(snapshotBeforeMutation(absPath, 'patchset:replace_lines', String(filename)));
-        await fs.writeFile(absPath, updated, 'utf-8');
-        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), updated, startL, Math.max(startL, startL + newLines.length - 1), `Updated ${filename}: replaced lines ${startL}-${endL}.`) });
-
-      } else if (op === 'insert_after') {
-        const afterL = Math.max(0, Number(edit.after_line ?? edit.afterLine) || 0);
-        const ins = String(edit.content ?? edit.new_content ?? '');
-        const content = await fs.readFile(absPath, 'utf-8');
-        const lines = content.split('\n');
-        const newLines = ins.split('\n');
-        lines.splice(afterL, 0, ...newLines);
-        const updated = lines.join('\n');
-        snapshots.push(snapshotBeforeMutation(absPath, 'patchset:insert_after', String(filename)));
-        await fs.writeFile(absPath, updated, 'utf-8');
-        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), updated, afterL + 1, Math.max(afterL + 1, afterL + newLines.length), `Updated ${filename}: inserted after line ${afterL}.`) });
-
-      } else if (op === 'delete_lines') {
-        const startL = Math.max(1, Number(edit.start_line ?? edit.startLine) || 1);
-        const endL = Math.max(startL, Number(edit.end_line ?? edit.endLine) || startL);
-        const content = await fs.readFile(absPath, 'utf-8');
-        const lines = content.split('\n');
-        lines.splice(startL - 1, endL - startL + 1);
-        const updated = lines.join('\n');
-        snapshots.push(snapshotBeforeMutation(absPath, 'patchset:delete_lines', String(filename)));
-        await fs.writeFile(absPath, updated, 'utf-8');
-        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), updated, Math.min(startL, Math.max(1, lines.length)), Math.min(startL, Math.max(1, lines.length)), `Updated ${filename}: deleted lines ${startL}-${endL}.`) });
-
-      } else {
-        results.push({ filename: String(filename), op, ok: false, error: `Unknown op: ${op}` });
-      }
-    } catch (err: any) {
-      results.push({ filename: String(filename), op, ok: false, error: err.message });
-    }
+  const result = applyTransactionalPatchset({
+    edits: args.edits as any[],
+    resolvePath: (requested) => resolveWorkspacePath(requested),
+    checkAllowed: (absolutePath) => isPathAllowed(absolutePath),
+    displayPath: (_absolutePath, requested) => requested,
+    beforeCommit: (files) => {
+      for (const file of files) snapshots.push(snapshotBeforeMutation(file.absolutePath, 'transactional_patchset', file.displayPath));
+    },
+    validateSyntax: true,
+  });
+  if (!result.ok) {
+    return {
+      success: false,
+      error: result.error || 'Transactional patchset failed.',
+      data: {
+        atomic: true,
+        applied: 0,
+        failed_edit_index: result.failedEditIndex,
+        recovered_transactions: result.recoveredTransactions,
+      },
+      stdout: `No files were changed. ${result.error || 'Patchset preflight failed.'}`,
+    };
   }
-  const failed = results.filter(r => !r.ok);
+  const fileSummaries = result.files.map((file) => ({
+    file: file.filename,
+    operations: file.operations,
+    created: file.created,
+    before_hash: file.beforeHash,
+    after_hash: file.afterHash,
+    changed_lines: [file.changedStartLine, file.changedEndLine],
+  }));
   return withWorkspaceSnapshots({
-    success: failed.length === 0,
-    data: { edit_count: results.length, results },
-    stdout: results.map(r => r.ok
-      ? `✅ [${r.op}] ${r.filename}\n${r.result || ''}`.trim()
-      : `❌ [${r.op}] ${r.filename}${r.error ? ': ' + r.error : ''}`
-    ).join('\n\n'),
-    ...(failed.length ? { error: `${failed.length}/${results.length} edits failed` } : {}),
-  }, failed.length === 0 ? snapshots : []);
+    success: true,
+    data: {
+      atomic: true,
+      transaction_id: result.transactionId,
+      edit_count: result.editCount,
+      touchedFiles: result.files.map((file) => file.filename),
+      files: fileSummaries,
+      recovered_transactions: result.recoveredTransactions,
+    },
+    stdout: [
+      `Applied ${result.editCount} edit(s) to ${result.files.length} file(s) transactionally.`,
+      ...fileSummaries.map((file) => `- ${file.file}: ${file.operations} operation(s), sha256 ${String(file.after_hash).slice(0, 12)}`),
+    ].join('\n'),
+  }, snapshots);
 }
 
 export const applyWorkspacePatchsetTool = {
   name: 'apply_workspace_patchset',
-  description: 'Apply multiple file edits atomically. Supports find_replace, replace_lines, insert_after, delete_lines, write_file, create_file. Returns per-edit results.',
+  description: 'Apply multiple file edits as a genuine all-or-none transaction. Every guard and syntax check passes before commit; commit failures roll back from a persisted journal.',
   execute: executeApplyWorkspacePatchset,
   schema: {
     edits: 'array (required) - Each: { filename, op, ...op-specific fields }',

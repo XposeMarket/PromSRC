@@ -121,8 +121,9 @@ async function deliver(channel: DeliveryChannel, text: string): Promise<void> {
 
 export function notifyChatCompletion(input: ChatCompletionNotificationInput): void {
   const sessionId = String(input.sessionId || '').trim();
-  const finalText = String(input.finalText || '').trim();
+  const finalText = String(input.finalText || '').slice(0, 4_000).trim();
   if (!sessionId || !finalText) return;
+  const boundedInput: ChatCompletionNotificationInput = { ...input, sessionId, finalText };
 
   const now = Date.now();
   cleanupDedupe(now);
@@ -135,7 +136,7 @@ export function notifyChatCompletion(input: ChatCompletionNotificationInput): vo
   if (recentCompletionKeys.has(dedupeKey)) return;
   recentCompletionKeys.set(dedupeKey, now);
 
-  sendWebPushToAll(buildWebPushPayload(input));
+  sendWebPushToAll(buildWebPushPayload(boundedInput));
 
   const channels = resolveChannelsConfig();
   const candidates: Array<[DeliveryChannel, ChannelCompletionNotificationConfig]> = [
@@ -145,8 +146,8 @@ export function notifyChatCompletion(input: ChatCompletionNotificationInput): vo
   ];
 
   for (const [channel, cfg] of candidates) {
-    if (!shouldNotify(cfg, input.source)) continue;
-    const text = buildMessage(input, cfg);
+    if (!shouldNotify(cfg, boundedInput.source)) continue;
+    const text = buildMessage(boundedInput, cfg);
     deliver(channel, text).catch((err: any) => {
       console.warn(`[completion-bridge] ${channel} delivery failed: ${String(err?.message || err)}`);
     });

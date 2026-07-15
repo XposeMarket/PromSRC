@@ -493,7 +493,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'apply_workspace_patchset',
-        description: 'Apply multiple file edits to workspace files in one atomic call. Supports find_replace, replace_lines, insert_after, delete_lines, write_file, and create_file ops. Returns per-edit results with success/error per entry. Use instead of repeated find_replace/replace_lines calls when editing multiple files or applying multiple hunks.',
+        description: 'Apply multiple workspace edits as a genuine all-or-none transaction. Every path, content guard, edit, and syntax check is preflighted in memory before any file is replaced; a persisted journal rolls back commit failures. Use expected_hash and/or expected_before on warm follow-ups to reject stale context.',
         parameters: {
           type: 'object', required: ['edits'],
           properties: {
@@ -505,7 +505,7 @@ export function getFileWebMemoryTools(): any[] {
                 required: ['filename', 'op'],
                 properties: {
                   filename: { type: 'string', description: 'Workspace-relative file path.' },
-                  op: { type: 'string', enum: ['find_replace', 'replace_lines', 'insert_after', 'delete_lines', 'write_file', 'create_file', 'rename_file'], description: 'Edit operation.' },
+                  op: { type: 'string', enum: ['find_replace', 'replace_lines', 'insert_after', 'insert_after_anchor', 'delete_lines', 'write_file', 'create_file'], description: 'Edit operation.' },
                   find: { type: 'string', description: 'For find_replace: exact text to find.' },
                   replace: { type: 'string', description: 'For find_replace: replacement text.' },
                   replace_all: { type: 'boolean', description: 'For find_replace: replace all occurrences. Default false.' },
@@ -514,6 +514,9 @@ export function getFileWebMemoryTools(): any[] {
                   new_content: { type: 'string', description: 'For replace_lines: replacement content.' },
                   after_line: { type: 'number', description: 'For insert_after: insert after this line (0 = beginning).' },
                   content: { type: 'string', description: 'For insert_after/write_file/create_file: content to insert or write.' },
+                  anchor: { type: 'string', description: 'For insert_after_anchor: exact anchor text.' },
+                  expected_hash: { type: 'string', description: 'Optional full or prefix SHA-256 guard for the original file.' },
+                  expected_before: { type: 'string', description: 'Optional exact text that must exist in the original file before the transaction begins.' },
                 },
               },
             },
@@ -625,6 +628,38 @@ export function getFileWebMemoryTools(): any[] {
             full: { type: 'boolean' },
             head: { type: 'number' },
             tail: { type: 'number' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'work_context_execute',
+        description: 'Execute 1-8 already-decided, bounded steps from a warm session work-context packet in one runtime call. The runtime checks packet revision plus domain freshness guards before starting. Coding patch steps must carry expected_hash or expected_before guards and remain transactional. Browser/desktop commit actions are rejected; use the normal guarded path for submit/send/publish/purchase/delete. The model still chooses all semantic edits and actions—this only removes repeated model round trips between predictable mechanical steps.',
+        parameters: {
+          type: 'object',
+          required: ['domain', 'expected_context_revision', 'steps'],
+          properties: {
+            domain: { type: 'string', enum: ['coding', 'browser', 'desktop', 'creative'] },
+            expected_context_revision: { type: 'number', description: 'Exact revision from the injected WORK_CONTEXT block.' },
+            expected_content_hash: { type: 'string', description: 'Optional browser/desktop/creative content-hash prefix freshness guard.' },
+            expected_url: { type: 'string', description: 'Optional exact current URL guard for browser work.' },
+            expected_window_handle: { type: 'string', description: 'Optional exact active window handle guard for desktop work.' },
+            expected_scene_version: { type: 'number', description: 'Optional exact scene version guard for Creative work.' },
+            steps: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 8,
+              items: {
+                type: 'object',
+                required: ['tool', 'args'],
+                properties: {
+                  tool: { type: 'string', description: 'An allowlisted existing tool for this domain.' },
+                  args: { type: 'object', description: 'Normal arguments for the inner tool. Coding patch edits require content guards.' },
+                },
+              },
+            },
           },
         },
       },
@@ -1254,8 +1289,8 @@ export function getFileWebMemoryTools(): any[] {
       function: {
         name: 'apply_dev_source_patchset',
         description:
-          'Apply multiple approved Prometheus dev-source edits in one guarded patchset. Prefer this after request_dev_source_edit approval. ' +
-          'It validates every edit before writing, syntax-parses changed JS/TS, returns slim telemetry and touched files, and does not repeat the full post-edit workflow after each tiny edit.',
+          'Apply multiple approved Prometheus dev-source edits as a genuine all-or-none transaction. Prefer this after request_dev_source_edit approval. ' +
+          'It preflights every path, guard, edit, and JS/TS syntax result in memory before writing, uses a persisted rollback journal during commit, and returns slim telemetry and touched files.',
         parameters: {
           type: 'object', required: ['edits'],
           properties: {

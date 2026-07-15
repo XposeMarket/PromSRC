@@ -9864,6 +9864,50 @@ function renderRichArtifacts(msg) {
   }).join('');
 }
 
+function renderThreadLinkArtifacts(msg) {
+  const artifacts = Array.isArray(msg?.richArtifacts)
+    ? msg.richArtifacts.filter((artifact) => artifact?.type === 'thread_links')
+    : [];
+  if (!artifacts.length) return '';
+  const items = artifacts.flatMap((artifact) => Array.isArray(artifact?.items) ? artifact.items : [])
+    .filter((item) => String(item?.sessionId || '').trim());
+  if (!items.length) return '';
+  const seen = new Set();
+  const cards = items.filter((item) => {
+    const sessionId = String(item.sessionId || '').trim();
+    if (seen.has(sessionId)) return false;
+    seen.add(sessionId);
+    return true;
+  }).map((item) => {
+    const sessionId = String(item.sessionId || '').trim();
+    const label = String(item.label || 'Thread touched').trim();
+    const title = String(item.title || 'Prometheus thread').trim();
+    const detail = String(item.subtitle || item.status || '').trim();
+    return `<button type="button" class="thread-link-card" data-thread-session="${escHtml(sessionId)}" onclick="openPrometheusThreadLink(this.dataset.threadSession)" aria-label="Open Prometheus thread ${escHtml(title)}">
+      <span class="thread-link-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M7.5 18.25 4 20l.85-3.75A8 8 0 1 1 7.5 18.25Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span class="thread-link-copy"><span class="thread-link-label">${escHtml(label)}</span><strong>${escHtml(title)}</strong>${detail ? `<small>${escHtml(detail)}</small>` : ''}</span>
+      <span class="thread-link-open">Open thread <span aria-hidden="true">›</span></span>
+    </button>`;
+  }).join('');
+  return `<div class="thread-links-artifact">${cards}</div>`;
+}
+
+async function openPrometheusThreadLink(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) return;
+  if (document.body.classList.contains('pm-mobile-active')) {
+    window.location.hash = `#mobile/chat/${encodeURIComponent(id)}`;
+    return;
+  }
+  if (!window.chatSessions.some((session) => session?.id === id)) {
+    try {
+      const data = await fetchJsonWithTimeout(`/api/sessions/${encodeURIComponent(id)}?historyLimit=1&processLimit=1&includeToolLog=0`, 3000);
+      if (data?.session) mergeServerSessionSummaries([data.session]);
+    } catch {}
+  }
+  await openSession(id);
+}
+
 function normalizeEmailComposerList(value) {
   if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
   return String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
@@ -10870,11 +10914,16 @@ function renderUserMessageContent(msg) {
   return `${imgHtml}${fileHtml}${textHtml ? `<div class="msg-content">${textHtml}</div>` : ''}`;
 }
 
+function isRenderableLiveTraceImageSource(value) {
+  const source = String(value || '').trim();
+  return /^data:image\//i.test(source) || /^\/api\/canvas\/inline\?path=/i.test(source);
+}
+
 function renderLiveTracePreview(entry) {
   const preview = entry?.preview && typeof entry.preview === 'object' ? entry.preview : null;
   const dataUrl = String(preview?.dataUrl || entry?.dataUrl || '').trim();
-  if (!/^data:image\//i.test(dataUrl)) return '';
-  const title = String(entry?.previewTitle || entry?.text || 'Vision screenshot preview').trim();
+  if (!isRenderableLiveTraceImageSource(dataUrl)) return '';
+  const title = String(entry?.previewTitle || preview?.title || entry?.text || 'Vision preview').trim();
   const width = Number(preview?.width || entry?.width || 0);
   const height = Number(preview?.height || entry?.height || 0);
   const dims = width > 0 && height > 0 ? ` (${Math.round(width)}x${Math.round(height)})` : '';
@@ -10926,7 +10975,7 @@ function visibleLiveTraceEntries(entries) {
     entry
     && !isDesktopPreparedTraceEntry(entry)
     && !isBareThinkingLiveTraceText(entry?.text)
-    && (String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim())
+    && (String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl))
   );
 }
 
@@ -10997,6 +11046,15 @@ function liveTraceGroups(entries) {
     if (isLiveTraceCompactionEntry(entry)) {
       activeToolGroup = null;
       groups.push({ kind: 'compaction', entries: [entry] });
+      return;
+    }
+    if (String(entry?.type || '').toLowerCase() === 'vision' && renderLiveTracePreview(entry)) {
+      // A screenshot is a top-level timeline beat, not hidden content inside a
+      // collapsible tool group. End the current group so the visible order is
+      // tool/result group -> screenshot -> next tool/result group.
+      if (groups[groups.length - 1]?.kind === 'vision') groups[groups.length - 1].entries.push(entry);
+      else groups.push({ kind: 'vision', entries: [entry] });
+      activeToolGroup = null;
       return;
     }
     if (isLiveTraceThoughtEntry(entry)) {
@@ -11264,6 +11322,9 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
     if (group.kind === 'compaction') {
       return group.entries.map(renderLiveTraceCompactionBreak).join('');
     }
+    if (group.kind === 'vision') {
+      return `<div class="live-turn-vision-break" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTracePreview).join('')}</div>`;
+    }
     const isLiveCurrent = streaming && index === groups.length - 1;
     const summary = isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries);
     const summaryKey = liveTraceSummaryKey(summary);
@@ -11271,26 +11332,14 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
     const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
     const itemCount = callCount || visibleEntries.length;
     const itemLabel = callCount ? 'call' : 'item';
-    // Screenshot previews must remain visible even though the redesigned tool
-    // stream collapses the verbose call/result rows.  Keep the canonical entry
-    // in the details body (so expanded order is tool -> result -> screenshot),
-    // and mirror only its thumbnail directly below the collapsed summary.
-    const collapsedPreviews = visibleEntries
-      .filter((entry) => String(entry?.type || '').toLowerCase() === 'vision')
-      .map(renderLiveTracePreview)
-      .filter(Boolean)
-      .join('');
-    return `<div class="live-turn-tool-group-shell${collapsedPreviews ? ' has-vision-preview' : ''}">
-      <details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
-        <summary class="live-turn-tool-summary">
-          <span class="live-turn-tool-icon" aria-hidden="true">›</span>
-          <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
-          <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
-        </summary>
-        <div class="live-turn-tool-body">${renderLiveTraceList(group.entries)}</div>
-      </details>
-      ${collapsedPreviews ? `<div class="live-turn-collapsed-vision-previews">${collapsedPreviews}</div>` : ''}
-    </div>`;
+    return `<details class="live-turn-tool-group"${isLiveCurrent ? ' data-live-trace-current="1"' : ''} data-live-trace-group="${escHtml(group.id)}">
+      <summary class="live-turn-tool-summary">
+        <span class="live-turn-tool-icon" aria-hidden="true">›</span>
+        <strong data-live-trace-summary-key="${escHtml(summaryKey)}">${escHtml(summary)}</strong>
+        <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
+      </summary>
+      <div class="live-turn-tool-body">${renderLiveTraceList(group.entries)}</div>
+    </details>`;
   }).join('')}</div>`;
 }
 
@@ -11666,6 +11715,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderMessageProcessPill(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderThreadLinkArtifacts(msg) : ''}
               </div>
               ${(msg.approvalRequest || msg.questionRequest) && !msg.content ? '' : actionsHtml}
         </div>
@@ -15060,13 +15110,14 @@ async function sendChat(queuedMessage = null, options = {}) {
           case 'vision_injected': {
             const preview = event.preview && typeof event.preview === 'object' ? event.preview : {};
             const dataUrl = String(preview.dataUrl || event.dataUrl || '').trim();
-            if (dataUrl) {
+            if (isRenderableLiveTraceImageSource(dataUrl)) {
               movePreToolAnswerTextIntoPreamble();
               sawToolActivityThisTurn = true;
-              const source = String(event.source || '').toLowerCase() === 'browser' ? 'Browser' : 'Desktop';
+              const sourceValue = String(event.source || '').toLowerCase();
+              const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : 'Desktop';
               const tool = String(event.tool || event.action || '').trim();
               const toolLabel = tool ? formatToolCallForLog(tool, {}, streamState).replace(/\.\.\.$/, '') : `${source} observation`;
-              const text = `Vision injected: ${toolLabel}`;
+              const text = String(event.label || `Vision injected: ${toolLabel}`).trim();
               const last = Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1] : null;
               const samePreview = last
                 && last.type === 'vision'
@@ -15077,7 +15128,7 @@ async function sendChat(queuedMessage = null, options = {}) {
                 const added = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
                 if (added) {
                   added.preview = preview;
-                  added.previewTitle = `${source} screenshot`;
+                  added.previewTitle = String(event.previewTitle || preview.title || `${source} preview`);
                 }
               }
               renderIfViewingThisSession();
@@ -38977,6 +39028,7 @@ window.openTerminalSession = openTerminalSession;
 window.toggleSessionsEditMode = toggleSessionsEditMode;
 window.deleteChatSession = deleteChatSession;
 window.openSession = openSession;
+window.openPrometheusThreadLink = openPrometheusThreadLink;
 window.markSessionUnread = markSessionUnread;
 window.upsertAutomatedSession = upsertAutomatedSession;
 window.setSidebarTab = setSidebarTab;
@@ -39503,12 +39555,13 @@ wsEventBus.on('vision_injected', (msg) => {
   const sid = String(msg.sessionId || window.activeChatSessionId || '').trim();
   const preview = msg.preview && typeof msg.preview === 'object' ? msg.preview : {};
   const dataUrl = String(preview.dataUrl || msg.dataUrl || '').trim();
-  if (!dataUrl) return;
-  const source = String(msg.source || '').toLowerCase() === 'browser' ? 'Browser' : 'Desktop';
+  if (!isRenderableLiveTraceImageSource(dataUrl)) return;
+  const sourceValue = String(msg.source || '').toLowerCase();
+  const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : 'Desktop';
   if (!/^voice_(?:browser|desktop)_screenshot$/i.test(tool)) {
     const streamState = getSessionStreamState(sid);
     const toolLabel = tool ? formatToolCallForLog(tool, {}, streamState).replace(/\.\.\.$/, '') : `${source} observation`;
-    const text = `Vision injected: ${toolLabel}`;
+    const text = String(msg.label || `Vision injected: ${toolLabel}`).trim();
     const last = Array.isArray(streamState.liveTraceEntries)
       ? streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1]
       : null;
@@ -39521,7 +39574,7 @@ wsEventBus.on('vision_injected', (msg) => {
       const added = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
       if (added) {
         added.preview = preview;
-        added.previewTitle = `${source} screenshot`;
+        added.previewTitle = String(msg.previewTitle || preview.title || `${source} preview`);
       }
     }
     if (sid === window.activeChatSessionId) {

@@ -16,6 +16,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import {
   getSession,
   PRE_COMPACTION_MEMORY_FLUSH_PROMPT,
@@ -23,8 +24,9 @@ import {
 } from '../session.js';
 import {
   getProject,
-  findProjectBySessionId,
+  findProjectBySessionIdAsync,
   getProjectWorkspaceDir,
+  type Project,
 } from './project-store.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -45,6 +47,25 @@ interface ConversationMessage {
 
 const MIN_USER_MESSAGES = 1; // fire even after first user reply
 const MAX_CONVO_CHARS   = 8000;
+const projectContextWriteQueues = new Map<string, Promise<void>>();
+
+async function writeTextAtomic(filePath: string, content: string): Promise<void> {
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.${process.pid}.${crypto.randomBytes(5).toString('hex')}.tmp`;
+  try {
+    const handle = await fs.promises.open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(content, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.promises.rename(temporary, filePath);
+  } catch (error) {
+    await fs.promises.unlink(temporary).catch(() => undefined);
+    throw error;
+  }
+}
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
@@ -55,9 +76,9 @@ const MAX_CONVO_CHARS   = 8000;
 export async function extractAndWriteProjectContext(
   messages: ConversationMessage[],
   sessionId: string,
-  options?: { extraTextBlocks?: string[] },
+  options?: { extraTextBlocks?: string[]; resolvedProject?: Project },
 ): Promise<ProjectLearningResult> {
-  const project = findProjectBySessionId(sessionId);
+  const project = options?.resolvedProject || await findProjectBySessionIdAsync(sessionId);
   if (!project) {
     // Not a project session — silent skip
     return { skipped: true, reason: 'not a project session', sectionsUpdated: [], linesAdded: 0 };
@@ -76,14 +97,22 @@ export async function extractAndWriteProjectContext(
 
   const contextPath = path.join(getProjectWorkspaceDir(project.id), 'CONTEXT.md');
 
+  const prior = projectContextWriteQueues.get(contextPath) || Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tail = prior.catch(() => undefined).then(() => gate);
+  projectContextWriteQueues.set(contextPath, tail);
+  await prior.catch(() => undefined);
+  try {
+
   // Read or seed the file
   let content = '';
-  if (fs.existsSync(contextPath)) {
-    content = fs.readFileSync(contextPath, 'utf-8');
-  } else {
+  try {
+    content = await fs.promises.readFile(contextPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     content = `# ${project.name}\n\n## Overview\n\n## Goals\n\n## Key People & Entities\n\n## Tech Stack & Tools\n\n## Timeline & Milestones\n\n## Notes\n`;
-    fs.mkdirSync(path.dirname(contextPath), { recursive: true });
-    fs.writeFileSync(contextPath, content, 'utf-8');
+    await writeTextAtomic(contextPath, content);
   }
 
   const sectionsUpdated: string[] = [];
@@ -157,31 +186,44 @@ export async function extractAndWriteProjectContext(
       .replace(/\*\(Prometheus will fill this in after your first conversation\.\)\*\n?/g, '')
       .replace(/\*\(Prometheus will fill this in\.\.\.\)\*\n?/g, '');
 
-    fs.writeFileSync(contextPath, content, 'utf-8');
+    await writeTextAtomic(contextPath, content);
     console.log(`[ProjectLearning] Updated CONTEXT.md for "${project.name}" — ${linesAdded} line(s) in: ${sectionsUpdated.join(', ')}`);
   }
 
   return { skipped: false, sectionsUpdated, linesAdded };
+  } finally {
+    release();
+    if (projectContextWriteQueues.get(contextPath) === tail) projectContextWriteQueues.delete(contextPath);
+  }
 }
 
 export async function refreshProjectContextForSession(
   sessionId: string,
   options?: { extraTextBlocks?: string[] },
 ): Promise<ProjectLearningResult> {
-  const project = findProjectBySessionId(sessionId);
+  const project = await findProjectBySessionIdAsync(sessionId);
   if (!project) {
     return { skipped: true, reason: 'not a project session', sectionsUpdated: [], linesAdded: 0 };
   }
 
   const session = getSession(sessionId);
-  const messages: ConversationMessage[] = (Array.isArray(session.history) ? session.history : [])
-    .filter((msg) => !isSyntheticProjectLearningNoise(msg?.content))
-    .map((msg) => ({
-      role: msg.role,
-      content: String(msg.content || ''),
-    }));
+  const messages: ConversationMessage[] = [];
+  let capturedChars = 0;
+  for (const msg of Array.isArray(session.history) ? session.history : []) {
+    if (msg?.role !== 'user') continue;
+    const content = String(msg?.content || '');
+    if (isSyntheticProjectLearningNoise(content)) continue;
+    const clean = content.trim();
+    if (!clean) continue;
+    const separator = messages.length > 0 ? 1 : 0;
+    const remaining = Math.max(0, MAX_CONVO_CHARS - capturedChars - separator);
+    if (remaining <= 0) break;
+    const bounded = clean.slice(0, remaining);
+    messages.push({ role: 'user', content: bounded });
+    capturedChars += separator + bounded.length;
+  }
 
-  return extractAndWriteProjectContext(messages, sessionId, options);
+  return extractAndWriteProjectContext(messages, sessionId, { ...options, resolvedProject: project });
 }
 
 export async function refreshProjectContextFromLatestPriorSession(
@@ -369,11 +411,20 @@ function buildLearningTranscript(
   extraTextBlocks?: string[],
 ): string {
   const parts: string[] = [];
-  const userBlock = messages
-    .filter((m) => m.role === 'user')
-    .map((m) => String(m.content || '').trim())
-    .filter(Boolean)
-    .join('\n');
+  const userParts: string[] = [];
+  let usedChars = 0;
+  for (const message of messages) {
+    if (message.role !== 'user') continue;
+    const clean = String(message.content || '').trim();
+    if (!clean) continue;
+    const separator = userParts.length > 0 ? 1 : 0;
+    const remaining = MAX_CONVO_CHARS - usedChars - separator;
+    if (remaining <= 0) break;
+    userParts.push(clean.slice(0, remaining));
+    usedChars += separator + Math.min(clean.length, remaining);
+    if (clean.length > remaining) break;
+  }
+  const userBlock = userParts.join('\n');
   if (userBlock) parts.push(userBlock);
   for (const block of extraTextBlocks || []) {
     const clean = String(block || '').trim();

@@ -121,6 +121,10 @@ function loadProjectFromDisk(id: string): Project | null {
   const file = getProjectFile(projectId);
   if (!fs.existsSync(file)) return null;
   try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size > 8 * 1024 * 1024) {
+      throw new RangeError(`Project metadata exceeds the 8 MiB safety limit: ${projectId}`);
+    }
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as Project;
     return {
       ...parsed,
@@ -310,9 +314,58 @@ export function removeSessionFromProject(
   return project;
 }
 
+async function loadProjectFromDiskAsync(id: string): Promise<Project | null> {
+  const projectId = assertSafeStorageId(id, 'project id');
+  const file = getProjectFile(projectId);
+  try {
+    const stat = await fs.promises.stat(file);
+    if (!stat.isFile() || stat.size > 8 * 1024 * 1024) {
+      throw new RangeError(`Project metadata exceeds the 8 MiB safety limit: ${projectId}`);
+    }
+    const parsed = JSON.parse(await fs.promises.readFile(file, 'utf8')) as Project;
+    return {
+      ...parsed,
+      id: projectId,
+      sessions: Array.isArray(parsed.sessions)
+        ? parsed.sessions.filter((session) => isSafeStorageId(session?.id))
+        : [],
+      knowledge: Array.isArray(parsed.knowledge) ? parsed.knowledge : [],
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error(`[ProjectStore] Failed to load project ${id}:`, (error as Error)?.message || error);
+    }
+    return null;
+  }
+}
+
 export function findProjectBySessionId(sessionId: string): Project | null {
   if (!isSafeStorageId(sessionId)) return null;
   return listProjects().find(p => p.sessions.some(s => s.id === sessionId)) || null;
+}
+
+/** Non-blocking lookup used by post-terminal learning maintenance. */
+export async function findProjectBySessionIdAsync(sessionId: string): Promise<Project | null> {
+  if (!isSafeStorageId(sessionId)) return null;
+  let files: string[];
+  try {
+    files = await fs.promises.readdir(getProjectsDir());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error('[ProjectStore] Failed to list projects:', (error as Error)?.message || error);
+    }
+    return null;
+  }
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue;
+    const id = file.slice(0, -5);
+    if (!isSafeStorageId(id)) continue;
+    const project = await loadProjectFromDiskAsync(id);
+    if (project?.sessions.some((session) => session.id === sessionId)) return project;
+    // Parsing an unusually large project record must not monopolize the gateway.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  return null;
 }
 
 // ─── Knowledge Files ─────────────────────────────────────────────────────────

@@ -183,6 +183,19 @@ function uniqueCompact(values: Array<unknown>, maxItems: number, maxChars = 180)
   return out;
 }
 
+function compactObservationArtifact(value: unknown): unknown {
+  if (typeof value === 'string') return value.slice(0, 1_000);
+  if (!value || typeof value !== 'object') return String(value ?? '').slice(0, 1_000);
+  const input = value as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+  for (const key of ['id', 'type', 'kind', 'name', 'label', 'title', 'path', 'url', 'mimeType', 'size', 'sizeBytes']) {
+    const inner = input[key];
+    if (typeof inner === 'string') output[key] = inner.slice(0, 1_000);
+    else if (typeof inner === 'number' || typeof inner === 'boolean') output[key] = inner;
+  }
+  return Object.keys(output).length > 0 ? output : '[artifact metadata omitted]';
+}
+
 function shouldShowObservationInSummary(obs: ToolObservation): boolean {
   if (obs.status === 'error') return true;
   if (obs.artifacts?.length || obs.pathsTouched?.length || obs.resultRawRef) return true;
@@ -268,7 +281,11 @@ export function createToolObservation(input: {
     argsPreview: stringifyPreview(input.args || {}, 900),
     resultPreview: stringifyPreview(resultText, input.error ? 1800 : 1000),
     resultRawRef: rawRef,
-    artifacts: Array.isArray(input.artifacts) && input.artifacts.length ? input.artifacts.slice(0, 10) : undefined,
+    // Observations are durable diagnostic metadata, not a second artifact
+    // payload store. Never duplicate base64/blob bodies into the JSONL.
+    artifacts: Array.isArray(input.artifacts) && input.artifacts.length
+      ? input.artifacts.slice(0, 10).map(compactObservationArtifact)
+      : undefined,
     pathsTouched: pathsTouched.length ? pathsTouched : undefined,
     exitCode: Number.isFinite(exitCode) ? exitCode : undefined,
     durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
@@ -331,6 +348,75 @@ export function readToolObservations(sessionId: string, maxObservations = 80): T
     } catch {}
   }
   return out;
+}
+
+export async function persistToolResultsAsObservationsAsync(
+  sessionId: string,
+  turnId: string,
+  toolResults: Array<any> = [],
+): Promise<{ observations: ToolObservation[]; toolLogText: string }> {
+  const { persistToolResultsAsObservationsInWorker } = await import('./tool-observation-persistence-client.js');
+  return persistToolResultsAsObservationsInWorker(sessionId, turnId, toolResults);
+}
+
+/**
+ * Read the same last-N observation window without loading a multi-megabyte
+ * session JSONL into the gateway event loop. Chunks are gathered from the end
+ * until the requested number of complete lines is available, then parsed with
+ * the same filtering/slicing rules as readToolObservations().
+ */
+export async function readToolObservationsAsync(sessionId: string, maxObservations = 80): Promise<ToolObservation[]> {
+  const filePath = observationJsonlPath(sessionId);
+  const limit = Math.max(1, Math.floor(Number(maxObservations || 80)));
+  const configuredTailBytes = Number(process.env.PROMETHEUS_TOOL_OBSERVATION_TAIL_MAX_BYTES);
+  const maxTailBytes = Number.isFinite(configuredTailBytes)
+    ? Math.max(256 * 1024, Math.min(8 * 1024 * 1024, Math.floor(configuredTailBytes)))
+    : 2 * 1024 * 1024;
+  const configuredLineBytes = Number(process.env.PROMETHEUS_TOOL_OBSERVATION_LINE_MAX_BYTES);
+  const maxLineBytes = Number.isFinite(configuredLineBytes)
+    ? Math.max(32 * 1024, Math.min(1024 * 1024, Math.floor(configuredLineBytes)))
+    : 256 * 1024;
+  let handle: fs.promises.FileHandle | null = null;
+  try {
+    handle = await fs.promises.open(filePath, 'r');
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size <= 0) return [];
+    const chunks: Buffer[] = [];
+    const chunkBytes = 64 * 1024;
+    let position = stat.size;
+    let newlineCount = 0;
+    let gatheredBytes = 0;
+    while (position > 0 && newlineCount <= limit && gatheredBytes < maxTailBytes) {
+      const size = Math.min(chunkBytes, position, maxTailBytes - gatheredBytes);
+      position -= size;
+      const chunk = Buffer.allocUnsafe(size);
+      const { bytesRead } = await handle.read(chunk, 0, size, position);
+      const value = bytesRead === size ? chunk : chunk.subarray(0, bytesRead);
+      chunks.unshift(value);
+      gatheredBytes += value.length;
+      for (let index = 0; index < value.length; index += 1) {
+        if (value[index] === 0x0a) newlineCount += 1;
+      }
+    }
+    const lines = Buffer.concat(chunks).toString('utf8').split(/\r?\n/);
+    // If the bounded read stopped in the middle of a legacy oversized line,
+    // discard that incomplete prefix instead of synchronously materializing
+    // an unbounded record in the gateway.
+    if (position > 0) lines.shift();
+    const completeLines = lines.filter(Boolean);
+    const slice = completeLines.slice(-limit);
+    const out: ToolObservation[] = [];
+    for (const line of slice) {
+      if (Buffer.byteLength(line, 'utf8') > maxLineBytes) continue;
+      try { out.push(JSON.parse(line) as ToolObservation); } catch {}
+    }
+    return out;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    return [];
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 export function buildToolBenchmarkAggregate(sessionId: string, maxObservations = 5000): Record<string, any> {
@@ -545,9 +631,27 @@ export function getRecentToolObservationsForContext(sessionId: string, opts: Obs
   return formatToolObservationsForContext(filtered, opts);
 }
 
+export async function getRecentToolObservationsForContextAsync(sessionId: string, opts: ObservationContextOptions = {}): Promise<string> {
+  const lookbackTurns = Math.max(1, Math.min(20, Math.floor(Number(opts.lookbackTurns || 5))));
+  const observations = await readToolObservationsAsync(sessionId, lookbackTurns * 20);
+  if (!observations.length) return '';
+  const turnIds = [...new Set(observations.map((obs) => obs.turnId).filter(Boolean))].slice(-lookbackTurns);
+  const filtered = observations.filter((obs) => turnIds.includes(obs.turnId));
+  return formatToolObservationsForContext(filtered, opts);
+}
+
 export function getRecentToolStateSummaryForContext(sessionId: string, opts: ObservationContextOptions = {}): string {
   const lookbackTurns = Math.max(1, Math.min(20, Math.floor(Number(opts.lookbackTurns || 3))));
   const observations = readToolObservations(sessionId, lookbackTurns * 20);
+  if (!observations.length) return '';
+  const turnIds = [...new Set(observations.map((obs) => obs.turnId).filter(Boolean))].slice(-lookbackTurns);
+  const filtered = observations.filter((obs) => turnIds.includes(obs.turnId));
+  return formatToolStateSummaryForContext(filtered, opts);
+}
+
+export async function getRecentToolStateSummaryForContextAsync(sessionId: string, opts: ObservationContextOptions = {}): Promise<string> {
+  const lookbackTurns = Math.max(1, Math.min(20, Math.floor(Number(opts.lookbackTurns || 3))));
+  const observations = await readToolObservationsAsync(sessionId, lookbackTurns * 20);
   if (!observations.length) return '';
   const turnIds = [...new Set(observations.map((obs) => obs.turnId).filter(Boolean))].slice(-lookbackTurns);
   const filtered = observations.filter((obs) => turnIds.includes(obs.turnId));

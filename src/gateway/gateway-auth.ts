@@ -137,12 +137,32 @@ function isPublicAccountAuthRoute(req: GatewayRequestLike): boolean {
   return false;
 }
 
+function hasValidTurnBlobGrant(req: GatewayRequestLike): boolean {
+  if (String(req.method || '').trim().toUpperCase() !== 'GET') return false;
+  try {
+    const host = getHeaderValue(req.headers, 'host') || 'localhost';
+    const parsed = new URL(String(req.url || ''), `http://${host}`);
+    const match = /^\/api\/turn-blobs\/([a-f0-9]{64})$/i.exec(parsed.pathname);
+    if (!match) return false;
+    const expiresAt = parsed.searchParams.get('tbexp');
+    const signature = parsed.searchParams.get('tbsig');
+    if (!expiresAt || !signature) return false;
+    // Lazy import keeps gateway auth independent from the turn runtime during
+    // boot. The grant is scoped to one immutable hash and an expiry timestamp.
+    const { verifyTurnBlobGrant } = require('./turn-jobs/blob-runtime') as typeof import('./turn-jobs/blob-runtime');
+    return verifyTurnBlobGrant(match[1], expiresAt, signature);
+  } catch {
+    return false;
+  }
+}
+
 export function evaluateGatewayRequest(
   req: GatewayRequestLike,
   opts?: { allowQueryToken?: boolean },
 ): { ok: true } | { ok: false; status: number; message: string } {
   if (!isGatewayAuthEnabled()) return { ok: true };
   if (isPublicAccountAuthRoute(req)) return { ok: true };
+  if (hasValidTurnBlobGrant(req)) return { ok: true };
 
   const renderGrant = evaluateCreativeRenderGrant(req);
   if (renderGrant.present) {

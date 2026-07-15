@@ -16,6 +16,14 @@ import { buildGatewayCorsOptions } from '../gateway-auth';
 import { isModelBusy, getLastMainSessionId } from '../comms/broadcaster';
 import { listLiveRuntimes } from '../live-runtime-registry';
 import { getMemoryIndexRefreshWorkerStatus } from '../memory-index/refresh-worker-client';
+import { getTurnJobRuntimeStatus } from '../turn-jobs/runtime.js';
+import { fileResourceLeasesEnabled } from '../turn-jobs/resource-policy.js';
+import { getTurnRetentionRuntimeStatus } from '../turn-jobs/retention-client.js';
+import { getModelTurnWorkerPoolStatus } from '../turn-workers/model-call-dispatcher.js';
+import { getTurnFileChangeWorkerPoolStatus } from '../turn-workers/turn-file-change-dispatcher.js';
+import { getContextFootprintWorkerStatus } from '../context-window/context-footprint-client.js';
+import { getSessionPersistenceStatus } from '../session.js';
+import { getToolObservationPersistenceStatus } from '../tool-observation-persistence-client.js';
 import { providerWebhookRawBodyMiddleware, resolveHookConfig } from '../comms/webhook-handler';
 
 const startedAt = Date.now();
@@ -45,6 +53,13 @@ export function createApp(): express.Application {
 
   app.get('/api/health', (_req, res) => {
     const memoryMaintenance = getMemoryIndexRefreshWorkerStatus();
+    const turnJournal = getTurnJobRuntimeStatus() as any;
+    const turnRetention = getTurnRetentionRuntimeStatus();
+    const turnWorkers = getModelTurnWorkerPoolStatus();
+    const fileChangeWorkers = getTurnFileChangeWorkerPoolStatus();
+    const contextFootprint = getContextFootprintWorkerStatus();
+    const sessionPersistence = getSessionPersistenceStatus();
+    const toolObservationPersistence = getToolObservationPersistenceStatus();
     res.setHeader('Cache-Control', 'no-store');
     res.json({
       ok: true,
@@ -62,6 +77,7 @@ export function createApp(): express.Application {
       })),
       memoryMaintenance: {
         isolation: memoryMaintenance.isolation,
+        workerHeapMb: memoryMaintenance.workerHeapMb,
         state: memoryMaintenance.broker.state,
         pid: memoryMaintenance.broker.pid,
         active: !!memoryMaintenance.runningWorkspace,
@@ -70,6 +86,112 @@ export function createApp(): express.Application {
         queuedJobs: memoryMaintenance.queuedJobs,
         lastRunStartedAt: memoryMaintenance.lastRunStartedAt,
         lastRunCompletedAt: memoryMaintenance.lastRunCompletedAt,
+        lastError: memoryMaintenance.lastError,
+      },
+      turnRuntime: {
+        isolation: 'model-process-pool+file-change-process+context-process+observation-process+durable-turn-journal',
+        resourceLeases: {
+          sharedWorkspace: true,
+          fileRepositoryEnabled: fileResourceLeasesEnabled(),
+          singletonResourcesEnabled: true,
+        },
+        enabled: turnWorkers.enabled,
+        maxWorkers: turnWorkers.maxWorkers,
+        workerHeapMb: turnWorkers.heapLimitMb,
+        queuedJobs: turnWorkers.queuedJobs,
+        runningJobs: turnWorkers.runningJobs,
+        workers: turnWorkers.workers.map((worker) => ({
+          state: worker.state,
+          pid: worker.pid,
+          active: Boolean(worker.activeJobId),
+          lastHeartbeatAt: worker.lastHeartbeatAt,
+          jobsCompleted: worker.jobsCompleted,
+        })),
+        fileChangeWorkers: {
+          enabled: fileChangeWorkers.enabled,
+          workerOldSpaceMb: fileChangeWorkers.workerOldSpaceMb,
+          maxWorkers: fileChangeWorkers.maxWorkers,
+          queuedJobs: fileChangeWorkers.queuedJobs,
+          runningJobs: fileChangeWorkers.runningJobs,
+          workers: fileChangeWorkers.workers.map((worker) => ({
+            state: worker.state,
+            pid: worker.pid,
+            active: Boolean(worker.activeJobId),
+            lastHeartbeatAt: worker.lastHeartbeatAt,
+            jobsCompleted: worker.jobsCompleted,
+          })),
+        },
+        contextFootprint: {
+          isolation: contextFootprint.isolation,
+          state: contextFootprint.broker.state,
+          pid: contextFootprint.broker.pid,
+          queued: contextFootprint.queued,
+          running: contextFootprint.running,
+          maxQueued: contextFootprint.maxQueued,
+          workerHeapMb: contextFootprint.workerHeapMb,
+          maxSnapshotBytes: contextFootprint.maxSnapshotBytes,
+          lastStartedAt: contextFootprint.lastStartedAt,
+          lastCompletedAt: contextFootprint.lastCompletedAt,
+          lastError: contextFootprint.lastError,
+        },
+        sessionPersistence: {
+          mode: 'cooperative-async-atomic',
+          pendingTimers: sessionPersistence.pendingTimers,
+          activeWrites: sessionPersistence.activeWrites,
+          indexWriteActive: sessionPersistence.indexWriteActive,
+          shuttingDown: sessionPersistence.shuttingDown,
+        },
+        toolObservationPersistence: {
+          isolation: toolObservationPersistence.isolation,
+          maxWorkers: toolObservationPersistence.maxWorkers,
+          workerHeapMb: toolObservationPersistence.workerHeapMb,
+          maxSnapshotBytes: toolObservationPersistence.maxSnapshotBytes,
+          queued: toolObservationPersistence.queued,
+          running: toolObservationPersistence.running,
+          workers: toolObservationPersistence.workers.map((worker) => ({
+            state: worker.state,
+            pid: worker.pid,
+            active: worker.state === 'busy',
+            lastHeartbeatAt: worker.lastHeartbeatAt,
+          })),
+          lastStartedAt: toolObservationPersistence.lastStartedAt,
+          lastCompletedAt: toolObservationPersistence.lastCompletedAt,
+          lastError: toolObservationPersistence.lastError,
+        },
+        journal: {
+          queued: Number(turnJournal.queued || 0),
+          active: Number(turnJournal.active || 0),
+          waiting: Number(turnJournal.waiting || 0),
+          state: turnJournal.state || 'ready',
+          recovery: turnJournal.recovery || {
+            mode: 'lease-and-final-state-only',
+            scheduled: false,
+            running: false,
+            turnRedispatch: false,
+            channelRedelivery: false,
+          },
+        },
+        retention: {
+          isolation: turnRetention.isolation,
+          workerHeapMb: turnRetention.workerHeapMb,
+          enabled: turnRetention.enabled,
+          state: turnRetention.broker.state,
+          pid: turnRetention.broker.pid || turnRetention.lastWorkerPid,
+          scheduled: turnRetention.scheduled,
+          scheduledFor: turnRetention.scheduledFor,
+          running: turnRetention.running,
+          jobRetentionMs: turnRetention.jobRetentionMs,
+          blobRetentionMs: turnRetention.blobRetentionMs,
+          catchupDelayMs: turnRetention.catchupDelayMs,
+          jobBatchLimit: turnRetention.jobBatchLimit,
+          blobScanLimit: turnRetention.blobScanLimit,
+          blobDeleteLimit: turnRetention.blobDeleteLimit,
+          lastRunStartedAt: turnRetention.lastRunStartedAt,
+          lastRunCompletedAt: turnRetention.lastRunCompletedAt,
+          jobsDeleted: turnRetention.lastResult?.jobsDeleted,
+          blobsDeleted: turnRetention.lastResult?.blobs.deleted,
+          lastError: turnRetention.lastError,
+        },
       },
     });
   });

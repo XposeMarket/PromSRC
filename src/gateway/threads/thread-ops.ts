@@ -162,6 +162,75 @@ function createManagedThread(
   };
 }
 
+const THREAD_LINK_ACTION_LABELS: Record<string, string> = {
+  create: 'Thread created',
+  start: 'Thread created',
+  create_many: 'Thread created',
+  start_many: 'Thread created',
+  send: 'Thread messaged',
+  chat: 'Thread messaged',
+  steer: 'Thread steered',
+  interrupt: 'Thread paused',
+  stop: 'Thread paused',
+  rename: 'Thread renamed',
+  pin: 'Thread pinned',
+  unpin: 'Thread unpinned',
+  follow: 'Thread followed',
+  unfollow: 'Thread unfollowed',
+};
+
+export function buildPrometheusThreadLinksArtifact(args: any, output: any): Record<string, any> | null {
+  const action = String(args?.action || '').trim().toLowerCase();
+  const label = THREAD_LINK_ACTION_LABELS[action];
+  if (!label) return null;
+
+  const candidates: any[] = [
+    output?.session,
+    ...(Array.isArray(output?.created) ? output.created : []),
+    output?.supervision,
+    ...(Array.isArray(output?.cancelled) ? output.cancelled : []),
+    ...(Array.isArray(output?.supervisions) ? output.supervisions : []),
+    output?.runtime,
+  ].filter(Boolean);
+  const requestedTarget = String(args?.session_id || args?.sessionId || args?.target_session_id || '').trim();
+  if (requestedTarget) candidates.push({ id: requestedTarget, sessionId: requestedTarget });
+
+  const seen = new Set<string>();
+  const items: Array<Record<string, any>> = [];
+  for (const candidate of candidates) {
+    const sessionId = String(
+      candidate?.targetSessionId
+      || candidate?.sessionId
+      || candidate?.id
+      || candidate?.runtime?.sessionId
+      || '',
+    ).trim();
+    if (!sessionId || seen.has(sessionId) || !sessionExists(sessionId)) continue;
+    seen.add(sessionId);
+    const session = getSession(sessionId);
+    const goalStatus = String(session.mainChatGoal?.status || '').trim();
+    items.push({
+      sessionId,
+      title: getSessionDisplayTitle(session) || String(candidate?.title || sessionId),
+      label,
+      subtitle: goalStatus === 'active' || goalStatus === 'restarting'
+        ? 'Working autonomously'
+        : action === 'unfollow'
+          ? 'Thread remains available'
+          : 'Prometheus chat session',
+      status: goalStatus || String(candidate?.status || ''),
+    });
+  }
+  if (!items.length) return null;
+  return {
+    id: `thread-links:${action}:${items.map((item) => item.sessionId).sort().join(',')}`,
+    type: 'thread_links',
+    title: items.length === 1 ? label : `${items.length} threads touched`,
+    items,
+    createdAt: new Date().toISOString(),
+  };
+}
+
 export async function executePrometheusThreadOps(
   ownerSessionId: string,
   args: any,

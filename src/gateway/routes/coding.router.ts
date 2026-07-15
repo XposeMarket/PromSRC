@@ -8,8 +8,49 @@ import {
   gitStage,
   resolveCodingRoot,
 } from '../coding/workspace-session';
+import { clearWorkContext, getWorkContextBenchmarkSummary, getWorkContextConfig, getWorkContextPacket } from '../work-context/manager';
+import { getWorkContextPacketPath } from '../work-context/store';
 
 export const router = express.Router();
+
+router.get('/api/work-context-benchmarks', (_req, res) => {
+  try {
+    res.json(getWorkContextBenchmarkSummary());
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.get('/api/work-context/:sessionId', (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || '').trim();
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+    res.json({
+      config: getWorkContextConfig(),
+      packet: getWorkContextPacket(sessionId),
+      storagePath: getWorkContextPacketPath(sessionId),
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/work-context/:sessionId/clear', (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || '').trim();
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+    clearWorkContext(sessionId);
+    res.json({ ok: true, sessionId });
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
 
 router.get('/api/coding/session', (req, res) => {
   try {

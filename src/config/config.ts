@@ -406,6 +406,19 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       testRecipient: '',
     },
   },
+  work_context: {
+    enabled: true,
+    shadow_mode: true,
+    max_packet_bytes: 96_000,
+    max_age_hours: 24 * 14,
+    fast_paths: {
+      coding: false,
+      browser: false,
+      desktop: false,
+      creative: false,
+      generic: false,
+    },
+  },
   orchestration: {
     enabled: false,
     secondary: {
@@ -823,6 +836,15 @@ export class ConfigManager {
             }
           : DEFAULT_CONFIG.tools;
 
+        const mergedWorkContext = {
+          ...((DEFAULT_CONFIG as any).work_context || {}),
+          ...((loaded as any).work_context || {}),
+          fast_paths: {
+            ...((DEFAULT_CONFIG as any).work_context?.fast_paths || {}),
+            ...((loaded as any).work_context?.fast_paths || {}),
+          },
+        };
+
         const merged: PrometheusConfig = {
           ...DEFAULT_CONFIG,
           ...loaded,
@@ -832,6 +854,7 @@ export class ConfigManager {
           channels: mergedChannels as any,
           telegram: (mergedChannels as any).telegram,
           tools: mergedTools,
+          work_context: mergedWorkContext,
         };
 
 

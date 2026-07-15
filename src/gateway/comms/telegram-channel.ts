@@ -487,7 +487,7 @@ export class TelegramChannel {
    * Stores a mutable abort sentinel — the run polls `.aborted` to bail out cooperatively.
    * Calling `.abort()` flips the flag; the run cleans up in its existing finally block.
    */
-  private activeRuns = new Map<string, { aborted: boolean; abort: () => void }>();
+  private activeRuns = new Map<string, { aborted: boolean; interrupted?: boolean; signal: AbortSignal; abort: () => void }>();
 
   /** Build the debounce/abort key from userId + chatId. */
   private humanFeelKey(userId: number, chatId: number): string {
@@ -1466,9 +1466,13 @@ export class TelegramChannel {
      * `.aborted = true` (or via abortLiveRuntime) to interrupt the run mid-stream.
      * If omitted, a fresh signal is created internally.
      */
-    externalAbortSignal?: { aborted: boolean };
+    externalAbortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal };
   }): Promise<{ aborted: boolean; result: { type: string; text: string; thinking?: string; toolResults?: any[] } }> {
-    const abortSignal = params.externalAbortSignal ?? { aborted: false };
+    const ownedAbortController = params.externalAbortSignal?.signal ? null : new AbortController();
+    const abortSignal = params.externalAbortSignal ?? {
+      aborted: false,
+      signal: ownedAbortController!.signal,
+    };
     const runtimeId = registerLiveRuntime({
       kind: 'main_chat',
       label: 'Main chat',
@@ -1477,6 +1481,13 @@ export class TelegramChannel {
       chatId: params.chatId,
       detail: String(params.message || '').slice(0, 160),
       abortSignal,
+      onShutdownInterrupt: () => {
+        ownedAbortController?.abort();
+        // Externally-owned Telegram signals carry their own AbortController.
+        if (!ownedAbortController && typeof (abortSignal as any).abort === 'function') {
+          (abortSignal as any).abort();
+        }
+      },
       recoveryPolicy: 'mark_interrupted',
       recoveryData: {
         message: String(params.message || ''),
@@ -1534,6 +1545,13 @@ export class TelegramChannel {
             params.callerOnToken,        // 13. callerOnToken
           );
       return { aborted: abortSignal.aborted, result };
+    } catch (err) {
+      // Restart interruption is a resumable control-plane event. Do not turn it
+      // into a Telegram error message while the gateway is intentionally exiting.
+      if (abortSignal.interrupted) {
+        return { aborted: true, result: { type: 'interrupted', text: '' } };
+      }
+      throw err;
     } finally {
       setModelBusy(false);
       finishLiveRuntime(runtimeId);
@@ -1595,9 +1613,14 @@ export class TelegramChannel {
 
     // Register an abort signal so a stop trigger from this conversation can
     // interrupt the model loop mid-stream.
-    const abortSignal: { aborted: boolean; abort: () => void } = {
+    const abortController = new AbortController();
+    const abortSignal: { aborted: boolean; interrupted?: boolean; signal: AbortSignal; abort: () => void } = {
       aborted: false,
-      abort() { this.aborted = true; },
+      signal: abortController.signal,
+      abort() {
+        this.aborted = true;
+        abortController.abort();
+      },
     };
     this.activeRuns.set(abortKey, abortSignal);
 

@@ -23,6 +23,7 @@ export type RichArtifactType =
   | 'map'
   | 'email_composer'
   | 'prediction_market'
+  | 'thread_links'
   | 'visual'
   // Declared for forward-compatibility; renderers not implemented yet.
   | 'jobs'
@@ -267,6 +268,21 @@ export interface RunResultArtifact extends BaseRichArtifact {
   links?: RunResultLink[];
 }
 
+// ─── thread_links (Prometheus peer-session navigation) ─────────────────────
+
+export interface ThreadLinkArtifactItem {
+  sessionId: string;
+  title: string;
+  label?: string;
+  subtitle?: string;
+  status?: string;
+}
+
+export interface ThreadLinksArtifact extends BaseRichArtifact {
+  type: 'thread_links';
+  items: ThreadLinkArtifactItem[];
+}
+
 // ─── map (places) ────────────────────────────────────────────────────────────
 
 export interface MapMarker {
@@ -348,6 +364,7 @@ export type RichArtifact =
   | ComparisonArtifact
   | ChartArtifact
   | RunResultArtifact
+  | ThreadLinksArtifact
   | MapArtifact
   | EmailComposerArtifact
   | PredictionMarketArtifact

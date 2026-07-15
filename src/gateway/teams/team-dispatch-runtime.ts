@@ -4,6 +4,7 @@ import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/conf
 import { parseProviderModelRef, resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import {
   getManagedTeam,
+  saveManagedTeam,
   drainAgentMessages,
   recordTeamRun,
   buildTeamRoomSummary,
@@ -29,7 +30,7 @@ type HandleChatFn = (
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   pinnedMessages?: Array<{ role: string; content: string }>,
-  abortSignal?: { aborted: boolean },
+  abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal },
   callerContext?: string,
   modelOverride?: string,
   executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron' | 'team_subagent',
@@ -59,6 +60,57 @@ interface DispatchDeps {
 }
 
 let _dispatchDeps: DispatchDeps | null = null;
+
+type TeamRuntimeAbortSignal = { aborted: boolean; interrupted?: boolean; signal?: AbortSignal };
+
+// A restart interruption belongs to the replacement gateway. Keeping the old
+// call pending prevents its caller from translating a deliberate shutdown into
+// a failed dispatch after the durable runtime/task snapshot has been written.
+const TEAM_DISPATCH_SHUTDOWN_HOLD = new Promise<never>(() => {});
+
+function createTeamDispatchShutdownBridge(): {
+  abortSignal: TeamRuntimeAbortSignal;
+  interruptForShutdown: () => void;
+} {
+  const controller = new AbortController();
+  const abortSignal: TeamRuntimeAbortSignal = {
+    aborted: false,
+    signal: controller.signal,
+  };
+  return {
+    abortSignal,
+    interruptForShutdown: () => {
+      abortSignal.interrupted = true;
+      abortSignal.aborted = true;
+      if (!controller.signal.aborted) {
+        controller.abort(new Error('Gateway shutdown interrupted the team dispatch.'));
+      }
+    },
+  };
+}
+
+function restoreDispatchMessagesForShutdown(teamId: string, agentId: string, messages: string[]): void {
+  if (!teamId || messages.length === 0) return;
+  try {
+    const team = getManagedTeam(teamId);
+    if (!team) return;
+    if (!team.pendingMessages) team.pendingMessages = {};
+    const newerMessages = Array.isArray(team.pendingMessages[agentId])
+      ? team.pendingMessages[agentId]
+      : [];
+    // Drained messages predate anything queued while this run was active.
+    // Both source queues are bounded, so the one-time restart merge remains
+    // bounded without dropping either side of the handoff.
+    team.pendingMessages[agentId] = [...messages, ...newerMessages];
+    saveManagedTeam(team);
+  } catch (error: any) {
+    console.warn('[TeamDispatch] Could not restore queued messages for restart:', error?.message || error);
+  }
+}
+
+async function holdTeamDispatchForGatewayShutdown(): Promise<never> {
+  return TEAM_DISPATCH_SHUTDOWN_HOLD;
+}
 
 export function setDispatchDeps(deps: DispatchDeps): void {
   _dispatchDeps = deps;
@@ -651,7 +703,9 @@ export async function runTeamAgentViaChat(
     teamId,
     agentId,
   });
-  const abortSignal = { aborted: false };
+  const shutdownBridge = createTeamDispatchShutdownBridge();
+  const abortSignal = shutdownBridge.abortSignal;
+  let shutdownMessagesRestored = false;
   const runtimeId = registerLiveRuntime({
     kind: 'team_member',
     label: `Team dispatch - ${agentName}`,
@@ -662,6 +716,22 @@ export async function runTeamAgentViaChat(
     source: trigger,
     detail: task.slice(0, 160),
     abortSignal,
+    onShutdownInterrupt: () => {
+      if (!shutdownMessagesRestored) {
+        shutdownMessagesRestored = true;
+        restoreDispatchMessagesForShutdown(teamId, agentId, pendingMessages);
+      }
+      shutdownBridge.interruptForShutdown();
+    },
+    recoveryPolicy: 'resume',
+    recoveryData: {
+      teamId,
+      agentId,
+      taskId: cronTask.id,
+      trigger,
+      task: String(task || '').slice(0, 8_000),
+      queuedMessageCount: pendingMessages.length,
+    },
   });
   _activeAgentSessions.add(sessionId);
   _activeAgentSessions.add(dispatchRuntimeSessionId);
@@ -688,6 +758,10 @@ export async function runTeamAgentViaChat(
       undefined,
       agentRouting.providerOverride,
     );
+
+    if (abortSignal.interrupted) {
+      await holdTeamDispatchForGatewayShutdown();
+    }
 
     const finalTask = loadTask(cronTask.id);
     const resultText = String(result?.text || finalTask?.finalSummary || finalTask?.pendingClarificationQuestion || liveReplyText || '').trim();
@@ -797,6 +871,9 @@ export async function runTeamAgentViaChat(
       warning: resultWarning || undefined,
     };
   } catch (err: any) {
+    if (abortSignal.interrupted) {
+      await holdTeamDispatchForGatewayShutdown();
+    }
     const finishedAt = Date.now();
 
     // ── Issue 9: Record failed run in team history ────────────────────────────
@@ -860,34 +937,39 @@ export async function runTeamAgentViaChat(
       taskId: cronTask.id,
     };
   } finally {
-    finishLiveRuntime(runtimeId);
-    _activeAgentSessions.delete(sessionId);
-    _activeAgentSessions.delete(dispatchRuntimeSessionId);
-    clearTaskRunBinding(sessionId, cronTask.id);
-    if (teamId) {
-      try {
-        const { hasPendingAgentMessages, listPendingTeamDirectThreadsForParticipant } = require('./managed-teams');
-        if (hasPendingAgentMessages(teamId, agentId)) {
-          const { scheduleTeamMemberAutoWake } = require('./team-member-room');
-          scheduleTeamMemberAutoWake(teamId, agentId, {
-            reason: 'New teammate messages arrived while you were dispatched.',
-            delayMs: 500,
-            source: 'dispatch_followup',
-          });
-        }
-        const pendingDirectThreads = listPendingTeamDirectThreadsForParticipant(teamId, 'member', agentId);
-        if (Array.isArray(pendingDirectThreads) && pendingDirectThreads.length > 0) {
-          const { scheduleTeamMemberDirectWake } = require('./team-member-room');
-          for (const thread of pendingDirectThreads) {
-            if (!thread?.id) continue;
-            scheduleTeamMemberDirectWake(teamId, agentId, thread.id, {
-              reason: 'The team owner sent you a direct follow-up while you were dispatched.',
+    // finishLiveRuntime deliberately preserves an interrupted ledger record,
+    // but the surrounding cleanup can still consume queued handoffs. Leave all
+    // old-process ownership intact until the replacement gateway recovers it.
+    if (!abortSignal.interrupted) {
+      finishLiveRuntime(runtimeId);
+      _activeAgentSessions.delete(sessionId);
+      _activeAgentSessions.delete(dispatchRuntimeSessionId);
+      clearTaskRunBinding(sessionId, cronTask.id);
+      if (teamId) {
+        try {
+          const { hasPendingAgentMessages, listPendingTeamDirectThreadsForParticipant } = require('./managed-teams');
+          if (hasPendingAgentMessages(teamId, agentId)) {
+            const { scheduleTeamMemberAutoWake } = require('./team-member-room');
+            scheduleTeamMemberAutoWake(teamId, agentId, {
+              reason: 'New teammate messages arrived while you were dispatched.',
               delayMs: 500,
+              source: 'dispatch_followup',
             });
           }
+          const pendingDirectThreads = listPendingTeamDirectThreadsForParticipant(teamId, 'member', agentId);
+          if (Array.isArray(pendingDirectThreads) && pendingDirectThreads.length > 0) {
+            const { scheduleTeamMemberDirectWake } = require('./team-member-room');
+            for (const thread of pendingDirectThreads) {
+              if (!thread?.id) continue;
+              scheduleTeamMemberDirectWake(teamId, agentId, thread.id, {
+                reason: 'The team owner sent you a direct follow-up while you were dispatched.',
+                delayMs: 500,
+              });
+            }
+          }
+        } catch {
+          // Best-effort handoff back into the room.
         }
-      } catch {
-        // Best-effort handoff back into the room.
       }
     }
   }

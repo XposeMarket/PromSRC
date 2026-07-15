@@ -34,7 +34,7 @@ type HandleChatFn = (
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   pinnedMessages?: Array<{ role: string; content: string }>,
-  abortSignal?: { aborted: boolean },
+  abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal },
   callerContext?: string,
   modelOverride?: string,
   executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron' | 'team_manager' | 'team_subagent',
@@ -66,7 +66,7 @@ interface CoordinatorDeps {
 
 export interface CoordinatorConversationOptions {
   sendSSE?: (event: string, data: any) => void;
-  abortSignal?: { aborted: boolean };
+  abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal };
   sessionIdOverride?: string;
   threadId?: string;
   replyTargetType?: 'room' | 'team' | 'manager' | 'member' | 'user';
@@ -348,6 +348,56 @@ function broadcastTeamManagerStreamDone(
 
 let _deps: CoordinatorDeps | null = null;
 
+type TeamManagerAbortSignal = { aborted: boolean; interrupted?: boolean; signal?: AbortSignal };
+
+const TEAM_MANAGER_SHUTDOWN_HOLD = new Promise<never>(() => {});
+
+function createTeamManagerShutdownBridge(existing?: TeamManagerAbortSignal): {
+  abortSignal: TeamManagerAbortSignal;
+  interruptForShutdown: () => void;
+  dispose: () => void;
+} {
+  const abortSignal = existing || { aborted: false };
+  const controller = new AbortController();
+  const upstreamSignal = abortSignal.signal;
+  const forwardUpstreamAbort = () => {
+    if (!controller.signal.aborted) controller.abort(upstreamSignal?.reason);
+  };
+  if (upstreamSignal?.aborted) forwardUpstreamAbort();
+  else upstreamSignal?.addEventListener('abort', forwardUpstreamAbort, { once: true });
+  abortSignal.signal = controller.signal;
+  return {
+    abortSignal,
+    interruptForShutdown: () => {
+      abortSignal.interrupted = true;
+      abortSignal.aborted = true;
+      if (!controller.signal.aborted) {
+        controller.abort(new Error('Gateway shutdown interrupted the team manager.'));
+      }
+    },
+    dispose: () => upstreamSignal?.removeEventListener('abort', forwardUpstreamAbort),
+  };
+}
+
+function restoreManagerMessagesForShutdown(teamId: string, messages: string[]): void {
+  if (messages.length === 0) return;
+  try {
+    const team = getManagedTeam(teamId);
+    if (!team) return;
+    const newerMessages = Array.isArray(team.pendingManagerMessages)
+      ? team.pendingManagerMessages
+      : [];
+    team.pendingManagerMessages = [...messages, ...newerMessages];
+    saveManagedTeam(team);
+  } catch (error: any) {
+    console.warn('[TeamCoordinator] Could not restore manager inbox for restart:', error?.message || error);
+  }
+}
+
+async function holdTeamManagerForGatewayShutdown(): Promise<never> {
+  return TEAM_MANAGER_SHUTDOWN_HOLD;
+}
+
 export function setCoordinatorDeps(deps: CoordinatorDeps): void {
   _deps = deps;
 }
@@ -383,7 +433,7 @@ function prepareTeamManagerRuntime(team: any, sessionId: string): { modelOverrid
     : (rawModel ? { modelOverride: rawModel } : {});
 }
 
-function buildTeamCallerContext(teamId: string): string {
+function buildTeamCallerContext(teamId: string, drainedMessages?: string[]): string {
   const team = getManagedTeam(teamId);
   if (!team) return '';
 
@@ -412,6 +462,9 @@ function buildTeamCallerContext(teamId: string): string {
   }) || '  (no recent room state)';
 
   const pendingManagerMessages = drainManagerMessages(teamId);
+  if (drainedMessages && pendingManagerMessages.length > 0) {
+    drainedMessages.push(...pendingManagerMessages);
+  }
   const managerInbox = pendingManagerMessages.length > 0
     ? pendingManagerMessages.map((m, i) => `  ${i + 1}. ${m}`).join('\n')
     : '';
@@ -587,7 +640,10 @@ export async function runCoordinatorConversation(
   const maxTurns = autoContinue ? SAFETY_MAX_TURNS : 1;
   const runStartedAt = Date.now();
   let consecutiveIdleTurns = 0; // turns without any member-room or dispatch activity
-  const abortSignal = { aborted: false };
+  const shutdownBridge = createTeamManagerShutdownBridge();
+  const abortSignal = shutdownBridge.abortSignal;
+  let shutdownReplayManagerMessages: string[] = [];
+  let shutdownMessagesRestored = false;
   const runtimeId = registerLiveRuntime({
     kind: 'team_manager',
     label: `Team manager - ${team.name}`,
@@ -596,10 +652,26 @@ export async function runCoordinatorConversation(
     source: 'system',
     detail: String(userMessage || '').slice(0, 160),
     abortSignal,
+    onShutdownInterrupt: () => {
+      if (!shutdownMessagesRestored) {
+        shutdownMessagesRestored = true;
+        restoreManagerMessagesForShutdown(teamId, shutdownReplayManagerMessages);
+      }
+      shutdownBridge.interruptForShutdown();
+    },
+    recoveryPolicy: 'mark_interrupted',
+    recoveryData: {
+      teamId,
+      sessionId,
+      autoContinue,
+      message: String(userMessage || '').slice(0, 8_000),
+      threadId: String(options.threadId || '').trim() || undefined,
+    },
   });
 
   try {
 	  for (let turn = 0; turn < maxTurns; turn++) {
+	    if (abortSignal.interrupted) await holdTeamManagerForGatewayShutdown();
 	    if (abortSignal.aborted) break;
     // Check if team was paused (user clicked Stop)
     const freshTeam = getManagedTeam(teamId);
@@ -613,7 +685,8 @@ export async function runCoordinatorConversation(
     }
 
     // Rebuild caller context each turn (picks up latest team chat, goal state, thread)
-    const callerContext = buildTeamCallerContext(teamId);
+    shutdownReplayManagerMessages = [];
+    const callerContext = buildTeamCallerContext(teamId, shutdownReplayManagerMessages);
     try { setWorkspace(sessionId, getTeamWorkspacePath(teamId)); } catch { /* non-fatal */ }
 
     // Ensure team_ops + source_write tools are available in the coordinator session every turn
@@ -672,6 +745,12 @@ export async function runCoordinatorConversation(
 	        managerRouting.providerOverride,
 	      );
 
+	      if (abortSignal.interrupted) {
+	        await holdTeamManagerForGatewayShutdown();
+	      }
+	      // This turn accepted its inbox. A later shutdown must not replay it.
+	      shutdownReplayManagerMessages = [];
+
 	      responseText = String(result.text || '').trim();
 	      const resultThinking = String(result.thinking || '').trim();
 	      if (resultThinking) {
@@ -713,6 +792,9 @@ export async function runCoordinatorConversation(
 	      }
 	      closeStream('turn_complete');
 	    } catch (err: any) {
+	      if (abortSignal.interrupted) {
+	        await holdTeamManagerForGatewayShutdown();
+	      }
 	      if (abortSignal.aborted) {
 	        closeStream('aborted');
 	        break;
@@ -827,7 +909,10 @@ export async function runCoordinatorConversation(
     ].join('\n');
   }
   } finally {
-    finishLiveRuntime(runtimeId);
+    if (!abortSignal.interrupted) {
+      shutdownBridge.dispose();
+      finishLiveRuntime(runtimeId);
+    }
   }
 }
 
@@ -840,7 +925,8 @@ export async function runCoordinatorConversationDetailed(
 ): Promise<CoordinatorConversationResult> {
   const nullSse = (_e: string, _d: any) => {};
   const emitSSE = options.sendSSE || nullSse;
-  const abortSignal = options.abortSignal || { aborted: false };
+  const shutdownBridge = createTeamManagerShutdownBridge(options.abortSignal);
+  const abortSignal = shutdownBridge.abortSignal;
 
   if (!_deps) {
     console.warn('[TeamCoordinator] deps not wired - coordinator conversation skipped.');
@@ -858,6 +944,8 @@ export async function runCoordinatorConversationDetailed(
   let turnsCompleted = 0;
   let finalReason = autoContinue ? 'natural_stop' : 'single_turn';
   let lastManagerMessage = '';
+  let shutdownReplayManagerMessages: string[] = [];
+  let shutdownMessagesRestored = false;
   const runStartedAt = Date.now();
   const runtimeId = registerLiveRuntime({
     kind: 'team_manager',
@@ -867,10 +955,28 @@ export async function runCoordinatorConversationDetailed(
     source: 'system',
     detail: String(userMessage || '').slice(0, 160),
     abortSignal,
+    onShutdownInterrupt: () => {
+      if (!shutdownMessagesRestored) {
+        shutdownMessagesRestored = true;
+        restoreManagerMessagesForShutdown(teamId, shutdownReplayManagerMessages);
+      }
+      shutdownBridge.interruptForShutdown();
+    },
+    recoveryPolicy: 'mark_interrupted',
+    recoveryData: {
+      teamId,
+      sessionId,
+      autoContinue,
+      message: String(userMessage || '').slice(0, 8_000),
+      threadId: String(options.threadId || '').trim() || undefined,
+      replyTargetType: options.replyTargetType,
+      replyTargetId: String(options.replyTargetId || '').slice(0, 500) || undefined,
+    },
   });
 
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
+      if (abortSignal.interrupted) await holdTeamManagerForGatewayShutdown();
       if (abortSignal.aborted) {
         finalReason = 'aborted';
         break;
@@ -888,7 +994,8 @@ export async function runCoordinatorConversationDetailed(
         break;
       }
 
-      const callerContext = buildTeamCallerContext(teamId);
+      shutdownReplayManagerMessages = [];
+      const callerContext = buildTeamCallerContext(teamId, shutdownReplayManagerMessages);
       try { setWorkspace(sessionId, getTeamWorkspacePath(teamId)); } catch { /* non-fatal */ }
 
       prepareTeamManagerToolScope(sessionId);
@@ -920,7 +1027,7 @@ export async function runCoordinatorConversationDetailed(
         };
 
         const managerRouting = prepareTeamManagerRuntime(freshTeam, sessionId);
-        const result = await _deps.handleChat(
+	        const result = await _deps.handleChat(
           currentMessage,
           sessionId,
           trackingSse,
@@ -934,6 +1041,11 @@ export async function runCoordinatorConversationDetailed(
 	          undefined,
 	          managerRouting.providerOverride,
 	        );
+
+	        if (abortSignal.interrupted) {
+	          await holdTeamManagerForGatewayShutdown();
+	        }
+	        shutdownReplayManagerMessages = [];
 
 	        responseText = String(result.text || '').trim();
 	        const resultThinking = String(result.thinking || '').trim();
@@ -988,6 +1100,9 @@ export async function runCoordinatorConversationDetailed(
 	          broadcastTeamChatMessage(bfn, teamId, team.name, chatMsg);
 	        }
 	      } catch (err: any) {
+        if (abortSignal.interrupted) {
+          await holdTeamManagerForGatewayShutdown();
+        }
         if (abortSignal.aborted) {
           finalReason = 'aborted';
           break;
@@ -1115,7 +1230,10 @@ export async function runCoordinatorConversationDetailed(
       managerMessage: lastManagerMessage,
     };
   } finally {
-    finishLiveRuntime(runtimeId);
+    if (!abortSignal.interrupted) {
+      shutdownBridge.dispose();
+      finishLiveRuntime(runtimeId);
+    }
   }
 }
 

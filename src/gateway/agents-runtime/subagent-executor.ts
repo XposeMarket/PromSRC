@@ -36,6 +36,9 @@ import { executeGenerateImage } from '../../tools/generate-image';
 import { executeGenerateVideo } from '../../tools/generate-video';
 import { getActiveAllowedWorkspaces, hasActiveWorkspaceScope } from '../../tools/workspace-context';
 import { isCanonicalPathInsideSync } from '../../tools/workspace-boundary';
+import { applyTransactionalPatchset } from '../../tools/transactional-patch';
+import { preflightWorkContextFastPath } from '../work-context/fast-path';
+import { observeWorkContextToolResult } from '../work-context/manager';
 import { createWorkspaceSnapshot, listWorkspaceHistory, restoreWorkspaceCheckpoint, restoreWorkspaceSnapshot, toSnapshotRef } from '../../workspace-history';
 import {
   DEFAULT_FILE_TOOL_EXCLUDES,
@@ -5087,6 +5090,62 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
     }
     switch (name) {
+      case 'work_context_execute': {
+        const preflight = preflightWorkContextFastPath(sessionId, args);
+        if (!preflight.ok || !preflight.packet) {
+          return {
+            name,
+            args,
+            result: `FAST_PATH_REJECTED: ${preflight.error || 'Work context preflight failed.'} Use the normal focused tool path to refresh state, then retry with the new revision.`,
+            error: true,
+            data: { ok: false, preflight: true, currentRevision: preflight.packet?.revision, freshness: preflight.packet?.freshness },
+          };
+        }
+        const startedAt = Date.now();
+        const results: Array<{ index: number; tool: string; ok: boolean; summary: string; data?: any }> = [];
+        const innerDeps: ExecuteToolDeps = {
+          ...deps,
+          executionPolicy: { ...(deps.executionPolicy || {}), mode: 'goal_autonomous', approvalMode: 'never' },
+        };
+        for (let index = 0; index < preflight.steps.length; index += 1) {
+          const step = preflight.steps[index];
+          const stepResult = await executeTool(step.tool, step.args || {}, workspacePath, innerDeps, sessionId);
+          const summary = String(stepResult.result || '').slice(0, 4000);
+          results.push({ index, tool: step.tool, ok: !stepResult.error, summary, data: stepResult.data });
+          await observeWorkContextToolResult({
+            sessionId,
+            workspacePath,
+            userMessage: preflight.packet.lastUserMessage || preflight.packet.objective,
+            toolName: step.tool,
+            args: step.args,
+            result: stepResult.result,
+            error: stepResult.error,
+            data: stepResult.data,
+            extra: stepResult.extra,
+            artifacts: [
+              ...(Array.isArray((stepResult as any)?.data?.artifacts) ? (stepResult as any).data.artifacts : []),
+              ...(Array.isArray((stepResult as any)?.extra?.artifacts) ? (stepResult as any).extra.artifacts : []),
+            ],
+          }).catch(() => null);
+          if (stepResult.error) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({ ok: false, fast_path: true, stopped_at: index, elapsed_ms: Date.now() - startedAt, results }, null, 2),
+              error: true,
+              data: { ok: false, fastPath: true, stoppedAt: index, results },
+            };
+          }
+        }
+        return {
+          name,
+          args,
+          result: JSON.stringify({ ok: true, fast_path: true, step_count: results.length, elapsed_ms: Date.now() - startedAt, results }, null, 2),
+          error: false,
+          data: { ok: true, fastPath: true, results },
+        };
+      }
+
       case 'declare_plan': {
         // Handled upstream in server-v2 before executeTool is called.
         // This passthrough prevents "unknown tool" errors if it reaches the executor.
@@ -7761,32 +7820,64 @@ export async function executeTool(name: string, args: any, workspacePath: string
         args = normalizeWorkspacePatchsetArgs(args);
         const patchEdits = Array.isArray(args.edits) ? args.edits : [];
         if (!patchEdits.length) return { name, args, result: 'edits array is required and must not be empty', error: true };
-        const patchResults: Array<{ filename: string; op: string; ok: boolean; result?: string; error?: string }> = [];
         const patchSnapshots: Array<ReturnType<typeof snapshotPreMutation>> = [];
-        for (const edit of patchEdits) {
-          const pFilename = edit?.filename;
-          const pOp = normalizeWorkspacePatchOp(edit?.op);
-          if (!pFilename || !pOp) { patchResults.push({ filename: String(pFilename || ''), op: pOp, ok: false, error: 'filename and op are required' }); continue; }
-          try {
-            const supportedPatchOps = new Set(['find_replace', 'replace_lines', 'insert_after', 'delete_lines', 'write_file', 'create_file', 'rename_file']);
-            if (!supportedPatchOps.has(pOp)) {
-              patchResults.push({ filename: String(pFilename), op: pOp, ok: false, error: `Unsupported patchset op: ${pOp}` });
-              continue;
+        const result = applyTransactionalPatchset({
+          edits: patchEdits,
+          resolvePath: (requested) => resolveAllowedWorkspacePath(requested).absPath,
+          checkAllowed: (absolutePath) => {
+            try {
+              resolveAllowedWorkspacePath(absolutePath);
+              return { allowed: true };
+            } catch (err: any) {
+              return { allowed: false, reason: err?.message || String(err) };
             }
-            const resolvedPOp = pOp;
-            const r = await executeTool(resolvedPOp, { filename: pFilename, old_path: pFilename, ...edit }, workspacePath, deps, sessionId);
-            const snapshots = [
-              ...(Array.isArray((r as any)?.extra?.workspaceSnapshots) ? (r as any).extra.workspaceSnapshots : []),
-              ...(Array.isArray((r as any)?.data?.workspaceSnapshots) ? (r as any).data.workspaceSnapshots : []),
-            ];
-            patchSnapshots.push(...snapshots);
-            patchResults.push({ filename: pFilename, op: pOp, ok: !r.error, result: r.error ? undefined : r.result, error: r.error ? r.result : undefined });
-          } catch (err: any) {
-            patchResults.push({ filename: pFilename, op: pOp, ok: false, error: err?.message || String(err) });
-          }
+          },
+          displayPath: (absolutePath) => resolveAllowedWorkspacePath(absolutePath).displayPath,
+          beforeCommit: (files) => {
+            for (const file of files) {
+              patchSnapshots.push(snapshotPreMutation({ absPath: file.absolutePath, displayPath: file.displayPath }, 'workspace_transactional_patchset'));
+            }
+          },
+          validateSyntax: true,
+        });
+        if (!result.ok) {
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              ok: false,
+              atomic: true,
+              applied: 0,
+              failed_edit_index: result.failedEditIndex,
+              error: result.error,
+              recovered_transactions: result.recoveredTransactions,
+            }, null, 2),
+            error: true,
+          };
         }
-        const allOk = patchResults.every(r => r.ok);
-        return withWorkspaceSnapshots({ name, args, result: JSON.stringify({ applied: patchResults.filter(r => r.ok).length, failed: patchResults.filter(r => !r.ok).length, results: patchResults }, null, 2), error: !allOk }, allOk ? patchSnapshots : []);
+        const touchedFiles = result.files.map((file) => file.filename);
+        return withWorkspaceSnapshots({
+          name,
+          args,
+          result: JSON.stringify({
+            ok: true,
+            atomic: true,
+            transaction_id: result.transactionId,
+            edit_count: result.editCount,
+            touched_files: touchedFiles,
+            files: result.files.map((file) => ({
+              file: file.filename,
+              operations: file.operations,
+              created: file.created,
+              before_hash: file.beforeHash,
+              after_hash: file.afterHash,
+              changed_lines: [file.changedStartLine, file.changedEndLine],
+            })),
+            recovered_transactions: result.recoveredTransactions,
+          }, null, 2),
+          error: false,
+          data: { touchedFiles, transactionId: result.transactionId, atomic: true },
+        }, patchSnapshots);
       }
 
       case 'file_tree': {
@@ -8184,108 +8275,55 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const edits = Array.isArray(normalizedPatchsetArgs.edits) ? normalizedPatchsetArgs.edits : [];
         if (!edits.length) return { name, args, result: 'ERROR: edits[] is required.', error: true };
         const projectRoot = resolveProjectRootForSourceAccess();
-        const results: string[] = [];
-        const touched = new Set<string>();
-        const normalizeDevSourcePath = (entry: any): string => String(entry?.file || entry?.path || '').replace(/\\/g, '/').replace(/^\.\//, '');
-        const resolveDevSourceFile = (requested: string): { isWebUi: boolean; file: string; display: string; absPath: string } => {
-          const isWebUi = requested.startsWith('web-ui/');
-          const root = isWebUi ? path.join(projectRoot, 'web-ui') : path.join(projectRoot, 'src');
-          const file = isWebUi ? requested.slice('web-ui/'.length) : requested.replace(/^src\//, '');
-          const absPath = path.resolve(root, file);
-          if (!absPath.startsWith(root)) throw new Error(`Path escapes ${isWebUi ? 'web-ui/' : 'src/'}: ${requested}`);
-          return { isWebUi, file, display: `${isWebUi ? 'web-ui' : 'src'}/${file}`, absPath };
-        };
-        const delegatedNameFor = (isWebUi: boolean, base: string): string => isWebUi ? `${base}_webui_source` : `${base}_source`;
-        const readExistingContent = (target: { display: string; absPath: string }): string | null => {
-          if (!fs.existsSync(target.absPath)) return null;
-          const stat = fs.statSync(target.absPath);
-          if (!stat.isFile()) throw new Error(`"${target.display}" is not a file`);
-          return fs.readFileSync(target.absPath, 'utf-8');
-        };
-        const checkGuards = (edit: any, target: { display: string; absPath: string }): ToolResult | null => {
-          const content = readExistingContent(target);
-          if (edit.expected_hash) {
-            if (content === null) return { name, args, result: `ERROR: ${target.display} does not exist; cannot verify expected_hash.`, error: true };
-            const digest = createHash('sha256').update(content).digest('hex');
-            const expected = String(edit.expected_hash).trim().toLowerCase();
-            if (!digest.startsWith(expected)) {
-              return { name, args, result: `ERROR: ${target.display} expected_hash mismatch. Current sha256 starts ${digest.slice(0, Math.max(12, expected.length))}.`, error: true };
-            }
-          }
-          if (edit.expected_before) {
-            if (content === null || !content.includes(String(edit.expected_before))) {
-              return { name, args, result: `ERROR: ${target.display} expected_before text was not found.`, error: true };
-            }
-          }
-          return null;
-        };
-        for (let i = 0; i < edits.length; i++) {
-          const edit = edits[i] || {};
-          const requested = normalizeDevSourcePath(edit);
-          if (!requested) return { name, args, result: `ERROR: edits[${i}].file is required.`, error: true };
-          let target: { isWebUi: boolean; file: string; display: string; absPath: string };
-          try {
-            target = resolveDevSourceFile(requested);
-          } catch (err: any) {
-            return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
-          }
-          const guarded = checkGuards(edit, target);
-          if (guarded) return guarded;
-          const op = String(edit.op || '').toLowerCase();
-          let delegatedTool = '';
-          let delegatedArgs: any = { file: target.file };
-          if (op === 'exact_replace' || op === 'find_replace' || op === 'delete_exact') {
-            delegatedTool = delegatedNameFor(target.isWebUi, 'find_replace');
-            delegatedArgs.find = String(edit.find || '');
-            delegatedArgs.replace = op === 'delete_exact' ? '' : String(edit.replace ?? edit.content ?? '');
-            delegatedArgs.replace_all = edit.replace_all === true;
-          } else if (op === 'line_replace' || op === 'replace_lines') {
-            delegatedTool = delegatedNameFor(target.isWebUi, 'replace_lines');
-            delegatedArgs.start_line = edit.start_line;
-            delegatedArgs.end_line = edit.end_line;
-            delegatedArgs.new_content = String(edit.new_content ?? edit.replace ?? edit.content ?? '');
-          } else if (op === 'insert_after_line' || op === 'insert_after') {
-            delegatedTool = delegatedNameFor(target.isWebUi, 'insert_after');
-            delegatedArgs.after_line = edit.after_line;
-            delegatedArgs.content = String(edit.content ?? edit.new_content ?? edit.replace ?? '');
-          } else if (op === 'insert_after_anchor') {
-            const content = readExistingContent(target);
-            const anchor = String(edit.anchor || edit.find || '');
-            if (content === null) return { name, args, result: `ERROR: ${target.display} does not exist.`, error: true };
-            if (!anchor) return { name, args, result: `ERROR: edits[${i}].anchor is required for insert_after_anchor.`, error: true };
-            const lines = content.split('\n');
-            const lineIndex = lines.findIndex((line) => line.includes(anchor));
-            if (lineIndex < 0) return { name, args, result: buildTextNotFoundRecovery(target.display, content, anchor, target.isWebUi ? 'read_webui_source' : 'read_source'), error: true };
-            delegatedTool = delegatedNameFor(target.isWebUi, 'insert_after');
-            delegatedArgs.after_line = lineIndex + 1;
-            delegatedArgs.content = String(edit.content ?? edit.new_content ?? edit.replace ?? '');
-          } else if (op === 'delete_lines') {
-            delegatedTool = delegatedNameFor(target.isWebUi, 'delete_lines');
-            delegatedArgs.start_line = edit.start_line;
-            delegatedArgs.end_line = edit.end_line;
-          } else if (op === 'write_file' || op === 'full_file_write' || op === 'create_file') {
-            delegatedTool = delegatedNameFor(target.isWebUi, 'write');
-            delegatedArgs.content = String(edit.content ?? edit.new_content ?? edit.replace ?? '');
-            delegatedArgs.overwrite = op !== 'create_file';
-          } else {
-            return { name, args, result: `ERROR: unsupported patchset op "${op}" at edits[${i}].`, error: true };
-          }
-          const result = await executeTool(delegatedTool, delegatedArgs, workspacePath, deps, sessionId);
-          results.push(`--- ${target.display} via ${delegatedTool} ---\n${result.result}`);
-          if (result.error) return { name, args, result: results.join('\n\n'), error: true };
-          touched.add(target.display);
+        const srcRoot = path.resolve(projectRoot, 'src');
+        const webUiRoot = path.resolve(projectRoot, 'web-ui');
+        const snapshots: Array<ReturnType<typeof snapshotPreMutation>> = [];
+        const result = applyTransactionalPatchset({
+          edits,
+          resolvePath: (requested) => {
+            const normalized = String(requested || '').replace(/\\/g, '/').replace(/^\.\//, '');
+            if (normalized.startsWith('web-ui/')) return path.resolve(webUiRoot, normalized.slice('web-ui/'.length));
+            return path.resolve(srcRoot, normalized.replace(/^src\//, ''));
+          },
+          checkAllowed: (absolutePath) => {
+            const inside = isCanonicalPathInsideSync(srcRoot, absolutePath) || isCanonicalPathInsideSync(webUiRoot, absolutePath);
+            return inside ? { allowed: true } : { allowed: false, reason: 'Dev source patch path must remain inside src/ or web-ui/.' };
+          },
+          displayPath: (absolutePath) => isCanonicalPathInsideSync(webUiRoot, absolutePath)
+            ? `web-ui/${path.relative(webUiRoot, absolutePath).replace(/\\/g, '/')}`
+            : `src/${path.relative(srcRoot, absolutePath).replace(/\\/g, '/')}`,
+          beforeCommit: (files) => {
+            for (const file of files) snapshots.push(snapshotPreMutation({ absPath: file.absolutePath, displayPath: file.displayPath }, 'dev_source_transactional_patchset'));
+          },
+          validateSyntax: true,
+        });
+        if (!result.ok) {
+          return {
+            name,
+            args,
+            result: JSON.stringify({ ok: false, atomic: true, applied: 0, failed_edit_index: result.failedEditIndex, error: result.error, recovered_transactions: result.recoveredTransactions }, null, 2),
+            error: true,
+          };
         }
-        const touchedFiles = Array.from(touched);
-        return {
+        const touchedFiles = result.files.map((file) => file.filename);
+        return withWorkspaceSnapshots({
           name,
           args,
           result: [
-            JSON.stringify({ ok: true, edit_count: edits.length, touched_files: touchedFiles }, null, 2),
-            results.join('\n\n'),
+            JSON.stringify({
+              ok: true,
+              atomic: true,
+              transaction_id: result.transactionId,
+              edit_count: result.editCount,
+              touched_files: touchedFiles,
+              files: result.files.map((file) => ({ file: file.filename, operations: file.operations, after_hash: file.afterHash, changed_lines: [file.changedStartLine, file.changedEndLine] })),
+              recovered_transactions: result.recoveredTransactions,
+            }, null, 2),
             getPostSourceEditInstructionForSession(sessionId, touchedFiles),
           ].filter(Boolean).join('\n\n'),
           error: false,
-        };
+          data: { touchedFiles, transactionId: result.transactionId, atomic: true },
+        }, snapshots);
       }
 
       // ── read_source: read a file from src/ only ───────────────────────────────
@@ -13197,6 +13235,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	            ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'analyze_image complete' }, null, 2)
 	            : `ERROR: ${toolResult.error || 'analyze_image failed'}`,
 	          error: toolResult.success !== true,
+	          data: toolResult.success === true ? toolResult.data : undefined,
 	        };
 	      }
 
@@ -13216,6 +13255,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	            ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'analyze_video complete' }, null, 2)
 	            : `ERROR: ${toolResult.error || 'analyze_video failed'}`,
           error: toolResult.success !== true,
+          data: toolResult.success === true ? toolResult.data : undefined,
         };
       }
 

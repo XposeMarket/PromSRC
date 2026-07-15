@@ -21,7 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn, execFileSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
-import { flushSession } from './session';
+import { flushSessionAsync } from './session';
 import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
 import { recordActiveMainChatGoalsInterruptedForRestart } from './main-chat-goals';
 import { getLastMainSessionId } from './comms/broadcaster';
@@ -381,10 +381,12 @@ interface ShutdownHooks {
   stopInternalWatches?: () => void;
   stopHeartbeat?: () => void;
   stopBrain?: () => void;
+  drainActiveWork?: () => void | Promise<void>;
   stopRuntimeWorkers?: () => void | Promise<void>;
+  closeTurnJournal?: () => void;
   closeHttpServer?: () => Promise<void>;
   closeWebSocket?: () => void;
-  flushSessions?: () => void;
+  flushSessions?: () => void | Promise<void>;
 }
 
 let _shutdownHooks: ShutdownHooks = {};
@@ -490,7 +492,18 @@ export function markStartupNotificationDelivered(
 async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void> {
   console.log('[lifecycle] Shutting down gateway subsystems...');
 
-  // 1. Stop accepting new work
+  // 1. Stop accepting new work before any worker/session/journal owner closes.
+  // Do not await the HTTP close callback yet: active requests need the runtime
+  // abort/drain phase below to unwind rather than holding shutdown open.
+  try { _shutdownHooks.closeWebSocket?.(); } catch (e: any) {
+    console.warn('[lifecycle] WebSocket close error:', e.message);
+  }
+  let networkClosing: Promise<void> | undefined;
+  try { networkClosing = _shutdownHooks.closeHttpServer?.(); } catch (e: any) {
+    console.warn('[lifecycle] HTTP server close-start error:', e.message);
+  }
+
+  // 2. Snapshot and abort active work while every persistence owner is alive.
   try {
     // A goal runner has brief idle gaps between turns. Those gaps have no live
     // runtime for runtime-recovery to discover, but the goal still owns the
@@ -528,20 +541,24 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
   try { _shutdownHooks.stopTelegram?.(); } catch (e: any) {
     console.warn('[lifecycle] Telegram stop error:', e.message);
   }
+  try { await _shutdownHooks.drainActiveWork?.(); } catch (e: any) {
+    console.warn('[lifecycle] Active work drain error:', e.message);
+  }
   try { await _shutdownHooks.stopRuntimeWorkers?.(); } catch (e: any) {
     console.warn('[lifecycle] Runtime worker stop error:', e.message);
   }
 
-  // 2. Flush sessions to disk
-  try { _shutdownHooks.flushSessions?.(); } catch (e: any) {
+  // 3. Flush sessions, then close the journal last. Turn callbacks can still
+  // settle during worker drain, so neither owner may disappear earlier.
+  try { await _shutdownHooks.flushSessions?.(); } catch (e: any) {
     console.warn('[lifecycle] Session flush error:', e.message);
   }
-
-  // 3. Close network listeners
-  try { _shutdownHooks.closeWebSocket?.(); } catch (e: any) {
-    console.warn('[lifecycle] WebSocket close error:', e.message);
+  try { _shutdownHooks.closeTurnJournal?.(); } catch (e: any) {
+    console.warn('[lifecycle] Turn journal close error:', e.message);
   }
-  try { await _shutdownHooks.closeHttpServer?.(); } catch (e: any) {
+
+  // 4. The listener was closed at entry; wait only for its bounded callback.
+  try { await networkClosing; } catch (e: any) {
     console.warn('[lifecycle] HTTP server close error:', e.message);
   }
 
@@ -589,7 +606,7 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   // Step 1: Write context for the next boot
   if (restartCtx.previousSessionId) {
     try {
-      flushSession(restartCtx.previousSessionId);
+      await flushSessionAsync(restartCtx.previousSessionId);
     } catch (err: any) {
       console.warn(`[lifecycle] Could not flush previous session before restart: ${String(err?.message || err)}`);
     }

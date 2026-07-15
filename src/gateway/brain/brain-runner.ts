@@ -301,7 +301,7 @@ type HandleChatFn = (
   sessionId: string,
   sendSSE: (event: string, data: any) => void,
   pinnedMessages?: Array<{ role: string; content: string }>,
-  abortSignal?: { aborted: boolean },
+  abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal },
   callerContext?: string,
   modelOverride?: string,
   executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron',
@@ -808,7 +808,12 @@ export class BrainRunner {
     const windowLabel = getWindowLabel(windowStart);
     const runId       = crypto.randomUUID();
     const sessionId   = `brain_thought_${dateStr}_${windowLabel}`;
-    const abortSignal = { aborted: false };
+    const abortController = new AbortController();
+    const abortSignal: { aborted: boolean; interrupted?: boolean; signal: AbortSignal } = {
+      aborted: false,
+      interrupted: false,
+      signal: abortController.signal,
+    };
     const runtimeId = registerLiveRuntime({
       kind: 'brain_thought',
       label: `Brain thought - ${dateStr} ${windowLabel}`,
@@ -816,6 +821,7 @@ export class BrainRunner {
       source: 'system',
       detail: `Window ${fmtUtc(windowStart)} -> ${fmtUtc(windowEnd)}`,
       abortSignal,
+      onShutdownInterrupt: () => abortController.abort(),
     });
 
     console.log(`[BrainRunner] Starting Thought ${thoughtNumber} — window ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}`);
@@ -919,13 +925,20 @@ export class BrainRunner {
         : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
 	    } catch (err: any) {
-	      resultText = `Error: ${err?.message || String(err)}`;
-	      console.error(`[BrainRunner] Thought ${thoughtNumber} failed:`, err?.message);
+        if (!abortSignal.interrupted) {
+	        resultText = `Error: ${err?.message || String(err)}`;
+	        console.error(`[BrainRunner] Thought ${thoughtNumber} failed:`, err?.message);
+        }
 	    } finally {
 	      finishLiveRuntime(runtimeId);
 	      clearSessionMutationScope(sessionId);
 	      this.thoughtRunning = false;
 	    }
+
+    // The durable runtime ledger already owns restart recovery. Do not append
+    // an operator-abort message, recover a partial artifact, or mark this run
+    // failed while the old gateway is unwinding.
+    if (abortSignal.interrupted) return false;
 
     addMessage(
       sessionId,
@@ -1033,7 +1046,12 @@ export class BrainRunner {
     const now         = new Date();
     const dreamLabel  = getWindowLabel(now);
     const sessionId   = `brain_dream_${dateStr}`;
-    const abortSignal = { aborted: false };
+    const abortController = new AbortController();
+    const abortSignal: { aborted: boolean; interrupted?: boolean; signal: AbortSignal } = {
+      aborted: false,
+      interrupted: false,
+      signal: abortController.signal,
+    };
     const runtimeId = registerLiveRuntime({
       kind: 'brain_dream',
       label: `Brain dream - ${dateStr}`,
@@ -1041,6 +1059,7 @@ export class BrainRunner {
       source: 'system',
       detail: `Nightly synthesis for ${dateStr}`,
       abortSignal,
+      onShutdownInterrupt: () => abortController.abort(),
     });
 
     console.log(`[BrainRunner] Starting Dream for ${dateStr} (${thoughtCount} thoughts available)`);
@@ -1155,13 +1174,17 @@ export class BrainRunner {
         : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
 	    } catch (err: any) {
-	      resultText = `Error: ${err?.message || String(err)}`;
-	      console.error(`[BrainRunner] Dream for ${dateStr} failed:`, err?.message);
+        if (!abortSignal.interrupted) {
+	        resultText = `Error: ${err?.message || String(err)}`;
+	        console.error(`[BrainRunner] Dream for ${dateStr} failed:`, err?.message);
+        }
 	    } finally {
 	      finishLiveRuntime(runtimeId);
 	      clearSessionMutationScope(sessionId);
 	      this.dreamRunning = false;
 	    }
+
+    if (abortSignal.interrupted) return false;
 
     addMessage(
       sessionId,
@@ -1320,7 +1343,12 @@ export class BrainRunner {
     const now = new Date();
     const cleanupLabel = getWindowLabel(now);
     const sessionId = `brain_dream_cleanup_${dateStr}`;
-    const abortSignal = { aborted: false };
+    const abortController = new AbortController();
+    const abortSignal: { aborted: boolean; interrupted?: boolean; signal: AbortSignal } = {
+      aborted: false,
+      interrupted: false,
+      signal: abortController.signal,
+    };
     const runtimeId = registerLiveRuntime({
       kind: 'brain_dream',
       label: `Brain dream cleanup - ${dateStr}`,
@@ -1328,6 +1356,7 @@ export class BrainRunner {
       source: 'system',
       detail: `Second-pass memory solidifier for ${dateStr}`,
       abortSignal,
+      onShutdownInterrupt: () => abortController.abort(),
     });
 
     console.log(`[BrainRunner] Starting Dream cleanup for ${dateStr}`);
@@ -1411,13 +1440,17 @@ export class BrainRunner {
         : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
     } catch (err: any) {
-      resultText = `Error: ${err?.message || String(err)}`;
-      console.error(`[BrainRunner] Dream cleanup for ${dateStr} failed:`, err?.message);
+      if (!abortSignal.interrupted) {
+        resultText = `Error: ${err?.message || String(err)}`;
+        console.error(`[BrainRunner] Dream cleanup for ${dateStr} failed:`, err?.message);
+      }
     } finally {
       finishLiveRuntime(runtimeId);
       clearSessionMutationScope(sessionId);
       this.dreamCleanupRunning = false;
     }
+
+    if (abortSignal.interrupted) return false;
 
     addMessage(
       sessionId,

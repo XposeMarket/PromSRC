@@ -1,6 +1,6 @@
 /**
  * session.ts - Simple session state for Prometheus v2
- * 
+ *
  * No plans. No verified facts. No workspace ledger. No self-learning.
  * Just conversation history.
  */
@@ -11,7 +11,10 @@ import { getConfig } from '../config/config';
 import { stripInternalToolNotes } from './comms/reply-processor';
 import { resolveActiveModelContextProfile } from './context/model-context';
 import { getUsageCalibration } from '../providers/model-usage';
-import { getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
+import {
+  getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext,
+  getRecentToolStateSummaryForContextAsync as readRecentToolStateSummaryForContextAsync,
+} from './tool-observations';
 import { hookBus } from './hooks';
 import {
   assertSafeStorageId,
@@ -19,9 +22,14 @@ import {
   resolveConfinedStoragePath,
   storageFilePath,
 } from './storage/storage-paths';
+import { writeJsonAtomicCooperatively } from './storage/cooperative-json.js';
 
 export interface ChatMessage {
   messageId?: string;
+  /** Stable journal identity used to make a retried turn's session commit idempotent. */
+  durableTurnJobId?: string;
+  /** Bounded terminal blob prepared before this assistant message was flushed. */
+  durableFinalRef?: string;
   messageKind?: 'goal_command_ack' | 'goal_turn' | 'goal_restart_checkpoint' | 'restart_status' | string;
   activeRunKind?: string;
   goalId?: string;
@@ -329,6 +337,11 @@ const AUTO_SESSION_ID_RE = /^(task_|cron_|brain_|auto_)/i;
 const INTERNAL_SESSION_ID_RE = /^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_)/i;
 const SESSION_SAVE_DEBOUNCE_MS = 500;
 const sessionSaveTimers = new Map<string, NodeJS.Timeout>();
+const sessionMutationGenerations = new Map<string, number>();
+const sessionAsyncWrites = new Map<string, Promise<void>>();
+let sessionIndexMutationGeneration = 0;
+let sessionIndexAsyncWrite: Promise<void> | null = null;
+let sessionPersistenceShuttingDown = false;
 const sessionMutationScopes = new Map<string, SessionMutationScope>();
 let sessionIndexCache: SessionIndex | null = null;
 let sessionIndexCommandTitleRebuildAttempted = false;
@@ -825,7 +838,39 @@ function saveSessionIndex(index: SessionIndex): void {
   ensureSessionDir();
   index.updatedAt = Date.now();
   sessionIndexCache = index;
+  sessionIndexMutationGeneration += 1;
+  if (sessionIndexAsyncWrite) return;
   fs.writeFileSync(sessionIndexPath(), JSON.stringify(index, null, 2), 'utf-8');
+}
+
+async function persistSessionIndexUntilStable(): Promise<void> {
+  for (;;) {
+    const index = sessionIndexCache || loadSessionIndex();
+    index.updatedAt = Date.now();
+    const generation = sessionIndexMutationGeneration;
+    const result = await writeJsonAtomicCooperatively(sessionIndexPath(), index, {
+      spaces: 2,
+      mode: 0o600,
+      shouldCommit: () => generation === sessionIndexMutationGeneration,
+    });
+    if (!result.committed) continue;
+    if (generation === sessionIndexMutationGeneration) return;
+  }
+}
+
+function saveSessionIndexAsync(index: SessionIndex): Promise<void> {
+  ensureSessionDir();
+  index.updatedAt = Date.now();
+  sessionIndexCache = index;
+  sessionIndexMutationGeneration += 1;
+  if (sessionIndexAsyncWrite) return sessionIndexAsyncWrite;
+  const task = Promise.resolve()
+    .then(() => persistSessionIndexUntilStable())
+    .finally(() => {
+      if (sessionIndexAsyncWrite === task) sessionIndexAsyncWrite = null;
+    });
+  sessionIndexAsyncWrite = task;
+  return task;
 }
 
 function isCommandTitleText(value: any): boolean {
@@ -890,9 +935,12 @@ function polishSessionTitle(raw: string): string {
 }
 
 export function getSessionTitleFromHistory(history: any[]): string {
-  const earlyUsers = (Array.isArray(history) ? history : [])
-    .filter((msg) => msg?.role === 'user' && !isSessionTitleCommandMessage(msg))
-    .slice(0, 3);
+  const earlyUsers: any[] = [];
+  for (const message of Array.isArray(history) ? history : []) {
+    if (message?.role !== 'user' || isSessionTitleCommandMessage(message)) continue;
+    earlyUsers.push(message);
+    if (earlyUsers.length >= 3) break;
+  }
   const candidate = earlyUsers
     .map((msg) => normalizeSessionTitleText(msg?.content))
     .find((text) => text.length >= 8 && !isGreetingOnlySessionMessage(text));
@@ -1013,6 +1061,15 @@ function upsertSessionSummary(session: Session): void {
     delete index.summaries[summary.id];
   }
   saveSessionIndex(index);
+}
+
+async function upsertSessionSummaryAsync(session: Session): Promise<void> {
+  const index = loadSessionIndex();
+  const summary = buildSessionSummary(session);
+  const shouldIndex = summary.messageCount > 0 || !!summary.pinnedAt;
+  if (shouldIndex) index.summaries[summary.id] = summary;
+  else delete index.summaries[summary.id];
+  await saveSessionIndexAsync(index);
 }
 
 function removeSessionSummary(id: string): void {
@@ -1834,6 +1891,20 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
   // comparing against the (now provider-aware) window thresholds.
   const usageCalibrationFactor = activeUsageCalibrationFactor();
   const beforeTokens = Math.round(estimateActiveContextTokens(session) * usageCalibrationFactor);
+  const stableMessageId = String(msg.messageId || '').trim();
+  if (stableMessageId && session.history.some((entry) => String(entry.messageId || '') === stableMessageId)) {
+    return {
+      added: false,
+      compactionInjected: false,
+      deferredForCompaction: false,
+      compactionApplied: false,
+      memoryFlushInjected: false,
+      deferredForMemoryFlush: false,
+      estimatedTokens: beforeTokens,
+      contextLimitTokens,
+      thresholdTokens,
+    };
+  }
   let compactionInjected = false;
   let deferredForCompaction = false;
   let compactionApplied = false;
@@ -2070,6 +2141,42 @@ export function getRecentToolObservationsForContext(
   includeTelemetry = false,
 ): string {
   const observations = readRecentToolStateSummaryForContext(id, {
+    lookbackTurns,
+    maxChars,
+    includeHeader: true,
+    includeTelemetry,
+  });
+  if (observations) return observations;
+  const legacy = getRecentToolLog(id, lookbackTurns, Math.min(1200, Math.max(400, Number(maxChars || 1200))));
+  return legacy
+    ? `[TOOL_STATE_SUMMARY]\nlegacy_tool_log_available: true\nfull_raw_observations: unavailable for this legacy turn\npreview:\n${legacy.replace(/^\[RECENT_TOOL_LOG\]\n?/, '')}`
+    : '';
+}
+
+export function getDurableTurnSessionReceipt(
+  id: string,
+  jobIdInput: string,
+): { messageId: string; finalRef: string } | null {
+  const jobId = String(jobIdInput || '').trim();
+  if (!jobId) return null;
+  const session = getSession(id);
+  for (let index = session.history.length - 1; index >= 0; index -= 1) {
+    const message = session.history[index];
+    if (message.role !== 'assistant' || String(message.durableTurnJobId || '') !== jobId) continue;
+    const finalRef = String(message.durableFinalRef || '').trim();
+    if (!finalRef) return null;
+    return { messageId: String(message.messageId || ''), finalRef };
+  }
+  return null;
+}
+
+export async function getRecentToolObservationsForContextAsync(
+  id: string,
+  lookbackTurns: number = 5,
+  maxChars?: number,
+  includeTelemetry = false,
+): Promise<string> {
+  const observations = await readRecentToolStateSummaryForContextAsync(id, {
     lookbackTurns,
     maxChars,
     includeHeader: true,
@@ -2321,17 +2428,23 @@ export function markSessionReadForMobile(id: string, readAt: number = Date.now()
 export function deleteSession(id: string): boolean {
   const sessionId = assertSafeStorageId(id, 'session id');
   sessions.delete(sessionId);
+  // Invalidate both generation checks of any cooperative write already in
+  // progress so it cannot resurrect a session after deletion.
+  bumpSessionMutationGeneration(sessionId);
   const existing = sessionSaveTimers.get(sessionId);
   if (existing) {
     clearTimeout(existing);
     sessionSaveTimers.delete(sessionId);
   }
   const filePath = getSessionPath(sessionId);
-  if (!fs.existsSync(filePath)) return false;
+  let removed = false;
   try {
-    fs.unlinkSync(filePath);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      removed = true;
+    }
     removeSessionSummary(sessionId);
-    return true;
+    return removed;
   } catch {
     return false;
   }
@@ -2379,7 +2492,7 @@ export function consolidateLegacyAutomatedSessions(): number {
     const stable = getSession(stableId);
     if (!Array.isArray(stable.history)) stable.history = [];
     const seen = new Set(
-      stable.history.map((m) => `${m.role} ${m.timestamp || ''} ${String(m.content || '').slice(0, 200)}`),
+      stable.history.map((m) => `${m.role}\0${m.timestamp || ''}\0${String(m.content || '').slice(0, 200)}`),
     );
 
     for (const run of runs) {
@@ -2392,7 +2505,7 @@ export function consolidateLegacyAutomatedSessions(): number {
         legacyHistory = [];
       }
       for (const msg of legacyHistory) {
-        const key = `${msg.role} ${msg.timestamp || ''} ${String(msg.content || '').slice(0, 200)}`;
+        const key = `${msg.role}\0${msg.timestamp || ''}\0${String(msg.content || '').slice(0, 200)}`;
         if (seen.has(key)) continue;
         seen.add(key);
         stable.history.push(msg);
@@ -2504,26 +2617,126 @@ function scrubSession(session: Session): Session {
   };
 }
 
+export async function autoNameSessionAsync(id: string, title: string): Promise<SessionSummary | null> {
+  const sessionId = String(id || '').trim();
+  const nextTitle = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!sessionId || !nextTitle) return null;
+  const session = getSession(sessionId);
+  if (session.autoTitleLocked === true) return null;
+  session.title = nextTitle;
+  session.autoTitleLocked = true;
+  session.lastActiveAt = Date.now();
+  await flushSessionAsync(sessionId);
+  return buildSessionSummary(session);
+}
+
+async function scrubSessionCooperatively(session: Session): Promise<Session> {
+  const history: ChatMessage[] = [];
+  let budget = 0;
+  const scrubText = async (value: string | undefined | null): Promise<string> => {
+    const text = String(value || '');
+    const chunkChars = 128 * 1024;
+    if (text.length <= chunkChars) return scrubPersistedText(text);
+    const chunks: string[] = [];
+    for (let start = 0; start < text.length;) {
+      let end = Math.min(text.length, start + chunkChars);
+      if (end < text.length) {
+        const finalCode = text.charCodeAt(end - 1);
+        if (finalCode >= 0xd800 && finalCode <= 0xdbff) end += 1;
+      }
+      // Chunking also prevents a single giant base64/token-shaped value from
+      // monopolizing the event loop inside the secret-scrubbing regexes.
+      chunks.push(scrubPersistedText(text.slice(start, end)));
+      start = end;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return chunks.join('');
+  };
+  const yieldFor = async (value: unknown): Promise<void> => {
+    budget += typeof value === 'string' ? value.length : 1;
+    if (budget < 256 * 1024) return;
+    budget = 0;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  };
+  for (const message of Array.isArray(session.history) ? session.history : []) {
+    const content = await scrubText(message.content);
+    const toolLog = message.toolLog ? await scrubText(message.toolLog) : message.toolLog;
+    const processEntries: any[] | undefined = Array.isArray(message.processEntries) ? [] : message.processEntries;
+    if (Array.isArray(message.processEntries) && Array.isArray(processEntries)) {
+      for (const entry of message.processEntries) {
+        const entryContent = entry?.content ? await scrubText(String(entry.content)) : entry?.content;
+        processEntries.push({ ...entry, content: entryContent });
+        await yieldFor(entryContent);
+      }
+    }
+    history.push({ ...message, content, toolLog, processEntries });
+    await yieldFor(content);
+    await yieldFor(toolLog);
+  }
+  return {
+    ...session,
+    latestContextSummary: session.latestContextSummary
+      ? await scrubText(session.latestContextSummary)
+      : session.latestContextSummary,
+    mainChatGoal: scrubMainChatGoal(session.mainChatGoal),
+    mainChatGoalHistory: Array.isArray(session.mainChatGoalHistory)
+      ? session.mainChatGoalHistory.map((goal) => scrubMainChatGoal(goal)).filter(Boolean) as MainChatGoalState[]
+      : session.mainChatGoalHistory,
+    history,
+  };
+}
+
+function bumpSessionMutationGeneration(id: string): number {
+  const next = (sessionMutationGenerations.get(id) || 0) + 1;
+  sessionMutationGenerations.set(id, next);
+  return next;
+}
+
+async function persistSessionUntilStable(id: string): Promise<void> {
+  for (;;) {
+    const session = sessions.get(id);
+    if (!session) return;
+    session.lastAssistantAt = getLastAssistantTimestamp(session.history);
+    applyAutoSessionTitleOnce(session);
+    const generation = sessionMutationGenerations.get(id) || 0;
+    const snapshot = await scrubSessionCooperatively(session);
+    const result = await writeJsonAtomicCooperatively(getSessionPath(id), snapshot, {
+      spaces: 2,
+      mode: 0o600,
+      shouldCommit: () => sessions.get(id) === session && generation === (sessionMutationGenerations.get(id) || 0),
+    });
+    if (!result.committed) continue;
+    await upsertSessionSummaryAsync(session);
+    if (sessions.get(id) === session && generation === (sessionMutationGenerations.get(id) || 0)) return;
+  }
+}
+
+function enqueueSessionWrite(id: string): Promise<void> {
+  const existing = sessionAsyncWrites.get(id);
+  if (existing) return existing;
+  const task = Promise.resolve()
+    .then(() => persistSessionUntilStable(id))
+    .finally(() => {
+      if (sessionAsyncWrites.get(id) === task) sessionAsyncWrites.delete(id);
+    });
+  sessionAsyncWrites.set(id, task);
+  return task;
+}
+
 function saveSession(id: string): void {
   const session = sessions.get(id);
   if (!session) return;
+  bumpSessionMutationGeneration(id);
 
   const existing = sessionSaveTimers.get(id);
   if (existing) clearTimeout(existing);
 
   const timer = setTimeout(() => {
     sessionSaveTimers.delete(id);
-    const latest = sessions.get(id);
-    if (!latest) return;
-    latest.lastAssistantAt = getLastAssistantTimestamp(latest.history);
-    applyAutoSessionTitleOnce(latest);
-    ensureSessionDir();
-    try {
-      fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(latest), null, 2));
-      upsertSessionSummary(latest);
-    } catch (err) {
+    if (!sessions.has(id) || sessionPersistenceShuttingDown) return;
+    void enqueueSessionWrite(id).catch((err) => {
       console.warn(`[session] Failed to save session ${id}:`, err);
-    }
+    });
   }, SESSION_SAVE_DEBOUNCE_MS);
   if (typeof (timer as any).unref === 'function') {
     (timer as any).unref();
@@ -2539,9 +2752,14 @@ export function flushSession(id: string): void {
   }
   const session = sessions.get(id);
   if (!session) return;
+  bumpSessionMutationGeneration(id);
   session.lastAssistantAt = getLastAssistantTimestamp(session.history);
   applyAutoSessionTitleOnce(session);
   ensureSessionDir();
+  if (sessionAsyncWrites.has(id)) {
+    void enqueueSessionWrite(id).catch((err) => console.warn(`[session] Failed to flush session ${id}:`, err));
+    return;
+  }
   try {
     fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(session), null, 2));
     upsertSessionSummary(session);
@@ -2669,6 +2887,71 @@ export function expireScopedToolCategoryActivations(id: string): void {
   if (pruneScopedToolCategoryActivations(session)) {
     saveSession(id);
   }
+}
+
+/**
+ * Durable final-boundary flush. Scrubbing, JSON serialization, fsync and index
+ * persistence yield cooperatively and are ordered per session.
+ */
+export async function flushSessionAsync(id: string): Promise<void> {
+  const existing = sessionSaveTimers.get(id);
+  if (existing) {
+    clearTimeout(existing);
+    sessionSaveTimers.delete(id);
+  }
+  const session = sessions.get(id);
+  if (!session) return;
+  bumpSessionMutationGeneration(id);
+  await enqueueSessionWrite(id);
+}
+
+/** Attach best-effort observation metadata without recreating a deleted session. */
+export async function attachAssistantToolObservationMetadataAsync(
+  id: string,
+  messageId: string,
+  toolLog: string,
+  toolResultBudget?: unknown,
+): Promise<boolean> {
+  const session = sessions.get(id);
+  if (!session || !messageId) return false;
+  const index = session.history.findIndex((message) => message.messageId === messageId);
+  if (index < 0) return false;
+  const current = session.history[index] as any;
+  session.history[index] = {
+    ...current,
+    toolLog: String(toolLog || '').slice(0, 12_000) || current.toolLog,
+    toolResultBudget: toolResultBudget || current.toolResultBudget,
+  } as ChatMessage;
+  bumpSessionMutationGeneration(id);
+  await enqueueSessionWrite(id);
+  return true;
+}
+
+export function getSessionPersistenceStatus(): {
+  pendingTimers: number;
+  activeWrites: number;
+  indexWriteActive: boolean;
+  shuttingDown: boolean;
+} {
+  return {
+    pendingTimers: sessionSaveTimers.size,
+    activeWrites: sessionAsyncWrites.size,
+    indexWriteActive: !!sessionIndexAsyncWrite,
+    shuttingDown: sessionPersistenceShuttingDown,
+  };
+}
+
+export async function shutdownSessionPersistence(): Promise<void> {
+  sessionPersistenceShuttingDown = true;
+  const pendingIds = new Set<string>([...sessionSaveTimers.keys(), ...sessionAsyncWrites.keys()]);
+  for (const timer of sessionSaveTimers.values()) clearTimeout(timer);
+  sessionSaveTimers.clear();
+  await Promise.allSettled([...pendingIds].map(async (id) => {
+    if (!sessions.has(id)) return;
+    bumpSessionMutationGeneration(id);
+    await enqueueSessionWrite(id);
+  }));
+  await sessionIndexAsyncWrite?.catch(() => undefined);
 }
 
 export function setActivatedToolCategories(id: string, categories: string[]): void {

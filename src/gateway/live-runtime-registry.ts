@@ -34,8 +34,14 @@ export interface LiveRuntimeRegistration {
   source?: string;
   chatId?: number;
   detail?: string;
-  abortSignal?: { aborted: boolean };
+  abortSignal?: { aborted: boolean; interrupted?: boolean };
+  /** Operator-requested abort. This may apply user-visible terminal state. */
   onAbort?: () => void;
+  /**
+   * Gateway shutdown/restart interruption. This must only cancel underlying I/O;
+   * it must not apply operator-abort or failure semantics to durable work.
+   */
+  onShutdownInterrupt?: () => void;
   recoveryPolicy?: 'resume' | 'rerun' | 'mark_interrupted' | 'do_not_resume';
   recoveryData?: Record<string, any>;
 }
@@ -141,8 +147,9 @@ export function isInterruptedByRestart(
 }
 
 interface LiveRuntimeRecord extends LiveRuntimeSnapshot {
-  abortSignal?: { aborted: boolean };
+  abortSignal?: { aborted: boolean; interrupted?: boolean };
   onAbort?: () => void;
+  onShutdownInterrupt?: () => void;
   pendingSteers?: RuntimeSteerEvent[];
 }
 
@@ -212,6 +219,67 @@ function appendRuntimeEvent(type: string, runtime: LiveRuntimeSnapshot, extra?: 
 }
 
 const MAX_DURABLE_CHECKPOINT_TEXT = 500;
+const MAX_LIVE_CHECKPOINT_ARG_CHARS = 6_000;
+const MAX_LIVE_CHECKPOINT_ARG_STRING = 2_000;
+const MAX_LIVE_CHECKPOINT_ARG_ITEMS = 24;
+const MAX_LIVE_CHECKPOINT_ARG_DEPTH = 4;
+
+/**
+ * Bound raw tool arguments before they enter the in-memory runtime record. This
+ * avoids retaining a multi-megabyte base64/blob argument until shutdown, when a
+ * full recovery checkpoint is synchronously serialized. The traversal itself is
+ * capped too, so adversarially wide objects do not become gateway work.
+ */
+function boundLiveCheckpointArgs(value: unknown): unknown {
+  const seen = new WeakSet<object>();
+  let chars = 0;
+
+  const visit = (input: unknown, depth: number): unknown => {
+    if (chars >= MAX_LIVE_CHECKPOINT_ARG_CHARS) return '[argument preview truncated]';
+    if (input == null || typeof input === 'number' || typeof input === 'boolean') return input;
+    if (typeof input === 'string') {
+      if (input.length > MAX_LIVE_CHECKPOINT_ARG_STRING) {
+        chars += 64;
+        return `[large argument string omitted: ${input.length} chars]`;
+      }
+      chars += input.length;
+      return input;
+    }
+    if (typeof input !== 'object') {
+      const text = String(input);
+      chars += text.length;
+      return text.slice(0, MAX_LIVE_CHECKPOINT_ARG_STRING);
+    }
+    if (depth >= MAX_LIVE_CHECKPOINT_ARG_DEPTH) return '[nested argument omitted]';
+    if (seen.has(input as object)) return '[circular argument omitted]';
+    seen.add(input as object);
+
+    if (Array.isArray(input)) {
+      const out: unknown[] = [];
+      const length = Math.min(input.length, MAX_LIVE_CHECKPOINT_ARG_ITEMS);
+      for (let index = 0; index < length; index += 1) out.push(visit(input[index], depth + 1));
+      if (input.length > length) out.push(`[${input.length - length} more items omitted]`);
+      return out;
+    }
+
+    const out: Record<string, unknown> = {};
+    let count = 0;
+    for (const key in input as Record<string, unknown>) {
+      if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
+      if (count >= MAX_LIVE_CHECKPOINT_ARG_ITEMS) {
+        out.__truncated__ = 'additional keys omitted';
+        break;
+      }
+      const boundedKey = key.slice(0, 200);
+      chars += boundedKey.length;
+      out[boundedKey] = visit((input as Record<string, unknown>)[key], depth + 1);
+      count += 1;
+    }
+    return out;
+  };
+
+  return visit(value, 0);
+}
 
 // Strip the heavy live-UI payload (process log, long messages) before writing to
 // the durable ledger. The full record stays in memory for live UI + graceful
@@ -318,6 +386,7 @@ export function registerLiveRuntime(registration: LiveRuntimeRegistration): stri
     pid: process.pid,
     abortSignal: registration.abortSignal,
     onAbort: registration.onAbort,
+    onShutdownInterrupt: registration.onShutdownInterrupt,
   };
   activeRuntimes.set(id, record);
   persistRuntime(toSnapshot(record), 'registered');
@@ -329,6 +398,14 @@ export function finishLiveRuntime(id: string): void {
   cancelCheckpointFlush(key);
   const record = activeRuntimes.get(key);
   if (record) {
+    // Shutdown interruption has already persisted the recoverable snapshot. The
+    // cancelled provider/tool call will normally unwind through its `finally`
+    // block, but that unwind must not overwrite the interruption as an operator
+    // abort or remove it from the durable recovery ledger.
+    if (record.status === 'interrupted') {
+      activeRuntimes.delete(key);
+      return;
+    }
     record.status = record.abortSignal?.aborted ? 'aborted' : 'completed';
     record.completedAt = Date.now();
     record.updatedAt = Date.now();
@@ -561,9 +638,12 @@ function scheduleCheckpointFlush(id: string, snapshot: LiveRuntimeSnapshot): voi
 export function updateLiveRuntimeCheckpoint(id: string, checkpoint: Record<string, any>): void {
   const record = activeRuntimes.get(String(id || ''));
   if (!record) return;
+  const boundedCheckpoint = Object.prototype.hasOwnProperty.call(checkpoint, 'args')
+    ? { ...checkpoint, args: boundLiveCheckpointArgs(checkpoint.args) }
+    : checkpoint;
   record.checkpoint = {
     ...(record.checkpoint || {}),
-    ...checkpoint,
+    ...boundedCheckpoint,
     updatedAt: Date.now(),
   };
   record.updatedAt = Date.now();
@@ -598,13 +678,24 @@ export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): Live
     // Persist the restart epoch onto recoveryData so it survives in the durable
     // ledger and the post-restart process can match "interrupted by this restart".
     record.recoveryData = { ...(record.recoveryData || {}), restartEpoch, interruptReason: reason };
-    if (record.abortSignal) record.abortSignal.aborted = true;
+    if (record.abortSignal) {
+      record.abortSignal.interrupted = true;
+      record.abortSignal.aborted = true;
+    }
     const snapshot = toSnapshot(record);
     interrupted.push(snapshot);
     // Persist the FULL snapshot (with process log) so the owning session can
     // recover its own context after restart. This is the one path that keeps
     // the heavy checkpoint on disk.
     persistRuntime(snapshot, 'interrupted', { reason }, { full: true });
+    // Invoke only the shutdown-specific hook after the recovery snapshot is
+    // durable. `onAbort` is intentionally not a fallback: several runtimes use
+    // it to mark a task failed for an explicit operator abort.
+    try {
+      record.onShutdownInterrupt?.();
+    } catch (err: any) {
+      console.warn(`[live-runtime] Shutdown interruption hook failed for ${record.id}:`, err?.message || err);
+    }
   }
   return interrupted;
 }

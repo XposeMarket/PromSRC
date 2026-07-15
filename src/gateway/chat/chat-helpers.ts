@@ -682,11 +682,77 @@ export async function _dispatchToAgent(
   return { task_id: task.id, agent_id: agentId, status: 'dispatched' };
 }
 
+const toolAuditQueues = new Map<string, { lines: string[]; writing: boolean }>();
+const MAX_PENDING_TOOL_AUDIT_LINES = 500;
+
+function boundedToolAuditArgs(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+  if (value == null || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (typeof value === 'string') return value.length <= 500 ? value : `${value.slice(0, 500)}...[truncated]`;
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'function' || typeof value === 'symbol' || value === undefined) return undefined;
+  if (Buffer.isBuffer(value)) return { type: 'Buffer', bytes: value.byteLength };
+  if (depth >= 3 || !value || typeof value !== 'object') return '[depth limit]';
+  if (seen.has(value)) return '[cycle]';
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const out = value.slice(0, 12).map((entry) => boundedToolAuditArgs(entry, depth + 1, seen));
+      if (value.length > 12) out.push(`[${value.length - 12} more items]`);
+      return out;
+    }
+    const out: Record<string, unknown> = {};
+    let count = 0;
+    for (const key in value as Record<string, unknown>) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+      if (count >= 20) {
+        out.$truncated = 'additional keys omitted';
+        break;
+      }
+      out[key] = boundedToolAuditArgs((value as Record<string, unknown>)[key], depth + 1, seen);
+      count += 1;
+    }
+    return out;
+  } catch {
+    return '[unreadable]';
+  } finally {
+    seen.delete(value);
+  }
+}
+
+async function drainToolAuditQueue(logPath: string, queue: { lines: string[]; writing: boolean }): Promise<void> {
+  if (queue.writing) return;
+  queue.writing = true;
+  try {
+    while (queue.lines.length > 0) {
+      const batch = queue.lines.splice(0, 50).join('');
+      await fs.promises.appendFile(logPath, batch, 'utf8');
+    }
+  } catch {
+    // Audit logging must never fail the owning tool call.
+  } finally {
+    queue.writing = false;
+    if (queue.lines.length > 0) {
+      void drainToolAuditQueue(logPath, queue);
+    } else if (toolAuditQueues.get(logPath) === queue) {
+      toolAuditQueues.delete(logPath);
+    }
+  }
+}
+
 export function logToolCall(workspacePath: string, toolName: string, args: any, result: string, error: boolean) {
   try {
     const logPath = path.join(workspacePath, 'tool_audit.log');
     const ts = new Date().toISOString();
-    fs.appendFileSync(logPath, `[${ts}] ${error ? 'FAIL' : 'OK'} ${toolName}(${JSON.stringify(args).slice(0, 200)}) => ${result.slice(0, 200)}\n`);
+    const argsPreview = JSON.stringify(boundedToolAuditArgs(args)).slice(0, 2_000);
+    const resultPreview = String(result || '').slice(0, 200);
+    let queue = toolAuditQueues.get(logPath);
+    if (!queue) {
+      queue = { lines: [], writing: false };
+      toolAuditQueues.set(logPath, queue);
+    }
+    if (queue.lines.length >= MAX_PENDING_TOOL_AUDIT_LINES) queue.lines.shift();
+    queue.lines.push(`[${ts}] ${error ? 'FAIL' : 'OK'} ${toolName}(${argsPreview}) => ${resultPreview}\n`);
+    void drainToolAuditQueue(logPath, queue);
   } catch {}
 }
 // Reply processor fns (separateThinkingFromContent etc.) extracted to reply-processor.ts

@@ -9,7 +9,7 @@
  * resetProvider() from the settings API). No other files need touching.
  */
 
-import { getProvider, getModelForRole, getPrimaryModel, resetProvider } from '../providers/factory';
+import { getProvider, getModelForRole, getPrimaryModel, getProviderAccountId, resetProvider } from '../providers/factory';
 import type { LLMProvider } from '../providers/LLMProvider';
 import type { ModelStreamEvent } from '../providers/LLMProvider';
 export type { LLMProvider };
@@ -25,6 +25,11 @@ import {
   captureRuntimePromptManifest,
   type RuntimePromptManifestContext,
 } from '../runtime/prompt-manifest';
+
+function shouldUseIsolatedModelWorkers(): boolean {
+  return process.env.PROMETHEUS_TURN_WORKER !== '1'
+    && process.env.PROMETHEUS_DISABLE_MODEL_WORKERS !== '1';
+}
 
 export interface GenerateOutput {
   response: string;
@@ -68,6 +73,33 @@ export class OllamaClient {
   ): Promise<ChatOutput> {
     const model = String(options?.model || '').trim() || getModelForRole(role);
     const activeProvider = options?.provider ?? this.provider;
+    if (shouldUseIsolatedModelWorkers()) {
+      const { dispatchIsolatedModelCall } = await import('../gateway/turn-workers/model-call-dispatcher.js');
+      return dispatchIsolatedModelCall<ChatOutput>({
+        version: 1,
+        operation: 'chat',
+        providerId: activeProvider.id,
+        accountId: getProviderAccountId(activeProvider),
+        model,
+        role,
+        messages,
+        options: {
+          temperature: options?.temperature,
+          maxTokens: options?.num_predict,
+          numCtx: options?.num_ctx,
+          think: options?.think,
+          tools: options?.tools as any,
+          omitIntradayNotes: options?.omitIntradayNotes,
+        },
+        usageContext: options?.usageContext as any,
+      }, {
+        onToken: options?.onToken,
+        onThinking: options?.onThinking,
+        onReasoningSummary: options?.onReasoningSummary,
+        onModelEvent: options?.onModelEvent,
+        signal: options?.abortSignal,
+      });
+    }
     const startedAt = Date.now();
     const promptManifest = captureRuntimePromptManifest({
       callType: 'chat',
@@ -138,11 +170,37 @@ export class OllamaClient {
       num_ctx?: number;
       num_predict?: number;
       think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      abortSignal?: AbortSignal;
+      /** Internal per-call model override used by isolated model workers. */
+      model?: string;
+      /** Internal per-call provider override used by isolated model workers. */
+      provider?: LLMProvider;
       usageContext?: { sessionId?: string; agentId?: string; promptManifest?: RuntimePromptManifestContext };
     }
   ): Promise<GenerateOutput> {
-    const model = getModelForRole(role);
-    const activeProvider = this.provider;
+    const model = String(options?.model || '').trim() || getModelForRole(role);
+    const activeProvider = options?.provider ?? this.provider;
+    if (shouldUseIsolatedModelWorkers()) {
+      const { dispatchIsolatedModelCall } = await import('../gateway/turn-workers/model-call-dispatcher.js');
+      return dispatchIsolatedModelCall<GenerateOutput>({
+        version: 1,
+        operation: 'generate',
+        providerId: activeProvider.id,
+        accountId: getProviderAccountId(activeProvider),
+        model,
+        role,
+        prompt,
+        options: {
+          temperature: options?.temperature,
+          format: options?.format,
+          system: options?.system,
+          numCtx: options?.num_ctx,
+          maxTokens: options?.num_predict,
+          think: options?.think,
+        },
+        usageContext: options?.usageContext as any,
+      }, { signal: options?.abortSignal });
+    }
     const startedAt = Date.now();
     const promptManifest = captureRuntimePromptManifest({
       callType: 'generate',
@@ -162,6 +220,7 @@ export class OllamaClient {
       num_ctx:     options?.num_ctx,
       max_tokens:  options?.num_predict,
       think:       options?.think,
+      abortSignal: options?.abortSignal,
     });
     const usage = normalizeUsage(result.usage, {
       inputTokens: estimateTextTokens(`${options?.system || ''}\n${prompt}`),

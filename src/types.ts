@@ -534,6 +534,19 @@ export interface PrometheusConfig {
       };
     };
   };
+  work_context?: {
+    enabled?: boolean;
+    shadow_mode?: boolean;
+    max_packet_bytes?: number;
+    max_age_hours?: number;
+    fast_paths?: {
+      coding?: boolean;
+      browser?: boolean;
+      desktop?: boolean;
+      creative?: boolean;
+      generic?: boolean;
+    };
+  };
   telegram?: {
     enabled: boolean;
     botToken: string;

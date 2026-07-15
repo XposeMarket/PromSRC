@@ -705,7 +705,7 @@ function _compactMobileThreadCacheMessage(m) {
     files: _compactMobileThreadCacheMedia(m?.files),
     artifacts: _compactMobileThreadCacheMedia(m?.artifacts),
     richArtifacts: Array.isArray(m?.richArtifacts)
-      ? m.richArtifacts.filter((item) => item?.type === 'visual').slice(-4).map((item) => ({ ...item }))
+      ? m.richArtifacts.filter((item) => item?.type === 'visual' || item?.type === 'thread_links').slice(-8).map((item) => ({ ...item }))
       : undefined,
     productCarousel: m?.productCarousel && typeof m.productCarousel === 'object' ? {
       title: String(m.productCarousel.title || '').slice(0, 160),
@@ -2876,15 +2876,21 @@ function _appendMobileCompactionTrace(message, status = 'compacting', summary = 
   });
 }
 
+function _isRenderableMobileTraceImageSource(value) {
+  const source = String(value || '').trim();
+  return /^data:image\//i.test(source) || /^\/api\/canvas\/inline\?path=/i.test(source);
+}
+
 function _appendMobileVisionTrace(message, evt) {
   if (!message || !evt) return;
   const preview = evt.preview && typeof evt.preview === 'object' ? evt.preview : {};
   const dataUrl = String(preview.dataUrl || evt.dataUrl || '').trim();
-  if (!/^data:image\//i.test(dataUrl)) return;
+  if (!_isRenderableMobileTraceImageSource(dataUrl)) return;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
-  const source = String(evt.source || '').toLowerCase() === 'browser' ? 'Browser' : 'Desktop';
+  const sourceValue = String(evt.source || '').toLowerCase();
+  const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : 'Desktop';
   const tool = String(evt.tool || evt.action || evt.name || '').trim();
-  const text = `Vision injected: ${tool ? _mobileToolLabel({ ...evt, action: tool }) : `${source} observation`}`;
+  const text = String(evt.label || `Vision injected: ${tool ? _mobileToolLabel({ ...evt, action: tool }) : `${source} observation`}`).trim();
   const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
   if (last && last.type === 'vision' && String(last.text || '') === text && String(last?.preview?.dataUrl || '') === dataUrl) return;
   message.liveTraceEntries.push({
@@ -2893,7 +2899,7 @@ function _appendMobileVisionTrace(message, evt) {
     text,
     time: _nowTime(),
     preview,
-    previewTitle: `${source} screenshot`,
+    previewTitle: String(evt.previewTitle || preview.title || `${source} preview`),
     previewKey: _mobileVisionPreviewKey(dataUrl, preview),
   });
 }
@@ -3232,8 +3238,8 @@ function _mobileLiveTraceCompactionEnabled(message) {
 function _renderMobileLiveTracePreview(entry) {
   const preview = entry?.preview && typeof entry.preview === 'object' ? entry.preview : null;
   const dataUrl = String(preview?.dataUrl || entry?.dataUrl || '').trim();
-  if (!/^data:image\//i.test(dataUrl)) return '';
-  const title = String(entry?.previewTitle || entry?.text || 'Vision screenshot preview').trim();
+  if (!_isRenderableMobileTraceImageSource(dataUrl)) return '';
+  const title = String(entry?.previewTitle || preview?.title || entry?.text || 'Vision preview').trim();
   const width = Number(preview?.width || entry?.width || 0);
   const height = Number(preview?.height || entry?.height || 0);
   const dims = width > 0 && height > 0 ? ` (${Math.round(width)}x${Math.round(height)})` : '';
@@ -3589,6 +3595,14 @@ function _mobileTraceGroups(entries) {
       groups.push({ kind: 'compaction', entries: [entry] });
       return;
     }
+    if (String(entry?.type || '').toLowerCase() === 'vision' && _renderMobileLiveTracePreview(entry)) {
+      // Screenshots intentionally break the collapsible tool sequence so they
+      // stay visible as first-class timeline cards.
+      if (groups[groups.length - 1]?.kind === 'vision') groups[groups.length - 1].entries.push(entry);
+      else groups.push({ kind: 'vision', entries: [entry] });
+      activeToolGroup = null;
+      return;
+    }
     if (_isMobileTraceThoughtEntry(entry)) {
       activeToolGroup = null;
       groups.push({ kind: 'thought', entries: [entry] });
@@ -3898,6 +3912,9 @@ function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent
     if (group.kind === 'compaction') {
       return group.entries.map(_renderMobileCompactionBreak).join('');
     }
+    if (group.kind === 'vision') {
+      return `<div class="pm-trace-vision-break" data-pm-trace-group="${escapeHtml(group.id)}">${group.entries.map(_renderMobileLiveTracePreview).join('')}</div>`;
+    }
     const isLiveCurrent = streaming && index === groups.length - 1;
     const summary = isLiveCurrent ? _mobileTraceCurrentToolLabel(group.entries) : _mobileTraceToolSummary(group.entries);
     const summaryKey = _mobileTraceSummaryKey(summary);
@@ -3906,24 +3923,14 @@ function _renderMobileGroupedTrace(entries, { streaming = false, openLiveCurrent
     const itemCount = callCount || visibleEntries.length;
     const itemLabel = callCount ? 'call' : 'item';
     const openAttr = isLiveCurrent && openLiveCurrent ? ' open' : '';
-    // Keep screenshot thumbnails visible when the compact tool group is closed.
-    // The same vision entry remains in the expanded body in chronological order.
-    const collapsedPreviews = visibleEntries
-      .filter((entry) => String(entry?.type || '').toLowerCase() === 'vision')
-      .map(_renderMobileLiveTracePreview)
-      .filter(Boolean)
-      .join('');
-    return `<div class="pm-trace-tool-group-shell${collapsedPreviews ? ' has-vision-preview' : ''}">
-      <details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
-        <summary class="pm-trace-tool-summary">
-          <span class="pm-trace-tool-icon" aria-hidden="true">›</span>
-          <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
-          <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
-        </summary>
-        <div class="pm-trace-tool-body">${_renderMobileLiveTrace(group.entries)}</div>
-      </details>
-      ${collapsedPreviews ? `<div class="pm-trace-collapsed-vision-previews">${collapsedPreviews}</div>` : ''}
-    </div>`;
+    return `<details class="pm-trace-tool-group"${openAttr}${isLiveCurrent ? ' data-pm-trace-live-current="1"' : ''} data-pm-trace-group="${escapeHtml(group.id)}">
+      <summary class="pm-trace-tool-summary">
+        <span class="pm-trace-tool-icon" aria-hidden="true">›</span>
+        <strong data-pm-trace-summary-key="${escapeHtml(summaryKey)}">${escapeHtml(summary)}</strong>
+        <em>${itemCount} ${itemLabel}${itemCount === 1 ? '' : 's'}</em>
+      </summary>
+      <div class="pm-trace-tool-body">${_renderMobileLiveTrace(group.entries)}</div>
+    </details>`;
   }).join('')}</div>`;
 }
 
@@ -5414,6 +5421,43 @@ function _renderMobileRichArtifacts(message) {
   }).join('');
 }
 
+function _renderMobileThreadLinkArtifacts(message) {
+  const artifacts = Array.isArray(message?.richArtifacts)
+    ? message.richArtifacts.filter((artifact) => artifact?.type === 'thread_links')
+    : [];
+  if (!artifacts.length) return '';
+  const seen = new Set();
+  const cards = artifacts.flatMap((artifact) => Array.isArray(artifact?.items) ? artifact.items : [])
+    .filter((item) => {
+      const sessionId = String(item?.sessionId || '').trim();
+      if (!sessionId || seen.has(sessionId)) return false;
+      seen.add(sessionId);
+      return true;
+    })
+    .map((item) => {
+      const sessionId = String(item.sessionId || '').trim();
+      const label = String(item.label || 'Thread touched').trim();
+      const title = String(item.title || 'Prometheus thread').trim();
+      const detail = String(item.subtitle || item.status || '').trim();
+      return `<button type="button" class="pm-thread-link-card" data-pm-thread-session="${escapeHtml(sessionId)}" onclick="window.pmOpenPrometheusThread(this.dataset.pmThreadSession)" aria-label="Open Prometheus thread ${escapeHtml(title)}">
+        <span class="pm-thread-link-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M7.5 18.25 4 20l.85-3.75A8 8 0 1 1 7.5 18.25Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="pm-thread-link-copy"><span class="pm-thread-link-label">${escapeHtml(label)}</span><strong>${escapeHtml(title)}</strong>${detail ? `<small>${escapeHtml(detail)}</small>` : ''}</span>
+        <span class="pm-thread-link-open">Open thread <span aria-hidden="true">›</span></span>
+      </button>`;
+    }).join('');
+  return cards ? `<div class="pm-thread-links-artifact">${cards}</div>` : '';
+}
+
+function _openMobilePrometheusThread(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) return;
+  __pmChat.activeSessionId = id;
+  _rememberMobileLastChatSession(id);
+  window.location.hash = `#mobile/chat/${encodeURIComponent(id)}`;
+}
+
+window.pmOpenPrometheusThread = _openMobilePrometheusThread;
+
 function _renderMobilePredictionMarket(a) {
   const items = Array.isArray(a?.items) ? a.items.filter(Boolean) : [];
   if (!items.length) return '';
@@ -6324,6 +6368,7 @@ function _renderChatMessageHtml(m, index = -1) {
   }
   inner += _renderMobileMediaGallery(_collectMessageMedia(m));
   inner += _renderMobileFileChanges(m.fileChanges);
+  inner += _renderMobileThreadLinkArtifacts(m);
   if (inner.endsWith(statusDividerHtml)) inner = inner.slice(0, -statusDividerHtml.length);
   return `<div class="pm-msg from-ai${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}"${m.streaming ? ' data-streaming="1"' : ''}>
     ${m.workflowLabel ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
@@ -25805,6 +25850,7 @@ function _renderMobileAgentChatBubble(message, options = {}) {
       artifacts: Array.isArray(message?.artifacts) ? message.artifacts : (Array.isArray(message?.metadata?.artifacts) ? message.metadata.artifacts : []),
     }));
     inner += _renderMobileFileChanges(_mobileAgentMessageFileChanges(message));
+    inner += _renderMobileThreadLinkArtifacts(message);
     if (message?.approvalRequest) {
       inner += `<div class="pm-chat-approvals-inline">${_renderMobileApprovalCard(message.approvalRequest, { compact: false })}</div>`;
     }

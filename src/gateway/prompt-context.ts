@@ -8,7 +8,7 @@ import { hookBus } from './hooks';
 import { SkillsManager } from './skills-runtime/skills-manager';
 import { getConfig, getAgents } from '../config/config';
 import { getActivatedSkillIds, getActivatedSkillResources, getActivatedToolCategories, isBusinessContextEnabled } from './session';
-import { searchMemoryIndex } from './memory-index/index';
+import { searchMemoryIndexAsync } from './memory-index/index';
 import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
 import { buildCisContextBlock } from './business/cis-context-builder';
 import { loadSoul, loadPrometheusRuntimeContract, loadVoiceSoul } from '../config/soul-loader';
@@ -434,6 +434,19 @@ function loadBusinessContextProfile(workspacePath: string, maxChars: number = 40
   return loadWorkspaceFile(workspacePath, 'BUSINESS.md', maxChars);
 }
 
+async function loadWorkspaceFileAsync(workspacePath: string, filename: string, maxChars: number = 500): Promise<string> {
+  try {
+    const content = (await fs.promises.readFile(path.join(workspacePath, filename), 'utf8')).trim();
+    return content.length <= maxChars ? content : `${content.slice(0, maxChars)}\n...(truncated)`;
+  } catch {
+    return '';
+  }
+}
+
+async function loadBusinessContextProfileAsync(workspacePath: string, maxChars: number = 4000): Promise<string> {
+  return loadWorkspaceFileAsync(workspacePath, 'BUSINESS.md', maxChars);
+}
+
 function stripMemoryToolHints(content: string): string {
   if (!content) return content;
   const filtered = content
@@ -465,6 +478,17 @@ function readMemoryProfileFile(filePath: string, maxChars?: number): string {
   }
 }
 
+async function readMemoryProfileFileAsync(filePath: string, maxChars?: number): Promise<string> {
+  try {
+    const content = (await fs.promises.readFile(filePath, 'utf8')).trim();
+    const cleaned = stripMemoryToolHints(content);
+    if (typeof maxChars !== 'number' || maxChars <= 0 || cleaned.length <= maxChars) return cleaned;
+    return `${cleaned.slice(0, Math.max(0, maxChars - 16)).trimEnd()}\n...[truncated]`;
+  } catch {
+    return '';
+  }
+}
+
 function loadFullMemoryProfile(
   workspacePath: string,
   filename: 'USER.md' | 'SOUL.md' | 'MEMORY.md',
@@ -484,6 +508,30 @@ function loadFullMemoryProfile(
     if (seen.has(resolved)) continue;
     seen.add(resolved);
     const content = readMemoryProfileFile(resolved, maxChars);
+    if (content) return content;
+  }
+  return '';
+}
+
+async function loadFullMemoryProfileAsync(
+  workspacePath: string,
+  filename: 'USER.md' | 'SOUL.md' | 'MEMORY.md',
+  maxChars?: number,
+  fallbackWorkspacePaths: string[] = [],
+): Promise<string> {
+  const candidatePaths = [
+    path.join(workspacePath, filename),
+    ...fallbackWorkspacePaths
+      .map((fallbackPath) => String(fallbackPath || '').trim())
+      .filter(Boolean)
+      .map((fallbackPath) => path.join(fallbackPath, filename)),
+  ];
+  const seen = new Set<string>();
+  for (const candidatePath of candidatePaths) {
+    const resolved = path.resolve(candidatePath);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    const content = await readMemoryProfileFileAsync(resolved, maxChars);
     if (content) return content;
   }
   return '';
@@ -558,12 +606,12 @@ function routeMemorySearchMode(messageText: string): MemorySearchRouting {
   return { mode: 'no_search', reason: 'not_needed' };
 }
 
-function buildRetrievedMemoryContext(workspacePath: string, messageText: string, routing: MemorySearchRouting): string {
+async function buildRetrievedMemoryContext(workspacePath: string, messageText: string, routing: MemorySearchRouting): Promise<string> {
   if (routing.mode === 'no_search') return '';
   try {
     const searchMode = routing.mode === 'deep_search' ? 'deep' : 'quick';
     const limit = routing.mode === 'deep_search' ? 8 : 4;
-    const result = searchMemoryIndex(workspacePath, {
+    const result = await searchMemoryIndexAsync(workspacePath, {
       query: messageText,
       mode: searchMode as any,
       limit,
@@ -1145,7 +1193,7 @@ export async function buildPersonalityContext(
       await import('../config/local-model-prompts.js');
     const timeString  = formatLocalModelTime();
     const userMemory  = loadCondensedMemoryProfile(workspacePath);
-    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath, 900) : '';
+    const business = isBusinessContextEnabled(sessionId) ? await loadBusinessContextProfileAsync(workspacePath, 900) : '';
     const activeSkillCtxLocal = buildActiveSkillsContext(sessionId, skillsManager);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
@@ -1153,8 +1201,10 @@ export async function buildPersonalityContext(
   }
 
   if (profile === 'teach_mode') {
-    const user = loadFullMemoryProfile(workspacePath, 'USER.md', 2600);
-    const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md', 3200);
+    const [user, soul] = await Promise.all([
+      loadFullMemoryProfileAsync(workspacePath, 'USER.md', 2600),
+      loadFullMemoryProfileAsync(workspacePath, 'SOUL.md', 3200),
+    ]);
     const activatedCatsTeach = getActivatedToolCategories(sessionId);
     activatedCatsTeach.add('browser');
     if (extraCats) {
@@ -1192,28 +1242,21 @@ export async function buildPersonalityContext(
     ? routeMemorySearchMode(messageText)
     : ({ mode: 'no_search', reason: 'execution_mode_skip' } as MemorySearchRouting);
   const retrievedMemoryCtx = allowLongTermSearch
-    ? buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
+    ? await buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
     : '';
   const cisContext = buildCisContextBlock(workspacePath, messageText, { force: isBusinessContextEnabled(sessionId) });
   const configSoul = loadSoul();
 
   if (profile === 'voice_agent') {
     const voiceSoulContract = loadVoiceSoul();
-    const user = loadFullMemoryProfile(workspacePath, 'USER.md');
-    const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
-    const readCapped = (relativePath: string, maxChars: number): string => {
-      try {
-        const filePath = path.join(workspacePath, relativePath);
-        if (!fs.existsSync(filePath)) return '';
-        const raw = fs.readFileSync(filePath, 'utf-8').trim();
-        return raw.length > maxChars ? `${raw.slice(0, maxChars)}\n...[truncated]` : raw;
-      } catch {
-        return '';
-      }
-    };
-    const selfIndex = isPublicDistributionBuild() ? '' : readCapped(path.join('self', 'index.md'), 3000);
-    const voiceSelf = isPublicDistributionBuild() ? '' : readCapped(path.join('self', '06-image-voice.md'), 7000);
-    const boot = readCapped('BOOT.md', 3000);
+    const readCapped = (relativePath: string, maxChars: number): Promise<string> => loadWorkspaceFileAsync(workspacePath, relativePath, maxChars);
+    const [user, soul, selfIndex, voiceSelf, boot] = await Promise.all([
+      loadFullMemoryProfileAsync(workspacePath, 'USER.md'),
+      loadFullMemoryProfileAsync(workspacePath, 'SOUL.md'),
+      isPublicDistributionBuild() ? Promise.resolve('') : readCapped(path.join('self', 'index.md'), 3000),
+      isPublicDistributionBuild() ? Promise.resolve('') : readCapped(path.join('self', '06-image-voice.md'), 7000),
+      readCapped('BOOT.md', 3000),
+    ]);
     let projectContextBlock = '';
     try {
       const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
@@ -1250,10 +1293,12 @@ export async function buildPersonalityContext(
   // A model switch starts a fresh generation, but it must not turn a named
   // agent/manager into main Prometheus by reloading Prom's USER/SOUL/MEMORY.
   if (profile === 'switch_model' && runtimeActor?.kind !== 'agent' && runtimeActor?.kind !== 'manager') {
-    const user = loadFullMemoryProfile(workspacePath, 'USER.md');
-    const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
-    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
-    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md');
+    const [user, soul, business, memory] = await Promise.all([
+      loadFullMemoryProfileAsync(workspacePath, 'USER.md'),
+      loadFullMemoryProfileAsync(workspacePath, 'SOUL.md'),
+      isBusinessContextEnabled(sessionId) ? loadBusinessContextProfileAsync(workspacePath) : Promise.resolve(''),
+      loadFullMemoryProfileAsync(workspacePath, 'MEMORY.md'),
+    ]);
     // switch_model starts a fresh generation context. Do not inherit the
     // interactive session's expanded tool categories, otherwise a lightweight
     // switch can receive the full schema payload from prior category opens.
@@ -1417,11 +1462,13 @@ export async function buildPersonalityContext(
   const isAutonomous = executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'heartbeat';
   if (isAutonomous) {
     const isProposalExecution = executionMode === 'proposal_execution';
-    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
-    const soul = isProposalExecution ? configSoul : loadFullMemoryProfile(workspacePath, 'SOUL.md');
+    const [business, soul, memory] = await Promise.all([
+      isBusinessContextEnabled(sessionId) ? loadBusinessContextProfileAsync(workspacePath) : Promise.resolve(''),
+      isProposalExecution ? Promise.resolve(configSoul) : loadFullMemoryProfileAsync(workspacePath, 'SOUL.md'),
+      isProposalExecution ? Promise.resolve('') : loadFullMemoryProfileAsync(workspacePath, 'MEMORY.md'),
+    ]);
     // Proposal executors get only the approved task context plus the configured
     // Prometheus soul. Workspace MEMORY.md is intentionally excluded here.
-    const memory = isProposalExecution ? '' : loadFullMemoryProfile(workspacePath, 'MEMORY.md');
     // USER.md intentionally excluded from background tasks — user preferences are
     // not relevant to focused task execution and waste token budget.
     // AGENTS.md intentionally excluded from autonomous path — background tasks,
@@ -1439,7 +1486,9 @@ export async function buildPersonalityContext(
     const skipIntraday = true;
     const today = new Date().toISOString().split('T')[0];
     const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
-    const intradayNotes = (!skipIntraday && fs.existsSync(intradayPath)) ? processIntradayNotes(fs.readFileSync(intradayPath, 'utf-8')) : '';
+    const intradayNotes = !skipIntraday
+      ? processIntradayNotes(await fs.promises.readFile(intradayPath, 'utf8').catch(() => ''))
+      : '';
     // Fix 2: Don't inherit interactive session categories for cron/heartbeat runs.
     // task_* sessions manage their own categories explicitly (e.g. source_write for proposals).
     // Cron sessions (including sessionTarget:'main') start clean to avoid leaking 8+ interactive cats.
@@ -1477,13 +1526,17 @@ export async function buildPersonalityContext(
   }
 
   // ── Path A: interactive chat — tiered ─────────────────────────────────────
-  const user = loadFullMemoryProfile(workspacePath, 'USER.md');
-  const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
-  const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md');
   const today = new Date().toISOString().split('T')[0];
   const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
   const _skipIntradayInteractive = sessionId.startsWith('proposal_') || executionMode === 'background_agent';
-  const intradayNotes = (!_skipIntradayInteractive && fs.existsSync(intradayPath)) ? processIntradayNotes(fs.readFileSync(intradayPath, 'utf-8')) : '';
+  const [user, business, memory, soul, intradayRaw] = await Promise.all([
+    loadFullMemoryProfileAsync(workspacePath, 'USER.md'),
+    isBusinessContextEnabled(sessionId) ? loadBusinessContextProfileAsync(workspacePath) : Promise.resolve(''),
+    loadFullMemoryProfileAsync(workspacePath, 'MEMORY.md'),
+    loadFullMemoryProfileAsync(workspacePath, 'SOUL.md'),
+    _skipIntradayInteractive ? Promise.resolve('') : fs.promises.readFile(intradayPath, 'utf8').catch(() => ''),
+  ]);
+  const intradayNotes = processIntradayNotes(intradayRaw);
 
   // ── Tier 1: first message in session ──────────────────────────────────────
   if (historyLength === 0) {
@@ -1495,7 +1548,7 @@ export async function buildPersonalityContext(
         projectContextBlockT1 = buildProjectContextBlock(sessionId) || '';
       }
     } catch {}
-    const soulT1 = loadFullMemoryProfile(workspacePath, 'SOUL.md');
+    const soulT1 = soul;
     // Include tool category menu (auto-activation may have already run; show active state)
     const activatedCatsT1 = getActivatedToolCategories(sessionId);
     if (extraCats) {
@@ -1541,8 +1594,6 @@ export async function buildPersonalityContext(
       projectContextBlockT2 = buildProjectContextBlock(sessionId) || '';
     }
   } catch {}
-
-  const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
 
   // Build dynamic [TOOLS] block from session's activated categories
   const activatedCats = getActivatedToolCategories(sessionId);

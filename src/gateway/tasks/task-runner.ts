@@ -420,7 +420,7 @@ export interface EphemeralBackgroundWaitResult {
 interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   promise: Promise<void>;
   spawnerSessionId?: string;
-  abortSignal?: { aborted: boolean; signal?: AbortSignal };
+  abortSignal?: { aborted: boolean; interrupted?: boolean; signal?: AbortSignal };
   abortController?: AbortController;
   promptPreview?: string;
   fileChanges?: any;
@@ -635,6 +635,9 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           record.completedAt = Date.now();
         }
       },
+      // A gateway restart is resumable interruption, not an operator failure.
+      // Only release the provider/tool I/O here; the recovery ledger owns state.
+      onShutdownInterrupt: () => abortController.abort(),
     });
     record.state = 'in_progress';
     console.log(`[Background Agent] ${record.id} started`);
@@ -742,6 +745,12 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         // handleChat returns a ChatResult object — extract .text, not the whole object
         const finalText = String((chatResult as any)?.text ?? chatResult ?? '').trim();
         if (abortSignal.aborted) {
+          if (abortSignal.interrupted) {
+            persistBackgroundVoiceWorker(record);
+            console.log(`[Background Agent] ${record.id} interrupted for gateway restart`);
+            finishLiveRuntime(runtimeId);
+            return;
+          }
           record.error = 'Aborted by operator.';
           record.state = 'failed';
           record.completedAt = Date.now();
@@ -767,14 +776,19 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
           broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'completed', result: record.result, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
         }
       } catch (err: any) {
-        record.error = String(err?.message || err || 'Background execution failed');
-        record.state = 'failed';
-        record.completedAt = Date.now();
-        persistBackgroundVoiceWorker(record);
-        queueBackgroundResultForForeground(record);
-        console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
-        if (spawnerSessionId) {
-          broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
+        if (abortSignal.interrupted) {
+          persistBackgroundVoiceWorker(record);
+          console.log(`[Background Agent] ${record.id} interrupted for gateway restart`);
+        } else {
+          record.error = String(err?.message || err || 'Background execution failed');
+          record.state = 'failed';
+          record.completedAt = Date.now();
+          persistBackgroundVoiceWorker(record);
+          queueBackgroundResultForForeground(record);
+          console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
+          if (spawnerSessionId) {
+            broadcastWS({ ...backgroundVoiceDispatchMetadata(record), type: 'bg_agent_done', sessionId: spawnerSessionId, spawnerSessionId, bgSessionId: sessionId, backgroundSessionId: sessionId, bgId: record.id, state: 'failed', error: record.error, task: prompt, prompt, taskPrompt: prompt, fileChanges: record.fileChanges, actor: 'Background Agent', providerId: record.providerId, model: record.model, modelSource: record.modelSource, executor_reasoning_effort: record.reasoningEffort });
+          }
         }
       }
       finishLiveRuntime(runtimeId);
@@ -789,6 +803,7 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         num_ctx: 8192,
         num_predict: 2048,
         think: false,
+        abortSignal: abortController.signal,
         usageContext: { sessionId: record.id, agentId: 'background_agent' },
       });
       const text = String(out?.message?.content || '').trim();
@@ -797,13 +812,17 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
       record.completedAt = Date.now();
       console.log(`[Background Agent] ${record.id} completed (fallback — no handleChat wired)`);
     } catch (err: any) {
-      record.error = String(err?.message || err || 'Background execution failed');
-      record.state = 'failed';
-      record.completedAt = Date.now();
-      console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
+      if (abortSignal.interrupted) {
+        console.log(`[Background Agent] ${record.id} interrupted for gateway restart`);
+      } else {
+        record.error = String(err?.message || err || 'Background execution failed');
+        record.state = 'failed';
+        record.completedAt = Date.now();
+        console.log(`[Background Agent] ${record.id} failed: ${record.error}`);
+      }
     } finally {
       persistBackgroundVoiceWorker(record);
-      queueBackgroundResultForForeground(record);
+      if (!abortSignal.interrupted) queueBackgroundResultForForeground(record);
       finishLiveRuntime(runtimeId);
     }
   })();

@@ -49,6 +49,13 @@ export interface XAIRuntimeCredentials {
 type BgOAuthResult = { done: false } | { done: true; success: boolean; error?: string; accountId?: string };
 let _bgResult: BgOAuthResult = { done: false };
 let _activeFlow: { verifier: string; state: string; authUrl: string; createdAt: number; tokenEndpoint: string; accountId?: string } | null = null;
+const refreshInFlight = new Map<string, Promise<XAITokens>>();
+
+function assertGatewayCredentialWriter(operation: string): void {
+  if (process.env.PROMETHEUS_RUNTIME_WORKER === '1') {
+    throw new Error(`Runtime workers are read-only OAuth credential consumers and cannot ${operation}; gateway preflight must refresh credentials.`);
+  }
+}
 
 function generateVerifier(): string {
   return crypto.randomBytes(32).toString('base64url');
@@ -101,6 +108,7 @@ async function discovery(): Promise<{ authorization_endpoint: string; token_endp
 }
 
 function saveTokens(configDir: string, tokens: XAITokens, accountId?: string): void {
+  assertGatewayCredentialWriter('persist xAI OAuth credentials');
   getVault(configDir).set(accountVaultKey(accountId), JSON.stringify(tokens), 'xai-oauth:save');
   log.security('[xai-oauth] Tokens saved to vault');
   try {
@@ -120,6 +128,7 @@ export function loadXAITokens(configDir: string, accountId?: string): XAITokens 
 }
 
 export function clearXAITokens(configDir: string, accountId?: string): void {
+  assertGatewayCredentialWriter('clear xAI OAuth credentials');
   getVault(configDir).delete(accountVaultKey(accountId), 'xai-oauth:clear');
   log.security('[xai-oauth] Tokens cleared from vault');
   try {
@@ -132,6 +141,20 @@ export function isXAIConnected(configDir: string, accountId?: string): boolean {
 }
 
 export async function refreshXAITokens(configDir: string, accountId?: string): Promise<XAITokens> {
+  assertGatewayCredentialWriter('refresh xAI OAuth credentials');
+  const refreshKey = `${configDir}:${String(accountId || '')}`;
+  const activeRefresh = refreshInFlight.get(refreshKey);
+  if (activeRefresh) return activeRefresh;
+  const refresh = refreshXAITokensUncoordinated(configDir, accountId);
+  refreshInFlight.set(refreshKey, refresh);
+  try {
+    return await refresh;
+  } finally {
+    refreshInFlight.delete(refreshKey);
+  }
+}
+
+async function refreshXAITokensUncoordinated(configDir: string, accountId?: string): Promise<XAITokens> {
   const existing = loadXAITokens(configDir, accountId);
   if (!existing?.refresh_token) throw new Error('No xAI refresh token; reconnect xAI OAuth.');
   const tokenEndpoint = validateXaiEndpoint(existing.token_endpoint || (await discovery()).token_endpoint, 'token_endpoint');

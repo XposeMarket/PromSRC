@@ -58,6 +58,7 @@ interface MemoryEmbeddingJob {
 
 export interface MemoryIndexRefreshWorkerStatus {
   isolation: 'child_process';
+  workerHeapMb: number;
   runningKind?: 'memory_index_refresh' | 'memory_embedding_backfill' | 'memory_embedding_auto_backfill';
   runningWorkspace?: string;
   queuedWorkspaces: number;
@@ -76,11 +77,16 @@ function envMs(name: string, fallback: number, minimum: number): number {
 }
 
 const refreshTimeoutMs = envMs('PROMETHEUS_MEMORY_REFRESH_WORKER_TIMEOUT_MS', 15 * 60_000, 30_000);
+const configuredMemoryWorkerHeapMb = Number(process.env.PROMETHEUS_MEMORY_REFRESH_WORKER_HEAP_MB || 3_072);
+const memoryWorkerHeapMb = Number.isFinite(configuredMemoryWorkerHeapMb)
+  ? Math.max(1_024, Math.min(4_096, Math.floor(configuredMemoryWorkerHeapMb)))
+  : 3_072;
 const broker = new RuntimeWorkerBroker({
   name: 'memory-index-maintenance',
   entryBasename: 'memory-index-worker',
   startupTimeoutMs: envMs('PROMETHEUS_MEMORY_REFRESH_WORKER_STARTUP_TIMEOUT_MS', 45_000, 1000),
   defaultJobTimeoutMs: refreshTimeoutMs,
+  maxOldSpaceMb: memoryWorkerHeapMb,
   env: {
     PROMETHEUS_MEMORY_REFRESH_WORKER: '1',
   },
@@ -299,6 +305,7 @@ export function getMemoryIndexRefreshWorkerStatus(): MemoryIndexRefreshWorkerSta
   for (const state of refreshStates.values()) if (state.queued) queuedWorkspaces += 1;
   return {
     isolation: 'child_process',
+    workerHeapMb: memoryWorkerHeapMb,
     runningKind,
     runningWorkspace: runningWorkspace || undefined,
     queuedWorkspaces,

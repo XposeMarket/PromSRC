@@ -83,6 +83,8 @@ export interface GenerateOptions {
   format?: 'json';
   system?: string;
   think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+  /** Cancels background generation or a worker-owned request. */
+  abortSignal?: AbortSignal;
 }
 
 export interface ModelUsage {

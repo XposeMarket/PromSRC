@@ -6,7 +6,7 @@ import {
   archiveMainChatGoal,
   flushSession,
   getMainChatGoal,
-  getRecentToolObservationsForContext,
+  getRecentToolObservationsForContextAsync,
   getSession,
   listMainChatGoalRecords,
   setMainChatGoal,
@@ -660,7 +660,7 @@ export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: s
   }
   const policy = resolveMainChatGoalPolicy();
   const sessionContext = buildGoalJudgeSessionContext(goal);
-  const toolLog = getRecentToolObservationsForContext(goal.sessionId, 18, 8000);
+  const toolLog = await getRecentToolObservationsForContextAsync(goal.sessionId, 18, 8000);
   const prompt = [
     'Evaluate whether the assistant has satisfied the active main-chat goal.',
     'You are an isolated judge using the main model path, but you do not receive the normal soul/memory/persona prompt.',
@@ -826,7 +826,7 @@ export async function maybeSummarizeMainChatGoal(sessionId: string): Promise<Mai
     ? Math.max(0, Math.floor(Number(current.lastSummaryMessageIndex)))
     : 0;
   const recentMessages = (session.history || []).slice(start).slice(-Math.max(10, policy.summaryEveryTurns * 2 + 4));
-  const toolLog = getRecentToolObservationsForContext(sessionId, Math.max(3, policy.summaryEveryTurns), 2500);
+  const toolLog = await getRecentToolObservationsForContextAsync(sessionId, Math.max(3, policy.summaryEveryTurns), 2500);
   const prompt = [
     'Create an active-goal progress ledger for a nonstop main-chat goal loop.',
     `Target length: <= ${policy.summaryMaxWords} words.`,

@@ -24,11 +24,13 @@ const READ_ONLY_TOOLS = new Set([
   'desktop_get_clipboard', 'desktop_list_installed_apps', 'desktop_find_installed_app',
   'desktop_get_process_list', 'desktop_background_status', 'browser_snapshot',
   'browser_get_focused_item', 'browser_get_page_text', 'browser_snapshot_delta',
+  'browser_get_url', 'browser_open', 'browser_back', 'browser_forward', 'browser_scroll', 'browser_wait',
   'browser_extract_structured', 'browser_element_watch', 'browser_vision_screenshot',
   'read_source', 'list_source', 'source_stats', 'webui_source_stats',
   'skill_list', 'skill_read', 'skill_resource_list', 'skill_resource_read',
   'skill_inspect', 'skill_scan', 'persona_read', 'get_team_logs', 'fetch_image',
   'analyze_image', 'analyze_video', 'desktop_get_window_text',
+  'creative_get_state', 'creative_render_snapshot',
   'desktop_get_accessibility_tree', 'desktop_get_accessibility_state',
   'desktop_pixel_watch', 'desktop_list_macros', 'desktop_list_apps',
   'desktop_list_windows', 'desktop_get_window_state', 'desktop_locate_text',
@@ -82,7 +84,7 @@ const LOCAL_WRITE_TOOLS = new Set([
   'write', 'write_file', 'create_file', 'edit', 'replace_lines', 'insert_after',
   'find_replace', 'rename', 'rename_file', 'copy', 'copy_file', 'copy_directory',
   'move_file', 'move_directory', 'mkdir', 'append', 'apply_patch',
-  'apply_workspace_patchset', 'write_note', 'memory_write', 'memory_index_refresh',
+  'apply_workspace_patchset', 'work_context_execute', 'write_note', 'memory_write', 'memory_index_refresh',
   'memory_embedding_backfill', 'persona_update', 'schedule_memory',
   'snapshot_workspace', 'format_changed_files', 'clone_repo', 'download_url',
   'download_media', 'generate_image', 'generate_video', 'upload_image',
@@ -94,6 +96,8 @@ const LOCAL_WRITE_TOOLS = new Set([
   'desktop_set_clipboard', 'desktop_launch_app', 'desktop_close_app',
   'desktop_wait_for_change', 'desktop_diff_screenshot',
   'desktop_background_prepare_sandbox', 'desktop_record_macro', 'desktop_stop_macro',
+  'creative_project', 'creative_scene', 'creative_image_ops', 'creative_video_ops',
+  'creative_hyperframes_ops', 'creative_quality_ops',
 ]);
 
 const DESTRUCTIVE_TOOLS = new Set([
@@ -171,6 +175,19 @@ export function resolveToolCapabilityMetadata(
 ): ToolCapabilityMetadata {
   if (declared) return { ...declared, known: declared.known !== false };
   const name = String(toolName || '').trim();
+  if (name === 'work_context_execute') {
+    const steps = Array.isArray(args?.steps) ? args.steps.slice(0, 8) : [];
+    if (!steps.length) return UNKNOWN_FAIL_CLOSED;
+    const nested = steps.map((step: any) => resolveToolCapabilityMetadata(String(step?.tool || ''), undefined, step?.args));
+    return {
+      readOnly: nested.every((item) => item.readOnly),
+      localWrite: nested.some((item) => item.localWrite),
+      externalWrite: nested.some((item) => item.externalWrite),
+      destructive: nested.some((item) => item.destructive),
+      credentialUse: nested.some((item) => item.credentialUse),
+      known: nested.every((item) => item.known),
+    };
+  }
   if (name === 'x_api_request') {
     const method = String(args?.method || '').trim().toUpperCase();
     if (method === 'GET' || method === 'HEAD') return CREDENTIAL_READ_ONLY;
