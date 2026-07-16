@@ -9500,12 +9500,24 @@ async function runInteractiveTurn(
   const providerUsageAfterTurn = aggregateSessionModelUsage(sessionId);
   turnTiming.mark('model_usage_after_loaded', { durationMs: Date.now() - providerUsageAfterStartedAt });
   const turnProviderUsage = diffModelUsage(providerUsageBeforeTurn, providerUsageAfterTurn);
+  const toolSummaryStartedAt = Date.now();
   const toolResultBudget = summarizeTurnToolResultBudget(toolObservations);
   const toolLogText = toolObservations.length > 0
     ? formatToolStateSummaryForContext(toolObservations, { includeHeader: true, maxChars: 2200, maxObservations: 14, includeTelemetry: true })
     : '';
+  turnTiming.mark('tool_summary_built', { durationMs: Date.now() - toolSummaryStartedAt });
+  const fileChangesStartedAt = Date.now();
   const resultFileChanges = result.fileChanges || await collectTurnFileChanges(result.toolResults as any[] | undefined, getWorkspace(sessionId) || process.cwd());
+  turnTiming.mark('file_changes_collected', {
+    durationMs: Date.now() - fileChangesStartedAt,
+    changedFileCount: Array.isArray((resultFileChanges as any)?.files) ? (resultFileChanges as any).files.length : 0,
+  });
+  const durableTraceStartedAt = Date.now();
   const durableToolStreamTrace = buildDurableToolStreamTrace(sessionId);
+  turnTiming.mark('durable_trace_built', {
+    durationMs: Date.now() - durableTraceStartedAt,
+    traceEntryCount: Array.isArray(durableToolStreamTrace) ? durableToolStreamTrace.length : 0,
+  });
   if (resultFileChanges && !result.fileChanges) {
     (result as any).fileChanges = resultFileChanges;
   }
@@ -9549,6 +9561,7 @@ async function runInteractiveTurn(
       stepSummary,
       'Compact tool/process state was preserved for continuation. Full raw observations remain available out-of-band.',
     ].join('\n');
+    const assistantPersistStartedAt = Date.now();
     addMessage(sessionId, {
       role: 'assistant',
       ...goalMessageIdentity,
@@ -9572,11 +9585,22 @@ async function runInteractiveTurn(
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
     });
+    turnTiming.mark('assistant_message_committed', {
+      durationMs: Date.now() - assistantPersistStartedAt,
+      interrupted: true,
+    });
     if (toolLogText) {
+      const toolLogPersistStartedAt = Date.now();
       persistToolLog(sessionId, toolLogText);
+      turnTiming.mark('tool_log_persisted', { durationMs: Date.now() - toolLogPersistStartedAt });
     }
-    if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
+    if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
+      const projectLearningStartedAt = Date.now();
+      await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
+      turnTiming.mark('project_learning_done', { durationMs: Date.now() - projectLearningStartedAt });
+    }
   } else {
+    const assistantPersistStartedAt = Date.now();
     addMessage(sessionId, {
       role: 'assistant',
       ...goalMessageIdentity,
@@ -9599,12 +9623,27 @@ async function runInteractiveTurn(
       disableMemoryFlushCheck: isSubagentChatSession,
       maxMessages: isSubagentChatSession ? 120 : undefined,
     });
+    turnTiming.mark('assistant_message_committed', {
+      durationMs: Date.now() - assistantPersistStartedAt,
+      interrupted: false,
+    });
     if (toolLogText) {
+      const toolLogPersistStartedAt = Date.now();
       persistToolLog(sessionId, toolLogText);
+      turnTiming.mark('tool_log_persisted', { durationMs: Date.now() - toolLogPersistStartedAt });
     }
-    if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) await maybeRefreshProjectLearning(sessionId);
     if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
+      const projectLearningStartedAt = Date.now();
+      await maybeRefreshProjectLearning(sessionId);
+      turnTiming.mark('project_learning_done', { durationMs: Date.now() - projectLearningStartedAt });
+    }
+    if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
+      const autoTitleStartedAt = Date.now();
       const generatedSessionTitle = await maybeAutoNameChatSession(sessionId);
+      turnTiming.mark('auto_title_done', {
+        durationMs: Date.now() - autoTitleStartedAt,
+        generated: !!generatedSessionTitle,
+      });
       if (generatedSessionTitle && !abortSignal?.aborted) {
         sendSSE('session_title', {
           sessionId,
@@ -9616,7 +9655,9 @@ async function runInteractiveTurn(
   }
 
     turnTiming.mark('turn_postprocessing_done');
+    const streamCompletionStartedAt = Date.now();
     completeLocalMainChatStream(result);
+    turnTiming.mark('main_stream_completed', { durationMs: Date.now() - streamCompletionStartedAt });
     return result;
   } finally {
     if (localMainChatStream && !localMainChatStreamCompleted) {
