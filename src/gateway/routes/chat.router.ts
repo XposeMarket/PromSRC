@@ -16,8 +16,8 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
-import { enqueuePostTurnJob } from '../chat/post-turn-queue';
-import { runWithContextBuildPermit } from '../chat/context-build-limiter';
+import { enqueuePostTurnJob, getPostTurnQueueStatus } from '../chat/post-turn-queue';
+import { getContextBuildLimiterStatus, runWithContextBuildPermit } from '../chat/context-build-limiter';
 
 // WebSocketServer + WebSocket moved to core/server.ts (B3)
 import {
@@ -42,7 +42,7 @@ import { readModelUsageEventsForSession, getUsageCalibration } from '../../provi
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, type TurnOrigin } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin } from '../session';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import {
   collectRichArtifacts,
@@ -10301,6 +10301,11 @@ router.get('/api/status', async (_req, res) => {
       enabled: orchCfg.enabled,
       secondary: orchCfg.secondary,
     } : null,
+    gatewayQueues: {
+      contextBuild: getContextBuildLimiterStatus(),
+      postTurn: getPostTurnQueueStatus(),
+      sessionPersistence: getSessionPersistenceStatus(),
+    },
   });
 });
 
