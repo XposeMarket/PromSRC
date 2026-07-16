@@ -178,6 +178,7 @@ import { createServer } from './core/server';
 import { runStartup } from './core/startup';
 import { scheduleMemoryIndexRefresh, shutdownMemoryIndexRefreshWorker } from './memory-index/index';
 import { shutdownMemorySearchWorker } from './memory-index/search-worker-client';
+import { warmModelUsageIndex } from '../providers/model-usage';
 import { requireGatewayAuth } from './gateway-auth';
 import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
 import {
@@ -900,6 +901,12 @@ startupMark('advanced systems initialized');
 
 console.log('[Server] ✅ Advanced error response systems initialized');
 try { seedDefaultShortcuts(); console.log('[SiteShortcuts] Default shortcuts seeded.'); } catch (e: any) { console.warn('[SiteShortcuts] Seed failed:', e.message); }
+try {
+  const usageWarmup = warmModelUsageIndex();
+  console.log(`[model-usage] Indexed ${usageWarmup.events} events in ${usageWarmup.durationMs}ms before accepting traffic.`);
+} catch (e: any) {
+  console.warn('[model-usage] Startup index warmup failed:', e?.message || e);
+}
 
 server.listen(PORT, HOST, () => {
   startupMark('server listen callback');

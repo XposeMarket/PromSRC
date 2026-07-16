@@ -36,7 +36,7 @@ import { getVault } from '../../security/vault';
 import { isOnboardingSession, getMeetAndGreetSystemPrompt } from '../onboarding/meet-prompt';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
-import { readModelUsageEvents, getUsageCalibration } from '../../providers/model-usage';
+import { readModelUsageEventsForSession, getUsageCalibration } from '../../providers/model-usage';
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
@@ -15198,7 +15198,7 @@ function estimateStoredThreadFootprint(sessionId: string, session: any, profile:
 }
 
 function aggregateSessionModelUsage(sessionId: string) {
-  const events = readModelUsageEvents().filter((event) => String(event.sessionId || '') === sessionId);
+  const events = readModelUsageEventsForSession(sessionId);
   const totals = {
     calls: events.length,
     providerReportedCalls: 0,

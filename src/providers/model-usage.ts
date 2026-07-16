@@ -134,13 +134,8 @@ export function getUsageCalibration(provider: string, model: string): UsageCalib
   try {
     const prov = String(provider || '').trim();
     const mdl = String(model || '').trim();
-    const events = readModelUsageEvents().filter((e) =>
-      e.source === 'provider'
-      && String(e.provider) === prov
-      && String(e.model) === mdl
-      && Number(e.estimatedProviderInputTokens || 0) > 0,
-    );
-    const recent = events.slice(-CALIBRATION_WINDOW);
+    ensureUsageReadCache();
+    const recent = (_usageCalibrationEvents.get(usageCalibrationKey(prov, mdl)) || []).slice(-CALIBRATION_WINDOW);
     const ratios = recent
       .map((e) => {
         const provider = String(e.provider || '');
@@ -276,7 +271,22 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
     }
     const filePath = usageLogPath();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.appendFileSync(filePath, JSON.stringify(full) + '\n', 'utf-8');
+    const line = JSON.stringify(full) + '\n';
+    const priorSize = (() => {
+      try { return fs.statSync(filePath).size; } catch { return 0; }
+    })();
+    fs.appendFileSync(filePath, line, 'utf-8');
+    if (
+      filePath === _usageReadCachePath
+      && _usageReadCacheInitialized
+      && _usageReadCacheSize === priorSize
+      && !_usageReadCacheRemainder
+    ) {
+      indexUsageEvent(full);
+      const st = fs.statSync(filePath);
+      _usageReadCacheSize = st.size;
+      _usageReadCacheMtimeMs = st.mtimeMs;
+    }
   } catch {
     // Usage telemetry must never break a model call.
   }
@@ -286,32 +296,141 @@ let _usageReadCachePath = '';
 let _usageReadCacheMtimeMs = 0;
 let _usageReadCacheSize = 0;
 let _usageReadCacheEvents: ModelUsageEvent[] = [];
+let _usageReadCacheRemainder = '';
+let _usageReadCacheInitialized = false;
+const _usageEventsBySession = new Map<string, ModelUsageEvent[]>();
+const _usageCalibrationEvents = new Map<string, ModelUsageEvent[]>();
+
+function usageCalibrationKey(provider: string, model: string): string {
+  return `${String(provider || '').trim()}\u0000${String(model || '').trim()}`;
+}
+
+function isCalibrationEvent(event: ModelUsageEvent): boolean {
+  return event.source === 'provider' && Number(event.estimatedProviderInputTokens || 0) > 0;
+}
+
+function indexUsageEvent(event: ModelUsageEvent): void {
+  _usageReadCacheEvents.push(event);
+  const sessionId = String(event.sessionId || '').trim();
+  if (sessionId) {
+    const events = _usageEventsBySession.get(sessionId) || [];
+    events.push(event);
+    _usageEventsBySession.set(sessionId, events);
+  }
+  if (isCalibrationEvent(event)) {
+    const key = usageCalibrationKey(event.provider, event.model);
+    const events = _usageCalibrationEvents.get(key) || [];
+    events.push(event);
+    if (events.length > CALIBRATION_WINDOW) events.splice(0, events.length - CALIBRATION_WINDOW);
+    _usageCalibrationEvents.set(key, events);
+  }
+}
+
+function resetUsageReadCache(filePath = ''): void {
+  _usageReadCachePath = filePath;
+  _usageReadCacheMtimeMs = 0;
+  _usageReadCacheSize = 0;
+  _usageReadCacheEvents = [];
+  _usageReadCacheRemainder = '';
+  _usageReadCacheInitialized = false;
+  _usageEventsBySession.clear();
+  _usageCalibrationEvents.clear();
+}
+
+function parseUsageChunk(chunk: string, finalChunk: boolean): void {
+  const combined = `${_usageReadCacheRemainder}${chunk}`;
+  const lines = combined.split('\n');
+  _usageReadCacheRemainder = finalChunk || combined.endsWith('\n') ? '' : (lines.pop() || '');
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      indexUsageEvent(JSON.parse(line) as ModelUsageEvent);
+    } catch {
+      // Ignore malformed telemetry rows; usage reporting must remain best-effort.
+    }
+  }
+  if (finalChunk && _usageReadCacheRemainder.trim()) {
+    try {
+      indexUsageEvent(JSON.parse(_usageReadCacheRemainder) as ModelUsageEvent);
+    } catch {}
+    _usageReadCacheRemainder = '';
+  }
+}
+
+function readUsageTail(filePath: string, start: number, end: number): string {
+  const length = Math.max(0, end - start);
+  if (length <= 0) return '';
+  const handle = fs.openSync(filePath, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(length);
+    let offset = 0;
+    while (offset < length) {
+      const read = fs.readSync(handle, buffer, offset, length - offset, start + offset);
+      if (read <= 0) break;
+      offset += read;
+    }
+    return buffer.subarray(0, offset).toString('utf-8');
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function ensureUsageReadCache(): void {
+  const filePath = usageLogPath();
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(filePath);
+  } catch {
+    resetUsageReadCache(filePath);
+    _usageReadCacheInitialized = true;
+    return;
+  }
+
+  if (!_usageReadCacheInitialized || filePath !== _usageReadCachePath || st.size < _usageReadCacheSize) {
+    resetUsageReadCache(filePath);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    parseUsageChunk(content, true);
+    _usageReadCacheSize = st.size;
+    _usageReadCacheMtimeMs = st.mtimeMs;
+    _usageReadCacheInitialized = true;
+    return;
+  }
+
+  if (st.size > _usageReadCacheSize) {
+    const tail = readUsageTail(filePath, _usageReadCacheSize, st.size);
+    parseUsageChunk(tail, false);
+    _usageReadCacheSize = st.size;
+    _usageReadCacheMtimeMs = st.mtimeMs;
+    return;
+  }
+
+  _usageReadCacheMtimeMs = st.mtimeMs;
+}
 
 export function readModelUsageEvents(): ModelUsageEvent[] {
   try {
-    const filePath = usageLogPath();
-    let st: fs.Stats;
-    try { st = fs.statSync(filePath); } catch { return []; }
-    if (
-      filePath === _usageReadCachePath
-      && st.mtimeMs === _usageReadCacheMtimeMs
-      && st.size === _usageReadCacheSize
-    ) {
-      return _usageReadCacheEvents;
-    }
-    const events = fs.readFileSync(filePath, 'utf-8')
-      .split('\n')
-      .filter((line) => line.trim())
-      .map((line) => {
-        try { return JSON.parse(line) as ModelUsageEvent; } catch { return null; }
-      })
-      .filter((event): event is ModelUsageEvent => !!event);
-    _usageReadCachePath = filePath;
-    _usageReadCacheMtimeMs = st.mtimeMs;
-    _usageReadCacheSize = st.size;
-    _usageReadCacheEvents = events;
-    return events;
+    ensureUsageReadCache();
+    return _usageReadCacheEvents;
   } catch {
     return [];
   }
+}
+
+export function readModelUsageEventsForSession(sessionId: string): ModelUsageEvent[] {
+  try {
+    ensureUsageReadCache();
+    return _usageEventsBySession.get(String(sessionId || '').trim()) || [];
+  } catch {
+    return [];
+  }
+}
+
+export function warmModelUsageIndex(): { events: number; durationMs: number } {
+  const startedAt = Date.now();
+  ensureUsageReadCache();
+  return { events: _usageReadCacheEvents.length, durationMs: Date.now() - startedAt };
+}
+
+export function resetModelUsageIndexForTests(): void {
+  resetUsageReadCache();
 }
