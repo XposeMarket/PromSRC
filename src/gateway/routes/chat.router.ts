@@ -17,6 +17,7 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { enqueuePostTurnJob } from '../chat/post-turn-queue';
+import { runWithContextBuildPermit } from '../chat/context-build-limiter';
 
 // WebSocketServer + WebSocket moved to core/server.ts (B3)
 import {
@@ -4073,18 +4074,28 @@ async function handleChat(
   htime('reached Building model context');
   sendSSE('ui_preflight', { message: 'Building model context...' });
   const contextBuildStartedAt = markLatency('context_build_start');
-  const personalityCtx = await buildPersonalityContext(
+  const contextAdmissionStartedAt = Date.now();
+  let contextPermitAcquiredAt = contextAdmissionStartedAt;
+  const personalityCtx = await runWithContextBuildPermit(
     sessionId,
-    workspacePath,
-    message,
-    executionMode || 'interactive',
-    history.length,
-    _skillsManager,
-    // Component 5: inject browser_vision hint when vision mode is active for this session.
-    // browserVisionModeActive is declared higher in handleChat's closure scope.
-    browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
-    personalityProfile,
+    () => {
+      contextPermitAcquiredAt = Date.now();
+      return buildPersonalityContext(
+        sessionId,
+        workspacePath,
+        message,
+        executionMode || 'interactive',
+        history.length,
+        _skillsManager,
+        // Component 5: inject browser_vision hint when vision mode is active for this session.
+        // browserVisionModeActive is declared higher in handleChat's closure scope.
+        browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
+        personalityProfile,
+      );
+    },
+    abortSignal?.signal,
   );
+  htime('context_build_admitted', { waitMs: Math.max(0, contextPermitAcquiredAt - contextAdmissionStartedAt) });
   htime('after buildPersonalityContext');
   htime('personality_context_built', { contextChars: String(personalityCtx || '').length });
   markLatency('context_build_done', {

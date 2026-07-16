@@ -26,7 +26,7 @@ import {
 } from '../config/config';
 import { getVault } from '../security/vault';
 import { getOllamaClient } from '../agents/ollama-client';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, flushAllSessions } from './session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, flushAllSessions, getSessionPersistenceStatus } from './session';
 import { hookBus } from './hooks';
 import { loadWorkspaceHooks } from './hook-loader';
 import { runBootMd } from './boot';
@@ -179,6 +179,8 @@ import { runStartup } from './core/startup';
 import { scheduleMemoryIndexRefresh, shutdownMemoryIndexRefreshWorker } from './memory-index/index';
 import { shutdownMemorySearchWorker } from './memory-index/search-worker-client';
 import { warmModelUsageIndex } from '../providers/model-usage';
+import { getContextBuildLimiterStatus } from './chat/context-build-limiter';
+import { getPostTurnQueueStatus } from './chat/post-turn-queue';
 import { requireGatewayAuth } from './gateway-auth';
 import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
 import {
@@ -761,6 +763,11 @@ app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => 
     search: rawCfg.search?.tinyfish_api_key ? 'tinyfish' : rawCfg.search?.google_api_key ? 'google' : (rawCfg.search?.tavily_api_key ? 'tavily' : 'none'),
     orchestration: null,
     chatRouter: getChatRouterWarmupStatus(),
+    gatewayQueues: {
+      contextBuild: getContextBuildLimiterStatus(),
+      postTurn: getPostTurnQueueStatus(),
+      sessionPersistence: getSessionPersistenceStatus(),
+    },
   });
 });
 
