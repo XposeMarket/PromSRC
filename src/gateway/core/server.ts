@@ -248,7 +248,11 @@ function tryHttpsRedirect(
   return true;
 }
 
-function tryRawGatewayFastPath(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+function tryRawGatewayFastPath(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  getGatewayQueues?: () => unknown,
+): boolean {
   const method = String(req.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD') return false;
   const pathname = String(req.url || '').split('?')[0];
@@ -299,6 +303,7 @@ function tryRawGatewayFastPath(req: http.IncomingMessage, res: http.ServerRespon
       workspace: rawCfg.workspace?.path || '',
       search: rawCfg.search?.tinyfish_api_key ? 'tinyfish' : rawCfg.search?.google_api_key ? 'google' : (rawCfg.search?.tavily_api_key ? 'tavily' : 'none'),
       fastPath: true,
+      gatewayQueues: getGatewayQueues?.(),
     });
     return true;
   }
@@ -338,6 +343,7 @@ export function createServer(
   host: string,
   tlsOptions?: https.ServerOptions,
   redirectHttpsPort?: number,
+  getGatewayQueues?: () => unknown,
 ): ServerBundle {
   const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
     const isStreamingRequest = isStreamingHttpRequest(req);
@@ -354,7 +360,7 @@ export function createServer(
     };
     req.on('error', destroyRequestSocket);
     res.on('finish', destroyRequestSocket);
-    if (tryRawGatewayFastPath(req, res)) return;
+    if (tryRawGatewayFastPath(req, res, getGatewayQueues)) return;
     if (!tlsOptions && tryHttpsRedirect(req, res, redirectHttpsPort)) return;
     if (tryRawWebStaticFastPath(req, res)) return;
     app(req, res);

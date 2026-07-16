@@ -850,8 +850,15 @@ startupMark('routers mounted');
 
 // ─── Server ────────────────────────────────────────────────────────────────────
 const httpsGateway = loadGatewayHttpsOptions();
-const { server, wss } = createServer(app, PORT, HOST, undefined, httpsGateway?.port);
-const secureBundle = httpsGateway ? createServer(app, httpsGateway.port, HOST, httpsGateway.options) : null;
+const getGatewayQueueStatus = () => ({
+  contextBuild: getContextBuildLimiterStatus(),
+  postTurn: getPostTurnQueueStatus(),
+  sessionPersistence: getSessionPersistenceStatus(),
+});
+const { server, wss } = createServer(app, PORT, HOST, undefined, httpsGateway?.port, getGatewayQueueStatus);
+const secureBundle = httpsGateway
+  ? createServer(app, httpsGateway.port, HOST, httpsGateway.options, undefined, getGatewayQueueStatus)
+  : null;
 const xaiVoiceStreaming = attachXaiVoiceStreaming(server);
 const secureXaiVoiceStreaming = secureBundle ? attachXaiVoiceStreaming(secureBundle.server) : null;
 const openAiRealtimeProxy = attachOpenAiRealtimeProxy(server);
