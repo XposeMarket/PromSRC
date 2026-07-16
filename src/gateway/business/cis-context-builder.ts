@@ -1,6 +1,6 @@
-import fs from 'fs';
 import path from 'path';
 import { listEntities, readEntity } from './entity-store';
+import { readPromptProfileText } from '../prompt-profile-snapshot';
 
 const BUSINESS_KEYWORDS = [
   'business',
@@ -42,8 +42,7 @@ function includesBusinessIntent(messageText: string): boolean {
 
 function loadBusinessSnapshot(workspacePath: string): string {
   const filePath = path.join(workspacePath, 'BUSINESS.md');
-  if (!fs.existsSync(filePath)) return '';
-  return compact(fs.readFileSync(filePath, 'utf-8'), 1600);
+  return compact(readPromptProfileText(filePath), 1600);
 }
 
 function scoreEntity(messageText: string, entity: { id: string; name: string; type: string }): number {

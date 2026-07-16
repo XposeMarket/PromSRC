@@ -24,6 +24,7 @@ import {
   type Stage4InstructionIntents,
   type Stage4MenuSegmentId,
 } from '../runtime/instruction-intent-detector';
+import { memoizePromptProfileBlock, readPromptProfileText } from './prompt-profile-snapshot';
 
 // ─── Prompt-cache assembly ─────────────────────────────────────────────────────
 // Splits the system prompt into a STABLE (cacheable) prefix and a VOLATILE
@@ -52,18 +53,27 @@ function assembleContext(
 function buildSubagentsRosterBlock(): string {
   try {
     const all = getAgents();
-    // Subagents = everything except the default/main agent.
-    const subs = all.filter((a: any) => a && a.default !== true && a.id !== 'main');
-    if (subs.length === 0) {
-      return `[SUBAGENTS] You currently have 0 subagents configured (only the default agent exists). If asked "how many subagents / who are they," answer: none yet.`;
-    }
-    const lines = subs.map((a: any) => {
-      const displayName = a?.identity?.displayName || a?.name || a?.id;
-      const desc = (a?.description || '').toString().trim();
-      const shortDesc = desc.length > 140 ? desc.slice(0, 137) + '…' : desc;
-      return `- ${displayName} (id: ${a.id})${shortDesc ? ` — ${shortDesc}` : ''}`;
+    const fingerprint = JSON.stringify(all.map((agent: any) => ({
+      id: agent?.id,
+      default: agent?.default,
+      name: agent?.name,
+      displayName: agent?.identity?.displayName,
+      description: agent?.description,
+    })));
+    return memoizePromptProfileBlock('subagents_roster', fingerprint, () => {
+      // Subagents = everything except the default/main agent.
+      const subs = all.filter((a: any) => a && a.default !== true && a.id !== 'main');
+      if (subs.length === 0) {
+        return `[SUBAGENTS] You currently have 0 subagents configured (only the default agent exists). If asked "how many subagents / who are they," answer: none yet.`;
+      }
+      const lines = subs.map((a: any) => {
+        const displayName = a?.identity?.displayName || a?.name || a?.id;
+        const desc = (a?.description || '').toString().trim();
+        const shortDesc = desc.length > 140 ? desc.slice(0, 137) + '…' : desc;
+        return `- ${displayName} (id: ${a.id})${shortDesc ? ` — ${shortDesc}` : ''}`;
+      });
+      return `[SUBAGENTS] You currently have ${subs.length} subagent${subs.length === 1 ? '' : 's'} configured. ALWAYS refer to each by their display name (not the technical id). When asked how many subagents exist or who they are, answer with this count and these names:\n${lines.join('\n')}`;
     });
-    return `[SUBAGENTS] You currently have ${subs.length} subagent${subs.length === 1 ? '' : 's'} configured. ALWAYS refer to each by their display name (not the technical id). When asked how many subagents exist or who they are, answer with this count and these names:\n${lines.join('\n')}`;
   } catch {
     return '';
   }
@@ -414,8 +424,8 @@ export function buildBootStartupSnapshot(
 export function loadWorkspaceFile(workspacePath: string, filename: string, maxChars: number = 500): string {
   try {
     const filePath = path.join(workspacePath, filename);
-    if (!fs.existsSync(filePath)) return '';
-    const content = fs.readFileSync(filePath, 'utf-8').trim();
+    const content = readPromptProfileText(filePath).trim();
+    if (!content) return '';
     if (content.length <= maxChars) return content;
     return content.slice(0, maxChars) + '\n...(truncated)';
   } catch { return ''; }
@@ -455,8 +465,8 @@ function stripMemoryToolHints(content: string): string {
 
 function readMemoryProfileFile(filePath: string, maxChars?: number): string {
   try {
-    if (!fs.existsSync(filePath)) return '';
-    const content = fs.readFileSync(filePath, 'utf-8').trim();
+    const content = readPromptProfileText(filePath).trim();
+    if (!content) return '';
     const cleaned = stripMemoryToolHints(content);
     if (typeof maxChars !== 'number' || maxChars <= 0 || cleaned.length <= maxChars) return cleaned;
     return `${cleaned.slice(0, Math.max(0, maxChars - 16)).trimEnd()}\n...[truncated]`;
@@ -499,8 +509,7 @@ export function readDailyMemoryContext(workspacePath: string, maxTokens: number 
 
     for (const day of [yesterday, today]) {
       const p = path.join(memDir, `${day}.md`);
-      if (!fs.existsSync(p)) continue;
-      const raw = fs.readFileSync(p, 'utf-8').trim();
+      const raw = readPromptProfileText(p).trim();
       if (!raw) continue;
       sections.push(`### Memory: ${day}\n${raw}`);
     }
@@ -958,7 +967,7 @@ const BG_AGENT_RUNTIME_HINT = `BACKGROUND AGENTS: background_ops(action:"spawn",
   2) PARALLELIZE: when a piece of work is independent of what you're doing right now, spawn it to run concurrently instead of serially — gather data, scan the repo, run a web lookup, write a file, update memory, or prep one thing while you do another (e.g. browse a site while an agent builds a file). Don't do independent work one-at-a-time when it can overlap.
 prompt MUST be fully self-contained: include exact paths, URLs, context, and instructions — the spawned agent has no access to "the conversation". The finalization gate waits for and merges same-turn background_ops spawn results before your final reply. Use background_ops(action:"wait", wait_ms) to intentionally pause the foreground turn while spawned agents finish before you continue. Don't call background_ops action="join"/"status" unless explicitly needed. Legacy background_* tools remain executable compatibility aliases but are hidden from the normal schema surface. Spawned agents plan with bg_plan_declare/bg_plan_advance.`;
 
-export function buildToolsContext(activatedCategories: Set<string>, options?: { instructionIntents?: Stage4InstructionIntents }): string {
+function buildToolsContextUncached(activatedCategories: Set<string>, options?: { instructionIntents?: Stage4InstructionIntents }): string {
   // Build dynamic search provider summary inline (getConfig already imported at top of file)
   let searchProviders = 'DuckDuckGo (fallback)';
   try {
@@ -1090,6 +1099,37 @@ ${BG_AGENT_RUNTIME_HINT}`;
 
   if (activePolicies.length === 0) return baseMenu;
   return baseMenu + '\n\n' + activePolicies.join('\n\n');
+}
+
+export function buildToolsContext(activatedCategories: Set<string>, options?: { instructionIntents?: Stage4InstructionIntents }): string {
+  const categories = Array.from(activatedCategories)
+    .map((category) => String(category || '').trim())
+    .filter(Boolean)
+    .sort();
+  let searchFingerprint: Record<string, unknown> = {};
+  try {
+    const search = (getConfig().getConfig() as any)?.search || {};
+    searchFingerprint = {
+      preferred_provider: search.preferred_provider,
+      tinyfish_api_key: search.tinyfish_api_key,
+      tavily_api_key: search.tavily_api_key,
+      google_api_key: search.google_api_key,
+      google_cx: search.google_cx,
+      brave_api_key: search.brave_api_key,
+    };
+  } catch {}
+  const fingerprint = JSON.stringify({
+    categories,
+    instructionIntents: options?.instructionIntents || null,
+    search: searchFingerprint,
+    publicDistribution: isPublicDistributionBuild(),
+    instructionResolverMode: getInstructionResolverMode(),
+  });
+  return memoizePromptProfileBlock(
+    `tools:${categories.join(',')}`,
+    fingerprint,
+    () => buildToolsContextUncached(new Set(categories), options),
+  );
 }
 
 function stripSkillEmojiFrontmatter(content: string): string {
@@ -1231,8 +1271,8 @@ export async function buildPersonalityContext(
     const readCapped = (relativePath: string, maxChars: number): string => {
       try {
         const filePath = path.join(workspacePath, relativePath);
-        if (!fs.existsSync(filePath)) return '';
-        const raw = fs.readFileSync(filePath, 'utf-8').trim();
+        const raw = readPromptProfileText(filePath).trim();
+        if (!raw) return '';
         return raw.length > maxChars ? `${raw.slice(0, maxChars)}\n...[truncated]` : raw;
       } catch {
         return '';
@@ -1466,7 +1506,7 @@ export async function buildPersonalityContext(
     const skipIntraday = true;
     const today = new Date().toISOString().split('T')[0];
     const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
-    const intradayNotes = (!skipIntraday && fs.existsSync(intradayPath)) ? processIntradayNotes(fs.readFileSync(intradayPath, 'utf-8')) : '';
+    const intradayNotes = !skipIntraday ? processIntradayNotes(readPromptProfileText(intradayPath)) : '';
     // Fix 2: Don't inherit interactive session categories for cron/heartbeat runs.
     // task_* sessions manage their own categories explicitly (e.g. source_write for proposals).
     // Cron sessions (including sessionTarget:'main') start clean to avoid leaking 8+ interactive cats.
@@ -1510,7 +1550,7 @@ export async function buildPersonalityContext(
   const today = new Date().toISOString().split('T')[0];
   const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
   const _skipIntradayInteractive = sessionId.startsWith('proposal_') || executionMode === 'background_agent';
-  const intradayNotes = (!_skipIntradayInteractive && fs.existsSync(intradayPath)) ? processIntradayNotes(fs.readFileSync(intradayPath, 'utf-8')) : '';
+  const intradayNotes = !_skipIntradayInteractive ? processIntradayNotes(readPromptProfileText(intradayPath)) : '';
 
   // ── Tier 1: first message in session ──────────────────────────────────────
   if (historyLength === 0) {

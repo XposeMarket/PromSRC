@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import { resolveSkillsRoot } from '../skills/store.js';
 import { loadSkillPackage } from '../gateway/skills-runtime/skill-package.js';
+import { readPromptProfileText } from '../gateway/prompt-profile-snapshot.js';
 
 // Prefer config next to the project, fall back to home.
 // In packaged Electron runtime PROMETHEUS_DATA_DIR is set by main.js and takes priority
@@ -74,7 +75,8 @@ function clampText(text: string, maxChars: number): string {
 
 function readFirstExisting(paths: string[]): string {
   for (const p of paths) {
-    if (fs.existsSync(p)) return fs.readFileSync(p, 'utf-8').trim();
+    const content = readPromptProfileText(p).trim();
+    if (content) return content;
   }
   return '';
 }
