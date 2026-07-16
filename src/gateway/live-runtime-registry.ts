@@ -154,9 +154,10 @@ interface RuntimeLedger {
   runtimes: Record<string, LiveRuntimeSnapshot>;
 }
 
+let runtimeLedgerCache: RuntimeLedger | null = null;
+
 function getRuntimeStateDir(): string {
   const dir = path.join(getConfig().getConfigDir(), 'runtimes');
-  fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
@@ -169,46 +170,174 @@ function getRuntimeEventsPath(): string {
 }
 
 function readLedger(): RuntimeLedger {
+  if (runtimeLedgerCache) return runtimeLedgerCache;
   const filePath = getRuntimeLedgerPath();
-  if (!fs.existsSync(filePath)) return { version: 1, updatedAt: Date.now(), runtimes: {} };
+  if (!fs.existsSync(filePath)) {
+    runtimeLedgerCache = { version: 1, updatedAt: Date.now(), runtimes: {} };
+    return runtimeLedgerCache;
+  }
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    return {
+    runtimeLedgerCache = {
       version: 1,
       updatedAt: Number(parsed?.updatedAt || Date.now()),
       runtimes: parsed?.runtimes && typeof parsed.runtimes === 'object' ? parsed.runtimes : {},
     };
+    return runtimeLedgerCache;
   } catch {
-    return { version: 1, updatedAt: Date.now(), runtimes: {} };
+    runtimeLedgerCache = { version: 1, updatedAt: Date.now(), runtimes: {} };
+    return runtimeLedgerCache;
   }
 }
 
-function writeLedger(ledger: RuntimeLedger): void {
+function writeLedgerSync(ledger: RuntimeLedger): void {
   const filePath = getRuntimeLedgerPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
   ledger.updatedAt = Date.now();
   fs.writeFileSync(tmp, JSON.stringify(ledger, null, 2), 'utf-8');
   fs.renameSync(tmp, filePath);
+  runtimeLedgerCache = ledger;
 }
 
-function appendRuntimeEvent(type: string, runtime: LiveRuntimeSnapshot, extra?: Record<string, any>): void {
+interface RuntimePersistenceEvent {
+  t: number;
+  type: string;
+  runtimeId: string;
+  kind: LiveRuntimeKind;
+  sessionId?: string;
+  taskId?: string;
+  teamId?: string;
+  agentId?: string;
+  scheduleId?: string;
+  status?: LiveRuntimeSnapshot['status'];
+  pid?: number;
+  extra?: Record<string, any>;
+}
+
+const MAX_PENDING_RUNTIME_EVENTS = 4096;
+const pendingRuntimeEvents: RuntimePersistenceEvent[] = [];
+const runtimePersistenceIdleWaiters = new Set<() => void>();
+let runtimeLedgerDirty = false;
+let runtimePersistenceActive = false;
+let runtimePersistenceScheduled = false;
+let runtimePersistenceBlocked = false;
+let runtimePersistenceFailureStreak = 0;
+let runtimePersistenceCompleted = 0;
+let runtimePersistenceFailed = 0;
+let runtimePersistenceDropped = 0;
+let runtimePersistenceHighWater = 0;
+
+function scheduleRuntimePersistenceDrain(): void {
+  if (runtimePersistenceActive || runtimePersistenceScheduled || runtimePersistenceBlocked) return;
+  runtimePersistenceScheduled = true;
+  setImmediate(() => {
+    runtimePersistenceScheduled = false;
+    void drainRuntimePersistence();
+  });
+}
+
+function queueRuntimePersistence(event?: RuntimePersistenceEvent): void {
+  runtimeLedgerDirty = true;
+  if (runtimePersistenceBlocked) runtimePersistenceFailureStreak = 0;
+  runtimePersistenceBlocked = false;
+  if (event) {
+    if (pendingRuntimeEvents.length >= MAX_PENDING_RUNTIME_EVENTS) {
+      // The latest ledger snapshot is authoritative for restart recovery.
+      // Event rows are audit-only, so shed the oldest row under sustained
+      // overload instead of retaining an unbounded queue.
+      pendingRuntimeEvents.shift();
+      runtimePersistenceDropped += 1;
+    }
+    pendingRuntimeEvents.push(event);
+  }
+  runtimePersistenceHighWater = Math.max(runtimePersistenceHighWater, pendingRuntimeEvents.length);
+  scheduleRuntimePersistenceDrain();
+}
+
+function makeRuntimePersistenceEvent(
+  type: string,
+  runtime: LiveRuntimeSnapshot,
+  extra?: Record<string, any>,
+): RuntimePersistenceEvent {
+  return {
+    t: Date.now(),
+    type,
+    runtimeId: runtime.id,
+    kind: runtime.kind,
+    sessionId: runtime.sessionId,
+    taskId: runtime.taskId,
+    teamId: runtime.teamId,
+    agentId: runtime.agentId,
+    scheduleId: runtime.scheduleId,
+    status: runtime.status,
+    pid: runtime.pid,
+    extra,
+  };
+}
+
+function runtimeEventLine(event: RuntimePersistenceEvent): string {
+  const { extra, ...fields } = event;
+  return `${JSON.stringify({
+    ...fields,
+    ...(extra || {}),
+  })}\n`;
+}
+
+function resolveRuntimePersistenceIdleWaiters(): void {
+  if (runtimePersistenceActive || runtimePersistenceScheduled) return;
+  if (!runtimePersistenceBlocked && (runtimeLedgerDirty || pendingRuntimeEvents.length)) return;
+  for (const resolve of runtimePersistenceIdleWaiters) resolve();
+  runtimePersistenceIdleWaiters.clear();
+}
+
+async function drainRuntimePersistence(): Promise<void> {
+  if (runtimePersistenceActive) return;
+  runtimePersistenceActive = true;
   try {
-    const evt = {
-      t: Date.now(),
-      type,
-      runtimeId: runtime.id,
-      kind: runtime.kind,
-      sessionId: runtime.sessionId,
-      taskId: runtime.taskId,
-      teamId: runtime.teamId,
-      agentId: runtime.agentId,
-      scheduleId: runtime.scheduleId,
-      status: runtime.status,
-      pid: runtime.pid,
-      ...(extra || {}),
-    };
-    fs.appendFileSync(getRuntimeEventsPath(), `${JSON.stringify(evt)}\n`, 'utf-8');
-  } catch {}
+    while (runtimeLedgerDirty || pendingRuntimeEvents.length) {
+      const ledger = readLedger();
+      const ledgerJson = JSON.stringify({ ...ledger, updatedAt: Date.now() }, null, 2);
+      const events = pendingRuntimeEvents.splice(0);
+      runtimeLedgerDirty = false;
+      const stateDir = getRuntimeStateDir();
+      const ledgerPath = getRuntimeLedgerPath();
+      const tempPath = `${ledgerPath}.tmp-${process.pid}-${Date.now()}`;
+      try {
+        await fs.promises.mkdir(stateDir, { recursive: true });
+        await fs.promises.writeFile(tempPath, ledgerJson, 'utf-8');
+        await fs.promises.rename(tempPath, ledgerPath);
+        if (events.length) {
+          await fs.promises.appendFile(getRuntimeEventsPath(), events.map(runtimeEventLine).join(''), 'utf-8');
+        }
+        ledger.updatedAt = Date.now();
+        runtimePersistenceCompleted += Math.max(1, events.length);
+        runtimePersistenceFailureStreak = 0;
+      } catch (err: any) {
+        runtimePersistenceFailed += Math.max(1, events.length);
+        // Restore events and dirty state so a later flush can retry.
+        pendingRuntimeEvents.unshift(...events);
+        if (pendingRuntimeEvents.length > MAX_PENDING_RUNTIME_EVENTS) {
+          const excess = pendingRuntimeEvents.length - MAX_PENDING_RUNTIME_EVENTS;
+          pendingRuntimeEvents.splice(0, excess);
+          runtimePersistenceDropped += excess;
+        }
+        runtimeLedgerDirty = true;
+        runtimePersistenceFailureStreak += 1;
+        console.warn('[live-runtime] Failed to persist runtime state:', err?.message || err);
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        if (runtimePersistenceFailureStreak >= 3) runtimePersistenceBlocked = true;
+        break;
+      } finally {
+        await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  } finally {
+    runtimePersistenceActive = false;
+    if (!runtimePersistenceBlocked && (runtimeLedgerDirty || pendingRuntimeEvents.length)) scheduleRuntimePersistenceDrain();
+    resolveRuntimePersistenceIdleWaiters();
+  }
 }
 
 const MAX_DURABLE_CHECKPOINT_TEXT = 500;
@@ -245,8 +374,7 @@ function persistRuntime(runtime: LiveRuntimeSnapshot, eventType: string, extra?:
     // `full` keeps the heavy checkpoint (process log) on disk — only used on
     // interruption so the owning session can recover its own full context.
     ledger.runtimes[runtime.id] = opts?.full ? runtime : toDurableSnapshot(runtime);
-    writeLedger(ledger);
-    appendRuntimeEvent(eventType, runtime, extra);
+    queueRuntimePersistence(makeRuntimePersistenceEvent(eventType, runtime, extra));
   } catch (err: any) {
     console.warn('[live-runtime] Failed to persist runtime:', err?.message || err);
   }
@@ -259,9 +387,8 @@ function deleteDurableRuntime(id: string, eventType: string, snapshotForEvent?: 
     const ledger = readLedger();
     if (ledger.runtimes[id]) {
       delete ledger.runtimes[id];
-      writeLedger(ledger);
     }
-    if (snapshotForEvent) appendRuntimeEvent(eventType, snapshotForEvent, extra);
+    queueRuntimePersistence(snapshotForEvent ? makeRuntimePersistenceEvent(eventType, snapshotForEvent, extra) : undefined);
   } catch (err: any) {
     console.warn('[live-runtime] Failed to delete durable runtime:', err?.message || err);
   }
@@ -614,6 +741,10 @@ export function listDurableRuntimes(): LiveRuntimeSnapshot[] {
     .sort((a, b) => Number(b.updatedAt || b.startedAt || 0) - Number(a.updatedAt || a.startedAt || 0));
 }
 
+export function warmLiveRuntimePersistence(): { runtimes: number } {
+  return { runtimes: Object.keys(readLedger().runtimes || {}).length };
+}
+
 export function listInterruptedRuntimes(): LiveRuntimeSnapshot[] {
   return listDurableRuntimes().filter((runtime) => isRuntimeRecoverableAfterRestart(runtime));
 }
@@ -629,8 +760,7 @@ export function markDurableRuntimeRecovered(id: string, status: 'completed' | 'a
   // The heavy process log was already injected into the owning session during
   // recovery; only keep the lightweight summary on disk from here on.
   ledger.runtimes[runtime.id] = toDurableSnapshot(runtime);
-  writeLedger(ledger);
-  appendRuntimeEvent('recovered', runtime, extra);
+  queueRuntimePersistence(makeRuntimePersistenceEvent('recovered', runtime, extra));
 }
 
 // Remove terminal and already-recovered runtimes from the durable ledger.
@@ -648,7 +778,7 @@ export function pruneDurableLedger(): { removed: number; kept: number } {
         removed++;
       }
     }
-    if (removed > 0) writeLedger(ledger);
+    if (removed > 0) queueRuntimePersistence();
     return { removed, kept: Object.keys(ledger.runtimes).length };
   } catch (err: any) {
     console.warn('[live-runtime] pruneDurableLedger failed:', err?.message || err);
@@ -688,7 +818,7 @@ export function compactRuntimeStateOnStartup(): { ledgerRemoved: number; ledgerK
       ledgerKept = Object.keys(next).length;
       if (ledgerRemoved > 0) {
         try { fs.copyFileSync(ledgerPath, `${ledgerPath}.bak`); } catch {}
-        writeLedger({ version: 1, updatedAt: Date.now(), runtimes: next });
+        writeLedgerSync({ version: 1, updatedAt: Date.now(), runtimes: next });
       }
     }
   } catch (err: any) {
@@ -714,4 +844,41 @@ export function compactRuntimeStateOnStartup(): { ledgerRemoved: number; ledgerK
   }
 
   return { ledgerRemoved, ledgerKept, eventsRotated };
+}
+
+export function flushLiveRuntimePersistence(): Promise<void> {
+  if (runtimePersistenceBlocked) return Promise.resolve();
+  if (!runtimePersistenceActive && !runtimePersistenceScheduled && !runtimeLedgerDirty && pendingRuntimeEvents.length === 0) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    runtimePersistenceIdleWaiters.add(resolve);
+    scheduleRuntimePersistenceDrain();
+  });
+}
+
+export function getLiveRuntimePersistenceStatus(): {
+  pendingEvents: number;
+  ledgerDirty: boolean;
+  active: boolean;
+  scheduled: boolean;
+  blocked: boolean;
+  completed: number;
+  failed: number;
+  dropped: number;
+  highWater: number;
+  maxPendingEvents: number;
+} {
+  return {
+    pendingEvents: pendingRuntimeEvents.length,
+    ledgerDirty: runtimeLedgerDirty,
+    active: runtimePersistenceActive,
+    scheduled: runtimePersistenceScheduled,
+    blocked: runtimePersistenceBlocked,
+    completed: runtimePersistenceCompleted,
+    failed: runtimePersistenceFailed,
+    dropped: runtimePersistenceDropped,
+    highWater: runtimePersistenceHighWater,
+    maxPendingEvents: MAX_PENDING_RUNTIME_EVENTS,
+  };
 }

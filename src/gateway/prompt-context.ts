@@ -12,7 +12,7 @@ import { searchMemoryInWorker } from './memory-index/search-worker-client';
 import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
 import { buildCisContextBlock } from './business/cis-context-builder';
 import { loadSoul, loadPrometheusRuntimeContract, loadVoiceSoul } from '../config/soul-loader';
-import { getRuntimeActorContext, loadRuntimeActorMemoryContext } from './runtime-actor';
+import { getRuntimeActorContext, loadRuntimeActorMemoryContext, type RuntimeActorContext } from './runtime-actor';
 import { PROMPT_CACHE_MARKER } from '../providers/LLMProvider';
 import { TOOL_CATEGORY_MANIFEST, TOOL_CATEGORY_MENU_ORDER } from '../runtime/tool-category-manifest';
 import {
@@ -111,6 +111,27 @@ export interface BuildPersonalityContextOptions {
   excludedSkillIds?: string[];
   forcedSkillIds?: string[];
   instructionIntents?: Stage4InstructionIntents;
+  serializedSnapshot?: PersonalityContextSnapshot;
+}
+
+/**
+ * Gateway-owned state captured before prompt construction is delegated.
+ *
+ * The child receives only plain data. It cannot mutate the authoritative
+ * session, skill-window, project, runtime-actor, or hook state.
+ */
+export interface PersonalityContextSnapshot {
+  businessContextEnabled: boolean;
+  activatedToolCategories: string[];
+  runtimeActor: RuntimeActorContext | null;
+  runtimeActorMemory: string;
+  runtimeActorManagerMemory: string;
+  projectContextBlock: string;
+  skillTurnContext: string;
+  activeSkillsContext: string;
+  retrievedMemoryContext: string;
+  subagentsRosterBlock: string;
+  advanceTurn: boolean;
 }
 
 const BOOT_COMPACTION_EXCLUDE_SESSION_RE = /^(startup_connection_probe_|brain_|auto_boot_|auto_restart_|task_|cron_|background_|team_dispatch_|subagent_chat_)/i;
@@ -1005,6 +1026,7 @@ function buildToolsContextUncached(activatedCategories: Set<string>, options?: {
   Use: request_tool_category({"category":"browser_automation","scope":"turn"}) for the current user turn. Use scope=session only for explicit ongoing workflows; scope=next_turn keeps it through one follow-up turn; scope=ttl with turns keeps it for a bounded multi-turn workflow.
 
 [FILE EDIT ROUTING] For workspace edits, activate/use workspace_write/file_ops. Use workspace_read(action:"grep"/"search"/"stats"/"read") when locating or understanding the target; if an exact file plus exact snippet/line range is already known, use workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"patchset") directly. For obvious small single-file edits or bug fixes, do not call skill_list/skill_read just because broad file/frontend skills match; read a skill only when the user explicitly asks, the workflow is unfamiliar/high-risk, or the skill is needed for a specific non-obvious procedure. Edit tools fail safely and return post-edit context. Do not use workspace_run/terminal/Python/PowerShell/sed/node scripts as the default file editor.
+[SOURCE ROOT SAFETY] When the request concerns Prometheus itself, inspect the live product tree with dev_source_read. Do not use workspace/repos/PromSRC*, PromSRC-compare, rescue copies, or other workspace clones as current product source unless the user explicitly asks to compare that copy.
 
 [RUN COMMAND ROUTING] For shell/dev-server/process work, activate workspace_write. Use workspace_run(action:"run", command) for bounded commands; use workspace_run(action:"start", command) for long-running or interactive commands; manage runIds with workspace_run(action:"status"|"log"|"wait"|"kill"|"submit").
 
@@ -1166,6 +1188,129 @@ function buildActiveSkillsContext(sessionId: string, skillsManager: SkillsManage
   return lines.join('\n');
 }
 
+function shouldAdvancePromptTurn(
+  executionMode: string,
+  historyLength: number,
+  profile: BuildPersonalityContextOptions['profile'],
+  runtimeActor: RuntimeActorContext | null,
+): boolean {
+  if (profile === 'local_llm' || profile === 'teach_mode' || profile === 'voice_agent' || profile === 'direct_subagent') return true;
+  if (profile === 'switch_model') return true;
+  if (runtimeActor?.kind === 'agent' && (executionMode === 'cron' || executionMode === 'interactive')) return true;
+  if (executionMode === 'background_agent' || executionMode === 'team_subagent' || executionMode === 'team_manager') return true;
+  const autonomous = executionMode === 'background_task'
+    || executionMode === 'proposal_execution'
+    || executionMode === 'heartbeat';
+  return !autonomous && historyLength > 0;
+}
+
+export async function capturePersonalityContextSnapshot(
+  sessionId: string,
+  workspacePath: string,
+  messageText: string,
+  executionMode: string,
+  historyLength: number,
+  skillsManager: SkillsManager,
+  setCurrentTurn: (sessionId: string, turn: number) => void,
+  extraCats?: Set<string>,
+  options?: BuildPersonalityContextOptions,
+): Promise<PersonalityContextSnapshot> {
+  const runtimeActor = getRuntimeActorContext(sessionId);
+  const profile = options?.profile || 'default';
+  const isDirectSubagentProfile = profile === 'direct_subagent';
+  const allowLongTermSearch = profile !== 'local_llm'
+    && profile !== 'teach_mode'
+    && executionMode === 'interactive'
+    && !isDirectSubagentProfile
+    && runtimeActor?.kind !== 'agent'
+    && runtimeActor?.kind !== 'manager';
+  const memorySearchRouting = allowLongTermSearch
+    ? routeMemorySearchMode(messageText)
+    : ({ mode: 'no_search', reason: 'execution_mode_skip' } as MemorySearchRouting);
+  const retrievedMemoryContext = allowLongTermSearch
+    ? await buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
+    : '';
+  let projectContextBlock = '';
+  try {
+    const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
+    if (findProjectBySessionId(sessionId)) {
+      projectContextBlock = buildProjectContextBlock(sessionId) || '';
+    }
+  } catch {}
+  const advanceTurn = shouldAdvancePromptTurn(executionMode, historyLength, profile, runtimeActor || null);
+  const autonomous = executionMode === 'background_task'
+    || executionMode === 'proposal_execution'
+    || executionMode === 'heartbeat';
+  const advanceBeforeSkillContext = advanceTurn
+    && profile === 'default'
+    && !autonomous
+    && executionMode !== 'background_agent'
+    && executionMode !== 'team_subagent'
+    && executionMode !== 'team_manager'
+    && !(executionMode === 'cron' && runtimeActor?.kind === 'agent');
+  if (advanceBeforeSkillContext) setCurrentTurn(sessionId, historyLength);
+  const scheduledAgent = executionMode === 'cron' && runtimeActor?.kind === 'agent';
+  const interactiveAgentSwitch = profile === 'switch_model'
+    && executionMode === 'interactive'
+    && runtimeActor?.kind === 'agent';
+  const usesSessionCategories = profile === 'teach_mode'
+    || profile === 'direct_subagent'
+    || scheduledAgent
+    || interactiveAgentSwitch
+    || executionMode === 'background_agent'
+    || executionMode === 'team_subagent'
+    || executionMode === 'team_manager'
+    || (autonomous && sessionId.startsWith('task_'))
+    || (!autonomous
+      && profile === 'default'
+      && executionMode !== 'background_agent'
+      && executionMode !== 'team_subagent'
+      && executionMode !== 'team_manager');
+  if (usesSessionCategories) {
+    const sessionCategories = getActivatedToolCategories(sessionId);
+    if (profile === 'teach_mode') sessionCategories.add('browser');
+    for (const category of extraCats || []) {
+      sessionCategories.add(category === 'browser_vision' || category === 'browser' ? 'browser' : category);
+    }
+  }
+  const skillContextOptions = {
+    sessionId,
+    excludedSkillIds: options?.excludedSkillIds || [],
+    forcedSkillIds: options?.forcedSkillIds || [],
+  };
+  const snapshot: PersonalityContextSnapshot = {
+    businessContextEnabled: isBusinessContextEnabled(sessionId),
+    activatedToolCategories: [...getActivatedToolCategories(sessionId)],
+    runtimeActor: runtimeActor ? { ...runtimeActor } : null,
+    runtimeActorMemory: loadRuntimeActorMemoryContext(sessionId),
+    runtimeActorManagerMemory: loadRuntimeActorMemoryContext(sessionId, 8000),
+    projectContextBlock,
+    skillTurnContext: skillsManager.buildTurnContext(messageText, skillContextOptions),
+    activeSkillsContext: buildActiveSkillsContext(sessionId, skillsManager),
+    retrievedMemoryContext,
+    subagentsRosterBlock: buildSubagentsRosterBlock(),
+    advanceTurn: advanceTurn && !advanceBeforeSkillContext,
+  };
+  return snapshot;
+}
+
+export async function finalizePersonalityContextSnapshot(
+  sessionId: string,
+  workspacePath: string,
+  historyLength: number,
+  snapshot: PersonalityContextSnapshot,
+  setCurrentTurn: (sessionId: string, turn: number) => void,
+): Promise<void> {
+  if (snapshot.advanceTurn) setCurrentTurn(sessionId, historyLength);
+  await hookBus.fire({
+    type: 'agent:bootstrap',
+    sessionId,
+    workspacePath,
+    bootstrapFiles: [],
+    timestamp: Date.now(),
+  });
+}
+
 // ─── buildPersonalityContext ──────────────────────────────────────────────────────
 // Takes skillsManager and getSessionSkillWindowsFn as dependencies to avoid
 // circular imports with server-v2.
@@ -1197,6 +1342,31 @@ export async function buildPersonalityContext(
     excludedSkillIds: options?.excludedSkillIds || [],
     forcedSkillIds: options?.forcedSkillIds || [],
   };
+  const snapshot = options?.serializedSnapshot;
+  const businessContextEnabled = snapshot?.businessContextEnabled ?? isBusinessContextEnabled(sessionId);
+  const activatedToolCategories = (): Set<string> => snapshot
+    ? new Set(snapshot.activatedToolCategories)
+    : getActivatedToolCategories(sessionId);
+  const skillTurnContext = (): string => snapshot
+    ? snapshot.skillTurnContext
+    : skillsManager.buildTurnContext(messageText, skillContextOptions);
+  const activeSkillsContext = (): string => snapshot
+    ? snapshot.activeSkillsContext
+    : buildActiveSkillsContext(sessionId, skillsManager);
+  const projectContext = async (): Promise<string> => {
+    if (snapshot) return snapshot.projectContextBlock;
+    try {
+      const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
+      return findProjectBySessionId(sessionId) ? (buildProjectContextBlock(sessionId) || '') : '';
+    } catch {
+      return '';
+    }
+  };
+  const finishGatewayBootstrap = async (advanceTurn = false): Promise<void> => {
+    if (snapshot) return;
+    if (advanceTurn) setCurrentTurn(sessionId, historyLength);
+    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+  };
 
   // ── Path LOCAL_LLM: tiny prompt for small local model primaries ───────────────
   // Activated only when isLocalPrimary() is true in chat.router.ts.
@@ -1208,11 +1378,10 @@ export async function buildPersonalityContext(
       await import('../config/local-model-prompts.js');
     const timeString  = formatLocalModelTime();
     const userMemory  = loadCondensedMemoryProfile(workspacePath);
-    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath, 900) : '';
-    const selectedSkillCtxLocal = skillsManager.buildTurnContext(messageText, skillContextOptions);
-    const activeSkillCtxLocal = buildActiveSkillsContext(sessionId, skillsManager);
-    setCurrentTurn(sessionId, historyLength);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    const business = businessContextEnabled ? loadBusinessContextProfile(workspacePath, 900) : '';
+    const selectedSkillCtxLocal = skillTurnContext();
+    const activeSkillCtxLocal = activeSkillsContext();
+    await finishGatewayBootstrap(true);
     return buildLocalModelPersonalityCtx(timeString, userMemory)
       + (business ? `\n\n[BUSINESS]\n${business}` : '')
       + (selectedSkillCtxLocal ? `\n\n${selectedSkillCtxLocal}` : '')
@@ -1222,7 +1391,7 @@ export async function buildPersonalityContext(
   if (profile === 'teach_mode') {
     const user = loadFullMemoryProfile(workspacePath, 'USER.md', 2600);
     const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md', 3200);
-    const activatedCatsTeach = getActivatedToolCategories(sessionId);
+    const activatedCatsTeach = activatedToolCategories();
     activatedCatsTeach.add('browser');
     if (extraCats) {
       for (const ec of extraCats) {
@@ -1231,10 +1400,9 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchTeach = buildToolCategoryMatchContext(messageText, activatedCatsTeach);
-    const skillCtxTeach = skillsManager.buildTurnContext(messageText, skillContextOptions);
-    const activeSkillCtxTeach = buildActiveSkillsContext(sessionId, skillsManager);
-    setCurrentTurn(sessionId, historyLength);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    const skillCtxTeach = skillTurnContext();
+    const activeSkillCtxTeach = activeSkillsContext();
+    await finishGatewayBootstrap(true);
     return assembleContext(
       [
         user ? `[USER]\n${user}` : '',
@@ -1246,7 +1414,7 @@ export async function buildPersonalityContext(
   }
 
   const isDirectSubagentProfile = profile === 'direct_subagent';
-  const runtimeActor = getRuntimeActorContext(sessionId);
+  const runtimeActor = snapshot?.runtimeActor || getRuntimeActorContext(sessionId);
   const isScheduledAgentActor = executionMode === 'cron' && runtimeActor?.kind === 'agent';
   const isInteractiveAgentSwitch = profile === 'switch_model'
     && executionMode === 'interactive'
@@ -1258,10 +1426,12 @@ export async function buildPersonalityContext(
   const memorySearchRouting = allowLongTermSearch
     ? routeMemorySearchMode(messageText)
     : ({ mode: 'no_search', reason: 'execution_mode_skip' } as MemorySearchRouting);
-  const retrievedMemoryCtx = allowLongTermSearch
-    ? await buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
-    : '';
-  const cisContext = buildCisContextBlock(workspacePath, messageText, { force: isBusinessContextEnabled(sessionId) });
+  const retrievedMemoryCtx = snapshot
+    ? snapshot.retrievedMemoryContext
+    : allowLongTermSearch
+      ? await buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
+      : '';
+  const cisContext = buildCisContextBlock(workspacePath, messageText, { force: businessContextEnabled });
   const configSoul = loadSoul();
 
   if (profile === 'voice_agent') {
@@ -1281,20 +1451,13 @@ export async function buildPersonalityContext(
     const selfIndex = isPublicDistributionBuild() ? '' : readCapped(path.join('self', 'index.md'), 3000);
     const voiceSelf = isPublicDistributionBuild() ? '' : readCapped(path.join('self', '06-image-voice.md'), 7000);
     const boot = readCapped('BOOT.md', 3000);
-    let projectContextBlock = '';
-    try {
-      const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
-      if (findProjectBySessionId(sessionId)) {
-        projectContextBlock = buildProjectContextBlock(sessionId) || '';
-      }
-    } catch {}
+    const projectContextBlock = await projectContext();
     const referenceHint = isPublicDistributionBuild()
       ? ''
       : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map. The Voice Agent has direct voice-system notes below and should dispatch to the worker if it needs to read more files.`;
-    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
-    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
-    setCurrentTurn(sessionId, historyLength);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    const skillCtx = skillTurnContext();
+    const activeSkillCtx = activeSkillsContext();
+    await finishGatewayBootstrap(true);
     return assembleContext(
       [
         voiceSoulContract ? `[VOICE_SOUL]\n${voiceSoulContract}` : '',
@@ -1319,7 +1482,7 @@ export async function buildPersonalityContext(
   if (profile === 'switch_model' && runtimeActor?.kind !== 'agent' && runtimeActor?.kind !== 'manager') {
     const user = loadFullMemoryProfile(workspacePath, 'USER.md');
     const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
-    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
+    const business = businessContextEnabled ? loadBusinessContextProfile(workspacePath) : '';
     const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md');
     // switch_model starts a fresh generation context. Do not inherit the
     // interactive session's expanded tool categories, otherwise a lightweight
@@ -1332,10 +1495,9 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchSwitch = buildToolCategoryMatchContext(messageText, activatedCatsSwitch);
-    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
-    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
-    setCurrentTurn(sessionId, historyLength);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    const skillCtx = skillTurnContext();
+    const activeSkillCtx = activeSkillsContext();
+    await finishGatewayBootstrap(true);
     return assembleContext(
       [
         configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
@@ -1350,8 +1512,8 @@ export async function buildPersonalityContext(
   }
   if (isDirectSubagentProfile || isScheduledAgentActor || isInteractiveAgentSwitch) {
     const runtimeContract = loadPrometheusRuntimeContract();
-    const agentMemory = loadRuntimeActorMemoryContext(sessionId);
-    const activatedCatsDirectSub = getActivatedToolCategories(sessionId);
+    const agentMemory = snapshot ? snapshot.runtimeActorMemory : loadRuntimeActorMemoryContext(sessionId);
+    const activatedCatsDirectSub = activatedToolCategories();
     if (extraCats) {
       for (const ec of extraCats) {
         if (ec === 'browser_vision' || ec === 'browser') activatedCatsDirectSub.add('browser');
@@ -1359,10 +1521,9 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchDirectSub = buildToolCategoryMatchContext(messageText, activatedCatsDirectSub);
-    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
-    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
-    setCurrentTurn(sessionId, historyLength);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    const skillCtx = skillTurnContext();
+    const activeSkillCtx = activeSkillsContext();
+    await finishGatewayBootstrap(true);
     return assembleContext(
       [
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
@@ -1383,8 +1544,8 @@ export async function buildPersonalityContext(
   // They intentionally do not receive main Prometheus SOUL.md/config soul.
   if (executionMode === 'background_agent') {
     const runtimeContract = loadPrometheusRuntimeContract();
-    const agentMemory = loadRuntimeActorMemoryContext(sessionId);
-    const activatedCatsBackground = getActivatedToolCategories(sessionId);
+    const agentMemory = snapshot ? snapshot.runtimeActorMemory : loadRuntimeActorMemoryContext(sessionId);
+    const activatedCatsBackground = activatedToolCategories();
     if (extraCats) {
       for (const ec of extraCats) {
         if (ec === 'browser_vision' || ec === 'browser') activatedCatsBackground.add('browser');
@@ -1392,13 +1553,12 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchBackground = buildToolCategoryMatchContext(messageText, activatedCatsBackground);
-    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
-    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+    const skillCtx = skillTurnContext();
+    const activeSkillCtx = activeSkillsContext();
     const referenceHintBackground = isPublicDistributionBuild()
       ? ''
       : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map; use workspace_read(action:"read", path:"self/index.md"). Follow its links to focused self/* subsystem files as needed.`;
-    setCurrentTurn(sessionId, historyLength);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    await finishGatewayBootstrap(true);
     return assembleContext(
       [
         messageText ? `[Spawning Prompt from the Main Agent (or whomever is spawning it)]\n${messageText}` : '',
@@ -1417,8 +1577,8 @@ export async function buildPersonalityContext(
 
   if (executionMode === 'team_subagent') {
     const runtimeContract = loadPrometheusRuntimeContract();
-    const agentMemory = loadRuntimeActorMemoryContext(sessionId);
-    const activatedCatsSub = getActivatedToolCategories(sessionId);
+    const agentMemory = snapshot ? snapshot.runtimeActorMemory : loadRuntimeActorMemoryContext(sessionId);
+    const activatedCatsSub = activatedToolCategories();
     if (extraCats) {
       for (const ec of extraCats) {
         if (ec === 'browser_vision' || ec === 'browser') activatedCatsSub.add('browser');
@@ -1426,13 +1586,12 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchSub = buildToolCategoryMatchContext(messageText, activatedCatsSub);
-    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
-    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+    const skillCtx = skillTurnContext();
+    const activeSkillCtx = activeSkillsContext();
     const referenceHintSub = isPublicDistributionBuild()
       ? ''
       : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map; use workspace_read(action:"read", path:"self/index.md"). Follow its links to focused self/* subsystem files as needed.`;
-    setCurrentTurn(sessionId, historyLength);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    await finishGatewayBootstrap(true);
     return assembleContext(
       [
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
@@ -1452,8 +1611,8 @@ export async function buildPersonalityContext(
   // from callerContext and their own memory here, never Prom's USER/SOUL/MEMORY.
   if (executionMode === 'team_manager') {
     const runtimeContract = loadPrometheusRuntimeContract();
-    const agentMemory = loadRuntimeActorMemoryContext(sessionId, 8000);
-    const activatedCatsManager = getActivatedToolCategories(sessionId);
+    const agentMemory = snapshot ? snapshot.runtimeActorManagerMemory : loadRuntimeActorMemoryContext(sessionId, 8000);
+    const activatedCatsManager = activatedToolCategories();
     if (extraCats) {
       for (const ec of extraCats) {
         if (ec === 'browser_vision' || ec === 'browser') activatedCatsManager.add('browser');
@@ -1461,10 +1620,9 @@ export async function buildPersonalityContext(
       }
     }
     const toolCategoryMatchManager = buildToolCategoryMatchContext(messageText, activatedCatsManager);
-    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
-    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
-    setCurrentTurn(sessionId, historyLength);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    const skillCtx = skillTurnContext();
+    const activeSkillCtx = activeSkillsContext();
+    await finishGatewayBootstrap(true);
     return assembleContext(
       [
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
@@ -1484,7 +1642,7 @@ export async function buildPersonalityContext(
   const isAutonomous = executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'heartbeat';
   if (isAutonomous) {
     const isProposalExecution = executionMode === 'proposal_execution';
-    const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
+    const business = businessContextEnabled ? loadBusinessContextProfile(workspacePath) : '';
     const soul = isProposalExecution ? configSoul : loadFullMemoryProfile(workspacePath, 'SOUL.md');
     // Proposal executors get only the approved task context plus the configured
     // Prometheus soul. Workspace MEMORY.md is intentionally excluded here.
@@ -1494,13 +1652,7 @@ export async function buildPersonalityContext(
     // AGENTS.md intentionally excluded from autonomous path — background tasks,
     // cron, and heartbeat sessions don't need agent workspace context.
     // Projects: inject context ONLY when session belongs to a project
-    let projectContextBlock = '';
-    try {
-      const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
-      if (findProjectBySessionId(sessionId)) {
-        projectContextBlock = buildProjectContextBlock(sessionId) || '';
-      }
-    } catch {}
+    const projectContextBlock = await projectContext();
     // Skip intraday notes for ALL autonomous sessions — background_task, cron, heartbeat,
     // and proposal executor sessions all have their own goal context and don't need daily notes.
     const skipIntraday = true;
@@ -1511,7 +1663,7 @@ export async function buildPersonalityContext(
     // task_* sessions manage their own categories explicitly (e.g. source_write for proposals).
     // Cron sessions (including sessionTarget:'main') start clean to avoid leaking 8+ interactive cats.
     const activatedCatsAuto = sessionId.startsWith('task_')
-      ? getActivatedToolCategories(sessionId)
+      ? activatedToolCategories()
       : new Set<string>();
     if (extraCats) {
       for (const ec of extraCats) {
@@ -1522,9 +1674,9 @@ export async function buildPersonalityContext(
     const toolCategoryMatchAuto = buildToolCategoryMatchContext(messageText, activatedCatsAuto);
     const toolsBlockAuto = buildToolsContext(activatedCatsAuto, { instructionIntents: options?.instructionIntents });
     // Autonomous agents: same hint + pinned skills as interactive chat.
-    const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
-    const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    const skillCtx = skillTurnContext();
+    const activeSkillCtx = activeSkillsContext();
+    await finishGatewayBootstrap();
     return assembleContext(
       [
         business ? `[BUSINESS]\n${business}` : '',
@@ -1545,7 +1697,7 @@ export async function buildPersonalityContext(
 
   // ── Path A: interactive chat — tiered ─────────────────────────────────────
   const user = loadFullMemoryProfile(workspacePath, 'USER.md');
-  const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath) : '';
+  const business = businessContextEnabled ? loadBusinessContextProfile(workspacePath) : '';
   const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md');
   const today = new Date().toISOString().split('T')[0];
   const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
@@ -1555,16 +1707,10 @@ export async function buildPersonalityContext(
   // ── Tier 1: first message in session ──────────────────────────────────────
   if (historyLength === 0) {
     // Projects: inject context ONLY when session belongs to a project
-    let projectContextBlockT1 = '';
-    try {
-      const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
-      if (findProjectBySessionId(sessionId)) {
-        projectContextBlockT1 = buildProjectContextBlock(sessionId) || '';
-      }
-    } catch {}
+    const projectContextBlockT1 = await projectContext();
     const soulT1 = loadFullMemoryProfile(workspacePath, 'SOUL.md');
     // Include tool category menu (auto-activation may have already run; show active state)
-    const activatedCatsT1 = getActivatedToolCategories(sessionId);
+    const activatedCatsT1 = activatedToolCategories();
     if (extraCats) {
       for (const ec of extraCats) {
         if (ec === 'browser_vision' || ec === 'browser') activatedCatsT1.add('browser');
@@ -1573,9 +1719,9 @@ export async function buildPersonalityContext(
     }
     const toolCategoryMatchT1 = buildToolCategoryMatchContext(messageText, activatedCatsT1);
     // First turn: still get the skills hint + any pinned skills.
-    const skillCtxT1 = skillsManager.buildTurnContext(messageText, skillContextOptions);
-    const activeSkillCtxT1 = buildActiveSkillsContext(sessionId, skillsManager);
-    await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+    const skillCtxT1 = skillTurnContext();
+    const activeSkillCtxT1 = activeSkillsContext();
+    await finishGatewayBootstrap();
     return assembleContext(
       [
         configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
@@ -1598,21 +1744,15 @@ export async function buildPersonalityContext(
   }
 
   // ── Tier 2 / 3: subsequent messages ───────────────────────────────────────
-  setCurrentTurn(sessionId, historyLength);
+  if (!snapshot) setCurrentTurn(sessionId, historyLength);
 
   // Projects: inject context ONLY when session belongs to a project
-  let projectContextBlockT2 = '';
-  try {
-    const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
-    if (findProjectBySessionId(sessionId)) {
-      projectContextBlockT2 = buildProjectContextBlock(sessionId) || '';
-    }
-  } catch {}
+  const projectContextBlockT2 = await projectContext();
 
   const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
 
   // Build dynamic [TOOLS] block from session's activated categories
-  const activatedCats = getActivatedToolCategories(sessionId);
+  const activatedCats = activatedToolCategories();
   if (extraCats) {
     for (const ec of extraCats) {
       if (ec === 'browser_vision' || ec === 'browser') activatedCats.add('browser');
@@ -1629,10 +1769,10 @@ export async function buildPersonalityContext(
     : `[REFERENCE_FILES] Architecture/debug context: self/index.md is the canonical workspace-root map; use workspace_read(action:"read", path:"self/index.md"). Follow its links to focused self/* subsystem files as needed.`;
 
   // Skills: one-liner hint + any pinned skills injected in full.
-  const skillCtx = skillsManager.buildTurnContext(messageText, skillContextOptions);
-  const activeSkillCtx = buildActiveSkillsContext(sessionId, skillsManager);
+  const skillCtx = skillTurnContext();
+  const activeSkillCtx = activeSkillsContext();
 
-  await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
+  await finishGatewayBootstrap();
   return assembleContext(
     [
       configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
@@ -1640,7 +1780,7 @@ export async function buildPersonalityContext(
       soul ? `[SOUL]\n${soul}` : '',
       business ? `[BUSINESS]\n${business}` : '',
       memory ? `[MEMORY]\n${memory}` : '',
-      buildSubagentsRosterBlock(),
+      snapshot ? snapshot.subagentsRosterBlock : buildSubagentsRosterBlock(),
       projectContextBlockT2 ? `[PROJECT_CONTEXT]\n${projectContextBlockT2}` : '',
       toolsBlock,
     ],

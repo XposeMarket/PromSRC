@@ -2212,7 +2212,12 @@ function normalizeWorkspacePatchsetArgs(rawArgs: any): any {
   };
 }
 
-function normalizeWorkspaceWrapperTool(name: string, rawArgs: any): { name: string; args: any; error?: string } | null {
+export function isWorkspacePrometheusSourceCopyPath(rawPath: unknown): boolean {
+  const normalized = String(rawPath || '').trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+  return /^(?:workspace\/)?repos\/promsrc(?:[-_/].*)?(?:\/|$)/i.test(normalized);
+}
+
+function normalizeWorkspaceWrapperTool(name: string, rawArgs: any, workspacePath = ''): { name: string; args: any; error?: string } | null {
   if (!/^workspace_(read|edit|run|git|safety|code_nav)$/.test(name)) return null;
   const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
   const action = String(args.action || '').trim().toLowerCase();
@@ -2240,6 +2245,40 @@ function normalizeWorkspaceWrapperTool(name: string, rawArgs: any): { name: stri
   const pathArg = args.path ?? args.filename ?? args.file ?? args.name;
 
   if (name === 'workspace_read') {
+    const normalizedRequestedPath = String(pathArg || '').trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+    if (isWorkspacePrometheusSourceCopyPath(normalizedRequestedPath) && args.allow_source_copy !== true) {
+      return {
+        name,
+        args,
+        error: 'This path is a workspace copy of Prometheus source, not the live product tree. Use dev_source_read for current src/web-ui files. Set allow_source_copy=true only when the user explicitly asked to inspect or compare that copy.',
+      };
+    }
+    const explicitlyWorkspaceScoped = /^(?:workspace\/|repos\/|oss agents\/|games\/|scratch\/|temp\/)/i.test(normalizedRequestedPath);
+    if (!explicitlyWorkspaceScoped && normalizedRequestedPath) {
+      const projectRoot = resolvePrometheusRoot();
+      const workspaceCandidate = path.resolve(workspacePath || '.', normalizedRequestedPath);
+      const sourceCandidate = normalizedRequestedPath.startsWith('src/')
+        ? path.resolve(projectRoot, normalizedRequestedPath)
+        : path.resolve(projectRoot, 'src', normalizedRequestedPath);
+      const webUiCandidate = normalizedRequestedPath.startsWith('web-ui/')
+        ? path.resolve(projectRoot, normalizedRequestedPath)
+        : path.resolve(projectRoot, 'web-ui', normalizedRequestedPath);
+      const workspaceHasTarget = fs.existsSync(workspaceCandidate);
+      const sourceHasTarget = fs.existsSync(sourceCandidate);
+      const webUiHasTarget = fs.existsSync(webUiCandidate);
+      if (!workspaceHasTarget && (sourceHasTarget || webUiHasTarget)) {
+        const sourcePath = sourceHasTarget
+          ? (normalizedRequestedPath.startsWith('src/') ? normalizedRequestedPath : `src/${normalizedRequestedPath}`)
+          : (normalizedRequestedPath.startsWith('web-ui/') ? normalizedRequestedPath : `web-ui/${normalizedRequestedPath}`);
+        const routed = normalizeDevSourceWrapperTool('dev_source_read', {
+          ...rawArgs,
+          action,
+          file: sourcePath,
+          path: sourcePath,
+        });
+        if (routed) return routed;
+      }
+    }
     if (action === 'tree') {
       const treeArgs: Record<string, any> = { path: pathArg };
       copyIfPresent(treeArgs, args, ['glob', 'exclude', 'max_result_tokens', 'hard_max_result_tokens']);
@@ -2991,6 +3030,7 @@ function buildPresentedFileArtifact(absPath: string, relPath: string, title?: st
 
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
   let approvalDisplayToolName = name;
+  const allowWorkspaceSourceCopy = args?.allow_source_copy === true;
   const mediaGenerateWrapper = normalizeMediaGenerateWrapperTool(name, args);
   if (mediaGenerateWrapper) {
     if (mediaGenerateWrapper.error) return { name, args, result: mediaGenerateWrapper.error, error: true };
@@ -3021,11 +3061,31 @@ export async function executeTool(name: string, args: any, workspacePath: string
     name = devSourceWrapper.name;
     args = devSourceWrapper.args;
   }
-  const workspaceWrapper = normalizeWorkspaceWrapperTool(name, args);
+  const workspaceWrapper = normalizeWorkspaceWrapperTool(name, args, workspacePath);
   if (workspaceWrapper) {
     if (workspaceWrapper.error) return { name, args, result: workspaceWrapper.error, error: true };
     name = workspaceWrapper.name;
     args = workspaceWrapper.args;
+  }
+  if (
+    ['read_file', 'read_files_batch', 'file_stats', 'grep_file', 'search_files', 'list_directory', 'file_tree'].includes(name)
+    && !allowWorkspaceSourceCopy
+  ) {
+    const candidates = [
+      args?.filename,
+      args?.path,
+      args?.directory,
+      ...(Array.isArray(args?.files) ? args.files.map((entry: any) => entry?.filename ?? entry?.path ?? entry) : []),
+      ...(Array.isArray(args?.paths) ? args.paths : []),
+    ];
+    if (candidates.some(isWorkspacePrometheusSourceCopyPath)) {
+      return {
+        name,
+        args,
+        result: 'This path is a workspace copy of Prometheus source, not the live product tree. Use dev_source_read for current src/web-ui files. Set allow_source_copy=true only when the user explicitly asked to inspect or compare that copy.',
+        error: true,
+      };
+    }
   }
   const browserWrapper = normalizeBrowserWrapperTool(name, args);
   if (browserWrapper) {

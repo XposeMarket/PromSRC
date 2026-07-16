@@ -83,11 +83,11 @@ import {
   detectToolCategories,
   readMemoryCategories,
   readMemorySnippets,
-  buildPersonalityContext as _buildPersonalityContext,
   TOOL_BLOCKS,
   TOOL_TO_MEMORY_CATS,
   type SkillWindow,
 } from '../prompt-context';
+import { buildPersonalityContextIsolated } from './context-build-worker-client';
 import {
   browserOpen,
   browserSnapshot,
@@ -558,8 +558,9 @@ export async function buildPersonalityContext(
   skillsManager: any,
   extraCats?: Set<string>,
   options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent'; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
+  signal?: AbortSignal,
 ): Promise<string> {
-  return _buildPersonalityContext(
+  return buildPersonalityContextIsolated(
     sessionId,
     workspacePath,
     messageText,
@@ -570,6 +571,7 @@ export async function buildPersonalityContext(
     (sid: string, turn: number) => { sessionCurrentTurn.set(sid, turn); },
     extraCats,
     options,
+    signal,
   );
 }
 

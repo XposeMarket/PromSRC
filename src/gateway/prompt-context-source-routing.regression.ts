@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { detectToolCategories } from './prompt-context';
+import { isWorkspacePrometheusSourceCopyPath } from './agents-runtime/subagent-executor';
 
 function has(message: string, category: string): boolean {
   return detectToolCategories(message).has(category);
@@ -40,5 +41,8 @@ assert.equal(
   false,
   'a generic gateway mention without a source path must not force dev-source tools',
 );
+assert.equal(isWorkspacePrometheusSourceCopyPath('repos/PromSRC-compare/src/gateway/routes/chat.router.ts'), true);
+assert.equal(isWorkspacePrometheusSourceCopyPath('workspace/repos/PromSRC-rescue/src/gateway/routes/chat.router.ts'), true);
+assert.equal(isWorkspacePrometheusSourceCopyPath('repos/customer-app/src/index.ts'), false);
 
 console.log('prompt-context source-routing regression passed');

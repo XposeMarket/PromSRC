@@ -55,7 +55,7 @@ function envBytes(name: string, fallback: number, minimum: number, maximum: numb
 
 const workerEnabled = String(process.env.PROMETHEUS_MEMORY_SEARCH_WORKER || '1').trim() !== '0';
 const quickTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_QUICK_TIMEOUT_MS', 8_000, 1_000, 5 * 60_000);
-const deepTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_DEEP_TIMEOUT_MS', 15_000, 2_000, 10 * 60_000);
+const deepTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_DEEP_TIMEOUT_MS', 30_000, 2_000, 10 * 60_000);
 const recycleRssBytes = envBytes('PROMETHEUS_MEMORY_SEARCH_RECYCLE_RSS_BYTES', 768 * 1024 * 1024, 128 * 1024 * 1024, 4 * 1024 * 1024 * 1024);
 const maxQueued = 2;
 const broker = new RuntimeWorkerBroker({

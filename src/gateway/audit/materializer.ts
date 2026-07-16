@@ -609,6 +609,32 @@ export function materializeAuditSnapshot(configDir: string, workspacePath: strin
   writeIndexes(auditRoot, configDir, workspacePath, mirrors, mirrorStats);
 }
 
+export function createAuditMaterializerWorker(opts: StartAuditMaterializerOpts, intervalMs: number): Worker {
+  const data = {
+    type: 'prometheus_audit_materializer',
+    workspacePath: opts.workspacePath,
+    configDir: opts.configDir,
+    intervalMs,
+  };
+  if (path.extname(__filename).toLowerCase() !== '.ts') {
+    return new Worker(__filename, {
+      execArgv: process.execArgv,
+      workerData: data,
+    });
+  }
+
+  // Worker threads do not reliably inherit tsx's source-mode loader on every
+  // supported Node version. Register tsx inside a tiny CommonJS bootstrap so a
+  // development gateway can execute this .ts entrypoint just like dist/*.js.
+  return new Worker(
+    `const { workerData } = require('node:worker_threads'); require('tsx/cjs/api').register(); require(workerData.entry);`,
+    {
+      eval: true,
+      workerData: { ...data, entry: __filename },
+    },
+  );
+}
+
 export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {
   const intervalMs = Math.max(MIN_INTERVAL_MS, Number(opts.intervalMs || DEFAULT_INTERVAL_MS));
   if (_timer) return;
@@ -627,15 +653,7 @@ export function startAuditMaterializer(opts: StartAuditMaterializerOpts): void {
       // The audit mirror can parse and redact tens of megabytes of append-only
       // logs. Keep that synchronous filesystem/JSON work off the gateway event
       // loop so WebSocket, SSE, HTTP, and Telegram traffic remain responsive.
-      const worker = new Worker(__filename, {
-        execArgv: process.execArgv,
-        workerData: {
-          type: 'prometheus_audit_materializer',
-          workspacePath: opts.workspacePath,
-          configDir: opts.configDir,
-          intervalMs,
-        },
-      });
+      const worker = createAuditMaterializerWorker(opts, intervalMs);
       worker.unref();
       worker.on('message', (message: any) => {
         if (message?.ok === false) {

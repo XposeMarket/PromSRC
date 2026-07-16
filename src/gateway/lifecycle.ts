@@ -384,7 +384,7 @@ interface ShutdownHooks {
   stopRuntimeWorkers?: () => void | Promise<void>;
   closeHttpServer?: () => Promise<void>;
   closeWebSocket?: () => void;
-  flushSessions?: () => void;
+  flushSessions?: () => void | Promise<void>;
 }
 
 let _shutdownHooks: ShutdownHooks = {};
@@ -533,7 +533,7 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
   }
 
   // 2. Flush sessions to disk
-  try { _shutdownHooks.flushSessions?.(); } catch (e: any) {
+  try { await _shutdownHooks.flushSessions?.(); } catch (e: any) {
     console.warn('[lifecycle] Session flush error:', e.message);
   }
 

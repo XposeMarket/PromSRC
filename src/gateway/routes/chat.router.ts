@@ -18,6 +18,7 @@ import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { enqueuePostTurnJob, getPostTurnQueueStatus } from '../chat/post-turn-queue';
 import { getContextBuildLimiterStatus, runWithContextBuildPermit } from '../chat/context-build-limiter';
+import { getContextBuildWorkerPoolStatus } from '../chat/context-build-worker-client';
 
 // WebSocketServer + WebSocket moved to core/server.ts (B3)
 import {
@@ -1294,6 +1295,7 @@ import {
   executeTool as _executeTool,
   lastFilenameUsed,
 } from '../agents-runtime/subagent-executor';
+import { countEquivalentFailedReads } from '../tool-failure-guard';
 import {
   wss as _wssRef, setWss,
   broadcastWS,
@@ -4091,6 +4093,7 @@ async function handleChat(
         // browserVisionModeActive is declared higher in handleChat's closure scope.
         browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
         personalityProfile,
+        abortSignal?.signal,
       );
     },
     abortSignal?.signal,
@@ -7613,6 +7616,40 @@ RULES:
         }
       }
 
+      const equivalentReadFailures = countEquivalentFailedReads(toolName, toolArgs, allToolResults);
+      if (equivalentReadFailures >= 2) {
+        const blockMsg = [
+          `READ RETRY BLOCKED: ${equivalentReadFailures} equivalent attempts already failed for this read target.`,
+          'Do not try another wrapper, slash style, absolute path, or nearby spelling for the same target.',
+          'Reconsider whether the target belongs to Prometheus source or the user workspace, then pivot to a source-root list/grep/search or report the missing path.',
+          'A materially different file, pattern, or action remains allowed.',
+        ].join(' ');
+        console.warn(`[v2] EQUIVALENT READ FAILURE BLOCK: ${toolName}(${JSON.stringify(toolArgs).slice(0, 120)})`);
+        const blockedResult = makeInstrumentedToolResult(toolName, toolArgs, blockMsg, true);
+        allToolResults.push(blockedResult);
+        logToolCall(workspacePath, toolName, toolArgs, blockMsg, true);
+        markProgressStepStart(toolName);
+        markProgressStepResult(false, toolName);
+        sendSSE('info', { message: blockMsg });
+        sendSSE('tool_result', {
+          action: toolName,
+          result: blockMsg,
+          error: true,
+          stepNum: allToolResults.length,
+        });
+        messages.push({
+          role: 'tool',
+          tool_name: toolName,
+          tool_call_id: toolCallId || undefined,
+          content: blockMsg,
+        });
+        messages.push({
+          role: 'user',
+          content: 'The same read target has failed twice. Pivot to the correct root or a different discovery action; do not retry the same target again.',
+        });
+        continue;
+      }
+
       if (isBootStartupTurn && !bootAllowedTools.has(toolName)) {
         const blockMsg = `BOOT mode: "${toolName}" is disabled. Use only list_files and read_file, then provide the startup summary.`;
         console.log(`[v2] BOOT TOOL BLOCKED: ${toolName}`);
@@ -10303,6 +10340,7 @@ router.get('/api/status', async (_req, res) => {
     } : null,
     gatewayQueues: {
       contextBuild: getContextBuildLimiterStatus(),
+      contextBuildWorkers: getContextBuildWorkerPoolStatus(),
       postTurn: getPostTurnQueueStatus(),
       sessionPersistence: getSessionPersistenceStatus(),
     },

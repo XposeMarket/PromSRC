@@ -35,6 +35,8 @@ interface SerializedSearchResult {
 }
 
 const workerName = String(process.env.PROMETHEUS_RUNTIME_WORKER_NAME || 'memory-search-query');
+const MAX_QUERY_CHARS = 16_000;
+const MAX_SERIALIZED_RESULT_BYTES = 192 * 1024;
 let activeRequestId = '';
 
 function send(message: RuntimeWorkerChildMessage): void {
@@ -69,12 +71,72 @@ function resultMetadata(result: MemorySearchResult): Omit<SerializedSearchResult
   };
 }
 
+function boundJsonValue(value: unknown, state: { chars: number }, depth = 0): unknown {
+  if (state.chars >= 160_000) return '[TRUNCATED]';
+  if (value == null || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const remaining = Math.max(0, 160_000 - state.chars);
+    const bounded = value.slice(0, Math.min(16_000, remaining));
+    state.chars += bounded.length;
+    return bounded.length < value.length ? `${bounded}\n[TRUNCATED]` : bounded;
+  }
+  if (depth >= 8) return '[MAX_DEPTH]';
+  if (Array.isArray(value)) {
+    return value.slice(0, 100).map((entry) => boundJsonValue(entry, state, depth + 1));
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value).slice(0, 100)) {
+      out[key.slice(0, 200)] = boundJsonValue(entry, state, depth + 1);
+      if (state.chars >= 160_000) break;
+    }
+    return out;
+  }
+  return String(value).slice(0, 1000);
+}
+
+export function serializeBoundedMemorySearchResult(result: MemorySearchResult): string {
+  const bounded = boundJsonValue(result, { chars: 0 });
+  let serialized = JSON.stringify(bounded, null, 2);
+  if (Buffer.byteLength(serialized, 'utf8') <= MAX_SERIALIZED_RESULT_BYTES) return serialized;
+
+  const compact = {
+    query: String(result.query || '').slice(0, 4000),
+    mode: result.mode,
+    totalCandidates: result.totalCandidates,
+    hits: (result.hits || []).slice(0, 25).map((hit) => ({
+      ...hit,
+      title: String(hit.title || '').slice(0, 1000),
+      preview: String(hit.preview || '').slice(0, 4000),
+      diagnostics: undefined,
+    })),
+    citations: (result.citations || []).slice(0, 25),
+    stats: {
+      records: result.stats?.records,
+      chunks: result.stats?.chunks,
+      indexedAt: result.stats?.indexedAt,
+      backend: result.stats?.backend,
+      rerank: result.stats?.rerank,
+      telemetry: result.stats?.telemetry,
+      outputTruncated: true,
+    },
+  };
+  serialized = JSON.stringify(boundJsonValue(compact, { chars: 0 }), null, 2);
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_SERIALIZED_RESULT_BYTES) {
+    throw new Error(`Memory search result exceeded the safe serialized output limit (${MAX_SERIALIZED_RESULT_BYTES} bytes).`);
+  }
+  return serialized;
+}
+
 async function executeSearch(kind: SearchKind, payload: SearchPayload): Promise<SerializedSearchResult> {
   const workspacePath = String(payload.workspacePath || '').trim();
   if (!workspacePath) throw new Error(`${kind} requires workspacePath.`);
   const query = kind === 'memory_search'
     ? String(payload.params?.query || '')
     : String(payload.query || '');
+  if (query.length > MAX_QUERY_CHARS) {
+    throw new Error(`Memory search query exceeds the ${MAX_QUERY_CHARS}-character limit.`);
+  }
   if (
     process.env.PROMETHEUS_MEMORY_SEARCH_WORKER_TEST_HOOKS === '1'
     && query === '__PROMETHEUS_TEST_CRASH__'
@@ -128,7 +190,7 @@ async function executeSearch(kind: SearchKind, payload: SearchPayload): Promise<
   }
 
   return {
-    serialized: JSON.stringify(result, null, 2),
+    serialized: serializeBoundedMemorySearchResult(result),
     ...resultMetadata(result),
     rssBytes: process.memoryUsage().rss,
   };

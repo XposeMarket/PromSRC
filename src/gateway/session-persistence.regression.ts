@@ -6,6 +6,7 @@ import path from 'node:path';
 async function main(): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-session-persistence-'));
   process.env.PROMETHEUS_DATA_DIR = root;
+  process.env.PROMETHEUS_WORKSPACE_DIR = root;
 
   try {
     const sessionApi = await import('./session');
@@ -20,6 +21,20 @@ async function main(): Promise<void> {
       content: 'first response',
       timestamp: Date.now() + 1,
     });
+
+    const transcriptPath = path.join(root, 'audit', 'chats', 'transcripts', `${sessionId}.jsonl`);
+    assert.equal(fs.existsSync(transcriptPath), false, 'message arrival must not synchronously write the transcript');
+    await sessionApi.flushPendingChatAuditWrites();
+    const transcriptRows = fs.readFileSync(transcriptPath, 'utf-8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    assert.deepEqual(
+      transcriptRows.map((row) => row.content),
+      ['first message', 'first response'],
+      'the async transcript queue must preserve per-session message order',
+    );
+    const auditStatus = sessionApi.getChatAuditPersistenceStatus();
+    assert.equal(auditStatus.pendingRecords, 0);
+    assert.equal(auditStatus.dropped, 0);
+    assert.equal(auditStatus.markdownDropped, 0);
 
     await new Promise<void>((resolve) => setTimeout(resolve, 550));
     await sessionApi.flushPendingSessionWrites();

@@ -9,7 +9,13 @@
  * resetProvider() from the settings API). No other files need touching.
  */
 
-import { getProvider, getModelForRole, getPrimaryModel, resetProvider } from '../providers/factory';
+import {
+  getProvider,
+  getModelForRole,
+  getPrimaryModel,
+  getProviderRuntimeIdentity,
+  resetProvider,
+} from '../providers/factory';
 import type { LLMProvider } from '../providers/LLMProvider';
 import type { ModelStreamEvent } from '../providers/LLMProvider';
 export type { LLMProvider };
@@ -25,6 +31,17 @@ import {
   captureRuntimePromptManifest,
   type RuntimePromptManifestContext,
 } from '../runtime/prompt-manifest';
+import {
+  areModelCallWorkersEnabled,
+  dispatchModelCallWorker,
+  ModelCallWorkerError,
+  noteModelCallWorkerFallback,
+  shouldSuppressModelCallRetry,
+} from '../gateway/process/model-call-worker-pool';
+import type {
+  ModelCallChatRequest,
+  ModelCallGenerateRequest,
+} from '../gateway/process/model-call-worker-protocol';
 
 export interface GenerateOutput {
   response: string;
@@ -40,6 +57,163 @@ export class OllamaClient {
 
   private get provider(): LLMProvider {
     return getProvider();
+  }
+
+  private async prepareWorkerCredentials(providerId: string, accountId?: string): Promise<void> {
+    const normalized = String(providerId || '').trim().toLowerCase();
+    if (normalized === 'openai_codex') {
+      const [{ getConfig }, { getValidToken }] = await Promise.all([
+        import('../config/config.js'),
+        import('../auth/openai-oauth.js'),
+      ]);
+      await getValidToken(getConfig().getConfigDir(), accountId);
+      return;
+    }
+    if (normalized === 'xai') {
+      const [{ getConfig }, { getValidXAIToken, isXAIConnected }] = await Promise.all([
+        import('../config/config.js'),
+        import('../auth/xai-oauth.js'),
+      ]);
+      const configDir = getConfig().getConfigDir();
+      if (isXAIConnected(configDir, accountId)) {
+        await getValidXAIToken(configDir, accountId);
+      }
+    }
+  }
+
+  /**
+   * Provider-level call used by provider-specific Reactor shims. This performs
+   * isolation/fallback only; callers remain responsible for usage accounting.
+   */
+  async callProviderChatRaw(
+    activeProvider: LLMProvider,
+    messages: Array<any>,
+    model: string,
+    options?: {
+      temperature?: number;
+      num_ctx?: number;
+      num_predict?: number;
+      think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      tools?: any[];
+      onToken?: (chunk: string) => void;
+      onThinking?: (chunk: string) => void;
+      onReasoningSummary?: (chunk: string) => void;
+      onModelEvent?: (event: ModelStreamEvent) => void;
+      abortSignal?: AbortSignal;
+      omitIntradayNotes?: boolean;
+    },
+  ): Promise<any> {
+    const direct = () => activeProvider.chat(messages, model, {
+      temperature: options?.temperature,
+      max_tokens: options?.num_predict,
+      num_ctx: options?.num_ctx,
+      tools: options?.tools,
+      think: options?.think,
+      onToken: options?.onToken,
+      onThinking: options?.onThinking,
+      onReasoningSummary: options?.onReasoningSummary,
+      onModelEvent: options?.onModelEvent,
+      abortSignal: options?.abortSignal,
+      omitIntradayNotes: options?.omitIntradayNotes,
+    });
+    if (!areModelCallWorkersEnabled()) return direct();
+    const identity = getProviderRuntimeIdentity(activeProvider);
+    if (!identity) {
+      noteModelCallWorkerFallback(`Provider "${activeProvider.id}" is not reconstructable in a worker.`);
+      return direct();
+    }
+    const request: ModelCallChatRequest = {
+      operation: 'chat',
+      providerId: identity.providerId,
+      accountId: identity.accountId,
+      model,
+      messages,
+      options: {
+        temperature: options?.temperature,
+        maxTokens: options?.num_predict,
+        numCtx: options?.num_ctx,
+        tools: options?.tools,
+        think: options?.think,
+        omitIntradayNotes: options?.omitIntradayNotes,
+      },
+    };
+    try {
+      await this.prepareWorkerCredentials(identity.providerId, identity.accountId);
+      return await dispatchModelCallWorker(request, {
+        onToken: options?.onToken,
+        onThinking: options?.onThinking,
+        onReasoningSummary: options?.onReasoningSummary,
+        onModelEvent: options?.onModelEvent,
+        signal: options?.abortSignal,
+      });
+    } catch (error: any) {
+      if (error instanceof ModelCallWorkerError && error.safeToFallback) {
+        noteModelCallWorkerFallback(error.message);
+        console.warn(`[model-call-workers] Using direct chat path before provider start: ${error.message}`);
+        return direct();
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Provider-level call used by provider-specific Reactor shims. This performs
+   * isolation/fallback only; callers remain responsible for usage accounting.
+   */
+  async callProviderGenerateRaw(
+    activeProvider: LLMProvider,
+    prompt: string,
+    model: string,
+    options?: {
+      temperature?: number;
+      format?: 'json';
+      system?: string;
+      num_ctx?: number;
+      num_predict?: number;
+      think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      abortSignal?: AbortSignal;
+    },
+  ): Promise<any> {
+    const direct = () => activeProvider.generate(prompt, model, {
+      temperature: options?.temperature,
+      format: options?.format,
+      system: options?.system,
+      num_ctx: options?.num_ctx,
+      max_tokens: options?.num_predict,
+      think: options?.think,
+    });
+    if (!areModelCallWorkersEnabled()) return direct();
+    const identity = getProviderRuntimeIdentity(activeProvider);
+    if (!identity) {
+      noteModelCallWorkerFallback(`Provider "${activeProvider.id}" is not reconstructable in a worker.`);
+      return direct();
+    }
+    const request: ModelCallGenerateRequest = {
+      operation: 'generate',
+      providerId: identity.providerId,
+      accountId: identity.accountId,
+      model,
+      prompt,
+      options: {
+        temperature: options?.temperature,
+        format: options?.format,
+        system: options?.system,
+        numCtx: options?.num_ctx,
+        maxTokens: options?.num_predict,
+        think: options?.think,
+      },
+    };
+    try {
+      await this.prepareWorkerCredentials(identity.providerId, identity.accountId);
+      return await dispatchModelCallWorker(request, { signal: options?.abortSignal });
+    } catch (error: any) {
+      if (error instanceof ModelCallWorkerError && error.safeToFallback) {
+        noteModelCallWorkerFallback(error.message);
+        console.warn(`[model-call-workers] Using direct generate path before provider start: ${error.message}`);
+        return direct();
+      }
+      throw error;
+    }
   }
 
   // ─── Chat ───────────────────────────────────────────────────────────────────
@@ -80,19 +254,7 @@ export class OllamaClient {
       tools: options?.tools,
       context: options?.usageContext?.promptManifest,
     });
-    const result = await activeProvider.chat(messages, model, {
-      temperature:       options?.temperature,
-      max_tokens:        options?.num_predict,
-      num_ctx:           options?.num_ctx,
-      tools:             options?.tools,
-      think:             options?.think,
-      onToken:           options?.onToken,
-      onThinking:        options?.onThinking,
-      onReasoningSummary: options?.onReasoningSummary,
-      onModelEvent:      options?.onModelEvent,
-      abortSignal:       options?.abortSignal,
-      omitIntradayNotes: options?.omitIntradayNotes,
-    });
+    const result = await this.callProviderChatRaw(activeProvider, messages, model, options);
     const estimatedMessageInputTokens = estimateMessagesTokens(messages);
     const estimatedSystemPromptTokens = estimateMessagesTokens(messages.filter((message: any) => message?.role === 'system'));
     const estimatedConversationTokens = Math.max(0, estimatedMessageInputTokens - estimatedSystemPromptTokens);
@@ -138,11 +300,14 @@ export class OllamaClient {
       num_ctx?: number;
       num_predict?: number;
       think?: boolean | 'ultra' | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
+      model?: string;
+      provider?: LLMProvider;
+      abortSignal?: AbortSignal;
       usageContext?: { sessionId?: string; agentId?: string; promptManifest?: RuntimePromptManifestContext };
     }
   ): Promise<GenerateOutput> {
-    const model = getModelForRole(role);
-    const activeProvider = this.provider;
+    const model = String(options?.model || '').trim() || getModelForRole(role);
+    const activeProvider = options?.provider ?? this.provider;
     const startedAt = Date.now();
     const promptManifest = captureRuntimePromptManifest({
       callType: 'generate',
@@ -155,14 +320,7 @@ export class OllamaClient {
       prompt,
       context: options?.usageContext?.promptManifest,
     });
-    const result = await activeProvider.generate(prompt, model, {
-      temperature: options?.temperature,
-      format:      options?.format,
-      system:      options?.system,
-      num_ctx:     options?.num_ctx,
-      max_tokens:  options?.num_predict,
-      think:       options?.think,
-    });
+    const result = await this.callProviderGenerateRaw(activeProvider, prompt, model, options);
     const usage = normalizeUsage(result.usage, {
       inputTokens: estimateTextTokens(`${options?.system || ''}\n${prompt}`),
       outputTokens: estimateTextTokens(result.response) + estimateTextTokens(result.thinking),
@@ -213,6 +371,12 @@ export class OllamaClient {
         return await this.generateWithThinking(prompt, role, options);
       } catch (error: any) {
         lastError = error;
+        // A child may have already started a billable provider request. Retrying
+        // that failure here would silently duplicate the call, so only the
+        // direct/provider path retains the legacy retry behavior.
+        if (shouldSuppressModelCallRetry(error)) {
+          throw error;
+        }
         console.warn(`Attempt ${i + 1}/${maxRetries} failed:`, error.message);
         if (i < maxRetries - 1) {
           await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));

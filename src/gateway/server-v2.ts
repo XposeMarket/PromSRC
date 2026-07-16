@@ -26,7 +26,8 @@ import {
 } from '../config/config';
 import { getVault } from '../security/vault';
 import { getOllamaClient } from '../agents/ollama-client';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, flushAllSessions, getSessionPersistenceStatus } from './session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, flushAllSessions, flushPendingChatAuditWrites, getChatAuditPersistenceStatus, getSessionPersistenceStatus } from './session';
+import { compactRuntimeStateOnStartup, flushLiveRuntimePersistence, getLiveRuntimePersistenceStatus, warmLiveRuntimePersistence } from './live-runtime-registry';
 import { hookBus } from './hooks';
 import { loadWorkspaceHooks } from './hook-loader';
 import { runBootMd } from './boot';
@@ -180,6 +181,8 @@ import { scheduleMemoryIndexRefresh, shutdownMemoryIndexRefreshWorker } from './
 import { shutdownMemorySearchWorker } from './memory-index/search-worker-client';
 import { warmModelUsageIndex } from '../providers/model-usage';
 import { getContextBuildLimiterStatus } from './chat/context-build-limiter';
+import { getContextBuildWorkerPoolStatus, shutdownContextBuildWorkerPool } from './chat/context-build-worker-client';
+import { getModelCallWorkerPoolStatus, shutdownModelCallWorkerPool } from './process/model-call-worker-pool';
 import { getPostTurnQueueStatus } from './chat/post-turn-queue';
 import { requireGatewayAuth } from './gateway-auth';
 import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
@@ -765,8 +768,12 @@ app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => 
     chatRouter: getChatRouterWarmupStatus(),
     gatewayQueues: {
       contextBuild: getContextBuildLimiterStatus(),
+      contextBuildWorkers: getContextBuildWorkerPoolStatus(),
+      modelCallWorkers: getModelCallWorkerPoolStatus(),
       postTurn: getPostTurnQueueStatus(),
       sessionPersistence: getSessionPersistenceStatus(),
+      chatAuditPersistence: getChatAuditPersistenceStatus(),
+      runtimePersistence: getLiveRuntimePersistenceStatus(),
     },
   });
 });
@@ -852,8 +859,12 @@ startupMark('routers mounted');
 const httpsGateway = loadGatewayHttpsOptions();
 const getGatewayQueueStatus = () => ({
   contextBuild: getContextBuildLimiterStatus(),
+  contextBuildWorkers: getContextBuildWorkerPoolStatus(),
+  modelCallWorkers: getModelCallWorkerPoolStatus(),
   postTurn: getPostTurnQueueStatus(),
   sessionPersistence: getSessionPersistenceStatus(),
+  chatAuditPersistence: getChatAuditPersistenceStatus(),
+  runtimePersistence: getLiveRuntimePersistenceStatus(),
 });
 const { server, wss } = createServer(app, PORT, HOST, undefined, httpsGateway?.port, getGatewayQueueStatus);
 const secureBundle = httpsGateway
@@ -883,6 +894,8 @@ setShutdownHooks({
     return Promise.all([
       shutdownMemorySearchWorker(),
       shutdownMemoryIndexRefreshWorker(),
+      shutdownContextBuildWorkerPool(),
+      shutdownModelCallWorkerPool(),
     ]).then(() => undefined);
   },
   closeWebSocket: () => { try { wss.close(); } catch {}; try { secureBundle?.wss.close(); } catch {}; try { xaiVoiceStreaming.close(); } catch {}; try { secureXaiVoiceStreaming?.close(); } catch {}; try { openAiRealtimeProxy.close(); } catch {}; try { secureOpenAiRealtimeProxy?.close(); } catch {} },
@@ -893,8 +906,12 @@ setShutdownHooks({
       setTimeout(resolve, 2000); // force-resolve after 2s
     } catch { resolve(); }
   }),
-  flushSessions: () => {
+  flushSessions: async () => {
     try { flushAllSessions(); } catch {}
+    await Promise.all([
+      flushPendingChatAuditWrites(),
+      flushLiveRuntimePersistence(),
+    ]);
   },
 });
 
@@ -917,6 +934,13 @@ try {
   console.log(`[model-usage] Indexed ${usageWarmup.events} events in ${usageWarmup.durationMs}ms before accepting traffic.`);
 } catch (e: any) {
   console.warn('[model-usage] Startup index warmup failed:', e?.message || e);
+}
+try {
+  compactRuntimeStateOnStartup();
+  const runtimeWarmup = warmLiveRuntimePersistence();
+  console.log(`[live-runtime] Loaded ${runtimeWarmup.runtimes} durable runtime(s) before accepting traffic.`);
+} catch (e: any) {
+  console.warn('[live-runtime] Startup ledger warmup failed:', e?.message || e);
 }
 
 server.listen(PORT, HOST, () => {
@@ -950,7 +974,7 @@ if (secureBundle && httpsGateway) {
 }
 
 let shuttingDown = false;
-function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
+async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('[Gateway] Shutting down...');
@@ -977,7 +1001,17 @@ function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   try { flushAllSessions(); } catch (err: any) {
     console.warn('[Gateway] Session flush failed:', err?.message || err);
   }
+  try {
+    await Promise.all([
+      flushPendingChatAuditWrites(),
+      flushLiveRuntimePersistence(),
+    ]);
+  } catch (err: any) {
+    console.warn('[Gateway] Async persistence drain failed:', err?.message || err);
+  }
   void shutdownMemoryIndexRefreshWorker().catch(() => undefined);
+  void shutdownContextBuildWorkerPool().catch(() => undefined);
+  void shutdownModelCallWorkerPool().catch(() => undefined);
   try { if (wss) wss.close(); } catch {}
   try { secureBundle?.wss.close(); } catch {}
   try { xaiVoiceStreaming.close(); } catch {}
@@ -990,7 +1024,7 @@ function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   } catch { process.exit(0); }
 }
 
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
+process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
 
 export { app, server };

@@ -111,6 +111,30 @@ function requireApiKey(id: string, cfg: Record<string, unknown>): string {
 
 let cachedProvider: LLMProvider | null = null;
 let cachedProviderKey: string | null = null;
+const providerRuntimeIdentity = new WeakMap<object, { providerId: string; accountId?: string }>();
+
+function rememberProviderRuntimeIdentity(
+  provider: LLMProvider,
+  providerId: string,
+  accountId?: string,
+): LLMProvider {
+  providerRuntimeIdentity.set(provider as object, {
+    providerId: String(providerId || provider.id).trim(),
+    accountId: String(accountId || '').trim() || undefined,
+  });
+  return provider;
+}
+
+/**
+ * Returns the non-secret identity needed to reconstruct a factory provider in a
+ * child process. Unknown/custom provider objects deliberately return null so
+ * callers can use the in-process path instead of attempting to serialize them.
+ */
+export function getProviderRuntimeIdentity(
+  provider: LLMProvider,
+): { providerId: string; accountId?: string } | null {
+  return providerRuntimeIdentity.get(provider as object) || null;
+}
 
 export function getProvider(): LLMProvider {
   const { active, providers, accountId } = getProviderConfig();
@@ -126,7 +150,11 @@ export function getProvider(): LLMProvider {
   }
 
   cachedProviderKey = cacheKey;
-  cachedProvider = buildProvider(active, providers, selectedAccountId);
+  cachedProvider = rememberProviderRuntimeIdentity(
+    buildProvider(active, providers, selectedAccountId),
+    active,
+    selectedAccountId,
+  );
   return cachedProvider;
 }
 
@@ -138,13 +166,23 @@ export function resetProvider(): void {
 export function buildProviderById(providerId: string, accountId?: string): LLMProvider {
   const raw = getConfig().getConfig() as any;
   const providers = raw.llm?.providers || {};
-  return buildProvider(providerId, providers, accountId);
+  const selectedAccountId = readAccountId(providerId, providers, accountId);
+  return rememberProviderRuntimeIdentity(
+    buildProvider(providerId, providers, selectedAccountId),
+    providerId,
+    selectedAccountId,
+  );
 }
 
 export function buildProviderForLLM(llm: any): LLMProvider {
   const active = String(llm?.provider || 'ollama');
   const providers = llm?.providers || {};
-  return buildProvider(active, providers, llm?.accountId);
+  const selectedAccountId = readAccountId(active, providers, llm?.accountId);
+  return rememberProviderRuntimeIdentity(
+    buildProvider(active, providers, selectedAccountId),
+    active,
+    selectedAccountId,
+  );
 }
 
 function buildProvider(id: ProviderID, providers: any, accountId?: string): LLMProvider {

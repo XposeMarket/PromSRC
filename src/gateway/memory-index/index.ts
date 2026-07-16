@@ -209,6 +209,13 @@ const WORKSPACE_PRIORITY_ROOTS = [
   '.prometheus',
 ];
 const WORKSPACE_MAX_FILES = 12000;
+const MEMORY_STORE_MAX_FILE_BYTES = 128 * 1024 * 1024;
+const MEMORY_STORE_MAX_RECORDS = 8_000;
+const MEMORY_STORE_MAX_CHUNKS = 25_000;
+const MEMORY_STORE_MAX_CHUNK_TEXT_CHARS = 32 * 1024 * 1024;
+const MEMORY_STORE_MAX_TOKEN_KEYS = 100_000;
+const MEMORY_STORE_MAX_TOKEN_POSTINGS = 500_000;
+const MEMORY_STORE_MAX_RELATIONS = 32_000;
 const TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.mdx', '.json', '.jsonl', '.yaml', '.yml', '.toml', '.ini', '.env', '.csv', '.tsv',
   '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.css', '.scss', '.sass', '.less', '.html', '.htm',
@@ -295,6 +302,80 @@ export function scheduleMemoryIndexRefresh(workspacePath: string, options?: Memo
 function ensureDir(d: string): void { fs.mkdirSync(d, { recursive: true }); }
 function readJson<T>(p: string, fallback: T): T { try { return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf-8')) as T : fallback; } catch { return fallback; } }
 function writeJson(p: string, data: unknown): void { ensureDir(path.dirname(p)); fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf-8'); }
+function writeMemoryStore(p: string, store: Store): void {
+  assertMemoryStoreWithinBounds(store);
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(store, null, 2);
+  } catch (error: any) {
+    throw new Error(`Memory index store could not be serialized within safe bounds: ${String(error?.message || error)}`);
+  }
+  const bytes = Buffer.byteLength(serialized, 'utf8');
+  if (bytes > MEMORY_STORE_MAX_FILE_BYTES) {
+    throw new Error(`Memory index store would be ${bytes} bytes; safety limit is ${MEMORY_STORE_MAX_FILE_BYTES}.`);
+  }
+  ensureDir(path.dirname(p));
+  fs.writeFileSync(p, serialized, 'utf-8');
+}
+
+function resetOversizedGeneratedStore(storePath: string, manifestPath: string): boolean {
+  if (!fs.existsSync(storePath) || fs.statSync(storePath).size <= MEMORY_STORE_MAX_FILE_BYTES) return false;
+  // store.json and its manifest are derived caches under audit/_index. Removing
+  // them is safe: SQLite remains available and the maintenance worker rebuilds
+  // a bounded JSON fallback incrementally from the authoritative audit files.
+  fs.rmSync(storePath, { force: true });
+  fs.rmSync(manifestPath, { force: true });
+  fs.rmSync(path.join(path.dirname(storePath), 'graph.json'), { force: true });
+  return true;
+}
+
+function clearGeneratedMemoryStore(storePath: string, manifestPath: string): void {
+  fs.rmSync(storePath, { force: true });
+  fs.rmSync(manifestPath, { force: true });
+  fs.rmSync(path.join(path.dirname(storePath), 'graph.json'), { force: true });
+}
+function readMemoryStore(p: string, fallback: Store): Store {
+  if (!fs.existsSync(p)) return fallback;
+  const size = fs.statSync(p).size;
+  if (size > MEMORY_STORE_MAX_FILE_BYTES) {
+    throw new Error(`Memory index store is ${size} bytes; refusing to load it above the ${MEMORY_STORE_MAX_FILE_BYTES}-byte safety limit.`);
+  }
+  const store = JSON.parse(fs.readFileSync(p, 'utf-8')) as Store;
+  assertMemoryStoreWithinBounds(store);
+  return store;
+}
+
+export function assertMemoryStoreWithinBounds(store: Pick<Store, 'records' | 'chunks'> & Partial<Pick<Store, 'tokenIndex' | 'relations'>>): void {
+  const recordCount = Object.keys(store.records || {}).length;
+  const chunks = Object.values(store.chunks || {});
+  if (recordCount > MEMORY_STORE_MAX_RECORDS) {
+    throw new Error(`Memory index contains ${recordCount} records; safety limit is ${MEMORY_STORE_MAX_RECORDS}.`);
+  }
+  if (chunks.length > MEMORY_STORE_MAX_CHUNKS) {
+    throw new Error(`Memory index contains ${chunks.length} chunks; safety limit is ${MEMORY_STORE_MAX_CHUNKS}.`);
+  }
+  let textChars = 0;
+  for (const chunk of chunks) {
+    textChars += String(chunk?.text || '').length;
+    if (textChars > MEMORY_STORE_MAX_CHUNK_TEXT_CHARS) {
+      throw new Error(`Memory index chunk text exceeds the ${MEMORY_STORE_MAX_CHUNK_TEXT_CHARS}-character safety limit.`);
+    }
+  }
+  const tokenEntries = Object.entries(store.tokenIndex || {});
+  if (tokenEntries.length > MEMORY_STORE_MAX_TOKEN_KEYS) {
+    throw new Error(`Memory index contains ${tokenEntries.length} token keys; safety limit is ${MEMORY_STORE_MAX_TOKEN_KEYS}.`);
+  }
+  let postings = 0;
+  for (const [, ids] of tokenEntries) {
+    postings += Array.isArray(ids) ? ids.length : 0;
+    if (postings > MEMORY_STORE_MAX_TOKEN_POSTINGS) {
+      throw new Error(`Memory index token postings exceed the ${MEMORY_STORE_MAX_TOKEN_POSTINGS} safety limit.`);
+    }
+  }
+  if ((store.relations?.length || 0) > MEMORY_STORE_MAX_RELATIONS) {
+    throw new Error(`Memory index contains ${store.relations?.length} relations; safety limit is ${MEMORY_STORE_MAX_RELATIONS}.`);
+  }
+}
 function rel(abs: string, root: string): string { return path.relative(root, abs).replace(/\\/g, '/'); }
 function id(prefix: string, input: string): string { return `${prefix}_${crypto.createHash('sha1').update(input).digest('hex').slice(0, 16)}`; }
 function norm(s: string): string { return String(s || '').replace(/\r/g, '\n').replace(/\n{3,}/g, '\n\n').trim(); }
@@ -552,6 +633,28 @@ function addChunkIndex(tokenIndex: Record<string, string[]>, chunk: ChunkItem): 
     if (!tokenIndex[t].includes(chunk.id)) tokenIndex[t].push(chunk.id);
   }
 }
+
+export function buildBoundedTokenIndex(chunks: Record<string, Pick<ChunkItem, 'id' | 'terms'>>): Record<string, string[]> {
+  const tokenIndex: Record<string, string[]> = {};
+  let postings = 0;
+  let tokenKeyCount = 0;
+  for (const chunk of Object.values(chunks)) {
+    for (const token of [...new Set(chunk.terms || [])].slice(0, 24)) {
+      if (postings >= MEMORY_STORE_MAX_TOKEN_POSTINGS) return tokenIndex;
+      if (!tokenIndex[token]) {
+        if (tokenKeyCount >= MEMORY_STORE_MAX_TOKEN_KEYS) continue;
+        tokenIndex[token] = [];
+        tokenKeyCount += 1;
+      }
+      const bucket = tokenIndex[token];
+      if (bucket.length >= 200 || bucket.includes(chunk.id)) continue;
+      bucket.push(chunk.id);
+      postings += 1;
+    }
+  }
+  return tokenIndex;
+}
+
 function makeChunks(record: RecordItem, text: string): ChunkItem[] {
   const out: ChunkItem[] = []; const clean = norm(text); let idx = 0; let start = 0;
   while (start < clean.length) {
@@ -625,7 +728,7 @@ function overlapScore(aTerms: string[], bTerms: string[]): { count: number; scor
 function buildRelations(records: Record<string, RecordItem>, chunks: Record<string, ChunkItem>): RelationItem[] {
   const recs = Object.values(records);
   if (recs.length < 2) return [];
-  const relationCap = Math.max(5000, Math.min(50000, recs.length * 4));
+  const relationCap = Math.max(5000, Math.min(MEMORY_STORE_MAX_RELATIONS, recs.length * 4));
   const chunksByRecord = new Map<string, ChunkItem[]>();
   for (const chunk of Object.values(chunks)) {
     if (!chunksByRecord.has(chunk.recordId)) chunksByRecord.set(chunk.recordId, []);
@@ -672,6 +775,7 @@ function buildRelations(records: Record<string, RecordItem>, chunks: Record<stri
       for (let j = i + 1; j < Math.min(sorted.length, i + 3); j += 1) {
         const b = sorted[j];
         const rootBoost = relRoot(a.sourcePath) === relRoot(b.sourcePath) ? 0.04 : 0;
+        if (rels.length >= relationCap) return;
         rels.push({
           id: id('rel', `${type}:${a.id}:${b.id}`),
           fromId: a.id,
@@ -709,6 +813,7 @@ function buildRelations(records: Record<string, RecordItem>, chunks: Record<stri
         const overlap = overlapScore(recTerms.get(aId) || [], recTerms.get(bId) || []);
         if (overlap.count < 3 || overlap.score < 0.2) continue;
         seenSharedPairs.add(pairKey);
+        if (rels.length >= relationCap) break;
         rels.push({
           id: id('rel', `shared_terms:${aId}:${bId}`),
           fromId: aId,
@@ -736,6 +841,7 @@ function buildRelations(records: Record<string, RecordItem>, chunks: Record<stri
         if (!best || sim > best.score) best = { recId: b.id, score: sim };
       }
       if (best) {
+        if (rels.length >= relationCap) break;
         rels.push({
           id: id('rel', `semantic_neighbor:${a.id}:${best.recId}`),
           fromId: a.id,
@@ -767,6 +873,7 @@ function buildRelations(records: Record<string, RecordItem>, chunks: Record<stri
         if (!best || sim > best.score) best = { recId: bId, score: sim };
       }
       if (best) {
+        if (rels.length >= relationCap) break;
         rels.push({
           id: id('rel', `semantic_neighbor:${a.id}:${best.recId}`),
           fromId: a.id,
@@ -807,10 +914,11 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
   const auditRoot = path.join(workspacePath, 'audit');
   const now = Date.now(); const nowIso = new Date(now).toISOString();
   const shouldSyncSqlite = options?.syncSqlite !== false;
+  const resetOversizedStore = resetOversizedGeneratedStore(storePath, manifestPath);
   const manifest = readJson<Manifest>(manifestPath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), lastRunAtMs: 0, files: {} });
   memoryMark('manifest loaded');
   const minIntervalMs = Math.max(0, Number(options?.minIntervalMs ?? 20000));
-  if (!options?.force && now - Number(manifest.lastRunAtMs || 0) < minIntervalMs) {
+  if (!resetOversizedStore && !options?.force && now - Number(manifest.lastRunAtMs || 0) < minIntervalMs) {
     const stats = readIndexStatsFromLightFiles(workspacePath, manifest.updatedAt);
     memoryMark('refresh throttled');
     return { indexedFiles: 0, skippedFiles: 0, removedFiles: 0, deferredFiles: 0, ...stats };
@@ -848,8 +956,8 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
   }
   memoryMark(`changes compared (changed=${changed.length}, removed=${removed})`);
   const maxChanged = Math.max(1, Number(options?.maxChangedFiles ?? 200));
-  const nowChanges = changed.slice(0, maxChanged);
-  const deferred = Math.max(0, changed.length - nowChanges.length);
+  let nowChanges = changed.slice(0, maxChanged);
+  let deferred = Math.max(0, changed.length - nowChanges.length);
   if (removed === 0 && nowChanges.length === 0) {
     manifest.lastRunAtMs = now;
     manifest.updatedAt = manifest.updatedAt || nowIso;
@@ -860,7 +968,7 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
       const sqliteMissing = !fs.existsSync(sqliteDbPath);
       const sqliteEmpty = !sqliteMissing && (() => { try { const r = searchSqliteMemoryIndex(workspacePath, { query: '_', limit: 1 }); return !r || (r.stats?.records ?? 0) === 0; } catch { return true; } })();
       if (sqliteMissing || sqliteEmpty) {
-        const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: manifest.updatedAt || nowIso, records: {}, chunks: {}, tokenIndex: {}, relations: [] });
+        const store = readMemoryStore(storePath, { version: INDEX_VERSION, updatedAt: manifest.updatedAt || nowIso, records: {}, chunks: {}, tokenIndex: {}, relations: [] });
         try { syncSqliteMemoryIndex(workspacePath, store); } catch { /* non-fatal: JSON index remains the fallback */ }
         scheduleAutomaticEmbeddingBackfill(workspacePath);
         memoryMark('missing or empty sqlite synced from existing store');
@@ -871,23 +979,46 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
     memoryMark('no-op refresh complete');
     return { indexedFiles: 0, skippedFiles: skipped, removedFiles: 0, deferredFiles: deferred, ...stats };
   }
-  const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), records: {}, chunks: {}, tokenIndex: {}, relations: [] });
+  let store: Store;
+  try {
+    store = readMemoryStore(storePath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), records: {}, chunks: {}, tokenIndex: {}, relations: [] });
+  } catch (error: any) {
+    console.warn(`[memory-index] Rebuilding unsafe generated JSON fallback: ${String(error?.message || error).slice(0, 500)}`);
+    clearGeneratedMemoryStore(storePath, manifestPath);
+    manifest.files = {};
+    nowChanges = rels.slice(0, maxChanged);
+    deferred = Math.max(0, rels.length - nowChanges.length);
+    store = { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), records: {}, chunks: {}, tokenIndex: {}, relations: [] };
+  }
   memoryMark('store loaded');
+  let currentChunkTextChars = Object.values(store.chunks).reduce((sum, chunk) => sum + String(chunk?.text || '').length, 0);
   for (const oldRel of removedRels) {
     const ent = manifest.files[oldRel];
     for (const cid of ent?.chunkIds || []) { const c = store.chunks[cid]; if (c) { removeChunkIndex(store.tokenIndex, c); delete store.chunks[cid]; } }
     if (ent?.recordId) delete store.records[ent.recordId];
     delete manifest.files[oldRel];
   }
-  for (const relPath of nowChanges) {
+  for (let changeIndex = 0; changeIndex < nowChanges.length; changeIndex += 1) {
+    const relPath = nowChanges[changeIndex];
     const abs = sourceFiles.get(relPath) || path.join(auditRoot, relPath); const st = fs.statSync(abs);
     const prev = manifest.files[relPath];
-    if (prev) {
-      for (const cid of prev.chunkIds || []) { const c = store.chunks[cid]; if (c) { removeChunkIndex(store.tokenIndex, c); delete store.chunks[cid]; } }
-      delete store.records[prev.recordId];
-    }
     const parsed = parseContent(abs, relPath);
-    if (!parsed || !norm(parsed.text)) { delete manifest.files[relPath]; indexed += 1; continue; }
+    if (!parsed || !norm(parsed.text)) {
+      if (prev) {
+        for (const cid of prev.chunkIds || []) {
+          const c = store.chunks[cid];
+          if (c) {
+            currentChunkTextChars -= String(c.text || '').length;
+            removeChunkIndex(store.tokenIndex, c);
+            delete store.chunks[cid];
+          }
+        }
+        delete store.records[prev.recordId];
+      }
+      delete manifest.files[relPath];
+      indexed += 1;
+      continue;
+    }
     const type = inferType(relPath); const ts = tsFrom(relPath, st, parsed.parsed); const recId = id('rec', relPath);
     const title = String(parsed.parsed?.title || path.basename(relPath, path.extname(relPath)) || path.basename(relPath)).trim();
     const rec: RecordItem = {
@@ -906,18 +1037,45 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
       confidence: type === 'memory_root' ? 1 : type === 'chat_transcript' || type === 'chat_session' ? 0.62 : 0.8,
       status: 'active',
     };
-    store.records[recId] = rec;
     const chunks = makeChunks(rec, parsed.text);
+    const previousChunkCount = prev?.chunkIds?.length || 0;
+    const previousChunkTextChars = (prev?.chunkIds || []).reduce(
+      (sum, cid) => sum + String(store.chunks[cid]?.text || '').length,
+      0,
+    );
+    const nextChunkTextChars = chunks.reduce((sum, chunk) => sum + String(chunk.text || '').length, 0);
+    const projectedRecords = Object.keys(store.records).length + (prev?.recordId && store.records[prev.recordId] ? 0 : 1);
+    const projectedChunks = Object.keys(store.chunks).length - previousChunkCount + chunks.length;
+    const projectedChunkTextChars = currentChunkTextChars - previousChunkTextChars + nextChunkTextChars;
+    if (
+      projectedRecords > MEMORY_STORE_MAX_RECORDS
+      || projectedChunks > MEMORY_STORE_MAX_CHUNKS
+      || projectedChunkTextChars > MEMORY_STORE_MAX_CHUNK_TEXT_CHARS
+    ) {
+      deferred += nowChanges.length - changeIndex;
+      break;
+    }
+    if (prev) {
+      for (const cid of prev.chunkIds || []) { const c = store.chunks[cid]; if (c) { removeChunkIndex(store.tokenIndex, c); delete store.chunks[cid]; } }
+      delete store.records[prev.recordId];
+    }
+    store.records[recId] = rec;
     for (const c of chunks) { store.chunks[c.id] = c; addChunkIndex(store.tokenIndex, c); }
+    currentChunkTextChars = projectedChunkTextChars;
     manifest.files[relPath] = { mtimeMs: st.mtimeMs, size: st.size, recordId: recId, chunkIds: chunks.map((c) => c.id) };
     indexed += 1;
   }
   memoryMark(`changes indexed (${indexed})`);
+  store.tokenIndex = buildBoundedTokenIndex(store.chunks);
+  assertMemoryStoreWithinBounds(store);
   store.relations = buildRelations(store.records, store.chunks);
+  if (store.relations.length > MEMORY_STORE_MAX_RELATIONS) {
+    store.relations = store.relations.slice(0, MEMORY_STORE_MAX_RELATIONS);
+  }
   memoryMark(`relations built (${store.relations.length})`);
   store.version = INDEX_VERSION; store.updatedAt = nowIso;
   manifest.version = INDEX_VERSION; manifest.updatedAt = nowIso; manifest.lastRunAtMs = now;
-  ensureDir(root); writeJson(storePath, store); writeJson(manifestPath, manifest);
+  ensureDir(root); writeMemoryStore(storePath, store); writeJson(manifestPath, manifest);
   memoryMark('store and manifest written');
   const graphPath = path.join(root, 'graph.json');
   const firstChunkPreviewByRecord = new Map<string, string>();
@@ -971,7 +1129,7 @@ function recency(ts: number, now: number): number { const days = Math.max(0, (no
 
 function readStoreSnapshot(workspacePath: string): Store {
   const { store: storePath } = idxPaths(workspacePath);
-  return readJson<Store>(storePath, {
+  return readMemoryStore(storePath, {
     version: INDEX_VERSION,
     updatedAt: new Date(0).toISOString(),
     records: {},
@@ -1308,7 +1466,7 @@ export function getMemoryGraphSnapshot(workspacePath: string): { generatedAt: st
   // No cache yet: return the current store snapshot immediately while the
   // indexer builds graph.json in the background.
   scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 20000, maxChangedFiles: 120 });
-  const store = readJson<Store>(storePath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), records: {}, chunks: {}, tokenIndex: {}, relations: [] });
+  const store = readMemoryStore(storePath, { version: INDEX_VERSION, updatedAt: new Date(0).toISOString(), records: {}, chunks: {}, tokenIndex: {}, relations: [] });
   const nodes = Object.values(store.records).map((r) => ({
     id: r.id,
     sourceType: r.sourceType,

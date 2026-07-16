@@ -175,6 +175,13 @@ async function main(): Promise<void> {
       }),
       /exceeded the bounded IPC limit/i,
     );
+    await expectReject(
+      searchMemoryInWorker('memory_search', {
+        workspacePath,
+        params: { ...params, query: 'q'.repeat(16_001) },
+      }),
+      /query exceeds the 16000-character limit/i,
+    );
 
     await expectReject(
       searchMemoryInWorker('memory_search', {

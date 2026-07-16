@@ -71,6 +71,7 @@ export function getFileWebMemoryTools(): any[] {
             max_result_tokens: { type: 'number', description: 'Soft inline result budget. Default depends on action; overflow is saved as an artifact.' },
             hard_max_result_tokens: { type: 'number', description: 'Hard result budget cap for max_result_tokens. Default 4000.' },
             map: { type: 'boolean', description: 'For tree/list. Include compact repo-map header. Default true.' },
+            allow_source_copy: { type: 'boolean', description: 'Explicit opt-in for reading a workspace PromSRC clone/copy instead of the live product source. Use only when the user asked to compare that copy.' },
           },
         },
       },

@@ -1415,6 +1415,144 @@ function trimHistory(session: Session, maxMessages: number): void {
   void maxMessages;
 }
 
+interface PendingChatAuditBatch {
+  jsonlPath: string;
+  markdownPath: string;
+  jsonl: string[];
+  markdown: string[];
+  bytes: number;
+  records: number;
+  attempts: number;
+  jsonlWritten: boolean;
+}
+
+const MAX_PENDING_CHAT_AUDIT_RECORDS = 4096;
+const MAX_PENDING_CHAT_AUDIT_BYTES = 8 * 1024 * 1024;
+const MAX_CHAT_AUDIT_ATTEMPTS = 3;
+const pendingChatAuditBatches = new Map<string, PendingChatAuditBatch>();
+const chatAuditQueue: string[] = [];
+const chatAuditIdleWaiters = new Set<() => void>();
+let chatAuditDrainActive = false;
+let chatAuditDrainScheduled = false;
+let chatAuditCompleted = 0;
+let chatAuditFailed = 0;
+let chatAuditDropped = 0;
+let chatAuditMarkdownDropped = 0;
+let chatAuditHighWater = 0;
+let chatAuditPendingRecords = 0;
+let chatAuditRetainedBytes = 0;
+
+function resolveChatAuditIdleWaiters(): void {
+  if (chatAuditDrainActive || chatAuditDrainScheduled || chatAuditQueue.length || pendingChatAuditBatches.size) return;
+  for (const resolve of chatAuditIdleWaiters) resolve();
+  chatAuditIdleWaiters.clear();
+}
+
+function scheduleChatAuditDrain(): void {
+  if (chatAuditDrainActive || chatAuditDrainScheduled) return;
+  chatAuditDrainScheduled = true;
+  setImmediate(() => {
+    chatAuditDrainScheduled = false;
+    void drainChatAuditQueue();
+  });
+}
+
+function enqueueChatAuditArtifacts(
+  key: string,
+  jsonlPath: string,
+  markdownPath: string,
+  jsonl: string,
+  markdown: string,
+): void {
+  const recordBytes = Buffer.byteLength(jsonl, 'utf-8') + Buffer.byteLength(markdown, 'utf-8');
+  if (
+    chatAuditPendingRecords >= MAX_PENDING_CHAT_AUDIT_RECORDS
+    || chatAuditRetainedBytes + recordBytes > MAX_PENDING_CHAT_AUDIT_BYTES
+  ) {
+    // Chat history remains canonical in the session snapshot. Audit artifacts
+    // are explicitly best-effort, so overload drops are counted rather than
+    // retaining unlimited user message bodies in gateway memory.
+    chatAuditDropped += 1;
+    return;
+  }
+  let batch = pendingChatAuditBatches.get(key);
+  if (!batch) {
+    batch = { jsonlPath, markdownPath, jsonl: [], markdown: [], bytes: 0, records: 0, attempts: 0, jsonlWritten: false };
+    pendingChatAuditBatches.set(key, batch);
+    chatAuditQueue.push(key);
+    chatAuditHighWater = Math.max(chatAuditHighWater, chatAuditQueue.length);
+  }
+  batch.jsonl.push(jsonl);
+  batch.markdown.push(markdown);
+  batch.bytes += recordBytes;
+  batch.records += 1;
+  chatAuditRetainedBytes += recordBytes;
+  chatAuditPendingRecords += 1;
+  scheduleChatAuditDrain();
+}
+
+async function drainChatAuditQueue(): Promise<void> {
+  if (chatAuditDrainActive) return;
+  chatAuditDrainActive = true;
+  try {
+    while (chatAuditQueue.length) {
+      const key = chatAuditQueue.shift()!;
+      const batch = pendingChatAuditBatches.get(key);
+      if (!batch) continue;
+      pendingChatAuditBatches.delete(key);
+      try {
+        await fs.promises.mkdir(path.dirname(batch.jsonlPath), { recursive: true });
+        // JSONL is written first as the recovery-friendly journal. Markdown is
+        // a coalesced human-readable twin written by the same async queue.
+        if (!batch.jsonlWritten) {
+          await fs.promises.appendFile(batch.jsonlPath, batch.jsonl.join(''), 'utf-8');
+          batch.jsonlWritten = true;
+        }
+        await fs.promises.appendFile(batch.markdownPath, batch.markdown.join(''), 'utf-8');
+        chatAuditCompleted += batch.records;
+        chatAuditPendingRecords -= batch.records;
+        chatAuditRetainedBytes -= batch.bytes;
+      } catch (err) {
+        batch.attempts += 1;
+        chatAuditFailed += batch.records;
+        if (batch.jsonlWritten) {
+          // The durable journal made it to disk; do not duplicate it merely
+          // because the derived Markdown twin failed.
+          chatAuditCompleted += batch.records;
+          chatAuditMarkdownDropped += batch.records;
+          chatAuditPendingRecords -= batch.records;
+          chatAuditRetainedBytes -= batch.bytes;
+          console.warn(`[session] JSONL persisted but Markdown audit batch ${key} failed:`, err);
+        } else if (batch.attempts < MAX_CHAT_AUDIT_ATTEMPTS) {
+          const newer = pendingChatAuditBatches.get(key);
+          if (newer) {
+            batch.jsonl.push(...newer.jsonl);
+            batch.markdown.push(...newer.markdown);
+            batch.bytes += newer.bytes;
+            batch.records += newer.records;
+            batch.attempts = Math.max(batch.attempts, newer.attempts);
+            pendingChatAuditBatches.delete(key);
+            const queuedIndex = chatAuditQueue.indexOf(key);
+            if (queuedIndex >= 0) chatAuditQueue.splice(queuedIndex, 1);
+          }
+          pendingChatAuditBatches.set(key, batch);
+          chatAuditQueue.unshift(key);
+        } else {
+          chatAuditDropped += batch.records;
+          chatAuditPendingRecords -= batch.records;
+          chatAuditRetainedBytes -= batch.bytes;
+          console.warn(`[session] Dropped chat audit batch ${key} after ${batch.attempts} attempts:`, err);
+        }
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  } finally {
+    chatAuditDrainActive = false;
+    if (chatAuditQueue.length) scheduleChatAuditDrain();
+    resolveChatAuditIdleWaiters();
+  }
+}
+
 function appendCompactionArtifacts(
   sessionId: string,
   kind: 'legacy' | 'rolling',
@@ -1426,7 +1564,6 @@ function appendCompactionArtifacts(
     const cfg = getConfig();
     const workspacePath = cfg.getWorkspacePath();
     const compactionDir = path.join(workspacePath, 'audit', 'chats', 'compactions');
-    fs.mkdirSync(compactionDir, { recursive: true });
 
     const ts = new Date().toISOString();
     const cleanSummary = scrubPersistedText(String(summaryText || '')).slice(0, 12000);
@@ -1441,8 +1578,6 @@ function appendCompactionArtifacts(
     };
 
     const jsonlPath = storageFilePath(compactionDir, sessionId, '.jsonl', 'session id');
-    fs.appendFileSync(jsonlPath, JSON.stringify(payload) + '\n', 'utf-8');
-
     const mdPath = storageFilePath(compactionDir, sessionId, '.md', 'session id');
     const mdLines = [
       `### [${kind.toUpperCase()}_COMPACTION] ${ts}`,
@@ -1452,7 +1587,13 @@ function appendCompactionArtifacts(
       cleanSummary.trim() || '(No summary generated.)',
       '',
     ];
-    fs.appendFileSync(mdPath, mdLines.join('\n'), 'utf-8');
+    enqueueChatAuditArtifacts(
+      `compaction:${sessionId}`,
+      jsonlPath,
+      mdPath,
+      `${JSON.stringify(payload)}\n`,
+      mdLines.join('\n'),
+    );
   } catch {
     // Compaction artifacts are best-effort only.
   }
@@ -1467,7 +1608,6 @@ function appendTranscriptArtifacts(
     const cfg = getConfig();
     const workspacePath = cfg.getWorkspacePath();
     const transcriptDir = path.join(workspacePath, 'audit', 'chats', 'transcripts');
-    fs.mkdirSync(transcriptDir, { recursive: true });
 
     const ts = Number.isFinite(Number(msg.timestamp)) ? Number(msg.timestamp) : Date.now();
     const iso = new Date(ts).toISOString();
@@ -1487,8 +1627,6 @@ function appendTranscriptArtifacts(
     };
 
     const jsonlPath = storageFilePath(transcriptDir, sessionId, '.jsonl', 'session id');
-    fs.appendFileSync(jsonlPath, JSON.stringify(payload) + '\n', 'utf-8');
-
     const mdPath = storageFilePath(transcriptDir, sessionId, '.md', 'session id');
     const mdLines = [
       `### [${iso}] ${msg.role}${opts?.synthetic ? ' [synthetic]' : ''}`,
@@ -1496,7 +1634,13 @@ function appendTranscriptArtifacts(
       cleanContent.trim() || '(empty)',
       '',
     ];
-    fs.appendFileSync(mdPath, mdLines.join('\n'), 'utf-8');
+    enqueueChatAuditArtifacts(
+      `transcript:${sessionId}`,
+      jsonlPath,
+      mdPath,
+      `${JSON.stringify(payload)}\n`,
+      mdLines.join('\n'),
+    );
   } catch {
     // Transcript logging is best-effort only.
   }
@@ -2768,6 +2912,46 @@ export function flushPendingSessionWrites(): Promise<void> {
     sessionPersistenceIdleWaiters.add(resolve);
     scheduleSessionSnapshotDrain();
   });
+}
+
+export function flushPendingChatAuditWrites(): Promise<void> {
+  if (!chatAuditDrainActive && !chatAuditDrainScheduled && chatAuditQueue.length === 0 && pendingChatAuditBatches.size === 0) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    chatAuditIdleWaiters.add(resolve);
+    scheduleChatAuditDrain();
+  });
+}
+
+export function getChatAuditPersistenceStatus(): {
+  pendingBatches: number;
+  pendingRecords: number;
+  active: boolean;
+  scheduled: boolean;
+  completed: number;
+  failed: number;
+  dropped: number;
+  markdownDropped: number;
+  highWater: number;
+  retainedBytes: number;
+  maxPendingRecords: number;
+  maxRetainedBytes: number;
+} {
+  return {
+    pendingBatches: chatAuditQueue.length,
+    pendingRecords: chatAuditPendingRecords,
+    active: chatAuditDrainActive,
+    scheduled: chatAuditDrainScheduled,
+    completed: chatAuditCompleted,
+    failed: chatAuditFailed,
+    dropped: chatAuditDropped,
+    markdownDropped: chatAuditMarkdownDropped,
+    highWater: chatAuditHighWater,
+    retainedBytes: chatAuditRetainedBytes,
+    maxPendingRecords: MAX_PENDING_CHAT_AUDIT_RECORDS,
+    maxRetainedBytes: MAX_PENDING_CHAT_AUDIT_BYTES,
+  };
 }
 
 export function getSessionPersistenceStatus(): {

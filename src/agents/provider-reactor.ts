@@ -18,6 +18,8 @@ import {
   normalizeUsage,
 } from '../providers/model-usage';
 import type { AgentRole } from '../types';
+import { OllamaClient } from './ollama-client';
+import { shouldSuppressModelCallRetry } from '../gateway/process/model-call-worker-pool';
 
 type ProviderThinkMode = boolean | 'max' | 'extra_high' | 'xhigh' | 'high' | 'medium' | 'low' | 'minimal' | 'none';
 
@@ -60,6 +62,7 @@ export interface ReactorClient {
 export class ProviderReactorClient implements ReactorClient {
   /** Marker used by Reactor to detect cloud providers and enable native tool calls */
   readonly isCloudProvider = true;
+  private readonly isolatedModelClient = new OllamaClient();
 
   constructor(
     private readonly provider: LLMProvider,
@@ -84,12 +87,12 @@ export class ProviderReactorClient implements ReactorClient {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         const startedAt = Date.now();
-        const result = await this.provider.generate(prompt, this.model, {
+        const result = await this.isolatedModelClient.callProviderGenerateRaw(this.provider, prompt, this.model, {
           temperature: options?.temperature,
           format: options?.format,
           system: options?.system,
           num_ctx: options?.num_ctx,
-          max_tokens: options?.num_predict,
+          num_predict: options?.num_predict,
           think: options?.think,
         });
         const usage = normalizeUsage(result.usage, {
@@ -108,6 +111,9 @@ export class ProviderReactorClient implements ReactorClient {
         return result;
       } catch (err: any) {
         lastError = err;
+        if (shouldSuppressModelCallRetry(err)) {
+          throw err;
+        }
         console.warn(`[ProviderReactorClient] Attempt ${attempt + 1}/${maxRetries} failed: ${err?.message}`);
         if (attempt < maxRetries - 1) {
           await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
@@ -132,9 +138,9 @@ export class ProviderReactorClient implements ReactorClient {
   ): Promise<{ message: any; thinking?: string }> {
     const model = options?.model || this.model;
     const startedAt = Date.now();
-    const result = await this.provider.chat(messages, model, {
+    const result = await this.isolatedModelClient.callProviderChatRaw(this.provider, messages, model, {
       temperature: options?.temperature,
-      max_tokens: options?.num_predict,
+      num_predict: options?.num_predict,
       num_ctx: options?.num_ctx,
       tools: options?.tools,
       think: options?.think,
