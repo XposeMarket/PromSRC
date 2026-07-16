@@ -58,6 +58,7 @@ import {
   validateFileSyntax,
   type SearchMatcher,
 } from '../../tools/file-intelligence';
+import { runBoundedWorkspaceSearch } from '../workspace-search';
 import { getMCPManager } from '../mcp-manager';
 import { getProcessSupervisor } from '../process/supervisor';
 import { runElevatedCommand } from '../process/elevated-command';
@@ -7666,91 +7667,80 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const requestedMaxFileBytes = Math.floor(Number(args.max_file_bytes) || (5 * 1024 * 1024));
         const maxFileBytes = Math.max(64 * 1024, Math.min(25 * 1024 * 1024, requestedMaxFileBytes));
         const storeLimit = Math.max(maxResults, Math.min(240, maxResults * 3));
+        const requestedMaxFiles = Math.floor(Number(args.max_files) || 5_000);
+        const maxFiles = Math.max(100, Math.min(25_000, requestedMaxFiles));
+        const requestedMaxDurationMs = Math.floor(Number(args.timeout_ms) || 10_000);
+        const maxDurationMs = Math.max(500, Math.min(30_000, requestedMaxDurationMs));
+        const requestedMaxDepth = Math.floor(Number(args.max_depth) || 24);
+        const maxDepth = Math.max(1, Math.min(64, requestedMaxDepth));
         const defaultExcludes = new Set<string>([
           ...DEFAULT_FILE_TOOL_EXCLUDES,
           ...String(args.exclude || '').split(',').map((item: string) => item.trim()).filter(Boolean),
         ]);
+        if ((resolvedDir.normalizedRel || '.') === '.') {
+          for (const largeRoot of ['audit', 'oss agents', 'oss-agents', 'repos', 'captures', 'videos']) {
+            defaultExcludes.add(largeRoot);
+          }
+        }
         const gitignoreRules = args.gitignore === false || args.respect_gitignore === false ? [] : readSimpleGitignore(searchDir);
-        const matches: any[] = [];
-        let totalMatches = 0;
-        let filesSearched = 0;
-        let filesSkipped = 0;
-        let filesSkippedTooLarge = 0;
-        const skippedLargeSamples: Array<{ path: string; bytes: number }> = [];
-        let filesystemOps = 0;
-        const yieldToGateway = async (): Promise<void> => {
-          filesystemOps += 1;
-          if (filesystemOps % 32 === 0) {
-            await new Promise<void>((resolve) => setImmediate(resolve));
-          }
-        };
-        const walk = async (dir: string): Promise<void> => {
-          let entries: fs.Dirent[] = [];
-          try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
-          for (const entry of entries) {
-            await yieldToGateway();
-            const abs = path.join(dir, entry.name);
-            const rel = path.join(resolvedDir.displayPath === '.' ? '' : resolvedDir.displayPath, path.relative(searchDir, abs)).replace(/\\/g, '/');
-            const relForIgnore = path.relative(searchDir, abs).replace(/\\/g, '/');
-            if (entry.isDirectory()) {
-              if (shouldSkipSearchPath(relForIgnore, entry.name, { excludes: defaultExcludes, gitignoreRules })) { filesSkipped += 1; continue; }
-              await walk(abs);
-              continue;
-            }
-            if (!entry.isFile()) continue;
-            if (shouldSkipSearchPath(relForIgnore, entry.name, { excludes: defaultExcludes, gitignoreRules })) { filesSkipped += 1; continue; }
-            if (!args.include_lockfiles && /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb)$/i.test(rel)) { filesSkipped += 1; continue; }
-            if (!matchesGlobList(rel, globs)) continue;
-            let fileSize = 0;
-            try { fileSize = (await fs.promises.stat(abs)).size; } catch { continue; }
-            if (fileSize > maxFileBytes) {
-              filesSkipped += 1;
-              filesSkippedTooLarge += 1;
-              if (skippedLargeSamples.length < 12) skippedLargeSamples.push({ path: rel || entry.name, bytes: fileSize });
-              continue;
-            }
-            let content = '';
-            try { content = await fs.promises.readFile(abs, 'utf-8'); } catch { continue; }
-            filesSearched += 1;
-            const grep = collectGrepMatchesInText(rel || entry.name, content, matcher, {
-              maxResults: Math.max(1, storeLimit - matches.length),
-              contextLines,
-              before: Number(args.before) || 40,
-              after: Number(args.after) || 80,
-              charBefore: Number(args.char_before) || undefined,
-              charAfter: Number(args.char_after) || undefined,
-              charWindow: Number(args.char_window) || undefined,
-            });
-            totalMatches += grep.totalMatches;
-            if (matches.length < storeLimit) {
-              matches.push(...grep.matches.slice(0, Math.max(0, storeLimit - matches.length)));
-            }
-          }
-        };
-        await walk(searchDir);
-        const sortedMatches = matches.sort(compareGrepMatches(pattern)).slice(0, maxResults);
+        const search = await runBoundedWorkspaceSearch({
+          searchDir,
+          displayRoot: resolvedDir.displayPath,
+          matcher,
+          globs,
+          excludes: defaultExcludes,
+          gitignoreRules,
+          maxResults,
+          storeLimit,
+          maxFileBytes,
+          maxFiles,
+          maxDurationMs,
+          maxDepth,
+          contextLines,
+          before: Number(args.before) || 40,
+          after: Number(args.after) || 80,
+          charBefore: Number(args.char_before) || undefined,
+          charAfter: Number(args.char_after) || undefined,
+          charWindow: Number(args.char_window) || undefined,
+          includeLockfiles: args.include_lockfiles === true,
+          pathOnly: args.path_only === true || args.mode === 'path',
+          signal: deps.abortSignal?.signal,
+        });
+        const sortedMatches = search.matches.sort(compareGrepMatches(pattern)).slice(0, maxResults);
         const payload = {
           directory: resolvedDir.displayPath,
           pattern,
           search_mode: matcher.mode,
-          files_searched: filesSearched,
-          files_skipped: filesSkipped,
-          files_skipped_too_large: filesSkippedTooLarge,
+          operation: args.path_only === true || args.mode === 'path' ? 'path_lookup' : 'content_search',
+          elapsed_ms: search.elapsedMs,
+          files_visited: search.filesVisited,
+          files_searched: search.filesSearched,
+          files_skipped: search.filesSkipped,
+          files_skipped_too_large: search.filesSkippedTooLarge,
           max_file_bytes: maxFileBytes,
-          skipped_large_file_samples: skippedLargeSamples,
-          match_count: totalMatches,
-          returned_count: sortedMatches.length,
-          truncated_count: Math.max(0, totalMatches - sortedMatches.length),
+          skipped_large_file_samples: search.skippedLargeSamples,
+          match_count_observed: search.totalMatchesObserved,
+          returned_count: args.path_only === true || args.mode === 'path' ? search.pathMatches.length : sortedMatches.length,
+          truncated_count_observed: Math.max(0, search.totalMatchesObserved - sortedMatches.length),
+          truncated: search.truncated,
+          stop_reason: search.stopReason,
+          files_remaining_unknown: search.filesRemainingUnknown,
+          path_matches: args.path_only === true || args.mode === 'path' ? search.pathMatches.slice(0, maxResults) : undefined,
+          limits: {
+            max_files: maxFiles,
+            timeout_ms: maxDurationMs,
+            max_depth: maxDepth,
+          },
           result_limit: {
             requested: requestedMaxResults,
             applied: maxResults,
             context_lines: contextLines,
-            limit_reached: totalMatches > sortedMatches.length,
+            limit_reached: search.stopReason === 'result_limit' || search.totalMatchesObserved > sortedMatches.length,
             note: 'Result payloads are hard-clamped. Narrow directory, glob, or pattern to inspect more matches.',
           },
-          no_match_hints: totalMatches === 0 ? [
+          no_match_hints: search.totalMatchesObserved === 0 ? [
             ...buildNoMatchHints({ pattern, searched: resolvedDir.displayPath, mode: matcher.mode, excluded: Array.from(defaultExcludes), pathHint: String(directoryArg || '.') }),
-            ...(filesSkippedTooLarge > 0 ? [`${filesSkippedTooLarge} large file(s) were skipped to protect gateway responsiveness. Narrow to a specific file and use file_stats/read_file, or explicitly raise max_file_bytes (hard cap 25 MiB).`] : []),
+            ...(search.filesSkippedTooLarge > 0 ? [`${search.filesSkippedTooLarge} large file(s) were skipped to protect gateway responsiveness. Narrow to a specific file and use file_stats/read_file, or explicitly raise max_file_bytes (hard cap 25 MiB).`] : []),
           ] : undefined,
           matches: sortedMatches,
         };
