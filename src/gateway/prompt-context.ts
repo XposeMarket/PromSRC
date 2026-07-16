@@ -646,6 +646,11 @@ export function detectToolCategories(text: string): Set<string> {
   const CONNECTORS = ['gmail', 'github', 'slack', 'notion', 'google drive', 'hubspot', 'salesforce', 'stripe', 'ga4', 'external app', 'connected app'];
   const SOURCE_READ = ['prometheus source', 'prom source', 'read source', 'inspect source', 'grep source', 'read webui source', 'webui source', 'source_read', 'prometheus_source_read'];
   const SOURCE_WRITE = ['edit prometheus source', 'change prometheus source', 'patch prometheus source', 'modify prometheus source', 'source_write', 'prometheus_source_write', 'dev source edit'];
+  const explicitPromSourcePath = /(?:^|[\s("'`])(?:\.\/)?(?:src\/(?:gateway|runtime)(?:\/|$)|web-ui\/src(?:\/|$))/i.test(String(text || '').replace(/\\/g, '/'));
+  const contextualPromSourcePath =
+    /\bprometheus\b|\bpromsrc\b|\bgateway\b|\bdev[_ -]?source\b/i.test(lower)
+    && /(?:^|[\s("'`])(?:\.\/)?(?:src|web-ui)\/[a-z0-9_.@/-]+/i.test(String(text || '').replace(/\\/g, '/'));
+  const sourceMutationIntent = /\b(edit|change|patch|modify|fix|update|refactor|remove|add|implement)\b/i.test(lower);
   const SOCIAL_INTELLIGENCE = ['social intelligence', 'social profile', 'profile analysis', 'engagement analysis', 'growth trajectory', 'content recommendations', 'social_intel'];
   const PROPOSAL_ADMIN = ['edit proposal', 'update proposal', 'revise proposal', 'proposal admin', 'proposal_admin', 'pending proposal'];
   const MCP_SERVER_TOOLS = ['mcp server tools', 'mcp tools', 'mcp__', 'connected mcp', 'server tool', 'mcp_server_tools'];
@@ -670,8 +675,12 @@ export function detectToolCategories(text: string): Set<string> {
   if (MEDIA.some(k => lower.includes(k))) cats.add('media');
   if (AUTOMATIONS.some(k => lower.includes(k))) cats.add('automations');
   if (CONNECTORS.some(k => lower.includes(k))) cats.add('external_apps');
-  if (SOURCE_READ.some(k => lower.includes(k))) cats.add('prometheus_source_read');
-  if (SOURCE_WRITE.some(k => lower.includes(k))) cats.add('prometheus_source_write');
+  if (SOURCE_READ.some(k => lower.includes(k)) || explicitPromSourcePath || contextualPromSourcePath) {
+    cats.add('prometheus_source_read');
+  }
+  if (SOURCE_WRITE.some(k => lower.includes(k)) || ((explicitPromSourcePath || contextualPromSourcePath) && sourceMutationIntent)) {
+    cats.add('prometheus_source_write');
+  }
   if (SOCIAL_INTELLIGENCE.some(k => lower.includes(k))) cats.add('social_intelligence');
   if (PROPOSAL_ADMIN.some(k => lower.includes(k))) cats.add('proposal_admin');
   if (MCP_SERVER_TOOLS.some(k => lower.includes(k))) cats.add('mcp_server_tools');
