@@ -15,20 +15,8 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
+import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 
-// ── TEMP latency bisection probe ──────────────────────────────────────────
-const TURN_TIMING_ENABLED = process.env.PROMETHEUS_TURN_TIMING === '1';
-let __htimeT0 = 0;
-function __htimeReset(): void { __htimeT0 = Date.now(); }
-function htime(label: string): void {
-  try {
-    if (!TURN_TIMING_ENABLED) return;
-    if (!__htimeT0) return;
-    const line = `${new Date().toISOString()} +${String(Date.now() - __htimeT0).padStart(6)}ms ${label}\n`;
-    fs.appendFileSync(path.join(getConfig().getConfigDir(), 'logs', 'turn-timing.log'), line, 'utf-8');
-  } catch {}
-}
-// ──────────────────────────────────────────────────────────────────────────
 // WebSocketServer + WebSocket moved to core/server.ts (B3)
 import {
   getConfig,
@@ -2283,10 +2271,16 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[] },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder },
 ): Promise<HandleChatResult> {
   try {
   const latencyStartAt = Date.now();
+  const turnTiming = runtimeOptions?.timingRecorder || createTurnTimingRecorder(sessionId, {
+    startedAt: latencyStartAt,
+    phase: 'handle_chat',
+  });
+  const htime = (label: string, extra: Record<string, unknown> = {}): number => turnTiming.mark(`handle.${label}`, extra);
+  htime('entered');
   let firstProviderEventAt = 0;
   let firstVisibleTokenAt = 0;
   let firstReasoningAt = 0;
@@ -2356,7 +2350,7 @@ async function handleChat(
     }
   };
   sendSSE('ui_preflight', { message: 'Preparing Prometheus runtime...' });
-  __htimeReset(); htime('handleChat: after Preparing Prometheus runtime');
+  htime('runtime_preflight_sent');
   const isHandleChatGoalContinuation = isMainChatGoalContinuation(message);
   const activeGoalAtTurnStart = snapshotMainChatGoal(sessionId);
   const turnOwnsActiveGoal = activeGoalAtTurnStart?.status === 'active';
@@ -2428,6 +2422,7 @@ async function handleChat(
     ? []
     : getHistoryForApiCall(sessionId, Math.ceil(activeHistoryMessageCount / 2), { maxMessages: activeHistoryMessageCount });
   htime('after getHistoryForApiCall');
+  htime('history_loaded', { messageCount: rawHistory.length });
   const normalizedIncomingMessage = String(message || '').replace(/\s+/g, ' ').trim();
   // runInteractiveTurn persists the incoming user turn before calling handleChat.
   // Keep persisted storage unchanged, but avoid sending that same turn twice to the model.
@@ -3059,6 +3054,7 @@ async function handleChat(
   sendSSE('ui_preflight', { message: 'Loading tool schemas...' });
   tools = capToolsForProvider(buildToolsForGeneration(initialGenerationOverride), initialGenerationOverride);
   htime('after initial tool build');
+  htime('tools_built', { toolCount: tools.length });
   sendSSE('ui_preflight', { message: 'Tool schemas ready.' });
   const buildModelCapabilitySystemBlock = (): string => {
     const provider = currentModelCapabilities.provider || 'unknown';
@@ -4068,6 +4064,7 @@ async function handleChat(
     personalityProfile,
   );
   htime('after buildPersonalityContext');
+  htime('personality_context_built', { contextChars: String(personalityCtx || '').length });
   markLatency('context_build_done', {
     stageDurationMs: Date.now() - contextBuildStartedAt,
     contextChars: String(personalityCtx || '').length,
@@ -6350,6 +6347,12 @@ RULES:
       providerRequestStartedAt = markLatency('provider_request_start', {
         provider: generationOverride.providerId,
         model: generationOverride.model,
+        toolCount: Array.isArray(tools) ? tools.length : 0,
+        messageCount: Array.isArray(messages) ? messages.length : 0,
+      });
+      htime('provider_request_start', {
+        provider: generationOverride.providerId || '',
+        model: generationOverride.model || '',
         toolCount: Array.isArray(tools) ? tools.length : 0,
         messageCount: Array.isArray(messages) ? messages.length : 0,
       });
@@ -9113,13 +9116,16 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-	    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
+	    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; timingRecorder?: TurnTimingRecorder },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
     callerOnToken?: (token: string) => void,
 ): Promise<HandleChatResult> {
+  const turnTiming = flags?.timingRecorder || createTurnTimingRecorder(sessionId, { phase: 'interactive_turn' });
+  const leaseWaitStartedAt = turnTiming.mark('lease_wait_start');
   const turnLease = await mainChatTurnCoordinator.acquire(sessionId, abortSignal?.signal);
+  turnTiming.mark('lease_acquired', { waitMs: Date.now() - leaseWaitStartedAt });
   try {
   const isSubagentChatSession = /^subagent_chat_/i.test(String(sessionId || ''));
   const isDirectSubagentChatTurn = isSubagentChatSession && flags?.directSubagentChat === true;
@@ -9156,10 +9162,16 @@ async function runInteractiveTurn(
     origin: turnOrigin,
   } : {};
   persistTurnOriginChannelHint(sessionId, turnOrigin);
+  turnTiming.mark('turn_origin_persisted');
   const existingMainChatStream = getMainChatStream(sessionId);
+  const streamSetupStartedAt = Date.now();
   const localMainChatStream = existingMainChatStream?.active
       ? null
       : beginMainChatStream(sessionId);
+  turnTiming.mark('stream_setup_done', {
+    durationMs: Date.now() - streamSetupStartedAt,
+    reusedActiveStream: !!existingMainChatStream?.active,
+  });
   let localMainChatStreamCompleted = false;
   const completeLocalMainChatStream = (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any; richArtifacts?: any[] } | null | undefined): void => {
     if (!localMainChatStream || localMainChatStreamCompleted) return;
@@ -9264,6 +9276,7 @@ async function runInteractiveTurn(
   // Synthetic Goal prompts are runtime control input, not user-authored chat.
   // handleChat receives the full prompt directly below; storing it in history
   // leaks internal instructions into the UI and duplicates model context.
+  const addMessageStartedAt = Date.now();
   const addResult: any = isGoalContinuationTurn || isSyntheticSubagentCompletionTurn || isSyntheticThreadSupervisionReview
     ? { added: false, deferredForCompaction: false, deferredForMemoryFlush: false }
     : skipDuplicateVoiceWorkflowUser
@@ -9275,6 +9288,12 @@ async function runInteractiveTurn(
         disableMemoryFlushCheck: isSubagentChatSession,
         maxMessages: isSubagentChatSession ? 120 : undefined,
       });
+  turnTiming.mark('user_message_persisted', {
+    durationMs: Date.now() - addMessageStartedAt,
+    added: addResult.added !== false,
+    deferredForCompaction: addResult.deferredForCompaction === true,
+    deferredForMemoryFlush: addResult.deferredForMemoryFlush === true,
+  });
 
   if (addResult.deferredForCompaction && addResult.compactionPrompt) {
     sendSSE('ui_preflight', { message: 'Compacting the thread before continuing...' });
@@ -9421,7 +9440,10 @@ async function runInteractiveTurn(
     }
   })();
   const mergedCallerContext = [originCtx, callerContext, canvasCtx || undefined, assignedTaskAttentionCtx || undefined].filter(Boolean).join('\n\n') || undefined;
+  const providerUsageBeforeStartedAt = Date.now();
   const providerUsageBeforeTurn = aggregateSessionModelUsage(sessionId);
+  turnTiming.mark('model_usage_before_loaded', { durationMs: Date.now() - providerUsageBeforeStartedAt });
+  turnTiming.mark('handle_chat_start');
   const result = await handleChat(
     message,
     sessionId,
@@ -9442,14 +9464,20 @@ async function runInteractiveTurn(
         excludedSkillIds: turnExcludedSkillIds,
         forcedSkillIds: turnForcedSkillIds,
         instructionCallerRequirements: callerContext ? [callerContext] : [],
+        timingRecorder: turnTiming,
       },
-	  );
+  );
+  turnTiming.mark('handle_chat_done');
 
+  const observationPersistStartedAt = Date.now();
   const turnObservationId = `turn_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
   const toolObservations: ToolObservation[] = result.toolResults && result.toolResults.length > 0
     ? persistToolResultsAsObservations(sessionId, turnObservationId, result.toolResults)
     : [];
+  turnTiming.mark('tool_observations_persisted', { durationMs: Date.now() - observationPersistStartedAt, count: toolObservations.length });
+  const providerUsageAfterStartedAt = Date.now();
   const providerUsageAfterTurn = aggregateSessionModelUsage(sessionId);
+  turnTiming.mark('model_usage_after_loaded', { durationMs: Date.now() - providerUsageAfterStartedAt });
   const turnProviderUsage = diffModelUsage(providerUsageBeforeTurn, providerUsageAfterTurn);
   const toolResultBudget = summarizeTurnToolResultBudget(toolObservations);
   const toolLogText = toolObservations.length > 0
@@ -9566,6 +9594,7 @@ async function runInteractiveTurn(
     }
   }
 
+    turnTiming.mark('turn_postprocessing_done');
     completeLocalMainChatStream(result);
     return result;
   } finally {
@@ -9580,6 +9609,7 @@ async function runInteractiveTurn(
     if (localMainChatStream) finishMainChatStream(sessionId, localMainChatStream.streamId);
   }
   } finally {
+    turnTiming.mark('lease_release');
     mainChatTurnCoordinator.release(turnLease);
   }
 }
@@ -18881,6 +18911,11 @@ router.post('/api/chat', async (req, res) => {
     res.status(400).json({ error: err?.message || 'Invalid session id.' });
     return;
   }
+  const turnTiming = createTurnTimingRecorder(resolvedSessionId, {
+    startedAt: Date.now(),
+    phase: 'http_admission',
+  });
+  turnTiming.mark('request_received');
   const excludedSkillIds = normalizeExcludedSkillIdsInput(req.body?.excludedSkillIds || req.body?.excludedMatchingSkillIds);
   const forcedSkillIds = normalizeForcedSkillIdsInput(req.body?.selectedSkillIds || req.body?.forcedSkillIds || req.body?.matchedSkillIds);
   const clientRequestId = normalizeClientRequestId(req.body?.clientRequestId || req.headers['x-client-request-id']);
@@ -18907,6 +18942,7 @@ router.post('/api/chat', async (req, res) => {
     fingerprint: requestFingerprint,
     previous: priorRequest,
   });
+  turnTiming.mark('admission_decided', { kind: admission.kind });
 
   if (admission.kind === 'busy') {
     res.status(409).json({
@@ -18939,6 +18975,7 @@ router.post('/api/chat', async (req, res) => {
     try { res.write(': connected\n\n'); } catch {}
   };
   startSseResponse();
+  turnTiming.mark('sse_started');
 
   if (admission.kind === 'duplicate') {
       const stream = getMainChatStream(resolvedSessionId);
@@ -18962,6 +18999,7 @@ router.post('/api/chat', async (req, res) => {
   }
 
   const chatStream = beginMainChatStream(resolvedSessionId);
+  turnTiming.mark('main_stream_started', { streamId: chatStream.streamId });
   if (clientRequestId) {
     mainChatRequestDedupe.set(mainChatRequestDedupeKey(resolvedSessionId, clientRequestId), {
       at: Date.now(),
@@ -18980,15 +19018,7 @@ router.post('/api/chat', async (req, res) => {
       : eventData;
     httpSendSSE(event, payload);
   };
-  const __turnT0 = Date.now();
-  const __turnTimingLog = (label: string) => {
-    try {
-      if (!TURN_TIMING_ENABLED) return;
-      const line = `${new Date().toISOString()} +${String(Date.now() - __turnT0).padStart(6)}ms session=${resolvedSessionId} ${label}\n`;
-      fs.appendFileSync(path.join(getConfig().getConfigDir(), 'logs', 'turn-timing.log'), line, 'utf-8');
-    } catch {}
-  };
-  __turnTimingLog('request_received');
+  const __turnTimingLog = (label: string) => turnTiming.mark(label);
   sendSSE('progress_state', { source: 'none', reason: 'request_start', activeIndex: -1, total: 0, items: [] });
   sendSSE('ui_preflight', { message: 'Request received. Starting chat turn...' });
   let lastNonHeartbeatSseAt = Date.now();
@@ -19032,6 +19062,7 @@ router.post('/api/chat', async (req, res) => {
       attachments: Array.isArray(attachments) ? attachments.map((a: any) => ({ name: a?.name, mimeType: a?.mimeType })) : [],
     },
   });
+  turnTiming.mark('runtime_registered', { runtimeId });
   sendSSE('runtime_registered', {
     runtimeId,
     run: summarizeMobileRuntime(getLiveRuntime(runtimeId)),
@@ -19112,7 +19143,7 @@ router.post('/api/chat', async (req, res) => {
 		      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
           Array.isArray(attachmentPreviews) && attachmentPreviews.length > 0 ? attachmentPreviews : undefined,
           undefined,
-          (excludedSkillIds.length || forcedSkillIds.length) ? { excludedSkillIds, forcedSkillIds } : undefined,
+          { excludedSkillIds, forcedSkillIds, timingRecorder: turnTiming },
           turnOrigin,
           { clientRequestId },
 			    );
