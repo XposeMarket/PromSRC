@@ -84,6 +84,7 @@ interface WorkerSlot {
   rssBytes: number;
   lastHeartbeatAt: number;
   lastError?: string;
+  lastStderrTail?: string;
   startupTimer?: NodeJS.Timeout;
 }
 
@@ -117,6 +118,7 @@ export interface ModelCallWorkerPoolStatus {
     rssBytes: number;
     lastHeartbeatAt?: number;
     lastError?: string;
+    lastStderrTail?: string;
   }>;
 }
 
@@ -374,7 +376,9 @@ function spawnSlot(slot: WorkerSlot): void {
     });
     slot.child = child;
     child.stdout?.resume();
-    child.stderr?.on('data', (chunk) => { slot.lastError = String(chunk || '').slice(-2_000); });
+    child.stderr?.on('data', (chunk) => {
+      slot.lastStderrTail = `${slot.lastStderrTail || ''}${String(chunk || '')}`.slice(-2_000);
+    });
     child.on('message', (message) => handleMessage(slot, message));
     child.once('error', (error) => {
       slot.lastError = boundedModelCallError(error);
@@ -641,6 +645,7 @@ export function getModelCallWorkerPoolStatus(): ModelCallWorkerPoolStatus {
       rssBytes: slot.rssBytes,
       lastHeartbeatAt: slot.lastHeartbeatAt || undefined,
       lastError: slot.lastError,
+      lastStderrTail: slot.lastStderrTail,
     })),
   };
 }
