@@ -1362,8 +1362,23 @@ export class SkillsManager {
     if (typeof optionsOrMaxChars !== 'number' && optionsOrMaxChars.sessionId) {
       recordSkillRoutingReport(optionsOrMaxChars.sessionId, report);
     }
+    const deterministicCommandSkills = /^\s*\/visual(?:\s|$)/i.test(_messageText)
+      ? selectedSkills.filter((skill) => skill.id === 'interactive-visuals')
+      : [];
+    const forcedInstructions = deterministicCommandSkills.length
+      ? [
+          '[USER_SELECTED_SKILL_INSTRUCTIONS]',
+          'The user explicitly selected the following skill instructions for this turn. They are already loaded: follow them directly and do not merely mention or rediscover them.',
+          ...deterministicCommandSkills.flatMap((skill) => [
+            '',
+            `## ${skill.id}`,
+            String(skill.instructions || '').trim(),
+          ]),
+          '[/USER_SELECTED_SKILL_INSTRUCTIONS]',
+        ].join('\n')
+      : '';
     return getSkillRoutingMode() === 'active'
-      ? buildActiveSkillRoutingContext({ report, skills: all })
+      ? [buildActiveSkillRoutingContext({ report, skills: all }), forcedInstructions].filter(Boolean).join('\n\n')
       : legacyContext;
   }
 

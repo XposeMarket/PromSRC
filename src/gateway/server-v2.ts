@@ -61,7 +61,7 @@ import { CronScheduler, setCronSchedulerInstance } from './scheduling/cron-sched
 import { HeartbeatRunner, setHeartbeatRunnerInstance } from './scheduling/heartbeat-runner';
 import { MainChatTimerRunner } from './timers/timer-runner';
 import { InternalWatchRunner } from './internal-watch/internal-watch-runner';
-import { startThreadSupervisionRunner } from './threads/thread-supervision';
+import { ActiveThreadSupervisionController } from './threads/thread-supervision-controller';
 import { BrainRunner, setBrainRunnerInstance } from './brain/brain-runner';
 import {
   getAgentRunHistory, getAgentLastRun, recordAgentRun,
@@ -680,7 +680,12 @@ const internalWatchRunner = new InternalWatchRunner({
   cronScheduler,
 });
 internalWatchRunner.start();
-const stopThreadSupervisionRunner = startThreadSupervisionRunner(broadcastWS);
+const activeThreadSupervisionController = new ActiveThreadSupervisionController({
+  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput) =>
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput),
+  broadcast: broadcastWS,
+});
+const stopThreadSupervisionRunner = activeThreadSupervisionController.start();
 startupMark('timers started');
 
 // ─── A2 + A5: CIS tool dependency injection ────────────────────────────────

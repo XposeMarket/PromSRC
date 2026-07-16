@@ -756,7 +756,40 @@ export function isBrowserToolName(name: string): boolean {
 
 export function isDesktopToolName(name: string): boolean {
   if (/^delivery_send(?:_screenshot)?$/i.test(String(name || ''))) return true;
-  return /^desktop_(screenshot|get_monitors|window_screenshot|window_control|find_window|focus_window|click|drag|wait|type|type_raw|press_key|get_clipboard|set_clipboard|list_installed_apps|find_installed_app|launch_app|close_app|get_process_list|wait_for_change|diff_screenshot|scroll|send_to_telegram)$/i.test(String(name || ''));
+  // Cover both model-facing wrappers (desktop_screen/window/input/...) and the
+  // granular compatibility handlers they normalize into.
+  return /^desktop_[a-z0-9_]+$/i.test(String(name || '').trim());
+}
+
+/** True when a desktop tool call is itself a screenshot/vision capture. */
+export function isDesktopVisualToolName(name: string, args?: Record<string, any>): boolean {
+  const toolName = String(name || '').trim().toLowerCase();
+  if (!toolName) return false;
+  if (
+    toolName === 'desktop_screenshot'
+    || toolName === 'desktop_window_screenshot'
+    || toolName === 'desktop_click_text'
+    || toolName === 'desktop_diff_screenshot'
+    || toolName === 'desktop_wait_for_change'
+  ) {
+    return true;
+  }
+  const action = String(args?.action || args?.mode || '').trim().toLowerCase();
+  if (toolName === 'desktop_screen') {
+    return (
+      action === 'screenshot'
+      || action === 'region_screenshot'
+      || action === 'window_screenshot'
+      || action === 'diff_screenshot'
+      || action === 'diff'
+      || action === 'wait_for_change'
+      || action === 'pixel_watch'
+    );
+  }
+  if (toolName === 'desktop_window') {
+    return action === 'screenshot' || action === 'region_screenshot' || action === 'click_text';
+  }
+  return false;
 }
 
 export function isHighStakesFile(filename: string): boolean {

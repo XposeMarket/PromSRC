@@ -73,7 +73,7 @@ import { createToolObservationsFromResults, formatToolStateSummaryForContext, pe
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
-import { getAgentTeamScheduleTools } from '../tools/defs/agent-team-schedule';
+import { ensurePrometheusThreadOpsForSupervision, getAgentTeamScheduleTools } from '../tools/defs/agent-team-schedule';
 import { buildCisContextBlock } from '../business/cis-context-builder.js';
 import { refreshProjectContextForSession } from '../projects/project-learning.js';
 import { buildProjectContextBlock, findProjectBySessionId, removeSessionFromProject } from '../projects/project-store.js';
@@ -108,6 +108,7 @@ import {
   browserType,
   browserWait,
   browserScroll,
+  browserDrag,
   browserClose,
   formatBrowserInteractionContextBlock,
   browserVisionScreenshot,
@@ -139,8 +140,10 @@ import {
   desktopWindowControl,
   desktopClick,
   desktopDrag,
+  desktopScroll,
   desktopWait,
   desktopType,
+  desktopTypeRaw,
   desktopPressKey,
   desktopGetClipboard,
   desktopSetClipboard,
@@ -361,12 +364,16 @@ function buildCapturedScreenshotPreviewPayload(
     const base64 = String(packet?.screenshotBase64 || '').trim();
     if (!base64) return undefined;
     const mimeType = String(packet?.screenshotMime || 'image/png').trim() || 'image/png';
+    const screenshotId = String(packet?.screenshotId || '').trim();
+    if (!screenshotId) return undefined;
     return {
-      dataUrl: `data:${mimeType};base64,${base64}`,
+      // Keep the stream event small: full desktop frames can exceed buffering
+      // limits. The packet index serves the exact session-scoped capture.
+      dataUrl: `/api/chat/desktop-screenshot-preview/${encodeURIComponent(sessionId)}/${encodeURIComponent(screenshotId)}`,
       mimeType,
       width: Number(packet?.width || 0) || undefined,
       height: Number(packet?.height || 0) || undefined,
-      screenshotId: String(packet?.screenshotId || '').trim() || undefined,
+      screenshotId,
       capturedAt: Number(packet?.capturedAt || 0) || undefined,
     };
   }
@@ -1029,7 +1036,9 @@ function buildDurableToolStreamTrace(sessionId: string): Record<string, any>[] |
     if (frame.type === 'vision_injected') {
       const preview = data.preview && typeof data.preview === 'object' ? data.preview : null;
       const dataUrl = String(preview?.dataUrl || data.dataUrl || '').trim();
-      if (!/^data:image\//i.test(dataUrl) && !/^\/api\/canvas\/inline\?path=/i.test(dataUrl)) continue;
+      if (!/^data:image\//i.test(dataUrl)
+        && !/^\/api\/canvas\/inline\?path=/i.test(dataUrl)
+        && !/^\/api\/chat\/desktop-screenshot-preview\//i.test(dataUrl)) continue;
       const sourceValue = String(data.source || '').toLowerCase();
       const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : 'Desktop';
       const previewTitle = String(data.previewTitle || preview?.title || `${source} preview`).trim();
@@ -1426,6 +1435,7 @@ import {
   logToolCall,
   isBrowserToolName,
   isDesktopToolName,
+  isDesktopVisualToolName,
   buildBrowserAck,
   wrapUntrustedBrowserToolContent,
   buildDesktopAck,
@@ -1457,6 +1467,11 @@ import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import { detectStage4InstructionIntents } from '../../runtime/instruction-intent-detector';
 import { isProviderStatusChecking, markProviderStatus, readProviderStatusCache } from '../provider-status';
 import { attachWorkspaceCheckpoint, createWorkspaceTurnCheckpoint } from '../../workspace-history';
+import {
+  getCodingContextPacketTelemetry,
+  observeCodingContext,
+  selectCodingContextPacket,
+} from '../coding-context-packet';
 
 
 import {
@@ -1570,6 +1585,28 @@ function requireSafeSessionParam(req: express.Request, res: express.Response, ne
     res.status(400).json({ success: false, error: err?.message || 'Invalid session id.' });
   }
 }
+
+router.get(
+  '/api/chat/desktop-screenshot-preview/:sessionId/:screenshotId',
+  requireSafeSessionParam,
+  (req: express.Request, res: express.Response) => {
+    const screenshotId = String(req.params.screenshotId || '').trim();
+    if (!/^ds_[a-z0-9_]+$/i.test(screenshotId)) {
+      res.status(400).json({ success: false, error: 'Invalid screenshot id.' });
+      return;
+    }
+    const packet = getDesktopAdvisorPacketById(req.params.sessionId, screenshotId);
+    const base64 = String(packet?.screenshotBase64 || '').trim();
+    if (!packet || !base64) {
+      res.status(404).json({ success: false, error: 'Screenshot preview is no longer available.' });
+      return;
+    }
+    res.setHeader('Content-Type', packet.screenshotMime || 'image/png');
+    res.setHeader('Cache-Control', 'private, max-age=900');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.send(Buffer.from(base64, 'base64'));
+  },
+);
 
 function storageAwareStatus(error: unknown): number {
   return isStorageBoundaryError(error) ? 400 : 500;
@@ -2246,7 +2283,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[] },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[] },
 ): Promise<HandleChatResult> {
   try {
   const latencyStartAt = Date.now();
@@ -2268,6 +2305,7 @@ async function handleChat(
   };
   const ollama = getOllamaClient();
   const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
+  const isSyntheticThreadSupervisionReview = runtimeOptions?.syntheticThreadSupervisionReview === true;
   const excludedSkillIds = Array.isArray(runtimeOptions?.excludedSkillIds)
     ? runtimeOptions.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
@@ -2286,6 +2324,8 @@ async function handleChat(
   const workspacePath = shouldUseSessionWorkspace(executionMode, sessionWorkspace)
     ? sessionWorkspace
     : configuredWorkspace;
+  const codingContextPacketEnabled = process.env.PROMETHEUS_CODING_CONTEXT_PACKET_V2 === '1'
+    && !isDirectSubagentChatTurn;
   if (workspacePath && sessionWorkspace !== workspacePath) {
     setWorkspace(sessionId, workspacePath);
   }
@@ -2421,6 +2461,24 @@ async function handleChat(
   htime('before getRecentToolObservationsForContext');
   const recentToolLog = executionMode === 'cron' ? '' : getRecentToolObservationsForContext(sessionId, 3, recentToolLogMaxChars, true);
   htime('after getRecentToolObservationsForContext');
+  const codingContextPacketDecision = selectCodingContextPacket({
+    enabled: codingContextPacketEnabled,
+    sessionId,
+    message,
+    projectRoot: workspacePath,
+    executionMode,
+    creativeMode,
+    history: history.map((entry: any) => ({ role: String(entry?.role || ''), content: String(entry?.content || '') })),
+  });
+  if (codingContextPacketEnabled) {
+    sendSSE('coding_context_packet', {
+      status: codingContextPacketDecision.status,
+      reason: codingContextPacketDecision.reason,
+      taskId: codingContextPacketDecision.taskId,
+      ageMs: codingContextPacketDecision.ageMs,
+      counters: getCodingContextPacketTelemetry(),
+    });
+  }
   const inferReferenceImageMimeType = (filePath: string): string => {
     const ext = path.extname(filePath).toLowerCase();
     if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
@@ -2653,7 +2711,8 @@ async function handleChat(
         return true; // Category tools are still governed by per-session activation.
       })
       : baseTools;
-    return maybeAddGoalLifecycleTools(maybeAddLoopGateTool(maybeAddPlanScopedTools(filterToolsForModelCapabilities(currentTools))));
+    const scopedTools = maybeAddGoalLifecycleTools(maybeAddLoopGateTool(maybeAddPlanScopedTools(filterToolsForModelCapabilities(currentTools))));
+    return ensurePrometheusThreadOpsForSupervision(scopedTools, isSyntheticThreadSupervisionReview);
   };
   const buildSwitchModelToolCategories = (): Set<string> => {
     const switchCategories = new Set<string>();
@@ -2799,6 +2858,8 @@ async function handleChat(
   const MAX_WRITE_NOTE_FINALIZATION_GUARD = 1;
   let backgroundFinalizationGuard = 0;
   const MAX_BACKGROUND_FINALIZATION_GUARD = 1;
+  let visualFinalizationGuard = 0;
+  const MAX_VISUAL_FINALIZATION_GUARD = 2;
   const backgroundResultInjectedIds = new Set<string>();
   const orchestrationSkillEnabled = isOrchestrationSkillEnabled();
   const greetingLikeTurn = isGreetingLikeMessage(message);
@@ -3771,7 +3832,22 @@ async function handleChat(
           console.warn('[VoiceDispatch] Could not attach background spawn to voice workgroup:', err?.message || err);
         }
       }
-      return attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt);
+      const instrumentedResult = attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt);
+      if (codingContextPacketEnabled) {
+        observeCodingContext({
+          sessionId,
+          objective: message,
+          projectRoot: workspacePath,
+          toolName,
+          args: effectiveToolArgs,
+          result: instrumentedResult.result,
+          error: instrumentedResult.error,
+          artifacts: instrumentedResult.artifacts,
+          data: instrumentedResult.data,
+          extra: instrumentedResult.extra,
+        });
+      }
+      return instrumentedResult;
     } catch (err: any) {
       return makeInstrumentedToolResult(
         toolName,
@@ -3922,7 +3998,7 @@ async function handleChat(
       const isDesktopTool = isDesktopToolName(toolName);
       // Visual screenshot tools deliver a post-action screenshot via the advisor packet.
       // Route through buildDesktopScreenshotContent so vision primaries get the PNG image.
-      const isDesktopVisualTool1 = isDesktopVisualToolName(toolName);
+      const isDesktopVisualTool1 = isDesktopVisualToolName(toolName, toolArgs);
       let toolMessageContent = (isBrowserTool && multiAgentActive)
         ? buildBrowserAck(toolName, toolResult) + goalReminder
         : (isDesktopTool && isDesktopVisualTool1)
@@ -4168,10 +4244,10 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     if (executionMode === 'team_subagent' || executionMode === 'team_manager' || executionMode === 'background_agent' || isDirectSubagentChatTurn) {
       // Subagents receive subagent personality context first, then their role file
       // and task/chat context from callerContext as the final, most specific layer.
-      return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}`;
+      return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${codingContextPacketDecision.block ? '\n\n' + codingContextPacketDecision.block : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}`;
     }
     const onboardingBlock = isOnboardingSession(sessionId) ? '\n\n' + getMeetAndGreetSystemPrompt() : '';
-    return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${personalityCtx}${onboardingBlock}`;
+    return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${codingContextPacketDecision.block ? '\n\n' + codingContextPacketDecision.block : ''}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${personalityCtx}${onboardingBlock}`;
   };
   const messages: any[] = [
     {
@@ -4279,7 +4355,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   ]);
   const maybeAppendVisionScreenshotForTool = async (
     toolName: string,
-    toolResult?: { error?: boolean; data?: any },
+    toolResult?: { error?: boolean; data?: any; name?: string; args?: Record<string, any> },
     toolInput?: Record<string, any>,
   ): Promise<void> => {
     if (toolName === 'creative_render_snapshot' || toolName === 'creative_get_state' || toolName === 'video_render_frame' || toolName === 'video_render_contact_sheet' || toolName === 'video_analyze_frame' || toolName === 'video_extract_clip_frames') {
@@ -4322,18 +4398,26 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       sendSSE('info', { message: `Creative rendered frame vision injected (${frames.length} frame${frames.length === 1 ? '' : 's'}).` });
       return;
     }
-    // Desktop tools have their own handling
-    if (toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot' || toolName === 'desktop_click_text') {
+    // Desktop tools have their own handling. Accept both granular handlers and
+    // model-facing wrappers (desktop_screen/desktop_window screenshot actions).
+    if (isDesktopVisualToolName(toolName, toolInput) || isDesktopVisualToolName(String(toolResult?.name || ''), toolResult?.args || toolInput)) {
       // Keep existing desktop behavior — always inject on success
       if (toolResult?.error) return;
       const preview = buildCapturedScreenshotPreviewPayload(sessionId, 'desktop');
       const visionMessage = buildVisionScreenshotMessage(sessionId, 'desktop');
       if (visionMessage) {
         messages.push(visionMessage);
-        sendSSE('info', { message: `Vision screenshot injected (desktop) after ${toolName}.` });
       }
       if (preview) {
-        sendSSE('vision_injected', { source: 'desktop', tool: toolName, preview, injected: !!visionMessage });
+        sendSSE('vision_injected', {
+          source: 'desktop',
+          tool: toolName,
+          label: 'Desktop screenshot',
+          preview,
+          injected: !!visionMessage,
+        });
+      } else {
+        sendSSE('info', { message: `Vision screenshot unavailable (desktop) after ${toolName}.` });
       }
       return;
     }
@@ -4400,9 +4484,6 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     advisorTriggerToolArgs: Record<string, any>;
     advisorTriggerToolResult: ToolResult;
   };
-
-  const isDesktopVisualToolName = (toolName: string): boolean =>
-    toolName === 'desktop_screenshot' || toolName === 'desktop_window_screenshot' || toolName === 'desktop_click_text';
 
   const countRecentToolRepeats = (toolName: string, toolArgs: Record<string, any>): number => {
     const argsHash = hashArgs(toolArgs);
@@ -4562,7 +4643,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
       return;
     }
-    if (isDesktopVisualToolName(toolName)) {
+    if (isDesktopVisualToolName(toolName, toolArgs) || isDesktopVisualToolName(String(toolResult?.name || ''), toolResult?.args || toolArgs)) {
       await maybeAppendVisionScreenshotForTool(toolName, toolResult, toolArgs);
       return;
     }
@@ -4620,7 +4701,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
 
     if (
       isDesktopToolName(executedToolName)
-      && !isDesktopVisualToolName(executedToolName)
+      && !isDesktopVisualToolName(executedToolName, executedToolArgs)
       && decision.mode === 'screenshot'
     ) {
       try {
@@ -5541,7 +5622,7 @@ RULES:
     if (!isDesktopToolName(triggerToolName)) return;
     if (decision && !decision.shouldRunAdvisor) return;
     if (!decision && triggerResult.error) return;
-    if (!isDesktopVisualToolName(triggerToolName)) return;
+    if (!isDesktopVisualToolName(triggerToolName, triggerResult?.args as any)) return;
     const orchCfg = getOrchestrationConfig();
     if (!orchestrationSkillEnabled || !orchCfg?.enabled) return;
     if (desktopAdvisorCallsThisTurn >= desktopMaxAdvisorCallsPerTurn) return;
@@ -5936,7 +6017,7 @@ RULES:
         // Screenshot always delivers full data (image for OpenAI, rich OCR text for local).
         // Other desktop/browser tools pass their real result text so AI always knows the outcome.
         // Visual screenshot tools also update the advisor packet with the post-action screenshot.
-        const isDesktopVisualTool2 = isDesktopVisualToolName(toolName);
+        const isDesktopVisualTool2 = isDesktopVisualToolName(toolName, toolArgs);
         let toolMessageContent = (isBrowserTool && multiAgentActive)
           ? buildBrowserAck(toolName, toolResult) + goalReminder
           : (isDesktopTool && isDesktopVisualTool2)
@@ -6893,6 +6974,41 @@ RULES:
         && tools.some((t: any) => String(t?.function?.name || '').trim() === 'write_note')
         && !allToolResults.some((r) => String(r.name || '').trim() === 'write_note' && !r.error);
 
+      const isExplicitVisualCommand = /^\s*\/visual(?:\s|$)/i.test(message);
+      const hasCompleteVisualFence = /```(?:chart|mermaid|svg|html)\s*\r?\n[\s\S]+?```/i.test(candidateText);
+      const visualSkillIds = new Set(['chart-visualizer', 'mermaid-diagrams', 'svg-diagrams', 'interactive-artifacts']);
+      const hasReadSpecializedVisualSkill = allToolResults.some((result) => (
+        String(result?.name || '').trim() === 'skill_read'
+        && !result?.error
+        && visualSkillIds.has(String(result?.args?.id || result?.args?.skill_id || '').trim().toLowerCase())
+      ));
+
+      if (
+        isExplicitVisualCommand
+        && (!hasCompleteVisualFence || !hasReadSpecializedVisualSkill)
+        && visualFinalizationGuard < MAX_VISUAL_FINALIZATION_GUARD
+      ) {
+        visualFinalizationGuard += 1;
+        console.log(
+          `[v2] VISUAL FINALIZATION BLOCKED: missing ${!hasReadSpecializedVisualSkill ? 'specialized skill_read' : 'renderable visual fence'} (guard ${visualFinalizationGuard}/${MAX_VISUAL_FINALIZATION_GUARD})`,
+        );
+        sendSSE('info', { message: 'Post-check: completing the requested visual renderer.' });
+        if (candidateText) messages.push({ role: 'assistant', content: candidateText });
+        messages.push({
+          role: 'user',
+          content: [
+            'Do not finalize yet. This is an explicit /visual command.',
+            !hasReadSpecializedVisualSkill
+              ? 'Call skill_read now for exactly one best-fit skill: chart-visualizer, mermaid-diagrams, svg-diagrams, or interactive-artifacts.'
+              : 'You already read a visual skill; follow it now.',
+            'Return exactly one complete fenced visual block using chart, mermaid, svg, or html.',
+            'Do not call show_ui_card or show_comparison. Do not substitute a Markdown table or prose outline.',
+            'Keep any surrounding explanation to one short sentence.',
+          ].join('\n'),
+        });
+        continue;
+      }
+
       if (requiresWriteNoteBeforeFinal && writeNoteFinalizationGuard < MAX_WRITE_NOTE_FINALIZATION_GUARD) {
         writeNoteFinalizationGuard++;
         console.log('[v2] FINALIZATION BLOCKED: required write_note was not called before final response');
@@ -7209,11 +7325,12 @@ RULES:
         }
         return undefined;
       };
-      const finalProductCarousel = collectProductCarousel();
+      const explicitVisualOutput = /^\s*\/visual(?:\s|$)/i.test(message);
+      const finalProductCarousel = explicitVisualOutput ? undefined : collectProductCarousel();
       // Rich artifacts lane (additive). Collect any artifacts emitted by tools,
       // then fold the legacy product carousel into a `products` artifact so the
       // new render path covers it without touching every carousel emit site.
-      const finalRichArtifacts = collectRichArtifacts(allToolResults as any[]);
+      const finalRichArtifacts = explicitVisualOutput ? [] : collectRichArtifacts(allToolResults as any[]);
       if (finalProductCarousel && !finalRichArtifacts.some((a) => a.type === 'products')) {
         const productsArtifact = productCarouselToArtifact(finalProductCarousel);
         if (productsArtifact) finalRichArtifacts.unshift(productsArtifact);
@@ -8343,7 +8460,7 @@ RULES:
       const isDesktopTool = isDesktopToolName(toolName);
       // Visual screenshot tools end with a screenshot stored in the advisor packet.
       // Give vision-capable primaries the actual PNG so they can see the post-action state.
-      const isDesktopVisualTool3 = isDesktopVisualToolName(toolName);
+      const isDesktopVisualTool3 = isDesktopVisualToolName(toolName, toolArgs);
       let toolMessageContent = (isBrowserTool && multiAgentActive)
         ? buildBrowserAck(toolName, toolResult) + goalReminder
         : (isDesktopTool && isDesktopVisualTool3)
@@ -8996,7 +9113,7 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-	    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
+	    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -9014,6 +9131,7 @@ async function runInteractiveTurn(
     : [];
   const isGoalContinuationTurn = flags?.syntheticGoalContinuation === true || isMainChatGoalContinuation(message);
   const isSyntheticSubagentCompletionTurn = flags?.syntheticSubagentCompletion === true;
+  const isSyntheticThreadSupervisionReview = flags?.syntheticThreadSupervisionReview === true;
   const goalTurnSnapshot = isGoalContinuationTurn ? snapshotMainChatGoal(sessionId) : null;
   const goalRestartCheckpoint = goalTurnSnapshot?.restartCheckpoint && goalTurnSnapshot.restartCheckpoint.phase !== 'complete'
     ? goalTurnSnapshot.restartCheckpoint
@@ -9031,6 +9149,12 @@ async function runInteractiveTurn(
   } : {};
   const isTimerTurn = /^\s*\[Timer fired\]/i.test(String(message || ''));
   const turnOrigin = normalizeTurnOrigin(turnOriginInput, sessionId, isTimerTurn || isGoalContinuationTurn ? { channel: 'system', surface: 'automation', device: 'server' } : undefined);
+  const threadSupervisionMessageIdentity = isSyntheticThreadSupervisionReview ? {
+    messageKind: 'thread_supervision_review',
+    channel: 'system' as const,
+    channelLabel: 'active supervision',
+    origin: turnOrigin,
+  } : {};
   persistTurnOriginChannelHint(sessionId, turnOrigin);
   const existingMainChatStream = getMainChatStream(sessionId);
   const localMainChatStream = existingMainChatStream?.active
@@ -9082,7 +9206,7 @@ async function runInteractiveTurn(
     ...(isGoalContinuationTurn ? { channel: 'system' as const, channelLabel: 'goal' } : {}),
     ...(Array.isArray(attachmentPreviews) && attachmentPreviews.length ? { attachmentPreviews } : {}),
   };
-  if (!isGoalContinuationTurn && !isSyntheticSubagentCompletionTurn) {
+  if (!isGoalContinuationTurn && !isSyntheticSubagentCompletionTurn && !isSyntheticThreadSupervisionReview) {
     appendMainChatStreamEvent(sessionId, localMainChatStream?.streamId || existingMainChatStream?.streamId || '', 'user_message', {
       message: userMsg,
       clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId),
@@ -9140,7 +9264,7 @@ async function runInteractiveTurn(
   // Synthetic Goal prompts are runtime control input, not user-authored chat.
   // handleChat receives the full prompt directly below; storing it in history
   // leaks internal instructions into the UI and duplicates model context.
-  const addResult: any = isGoalContinuationTurn || isSyntheticSubagentCompletionTurn
+  const addResult: any = isGoalContinuationTurn || isSyntheticSubagentCompletionTurn || isSyntheticThreadSupervisionReview
     ? { added: false, deferredForCompaction: false, deferredForMemoryFlush: false }
     : skipDuplicateVoiceWorkflowUser
     ? { added: false, deferredForCompaction: false, deferredForMemoryFlush: false }
@@ -9314,6 +9438,7 @@ async function runInteractiveTurn(
 	    callerOnToken,
       {
         directSubagentChat: isDirectSubagentChatTurn,
+        syntheticThreadSupervisionReview: isSyntheticThreadSupervisionReview,
         excludedSkillIds: turnExcludedSkillIds,
         forcedSkillIds: turnForcedSkillIds,
         instructionCallerRequirements: callerContext ? [callerContext] : [],
@@ -9378,6 +9503,7 @@ async function runInteractiveTurn(
     addMessage(sessionId, {
       role: 'assistant',
       ...goalMessageIdentity,
+      ...threadSupervisionMessageIdentity,
       content: visibleCheckpointText,
       timestamp: Date.now(),
       toolLog: toolLogText || checkpointPacket,
@@ -9400,11 +9526,12 @@ async function runInteractiveTurn(
     if (toolLogText) {
       persistToolLog(sessionId, toolLogText);
     }
-    if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
+    if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
   } else {
     addMessage(sessionId, {
       role: 'assistant',
       ...goalMessageIdentity,
+      ...threadSupervisionMessageIdentity,
       content: result.text,
       timestamp: Date.now(),
       artifacts: Array.isArray(result.artifacts) && result.artifacts.length ? result.artifacts : undefined,
@@ -9426,8 +9553,8 @@ async function runInteractiveTurn(
     if (toolLogText) {
       persistToolLog(sessionId, toolLogText);
     }
-    if (!isSubagentChatSession) await maybeRefreshProjectLearning(sessionId);
-    if (!isSubagentChatSession) {
+    if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) await maybeRefreshProjectLearning(sessionId);
+    if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
       const generatedSessionTitle = await maybeAutoNameChatSession(sessionId);
       if (generatedSessionTitle && !abortSignal?.aborted) {
         sendSSE('session_title', {
@@ -11759,13 +11886,17 @@ function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>)
       open: 'voice_browser_open',
       scroll: 'voice_browser_scroll',
       snapshot: 'voice_browser_snapshot',
+      page_text: 'voice_browser_get_page_text',
+      focused_item: 'voice_browser_get_focused_item',
       click: 'voice_browser_click',
       vision_click: 'voice_browser_vision_click',
       fill: 'voice_browser_fill',
       type: 'voice_browser_type',
       vision_type: 'voice_browser_vision_type',
       press_key: 'voice_browser_press_key',
+      drag: 'voice_browser_drag',
       wait: 'voice_browser_wait',
+      close: 'voice_browser_close',
     } as Record<string, string>)[action];
     return target ? { name: target, args: innerArgs } : { name, args };
   }
@@ -11773,6 +11904,15 @@ function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>)
     const target = ({
       screenshot: 'voice_desktop_screenshot',
       click: 'voice_desktop_click',
+      drag: 'voice_desktop_drag',
+      scroll: 'voice_desktop_scroll',
+      type: 'voice_desktop_type',
+      type_raw: 'voice_desktop_type_raw',
+      press_key: 'voice_desktop_press_key',
+      wait: 'voice_desktop_wait',
+      get_clipboard: 'voice_desktop_get_clipboard',
+      set_clipboard: 'voice_desktop_set_clipboard',
+      monitors: 'voice_desktop_get_monitors',
       window_control: 'voice_desktop_window_control',
       focus_window: 'voice_desktop_focus_window',
       launch_app: 'voice_desktop_launch_app',
@@ -11919,12 +12059,12 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_browser',
-        description: 'Unified live browser wrapper for the Prometheus-controlled browser. Use action open/snapshot/screenshot/click/vision_click/fill/type/vision_type/press_key/scroll/wait, then pass the matching target/input arguments at top level. Use Worker for uploads/downloads, files, credentials, purchases/payments, destructive actions, account settings, or durable changes.',
+        description: 'Unified live browser wrapper using the same Prometheus browser runtime as regular chat. Supports open, snapshot, screenshot, page_text, focused_item, click, vision_click, fill, type, vision_type, press_key, scroll, drag, wait, and close.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['open', 'snapshot', 'screenshot', 'click', 'vision_click', 'fill', 'type', 'vision_type', 'press_key', 'scroll', 'wait'] },
+            action: { type: 'string', enum: ['open', 'snapshot', 'screenshot', 'page_text', 'focused_item', 'click', 'vision_click', 'fill', 'type', 'vision_type', 'press_key', 'scroll', 'drag', 'wait', 'close'] },
             url: { type: 'string' },
             query: { type: 'string' },
             ref: { type: 'number' },
@@ -11933,11 +12073,19 @@ function buildVoiceToolDefinitions(): any[] {
             text: { type: 'string' },
             x: { type: 'number' },
             y: { type: 'number' },
+            from_ref: { type: 'number' },
+            to_ref: { type: 'number' },
+            from_x: { type: 'number' },
+            from_y: { type: 'number' },
+            to_x: { type: 'number' },
+            to_y: { type: 'number' },
+            steps: { type: 'number' },
             button: { type: 'string', enum: ['left', 'right'] },
             key: { type: 'string' },
             direction: { type: 'string', enum: ['up', 'down'] },
             amount: { type: 'number' },
             ms: { type: 'number' },
+            max_chars: { type: 'number' },
             include_screenshot: { type: 'boolean' },
             include_summary: { type: 'boolean' },
           },
@@ -11949,12 +12097,12 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_desktop',
-        description: 'Unified live desktop wrapper for screenshot, app/window discovery, focus/launch/window control, and pointer/keyboard/scroll actions. Use action to select the wrapper operation and pass target/input arguments at top level. For window_control use window_action minimize/maximize/restore/close. Use Worker for file edits, shell/install work, credentials, purchases/payments, account settings/security changes, destructive confirmations, or durable system changes.',
+        description: 'Unified live desktop wrapper using the same Prometheus desktop runtime as regular chat. Supports screenshots, monitors, app/window discovery, focus/launch/window control, click, drag, scroll, type, raw type, key press, wait, clipboard, and window-scoped actions.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['screenshot', 'click', 'window_control', 'focus_window', 'launch_app', 'find_app', 'list_windows', 'window_click', 'window_type', 'window_press_key', 'window_scroll'] },
+            action: { type: 'string', enum: ['screenshot', 'monitors', 'click', 'drag', 'scroll', 'type', 'type_raw', 'press_key', 'wait', 'get_clipboard', 'set_clipboard', 'window_control', 'focus_window', 'launch_app', 'find_app', 'list_windows', 'window_click', 'window_type', 'window_press_key', 'window_scroll'] },
             window_action: { type: 'string', enum: ['minimize', 'maximize', 'restore', 'close'], description: 'Inner action when action is window_control.' },
             capture: { type: 'string', enum: ['all', 'primary'] },
             monitor_index: { type: 'number' },
@@ -11968,6 +12116,11 @@ function buildVoiceToolDefinitions(): any[] {
             padding: { type: 'number' },
             x: { type: 'number' },
             y: { type: 'number' },
+            from_x: { type: 'number' },
+            from_y: { type: 'number' },
+            to_x: { type: 'number' },
+            to_y: { type: 'number' },
+            steps: { type: 'number' },
             element: { type: 'number' },
             coordinate_space: { type: 'string', enum: ['capture', 'monitor', 'virtual', 'window'] },
             screenshot_id: { type: 'string' },
@@ -11990,6 +12143,8 @@ function buildVoiceToolDefinitions(): any[] {
             include_screenshot: { type: 'boolean' },
             include_summary: { type: 'boolean' },
             wait_ms: { type: 'number' },
+            ms: { type: 'number' },
+            max_chars: { type: 'number' },
             limit: { type: 'number' },
             refresh: { type: 'boolean' },
           },
@@ -13610,6 +13765,22 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         observation: compactVoiceText(result, 8000),
       });
     }
+    if (name === 'voice_browser_get_page_text') {
+      const result = await browserGetPageText(sessionId, {
+        maxChars: Math.min(12000, Math.max(500, Number(args.max_chars || 6000) || 6000)),
+      });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      return voiceToolResult(ok, ok ? 'Read the current browser page.' : result, {
+        observation: compactVoiceText(result, 12000),
+      });
+    }
+    if (name === 'voice_browser_get_focused_item') {
+      const result = await browserGetFocusedItem(sessionId);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      return voiceToolResult(ok, ok ? 'Read the focused browser item.' : result, {
+        observation: compactVoiceText(result, 5000),
+      });
+    }
     if (name === 'voice_browser_click') {
       const target = {
         ref: args.ref == null ? undefined : Number(args.ref),
@@ -13703,6 +13874,29 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         observation: compactVoiceText(result, 5000),
         ...shotMeta,
       });
+    }
+    if (name === 'voice_browser_drag') {
+      const result = await browserDrag(sessionId, {
+        from_ref: args.from_ref == null ? undefined : Number(args.from_ref),
+        to_ref: args.to_ref == null ? undefined : Number(args.to_ref),
+        from_x: args.from_x == null ? undefined : Number(args.from_x),
+        from_y: args.from_y == null ? undefined : Number(args.from_y),
+        to_x: args.to_x == null ? undefined : Number(args.to_x),
+        to_y: args.to_y == null ? undefined : Number(args.to_y),
+        steps: args.steps == null ? undefined : Number(args.steps),
+        observe: 'snapshot',
+      });
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceBrowserObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Browser drag complete.' : result, {
+        observation: compactVoiceText(result, 5000),
+        ...shotMeta,
+      });
+    }
+    if (name === 'voice_browser_close') {
+      const result = await browserClose(sessionId);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      return voiceToolResult(ok, ok ? 'Browser closed.' : result);
     }
     if (name === 'voice_desktop_screenshot') {
       const hasWindowTarget = !!(
@@ -13809,6 +14003,57 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         observation: compactVoiceText(result, 3000),
         ...shotMeta,
       });
+    }
+    if (name === 'voice_desktop_drag') {
+      const coords = [args.from_x, args.from_y, args.to_x, args.to_y].map(Number);
+      if (!coords.every(Number.isFinite)) return voiceToolResult(false, 'from_x, from_y, to_x, and to_y are required.');
+      const pointerArgs = parseDesktopPointerMonitorArgs(args);
+      const result = await desktopDrag(coords[0], coords[1], coords[2], coords[3], Number(args.steps || 20), pointerArgs);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Desktop drag complete.' : result, { observation: compactVoiceText(result, 3000), ...shotMeta });
+    }
+    if (name === 'voice_desktop_scroll') {
+      const direction = ['up', 'down', 'left', 'right'].includes(String(args.direction || '').toLowerCase())
+        ? String(args.direction).toLowerCase() as 'up' | 'down' | 'left' | 'right'
+        : 'down';
+      const result = await desktopScroll(direction, Number(args.amount || 3), args.x == null ? undefined : Number(args.x), args.y == null ? undefined : Number(args.y), direction === 'left' || direction === 'right', parseDesktopPointerMonitorArgs(args));
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? `Desktop scrolled ${direction}.` : result, { observation: compactVoiceText(result, 3000), ...shotMeta });
+    }
+    if (name === 'voice_desktop_type' || name === 'voice_desktop_type_raw') {
+      const text = String(args.text || '');
+      if (!text) return voiceToolResult(false, 'Text is required.');
+      const result = name === 'voice_desktop_type_raw' ? await desktopTypeRaw(text) : await desktopType(text);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? 'Desktop typing complete.' : result, { observation: compactVoiceText(result, 3000), ...shotMeta });
+    }
+    if (name === 'voice_desktop_press_key') {
+      const key = String(args.key || '').trim();
+      if (!key) return voiceToolResult(false, 'Key is required.');
+      const result = await desktopPressKey(key);
+      const ok = !/^ERROR:/i.test(String(result || ''));
+      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, args.include_screenshot !== false) : {};
+      return voiceToolResult(ok, ok ? `Pressed ${key}.` : result, { observation: compactVoiceText(result, 3000), ...shotMeta });
+    }
+    if (name === 'voice_desktop_wait') {
+      const ms = Math.min(5000, Math.max(50, Number(args.ms || args.wait_ms || 500) || 500));
+      const result = await desktopWait(ms);
+      return voiceToolResult(true, result || `Waited ${ms}ms.`, { ms });
+    }
+    if (name === 'voice_desktop_get_clipboard') {
+      const result = await desktopGetClipboard({ max_chars: Math.min(5000, Math.max(100, Number(args.max_chars || 1200) || 1200)) });
+      return voiceToolResult(!/^ERROR:/i.test(String(result || '')), 'Clipboard read.', { clipboard: compactVoiceText(result, 5000) });
+    }
+    if (name === 'voice_desktop_set_clipboard') {
+      const result = await desktopSetClipboard(String(args.text || ''));
+      return voiceToolResult(!/^ERROR:/i.test(String(result || '')), result);
+    }
+    if (name === 'voice_desktop_get_monitors') {
+      const result = await desktopGetMonitorsSummary();
+      return voiceToolResult(!/^ERROR:/i.test(String(result || '')), 'Desktop monitors listed.', { monitors: compactVoiceText(result, 5000) });
     }
     if (name === 'voice_desktop_window_control') {
       const actionRaw = String(args.action || '').toLowerCase();
@@ -14097,6 +14342,8 @@ function isDirectVoiceUiControlTool(toolName: string): boolean {
     'voice_desktop',
     'voice_browser_open',
     'voice_browser_snapshot',
+    'voice_browser_get_page_text',
+    'voice_browser_get_focused_item',
     'voice_browser_screenshot',
     'voice_browser_click',
     'voice_browser_vision_click',
@@ -14106,8 +14353,19 @@ function isDirectVoiceUiControlTool(toolName: string): boolean {
     'voice_browser_press_key',
     'voice_browser_scroll',
     'voice_browser_wait',
+    'voice_browser_drag',
+    'voice_browser_close',
     'voice_desktop_screenshot',
     'voice_desktop_click',
+    'voice_desktop_drag',
+    'voice_desktop_scroll',
+    'voice_desktop_type',
+    'voice_desktop_type_raw',
+    'voice_desktop_press_key',
+    'voice_desktop_wait',
+    'voice_desktop_get_clipboard',
+    'voice_desktop_set_clipboard',
+    'voice_desktop_get_monitors',
     'voice_desktop_window_control',
     'voice_desktop_list_windows',
     'voice_desktop_focus_window',
@@ -17259,8 +17517,8 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- Visual cards use the show_ui wrapper (render a card in the app while you speak the gist — keep speech short, the card carries the detail). Actions: weather (forecast), market (crypto/memecoins), stocks (equities/ETFs), prediction_market (Polymarket odds), map (places/locations), sources (news/citations), comparison (side-by-side table), chart (line/bar/area from numbers), product_carousel (products), agent_work (operator snapshot — gather via voice_ops action automation_dashboard first), and run_result (finished-task summary). For sources or product_carousel, pass the user\'s query directly; show_ui searches and assembles the items, so do not call it first with an empty items array and do not separately call voice_ops web_search unless show_ui reports a search failure. If the user asks for unspecified news sources, use query "latest news". All are keyless and read-only; call show_ui directly instead of dispatching the Worker for these.',
     '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. Load relevant workflow instructions before browser/desktop/tool actions when skill trigger context points to them. Follow skill instructions only through voice_* tools; explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker if they require files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
-    '- voice_browser: use action open, snapshot, screenshot, click, vision_click, fill, type, vision_type, press_key, scroll, or wait for fast browser navigation, input, drafting, and explicit user-authorized social posts/messages when content and destination are clear. Hand off to Worker for uploads, downloads, password/payment entry, purchases/payments, destructive actions, account settings/security changes, or anything involving files.',
-    '- voice_desktop: use action screenshot, list_windows, focus_window, window_control, find_app, launch_app, click, window_click, window_type, window_press_key, or window_scroll for live desktop UI. For window_control include window_action minimize/maximize/restore/close. Use window_id/window_handle/app_id/title and fresh screenshot coordinates. Explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker for file edits, shell commands, installs, destructive confirmations, purchases/payments, account settings/security changes, durable system changes, or anything requiring approvals.',
+    '- voice_browser uses the same Prometheus browser runtime as regular chat. Use action open, snapshot, screenshot, page_text, focused_item, click, vision_click, fill, type, vision_type, press_key, scroll, drag, wait, or close for live browser work. Hand off only for file transfer, credentials, purchases/payments, destructive actions, account settings/security changes, or durable work.',
+    '- voice_desktop uses the same Prometheus desktop runtime as regular chat. Use action screenshot, monitors, list_windows, focus_window, window_control, find_app, launch_app, click, drag, scroll, type, type_raw, press_key, wait, get_clipboard, set_clipboard, window_click, window_type, window_press_key, or window_scroll. For window_control include window_action minimize/maximize/restore/close. Use fresh screenshots and the same coordinate/SOM targeting rules as regular Prometheus.',
     '- Screenshot ownership: screenshot capture and screenshot sending stay in the voice layer. Do not call dispatch_prometheus_worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser action screenshot, voice_desktop action screenshot, or voice_ops action send_screenshot.',
     !identity.isSubagent
       ? '- send_to_prometheus_chat: consult the stronger Prometheus Worker for planning, analysis, brainstorming, explanations, reviews, or an ongoing discussion. This stays in the current chat with the full normal stream and creates no task. Call it immediately and stay quiet around the handoff; milestone mode and the final summary will bring the result back into voice.'

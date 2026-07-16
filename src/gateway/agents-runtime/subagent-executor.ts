@@ -9284,15 +9284,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
             ));
             const delivered: string[] = [];
             const errors: string[] = [];
-            for (const file of resolvedFiles) {
+            const batchId = resolvedFiles.length > 1 ? `delivery_${Date.now()}_${Math.random().toString(36).slice(2, 10)}` : undefined;
+            for (const [batchIndex, file] of resolvedFiles.entries()) {
               const delivery = await deliverToTargets({
                 sessionId,
                 target: args.target || 'origin',
-                text: msgText || `File ready: ${file.fileName}`,
+                text: msgText || (resolvedFiles.length > 1 ? `${resolvedFiles.length} files ready` : `File ready: ${file.fileName}`),
                 caption: String(args.caption || msgText || file.fileName || '').trim(),
                 attachmentPath: file.absPath,
                 fileName: file.fileName,
                 source: 'delivery_send:present_file',
+                batchId,
+                batchIndex,
+                batchCount: resolvedFiles.length,
               }, { telegramChannel: deps.telegramChannel, broadcastWS: deps.broadcastWS });
               delivered.push(...delivery.delivered);
               errors.push(...delivery.errors);
@@ -9325,20 +9329,24 @@ export async function executeTool(name: string, args: any, workspacePath: string
             const delivered: string[] = [];
             const errors: string[] = [];
             const artifacts: any[] = [];
-            for (const rawPath of attachmentPaths) {
+            const batchId = `delivery_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+            for (const [batchIndex, rawPath] of attachmentPaths.entries()) {
               const file = readAttachmentBuffer(rawPath, workspacePath);
               const relPath = path.relative(workspacePath, file.absPath).replace(/\\/g, '/');
               artifacts.push(buildPresentedFileArtifact(file.absPath, relPath));
               const delivery = await deliverToTargets({
                 sessionId,
                 target: args.target || 'origin',
-                text: msgText || `File ready: ${file.fileName}`,
+                text: msgText || `${attachmentPaths.length} files ready`,
                 caption: String(args.caption || msgText || file.fileName || '').trim(),
                 attachmentPath: file.absPath,
                 imageBuffer: file.mimeType.startsWith('image/') ? file.buffer : undefined,
                 mimeType: file.mimeType,
                 fileName: file.fileName,
                 source: 'delivery_send',
+                batchId,
+                batchIndex,
+                batchCount: attachmentPaths.length,
               }, { telegramChannel: deps.telegramChannel, broadcastWS: deps.broadcastWS });
               delivered.push(...delivery.delivered);
               errors.push(...delivery.errors);

@@ -149,7 +149,8 @@ export function log(text, type = 'log') {
 
 export function buildVisualSrcdoc(lang, code, isDark) {
   const mermaidTheme = isDark ? 'dark' : 'neutral';
-  const sharedStyles = '*{margin:0;padding:0;box-sizing:border-box}html,body{background:transparent!important;scrollbar-width:none;-ms-overflow-style:none}::-webkit-scrollbar{display:none}';
+  const visualCanvasBg = isDark ? '#101014' : '#ffffff';
+  const sharedStyles = `*{margin:0;padding:0;box-sizing:border-box}html,body{background:${visualCanvasBg}!important;color-scheme:${isDark ? 'dark' : 'light'};scrollbar-width:none;-ms-overflow-style:none}::-webkit-scrollbar{display:none}`;
   const mermaidControlsBg = isDark ? 'rgba(18,25,38,0.92)' : 'rgba(255,255,255,0.94)';
   const mermaidControlsBorder = isDark ? 'rgba(255,255,255,0.16)' : 'rgba(15,23,42,0.14)';
   const mermaidControlsText = isDark ? '#dbeafe' : '#1e293b';
@@ -188,6 +189,15 @@ export function buildVisualSrcdoc(lang, code, isDark) {
   let scale=1,tx=0,ty=0,minScale=0.2,maxScale=8;
 
   function applyTransform(){stage.style.transform='translate('+tx+'px,'+ty+'px) scale('+scale+')';}
+
+  function normalizeSvgSize(){
+    const svg=stage.querySelector('svg');if(!svg)return;
+    const vb=svg.viewBox&&svg.viewBox.baseVal?svg.viewBox.baseVal:null;
+    if(!vb||!vb.width||!vb.height)return;
+    const rawW=String(svg.getAttribute('width')||''),rawH=String(svg.getAttribute('height')||'');
+    if(!rawW||rawW.includes('%'))svg.setAttribute('width',String(vb.width));
+    if(!rawH||rawH.includes('%'))svg.setAttribute('height',String(vb.height));
+  }
 
   function svgBounds(){
     const svg=stage.querySelector('svg');
@@ -250,7 +260,7 @@ export function buildVisualSrcdoc(lang, code, isDark) {
   document.getElementById('sv-out').addEventListener('click',()=>{const r=viewport.getBoundingClientRect();zoomAt(scale/1.18,r.left+r.width/2,r.top+r.height/2);});
   document.getElementById('sv-reset').addEventListener('click',fitToViewport);
   window.addEventListener('resize',fitToViewport);
-  requestAnimationFrame(()=>{fitToViewport();setTimeout(fitToViewport,80);});
+  requestAnimationFrame(()=>{normalizeSvgSize();fitToViewport();setTimeout(fitToViewport,80);});
 })();
 <\/script>
 <\/body><\/html>`;
@@ -289,6 +299,14 @@ export function buildVisualSrcdoc(lang, code, isDark) {
   let maxScale = 8;
   function applyTransform() {
     stage.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+  }
+
+  function normalizeSvgSize() {
+    const svg = stage.querySelector('svg');
+    const vb = svg && svg.viewBox && svg.viewBox.baseVal ? svg.viewBox.baseVal : null;
+    if (!svg || !vb || !vb.width || !vb.height) return;
+    svg.setAttribute('width', String(vb.width));
+    svg.setAttribute('height', String(vb.height));
   }
 
   function graphBounds() {
@@ -435,6 +453,7 @@ export function buildVisualSrcdoc(lang, code, isDark) {
     .then(() => {
       if (!stage.querySelector('svg')) throw new Error('No SVG output');
       requestAnimationFrame(() => {
+        normalizeSvgSize();
         fitToViewport();
         setTimeout(fitToViewport, 80);
       });
@@ -464,7 +483,7 @@ function injectVisualResizeBridge(srcdoc, options = {}) {
   const bridge = `<script>(function(){
 var visualId=${visualScriptJson(visualId)},last=0,state=${visualScriptJson(initialState)}||{};
 function post(type,extra){try{parent.postMessage(Object.assign({type:type,visualId:visualId},extra||{}),'*')}catch(e){}}
-function send(){try{var d=document.documentElement,b=document.body;var h=Math.min(10000,Math.max(280,d?d.scrollHeight:0,b?b.scrollHeight:0,d?d.offsetHeight:0,b?b.offsetHeight:0));if(Math.abs(h-last)>1){last=h;post('prometheus:visual-resize',{height:h})}}catch(e){}}
+function send(){try{var d=document.documentElement,b=document.body;var viewport=Math.max(280,window.innerHeight||0);var measured=Math.max(d?d.scrollHeight:0,b?b.scrollHeight:0,d?d.offsetHeight:0,b?b.offsetHeight:0);var h=measured<=viewport+24?viewport:measured;h=Math.min(10000,Math.max(280,h));if(Math.abs(h-last)>1){last=h;post('prometheus:visual-resize',{height:h})}}catch(e){}}
 function keyFor(el,index){return el.getAttribute('data-state-key')||el.id||el.name||('control-'+index)}
 function captureControls(){var controls={};document.querySelectorAll('input,select,textarea').forEach(function(el,index){var key=keyFor(el,index);controls[key]={value:el.value};if(el.type==='checkbox'||el.type==='radio')controls[key].checked=!!el.checked});var details={};document.querySelectorAll('details').forEach(function(el,index){details[el.id||('details-'+index)]=!!el.open});state=Object.assign({},state,{controls:controls,details:details});if(window.openai)window.openai.widgetState=state;post('prometheus:visual-state',{state:state});return state}
 function restoreControls(){var controls=state&&state.controls||{};document.querySelectorAll('input,select,textarea').forEach(function(el,index){var saved=controls[keyFor(el,index)];if(!saved)return;if(Object.prototype.hasOwnProperty.call(saved,'value'))el.value=saved.value;if(Object.prototype.hasOwnProperty.call(saved,'checked'))el.checked=!!saved.checked});var details=state&&state.details||{};document.querySelectorAll('details').forEach(function(el,index){var key=el.id||('details-'+index);if(Object.prototype.hasOwnProperty.call(details,key))el.open=!!details[key]})}
@@ -490,7 +509,13 @@ function installVisualMessageBridge() {
     if (data.type === 'prometheus:visual-resize') {
       const height = Number(data.height);
       if (!Number.isFinite(height)) return;
-      const bounded = Math.min(10000, Math.max(280, Math.ceil(height) + 16));
+      // Do not add padding here. Several visual documents intentionally use
+      // html/body { height: 100% }; adding even one pixel creates a resize
+      // feedback loop where the iframe reports its newly enlarged viewport
+      // forever (especially visible in iOS Safari as a giant blank canvas).
+      const bounded = Math.min(10000, Math.max(280, Math.ceil(height)));
+      const current = Math.ceil(frame.getBoundingClientRect().height || 0);
+      if (Math.abs(current - bounded) <= 1) return;
       frame.style.height = `${bounded}px`;
       frame.style.minHeight = `${bounded}px`;
       return;
@@ -570,7 +595,8 @@ export function buildVisualIframe(lang, code, options = {}) {
   const encoded = escapeAttr(srcdoc);
   const escapedLang = lang.replace(/"/g, '');
   const escapedCode = escapeAttr(code);
-  const minHeight = 280;
+  const minHeight = lang === 'chart' ? 340 : lang === 'html' ? 420 : 360;
+  const frameBackground = isDark ? '#101014' : '#ffffff';
   return `<div class="visual-block" id="${id}-wrap" data-vis-lang="${escapedLang}" data-vis-code="${escapedCode}" style="width:100%;max-width:100%;margin:10px 0;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
   <iframe
     id="${id}"
@@ -579,7 +605,7 @@ export function buildVisualIframe(lang, code, options = {}) {
     data-visual-version="${escapeAttr(artifact?.version || 1)}"
     srcdoc="${encoded}"
     sandbox="allow-scripts allow-downloads"
-    style="width:100%;min-height:${minHeight}px;border:none;display:block;background:transparent"
+    style="width:100%;height:${minHeight}px;min-height:${minHeight}px;border:none;display:block;background:${frameBackground};color-scheme:${isDark ? 'dark' : 'light'}"
     loading="lazy"
   ><\/iframe>
 <\/div>`;

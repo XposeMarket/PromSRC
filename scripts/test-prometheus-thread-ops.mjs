@@ -46,6 +46,19 @@ try {
     session_id: targetId,
   }, {});
   assert.ok(pinned.session.pinnedAt > 0);
+  const threadLinks = threadOps.buildPrometheusThreadLinksArtifact({
+    action: 'pin',
+    session_id: targetId,
+  }, pinned);
+  assert.equal(threadLinks.type, 'thread_links');
+  assert.equal(threadLinks.items.length, 1);
+  assert.equal(threadLinks.items[0].sessionId, targetId);
+  assert.equal(threadLinks.items[0].title, 'Renamed managed thread');
+
+  assert.equal(threadOps.buildPrometheusThreadLinksArtifact({
+    action: 'read',
+    session_id: targetId,
+  }, pinned), null, 'read-only inspection must not claim the thread was touched');
 
   const read = await threadOps.executePrometheusThreadOps(ownerId, {
     action: 'read',
@@ -88,7 +101,14 @@ try {
   assert.ok(threadTool.function.parameters.properties.action.enum.includes('steer'));
   assert.ok(threadTool.function.parameters.properties.action.enum.includes('follow'));
 
-  console.log('PASS: Prometheus peer-session create, metadata, inspection, supervision, and tool contracts');
+  const desktopChat = fs.readFileSync(path.join(root, 'web-ui', 'src', 'pages', 'ChatPage.js'), 'utf8');
+  const mobileChat = fs.readFileSync(path.join(root, 'web-ui', 'src', 'mobile', 'mobile-pages.js'), 'utf8');
+  assert.match(desktopChat, /renderThreadLinkArtifacts\(msg\)/);
+  assert.match(desktopChat, /openPrometheusThreadLink/);
+  assert.match(mobileChat, /_renderMobileThreadLinkArtifacts\(m\)/);
+  assert.match(mobileChat, /pmOpenPrometheusThread/);
+
+  console.log('PASS: Prometheus peer-session controls, supervision, and linked thread-card contracts');
 } finally {
   const resolved = path.resolve(tempRoot);
   const tempBase = path.resolve(os.tmpdir());

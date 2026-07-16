@@ -107,12 +107,42 @@ const OBSERVATION_TOOL_REASONS: Record<string, PostActionObservationDecision> = 
     reason: 'explicit desktop window screenshot requested',
     shouldRunAdvisor: true,
   },
+  desktop_diff_screenshot: {
+    mode: 'screenshot',
+    reason: 'explicit desktop screenshot diff requested',
+    shouldRunAdvisor: true,
+  },
+  desktop_click_text: {
+    mode: 'screenshot',
+    reason: 'desktop text click is anchored to a screenshot',
+    shouldRunAdvisor: true,
+  },
   desktop_wait_for_change: {
     mode: 'screenshot',
     reason: 'change-watcher already captures screen state',
     shouldRunAdvisor: true,
   },
 };
+
+function isDesktopWrapperScreenshotAction(toolName: string, args?: Record<string, any>): boolean {
+  const name = String(toolName || '').trim().toLowerCase();
+  const action = String(args?.action || args?.mode || '').trim().toLowerCase();
+  if (name === 'desktop_screen') {
+    return (
+      action === 'screenshot'
+      || action === 'region_screenshot'
+      || action === 'window_screenshot'
+      || action === 'diff_screenshot'
+      || action === 'diff'
+      || action === 'wait_for_change'
+      || action === 'pixel_watch'
+    );
+  }
+  if (name === 'desktop_window') {
+    return action === 'screenshot' || action === 'region_screenshot' || action === 'click_text';
+  }
+  return false;
+}
 
 function upgradeMode(
   current: PostActionObserveMode,
@@ -381,6 +411,13 @@ function decideDesktopObservation(
 
   if (OBSERVATION_TOOL_REASONS[toolName]) {
     return OBSERVATION_TOOL_REASONS[toolName];
+  }
+  if (isDesktopWrapperScreenshotAction(toolName, input.args)) {
+    return {
+      mode: 'screenshot',
+      reason: 'explicit desktop wrapper screenshot requested',
+      shouldRunAdvisor: true,
+    };
   }
   if (input.error) {
     return { mode: 'screenshot', reason: 'desktop action failed; capture current UI state', shouldRunAdvisor: true };

@@ -18,7 +18,7 @@ assert.match(
 );
 assert.match(
   router,
-  /sendSSE\('vision_injected', \{ source: 'desktop', tool: toolName, preview, injected: !!visionMessage \}\)/,
+  /sendSSE\('vision_injected', \{[\s\S]{0,220}?source: 'desktop',[\s\S]{0,220}?preview,[\s\S]{0,120}?injected: !!visionMessage/,
   'desktop captures must emit a tool-stream preview even when model vision injection is unavailable',
 );
 assert.match(
@@ -51,5 +51,11 @@ assert.match(mobile, /groups\.push\(\{ kind: 'vision', entries: \[entry\] \}\)/,
 assert.match(mobile, /class="pm-trace-vision-break"/, 'mobile must render a standalone screenshot timeline card');
 assert.match(desktop, /isRenderableLiveTraceImageSource[\s\S]{0,180}?api\\\/canvas\\\/inline/, 'desktop must accept same-origin analysis preview URLs');
 assert.match(mobile, /_isRenderableMobileTraceImageSource[\s\S]{0,180}?api\\\/canvas\\\/inline/, 'mobile must accept same-origin analysis preview URLs');
+assert.match(desktop, /isRenderableLiveTraceImageSource[\s\S]{0,320}?desktop-screenshot-preview/, 'desktop must accept wrapper screenshot preview URLs');
+assert.match(mobile, /_isRenderableMobileTraceImageSource[\s\S]{0,320}?desktop-screenshot-preview/, 'mobile must accept wrapper screenshot preview URLs');
+assert.match(router, /desktop-screenshot-preview\/:sessionId\/:screenshotId/, 'gateway must expose exact desktop packet previews');
+assert.doesNotMatch(router, /sendSSE\('info', \{ message: `Vision screenshot injected \(desktop\)/, 'desktop injection status noise must stay hidden');
+assert.match(desktop, /isVisionInjectionStatusText\(normalizedText\)/, 'desktop recovery must hide legacy injection status rows');
+assert.match(mobile, /_isMobileVisionInjectionStatusText\(normalizedText\)/, 'mobile recovery must hide legacy injection status rows');
 
 console.log('[tool-stream-screenshot-previews] desktop/mobile live and recovery contracts passed');

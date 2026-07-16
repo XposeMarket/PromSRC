@@ -21,6 +21,9 @@ export interface DeliveryPayload {
   mimeType?: string;
   fileName?: string;
   source?: string;
+  batchId?: string;
+  batchIndex?: number;
+  batchCount?: number;
 }
 
 function normalizeTarget(value: unknown): DeliveryTarget {
@@ -81,6 +84,9 @@ function buildWebPayload(payload: DeliveryPayload, target: DeliveryTarget): Reco
     fileName: payload.fileName || (payload.attachmentPath ? path.basename(payload.attachmentPath) : ''),
     imageDataUrl: imageBase64 ? `data:${mimeType || 'image/jpeg'};base64,${imageBase64}` : '',
     mimeType,
+    batchId: payload.batchId || '',
+    batchIndex: Number.isFinite(payload.batchIndex) ? Number(payload.batchIndex) : undefined,
+    batchCount: Number.isFinite(payload.batchCount) ? Number(payload.batchCount) : undefined,
     timestamp: Date.now(),
   };
 }

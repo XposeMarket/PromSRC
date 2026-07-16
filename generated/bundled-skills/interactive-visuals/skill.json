@@ -2,8 +2,8 @@
   "schemaVersion": "prometheus-skill-bundle-v1",
   "id": "interactive-visuals",
   "name": "interactive-visuals",
-  "description": "Route /visual and general visualization requests to the smallest best-fit native widget, chart, Mermaid diagram, SVG, or interactive HTML artifact.",
-  "version": "2.0.0",
+  "description": "Route /visual and general visualization requests to exactly one best-fit chart, Mermaid, SVG, or interactive HTML visual skill.",
+  "version": "2.1.0",
   "entrypoint": "SKILL.md",
   "triggers": [
     "/visual",

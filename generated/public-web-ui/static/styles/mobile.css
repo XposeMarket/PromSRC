@@ -3675,16 +3675,39 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   line-height: 1.36;
   letter-spacing: 0;
 }
-.pm-voice-chat-lyrics-spoken {
-  color: rgba(255,255,255,.98);
-  text-shadow: 0 0 16px rgba(255,255,255,.18);
-  transition: color .16s ease, text-shadow .16s ease;
+.pm-voice-lyric-line {
+  transition: opacity .22s ease, transform .22s ease, filter .22s ease;
 }
-.pm-voice-chat-lyrics-pending,
-.pm-voice-chat-lyrics-active {
-  color: rgba(255,255,255,.42);
-  text-shadow: none;
-  transition: color .16s ease;
+.pm-voice-lyric-line--past {
+  opacity: .18;
+  transform: translateY(-3px) scale(.97);
+  filter: blur(.25px);
+}
+.pm-voice-lyric-line--current {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+.pm-voice-lyric-line--future {
+  opacity: .32;
+  transform: translateY(3px) scale(.98);
+}
+.pm-voice-lyric-word {
+  display: inline;
+  transition: color .14s ease, opacity .14s ease, text-shadow .14s ease;
+}
+.pm-voice-lyric-word--spoken { color: rgba(255,255,255,.66); }
+.pm-voice-lyric-word--active {
+  color: rgba(255,255,255,1);
+  text-shadow: 0 0 18px rgba(255,154,98,.42);
+}
+.pm-voice-lyric-word--pending { color: rgba(255,255,255,.34); }
+.pm-voice-page-lyrics {
+  width: 100%;
+  font-family: inherit;
+  font-size: clamp(17px, 4.7vw, 22px);
+  font-style: italic;
+  font-weight: 560;
+  line-height: 1.28;
 }
 
 .pm-bubble .pm-sender {
@@ -5894,6 +5917,42 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 .pm-agent-work-head { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
 .pm-agent-work-head strong { font-size: 15px; font-weight: 700; }
 .pm-agent-work-head span { font-size: 12px; opacity: 0.6; }
+
+/* Linked Prometheus threads touched by this response */
+.pm-thread-links-artifact { width: 100%; margin: 12px 0 2px; display: flex; flex-direction: column; gap: 8px; }
+.pm-thread-link-card {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--pm-border-strong);
+  border-radius: 14px;
+  background: var(--pm-surface);
+  color: var(--pm-text);
+  font: inherit;
+  text-align: left;
+  box-shadow: var(--pm-shadow-sm);
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-thread-link-card:active { background: var(--pm-surface-strong); transform: scale(.995); }
+.pm-thread-link-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; background: rgba(127,127,127,.12); }
+.pm-thread-link-icon svg { width: 20px; height: 20px; }
+.pm-thread-link-copy { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pm-thread-link-copy strong, .pm-thread-link-copy small, .pm-thread-link-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-thread-link-label { color: var(--pm-muted); font-size: 10px; font-weight: 800; }
+.pm-thread-link-copy strong { font-size: 12px; line-height: 1.35; }
+.pm-thread-link-copy small { color: var(--pm-muted); font-size: 10px; }
+.pm-thread-link-open { display: flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--pm-muted); font-size: 10px; font-weight: 750; }
+.pm-thread-link-open span { font-size: 18px; line-height: 1; }
+@media (max-width: 390px) {
+  .pm-thread-link-card { grid-template-columns: 34px minmax(0, 1fr) auto; gap: 8px; padding-inline: 9px; }
+  .pm-thread-link-icon { width: 34px; height: 34px; }
+  .pm-thread-link-open { font-size: 0; gap: 0; }
+  .pm-thread-link-open span { font-size: 20px; }
+}
 
 /* Mobile agent_work clickable rows + detail */
 .pm-aw-item { display: flex; flex-direction: column; }
@@ -9404,12 +9463,13 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   scrollbar-width: none;
+  overflow: hidden;
 }
 .pm-voice-preview-artifact::-webkit-scrollbar { display: none; }
 .pm-voice-preview-artifact > * { margin: 0 !important; max-width: 100% !important; }
 .pm-voice-preview-products .pm-voice-preview-artifact,
 .pm-voice-preview-sources .pm-voice-preview-artifact {
-  padding: 12px;
+  padding: 0;
   box-sizing: border-box;
   overflow: hidden;
 }
@@ -9420,8 +9480,8 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 }
 .pm-voice-preview-products .pm-product-heading,
 .pm-voice-preview-sources .pm-src-heading {
-  padding: 0 38px 9px 0;
-  margin: 0;
+  padding: 14px 44px 10px 16px;
+  margin: 0 !important;
   line-height: 1.25;
 }
 .pm-voice-preview-products .pm-product-track,
@@ -9437,6 +9497,17 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   max-width: none;
   min-width: 0;
   box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.pm-voice-preview-products .pm-product-card {
+  padding: 0;
+}
+.pm-voice-preview-products .pm-product-img-wrap,
+.pm-voice-preview-sources .pm-src-img-wrap {
+  border-radius: 0;
 }
 .pm-voice-preview-products .pm-product-img-wrap { aspect-ratio: 16 / 9; }
 .pm-voice-preview-sources .pm-src-card { min-height: 250px; }
@@ -9489,23 +9560,29 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   font-size: 12px;
 }
 .pm-voice-preview-ghost-artifact {
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-start;
-  padding: 14px 18px;
+  display: block;
+  padding: 0;
   box-sizing: border-box;
-  text-align: left;
   transform: translateY(16px) scale(.94) rotateX(-2deg);
   transform-origin: 50% 0;
 }
-.pm-voice-preview-ghost-artifact span {
-  font-size: 9px;
-  font-weight: 900;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: var(--pm-orange);
+.pm-voice-preview-ghost-artifact .pm-voice-preview-artifact {
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
-.pm-voice-preview-ghost-artifact strong { max-width: 88%; }
+.pm-voice-preview-ghost-artifact .pm-product-heading,
+.pm-voice-preview-ghost-artifact .pm-src-heading,
+.pm-voice-preview-ghost-artifact .pm-product-body,
+.pm-voice-preview-ghost-artifact .pm-src-body {
+  display: none;
+}
+.pm-voice-preview-ghost-artifact .pm-product-carousel,
+.pm-voice-preview-ghost-artifact .pm-sources {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
 .pm-voice-preview-ghost.ghost-2 {
   left: 28px;
   right: 28px;

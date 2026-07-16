@@ -1215,11 +1215,15 @@ export function getAgentTeamScheduleTools(): any[] {
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'find', 'read', 'status', 'create', 'create_many', 'send', 'steer', 'interrupt', 'rename', 'pin', 'unpin', 'follow', 'unfollow', 'supervisions'],
+              enum: ['list', 'find', 'read', 'status', 'create', 'create_many', 'send', 'steer', 'interrupt', 'rename', 'pin', 'unpin', 'follow', 'unfollow', 'supervisions', 'review_decision'],
               description: 'Peer-session operation. Use steer instead of send while the target is actively running.',
             },
             session_id: { type: 'string', description: 'Target Prometheus session id.' },
             supervision_id: { type: 'string', description: 'Supervision id for unfollow.' },
+            review_event_id: { type: 'string', description: 'Exact pending event id for an active-supervision review decision.' },
+            decision: { type: 'string', enum: ['wait', 'continue', 'verified_complete', 'needs_user', 'failed'], description: 'Authoritative active-supervision review outcome. Only verified_complete may finalize success.' },
+            progress_made: { type: 'boolean', description: 'Supervisor judgment of objective progress during this review. True requires bounded evidence.' },
+            evidence: { type: 'array', maxItems: 12, items: { type: 'string', maxLength: 500 }, description: 'Bounded implementation or verification evidence supporting a review decision.' },
             query: { type: 'string', description: 'Full-history search text for find.' },
             title: { type: 'string', description: 'Thread title for create or rename.' },
             prompt: { type: 'string', description: 'Initial work prompt for create, or message text for send/steer.' },
@@ -1227,6 +1231,11 @@ export function getAgentTeamScheduleTools(): any[] {
             objective: { type: 'string', description: 'Autonomous completion objective for create/follow. Defaults to prompt.' },
             workspace: { type: 'string', description: 'Optional target workspace. Defaults to the owner thread workspace.' },
             follow: { type: 'boolean', description: 'For create/create_many: enter autonomous Goal mode and durably supervise. Default true.' },
+            max_reviews: { type: 'number', description: 'Optional active-supervision review budget. Default 12.' },
+            max_follow_ups: { type: 'number', description: 'Optional supervised send/steer budget. Default 6.' },
+            max_elapsed_ms: { type: 'number', description: 'Optional elapsed-time budget. Default 24 hours.' },
+            min_review_interval_ms: { type: 'number', description: 'Minimum interval between model reviews. Default 15000ms.' },
+            max_consecutive_no_progress: { type: 'number', description: 'Hard stop after this many no-progress reviews. Default 3.' },
             wait: { type: 'boolean', description: 'For send: wait for the full target reply. Default false (detached).' },
             requires_response: { type: 'boolean', description: 'For steer: whether the live worker should respond. Default true.' },
             history_limit: { type: 'number', description: 'For read: maximum recent messages, default 60, max 200.' },
@@ -1602,4 +1611,11 @@ export function getAgentTeamScheduleTools(): any[] {
       },
     },
   ];
+}
+
+export function ensurePrometheusThreadOpsForSupervision(toolDefs: any[], enabled: boolean): any[] {
+  if (!enabled || toolDefs.some((tool: any) => String(tool?.function?.name || '') === 'prometheus_thread_ops')) return toolDefs;
+  const definition = getAgentTeamScheduleTools()
+    .find((tool: any) => String(tool?.function?.name || '') === 'prometheus_thread_ops');
+  return definition ? [definition, ...toolDefs] : toolDefs;
 }

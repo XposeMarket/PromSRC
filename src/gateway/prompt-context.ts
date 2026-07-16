@@ -1146,10 +1146,14 @@ export async function buildPersonalityContext(
     const timeString  = formatLocalModelTime();
     const userMemory  = loadCondensedMemoryProfile(workspacePath);
     const business = isBusinessContextEnabled(sessionId) ? loadBusinessContextProfile(workspacePath, 900) : '';
+    const selectedSkillCtxLocal = skillsManager.buildTurnContext(messageText, skillContextOptions);
     const activeSkillCtxLocal = buildActiveSkillsContext(sessionId, skillsManager);
     setCurrentTurn(sessionId, historyLength);
     await hookBus.fire({ type: 'agent:bootstrap', sessionId, workspacePath, bootstrapFiles: [], timestamp: Date.now() });
-    return buildLocalModelPersonalityCtx(timeString, userMemory) + (business ? `\n\n[BUSINESS]\n${business}` : '') + (activeSkillCtxLocal ? `\n\n${activeSkillCtxLocal}` : '');
+    return buildLocalModelPersonalityCtx(timeString, userMemory)
+      + (business ? `\n\n[BUSINESS]\n${business}` : '')
+      + (selectedSkillCtxLocal ? `\n\n${selectedSkillCtxLocal}` : '')
+      + (activeSkillCtxLocal ? `\n\n${activeSkillCtxLocal}` : '');
   }
 
   if (profile === 'teach_mode') {

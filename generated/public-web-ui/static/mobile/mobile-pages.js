@@ -2878,7 +2878,9 @@ function _appendMobileCompactionTrace(message, status = 'compacting', summary = 
 
 function _isRenderableMobileTraceImageSource(value) {
   const source = String(value || '').trim();
-  return /^data:image\//i.test(source) || /^\/api\/canvas\/inline\?path=/i.test(source);
+  return /^data:image\//i.test(source)
+    || /^\/api\/canvas\/inline\?path=/i.test(source)
+    || /^\/api\/chat\/desktop-screenshot-preview\//i.test(source);
 }
 
 function _appendMobileVisionTrace(message, evt) {
@@ -3005,6 +3007,11 @@ function _isMobileStartupStatusText(value) {
     .test(String(value || '').trim());
 }
 
+function _isMobileVisionInjectionStatusText(value) {
+  return /^vision screenshot injected \((?:desktop|browser)\) after\b/i
+    .test(String(value || '').replace(/\s+/g, ' ').trim());
+}
+
 function _isMobileBareThinkingTraceText(value) {
   return /^thinking(?:\.\.\.)?$/i.test(String(value || '').replace(/\s+/g, ' ').trim());
 }
@@ -3122,6 +3129,7 @@ function _mobileWorkflowTraceEntriesForMessage(message) {
     if (text && _isMobileStartupStatusText(text)) return;
     if (type === 'user' || type === 'final' || /^user\s*:/i.test(text)) return;
     const normalizedText = text.replace(/\s+/g, ' ').trim();
+    if (_isMobileVisionInjectionStatusText(normalizedText)) return;
     if (_isMobileBareThinkingTraceText(normalizedText) && !previewData) return;
     if (_mobileTraceTextLooksLikeFinalAnswer(normalizedText, finalText) && !previewData) return;
     if (type === 'process' || type === 'info') {
@@ -3525,6 +3533,7 @@ function _mobileVisibleTraceEntries(entries) {
   return coalesceToolActivityEntries(entries).filter((entry) => {
     if (_isMobileImageGenerationStreamEntry(entry)) return false;
     if (_isMobilePreparedTraceEntry(entry)) return false;
+    if (_isMobileVisionInjectionStatusText(entry?.text)) return false;
     if (_isMobileBareThinkingTraceText(entry?.text)) return false;
     const hasContent = String(entry?.text || '').trim() || String(entry?.preview?.dataUrl || entry?.dataUrl || '').trim();
     if (!hasContent) return false;
@@ -3993,6 +4002,12 @@ function _normalizeMobileMedia(item) {
     provider: String(item?.provider || '').trim(),
     model: String(item?.model || '').trim(),
     bytes: Number(item?.bytes || 0) || 0,
+    generated: item?.generated === true,
+    gallery: item?.gallery === true,
+    deliveryBatchId: String(item?.deliveryBatchId || item?.batchId || '').trim(),
+    deliveryBatchIndex: Number.isFinite(Number(item?.deliveryBatchIndex ?? item?.batchIndex))
+      ? Number(item?.deliveryBatchIndex ?? item?.batchIndex)
+      : -1,
   };
 }
 
@@ -4051,6 +4066,10 @@ function _mergeMobileMediaIntoMessage(message, items) {
     name: media.name,
     file_name: media.name,
     bytes: media.bytes,
+    generated: media.generated === true,
+    gallery: media.gallery === true,
+    deliveryBatchId: media.deliveryBatchId,
+    deliveryBatchIndex: media.deliveryBatchIndex,
   }));
   if (!message.body || typeof message.body !== 'object') message.body = { sender: 'Prometheus', text: '' };
   message.body.files = files;
@@ -4370,13 +4389,25 @@ function _deliveryNotificationToMobileMedia(msg = {}) {
   const imageDataUrl = String(msg.imageDataUrl || '').trim();
   const attachmentPath = String(msg.attachmentPath || '').trim();
   if (!imageDataUrl && !attachmentPath) return null;
+  const kind = imageDataUrl ? 'image' : _mobileMediaKind({ path: attachmentPath, name: msg.fileName });
   return _normalizeMobileMedia({
-    kind: imageDataUrl ? 'image' : _mobileMediaKind({ path: attachmentPath, name: msg.fileName }),
+    kind,
     dataUrl: imageDataUrl,
     path: attachmentPath,
     name: String(msg.fileName || msg.caption || (imageDataUrl ? 'Delivered image.png' : attachmentPath.split(/[\\/]/).pop()) || 'Delivered file').trim(),
     mimeType: msg.mimeType || (imageDataUrl.match(/^data:([^;]+);/i)?.[1] || ''),
+    gallery: kind === 'image' && Number(msg.batchCount || 0) > 1,
+    deliveryBatchId: msg.batchId,
+    deliveryBatchIndex: msg.batchIndex,
   });
+}
+
+function _refreshMobileDeliveryThread(sid) {
+  if (String(__pmChat.activeSessionId || '') !== sid) return;
+  _activeMobileThread();
+  const threadEl = document.getElementById('pm-chat-thread');
+  const bodyEl = document.getElementById('pm-chat-body');
+  if (threadEl) _flushThreadRender(threadEl, bodyEl, sid);
 }
 
 function _appendMobileDeliveryNotification(msg = {}) {
@@ -4385,10 +4416,24 @@ function _appendMobileDeliveryNotification(msg = {}) {
   const text = String(msg.text || msg.caption || '').trim();
   const media = _deliveryNotificationToMobileMedia(msg);
   const key = media ? _mobileMediaKey(media) : '';
+  const batchId = String(msg.batchId || media?.deliveryBatchId || '').trim();
+  if (batchId) {
+    const batchTurn = __pmChat.threads[sid].find((item) => String(item?.deliveryBatchId || '').trim() === batchId);
+    if (batchTurn) {
+      const mediaExists = key && _collectMessageMedia(batchTurn).some((candidate) => _mobileMediaKey(candidate) === key);
+      if (!mediaExists && media) _mergeMobileMediaIntoMessage(batchTurn, [media]);
+      if (!_mobileMessageCopyText(batchTurn) && text) {
+        batchTurn.body.text = text;
+        batchTurn.content = text;
+      }
+      batchTurn.deliveryBatchCount = Math.max(Number(batchTurn.deliveryBatchCount || 0), Number(msg.batchCount || 0));
+      _refreshMobileDeliveryThread(sid);
+      return;
+    }
+  }
   const exists = __pmChat.threads[sid].some((item) => {
-    if (text && _mobileMessageCopyText(item) === text) return true;
-    if (!key) return false;
-    return _collectMessageMedia(item).some((candidate) => _mobileMediaKey(candidate) === key);
+    if (key) return _collectMessageMedia(item).some((candidate) => _mobileMediaKey(candidate) === key);
+    return !!text && _mobileMessageCopyText(item) === text;
   });
   if (exists) return;
   const turn = {
@@ -4400,6 +4445,8 @@ function _appendMobileDeliveryNotification(msg = {}) {
     source: String(msg.source || 'delivery'),
     channel: String(msg.target || 'mobile'),
     channelLabel: 'delivery',
+    deliveryBatchId: batchId,
+    deliveryBatchCount: Number(msg.batchCount || 0),
   };
   if (media) _mergeMobileMediaIntoMessage(turn, [media]);
   __pmChat.threads[sid].push(turn);
@@ -4407,12 +4454,7 @@ function _appendMobileDeliveryNotification(msg = {}) {
   // refresh the thread already on screen, but must never select their session.
   // A tool finishing in chat A can emit a delivery while the user is composing
   // a new chat B; selecting A here would discard the user's navigation intent.
-  if (String(__pmChat.activeSessionId || '') === sid) {
-    _activeMobileThread();
-    const threadEl = document.getElementById('pm-chat-thread');
-    const bodyEl = document.getElementById('pm-chat-body');
-    if (threadEl) _flushThreadRender(threadEl, bodyEl, sid);
-  }
+  _refreshMobileDeliveryThread(sid);
 }
 
 if (!window.__pmMobileDeliveryBridgeInstalled) {
@@ -4431,11 +4473,11 @@ function _renderMobileGeneratedImageBatch(mediaList) {
   const firstSrc = _mobileMediaUrl(first, 'inline');
   const firstDownload = _mobileMediaUrl(first, 'download');
   const primaryAttrs = `data-pm-media data-pm-generated-primary data-kind="image" data-src="${escapeHtml(firstSrc)}" data-download="${escapeHtml(firstDownload)}" data-name="${escapeHtml(first.name)}" data-path="${escapeHtml(first.path || '')}" data-index="0"`;
-  const thumbs = list.length > 1 ? `<div class="pm-generated-image-thumbs" aria-label="Generated image options">${list.map((media, idx) => {
+  const thumbs = list.length > 1 ? `<div class="pm-generated-image-thumbs" aria-label="Image options">${list.map((media, idx) => {
     const src = _mobileMediaUrl(media, 'inline');
     const download = _mobileMediaUrl(media, 'download');
     const attrs = `data-pm-generated-thumb data-kind="image" data-src="${escapeHtml(src)}" data-download="${escapeHtml(download)}" data-name="${escapeHtml(media.name)}" data-path="${escapeHtml(media.path || '')}" data-index="${idx}"`;
-    return `<button type="button" class="pm-generated-image-thumb${idx === 0 ? ' selected' : ''}" ${attrs} aria-label="Show generated image ${idx + 1}"><img src="${escapeHtml(src)}" alt="${escapeHtml(media.name)}" loading="lazy" decoding="async"><span>${idx + 1}</span></button>`;
+    return `<button type="button" class="pm-generated-image-thumb${idx === 0 ? ' selected' : ''}" ${attrs} aria-label="Show image ${idx + 1}" aria-pressed="${idx === 0 ? 'true' : 'false'}"><img src="${escapeHtml(src)}" alt="${escapeHtml(media.name)}" loading="lazy" decoding="async"><span>${idx + 1}</span></button>`;
   }).join('')}</div>` : '';
   return `<div class="pm-generated-image-batch" data-count="${escapeHtml(String(list.length))}">
     <button type="button" class="pm-generated-image-primary" ${primaryAttrs}><img src="${escapeHtml(firstSrc)}" alt="${escapeHtml(first.name)}" loading="lazy" decoding="async"></button>
@@ -4495,6 +4537,7 @@ function _isMobileExplicitMediaToolName(name) {
 }
 
 function _mobileHasPendingImageGeneration(message) {
+  if (message?.streaming !== true) return false;
   const entries = [
     ...(Array.isArray(message.processEntries) ? message.processEntries : []),
     ...(Array.isArray(message.liveTraceEntries) ? message.liveTraceEntries : []),
@@ -4536,8 +4579,10 @@ function _renderMobileGeneratedImageLoadingCard() {
 function _renderMobileMediaGallery(mediaList) {
   const list = Array.isArray(mediaList) ? mediaList : [];
   if (!list.length) return '';
-  const generatedImages = list.filter((media) => media.kind === 'image' && media.generated);
-  const rest = list.filter((media) => !(media.kind === 'image' && media.generated));
+  const generatedImages = list
+    .filter((media) => media.kind === 'image' && (media.generated || media.gallery))
+    .sort((a, b) => Number(a.deliveryBatchIndex ?? -1) - Number(b.deliveryBatchIndex ?? -1));
+  const rest = list.filter((media) => !(media.kind === 'image' && (media.generated || media.gallery)));
   const generatedHtml = generatedImages.length ? _renderMobileGeneratedImageBatch(generatedImages) : '';
   const restHtml = rest.length ? `<div class="pm-media-gallery">${rest.map((media, idx) => {
     const src = _mobileMediaUrl(media, 'inline');
@@ -6244,10 +6289,38 @@ function _renderMobileRealtimeVoiceAssistantText(m) {
   const clean = String(m.body?.text || m.content || '').replace(/\s+/g, ' ').trim();
   if (!clean) return '';
   const progress = Math.max(0, Math.min(1, Number(m.voiceRealtimeProgress || 0) || 0));
-  const split = Math.max(0, Math.min(clean.length, Math.round(clean.length * progress)));
-  const spoken = clean.slice(0, split);
-  const pending = clean.slice(split);
-  return `<div class="pm-voice-chat-lyrics"><span class="pm-voice-chat-lyrics-spoken">${escapeHtml(spoken)}</span><span class="pm-voice-chat-lyrics-pending">${escapeHtml(pending)}</span></div>`;
+  return _renderMobileVoiceLyrics(clean, progress, { compact: true });
+}
+
+function _mobileVoiceLyricLines(text = '', wordsPerLine = 7) {
+  const words = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  const lines = [];
+  for (let i = 0; i < words.length; i += wordsPerLine) lines.push(words.slice(i, i + wordsPerLine));
+  return { words, lines };
+}
+
+function _renderMobileVoiceLyrics(text = '', progress = 0, options = {}) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return '';
+  const safeProgress = Math.max(0, Math.min(1, Number(progress) || 0));
+  const wordsPerLine = options.compact ? 8 : 6;
+  const { words, lines } = _mobileVoiceLyricLines(clean, wordsPerLine);
+  const activeWordIndex = Math.min(Math.max(0, words.length - 1), Math.floor(safeProgress * words.length));
+  const activeLineIndex = Math.min(Math.max(0, lines.length - 1), Math.floor(activeWordIndex / wordsPerLine));
+  const startLine = Math.max(0, Math.min(Math.max(0, lines.length - 3), activeLineIndex - 1));
+  const visible = lines.slice(startLine, startLine + 3);
+  const html = visible.map((line, visibleIndex) => {
+    const lineIndex = startLine + visibleIndex;
+    const lineStart = lineIndex * wordsPerLine;
+    const wordHtml = line.map((word, index) => {
+      const absoluteIndex = lineStart + index;
+      const state = absoluteIndex < activeWordIndex ? 'spoken' : absoluteIndex === activeWordIndex ? 'active' : 'pending';
+      return `<span class="pm-voice-lyric-word pm-voice-lyric-word--${state}">${escapeHtml(word)}</span>`;
+    }).join(' ');
+    const lineState = lineIndex < activeLineIndex ? 'past' : lineIndex === activeLineIndex ? 'current' : 'future';
+    return `<div class="pm-voice-lyric-line pm-voice-lyric-line--${lineState}">${wordHtml}</div>`;
+  }).join('');
+  return `<div class="pm-voice-chat-lyrics${options.standalone ? ' pm-voice-page-lyrics' : ''}">${html}</div>`;
 }
 
 function _renderChatMessageHtml(m, index = -1) {
@@ -8494,6 +8567,28 @@ function _openMobileMediaTarget({ kind, src, download, name, path, openMode }) {
 }
 
 function _wireMobileMediaCards(root = document) {
+  root?.querySelectorAll?.('[data-pm-generated-thumb]')?.forEach((thumb) => {
+    if (thumb.dataset.pmGeneratedThumbWired === '1') return;
+    thumb.dataset.pmGeneratedThumbWired = '1';
+    thumb.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const batch = thumb.closest('.pm-generated-image-batch');
+      const primary = batch?.querySelector('[data-pm-generated-primary]');
+      const primaryImage = primary?.querySelector('img');
+      if (!batch || !primary || !primaryImage) return;
+      ['kind', 'src', 'download', 'name', 'path', 'index'].forEach((field) => {
+        primary.setAttribute(`data-${field}`, thumb.getAttribute(`data-${field}`) || '');
+      });
+      primaryImage.src = thumb.getAttribute('data-src') || '';
+      primaryImage.alt = thumb.getAttribute('data-name') || '';
+      batch.querySelectorAll('[data-pm-generated-thumb]').forEach((candidate) => {
+        const selected = candidate === thumb;
+        candidate.classList.toggle('selected', selected);
+        candidate.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      });
+    });
+  });
   root?.querySelectorAll?.('[data-pm-media]')?.forEach((card) => {
     if (card.dataset.pmMediaWired === '1') return;
     card.dataset.pmMediaWired = '1';
@@ -14663,7 +14758,18 @@ function _voiceShowRealtimeAgentMessage(text, hint = 'Realtime agent is respondi
   }
   if (String(text || '').trim()) __pmVoice.clearToolStatus?.({ preserveDisplay: true });
   _voiceSetStatus('', hint);
-  _voiceRenderHighlightedStatus(text, options.highlight || '');
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  const lyricProgress = Number.isFinite(Number(options.progress))
+    ? Math.max(0, Math.min(1, Number(options.progress)))
+    : (clean && clean === String(__pmVoice.lyricText || '').replace(/\s+/g, ' ').trim()
+      ? Math.max(0, Math.min(1, Number(__pmVoice.lyricProgress || 0) || 0))
+      : null);
+  const statusEl = __pmVoice.statusEl || document.getElementById('pm-voice-status');
+  if (statusEl && clean && lyricProgress != null) {
+    statusEl.innerHTML = _renderMobileVoiceLyrics(clean, lyricProgress, { standalone: true });
+  } else {
+    _voiceRenderHighlightedStatus(text, options.highlight || '');
+  }
   _voiceSetStatusTone('pm-voice-agent-text');
   const stage = document.getElementById('pm-voice-status')?.closest('.pm-voice-body--page .pm-voice-stage');
   if (stage && String(text || '').trim()) stage.classList.add('pm-voice-final-response-pinned');
@@ -14675,6 +14781,27 @@ function _voiceShowReadyStatus() {
     ?.classList.remove('pm-voice-final-response-pinned');
   _voiceSetStatus('Ready', _voiceReadyHintGlobal());
   _voiceSetStatusTone('');
+}
+
+function _setMobileVoiceLyricProgress(text, progress, hint = 'Prometheus is responding') {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return;
+  __pmVoice.lyricText = clean;
+  __pmVoice.lyricProgress = Math.max(0, Math.min(1, Number(progress) || 0));
+  _voiceShowRealtimeAgentMessage(clean, hint, { progress: __pmVoice.lyricProgress });
+}
+
+function _setMobileVoicePlaybackLyricProgress(localProgress) {
+  const playback = __pmVoice.lyricPlayback || null;
+  const local = Math.max(0, Math.min(1, Number(localProgress) || 0));
+  if (playback?.text) {
+    const start = Math.max(0, Math.min(1, Number(playback.start || 0) || 0));
+    const end = Math.max(start, Math.min(1, Number(playback.end || 1) || 1));
+    _setMobileVoiceLyricProgress(playback.text, start + ((end - start) * local));
+    return;
+  }
+  const text = String(__pmVoice.currentSpokenSegment || __pmVoice.lyricText || '').trim();
+  if (text) _setMobileVoiceLyricProgress(text, local);
 }
 
 function _setOrbState(state) {
@@ -15361,9 +15488,22 @@ async function _playAudioBytesWithContext(bytes, playbackRate = 1) {
   gain.connect(ctx.destination);
   __pmVoice.audioSource = source;
   _markVoiceSpeakingStart(__pmVoice.currentSpokenSegment);
+  const lyricText = String(__pmVoice.lyricPlayback?.text || __pmVoice.currentSpokenSegment || '').trim();
+  const lyricStartedAt = ctx.currentTime;
+  const lyricDuration = decoded.duration / Math.max(0.5, Math.min(2, Number(playbackRate) || 1));
+  const updateLyrics = () => {
+    if (__pmVoice.audioSource !== source || !lyricText) return;
+    _setMobileVoicePlaybackLyricProgress((ctx.currentTime - lyricStartedAt) / Math.max(.05, lyricDuration));
+    __pmVoice.lyricRaf = requestAnimationFrame(updateLyrics);
+  };
+  if (lyricText) {
+    if (__pmVoice.lyricRaf) cancelAnimationFrame(__pmVoice.lyricRaf);
+    __pmVoice.lyricRaf = requestAnimationFrame(updateLyrics);
+  }
   return await new Promise((resolve, reject) => {
     source.onended = () => {
       if (__pmVoice.audioSource === source) __pmVoice.audioSource = null;
+      if (lyricText) _setMobileVoicePlaybackLyricProgress(1);
       _markVoiceSpeakingEnd();
       resolve(true);
     };
@@ -15423,6 +15563,12 @@ function _playHtmlAudioElement(audio, playbackRate = 1) {
       startedAt = Date.now();
       _markVoiceSpeakingStart(__pmVoice.currentSpokenSegment);
     };
+    const updateLyrics = () => {
+      const duration = Number(audio.duration || 0);
+      if (Number.isFinite(duration) && duration > 0) {
+        _setMobileVoicePlaybackLyricProgress(Number(audio.currentTime || 0) / duration);
+      }
+    };
     const finish = () => {
       if (settled) return;
       settled = true;
@@ -15433,6 +15579,7 @@ function _playHtmlAudioElement(audio, playbackRate = 1) {
     };
     audio.onplay = () => markSpeaking(true);
     audio.onplaying = () => markSpeaking(true);
+    audio.ontimeupdate = updateLyrics;
     audio.onended = () => {
       const elapsed = Date.now() - startedAt;
       if (elapsed < 1200 && Number(audio.currentTime || 0) < 0.25) {
@@ -17845,6 +17992,7 @@ function _startMobileRealtimeAssistantLyricProgress(sessionId = '') {
     const elapsed = Math.max(0, Date.now() - started);
     const progress = Math.max(Number(activeTurn.voiceRealtimeProgress || 0) || 0, Math.min(0.98, elapsed / Math.max(1, estimatedMs)));
     activeTurn.voiceRealtimeProgress = progress;
+    _setMobileVoiceLyricProgress(text, progress, 'Realtime agent is responding');
     _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_audio_progress', force: true });
   }, 180);
 }
@@ -17855,6 +18003,7 @@ function _finishMobileRealtimeAssistantLyricProgress(sessionId = '', options = {
   if (!turn) return;
   const delayMs = Math.max(350, Math.min(2400, Number(options.delayMs || 900) || 900));
   turn.voiceRealtimeProgress = 1;
+  _setMobileVoiceLyricProgress(String(turn.body?.text || turn.content || ''), 1, 'Realtime agent response');
   _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_audio_progress_done', force: true });
   setTimeout(() => {
     if (turn !== _mobileRealtimeActiveAssistantTurn(sid)) return;
@@ -19664,14 +19813,24 @@ async function _ttsSpeak(text) {
         return out.filter(Boolean);
       })();
       const chunks = sentences.length ? sentences : [String(text || '').trim().slice(0, 4000)];
+      const totalChunkChars = Math.max(1, chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+      let completedChunkChars = 0;
       _voiceDebug('tts-fetch-start', { provider: ttsProvider, voiceId: xaiVoice, delivery: useUrl ? 'url' : 'base64', chunks: chunks.length });
       let nextFetch = synthesizeVoiceAudio(buildChunkBody(chunks[0]));
       for (let ci = 0; ci < chunks.length; ci++) {
         const audio = await nextFetch;
         if (ci + 1 < chunks.length) nextFetch = synthesizeVoiceAudio(buildChunkBody(chunks[ci + 1]));
         _voiceDebug('tts-fetch-ok', { provider: ttsProvider, chunk: ci, mimeType: audio?.mimeType || '', hasBase64: !!audio?.audioBase64, hasUrl: !!(audio?.audioUrl || audio?.url) });
+        __pmVoice.lyricPlayback = {
+          text,
+          start: completedChunkChars / totalChunkChars,
+          end: (completedChunkChars + chunks[ci].length) / totalChunkChars,
+        };
+        __pmVoice.currentSpokenSegment = chunks[ci];
         await _playAudioBase64({ ...audio, playbackRate: ttsProvider === 'xai' ? xaiSpeed : 1 });
+        completedChunkChars += chunks[ci].length;
       }
+      __pmVoice.lyricPlayback = null;
       _voiceDebug('tts-play-ok', { provider: ttsProvider });
       return;
     } catch (err) {
@@ -19692,7 +19851,11 @@ async function _ttsSpeak(text) {
     utter.pitch = 1.0;
     utter.volume = 1.0;
     utter.onstart = () => { _markVoiceSpeakingStart(text); };
-    utter.onend   = () => { _markVoiceSpeakingEnd(); };
+    utter.onboundary = (event) => {
+      const charIndex = Math.max(0, Number(event.charIndex || 0) || 0);
+      _setMobileVoiceLyricProgress(text, charIndex / Math.max(1, text.length));
+    };
+    utter.onend   = () => { _setMobileVoiceLyricProgress(text, 1); _markVoiceSpeakingEnd(); };
     utter.onerror = () => { _markVoiceSpeakingEnd(); };
     synth.speak(utter);
   } catch (err) { console.warn('[voice] TTS failed', err); }
@@ -19700,6 +19863,11 @@ async function _ttsSpeak(text) {
 
 function _ttsStop() {
   try { window.speechSynthesis?.cancel(); } catch {}
+  if (__pmVoice.lyricRaf) {
+    cancelAnimationFrame(__pmVoice.lyricRaf);
+    __pmVoice.lyricRaf = 0;
+  }
+  __pmVoice.lyricPlayback = null;
   try { __pmVoice.audioSource?.stop?.(); } catch {}
   __pmVoice.audioSource = null;
   const realtimeDc = __pmVoice.realtimeSpeechConnection?.dc;
@@ -21210,14 +21378,31 @@ void main() {
       return;
     }
     const pending = queue.slice(0, 2);
+    const artifactLabel = (artifact = {}) => {
+      const type = String(artifact?.type || '').trim().toLowerCase();
+      return ({
+        products: 'Products',
+        product_carousel: 'Products',
+        sources: 'Sources',
+        weather: 'Weather',
+        market: 'Market',
+        stocks: 'Stocks',
+        prediction_market: 'Prediction Market',
+        map: 'Map',
+        comparison: 'Comparison',
+        chart: 'Chart',
+        agent_work: 'Agent Work',
+        run_result: 'Run Result',
+      })[type] || String(artifact?.title || type || 'Card').replaceAll('_', ' ');
+    };
     const label = active?.kind === 'artifact'
-      ? (active.artifact?.type === 'sources' ? 'Sources' : active.artifact?.type === 'products' ? 'Products' : 'Visual card')
-      : active?.transient ? 'Live view' : 'Attached file';
+      ? artifactLabel(active.artifact)
+      : active?.transient ? 'Live View' : 'Attached File';
     const ghostHtml = (item, idx) => {
       if (item?.kind === 'artifact') {
         const artifact = item.artifact || {};
-        const title = artifact.title || artifact.items?.[0]?.title || artifact.items?.[0]?.label || 'Visual card';
-        return `<div class="pm-voice-preview-ghost pm-voice-preview-ghost-artifact ghost-${idx + 1}" aria-hidden="true"><span>${escapeHtml(String(artifact.type || 'card').replaceAll('_', ' '))}</span><strong>${escapeHtml(title)}</strong></div>`;
+        const artifactType = String(artifact.type || 'artifact').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+        return `<div class="pm-voice-preview-ghost pm-voice-preview-ghost-artifact pm-voice-preview-${escapeHtml(artifactType)} ghost-${idx + 1}" aria-hidden="true"><div class="pm-voice-preview-artifact">${_renderMobileRichArtifacts({ richArtifacts: [artifact] })}</div></div>`;
       }
       const media = item?.media || {};
       const src = _mobileMediaUrl(media, 'inline');
@@ -21241,6 +21426,16 @@ void main() {
           : _renderMobileMediaGallery([active.media])}
       </div>` : ''}
     `;
+    previewHost.querySelectorAll('img').forEach((image) => {
+      image.loading = 'eager';
+      image.decoding = 'async';
+      try { image.fetchPriority = image.closest('.pm-voice-preview-card') ? 'high' : 'auto'; } catch {}
+      image.decode?.().catch?.(() => {});
+    });
+    previewHost.querySelectorAll('video').forEach((video) => {
+      video.preload = 'metadata';
+      try { video.load?.(); } catch {}
+    });
     _wireMobileMediaCards(previewHost);
     const closeBtn = previewHost.querySelector('.pm-voice-preview-close');
     closeBtn?.addEventListener('pointerdown', (event) => event.stopPropagation());
@@ -25839,7 +26034,7 @@ function _renderMobileAgentChatBubble(message, options = {}) {
     } else {
       inner += progress;
     }
-    const hasPendingImageGeneration = _mobileHasPendingImageGeneration(message) && !_collectMessageMedia(message).some((media) => media.kind === 'image' && media.generated);
+    const hasPendingImageGeneration = _mobileHasPendingImageGeneration(traceMessage) && !_collectMessageMedia(message).some((media) => media.kind === 'image' && media.generated);
     inner += text
       ? `<div class="markdown-body">${_renderMobileMarkdown(text)}</div>`
       : (streaming && !hasPendingImageGeneration && !hasLiveTrace ? `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>` : '');

@@ -17,9 +17,12 @@ import { handleMainChatGoalCommand } from '../main-chat-goals';
 import { abortLiveRuntime, addPendingRuntimeSteerForSession, listLiveRuntimes } from '../live-runtime-registry';
 import {
   cancelThreadSupervision,
+  assertThreadSupervisionFollowUpAllowed,
+  commitThreadSupervisionFollowUp,
   createThreadSupervision,
   getThreadSupervision,
   listThreadSupervisions,
+  resolveThreadSupervisionReview,
   updateThreadSupervision,
 } from './thread-supervision';
 
@@ -147,7 +150,17 @@ function createManagedThread(
   flushSession(targetSessionId);
 
   const supervision = follow && (objective || prompt)
-    ? createThreadSupervision({ ownerSessionId, targetSessionId, targetTitle: title, objective: objective || prompt })
+    ? createThreadSupervision({
+        ownerSessionId,
+        targetSessionId,
+        targetTitle: title,
+        objective: objective || prompt,
+        maxReviews: input?.max_reviews ?? defaults?.max_reviews,
+        maxFollowUps: input?.max_follow_ups ?? defaults?.max_follow_ups,
+        maxElapsedMs: input?.max_elapsed_ms ?? defaults?.max_elapsed_ms,
+        minReviewIntervalMs: input?.min_review_interval_ms ?? defaults?.min_review_interval_ms,
+        maxConsecutiveNoProgress: input?.max_consecutive_no_progress ?? defaults?.max_consecutive_no_progress,
+      })
     : null;
   const turnPrompt = managedPrompt(prompt, objective, follow);
   if (turnPrompt) runDetached(deps, ownerSessionId, targetSessionId, turnPrompt, supervision?.id);
@@ -159,6 +172,75 @@ function createManagedThread(
     started: !!turnPrompt,
     follow,
     supervision,
+  };
+}
+
+const THREAD_LINK_ACTION_LABELS: Record<string, string> = {
+  create: 'Thread created',
+  start: 'Thread created',
+  create_many: 'Thread created',
+  start_many: 'Thread created',
+  send: 'Thread messaged',
+  chat: 'Thread messaged',
+  steer: 'Thread steered',
+  interrupt: 'Thread paused',
+  stop: 'Thread paused',
+  rename: 'Thread renamed',
+  pin: 'Thread pinned',
+  unpin: 'Thread unpinned',
+  follow: 'Thread followed',
+  unfollow: 'Thread unfollowed',
+};
+
+export function buildPrometheusThreadLinksArtifact(args: any, output: any): Record<string, any> | null {
+  const action = String(args?.action || '').trim().toLowerCase();
+  const label = THREAD_LINK_ACTION_LABELS[action];
+  if (!label) return null;
+
+  const candidates: any[] = [
+    output?.session,
+    ...(Array.isArray(output?.created) ? output.created : []),
+    output?.supervision,
+    ...(Array.isArray(output?.cancelled) ? output.cancelled : []),
+    ...(Array.isArray(output?.supervisions) ? output.supervisions : []),
+    output?.runtime,
+  ].filter(Boolean);
+  const requestedTarget = String(args?.session_id || args?.sessionId || args?.target_session_id || '').trim();
+  if (requestedTarget) candidates.push({ id: requestedTarget, sessionId: requestedTarget });
+
+  const seen = new Set<string>();
+  const items: Array<Record<string, any>> = [];
+  for (const candidate of candidates) {
+    const sessionId = String(
+      candidate?.targetSessionId
+      || candidate?.sessionId
+      || candidate?.id
+      || candidate?.runtime?.sessionId
+      || '',
+    ).trim();
+    if (!sessionId || seen.has(sessionId) || !sessionExists(sessionId)) continue;
+    seen.add(sessionId);
+    const session = getSession(sessionId);
+    const goalStatus = String(session.mainChatGoal?.status || '').trim();
+    items.push({
+      sessionId,
+      title: getSessionDisplayTitle(session) || String(candidate?.title || sessionId),
+      label,
+      subtitle: goalStatus === 'active' || goalStatus === 'restarting'
+        ? 'Working autonomously'
+        : action === 'unfollow'
+          ? 'Thread remains available'
+          : 'Prometheus chat session',
+      status: goalStatus || String(candidate?.status || ''),
+    });
+  }
+  if (!items.length) return null;
+  return {
+    id: `thread-links:${action}:${items.map((item) => item.sessionId).sort().join(',')}`,
+    type: 'thread_links',
+    title: items.length === 1 ? label : `${items.length} threads touched`,
+    items,
+    createdAt: new Date().toISOString(),
   };
 }
 
@@ -220,6 +302,21 @@ export async function executePrometheusThreadOps(
     };
   }
 
+  if (action === 'review_decision') {
+    return {
+      supervision: resolveThreadSupervisionReview({
+        ownerSessionId,
+        supervisionId: String(args?.supervision_id || '').trim(),
+        reviewEventId: String(args?.review_event_id || '').trim(),
+        decision: args?.decision,
+        progressMade: args?.progress_made,
+        reason: String(args?.reason || '').trim(),
+        evidence: Array.isArray(args?.evidence) ? args.evidence : [],
+        broadcast: deps.broadcastWS,
+      }),
+    };
+  }
+
   const targetSessionId = String(args?.session_id || args?.sessionId || args?.target_session_id || '').trim();
   if (!targetSessionId && action !== 'unfollow') throw new Error('session_id is required.');
   if (targetSessionId === ownerSessionId) throw new Error('Peer-thread operations cannot target the current owner session.');
@@ -245,6 +342,12 @@ export async function executePrometheusThreadOps(
   if (action === 'steer') {
     const message = String(args?.message || args?.prompt || '').trim();
     if (!message) throw new Error('message is required.');
+    const supervision = assertThreadSupervisionFollowUpAllowed({
+      ownerSessionId,
+      targetSessionId,
+      supervisionId: args?.supervision_id,
+      broadcast: deps.broadcastWS,
+    });
     const result = addPendingRuntimeSteerForSession(targetSessionId, {
       message,
       source: `peer_session:${ownerSessionId}`,
@@ -253,6 +356,7 @@ export async function executePrometheusThreadOps(
       responseMode: args?.requires_response === false ? 'silent' : 'worker_reply',
     });
     if (!result.ok) throw new Error(result.error || 'Could not steer target thread.');
+    if (supervision) commitThreadSupervisionFollowUp(supervision.id);
     return result as any;
   }
 
@@ -263,6 +367,12 @@ export async function executePrometheusThreadOps(
       throw new Error('Target thread is currently running. Use action="steer" to message it live.');
     }
     if (!deps.runInteractiveTurn) throw new Error('Interactive turn runtime is unavailable.');
+    const supervision = assertThreadSupervisionFollowUpAllowed({
+      ownerSessionId,
+      targetSessionId,
+      supervisionId: args?.supervision_id,
+      broadcast: deps.broadcastWS,
+    });
     if (args?.wait === true) {
       const result = await deps.runInteractiveTurn(
         message,
@@ -278,9 +388,11 @@ export async function executePrometheusThreadOps(
         undefined,
         { channel: 'system', surface: 'automation', device: 'server', source: 'peer_session', chatId: ownerSessionId, label: 'Prometheus peer thread' },
       );
+      if (supervision) commitThreadSupervisionFollowUp(supervision.id);
       return { queued: false, completed: true, result };
     }
     runDetached(deps, ownerSessionId, targetSessionId, message);
+    if (supervision) commitThreadSupervisionFollowUp(supervision.id);
     return { queued: true, sessionId: targetSessionId };
   }
 
@@ -293,6 +405,11 @@ export async function executePrometheusThreadOps(
       targetSessionId,
       targetTitle: getSessionDisplayTitle(target),
       objective,
+      maxReviews: args?.max_reviews,
+      maxFollowUps: args?.max_follow_ups,
+      maxElapsedMs: args?.max_elapsed_ms,
+      minReviewIntervalMs: args?.min_review_interval_ms,
+      maxConsecutiveNoProgress: args?.max_consecutive_no_progress,
     });
     if (!target.mainChatGoal || !['active', 'restarting'].includes(target.mainChatGoal.status)) {
       if (activeRuntimeForSession(targetSessionId)) {

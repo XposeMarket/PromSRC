@@ -10916,7 +10916,9 @@ function renderUserMessageContent(msg) {
 
 function isRenderableLiveTraceImageSource(value) {
   const source = String(value || '').trim();
-  return /^data:image\//i.test(source) || /^\/api\/canvas\/inline\?path=/i.test(source);
+  return /^data:image\//i.test(source)
+    || /^\/api\/canvas\/inline\?path=/i.test(source)
+    || /^\/api\/chat\/desktop-screenshot-preview\//i.test(source);
 }
 
 function renderLiveTracePreview(entry) {
@@ -10954,6 +10956,11 @@ function isDesktopStartupStatusText(text) {
     .test(String(text || '').replace(/\s+/g, ' ').trim());
 }
 
+function isVisionInjectionStatusText(text) {
+  return /^vision screenshot injected \((?:desktop|browser)\) after\b/i
+    .test(String(text || '').replace(/\s+/g, ' ').trim());
+}
+
 function isBareThinkingLiveTraceText(text) {
   return /^thinking(?:\.\.\.)?$/i.test(String(text || '').replace(/\s+/g, ' ').trim());
 }
@@ -10974,6 +10981,7 @@ function visibleLiveTraceEntries(entries) {
   return coalesceToolActivityEntries(entries).filter((entry) =>
     entry
     && !isDesktopPreparedTraceEntry(entry)
+    && !isVisionInjectionStatusText(entry?.text)
     && !isBareThinkingLiveTraceText(entry?.text)
     && (String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl))
   );
@@ -11386,6 +11394,7 @@ function desktopWorkflowTraceEntriesForMessage(message) {
     if (text && isDesktopStartupStatusText(text)) return;
     if (type === 'user' || type === 'final' || /^user\s*:/i.test(text)) return;
     const normalizedText = text.replace(/\s+/g, ' ').trim();
+    if (isVisionInjectionStatusText(normalizedText)) return;
     if (isBareThinkingLiveTraceText(normalizedText) && !previewData) return;
     if (liveTraceTextLooksLikeFinalAnswer(normalizedText, finalText) && !previewData) return;
     if (type === 'process' || type === 'info') {

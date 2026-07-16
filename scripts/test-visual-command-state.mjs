@@ -28,11 +28,28 @@ assert.match(mobile, /prometheus:visual-state-change/);
 assert.match(utils, /data-visual-id=/);
 assert.match(utils, /window\.openai\.setWidgetState/);
 assert.match(utils, /window\.prometheusVisual/);
+assert.doesNotMatch(utils, /Math\.ceil\(height\)\s*\+\s*16/);
+assert.match(utils, /Math\.abs\(current - bounded\) <= 1/);
+assert.match(utils, /measured<=viewport\+24\?viewport:measured/);
+assert.match(utils, /height:\$\{minHeight\}px/);
+assert.match(utils, /const visualCanvasBg = isDark/);
+assert.match(utils, /function normalizeSvgSize\(\)/);
 
 const skill = read('workspace/skills/interactive-visuals/SKILL.md');
-for (const lane of ['native rich-output', 'chart-visualizer', 'mermaid-diagrams', 'svg-diagrams', 'interactive-artifacts']) {
+for (const lane of ['chart-visualizer', 'mermaid-diagrams', 'svg-diagrams', 'interactive-artifacts']) {
   assert.ok(skill.includes(lane), `visual router must document ${lane}`);
 }
+assert.match(skill, /do not call `show_ui_card`/i);
+assert.match(skill, /exactly one complete fenced visual block/i);
+
+const chatRouter = read('src/gateway/routes/chat.router.ts');
+const promptContext = read('src/gateway/prompt-context.ts');
+const skillsManagerSource = read('src/gateway/skills-runtime/skills-manager.ts');
+assert.match(chatRouter, /VISUAL FINALIZATION BLOCKED/);
+assert.match(chatRouter, /hasReadSpecializedVisualSkill/);
+assert.match(promptContext, /selectedSkillCtxLocal/);
+assert.match(skillsManagerSource, /\[USER_SELECTED_SKILL_INSTRUCTIONS\]/);
+assert.match(skillsManagerSource, /String\(skill\.instructions/);
 
 const require = createRequire(import.meta.url);
 const richArtifacts = require(path.join(root, 'dist/gateway/rich-artifacts.js'));
