@@ -10,7 +10,15 @@ type GenerateImageArgs = {
   model?: string;
   background?: string;
   output_format?: string;
+  output_compression?: number;
   quality?: string;
+  size?: string;
+  width?: number;
+  height?: number;
+  mask?: string;
+  presentation_mode?: 'foreground' | 'background' | 'auto';
+  partial_images?: number | boolean;
+  stream?: boolean;
   output_dir?: string;
   save_to_workspace?: boolean;
   on_image_persisted?: (image: {
@@ -20,7 +28,11 @@ type GenerateImageArgs = {
     mime_type: string;
     file_name: string;
     bytes: number;
+    width?: number | null;
+    height?: number | null;
+    has_alpha?: boolean | null;
   }) => void | Promise<void>;
+  on_partial_image?: (image: any) => void | Promise<void>;
 };
 
 export async function executeGenerateImage(args: GenerateImageArgs): Promise<ToolResult> {
@@ -36,10 +48,19 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
     model: args?.model != null ? String(args.model) : undefined,
     background: args?.background != null ? String(args.background) : undefined,
     output_format: args?.output_format != null ? String(args.output_format) : undefined,
+    output_compression: args?.output_compression != null ? Number(args.output_compression) : undefined,
     quality: args?.quality != null ? String(args.quality) : undefined,
+    size: args?.size != null ? String(args.size) : undefined,
+    width: args?.width != null ? Number(args.width) : undefined,
+    height: args?.height != null ? Number(args.height) : undefined,
+    mask: args?.mask != null ? String(args.mask) : undefined,
+    presentation_mode: args?.presentation_mode,
+    partial_images: args?.partial_images,
+    stream: args?.stream,
     output_dir: args?.output_dir != null ? String(args.output_dir) : undefined,
     save_to_workspace: args?.save_to_workspace,
     on_image_persisted: args?.on_image_persisted,
+    on_partial_image: args?.on_partial_image,
   });
 
   if (!result.success) {
@@ -68,12 +89,18 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
       output_format: result.output_format,
       quality: result.quality,
       size: result.size,
+      width: result.width,
+      height: result.height,
+      presentation_mode: result.presentation_mode,
       path: primary.path,
       rel_path: primary.rel_path,
       cache_path: primary.cache_path,
       mime_type: primary.mime_type,
       file_name: primary.file_name,
       bytes: primary.bytes,
+      width_actual: primary.width,
+      height_actual: primary.height,
+      has_alpha: primary.has_alpha,
       images: result.images.map((image) => ({
         provider: result.provider,
         model: result.model,
@@ -88,6 +115,9 @@ export async function executeGenerateImage(args: GenerateImageArgs): Promise<Too
         mime_type: image.mime_type,
         file_name: image.file_name,
         bytes: image.bytes,
+        width: image.width,
+        height: image.height,
+        has_alpha: image.has_alpha,
       })),
     },
   };
@@ -106,7 +136,14 @@ export const generateImageTool = {
     model: 'Optional image model tier override, e.g. gpt-image-2-medium or grok-imagine-image-quality',
     background: 'Optional background mode: transparent, opaque, or auto. Use transparent for real alpha in generated PNG/WebP files.',
     output_format: 'Optional output file format: png, jpeg, or webp. Transparency requires png or webp; png is used when transparent is requested.',
+    output_compression: 'Optional compression/quality control for JPEG/WebP where supported, 0-100',
     quality: 'Optional quality setting: low, medium, high, or auto.',
+    size: 'Optional exact output size WIDTHxHEIGHT for providers/models that support it',
+    width: 'Optional exact output width in pixels',
+    height: 'Optional exact output height in pixels',
+    mask: 'Optional PNG alpha mask for selection editing, matching the first reference image dimensions',
+    presentation_mode: 'foreground for direct image deliverables, background for workflow/intermediate asset generation',
+    partial_images: 'Internal: number of partial image previews to stream where supported',
     output_dir: 'Optional workspace-relative parent output directory. Each generation run is saved in a new child folder. Default: generated/images',
     save_to_workspace: 'If false, keep the image only in Prometheus cache',
   },
@@ -148,11 +185,27 @@ export const generateImageTool = {
         enum: ['png', 'jpeg', 'webp'],
         description: 'Output file format. Use png or webp for transparency; png is forced if background is transparent and jpeg was requested.',
       },
+      output_compression: {
+        type: 'integer',
+        minimum: 0,
+        maximum: 100,
+        description: 'JPEG/WebP output compression/quality control where supported.',
+      },
       quality: {
         type: 'string',
         enum: ['low', 'medium', 'high', 'auto'],
         description: 'Image generation quality.',
       },
+      size: { type: 'string', description: 'Exact output size such as 1536x1024, 1024x1024, 1024x1536, or auto.' },
+      width: { type: 'integer', minimum: 256, maximum: 4096, description: 'Exact output width in pixels.' },
+      height: { type: 'integer', minimum: 256, maximum: 4096, description: 'Exact output height in pixels.' },
+      mask: { type: 'string', description: 'PNG alpha mask for selection editing. Must match the first reference image dimensions.' },
+      presentation_mode: {
+        type: 'string',
+        enum: ['foreground', 'background', 'auto'],
+        description: 'Presentation mode. foreground is for direct image deliverables; background is for generated assets used as part of a larger workflow.',
+      },
+      partial_images: { type: 'integer', minimum: 0, maximum: 3, description: 'Internal preview streaming control where supported.' },
       output_dir: { type: 'string', description: 'Workspace-relative parent output directory. Each generation run is saved in a new child folder.' },
       save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache' },
     },

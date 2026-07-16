@@ -125,6 +125,17 @@ function buildEditsEndpoint(baseUrl: string): string {
 export class XAIImageGenerationProvider implements ImageGenerationProvider {
   readonly id = 'xai';
   readonly displayName = 'xAI Grok Imagine';
+  readonly capabilities = {
+    transparency: false,
+    referenceImages: true,
+    maxReferenceImages: MAX_XAI_REFERENCE_IMAGES,
+    maskEditing: false,
+    partialStreaming: false,
+    outputFormats: ['png'] as const,
+    outputCompression: false,
+    exactSizes: false,
+    sizes: ['16:9/1k', '1:1/1k', '9:16/1k', '16:9/2k', '1:1/2k', '9:16/2k'],
+  };
 
   listModels(): readonly string[] {
     return MODEL_IDS;
@@ -157,6 +168,7 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
         model,
         prompt,
         aspectRatio: request.aspect_ratio,
+        presentationMode: request.presentation_mode,
         error: 'Prompt is required and must be a non-empty string.',
         errorType: 'invalid_argument',
       });
@@ -168,6 +180,7 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
         model,
         prompt,
         aspectRatio: request.aspect_ratio,
+        presentationMode: request.presentation_mode,
         error: 'xAI credentials are not configured. Add XAI_API_KEY or connect xAI OAuth in Settings -> Models.',
         errorType: 'auth_required',
       });
@@ -179,6 +192,7 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
         model,
         prompt,
         aspectRatio: request.aspect_ratio,
+        presentationMode: request.presentation_mode,
         error: `xAI image editing supports up to ${MAX_XAI_REFERENCE_IMAGES} reference images per request.`,
         errorType: 'invalid_argument',
       });
@@ -238,6 +252,7 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
           model,
           prompt,
           aspectRatio: request.aspect_ratio,
+          presentationMode: request.presentation_mode,
           error: `xAI Grok Imagine image generation failed: ${message}`,
           errorType: response.status === 401 ? 'auth_required' : 'api_error',
         });
@@ -280,6 +295,7 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
           model,
           prompt,
           aspectRatio: request.aspect_ratio,
+          presentationMode: request.presentation_mode,
           error: 'xAI returned no image data.',
           errorType: 'empty_response',
         });
@@ -293,6 +309,9 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
         image: images[0],
         images,
         size: `${aspectRatio}/${resolution}`,
+        width: request.width,
+        height: request.height,
+        presentationMode: request.presentation_mode,
       });
     } catch (error: any) {
       return buildImageGenerationError({
@@ -300,6 +319,7 @@ export class XAIImageGenerationProvider implements ImageGenerationProvider {
         model,
         prompt,
         aspectRatio: request.aspect_ratio,
+        presentationMode: request.presentation_mode,
         error: `xAI Grok Imagine image generation failed: ${String(error?.message || error)}`,
         errorType: 'api_error',
       });

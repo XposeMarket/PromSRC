@@ -91,6 +91,17 @@ function resolveDefaultModel(): string {
 export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
   readonly id = 'openai';
   readonly displayName = 'OpenAI';
+  readonly capabilities = {
+    transparency: true,
+    referenceImages: true,
+    maxReferenceImages: 16,
+    maskEditing: true,
+    partialStreaming: false,
+    outputFormats: ['png', 'jpeg', 'webp'] as const,
+    outputCompression: true,
+    exactSizes: true,
+    sizes: ['1024x1024', '1024x1536', '1536x1024', 'auto'],
+  };
 
   listModels(): readonly string[] {
     return MODEL_IDS;
@@ -107,7 +118,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
   async generate(request: ImageGenerationResolvedRequest): Promise<ImageGenerationResult> {
     const prompt = String(request.prompt || '').trim();
     let model = this.resolveModel(request.model);
-    const size = IMAGE_SIZE_BY_ASPECT_RATIO[request.aspect_ratio];
+    const size = request.size || IMAGE_SIZE_BY_ASPECT_RATIO[request.aspect_ratio];
     const resolved = resolveApiModelForRequest(model, request.model, request.background);
     model = resolved.model;
     const meta = MODEL_METADATA[model] || { apiModel: resolved.apiModel };
@@ -124,6 +135,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         aspectRatio: request.aspect_ratio,
         background: request.background,
         outputFormat: request.output_format,
+        presentationMode: request.presentation_mode,
         error: 'Prompt is required and must be a non-empty string.',
         errorType: 'invalid_argument',
       });
@@ -137,6 +149,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         aspectRatio: request.aspect_ratio,
         background: request.background,
         outputFormat: request.output_format,
+        presentationMode: request.presentation_mode,
         error: 'OPENAI_API_KEY is not configured for OpenAI image generation.',
         errorType: 'auth_required',
       });
@@ -150,6 +163,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         aspectRatio: request.aspect_ratio,
         background: request.background,
         outputFormat: request.output_format,
+        presentationMode: request.presentation_mode,
         error: `${resolved.apiModel} does not support transparent backgrounds. Use background="opaque"/"auto" with ${resolved.apiModel}, or omit the model so Prometheus can use ${TRANSPARENT_API_MODEL} for true alpha output.`,
         errorType: 'unsupported_background',
       });
@@ -167,6 +181,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         form.set('quality', quality);
         form.set('background', request.background);
         form.set('output_format', request.output_format);
+        if (request.output_compression != null) form.set('output_compression', String(request.output_compression));
 
         for (const reference of resolvedReferences) {
           if (reference.bytes) {
@@ -182,6 +197,12 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
               new Blob([downloaded.bytes as any], { type: downloaded.mimeType || reference.mimeType }),
               reference.fileName,
             );
+          }
+        }
+        if (request.mask) {
+          const [mask] = await resolveReferenceImages([request.mask]);
+          if (mask?.bytes) {
+            form.append('mask', new Blob([mask.bytes as any], { type: mask.mimeType }), mask.fileName);
           }
         }
 
@@ -208,6 +229,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
           quality,
           background: request.background,
           output_format: request.output_format,
+          ...(request.output_compression != null ? { output_compression: request.output_compression } : {}),
         }),
         signal: AbortSignal.timeout(5 * 60 * 1000),
       });
@@ -224,6 +246,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
           aspectRatio: request.aspect_ratio,
           background: request.background,
           outputFormat: request.output_format,
+          presentationMode: request.presentation_mode,
           error: `OpenAI image generation failed: ${message}`,
           errorType: 'api_error',
         });
@@ -269,6 +292,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
           aspectRatio: request.aspect_ratio,
           background: request.background,
           outputFormat: request.output_format,
+          presentationMode: request.presentation_mode,
           error: 'OpenAI returned no image data.',
           errorType: 'empty_response',
         });
@@ -284,8 +308,12 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         revisedPrompt,
         quality,
         size,
+        width: request.width,
+        height: request.height,
         background: request.background,
         outputFormat: request.output_format,
+        outputCompression: request.output_compression,
+        presentationMode: request.presentation_mode,
       });
     } catch (error: any) {
       return buildImageGenerationError({
@@ -295,6 +323,7 @@ export class OpenAIImageGenerationProvider implements ImageGenerationProvider {
         aspectRatio: request.aspect_ratio,
         background: request.background,
         outputFormat: request.output_format,
+        presentationMode: request.presentation_mode,
         error: `OpenAI image generation failed: ${String(error?.message || error)}`,
         errorType: 'api_error',
       });

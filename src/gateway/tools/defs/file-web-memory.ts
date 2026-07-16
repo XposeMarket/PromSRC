@@ -2058,7 +2058,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'media_generate',
-        description: 'Unified AI media generation wrapper. Use action="image" for one-shot raster images and action="video" for one-shot MP4 generation. Existing generate_image/generate_video remain executable compatibility aliases.',
+        description: 'Unified AI media generation wrapper. Use action="image" for one-shot raster images and action="video" for one-shot MP4 generation. Set presentation_mode="foreground" only when the image itself is the primary deliverable; use "background" for workflow assets that will be applied to a project.',
         parameters: {
           type: 'object',
           required: ['action', 'prompt'],
@@ -2078,6 +2078,12 @@ export function getFileWebMemoryTools(): any[] {
             background: { type: 'string', enum: ['transparent', 'opaque', 'auto'], description: 'Image only: background mode. Use transparent for real alpha.' },
             output_format: { type: 'string', enum: ['png', 'jpeg', 'webp'], description: 'Image only: output format.' },
             quality: { type: 'string', enum: ['low', 'medium', 'high', 'auto'], description: 'Image only: generation quality.' },
+            size: { type: 'string', description: 'Image only: exact output size such as 1536x1024, 1024x1024, 1024x1536, or auto.' },
+            width: { type: 'integer', minimum: 256, maximum: 4096, description: 'Image only: exact output width.' },
+            height: { type: 'integer', minimum: 256, maximum: 4096, description: 'Image only: exact output height.' },
+            mask: { type: 'string', description: 'Image only: PNG alpha mask for selection editing. Must match the first reference image dimensions.' },
+            output_compression: { type: 'integer', minimum: 0, maximum: 100, description: 'Image only: JPEG/WebP output compression where supported.' },
+            presentation_mode: { type: 'string', enum: ['foreground', 'background', 'auto'], description: 'foreground for direct image deliverables; background for workflow/intermediate asset generation.' },
             output_dir: { type: 'string', description: 'Optional workspace-relative output directory.' },
             save_to_workspace: { type: 'boolean', description: 'If false, keep generated media only in Prometheus cache.' },
             poll_interval_ms: { type: 'integer', minimum: 1000, maximum: 30000, description: 'Video only: polling interval in milliseconds.' },
@@ -2090,7 +2096,7 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'generate_image',
-        description: 'Generate one or more raster images from a text prompt using the configured AI image provider such as OpenAI GPT image models or xAI Grok Imagine. Use background="transparent" and output_format="png" for true alpha transparency; do not rely only on prompt wording. For separate options/variations, set count > 1 and ask for separate standalone images, not a collage. Use count=1 only when the user wants one image or explicitly wants a single collage/grid/contact sheet. Saves to generated/images by default.',
+        description: 'Generate one or more raster images from a text prompt using the configured AI image provider such as OpenAI GPT image models or xAI Grok Imagine. Use presentation_mode="foreground" for direct image deliverables and "background" when generating assets for a larger workflow. Use background="transparent" and output_format="png" for true alpha transparency; do not rely only on prompt wording. For separate options/variations, set count > 1 and ask for separate standalone images, not a collage. Saves to generated/images by default.',
         parameters: {
           type: 'object', required: ['prompt'],
           properties: {
@@ -2103,6 +2109,12 @@ export function getFileWebMemoryTools(): any[] {
             background: { type: 'string', enum: ['transparent', 'opaque', 'auto'], description: 'Background mode. Use transparent for real alpha; Prometheus also infers this when the prompt asks for a transparent/no background sprite or cutout.' },
             output_format: { type: 'string', enum: ['png', 'jpeg', 'webp'], description: 'Output file format. Use png or webp for transparency; png is forced if background is transparent and jpeg was requested.' },
             quality: { type: 'string', enum: ['low', 'medium', 'high', 'auto'], description: 'Image generation quality.' },
+            size: { type: 'string', description: 'Exact output size such as 1536x1024, 1024x1024, 1024x1536, or auto.' },
+            width: { type: 'integer', minimum: 256, maximum: 4096, description: 'Exact output width in pixels.' },
+            height: { type: 'integer', minimum: 256, maximum: 4096, description: 'Exact output height in pixels.' },
+            mask: { type: 'string', description: 'PNG alpha mask for selection editing. Must match the first reference image dimensions.' },
+            output_compression: { type: 'integer', minimum: 0, maximum: 100, description: 'JPEG/WebP output compression where supported.' },
+            presentation_mode: { type: 'string', enum: ['foreground', 'background', 'auto'], description: 'foreground for direct image deliverables; background for workflow/intermediate asset generation.' },
             output_dir: { type: 'string', description: 'Optional workspace-relative parent output directory. Each generation run is saved in a new child folder. Default: generated/images' },
             save_to_workspace: { type: 'boolean', description: 'If false, keep the image only in Prometheus cache' },
           },

@@ -10918,6 +10918,7 @@ function isRenderableLiveTraceImageSource(value) {
   const source = String(value || '').trim();
   return /^data:image\//i.test(source)
     || /^\/api\/canvas\/inline\?path=/i.test(source)
+    || /^\/api\/canvas\/generated-image-preview\?cache=/i.test(source)
     || /^\/api\/chat\/desktop-screenshot-preview\//i.test(source);
 }
 
@@ -11541,10 +11542,14 @@ function attachVoiceAgentProcessEntriesToRecentAssistantTurn(sessionId, entries,
 }
 
 function isGenerateImagePendingFromEntries(...entryGroups) {
-  const text = entryGroups
-    .flatMap((entries) => Array.isArray(entries) ? entries : [])
-    .map((entry) => String(entry?.text || entry?.content || entry?.message || '').toLowerCase())
-    .join('\n');
+  const entries = entryGroups.flatMap((group) => Array.isArray(group) ? group : []);
+  const hasBackgroundImageGeneration = entries.some((entry) => {
+    const args = entry?.activity?.args || entry?.extra?.args || entry?.args || {};
+    return String(entry?.activity?.action || entry?.extra?.action || entry?.action || '').toLowerCase() === 'generate_image'
+      && String(args?.presentation_mode || '').toLowerCase() === 'background';
+  });
+  if (hasBackgroundImageGeneration) return false;
+  const text = entries.map((entry) => String(entry?.text || entry?.content || entry?.message || '').toLowerCase()).join('\n');
   return /\b(generate_image|generating image|image generation|i am generating the image)\b/.test(text)
     && !/\b(generate_image complete|generated image|generated images|failed|error)\b/.test(text);
 }
@@ -15123,10 +15128,27 @@ async function sendChat(queuedMessage = null, options = {}) {
               movePreToolAnswerTextIntoPreamble();
               sawToolActivityThisTurn = true;
               const sourceValue = String(event.source || '').toLowerCase();
-              const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : 'Desktop';
+              const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : sourceValue === 'generated_image' ? 'Generated image' : 'Desktop';
               const tool = String(event.tool || event.action || '').trim();
               const toolLabel = tool ? formatToolCallForLog(tool, {}, streamState).replace(/\.\.\.$/, '') : `${source} observation`;
               const text = String(event.label || `Vision injected: ${toolLabel}`).trim();
+              if (sourceValue === 'generated_image' && Array.isArray(streamState.liveTraceEntries)) {
+                const incomingPreviewId = String(preview.previewId || '').trim();
+                const incomingGenerationId = String(preview.generationId || '').trim();
+                const incomingWorkspacePath = String(preview.workspacePath || '').trim();
+                const incomingCacheKey = String(preview.cacheKey || '').trim();
+                const priorIndex = streamState.liveTraceEntries.findIndex((entry) =>
+                  entry?.type === 'vision'
+                  && String(entry?.preview?.artifactKind || '') === 'generated_image_partial'
+                  && (
+                    (!!incomingPreviewId && String(entry?.preview?.previewId || '') === incomingPreviewId)
+                    || (!!incomingGenerationId && String(entry?.preview?.generationId || '') === incomingGenerationId)
+                    || (!incomingPreviewId && !incomingGenerationId && !!incomingWorkspacePath && String(entry?.preview?.workspacePath || '') === incomingWorkspacePath)
+                    || (!incomingPreviewId && !incomingGenerationId && !!incomingCacheKey && String(entry?.preview?.cacheKey || '') === incomingCacheKey)
+                  )
+                );
+                if (priorIndex >= 0) streamState.liveTraceEntries.splice(priorIndex, 1);
+              }
               const last = Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1] : null;
               const samePreview = last
                 && last.type === 'vision'
@@ -39566,11 +39588,28 @@ wsEventBus.on('vision_injected', (msg) => {
   const dataUrl = String(preview.dataUrl || msg.dataUrl || '').trim();
   if (!isRenderableLiveTraceImageSource(dataUrl)) return;
   const sourceValue = String(msg.source || '').toLowerCase();
-  const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : 'Desktop';
+  const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : sourceValue === 'generated_image' ? 'Generated image' : 'Desktop';
   if (!/^voice_(?:browser|desktop)_screenshot$/i.test(tool)) {
     const streamState = getSessionStreamState(sid);
     const toolLabel = tool ? formatToolCallForLog(tool, {}, streamState).replace(/\.\.\.$/, '') : `${source} observation`;
     const text = String(msg.label || `Vision injected: ${toolLabel}`).trim();
+    if (sourceValue === 'generated_image' && Array.isArray(streamState.liveTraceEntries)) {
+      const incomingPreviewId = String(preview.previewId || '').trim();
+      const incomingGenerationId = String(preview.generationId || '').trim();
+      const incomingWorkspacePath = String(preview.workspacePath || '').trim();
+      const incomingCacheKey = String(preview.cacheKey || '').trim();
+      const priorIndex = streamState.liveTraceEntries.findIndex((entry) =>
+        entry?.type === 'vision'
+        && String(entry?.preview?.artifactKind || '') === 'generated_image_partial'
+        && (
+          (!!incomingPreviewId && String(entry?.preview?.previewId || '') === incomingPreviewId)
+          || (!!incomingGenerationId && String(entry?.preview?.generationId || '') === incomingGenerationId)
+          || (!incomingPreviewId && !incomingGenerationId && !!incomingWorkspacePath && String(entry?.preview?.workspacePath || '') === incomingWorkspacePath)
+          || (!incomingPreviewId && !incomingGenerationId && !!incomingCacheKey && String(entry?.preview?.cacheKey || '') === incomingCacheKey)
+        )
+      );
+      if (priorIndex >= 0) streamState.liveTraceEntries.splice(priorIndex, 1);
+    }
     const last = Array.isArray(streamState.liveTraceEntries)
       ? streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1]
       : null;

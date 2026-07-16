@@ -25,6 +25,7 @@ export const IMAGE_SIZE_BY_ASPECT_RATIO: Record<ImageAspectRatio, string> = {
   square: '1024x1024',
   portrait: '1024x1536',
 };
+export const GPT_IMAGE_2_EXACT_SIZE_RE = /^(?:1024x1024|1024x1536|1536x1024|auto|[1-9]\d{2,3}x[1-9]\d{2,3})$/;
 
 type PersistGeneratedImageInput = {
   bytes: Buffer;
@@ -74,6 +75,53 @@ function inferMimeTypeFromPath(filePath: string): string {
   if (ext === '.webp') return 'image/webp';
   if (ext === '.gif') return 'image/gif';
   return 'image/png';
+}
+
+function readPngInfo(buffer: Buffer): { width: number; height: number; hasAlpha: boolean | null } | null {
+  if (buffer.length < 26 || buffer.toString('hex', 0, 8) !== '89504e470d0a1a0a') return null;
+  const colorType = buffer[25];
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+    hasAlpha: colorType === 4 || colorType === 6 ? true : (colorType === 0 || colorType === 2 || colorType === 3 ? false : null),
+  };
+}
+
+function readGifInfo(buffer: Buffer): { width: number; height: number; hasAlpha: boolean | null } | null {
+  if (buffer.length < 10) return null;
+  const sig = buffer.toString('ascii', 0, 6);
+  if (sig !== 'GIF87a' && sig !== 'GIF89a') return null;
+  return { width: buffer.readUInt16LE(6), height: buffer.readUInt16LE(8), hasAlpha: null };
+}
+
+function readJpegInfo(buffer: Buffer): { width: number; height: number; hasAlpha: boolean | null } | null {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    const length = buffer.readUInt16BE(offset + 2);
+    if (length < 2) return null;
+    if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf)) {
+      return { height: buffer.readUInt16BE(offset + 5), width: buffer.readUInt16BE(offset + 7), hasAlpha: false };
+    }
+    offset += 2 + length;
+  }
+  return null;
+}
+
+export function inspectImageBuffer(buffer: Buffer, mimeType?: string): { width: number | null; height: number | null; hasAlpha: boolean | null } {
+  const mime = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  const info = readPngInfo(buffer) || readGifInfo(buffer) || readJpegInfo(buffer);
+  if (info) return info;
+  return {
+    width: null,
+    height: null,
+    hasAlpha: mime === 'image/jpeg' || mime === 'image/jpg' ? false : null,
+  };
 }
 
 function buildUniqueFilePath(directory: string, baseName: string, extension: string): string {
@@ -188,6 +236,26 @@ export async function resolveReferenceImages(referenceImages: string[]): Promise
   return resolved;
 }
 
+export async function validateMaskImage(mask: string, firstReferenceImage?: string): Promise<void> {
+  const [resolvedMask] = await resolveReferenceImages([mask]);
+  if (!resolvedMask?.bytes) {
+    throw new Error('Mask image must be a workspace file or data URL so dimensions and alpha can be validated before editing.');
+  }
+  const maskInfo = inspectImageBuffer(resolvedMask.bytes, resolvedMask.mimeType);
+  if (resolvedMask.mimeType !== 'image/png') throw new Error('Mask image must be a PNG with alpha.');
+  if (maskInfo.hasAlpha !== true) throw new Error('Mask image must contain an alpha channel.');
+  if (firstReferenceImage) {
+    const [reference] = await resolveReferenceImages([firstReferenceImage]);
+    const referenceBytes = reference?.bytes || (reference?.imageUrl ? (await fetchBinaryAsset(reference.imageUrl)).bytes : undefined);
+    if (referenceBytes) {
+      const refInfo = inspectImageBuffer(referenceBytes, reference.mimeType);
+      if (maskInfo.width && refInfo.width && maskInfo.height && refInfo.height && (maskInfo.width !== refInfo.width || maskInfo.height !== refInfo.height)) {
+        throw new Error(`Mask dimensions ${maskInfo.width}x${maskInfo.height} must match edited image dimensions ${refInfo.width}x${refInfo.height}.`);
+      }
+    }
+  }
+}
+
 export function normalizeImageAspectRatio(value?: string): ImageAspectRatio {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return DEFAULT_IMAGE_ASPECT_RATIO;
@@ -223,10 +291,51 @@ export function normalizeImageOutputFormat(value?: unknown, background?: ImageBa
   return 'png';
 }
 
+export function normalizeImageOutputCompression(value?: unknown, format?: ImageOutputFormat): number | undefined {
+  if (format !== 'jpeg' && format !== 'webp') return undefined;
+  const compression = Math.floor(Number(value));
+  if (!Number.isFinite(compression)) return undefined;
+  return Math.max(0, Math.min(100, compression));
+}
+
 export function normalizeImageQuality(value?: unknown): ImageQuality | undefined {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'auto') return raw;
   return undefined;
+}
+
+export function normalizeImagePresentationMode(value?: unknown): 'foreground' | 'background' {
+  const raw = String(value || '').trim().toLowerCase();
+  return raw === 'background' || raw === 'workflow' || raw === 'tool' ? 'background' : 'foreground';
+}
+
+export function normalizeImageSize(input: { size?: unknown; width?: unknown; height?: unknown; aspectRatio: ImageAspectRatio }): { size: string; width?: number; height?: number } {
+  const rawSize = String(input.size || '').trim().toLowerCase();
+  if (rawSize) {
+    if (!GPT_IMAGE_2_EXACT_SIZE_RE.test(rawSize)) {
+      throw new Error('Invalid image size. Use landscape/square/portrait, auto, or an exact WIDTHxHEIGHT size such as 1536x1024.');
+    }
+    const match = rawSize.match(/^(\d+)x(\d+)$/);
+    if (match) {
+      const width = Number(match[1]);
+      const height = Number(match[2]);
+      if (width < 256 || height < 256 || width > 4096 || height > 4096) {
+        throw new Error('Exact image width and height must both be between 256 and 4096 pixels.');
+      }
+    }
+    return { size: rawSize, width: match ? Number(match[1]) : undefined, height: match ? Number(match[2]) : undefined };
+  }
+  const width = Math.floor(Number(input.width));
+  const height = Math.floor(Number(input.height));
+  if (Number.isFinite(width) || Number.isFinite(height)) {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 256 || height < 256 || width > 4096 || height > 4096) {
+      throw new Error('Exact image width and height must both be between 256 and 4096 pixels.');
+    }
+    return { size: `${width}x${height}`, width, height };
+  }
+  const size = IMAGE_SIZE_BY_ASPECT_RATIO[input.aspectRatio];
+  const [w, h] = size.split('x').map(Number);
+  return { size, width: w, height: h };
 }
 
 export function mimeTypeForImageOutputFormat(format?: ImageOutputFormat): string {
@@ -285,6 +394,7 @@ export async function persistGeneratedImage(input: PersistGeneratedImageInput): 
   const configDir = getConfig().getConfigDir();
   const workspaceRoot = getWorkspaceRoot();
   const mimeType = String(input.mimeType || 'image/png').trim() || 'image/png';
+  const inspected = inspectImageBuffer(input.bytes, mimeType);
   const extension = inferExtensionFromMimeType(mimeType);
   const promptStem = sanitizePathSegment(String(input.prompt || '').slice(0, 48));
   const providerStem = sanitizePathSegment(input.provider);
@@ -303,6 +413,9 @@ export async function persistGeneratedImage(input: PersistGeneratedImageInput): 
       mime_type: mimeType,
       file_name: path.basename(cachePath),
       bytes: input.bytes.length,
+      width: inspected.width,
+      height: inspected.height,
+      has_alpha: inspected.hasAlpha,
     };
   }
 
@@ -319,6 +432,9 @@ export async function persistGeneratedImage(input: PersistGeneratedImageInput): 
     mime_type: mimeType,
     file_name: path.basename(workspacePath),
     bytes: input.bytes.length,
+    width: inspected.width,
+    height: inspected.height,
+    has_alpha: inspected.hasAlpha,
   };
 }
 
@@ -332,8 +448,12 @@ export function buildImageGenerationSuccess(input: {
   revisedPrompt?: string | null;
   quality?: string;
   size?: string;
+  width?: number;
+  height?: number;
   background?: ImageBackground;
   outputFormat?: ImageOutputFormat;
+  outputCompression?: number;
+  presentationMode?: 'foreground' | 'background';
 }): ImageGenerationSuccess {
   const images = Array.isArray(input.images) && input.images.length
     ? input.images
@@ -350,8 +470,12 @@ export function buildImageGenerationSuccess(input: {
     revised_prompt: input.revisedPrompt ?? null,
     quality: input.quality,
     size: input.size,
+    width: input.width,
+    height: input.height,
     background: input.background,
     output_format: input.outputFormat,
+    output_compression: input.outputCompression,
+    presentation_mode: input.presentationMode,
   };
 }
 
@@ -362,6 +486,7 @@ export function buildImageGenerationError(input: {
   aspectRatio: ImageAspectRatio;
   background?: ImageBackground;
   outputFormat?: ImageOutputFormat;
+  presentationMode?: 'foreground' | 'background';
   error: string;
   errorType: string;
 }): ImageGenerationFailure {
@@ -373,6 +498,7 @@ export function buildImageGenerationError(input: {
     aspect_ratio: input.aspectRatio,
     background: input.background,
     output_format: input.outputFormat,
+    presentation_mode: input.presentationMode,
     error: input.error,
     error_type: input.errorType,
   };

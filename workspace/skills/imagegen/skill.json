@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "imagegen",
+  "name": "imagegen",
+  "description": "Generate or edit raster images in Prometheus with native image providers and asset-aware output handling. Use for AI photos, illustrations, textures, sprites, mockups, hero images, transparent cutouts, background replacement, concept art, and image variants. Prefer deterministic tools for exact geometry, text, icons, and logos.",
+  "emoji": "🖼️",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "generate an ai image",
+    "create a raster image",
+    "make an image from prompt",
+    "edit this image with ai",
+    "remove image background",
+    "make transparent png",
+    "generate image variations",
+    "create product mockup image",
+    "create website hero image",
+    "make game sprite image",
+    "replace photo background",
+    "make concept art"
+  ],
+  "categories": [
+    "image",
+    "generation",
+    "editing",
+    "assets",
+    "creative"
+  ],
+  "requiredTools": [
+    "generate_image",
+    "creative"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "shell": false,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "references/prompting.md",
+      "type": "doc",
+      "description": "Prompt structures, reference-role guidance, edit invariants, and iteration patterns."
+    },
+    {
+      "path": "references/asset-workflows.md",
+      "type": "doc",
+      "description": "Project asset storage, Creative registration, provenance, transparency validation, and delivery guidance."
+    }
+  ],
+  "implicitInvocation": true,
+  "lifecycle": "active"
+}

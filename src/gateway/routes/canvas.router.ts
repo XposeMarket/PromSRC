@@ -260,6 +260,23 @@ function resolveCanvasPath(rawPath: string): { workspacePath: string; absPath: s
   return { workspacePath, absPath, relPath, inWorkspace };
 }
 
+function resolveGeneratedImageCachePreviewPath(rawCache: string): string {
+  const cacheName = String(rawCache || '').trim();
+  if (!cacheName || cacheName !== path.basename(cacheName) || cacheName === '.' || cacheName === '..') {
+    throw new Error('Invalid generated image cache key');
+  }
+  const cacheDir = path.resolve(path.join(getConfig().getConfigDir(), 'cache', 'images'));
+  const absPath = path.resolve(path.join(cacheDir, cacheName));
+  if (!isPathInside(cacheDir, absPath)) {
+    throw new Error('Generated image cache key outside preview cache');
+  }
+  const contentType = guessContentType(absPath);
+  if (!/^image\//i.test(contentType)) {
+    throw new Error('Generated image cache preview only serves image files');
+  }
+  return absPath;
+}
+
 function isWorkspaceCheckpointId(id: string, kind?: string): boolean {
   return kind === 'checkpoint' || /^turn_/i.test(String(id || ''));
 }
@@ -4823,6 +4840,22 @@ router.get('/api/canvas/inline', requireGatewayAuthAllowQueryToken, async (req: 
   } catch (err: any) {
     const message = String(err?.message || 'Inline preview failed');
     const status = /outside workspace|allowed/i.test(message) ? 403 : 500;
+    res.status(status).json({ success: false, error: message });
+  }
+});
+
+router.get('/api/canvas/generated-image-preview', requireGatewayAuthAllowQueryToken, async (req: any, res: any) => {
+  const cacheName = String(req.query.cache || '').trim();
+  if (!cacheName) {
+    res.status(400).json({ success: false, error: 'cache query param required' });
+    return;
+  }
+  try {
+    const absPath = resolveGeneratedImageCachePreviewPath(cacheName);
+    streamCanvasFile(absPath, res, String(req.headers.range || ''));
+  } catch (err: any) {
+    const message = String(err?.message || 'Generated image preview failed');
+    const status = /outside|invalid/i.test(message) ? 403 : 500;
     res.status(status).json({ success: false, error: message });
   }
 });

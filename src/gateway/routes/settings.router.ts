@@ -10,6 +10,7 @@ import { getCredentialHandler } from '../../security/credential-handler';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import * as fs from 'fs';
 import * as path from 'path';
+import crypto from 'crypto';
 import {
   getInstalledAppsInventory,
   searchInstalledApps,
@@ -69,6 +70,7 @@ import {
   serializePrometheusQuestionForClient,
   submitPrometheusQuestionResponse,
 } from '../prometheus-questions';
+import { flushSession, touchSession } from '../session';
 
 export const router = Router();
 
@@ -1636,10 +1638,24 @@ router.post('/api/lifecycle/restart', requireGatewayAuth, (req, res) => {
         : requestedSessionId ? 'web'
           : 'unknown';
   const lastMainSessionId = String(getLastMainSessionId?.() || '').trim();
-  const previousSessionId = requestedSessionId
+  let previousSessionId = requestedSessionId
     || lastMainSessionId
     || (originChannel === 'mobile' ? 'mobile_default' : undefined);
-  res.json({ ok: true, rebuild, message: rebuild ? 'Full rebuild + restart initiated.' : 'Quick restart initiated.' });
+  // `mobile_default` is the mobile client's throwaway New Chat draft. It must
+  // never own durable restart history. Current clients promote the draft
+  // before calling this route; this server-side rotation protects older or
+  // reconnecting clients that still submit the legacy id.
+  if (previousSessionId === 'mobile_default') {
+    previousSessionId = `mobile_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 6)}`;
+    touchSession(previousSessionId, { channel: 'mobile', title: 'Mobile restart' });
+    flushSession(previousSessionId);
+  }
+  res.json({
+    ok: true,
+    rebuild,
+    sessionId: previousSessionId,
+    message: rebuild ? 'Full rebuild + restart initiated.' : 'Quick restart initiated.',
+  });
   setTimeout(async () => {
     try {
       const restartContext = {

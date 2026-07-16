@@ -2880,6 +2880,7 @@ function _isRenderableMobileTraceImageSource(value) {
   const source = String(value || '').trim();
   return /^data:image\//i.test(source)
     || /^\/api\/canvas\/inline\?path=/i.test(source)
+    || /^\/api\/canvas\/generated-image-preview\?cache=/i.test(source)
     || /^\/api\/chat\/desktop-screenshot-preview\//i.test(source);
 }
 
@@ -2890,9 +2891,26 @@ function _appendMobileVisionTrace(message, evt) {
   if (!_isRenderableMobileTraceImageSource(dataUrl)) return;
   if (!Array.isArray(message.liveTraceEntries)) message.liveTraceEntries = [];
   const sourceValue = String(evt.source || '').toLowerCase();
-  const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : 'Desktop';
+  const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : sourceValue === 'generated_image' ? 'Generated image' : 'Desktop';
   const tool = String(evt.tool || evt.action || evt.name || '').trim();
   const text = String(evt.label || `Vision injected: ${tool ? _mobileToolLabel({ ...evt, action: tool }) : `${source} observation`}`).trim();
+  if (sourceValue === 'generated_image') {
+    const incomingPreviewId = String(preview.previewId || '').trim();
+    const incomingGenerationId = String(preview.generationId || '').trim();
+    const incomingWorkspacePath = String(preview.workspacePath || '').trim();
+    const incomingCacheKey = String(preview.cacheKey || '').trim();
+    const priorIndex = message.liveTraceEntries.findIndex((entry) =>
+      entry?.type === 'vision'
+      && String(entry?.preview?.artifactKind || '') === 'generated_image_partial'
+      && (
+        (!!incomingPreviewId && String(entry?.preview?.previewId || '') === incomingPreviewId)
+        || (!!incomingGenerationId && String(entry?.preview?.generationId || '') === incomingGenerationId)
+        || (!incomingPreviewId && !incomingGenerationId && !!incomingWorkspacePath && String(entry?.preview?.workspacePath || '') === incomingWorkspacePath)
+        || (!incomingPreviewId && !incomingGenerationId && !!incomingCacheKey && String(entry?.preview?.cacheKey || '') === incomingCacheKey)
+      )
+    );
+    if (priorIndex >= 0) message.liveTraceEntries.splice(priorIndex, 1);
+  }
   const last = message.liveTraceEntries[message.liveTraceEntries.length - 1];
   if (last && last.type === 'vision' && String(last.text || '') === text && String(last?.preview?.dataUrl || '') === dataUrl) return;
   message.liveTraceEntries.push({
@@ -4227,6 +4245,16 @@ function _clearMobileLiveRunForSession(sessionId) {
 async function _applyMobileHotRestartNotification(msg = {}) {
   const sid = String(msg.previousSessionId || msg.sessionId || '').trim();
   if (!sid) return;
+  // `mobile_default` is an unsaved client-side draft slot, not a durable
+  // conversation. Older clients used it as a restart target, which left a
+  // server-side history full of restart confirmations. Never hydrate that
+  // legacy history back into a fresh draft during reconnect.
+  if (sid === MOBILE_CHAT_SESSION_ID) {
+    if (msg.notificationId) {
+      try { wsSend({ type: 'startup_notification_ack', notificationId: String(msg.notificationId), surface: 'mobile', sessionId: sid }); } catch {}
+    }
+    return;
+  }
   const restartText = String(msg.text || '').trim();
   _clearMobileLiveRunForSession(sid);
   const session = await loadMobileChatSession(sid).catch(() => null);
@@ -6303,9 +6331,25 @@ function _renderMobileVoiceLyrics(text = '', progress = 0, options = {}) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   if (!clean) return '';
   const safeProgress = Math.max(0, Math.min(1, Number(progress) || 0));
-  const wordsPerLine = options.compact ? 8 : 6;
+  const wordsPerLine = options.compact ? 7 : 4;
   const { words, lines } = _mobileVoiceLyricLines(clean, wordsPerLine);
-  const activeWordIndex = Math.min(Math.max(0, words.length - 1), Math.floor(safeProgress * words.length));
+  const weights = words.map((word) => {
+    const cleanWord = String(word || '').replace(/[^\p{L}\p{N}']/gu, '');
+    const syllableLike = Math.max(1, (cleanWord.match(/[aeiouy]+/gi) || []).length);
+    const punctuationPause = /[.!?]$/.test(word) ? 1.8 : /[,;:]$/.test(word) ? .75 : 0;
+    return Math.max(.7, Math.min(2.6, .42 + (cleanWord.length * .065) + (syllableLike * .28) + punctuationPause));
+  });
+  const totalWeight = Math.max(1, weights.reduce((sum, weight) => sum + weight, 0));
+  const progressWeight = safeProgress * totalWeight;
+  let activeWordIndex = Math.max(0, words.length - 1);
+  let traversedWeight = 0;
+  for (let index = 0; index < weights.length; index += 1) {
+    traversedWeight += weights[index];
+    if (progressWeight < traversedWeight) {
+      activeWordIndex = index;
+      break;
+    }
+  }
   const activeLineIndex = Math.min(Math.max(0, lines.length - 1), Math.floor(activeWordIndex / wordsPerLine));
   const startLine = Math.max(0, Math.min(Math.max(0, lines.length - 3), activeLineIndex - 1));
   const visible = lines.slice(startLine, startLine + 3);
@@ -12259,7 +12303,17 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
             : 'Starting quick restart. The app may briefly disconnect while Prometheus comes back.',
           actions: [],
         });
-        const restartSessionId = __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID;
+        let restartSessionId = String(__pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+        // A restart completion is durable, so promote the throwaway New Chat
+        // draft before requesting it. This preserves the visible slash-command
+        // turn while ensuring the completion cannot land in `mobile_default`.
+        if (restartSessionId === MOBILE_CHAT_SESSION_ID) {
+          restartSessionId = await _ensureDurableMobileVoiceSession({
+            title: 'Mobile restart',
+            source: 'mobile_restart_session_created',
+          });
+          requestedSession = restartSessionId;
+        }
         const r = await restartMobileGateway({
           rebuild,
           sessionId: restartSessionId,
@@ -14789,6 +14843,19 @@ function _setMobileVoiceLyricProgress(text, progress, hint = 'Prometheus is resp
   __pmVoice.lyricText = clean;
   __pmVoice.lyricProgress = Math.max(0, Math.min(1, Number(progress) || 0));
   _voiceShowRealtimeAgentMessage(clean, hint, { progress: __pmVoice.lyricProgress });
+}
+
+function _mobileRealtimeAudioPlaybackMs(turn = null) {
+  const activeTurn = turn || _mobileRealtimeActiveAssistantTurn();
+  const audio = __pmRealtimeAgent?.conn?.audio;
+  const mediaStartRaw = activeTurn?.voiceRealtimeMediaStartTime;
+  const mediaStart = Number(mediaStartRaw);
+  const mediaNow = Number(audio?.currentTime);
+  if (mediaStartRaw != null && Number.isFinite(mediaStart) && Number.isFinite(mediaNow) && mediaNow >= mediaStart) {
+    return Math.max(0, (mediaNow - mediaStart) * 1000);
+  }
+  const started = Number(activeTurn?.voiceRealtimeAudioStartedAt || activeTurn?.voiceRealtimeUpdatedAt || Date.now());
+  return Math.max(0, Date.now() - started);
 }
 
 function _setMobileVoicePlaybackLyricProgress(localProgress) {
@@ -17972,6 +18039,12 @@ function _startMobileRealtimeAssistantLyricProgress(sessionId = '') {
     __pmRealtimeAgent.turn.voiceRealtimePendingAudioMs = 0;
     __pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt = 0;
   }
+  const pendingMediaStartRaw = __pmRealtimeAgent.turn.voiceRealtimePendingMediaStartTime;
+  const pendingMediaStart = Number(pendingMediaStartRaw);
+  if (turn.voiceRealtimeMediaStartTime == null && pendingMediaStartRaw != null && Number.isFinite(pendingMediaStart)) {
+    turn.voiceRealtimeMediaStartTime = pendingMediaStart;
+  }
+  __pmRealtimeAgent.turn.voiceRealtimePendingMediaStartTime = null;
   if (!Number(turn.voiceRealtimeAudioStartedAt || 0)) turn.voiceRealtimeAudioStartedAt = Date.now();
   turn.voiceRealtimeActive = true;
   if (!Number.isFinite(Number(turn.voiceRealtimeProgress))) turn.voiceRealtimeProgress = 0;
@@ -17984,12 +18057,11 @@ function _startMobileRealtimeAssistantLyricProgress(sessionId = '') {
       return;
     }
     const text = String(activeTurn.body?.text || activeTurn.content || '').trim();
-    const started = Number(activeTurn.voiceRealtimeAudioStartedAt || activeTurn.voiceRealtimeUpdatedAt || Date.now());
     const estimatedMs = Math.max(
       Number(activeTurn.voiceRealtimeAudioMs || 0) || 0,
       _estimateMobileRealtimeSpeechMs(text),
     );
-    const elapsed = Math.max(0, Date.now() - started);
+    const elapsed = _mobileRealtimeAudioPlaybackMs(activeTurn);
     const progress = Math.max(Number(activeTurn.voiceRealtimeProgress || 0) || 0, Math.min(0.98, elapsed / Math.max(1, estimatedMs)));
     activeTurn.voiceRealtimeProgress = progress;
     _setMobileVoiceLyricProgress(text, progress, 'Realtime agent is responding');
@@ -18024,12 +18096,20 @@ function _noteMobileRealtimeAssistantAudioChunk(sessionId = '', int16 = null) {
     if (chunkMs > 0) {
       __pmRealtimeAgent.turn.voiceRealtimePendingAudioMs = (Number(__pmRealtimeAgent.turn.voiceRealtimePendingAudioMs || 0) || 0) + chunkMs;
       if (!Number(__pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt || 0)) __pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt = Date.now();
+      if (__pmRealtimeAgent.turn.voiceRealtimePendingMediaStartTime == null) {
+        const mediaTime = Number(__pmRealtimeAgent?.conn?.audio?.currentTime);
+        if (Number.isFinite(mediaTime)) __pmRealtimeAgent.turn.voiceRealtimePendingMediaStartTime = mediaTime;
+      }
     }
     return;
   }
   turn.voiceRealtimeAudioMs = Math.max(Number(turn.voiceRealtimeAudioMs || 0) || 0, 0) + Math.max(0, chunkMs);
   turn.voiceRealtimeAudioLastAt = Date.now();
   if (!Number(turn.voiceRealtimeAudioStartedAt || 0)) turn.voiceRealtimeAudioStartedAt = Date.now();
+  if (turn.voiceRealtimeMediaStartTime == null) {
+    const mediaTime = Number(__pmRealtimeAgent?.conn?.audio?.currentTime);
+    if (Number.isFinite(mediaTime)) turn.voiceRealtimeMediaStartTime = mediaTime;
+  }
   _startMobileRealtimeAssistantLyricProgress(sid);
 }
 
@@ -18113,6 +18193,14 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     responseStatus: event?.response?.status || '',
     keys: event && typeof event === 'object' ? Object.keys(event).slice(0, 12) : [],
   });
+  if (type === 'response.audio.delta' || type === 'response.output_audio.delta') {
+    const b64 = String(event?.delta || event?.audio || '');
+    if (b64) {
+      const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+      const byteLength = Math.max(0, Math.floor((b64.length * 3) / 4) - padding);
+      _noteMobileRealtimeAssistantAudioChunk(sessionId, { length: Math.floor(byteLength / 2) });
+    }
+  }
   if (type === 'response.created') {
     if (
       String(__pmRealtimeAgent.conn?.provider || '') === 'xai'
@@ -18145,6 +18233,7 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     }
     __pmRealtimeAgent.turn.voiceRealtimePendingAudioMs = 0;
     __pmRealtimeAgent.turn.voiceRealtimePendingAudioStartedAt = 0;
+    __pmRealtimeAgent.turn.voiceRealtimePendingMediaStartTime = null;
     _voiceShowRealtimeAgentMessage('', 'Realtime agent is responding');
     __pmRealtimeAgent.turn.subagentVoiceReplyLogKey = '';
     return;
@@ -18388,9 +18477,9 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     const activeLyricTurn = _mobileRealtimeActiveAssistantTurn(sessionId);
     let responseStatusHoldMs = lastRealtimeReply ? 8500 : 1200;
     if (activeLyricTurn) {
-      const started = Number(activeLyricTurn.voiceRealtimeAudioStartedAt || activeLyricTurn.voiceRealtimeUpdatedAt || Date.now());
       const estimatedMs = Math.max(Number(activeLyricTurn.voiceRealtimeAudioMs || 0) || 0, _estimateMobileRealtimeSpeechMs(activeLyricTurn.body?.text || activeLyricTurn.content || lastRealtimeReply));
-      const remainingMs = Math.max(550, Math.min(9000, estimatedMs - Math.max(0, Date.now() - started)));
+      const playedMs = _mobileRealtimeAudioPlaybackMs(activeLyricTurn);
+      const remainingMs = Math.max(550, Math.min(120000, estimatedMs - playedMs));
       responseStatusHoldMs = Math.max(1200, remainingMs + 900);
       setTimeout(() => _finishMobileRealtimeAssistantLyricProgress(sessionId, { delayMs: 900 }), remainingMs);
     }

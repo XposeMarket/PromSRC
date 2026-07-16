@@ -11,6 +11,7 @@ import { executeGenerateVideo } from '../../../tools/generate-video';
 import { socialIntelTool } from '../../../tools/social-scraper.js';
 import { addCreativeReferences, getCreativeReferences } from '../../session';
 import { saveSiteShortcut } from '../../site-shortcuts';
+import { buildGeneratedImageVisionEvent } from '../../generated-image-preview';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import type { ToolResult } from '../../tool-builder';
 
@@ -285,7 +286,15 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           model: args.model != null ? String(args.model) : undefined,
           background: args.background != null ? String(args.background) : undefined,
           output_format: args.output_format != null ? String(args.output_format) : undefined,
+          output_compression: args.output_compression != null ? Number(args.output_compression) : undefined,
           quality: args.quality != null ? String(args.quality) : undefined,
+          size: args.size != null ? String(args.size) : undefined,
+          width: args.width != null ? Number(args.width) : undefined,
+          height: args.height != null ? Number(args.height) : undefined,
+          mask: args.mask != null ? String(args.mask) : undefined,
+          presentation_mode: args.presentation_mode === 'foreground' ? 'foreground' : 'background',
+          partial_images: args.partial_images ?? 1,
+          stream: args.stream !== false,
           output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
           save_to_workspace: args.save_to_workspace != null ? args.save_to_workspace === true : undefined,
           on_image_persisted: (image) => {
@@ -300,6 +309,12 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
                 generated_images: [image],
               },
             });
+            const event = buildGeneratedImageVisionEvent({ image, tool: name, label: 'Generated image' });
+            if (event) deps.sendSSE?.('vision_injected', event);
+          },
+          on_partial_image: (image: any) => {
+            const event = buildGeneratedImageVisionEvent({ image, tool: name, label: 'Generated image partial' });
+            if (event) deps.sendSSE?.('vision_injected', event);
           },
         });
         return {

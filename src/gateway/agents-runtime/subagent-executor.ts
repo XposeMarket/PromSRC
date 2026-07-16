@@ -64,6 +64,7 @@ import { getProcessSupervisor } from '../process/supervisor';
 import { runElevatedCommand } from '../process/elevated-command';
 import { executePromRepoSyncTool } from '../prom-repo-sync';
 import { buildToolBenchmarkAggregate } from '../tool-observations';
+import { buildGeneratedImageVisionEvent } from '../generated-image-preview';
 import {
   applyLineEndingTolerantFindReplace,
   normalizeDevSourcePatchsetArgs,
@@ -13122,9 +13123,27 @@ export async function executeTool(name: string, args: any, workspacePath: string
 		          model: args.model != null ? String(args.model) : undefined,
 		          background: args.background != null ? String(args.background) : undefined,
 		          output_format: args.output_format != null ? String(args.output_format) : undefined,
+		          output_compression: args.output_compression != null ? Number(args.output_compression) : undefined,
 		          quality: args.quality != null ? String(args.quality) : undefined,
+		          size: args.size != null ? String(args.size) : undefined,
+		          width: args.width != null ? Number(args.width) : undefined,
+		          height: args.height != null ? Number(args.height) : undefined,
+		          mask: args.mask != null ? String(args.mask) : undefined,
+		          presentation_mode: args.presentation_mode === 'background' ? 'background' : 'foreground',
+		          partial_images: args.partial_images,
+		          stream: args.stream === true,
 		          output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
 	          save_to_workspace: args.save_to_workspace != null ? args.save_to_workspace === true : undefined,
+		          on_image_persisted: (image) => {
+		            if (args.presentation_mode !== 'background') return;
+		            const event = buildGeneratedImageVisionEvent({ image, tool: name, label: 'Generated image' });
+		            if (event) deps.sendSSE?.('vision_injected', event);
+		          },
+		          on_partial_image: (image: any) => {
+		            if (args.presentation_mode !== 'background') return;
+		            const event = buildGeneratedImageVisionEvent({ image, tool: name, label: 'Generated image partial' });
+		            if (event) deps.sendSSE?.('vision_injected', event);
+		          },
 	        });
 		        return {
 		          name,

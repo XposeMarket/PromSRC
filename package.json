@@ -50,6 +50,7 @@
     "test:runtime-workers": "tsx src/gateway/process/runtime-worker-broker.regression.ts && tsx src/gateway/memory-index/memory-index.regression.ts",
     "test:visual": "npm run build:backend && node scripts/test-visual-command-state.mjs",
     "test:tool-stream-screenshot-previews": "node scripts/test-tool-stream-screenshot-previews.mjs",
+    "test:image-generation-flow": "npm run build:backend && node scripts/test-image-generation-flow.mjs",
     "benchmark:desktop": "npm run build:backend && node scripts/benchmark-desktop.mjs",
     "build:desktop-helper:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop-helper-win.ps1",
     "patch:hyperframes-esm": "node scripts/patch-hyperframes-esm.mjs",

@@ -428,6 +428,18 @@ function buildMediaAnalysisPreviewPayloads(
   return previews;
 }
 
+function inferImageGenerationPresentationMode(userMessage: string, toolName: string, toolArgs: any): 'foreground' | 'background' {
+  const explicit = String(toolArgs?.presentation_mode || '').trim().toLowerCase();
+  if (explicit === 'foreground' || explicit === 'direct') return 'foreground';
+  if (explicit === 'background' || explicit === 'workflow' || explicit === 'tool') return 'background';
+  if (toolName === 'creative_generate_image_shot') return 'background';
+  const text = `${userMessage || ''}\n${toolArgs?.prompt || ''}`.toLowerCase();
+  if (/\b(texture pack|sprite|sprites|asset|assets|wire (?:it|them) into|apply (?:it|them)|add (?:it|them) to|website|site|game|project|repo|implementation|landing page|html|css|app|background plate|keyframe|shot|creative project)\b/.test(text)) {
+    return 'background';
+  }
+  return 'foreground';
+}
+
 function pruneMainChatRequestDedupe(now = Date.now()): void {
   for (const [key, entry] of mainChatRequestDedupe.entries()) {
     const activeStream = getMainChatStream(entry.sessionId);
@@ -1026,9 +1038,10 @@ function buildDurableToolStreamTrace(sessionId: string): Record<string, any>[] |
       const dataUrl = String(preview?.dataUrl || data.dataUrl || '').trim();
       if (!/^data:image\//i.test(dataUrl)
         && !/^\/api\/canvas\/inline\?path=/i.test(dataUrl)
+        && !/^\/api\/canvas\/generated-image-preview\?cache=/i.test(dataUrl)
         && !/^\/api\/chat\/desktop-screenshot-preview\//i.test(dataUrl)) continue;
       const sourceValue = String(data.source || '').toLowerCase();
-      const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : 'Desktop';
+      const source = sourceValue === 'browser' ? 'Browser' : sourceValue === 'media_analysis' ? 'Media analysis' : sourceValue === 'generated_image' ? 'Generated image' : 'Desktop';
       const previewTitle = String(data.previewTitle || preview?.title || `${source} preview`).trim();
       entries.push({
         id: `trace_${stream.streamId}_${frame.seq}`,
@@ -3780,16 +3793,24 @@ async function handleChat(
     const wrapperAction = String(toolArgs?.action || toolArgs?.operation || toolArgs?.mode || '').trim().toLowerCase();
     const isBackgroundSpawn = toolName === 'background_spawn'
       || (toolName === 'background_ops' && (wrapperAction === 'spawn' || wrapperAction === 'start'));
+    const baseEffectiveToolArgs = toolArgs && typeof toolArgs === 'object' ? { ...toolArgs } : toolArgs;
+    if (toolName === 'generate_image' && baseEffectiveToolArgs && typeof baseEffectiveToolArgs === 'object') {
+      baseEffectiveToolArgs.presentation_mode = inferImageGenerationPresentationMode(message, toolName, baseEffectiveToolArgs);
+      if (baseEffectiveToolArgs.presentation_mode === 'background') {
+        baseEffectiveToolArgs.stream = baseEffectiveToolArgs.stream !== false;
+        baseEffectiveToolArgs.partial_images = baseEffectiveToolArgs.partial_images ?? 1;
+      }
+    }
     const effectiveToolArgs = isBackgroundSpawn && linkedVoiceWorkgroup
       ? {
-          ...(toolArgs && typeof toolArgs === 'object' ? toolArgs : {}),
+          ...(baseEffectiveToolArgs && typeof baseEffectiveToolArgs === 'object' ? baseEffectiveToolArgs : {}),
           tags: Array.from(new Set([
             ...(Array.isArray(toolArgs?.tags) ? toolArgs.tags.map((tag: unknown) => String(tag || '').trim()).filter(Boolean) : []),
             'voice_dispatch',
             `voice_workgroup:${linkedVoiceWorkgroup.id}`,
           ])).slice(0, 12),
         }
-      : toolArgs;
+      : baseEffectiveToolArgs;
     try {
       const toolResult = await executeTool(toolName, effectiveToolArgs, workspacePath, buildExecuteToolDeps(toolCallId), sessionId);
       if (isBackgroundSpawn && linkedVoiceWorkgroup && !toolResult?.error) {

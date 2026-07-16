@@ -11,6 +11,7 @@ const pages = read('web-ui/src/mobile/mobile-pages.js');
 const ws = read('web-ui/src/ws.js');
 const index = read('web-ui/index.html');
 const router = read('src/gateway/routes/chat.router.ts');
+const settingsRouter = read('src/gateway/routes/settings.router.ts');
 const gatewayServer = read('src/gateway/core/server.ts');
 const broadcaster = read('src/gateway/comms/broadcaster.ts');
 const auditMaterializer = read('src/gateway/audit/materializer.ts');
@@ -61,6 +62,26 @@ assert.doesNotMatch(
   pages,
   /if \(detail\?\.force === true\) \{[\s\S]{0,240}activeSessionId = sid/,
   'forced background renders must not change the selected chat',
+);
+assert.match(
+  pages,
+  /if \(sid === MOBILE_CHAT_SESSION_ID\) \{[\s\S]{0,320}startup_notification_ack[\s\S]{0,120}return;/,
+  'legacy mobile_default restart notifications must be acknowledged without hydrating hidden history',
+);
+assert.match(
+  pages,
+  /if \(restartSessionId === MOBILE_CHAT_SESSION_ID\) \{[\s\S]{0,320}_ensureDurableMobileVoiceSession/,
+  'mobile slash restart must promote the draft to a durable session first',
+);
+assert.match(
+  settingsRouter,
+  /if \(previousSessionId === 'mobile_default'\) \{[\s\S]{0,360}touchSession\(previousSessionId, \{ channel: 'mobile'/,
+  'the gateway must rotate legacy mobile_default restart targets to real mobile sessions',
+);
+assert.match(
+  settingsRouter,
+  /sessionId: previousSessionId/,
+  'the restart endpoint must report the effective durable target session',
 );
 
 assert.match(ws, /pm_reload_pending_until/, 'explicit reload must coordinate with service-worker takeover');
