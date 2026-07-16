@@ -16,6 +16,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
+import { enqueuePostTurnJob } from '../chat/post-turn-queue';
 
 // WebSocketServer + WebSocket moved to core/server.ts (B3)
 import {
@@ -9595,9 +9596,19 @@ async function runInteractiveTurn(
       turnTiming.mark('tool_log_persisted', { durationMs: Date.now() - toolLogPersistStartedAt });
     }
     if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
-      const projectLearningStartedAt = Date.now();
-      await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
-      turnTiming.mark('project_learning_done', { durationMs: Date.now() - projectLearningStartedAt });
+      enqueuePostTurnJob({
+        sessionId,
+        label: 'interrupted_project_learning',
+        run: async () => {
+          const projectLearningStartedAt = Date.now();
+          await maybeRefreshProjectLearning(sessionId, [visibleCheckpointText, checkpointPacket]);
+          turnTiming.mark('project_learning_done', {
+            durationMs: Date.now() - projectLearningStartedAt,
+            deferred: true,
+          });
+        },
+      });
+      turnTiming.mark('post_turn_work_enqueued', { kind: 'interrupted_project_learning' });
     }
   } else {
     const assistantPersistStartedAt = Date.now();
@@ -9633,24 +9644,35 @@ async function runInteractiveTurn(
       turnTiming.mark('tool_log_persisted', { durationMs: Date.now() - toolLogPersistStartedAt });
     }
     if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
-      const projectLearningStartedAt = Date.now();
-      await maybeRefreshProjectLearning(sessionId);
-      turnTiming.mark('project_learning_done', { durationMs: Date.now() - projectLearningStartedAt });
-    }
-    if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
-      const autoTitleStartedAt = Date.now();
-      const generatedSessionTitle = await maybeAutoNameChatSession(sessionId);
-      turnTiming.mark('auto_title_done', {
-        durationMs: Date.now() - autoTitleStartedAt,
-        generated: !!generatedSessionTitle,
+      enqueuePostTurnJob({
+        sessionId,
+        label: 'project_learning_and_auto_title',
+        run: async () => {
+          const projectLearningStartedAt = Date.now();
+          await maybeRefreshProjectLearning(sessionId);
+          turnTiming.mark('project_learning_done', {
+            durationMs: Date.now() - projectLearningStartedAt,
+            deferred: true,
+          });
+
+          const autoTitleStartedAt = Date.now();
+          const generatedSessionTitle = await maybeAutoNameChatSession(sessionId);
+          turnTiming.mark('auto_title_done', {
+            durationMs: Date.now() - autoTitleStartedAt,
+            generated: !!generatedSessionTitle,
+            deferred: true,
+          });
+          if (generatedSessionTitle) {
+            broadcastWS({
+              type: 'session_title',
+              sessionId,
+              title: generatedSessionTitle,
+              autoTitleLocked: true,
+            });
+          }
+        },
       });
-      if (generatedSessionTitle && !abortSignal?.aborted) {
-        sendSSE('session_title', {
-          sessionId,
-          title: generatedSessionTitle,
-          autoTitleLocked: true,
-        });
-      }
+      turnTiming.mark('post_turn_work_enqueued', { kind: 'project_learning_and_auto_title' });
     }
   }
 
@@ -19209,7 +19231,6 @@ router.post('/api/chat', async (req, res) => {
           turnOrigin,
           { clientRequestId },
 			    );
-        attachRuntimeProcessEntriesToLatestAssistant(resolvedSessionId, runtimeProcessEntries);
 		    if (!abortSignal.aborted) {
 		      markProviderStatus(true);
           const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim() || 'http';
@@ -19221,6 +19242,7 @@ router.post('/api/chat', async (req, res) => {
             requestOrigin: host ? `${proto}://${host}` : undefined,
             clientRequestId,
           });
+        const finalSendStartedAt = Date.now();
 	      sendSSE('final', {
         text: result.text,
         artifacts: result.artifacts,
@@ -19244,6 +19266,20 @@ router.post('/api/chat', async (req, res) => {
         productCarousel: result.productCarousel,
         richArtifacts: result.richArtifacts,
       });
+        turnTiming.mark('client_final_sent', { durationMs: Date.now() - finalSendStartedAt });
+        enqueuePostTurnJob({
+          sessionId: resolvedSessionId,
+          label: 'attach_runtime_process_entries',
+          run: () => {
+            const attachStartedAt = Date.now();
+            attachRuntimeProcessEntriesToLatestAssistant(resolvedSessionId, runtimeProcessEntries);
+            turnTiming.mark('runtime_process_entries_attached', {
+              durationMs: Date.now() - attachStartedAt,
+              deferred: true,
+              processEntryCount: runtimeProcessEntries.length,
+            });
+          },
+        });
     }
 		  } catch (err: any) {
 		    if (!abortSignal.aborted) markProviderStatus(false);
