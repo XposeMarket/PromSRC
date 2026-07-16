@@ -302,13 +302,11 @@ import { deliverToTargets, readAttachmentBuffer } from '../delivery-router';
 import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
 import {
   refreshMemoryIndexInWorker,
-  searchMemoryIndex,
   readMemoryRecord,
-  searchProjectMemory,
-  searchMemoryTimeline,
   getMemoryGraphSnapshot,
   getRelatedMemory,
 } from '../memory-index/index';
+import { searchMemoryInWorker } from '../memory-index/search-worker-client';
 // import { runDesktopTask } from '../tasks/desktop-task-runner'; // removed — module deleted
 import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress, backgroundWait } from '../tasks/task-runner';
 import { saveSiteShortcut } from '../site-shortcuts';
@@ -16842,7 +16840,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const sourceTypes = Array.isArray(args.source_types)
             ? args.source_types.map((v: any) => String(v || '').trim()).filter(Boolean)
             : undefined;
-          const out = searchMemoryIndex(workspacePath, {
+          const result = await searchMemoryInWorker('memory_search', {
+            workspacePath,
+            params: {
             query,
             mode: mode as any,
             limit: Number(args.limit || 8),
@@ -16851,8 +16851,10 @@ export async function executeTool(name: string, args: any, workspacePath: string
             dateTo: args.date_to ? String(args.date_to) : undefined,
             sourceTypes: sourceTypes as any,
             minDurability: args.min_durability !== undefined ? Number(args.min_durability) : undefined,
-          });
-          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+            queryRoute: 'legacy_executor',
+            },
+          }, { signal: deps.abortSignal?.signal });
+          return { name, args, result, error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search failed: ${String(err?.message || err)}`, error: true };
         }
@@ -16876,8 +16878,13 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const query = String(args.query || '').trim();
           if (!projectId) return { name, args, result: 'memory_search_project: project_id is required', error: true };
           if (!query) return { name, args, result: 'memory_search_project: query is required', error: true };
-          const out = searchProjectMemory(workspacePath, projectId, query, Number(args.limit || 10));
-          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+          const result = await searchMemoryInWorker('memory_search_project', {
+            workspacePath,
+            projectId,
+            query,
+            limit: Number(args.limit || 10),
+          }, { signal: deps.abortSignal?.signal });
+          return { name, args, result, error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search_project failed: ${String(err?.message || err)}`, error: true };
         }
@@ -16887,14 +16894,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
         try {
           const query = String(args.query || '').trim();
           if (!query) return { name, args, result: 'memory_search_timeline: query is required', error: true };
-          const out = searchMemoryTimeline(
+          const result = await searchMemoryInWorker('memory_search_timeline', {
             workspacePath,
             query,
-            args.date_from ? String(args.date_from) : undefined,
-            args.date_to ? String(args.date_to) : undefined,
-            Number(args.limit || 20),
-          );
-          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+            dateFrom: args.date_from ? String(args.date_from) : undefined,
+            dateTo: args.date_to ? String(args.date_to) : undefined,
+            limit: Number(args.limit || 20),
+          }, { signal: deps.abortSignal?.signal });
+          return { name, args, result, error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search_timeline failed: ${String(err?.message || err)}`, error: true };
         }

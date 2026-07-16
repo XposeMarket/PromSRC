@@ -8,7 +8,7 @@ import { hookBus } from './hooks';
 import { SkillsManager } from './skills-runtime/skills-manager';
 import { getConfig, getAgents } from '../config/config';
 import { getActivatedSkillIds, getActivatedSkillResources, getActivatedToolCategories, isBusinessContextEnabled } from './session';
-import { searchMemoryIndex } from './memory-index/index';
+import { searchMemoryInWorker } from './memory-index/search-worker-client';
 import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
 import { buildCisContextBlock } from './business/cis-context-builder';
 import { loadSoul, loadPrometheusRuntimeContract, loadVoiceSoul } from '../config/soul-loader';
@@ -523,7 +523,7 @@ type MemorySearchRouting = {
   reason: string;
 };
 
-function routeMemorySearchMode(messageText: string): MemorySearchRouting {
+export function routeMemorySearchMode(messageText: string): MemorySearchRouting {
   const text = String(messageText || '').toLowerCase();
   if (!text.trim()) return { mode: 'no_search', reason: 'empty_message' };
 
@@ -558,16 +558,26 @@ function routeMemorySearchMode(messageText: string): MemorySearchRouting {
   return { mode: 'no_search', reason: 'not_needed' };
 }
 
-function buildRetrievedMemoryContext(workspacePath: string, messageText: string, routing: MemorySearchRouting): string {
+export async function buildRetrievedMemoryContext(
+  workspacePath: string,
+  messageText: string,
+  routing: MemorySearchRouting,
+  signal?: AbortSignal,
+): Promise<string> {
   if (routing.mode === 'no_search') return '';
   try {
     const searchMode = routing.mode === 'deep_search' ? 'deep' : 'quick';
     const limit = routing.mode === 'deep_search' ? 8 : 4;
-    const result = searchMemoryIndex(workspacePath, {
-      query: messageText,
-      mode: searchMode as any,
-      limit,
-    });
+    const serialized = await searchMemoryInWorker('memory_search', {
+      workspacePath,
+      params: {
+        query: messageText,
+        mode: searchMode as any,
+        limit,
+        queryRoute: 'automatic_prompt_retrieval',
+      },
+    }, { signal });
+    const result = JSON.parse(serialized);
     if (!Array.isArray(result.hits) || result.hits.length === 0) {
       return `[MEMORY_SEARCH_ROUTING]\nmode=${routing.mode}\nreason=${routing.reason}\nresults=none`;
     }
@@ -577,7 +587,7 @@ function buildRetrievedMemoryContext(workspacePath: string, messageText: string,
       `reason=${routing.reason}`,
       `results=${result.hits.length}`,
       `[MEMORY_RETRIEVED]`,
-      ...result.hits.map((h) => {
+      ...result.hits.map((h: any) => {
         const citation = h.citation
           ? ` | citation=${h.citation.sourcePath}${h.citation.sourceStartLine ? `:${h.citation.sourceStartLine}` : ''} | authority=${h.citation.authority} | status=${h.citation.status}`
           : ` | source=${h.sourceType} | path=${h.sourcePath}`;
@@ -587,7 +597,11 @@ function buildRetrievedMemoryContext(workspacePath: string, messageText: string,
     ];
     return lines.join('\n');
   } catch (err: any) {
-    return `[MEMORY_SEARCH_ROUTING]\nmode=${routing.mode}\nreason=search_error\nerror=${String(err?.message || err)}`;
+    const message = String(err?.message || err);
+    const stopReason = err?.name === 'AbortError'
+      ? 'cancelled'
+      : /timed out/i.test(message) ? 'time_limit' : 'search_error';
+    return `[MEMORY_SEARCH_ROUTING]\nmode=${routing.mode}\nreason=${stopReason}\nresults=unavailable\nerror=${message}`;
   }
 }
 
@@ -1205,7 +1219,7 @@ export async function buildPersonalityContext(
     ? routeMemorySearchMode(messageText)
     : ({ mode: 'no_search', reason: 'execution_mode_skip' } as MemorySearchRouting);
   const retrievedMemoryCtx = allowLongTermSearch
-    ? buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
+    ? await buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
     : '';
   const cisContext = buildCisContextBlock(workspacePath, messageText, { force: isBusinessContextEnabled(sessionId) });
   const configSoul = loadSoul();

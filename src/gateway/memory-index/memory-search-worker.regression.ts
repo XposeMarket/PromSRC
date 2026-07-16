@@ -15,6 +15,7 @@ import {
   searchMemoryInWorker,
   shutdownMemorySearchWorker,
 } from './search-worker-client.js';
+import { buildRetrievedMemoryContext } from '../prompt-context.js';
 
 function idsAndCitations(serialized: string): { ids: string[]; citations: unknown[] } {
   const parsed = JSON.parse(serialized);
@@ -124,6 +125,17 @@ async function main(): Promise<void> {
     clearInterval(ticker);
     assert.ok(eventLoopTicks >= 40, `gateway event loop should remain responsive during 1.5s of child CPU work (ticks=${eventLoopTicks})`);
 
+    let promptTicks = 0;
+    const promptTicker = setInterval(() => { promptTicks += 1; }, 20);
+    const automaticContext = await buildRetrievedMemoryContext(
+      workspacePath,
+      '__PROMETHEUS_TEST_CPU__',
+      { mode: 'light_search', reason: 'worker_regression' },
+    );
+    clearInterval(promptTicker);
+    assert.match(automaticContext, /\[MEMORY_SEARCH_ROUTING\]/);
+    assert.ok(promptTicks >= 40, `automatic prompt retrieval must remain off the gateway event loop (ticks=${promptTicks})`);
+
     const projectLegacy = JSON.stringify(
       searchProjectMemory(workspacePath, 'atlas', 'command approvals', 10, { scheduleRefresh: false }),
       null,
@@ -192,6 +204,18 @@ async function main(): Promise<void> {
     queuedAbort.abort();
     await expectReject(queuedCancelled, /cancel/i);
     await queueLead;
+
+    const timeoutLead = searchMemoryInWorker('memory_search', {
+      workspacePath,
+      params: { ...params, query: '__PROMETHEUS_TEST_CPU__' },
+    });
+    const queuedTimeout = searchMemoryInWorker(
+      'memory_search',
+      { workspacePath, params },
+      { timeoutMs: 200 },
+    );
+    await expectReject(queuedTimeout, /timed out.*queued/i);
+    await timeoutLead;
 
     const queueA = searchMemoryInWorker('memory_search', { workspacePath, params });
     const queueB = searchMemoryInWorker('memory_search', { workspacePath, params });

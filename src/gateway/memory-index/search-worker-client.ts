@@ -29,6 +29,8 @@ interface QueuedSearch {
   resolve: (value: string) => void;
   reject: (error: Error) => void;
   abortListener?: () => void;
+  timeoutHandle?: NodeJS.Timeout;
+  deadlineAt: number;
   settled: boolean;
 }
 
@@ -52,8 +54,8 @@ function envBytes(name: string, fallback: number, minimum: number, maximum: numb
 }
 
 const workerEnabled = String(process.env.PROMETHEUS_MEMORY_SEARCH_WORKER || '1').trim() !== '0';
-const quickTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_QUICK_TIMEOUT_MS', 30_000, 5_000, 5 * 60_000);
-const deepTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_DEEP_TIMEOUT_MS', 90_000, 10_000, 10 * 60_000);
+const quickTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_QUICK_TIMEOUT_MS', 8_000, 1_000, 5 * 60_000);
+const deepTimeoutMs = envMs('PROMETHEUS_MEMORY_SEARCH_DEEP_TIMEOUT_MS', 15_000, 2_000, 10 * 60_000);
 const recycleRssBytes = envBytes('PROMETHEUS_MEMORY_SEARCH_RECYCLE_RSS_BYTES', 768 * 1024 * 1024, 128 * 1024 * 1024, 4 * 1024 * 1024 * 1024);
 const maxQueued = 2;
 const broker = new RuntimeWorkerBroker({
@@ -82,6 +84,7 @@ function abortError(message = 'Memory search was cancelled.'): Error {
 function settle(task: QueuedSearch, outcome: { value: string } | { error: Error }): void {
   if (task.settled) return;
   task.settled = true;
+  if (task.timeoutHandle) clearTimeout(task.timeoutHandle);
   if (task.signal && task.abortListener) task.signal.removeEventListener('abort', task.abortListener);
   if ('value' in outcome) task.resolve(outcome.value);
   else task.reject(outcome.error);
@@ -124,6 +127,16 @@ async function drainQueue(): Promise<void> {
         continue;
       }
       active = task;
+      const remainingMs = task.deadlineAt - Date.now();
+      if (remainingMs <= 0) {
+        settle(task, { error: new Error(`Memory search timed out after ${task.timeoutMs}ms (queue included).`) });
+        active = null;
+        continue;
+      }
+      if (task.timeoutHandle) {
+        clearTimeout(task.timeoutHandle);
+        task.timeoutHandle = undefined;
+      }
       let cancelled = false;
       const onActiveAbort = () => {
         cancelled = true;
@@ -136,7 +149,7 @@ async function drainQueue(): Promise<void> {
         if (task.signal.aborted) onActiveAbort();
       }
       try {
-        const result = await broker.run<MemorySearchWorkerResult>(task.kind, task.payload, task.timeoutMs);
+        const result = await broker.run<MemorySearchWorkerResult>(task.kind, task.payload, remainingMs);
         if (cancelled || task.signal?.aborted) {
           settle(task, { error: abortError() });
           await recycleWorker();
@@ -196,6 +209,7 @@ export function searchMemoryInWorker(
       payload,
       timeoutMs,
       signal: options.signal,
+      deadlineAt: Date.now() + timeoutMs,
       resolve,
       reject,
       settled: false,
@@ -210,6 +224,13 @@ export function searchMemoryInWorker(
       task.abortListener = onQueuedAbort;
       task.signal.addEventListener('abort', onQueuedAbort, { once: true });
     }
+    task.timeoutHandle = setTimeout(() => {
+      if (active === task || task.settled) return;
+      const index = queue.indexOf(task);
+      if (index >= 0) queue.splice(index, 1);
+      settle(task, { error: new Error(`Memory search timed out after ${timeoutMs}ms while queued.`) });
+    }, timeoutMs);
+    task.timeoutHandle.unref?.();
     queue.push(task);
     scheduleDrain();
   });
