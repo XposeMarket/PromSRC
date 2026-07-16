@@ -26,7 +26,7 @@ import {
 } from '../config/config';
 import { getVault } from '../security/vault';
 import { getOllamaClient } from '../agents/ollama-client';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions } from './session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, flushAllSessions } from './session';
 import { hookBus } from './hooks';
 import { loadWorkspaceHooks } from './hook-loader';
 import { runBootMd } from './boot';
@@ -880,10 +880,7 @@ setShutdownHooks({
     } catch { resolve(); }
   }),
   flushSessions: () => {
-    try {
-      const { flushSession } = require('./session');
-      // Flush is best-effort — sessions auto-save on debounce already
-    } catch {}
+    try { flushAllSessions(); } catch {}
   },
 });
 
@@ -963,6 +960,9 @@ function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): void {
   try { stopAgentSchedules(); } catch {}
   try { heartbeatRunner.stop(); } catch {}
   try { brainRunner.stop(); } catch {}
+  try { flushAllSessions(); } catch (err: any) {
+    console.warn('[Gateway] Session flush failed:', err?.message || err);
+  }
   void shutdownMemoryIndexRefreshWorker().catch(() => undefined);
   try { if (wss) wss.close(); } catch {}
   try { secureBundle?.wss.close(); } catch {}

@@ -329,6 +329,12 @@ const AUTO_SESSION_ID_RE = /^(task_|cron_|brain_|auto_)/i;
 const INTERNAL_SESSION_ID_RE = /^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_)/i;
 const SESSION_SAVE_DEBOUNCE_MS = 500;
 const sessionSaveTimers = new Map<string, NodeJS.Timeout>();
+const sessionSaveRevisions = new Map<string, number>();
+const pendingSessionSnapshots = new Map<string, number>();
+const sessionPersistenceIdleWaiters = new Set<() => void>();
+let sessionSnapshotDrainScheduled = false;
+let sessionSnapshotDrainActive = false;
+let sessionIndexRevision = 0;
 const sessionMutationScopes = new Map<string, SessionMutationScope>();
 let sessionIndexCache: SessionIndex | null = null;
 let sessionIndexCommandTitleRebuildAttempted = false;
@@ -825,6 +831,7 @@ function saveSessionIndex(index: SessionIndex): void {
   ensureSessionDir();
   index.updatedAt = Date.now();
   sessionIndexCache = index;
+  sessionIndexRevision += 1;
   fs.writeFileSync(sessionIndexPath(), JSON.stringify(index, null, 2), 'utf-8');
 }
 
@@ -1003,7 +1010,7 @@ function buildSessionSummary(session: Session): SessionSummary {
   };
 }
 
-function upsertSessionSummary(session: Session): void {
+function updateSessionSummaryInMemory(session: Session): SessionIndex {
   const index = loadSessionIndex();
   const summary = buildSessionSummary(session);
   const shouldIndex = summary.messageCount > 0 || !!summary.pinnedAt;
@@ -1012,6 +1019,13 @@ function upsertSessionSummary(session: Session): void {
   } else {
     delete index.summaries[summary.id];
   }
+  index.updatedAt = Date.now();
+  sessionIndexCache = index;
+  return index;
+}
+
+function upsertSessionSummary(session: Session): void {
+  const index = updateSessionSummaryInMemory(session);
   saveSessionIndex(index);
 }
 
@@ -2504,26 +2518,89 @@ function scrubSession(session: Session): Session {
   };
 }
 
+function resolveSessionPersistenceIdleWaiters(): void {
+  if (sessionSnapshotDrainActive || sessionSnapshotDrainScheduled || pendingSessionSnapshots.size) return;
+  for (const resolve of sessionPersistenceIdleWaiters) resolve();
+  sessionPersistenceIdleWaiters.clear();
+}
+
+function scheduleSessionSnapshotDrain(): void {
+  if (sessionSnapshotDrainScheduled || sessionSnapshotDrainActive) return;
+  sessionSnapshotDrainScheduled = true;
+  setImmediate(() => {
+    sessionSnapshotDrainScheduled = false;
+    void drainSessionSnapshots();
+  });
+}
+
+function enqueueSessionSnapshot(id: string, revision: number): void {
+  const existing = pendingSessionSnapshots.get(id) || 0;
+  if (revision > existing) pendingSessionSnapshots.set(id, revision);
+  scheduleSessionSnapshotDrain();
+}
+
+async function drainSessionSnapshots(): Promise<void> {
+  if (sessionSnapshotDrainActive) return;
+  sessionSnapshotDrainActive = true;
+  try {
+    while (pendingSessionSnapshots.size) {
+      const next = pendingSessionSnapshots.entries().next().value as [string, number] | undefined;
+      if (!next) break;
+      const [id, revision] = next;
+      pendingSessionSnapshots.delete(id);
+      const latest = sessions.get(id);
+      if (!latest || Number(sessionSaveRevisions.get(id) || 0) !== revision) continue;
+
+      latest.lastAssistantAt = getLastAssistantTimestamp(latest.history);
+      applyAutoSessionTitleOnce(latest);
+      ensureSessionDir();
+      const sessionJson = JSON.stringify(scrubSession(latest));
+      const index = updateSessionSummaryInMemory(latest);
+      const indexWriteRevision = ++sessionIndexRevision;
+      const indexJson = JSON.stringify(index);
+      const sessionPath = getSessionPath(id);
+      const indexPath = sessionIndexPath();
+      const sessionTempPath = `${sessionPath}.${process.pid}.${revision}.tmp`;
+      const indexTempPath = `${indexPath}.${process.pid}.${indexWriteRevision}.tmp`;
+      try {
+        await Promise.all([
+          fs.promises.writeFile(sessionTempPath, sessionJson, 'utf-8'),
+          fs.promises.writeFile(indexTempPath, indexJson, 'utf-8'),
+        ]);
+        if (Number(sessionSaveRevisions.get(id) || 0) !== revision) continue;
+        await fs.promises.rename(sessionTempPath, sessionPath);
+        if (sessionIndexRevision === indexWriteRevision) {
+          await fs.promises.rename(indexTempPath, indexPath);
+        }
+      } catch (err) {
+        console.warn(`[session] Failed to save session ${id}:`, err);
+      } finally {
+        await Promise.all([
+          fs.promises.rm(sessionTempPath, { force: true }).catch(() => undefined),
+          fs.promises.rm(indexTempPath, { force: true }).catch(() => undefined),
+        ]);
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  } finally {
+    sessionSnapshotDrainActive = false;
+    if (pendingSessionSnapshots.size) scheduleSessionSnapshotDrain();
+    resolveSessionPersistenceIdleWaiters();
+  }
+}
+
 function saveSession(id: string): void {
   const session = sessions.get(id);
   if (!session) return;
+  const revision = Number(sessionSaveRevisions.get(id) || 0) + 1;
+  sessionSaveRevisions.set(id, revision);
 
   const existing = sessionSaveTimers.get(id);
   if (existing) clearTimeout(existing);
 
   const timer = setTimeout(() => {
     sessionSaveTimers.delete(id);
-    const latest = sessions.get(id);
-    if (!latest) return;
-    latest.lastAssistantAt = getLastAssistantTimestamp(latest.history);
-    applyAutoSessionTitleOnce(latest);
-    ensureSessionDir();
-    try {
-      fs.writeFileSync(getSessionPath(id), JSON.stringify(scrubSession(latest), null, 2));
-      upsertSessionSummary(latest);
-    } catch (err) {
-      console.warn(`[session] Failed to save session ${id}:`, err);
-    }
+    enqueueSessionSnapshot(id, revision);
   }, SESSION_SAVE_DEBOUNCE_MS);
   if (typeof (timer as any).unref === 'function') {
     (timer as any).unref();
@@ -2537,6 +2614,9 @@ export function flushSession(id: string): void {
     clearTimeout(existing);
     sessionSaveTimers.delete(id);
   }
+  pendingSessionSnapshots.delete(id);
+  const revision = Number(sessionSaveRevisions.get(id) || 0) + 1;
+  sessionSaveRevisions.set(id, revision);
   const session = sessions.get(id);
   if (!session) return;
   session.lastAssistantAt = getLastAssistantTimestamp(session.history);
@@ -2669,6 +2749,37 @@ export function expireScopedToolCategoryActivations(id: string): void {
   if (pruneScopedToolCategoryActivations(session)) {
     saveSession(id);
   }
+}
+
+export function flushAllSessions(): void {
+  for (const id of sessions.keys()) flushSession(id);
+}
+
+export function flushPendingSessionWrites(): Promise<void> {
+  for (const [id, timer] of sessionSaveTimers) {
+    clearTimeout(timer);
+    sessionSaveTimers.delete(id);
+    enqueueSessionSnapshot(id, Number(sessionSaveRevisions.get(id) || 0));
+  }
+  if (!sessionSnapshotDrainActive && !sessionSnapshotDrainScheduled && pendingSessionSnapshots.size === 0) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    sessionPersistenceIdleWaiters.add(resolve);
+    scheduleSessionSnapshotDrain();
+  });
+}
+
+export function getSessionPersistenceStatus(): {
+  pending: number;
+  active: boolean;
+  scheduled: boolean;
+} {
+  return {
+    pending: pendingSessionSnapshots.size + sessionSaveTimers.size,
+    active: sessionSnapshotDrainActive,
+    scheduled: sessionSnapshotDrainScheduled,
+  };
 }
 
 export function setActivatedToolCategories(id: string, categories: string[]): void {
