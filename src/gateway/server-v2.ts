@@ -177,6 +177,7 @@ import { createApp } from './core/app';
 import { createServer } from './core/server';
 import { runStartup } from './core/startup';
 import { scheduleMemoryIndexRefresh, shutdownMemoryIndexRefreshWorker } from './memory-index/index';
+import { shutdownMemorySearchWorker } from './memory-index/search-worker-client';
 import { requireGatewayAuth } from './gateway-auth';
 import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
 import {
@@ -864,7 +865,10 @@ setShutdownHooks({
   stopBrain: () => brainRunner.stop(),
   stopRuntimeWorkers: () => {
     stopThreadSupervisionRunner();
-    return shutdownMemoryIndexRefreshWorker();
+    return Promise.all([
+      shutdownMemorySearchWorker(),
+      shutdownMemoryIndexRefreshWorker(),
+    ]).then(() => undefined);
   },
   closeWebSocket: () => { try { wss.close(); } catch {}; try { secureBundle?.wss.close(); } catch {}; try { xaiVoiceStreaming.close(); } catch {}; try { secureXaiVoiceStreaming?.close(); } catch {}; try { openAiRealtimeProxy.close(); } catch {}; try { secureOpenAiRealtimeProxy?.close(); } catch {} },
   closeHttpServer: () => new Promise<void>((resolve) => {

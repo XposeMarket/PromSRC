@@ -11,6 +11,10 @@ import {
   searchMemoryTimeline,
   searchProjectMemory,
 } from '../../memory-index/index';
+import {
+  isMemorySearchWorkerEnabled,
+  searchMemoryInWorker,
+} from '../../memory-index/search-worker-client';
 import { getMemoryEmbeddingStatus } from '../../memory/embeddings/registry';
 import { getMemoryProviderStatus } from '../../memory/providers/registry';
 import { consolidateMemory, listMemoryClaims, reviewMemoryClaim } from '../../memory/consolidation/runner';
@@ -270,7 +274,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           const sourceTypes = Array.isArray(args.source_types)
             ? args.source_types.map((v: any) => String(v || '').trim()).filter(Boolean)
             : undefined;
-          const out = await searchMemoryIndexAsync(workspacePath, {
+          const params = {
             query,
             mode: mode as any,
             limit: Number(args.limit || 8),
@@ -282,8 +286,14 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
             debug: args.debug === true,
             rerank: args.rerank !== false,
             queryRoute: String(args.query_route || 'tool_manual'),
-          });
-          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+          };
+          if (ctx.deps.abortSignal?.aborted || ctx.deps.abortSignal?.signal?.aborted) {
+            return { name, args, result: 'memory_search cancelled before execution', error: true };
+          }
+          const result = isMemorySearchWorkerEnabled()
+            ? await searchMemoryInWorker('memory_search', { workspacePath, params }, { signal: ctx.deps.abortSignal?.signal })
+            : JSON.stringify(await searchMemoryIndexAsync(workspacePath, params), null, 2);
+          return { name, args, result, error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search failed: ${String(err?.message || err)}`, error: true };
         }
@@ -307,7 +317,18 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           const query = String(args.query || '').trim();
           if (!projectId) return { name, args, result: 'memory_search_project: project_id is required', error: true };
           if (!query) return { name, args, result: 'memory_search_project: query is required', error: true };
-          return { name, args, result: JSON.stringify(searchProjectMemory(workspacePath, projectId, query, Number(args.limit || 10)), null, 2), error: false };
+          if (ctx.deps.abortSignal?.aborted || ctx.deps.abortSignal?.signal?.aborted) {
+            return { name, args, result: 'memory_search_project cancelled before execution', error: true };
+          }
+          const result = isMemorySearchWorkerEnabled()
+            ? await searchMemoryInWorker('memory_search_project', {
+                workspacePath,
+                projectId,
+                query,
+                limit: Number(args.limit || 10),
+              }, { signal: ctx.deps.abortSignal?.signal })
+            : JSON.stringify(searchProjectMemory(workspacePath, projectId, query, Number(args.limit || 10)), null, 2);
+          return { name, args, result, error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search_project failed: ${String(err?.message || err)}`, error: true };
         }
@@ -317,14 +338,22 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         try {
           const query = String(args.query || '').trim();
           if (!query) return { name, args, result: 'memory_search_timeline: query is required', error: true };
-          const out = searchMemoryTimeline(
-            workspacePath,
-            query,
-            args.date_from ? String(args.date_from) : undefined,
-            args.date_to ? String(args.date_to) : undefined,
-            Number(args.limit || 20),
-          );
-          return { name, args, result: JSON.stringify(out, null, 2), error: false };
+          if (ctx.deps.abortSignal?.aborted || ctx.deps.abortSignal?.signal?.aborted) {
+            return { name, args, result: 'memory_search_timeline cancelled before execution', error: true };
+          }
+          const dateFrom = args.date_from ? String(args.date_from) : undefined;
+          const dateTo = args.date_to ? String(args.date_to) : undefined;
+          const limit = Number(args.limit || 20);
+          const result = isMemorySearchWorkerEnabled()
+            ? await searchMemoryInWorker('memory_search_timeline', {
+                workspacePath,
+                query,
+                dateFrom,
+                dateTo,
+                limit,
+              }, { signal: ctx.deps.abortSignal?.signal })
+            : JSON.stringify(searchMemoryTimeline(workspacePath, query, dateFrom, dateTo, limit), null, 2);
+          return { name, args, result, error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search_timeline failed: ${String(err?.message || err)}`, error: true };
         }

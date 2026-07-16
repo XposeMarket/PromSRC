@@ -59,6 +59,10 @@ export interface MemorySearchParams {
   queryRoute?: string;
 }
 
+export interface MemorySearchExecutionOptions {
+  scheduleRefresh?: boolean;
+}
+
 export interface MemorySearchHit {
   rank: number;
   score: number;
@@ -1049,12 +1053,18 @@ function toOperationalMemoryHit(hit: any): MemorySearchHit {
   };
 }
 
-export function searchMemoryIndex(workspacePath: string, params: MemorySearchParams): MemorySearchResult {
+export function searchMemoryIndex(
+  workspacePath: string,
+  params: MemorySearchParams,
+  executionOptions: MemorySearchExecutionOptions = {},
+): MemorySearchResult {
   const startedAt = Date.now();
   const phases: Record<string, number> = {};
   const markPhase = (name: string, phaseStartedAt: number) => { phases[name] = Math.max(0, Date.now() - phaseStartedAt); };
   const refreshStartedAt = Date.now();
-  scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 15000, maxChangedFiles: 120 });
+  if (executionOptions.scheduleRefresh !== false) {
+    scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 15000, maxChangedFiles: 120 });
+  }
   markPhase('schedule_refresh_ms', refreshStartedAt);
   try {
     const sqliteStartedAt = Date.now();
@@ -1175,12 +1185,18 @@ export function searchMemoryIndex(workspacePath: string, params: MemorySearchPar
   };
 }
 
-export async function searchMemoryIndexAsync(workspacePath: string, params: MemorySearchParams): Promise<MemorySearchResult> {
+export async function searchMemoryIndexAsync(
+  workspacePath: string,
+  params: MemorySearchParams,
+  executionOptions: MemorySearchExecutionOptions = {},
+): Promise<MemorySearchResult> {
   const startedAt = Date.now();
   const phases: Record<string, number> = {};
   const markPhase = (name: string, phaseStartedAt: number) => { phases[name] = Math.max(0, Date.now() - phaseStartedAt); };
   const refreshStartedAt = Date.now();
-  scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 15000, maxChangedFiles: 120 });
+  if (executionOptions.scheduleRefresh !== false) {
+    scheduleMemoryIndexRefresh(workspacePath, { minIntervalMs: 15000, maxChangedFiles: 120 });
+  }
   markPhase('schedule_refresh_ms', refreshStartedAt);
   let sqliteError = '';
   const sqliteStartedAt = Date.now();
@@ -1213,7 +1229,7 @@ export async function searchMemoryIndexAsync(workspacePath: string, params: Memo
   if (sqliteStateBefore.disabled) sqliteError = sqliteStateBefore.reason || 'sqlite disabled for process';
   else if (sqliteStateAfter.disabled && !sqliteError) sqliteError = sqliteStateAfter.reason || 'sqlite disabled for process';
   const jsonStartedAt = Date.now();
-  const fallback = searchMemoryIndex(workspacePath, params);
+  const fallback = searchMemoryIndex(workspacePath, params, { scheduleRefresh: false });
   markPhase('json_fallback_ms', jsonStartedAt);
   const stats: any = fallback.stats || {};
   return {
@@ -1253,12 +1269,25 @@ export function readMemoryRecord(workspacePath: string, recordId: string): Resol
   };
 }
 
-export function searchProjectMemory(workspacePath: string, projectId: string, query: string, limit = 10): MemorySearchResult {
-  return searchMemoryIndex(workspacePath, { mode: 'project', projectId, query, limit });
+export function searchProjectMemory(
+  workspacePath: string,
+  projectId: string,
+  query: string,
+  limit = 10,
+  executionOptions: MemorySearchExecutionOptions = {},
+): MemorySearchResult {
+  return searchMemoryIndex(workspacePath, { mode: 'project', projectId, query, limit }, executionOptions);
 }
 
-export function searchMemoryTimeline(workspacePath: string, query: string, dateFrom?: string, dateTo?: string, limit = 20): MemorySearchResult {
-  return searchMemoryIndex(workspacePath, { mode: 'timeline', query, dateFrom, dateTo, limit });
+export function searchMemoryTimeline(
+  workspacePath: string,
+  query: string,
+  dateFrom?: string,
+  dateTo?: string,
+  limit = 20,
+  executionOptions: MemorySearchExecutionOptions = {},
+): MemorySearchResult {
+  return searchMemoryIndex(workspacePath, { mode: 'timeline', query, dateFrom, dateTo, limit }, executionOptions);
 }
 
 export function getMemoryGraphSnapshot(workspacePath: string): { generatedAt: string; nodeCount: number; edgeCount: number; nodes: any[]; edges: any[] } {
