@@ -20,6 +20,7 @@ assert.match(api, /const _sessionRequests = new Map\(\)/, 'session hydration req
 assert.match(api, /fullProcess=1&_fresh=1/, 'forced recovery hydration must request complete process entries');
 assert.match(router, /const fullProcess = full \|\| req\.query\.fullProcess/, 'session API must support full process recovery');
 assert.match(router, /processEntries: checkpointProcessEntries/, 'active runtime status must expose its durable tool checkpoint');
+assert.match(router, /clientRequestId: runtime\?\.clientRequestId/, 'active runtime status must expose stable turn identity across reconnects');
 
 assert.match(pages, /let mobileRecoveryInFlight = null/, 'mobile recovery must be single-flight');
 assert.match(pages, /aiTurn\._pmFinalReceived = true/, 'a displayed final response must become a monotonic recovery boundary');
@@ -27,6 +28,21 @@ assert.match(
   pages,
   /if \(targetAiTurn\?\._pmFinalReceived && _mobileAssistantHasVisibleAnswer\(targetAiTurn\)\)/,
   'a late disconnect callback must not replace an already-received final response',
+);
+assert.match(
+  pages,
+  /const active = msg\?\.streaming === true && msg\?\._pmFinalReceived !== true/,
+  'the final frame must switch the work timer to its completed expandable state before transport cleanup',
+);
+assert.match(
+  pages,
+  /const completedTraceEntries = \(!m\.streaming \|\| finalFrameReceived\) \? _mobileWorkflowTraceEntriesForMessage\(m\) : \[\]/,
+  'a final response must expose its preserved tool trace in the completed disclosure immediately',
+);
+assert.match(
+  pages,
+  /aiTurn\._pmFinalReceived = true;[\s\S]{0,180}aiTurn\.workEndedAt = Number\(aiTurn\.workEndedAt \|\| Date\.now\(\)\)/,
+  'the final frame must freeze the displayed work duration',
 );
 assert.match(
   pages,
@@ -44,7 +60,36 @@ assert.match(
   'SSE teardown after a final frame must not be reported as a disconnect',
 );
 assert.match(pages, /if \(!initialSessionLoadPending\)/, 'cold hydration and recovery must not start as competing loads');
-assert.match(pages, /let shouldResetForReplay = fullRefresh\s*\|\| isColdReopen/, 'foreground/full recovery must replay from the beginning');
+assert.match(
+  pages,
+  /const canPreserveLocalTimeline = hasLocalLiveHistory && !localRunIdentityConflicts/,
+  'recovery must recognize a richer local timeline that belongs to the active turn',
+);
+assert.match(
+  pages,
+  /let shouldResetForReplay = !canPreserveLocalTimeline\s*&& \(fullRefresh \|\| isColdReopen \|\| force \|\| !hasLocalLiveHistory\)/,
+  'foreground/full recovery must not destructively reset a valid local timeline',
+);
+assert.match(
+  pages,
+  /shouldResetForReplay = !canPreserveLocalTimeline;[\s\S]{0,180}replayAfter = 0/,
+  'a replacement stream or replay gap must reset the sequence cursor without necessarily erasing visible history',
+);
+assert.match(
+  router,
+  /appendRuntimeNarrationBoundary\(runtimeProcessEntries, runtimeNarrationTail\)/,
+  'durable runtime checkpoints must retain narration boundaries between tool groups',
+);
+assert.match(
+  pages,
+  /event === 'runner_idle'\s*&& status !== 'restarting'/,
+  'runner idle must reconcile stale mobile activity without clearing a legitimate planned restart',
+);
+assert.match(
+  pages,
+  /_clearMobileLiveRunForSession\(requestedSession\);[\s\S]{0,240}const history = Array\.isArray\(session\?\.history\)/,
+  'inactive run recovery must clear the cached streaming turn before merging persisted history',
+);
 assert.match(pages, /addEventListener\('pageshow', runRecoveryOnReturn\)/, 'bfcache/app resume must trigger recovery');
 assert.match(pages, /_saveMobileThreadCache\(requestedSession, _activeMobileThread\(\)\)/, 'recovered live trace must survive a hard reload');
 assert.match(pages, /\.filter\(_isMobileMessageCacheable\)/, 'in-progress trace messages must be cacheable');

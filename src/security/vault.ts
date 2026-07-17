@@ -35,6 +35,10 @@ const KEY_DIGEST  = 'sha512';
 const VAULT_FILE  = 'vault.enc';
 const MASTER_FILE = 'vault.key';
 const AUDIT_FILE  = 'vault-audit.log';
+const AUDIT_BACKUP_FILE = `${AUDIT_FILE}.1`;
+const AUDIT_MAX_BYTES = 10 * 1024 * 1024;
+const AUDIT_SIZE_CHECK_INTERVAL_MS = 30_000;
+const DERIVED_KEY_CACHE_MAX_ENTRIES = 256;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -187,6 +191,8 @@ export class SecretVault {
   private readonly auditPath: string;
   private masterKey: Buffer | null = null;
   private data: VaultMetadata = { version: 1, entries: {} };
+  private derivedKeyCache = new Map<string, { at: number; key: Buffer }>();
+  private lastAuditSizeCheckAt = 0;
 
   constructor(configDir: string) {
     const vaultDir = path.join(configDir, 'vault');
@@ -224,7 +230,44 @@ export class SecretVault {
   }
 
   private deriveKey(salt: Buffer): Buffer {
-    return crypto.pbkdf2Sync(this.masterKey!, salt, KEY_ITERS, KEY_BYTES, KEY_DIGEST);
+    const cacheKey = salt.toString('hex');
+    const cached = this.derivedKeyCache.get(cacheKey);
+    if (cached) {
+      // Refresh insertion order so the bounded map behaves like an LRU cache.
+      this.derivedKeyCache.delete(cacheKey);
+      this.derivedKeyCache.set(cacheKey, cached);
+      return cached.key;
+    }
+    const derived = crypto.pbkdf2Sync(this.masterKey!, salt, KEY_ITERS, KEY_BYTES, KEY_DIGEST);
+    this.derivedKeyCache.set(cacheKey, { at: Date.now(), key: derived });
+    while (this.derivedKeyCache.size > DERIVED_KEY_CACHE_MAX_ENTRIES) {
+      const oldest = this.derivedKeyCache.keys().next().value;
+      if (!oldest) break;
+      this.derivedKeyCache.delete(oldest);
+    }
+    return derived;
+  }
+
+  /**
+   * Derive keys for the encrypted entries before the gateway starts listening.
+   * This caches key material only (never plaintext credentials) and moves the
+   * intentionally expensive legacy PBKDF2 work out of live request handling.
+   */
+  prewarmDerivedKeys(): { entries: number; warmed: number; durationMs: number } {
+    const startedAt = Date.now();
+    this.refreshFromDisk();
+    const before = this.derivedKeyCache.size;
+    let entries = 0;
+    for (const entry of Object.values(this.data.entries)) {
+      if (!entry?.iv || (entry.expiresAt > 0 && Date.now() > entry.expiresAt)) continue;
+      entries++;
+      this.deriveKey(Buffer.from(entry.iv, 'hex'));
+    }
+    return {
+      entries,
+      warmed: Math.max(0, this.derivedKeyCache.size - before),
+      durationMs: Date.now() - startedAt,
+    };
   }
 
   // ── Crypto ────────────────────────────────────────────────────────────────
@@ -283,9 +326,25 @@ export class SecretVault {
 
   // ── Audit ─────────────────────────────────────────────────────────────────
 
+  private maybeRotateAuditLog(now = Date.now()): void {
+    if (now - this.lastAuditSizeCheckAt < AUDIT_SIZE_CHECK_INTERVAL_MS) return;
+    this.lastAuditSizeCheckAt = now;
+    try {
+      if (!fs.existsSync(this.auditPath) || fs.statSync(this.auditPath).size < AUDIT_MAX_BYTES) return;
+      const backupPath = path.join(path.dirname(this.auditPath), AUDIT_BACKUP_FILE);
+      try { fs.rmSync(backupPath, { force: true }); } catch {}
+      fs.renameSync(this.auditPath, backupPath);
+    } catch {
+      // Audit rotation must never make credential access fail.
+    }
+  }
+
   private audit(action: string, key: string, caller: string): void {
     const line = `${new Date().toISOString()} | ${action.padEnd(8)} | key=${key} | caller=${caller}\n`;
-    try { fs.appendFileSync(this.auditPath, line); } catch { /* must not break call */ }
+    try {
+      this.maybeRotateAuditLog();
+      fs.appendFileSync(this.auditPath, line);
+    } catch { /* must not break call */ }
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
@@ -378,6 +437,7 @@ export class SecretVault {
   /** Factory-reset: wipe all entries */
   clear(caller = 'unknown'): void {
     this.data = { version: 1, entries: {} };
+    this.derivedKeyCache.clear();
     this.persist({ mergeExisting: false });
     this.audit('CLEAR', '*', caller);
   }

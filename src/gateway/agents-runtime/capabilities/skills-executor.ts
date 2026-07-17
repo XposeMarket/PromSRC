@@ -57,14 +57,18 @@ export interface SkillMetadataAudit {
   kind: string;
   score: number;
   issues: string[];
+  informational: string[];
   description: string;
   triggers: string[];
   hasManifestOverlay: boolean;
   lifecycle: string;
   compatibilityEntry: boolean;
+  explicitOnly: boolean;
 }
 
 const PLACEHOLDER_DESCRIPTION_RE = /^(\(no description\)|tbd|todo|placeholder|description|skill|n\/a|none)\.?$/i;
+const USAGE_GUIDANCE_RE = /\b(?:use(?:\s+(?:this\s+skill|this|it))?(?:\s+only)?\s+(?:when|whenever|for|before)|invoke(?:\s+(?:this\s+skill|this|it))?\s+when|triggers?\s+(?:on|when)|designed\s+for|only\s+when|when(?:ever)?\s+(?:the\s+)?user|for\s+any\s+request|if\s+(?:the\s+)?user)\b/i;
+const LEADING_WORKFLOW_PURPOSE_RE = /^(?:apply|audit|author|build|call|close|create|design|enforce|find|handle|port|turn)\b/i;
 
 // Pure metadata-quality scorer. Returns issues + a 0-100 score so fleet tools
 // can flag skills whose triggers/descriptions will route poorly, without any
@@ -75,9 +79,11 @@ export function scoreSkillMetadata(skill: any): SkillMetadataAudit {
     ? skill.triggers.map((t: any) => String(t || '').trim()).filter(Boolean)
     : [];
   const issues: string[] = [];
+  const informational: string[] = [];
   const lifecycle = String(skill?.lifecycle || 'active').toLowerCase();
   const compatibilityEntry = ['deprecated', 'archived', 'compatibility', 'redirect', 'redirect-only'].includes(lifecycle)
     || /compatibility|deprecated|redirect[- ]only/i.test(String(skill?.description || ''));
+  const explicitOnly = skill?.implicitInvocation === false;
   let score = 100;
 
   if (!description) {
@@ -92,15 +98,19 @@ export function scoreSkillMetadata(skill: any): SkillMetadataAudit {
       issues.push('description_too_short');
       score -= 20;
     }
-    if (!/\b(use (this|it)|triggers? on|use when|use for)\b/i.test(description)) {
+    if (!USAGE_GUIDANCE_RE.test(description) && !LEADING_WORKFLOW_PURPOSE_RE.test(description)) {
       issues.push('description_missing_usage_guidance');
       score -= 10;
     }
   }
 
   if (triggers.length === 0) {
-    issues.push('no_triggers');
-    score -= 40;
+    if (explicitOnly) {
+      informational.push('explicit_only_no_triggers');
+    } else {
+      issues.push('no_triggers');
+      score -= 40;
+    }
   } else {
     if (triggers.length < 3) {
       issues.push('too_few_triggers');
@@ -129,12 +139,22 @@ export function scoreSkillMetadata(skill: any): SkillMetadataAudit {
     kind: String(skill?.kind || 'simple'),
     score,
     issues,
+    informational,
     description,
     triggers,
     hasManifestOverlay: skill?.manifestSource === 'overlay' || !!skill?.overlayPath,
     lifecycle,
     compatibilityEntry,
+    explicitOnly,
   };
+}
+
+function countAuditLabels(audits: SkillMetadataAudit[], key: 'issues' | 'informational'): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const audit of audits) {
+    for (const label of audit[key]) counts[label] = (counts[label] || 0) + 1;
+  }
+  return counts;
 }
 
 export function skillMatchesScope(skill: any, scope: string): boolean {
@@ -851,6 +871,8 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
         const all = deps.skillsManager.getAll().filter((s: any) => skillMatchesScope(s, scope));
         const audits = all.map((s: any) => scoreSkillMetadata(s)).sort((a: SkillMetadataAudit, b: SkillMetadataAudit) => a.score - b.score);
         const activeAudits = audits.filter((a: SkillMetadataAudit) => !a.compatibilityEntry);
+        const discoverableAudits = activeAudits.filter((a: SkillMetadataAudit) => !a.explicitOnly);
+        const explicitOnlyAudits = activeAudits.filter((a: SkillMetadataAudit) => a.explicitOnly);
         const compatibilityAudits = audits.filter((a: SkillMetadataAudit) => a.compatibilityEntry);
         const flagged = activeAudits.filter((a: SkillMetadataAudit) => a.score < threshold || a.issues.length > 0);
         const list = onlyProblems ? flagged : activeAudits;
@@ -858,11 +880,15 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
           scope,
           totalScanned: all.length,
           flagged: flagged.length,
+          actionableDebt: flagged.length,
           threshold,
-          activeDiscoverableSkills: activeAudits.length,
+          activeDiscoverableSkills: discoverableAudits.length,
+          explicitOnlySkills: explicitOnlyAudits.length,
           compatibilityEntries: compatibilityAudits.length,
-          avgScore: activeAudits.length ? Math.round(activeAudits.reduce((n: number, a: SkillMetadataAudit) => n + a.score, 0) / activeAudits.length) : 100,
-          skills: list.map((a: SkillMetadataAudit) => ({ id: a.id, name: a.name, score: a.score, issues: a.issues })),
+          actionableIssueCounts: countAuditLabels(activeAudits, 'issues'),
+          informationalStatusCounts: countAuditLabels(activeAudits, 'informational'),
+          avgScore: discoverableAudits.length ? Math.round(discoverableAudits.reduce((n: number, a: SkillMetadataAudit) => n + a.score, 0) / discoverableAudits.length) : 100,
+          skills: list.map((a: SkillMetadataAudit) => ({ id: a.id, name: a.name, score: a.score, issues: a.issues, informational: a.informational })),
         };
         return { name, args, result: JSON.stringify(summary, null, 2), error: false };
       }
@@ -907,22 +933,46 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
             return { name, args, result: 'skill_repair_metadata: apply mode requires confirm:true. Run mode:"preview" first to inspect the proposed patch set.', error: true };
           }
           if (!repairs.length) {
-            return { name, args, result: 'skill_repair_metadata: apply mode requires a repairs array of {id, description?, triggers?, categories?, requiredTools?, lifecycle?, name?} objects (typically the edited preview set).', error: true };
+            return { name, args, result: 'skill_repair_metadata: apply mode requires a repairs array of {id, description?, triggers?, triggerPositivePrompts?, triggerNegativePrompts?, categories?, requiredTools?, lifecycle?, name?} objects (typically the edited preview set).', error: true };
+          }
+          const planned: Array<{ repair: any; skill: any; manifest: Record<string, unknown> }> = [];
+          const preflightFailures: any[] = [];
+          for (const repair of repairs) {
+            const rid = String(repair?.id || '').trim();
+            if (!rid) { preflightFailures.push({ id: rid, error: 'missing id' }); continue; }
+            const skill = deps.skillsManager.get(rid);
+            if (!skill) { preflightFailures.push({ id: rid, error: 'not found' }); continue; }
+            const manifest = buildMetadataManifest(skill, repair);
+            if (!manifest) { preflightFailures.push({ id: rid, error: 'no changes' }); continue; }
+            if (Object.prototype.hasOwnProperty.call(manifest, 'triggers')) {
+              const positive = splitCsv(repair.triggerPositivePrompts || repair.trigger_positive_prompts);
+              const negative = splitCsv(repair.triggerNegativePrompts || repair.trigger_negative_prompts);
+              if (!positive.length || !negative.length) {
+                preflightFailures.push({ id: rid, error: 'trigger changes require triggerPositivePrompts and triggerNegativePrompts' });
+                continue;
+              }
+            }
+            planned.push({ repair, skill, manifest });
+          }
+          if (preflightFailures.length) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({ mode: 'apply', applied: 0, failed: preflightFailures.length, preflight: true, errors: preflightFailures }, null, 2),
+              error: true,
+            };
           }
           const applied: any[] = [];
           const failed: any[] = [];
-          for (const r of repairs) {
-            const rid = String(r?.id || '').trim();
-            if (!rid) { failed.push({ id: rid, error: 'missing id' }); continue; }
-            const sk = deps.skillsManager.get(rid);
-            if (!sk) { failed.push({ id: rid, error: 'not found' }); continue; }
-            const manifest = buildMetadataManifest(sk, r);
-            if (!manifest) { failed.push({ id: rid, error: 'no changes' }); continue; }
+          for (const { repair, skill, manifest } of planned) {
+            const rid = String(skill.id || repair.id || '').trim();
             try {
               const updated = deps.skillsManager.writeManifestOverlay(rid, manifest, {
                 changeType: 'metadata_repair',
                 appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
                 reason: args.reason ? String(args.reason) : 'bulk metadata repair',
+                triggerPositivePrompts: splitCsv(repair.triggerPositivePrompts || repair.trigger_positive_prompts),
+                triggerNegativePrompts: splitCsv(repair.triggerNegativePrompts || repair.trigger_negative_prompts),
               });
               applied.push({ id: updated.id, fields: Object.keys(manifest), score: scoreSkillMetadata(updated).score });
             } catch (e: any) {
@@ -948,13 +998,17 @@ export const skillsCapabilityExecutor: CapabilityExecutor = {
           issues: audit.issues,
           currentDescription: audit.description,
           currentTriggers: audit.triggers,
+          triggerEvaluationRequired: audit.issues.some((issue) => issue === 'no_triggers' || issue === 'too_few_triggers' || issue === 'duplicate_triggers' || issue === 'weak_short_trigger'),
+          triggerChangeBlocked: audit.issues.some((issue) => issue === 'no_triggers' || issue === 'too_few_triggers' || issue === 'duplicate_triggers' || issue === 'weak_short_trigger'),
           // Fill these in, then resend with mode:"apply", confirm:true, repairs:[...]
           description: '',
           triggers: '',
+          triggerPositivePrompts: [],
+          triggerNegativePrompts: [],
         }));
         return {
           name, args,
-          result: `${JSON.stringify({ mode: 'preview', scope, flagged: template.length, threshold, repairs: template }, null, 2)}\n\nTo apply: edit description/triggers in each repair entry, then call skill_repair_metadata({mode:"apply", confirm:true, repairs:[...]}).`,
+          result: `${JSON.stringify({ mode: 'preview', scope, flagged: template.length, threshold, repairs: template }, null, 2)}\n\nTo apply: edit the reviewed fields in each repair entry. Any trigger change remains blocked until that entry includes triggerPositivePrompts and triggerNegativePrompts, then call skill_repair_metadata({mode:"apply", confirm:true, repairs:[...]}).`,
           error: false,
         };
       }

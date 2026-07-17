@@ -30,6 +30,15 @@ const CODEX_REQUEST_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_REQUEST_TIMEOUT_MS', 90
 const CODEX_STREAM_IDLE_TIMEOUT_MS = envMs('PROMETHEUS_CODEX_STREAM_IDLE_TIMEOUT_MS', 300_000, 60_000);
 const DEFAULT_CODEX_INSTRUCTIONS = 'You are Prometheus, a helpful AI assistant. Answer the user directly and follow the conversation context.';
 
+export class CodexIncompleteStreamError extends Error {
+  readonly code = 'CODEX_INCOMPLETE_STREAM';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'CodexIncompleteStreamError';
+  }
+}
+
 // Models available via Codex OAuth (latest first; official OpenAI IDs only).
 // GPT-5.6 preview models are limited-access IDs published by OpenAI for API and Codex.
 // Keep GPT-5.5 as the stable default/fallback until the account/workspace is provisioned for GPT-5.6.
@@ -299,6 +308,7 @@ export class OpenAICodexAdapter implements LLMProvider {
       allowFallback: boolean,
       fallbackFrom?: string,
       fallbackReason?: string,
+      allowIncompleteStreamRetry = true,
     ): Promise<ChatResult> => {
       const controller = new AbortController();
       let abortReason = '';
@@ -416,6 +426,10 @@ export class OpenAICodexAdapter implements LLMProvider {
         if (controller.signal.aborted || err?.name === 'AbortError') {
           throw new Error(abortReason || 'openai_codex request aborted');
         }
+        if (err instanceof CodexIncompleteStreamError && allowIncompleteStreamRetry) {
+          console.warn(`[openai_codex] ${err.message} Retrying once.`);
+          return runRequest(requestedModel, allowFallback, fallbackFrom, fallbackReason, false);
+        }
         throw err;
       } finally {
         clearTimers();
@@ -441,6 +455,7 @@ export class OpenAICodexAdapter implements LLMProvider {
 		    let thinking = '';
 		    let toolCalls: any[] = [];
 		    let usage: ModelUsage | undefined;
+		    let sawCompleted = false;
 		    const toolCallByOutputIndex = new Map<number, any>();
 		    const toolCallByItemId = new Map<string, any>();
 		    const toolCallByCallId = new Map<string, any>();
@@ -464,13 +479,20 @@ export class OpenAICodexAdapter implements LLMProvider {
 		    };
 	
 	    try {
-      while (true) {
+      let streamDone = false;
+      while (!streamDone) {
         const { done, value } = await reader.read();
-        if (done) break;
-        onActivity?.();
-        buffer += decoder.decode(value, { stream: true });
+        streamDone = done;
+        if (value) {
+          onActivity?.();
+          buffer += decoder.decode(value, { stream: !done });
+        }
+        if (done) buffer += decoder.decode();
 
-        const lines = buffer.split('\n');
+        // Force the final unterminated SSE line through the same parser when the
+        // body closes. Previously it remained stranded in `buffer` and could
+        // turn a valid response.completed event into an empty assistant reply.
+        const lines = (done ? `${buffer}\n` : buffer).split('\n');
         buffer = lines.pop() || '';
 
         for (const line of lines) {
@@ -577,6 +599,8 @@ export class OpenAICodexAdapter implements LLMProvider {
 	
 	            // response.completed contains the full final snapshot
             if (type === 'response.completed') {
+              sawCompleted = true;
+              options?.onModelEvent?.({ type: 'provider_event', nativeType: type, provider: this.id, model });
               usage = parseUsage(event.response?.usage);
               const outputs = event.response?.output || [];
               for (const item of outputs) {
@@ -627,6 +651,13 @@ export class OpenAICodexAdapter implements LLMProvider {
 
     // Clean up internal tracking index
     toolCalls = toolCalls.map(({ _idx, ...tc }) => tc);
+
+    if (!sawCompleted) {
+      throw new CodexIncompleteStreamError('openai_codex stream ended before response.completed.');
+    }
+    if (!finalContent.trim() && toolCalls.length === 0) {
+      throw new CodexIncompleteStreamError('openai_codex response.completed contained no assistant text or tool calls.');
+    }
 
     const message: ChatMessage = {
       role: 'assistant',

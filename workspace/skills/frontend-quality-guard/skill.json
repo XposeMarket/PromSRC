@@ -92,6 +92,10 @@
       "path": "examples/post-menu-refactor-dom-guard.md",
       "type": "example",
       "description": "Checklist after HTML game menu/UI restructure"
+    },
+    {
+      "path": "references/anti-slop-and-visual-evidence.md",
+      "type": "doc"
     }
   ],
   "implicitInvocation": true,

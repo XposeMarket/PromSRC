@@ -2812,7 +2812,7 @@
     <div id="bgt-chat-bar" style="flex-shrink:0;border-top:1px solid var(--line);padding:10px 12px;background:var(--panel);display:flex;flex-direction:column;gap:6px">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted)">Chat with agent</div>
       <div style="display:flex;gap:8px;align-items:flex-end">
-        <textarea id="bgt-chat-input" rows="2" placeholder="Send a message to the task agent... (Shift+Enter for newline)" style="flex:1;resize:none;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;background:var(--panel-2);color:var(--text);outline:none" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();bgtChatSend();}"></textarea>
+        <textarea id="bgt-chat-input" rows="2" placeholder="Steer this task without creating a new one... (Shift+Enter for newline)" style="flex:1;resize:none;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;background:var(--panel-2);color:var(--text);outline:none" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();bgtChatSend();}"></textarea>
         <button onclick="bgtChatSend()" style="background:var(--brand);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0;height:36px">Send</button>
       </div>
     </div>

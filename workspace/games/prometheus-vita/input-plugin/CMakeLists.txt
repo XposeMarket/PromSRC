@@ -15,9 +15,15 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wall -Wextra")
 add_executable(${PROJECT_NAME} main.c)
 target_link_libraries(${PROJECT_NAME}
   SceCtrlForDriver_stub
+  SceDisplayForDriver_stub
+  SceIofilemgrForDriver_stub
+  SceSysmemForDriver_stub
   SceNetPsForDriver_stub
   SceSysclibForDriver_stub
   SceThreadmgrForDriver_stub
 )
 set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "-nostdlib")
 vita_create_self(${PROJECT_NAME}.skprx ${PROJECT_NAME} CONFIG plugin.yml UNSAFE)
+vita_create_stubs(stubs ${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/plugin.yml KERNEL)
+add_custom_target(${PROJECT_NAME}_stubs ALL
+  DEPENDS lib${PROJECT_NAME}_stub.a lib${PROJECT_NAME}_stub_weak.a)

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <style>
+    :root { --ink:#090807; --paper:#f0e7d7; --muted:#bcb2a1; --bronze:#b5793b; --ember:#ef5b24; --line:rgba(240,231,215,.22); }
+    * { box-sizing:border-box; } html, body { width:1920px; height:1080px; margin:0; overflow:hidden; background:#000; }
+    body { font-family:Arial, Helvetica, sans-serif; }
+    #root { position:relative; width:1920px; height:1080px; overflow:hidden; color:var(--paper); }
+    .backdrop { position:absolute; inset:0; background:radial-gradient(ellipse 72% 92% at 52% 52%, #282019 0%, #100e0c 45%, #050505 100%); }
+    .grain { position:absolute; inset:0; opacity:.35; background-image:radial-gradient(rgba(255,255,255,.12) .7px, transparent .8px); background-size:5px 5px; mix-blend-mode:soft-light; }
+    .vignette { position:absolute; inset:0; background:radial-gradient(ellipse at center, transparent 32%, rgba(0,0,0,.52) 100%); }
+    .clip { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
+    .eyebrow { color:var(--bronze); font-size:25px; letter-spacing:11px; font-weight:700; text-transform:uppercase; }
+    .big-title { font-family:Georgia, 'Times New Roman', serif; color:var(--paper); font-size:96px; font-weight:400; letter-spacing:-2px; text-align:center; line-height:1.04; }
+    .sub { color:var(--muted); font-size:28px; letter-spacing:.3px; text-align:center; }
+    #ember-line { position:absolute; left:220px; right:220px; top:540px; height:2px; background:linear-gradient(90deg, transparent, var(--ember), #ffd7a4, var(--ember), transparent); box-shadow:0 0 14px #ef5b24, 0 0 42px rgba(239,91,36,.7); transform-origin:center; }
+    .spark { position:absolute; width:9px; height:9px; border-radius:50%; background:#ffb45e; box-shadow:0 0 20px #ef5b24; }
+    .mark { width:132px; height:132px; border:2px solid var(--bronze); border-radius:50%; position:relative; display:grid; place-items:center; box-shadow:inset 0 0 35px rgba(181,121,59,.16), 0 0 28px rgba(239,91,36,.2); }
+    .mark::before { content:'P'; color:var(--paper); font-family:Georgia,serif; font-size:82px; transform:translateY(-3px); }
+    .connector-card { width:940px; min-height:330px; padding:45px 52px; border:1px solid rgba(240,231,215,.32); border-radius:22px; background:linear-gradient(135deg, rgba(51,42,34,.92), rgba(16,14,12,.86)); box-shadow:0 26px 85px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.07); position:relative; overflow:hidden; }
+    .connector-card::after { content:''; position:absolute; inset:0; background:linear-gradient(115deg, transparent 28%, rgba(255,199,126,.09) 45%, transparent 62%); }
+    .card-top { display:flex; justify-content:space-between; align-items:center; position:relative; z-index:1; }
+    .card-name { font-family:Georgia,serif; font-size:58px; letter-spacing:-1px; }
+    .chip { border:1px solid rgba(239,91,36,.7); color:#ffd2aa; padding:11px 18px; border-radius:999px; font-size:19px; letter-spacing:1.3px; text-transform:uppercase; }
+    .card-rule { height:1px; background:var(--line); margin:34px 0 26px; position:relative; z-index:1; }
+    .card-note { font-size:27px; color:var(--muted); position:relative; z-index:1; }
+    .connector-card .accent { color:var(--paper); }
+    .ui-shell { width:1230px; min-height:510px; padding:38px 45px 42px; border:1px solid rgba(240,231,215,.28); border-radius:24px; background:#13110f; box-shadow:0 28px 100px rgba(0,0,0,.58); }
+    .ui-header { display:flex; justify-content:space-between; align-items:center; padding-bottom:28px; border-bottom:1px solid var(--line); }
+    .ui-wordmark { font-family:Georgia,serif; font-size:38px; letter-spacing:1px; }
+    .ui-status { color:#eac899; font-size:18px; letter-spacing:2px; text-transform:uppercase; }
+    .tiles { display:grid; grid-template-columns:repeat(4,1fr); gap:18px; margin-top:38px; }
+    .tile { height:205px; padding:26px; border:1px solid rgba(240,231,215,.17); border-radius:14px; background:linear-gradient(145deg,#211c17,#151310); position:relative; overflow:hidden; }
+    .tile-icon { width:35px; height:35px; border:1px solid var(--bronze); border-radius:50%; margin-bottom:31px; box-shadow:0 0 18px rgba(181,121,59,.18); }
+    .tile-text { font-size:24px; color:var(--paper); line-height:1.13; }
+    .tile-approval { border-color:rgba(239,91,36,.75); }
+    .approval-ring { position:absolute; width:260px; height:260px; right:-28px; bottom:-37px; border:2px solid var(--ember); border-radius:50%; opacity:.25; }
+    .end-lockup { display:flex; flex-direction:column; align-items:center; gap:24px; }
+    .end-top { display:flex; align-items:center; gap:26px; color:var(--paper); font-family:Georgia,serif; font-size:64px; }
+    .end-x { color:var(--bronze); font-family:Arial,sans-serif; font-size:38px; }
+    .end-bottom { font-size:27px; letter-spacing:8px; color:var(--bronze); text-transform:uppercase; }
+    .footer { position:absolute; bottom:86px; color:var(--muted); font-size:24px; letter-spacing:.5px; }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="robinhood-connector-reveal" data-start="0" data-duration="12" data-width="1920" data-height="1080">
+    <div class="backdrop"></div><div class="grain"></div><div class="vignette"></div>
+    <div id="scene-one" class="clip" data-start="0" data-duration="2.5" data-track-index="1">
+      <div id="ember-line"></div><div id="spark-a" class="spark"></div><div id="spark-b" class="spark"></div>
+      <div style="display:flex; flex-direction:column; align-items:center; gap:34px; z-index:1;">
+        <div id="hero-mark" class="mark"></div>
+        <div id="hero-eyebrow" class="eyebrow">Prometheus</div>
+        <div id="hero-title" class="big-title">YOUR WORKSPACE.<br>CONNECTED.</div>
+      </div>
+    </div>
+    <div id="scene-two" class="clip" data-start="2.3" data-duration="3.05" data-track-index="2">
+      <div id="connector-card" class="connector-card">
+        <div class="card-top"><div class="card-name">Robinhood Trading</div><div id="status-chip" class="chip">Ready to connect</div></div>
+        <div class="card-rule"></div><div class="card-note">Secure, <span class="accent">approval-gated</span> access.</div>
+      </div>
+    </div>
+    <div id="scene-three" class="clip" data-start="5.0" data-duration="3.8" data-track-index="3">
+      <div style="display:flex; flex-direction:column; align-items:center; gap:36px;">
+        <div id="ui-shell" class="ui-shell">
+          <div class="ui-header"><div class="ui-wordmark">PROMETHEUS</div><div class="ui-status">Connector active</div></div>
+          <div class="tiles">
+            <div class="tile"><div class="tile-icon"></div><div class="tile-text">Account<br>context</div></div>
+            <div class="tile"><div class="tile-icon"></div><div class="tile-text">Research</div></div>
+            <div class="tile"><div class="tile-icon"></div><div class="tile-text">Trade<br>preparation</div></div>
+            <div id="approval-tile" class="tile tile-approval" data-layout-allow-overflow><div class="tile-icon"></div><div class="tile-text">Human<br>approval</div><div id="approval-ring" class="approval-ring"></div></div>
+          </div>
+        </div>
+        <div id="process-copy" class="eyebrow">Prepare. Review. Approve.</div>
+      </div>
+    </div>
+    <div id="scene-four" class="clip" data-start="8.45" data-duration="3.55" data-track-index="4">
+      <div class="end-lockup"><div id="end-mark" class="mark" style="width:100px;height:100px;"></div><div id="end-lockup" class="end-top">PROMETHEUS <span class="end-x">×</span> ROBINHOOD</div><div id="end-sub" class="end-bottom">The New Trading Connector</div><div id="end-footer" class="footer">You stay in control.</div></div>
+    </div>
+  </div>
+  <script>
+    window.__timelines = window.__timelines || {};
+    const tl = gsap.timeline({ paused:true });
+    const hidden = { opacity:0 };
+    gsap.set(['#scene-two','#scene-three','#scene-four'], hidden);
+    tl.from('#ember-line', { scaleX:0, duration:.72, ease:'power3.out' }, 0)
+      .from('#hero-mark', { opacity:0, scale:.42, rotation:-42, duration:.7, ease:'back.out(1.8)' }, .22)
+      .from('#hero-eyebrow', { opacity:0, y:22, duration:.42, ease:'power2.out' }, .64)
+      .from('#hero-title', { opacity:0, y:42, duration:.7, ease:'power3.out' }, .74)
+      .to('#spark-a', { x:1300, y:350, duration:1.75, ease:'power1.inOut' }, .05)
+      .to('#spark-b', { x:-1300, y:-250, duration:1.75, ease:'power1.inOut' }, .22)
+      .to('#scene-one', { opacity:0, scale:1.035, duration:.38, ease:'power2.in' }, 2.18)
+      .to('#scene-two', { opacity:1, duration:.01 }, 2.28)
+      .from('#connector-card', { opacity:0, y:65, scale:.94, duration:.72, ease:'power3.out' }, 2.3)
+      .from('#status-chip', { opacity:0, scale:.75, duration:.38, ease:'back.out(2)' }, 2.92)
+      .to('#status-chip', { color:'#fff0dc', borderColor:'#ef5b24', backgroundColor:'rgba(239,91,36,.16)', duration:.3 }, 3.34)
+      .to('#status-chip', { textContent:'Connected', duration:.01 }, 3.42)
+      .to('#scene-two', { opacity:0, y:-32, duration:.42, ease:'power2.in' }, 4.78)
+      .to('#scene-three', { opacity:1, duration:.01 }, 4.95)
+      .from('#ui-shell', { opacity:0, y:55, scale:.96, duration:.7, ease:'power3.out' }, 5.0)
+      .from('.tile', { opacity:0, y:34, duration:.48, stagger:.14, ease:'power3.out' }, 5.38)
+      .from('#process-copy', { opacity:0, y:20, duration:.46, ease:'power2.out' }, 6.25)
+      .from('#approval-ring', { opacity:0, scale:.25, duration:.66, ease:'power3.out' }, 6.5)
+      .to('#scene-three', { opacity:0, scale:.985, duration:.42, ease:'power2.in' }, 8.34)
+      .to('#scene-four', { opacity:1, duration:.01 }, 8.43)
+      .from('#end-mark', { opacity:0, scale:.4, rotation:36, duration:.6, ease:'back.out(1.7)' }, 8.52)
+      .from('#end-lockup', { opacity:0, y:30, duration:.62, ease:'power3.out' }, 8.84)
+      .from('#end-sub', { opacity:0, y:18, duration:.48, ease:'power2.out' }, 9.35)
+      .from('#end-footer', { opacity:0, y:12, duration:.4, ease:'power2.out' }, 10.0);
+    window.__timelines['robinhood-connector-reveal'] = tl;
+  </script>
+</body>
+</html>

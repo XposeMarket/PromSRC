@@ -40,7 +40,7 @@ assert.doesNotMatch(startup, /resumeMainChatGoalsInterruptedForRestart\(\)/, 'ea
 assert.match(boot, /goalOwnedRestart/, 'BOOT must recognize a goal-owned restart');
 assert.match(boot, /finalizeMainChatGoalRestartRecovery/, 'BOOT must finalize goal restart ownership');
 assert.match(boot, /resumableGoalSessionIds/, 'BOOT must return the exact goal-owned sessions it finalized');
-assert.match(chatHelpers, /after BOOT finalization/, 'goal runner must resume only after BOOT finalization');
+assert.match(chatHelpers, /after startup recovery finalization/, 'goal runner must resume only after planned or crash recovery finalization');
 assert.match(chatHelpers, /_resumeMainChatGoalsAfterBoot\?\.\(/, 'post-BOOT goal resume must use the injected runtime callback');
 assert.doesNotMatch(chatHelpers, /require\('\.\.\/routes\/chat\.router'\)/, 'post-BOOT resume must not depend on a fragile circular dynamic require');
 assert.match(chat, /resumeMainChatGoalsAfterBoot: \(sessionIds\) => resumeMainChatGoalsInterruptedForRestart\(sessionIds\)/, 'chat router must inject the targeted post-BOOT resumer');

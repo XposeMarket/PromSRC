@@ -1,0 +1,12 @@
+{
+  "skillId": "revenue-agent-system-designer",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-07-17T14:28:03.785Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\revenue-agent-system-designer",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "f23d0cbce02198aa"
+}

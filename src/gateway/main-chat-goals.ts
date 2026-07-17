@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { getConfig } from '../config/config';
 import { getOllamaClient } from '../agents/ollama-client';
 import { getLatestPendingDevSourceEditContinuation } from './dev-source-approvals';
+import { getCoordinatedDevEdit } from './dev-edit-coordinator';
 import {
   archiveMainChatGoal,
   flushSession,
@@ -919,6 +920,8 @@ export function buildMainChatGoalContinuationPrompt(goal: MainChatGoalState): st
           'This first declared plan becomes the durable Goal plan shown in the progress UI and must survive continuation and restart boundaries.',
         ].join('\n')
       : `This is autonomous goal continuation ${nextTurn}. Continue directly from the thread and evidence already gathered. Call declare_plan only when a new tracked multi-step plan would materially help; it is not required at every continuation boundary.`;
+  const crashRecovered = goal.restartCheckpoint?.phase === 'crash_recovered'
+    || goal.restartCheckpoint?.recoveryKind === 'crash';
   const restart = goal.restartCheckpoint && goal.restartCheckpoint.phase !== 'complete'
     ? [
         '',
@@ -928,9 +931,12 @@ export function buildMainChatGoalContinuationPrompt(goal: MainChatGoalState): st
         `- phase: ${goal.restartCheckpoint.phase}`,
         `- dev_edit_id: ${goal.restartCheckpoint.devEditId || '(none)'}`,
         `- affected_files: ${(goal.restartCheckpoint.affectedFiles || []).join(', ') || '(none recorded)'}`,
+        `- known_touched_files: ${(goal.restartCheckpoint.touchedFiles || []).join(', ') || '(none recorded; approved/checkpoint files are not proof of mutation)'}`,
         `- changed_surfaces: ${(goal.restartCheckpoint.changedSurfaces || []).join(', ') || '(none recorded)'}`,
         `- pre_restart_verification: ${goal.restartCheckpoint.verificationSummary || '(none recorded)'}`,
-        'This was an intentional restart boundary inside the same goal. Do not stop after acknowledging it. Confirm the new gateway is healthy, perform the post-restart verification or benchmark required by the goal, continue the stored unfinished plan, and include concrete evidence in the eventual completion attempt.',
+        crashRecovered
+          ? 'This was an UNEXPECTED gateway restart before the current changes were verified or applied. Do not claim that the changes are live. Preserve and resume the existing dev edit ID when present. Reread every known touched file before making further edits; when no touched-file evidence exists, treat the checkpoint file list only as possible scope and reread it before mutation. Reconcile partial work without blindly repeating it, then finish verification and use the normal apply/restart path only when the changes are actually ready.'
+          : 'This was an intentional restart boundary inside the same goal. Do not stop after acknowledging it. Confirm the new gateway is healthy, perform the post-restart verification or benchmark required by the goal, continue the stored unfinished plan, and include concrete evidence in the eventual completion attempt.',
       ].join('\n')
     : '';
   return [
@@ -1475,11 +1481,57 @@ export function finalizeMainChatGoalRestartRecovery(
       restartCheckpoint: {
         ...goal.restartCheckpoint,
         phase: 'boot_finalized',
+        recoveryKind: 'planned',
         reason: input.reason || goal.restartCheckpoint.reason,
         devEditId: input.devEditId || goal.restartCheckpoint.devEditId,
         affectedFiles: input.affectedFiles?.length ? input.affectedFiles : goal.restartCheckpoint.affectedFiles,
         changedSurfaces: input.changedSurfaces?.length ? input.changedSurfaces : goal.restartCheckpoint.changedSurfaces,
         verificationSummary: input.verificationSummary || goal.restartCheckpoint.verificationSummary,
+        recoveredAt: now,
+      },
+      updatedAt: now,
+    };
+  });
+}
+
+export function finalizeMainChatGoalCrashRecovery(
+  sessionId: string,
+  input: {
+    reason?: string;
+    recoveredAt?: number;
+  } = {},
+): MainChatGoalState | null {
+  return updateMainChatGoal(sessionId, (goal) => {
+    if (!goal || !goal.restartCheckpoint || !['restarting', 'paused'].includes(String(goal.status || ''))) return goal;
+    const now = Number(input.recoveredAt || Date.now()) || Date.now();
+    const reason = String(input.reason || 'gateway_crash').trim() || 'gateway_crash';
+    const devEditId = goal.restartCheckpoint.devEditId;
+    const coordinatedEdit = getCoordinatedDevEdit(devEditId, sessionId);
+    const touchedFiles = coordinatedEdit?.touchedFiles || goal.restartCheckpoint.touchedFiles || [];
+    const checkpointFiles = goal.restartCheckpoint.affectedFiles || [];
+    const recoveryDirective = [
+      'The gateway restarted unexpectedly before the current changes were verified or applied.',
+      devEditId ? `Resume the existing dev edit ${devEditId}; do not create a duplicate edit for the same work.` : '',
+      touchedFiles.length
+        ? `Reread the files known to have been touched before editing further: ${touchedFiles.join(', ')}.`
+        : checkpointFiles.length
+          ? `Partial edits may exist. Reread the checkpoint file list before any further mutation: ${checkpointFiles.join(', ')}.`
+          : 'Partial edits may exist. Reread the relevant source and persisted work state before any further mutation.',
+      'Reconcile the persisted partial work, finish the intended changes, run the required verification, and only then use the normal apply/restart path.',
+    ].filter(Boolean).join(' ');
+    return {
+      ...goal,
+      status: 'restarting',
+      pausedReason: 'gateway_crash',
+      lastVerdict: 'continue',
+      lastReason: `Recovered after an unexpected gateway restart (${reason}); changes were not yet verified or applied.`,
+      nextStepDirective: recoveryDirective,
+      restartCheckpoint: {
+        ...goal.restartCheckpoint,
+        phase: 'crash_recovered',
+        recoveryKind: 'crash',
+        reason,
+        touchedFiles,
         recoveredAt: now,
       },
       updatedAt: now,

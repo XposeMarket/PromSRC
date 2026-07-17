@@ -1,0 +1,53 @@
+# ITLS
+*KERNEL
+ur0:tai/0syscall6.skprx
+ur0:tai/nonpdrm.skprx
+ur0:tai/repatch.skprx
+ur0:tai/itls.skprx
+ur0:tai/yamt_helper.skprx
+ur0:tai/psvshell.skprx
+ur0:tai/nopowerlimits.skprx
+ur0:tai/kubridge.skprx
+ur0:tai/X1Vita.skprx
+ur0:tai/fd_fix.skprx
+ur0:tai/vitacheat.skprx
+ur0:tai/udcd_uvc.skprx
+ur0:tai/prometheus_vita_input.skprx
+
+# YAMT
+*NPXS10015
+ur0:tai/yamt.suprx
+ur0:tai/henkaku.suprx
+# This file is used as an alternative if ux0:tai/config.txt is not found.
+# For users plugins, you must refresh taiHEN from HENkaku Settings for
+# changes to take place.
+# For kernel plugins, you must reboot for changes to take place.
+# henkaku.skprx is hard-coded to load and is not listed here
+*main
+ur0:tai/henkaku.suprx
+ur0:tai/shellbat.suprx
+ur0:tai/pngshot.suprx
+ur0:tai/QuickMenuReborn.suprx
+# main is a special titleid for SceShell
+# this is for modifying the version string
+*NPXS10016
+# this is for modifying the version string in settings widget
+ur0:tai/henkaku.suprx
+
+# Optional QoL plugins
+# removes brightness and wifi restrictions for games
+# increases max/decreases min brightness, disabled by default
+# ur0:tai/vitabright.skprx
+# shows battery percentage near the gauge
+# screenshots are png instead of jpg
+*PCSC00045
+ur0:tai/mirage.suprx
+
+*PCSA00107
+ur0:tai/mirage.suprx
+
+*PCSF00243
+ur0:tai/mirage.suprx
+
+*PCSF00403
+ur0:tai/mirage.suprx

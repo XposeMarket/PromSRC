@@ -963,6 +963,12 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
   const url = (API || '') + `/api/agents/${encodeURIComponent(agentId)}/chat/stream`;
   const cb = (name, ...args) => { try { handlers[name]?.(...args); } catch (e) { console.error('[subagent stream]', name, e); } };
   let activeRuntimeId = '';
+  let streamFinished = false;
+  const finishOnce = () => {
+    if (streamFinished) return;
+    streamFinished = true;
+    cb('onDone');
+  };
 
   (async () => {
     let res;
@@ -979,7 +985,7 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
       });
     } catch (err) {
       cb('onError', err);
-      cb('onDone');
+      finishOnce();
       return;
     }
     if (!res.ok || !res.body) {
@@ -996,7 +1002,7 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
         }
       } catch {}
       cb('onError', new Error(detail ? `Chat HTTP ${res.status}: ${detail}` : `Chat HTTP ${res.status}`));
-      cb('onDone');
+      finishOnce();
       return;
     }
     const reader = res.body.getReader();
@@ -1033,15 +1039,15 @@ export function streamSubagentChat(agentId, { message, signal, ...extra }, handl
             case 'final':         gotFinal = true; cb('onFinal', String(evt.text || evt.content || ''), evt); break;
             case 'done':
               if (!gotFinal && evt.reply) cb('onFinal', String(evt.reply), evt);
-              cb('onDone'); return;
-            case 'error':         cb('onError', new Error(String(evt.message || 'Chat error'))); cb('onDone'); return;
+              finishOnce(); return;
+            case 'error':         cb('onError', new Error(String(evt.message || 'Chat error'))); finishOnce(); return;
           }
         }
       }
     } catch (err) {
       if (err?.name !== 'AbortError') cb('onError', err);
     } finally {
-      cb('onDone');
+      finishOnce();
     }
   })();
 

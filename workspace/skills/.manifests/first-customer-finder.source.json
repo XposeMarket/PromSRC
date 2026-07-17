@@ -1,0 +1,12 @@
+{
+  "sourceType": "directory",
+  "source": "C:\\Users\\rafel\\PromSRC\\workspace\\repos\\codex-first-customer-finder-skill\\first-customer-finder",
+  "importedAt": "2026-07-15T01:33:51.290Z",
+  "upstreamFolder": "first-customer-finder",
+  "prometheusImportedVersion": 1,
+  "compatibilityAudit": {
+    "status": "needs_changes",
+    "sourceKind": "codex",
+    "findings": 3
+  }
+}

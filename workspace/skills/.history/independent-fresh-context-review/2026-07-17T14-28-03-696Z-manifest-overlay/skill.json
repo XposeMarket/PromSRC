@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "independent-fresh-context-review",
+  "name": "Independent Fresh-Context Review",
+  "description": "Run a genuinely independent review of completed code, research, designs, plans, or artifacts using a fresh context and structured evidence brief. Use for fresh-session review, adversarial final QA, reasoning-inertia avoidance, or independent verification.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "categories": [
+    "review",
+    "quality",
+    "verification",
+    "agents"
+  ],
+  "requiredTools": [
+    "agents_and_teams",
+    "workspace_write"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "templates/review-brief.md",
+      "type": "template",
+      "description": "Producer handoff"
+    },
+    {
+      "path": "templates/review-verdict.md",
+      "type": "template",
+      "description": "Reviewer verdict"
+    },
+    {
+      "path": "references/trigger-tests.md",
+      "type": "test",
+      "description": "Routing tests"
+    }
+  ]
+}

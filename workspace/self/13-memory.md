@@ -92,9 +92,15 @@ Operational index:
 
 Refresh mechanisms:
 
-- `scheduleMemoryIndexRefresh(...)`
-- `scheduleOperationalIndexRefresh(...)`
-- manual tool trigger via `memory_index_refresh`
+- `scheduleMemoryIndexRefresh(...)` coalesces best-effort work into the gateway-owned child-process queue.
+- `scheduleOperationalIndexRefresh(...)` is a compatibility entry point that delegates to the same evidence-maintenance worker; it no longer runs synchronous operational parsing through `setImmediate(...)` in the gateway.
+- `refreshMemoryIndexInWorker(...)` uses the same serialized queue and resolves with fresh statistics for APIs/tools that must await completion.
+- `refreshMemoryIndexFromAudit(...)` is the synchronous implementation used inside `memory-index-worker.ts`; production gateway callers must not invoke it directly.
+- the evidence refresh also checks/rebuilds the operational index and optionally syncs SQLite inside the child
+- manual `memory_index_refresh`, provider sync, memory-note creation, Obsidian changes, and consolidation changes all cross or enqueue this process boundary
+- explicit `memory_embedding_backfill` and the post-refresh automatic embedding pass use the same serialized worker, so they cannot race the SQLite refresh writer or block gateway traffic
+- the child is recycled after each run because large legacy JSON snapshots can temporarily consume gigabytes of heap
+- failures retain the last good on-disk index rather than blocking search or crashing the gateway
 
 Memory defaults in config source:
 
@@ -163,7 +169,9 @@ Workspace file priority policy:
 Memory refresh notes:
 
 - `/api/memory/graph`, `/api/memory/create`, and `/api/memory/refresh` now request a `12000` changed-file pass for this workspace-aware index path
-- the graph endpoint still returns cached graph data and schedules background refresh, so opening the graph should not block on a full workspace scan
+- the graph endpoint still returns cached graph data and schedules child-process refresh, so opening the graph should not block on a full workspace scan
+- `/api/memory/create` and `/api/memory/refresh` await the child when their response requires the newly indexed record/statistics; the HTTP request may remain open, but unrelated gateway/mobile/Telegram traffic stays serviceable
+- worker timeouts are controlled by `PROMETHEUS_MEMORY_REFRESH_WORKER_TIMEOUT_MS` (default 15 minutes) and `PROMETHEUS_MEMORY_REFRESH_WORKER_STARTUP_TIMEOUT_MS` (default 45 seconds)
 - the larger unsolved design is a dedicated workspace inventory/search layer: all files should be searchable/browsable from the Memory page, while the graph should render high-signal clusters and promoted search results instead of tens of thousands of always-visible particles
 
 

@@ -1,5 +1,24 @@
 ## 16) Tasks, Background Agents, and Autonomous Runs
 
+### Agent orchestration contracts (2026-07-14)
+
+- Standalone durable tasks persist the verbatim assignment separately from the wrapped prompt and inject it on every execution round and recovery path.
+- BOOT tool restriction is activated only by the explicit `[BOOT STARTUP TURN]` runtime marker, never by incidental references to `BOOT.md` in an assignment or role file.
+- `agent_run_ops(recover)` checks task-router readiness and returns structured `task_router_not_ready` instead of throwing an initialization exception.
+- Disposable benchmark agents use canonical full deletion and post-delete verification for both task and agent records.
+- Reply waits distinguish `reply_available`, `no_reply`, and `timed_out`, and report delivery/wait duration metadata.
+- Model usage events support task/run/team/job/attempt/phase correlation for orchestration telemetry.
+
+### Scheduled-agent verification contracts (2026-07-14)
+
+- Scheduled jobs may define filesystem `expectedOutputs` and a textual `expectedResult` contract with required/forbidden text.
+- Jobs with no output contract are `unverified`, not healthy. Contract failures become explicit run errors.
+- Timing fields distinguish queue, runner, and total orchestration duration while retaining `lastDuration` as a compatibility alias.
+- Automation dashboard summary mode returns compact top-level sections by default; agent/team/output nesting is opt-in through `include` or full depth.
+- Scheduler admission is independent (2026-07-15): firing one scheduled job no longer iterates over and pauses every unrelated running background task. Per-job locks preserve parallel schedules; bounded model-worker capacity and durable resource leases handle actual contention. The legacy task interruption/resume methods still exist for explicit compatibility paths, but normal `CronScheduler.executeJob(...)` does not invoke them globally.
+
+
+
 ### Display names (user-facing)
 
 - Refer to subagents by **display name** (`identity.displayName` / `name`), not technical `id`, in answers and summaries. Use `agent_id` only in tool calls.
@@ -176,6 +195,8 @@ There are two different parallel-work strategies in the runtime:
 - when `orchestration.subagent_mode = true`, it exposes `subagent_spawn`
 
 So "standalone subagents" and "team subagents" are real separate concepts, and the runtime can also expose a lighter specialist-delegation mode instead of full child spawning.
+
+Process-isolation clarification (2026-07-15): `BackgroundTaskRunner`, manager/worker roles, standalone subagents, and team subagents are separate task/runtime identities. Their provider/model calls can now run concurrently in separate children from the bounded model-worker pool, and each top-level turn has durable journal/session identity. Their full `handleChat(...)` orchestration, tool loop, approvals, and task/team managers still share the gateway Node process, so complete-turn heap/CPU/crash isolation is not yet present. Full extraction still needs gateway RPC, executable restart recovery/redelivery, and explicit ownership for child commands started by a turn as described in [30-runtime-process-isolation.md](30-runtime-process-isolation.md). The normal shared workspace remains authoritative—no automatic worktree/workspace isolation is planned, and cross-session file/repository leases are disabled unless explicitly opted in.
 
 ## 19) Deploy Analysis Tool
 

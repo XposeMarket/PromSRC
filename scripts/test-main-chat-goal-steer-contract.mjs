@@ -84,6 +84,25 @@ try {
     false,
   );
 
+  const taskRuntimeId = registry.registerLiveRuntime({
+    kind: 'subagent',
+    label: 'Dante active run',
+    sessionId: 'originating_chat_session',
+    taskId: 'task-steer-contract',
+  });
+  runtimeIds.push(taskRuntimeId);
+  assert.equal(registry.isSteerableTaskRuntimeKind('subagent'), true);
+  const taskSteer = registry.addPendingRuntimeSteerForTask('task-steer-contract', {
+    message: 'Change the current implementation batch; do not create another task.',
+    source: 'task_steer_contract',
+    kind: 'correction',
+  });
+  assert.equal(taskSteer.ok, true, taskSteer.error);
+  const consumedTaskSteer = registry.consumePendingRuntimeSteersForSession('task_task-steer-contract');
+  assert.equal(consumedTaskSteer.length, 1);
+  assert.match(consumedTaskSteer[0].message, /do not create another task/);
+  assert.equal(registry.getLiveRuntime(taskRuntimeId)?.status, 'running');
+
   const chatSource = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
   const backgroundRunnerSource = fs.readFileSync(path.join(root, 'src/gateway/tasks/task-runner.ts'), 'utf8');
   assert.match(backgroundRunnerSource, /queueBackgroundResultForForeground\(record\)/, 'background completion must queue a live foreground event');
@@ -105,6 +124,10 @@ try {
   const desktopSource = fs.readFileSync(path.join(root, 'web-ui/src/pages/ChatPage.js'), 'utf8');
   assert.match(desktopSource, /isActiveMainGoalRunning\(thisSessionId\)/, 'the desktop goal composer must retain its live-steer path');
   assert.match(desktopSource, /source: 'web_goal_composer'/, 'desktop goal steers must remain identifiable in history');
+
+  const taskRouterSource = fs.readFileSync(path.join(root, 'src/gateway/tasks/task-router.ts'), 'utf8');
+  assert.match(taskRouterSource, /addPendingRuntimeSteerForTask/, 'task_control steer must target the active task runtime');
+  assert.match(taskRouterSource, /Do not create or dispatch a second task/, 'task steer context must preserve single-task semantics');
 
   console.log('main-chat goal steer contract: ok');
 } finally {

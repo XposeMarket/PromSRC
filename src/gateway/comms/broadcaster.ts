@@ -140,6 +140,7 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
     appendEventLoopStallDiagnostic(configDir, now, heartbeatDriftMs, elapsedMs);
     _lastHeartbeatCpuUsage = process.cpuUsage();
     _lastHeartbeatAt = now;
+    const memory = process.memoryUsage();
     fs.writeFileSync(path.join(configDir, 'gateway-runtime-status.json'), JSON.stringify({
       pid: process.pid,
       timestamp: now,
@@ -158,6 +159,13 @@ function writeRuntimeStatus(reason = 'heartbeat'): void {
       eventLoopStallRestartThresholdMs: EVENT_LOOP_STALL_RESTART_MS,
       eventLoopStallAutoRestartEnabled: EVENT_LOOP_STALL_AUTORESTART_ENABLED,
       eventLoopStallRestartScheduled: _eventLoopStallRestartScheduled,
+      memory: {
+        rss: memory.rss,
+        heapTotal: memory.heapTotal,
+        heapUsed: memory.heapUsed,
+        external: memory.external,
+        arrayBuffers: memory.arrayBuffers,
+      },
     }), 'utf-8');
     maybeScheduleEventLoopStallRecovery(heartbeatDriftMs, now);
   } catch {}

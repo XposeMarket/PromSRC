@@ -1,0 +1,3 @@
+# Brand Assets and Logo Retrieval
+
+Prefer official press/media kits, official site/design assets, and verified official repositories. Third-party databases are discovery fallbacks requiring official cross-check. Confirm brand and variant; enumerate source, format, dimensions/viewBox, variant, and usage notes. Prefer SVG; preserve originals. Verify visually against a current official surface and reject generated, traced, distorted, stale, or unofficial substitutes. Keep untouched originals plus normalized copies; trimming/conversion must not alter geometry, proportions, color, or clear space. Record provenance and transformations. Hand exact assets to `exact-logo-brand-kit-workflow` for composition. Flag licensing uncertainty rather than inventing permission.

@@ -1,0 +1,12 @@
+{
+  "skillId": "supervised-goal-orchestrator",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-07-17T14:28:03.678Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\supervised-goal-orchestrator",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "fad79f0277745352"
+}

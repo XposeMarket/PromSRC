@@ -317,6 +317,7 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'schedule_job_patch',
   'schedule_job_stuck_control',
   'prometheus_thread_ops',
+  'prometheus_request_ops',
   // Advanced automation management/diagnostics (schedule_job, automation_dashboard,
   // and timer remain core; only execution-level scheduling stays always-on).
   'task_control',
@@ -1003,13 +1004,12 @@ export function getToolCategory(name: string): InternalToolCategory | null {
 }
 
 const TOOL_BUILD_CACHE_TTL_MS = 30_000;
+const DYNAMIC_TOOL_BUILD_CACHE_TTL_MS = 5_000;
 const TOOL_BUILD_CACHE_MAX_ENTRIES = 64;
-const DYNAMIC_TOOL_SURFACE_CATEGORIES = new Set<string>([
-  'external_apps',
-  'mcp_server_tools',
+const NON_CACHEABLE_TOOL_SURFACE_CATEGORIES = new Set<string>([
   'composite_tools',
 ]);
-const toolBuildCache = new Map<string, { at: number; tools: any[] }>();
+const toolBuildCache = new Map<string, { at: number; ttlMs: number; tools: any[] }>();
 
 function stableCategoryKey(categories: Set<string>): string {
   return Array.from(categories).sort().join(',');
@@ -1037,8 +1037,27 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   const categoryIsActive = (category: ToolCategory): boolean => (
     activatedCategories === undefined || normalizedActiveCategories.has(category)
   );
+  const externalAppsActive = categoryIsActive('external_apps');
+  const mcpServerToolsActive = categoryIsActive('mcp_server_tools');
+  const extensionRegistry = getExtensionRuntimeRegistry();
+  if (externalAppsActive && !deps.skipDynamicExtensionTools) {
+    ensurePrometheusExtensionRuntimeLoaded();
+  }
+  const extensionRevision = externalAppsActive && !deps.skipDynamicExtensionTools
+    ? extensionRegistry.getRevision()
+    : 0;
+  let mcpToolsSnapshot: any[] | null = null;
+  if (mcpServerToolsActive) {
+    try { mcpToolsSnapshot = getMCPManager().getAllTools(); } catch { mcpToolsSnapshot = []; }
+  }
+  const mcpToolSignature = (mcpToolsSnapshot || [])
+    .map((tool: any) => `${String(tool?.serverId || '')}:${String(tool?.name || '')}`)
+    .sort()
+    .join('|');
   const cacheable = activatedCategories !== undefined
-    && !Array.from(DYNAMIC_TOOL_SURFACE_CATEGORIES).some((category) => normalizedActiveCategories.has(category));
+    && !Array.from(NON_CACHEABLE_TOOL_SURFACE_CATEGORIES).some((category) => normalizedActiveCategories.has(category));
+  const dynamicSurfaceActive = externalAppsActive || mcpServerToolsActive;
+  const cacheTtlMs = dynamicSurfaceActive ? DYNAMIC_TOOL_BUILD_CACHE_TTL_MS : TOOL_BUILD_CACHE_TTL_MS;
   const subagentMode = configSnapshot.orchestration?.subagent_mode === true;
   const agentBuilderEnabled = configSnapshot?.agent_builder?.enabled === true;
   const cacheKey = cacheable
@@ -1046,12 +1065,14 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       `public:${isPublicBuild ? '1' : '0'}`,
       `subagent:${subagentMode ? '1' : '0'}`,
       `agentBuilder:${agentBuilderEnabled ? '1' : '0'}`,
+      `extensions:${extensionRevision}`,
+      `mcp:${mcpToolSignature}`,
       `cats:${stableCategoryKey(normalizedActiveCategories)}`,
     ].join('|')
     : '';
   if (cacheKey) {
     const cached = toolBuildCache.get(cacheKey);
-    if (cached && Date.now() - cached.at <= TOOL_BUILD_CACHE_TTL_MS) return cached.tools.slice();
+    if (cached && Date.now() - cached.at <= cached.ttlMs) return cached.tools.slice();
     if (cached) toolBuildCache.delete(cacheKey);
   }
   const creativeCategoryActive = categoryIsActive('creative_basic')
@@ -1326,6 +1347,24 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       parameters: { type: 'object', required: [], properties: {} },
     },
   });
+  toolDefs.push({
+    type: 'function',
+    function: {
+      name: 'tool_result_read',
+      description:
+        'Read one bounded text range from an oversized tool result saved out-of-band during this same chat session. ' +
+        'Use only when the [TOOL_RESULT_BOUNDED] preview says omitted content is required. Follow next_offset_bytes to continue.',
+      parameters: {
+        type: 'object',
+        required: ['raw_ref'],
+        properties: {
+          raw_ref: { type: 'string', description: 'Exact tool-result-raw reference returned by the bounded result.' },
+          offset_bytes: { type: 'number', description: 'UTF-8 byte offset. Start at 0, then use next_offset_bytes. Default 0.' },
+          max_chars: { type: 'number', description: 'Maximum text characters to return. Default 8000, hard maximum 16000.' },
+        },
+      },
+    },
+  });
   toolDefs.push(
     {
       type: 'function',
@@ -1493,14 +1532,13 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   // current tool surface; connector_list remains core for discovery.
   if (categoryIsActive('external_apps') && !deps.skipDynamicExtensionTools) {
     try {
-      ensurePrometheusExtensionRuntimeLoaded();
-      dynamicToolDefs.push(...getExtensionRuntimeRegistry().listConnectedConnectorToolDefinitions());
+      dynamicToolDefs.push(...extensionRegistry.listConnectedConnectorToolDefinitions());
     } catch { /* connector defs may not load in all build targets */ }
   }
 
   if (categoryIsActive('mcp_server_tools')) {
     try {
-      const mcpTools = getMCPManager().getAllTools();
+      const mcpTools = mcpToolsSnapshot || [];
       for (const t of mcpTools) {
         try {
           const { isManagedMcpToolExposed } = require('../connections/runtime');
@@ -1560,7 +1598,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       return cat === null || normalizedActiveCategories.has(cat);
     });
     if (cacheKey) {
-      toolBuildCache.set(cacheKey, { at: Date.now(), tools: filteredTools });
+      toolBuildCache.set(cacheKey, { at: Date.now(), ttlMs: cacheTtlMs, tools: filteredTools });
       trimToolBuildCache();
     }
     return filteredTools.slice();

@@ -1,7 +1,10 @@
 import crypto from 'crypto';
+import fs from 'fs';
 import path from 'path';
+import { getConfig } from '../config/config';
 
 const PACKET_TTL_MS = 30 * 60_000;
+const AGENT_PACKET_TTL_MS = 14 * 24 * 60 * 60_000;
 const MAX_PACKET_CHARS = 6_000;
 const MAX_SESSIONS = 100;
 const FILE_TOOLS = new Set([
@@ -25,7 +28,7 @@ interface TargetFact {
   symbols: string[];
   lineHints: number[];
   contentHash: string;
-  hashKind: 'authoritative_content' | 'observed_snapshot';
+  hashKind: 'authoritative_content' | 'observed_snapshot' | 'dirty_unverified';
   observedAt: number;
   provenance: string;
 }
@@ -38,8 +41,11 @@ interface VerificationFact {
 }
 
 interface CodingContextPacket {
+  scopeId: string;
   sessionId: string;
+  actorId?: string;
   taskId: string;
+  lastRuntimeTaskId?: string;
   objective: string;
   projectRoot: string;
   targets: TargetFact[];
@@ -53,6 +59,9 @@ interface CodingContextPacket {
 
 export interface CodingContextObservation {
   sessionId: string;
+  scopeId?: string;
+  actorId?: string;
+  runtimeTaskId?: string;
   objective: string;
   projectRoot: string;
   toolName: string;
@@ -68,6 +77,9 @@ export interface CodingContextObservation {
 export interface CodingContextSelectionInput {
   enabled: boolean;
   sessionId: string;
+  scopeId?: string;
+  actorId?: string;
+  runtimeTaskId?: string;
   message: string;
   projectRoot: string;
   executionMode: string;
@@ -86,6 +98,7 @@ export interface CodingContextSelection {
 }
 
 const packets = new Map<string, CodingContextPacket>();
+let packetsLoaded = false;
 const telemetry: Record<CodingContextPacketDecisionStatus, number> = {
   injected: 0,
   omitted: 0,
@@ -94,6 +107,42 @@ const telemetry: Record<CodingContextPacketDecisionStatus, number> = {
 
 function sha256(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function packetStorePath(): string {
+  const override = String(process.env.PROMETHEUS_CODING_CONTEXT_PACKET_STORE || '').trim();
+  return override || path.join(getConfig().getConfigDir(), 'work-context', 'coding-context-packets.json');
+}
+
+function cleanScopeId(value: unknown, fallbackSessionId: string): string {
+  return cleanScalar(value || `session:${fallbackSessionId}`, 240) || `session:${fallbackSessionId}`;
+}
+
+function ensurePacketsLoaded(): void {
+  if (packetsLoaded) return;
+  packetsLoaded = true;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packetStorePath(), 'utf-8'));
+    const values = Array.isArray(parsed?.packets) ? parsed.packets : [];
+    for (const value of values) {
+      if (!value || typeof value !== 'object') continue;
+      const packet = value as CodingContextPacket;
+      const scopeId = cleanScopeId(packet.scopeId, packet.sessionId);
+      if (!scopeId || !packet.projectRoot || !Array.isArray(packet.targets)) continue;
+      packets.set(scopeId, { ...packet, scopeId });
+    }
+  } catch {}
+}
+
+function persistPackets(): void {
+  try {
+    const filePath = packetStorePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const tempPath = `${filePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify({ version: 1, packets: [...packets.values()] }, null, 2), 'utf-8');
+    fs.rmSync(filePath, { force: true });
+    fs.renameSync(tempPath, filePath);
+  } catch {}
 }
 
 function cleanScalar(value: unknown, max = 240): string {
@@ -270,14 +319,16 @@ function recordDecision(status: CodingContextPacketDecisionStatus, reason: strin
 }
 
 export function observeCodingContext(input: CodingContextObservation): void {
+  ensurePacketsLoaded();
   const toolName = cleanScalar(input.toolName, 100).toLowerCase();
   if (!FILE_TOOLS.has(toolName) && !COMMAND_TOOLS.has(toolName)) return;
   const sessionId = cleanScalar(input.sessionId, 200);
+  const scopeId = cleanScopeId(input.scopeId, sessionId);
   const projectRoot = normalizedRoot(input.projectRoot);
   if (!sessionId || !projectRoot) return;
   const args = input.args && typeof input.args === 'object' ? input.args : {};
   const now = input.now ?? Date.now();
-  const existing = packets.get(sessionId);
+  const existing = packets.get(scopeId);
   const incomingObjective = cleanScalar(input.objective, 360);
   const sameTask = !!existing
     && existing.projectRoot === projectRoot
@@ -287,14 +338,17 @@ export function observeCodingContext(input: CodingContextObservation): void {
       || CONTINUATION_CUE.test(incomingObjective)
       || referencesKnownTarget(incomingObjective, existing)
       || hasStrongObjectiveContinuity(incomingObjective, existing.objective)
+      || (!!input.actorId && existing.actorId === cleanScalar(input.actorId, 200))
     );
   const objective = sameTask && existing && CONTINUATION_CUE.test(incomingObjective)
     ? existing.objective
     : incomingObjective || existing?.objective || 'Active coding task';
   const packet: CodingContextPacket = sameTask && existing
-    ? existing
-    : {
+      ? existing
+      : {
+        scopeId,
         sessionId,
+        actorId: cleanScalar(input.actorId, 200) || undefined,
         taskId: sha256(`${sessionId}\0${objective}\0${projectRoot}`).slice(0, 16),
         objective,
         projectRoot,
@@ -305,6 +359,10 @@ export function observeCodingContext(input: CodingContextObservation): void {
         updatedAt: now,
         lastEvidenceAt: 0,
       };
+  packet.scopeId = scopeId;
+  packet.sessionId = sessionId;
+  packet.actorId = cleanScalar(input.actorId, 200) || packet.actorId;
+  packet.lastRuntimeTaskId = cleanScalar(input.runtimeTaskId, 200) || packet.lastRuntimeTaskId;
   packet.objective = objective;
   packet.updatedAt = now;
 
@@ -312,8 +370,8 @@ export function observeCodingContext(input: CodingContextObservation): void {
     const paths = collectPaths(projectRoot, toolName, args);
     const structuredHashes = authoritativeHashes(projectRoot, toolName, args, input.data, input.extra);
     if (isMutation(toolName, args)) {
-      packet.targets = [];
-      packet.lastEvidenceAt = 0;
+      const mutationPaths = collectPaths(projectRoot, toolName, args);
+      packet.targets = packet.targets.filter((target) => !mutationPaths.includes(target.path));
       for (const [filePath, contentHash] of structuredHashes) {
         packet.targets.push({
           path: filePath,
@@ -323,6 +381,18 @@ export function observeCodingContext(input: CodingContextObservation): void {
           hashKind: 'authoritative_content',
           observedAt: now,
           provenance: `tool:${toolName}:authoritative_hash`,
+        });
+        packet.lastEvidenceAt = now;
+      }
+      for (const filePath of mutationPaths.filter((candidate) => !structuredHashes.has(candidate))) {
+        packet.targets.push({
+          path: filePath,
+          symbols: collectSymbols(args),
+          lineHints: collectLineHints(args),
+          contentHash: '',
+          hashKind: 'dirty_unverified',
+          observedAt: now,
+          provenance: `tool:${toolName}:mutation_requires_reread`,
         });
         packet.lastEvidenceAt = now;
       }
@@ -358,28 +428,39 @@ export function observeCodingContext(input: CodingContextObservation): void {
 
   const refs = artifactRefs(input.artifacts || []);
   if (refs.length) packet.artifacts = Array.from(new Set([...packet.artifacts, ...refs])).slice(-8);
-  packets.set(sessionId, packet);
+  packets.set(scopeId, packet);
   if (packets.size > MAX_SESSIONS) {
     const oldest = [...packets.values()].sort((a, b) => a.updatedAt - b.updatedAt)[0];
-    if (oldest) packets.delete(oldest.sessionId);
+    if (oldest) packets.delete(oldest.scopeId);
   }
+  persistPackets();
 }
 
 export function selectCodingContextPacket(input: CodingContextSelectionInput): CodingContextSelection {
+  ensurePacketsLoaded();
   if (!input.enabled) return recordDecision('omitted', 'feature_disabled');
-  if (input.executionMode !== 'interactive' || input.creativeMode) return recordDecision('omitted', 'non_coding_surface');
-  const packet = packets.get(cleanScalar(input.sessionId, 200));
+  const supportedModes = new Set(['interactive', 'background_task', 'background_agent', 'team_subagent']);
+  if (!supportedModes.has(input.executionMode) || input.creativeMode) return recordDecision('omitted', 'non_coding_surface');
+  const sessionId = cleanScalar(input.sessionId, 200);
+  const scopeId = cleanScopeId(input.scopeId, sessionId);
+  const packet = packets.get(scopeId);
   if (!packet || packet.projectRoot !== normalizedRoot(input.projectRoot)) return recordDecision('omitted', 'no_session_packet');
   const now = input.now ?? Date.now();
   const ageMs = packet.lastEvidenceAt ? now - packet.lastEvidenceAt : Number.POSITIVE_INFINITY;
-  if (!packet.targets.length || !Number.isFinite(ageMs) || ageMs < 0 || ageMs > PACKET_TTL_MS) {
+  const ttlMs = input.actorId ? AGENT_PACKET_TTL_MS : PACKET_TTL_MS;
+  if (!packet.targets.length || !Number.isFinite(ageMs) || ageMs < 0 || ageMs > ttlMs) {
     return recordDecision('rejected_stale', 'stale_targeted_evidence', { taskId: packet.taskId, ageMs });
   }
   const message = cleanScalar(input.message, 1_000);
   const targetReference = referencesKnownTarget(message, packet);
   const explicitContinuation = CONTINUATION_CUE.test(message);
   const strongContinuity = hasStrongObjectiveContinuity(message, packet.objective);
-  if (!targetReference && !explicitContinuation && !strongContinuity) {
+  const samePersistentActor = !!input.actorId && packet.actorId === cleanScalar(input.actorId, 200);
+  const crossTaskAgentHandoff = samePersistentActor
+    && !!input.runtimeTaskId
+    && !!packet.lastRuntimeTaskId
+    && cleanScalar(input.runtimeTaskId, 200) !== packet.lastRuntimeTaskId;
+  if (!targetReference && !explicitContinuation && !strongContinuity && !crossTaskAgentHandoff) {
     return recordDecision('omitted', 'ambiguous_continuation', { taskId: packet.taskId, ageMs });
   }
   if (!targetReference && lastAssistantLooksResolved(input.history || [])) {
@@ -390,6 +471,9 @@ export function selectCodingContextPacket(input: CodingContextSelectionInput): C
     version: 2,
     trust: 'structured_facts_only',
     task_id: packet.taskId,
+    actor_id: packet.actorId || null,
+    previous_runtime_task_id: packet.lastRuntimeTaskId || null,
+    current_runtime_task_id: cleanScalar(input.runtimeTaskId, 200) || null,
     objective: packet.objective,
     project_root: packet.projectRoot,
     freshness: { evidence_age_ms: ageMs, packet_updated_at: new Date(packet.updatedAt).toISOString() },
@@ -399,7 +483,9 @@ export function selectCodingContextPacket(input: CodingContextSelectionInput): C
       line_hints: target.lineHints,
       ...(target.hashKind === 'authoritative_content'
         ? { authoritative_content_sha256: target.contentHash }
-        : { observed_snapshot_sha256: target.contentHash }),
+        : target.hashKind === 'observed_snapshot'
+          ? { observed_snapshot_sha256: target.contentHash }
+          : { dirty_unverified: true, required_action: 'Reread this file before relying on line hints or making another edit.' }),
       observed_at: new Date(target.observedAt).toISOString(),
       provenance: target.provenance,
     })),
@@ -424,7 +510,19 @@ export function selectCodingContextPacket(input: CodingContextSelectionInput): C
     return recordDecision('omitted', 'packet_hard_cap', { taskId: packet.taskId, ageMs });
   }
   telemetry.injected++;
-  return { status: 'injected', reason: targetReference ? 'known_target' : explicitContinuation ? 'explicit_continuation' : 'strong_objective_continuity', block: `${prefix}${body}${suffix}`, taskId: packet.taskId, ageMs };
+  return {
+    status: 'injected',
+    reason: targetReference
+      ? 'known_target'
+      : explicitContinuation
+        ? 'explicit_continuation'
+        : strongContinuity
+          ? 'strong_objective_continuity'
+          : 'persistent_agent_task_handoff',
+    block: `${prefix}${body}${suffix}`,
+    taskId: packet.taskId,
+    ageMs,
+  };
 }
 
 export function getCodingContextPacketTelemetry(): Readonly<Record<CodingContextPacketDecisionStatus, number>> {
@@ -433,7 +531,14 @@ export function getCodingContextPacketTelemetry(): Readonly<Record<CodingContext
 
 export function resetCodingContextPacketsForTest(): void {
   packets.clear();
+  packetsLoaded = true;
   telemetry.injected = 0;
   telemetry.omitted = 0;
   telemetry.rejected_stale = 0;
+}
+
+export function reloadCodingContextPacketsForTest(): void {
+  packets.clear();
+  packetsLoaded = false;
+  ensurePacketsLoaded();
 }

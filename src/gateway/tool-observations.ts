@@ -229,7 +229,8 @@ export function createToolObservation(input: {
   const id = `toolobs_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
   const resultText = String(input.result || '');
   const argsText = stringifyPreview(input.args || {}, 50_000);
-  const rawRef = maybePersistRawResult(input.sessionId, id, resultText);
+  const envelopeRawRef = String(input.extra?.toolResultEnvelope?.rawRef || '').trim();
+  const rawRef = envelopeRawRef || maybePersistRawResult(input.sessionId, id, resultText);
   const pathsTouched = [...new Set([...extractPaths(input.args), ...extractPaths(input.data), ...extractPaths(input.extra)])].slice(0, 12);
   const exitCode = Number(input.extra?.exitCode ?? input.data?.exitCode);
   const telemetry = input.extra?.telemetry || input.data?.telemetry || {};

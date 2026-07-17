@@ -34,6 +34,7 @@ import { ensureScheduleRuntimeForAgent } from '../../scheduling/schedule-agent';
 import { systemDiagnosticsTool } from '../../diagnostics/system-diagnostics';
 import { createDiagnosticPacket, getDiagnosticPacket, listDiagnosticPackets, updateDiagnosticPacketStatus } from '../../diagnostics/diagnostic-packet-store';
 import { buildPrometheusThreadLinksArtifact, executePrometheusThreadOps } from '../../threads/thread-ops';
+import { executePrometheusRequestOps } from '../../requests/request-ops';
 
 const AUTOMATION_TOOL_NAMES = new Set([
   'background_spawn',
@@ -53,6 +54,7 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'schedule_job_stuck_control',
   'automation_dashboard',
   'prometheus_thread_ops',
+  'prometheus_request_ops',
   'system_diagnostics',
   'diagnostic_packet',
 ]);
@@ -421,6 +423,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
               target: { type: targetType as any, config: targetConfig },
               condition,
               onMatch,
+              deliveryMode: String(args.delivery_mode || args.deliveryMode || '').trim() === 'notify_only' ? 'notify_only' : 'run_turn',
               maxFirings: 1,
               firedCount: 0,
               status: 'active',
@@ -443,6 +446,7 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
             target: { type: targetType as any, config: targetConfig },
             condition,
             onMatch,
+            deliveryMode: String(args.delivery_mode || args.deliveryMode || '').trim() === 'notify_only' ? 'notify_only' : 'run_turn',
             onTimeout: String(args.on_timeout || args.onTimeout || '').trim() || undefined,
             maxFirings: Number(args.max_firings ?? args.maxFirings) || undefined,
             initialObservation,
@@ -884,6 +888,23 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           };
         } catch (err: any) {
           return { name, args, result: `prometheus_thread_ops error: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'prometheus_request_ops': {
+        try {
+          const out = await executePrometheusRequestOps(sessionId, args, {
+            runInteractiveTurn: deps.runInteractiveTurn,
+            broadcastWS: deps.broadcastWS,
+          });
+          return {
+            name,
+            args,
+            result: JSON.stringify(out, null, 2),
+            error: out.success === false,
+          };
+        } catch (err: any) {
+          return { name, args, result: `prometheus_request_ops error: ${String(err?.message || err)}`, error: true };
         }
       }
 

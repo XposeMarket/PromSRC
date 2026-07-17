@@ -1,0 +1,12 @@
+{
+  "skillId": "frontend-quality-guard",
+  "reason": "resource-write",
+  "createdAt": "2026-07-17T14:31:39.856Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\frontend-quality-guard",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "b0a2c0c845c7a0af"
+}

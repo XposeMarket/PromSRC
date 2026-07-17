@@ -262,6 +262,75 @@ export function getDevSourceEditContinuation(id?: string): DevSourceEditContinua
   return readContinuationStore().continuations.find((item) => item.id === clean) || null;
 }
 
+export function listDevSourceEditContinuations(): DevSourceEditContinuation[] {
+  return readContinuationStore().continuations
+    .filter(Boolean)
+    .sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0))
+    .map((item) => JSON.parse(JSON.stringify(item)));
+}
+
+export function restoreDevSourceEditContinuationAccess(
+  continuationOrId: DevSourceEditContinuation | string,
+  restoredBy = 'request_recovery',
+): DevSourceEditScope {
+  if (isPublicDistributionBuild()) {
+    throw new Error('Dev source edit approvals are disabled in the public distribution build.');
+  }
+  const continuation = typeof continuationOrId === 'string'
+    ? getDevSourceEditContinuation(continuationOrId)
+    : continuationOrId;
+  if (!continuation) throw new Error('Dev source edit continuation not found.');
+  if (continuation.status !== 'approved') {
+    throw new Error(`Dev source edit ${continuation.id} cannot restore access in status=${continuation.status}.`);
+  }
+  const sid = String(continuation.sessionId || '').trim();
+  if (!sid) throw new Error(`Dev source edit ${continuation.id} has no owning session.`);
+  const allowedFiles = normalizeAllowedFiles(continuation.allowedFiles);
+  const allowedDirs = normalizeAllowedDirs(continuation.allowedDirs);
+  if (allowedFiles.length === 0) {
+    throw new Error(`Dev source edit ${continuation.id} has no restorable source files.`);
+  }
+  const currentScope = getSessionMutationScope(sid);
+  const mergedFiles = Array.from(new Set([...(currentScope?.allowedFiles || []), ...allowedFiles]));
+  const mergedDirs = Array.from(new Set([...(currentScope?.allowedDirs || []), ...allowedDirs]));
+  const scope: DevSourceEditScope = {
+    devEditId: continuation.id,
+    allowedFiles: mergedFiles,
+    allowedDirs: mergedDirs,
+    verificationProfile: continuation.verificationProfile,
+    verificationProfiles: continuation.verificationProfiles,
+    plan: continuation.plan,
+    planHash: continuation.planHash,
+    approvalId: continuation.approvalId,
+    expiresAt: Date.now() + DEFAULT_TTL_MS,
+  };
+  setSessionMutationScope(sid, { allowedFiles: mergedFiles, allowedDirs: mergedDirs });
+  activateToolCategory(sid, 'prometheus_source_read');
+  activateToolCategory(sid, 'prometheus_source_write');
+  grants.set(sid, scope);
+  registerCoordinatedDevEdit({
+    id: continuation.id,
+    sessionId: sid,
+    files: allowedFiles,
+    leaseMs: DEFAULT_TTL_MS,
+  });
+  appendAuditEntry({
+    sessionId: sid,
+    actionType: 'approval_resolved',
+    toolName: 'prometheus_request_ops',
+    toolArgs: {
+      action: 'restore_existing_dev_edit_access',
+      devEditId: continuation.id,
+      allowedFiles,
+      restoredBy,
+    },
+    policyTier: 'commit',
+    approvalStatus: 'approved',
+    resultSummary: `Restored the existing approved dev-edit scope for ${allowedFiles.length} file(s); no new request or approval was created.`,
+  });
+  return scope;
+}
+
 export function markDevSourceEditContinuationComplete(input: {
   id?: string;
   sessionId?: string;

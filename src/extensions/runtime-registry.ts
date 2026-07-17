@@ -23,6 +23,8 @@ type RegisteredTool = PrometheusExtensionTool & {
   extensionId: string;
 };
 
+const CONNECTOR_CONNECTION_CACHE_TTL_MS = 5_000;
+
 function descriptorContracts(manifest: LoadedExtensionDescriptor) {
   if (manifest.contracts) {
     return {
@@ -60,6 +62,8 @@ export class PrometheusExtensionRuntimeRegistry {
   private tools = new Map<string, RegisteredTool>();
   private connectors = new Map<string, PrometheusConnectorRuntime & { extensionId: string }>();
   private connectorStatusCache: { at: number; text: string } | null = null;
+  private connectorConnectionCache = new Map<string, { at: number; connected: boolean }>();
+  private revision = 0;
   private connectorHealth = new Map<string, { authState: 'expired_or_invalid'; lastAuthError: string; reauthRequired: true; at: number }>();
   private providers = new Map<string, PrometheusProviderRuntime & { extensionId: string }>();
   private mcpPresets = new Map<string, PrometheusMcpPresetRuntime & { extensionId: string }>();
@@ -130,6 +134,7 @@ export class PrometheusExtensionRuntimeRegistry {
     }
     this.tools.set(tool.name, { ...tool, extensionId });
     this.connectorStatusCache = null;
+    this.revision++;
   }
 
   unregisterTool(name: string, extensionId?: string): boolean {
@@ -137,13 +142,43 @@ export class PrometheusExtensionRuntimeRegistry {
     if (!existing) return false;
     if (extensionId && existing.extensionId !== extensionId) return false;
     const deleted = this.tools.delete(name);
-    if (deleted) this.connectorStatusCache = null;
+    if (deleted) {
+      this.connectorStatusCache = null;
+      this.revision++;
+    }
     return deleted;
   }
 
   registerConnector(extensionId: string, connector: PrometheusConnectorRuntime): void {
     this.connectors.set(connector.id, { ...connector, extensionId });
     this.connectorStatusCache = null;
+    this.connectorConnectionCache.delete(connector.id);
+    this.revision++;
+  }
+
+  getRevision(): number {
+    return this.revision;
+  }
+
+  invalidateConnectorState(connectorId?: string): void {
+    if (connectorId) this.connectorConnectionCache.delete(connectorId);
+    else this.connectorConnectionCache.clear();
+    this.connectorStatusCache = null;
+    this.revision++;
+  }
+
+  private isConnectorConnected(connectorId: string, now = Date.now()): boolean {
+    const cached = this.connectorConnectionCache.get(connectorId);
+    if (cached && now - cached.at <= CONNECTOR_CONNECTION_CACHE_TTL_MS) return cached.connected;
+    const connector = this.connectors.get(connectorId);
+    let connected = false;
+    try {
+      connected = connector?.isConnected?.() === true;
+    } catch {
+      connected = false;
+    }
+    this.connectorConnectionCache.set(connectorId, { at: now, connected });
+    return connected;
   }
 
   registerProvider(extensionId: string, provider: PrometheusProviderRuntime): void {
@@ -183,12 +218,16 @@ export class PrometheusExtensionRuntimeRegistry {
   }
 
   listConnectedConnectorToolDefinitions(): any[] {
+    const now = Date.now();
+    const connectedById = new Map<string, boolean>();
     return this.listTools()
       .filter((tool) => {
         const connectorId = String((tool as any).connectorId || '').trim();
         if (!connectorId) return true;
-        const connector = this.connectors.get(connectorId);
-        return connector?.isConnected?.() === true;
+        if (!connectedById.has(connectorId)) {
+          connectedById.set(connectorId, this.isConnectorConnected(connectorId, now));
+        }
+        return connectedById.get(connectorId) === true;
       })
       .map(toFunctionTool);
   }
@@ -241,7 +280,7 @@ export class PrometheusExtensionRuntimeRegistry {
     const connectors = this.listConnectors();
     const rows = connectors.map((connector) => ({
       connector,
-      connected: connector.isConnected?.() === true,
+      connected: this.isConnectorConnected(connector.id, now),
     }));
     const connected = rows.filter((row) => row.connected);
     const disconnected = rows.filter((row) => !row.connected);

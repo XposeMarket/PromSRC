@@ -17,7 +17,10 @@ import {
 } from './tasks/task-store';
 import { collectTurnFileChangesFromProcessEntries } from './file-change-summary';
 import { addMessage, flushSession, getHistory, getWorkspace } from './session';
-import { recordMainChatGoalInterruptedForRestart } from './main-chat-goals';
+import {
+  finalizeMainChatGoalCrashRecovery,
+  recordMainChatGoalInterruptedForRestart,
+} from './main-chat-goals';
 
 const TASK_RUNTIME_KINDS = new Set([
   'background_task',
@@ -38,6 +41,14 @@ export interface HotRestartMainChatRecovery {
   summary: string;
 }
 
+const crashRecoveredMainChatGoalSessionIds = new Set<string>();
+
+export function consumeCrashRecoveredMainChatGoalSessionIds(): string[] {
+  const sessionIds = Array.from(crashRecoveredMainChatGoalSessionIds);
+  crashRecoveredMainChatGoalSessionIds.clear();
+  return sessionIds;
+}
+
 function isTaskRuntime(runtime: LiveRuntimeSnapshot): boolean {
   return !!runtime.taskId || TASK_RUNTIME_KINDS.has(String(runtime.kind || ''));
 }
@@ -53,6 +64,20 @@ function plannedRestartToolName(runtime: LiveRuntimeSnapshot): string | undefine
   for (const toolName of candidates) {
     if (toolName === 'gateway_restart') return toolName;
     if (toolName === 'prom_apply_dev_changes') return toolName;
+    if (/^(prom_)?dev_.*apply/i.test(toolName)) return toolName;
+    if (/^(apply_)?dev_source_(changes|edit|patch)$/i.test(toolName)) return toolName;
+  }
+  return undefined;
+}
+
+function explicitlyOwnedMainChatRestartToolName(runtime: LiveRuntimeSnapshot): string | undefined {
+  const candidates = [
+    runtime.checkpoint?.toolName,
+    runtime.recoveryData?.restartTrigger,
+    runtime.recoveryData?.plannedRestartTool,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  for (const toolName of candidates) {
+    if (toolName === 'gateway_restart' || toolName === 'prom_apply_dev_changes') return toolName;
     if (/^(prom_)?dev_.*apply/i.test(toolName)) return toolName;
     if (/^(apply_)?dev_source_(changes|edit|patch)$/i.test(toolName)) return toolName;
   }
@@ -212,6 +237,69 @@ function addCheckpointMessageToSession(runtime: LiveRuntimeSnapshot, reason: str
     disableMemoryFlushCheck: true,
   });
   flushSession(runtime.sessionId);
+}
+
+function addCrashRecoveryMessageToSession(runtime: LiveRuntimeSnapshot, reason: string): boolean {
+  const sessionId = String(runtime.sessionId || '').trim();
+  if (!sessionId) return false;
+  const goal = finalizeMainChatGoalCrashRecovery(sessionId, {
+    reason,
+    recoveredAt: Date.now(),
+  });
+  if (!goal || goal.restartCheckpoint?.phase !== 'crash_recovered') return false;
+
+  const touchedFiles = goal.restartCheckpoint.touchedFiles || [];
+  const checkpointFiles = goal.restartCheckpoint.affectedFiles || [];
+  const devEditId = goal.restartCheckpoint.devEditId;
+  const content = [
+    'The gateway restarted unexpectedly while this goal was still editing.',
+    'The partial work was preserved, but the changes were not yet verified, applied, or confirmed live.',
+    devEditId ? `Prometheus will resume the existing dev edit (${devEditId}) instead of creating a duplicate.` : '',
+    touchedFiles.length
+      ? `Before editing further, Prometheus will reread the files known to have been touched: ${touchedFiles.join(', ')}.`
+      : checkpointFiles.length
+        ? `Partial edits may exist. Before any further mutation, Prometheus will reread the checkpoint file list: ${checkpointFiles.join(', ')}.`
+        : 'Partial edits may exist. Before any further mutation, Prometheus will reread the relevant source and persisted work state.',
+    'Resuming the same goal from its crash-recovery checkpoint.',
+  ].filter(Boolean).join('\n');
+  const recent = getHistory(sessionId, 12);
+  const alreadyPresent = recent.some((message) =>
+    message.role === 'assistant'
+    && message.messageKind === 'restart_status'
+    && String(message.content || '').trim() === content
+  );
+  if (!alreadyPresent) {
+    addMessage(sessionId, {
+      role: 'assistant',
+      messageKind: 'restart_status',
+      activeRunKind: 'main_chat_goal',
+      goalId: goal.id,
+      goalTurnNumber: goal.restartCheckpoint.turnNumber,
+      content,
+      timestamp: Date.now(),
+      channel: runtime.source as any,
+      channelLabel: runtime.source || 'system',
+      processEntries: [{
+        ts: new Date().toLocaleTimeString(),
+        type: 'warning',
+        actor: 'Runtime Recovery',
+        content,
+        extra: {
+          packetType: 'main_chat_goal_crash_recovery',
+          restartReason: reason,
+          devEditId,
+          touchedFiles,
+          checkpointFiles,
+        },
+      }],
+    }, {
+      disableCompactionCheck: true,
+      disableMemoryFlushCheck: true,
+    });
+  }
+  flushSession(sessionId);
+  crashRecoveredMainChatGoalSessionIds.add(sessionId);
+  return true;
 }
 
 function pauseMainChatGoalRuntimeForRestart(runtime: LiveRuntimeSnapshot, reason: string): void {
@@ -458,11 +546,17 @@ export function recoverInterruptedRuntimes(opts: {
   launchBackgroundTaskRunner?: (taskId: string) => void;
   completePlainGatewayRestartTask?: (taskId: string) => boolean;
   notify?: (message: string) => void;
-} = {}): { inspected: number; resumedTasks: string[]; interruptedChats: string[] } {
+} = {}): {
+  inspected: number;
+  resumedTasks: string[];
+  interruptedChats: string[];
+  crashRecoveredGoalSessionIds: string[];
+} {
   const runtimes = listInterruptedRuntimes()
     .filter((runtime) => Number(runtime.pid || 0) !== process.pid);
   const resumedTasks: string[] = [];
   const interruptedChats: string[] = [];
+  const crashRecoveredGoalSessionIds = new Set<string>();
 
   for (const runtime of runtimes) {
     try {
@@ -528,10 +622,29 @@ export function recoverInterruptedRuntimes(opts: {
       }
 
       if ((runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal') && runtime.sessionId) {
-        pauseMainChatGoalRuntimeForRestart(runtime, runtime.interruptReason || 'gateway_restart');
-        if (runtime.kind === 'main_chat') addCheckpointMessageToSession(runtime, runtime.interruptReason || 'gateway_restart', 'recovered');
+        const reason = runtime.interruptReason || 'gateway_restart';
+        // A generic interruptReason such as "gateway_restart" is also used for
+        // supervisor crash recovery, so only explicit tool/checkpoint ownership
+        // may route a main-chat goal into BOOT's planned-restart path.
+        const plannedRestartTool = explicitlyOwnedMainChatRestartToolName(runtime);
+        let crashRecoveryFinalized = false;
+        pauseMainChatGoalRuntimeForRestart(runtime, reason);
+        if (runtime.kind === 'main_chat') {
+          addCheckpointMessageToSession(runtime, reason, 'recovered');
+        } else if (!plannedRestartTool) {
+          const sessionId = String(runtime.sessionId).trim();
+          if (!crashRecoveredGoalSessionIds.has(sessionId) && addCrashRecoveryMessageToSession(runtime, reason)) {
+            crashRecoveredGoalSessionIds.add(sessionId);
+            crashRecoveryFinalized = true;
+          }
+        }
         interruptedChats.push(runtime.sessionId);
-        markDurableRuntimeRecovered(runtime.id, 'interrupted', { recovery: 'chat_checkpointed', sessionId: runtime.sessionId });
+        markDurableRuntimeRecovered(runtime.id, 'interrupted', {
+          recovery: crashRecoveryFinalized
+            ? 'main_chat_goal_crash_recovered'
+            : 'chat_checkpointed',
+          sessionId: runtime.sessionId,
+        });
         continue;
       }
 
@@ -547,7 +660,12 @@ export function recoverInterruptedRuntimes(opts: {
     );
   }
 
-  return { inspected: runtimes.length, resumedTasks, interruptedChats };
+  return {
+    inspected: runtimes.length,
+    resumedTasks,
+    interruptedChats,
+    crashRecoveredGoalSessionIds: Array.from(crashRecoveredGoalSessionIds),
+  };
 }
 
 

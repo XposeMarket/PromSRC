@@ -89,7 +89,10 @@ async function main(): Promise<void> {
   );
   // Queued cancellation must remove the request without disturbing the active
   // provider call.
-  queuedController.abort(new Error('queued regression cancellation'));
+  // Default abort reasons are DOMExceptions with a getter-only name. This is
+  // the exact stop-now path that previously threw uncaught and killed the
+  // whole gateway.
+  queuedController.abort();
   await assert.rejects(second, (error: any) => error?.name === 'AbortError');
   await first;
 
@@ -101,9 +104,13 @@ async function main(): Promise<void> {
     { signal: controller.signal, onToken: (value) => afterRejectEvents.push(value) },
   );
   await waitFor(() => getModelCallWorkerPoolStatus().providerStarted > startedBeforeCancel);
-  controller.abort(new Error('active regression cancellation'));
+  controller.abort();
   await assert.rejects(cancelled, (error: any) => error?.name === 'AbortError');
   await waitFor(() => getModelCallWorkerPoolStatus().active === 0, 7_000);
+  // A worker that ignores cancellation is killed after the grace period and is
+  // replaced lazily. Warm that replacement before testing an active timeout so
+  // worker startup time is not misclassified as queue time.
+  await dispatchModelCallWorker(request() as any);
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.deepEqual(afterRejectEvents, [], 'callbacks must stop after the parent promise rejects');
 
@@ -116,7 +123,8 @@ async function main(): Promise<void> {
   await waitFor(() => getModelCallWorkerPoolStatus().providerStarted > beforeStubborn);
   stubbornController.abort(new Error('stubborn provider cancellation'));
   await assert.rejects(stubborn, (error: any) => error?.name === 'AbortError');
-  await waitFor(() => getModelCallWorkerPoolStatus().active === 0, 2_000);
+  await waitFor(() => getModelCallWorkerPoolStatus().active === 0, 7_000);
+  await dispatchModelCallWorker(request() as any);
 
   await assert.rejects(
     () => dispatchModelCallWorker(request({ __testDelayMs: 2_000 }) as any, {}, 1_000),

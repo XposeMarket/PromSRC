@@ -16,6 +16,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
+import { digestCanonicalToolArgs, previewCanonicalToolArgs } from '../chat/tool-loop-identity';
 import { enqueuePostTurnJob, getPostTurnQueueStatus } from '../chat/post-turn-queue';
 import { getContextBuildLimiterStatus, runWithContextBuildPermit } from '../chat/context-build-limiter';
 import { getContextBuildWorkerPoolStatus } from '../chat/context-build-worker-client';
@@ -61,6 +62,7 @@ import { executePolymarketLookup } from '../../tools/polymarket';
 import { executeMapLookup } from '../../tools/mapcard';
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../context/model-context';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
+import { envelopeOversizedToolResult } from '../tool-result-envelope';
 import { hookBus } from '../hooks';
 import { loadWorkspaceHooks } from '../hook-loader';
 import { runBootMd } from '../boot';
@@ -1065,6 +1067,21 @@ function truncateRuntimeProcessText(value: unknown, max = 4000): string {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
+function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: unknown): void {
+  const content = truncateRuntimeProcessText(value, 12_000);
+  if (!content) return;
+  const previous = entries[entries.length - 1];
+  if (previous?.type === 'think' && String(previous?.content || '').trim() === content) return;
+  entries.push({
+    ts: new Date().toLocaleTimeString(),
+    type: 'think',
+    actor: 'Prom',
+    content,
+    extra: { source: 'runtime_checkpoint', event: 'token_narration_boundary' },
+  });
+  if (entries.length > 250) entries.splice(0, entries.length - 250);
+}
+
 function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
   const eventType = String(type || '').trim();
   if (!eventType || eventType === 'heartbeat' || eventType === 'token' || eventType === 'thinking_delta') return null;
@@ -1374,6 +1391,7 @@ import {
   registerLiveRuntime,
   finishLiveRuntime,
   updateLiveRuntimeCheckpoint,
+  markLiveRuntimeProgress,
   listLiveRuntimes,
   getLiveRuntime,
   abortLiveRuntime,
@@ -2335,8 +2353,9 @@ async function handleChat(
   const workspacePath = shouldUseSessionWorkspace(executionMode, sessionWorkspace)
     ? sessionWorkspace
     : configuredWorkspace;
+  const workContextConfig = (getConfig().getConfig() as any)?.work_context || {};
   const codingContextPacketEnabled = process.env.PROMETHEUS_CODING_CONTEXT_PACKET_V2 === '1'
-    && !isDirectSubagentChatTurn;
+    || workContextConfig.enabled === true;
   if (workspacePath && sessionWorkspace !== workspacePath) {
     setWorkspace(sessionId, workspacePath);
   }
@@ -2345,6 +2364,11 @@ async function handleChat(
   const durableTaskContextMatch = callerContextText.match(/\[BACKGROUND TASK CONTEXT\][\s\S]*?\bTask ID:\s*([a-zA-Z0-9_-]+)/i);
   const durableTaskId = String(durableTaskContextMatch?.[1] || '').trim();
   const hasDurableTaskPlan = !!durableTaskId;
+  const codingContextActor = getRuntimeActorContext(sessionId);
+  const codingContextActorId = codingContextActor?.kind === 'agent'
+    ? String(codingContextActor.agentId || '').trim()
+    : '';
+  const codingContextScopeId = codingContextActorId ? `agent:${codingContextActorId}` : `session:${sessionId}`;
   const voiceAgentHandoffActive = /\[VOICE_AGENT_HANDOFF\]/i.test(callerContextText);
   const voiceAgentChatHandoffActive = /\[VOICE_AGENT_CHAT_HANDOFF\]/i.test(callerContextText);
   const linkedVoiceWorkgroup = voiceAgentChatHandoffActive
@@ -2476,6 +2500,9 @@ async function handleChat(
   const codingContextPacketDecision = selectCodingContextPacket({
     enabled: codingContextPacketEnabled,
     sessionId,
+    scopeId: codingContextScopeId,
+    actorId: codingContextActorId || undefined,
+    runtimeTaskId: durableTaskId || undefined,
     message,
     projectRoot: workspacePath,
     executionMode,
@@ -3619,32 +3646,17 @@ async function handleChat(
   const loopWarnNudged = new Set<string>();
   const loopBlockNudged = new Set<string>();
   const loopContinueAllowed = new Set<string>();
-  const recentToolCalls: Array<{ name: string; argsHash: string }> = [];
-  const hashArgs = (args: any): string => {
-    try {
-      const normalize = (v: any): any => {
-        if (Array.isArray(v)) return v.map(normalize);
-        if (v && typeof v === 'object') {
-          const out: Record<string, any> = {};
-          for (const k of Object.keys(v).sort()) out[k] = normalize(v[k]);
-          return out;
-        }
-        return v;
-      };
-      return JSON.stringify(normalize(args || {})).slice(0, 200);
-    } catch {
-      return String(args || '').slice(0, 200);
-    }
-  };
+  const recentToolCalls: Array<{ name: string; argsDigest: string }> = [];
+  const hashArgs = (args: any): string => digestCanonicalToolArgs(args);
   const checkLoopDetection = (toolName: string, args: any): { state: 'ok' | 'warn' | 'block'; repeats: number } => {
     if (!loopDetectionEnabled) return { state: 'ok', repeats: 1 };
-    const argsHash = hashArgs(args);
-    const loopSig = `${toolName}:${argsHash}`;
+    const argsDigest = hashArgs(args);
+    const loopSig = `${toolName}:${argsDigest}`;
     if (loopContinueAllowed.has(loopSig)) return { state: 'ok', repeats: 1 };
     // Count includes this current attempt so thresholds are exact:
     // warning at 5th identical call, gate at 8th.
-    const repeats = recentToolCalls.filter((t) => t.name === toolName && t.argsHash === argsHash).length + 1;
-    recentToolCalls.push({ name: toolName, argsHash });
+    const repeats = recentToolCalls.filter((t) => t.name === toolName && t.argsDigest === argsDigest).length + 1;
+    recentToolCalls.push({ name: toolName, argsDigest });
     if (recentToolCalls.length > 20) recentToolCalls.shift();
     if (repeats >= loopCriticalThreshold) return { state: 'block', repeats };
     if (repeats >= loopWarningThreshold) return { state: 'warn', repeats };
@@ -3853,10 +3865,16 @@ async function handleChat(
           console.warn('[VoiceDispatch] Could not attach background spawn to voice workgroup:', err?.message || err);
         }
       }
-      const instrumentedResult = attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt);
+      const instrumentedResult = await envelopeOversizedToolResult(
+        attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt),
+        { sessionId, toolName },
+      );
       if (codingContextPacketEnabled) {
         observeCodingContext({
           sessionId,
+          scopeId: codingContextScopeId,
+          actorId: codingContextActorId || undefined,
+          runtimeTaskId: durableTaskId || undefined,
           objective: message,
           projectRoot: workspacePath,
           toolName,
@@ -4519,18 +4537,18 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   };
 
   const countRecentToolRepeats = (toolName: string, toolArgs: Record<string, any>): number => {
-    const argsHash = hashArgs(toolArgs);
-    const loopRepeats = recentToolCalls.filter((t) => t.name === toolName && t.argsHash === argsHash).length;
+    const argsDigest = hashArgs(toolArgs);
+    const loopRepeats = recentToolCalls.filter((t) => t.name === toolName && t.argsDigest === argsDigest).length;
     const priorRepeats = allToolResults.filter((result) =>
-      result.name === toolName && hashArgs(result.args) === argsHash,
+      result.name === toolName && hashArgs(result.args) === argsDigest,
     ).length;
     return Math.max(1, loopRepeats, priorRepeats + 1);
   };
 
   const countRecentToolFailures = (toolName: string, toolArgs: Record<string, any>): number => {
-    const argsHash = hashArgs(toolArgs);
+    const argsDigest = hashArgs(toolArgs);
     return allToolResults.filter((result) =>
-      result.error && result.name === toolName && hashArgs(result.args) === argsHash,
+      result.error && result.name === toolName && hashArgs(result.args) === argsDigest,
     ).length;
   };
 
@@ -6609,6 +6627,9 @@ RULES:
       }
     } catch (err: any) {
       console.error('[v2] Chat error:', err.message);
+      if (err?.code === 'CODEX_INCOMPLETE_STREAM' || err?.name === 'CodexIncompleteStreamError') {
+        return { type: 'chat', text: 'No final response was generated. Please retry.' };
+      }
       return { type: 'chat', text: `Error: ${err.message}` };
     }
 
@@ -7195,48 +7216,11 @@ RULES:
         finalText = trimGrokRunawayRepetition(finalText);
       }
       if (!finalText || finalText.length < 5) {
-        if (allToolResults.length > 0) {
-          // Build a meaningful auto-summary from what the tools actually did
-          // instead of just saying 'Done!' which gives no useful information.
-          const lastResult = allToolResults[allToolResults.length - 1];
-          if (lastResult.error) {
-            finalText = `Tool failed: ${lastResult.result.slice(0, 200)}`;
-          } else {
-            // Summarize the last few tool calls into a compact completion statement
-            const actionSummary = allToolResults
-              .filter(r => !r.error)
-              .slice(-6)
-              .map(r => {
-                const name = String(r.name || 'tool');
-                const args = r.args || {};
-                if (isSetupOrScoutTool(name)) {
-                  return '';
-                }
-                // Extract the most meaningful arg per tool type
-                if (name === 'create_file' || name === 'write') {
-                  return args.filename || args.name || args.path || name;
-                }
-                if (name === 'replace_lines' || name === 'find_replace' || name === 'insert_after' || name === 'delete_lines') {
-                  return `edited ${args.filename || args.name || 'file'}`;
-                }
-                if (name === 'web_fetch' || name === 'web_search') {
-                  return `searched`;
-                }
-                if (name === 'browser_open') {
-                  return `opened ${String(args.url || '').slice(0, 50)}`;
-                }
-                // For other tools just use the result preview
-                return String(r.result || '').slice(0, 80).replace(/\n/g, ' ');
-              })
-              .filter(Boolean);
-            const uniqueActions = Array.from(new Set(actionSummary));
-            finalText = uniqueActions.length > 0
-              ? `Done. ${uniqueActions.join(', ')}.`
-              : `Completed ${allToolResults.length} step${allToolResults.length !== 1 ? 's' : ''}.`;
-          }
-        } else {
-          finalText = emptyModelFinalFallback;
-        }
+        // Never infer completion from tool payloads. A tool can succeed while the
+        // user's larger request remains incomplete, and truncated JSON is not a
+        // user-facing answer. The provider adapter already retries incomplete
+        // Codex streams once; after that, report the missing final explicitly.
+        finalText = 'No final response was generated. Please retry.';
       }
       if (greetingLikeTurn && finalText.length > 220) {
         finalText = finalText.split(/\n+/)[0].slice(0, 220).trim();
@@ -7536,9 +7520,9 @@ RULES:
           loopGateToolActive = false;
           loopWarnNudged.delete(targetSig);
           loopBlockNudged.delete(targetSig);
-          const argsHash = hashArgs(targetArgs);
+          const argsDigest = hashArgs(targetArgs);
           for (let i = recentToolCalls.length - 1; i >= 0; i--) {
-            if (recentToolCalls[i]?.name === targetToolName && recentToolCalls[i]?.argsHash === argsHash) {
+            if (recentToolCalls[i]?.name === targetToolName && recentToolCalls[i]?.argsDigest === argsDigest) {
               recentToolCalls.splice(i, 1);
             }
           }
@@ -7569,7 +7553,7 @@ RULES:
       if (loopCheck.state === 'block') {
         loopGateToolActive = true;
         const blockMsg = `${loopPivotNudge} Gate raised: ${toolName} with identical arguments has run ${loopCheck.repeats} times (critical threshold ${loopCriticalThreshold}). To continue intentionally, call tool_loop_continue with tool_name="${toolName}", args equal to the exact arguments you still need to repeat, and a concrete reason.`;
-        console.warn(`[v2] LOOP BLOCK: ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)}) x${loopCheck.repeats}`);
+        console.warn(`[v2] LOOP BLOCK: ${toolName}(${previewCanonicalToolArgs(toolArgs, 80)}) x${loopCheck.repeats}`);
         const blockedResult: ToolResult = {
           name: toolName,
           args: toolArgs,
@@ -7605,7 +7589,7 @@ RULES:
       if (loopCheck.state === 'warn') {
         loopGateToolActive = true;
         const warnMsg = `${loopPivotNudge} Warning: ${toolName} with identical arguments repeated ${loopCheck.repeats} times (warning threshold ${loopWarningThreshold}).`;
-        console.warn(`[v2] LOOP WARN: ${toolName}(${JSON.stringify(toolArgs).slice(0, 80)}) x${loopCheck.repeats}`);
+        console.warn(`[v2] LOOP WARN: ${toolName}(${previewCanonicalToolArgs(toolArgs, 80)}) x${loopCheck.repeats}`);
         sendSSE('info', { message: warnMsg });
         if (!loopWarnNudged.has(loopSig)) {
           loopWarnNudged.add(loopSig);
@@ -8927,6 +8911,7 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
         broadcastMainChatGoalState(sid, 'turn_started', { turnsUsed: current.turnsUsed });
         const runtimeProcessEntries: Record<string, any>[] = [];
         let runtimeThinkingTail = '';
+        let runtimeNarrationTail = '';
 
         let result: HandleChatResult | null = null;
         try {
@@ -8935,6 +8920,15 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
             sid,
             (event, data) => {
               const checkpoint: Record<string, any> = { event, at: Date.now() };
+              if (event === 'token') {
+                const token = String(data?.text || '').trim();
+                if (token) runtimeNarrationTail = `${runtimeNarrationTail}${data?.text || ''}`.slice(-12_000);
+                return;
+              }
+              if (event === 'tool_call' && runtimeNarrationTail.trim()) {
+                appendRuntimeNarrationBoundary(runtimeProcessEntries, runtimeNarrationTail);
+                runtimeNarrationTail = '';
+              }
               if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
               if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
               if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
@@ -9064,8 +9058,9 @@ export function resumeMainChatGoalsInterruptedForRestart(targetSessionIds?: stri
   const policy = resolveMainChatGoalPolicy();
   if (!policy.enabled || !policy.autoResumeOnRestart) return [];
   const resumed: string[] = [];
+  const hasExplicitTargets = targetSessionIds !== undefined;
   const requested = new Set((targetSessionIds || []).map((id) => String(id || '').trim()).filter(Boolean));
-  const records = requested.size > 0
+  const records = hasExplicitTargets
     ? Array.from(requested).map((sessionId) => ({
         sessionId,
         current: true,
@@ -9083,6 +9078,9 @@ export function resumeMainChatGoalsInterruptedForRestart(targetSessionIds?: stri
     const checkpointPhase = String(goal?.restartCheckpoint?.phase || '').toLowerCase();
     const bootFinalized = checkpointPhase === 'boot_finalized' || checkpointPhase === 'resuming';
     if (!bootFinalized && !/gateway_restart|gateway_crash|restart|prom_apply_dev_changes/.test(`${pausedReason} ${checkpointReason}`)) continue;
+    if (checkpointPhase === 'crash_recovered') {
+      broadcastMainChatGoalState(sessionId, 'startup_crash_recovered', { goal });
+    }
     const result = handleMainChatGoalCommand(sessionId, '/goal resume');
     if (result.goal?.status === 'active') {
       startMainChatGoalRunner(sessionId, 'startup_auto_resume');
@@ -10366,6 +10364,7 @@ function summarizeMobileRuntime(runtime: any): Record<string, any> {
     agentId: runtime?.agentId ? String(runtime.agentId) : '',
     scheduleId: runtime?.scheduleId ? String(runtime.scheduleId) : '',
     source: runtime?.source ? String(runtime.source) : '',
+    clientRequestId: runtime?.clientRequestId ? String(runtime.clientRequestId) : '',
     detail: runtime?.detail ? String(runtime.detail).slice(0, 500) : '',
     startedAt: Number(runtime?.startedAt || 0),
     abortable: runtime?.abortable === true,
@@ -13339,31 +13338,20 @@ async function executeVoiceTaskControl(sessionId: string, args: Record<string, a
     const resumeAfter = args?.resume_after_message === true || args?.resumeAfterMessage === true;
     const results: any[] = [];
     for (const task of targets) {
-      const recovery = await handleTaskRecoveryMessage(task.id, message, {
-        sourceSessionId: sessionId,
-        source: 'chat',
-        visibleMessage: message,
+      const control: any = await handleTaskControlAction(sessionId, {
+        action: 'steer',
+        task_id: task.id,
+        message,
+        source: 'voice_task_control',
+        resume_after_message: resumeAfter,
       });
-      let control: any = null;
-      if (!recovery.handled) {
-        const existing = Array.isArray(task.resumeContext?.messages) ? task.resumeContext.messages : [];
-        updateResumeContext(task.id, {
-          messages: [
-            ...existing,
-            { role: 'user', content: `[VOICE TASK GUIDANCE]\n${message}`, timestamp: Date.now() },
-          ].slice(-80),
-        });
-        appendJournal(task.id, { type: 'status_push', content: `Voice guidance added: ${message.slice(0, 220)}` });
-      }
-      if (resumeAfter) {
-        control = await handleTaskControlAction(sessionId, { action: 'resume', task_id: task.id, note: message });
-      }
       results.push({
         task_id: task.id,
         title: task.title,
-        recoveryHandled: recovery.handled,
-        resumed: recovery.resumed || control?.success === true,
-        reply: compactVoiceText(recovery.reply || control?.message || 'Guidance recorded.', 900),
+        steered: control?.steered === true,
+        queued: control?.queued === true,
+        resumed: control?.resumed === true,
+        reply: compactVoiceText(control?.message || 'Guidance recorded.', 900),
         control,
       });
     }
@@ -13516,8 +13504,8 @@ async function executeVoiceAgentControl(sessionId: string, args: Record<string, 
   if (action === 'run_status') return voiceToolResult(true, `Loaded ${target.title}.`, { task: summarizeVoiceTaskTargets([target])[0] });
   if (action === 'run_message') {
     if (!message) return voiceToolResult(false, 'run_message requires a message.');
-    const recovery = await handleTaskRecoveryMessage(target.id, message, { sourceSessionId: sessionId, source: 'chat', visibleMessage: message });
-    return voiceToolResult(recovery.handled, recovery.handled ? `Sent recovery guidance to ${agent?.name || voiceTaskOwner(target).label}.` : 'That run is not eligible for recovery chat.', { taskId: target.id, reply: compactVoiceText(recovery.reply || '', 1600), resumed: recovery.resumed, tracking: 'none' });
+    const control: any = await handleTaskControlAction(sessionId, { action: 'steer', task_id: target.id, message, source: 'voice_agent_control' });
+    return voiceToolResult(control.success === true, control.message || `Sent guidance to ${agent?.name || voiceTaskOwner(target).label}.`, { taskId: target.id, control, tracking: 'none' });
   }
   const actionMap: Record<string, string> = { run_resume: 'resume', run_pause: 'pause', run_rerun: 'rerun', run_cancel: 'cancel' };
   const controlAction = actionMap[action];
@@ -19209,6 +19197,7 @@ router.post('/api/chat', async (req, res) => {
   const runtimeProcessEntries: Record<string, any>[] = [];
   let __firstContentLogged = false;
   let runtimeThinkingTail = '';
+  let runtimeNarrationTail = '';
   let lastRuntimeThinkingCheckpointAt = 0;
   sendSSE = (event, data) => {
     if (event !== 'heartbeat') lastNonHeartbeatSseAt = Date.now();
@@ -19234,7 +19223,14 @@ router.post('/api/chat', async (req, res) => {
     }
     if (event === 'token') {
       if (!__firstContentLogged) { __firstContentLogged = true; __turnTimingLog(`FIRST_CONTENT(${event})`); }
+      const token = String(data?.text || '');
+      if (token.trim()) runtimeNarrationTail = `${runtimeNarrationTail}${token}`.slice(-12_000);
+      markLiveRuntimeProgress(runtimeId, { event: 'token', phase: 'model_stream' });
       return;
+    }
+    if (event === 'tool_call' && runtimeNarrationTail.trim()) {
+      appendRuntimeNarrationBoundary(runtimeProcessEntries, runtimeNarrationTail);
+      runtimeNarrationTail = '';
     }
     if (event === 'ui_preflight') __turnTimingLog(`preflight: ${String(data?.message || '').slice(0, 60)}`);
     else if (event === 'thinking' || event === 'tool_call' || event === 'tool_result' || event === 'progress_state') __turnTimingLog(`${event}: ${String(data?.message || data?.name || data?.action || '').slice(0, 60)}`);

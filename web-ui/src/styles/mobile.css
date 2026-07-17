@@ -10544,6 +10544,36 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 .pm-card .pm-card-head svg { width: 14px; height: 14px; }
 .pm-card .pm-card-body { font-size: 14px; line-height: 1.45; color: var(--pm-text-soft); }
 .pm-card .pm-card-body.strong { color: var(--pm-text); font-weight: 600; }
+
+/* Expanded task payloads can contain long prompts, paths, and log records. Keep
+   their intrinsic width from widening the mobile page and stranding it at a
+   horizontal scroll offset after a refresh. */
+#pm-tasks-body {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+#pm-tasks-filter,
+#pm-tasks-list,
+.pm-task-card,
+.pm-task-expanded,
+.pm-task-expanded > section,
+.pm-task-expanded .pm-card-body {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.pm-task-card > div,
+.pm-task-expanded > section > * {
+  min-width: 0;
+}
+.pm-task-expanded .pm-card-body {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .pm-task-final-response,
 .pm-task-evidence-entry,
 .pm-task-journal,

@@ -2185,7 +2185,10 @@ function _renderMobileWorkTimer(msg, opts = {}) {
   if (!_isMobileAssistantMessage(msg)) return '';
   const startedAt = _mobileAssistantWorkStartedAt(msg);
   if (!startedAt) return '';
-  const active = msg?.streaming === true;
+  // A final frame is the UI completion boundary even if the transport's later
+  // `done` callback has not cleared `streaming` yet. Keeping it "Working" in
+  // that gap also removed the trace disclosure after the answer appeared.
+  const active = msg?.streaming === true && msg?._pmFinalReceived !== true;
   const endedAt = Number(msg?.workEndedAt || 0);
   const duration = active
     ? Date.now() - startedAt
@@ -6407,12 +6410,13 @@ function _renderChatMessageHtml(m, index = -1) {
     if (!dockElsewhere) inner += _renderMobileQuestionCard(m.questionRequest);
   }
   const hasLiveTraceEntries = Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length > 0;
-  const showLiveWorkflowTrace = m.streaming && hasLiveTraceEntries;
+  const finalFrameReceived = m._pmFinalReceived === true;
+  const showLiveWorkflowTrace = m.streaming && !finalFrameReceived && hasLiveTraceEntries;
   const liveTraceHtml = showLiveWorkflowTrace
     ? _renderMobileGroupedTrace(m.liveTraceEntries, { streaming: true, openLiveCurrent: isVoiceTraceTurn })
     : '';
   const hasLiveTrace = !!liveTraceHtml;
-  const completedTraceEntries = !m.streaming ? _mobileWorkflowTraceEntriesForMessage(m) : [];
+  const completedTraceEntries = (!m.streaming || finalFrameReceived) ? _mobileWorkflowTraceEntriesForMessage(m) : [];
   const hasCompletedTrace = _mobileTraceHasToolGroup(completedTraceEntries);
   const hasPendingImageGeneration = _mobileHasPendingImageGeneration(m) && !_collectMessageMedia(m).some((media) => media.kind === 'image' && media.generated);
   if (hasLiveTrace) {
@@ -9218,9 +9222,27 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     if (sid && sid === requestedSession) {
       const event = String(msg?.event || '').trim();
       const status = String(msg?.goal?.status || '').trim();
-      const shouldRecoverGoalStream = /^(runner_started|turn_started|runtime_failure|startup_auto_resume)$/.test(event)
+      const checkpointPhase = String(msg?.goal?.restartCheckpoint?.phase || '').trim();
+      const shouldRecoverGoalStream = /^(runner_started|turn_started|runtime_failure|startup_auto_resume|startup_crash_recovered|crash_recovered|recovery_finalized|recovery_resumed)$/.test(event)
         || (!event && status === 'active');
       if (shouldRecoverGoalStream) {
+        scheduleMobileRunRecovery(120, { force: true, fullRefresh: false });
+      } else if (
+        event === 'runner_idle'
+        && status !== 'restarting'
+      ) {
+        // `runner_idle` is the durable backend boundary for an ended goal turn.
+        // Reconcile it with run-status so a gateway crash cannot leave the
+        // phone's cached streaming turn, tool activity, or busy composer alive.
+        // A legitimate planned apply restart remains `restarting` until the
+        // replacement gateway confirms it, so never downgrade that state here.
+        scheduleMobileRunRecovery(120, { force: true, fullRefresh: false });
+      } else if (
+        status === 'active'
+        && /^(boot_finalized|crash_recovered|resuming)$/.test(checkpointPhase)
+      ) {
+        // Accept the persisted recovered-goal state even if an older gateway
+        // does not emit the newer explicit recovery event name.
         scheduleMobileRunRecovery(120, { force: true, fullRefresh: false });
       }
     }
@@ -10327,6 +10349,28 @@ void main() {
           hasLocalLiveHistory = false;
         }
         aiTurn.streaming = true;
+        const statusRuntimeId = String(status?.run?.id || status?.activeRun?.id || '').trim();
+        const localRuntimeId = String(aiTurn.runtimeId || remembered?.runtimeId || '').trim();
+        const statusClientRequestId = String(status?.run?.clientRequestId || status?.activeRun?.clientRequestId || '').trim();
+        const localClientRequestId = String(aiTurn._clientRequestId || remembered?.clientRequestId || '').trim();
+        const sameClientRequest = !!statusClientRequestId && !!localClientRequestId
+          && statusClientRequestId === localClientRequestId;
+        const clientRequestConflicts = !!statusClientRequestId && !!localClientRequestId
+          && statusClientRequestId !== localClientRequestId;
+        const localStartedAt = Number(aiTurn.workStartedAt || aiTurn.timestamp || remembered?.startedAt || 0) || 0;
+        const statusStartedAt = Number(status?.run?.startedAt || status?.activeRun?.startedAt || 0) || 0;
+        const clearlyNewerRuntime = !!statusStartedAt && !!localStartedAt && statusStartedAt > localStartedAt + 30_000;
+        // Runtime IDs can legitimately change when the gateway/supervisor
+        // reattaches the same user turn. Treat that as a new turn only when its
+        // start boundary also proves it is newer and no stable request ID ties
+        // the two sides together.
+        const runtimeIdentityConflicts = !!statusRuntimeId && !!localRuntimeId
+          && statusRuntimeId !== localRuntimeId && !sameClientRequest && clearlyNewerRuntime;
+        const localRunIdentityConflicts = clientRequestConflicts || runtimeIdentityConflicts;
+        // Recovery is monotonic: a visible/cache-restored timeline belonging to
+        // this runtime is richer than a checkpoint or partial replay until the
+        // server proves otherwise. Foregrounding the app must never erase it.
+        const canPreserveLocalTimeline = hasLocalLiveHistory && !localRunIdentityConflicts;
         const checkpointProcessLog = Array.isArray(status?.run?.checkpoint?.processEntries)
           ? status.run.checkpoint.processEntries
           : [];
@@ -10340,27 +10384,15 @@ void main() {
           Number(__pmChat.activeRuns?.[requestedSession]?.lastSeq || 0) || 0,
           Number(remembered?.lastSeq || 0) || 0,
         );
-        // Two distinct recovery scenarios with different correct behavior:
-        //
-        // 1. COLD REOPEN (app was closed/backgrounded and reopened):
-        //    remembered.disconnected === true. User wants to see the FULL tool
-        //    stream from the beginning of the turn. Always replay from seq=0
-        //    and reset the live aiTurn regardless of hasLocalLiveHistory. Stale
-        //    local entries from before the disconnect are incomplete — rebuild.
-        //
-        // 2. MID-STREAM RECONNECT (WS blip, brief focus loss, gateway restart):
-        //    No disconnected flag. Preserve existing live entries and only
-        //    append missed frames after rememberedLastSeq to avoid flickering.
-        //
-        // Previous bug: !hasLocalLiveHistory blocked full replay on cold reopen
-        // whenever the aiTurn had even 1 stale process entry — so replayAfter
-        // was set to e.g. seq 47 and only the tail of the stream ever showed.
+        // A cold/foreground recovery should request missing frames, but it must
+        // not automatically replace a richer local timeline. Replacement is
+        // reserved for an empty trace or a positively different runtime/turn.
         const isColdReopen = remembered?.disconnected === true;
-        let shouldResetForReplay = fullRefresh
-          || isColdReopen
-          || (!hasLocalLiveHistory && (fullRefresh || force));
-        // Full replay must also clear in-memory/local lastSeq; otherwise the
-        // seq=0 frames are fetched but noteChatStreamSeq rejects them as stale.
+        let shouldResetForReplay = !canPreserveLocalTimeline
+          && (fullRefresh || isColdReopen || force || !hasLocalLiveHistory);
+        // Only a destructive replacement clears the replay cursor here. Stream
+        // changes/gaps below may reset the cursor independently while retaining
+        // the already-rendered timeline.
         if (shouldResetForReplay && __pmChat.activeRuns?.[requestedSession]) {
           __pmChat.activeRuns[requestedSession] = {
             ...__pmChat.activeRuns[requestedSession],
@@ -10375,7 +10407,10 @@ void main() {
         const replayStreamId = String(replay?.stream?.streamId || '').trim();
         const rememberedStreamId = String(__pmChat.activeRuns?.[requestedSession]?.streamId || remembered?.streamId || '').trim();
         if (!shouldResetForReplay && replayStreamId && rememberedStreamId && replayStreamId !== rememberedStreamId) {
-          shouldResetForReplay = true;
+          // A gateway restart creates a new in-memory stream ID. Its seq=0
+          // replay is a continuation, not proof that the cached pre-restart
+          // timeline is stale. Reset only the dedupe cursor and merge it.
+          shouldResetForReplay = !canPreserveLocalTimeline;
           replayAfter = 0;
           if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
           const run = __pmChat.activeRuns[requestedSession] || {};
@@ -10390,7 +10425,9 @@ void main() {
           && firstSeq > 0
           && firstSeq > rememberedLastSeq + 1;
         if (replayGap) {
-          shouldResetForReplay = true;
+          // The server no longer has every intermediate frame. Preserve the
+          // local prefix and merge all frames the server can still provide.
+          shouldResetForReplay = !canPreserveLocalTimeline;
           replayAfter = 0;
           if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
           const run = __pmChat.activeRuns[requestedSession] || {};
@@ -10454,6 +10491,11 @@ void main() {
       const session = await loadMobileChatSession(requestedSession).catch(() => null);
       _rememberMobileSessionGoal(session, requestedSession);
       _renderMobileGoalPill(goalStrip, requestedSession);
+      // Run-status is the authority for live activity. Remove the cached
+      // streaming turn before merging persisted history; otherwise the merge
+      // intentionally preserves that "pending" local turn and the phone can
+      // stay stuck showing tool progress after a supervisor restart.
+      _clearMobileLiveRunForSession(requestedSession);
       const history = Array.isArray(session?.history) ? session.history : [];
       if (history.length) {
         const localThread = __pmChat.threads[requestedSession] || [];
@@ -10462,8 +10504,6 @@ void main() {
         _flushThreadRender(threadEl, body, requestedSession);
         if (!silent) pmToast('Recovered latest mobile chat result.', 'success');
       }
-      _clearMobileActiveRun(requestedSession);
-      _markMobileSessionRunning(requestedSession, false);
       setBusy(false);
       const queue = _getMobileQueuedPrompts(requestedSession);
       if (queue.length) {
@@ -11920,6 +11960,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
           _finishMobileVisualStreamText(aiTurn);
         }
         aiTurn._pmFinalReceived = true;
+        aiTurn.workEndedAt = Number(aiTurn.workEndedAt || Date.now()) || Date.now();
+        aiTurn.workDurationMs = Math.max(0, aiTurn.workEndedAt - _mobileAssistantWorkStartedAt(aiTurn));
         _rememberMobileCompletedAssistantTurn(requestedSession, aiTurn);
         _scheduleMobileThreadCacheSave(requestedSession, 80);
         renderThreadSoon();
@@ -19970,14 +20012,24 @@ function _ttsStop() {
   _markVoiceSpeakingEnd();
 }
 
-async function _speakSubagentVoiceReplyOnce(agentId, text) {
+function _claimSubagentVoiceReplyOnce(agentId, text) {
   const clean = _cleanVoiceSpeechText(text);
-  if (!clean) return false;
+  if (!clean) return '';
   const key = `${String(agentId || '').trim()}:${clean.toLowerCase().slice(0, 800)}`;
   const last = __pmVoice.subagentLastSpokenReply || {};
-  if (last.key === key && Date.now() - Number(last.at || 0) < 12000) return false;
+  if (last.key === key && Date.now() - Number(last.at || 0) < 12000) return '';
   __pmVoice.subagentLastSpokenReply = { key, at: Date.now(), text: clean, agentId: String(agentId || '').trim() };
   __pmVoice.lastAi = clean;
+  return clean;
+}
+
+async function _deliverSubagentVoiceReplyOnce(agentId, text) {
+  // Claim the completion before choosing an output. Subagent SSE completion can
+  // be observed by both the local stream and its reconciliation path; only one
+  // observer may hand the reply to either realtime summary audio or verbatim TTS.
+  const clean = _claimSubagentVoiceReplyOnce(agentId, text);
+  if (!clean) return false;
+  if (_realtimeAgentDataChannelOpen() && _requestMobileRealtimeAgentFinalSummary(clean)) return true;
   _ttsStop();
   await _ttsSpeak(clean);
   return true;
@@ -24003,8 +24055,7 @@ void main() {
         if (reply) {
           _setOrbState('speaking');
           _setStatus('Answered', `${label} replied`);
-          const spokeWithRealtimeAgent = _realtimeAgentDataChannelOpen() && _requestMobileRealtimeAgentFinalSummary(reply);
-          if (!spokeWithRealtimeAgent) await _speakSubagentVoiceReplyOnce(agentId, reply).catch(() => {});
+          await _deliverSubagentVoiceReplyOnce(agentId, reply).catch(() => {});
         } else {
           _setOrbState(null);
           _setStatus('Done', `${label} finished`);
@@ -29923,6 +29974,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
     }
     if (bodyEl && bodySnapshot) {
       const nextTop = Math.min(bodySnapshot.top, Math.max(0, bodyEl.scrollHeight - bodyEl.clientHeight));
+      bodyEl.scrollLeft = 0;
       bodyEl.scrollTop = nextTop;
     }
   }
@@ -31831,8 +31883,7 @@ async function _renderSubagentChatTab(slot, agent, attachStream) {
           && __pmVoice?.target?.kind === 'subagent'
           && String(__pmVoice.target.agentId || '') === String(agent.id || '')
         ) {
-          const spokeWithRealtimeAgent = _realtimeAgentDataChannelOpen() && _requestMobileRealtimeAgentFinalSummary(finalSubagentVoiceReply);
-          if (!spokeWithRealtimeAgent) await _speakSubagentVoiceReplyOnce(agent.id, finalSubagentVoiceReply).catch(() => {});
+          await _deliverSubagentVoiceReplyOnce(agent.id, finalSubagentVoiceReply).catch(() => {});
         }
         drainQueueSoon();
         resolveCompletion();

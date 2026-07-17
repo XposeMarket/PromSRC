@@ -1,0 +1,12 @@
+{
+  "skillId": "independent-fresh-context-review",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-07-17T14:28:03.708Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\independent-fresh-context-review",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "9b94fc40bbb15eb2"
+}

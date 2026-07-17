@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   getCodingContextPacketTelemetry,
   observeCodingContext,
+  reloadCodingContextPacketsForTest,
   resetCodingContextPacketsForTest,
   selectCodingContextPacket,
 } from './coding-context-packet';
+
+const packetStore = path.join(os.tmpdir(), `prometheus-coding-context-${process.pid}.json`);
+process.env.PROMETHEUS_CODING_CONTEXT_PACKET_STORE = packetStore;
+try { fs.rmSync(packetStore, { force: true }); } catch {}
 
 const root = process.cwd();
 const baseTime = Date.UTC(2026, 6, 16, 12, 0, 0);
@@ -145,7 +153,8 @@ const invalidated = selectCodingContextPacket({
   executionMode: 'interactive',
   now: baseTime + 1_000,
 });
-assert.deepEqual({ status: invalidated.status, reason: invalidated.reason }, { status: 'rejected_stale', reason: 'stale_targeted_evidence' });
+assert.equal(invalidated.status, 'injected');
+assert.match(invalidated.block, /dirty_unverified|required_action/);
 
 observeCodingContext({
   sessionId: 'mutation-session',
@@ -186,5 +195,38 @@ const sourceWrapper = selectCodingContextPacket({
 assert.equal(sourceWrapper.status, 'injected');
 assert.match(sourceWrapper.block, /src\/gateway\/source-wrapper\.ts/);
 
-assert.deepEqual(getCodingContextPacketTelemetry(), { injected: 4, omitted: 2, rejected_stale: 2 });
+observeCodingContext({
+  sessionId: 'subagent-task-one-session',
+  scopeId: 'agent:dante',
+  actorId: 'dante',
+  runtimeTaskId: 'task-one',
+  objective: 'Improve the PS Vita driving game road geometry',
+  projectRoot: root,
+  toolName: 'workspace_edit',
+  args: { action: 'find_replace', path: 'games/figure-8-drift-vita/src/main.cpp', find: 'old', replace: 'new' },
+  result: 'edit applied',
+  now: baseTime + 3_000,
+});
+reloadCodingContextPacketsForTest();
+const nextAgentTask = selectCodingContextPacket({
+  enabled: true,
+  sessionId: 'subagent-task-two-session',
+  scopeId: 'agent:dante',
+  actorId: 'dante',
+  runtimeTaskId: 'task-two',
+  message: 'Audit and improve vehicle handling on the current Vita project.',
+  projectRoot: root,
+  executionMode: 'background_agent',
+  now: baseTime + 4_000,
+});
+assert.deepEqual(
+  { status: nextAgentTask.status, reason: nextAgentTask.reason },
+  { status: 'injected', reason: 'persistent_agent_task_handoff' },
+);
+assert.match(nextAgentTask.block, /figure-8-drift-vita\/src\/main\.cpp/);
+assert.match(nextAgentTask.block, /previous_runtime_task_id/);
+assert.match(nextAgentTask.block, /Reread this file/);
+
+assert.deepEqual(getCodingContextPacketTelemetry(), { injected: 6, omitted: 2, rejected_stale: 1 });
+try { fs.rmSync(packetStore, { force: true }); } catch {}
 console.log('coding-context-packet regression: ok');

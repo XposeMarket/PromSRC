@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "web-design-skill",
+  "name": "web-design-skill",
+  "description": "Design or substantially improve the visual system of a website or web application, including layout, typography, color, responsive behavior, components, media, and interaction polish. Use for visual web-design work; do not use for unrelated coding, minor copy edits, or framework-specific animation unless explicitly requested.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "make it look premium",
+    "typography for website",
+    "landing page design",
+    "improve the design",
+    "redesign this page",
+    "design a website",
+    "responsive web design",
+    "portfolio website",
+    "website sections",
+    "visual direction",
+    "homepage design",
+    "pricing section"
+  ],
+  "categories": [
+    "web-design",
+    "frontend",
+    "creative"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "workspace_write",
+    "creative_basic"
+  ],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "references/section-visual-system-and-restraint.md",
+      "type": "doc"
+    }
+  ]
+}

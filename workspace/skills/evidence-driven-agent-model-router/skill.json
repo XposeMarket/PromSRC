@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "evidence-driven-agent-model-router",
+  "name": "Evidence-Driven Agent Model Router",
+  "description": "Benchmark and route planning, coding, research, computer-action, review, and summarization lanes to models using measured quality, latency, cost, tool reliability, and fallback evidence. Use when choosing or revising agent model assignments; never route from social claims alone.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "benchmark agent models",
+    "route agents by evidence",
+    "choose model for each lane",
+    "model role matrix",
+    "adaptive model routing",
+    "agent model benchmark",
+    "compare model cost and quality",
+    "revise model defaults"
+  ],
+  "categories": [
+    "models",
+    "agents",
+    "benchmarking",
+    "routing",
+    "operations"
+  ],
+  "requiredTools": [
+    "agents_and_teams",
+    "workspace_write",
+    "model_management"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "templates/benchmark-ledger.md",
+      "type": "template",
+      "description": "Benchmark table"
+    },
+    {
+      "path": "templates/routing-policy.md",
+      "type": "template",
+      "description": "Routing table"
+    },
+    {
+      "path": "references/trigger-tests.md",
+      "type": "test",
+      "description": "Routing tests"
+    }
+  ]
+}

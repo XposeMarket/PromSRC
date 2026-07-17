@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Prom Runtime Personality Architecture</title>
+<style>
+:root{--ink:#1c1915;--paper:#f4efe5;--panel:#fffaf0;--line:#c8bda8;--ember:#d65a24;--gold:#a9792a;--muted:#70685d;--green:#476b52;--shadow:0 18px 50px rgba(48,38,24,.12)}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(135deg,#eee6d8,#faf6ee 52%,#e8dfd0);color:var(--ink);font:15px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.wrap{max-width:1120px;margin:auto;padding:28px 18px 42px}header{display:flex;gap:18px;align-items:flex-end;justify-content:space-between;margin-bottom:20px}h1{font-family:Georgia,serif;font-size:clamp(30px,6vw,56px);line-height:.96;margin:0;letter-spacing:-.04em}header p{max-width:510px;color:var(--muted);margin:0}.tabs{display:flex;gap:8px;margin:20px 0 16px;overflow:auto}.tab{border:1px solid var(--line);background:rgba(255,250,240,.72);padding:10px 14px;border-radius:999px;color:var(--ink);font-weight:700;cursor:pointer;white-space:nowrap}.tab[aria-selected=true]{background:var(--ink);color:var(--paper);border-color:var(--ink)}.view{display:none}.view.active{display:block}.card{background:rgba(255,250,240,.9);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow)}.stack{padding:18px}.layer{position:relative;border:1px solid var(--line);border-radius:14px;padding:15px 17px;margin:10px 0;background:#fffdf7}.layer strong{display:block;font-size:17px}.layer small{color:var(--muted)}.layer.soul{border:2px solid var(--ember);background:#fff4e8;box-shadow:0 0 0 4px rgba(214,90,36,.08)}.layer.soul:after{content:"IDENTITY ANCHOR";position:absolute;right:12px;top:12px;font-size:10px;font-weight:900;letter-spacing:.13em;color:var(--ember)}.connector{text-align:center;color:var(--gold);font-weight:900}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.compare{padding:19px}.compare h2{font-family:Georgia,serif;margin:0 0 12px}.bad{border-top:5px solid #777}.good{border-top:5px solid var(--ember)}ul{padding-left:20px;margin:8px 0}li{margin:6px 0}.callout{padding:18px;border-left:5px solid var(--ember);font-family:Georgia,serif;font-size:20px;background:#fff7eb;border-radius:8px}.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;align-items:stretch}.step{padding:14px;border:1px solid var(--line);border-radius:14px;background:#fffdf7;min-height:150px}.n{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--ink);color:white;font-weight:800;margin-bottom:9px}.step h3{margin:0 0 6px;font-size:15px}.step p{font-size:13px;color:var(--muted);margin:0}.priority{padding:18px}.meter{height:14px;background:#ddd4c5;border-radius:99px;overflow:hidden;margin:7px 0 14px}.fill{height:100%;border-radius:99px}.p1{width:95%;background:var(--ember)}.p2{width:72%;background:var(--gold)}.p3{width:50%;background:var(--green)}.p4{width:30%;background:#777}.code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;background:#211f1b;color:#f7edd9;border-radius:14px;padding:16px;overflow:auto}.badge{display:inline-block;padding:4px 8px;border-radius:99px;background:#efe3cf;color:#594a36;font-size:11px;font-weight:800}.foot{margin-top:16px;color:var(--muted);font-size:12px}@media(max-width:780px){header{display:block}header p{margin-top:12px}.grid{grid-template-columns:1fr}.flow{grid-template-columns:1fr}.step{min-height:0}.wrap{padding-top:20px}.layer.soul:after{position:static;display:block;margin-top:6px}}
+</style>
+</head>
+<body><main class="wrap">
+<header><h1>Prom stays Prom.</h1><p>The fix is not “put SOUL.md first and hope.” It is to make identity the stable authority, then keep operational context conditional, subordinate, and unable to rewrite the voice.</p></header>
+<nav class="tabs" aria-label="Views">
+<button class="tab" aria-selected="true" data-view="target">Target stack</button>
+<button class="tab" aria-selected="false" data-view="before">Current vs proposed</button>
+<button class="tab" aria-selected="false" data-view="flow">Assembly flow</button>
+<button class="tab" aria-selected="false" data-view="rules">Priority rules</button>
+</nav>
+<section id="target" class="view active card stack">
+<div class="layer soul"><strong>1. Identity kernel · Prometheus Soul</strong><small>Who Prom is, relationship to Raul, voice, judgment, epistemics, conversational rhythm. Stable and always present.</small></div>
+<div class="connector">↓ governs everything below</div>
+<div class="layer"><strong>2. Current mode overlay</strong><small>Conversational, execution, voice, task, team, schedule. Changes behavior and responsibilities, never identity.</small></div>
+<div class="connector">↓</div>
+<div class="layer"><strong>3. Relevant personal context</strong><small>USER, durable MEMORY, project context, business context, recent notes. Supplies familiarity and facts, not a replacement persona.</small></div>
+<div class="connector">↓</div>
+<div class="layer"><strong>4. Capability and policy context</strong><small>Available tools, permissions, approvals, visual/browser rules. Prefer compact always-on contracts plus conditional category details.</small></div>
+<div class="connector">↓</div>
+<div class="layer"><strong>5. Turn-local context</strong><small>The user message, selected skill, retrieved evidence, current UI state, tool observations. Most volatile and most disposable.</small></div>
+<div class="callout">SOUL should be top-level in authority, not necessarily the first byte sent to the provider.</div>
+</section>
+<section id="before" class="view">
+<div class="grid">
+<article class="card compare bad"><span class="badge">CURRENT PRESSURE</span><h2>Personality surrounded by machinery</h2><ul><li>Base runtime policy appears before assembled persona context.</li><li>Config soul and workspace soul overlap.</li><li>Large MEMORY and tool guidance can dominate attention.</li><li>Operational instructions encourage report-shaped replies.</li><li>Voice is present, but must compete every turn.</li></ul></article>
+<article class="card compare good"><span class="badge">PROPOSED</span><h2>Identity governs machinery</h2><ul><li>One compact identity kernel is the canonical voice.</li><li>Workspace SOUL specializes the relationship without duplicating policy.</li><li>Modes explicitly inherit identity.</li><li>Tools and runbooks load only when relevant.</li><li>A final response-style reminder reasserts natural conversation.</li></ul></article>
+</div>
+<div class="card compare" style="margin-top:16px"><h2>What moves out of Soul</h2><p>Tool routing, approval mechanics, file runbooks, browser procedures, schedule behavior, schema explanations, and long operational edge cases. Soul keeps character, standards, judgment, social behavior, and a few permanent boundaries.</p></div>
+</section>
+<section id="flow" class="view card" style="padding:18px">
+<div class="flow">
+<div class="step"><span class="n">1</span><h3>Load identity</h3><p>Canonical config soul plus a lean Raul-specific workspace layer.</p></div>
+<div class="step"><span class="n">2</span><h3>Select mode</h3><p>Casual chat stays light. Real work activates execution rigor.</p></div>
+<div class="step"><span class="n">3</span><h3>Retrieve relevance</h3><p>Bring only context tied to this turn, while durable identity remains cached.</p></div>
+<div class="step"><span class="n">4</span><h3>Expose capabilities</h3><p>Compact tool categories first; full instructions only after activation.</p></div>
+<div class="step"><span class="n">5</span><h3>Reassert voice</h3><p>Before generation: “Answer as Prom. Preserve natural scale and rhythm.”</p></div>
+</div>
+</section>
+<section id="rules" class="view card priority">
+<h2 style="font-family:Georgia,serif">Instruction authority</h2>
+<strong>Identity and permanent behavioral contract</strong><div class="meter"><div class="fill p1"></div></div>
+<strong>Safety, irreversible-action boundaries, current mode</strong><div class="meter"><div class="fill p2"></div></div>
+<strong>User/project facts and selected workflow guidance</strong><div class="meter"><div class="fill p3"></div></div>
+<strong>Formatting hints, menus, telemetry, transient context</strong><div class="meter"><div class="fill p4"></div></div>
+<div class="code">// conceptual assembly
+system = [
+  base_provider_contract,
+  identity_kernel,          // Prom remains Prom
+  mode_overlay,             // what Prom is doing now
+  relevant_memory_context,  // what Prom knows now
+  capability_policy,        // what Prom can do now
+  turn_local_evidence,
+  response_voice_anchor     // preserve scale, rhythm, point of view
+]</div>
+<p class="foot">Source-grounded against the current prompt census and prompt-context assembly. This is a design recommendation, not a claim that simple textual order alone determines model behavior.</p>
+</section>
+</main>
+<script>
+const tabs=[...document.querySelectorAll('.tab')],views=[...document.querySelectorAll('.view')];
+const saved=window.openai?.widgetState||window.prometheusVisual?.getState?.()||{};
+function select(id){tabs.forEach(t=>t.setAttribute('aria-selected',String(t.dataset.view===id)));views.forEach(v=>v.classList.toggle('active',v.id===id));const s={view:id};window.openai?.setWidgetState?.(s);window.prometheusVisual?.setState?.(s)}
+tabs.forEach(t=>t.addEventListener('click',()=>select(t.dataset.view)));select(saved.view&&document.getElementById(saved.view)?saved.view:'target');
+</script></body></html>

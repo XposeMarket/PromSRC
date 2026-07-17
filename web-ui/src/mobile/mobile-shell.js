@@ -111,6 +111,8 @@ let _drawerSearchSeq = 0;
 let _tabResizeHandlerBound = false;
 let _drawerCallbacks = null;
 let _drawerRefreshing = false;
+let _drawerRenderSeq = 0;
+let _drawerChannelsCache = null;
 let _mobileNoSelectGuardInstalled = false;
 const PM_DRAWER_REFRESH_TTL_MS = 30_000;
 const PM_NO_SELECT_INTERACTIVE_SELECTOR = [
@@ -163,6 +165,7 @@ export async function refreshMobileDrawerSessions({ force = false, channel = '' 
   if (_drawerRefreshing && !force) return;
   _drawerRefreshing = true;
   try {
+    if (force) _drawerChannelsCache = null;
     const targetChannel = String(channel || _currentDrawerSessionChannel() || 'mobile').trim() || 'mobile';
     const state = _drawerPageStateFor(targetChannel);
     const freshEnough = state.initialized
@@ -298,6 +301,7 @@ function _resetDrawerPageState(channel = '') {
 }
 
 export function invalidateMobileDrawerSessions(channel = '') {
+  _drawerChannelsCache = null;
   _resetDrawerPageState(channel);
   if (_drawerEl?.classList?.contains('open')) {
     refreshMobileDrawerSessions({ force: true, channel: channel || _currentDrawerSessionChannel() }).catch(() => {});
@@ -638,6 +642,10 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     // most recent pointermove sample and can lag behind a fast finger lift.
     const target = e && Number.isFinite(e.clientX) ? tabAtX(e.clientX) : pendingTab;
     if (!target) return;
+    // Keep taps as tactile as drags. Dragging already ticks when it crosses a
+    // tab boundary; this release tick also covers a plain tap on the current
+    // tab and native shells where the transparent iOS switch is unavailable.
+    pmHaptic(8);
     const id = target.getAttribute('data-tab');
     const tabObj = mobileNavTabs.find((x) => x.id === id);
     // During a drag setActive() intentionally moves the visual highlight, so
@@ -824,6 +832,15 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   }, true);
 
   _scrimEl.addEventListener('click', closeDrawer);
+  // Dynamic session/channel content is replaced as the user drills through the
+  // drawer, so use one delegated haptic listener instead of repeatedly wrapping
+  // every rendered button. Controls with a native iOS haptic overlay already
+  // call pmHaptic themselves and are skipped here to avoid a double pulse.
+  _drawerEl.addEventListener('click', (ev) => {
+    const btn = ev.target?.closest?.('button');
+    if (!btn || !_drawerEl.contains(btn) || btn.dataset.pmHaptic === '1') return;
+    pmHaptic(10);
+  }, true);
   _drawerEl.querySelectorAll('.pm-drawer-item').forEach(btn => {
     btn.addEventListener('click', () => {
       const route = btn.getAttribute('data-route');
@@ -950,9 +967,12 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
 }
 
 async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
-  const head = _drawerEl?.querySelector('#pm-drawer-session-head');
-  const sessionList = _drawerEl?.querySelector('#pm-mobile-session-list');
+  const renderSeq = ++_drawerRenderSeq;
+  const renderDrawer = _drawerEl;
+  const head = renderDrawer?.querySelector('#pm-drawer-session-head');
+  const sessionList = renderDrawer?.querySelector('#pm-mobile-session-list');
   if (!head || !sessionList || typeof loadSessions !== 'function') return;
+  const isCurrent = () => renderSeq === _drawerRenderSeq && renderDrawer === _drawerEl;
   if (_drawerSearch) {
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
     return;
@@ -977,6 +997,7 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
         return;
       }
       await _loadDrawerSessionPage({ channel: 'mobile', loadSessions });
+      if (!isCurrent()) return;
       const pageState = _drawerPageStateFor('mobile');
       head.innerHTML = `
         <div class="pm-drawer-section-title">Sessions</div>
@@ -992,27 +1013,57 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
       _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
       return;
     }
-    let data = await loadSessions({ channel: _currentDrawerSessionChannel(), limit: PM_DRAWER_SESSION_PAGE_SIZE, offset: 0 });
-    data = typeof window.enrichMobileSessionGroupsForDrawer === 'function'
-      ? await window.enrichMobileSessionGroupsForDrawer(async () => data)
-      : data;
-    const channels = Array.isArray(data?.channels) ? data.channels : [];
-    const selectedChannel = channels.find((c) => c.key === drawerState.channel) || channels[0] || null;
 
     if (drawerState.view === 'channels') {
       head.innerHTML = `
         <button class="pm-drawer-back" type="button" data-drawer-view="mobile">${ICONS.back}<span>Sessions</span></button>
         <div class="pm-drawer-section-title">Channels</div>
       `;
+      // Switch the visible state immediately. Previously the old mobile chats
+      // stayed on screen until two async requests completed, which made the tap
+      // look frozen and allowed late responses to repaint the wrong view.
+      sessionList.innerHTML = '<div class="pm-session-empty pm-session-loading">Loading channels...</div>';
+      _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
+
+      let channels = _drawerChannelsCache;
+      if (!Array.isArray(channels)) {
+        // Only one summary is needed to obtain the static channel catalog and
+        // totals. Do not hydrate a full page of chats just to draw five cards.
+        let data = await loadSessions({ channel: 'mobile', limit: 1, offset: 0 });
+        if (!isCurrent()) return;
+        data = typeof window.enrichMobileSessionGroupsForDrawer === 'function'
+          ? await window.enrichMobileSessionGroupsForDrawer(async () => data)
+          : data;
+        if (!isCurrent()) return;
+        channels = Array.isArray(data?.channels) ? data.channels : [];
+        _drawerChannelsCache = channels;
+      }
       sessionList.innerHTML = channels.length
         ? channels.map((c) => _channelButtonHtml(c)).join('')
         : '<div class="pm-session-empty">No channels yet.</div>';
-    } else if (drawerState.view === 'channelChats' && selectedChannel) {
+    } else if (drawerState.view === 'channelChats') {
+      const cachedChannels = Array.isArray(_drawerChannelsCache) ? _drawerChannelsCache : [];
+      const selectedChannel = cachedChannels.find((c) => c.key === drawerState.channel) || {
+        key: String(drawerState.channel || '').trim(),
+        label: _channelLabel(drawerState.channel) || String(drawerState.channel || '').trim(),
+      };
+      if (!selectedChannel.key) {
+        _saveDrawerState({ view: 'channels', channel: '' });
+        if (isCurrent()) _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat });
+        return;
+      }
+      const channelLabel = selectedChannel.label || selectedChannel.key;
+      head.innerHTML = `
+        <button class="pm-drawer-back" type="button" data-drawer-view="channels">${ICONS.back}<span>Channels</span></button>
+        <div class="pm-drawer-section-title">${escapeHtml(channelLabel)}</div>
+      `;
+      sessionList.innerHTML = '<div class="pm-session-empty pm-session-loading">Loading chats...</div>';
+      _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
       if (!_drawerPageStateFor(selectedChannel.key).initialized) {
         await _loadDrawerSessionPage({ channel: selectedChannel.key, loadSessions });
       }
+      if (!isCurrent()) return;
       const pageState = _drawerPageStateFor(selectedChannel.key);
-      const channelLabel = selectedChannel.label || selectedChannel.key;
       head.innerHTML = `
         <button class="pm-drawer-back" type="button" data-drawer-view="channels">${ICONS.back}<span>Channels</span></button>
         <div class="pm-drawer-section-title">${escapeHtml(channelLabel)}</div>
@@ -1023,6 +1074,7 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
       if (!_drawerPageStateFor('mobile').initialized) {
         await _loadDrawerSessionPage({ channel: 'mobile', loadSessions });
       }
+      if (!isCurrent()) return;
       const pageState = _drawerPageStateFor('mobile');
       head.innerHTML = `
         <div class="pm-drawer-section-title">Sessions</div>
@@ -1038,7 +1090,9 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
     }
 
     _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
-  } catch {
+  } catch (err) {
+    if (!isCurrent()) return;
+    console.warn('[mobile drawer] render failed', err);
     if (head) head.innerHTML = '<div class="pm-drawer-section-title">Sessions</div>';
     sessionList.innerHTML = '<div class="pm-session-empty">Could not load sessions.</div>';
   }
@@ -1221,7 +1275,6 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
     // Keep rows native so WebKit suppresses activation after a drag, and only
     // trigger haptics after an actual button click.
     btn.addEventListener('click', () => {
-      pmHaptic(10);
       openSession();
     });
   });

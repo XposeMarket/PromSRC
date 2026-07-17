@@ -70,13 +70,15 @@ export type MainChatGoalStatus = 'active' | 'restarting' | 'paused' | 'blocked' 
 export interface MainChatGoalRestartCheckpoint {
   id: string;
   reason: string;
-  phase: 'interrupted' | 'boot_finalized' | 'resuming' | 'complete';
+  phase: 'interrupted' | 'crash_recovered' | 'boot_finalized' | 'resuming' | 'complete';
+  recoveryKind?: 'planned' | 'crash';
   turnNumber: number;
   planId?: string;
   activeStepIndex?: number;
   runtimeStartedAt?: number;
   devEditId?: string;
   affectedFiles?: string[];
+  touchedFiles?: string[];
   changedSurfaces?: string[];
   verificationSummary?: string;
   createdAt: number;
@@ -613,7 +615,7 @@ function normalizeMainChatGoalTurnPlans(input: any, now: number): MainChatGoalTu
 function normalizeMainChatGoalRestartCheckpoint(input: any, now: number): MainChatGoalRestartCheckpoint | undefined {
   if (!input || typeof input !== 'object') return undefined;
   const rawPhase = String(input.phase || 'interrupted').trim().toLowerCase();
-  const phase: MainChatGoalRestartCheckpoint['phase'] = ['interrupted', 'boot_finalized', 'resuming', 'complete'].includes(rawPhase)
+  const phase: MainChatGoalRestartCheckpoint['phase'] = ['interrupted', 'crash_recovered', 'boot_finalized', 'resuming', 'complete'].includes(rawPhase)
     ? rawPhase as MainChatGoalRestartCheckpoint['phase']
     : 'interrupted';
   const list = (value: any) => Array.isArray(value)
@@ -623,12 +625,18 @@ function normalizeMainChatGoalRestartCheckpoint(input: any, now: number): MainCh
     id: String(input.id || `goal_restart_${now}`),
     reason: String(input.reason || 'gateway_restart').slice(0, 240),
     phase,
+    recoveryKind: input.recoveryKind === 'crash' || input.recovery_kind === 'crash'
+      ? 'crash'
+      : input.recoveryKind === 'planned' || input.recovery_kind === 'planned'
+        ? 'planned'
+        : undefined,
     turnNumber: Math.max(1, Math.floor(Number(input.turnNumber ?? input.turn_number ?? 1) || 1)),
     planId: String(input.planId || input.plan_id || '').trim() || undefined,
     activeStepIndex: Number.isFinite(Number(input.activeStepIndex ?? input.active_step_index)) ? Number(input.activeStepIndex ?? input.active_step_index) : undefined,
     runtimeStartedAt: Number.isFinite(Number(input.runtimeStartedAt ?? input.runtime_started_at)) ? Number(input.runtimeStartedAt ?? input.runtime_started_at) : undefined,
     devEditId: String(input.devEditId || input.dev_edit_id || '').trim() || undefined,
     affectedFiles: list(input.affectedFiles ?? input.affected_files),
+    touchedFiles: list(input.touchedFiles ?? input.touched_files),
     changedSurfaces: list(input.changedSurfaces ?? input.changed_surfaces),
     verificationSummary: String(input.verificationSummary || input.verification_summary || '').trim().slice(0, 4000) || undefined,
     createdAt: Number.isFinite(Number(input.createdAt ?? input.created_at)) ? Number(input.createdAt ?? input.created_at) : now,

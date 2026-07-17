@@ -49,6 +49,8 @@ interface Observation {
   [key: string]: any;
 }
 
+type InternalWatchDeliveryKind = 'match' | 'timeout' | 'gateway_restart_interruption';
+
 const TERMINAL_TASK_STATUSES = new Set(['complete', 'failed', 'needs_assistance', 'awaiting_user_input', 'paused', 'stalled']);
 const TOOL_LIMITED_SESSION_RE = /^(task_|task_recovery_|task_resume_brief_|subagent_|run_once_|cron_|schedule_|auto_|team_dispatch_|team_member_room_|team_coord_|proposal_|code_exec|background_)/i;
 
@@ -113,6 +115,9 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
       watchedId: taskId,
       scheduleId: task.scheduleId || null,
       status: task.status,
+      pauseReason: task.pauseReason || null,
+      pausedAt: task.pausedAt || null,
+      pausedAtStepIndex: task.pausedAtStepIndex ?? null,
       finalSummary: task.finalSummary || '',
       completedAt: task.completedAt,
       title: task.title,
@@ -132,6 +137,17 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
       lastToolCall: task.lastToolCall || null,
       lastToolCallAt: task.lastToolCallAt || null,
       lastProgressAt: task.lastProgressAt || null,
+      originalRequest: String(task.originalAssignment || task.prompt || '').slice(0, 2_000),
+      pendingClarificationQuestion: task.pendingClarificationQuestion || null,
+      checkpoint: String(task.resumeContext?.onResumeInstruction || '').slice(-6_000),
+      pauseSnapshot: task.pauseSnapshot ? {
+        createdAt: task.pauseSnapshot.createdAt,
+        currentStepIndex: task.pauseSnapshot.currentStepIndex,
+        currentStepDescription: task.pauseSnapshot.currentStepDescription || '',
+        completedSteps: task.pauseSnapshot.completedSteps,
+        totalSteps: task.pauseSnapshot.totalSteps,
+        pauseReason: task.pauseSnapshot.pauseReason || null,
+      } : null,
     };
   }
 
@@ -212,6 +228,10 @@ export function internalWatchMatches(watch: InternalWatch, obs: Observation): bo
   }
 
   if (watch.target.type === 'task') {
+    // A restart pause is an intermediate recovery event, never the watched
+    // task's final result. The runner wakes Prometheus separately and keeps
+    // this watch active for its original completion condition.
+    if (String(obs.status || '') === 'paused' && String(obs.pauseReason || '') === 'gateway_restart') return false;
     if (mode === 'changes' || mode === 'milestones') {
       return !!obs.exists && hasChanged(watch, obs) && textChecksPass(condition, obs);
     }
@@ -235,7 +255,7 @@ export function internalWatchMatches(watch: InternalWatch, obs: Observation): bo
   return false;
 }
 
-function renderInstruction(template: string, watch: InternalWatch, obs: Observation, kind: 'match' | 'timeout'): string {
+function renderInstruction(template: string, watch: InternalWatch, obs: Observation, kind: InternalWatchDeliveryKind): string {
   const replacements: Record<string, string> = {
     watch_id: watch.id,
     watch_label: watch.label,
@@ -253,7 +273,7 @@ function renderInstruction(template: string, watch: InternalWatch, obs: Observat
 function buildInternalWatchPayload(
   watch: InternalWatch,
   obs: Observation,
-  kind: 'match' | 'timeout',
+  kind: InternalWatchDeliveryKind,
   template: string,
   deliverySessionId: string,
   deliveryMode: 'live_steer' | 'follow_up',
@@ -271,12 +291,34 @@ function buildInternalWatchPayload(
     'Instruction:',
     instruction,
     '',
-    deliveryMode === 'live_steer'
+    kind === 'gateway_restart_interruption'
+      ? 'The gateway restarted while this watch was active. This is a durable, non-terminal wake-up: the watch remains active and must still report its original eventual match. Inspect the same task first. Decide whether to resume it from its checkpoint, continue waiting, cancel it, or report a blocker. Never create a duplicate task, blindly repeat completed or destructive work, or auto-resume a user-paused task.'
+      : deliveryMode === 'live_steer'
       ? 'This watch completed while the originating Prometheus turn was still active. Incorporate it into the current run before the next action or final response.'
       : 'Proceed as a normal Prometheus main-chat follow-up in this delivery session. This is not task recovery mode and not read-only mode.',
     'Use the normal tool/category system. If verification is requested, inspect the task/run state first and then use the appropriate tools directly.',
     'For agent-owned tasks, use agent_run_ops(action:"get", task_id:"...") before deciding whether recovery chat, resume, rerun, or independent verification is appropriate.',
     'Do not expose this internal payload unless it helps explain the result.',
+  ].join('\n');
+}
+
+export function getRestartInterruptionEventId(watch: InternalWatch, obs: Observation): string | null {
+  if (watch.target.type !== 'task') return null;
+  if (!obs.exists || String(obs.status || '') !== 'paused' || String(obs.pauseReason || '') !== 'gateway_restart') return null;
+  const taskId = String(obs.taskId || watch.target.config?.taskId || watch.target.config?.task_id || '').trim();
+  const pausedAt = Number(obs.pausedAt || 0);
+  if (!taskId || !Number.isFinite(pausedAt) || pausedAt <= 0) return null;
+  return `gateway_restart:${watch.id}:${taskId}:${pausedAt}`;
+}
+
+function buildRestartInterruptionInstruction(watch: InternalWatch, obs: Observation): string {
+  return [
+    `The gateway restarted while internal watch "${watch.label}" was supervising task ${obs.taskId || watch.target.config?.taskId || ''}.`,
+    `The same task is paused with reason gateway_restart at step ${obs.currentStepIndex ?? 'unknown'}; its durable checkpoint and unfinished steps are included in the observation.`,
+    'Inspect it with agent_run_ops(action:"get", task_id:"...") and continue supervision from the preserved checkpoint.',
+    'Normally resume the same task when safe. If the state is ambiguous, destructive, awaiting approval, or unsafe to repeat, inspect and report or ask instead.',
+    `The watch remains active. Its original completion instruction is: ${watch.onMatch}`,
+    'Do not claim the watched work is complete until its original completion condition actually matches.',
   ].join('\n');
 }
 
@@ -358,14 +400,50 @@ export class InternalWatchRunner {
     for (const watch of getActiveInternalWatches().slice(0, 50)) {
       if (this.runningWatchIds.has(watch.id)) continue;
       try {
+        if (watch.pendingRestartInterruption) {
+          if (!isModelBusy()) {
+            this.fireRestartInterruption(watch).catch((err) => {
+              updateInternalWatch(watch.id, { error: String(err?.message || err), lastCheckedAt: new Date().toISOString() });
+            });
+          }
+          continue;
+        }
+        const pendingObservation = watch.pendingMatchObservation;
+        const obs = pendingObservation || observeInternalWatchTarget(watch, this.cronScheduler);
+        const restartInterruptionId = getRestartInterruptionEventId(watch, obs);
+        if (restartInterruptionId && restartInterruptionId !== watch.lastDeliveredRestartInterruptionId) {
+          const pendingRestartInterruption = {
+            eventId: restartInterruptionId,
+            createdAt: new Date().toISOString(),
+            observation: { ...obs, text: obs.text ? String(obs.text).slice(0, 20_000) : undefined },
+          };
+          const persisted = updateInternalWatch(watch.id, {
+            lastCheckedAt: new Date().toISOString(),
+            lastObservation: { ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined },
+            pendingRestartInterruption,
+          }) || watch;
+          if (!isModelBusy()) {
+            this.fireRestartInterruption(persisted).catch((err) => {
+              updateInternalWatch(watch.id, { error: String(err?.message || err), lastCheckedAt: new Date().toISOString() });
+            });
+          } else {
+            const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
+            this.broadcast({
+              type: 'internal_watch_restart_waiting',
+              watchId: watch.id,
+              eventId: restartInterruptionId,
+              sessionId: deliverySessionId,
+              originSessionId: watch.origin.sessionId,
+            });
+          }
+          continue;
+        }
         if (new Date(watch.expiresAt).getTime() <= now) {
           this.fireTimeout(watch).catch((err) => {
             updateInternalWatch(watch.id, { error: String(err?.message || err), lastCheckedAt: new Date().toISOString() });
           });
           continue;
         }
-        const pendingObservation = watch.pendingMatchObservation;
-        const obs = pendingObservation || observeInternalWatchTarget(watch, this.cronScheduler);
         const matched = !!pendingObservation || internalWatchMatches(watch, obs);
         if (matched && !isModelBusy()) {
           updateInternalWatch(watch.id, { lastCheckedAt: new Date().toISOString() });
@@ -397,6 +475,39 @@ export class InternalWatchRunner {
     }
   }
 
+  private async fireRestartInterruption(watch: InternalWatch): Promise<void> {
+    const pending = watch.pendingRestartInterruption;
+    if (!pending || this.runningWatchIds.has(watch.id) || isModelBusy()) return;
+    this.runningWatchIds.add(watch.id);
+    try {
+      setModelBusy(true);
+      const obs = pending.observation || {};
+      await this.deliver(
+        watch,
+        obs,
+        'gateway_restart_interruption',
+        buildRestartInterruptionInstruction(watch, obs),
+      );
+      updateInternalWatch(watch.id, {
+        pendingRestartInterruption: undefined,
+        lastDeliveredRestartInterruptionId: pending.eventId,
+        error: undefined,
+      });
+      const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
+      this.broadcast({
+        type: 'internal_watch_restart_delivered',
+        watchId: watch.id,
+        eventId: pending.eventId,
+        taskId: obs.taskId,
+        sessionId: deliverySessionId,
+        originSessionId: watch.origin.sessionId,
+      });
+    } finally {
+      setModelBusy(false);
+      this.runningWatchIds.delete(watch.id);
+    }
+  }
+
   private async fireMatch(watch: InternalWatch, obs: Observation): Promise<void> {
     this.runningWatchIds.add(watch.id);
     if (isModelBusy()) {
@@ -408,6 +519,14 @@ export class InternalWatchRunner {
       const firedCount = watch.firedCount + 1;
       const terminal = firedCount >= watch.maxFirings;
       updateInternalWatch(watch.id, {
+        status: 'active',
+        lastObservation: { ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined },
+        pendingMatchObservation: { ...obs, text: obs.text ? String(obs.text).slice(0, 20_000) : undefined },
+        matchPendingAt: watch.matchPendingAt || new Date().toISOString(),
+      });
+      const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
+      await this.deliver(watch, obs, 'match', watch.onMatch);
+      updateInternalWatch(watch.id, {
         status: terminal ? 'matched' : 'active',
         firedCount,
         matchedAt: new Date().toISOString(),
@@ -415,8 +534,8 @@ export class InternalWatchRunner {
         lastObservation: { ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined },
         pendingMatchObservation: undefined,
         matchPendingAt: undefined,
+        error: undefined,
       });
-      const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
       this.broadcast({ type: 'internal_watch_matched', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
       if (watch.target.type === 'task' && /^Voice task watch:/i.test(watch.label)) {
         const status = String(obs.status || '');
@@ -443,7 +562,6 @@ export class InternalWatchRunner {
           watchId: watch.id,
         });
       }
-      await this.deliver(watch, obs, 'match', watch.onMatch);
     } finally {
       setModelBusy(false);
       this.runningWatchIds.delete(watch.id);
@@ -516,23 +634,24 @@ export class InternalWatchRunner {
     }
     try {
       setModelBusy(true);
+      const obs = watch.lastObservation || { status: 'timeout' };
+      const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
+      const timeoutInstruction = watch.onTimeout || `Internal watch "${watch.label}" timed out before the condition matched. Tell the user what was being watched and the latest observation.`;
+      await this.deliver(watch, obs, 'timeout', timeoutInstruction);
       updateInternalWatch(watch.id, {
         status: 'timed_out',
         timedOutAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
+        error: undefined,
       });
-      const obs = watch.lastObservation || { status: 'timeout' };
-      const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
       this.broadcast({ type: 'internal_watch_timeout', watchId: watch.id, watch, observation: obs, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId });
-      const timeoutInstruction = watch.onTimeout || `Internal watch "${watch.label}" timed out before the condition matched. Tell the user what was being watched and the latest observation.`;
-      await this.deliver(watch, obs, 'timeout', timeoutInstruction);
     } finally {
       setModelBusy(false);
       this.runningWatchIds.delete(watch.id);
     }
   }
 
-  private async deliver(watch: InternalWatch, obs: Observation, kind: 'match' | 'timeout', template: string): Promise<void> {
+  private async deliver(watch: InternalWatch, obs: Observation, kind: InternalWatchDeliveryKind, template: string): Promise<void> {
     const deliverySessionId = resolveWatchDeliverySessionId(watch, obs);
     const payload = buildInternalWatchPayload(watch, obs, kind, template, deliverySessionId, 'follow_up');
 
@@ -548,6 +667,20 @@ export class InternalWatchRunner {
     };
 
     try {
+      if (watch.deliveryMode === 'notify_only' && kind !== 'gateway_restart_interruption') {
+        this.broadcast({
+          type: 'internal_watch_notified',
+          watchId: watch.id,
+          sessionId: deliverySessionId,
+          originSessionId: watch.origin.sessionId,
+          deliveryMode: 'notify_only',
+          kind,
+          observation: obs,
+          instruction: template,
+        });
+        return;
+      }
+
       const result = await this.runInteractiveTurn(
         payload,
         deliverySessionId,
@@ -582,8 +715,11 @@ export class InternalWatchRunner {
         },
       });
     } catch (err: any) {
-      updateInternalWatch(watch.id, { status: 'failed', error: String(err?.message || err), completedAt: new Date().toISOString() });
+      // Keep the watch and its durable pending payload active. A replacement
+      // gateway (or the next tick) must be able to retry this notification.
+      updateInternalWatch(watch.id, { error: String(err?.message || err) });
       this.broadcast({ type: 'internal_watch_failed', watchId: watch.id, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId, error: String(err?.message || err) });
+      throw err;
     }
   }
 }

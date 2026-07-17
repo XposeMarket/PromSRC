@@ -6240,7 +6240,11 @@ export async function browserScrollCollectV2(
     const schemaInput = options.schema && typeof options.schema === 'object'
       ? { ...(options.schema || {}), ...options }
       : { ...options };
-    const resolved = resolveBrowserExtractionSchemaForUrl(session.page.url(), schemaInput);
+    const resolved = resolveBrowserExtractionSchemaForUrl(
+      session.page.url(),
+      schemaInput,
+      'browser_scroll_collect_v2',
+    );
     if (!resolved.schema) return `ERROR: ${resolved.error || 'Could not resolve extraction schema.'}`;
 
     const perPassLimit = Math.min(
@@ -6263,11 +6267,14 @@ export async function browserScrollCollectV2(
       let prevScrollY = 0;
       if (pass > 0) {
         prevScrollY = await session.page.evaluate(() => Number((globalThis as any).scrollY || 0));
-        await session.page.evaluate((dir: 'down' | 'up', mult: number) => {
-          const pageGlobal = globalThis as any;
-          const distance = Number(pageGlobal.innerHeight || 0) * mult;
-          pageGlobal.scrollBy(0, dir === 'up' ? -distance : distance);
-        }, direction, multiplier);
+        await session.page.evaluate(
+          ({ dir, mult }: { dir: 'down' | 'up'; mult: number }) => {
+            const pageGlobal = globalThis as any;
+            const distance = Number(pageGlobal.innerHeight || 0) * mult;
+            pageGlobal.scrollBy(0, dir === 'up' ? -distance : distance);
+          },
+          { dir: direction, mult: multiplier },
+        );
         await session.page.waitForTimeout(delayMs);
       }
 
@@ -6412,6 +6419,21 @@ export async function browserScrollCollectV2(
   }
 }
 
+export function hasBrowserStructuredCollectionInput(options: Record<string, any> = {}): boolean {
+  const schema = options.schema && typeof options.schema === 'object' && !Array.isArray(options.schema)
+    ? options.schema
+    : {};
+  const hasSavedSchema = !!String(options.schema_name || options.use_schema || schema.schema_name || schema.use_schema || '').trim();
+  const hasFields = !!(options.fields && typeof options.fields === 'object' && !Array.isArray(options.fields))
+    || !!(schema.fields && typeof schema.fields === 'object' && !Array.isArray(schema.fields));
+  const hasContainer = !!String(
+    options.container_selector || options.item_root || options.root_name || options.container_name
+    || schema.container_selector || schema.item_root || schema.root_name || schema.container_name
+    || '',
+  ).trim();
+  return hasSavedSchema || (hasFields && hasContainer);
+}
+
 export async function getBrowserAdvisorPacket(
   sessionId: string,
   options?: { maxItems?: number; snapshotElements?: number },
@@ -6521,12 +6543,16 @@ export function getBrowserToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'browser_extract',
-        description: 'Unified browser extraction/diagnostics wrapper. Use for scroll collection, structured extraction, JS fallback, network/console/a11y diagnostics, smoke tests, and Teach verification.',
+        description: 'Unified browser extraction/diagnostics wrapper. scroll_collect performs schema-free text/feed collection. scroll_collect_structured (alias: scroll_collect_v2) repeatedly collects structured items and requires an inline schema, saved schema, or saved item root. Also supports JS fallback, network/console/a11y diagnostics, smoke tests, and Teach verification.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['scroll_collect', 'scroll_collect_v2', 'extract_structured', 'run_js', 'network', 'console', 'accessibility', 'smoke_test', 'teach_verify'] },
+            action: {
+              type: 'string',
+              enum: ['scroll_collect', 'scroll_collect_structured', 'scroll_collect_v2', 'extract_structured', 'run_js', 'network', 'console', 'accessibility', 'smoke_test', 'teach_verify'],
+              description: 'scroll_collect is schema-free text/feed collection. scroll_collect_structured and its scroll_collect_v2 alias require structured extraction fields plus a container selector/saved item root, or a saved schema.',
+            },
             code: { type: 'string', description: 'JavaScript for run_js.' },
             schema: { type: 'object', description: 'Structured extraction schema.' },
             network_action: { type: 'string', enum: ['start', 'stop', 'read', 'clear'], description: 'Sub-action for action="network".' },
@@ -9060,6 +9086,7 @@ function normalizeExtractionFieldsInput(raw: any): Record<string, BrowserKnowled
 export function resolveBrowserExtractionSchemaForUrl(
   url: string,
   schemaInput: Record<string, any>,
+  caller = 'browser_extract_structured',
 ): { schema?: ResolvedBrowserExtractionSchema; error?: string } {
   const input = schemaInput && typeof schemaInput === 'object' ? { ...schemaInput } : {};
   const example = JSON.stringify({ container_selector: '#content', fields: { title: { selector: 'h1', type: 'text' } } }, null, 2);
@@ -9084,7 +9111,7 @@ export function resolveBrowserExtractionSchemaForUrl(
   }
   const fields = Object.keys(inlineFields).length ? inlineFields : { ...(savedSchema?.fields || {}) };
   if (!Object.keys(fields).length) {
-    return { error: `browser_extract_structured requires both a container selector (or saved item root) and fields, unless schema_name resolves both. Minimum valid schema:\n${example}` };
+    return { error: `${caller} requires both a container selector (or saved item root) and fields, unless schema_name resolves both. Minimum valid schema:\n${example}` };
   }
 
   const itemRootName = String(
@@ -9114,7 +9141,7 @@ export function resolveBrowserExtractionSchemaForUrl(
   }
 
   if (!containerSelector) {
-    return { error: `browser_extract_structured requires both a container selector (or saved item root) and fields. Minimum valid schema:\n${example}` };
+    return { error: `${caller} requires both a container selector (or saved item root) and fields. Minimum valid schema:\n${example}` };
   }
 
   const overridesUsed = Object.keys(inlineFields).length > 0

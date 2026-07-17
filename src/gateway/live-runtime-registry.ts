@@ -2,6 +2,12 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../config/config';
+import {
+  finishRuntimeProgressLease,
+  registerRuntimeProgressLease,
+  renewRuntimeProgressLease,
+  type RuntimeProgressLeaseRenewal,
+} from './gateway-progress-lease';
 
 export type LiveRuntimeKind =
   | 'main_chat'
@@ -21,6 +27,14 @@ export type LiveRuntimeKind =
 
 export function isSteerableChatRuntimeKind(kind: LiveRuntimeKind | string | null | undefined): boolean {
   return kind === 'main_chat' || kind === 'main_chat_goal';
+}
+
+export function isSteerableTaskRuntimeKind(kind: LiveRuntimeKind | string | null | undefined): boolean {
+  return kind === 'background_task'
+    || kind === 'subagent'
+    || kind === 'team_subagent'
+    || kind === 'proposal_execution'
+    || kind === 'scheduled_task';
 }
 
 export interface LiveRuntimeRegistration {
@@ -447,6 +461,12 @@ export function registerLiveRuntime(registration: LiveRuntimeRegistration): stri
     onAbort: registration.onAbort,
   };
   activeRuntimes.set(id, record);
+  registerRuntimeProgressLease({
+    runtimeId: id,
+    kind: record.kind,
+    sessionId: record.sessionId,
+    startedAt: record.startedAt,
+  });
   persistRuntime(toSnapshot(record), 'registered');
   return id;
 }
@@ -454,8 +474,18 @@ export function registerLiveRuntime(registration: LiveRuntimeRegistration): stri
 export function finishLiveRuntime(id: string): void {
   const key = String(id || '');
   cancelCheckpointFlush(key);
+  finishRuntimeProgressLease(key);
   const record = activeRuntimes.get(key);
   if (record) {
+    // During gateway shutdown, prepareActiveRuntimesForGatewayShutdown() has
+    // already persisted this runtime as interrupted and marked its abort
+    // signal. The unwinding turn will still reach its normal finally block and
+    // call finishLiveRuntime(). Do not let that late cleanup overwrite the
+    // durable restart checkpoint as aborted/completed.
+    if (record.status === 'interrupted' && record.interruptedAt) {
+      activeRuntimes.delete(key);
+      return;
+    }
     record.status = record.abortSignal?.aborted ? 'aborted' : 'completed';
     record.completedAt = Date.now();
     record.updatedAt = Date.now();
@@ -470,6 +500,7 @@ function pruneTerminalActiveRuntimes(): void {
   for (const [id, record] of activeRuntimes.entries()) {
     if (!hasTerminalRuntimeCheckpoint(record)) continue;
     cancelCheckpointFlush(id);
+    finishRuntimeProgressLease(id);
     const snapshot = toSnapshot(record);
     deleteDurableRuntime(id, 'pruned_terminal_active_runtime', snapshot);
     activeRuntimes.delete(id);
@@ -515,6 +546,7 @@ export function abortLiveRuntime(id: string): { ok: boolean; runtime?: LiveRunti
     record.onAbort?.();
     record.status = 'aborted';
     record.updatedAt = Date.now();
+    finishRuntimeProgressLease(key);
   } catch (err: any) {
     return {
       ok: false,
@@ -564,7 +596,12 @@ export function addPendingRuntimeSteer(
 ): { ok: boolean; runtime?: LiveRuntimeSnapshot; event?: RuntimeSteerEvent; error?: string } {
   const record = activeRuntimes.get(String(id || ''));
   if (!record) return { ok: false, error: 'Runtime not found.' };
-  if (!isSteerableChatRuntimeKind(record.kind)) return { ok: false, runtime: toSnapshot(record), error: 'Runtime is not steerable.' };
+  const isTaskTargetedSteer = isSteerableTaskRuntimeKind(record.kind)
+    && !!record.taskId
+    && String(input.sessionId || '') === `task_${record.taskId}`;
+  if (!isSteerableChatRuntimeKind(record.kind) && !isTaskTargetedSteer) {
+    return { ok: false, runtime: toSnapshot(record), error: 'Runtime is not steerable.' };
+  }
   const message = String(input.message || '').trim();
   const attachments = Array.isArray((input as any).attachments) ? (input as any).attachments : [];
   const attachmentPreviews = Array.isArray((input as any).attachmentPreviews) ? (input as any).attachmentPreviews : [];
@@ -617,7 +654,11 @@ export function consumePendingRuntimeSteersForSession(sessionId: string, limit =
   if (!sid) return [];
   const out: RuntimeSteerEvent[] = [];
   for (const record of activeRuntimes.values()) {
-    if (!isSteerableChatRuntimeKind(record.kind) || String(record.sessionId || '') !== sid) continue;
+    const isChatMatch = isSteerableChatRuntimeKind(record.kind) && String(record.sessionId || '') === sid;
+    const isTaskMatch = isSteerableTaskRuntimeKind(record.kind)
+      && !!record.taskId
+      && sid === `task_${record.taskId}`;
+    if (!isChatMatch && !isTaskMatch) continue;
     const queue = Array.isArray(record.pendingSteers) ? record.pendingSteers : [];
     while (queue.length && out.length < limit) {
       const event = queue.shift();
@@ -694,7 +735,42 @@ export function updateLiveRuntimeCheckpoint(id: string, checkpoint: Record<strin
     updatedAt: Date.now(),
   };
   record.updatedAt = Date.now();
+  renewRuntimeProgressLease(record.id, {
+    event: checkpoint?.event,
+    phase: checkpoint?.phase,
+    activeToolName: checkpoint?.toolName,
+    checkpoint: true,
+    at: record.updatedAt,
+  });
   scheduleCheckpointFlush(id, toSnapshot(record));
+}
+
+/** Queue guidance directly into the live model loop for one persisted task. */
+export function addPendingRuntimeSteerForTask(
+  taskId: string,
+  input: Omit<RuntimeSteerEvent, 'id' | 'sessionId' | 'createdAt'> & { id?: string; createdAt?: number },
+): { ok: boolean; runtime?: LiveRuntimeSnapshot; event?: RuntimeSteerEvent; error?: string } {
+  const tid = String(taskId || '').trim();
+  if (!tid) return { ok: false, error: 'Task id is required.' };
+  const runtime = Array.from(activeRuntimes.values())
+    .filter((record) =>
+      isSteerableTaskRuntimeKind(record.kind)
+      && record.status === 'running'
+      && String(record.taskId || '') === tid
+    )
+    .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+  if (!runtime) return { ok: false, error: 'No active steerable runtime for this task.' };
+  return addPendingRuntimeSteer(runtime.id, {
+    ...input,
+    sessionId: `task_${tid}`,
+  });
+}
+
+/** Record observed model/tool activity without expanding the durable checkpoint ledger. */
+export function markLiveRuntimeProgress(id: string, progress: RuntimeProgressLeaseRenewal = {}): void {
+  const record = activeRuntimes.get(String(id || ''));
+  if (!record || record.status !== 'running') return;
+  renewRuntimeProgressLease(record.id, { ...progress, checkpoint: false });
 }
 
 export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): LiveRuntimeSnapshot[] {
@@ -722,6 +798,7 @@ export function markActiveRuntimesInterrupted(reason = 'gateway_shutdown'): Live
     record.interruptedAt = restartEpoch;
     record.interruptReason = reason;
     record.updatedAt = Date.now();
+    finishRuntimeProgressLease(record.id);
     // Persist the restart epoch onto recoveryData so it survives in the durable
     // ledger and the post-restart process can match "interrupted by this restart".
     record.recoveryData = { ...(record.recoveryData || {}), restartEpoch, interruptReason: reason };

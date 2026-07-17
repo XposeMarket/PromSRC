@@ -57,7 +57,10 @@ function send(message: ModelCallWorkerChildMessage): void {
 }
 
 function abortError(reason?: unknown): Error {
-  const error = reason instanceof Error ? reason : new Error(String(reason || 'Model call cancelled.'));
+  const message = reason instanceof Error
+    ? reason.message
+    : String(reason || 'Model call cancelled.');
+  const error = new Error(message, reason === undefined ? undefined : { cause: reason });
   error.name = 'AbortError';
   return error;
 }

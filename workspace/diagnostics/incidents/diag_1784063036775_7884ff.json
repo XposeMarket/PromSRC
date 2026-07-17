@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "id": "diag_1784063036775_7884ff",
+  "status": "open",
+  "createdAt": "2026-07-14T21:03:56.775Z",
+  "updatedAt": "2026-07-14T21:03:56.775Z",
+  "classification": "application_defect",
+  "severity": "high",
+  "confidence": "high",
+  "observedBehavior": "Comprehensive agent-tool smoke test found three repeatable failures: (1) managed team creation through ask_team_coordinator and team_ops_wrapper rejected creation because the public wrapper cannot provide required name/team_context fields, leaving 0 teams; (2) delegated standalone task via agent_chat_ops message completed calculations and internal plans repeatedly but the outer task stayed running/step 1 until manually paused/cancelled; (3) agent_run_ops benchmark_disposable on explicit GPT-5.6 Terra and Luna routes returned needs_assistance with empty result although prompts were trivial and agents were cleaned up.",
+  "expectedBehavior": "Managed team creation should persist a team when supplied name, purpose/context, members, and goal. A delegated standalone task should terminate once its plan/result is complete. Disposable benchmarks should return their deterministic result and verified cleanup.",
+  "minimalReproduction": [
+    "Reset to only Main agent and configure Terra/Luna routes.",
+    "Create two standalone agents using agent_ops spawn; chat succeeds and reports Luna route.",
+    "Send a delegated task with agent_chat_ops message to one agent. Observe correct computation in journal, repeated bg_plan completion/redeclaration, but outer task remains running at step 1.",
+    "Call ask_team_coordinator to create a two-member team. Observe agents created but no team persisted, with team_manage requiring name and team_context. Direct team_ops_wrapper manage/create reproduces same schema rejection.",
+    "Call agent_run_ops benchmark_disposable with openai_codex/gpt-5.6-terra and openai_codex/gpt-5.6-luna. Both end needs_assistance with empty result."
+  ],
+  "affectedSubsystem": "Agent orchestration: managed-team wrapper/coordinator schema, delegated task finalization, disposable benchmark lifecycle, recovery runtime",
+  "evidence": [
+    {
+      "kind": "team_creation",
+      "ref": "",
+      "freshness": "unknown",
+      "provenance": "mirror",
+      "redacted": true
+    },
+    {
+      "kind": "delegated_task",
+      "ref": "",
+      "freshness": "unknown",
+      "provenance": "mirror",
+      "redacted": true
+    },
+    {
+      "kind": "benchmark_disposable",
+      "ref": "",
+      "freshness": "unknown",
+      "provenance": "mirror",
+      "redacted": true
+    },
+    {
+      "kind": "recovery",
+      "ref": "",
+      "freshness": "unknown",
+      "provenance": "mirror",
+      "redacted": true
+    },
+    {
+      "kind": "control_pass",
+      "ref": "",
+      "freshness": "unknown",
+      "provenance": "mirror",
+      "redacted": true
+    }
+  ],
+  "attemptedRecoveries": [
+    {
+      "action": "Retry team creation through coordinator and direct wrapper",
+      "at": "2026-07-14T21:03:56.775Z",
+      "outcome": ""
+    },
+    {
+      "action": "Pause/resume delegated task",
+      "at": "2026-07-14T21:03:56.775Z",
+      "outcome": ""
+    },
+    {
+      "action": "Recovery chat",
+      "at": "2026-07-14T21:03:56.775Z",
+      "outcome": ""
+    },
+    {
+      "action": "Cleanup",
+      "at": "2026-07-14T21:03:56.775Z",
+      "outcome": ""
+    }
+  ],
+  "operationalRecoveryExhausted": true,
+  "unresolvedUncertainty": [
+    "Whether the team wrapper schema omission is in tool exposure, wrapper field mapping, or underlying team_manage validation.",
+    "Whether delegated-task non-finalization is caused by the agent repeatedly using bg_plan APIs, outer runner completion detection, or prompt/tool-policy interaction.",
+    "Why agent named Terra Tester inherited Luna route while an explicit Terra scheduled job correctly used Terra."
+  ],
+  "sanitizedSummary": "Agent orchestration regression suite: standalone conversational chat and scheduled subagent jobs pass, but managed-team creation, delegated task finalization, disposable benchmark completion, and recovery runtime have reproducible failures. Test resources were fully cleaned up."
+}

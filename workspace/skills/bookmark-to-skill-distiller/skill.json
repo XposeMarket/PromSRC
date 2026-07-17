@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "bookmark-to-skill-distiller",
+  "name": "Bookmark-to-Skill Distiller",
+  "description": "Audit X bookmarks or saved-link corpora, extract repeated operational workflows, compare them with the installed Prometheus skill catalog, and produce ranked evidence-backed new-skill and improvement recommendations. Use for bookmark audits and saved-idea operationalization.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "audit my bookmarks for skills",
+    "turn bookmarks into skills",
+    "bookmark skill ideas",
+    "analyze saved posts for workflows",
+    "compare bookmarks to skill catalog",
+    "distill x bookmarks",
+    "saved links skill audit",
+    "operationalize my bookmarks"
+  ],
+  "categories": [
+    "skills",
+    "research",
+    "x",
+    "knowledge-management",
+    "audit"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "workspace_write",
+    "skills"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "browser": true,
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "templates/scoring-rubric.md",
+      "type": "template",
+      "description": "Scoring table"
+    },
+    {
+      "path": "examples/raul-x-bookmarks-audit.md",
+      "type": "example",
+      "description": "Canonical worked example pointer"
+    },
+    {
+      "path": "references/trigger-tests.md",
+      "type": "test",
+      "description": "Routing tests"
+    }
+  ]
+}

@@ -78,8 +78,10 @@ Current browser tool surface also includes:
 
 - model-facing wrappers: `browser_session`, `browser_observe`, `browser_act`, and `browser_extract`
 - hidden compatibility handlers: `browser_type`, `browser_scroll_collect_v2`, `browser_intercept_network`, `browser_element_watch`, `browser_snapshot_delta`, `browser_extract_structured`, `browser_teach_verify`, and the other granular browser tools
+- `browser_extract(action:"scroll_collect")` is the schema-free text/feed collector
+- `browser_extract(action:"scroll_collect_structured")` is the structured repeated-item collector and requires fields plus a container/saved item root, or a saved schema; `scroll_collect_v2` remains a compatibility alias
 
-Browser site knowledge now includes named elements, item roots, and extraction schemas via `src/gateway/browser-site-knowledge.ts`. `browser_extract_structured` can use an inline schema or a saved schema name.
+Browser site knowledge now includes named elements, item roots, and extraction schemas via `src/gateway/browser-site-knowledge.ts`. Structured extraction and structured scroll collection can use an inline schema or a saved schema name. Schema errors identify the actual calling tool and direct schema-free collection to `scroll_collect`.
 
 Browser performance telemetry:
 

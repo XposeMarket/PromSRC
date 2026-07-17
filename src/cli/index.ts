@@ -11,6 +11,17 @@ import { getConfig } from '../config/config';
 import { getDatabase } from '../db/database';
 import { getOllamaClient } from '../agents/ollama-client';
 import * as ui from './ui.js';
+import {
+  appendGatewaySupervisorEvidence,
+  buildGatewaySupervisorEvidence,
+  classifyGatewaySupervisorObservation,
+  readGatewayProgressLease,
+  type GatewayRuntimeStatusSnapshot,
+} from './gateway-supervisor-policy.js';
+import {
+  takeSupervisorRestartRequest,
+  type SupervisorRestartRequest,
+} from '../runtime/supervisor-restart-request.js';
 // AgentOrchestrator removed — legacy pipeline superseded by reactor + multi-agent orchestration
 
 const program = new Command();
@@ -130,13 +141,21 @@ function killGatewayChild(child: ChildProcess): void {
   }, 2500).unref?.();
 }
 
-async function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS): Promise<boolean> {
+interface GatewayHealthProbe {
+  healthy: boolean;
+  durationMs: number;
+  outcome: 'ok' | 'http_error' | 'timeout' | 'request_error';
+  statusCode?: number;
+}
+
+async function probeGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS): Promise<GatewayHealthProbe> {
   return new Promise((resolve) => {
+    const startedAt = Date.now();
     let settled = false;
-    const done = (ok: boolean) => {
+    const done = (result: Omit<GatewayHealthProbe, 'durationMs'>) => {
       if (settled) return;
       settled = true;
-      resolve(ok);
+      resolve({ ...result, durationMs: Date.now() - startedAt });
     };
     const req = http.request({
       host: '127.0.0.1',
@@ -149,25 +168,24 @@ async function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS): Promis
     }, (res) => {
       const ok = Number(res.statusCode || 0) >= 200 && Number(res.statusCode || 0) < 300;
       res.resume();
-      res.once('end', () => done(ok));
-      res.once('close', () => done(ok));
+      const result = { healthy: ok, outcome: ok ? 'ok' : 'http_error', statusCode: res.statusCode } as const;
+      res.once('end', () => done(result));
+      res.once('close', () => done(result));
     });
     req.once('timeout', () => {
       req.destroy();
-      done(false);
+      done({ healthy: false, outcome: 'timeout' });
     });
-    req.once('error', () => done(false));
+    req.once('error', () => done({ healthy: false, outcome: 'request_error' }));
     req.end();
   });
 }
 
-interface GatewayRuntimeStatus {
-  pid?: number;
-  timestamp?: number;
-  reason?: string;
-  modelBusy?: boolean;
-  modelBusySince?: number;
-  modelBusyAgeMs?: number;
+async function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS): Promise<boolean> {
+  return (await probeGatewayHealth(timeoutMs)).healthy;
+}
+
+interface GatewayRuntimeStatus extends GatewayRuntimeStatusSnapshot {
   lastMainSessionId?: string;
 }
 
@@ -179,23 +197,6 @@ function readGatewayRuntimeStatus(): GatewayRuntimeStatus | null {
   } catch {
     return null;
   }
-}
-
-function shouldDeferGatewayRestart(status: GatewayRuntimeStatus | null): boolean {
-  if (!status || !Number.isFinite(Number(status.timestamp))) return false;
-  const ageMs = Date.now() - Number(status.timestamp);
-  if (ageMs < 20_000) return true;
-  const busyAgeAtHeartbeatMs = Number.isFinite(Number(status.modelBusyAgeMs))
-    ? Number(status.modelBusyAgeMs)
-    : 0;
-  const busyAgeFromStartMs = Number.isFinite(Number(status.modelBusySince))
-    ? Math.max(0, Date.now() - Number(status.modelBusySince))
-    : 0;
-  // A frozen gateway cannot update modelBusyAgeMs. Include heartbeat staleness
-  // so a turn that froze early does not receive an infinite busy grace period.
-  const busyAgeMs = Math.max(busyAgeFromStartMs, busyAgeAtHeartbeatMs + Math.max(0, ageMs));
-  if (status.modelBusy && busyAgeMs < GATEWAY_BUSY_RESTART_GRACE_MS) return true;
-  return false;
 }
 
 function hasLiveGatewayHeartbeat(status: GatewayRuntimeStatus | null, maxAgeMs = 20_000): boolean {
@@ -474,6 +475,51 @@ async function runSupervisedGateway(): Promise<void> {
   let child: ChildProcess | null = null;
   let launchInFlight = false;
   let restartTimer: NodeJS.Timeout | null = null;
+  const supervisorStateDir = process.env.PROMETHEUS_SUPERVISOR_STATE_DIR
+    || path.join(resolveInstallRoot(), '.prometheus');
+
+  const launchReplacementSupervisor = async (request: SupervisorRestartRequest): Promise<boolean> => {
+    try {
+      const replacementEnv = {
+        ...process.env,
+        PROMETHEUS_SUPERVISOR: '1',
+        PROMETHEUS_SUPERVISOR_RESTART: '1',
+        PROMETHEUS_DISABLE_GATEWAY_SUPERVISOR: '0',
+        PROMETHEUS_HOT_RESTART: '1',
+        PROMETHEUS_SUPERVISOR_STATE_DIR: supervisorStateDir,
+      } as NodeJS.ProcessEnv;
+      delete replacementEnv.PROMETHEUS_SUPERVISED_GATEWAY_CHILD;
+      const replacement = spawn(
+        process.execPath,
+        [...process.execArgv, ...process.argv.slice(1)],
+        {
+          cwd: process.cwd(),
+          env: replacementEnv,
+          detached: true,
+          stdio: 'inherit',
+          windowsHide: true,
+        },
+      );
+      const started = await new Promise<boolean>((resolve) => {
+        let settled = false;
+        const done = (ok: boolean) => {
+          if (settled) return;
+          settled = true;
+          resolve(ok);
+        };
+        replacement.once('spawn', () => done(true));
+        replacement.once('error', () => done(false));
+        setTimeout(() => done(!!replacement.pid), 5_000).unref?.();
+      });
+      if (!started) return false;
+      replacement.unref();
+      console.error(`[GatewaySupervisor] Replacement supervisor started for request ${request.id} (pid=${replacement.pid || 'unknown'}).`);
+      return true;
+    } catch (error: any) {
+      console.error(`[GatewaySupervisor] Could not replace supervisor: ${error?.message || error}`);
+      return false;
+    }
+  };
 
   const scheduleLaunch = () => {
     if (stopping || restartTimer || launchInFlight) return;
@@ -497,16 +543,75 @@ async function runSupervisedGateway(): Promise<void> {
     if (stopping) return;
     const launched = spawn(process.execPath, gatewayChildArgs(), {
       cwd: process.cwd(),
-      env: { ...process.env, PROMETHEUS_SUPERVISED_GATEWAY_CHILD: '1' },
+      env: {
+        ...process.env,
+        PROMETHEUS_SUPERVISED_GATEWAY_CHILD: '1',
+        PROMETHEUS_SUPERVISOR_STATE_DIR: supervisorStateDir,
+      },
       stdio: 'inherit',
       windowsHide: false,
     });
     child = launched;
     launched.once('exit', (code, signal) => {
+      void (async () => {
       if (stopping) return;
       if (child === launched) child = null;
       console.error(`[GatewaySupervisor] Gateway exited (${signal || (code ?? 'unknown')}).`);
+      const now = Date.now();
+      const runtimeStatus = readGatewayRuntimeStatus();
+      const progressLease = readGatewayProgressLease(path.join(resolveInstallRoot(), '.prometheus'));
+      const decision = classifyGatewaySupervisorObservation({
+        now,
+        healthOk: false,
+        childPid: launched.pid,
+        childExited: true,
+        portOwnerPids: [],
+        consecutiveFailures: 0,
+        failureLimit: GATEWAY_HEALTH_FAILURE_LIMIT,
+        restartEnabled: gatewaySupervisorRestartEnabled(),
+        heartbeatFreshMs: 20_000,
+        legacyBusyGraceMs: GATEWAY_BUSY_RESTART_GRACE_MS,
+        runtimeStatus,
+        progressLease,
+      });
+      appendGatewaySupervisorEvidence(
+        path.join(resolveInstallRoot(), '.prometheus'),
+        buildGatewaySupervisorEvidence({
+          now,
+          supervisorPid: process.pid,
+          childPid: launched.pid,
+          portOwnerPids: [],
+          probe: { healthy: false, durationMs: 0, outcome: signal ? 'child_signal_exit' : 'child_exit' },
+          consecutiveFailures: 0,
+          decision,
+          runtimeStatus,
+          progressLease,
+        }),
+      );
+      const supervisorRequest = takeSupervisorRestartRequest(
+        supervisorStateDir,
+        Number(launched.pid || 0),
+      );
+      if (supervisorRequest.request) {
+        console.error(`[GatewaySupervisor] Gateway requested full supervisor replacement (${supervisorRequest.request.reason}).`);
+        if (await launchReplacementSupervisor(supervisorRequest.request)) {
+          stopping = true;
+          if (restartTimer) {
+            clearTimeout(restartTimer);
+            restartTimer = null;
+          }
+          setTimeout(() => process.exit(0), 250).unref?.();
+          return;
+        }
+        console.error('[GatewaySupervisor] Full replacement failed; falling back to relaunching the gateway child under the current supervisor.');
+      } else if (supervisorRequest.status !== 'none') {
+        console.error(`[GatewaySupervisor] Ignored supervisor replacement request (${supervisorRequest.status}).`);
+      }
       scheduleLaunch();
+      })().catch((error: any) => {
+        console.error(`[GatewaySupervisor] Child-exit handling failed: ${error?.message || error}`);
+        scheduleLaunch();
+      });
     });
     } finally {
       launchInFlight = false;
@@ -533,29 +638,73 @@ async function runSupervisedGateway(): Promise<void> {
   while (!stopping) {
     await sleep(15_000);
     if (stopping) break;
-    const healthy = await checkGatewayHealth();
-    if (healthy) {
-      consecutiveFailures = 0;
+    const now = Date.now();
+    const probe = await probeGatewayHealth();
+    consecutiveFailures = probe.healthy ? 0 : consecutiveFailures + 1;
+    const runtimeStatus = readGatewayRuntimeStatus();
+    const progressLease = readGatewayProgressLease(path.join(resolveInstallRoot(), '.prometheus'));
+    // PID inspection shells out on supported platforms. Keep the healthy path
+    // cheap; ownership is required only before a failed probe may cause a kill.
+    const portOwnerPids = probe.healthy ? [] : getGatewayPortOwnerPids();
+    // launch() assigns through a nested closure, which TypeScript's control-flow
+    // analysis does not model after the initial null assignment.
+    const observedChild = child as ChildProcess | null;
+    const childPid = observedChild?.pid;
+    const childExited = !observedChild || observedChild.exitCode !== null || observedChild.signalCode !== null;
+    const decision = classifyGatewaySupervisorObservation({
+      now,
+      healthOk: probe.healthy,
+      childPid,
+      childExited,
+      portOwnerPids,
+      consecutiveFailures,
+      failureLimit: GATEWAY_HEALTH_FAILURE_LIMIT,
+      restartEnabled: gatewaySupervisorRestartEnabled(),
+      heartbeatFreshMs: 20_000,
+      legacyBusyGraceMs: GATEWAY_BUSY_RESTART_GRACE_MS,
+      runtimeStatus,
+      progressLease,
+    });
+
+    appendGatewaySupervisorEvidence(
+      path.join(resolveInstallRoot(), '.prometheus'),
+      buildGatewaySupervisorEvidence({
+        now,
+        supervisorPid: process.pid,
+        childPid,
+        portOwnerPids,
+        probe,
+        consecutiveFailures,
+        decision,
+        runtimeStatus,
+        progressLease,
+      }),
+    );
+
+    if (decision.resetFailures) consecutiveFailures = 0;
+    if (decision.state === 'healthy') {
       restartCount = 0;
       continue;
     }
-    const runtimeStatus = readGatewayRuntimeStatus();
-    if (shouldDeferGatewayRestart(runtimeStatus)) {
-      consecutiveFailures = 0;
-      const ageMs = runtimeStatus?.timestamp ? Date.now() - Number(runtimeStatus.timestamp) : -1;
-      const state = runtimeStatus?.modelBusy ? 'active model turn' : 'fresh runtime heartbeat';
-      console.error(`[GatewaySupervisor] Health check timed out, but gateway has ${state} (${Math.max(0, Math.round(ageMs / 1000))}s ago). Waiting instead of restarting.`);
+    if (decision.state === 'busy_progressing' || decision.state === 'degraded_progressing') {
+      const progressSeconds = Math.round(Math.max(0, decision.progressAgeMs ?? decision.heartbeatAgeMs ?? 0) / 1000);
+      console.error(`[GatewaySupervisor] Health check failed, but gateway progress is fresh (${progressSeconds}s ago; ${decision.reasonCode}). Waiting instead of restarting.`);
       continue;
     }
-    consecutiveFailures++;
-    if (consecutiveFailures < GATEWAY_HEALTH_FAILURE_LIMIT) continue;
-
-    consecutiveFailures = 0;
-    if (!gatewaySupervisorRestartEnabled()) {
-      console.error('[GatewaySupervisor] Gateway health checks timed out. Auto-restart is disabled; leaving the gateway process running. Set PROMETHEUS_SUPERVISOR_RESTART=1 to enable restart-on-failed-health.');
+    if (decision.state === 'identity_mismatch') {
+      console.error(`[GatewaySupervisor] Gateway identity mismatch (child=${childPid || 'none'}, listeners=${portOwnerPids.join(',') || 'none'}). Refusing to kill a process until ownership agrees.`);
       continue;
     }
-    console.error('[GatewaySupervisor] Gateway health checks timed out. Restarting frozen gateway process...');
+    if (decision.action === 'relaunch') {
+      scheduleLaunch();
+      continue;
+    }
+    if (decision.state === 'waiting') continue;
+    if (decision.action !== 'restart') {
+      console.error('[GatewaySupervisor] Gateway appears stalled, but auto-restart is disabled. Leaving the process running. Set PROMETHEUS_SUPERVISOR_RESTART=1 to enable confirmed-stall recovery.');
+      continue;
+    }
+    console.error(`[GatewaySupervisor] Confirmed gateway stall (${decision.reasonCode}). Restarting gateway process...`);
     if (child) killGatewayChild(child);
     else scheduleLaunch();
   }

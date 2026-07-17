@@ -5,6 +5,7 @@ import { getConfig } from '../../config/config';
 
 export type InternalWatchTargetType = 'file' | 'task' | 'scheduled_job' | 'event_queue';
 export type InternalWatchStatus = 'active' | 'matched' | 'timed_out' | 'cancelled' | 'failed';
+export type InternalWatchDeliveryMode = 'run_turn' | 'notify_only';
 
 export interface InternalWatchOrigin {
   sessionId: string;
@@ -26,6 +27,13 @@ export interface InternalWatchCondition {
   match?: Record<string, any>;
 }
 
+export interface InternalWatchRestartInterruption {
+  /** Stable for one task pause boundary so a replacement gateway can safely retry delivery. */
+  eventId: string;
+  createdAt: string;
+  observation: Record<string, any>;
+}
+
 export interface InternalWatch {
   id: string;
   label: string;
@@ -37,6 +45,8 @@ export interface InternalWatch {
   target: InternalWatchTarget;
   condition: InternalWatchCondition;
   onMatch: string;
+  /** run_turn preserves the historical tool-capable follow-up; notify_only broadcasts the match without invoking a model turn. */
+  deliveryMode: InternalWatchDeliveryMode;
   onTimeout?: string;
   maxFirings: number;
   firedCount: number;
@@ -46,6 +56,10 @@ export interface InternalWatch {
   /** Latched matching observation waiting for delivery while the model is busy. */
   pendingMatchObservation?: Record<string, any>;
   matchPendingAt?: string;
+  /** Durable, non-terminal wake-up when a watched task was paused by a gateway restart. */
+  pendingRestartInterruption?: InternalWatchRestartInterruption;
+  /** Last successfully delivered restart event; prevents repeat wake-ups while the task remains paused. */
+  lastDeliveredRestartInterruptionId?: string;
   matchedAt?: string;
   timedOutAt?: string;
   completedAt?: string;
@@ -110,6 +124,7 @@ function normalizeWatch(raw: any): InternalWatch | null {
     },
     condition: raw?.condition && typeof raw.condition === 'object' ? raw.condition : {},
     onMatch: String(raw?.onMatch || '').trim(),
+    deliveryMode: raw?.deliveryMode === 'notify_only' ? 'notify_only' : 'run_turn',
     onTimeout: raw?.onTimeout ? String(raw.onTimeout).trim() : undefined,
     maxFirings: Math.max(1, Math.min(10, Math.floor(Number(raw?.maxFirings) || 1))),
     firedCount: Math.max(0, Math.floor(Number(raw?.firedCount) || 0)),
@@ -118,6 +133,20 @@ function normalizeWatch(raw: any): InternalWatch | null {
     lastObservation: raw?.lastObservation && typeof raw.lastObservation === 'object' ? raw.lastObservation : undefined,
     pendingMatchObservation: raw?.pendingMatchObservation && typeof raw.pendingMatchObservation === 'object' ? raw.pendingMatchObservation : undefined,
     matchPendingAt: raw?.matchPendingAt ? String(raw.matchPendingAt) : undefined,
+    pendingRestartInterruption: raw?.pendingRestartInterruption
+      && typeof raw.pendingRestartInterruption === 'object'
+      && String(raw.pendingRestartInterruption.eventId || '').trim()
+      && raw.pendingRestartInterruption.observation
+      && typeof raw.pendingRestartInterruption.observation === 'object'
+      ? {
+          eventId: String(raw.pendingRestartInterruption.eventId),
+          createdAt: String(raw.pendingRestartInterruption.createdAt || new Date().toISOString()),
+          observation: raw.pendingRestartInterruption.observation,
+        }
+      : undefined,
+    lastDeliveredRestartInterruptionId: raw?.lastDeliveredRestartInterruptionId
+      ? String(raw.lastDeliveredRestartInterruptionId)
+      : undefined,
     matchedAt: raw?.matchedAt ? String(raw.matchedAt) : undefined,
     timedOutAt: raw?.timedOutAt ? String(raw.timedOutAt) : undefined,
     completedAt: raw?.completedAt ? String(raw.completedAt) : undefined,
@@ -157,6 +186,7 @@ export function createInternalWatch(input: {
   target: InternalWatchTarget;
   condition?: InternalWatchCondition;
   onMatch: string;
+  deliveryMode?: InternalWatchDeliveryMode;
   onTimeout?: string;
   maxFirings?: number;
   initialObservation?: Record<string, any>;
@@ -197,6 +227,7 @@ export function createInternalWatch(input: {
     },
     condition: input.condition || {},
     onMatch,
+    deliveryMode: input.deliveryMode === 'notify_only' ? 'notify_only' : 'run_turn',
     onTimeout: input.onTimeout ? String(input.onTimeout).trim() : undefined,
     maxFirings: Math.max(1, Math.min(10, Math.floor(Number(input.maxFirings) || 1))),
     firedCount: 0,

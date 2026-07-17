@@ -10,6 +10,7 @@ async function main(): Promise<void> {
 
   try {
     const runtimeApi = await import('./live-runtime-registry');
+    const recoveryApi = await import('./runtime-recovery');
     const runtimeId = runtimeApi.registerLiveRuntime({
       kind: 'main_chat',
       label: 'async persistence regression',
@@ -32,9 +33,36 @@ async function main(): Promise<void> {
     ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
     assert.equal(ledger.runtimes[runtimeId], undefined, 'terminal runtimes must be removed before graceful drain completes');
 
+    const restartRuntimeId = runtimeApi.registerLiveRuntime({
+      kind: 'main_chat_goal',
+      label: 'shutdown recovery regression',
+      sessionId: 'runtime_shutdown_recovery_regression',
+      recoveryPolicy: 'resume',
+      abortSignal: { aborted: false },
+    });
+    runtimeApi.updateLiveRuntimeCheckpoint(restartRuntimeId, { event: 'working', message: 'before shutdown' });
+    await runtimeApi.flushLiveRuntimePersistence();
+    const interrupted = recoveryApi.prepareActiveRuntimesForGatewayShutdown('signal_sigterm');
+    assert.equal(interrupted.some((runtime) => runtime.id === restartRuntimeId), true);
+    runtimeApi.finishLiveRuntime(restartRuntimeId);
+    await runtimeApi.flushLiveRuntimePersistence();
+    ledger = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
+    assert.equal(
+      ledger.runtimes[restartRuntimeId]?.status,
+      'interrupted',
+      'a turn unwinding after shutdown must not erase its durable restart checkpoint',
+    );
+
     const eventsPath = path.join(root, '.prometheus', 'runtimes', 'runtime-events.ndjson');
     const events = fs.readFileSync(eventsPath, 'utf-8').trim().split(/\r?\n/).map((line) => JSON.parse(line));
-    assert.deepEqual(events.map((event) => event.type), ['registered', 'checkpoint', 'completed']);
+    assert.deepEqual(
+      events.filter((event) => event.runtimeId === runtimeId).map((event) => event.type),
+      ['registered', 'checkpoint', 'completed'],
+    );
+    assert.deepEqual(
+      events.filter((event) => event.runtimeId === restartRuntimeId).map((event) => event.type),
+      ['registered', 'interrupted'],
+    );
     const status = runtimeApi.getLiveRuntimePersistenceStatus();
     assert.equal(status.pendingEvents, 0);
     assert.equal(status.ledgerDirty, false);

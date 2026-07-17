@@ -32,6 +32,28 @@ try {
     return supervisionApi.updateThreadSupervisionsBatch([{ id: record.id, patch }])[0];
   };
 
+  makeSession('owner_restart', 'Restart owner');
+  makeSession('target_restart', 'Restart target');
+  let restarted = supervisionApi.createThreadSupervision({
+    ownerSessionId: 'owner_restart', targetSessionId: 'target_restart', objective: 'Continue after restart', minReviewIntervalMs: 1,
+  });
+  restarted = supervisionApi.updateThreadSupervision(restarted.id, {
+    lastObservedRuntimeState: 'running',
+    lastObservedMessageCount: 0,
+  })!;
+  sessionApi.addMessage('target_restart', {
+    role: 'assistant',
+    messageKind: 'restart_status',
+    content: 'The gateway restarted and preserved the current checkpoint.',
+    timestamp: Date.now(),
+  }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+  sessionApi.flushSession('target_restart');
+  restarted = observeAndPersist(restarted, 'idle');
+  assert.ok(restarted.pendingEvent?.types.includes('gateway_restart_interruption'));
+  assert.ok(restarted.pendingEvent?.types.includes('running_to_idle'));
+  assert.equal(restarted.status, 'active', 'restart interruption must remain a non-terminal supervision event');
+  supervisionApi.cancelThreadSupervision(restarted.id);
+
   makeSession('owner_coalesce', 'Coalesce owner');
   makeSession('target_coalesce', 'Coalesce target');
   let coalesced = supervisionApi.createThreadSupervision({

@@ -278,7 +278,9 @@ Do not mix mobile changes into a desktop web UI fix unless the shared file truly
 - `index.html` still contains both DOM markup and legacy inline behavior. A function may be defined in a module but invoked from inline HTML by global name.
 - `app.js:setMode(...)` hides the main shell for non-chat modes and closes the right panel. If a page appears blank, check whether its `*-view` container is displayed and whether `main.main-shell` was intentionally hidden.
 - Desktop sessions are no longer only local browser state. The canonical backend session APIs are `/api/sessions` and `/api/sessions/:id`; local `localStorage` is cache/compatibility state.
-- Cross-surface streams have two paths: websocket/main-chat stream events and retained stream catch-up. Debug both before assuming the model/tool loop failed.
+- Cross-surface streams have two paths: websocket/main-chat stream events and retained stream catch-up. Debug both before assuming the model/tool loop failed. Retention is now bounded to 12,000 frames and 16 MiB per session; sequence gaps require session/cold recovery.
+- Progress/final frames are byte-bounded before WebSocket/SSE/replay delivery. Oversized text is previewed by reference and large data-URI media can arrive as a signed same-origin `/api/turn-blobs/:hash` URL; desktop renderers must accept that URL in the same field. A slow SSE socket may be closed after 30 seconds of backpressure without cancelling the turn, then recover through retained stream/session state.
+- Session/final state is flushed before terminal publication, but post-restart terminal redelivery is not yet driven by the durable outbox. Do not describe the current journal as guaranteed offline delivery.
 - Generated media previews should use `/api/canvas/inline?path=...` for browser playback, not download-style URLs.
 - Account/auth/pairing logic is security-sensitive. Do not loosen gateway auth, pairing approval, OAuth credential handling, command approvals, or source-edit approvals as part of a UI cleanup.
 

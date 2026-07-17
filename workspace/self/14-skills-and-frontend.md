@@ -77,6 +77,9 @@ Skill write safety is built into `SkillsManager`:
 - every automatic or tool-driven skill write appends `workspace/skills/.history/skill-change-ledger.jsonl`
 - ledger entries include `skillId`, `changeType`, `evidence`, `beforeHash`, `afterHash`, `appliedBy`, `status`, `snapshotDir`, `changedPaths`, and `reason`
 - `skill_manifest_write`, `skill_resource_write`, and `skill_resource_delete` accept ledger metadata including `changeType`, `evidence`, `appliedBy`, and `reason`
+- unified `skill_ops` exposes `triggerPositivePrompts` and `triggerNegativePrompts`; create/update/manifest/repair operations that change triggers must supply both and pass routing evaluation before the manifest write
+- fleet metadata audits treat missing triggers on explicit-only skills as informational, report compatibility entries separately, and recognize guidance such as “Use only when”, “Use this skill when”, “Invoke when”, and “Designed for”
+- bulk metadata repair performs a whole-request preflight for IDs, changes, and required trigger evaluations before its first write; preview output never invents triggers and marks trigger debt as blocked pending reviewed positive/negative prompts
 
 2026-06-05 batch web research skill alignment:
 

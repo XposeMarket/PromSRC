@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "brand-assets-and-logo-retrieval",
+  "name": "Brand Assets and Logo Retrieval",
+  "description": "Find, verify, download, normalize, and provenance-track official brand logos, icons, wordmarks, and related assets from authoritative sources. Use when a site, deck, mockup, or creative workflow needs real brand assets rather than AI-redrawn logos.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "categories": [
+    "brand",
+    "assets",
+    "research",
+    "design",
+    "media"
+  ],
+  "requiredTools": [
+    "web",
+    "media_assets",
+    "workspace_write",
+    "browser_automation"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "browser": true,
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "templates/asset-provenance.md",
+      "type": "template",
+      "description": "Provenance manifest"
+    },
+    {
+      "path": "references/source-priority.md",
+      "type": "doc",
+      "description": "Authority rules"
+    },
+    {
+      "path": "references/trigger-tests.md",
+      "type": "test",
+      "description": "Routing tests"
+    }
+  ]
+}

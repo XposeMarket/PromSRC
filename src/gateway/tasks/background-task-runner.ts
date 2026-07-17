@@ -33,6 +33,12 @@ import {
   type PauseReason,
   type TaskPauseSnapshot,
 } from './task-store';
+import {
+  buildTaskCompletionProtocol,
+  hasTaskCompleteNoteSince,
+  shouldAppendWriteNoteCompletionStep,
+  WRITE_NOTE_COMPLETION_MARKER,
+} from './task-completion-protocol.js';
 import { clearHistory, addMessage, getHistory, flushSession, activateToolCategory, clearSessionMutationScope, setSessionMutationScope, setWorkspace } from '../session';
 import {
   buildTaskPauseSnapshot,
@@ -591,12 +597,12 @@ export class BackgroundTaskRunner {
     // step, its text response becomes lastResultSummary, and that is delivered
     // directly to the user. No second LLM call needed after all steps are done.
     //
-    // Skip for: resuming mid-task, legacy child sub-agents (they don't deliver to user chat),
-    // and tasks that already have the step (idempotent on restart).
+    // Skip for: resuming mid-task, legacy child tasks that report to a parent,
+    // and tasks that already have the step (idempotent on restart). Named
+    // standalone subagents own a task panel, so they need this step too.
     const isResuming = task.currentStepIndex > 0;
     const isLegacySubagent = !task.teamSubagent && (!!task.subagentProfile || !!task.parentTaskId);
-    const alreadyHasWriteNoteStep = task.plan.some((s: any) => s.notes === 'write_note_completion');
-    if (!isResuming && !isLegacySubagent && !alreadyHasWriteNoteStep && task.plan.length > 0) {
+    if (shouldAppendWriteNoteCompletionStep(task)) {
       mutatePlan(taskId, [{
         op: 'add',
         after_index: task.plan.length - 1,
@@ -606,7 +612,7 @@ export class BackgroundTaskRunner {
           'Do not write a general operator snapshot, global system status report, workspace-wide continuity report, or broad memory recap unless the task explicitly asked for that artifact. ' +
           'Tag it "task_complete"; that note completes the task, so do not call step_complete afterward. ' +
           'Then write your final response to the user summarizing the outcome.',
-        notes: 'write_note_completion',
+        notes: WRITE_NOTE_COMPLETION_MARKER,
       }]);
       appendJournal(taskId, { type: 'status_push', content: 'Appended mandatory write_note completion step.' });
     }
@@ -760,10 +766,7 @@ export class BackgroundTaskRunner {
       `- Execute steps in order. Use whatever tools each step requires.`,
       `- After completing ALL tool calls for a step, call step_complete(note: "what you did").`,
       `- Do NOT call declare_plan again — your plan is already set.`,
-      `- The FINAL step in every plan is "Log completion". In that step you MUST call write_note`,
-      `  (tag: "task_complete") with a full rundown of what was done. That note completes the task;`,
-      `  do not call step_complete afterward. Then write your summary response as plain text.`,
-      `  That text becomes the final message delivered to chat.`,
+      ...buildTaskCompletionProtocol(task),
       `- If blocked, say what is blocking you and stop.`,
       `You are running autonomously.${teamSubagentNote}${profileNote}${standaloneRoleBlock}${standaloneAssignments}${blockedStateNote}${latestPauseAnalysis}${latestResumeBrief}${resumeNote}${xLoginGuidance}`,
       `[/BACKGROUND TASK CONTEXT]`,
@@ -2162,14 +2165,7 @@ export class BackgroundTaskRunner {
         this._broadcast('task_panel_update', { taskId });
       }
 
-      const isWriteNoteStep = currentStep?.notes === 'write_note_completion';
-      // Canonical completion detection uses durable write_note journal entries.
-      const hasTaskCompleteWriteNoteAlready = isWriteNoteStep
-        && Array.isArray(liveTask.journal)
-        && liveTask.journal.some((entry: any) =>
-          entry?.type === 'write_note'
-          && /^\s*\[task_complete\]\b/i.test(String(entry?.content || ''))
-        );
+      const isWriteNoteStep = currentStep?.notes === WRITE_NOTE_COMPLETION_MARKER;
       const prompt = firstRound
         ? (this.openingAction
             ? `[Resuming task from heartbeat. Opening action: ${this.openingAction}]\n\n${task.prompt}`
@@ -2181,21 +2177,14 @@ export class BackgroundTaskRunner {
                 `CURRENT STEP: ${liveTask.currentStepIndex + 1} of ${liveTask.plan.length} — FINAL STEP`,
                 `STEP GOAL: ${currentStep?.description}`,
                 ``,
-                ...(hasTaskCompleteWriteNoteAlready
-                  ? [
-                      `A task_complete note is already logged. The task will complete automatically.`,
-                      `Write your final plain-text summary response now — do NOT call write_note or step_complete again.`,
-                    ]
-                  : [
-                      `This is the final step. Do the following IN ORDER:`,
-                      `1. Call write_note with tag "task_complete" and a summary scoped only to this task/run:`,
-                      `   what files changed, what was created/modified, concrete outputs, key results, blockers, findings.`,
-                      `   Do not write a general operator snapshot, global system status report, workspace-wide continuity report, or broad memory recap unless this task explicitly asked for that artifact.`,
-                      `   Calling write_note with tag "task_complete" will automatically complete the task.`,
-                      `   Do NOT call step_complete after write_note.`,
-                      `2. After write_note returns, write your final plain-text response to the user.`,
-                      `   Make it clear and complete — this goes directly to chat.`,
-                    ]),
+                `This is the final step. Do the following IN ORDER:`,
+                `1. Call write_note with tag "task_complete" and a summary scoped only to this task/run:`,
+                `   what files changed, what was created/modified, concrete outputs, key results, blockers, findings.`,
+                `   Do not write a general operator snapshot, global system status report, workspace-wide continuity report, or broad memory recap unless this task explicitly asked for that artifact.`,
+                `   Calling write_note with tag "task_complete" will automatically complete the task.`,
+                `   Do NOT call step_complete after write_note.`,
+                `2. After write_note returns, write your final plain-text response to the user.`,
+                `   Make it clear and complete — this goes directly to chat.`,
               ].filter(Boolean).join('\n')
           : stallNudgeMessage
             ? stallNudgeMessage
@@ -2233,6 +2222,7 @@ export class BackgroundTaskRunner {
       }
 
       currentRoundToolEventCount = 0;
+      const roundStartedAt = Date.now();
       const roundOutcome = await this._runRoundWithRetry(
         liveTask,
         prompt,
@@ -2328,16 +2318,16 @@ export class BackgroundTaskRunner {
       // Step did NOT advance. The agent either:
       // 1. Is still working on the step (stall counter running), or
       // 2. Said something meaningful but didn't call step_complete.
-      // Final-step safeguard: if this is write_note_completion and a canonical
-      // [task_complete] write_note journal entry exists, auto-complete deterministically.
+      // Completion safeguard: the explicit write_note_completion step always
+      // accepts a canonical note. For compatibility with old/resumed plans that
+      // lack the synthetic step, a task_complete note made during the current
+      // round also completes the actual final step. Scoping to this round keeps
+      // an early note from silently completing a later step.
       const stepAfterRound = reloadedTask.plan[reloadedTask.currentStepIndex];
-      const isWriteNoteCompletionStep = stepAfterRound?.notes === 'write_note_completion';
-      if (isWriteNoteCompletionStep) {
-        const hasTaskCompleteWriteNote = Array.isArray(reloadedTask.journal)
-          && reloadedTask.journal.some((entry: any) =>
-            entry?.type === 'write_note'
-            && /^\s*\[task_complete\]\b/i.test(String(entry?.content || ''))
-          );
+      const isWriteNoteCompletionStep = stepAfterRound?.notes === WRITE_NOTE_COMPLETION_MARKER;
+      const isActualFinalStep = reloadedTask.currentStepIndex === reloadedTask.plan.length - 1;
+      if (isWriteNoteCompletionStep || isActualFinalStep) {
+        const hasTaskCompleteWriteNote = hasTaskCompleteNoteSince(reloadedTask.journal, roundStartedAt);
 
 	        if (hasTaskCompleteWriteNote) {
           const completedStepIndex = reloadedTask.currentStepIndex;
@@ -2356,7 +2346,7 @@ export class BackgroundTaskRunner {
 
           appendJournal(taskId, {
             type: 'status_push',
-            content: `Auto-advanced final step ${completedStepIndex + 1}: task_complete note already logged.`,
+            content: `Auto-advanced final step ${completedStepIndex + 1}: task_complete note logged during this step.`,
           });
           toolCallsSinceLastStepComplete = 0;
           stallNudgeInjected = false;

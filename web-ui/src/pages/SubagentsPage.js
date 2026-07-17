@@ -2035,6 +2035,8 @@ function renderSubagentRunProgress(taskOrRun) {
 
 function renderSubagentRunRecovery(task, agentId) {
   const canRecover = !!task?.canRecover || ['needs_assistance', 'awaiting_user_input', 'paused', 'stalled', 'failed'].includes(String(task?.status || '').toLowerCase());
+  const canSteerLive = ['running', 'queued', 'waiting_subagent'].includes(String(task?.status || '').toLowerCase());
+  const canMessageRun = canRecover || canSteerLive;
   const turns = Array.isArray(task?.recoveryConversation) ? task.recoveryConversation.slice(-16) : [];
   const pauseMessage = String(task?.pauseAnalysis?.message || '').trim();
   const pending = String(task?.pendingClarificationQuestion || '').trim();
@@ -2056,22 +2058,22 @@ function renderSubagentRunRecovery(task, agentId) {
       }).join('')
     : `<div style="font-size:12px;color:var(--muted)">No recovery messages yet.</div>`;
   return `
-    <section style="border:1px solid ${canRecover ? 'rgba(251,146,60,.45)' : 'var(--line)'};background:var(--panel-2);border-radius:10px;padding:11px;display:flex;flex-direction:column;gap:9px">
+    <section style="border:1px solid ${canMessageRun ? 'rgba(251,146,60,.45)' : 'var(--line)'};background:var(--panel-2);border-radius:10px;padding:11px;display:flex;flex-direction:column;gap:9px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <div style="font-size:12px;font-weight:900;color:${canRecover ? 'var(--brand)' : 'var(--text)'}">Recovery Chat</div>
-        <span style="font-size:10px;color:var(--muted)">${canRecover ? 'task mode' : 'read only'}</span>
+        <div style="font-size:12px;font-weight:900;color:${canMessageRun ? 'var(--brand)' : 'var(--text)'}">${canSteerLive ? 'Live Task Steering' : 'Recovery Chat'}</div>
+        <span style="font-size:10px;color:var(--muted)">${canSteerLive ? 'joins current run' : canRecover ? 'task mode' : 'read only'}</span>
       </div>
       ${pending ? `<div style="font-size:12px;line-height:1.45"><strong>Pending question:</strong> ${escHtml(pending)}</div>` : ''}
       ${pauseMessage ? `<div style="font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere"><strong>Pause analysis:</strong><br>${escHtml(pauseMessage.slice(0, 1400))}</div>` : ''}
       <div style="display:flex;flex-direction:column;gap:10px;align-items:stretch">${recoveryTurnsHtml}</div>
-      ${canRecover ? `<div class="panel-chat-composer" style="border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:8px">
+      ${canMessageRun ? `<div class="panel-chat-composer" style="border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:8px">
         <input id="sa-run-recovery-files-${escHtml(taskId)}" type="file" multiple accept="image/*,video/*,.pdf,.txt,.md,.json,.csv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml" style="display:none" onchange="updateSubagentRunRecoveryFileLabel('${escHtml(taskId)}')" />
         <div id="sa-run-recovery-files-label-${escHtml(taskId)}" style="display:none;margin-bottom:6px;font-size:11px;color:var(--muted)"></div>
         <div style="display:flex;gap:8px;align-items:flex-end">
-          <button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="document.getElementById('sa-run-recovery-files-${escHtml(taskId)}')?.click()">
+          ${canSteerLive ? '' : `<button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="document.getElementById('sa-run-recovery-files-${escHtml(taskId)}')?.click()">
             <iconify-icon icon="solar:paperclip-bold-duotone" width="17" height="17"></iconify-icon>
-          </button>
-          <textarea id="sa-run-recovery-${escHtml(taskId)}" rows="1" placeholder="Reply to this run..." class="chat-textarea" style="min-height:42px;max-height:140px"></textarea>
+          </button>`}
+          <textarea id="sa-run-recovery-${escHtml(taskId)}" rows="1" placeholder="${canSteerLive ? 'Steer this current run — no new task will be created...' : 'Reply to this run...'}" class="chat-textarea" style="min-height:42px;max-height:140px"></textarea>
           <button class="send-btn" onclick="sendSubagentRunRecovery('${escHtml(agentId)}','${escHtml(taskId)}')" title="Send">
             <iconify-icon icon="solar:arrow-up-bold" width="20" height="20"></iconify-icon>
           </button>
@@ -2273,6 +2275,8 @@ async function sendSubagentRunRecovery(agentId, taskId) {
   const fileInput = document.getElementById(`sa-run-recovery-files-${id}`);
   const message = String(textarea?.value || '').trim();
   const selectedFiles = Array.from(fileInput?.files || []);
+  const runStatus = String(subagentRunDetails[id]?.task?.status || '').toLowerCase();
+  const isLiveSteer = ['running', 'queued', 'waiting_subagent'].includes(runStatus);
   if (!id || (!message && !selectedFiles.length)) return;
   try {
     let attachmentPreviews = [];
@@ -2281,11 +2285,13 @@ async function sendSubagentRunRecovery(agentId, taskId) {
       const uploadResults = await uploadSubagentChatStagedFiles(staged);
       attachmentPreviews = subagentUploadResultsToAttachmentPreviews(uploadResults);
     }
-    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(id)}/recovery`, {
+    const data = await api(isLiveSteer
+      ? `/api/bg-tasks/${encodeURIComponent(id)}/message`
+      : `/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(id)}/recovery`, {
       method: 'POST',
       body: JSON.stringify({
         message: message || (attachmentPreviews.length ? 'Please review the attached file(s).' : ''),
-        attachmentPreviews,
+        ...(isLiveSteer ? {} : { attachmentPreviews }),
       }),
       timeoutMs: 300000,
     });
@@ -2295,7 +2301,7 @@ async function sendSubagentRunRecovery(agentId, taskId) {
     if (data?.task) subagentRunDetails[id] = { task: data.task, run: data.run || null, evidenceBus: data.evidenceBus || null };
     const runsData = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`).catch(() => null);
     if (Array.isArray(runsData?.runs)) subagentRuns = runsData.runs;
-    showToast('Recovery updated', data?.resumed ? 'Run resumed' : 'Reply sent', 'success');
+    showToast(isLiveSteer ? 'Task steered' : 'Recovery updated', isLiveSteer ? (data?.message || 'Guidance joined the current run') : data?.resumed ? 'Run resumed' : 'Reply sent', 'success');
     renderSubagentBoard(agentId);
   } catch (err) {
     showToast('Recovery error', err.message || 'Failed to send recovery reply', 'error');

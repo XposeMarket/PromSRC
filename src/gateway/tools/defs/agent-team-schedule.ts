@@ -461,7 +461,8 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'message_subagent',
         description:
-          'Send a normal direct message to a standalone one-off subagent in the background and return a task id immediately. ' +
+          'Create a NEW background task for a standalone one-off subagent and return a task id immediately. ' +
+          'Do not use this to add or change instructions on an existing run; inspect it and use agent_run_ops(action="steer") instead. ' +
           'Use this when the user wants the main chat agent to hand work or a question to an existing standalone subagent as a peer while main chat continues. ' +
           'The subagent working conversation and final result stay in the subagent task panel, not the main chat. This is not team dispatch and only works for subagents that are not assigned to a managed team. Call agent_list() first if you are unsure of the ID.',
         parameters: {
@@ -469,8 +470,9 @@ export function getAgentTeamScheduleTools(): any[] {
           required: ['agent_id', 'message'],
           properties: {
             agent_id: { type: 'string', description: 'ID of the standalone subagent to message.' },
-            message: { type: 'string', description: 'Plain-language message to send to the subagent in the background. Include the task or question.' },
+            message: { type: 'string', description: 'Plain-language assignment for the new background task. Include the task or question.' },
             context: { type: 'string', description: 'Optional additional context from the main chat.' },
+            force_new_task: { type: 'boolean', description: 'Required true when this agent already has an active run and the user explicitly requested separate parallel work.' },
           },
         },
       },
@@ -827,7 +829,7 @@ export function getAgentTeamScheduleTools(): any[] {
         description:
           'Create, list, or cancel bounded internal watches that wake a normal tool-capable Prometheus main-chat turn when an internal condition changes. ' +
           'Use after triggering background work, request_team_member_turn(background=true), dispatch_team_agent(background=true), schedule_job(run_now), collectors, build/restart checks, or file-producing jobs so Prometheus does not have to manually poll. ' +
-          'Supported targets: file, task, scheduled_job, event_queue. Watches require a TTL, persist across gateway restart, and default to firing once. Watch delivery uses the regular chat/tool-category path; it is not task recovery chat unless the follow-up intentionally calls agent_run_ops(action:"recover").',
+          'Supported targets: file, task, scheduled_job, event_queue. Watches require a TTL, persist across gateway restart, and default to firing once. delivery_mode defaults to run_turn (the historical regular chat/tool-category path); use notify_only to broadcast completion state without invoking a model turn or injecting control flow.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -860,7 +862,12 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             on_match: {
               type: 'string',
-              description: 'Instruction to run in the resolved main chat when the watch matches. Supports {{watch_id}}, {{watch_label}}, {{path}}, {{task_id}}, {{job_id}}, {{status}}, {{result}}, {{observation_json}}.',
+              description: 'Instruction for run_turn delivery, or an operator-readable notification label for notify_only. Supports {{watch_id}}, {{watch_label}}, {{path}}, {{task_id}}, {{job_id}}, {{status}}, {{result}}, {{observation_json}}.',
+            },
+            delivery_mode: {
+              type: 'string',
+              enum: ['run_turn', 'notify_only'],
+              description: 'Default run_turn starts the normal tool-capable follow-up. notify_only broadcasts the matched observation without invoking a model turn.',
             },
             on_timeout: {
               type: 'string',
@@ -943,24 +950,24 @@ export function getAgentTeamScheduleTools(): any[] {
         description:
           'Inspect and operate on existing agent-owned task runs. Use this for subagent Runs/recovery, not normal Home chat. ' +
           'List/get responses include current step, unfinished/failed steps, runtime progress, last tool call, last journal event, and live runner state. ' +
-          'recover sends a message into the run-attached recovery conversation and returns the recovery reply; it is a chat path, not an automatic resume unless the message explicitly requests resume/rerun. ' +
-          'Use chat_with_subagent for normal persistent subagent chat and message_subagent to start a new background handoff.',
+          'steer injects new guidance into an actively running task without creating another task. recover is only for a paused/stalled run-attached recovery conversation. ' +
+          'Use chat_with_subagent for normal persistent subagent chat. Use message_subagent only when the user explicitly wants a separate new background handoff.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'get', 'recover', 'resume', 'rerun', 'pause', 'cancel', 'benchmark_disposable'],
-              description: 'list/get inspect runs; recover chats in task recovery mode; resume/rerun/pause/cancel control the existing run.',
+              enum: ['list', 'get', 'steer', 'recover', 'resume', 'rerun', 'pause', 'cancel', 'benchmark_disposable'],
+              description: 'list/get inspect runs; steer joins active work; recover chats in paused task recovery mode; resume/rerun/pause/cancel control the existing run.',
             },
             agent_id: { type: 'string', description: 'Optional agent ID. Required for agent-scoped lists; optional with task_id because ownership can be derived from the task.' },
-            task_id: { type: 'string', description: 'Task/run ID. Required for get/recover/resume/rerun/pause/cancel.' },
+            task_id: { type: 'string', description: 'Task/run ID. Required for get/steer/recover/resume/rerun/pause/cancel.' },
             status: { type: 'string', description: 'Optional list filter: queued|running|paused|stalled|needs_assistance|awaiting_user_input|failed|complete|waiting_subagent. Comma/space separated values are allowed.' },
             recoverable_only: { type: 'boolean', description: 'For list, return only paused/stalled/failed/needs-input runs that can use recovery chat.' },
             limit: { type: 'number', description: 'For list, max runs returned. Default 20, max 100.' },
             detail: { type: 'string', enum: ['compact', 'full'], description: 'List payload detail. Default compact; use get for one hydrated run.' },
-            message: { type: 'string', description: 'Recovery chat message for action="recover". This is added to the run recovery conversation.' },
+            message: { type: 'string', description: 'Guidance for action="steer", or a recovery chat message for action="recover".' },
             note: { type: 'string', description: 'Optional operator note for resume/rerun/pause/cancel actions.' },
             include_task: { type: 'boolean', description: 'For get/recover/control responses, include the full raw task record. Default false to keep tool output compact.' },
             include_evidence: { type: 'boolean', description: 'Include a capped evidence bus snapshot when available. Default true.' },
@@ -978,18 +985,20 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'task_control',
-        description: 'Query and control background tasks. Use this instead of reading files to discover task status.',
+        description: 'Query, steer, and control existing background tasks. When the user changes or adds instructions to current work, use steer; do not create another task.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', description: 'One of: list, latest, get, resume, rerun, pause, cancel, delete' },
-            task_id: { type: 'string', description: 'Task ID (required for get/pause/cancel/delete; optional for resume/rerun)' },
+            action: { type: 'string', description: 'One of: list, latest, get, steer, message, resume, rerun, pause, cancel, delete' },
+            task_id: { type: 'string', description: 'Task ID. Strongly recommended for steer; required for get/pause/cancel/delete; optional for resume/rerun.' },
             status: { type: 'string', description: 'Optional filter: queued|running|paused|stalled|needs_assistance|awaiting_user_input|failed|complete|waiting_subagent' },
             include_all_sessions: { type: 'boolean', description: 'If true, list across all sessions/channels; default false (scoped)' },
             include_scheduled: { type: 'boolean', description: 'Include compact scheduled jobs in list output. Default false.' },
             limit: { type: 'number', description: 'Max tasks to return (default 20, max 100)' },
-            note: { type: 'string', description: 'Optional operator note to append when resuming/rerunning' },
+            message: { type: 'string', description: 'New guidance for steer/message. It is injected into the current task; no new task is created.' },
+            resume_after_message: { type: 'boolean', description: 'If steering a paused task, resume that same task after recording the guidance. Default false.' },
+            note: { type: 'string', description: 'Optional operator note for control actions; also accepted as steer text for compatibility.' },
             confirm: { type: 'boolean', description: 'Required true for destructive actions cancel/delete' },
           },
         },
@@ -1265,6 +1274,34 @@ export function getAgentTeamScheduleTools(): any[] {
                 },
               },
             },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'prometheus_request_ops',
+        description:
+          'Read and recover durable Prometheus requests across sessions: dev-source edits, approvals, proposals, and user questions. ' +
+          'Use recovery_candidates when the user says work was cut off or interrupted. recover only resumes an existing approved dev edit in its original owning thread; it never approves, completes, or marks changes live.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['list', 'find', 'read', 'status', 'recovery_candidates', 'recover'],
+            },
+            request_id: { type: 'string', description: 'Exact durable request/dev-edit/approval/proposal/question ID.' },
+            query: { type: 'string', description: 'Text search across request plans, summaries, files, sessions, and statuses.' },
+            kind: { type: 'string', enum: ['dev_source_edit', 'approval', 'proposal', 'question'] },
+            status: { type: 'string', description: 'Optional exact status filter.' },
+            session_id: { type: 'string', description: 'Optional owning-session filter.' },
+            depth: { type: 'string', enum: ['summary', 'full'], description: 'Full includes plans, touched files, verification, and request-specific data.' },
+            limit: { type: 'number', description: 'Maximum results, default 50 and maximum 200.' },
+            message: { type: 'string', description: 'Optional user recovery note included in the guarded handoff.' },
+            reason: { type: 'string', description: 'Alias for message during recover.' },
           },
         },
       },

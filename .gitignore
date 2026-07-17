@@ -233,3 +233,21 @@ workspace/generated/**
 *.mp4
 *.mov
 *.webm
+
+# Final workspace safety guards. The broad workspace re-includes above are
+# intentional, but must never pull nested dependencies, compiler output, or
+# live diagnostic/runtime logs into repository checkpoints.
+workspace/**/node_modules/
+workspace/**/build/
+workspace/**/logs/
+workspace/temp/
+workspace/**/*.log
+workspace/**/*.cpuprofile
+workspace/**/__pycache__/
+workspace/**/*.pyc
+
+# External reference checkouts are independent repositories. Keep their local
+# working trees out of the parent repo rather than recording unusable gitlinks.
+workspace/repos/
+workspace/scratch/
+workspace/games/prometheus-vita/vendor/

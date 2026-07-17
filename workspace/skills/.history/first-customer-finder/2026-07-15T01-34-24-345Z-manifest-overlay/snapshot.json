@@ -1,0 +1,11 @@
+{
+  "skillId": "first-customer-finder",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-07-15T01:34:24.350Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\first-customer-finder",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "632e769ebad025d3"
+}

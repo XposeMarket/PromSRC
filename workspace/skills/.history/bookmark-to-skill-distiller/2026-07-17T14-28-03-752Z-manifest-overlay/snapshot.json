@@ -1,0 +1,12 @@
+{
+  "skillId": "bookmark-to-skill-distiller",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-07-17T14:28:03.758Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\bookmark-to-skill-distiller",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "09e29bca596bf872"
+}

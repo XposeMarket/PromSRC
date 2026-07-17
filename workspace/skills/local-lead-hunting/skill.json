@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "local-lead-hunting",
+  "name": "local-lead-hunting",
+  "description": "Discover, verify, qualify, and persist local-business leads from live public sources using explicit market, geography, service, and fit criteria. Use for building or updating a local prospect pipeline; do not use for writing outreach, general market research, or analyzing a lead already selected.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "local businesses with bad websites",
+    "find local business leads",
+    "google maps lead search",
+    "save leads to markdown",
+    "find prospects on maps",
+    "website seo lead evidence",
+    "screen local businesses",
+    "qualify business leads",
+    "live business listings",
+    "local lead hunting"
+  ],
+  "categories": [
+    "sales",
+    "marketing",
+    "lead-generation",
+    "browser-automation"
+  ],
+  "requiredTools": [
+    "browser_automation",
+    "workspace_write",
+    "skills"
+  ],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "references/revenue-system-handoff.md",
+      "type": "doc"
+    }
+  ]
+}

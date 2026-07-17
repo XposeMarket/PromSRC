@@ -1,0 +1,20 @@
+# Ember Notes
+
+Source: http://127.0.0.1:18765
+
+To create a video from this capture, route through `hyperframes`: use `website-to-video` for a site tour or `product-launch-video` for a commercial promo.
+
+## What's in This Capture
+
+| File | Contents |
+|------|----------|
+| `screenshots/scroll-*.png` | Viewport screenshots of the full page. Start with `scroll-000.png` (hero). |
+| `extracted/asset-descriptions.md` | One-line description of every downloaded asset. **Read this first.** |
+| `extracted/tokens.json` | Design tokens: 3 colors, 2 fonts, 1 headings, 0 CTAs |
+| `extracted/visible-text.txt` | Page text in DOM order, prefixed with HTML tag (`[h1]`, `[p]`, `[a]`). Use as context — rephrase freely. |
+| `assets/` | Downloaded images, SVGs, and font files. |
+
+## Brand Summary
+
+- **Colors**: #F5F0E6, #25221D, #C64F2D
+- **Fonts**: Georgia (400), Arial (700)

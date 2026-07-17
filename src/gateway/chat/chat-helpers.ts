@@ -17,6 +17,7 @@ import { getProcessSupervisor } from '../process/supervisor';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, activateToolCategory, getActivatedToolCategories } from '../session';
 import { hookBus } from '../hooks';
 import { runBootMd } from '../boot';
+import { consumeCrashRecoveredMainChatGoalSessionIds } from '../runtime-recovery';
 import { listPendingStartupNotifications } from '../lifecycle';
 import {
   createTask,
@@ -470,30 +471,37 @@ function buildBootStartupSnapshot(workspacePath: string): string {
 
 hookBus.register('gateway:startup', async ({ workspacePath }) => {
   const startupSnapshot = buildBootStartupSnapshot(workspacePath);
-  const bootResult = await runBootMd(workspacePath, async (message, sessionId, sendSSE, callerContext) => {
-    const bootContext = [
-      'CONTEXT: Internal startup BOOT.md turn. All data has been pre-fetched and is in the snapshot below.',
-      'Do NOT call any tools. Read the snapshot and write a 2-3 sentence startup summary.',
-      '[BOOT STARTUP SNAPSHOT - pre-fetched runtime data, no tools needed]',
-      startupSnapshot,
-      '[/BOOT STARTUP SNAPSHOT]',
-    ].join('\n\n');
-    const effectiveCallerContext = callerContext || bootContext;
-    const effectiveSessionId = sessionId || `auto_boot_${Date.now()}`;
-    setWorkspace(effectiveSessionId, workspacePath);
-    clearHistory(effectiveSessionId);
-    const result = await _handleChat(message, effectiveSessionId, sendSSE, undefined, undefined, effectiveCallerContext);
-    if (result?.text && !callerContext) {
-      // Backward-compatible fallback for old clients still listening for boot_greeting.
-      broadcastWS({ type: 'boot_greeting', text: result.text, sessionId: effectiveSessionId });
-    }
-    return { text: result.text };
-  });
+  let bootResult: Awaited<ReturnType<typeof runBootMd>> | undefined;
+  try {
+    bootResult = await runBootMd(workspacePath, async (message, sessionId, sendSSE, callerContext) => {
+      const bootContext = [
+        'CONTEXT: Internal startup BOOT.md turn. All data has been pre-fetched and is in the snapshot below.',
+        'Do NOT call any tools. Read the snapshot and write a 2-3 sentence startup summary.',
+        '[BOOT STARTUP SNAPSHOT - pre-fetched runtime data, no tools needed]',
+        startupSnapshot,
+        '[/BOOT STARTUP SNAPSHOT]',
+      ].join('\n\n');
+      const effectiveCallerContext = callerContext || bootContext;
+      const effectiveSessionId = sessionId || `auto_boot_${Date.now()}`;
+      setWorkspace(effectiveSessionId, workspacePath);
+      clearHistory(effectiveSessionId);
+      const result = await _handleChat(message, effectiveSessionId, sendSSE, undefined, undefined, effectiveCallerContext);
+      if (result?.text && !callerContext) {
+        // Backward-compatible fallback for old clients still listening for boot_greeting.
+        broadcastWS({ type: 'boot_greeting', text: result.text, sessionId: effectiveSessionId });
+      }
+      return { text: result.text };
+    });
+  } catch (err: any) {
+    // Unexpected goal recovery must not depend on BOOT.md/model success.
+    console.warn('[RuntimeRecovery] BOOT startup processing failed; continuing crash-goal recovery:', err?.message || err);
+  }
 
   if (bootResult?.status === 'ran') {
+    const bootSource = bootResult.source;
     const pending = listPendingStartupNotifications()
       .filter((item) => !item.delivered?.web)
-      .filter((item) => item.source === bootResult.source);
+      .filter((item) => item.source === bootSource);
     for (const item of pending) {
       broadcastWS({
         type: 'session_notification',
@@ -512,11 +520,17 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
   // and completed any dev-edit continuation may the durable goal runner reclaim
   // the session and continue the interrupted iteration.
   try {
-    const resumedGoals = _resumeMainChatGoalsAfterBoot?.(
-      bootResult?.status === 'ran' ? bootResult.resumableGoalSessionIds : undefined,
-    ) || [];
+    const plannedRestartSessionIds = bootResult?.status === 'ran'
+      ? (bootResult.resumableGoalSessionIds || [])
+      : [];
+    const crashRecoveredSessionIds = consumeCrashRecoveredMainChatGoalSessionIds();
+    const resumableSessionIds = Array.from(new Set([
+      ...plannedRestartSessionIds,
+      ...crashRecoveredSessionIds,
+    ]));
+    const resumedGoals = _resumeMainChatGoalsAfterBoot?.(resumableSessionIds) || [];
     if (resumedGoals.length > 0) {
-      console.log(`[RuntimeRecovery] Auto-resumed ${resumedGoals.length} main-chat goal(s) after BOOT finalization.`);
+      console.log(`[RuntimeRecovery] Auto-resumed ${resumedGoals.length} main-chat goal(s) after startup recovery finalization.`);
     }
   } catch (err: any) {
     console.warn('[RuntimeRecovery] Post-BOOT main-chat goal auto-resume failed:', err?.message || err);
@@ -715,7 +729,7 @@ export function looksLikeIntentOnlyReply(text: string): boolean {
 export function isContinuationCue(message: string): boolean {
   const s = String(message || '').trim().toLowerCase();
   if (!s) return false;
-  return /^(ok|okay|yes|yep|sure|proceed|continue|go ahead|keep going|do it|try again|move on|all set|ready|done|fixed|i logged in|logged in|it's fixed|it is fixed)\.?$/.test(s);
+  return /^(ok|okay|yes|yep|sure|proceed|continue|go ahead|keep going|do it|try again|move on|all set|ready|done|fixed|i logged in|logged in|it's fixed|it is fixed|you got cut ?off|you were cut ?off|you were interrupted|pick up where you left off|resume the previous request)\.?$/.test(s);
 }
 
 export function hasPendingExecutionIntent(

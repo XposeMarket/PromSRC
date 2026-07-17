@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tool Bench: Ember Dash</title>
+  <style>
+    :root { color-scheme: dark; --ember:#ff6a2b; --ink:#0e0e10; --card:#19191d; --muted:#aaa; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; background:radial-gradient(circle at 50% 0%,#3a1c12,var(--ink) 52%); font:16px/1.4 system-ui,sans-serif; color:#fff; }
+    main { width:min(92vw,640px); padding:28px; border:1px solid #4d2b1d; border-radius:22px; background:rgba(25,25,29,.94); box-shadow:0 28px 90px #0008; }
+    h1 { margin:0; letter-spacing:-.04em; } p { color:var(--muted); }
+    #track { position:relative; height:210px; overflow:hidden; border-radius:14px; background:linear-gradient(180deg,#25130e,#121216); border:1px solid #55301f; }
+    #runner { position:absolute; left:28px; bottom:22px; width:42px; height:42px; border-radius:12px; background:var(--ember); box-shadow:0 0 28px #ff6a2baa; transition:left .15s ease; }
+    #spark { position:absolute; right:72px; bottom:22px; width:24px; height:24px; border-radius:50%; background:#ffd166; box-shadow:0 0 22px #ffd166; }
+    .hud { display:flex; justify-content:space-between; gap:16px; margin:18px 0; font-weight:700; }
+    button { width:100%; padding:14px 18px; border:0; border-radius:12px; background:var(--ember); color:#160a06; font:700 16px system-ui; cursor:pointer; }
+    button:focus-visible { outline:3px solid #fff; outline-offset:3px; }
+    #message { min-height:24px; margin:14px 0 0; color:#ffd7c5; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Ember Dash</h1>
+    <p>Catch the spark. Every successful dash makes the next one hotter.</p>
+    <section id="track" aria-label="Ember Dash game track"><div id="runner" aria-label="runner"></div><div id="spark" aria-label="spark"></div></section>
+    <div class="hud"><span>Score: <output id="score">0</output></span><span id="status">Ready</span></div>
+    <button id="dash" type="button">Dash for the spark</button>
+    <p id="message" role="status" aria-live="polite">Press Dash to start.</p>
+  </main>
+  <script>
+    const dash = document.querySelector('#dash');
+    const runner = document.querySelector('#runner');
+    const spark = document.querySelector('#spark');
+    const score = document.querySelector('#score');
+    const status = document.querySelector('#status');
+    const message = document.querySelector('#message');
+    let points = 0;
+    dash.addEventListener('click', () => {
+      // Intentional benchmark defect: a nonexistent score element triggers a ReferenceError.
+      score.textContent = ++points;
+      runner.style.left = `${Math.min(520, 28 + points * 52)}px`;
+      spark.style.right = `${Math.max(18, 72 - points * 6)}px`;
+      status.textContent = points >= 5 ? 'Molten!' : 'Dashing';
+      message.textContent = `Dash ${points}: ember pressure rising.`;
+    });
+  </script>
+</body>
+</html>

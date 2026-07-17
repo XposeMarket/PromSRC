@@ -18,6 +18,7 @@ import { appendTeamChat, getManagedTeam } from '../teams/managed-teams';
 import { BackgroundTaskRunner } from './background-task-runner';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { type TaskControlResponse } from '../tool-builder';
+import { addPendingRuntimeSteerForTask } from '../live-runtime-registry';
 import {
   buildTaskPauseSnapshot,
   formatTaskPauseSnapshot,
@@ -574,6 +575,66 @@ export function launchBackgroundTaskRunner(taskId: string): void {
   runner.start().catch(err => console.error(`[BackgroundTaskRunner] task_control start ${taskId} error:`, err.message));
 }
 
+export function steerTask(
+  taskId: string,
+  rawMessage: string,
+  opts?: { source?: string; resumeAfterMessage?: boolean },
+): TaskControlResponse {
+  const task = loadTask(taskId);
+  const message = String(rawMessage || '').trim();
+  if (!task) return { success: false, action: 'steer', code: 'not_found', message: `Task not found: ${taskId}` };
+  if (!message) return { success: false, action: 'steer', code: 'missing_message', message: 'A steer message is required.' };
+  if (task.status === 'complete' || task.status === 'failed') {
+    return { success: false, action: 'steer', code: 'terminal', message: `Task "${task.title}" is ${task.status}; rerun it explicitly to do more work.` };
+  }
+
+  const source = String(opts?.source || 'task_control').trim() || 'task_control';
+  const instruction = [
+    '[TASK USER STEER — HIGHEST PRIORITY]',
+    message,
+    '',
+    'Apply this guidance to the CURRENT task and current plan. Do not create or dispatch a second task.',
+    'Preserve completed work unless this guidance explicitly replaces it.',
+    '[/TASK USER STEER]',
+  ].join('\n');
+  const existing = Array.isArray(task.resumeContext?.messages) ? task.resumeContext.messages : [];
+  updateResumeContext(task.id, {
+    onResumeInstruction: instruction,
+    messages: [...existing, { role: 'user', content: instruction, timestamp: Date.now() }].slice(-80),
+  });
+  appendJournal(task.id, { type: 'status_push', content: `Task steer from ${source}: ${message.slice(0, 220)}` });
+
+  const liveSteer = addPendingRuntimeSteerForTask(task.id, {
+    message: instruction,
+    source,
+    kind: 'correction',
+    requiresWorkerResponse: true,
+  });
+
+  let resumed = false;
+  if (!liveSteer.ok && opts?.resumeAfterMessage === true && ['paused', 'stalled', 'needs_assistance', 'awaiting_user_input', 'queued'].includes(task.status)) {
+    updateTaskStatus(task.id, 'queued', { pauseReason: undefined });
+    launchBackgroundTaskRunner(task.id);
+    resumed = true;
+  }
+
+  const refreshed = loadTask(task.id) || task;
+  return {
+    success: true,
+    action: 'steer',
+    task: summarizeTaskRecord(refreshed),
+    steered: liveSteer.ok,
+    queued: !liveSteer.ok,
+    resumed,
+    event_id: liveSteer.event?.id,
+    message: liveSteer.ok
+      ? `Steered the active task "${task.title}". The guidance will join its current model loop.`
+      : resumed
+        ? `Added guidance to "${task.title}" and resumed the same task.`
+        : `Added guidance to "${task.title}" for its next task round. No new task was created.`,
+  } as TaskControlResponse;
+}
+
 export function completePlainGatewayRestartTask(taskId: string): boolean {
   const task = loadTask(taskId);
   if (!task || task.status === 'complete' || task.status === 'failed') return false;
@@ -700,7 +761,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     return { success: true, action, task: summarizeTaskRecord(task), message: `Loaded task "${task.title}".` };
   }
 
-  const resolveCandidateForAction = (candidateAction: 'resume' | 'rerun' | 'pause' | 'cancel' | 'delete') => {
+  const resolveCandidateForAction = (candidateAction: 'resume' | 'rerun' | 'pause' | 'cancel' | 'delete' | 'steer') => {
     if (taskId) {
       const exact = loadTask(taskId);
       if (!exact) return { task: null as TaskRecord | null, err: `Task not found: ${taskId}` };
@@ -727,6 +788,30 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     }
     return { task: null as TaskRecord | null, err: 'AMBIGUOUS', candidates: preferred.slice(0, 3) };
   };
+
+  if (action === 'steer' || action === 'message') {
+    const resolved = resolveCandidateForAction('steer');
+    if (!resolved.task) {
+      if (resolved.err === 'AMBIGUOUS') {
+        return {
+          success: false,
+          action: 'steer',
+          code: 'ambiguous',
+          message: 'Multiple active tasks match. Provide task_id so guidance is not sent to the wrong task.',
+          candidates: (resolved.candidates || []).map(summarizeTaskRecord),
+        };
+      }
+      return { success: false, action: 'steer', code: 'no_candidate', message: resolved.err };
+    }
+    return steerTask(
+      resolved.task.id,
+      String(args?.message || args?.instruction || args?.guidance || args?.note || ''),
+      {
+        source: String(args?.source || 'task_control'),
+        resumeAfterMessage: args?.resume_after_message === true || args?.resumeAfterMessage === true,
+      },
+    );
+  }
 
   if (action === 'resume' || action === 'rerun') {
     const resolved = resolveCandidateForAction(action);

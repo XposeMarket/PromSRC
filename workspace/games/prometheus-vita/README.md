@@ -99,3 +99,9 @@ USB is not required for routine file transfer. In VitaShell, press **Start**, se
 - `D:\tai\udcd_uvc.skprx` copied and visually verified.
 - The VPK still must be installed from VitaShell.
 - The plugin entry still must be added to the Vita's active tai config and the Vita rebooted. Those are intentionally not performed blindly because the mounted USB view exposes `ux0:tai`, while the active Enso config may be `ur0:tai/config.txt`.
+# Figure 8 game development workflow
+
+When using this bridge to work on Figure 8 Drift, also read
+[`../figure-8-drift-vita/PROMETHEUS_WORKFLOW.md`](../figure-8-drift-vita/PROMETHEUS_WORKFLOW.md).
+It documents the local Windows geometry preview, structural layout validation,
+Vita build, backend install, and hardware smoke-test loop.

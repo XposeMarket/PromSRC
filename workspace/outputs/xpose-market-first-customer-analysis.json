@@ -1,0 +1,94 @@
+{
+  "title": "Xpose Market — First Customer Finder",
+  "product": "Xpose Market local-business websites and marketing services",
+  "product_url": "https://www.yelp.com/biz/xpose-market-bethesda",
+  "target_customer": "Owner-operated local service businesses and newly launching small businesses that need a professional, conversion-focused website and a clearer path from local discovery to inquiry.",
+  "search_scope": "Public English-language sources, current web results with publicly readable pages; no outreach, publishing, login-wall bypass, personal contact enrichment, or CRM creation.",
+  "generated_at": "2026-07-16",
+  "verdict": "The offer is clear enough to test: custom websites plus marketing support for local small businesses, positioned around a professional online presence that converts local attention into inquiries. Current public evidence shows real demand for help launching or improving a site, but the strongest signals are broad and partly stale. Treat this as a validation shortlist, not confirmed buying intent. Narrowest test offer recommended: a fixed-scope Local Lead Starter Site: conversion-focused 1–5 page website, mobile/contact-flow cleanup, Google Business Profile and directory consistency checklist, and one short conversion review.",
+  "icp": {
+    "primary": "Owner-operated local service businesses launching, relying mainly on social/WhatsApp, or operating with an incomplete, unclear, or non-converting website.",
+    "adjacent": "Very small businesses in early launch who are actively comparing builders and need professional setup, copy, domain, forms, and a credible local presence.",
+    "buyer": "Owner or founder; sometimes the trusted friend/family member helping them launch.",
+    "job": "Turn local discovery into trust and a low-friction inquiry or booking without forcing the owner to become the website expert.",
+    "triggers": ["new business launch", "need website soon", "active local marketing but weak site", "website redesign or conversion concern", "reliance on social platforms only"],
+    "positive_signals": ["publicly asks for a website or web designer", "describes traffic/conversion concerns", "has active business presence but weak owned web presence", "asks about affordable growth-ready setup"],
+    "disqualifiers": ["enterprise procurement", "only wants a free DIY builder with no service budget", "no public evidence of a current website or marketing need", "needs regulated or complex functionality outside the fixed starter scope"]
+  },
+  "prospects": [
+    {
+      "name": "Small-business founder seeking a website (identity not publicly established)",
+      "type": "Public discussion / potential business owner",
+      "stage": "High intent",
+      "score": 82,
+      "pain_signal": "A public post says the person is helping a friend start a business and is looking for freelance website designers to build and design the site, asking for quotes.",
+      "evidence": "Facebook group post publicly requests freelance website designers and quotes for a new business website. The post is intentionally public, but the underlying business and decision-maker are not identified in the readable evidence.",
+      "why_fit": "The request maps directly to Xpose Market's custom website creation offer and the likely need for a guided, non-technical process.",
+      "why_now": "The public request is an explicit active buying signal, although the page does not expose a reliable publication date in the fetched view.",
+      "source_title": "Freelance website designers for small business?",
+      "source_url": "https://www.facebook.com/groups/653118941825488/posts/2472129139924450/",
+      "source_type": "Public Facebook group post",
+      "signal_date": "date unavailable",
+      "suggested_channel": "Public comment or group-approved direct response, only if group rules permit",
+      "opener": "Saw your public question about finding a designer for a new small-business website. Xpose Market builds simple, conversion-focused sites and handles the structure, copy direction, mobile experience, and inquiry path so the owner does not have to be technical. Would a short scope-and-quote conversation be useful?",
+      "caution": "Do not attempt identity resolution or private-contact discovery from the post. Verify the business, budget, and current need through an authorized conversation first.",
+      "dimensions": {"pain_strength": 5, "product_fit": 5, "timing": 4, "reachability": 4, "evidence_quality": 4}
+    },
+    {
+      "name": "Early-stage small-business founder (Reddit account identity unavailable)",
+      "type": "Public discussion / potential business owner",
+      "stage": "Problem aware",
+      "score": 76,
+      "pain_signal": "The founder says the business is in early stages, needs a website soon, wants a professional look that drives traffic, and is weighing free builders against investing immediately.",
+      "evidence": "The public discussion explicitly describes urgency, affordability concerns, and the gap between a pretty site and one that actually drives traffic.",
+      "why_fit": "Xpose can sell a guided, fixed-scope starter site that answers the exact tradeoff: professional presence, clear conversion paths, and growth-ready basics rather than a generic template.",
+      "why_now": "The post is approximately nine months old in the fetched page and includes an update after evaluating tools, so current need must be reconfirmed.",
+      "source_title": "Website builder recommendations for small business?",
+      "source_url": "https://www.reddit.com/r/smallbusiness/comments/1ocsgof/website_builder_recommendations_for_small_business/",
+      "source_type": "Public Reddit discussion",
+      "signal_date": "approximately 2025-10 (page shows 9mo ago)",
+      "suggested_channel": "Reply to the public discussion if still open and relevant",
+      "opener": "Your post separated two needs that often get mixed together: looking professional and actually turning traffic into inquiries. Xpose Market builds small-business sites around that conversion path, not just a template. Is the site still a growth bottleneck, or did the builder route solve it?",
+      "caution": "This is a validation lead, not a live buyer. The stated builder update may mean the original need was solved.",
+      "dimensions": {"pain_strength": 4, "product_fit": 4, "timing": 3, "reachability": 4, "evidence_quality": 4}
+    },
+    {
+      "name": "Public small-business web-design requester (account identity unavailable)",
+      "type": "Public discussion / potential business owner",
+      "stage": "High intent",
+      "score": 73,
+      "pain_signal": "A public post asks for someone to build a small-business website and requests information about finding leads and web-design clients, indicating a concrete website need in the thread context.",
+      "evidence": "The fetched Reddit page includes the original public request for a small-business website and a direct request for recommendations, but the post is approximately three years old and the account is deleted.",
+      "why_fit": "The need is directly inside Xpose's website creation offer, especially if the owner values a prepared recommendation over a hard sell.",
+      "why_now": "No current timing signal remains; the historical thread is useful for message-market fit and channel learning, not immediate outreach.",
+      "source_title": "Any suggestions on how can one find web design clients?",
+      "source_url": "https://www.reddit.com/r/smallbusiness/comments/15iybvv/any-suggestions_on-how-can-one-find-web-design/",
+      "source_type": "Public Reddit discussion",
+      "signal_date": "approximately 2023-07 (page shows 3y ago)",
+      "suggested_channel": "Use only as a message-market-fit reference; no direct outreach target identified",
+      "opener": "Your thread highlighted why a small-business website conversation works better when it starts with a concrete site diagnosis instead of a generic pitch. Xpose Market uses that approach: identify the biggest trust or inquiry-flow gap, then propose a focused fix. Would a one-page example of that audit be useful?",
+      "caution": "Do not contact or attempt to identify the deleted account. Keep this record as historical demand evidence only.",
+      "dimensions": {"pain_strength": 4, "product_fit": 4, "timing": 1, "reachability": 2, "evidence_quality": 4}
+    }
+  ],
+  "patterns": [
+    {"title": "Launch pressure", "count": 2, "insight": "New or early-stage businesses want a site quickly and need help translating a vague online-presence goal into a concrete scope."},
+    {"title": "Professional presence versus conversion", "count": 2, "insight": "Public discussions distinguish a site that looks good from one that drives traffic, trust, inquiries, or bookings. This is the strongest positioning opportunity for Xpose."},
+    {"title": "Technical overwhelm and affordability", "count": 2, "insight": "Prospects compare free builders and paid help, suggesting a small, transparent starter offer is more testable than an open-ended agency package."}
+  ],
+  "outreach_plan": {
+    "angle": "Validate one narrow Local Lead Starter Site offer with source-based questions, not a broad agency pitch.",
+    "first_step": "Review the two recent/high-intent public threads manually; respond only where the thread remains open and rules allow it.",
+    "follow_up": "If a prospect confirms the need, offer a short teardown of their current discovery-to-inquiry path and a fixed-scope starter quote.",
+    "success": "Within seven days, secure three permission-based conversations and learn whether owners pay for conversion-focused setup versus choosing DIY tools.",
+    "guardrail": "No messages, comments, forms, follows, CRM records, or publishing were performed by this workflow."
+  },
+  "limits": [
+    "These are potential customers based on public signals, not confirmed buyers or consented contacts.",
+    "The strongest Facebook signal does not expose a verified business identity or date in the readable public view.",
+    "Two Reddit signals are stale, and one account is deleted; they should not be treated as immediate outreach targets.",
+    "No local geography was used to force-fit prospects. The Xpose operating geography is known internally, but the public signals found here were broader.",
+    "Offer pricing, turnaround, portfolio proof, maintenance terms, and a specific guarantee were not present in the verified artifacts, which weakens conversion readiness.",
+    "The Xpose Market website repository/artifact was not present at the documented workspace path during verification; the offer was verified from the BUSINESS context, project entity, and public company/listing evidence instead."
+  ]
+}

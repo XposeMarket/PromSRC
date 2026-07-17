@@ -1,0 +1,11 @@
+{
+  "skillId": "local-lead-hunting",
+  "reason": "resource-write",
+  "createdAt": "2026-07-17T14:31:44.971Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\local-lead-hunting",
+  "copied": [
+    "SKILL.md",
+    "skill.md"
+  ],
+  "hash": "f7697b7eeabd12d6"
+}

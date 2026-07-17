@@ -398,11 +398,11 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
 
       case 'dispatch_to_agent': {
         const agentId = String(args.agent_id || '').trim();
-        const agentMessage = String(args.message || '').trim();
+        const agentMessage = String(args.message || args.task || args.task_prompt || args.taskPrompt || '').trim();
         const agentContext = args.context ? String(args.context) : undefined;
 
         if (!agentId) return { name, args, result: 'dispatch_to_agent requires agent_id', error: true };
-        if (!agentMessage) return { name, args, result: 'dispatch_to_agent requires message', error: true };
+        if (!agentMessage) return { name, args, result: 'dispatch_to_agent requires message (aliases: task, task_prompt)', error: true };
 
         try {
           const dispatchResult = await deps.dispatchToAgent(agentId, agentMessage, agentContext, sessionId);
@@ -432,6 +432,25 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
             name,
             args,
             result: `Agent "${agentId}" belongs to team "${team.name}" (${team.id}). Use team messaging/dispatch tools for team agents; message_subagent is only for standalone one-off subagents.`,
+            error: true,
+          };
+        }
+
+        const activeRun = listTasks({ status: ['queued', 'running', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input'] })
+          .filter((task: any) => String(task?.subagentProfile || '') === agentId)
+          .sort((a: any, b: any) => Number(b.lastProgressAt || 0) - Number(a.lastProgressAt || 0))[0];
+        if (activeRun && args?.force_new_task !== true && args?.forceNewTask !== true) {
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: false,
+              code: 'active_run_exists',
+              agent_id: agentId,
+              task_id: activeRun.id,
+              status: activeRun.status,
+              message: `This agent already has an active run. Steer task ${activeRun.id} instead of creating another task. Set force_new_task=true only for explicitly separate parallel work.`,
+            }, null, 2),
             error: true,
           };
         }
@@ -500,7 +519,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
         if (!message) return { name, args, result: 'ERROR: message is required', error: true };
         try {
           const team = listManagedTeams().find((t: any) => Array.isArray(t.subagentIds) && t.subagentIds.includes(targetAgentId));
-          if (!team) return { name, args, result: `ERROR: Could not find a team containing agent "${targetAgentId}". Check the agent ID.`, error: true };
+          if (!team) return { name, args, result: `ERROR: Agent "${targetAgentId}" is not a managed-team member. For standalone agents use chat_with_subagent (conversation) or message_subagent (background task).`, error: true };
           queueAgentMessage(team.id, targetAgentId, message);
           appendAndBroadcastTeamChat(deps, team, {
             from: 'manager',
@@ -905,11 +924,11 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
       case 'dispatch_team_agent': {
         const teamId = String(args?.team_id || '').trim();
         const agentId = String(args?.agent_id || '').trim();
-        const task = String(args?.task || '').trim();
+        const task = String(args?.task || args?.task_prompt || args?.taskPrompt || args?.message || '').trim();
         const context = args?.context ? String(args.context) : undefined;
         const background = args?.background === true;
         if (!teamId || !agentId || !task) {
-          return { name, args, result: 'ERROR: dispatch_team_agent requires team_id, agent_id, and task', error: true };
+          return { name, args, result: 'ERROR: dispatch_team_agent requires team_id, agent_id, and task (aliases: task_prompt, message)', error: true };
         }
         const team = getManagedTeam(teamId);
         if (!team) return { name, args, result: `ERROR: Team not found: ${teamId}`, error: true };
@@ -1683,11 +1702,12 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
           }
           if (runNow && !taskPrompt) return { name, args, result: 'spawn_subagent requires task_prompt when run_now=true', error: true };
           if (createIfMissing) {
+            createIfMissing.description = String(createIfMissing.description || `Standalone subagent ${subagentId}`).trim();
+            createIfMissing.system_instructions = String(createIfMissing.system_instructions || 'Complete assigned tasks accurately, efficiently, and report concrete results.').trim();
+            createIfMissing.constraints = createIfMissing.constraints == null ? [] : createIfMissing.constraints;
+            createIfMissing.success_criteria = String(createIfMissing.success_criteria || (taskPrompt ? `Complete the assigned task: ${taskPrompt.slice(0, 240)}` : 'Complete assigned tasks and return a concrete result.')).trim();
             const fieldErrors: string[] = [];
-            if (!String(createIfMissing.description || '').trim()) fieldErrors.push('create_if_missing.description is required');
-            if (!String(createIfMissing.system_instructions || '').trim()) fieldErrors.push('create_if_missing.system_instructions is required');
             if (!Array.isArray(createIfMissing.constraints)) fieldErrors.push('create_if_missing.constraints must be an array (use [] when none)');
-            if (!String(createIfMissing.success_criteria || '').trim()) fieldErrors.push('create_if_missing.success_criteria is required');
             for (const field of ['allowed_tools', 'forbidden_tools', 'mcp_servers', 'skillIds', 'context_refs']) {
               if (createIfMissing[field] != null && !Array.isArray(createIfMissing[field])) fieldErrors.push(`create_if_missing.${field} must be an array`);
             }

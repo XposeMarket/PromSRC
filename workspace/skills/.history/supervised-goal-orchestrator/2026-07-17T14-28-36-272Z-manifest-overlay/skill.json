@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "supervised-goal-orchestrator",
+  "name": "Supervised Goal Orchestrator",
+  "description": "Turn a loose objective or brain dump into bounded parallel Prometheus work lanes, actively supervise them, reconcile outputs, and finish with verified evidence. Use for master-thread, delegate-and-supervise, parallel-goal, or keep-working-until-verified requests; not for simple linear tasks.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "categories": [
+    "agents",
+    "orchestration",
+    "goals",
+    "workflow",
+    "prometheus"
+  ],
+  "requiredTools": [
+    "agents_and_teams",
+    "workspace_write",
+    "automations"
+  ],
+  "implicitInvocation": true,
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true,
+    "externalSideEffects": false
+  },
+  "resources": [
+    {
+      "path": "templates/normalized-goal.md",
+      "type": "template",
+      "description": "Goal normalization"
+    },
+    {
+      "path": "templates/lane-brief.md",
+      "type": "template",
+      "description": "Lane brief"
+    },
+    {
+      "path": "templates/evidence-ledger.md",
+      "type": "template",
+      "description": "Evidence ledger"
+    },
+    {
+      "path": "references/trigger-tests.md",
+      "type": "test",
+      "description": "Positive and negative routing tests"
+    }
+  ]
+}

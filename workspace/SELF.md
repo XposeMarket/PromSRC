@@ -122,7 +122,7 @@ Background runner (`background-task-runner.ts`):
 
 - Uses agent-driven `step_complete` progression.
 - Detects stalls (tool-call threshold without step completion) and injects nudge guidance.
-- Supports pause/resume and schedule interruption handling.
+- Supports pause/resume. Legacy schedule-interruption helpers remain available, but normal scheduled jobs no longer globally pause every unrelated running task.
 - Integrates with chat runtime through `task_` session IDs.
 
 ## 9) Team System (Current)
@@ -188,5 +188,23 @@ Verified/updated on 2026-06-05.
 - `workspace/audit` is excluded from workspace-file scanning because audit evidence is indexed through its own roots; dependency/build/cache folders are skipped.
 - Text workspace files are chunked/search-indexed/embedded through the memory index path; binary or non-text files are represented as metadata-only records.
 - Current workspace-file scanning still has a `12000` file cap. Long-term direction: add a dedicated workspace inventory/search layer so all files are browsable/searchable from Memory without rendering every file as a graph particle.
+
+## 16) Gateway Runtime Process Isolation
+
+Verified/updated on 2026-07-15.
+
+- Memory evidence/operational/SQLite refresh and embedding backfill run in a recycled child through `src/gateway/process/runtime-worker-broker.ts`, preventing their temporary multi-gigabyte heap from becoming the gateway baseline.
+- Provider/model calls made through `OllamaClient.chatWithThinking(...)` and `generateWithThinking(...)` now run in a bounded, heartbeating child-process pool under `src/gateway/turn-workers/`. The default is three workers with a 100-job queue; results travel through blob references.
+- Finalization file-change summaries run their git/diff/stat/read work in a separate two-worker-by-default bounded pool under `src/gateway/turn-workers/`. Requests and results use blob references, each child defaults to a 384 MiB old-space cap, and an unavailable child omits optional change metadata instead of rescanning synchronously in the gateway.
+- Stored-thread footprint calculation and tool-observation persistence run in separate bounded children. Oversized context snapshots degrade to an unavailable diagnostic, and observation failure or delay cannot fail a valid final; compact metadata may attach to the exact assistant message shortly after terminal publication.
+- Session JSON commits use cooperative chunked serialization, asynchronous atomic write/fsync/rename, and per-session generation fences. Prompt/reference reads, project learning, auto-title work, and completion notifications no longer place large synchronous work on the terminal publication boundary.
+- Top-level interactive/Goal/background/scheduled/team/Brain turns now receive a SQLite-WAL journal record at `<configDir>/runtime/turn-jobs.sqlite`. The journal owns per-session leases, fenced events/checkpoints/tool effects, resource leases, referenced finals, and stale-lease reconciliation; large content lives under `<configDir>/runtime/turn-blobs/`.
+- Main-chat progress/final/done frames are exact-byte-bounded and blob-backed. Replay is capped at 12,000 frames and 16 MiB per session; slow SSE consumers cannot grow an unlimited write buffer or cancel the underlying work merely by disconnecting.
+- Large model envelopes and final blobs serialize cooperatively and use asynchronous gzip/write/fsync; terminal/replay publication only reuses already-durable content references instead of performing a new large synchronous blob write.
+- Session state and the durable final are persisted before terminal publication. Startup plus a bounded periodic pass marks a stranded `final_persisted` row complete only when it has zero delivery rows, preserving exact-client replay without rerunning the turn. Any explicit outbox row is left untouched; current chat delivery is still not executed/retried from that outbox after restart.
+- `/api/health` exposes `memoryMaintenance` plus `turnRuntime` model/file-change/context/observation/session/retention worker and journal/lease-and-final recovery state, and lifecycle shutdown drains those workers and cooperative session persistence before closing the journal.
+- The complete `handleChat(...)` orchestration/tool loop, prompts/sessions, tools, approvals, tasks, teams, and subagents remain gateway-owned. Model-heavy turns are process-isolated at the provider call, but this is not yet one OS process per complete turn or automatic checkpoint resume.
+- Scheduled jobs now run independently instead of pausing all unrelated background work; real shared-resource contention is handled through existing locks and durable resource leases.
+- Detailed current state and rollout gates: `workspace/self/30-runtime-process-isolation.md`.
 
 

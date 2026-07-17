@@ -22,6 +22,8 @@ import { loadManifestRuntimeExtensions } from './runtime-loader.js';
 import { hasXAIConfiguredCredentials, refreshXAITools } from './xai-extension-adapter.js';
 
 let loaded = false;
+let lastCredentialRefreshAt = 0;
+const CREDENTIAL_REFRESH_TTL_MS = 5_000;
 
 function registerXConnectorRecords(): void {
   const registry = getExtensionRuntimeRegistry();
@@ -60,17 +62,23 @@ function registerXConnectorRecords(): void {
 
 export function resetPrometheusExtensionRuntimeLoaded(): void {
   loaded = false;
+  lastCredentialRefreshAt = 0;
 }
 
 export function ensurePrometheusExtensionRuntimeLoaded(): void {
   if (!loaded) {
     loadManifestRuntimeExtensions();
+    registerXConnectorRecords();
     loaded = true;
   }
   // X/xAI records depend on auth state initialized at gateway startup; refresh on
-  // every ensure so early callers cannot freeze a stale/empty record.
-  registerXConnectorRecords();
-  refreshXAITools();
+  // a short bounded cadence. Tool surfaces are rebuilt repeatedly inside a turn;
+  // re-decrypting OAuth state for each rebuild blocks the gateway event loop.
+  const now = Date.now();
+  if (now - lastCredentialRefreshAt >= CREDENTIAL_REFRESH_TTL_MS) {
+    refreshXAITools();
+    lastCredentialRefreshAt = now;
+  }
   // Warn-only guardrail (logs once): catches manifest/registry drift.
   logExtensionConsistencyOnce();
 }

@@ -8,12 +8,13 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 import { resolveRuntimeBinary } from '../../runtime/dependencies';
+import { resolveGatewayRestartScope } from '../../runtime/supervisor-restart-request';
 import { getConfig, getAgents, getAgentById } from '../../config/config';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { resetProvider } from '../../providers/factory.js';
 import { getPolicyEngine } from '../policy';
 import { getToolPermissionMode, shouldBypassGenericToolApproval } from '../tool-approval-mode';
-import { scoreSkillMetadata, skillMatchesScope, buildMetadataManifest, splitCsv, formatCompactSkillList, type SkillMetadataAudit } from './capabilities/skills-executor';
+import { splitCsv, formatCompactSkillList, skillsCapabilityExecutor } from './capabilities/skills-executor';
 import { appendAuditEntry } from '../audit-log';
 import { webSearch } from '../../tools/web';
 import {
@@ -226,6 +227,7 @@ import {
   browserSendToTelegram,
   browserScrollCollect,
   browserScrollCollectV2,
+  hasBrowserStructuredCollectionInput,
   browserRunJs,
   browserRunSmokeSteps,
   browserInspectConsole,
@@ -344,6 +346,7 @@ import {
   toggleCreativeLibraryPack,
 } from '../creative/custom-registries';
 import { buildConnectorStatus } from '../tool-builder';
+import { readRawToolResultRange } from '../tool-result-envelope';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/legacy-connector-adapter';
 import { classifyCommandTermination } from '../process/command-outcome';
 import { getExtensionRuntimeRegistry } from '../../extensions/runtime-registry';
@@ -2445,7 +2448,16 @@ function normalizeBrowserWrapperTool(name: string, rawArgs: any): { name: string
 
   if (name === 'browser_extract') {
     if (action === 'scroll_collect') return { name: 'browser_scroll_collect', args };
-    if (action === 'scroll_collect_v2' || action === 'collect_structured') return { name: 'browser_scroll_collect_v2', args };
+    if (action === 'scroll_collect_structured' || action === 'scroll_collect_v2' || action === 'collect_structured') {
+      if (!hasBrowserStructuredCollectionInput(args)) {
+        return {
+          name,
+          args: rawArgs,
+          error: 'browser_extract action="scroll_collect_structured" requires schema_name/use_schema, or fields plus container_selector/item_root. For schema-free text collection, use action="scroll_collect".',
+        };
+      }
+      return { name: 'browser_scroll_collect_v2', args };
+    }
     if (action === 'extract_structured' || action === 'structured') return { name: 'browser_extract_structured', args };
     if (action === 'run_js' || action === 'js') return { name: 'browser_run_js', args };
     if (action === 'network' || action === 'intercept_network') {
@@ -5302,6 +5314,41 @@ export async function executeTool(name: string, args: any, workspacePath: string
           };
         }
 
+        if (action === 'steer') {
+          const message = String(args?.message || args?.prompt || args?.instruction || '').trim();
+          if (!message) return { name, args, result: 'agent_run_ops steer requires message', error: true };
+          const resolved = resolveAgentRunTaskForTool(args?.agent_id || args?.agentId, args?.task_id || args?.taskId || args?.id);
+          if (!resolved.task) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({ success: false, action, code: resolved.code || 'not_found', message: resolved.error }, null, 2),
+              error: true,
+            };
+          }
+          const ctl = await deps.handleTaskControlAction(sessionId, {
+            action: 'steer',
+            task_id: resolved.task.id,
+            message,
+            source: 'agent_run_ops',
+            resume_after_message: args?.resume_after_message === true || args?.resumeAfterMessage === true,
+          });
+          const updated = loadTask(resolved.task.id) || resolved.task;
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              success: ctl.success === true,
+              action,
+              agent_id: resolved.agentId,
+              task_id: resolved.task.id,
+              control: ctl,
+              ...buildAgentRunToolSnapshot(updated, resolved.agentId, { includeTask, includeEvidence }),
+            }, null, 2),
+            error: ctl.success !== true,
+          };
+        }
+
         if (action === 'recover') {
           const message = String(args?.message || args?.prompt || '').trim();
           if (!message) return { name, args, result: 'agent_run_ops recover requires message', error: true };
@@ -5387,7 +5434,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         return {
           name,
           args,
-          result: `Unsupported agent_run_ops action "${rawAction}". Use list, get, recover, resume, rerun, pause, cancel, or benchmark_disposable.`,
+          result: `Unsupported agent_run_ops action "${rawAction}". Use list, get, steer, recover, resume, rerun, pause, cancel, or benchmark_disposable.`,
           error: true,
         };
       }
@@ -6309,7 +6356,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
       case 'dispatch_team_agent': {
         const teamId = String(args?.team_id || '').trim();
         const agentId = String(args?.agent_id || '').trim();
-        const task = String(args?.task || '').trim();
+        const task = String(args?.task || args?.task_prompt || args?.taskPrompt || args?.message || '').trim();
         const context = args?.context ? String(args.context) : undefined;
         const background = args?.background === true;
         if (!teamId || !agentId || !task) {
@@ -14382,6 +14429,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	              target: { type: targetType as any, config: targetConfig },
 	              condition,
 	              onMatch,
+	              deliveryMode: String(args.delivery_mode || args.deliveryMode || '').trim() === 'notify_only' ? 'notify_only' : 'run_turn',
 	              maxFirings: 1,
 	              firedCount: 0,
 	              status: 'active',
@@ -14404,6 +14452,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	            target: { type: targetType as any, config: targetConfig },
 	            condition,
 	            onMatch,
+	            deliveryMode: String(args.delivery_mode || args.deliveryMode || '').trim() === 'notify_only' ? 'notify_only' : 'run_turn',
 	            onTimeout: String(args.on_timeout || args.onTimeout || '').trim() || undefined,
 	            maxFirings: Number(args.max_firings ?? args.maxFirings) || undefined,
 	            initialObservation,
@@ -17442,115 +17491,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
       }
 
       case 'skill_audit_all': {
-        deps.skillsManager.scanSkills();
-        const scope = String(args.scope || 'all');
-        const onlyProblems = args.onlyProblems !== false && args.only_problems !== false;
-        const threshold = Number.isFinite(Number(args.threshold)) ? Number(args.threshold) : 80;
-        const all = deps.skillsManager.getAll().filter((s: any) => skillMatchesScope(s, scope));
-        const audits = all.map((s: any) => scoreSkillMetadata(s)).sort((a: SkillMetadataAudit, b: SkillMetadataAudit) => a.score - b.score);
-        const activeAudits = audits.filter((a: SkillMetadataAudit) => !a.compatibilityEntry);
-        const compatibilityAudits = audits.filter((a: SkillMetadataAudit) => a.compatibilityEntry);
-        const flagged = activeAudits.filter((a: SkillMetadataAudit) => a.score < threshold || a.issues.length > 0);
-        const list = onlyProblems ? flagged : activeAudits;
-        const summary = {
-          scope,
-          totalScanned: all.length,
-          flagged: flagged.length,
-          threshold,
-          activeDiscoverableSkills: activeAudits.length,
-          compatibilityEntries: compatibilityAudits.length,
-          avgScore: activeAudits.length ? Math.round(activeAudits.reduce((n: number, a: SkillMetadataAudit) => n + a.score, 0) / activeAudits.length) : 100,
-          skills: list.map((a: SkillMetadataAudit) => ({ id: a.id, name: a.name, score: a.score, issues: a.issues })),
-        };
-        return { name, args, result: JSON.stringify(summary, null, 2), error: false };
+        return skillsCapabilityExecutor.execute({ name, args, workspacePath, deps, sessionId });
       }
 
       case 'skill_update_metadata': {
-        const skillId = String(args.id || args.skill_id || '').trim();
-        if (!skillId) return { name, args, result: 'skill_update_metadata: id is required', error: true };
-        const skill = deps.skillsManager.get(skillId);
-        if (!skill) return { name, args, result: `Skill "${skillId}" not found. Call skill_list to see available IDs.`, error: true };
-        const manifest = buildMetadataManifest(skill, args);
-        if (!manifest) {
-          return { name, args, result: `skill_update_metadata: no metadata changes provided for "${skillId}" (pass description, triggers, addTriggers, removeTriggers, categories, requiredTools, lifecycle, or name).`, error: true };
-        }
-        try {
-          const updated = deps.skillsManager.writeManifestOverlay(skillId, manifest, {
-            changeType: args.changeType || args.change_type ? String(args.changeType || args.change_type) : 'metadata_update',
-            evidence: Array.isArray(args.evidence) ? args.evidence.map((v: any) => String(v || '').trim()).filter(Boolean) : (args.evidence ? [String(args.evidence)] : undefined),
-            appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
-            reason: args.reason ? String(args.reason) : undefined,
-          });
-          const after = scoreSkillMetadata(updated);
-          return {
-            name, args,
-            result: `Updated metadata for ${updated.name} (${updated.id}). Fields: ${Object.keys(manifest).join(', ')}. New quality score: ${after.score}${after.issues.length ? `, remaining issues: ${after.issues.join(', ')}` : ' (clean)'}.`,
-            error: false,
-          };
-        } catch (metaErr: any) {
-          return { name, args, result: `skill_update_metadata failed: ${metaErr.message}`, error: true };
-        }
+        return skillsCapabilityExecutor.execute({ name, args, workspacePath, deps, sessionId });
       }
 
       case 'skill_repair_metadata': {
-        deps.skillsManager.scanSkills();
-        const mode = String(args.mode || 'preview').trim().toLowerCase();
-        const scope = String(args.scope || 'all');
-        const ids = splitCsv(args.ids).map((s) => s.toLowerCase());
-        const repairs = Array.isArray(args.repairs) ? args.repairs : [];
-        if (mode === 'apply') {
-          if (args.confirm !== true) {
-            return { name, args, result: 'skill_repair_metadata: apply mode requires confirm:true. Run mode:"preview" first to inspect the proposed patch set.', error: true };
-          }
-          if (!repairs.length) {
-            return { name, args, result: 'skill_repair_metadata: apply mode requires a repairs array of {id, description?, triggers?, categories?, requiredTools?, lifecycle?, name?} objects (typically the edited preview set).', error: true };
-          }
-          const applied: any[] = [];
-          const failed: any[] = [];
-          for (const r of repairs) {
-            const rid = String(r?.id || '').trim();
-            if (!rid) { failed.push({ id: rid, error: 'missing id' }); continue; }
-            const sk = deps.skillsManager.get(rid);
-            if (!sk) { failed.push({ id: rid, error: 'not found' }); continue; }
-            const manifest = buildMetadataManifest(sk, r);
-            if (!manifest) { failed.push({ id: rid, error: 'no changes' }); continue; }
-            try {
-              const updated = deps.skillsManager.writeManifestOverlay(rid, manifest, {
-                changeType: 'metadata_repair',
-                appliedBy: args.appliedBy || args.applied_by ? String(args.appliedBy || args.applied_by) : undefined,
-                reason: args.reason ? String(args.reason) : 'bulk metadata repair',
-              });
-              applied.push({ id: updated.id, fields: Object.keys(manifest), score: scoreSkillMetadata(updated).score });
-            } catch (e: any) {
-              failed.push({ id: rid, error: e.message });
-            }
-          }
-          return { name, args, result: JSON.stringify({ mode: 'apply', applied: applied.length, failed: failed.length, results: applied, errors: failed }, null, 2), error: false };
-        }
-        const threshold = Number.isFinite(Number(args.threshold)) ? Number(args.threshold) : 80;
-        const all = deps.skillsManager.getAll().filter((s: any) => {
-          if (ids.length) return ids.includes(String(s.id || '').toLowerCase());
-          return skillMatchesScope(s, scope);
-        });
-        const flagged = all
-          .map((s: any) => ({ skill: s, audit: scoreSkillMetadata(s) }))
-          .filter(({ audit }: { skill: any; audit: SkillMetadataAudit }) => !audit.compatibilityEntry && (audit.score < threshold || audit.issues.length > 0))
-          .sort((a: { skill: any; audit: SkillMetadataAudit }, b: { skill: any; audit: SkillMetadataAudit }) => a.audit.score - b.audit.score);
-        const template = flagged.map(({ audit }: { skill: any; audit: SkillMetadataAudit }) => ({
-          id: audit.id,
-          name: audit.name,
-          score: audit.score,
-          issues: audit.issues,
-          currentDescription: audit.description,
-          currentTriggers: audit.triggers,
-          description: '',
-          triggers: '',
-        }));
-        return {
-          name, args,
-          result: `${JSON.stringify({ mode: 'preview', scope, flagged: template.length, threshold, repairs: template }, null, 2)}\n\nTo apply: edit description/triggers in each repair entry, then call skill_repair_metadata({mode:"apply", confirm:true, repairs:[...]}).`,
-          error: false,
-        };
+        return skillsCapabilityExecutor.execute({ name, args, workspacePath, deps, sessionId });
       }
 
       // â”€â”€ Piece 1: MCP Tool Dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -17577,11 +17526,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
         // â”€â”€ Piece 5: dispatch_to_agent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if (name === 'dispatch_to_agent') {
           const agentId = String(args.agent_id || '').trim();
-          const agentMessage = String(args.message || '').trim();
+          const agentMessage = String(args.message || args.task || args.task_prompt || args.taskPrompt || '').trim();
           const agentContext = args.context ? String(args.context) : undefined;
 
           if (!agentId) return { name, args, result: 'dispatch_to_agent requires agent_id', error: true };
-          if (!agentMessage) return { name, args, result: 'dispatch_to_agent requires message', error: true };
+          if (!agentMessage) return { name, args, result: 'dispatch_to_agent requires message (aliases: task, task_prompt)', error: true };
 
           try {
             const dispatchResult = await deps.dispatchToAgent(agentId, agentMessage, agentContext, sessionId);
@@ -17612,6 +17561,25 @@ export async function executeTool(name: string, args: any, workspacePath: string
               name,
               args,
               result: `Agent "${agentId}" belongs to team "${team.name}" (${team.id}). Use team messaging/dispatch tools for team agents; message_subagent is only for standalone one-off subagents.`,
+              error: true,
+            };
+          }
+
+          const activeRun = listTasks({ status: ['queued', 'running', 'paused', 'stalled', 'needs_assistance', 'awaiting_user_input'] })
+            .filter((task: any) => String(task?.subagentProfile || '') === agentId)
+            .sort((a: any, b: any) => Number(b.lastProgressAt || 0) - Number(a.lastProgressAt || 0))[0];
+          if (activeRun && args?.force_new_task !== true && args?.forceNewTask !== true) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({
+                success: false,
+                code: 'active_run_exists',
+                agent_id: agentId,
+                task_id: activeRun.id,
+                status: activeRun.status,
+                message: `This agent already has an active run. Use agent_run_ops(action="steer", task_id="${activeRun.id}", message=...) to join it. Set force_new_task=true only when the user explicitly requested separate parallel work.`,
+              }, null, 2),
               error: true,
             };
           }
@@ -18893,6 +18861,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
                 title: args.title || reason,
                 summary: args.summary || reason,
                 affectedFiles: affectedFiles.length ? affectedFiles : undefined,
+                restartScope: resolveGatewayRestartScope({ affectedFiles }),
                 testInstructions: args.test_instructions || undefined,
                 previousSessionId: sessionId,
                 taskId: restartTask?.id,
@@ -19050,6 +19019,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
               title: args.title || reason,
               summary: args.summary || reason,
               affectedFiles: Array.isArray(args.affected_files) ? args.affected_files : undefined,
+              restartScope: resolveGatewayRestartScope({
+                affectedFiles: args.affected_files,
+                requestedScope: args.restart_scope,
+                fullSupervisor: args.full_supervisor,
+              }),
               testInstructions: args.test_instructions || undefined,
               previousSessionId: sessionId,
               taskId: restartTask?.id,
@@ -19750,6 +19724,20 @@ export async function executeTool(name: string, args: any, workspacePath: string
         // ── connector_list: always-available connector discovery ──────────────
         if (name === 'connector_list') {
           return { name, args, result: buildConnectorStatus(), error: false };
+        }
+
+        if (name === 'tool_result_read') {
+          try {
+            const range = await readRawToolResultRange({
+              rawRef: String(args?.raw_ref || args?.rawRef || ''),
+              sessionId,
+              offsetBytes: args?.offset_bytes ?? args?.offsetBytes,
+              maxChars: args?.max_chars ?? args?.maxChars,
+            });
+            return { name, args, result: JSON.stringify(range, null, 2), error: false };
+          } catch (error: any) {
+            return { name, args, result: `tool_result_read failed: ${String(error?.message || error)}`, error: true };
+          }
         }
 
         // ── connector_* tools: dispatch to connector handlers ─────────────

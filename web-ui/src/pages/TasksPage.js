@@ -862,6 +862,7 @@ async function bgtSendReply(taskId) {
   try {
     const result = await api(`/api/bg-tasks/${taskId}/message`, { method: 'POST', body: JSON.stringify({ message }) });
     if (result.success) {
+      bgtToast(result.steered ? 'Task steered live' : result.resumed ? 'Guidance sent; task resumed' : 'Guidance queued', result.message || 'No new task was created');
       // Refresh the panel after a short delay to show the journal update
       setTimeout(() => bgtRefreshOpenPanel(), 800);
     } else {
@@ -886,6 +887,7 @@ async function bgtChatSend() {
   try {
     const result = await api(`/api/bg-tasks/${bgtOpenTaskId}/message`, { method: 'POST', body: JSON.stringify({ message }) });
     if (result.success) {
+      bgtToast(result.steered ? 'Task steered live' : result.resumed ? 'Guidance sent; task resumed' : 'Guidance queued', result.message || 'No new task was created');
       // Show optimistic sent indicator in journal area
       const body = document.getElementById('bgt-panel-body');
       if (body) {

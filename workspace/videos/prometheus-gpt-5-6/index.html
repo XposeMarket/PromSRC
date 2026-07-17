@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <style>
+    :root { --ink:#0d0d0c; --paper:#efe6d3; --muted:#b6ab9a; --ember:#df6b2d; --bronze:#b88a55; --line:rgba(239,230,211,.19); }
+    *{box-sizing:border-box} html,body,#root{margin:0;width:1920px;height:1080px;overflow:hidden;background:var(--ink);font-family:Arial,Helvetica,sans-serif;color:var(--paper)}
+    .grain{position:absolute;inset:0;opacity:.25;background-image:radial-gradient(rgba(255,255,255,.13) .6px,transparent .7px);background-size:5px 5px;mix-blend-mode:overlay}
+    .ember{position:absolute;border-radius:50%;filter:blur(1px);background:var(--ember);box-shadow:0 0 55px 18px rgba(223,107,45,.33)}
+    .frame{position:absolute;inset:0;padding:76px 96px;display:flex;flex-direction:column;justify-content:space-between}
+    .top{display:flex;justify-content:space-between;align-items:center;font-size:20px;font-weight:700;letter-spacing:5px;text-transform:uppercase}.top span:last-child{color:var(--ember);letter-spacing:3px}
+    .hero{max-width:1440px}.eyebrow{color:var(--ember);font-weight:700;font-size:22px;letter-spacing:5px;text-transform:uppercase;margin-bottom:26px}.headline{font-family:Georgia,serif;font-size:126px;line-height:.92;letter-spacing:-7px}.headline em{font-style:normal;color:var(--ember)}.sub{margin-top:38px;max-width:740px;color:var(--muted);font-size:27px;line-height:1.35}
+    .model-card{position:absolute;right:120px;top:230px;width:490px;padding:32px;border:1px solid var(--line);background:linear-gradient(135deg,rgba(255,255,255,.07),rgba(255,255,255,.015));box-shadow:0 28px 80px rgba(0,0,0,.45)}
+    .card-kicker{color:var(--bronze);font-size:15px;font-weight:700;letter-spacing:3px}.card-title{font-size:62px;font-family:Georgia,serif;margin:18px 0}.rule{height:1px;background:var(--line);margin:22px 0}.rows{display:grid;gap:15px}.row{display:flex;justify-content:space-between;color:var(--muted);font-size:19px}.row strong{color:var(--paper)}
+    .bottom{display:flex;justify-content:space-between;align-items:end}.pills{display:flex;gap:14px}.pill{padding:13px 19px;border:1px solid var(--line);font-size:16px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}.page{font-size:18px;color:var(--muted);letter-spacing:2px}
+    .act{position:absolute;inset:0;padding:76px 96px;display:flex;flex-direction:column;justify-content:center}.act h2{font-family:Georgia,serif;font-size:112px;letter-spacing:-6px;line-height:.94;max-width:1200px;margin:0}.act h2 em{font-style:normal;color:var(--ember)}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:56px;max-width:1500px}.tile{border-top:2px solid var(--bronze);padding:24px 0}.tile b{display:block;font-size:25px;letter-spacing:1px;text-transform:uppercase;margin-bottom:12px}.tile p{font-size:22px;line-height:1.35;color:var(--muted);margin:0}
+    .close{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center}.close h2{font-family:Georgia,serif;font-size:140px;line-height:.9;letter-spacing:-8px;margin:0}.close h2 em{font-style:normal;color:var(--ember)}.close p{font-size:25px;letter-spacing:3px;color:var(--muted);text-transform:uppercase;margin-top:36px}.seal{position:absolute;bottom:95px;left:50%;transform:translateX(-50%);border:1px solid var(--bronze);color:var(--bronze);padding:14px 24px;letter-spacing:3px;font-size:16px}
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="12" data-width="1920" data-height="1080">
+    <div class="grain"></div><div id="ember1" class="ember" style="width:15px;height:15px;left:16%;bottom:19%"></div><div id="ember2" class="ember" style="width:9px;height:9px;left:70%;bottom:31%"></div>
+    <section id="intro" class="frame clip" data-start="0" data-duration="4" data-track-index="1">
+      <div class="top"><span>Prometheus</span><span>Model Update</span></div>
+      <div class="hero"><div class="eyebrow">A sharper mind, in your workspace</div><div class="headline">Meet <em>GPT-5.6</em><br>in Prometheus.</div><div class="sub">Bring next-generation reasoning into the local AI command center built to keep moving after the answer.</div></div>
+      <div class="model-card" id="card"><div class="card-kicker">Available models</div><div class="card-title">GPT-5.6</div><div class="rule"></div><div class="rows"><div class="row"><span>Reasoning</span><strong>Deep</strong></div><div class="row"><span>Workspace context</span><strong>Connected</strong></div><div class="row"><span>Tools and agents</span><strong>Ready</strong></div></div></div>
+      <div class="bottom"><div class="pills"><div class="pill">Memory</div><div class="pill">Browser</div><div class="pill">Desktop</div></div><div class="page">01 / 03</div></div>
+    </section>
+    <section id="capabilities" class="act clip" data-start="4" data-duration="4" data-track-index="2"><div class="eyebrow">Not just a smarter chat</div><h2>Reason with the full<br><em>workspace.</em> Then act.</h2><div class="grid"><div class="tile"><b>Remember</b><p>Carry context, decisions, and durable project history forward.</p></div><div class="tile"><b>Operate</b><p>Use browser, desktop, files, and connected tools from one place.</p></div><div class="tile"><b>Delegate</b><p>Send focused work to agents and keep the evidence close.</p></div></div></section>
+    <section id="outro" class="close clip" data-start="8" data-duration="4" data-track-index="3"><div><div class="eyebrow">Prometheus + GPT-5.6</div><h2>More capable<br>where it <em>counts.</em></h2><p>Your local AI command center.</p></div><div class="seal">Prometheus</div></section>
+  </div>
+  <script>
+    window.__timelines=window.__timelines||{};
+    const tl=gsap.timeline({paused:true});
+    gsap.set(['#capabilities','#outro'],{autoAlpha:0});
+    tl.from('#intro .top',{opacity:0,y:-18,duration:.45},0)
+      .from('#intro .eyebrow',{opacity:0,x:-32,duration:.45},.2)
+      .from('#intro .headline',{opacity:0,y:40,duration:.8},.35)
+      .from('#intro .sub',{opacity:0,y:18,duration:.5},.75)
+      .from('#card',{opacity:0,x:70,rotate:3,duration:.7},.55)
+      .from('#intro .bottom',{opacity:0,y:20,duration:.45},1.1)
+      .to('#intro',{autoAlpha:0,duration:.45},3.55)
+      .to('#capabilities',{autoAlpha:1,duration:.25},3.75)
+      .from('#capabilities .eyebrow',{opacity:0,y:20,duration:.4},4)
+      .from('#capabilities h2',{opacity:0,y:50,duration:.7},4.18)
+      .from('#capabilities .tile',{opacity:0,y:30,stagger:.16,duration:.45},4.75)
+      .to('#capabilities',{autoAlpha:0,duration:.4},7.55)
+      .to('#outro',{autoAlpha:1,duration:.25},7.8)
+      .from('#outro .eyebrow',{opacity:0,y:22,duration:.45},8.08)
+      .from('#outro h2',{opacity:0,scale:.94,duration:.72},8.25)
+      .from('#outro p',{opacity:0,y:16,duration:.45},8.85)
+      .from('#outro .seal',{opacity:0,y:16,duration:.45},9.05)
+      .to('#ember1',{x:980,y:-500,scale:.4,duration:12,ease:'none'},0)
+      .to('#ember2',{x:-720,y:320,scale:1.8,duration:12,ease:'none'},0);
+    window.__timelines.main=tl;
+  </script>
+</body>
+</html>

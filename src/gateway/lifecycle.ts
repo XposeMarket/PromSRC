@@ -27,6 +27,10 @@ import { recordActiveMainChatGoalsInterruptedForRestart } from './main-chat-goal
 import { getLastMainSessionId } from './comms/broadcaster';
 import type { DevSourceEditContinuation } from './dev-source-approvals';
 import { listCoordinatedRestartBlockers } from './dev-edit-coordinator';
+import {
+  removeSupervisorRestartRequest,
+  writeSupervisorRestartRequest,
+} from '../runtime/supervisor-restart-request';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +38,7 @@ export interface RestartContext {
   reason: 'proposal' | 'repair' | 'self_update' | 'manual' | 'build_deploy';
   timestamp: number;
   restartLauncher?: 'electron' | 'external_supervisor' | 'prom_gateway_start';
+  restartScope?: 'gateway' | 'supervisor';
   electronManaged?: boolean;
   proposalId?: string;
   repairId?: string;
@@ -96,10 +101,18 @@ function getGatewayHealthUrl(): string {
   return `http://127.0.0.1:${port}/api/health`;
 }
 
-function shouldClosePreviousTerminalAfterRestart(ctx: RestartContext): boolean {
+export function shouldClosePreviousTerminalAfterRestart(ctx: RestartContext): boolean {
   if (process.env.PROMETHEUS_CLOSE_OLD_TERMINAL_ON_RESTART === '0') return false;
   if (process.env.PROMETHEUS_RESTART_CLOSE_OLD_TERMINAL === '0') return false;
   if (ctx.electronManaged || ctx.restartLauncher === 'electron') return false;
+  // The shell/terminal that launched a supervised gateway also owns the
+  // supervisor and every replacement child it creates. Killing that process
+  // tree after the replacement becomes healthy would take the new gateway
+  // down with it and leave nothing available to restart it again.
+  if (
+    ctx.restartLauncher === 'external_supervisor'
+    || process.env.PROMETHEUS_SUPERVISED_GATEWAY_CHILD === '1'
+  ) return false;
   return true;
 }
 
@@ -595,6 +608,22 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
     }
   }
   writeRestartContext(restartCtx);
+  if (externallySupervised && restartCtx.restartScope === 'supervisor') {
+    const supervisorStateDir = process.env.PROMETHEUS_SUPERVISOR_STATE_DIR
+      || path.dirname(getRestartContextPath());
+    try {
+      const request = writeSupervisorRestartRequest(supervisorStateDir, {
+        gatewayPid: process.pid,
+        reason: restartCtx.summary || restartCtx.title || restartCtx.reason,
+        affectedFiles: restartCtx.affectedFiles,
+      });
+      console.log(`[lifecycle] Full supervisor replacement requested (${request.id}).`);
+    } catch (error) {
+      removeSupervisorRestartRequest(supervisorStateDir);
+      clearRestartContext();
+      throw error;
+    }
+  }
   startPreviousTerminalCleanupWatcher(restartCtx);
 
   // Step 2: Shut down current gateway

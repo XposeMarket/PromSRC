@@ -6,3 +6,10 @@ prometheus_vita_input:
   main:
     start: module_start
     stop: module_stop
+  modules:
+    prometheus_vita_input:
+      syscall: true
+      functions:
+        - promVitaSetButtons: 0xF8311001
+        - promVitaSetAnalog: 0xF8311002
+        - promVitaCaptureFrame: 0xF8311003

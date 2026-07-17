@@ -338,11 +338,11 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       notify: (message) => console.log(`[RuntimeRecovery] ${message}`),
     });
     if (recovery.inspected > 0) {
-      console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), preserved ${recovery.interruptedChats.length} chat checkpoint(s).`);
+      console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), preserved ${recovery.interruptedChats.length} chat checkpoint(s), finalized ${recovery.crashRecoveredGoalSessionIds.length} crashed main-chat goal(s).`);
     }
-    // Main-chat goals resume only after the gateway:startup/BOOT restart
-    // finalizer has recorded the post-restart checkpoint. Starting them here
-    // races the restart follow-up and gives two runtimes ownership of one chat.
+    // Main-chat goals resume only after gateway:startup has finalized ownership:
+    // BOOT owns planned restart/apply boundaries, while runtime recovery owns
+    // unexpected crashes. Starting either here would give two runtimes one chat.
   } catch (err: any) {
     console.warn('[RuntimeRecovery] Startup recovery failed:', err?.message || err);
   }

@@ -19,7 +19,7 @@ import { getWorkspace } from '../session';
 import { hookBus } from '../hooks';
 import { updateResumeContext, type TaskStatus } from '../tasks/task-store';
 import { getErrorAudit } from '../../security/error-audit';
-import { handleTaskRecoveryMessage } from '../tasks/task-router';
+import { handleTaskRecoveryMessage, steerTask } from '../tasks/task-router';
 import { buildTaskPauseSnapshot, formatTaskPauseSnapshot } from '../tasks/task-recovery';
 import { isStorageBoundaryError } from '../storage/storage-paths';
 
@@ -895,39 +895,8 @@ router.post('/api/bg-tasks/:id/message', async (req: any, res: any) => {
     return;
   }
 
-  // Inject the message into the task session so the agent sees it on the next round.
-  const sessionId = `task_${task.id}`;
-  addMessage(sessionId, { role: 'user', content: userMessage, timestamp: Date.now() });
-  appendJournal(task.id, { type: 'status_push', content: `User replied via task panel: ${userMessage.slice(0, 200)}` });
-
-  const panelInstruction = [
-    '[TASK PANEL USER REPLY]',
-    `The user replied from the task panel: ${userMessage}`,
-    '',
-    'Treat this as the highest-priority resume instruction for the next task round.',
-    /write\s+note|task[_\s-]*complete|complete\s+(the\s+)?task|you were finished|you are finished|you'?re finished/i.test(userMessage)
-      ? 'If the user says the work is finished, do not continue exploratory work. Call write_note with tag "task_complete" using a concise summary of the completed work, then write the final plain-text response. Do not call step_complete after task_complete.'
-      : 'Apply this guidance directly, then continue only the current approved task scope.',
-    '[/TASK PANEL USER REPLY]',
-  ].join('\n');
-
-  updateResumeContext(task.id, {
-    onResumeInstruction: panelInstruction,
-    messages: [
-      ...((task.resumeContext?.messages || []).slice(-9)),
-      { role: 'user', content: panelInstruction, timestamp: Date.now() },
-    ],
-  });
-
-  // If the task is waiting for guidance, resume it so it processes the message.
-  const needsResume = task.status === 'needs_assistance' || task.status === 'paused' || task.status === 'stalled';
-  if (needsResume) {
-    updateTaskStatus(task.id, 'queued');
-    const runner = new BackgroundTaskRunner(task.id, _handleChat, _makeBroadcastForTask(task.id), _telegramChannel, panelInstruction);
-    runner.start().catch((err: any) => console.error(`[BackgroundTaskRunner] MessageResume ${task.id} error:`, err.message));
-  }
-
-  res.json({ success: true, resumed: needsResume });
+  const steer = steerTask(task.id, userMessage, { source: 'task_panel', resumeAfterMessage: true });
+  res.json(steer);
 });
 
 // SSE stream for live task updates

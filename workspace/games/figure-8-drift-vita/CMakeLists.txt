@@ -24,6 +24,7 @@ add_executable(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
   vitaGL
   vitashark
+  jpeg
   SceShaccCgExt
   SceShaccCg_stub
   taihen_stub
@@ -31,6 +32,8 @@ target_link_libraries(${PROJECT_NAME}
   SceGxm_stub
   SceDisplay_stub
   SceSysmodule_stub
+  SceNet_stub
+  SceNetCtl_stub
   SceCtrl_stub
   SceTouch_stub
   SceAppMgr_stub
@@ -48,4 +51,6 @@ vita_create_self(${PROJECT_NAME}.self ${PROJECT_NAME} UNSAFE)
 vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
   VERSION ${VITA_VERSION}
   NAME ${VITA_APP_NAME}
+  FILE assets/environment-atlas.jpg assets/environment-atlas.jpg
+  FILE assets/cockpit-dashboard.jpg assets/cockpit-dashboard.jpg
 )

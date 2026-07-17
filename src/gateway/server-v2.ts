@@ -686,14 +686,13 @@ const internalWatchRunner = new InternalWatchRunner({
   broadcast: broadcastWS,
   cronScheduler,
 });
-internalWatchRunner.start();
 const activeThreadSupervisionController = new ActiveThreadSupervisionController({
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput) =>
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput),
   broadcast: broadcastWS,
 });
-const stopThreadSupervisionRunner = activeThreadSupervisionController.start();
-startupMark('timers started');
+let stopThreadSupervisionRunner: () => void = () => undefined;
+startupMark('recovery-aware timers constructed');
 
 // ─── A2 + A5: CIS tool dependency injection ────────────────────────────────
 injectAnalysisTeamDeps({ workspacePath: getConfig().getWorkspacePath(), broadcast: broadcastWS });
@@ -942,6 +941,12 @@ try {
 } catch (e: any) {
   console.warn('[live-runtime] Startup ledger warmup failed:', e?.message || e);
 }
+try {
+  const vaultWarmup = getVault(CONFIG_DIR_PATH).prewarmDerivedKeys();
+  console.log(`[Vault] Prewarmed ${vaultWarmup.warmed}/${vaultWarmup.entries} derived key(s) in ${vaultWarmup.durationMs}ms before accepting traffic.`);
+} catch (e: any) {
+  console.warn('[Vault] Derived-key warmup failed:', e?.message || e);
+}
 
 server.listen(PORT, HOST, () => {
   startupMark('server listen callback');
@@ -962,6 +967,13 @@ server.listen(PORT, HOST, () => {
     runStartup({
       HOST, PORT, config, skillsManager, cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
       handleChat, buildTools, runTeamAgentViaChat,
+    }).then(() => {
+      // These observers must see runtime recovery's settled task/session state.
+      // Starting them earlier can turn a restart into a generic idle/timeout
+      // event before pause reasons and checkpoints have been persisted.
+      internalWatchRunner.start();
+      stopThreadSupervisionRunner = activeThreadSupervisionController.start();
+      startupMark('recovery-aware timers started');
     }).catch((err: any) => console.error('[Gateway] Startup error:', err?.message || err));
     telegramPersonaBots.start().catch((err: any) => console.error('[TelegramPersonaBots] Startup error:', err?.message || err));
   }, 1000).unref?.();

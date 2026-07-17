@@ -138,7 +138,15 @@ function resolveWorkerEntry(): string {
 }
 
 function abortError(reason?: unknown): Error {
-  const error = reason instanceof Error ? reason : new Error(String(reason || 'Model call cancelled.'));
+  // AbortSignal.reason is a DOMException when AbortController.abort() is
+  // called without an explicit reason. DOMException.name is getter-only in
+  // Node, so mutating the original reason can throw from the abort event
+  // callback and terminate the gateway. Always create an owned, writable
+  // Error while preserving the useful message and original cause.
+  const message = reason instanceof Error
+    ? reason.message
+    : String(reason || 'Model call cancelled.');
+  const error = new Error(message, reason === undefined ? undefined : { cause: reason });
   error.name = 'AbortError';
   return error;
 }
