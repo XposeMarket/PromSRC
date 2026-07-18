@@ -9224,6 +9224,10 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     busy: false,
     abort: null,
   };
+  // Composer sizing is invoked by startup bridges below. Keep its mutable
+  // animation state initialized before any of those callbacks can run.
+  let chatComposerSpaceRaf = 0;
+  let chatComposerShiftAnimation = null;
 
   _pmRefreshSlashChrome(page, input);
   _installMobileTimestampReveal(threadEl, handleMobileMessageAction);
@@ -10670,9 +10674,6 @@ void main() {
     if (chatVoiceHost) chatVoiceHost.hidden = !enabled;
     updateChatComposerSpace();
   }
-
-  let chatComposerSpaceRaf = 0;
-  let chatComposerShiftAnimation = null;
 
   function updateChatComposerSpace() {
     if (chatComposerSpaceRaf) cancelAnimationFrame(chatComposerSpaceRaf);

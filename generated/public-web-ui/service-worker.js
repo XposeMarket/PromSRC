@@ -17,7 +17,7 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const VERSION = 'pm-v169-2026-07-18-mobile-layout-motion';
+const VERSION = 'pm-v170-2026-07-18-mobile-composer-init-fix';
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 

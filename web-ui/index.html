@@ -8079,7 +8079,7 @@ let _errBackdrop = null;
     ? window.__PROM_SHOULD_BOOT_MOBILE()
     : document.body.classList.contains('pm-mobile-active');
   if (shouldBootMobile) {
-    window.__PROM_MOBILE_ROUTER_READY = import('./src/mobile/mobile-router.js?v=stream-focus-isolation-v16')
+    window.__PROM_MOBILE_ROUTER_READY = import('./src/mobile/mobile-router.js?v=mobile-composer-init-fix-v17')
       .catch((err) => {
         console.error('[mobile] router import failed:', err);
         throw err;

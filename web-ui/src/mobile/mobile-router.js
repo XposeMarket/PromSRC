@@ -8,7 +8,7 @@ import {
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage,
-} from './mobile-pages.js?v=stream-focus-isolation-v16';
+} from './mobile-pages.js?v=mobile-composer-init-fix-v17';
 import {
   getDeviceToken,
   loadMobileSessionGroups,

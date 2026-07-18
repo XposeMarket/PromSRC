@@ -16,6 +16,17 @@ const gatewayServer = read('src/gateway/core/server.ts');
 const broadcaster = read('src/gateway/comms/broadcaster.ts');
 const auditMaterializer = read('src/gateway/audit/materializer.ts');
 
+const composerRafDeclaration = pages.indexOf('let chatComposerSpaceRaf = 0;');
+const composerShiftDeclaration = pages.indexOf('let chatComposerShiftAnimation = null;');
+const firstComposerSpaceCall = pages.indexOf('updateChatComposerSpace();');
+assert.ok(composerRafDeclaration >= 0, 'mobile chat must declare its composer RAF state');
+assert.ok(composerShiftDeclaration >= 0, 'mobile chat must declare its composer animation state');
+assert.ok(firstComposerSpaceCall >= 0, 'mobile chat must size its composer during startup');
+assert.ok(
+  composerRafDeclaration < firstComposerSpaceCall && composerShiftDeclaration < firstComposerSpaceCall,
+  'composer animation state must initialize before startup can call updateChatComposerSpace',
+);
+
 assert.match(api, /const _sessionRequests = new Map\(\)/, 'session hydration requests must be coalesced');
 assert.match(api, /fullProcess=1&_fresh=1/, 'forced recovery hydration must request complete process entries');
 assert.match(router, /const fullProcess = full \|\| req\.query\.fullProcess/, 'session API must support full process recovery');
