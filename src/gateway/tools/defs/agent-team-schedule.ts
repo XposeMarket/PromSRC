@@ -985,12 +985,12 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'task_control',
-        description: 'Query, steer, and control existing background tasks. When the user changes or adds instructions to current work, use steer; do not create another task.',
+        description: 'Query, steer, and control existing background tasks, including their pending approvals. You may inspect approvals proactively. Resolve one only after the user explicitly authorizes that exact approval in the current conversation; never let a task approve itself.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', description: 'One of: list, latest, get, steer, message, resume, rerun, pause, cancel, delete' },
+            action: { type: 'string', description: 'One of: list, latest, get, steer, message, list_approvals, resolve_approval, resume, rerun, pause, cancel, delete' },
             task_id: { type: 'string', description: 'Task ID. Strongly recommended for steer; required for get/pause/cancel/delete; optional for resume/rerun.' },
             status: { type: 'string', description: 'Optional filter: queued|running|paused|stalled|needs_assistance|awaiting_user_input|failed|complete|waiting_subagent' },
             include_all_sessions: { type: 'boolean', description: 'If true, list across all sessions/channels; default false (scoped)' },
@@ -1000,6 +1000,10 @@ export function getAgentTeamScheduleTools(): any[] {
             resume_after_message: { type: 'boolean', description: 'If steering a paused task, resume that same task after recording the guidance. Default false.' },
             note: { type: 'string', description: 'Optional operator note for control actions; also accepted as steer text for compatibility.' },
             confirm: { type: 'boolean', description: 'Required true for destructive actions cancel/delete' },
+            approval_id: { type: 'string', description: 'Exact approval ID for resolve_approval.' },
+            decision: { type: 'string', enum: ['approve', 'reject'], description: 'Decision for resolve_approval.' },
+            grant_scope: { type: 'string', enum: ['once', 'session', 'always'], description: 'Permission scope for an approved command/tool request. Default once. One-shot approval kinds only allow once.' },
+            user_authorized: { type: 'boolean', description: 'Required true for resolve_approval. Set it only when the user explicitly authorized this exact approve/reject decision in the current conversation.' },
           },
         },
       },

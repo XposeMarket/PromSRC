@@ -14,6 +14,7 @@ async function settle(): Promise<void> {
 async function main(): Promise<void> {
   try {
     const taskApi = await import('../tasks/task-store');
+    const approvalApi = await import('../verification-flow');
     const storeApi = await import('./internal-watch-store');
     const runnerApi = await import('./internal-watch-runner');
 
@@ -33,6 +34,20 @@ async function main(): Promise<void> {
       pauseReason: 'gateway_restart',
       pausedAt: 1_784_300_000_000,
       pausedAtStepIndex: 1,
+    });
+    const pendingApproval = approvalApi.getApprovalQueue().create({
+      sessionId: task.sessionId,
+      taskId: task.id,
+      originType: 'background_task',
+      originLabel: task.title,
+      toolName: 'run_command',
+      toolArgs: { command: 'npm test' },
+      approvalKind: 'command',
+      action: 'Run npm test',
+      reason: 'Regression approval',
+      policyTier: 'commit',
+      riskScore: 4,
+      affectedSystems: ['workspace'],
     });
 
     const observation = runnerApi.observeInternalWatchTarget({
@@ -54,6 +69,9 @@ async function main(): Promise<void> {
     assert.equal(observation.pauseReason, 'gateway_restart');
     assert.equal(observation.pausedAtStepIndex, 1);
     assert.match(String(observation.checkpoint), /Preserved checkpoint/);
+    assert.equal(observation.pendingApprovalCount, 1);
+    assert.equal(observation.pendingApprovals?.[0]?.id, pendingApproval.id);
+    assert.equal(observation.pendingApprovals?.[0]?.taskId, task.id);
 
     const watch = storeApi.createInternalWatch({
       id: 'restart_recovery_success',

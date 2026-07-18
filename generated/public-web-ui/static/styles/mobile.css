@@ -1,3 +1,225 @@
+
+
+/* Keep the brand stage genuinely black: this sits above every particle and
+   constellation layer, then feathers cleanly back into the surrounding sky. */
+.pm-one-center-blackout {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: 50%;
+  width: min(94vw, 390px);
+  height: min(53vh, 450px);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  background: radial-gradient(ellipse at center,
+    #000 0%,
+    #000 60%,
+    rgba(0, 0, 0, .995) 70%,
+    rgba(0, 0, 0, .9) 80%,
+    rgba(0, 0, 0, 0) 100%);
+}
+
+
+/* --------------------------------------------------------------------------
+   Prometheus One mobile launch sequence
+   Black first frame -> constellations -> P1 mark -> Cinzel title -> app.
+   -------------------------------------------------------------------------- */
+body.pm-mobile-active .pm-one-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  isolation: isolate;
+  background: #000;
+  opacity: 1;
+  transition: opacity 620ms cubic-bezier(.4, 0, .2, 1), visibility 620ms;
+}
+
+body.pm-mobile-active .pm-one-splash[hidden] { display: none; }
+
+body.pm-mobile-active .pm-one-splash.is-leaving {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.pm-one-starfield {
+  position: absolute;
+  inset: -8%;
+  opacity: 0;
+  pointer-events: none;
+  background-repeat: repeat;
+  mix-blend-mode: screen;
+}
+
+.pm-one-starfield-far {
+  background-image:
+    radial-gradient(circle at 8px 12px, rgba(240, 211, 148, .72) 0 1px, transparent 1.4px),
+    radial-gradient(circle at 38px 52px, rgba(182, 137, 66, .55) 0 .8px, transparent 1.3px),
+    radial-gradient(circle at 74px 24px, rgba(255, 235, 184, .46) 0 .65px, transparent 1.15px);
+  background-size: 92px 86px, 113px 121px, 149px 137px;
+  filter: blur(.1px) drop-shadow(0 0 3px rgba(216, 169, 81, .28));
+  transform: scale(1.04);
+}
+
+.pm-one-starfield-near {
+  background-image:
+    radial-gradient(circle at 22px 31px, #f5d995 0 1.2px, rgba(224, 180, 92, .42) 1.4px, transparent 3.2px),
+    radial-gradient(circle at 91px 67px, rgba(240, 204, 128, .82) 0 .95px, transparent 2.4px);
+  background-size: 137px 153px, 211px 187px;
+  filter: drop-shadow(0 0 6px rgba(232, 190, 105, .52));
+  transform: scale(1.015);
+}
+
+.pm-one-constellations {
+  position: absolute;
+  inset: -2%;
+  width: 104%;
+  height: 104%;
+  opacity: 0;
+  color: #b98a3b;
+  filter: drop-shadow(0 0 5px rgba(214, 164, 74, .25));
+  transform: scale(1.025);
+}
+
+.pm-one-constellation-lines path {
+  fill: none;
+  stroke: url(#pm-one-line-gold, currentColor);
+  stroke: currentColor;
+  stroke-width: .42;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1.5 1.1;
+  opacity: .27;
+  vector-effect: non-scaling-stroke;
+}
+
+.pm-one-constellation-stars circle {
+  fill: #d7aa57;
+  opacity: .78;
+  filter: url(#pm-one-star-glow);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.pm-one-constellation-stars circle:nth-child(3n) { animation: pm-one-star-pulse 2.1s ease-in-out 1.1s infinite alternate; }
+.pm-one-constellation-stars circle:nth-child(4n + 1) { animation: pm-one-star-pulse 2.8s ease-in-out 1.45s infinite alternate-reverse; }
+.pm-one-constellation-stars .is-bright {
+  fill: #f5dc9b;
+  opacity: 1;
+  animation: pm-one-bright-star 1.7s ease-in-out 1s infinite alternate;
+}
+
+.pm-one-brand {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(70vw, 286px);
+  transform: translateY(-1vh);
+}
+
+.pm-one-mark-wrap {
+  width: clamp(172px, 54vw, 228px);
+  opacity: 0;
+  transform: translateZ(0) scale(.86);
+  transform-origin: center;
+  filter: drop-shadow(0 0 22px rgba(202, 151, 63, .22));
+  isolation: isolate;
+  contain: paint;
+  will-change: opacity, transform, filter;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.pm-one-mark {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  border-radius: 0;
+  opacity: 1;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.pm-one-title {
+  position: relative;
+  margin-top: 20px;
+  font-family: 'Cinzel', 'Times New Roman', Georgia, serif;
+  font-size: clamp(20px, 5.5vw, 26px);
+  font-weight: 600;
+  letter-spacing: .072em;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  color: transparent;
+  background: linear-gradient(105deg, #75501d 0%, #d3a958 27%, #f6e0a7 46%, #fff4ca 50%, #d0a04a 57%, #8b6326 100%);
+  background-size: 240% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  opacity: 0;
+  transform: translateY(9px);
+  filter: drop-shadow(0 0 12px rgba(213, 164, 75, .18));
+}
+
+.pm-one-splash.is-running .pm-one-starfield-far {
+  animation: pm-one-particles-in 760ms ease-out 90ms both, pm-one-particle-drift 5s ease-in-out 900ms infinite alternate;
+}
+.pm-one-splash.is-running .pm-one-starfield-near {
+  animation: pm-one-particles-in 680ms ease-out 220ms both, pm-one-particle-drift-near 4.2s ease-in-out 920ms infinite alternate;
+}
+.pm-one-splash.is-running .pm-one-constellations {
+  animation: pm-one-constellations-in 820ms ease-out 160ms both;
+}
+.pm-one-splash.is-running .pm-one-mark-wrap {
+  animation: pm-one-mark-in 720ms cubic-bezier(.16, 1, .3, 1) 860ms both;
+}
+.pm-one-splash.is-running .pm-one-title {
+  animation: pm-one-title-in 560ms cubic-bezier(.22, 1, .36, 1) 1640ms both, pm-one-title-shimmer 820ms cubic-bezier(.4, 0, .2, 1) 2280ms 1 both;
+}
+
+@keyframes pm-one-particles-in {
+  from { opacity: 0; transform: scale(1.055); }
+  to { opacity: .78; transform: scale(1); }
+}
+@keyframes pm-one-particle-drift { to { transform: translate3d(-4px, 6px, 0) scale(1.012); opacity: .94; } }
+@keyframes pm-one-particle-drift-near { to { transform: translate3d(5px, -7px, 0) scale(1.02); opacity: .9; } }
+@keyframes pm-one-constellations-in {
+  from { opacity: 0; transform: scale(1.035); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes pm-one-mark-in {
+  from { opacity: 0; transform: translateZ(0) scale(.86); filter: blur(5px) drop-shadow(0 0 5px rgba(202, 151, 63, 0)); }
+  to { opacity: 1; transform: translateZ(0) scale(1); filter: blur(0) drop-shadow(0 0 22px rgba(202, 151, 63, .22)); }
+}
+@keyframes pm-one-title-in {
+  from { opacity: 0; transform: translateY(9px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pm-one-title-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@keyframes pm-one-star-pulse { from { opacity: .42; transform: scale(.72); } to { opacity: 1; transform: scale(1.42); } }
+@keyframes pm-one-bright-star { from { transform: scale(.9); opacity: .7; } to { transform: scale(1.45); opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-one-splash.is-running .pm-one-starfield,
+  .pm-one-splash.is-running .pm-one-constellations,
+  .pm-one-splash.is-running .pm-one-mark-wrap,
+  .pm-one-splash.is-running .pm-one-title {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
+  body.pm-mobile-active .pm-one-splash { transition-duration: 180ms; }
+}
+
 /* Prometheus Mobile — isolated mobile shell + pages.
  * Only activates when <body> has class "pm-mobile-active".
  * Desktop UI is untouched otherwise.
@@ -154,6 +376,16 @@
 }
 :root[data-skin="purple"] .pm-app {
   background: var(--pm-bg);
+}
+
+
+/* Mobile motion language: one calm, responsive curve for layout-bearing UI.
+   Keeping these values shared prevents the composer, runtime docks, chat inset,
+   and drawer from arriving on visibly different beats. */
+body.pm-mobile-active {
+  --pm-motion-layout-duration: 300ms;
+  --pm-motion-layout-ease: cubic-bezier(.22, .74, .22, 1);
+  --pm-motion-fade-duration: 220ms;
 }
 
 body.pm-mobile-active :where(
@@ -381,9 +613,9 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-drawer-open .pm-app {
   transform: translate3d(0, 0, 0);
   transform-origin: left center;
   transition:
-    transform .28s cubic-bezier(.2,.72,.2,1),
-    border-radius .28s cubic-bezier(.2,.72,.2,1),
-    box-shadow .28s ease;
+    transform var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    border-radius var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    box-shadow var(--pm-motion-fade-duration, 220ms) ease;
   will-change: transform, border-radius;
 }
 
@@ -1792,8 +2024,11 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   background: #050506;
   border-right: 0;
   opacity: 0;
-  transform: translateX(-10px);
-  transition: opacity .18s ease, transform .28s cubic-bezier(.2,.72,.2,1);
+  transform: translate3d(-100%, 0, 0);
+  transition:
+    opacity var(--pm-motion-fade-duration, 220ms) ease,
+    transform var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1));
+  will-change: transform, opacity;
   z-index: 1;
   display: flex; flex-direction: column;
   padding: max(env(safe-area-inset-top), 18px) 16px calc(22px + env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
@@ -1809,7 +2044,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 .pm-drawer [hidden] { display: none !important; }
 .pm-drawer.open {
   opacity: 1;
-  transform: translateX(0);
+  transform: translate3d(0, 0, 0);
   pointer-events: auto;
 }
 .pm-drawer-brand {
@@ -3660,6 +3895,19 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   font-size: 1em;
   font-weight: 380;
   line-height: 1.38;
+}
+.pm-msg.from-ai .pm-final-answer {
+  transform-origin: left bottom;
+}
+.pm-msg.from-ai .pm-final-answer--streaming {
+  animation: pm-final-answer-stream-in .24s cubic-bezier(.22,.8,.28,1) both;
+}
+@keyframes pm-final-answer-stream-in {
+  from { opacity: .72; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-msg.from-ai .pm-final-answer--streaming { animation: none; }
 }
 .pm-msg.from-ai .pm-time {
   text-align: left;
@@ -6545,7 +6793,11 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
     0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(40,28,16,var(--pm-lg-shadow-alpha, .09)),
     0 1px 4px rgba(40,28,16,.06);
   z-index: 4;
-  transition: bottom .18s ease, padding .16s ease, border-radius .16s ease, min-height .16s ease;
+  transition:
+    bottom var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    padding var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    border-radius var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    min-height var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1));
 }
 .pm-composer > * {
   position: relative;
@@ -7064,7 +7316,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   right: auto;
   width: min(72vw, 390px);
   bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-composer-live-height, 72px) + var(--pm-goal-live-height, 0px) + 38px);
-  transition: bottom .18s ease;
+  transition: bottom var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1));
   z-index: 8;
   max-height: min(28vh, 168px);
   overflow: visible;
@@ -7115,7 +7367,10 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   max-height: min(58vh, 520px);
   overflow: auto;
   pointer-events: none;
-  transition: bottom .18s ease;
+  transition:
+    bottom var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    transform var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    opacity var(--pm-motion-fade-duration, 220ms) ease;
 }
 .pm-keyboard-open .pm-background-spawn-dock {
   bottom: calc(var(--pm-keyboard-offset, 0px) + var(--pm-composer-live-height, 72px) + var(--pm-goal-live-height, 0px) + var(--pm-queued-live-height, 0px) + 18px);
@@ -7140,7 +7395,10 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   gap: 7px;
   pointer-events: none;
   transform: translateX(-50%);
-  transition: bottom .18s ease;
+  transition:
+    bottom var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    transform var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    opacity var(--pm-motion-fade-duration, 220ms) ease;
 }
 .pm-main-plan-dock[hidden] { display: none !important; }
 .pm-keyboard-open .pm-main-plan-dock {
@@ -7173,6 +7431,17 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   display: inline-flex;
   align-items: center;
   justify-content: center;
+
+.pm-main-plan-dock.is-open .pm-main-plan-popover,
+.pm-background-spawn-dock.is-open .pm-background-spawn-lane {
+  transform-origin: center bottom;
+  animation: pm-mobile-surface-rise var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)) both;
+}
+@keyframes pm-mobile-surface-rise {
+  from { opacity: 0; transform: translate3d(0, 10px, 0) scale(.985); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
   border-radius: 999px;
   background: conic-gradient(var(--pm-orange) var(--pm-plan-progress), rgba(127,127,127,.28) 0);
 }
@@ -8776,6 +9045,9 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   white-space: pre-wrap;
   word-break: break-word;
   align-self: center;
+  transition:
+    min-height var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    padding var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1));
 }
 .pm-composer:is(.is-focused, .has-text, .has-attachments) {
   border-radius: 28px;
@@ -8875,6 +9147,18 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   animation: none;
 }
 .pm-composer .pm-send.is-abort::after { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  body.pm-mobile-active {
+    --pm-motion-layout-duration: 0ms;
+    --pm-motion-fade-duration: 0ms;
+  }
+  .pm-main-plan-dock.is-open .pm-main-plan-popover,
+  .pm-background-spawn-dock.is-open .pm-background-spawn-lane {
+    animation: none;
+  }
+}
+
 .pm-composer .pm-send.is-abort .pm-send-voice-icon { display: none; }
 .pm-composer .pm-send.is-abort svg {
   width: 18px;

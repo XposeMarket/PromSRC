@@ -57,6 +57,9 @@ The canonical sync path is:
 
 Service worker gotcha: `web-ui/service-worker.js` has a `VERSION` constant. Bump it on meaningful frontend/mobile changes or installed PWAs may keep old assets even after build/restart. The service worker intentionally never caches `/api/*`, `/ws`, or `/events`, so stale chat/auth/streaming data usually means app state or generated static files, not cached API responses. Current version: `pm-v69-2026-06-19-mobile-deep-links`. [2026-06-19]
 
+Mobile Prometheus One splash branding (2026-07-17): `web-ui/index.html` owns the cold-load `#pm-one-splash` composition. Its centered logo uses the dedicated generated asset `web-ui/src/assets/prometheus-one/p1-mark-ring.png` (P1 + gold ring + upper-right star only), while `web-ui/src/styles/mobile.css` owns the particle/constellation, mark entrance, Cinzel title fade, and metallic shimmer. Keep the transparent mark inside `.pm-one-mark-wrap`: entrance opacity/transform/filter animation belongs on that isolated compositor wrapper, while the image remains a stable `translateZ(0)` raster layer so iOS does not drop it when the sibling background-clipped title fades or shimmers. Preserve the reusable official lockup at `p1-logo.png`; do not overwrite it for splash-only variants. Bump the service-worker `VERSION` and the mobile CSS query version when changing this installed-PWA launch experience.
+Mobile chat layout motion (2026-07-18): composer focus/expansion, hamburger drawer motion, and composer-adjacent queued/plan/background-agent surfaces share `--pm-motion-*` timing in `web-ui/src/styles/mobile.css`. `updateChatComposerSpace()` in `mobile-pages.js` coalesces `ResizeObserver` measurements and continues any in-flight FLIP translation from its current visual offset, preventing repeated layout updates from restarting the chat movement. Keep `prefers-reduced-motion` at zero duration, and bump `web-ui/service-worker.js` after changing these motions.
+
 Session cache: `web-ui/src/mobile/mobile-api.js` caches `loadMobileChatSession` results in-memory for 30s (max 20 entries). Use `invalidateMobileChatSessionCache(sessionId?)` to bust. Cache is automatically busted on `updateMobileChatSessionHistory` writes. This makes revisiting the same chat instant within the TTL window. [2026-06-17]
 
 Recovery parallelism: `refreshMobileRunRecovery` in `mobile-pages.js` now fires `loadMobileChatRunStatus` + `loadMobileChatSession` in parallel (batch 1), then `loadMobileApprovals` + `loadMobileQuestions` in parallel (batch 2). Previously all were serial awaits — a 5-call waterfall on every reconnect. [2026-06-17]
@@ -154,6 +157,15 @@ Mobile sends normal worker turns through `POST /api/chat` with SSE. `mobile-api.
 - `sessionId`
 - optional `clientRequestId`
 - `origin: { channel: 'mobile', surface: 'mobile_app', device: 'phone', label: 'Mobile app', source: 'mobile_web_ui' }`
+
+Mobile final-answer presentation (2026-07-18):
+
+- Tool/thinking trace and final-answer text share one assistant turn in state, but are separate presentation phases: trace content remains in the live/completed trace UI; answer content renders in `.pm-final-answer`.
+- Never pass final-answer Markdown through `_normalizeMobileTraceProseText`; that helper is only for trace prose and can collapse intentional Markdown newlines, fusing headings/lists into preceding text.
+- `_appendMobileVisualStreamToken` buffers provider chunks and commits visual frames at a short cadence rather than rebuilding the full Markdown DOM for every raw token. The authoritative `final` SSE frame replaces provisional text and completes normal Markdown rendering.
+- Streaming answer frames use a subtle `pm-final-answer-stream-in` fade/translate animation with a `prefers-reduced-motion` fallback.
+- Relevant service-worker cache version: `pm-v168-2026-07-18-mobile-final-answer-stream`.
+
 - attachments and caller context when present
 
 `chat.router.ts` normalizes turn origin. A session ID beginning `mobile_` or an explicit `origin.channel='mobile'` becomes channel `mobile`, surface `mobile_app`, device `phone`. The injected origin context tells the model that mobile is only the contact channel; local desktop/browser/files/tools can still be available.
@@ -528,3 +540,14 @@ For mobile voice:
 - Test speaking while an active worker is running: expect `voice_interruption` and either steer or abort behavior.
 - Inspect `D:\Prometheus\voice-xai-debug.log` only for voice endpoint diagnostics; do not treat it as durable app state.
 
+
+
+
+### Prometheus One startup splash
+
+- The mobile shell starts on a true black first frame, then reveals a layered gold particle field plus restrained constellation connections.
+- `web-ui/index.html` owns the first-paint guard, splash markup, particle layers, and the official P1 logo image at `web-ui/src/assets/prometheus-one/p1-logo.png` so the launch identity matches the approved brand artwork rather than a reconstructed vector.
+- `web-ui/src/styles/mobile.css` owns the staged animation: far/near particles and glowing star nodes, official centered P1 logo reveal, Cinzel SemiBold `Prometheus One` title fade, then a single metallic shimmer across the settled lettering. It includes a reduced-motion path.
+- `web-ui/src/mobile/mobile-router.js` schedules dismissal after a successful mobile render and after the complete brand sequence; the early bootstrap retains a bounded timeout fallback so the splash cannot trap the user.
+
+Keep the sequence mobile-scoped under `body.pm-mobile-active`. After edits, run the web UI sync check and visually smoke-test a cold load of `#mobile/chat` (or `/mobile`) at the black, constellation, mark, title, and dismissed phases.

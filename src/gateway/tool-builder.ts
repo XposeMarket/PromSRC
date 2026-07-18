@@ -1629,6 +1629,9 @@ export interface TaskControlResponse {
   tasks?: Array<Record<string, any>>;
   scheduled_jobs?: Array<Record<string, any>>;
   candidates?: Array<Record<string, any>>;
+  approvals?: Array<Record<string, any>>;
+  approval?: Record<string, any> | null;
+  decision?: 'approved' | 'rejected';
 }
 
 export type ScheduleJobAction =

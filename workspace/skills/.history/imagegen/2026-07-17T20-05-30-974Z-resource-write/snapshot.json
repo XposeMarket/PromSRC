@@ -1,0 +1,12 @@
+{
+  "skillId": "imagegen",
+  "reason": "resource-write",
+  "createdAt": "2026-07-17T20:05:30.982Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\imagegen",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "0b95dec256366694"
+}

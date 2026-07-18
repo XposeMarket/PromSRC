@@ -72,6 +72,7 @@ export type PauseReason =
   | 'interrupted_by_schedule'
   | 'gateway_restart'
   | 'awaiting_user_input'  // task paused because it needs clarification from the user
+  | 'awaiting_approval'  // task is waiting on a non-command approval card
   | 'awaiting_command_approval'  // task is waiting on a run_command approval card
   | 'awaiting_final_action_approval'  // task is waiting before an irreversible UI action
   | 'awaiting_prometheus_question_response'  // task is waiting on a Prometheus question card

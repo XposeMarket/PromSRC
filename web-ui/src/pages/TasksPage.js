@@ -368,6 +368,78 @@ async function loadTaskApprovals(taskId) {
   }
 }
 
+function bgtApprovalRiskLevel(score) {
+  const n = Number(score || 0);
+  if (n >= 7) return 'high';
+  if (n >= 4) return 'medium';
+  return 'low';
+}
+
+function normalizeTaskApproval(input = {}) {
+  const approval = input && typeof input === 'object' ? input : {};
+  const toolArgs = approval.toolArgs && typeof approval.toolArgs === 'object' ? approval.toolArgs : {};
+  const toolName = String(approval.toolName || '').trim();
+  const approvalKind = String(approval.approvalKind || '').trim();
+  const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
+  const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
+  const isCommand = approvalKind === 'command' || approvalKind === 'elevated_command' || toolName === 'run_command';
+  const title = approvalKind === 'elevated_command' ? 'Administrator command'
+    : isDevSource ? 'Dev source edit approval'
+      : isFinalAction ? 'Final action approval'
+        : isCommand ? 'Command approval'
+          : toolName ? `${toolName.replace(/_/g, ' ')} approval` : 'Approval required';
+  return {
+    ...approval,
+    id: String(approval.id || approval.approvalId || '').trim(),
+    toolArgs,
+    toolName,
+    approvalKind,
+    title,
+    command: String(approval.command || toolArgs.command || '').trim(),
+    summary: String(approval.reason || approval.summary || approval.action || '').trim(),
+    oneShot: approval.oneShot === true || approvalKind === 'elevated_command' || isDevSource || isFinalAction,
+  };
+}
+
+function renderTaskApprovalCard(input = {}) {
+  const approval = normalizeTaskApproval(input);
+  if (!approval.id) return '';
+  const riskLevel = bgtApprovalRiskLevel(approval.riskScore);
+  const isOneShot = approval.oneShot === true;
+  const sourceFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
+  const sourceDirs = Array.isArray(approval.devSourceEdit?.allowedDirs) ? approval.devSourceEdit.allowedDirs : [];
+  const boundary = approval.commandBoundary || null;
+  const boundaryScope = String(boundary?.scope || '').trim();
+  const boundaryPaths = Array.isArray(boundary?.externalPaths) ? boundary.externalPaths.filter(Boolean) : [];
+  const technicalText = approval.command || approval.scopedAction || approval.action || '';
+  const approvalId = escHtml(approval.id);
+  return `<div class="chat-approval-card chat-approval-card-${riskLevel} chat-approval-card-pending" data-approval-id="${approvalId}">
+    <div class="chat-approval-head">
+      <div>
+        <div class="chat-approval-kicker">Approval needed</div>
+        <div class="chat-approval-title">${escHtml(approval.title)}</div>
+      </div>
+      <div class="chat-approval-badges">
+        <span class="chat-approval-status chat-approval-status-pending">pending</span>
+        <span class="chat-approval-risk">risk ${escHtml(String(approval.riskScore ?? 0))}</span>
+      </div>
+    </div>
+    ${approval.originLabel ? `<div class="chat-approval-scope"><span>Requested by</span>${escHtml(String(approval.originLabel))}</div>` : ''}
+    ${approval.summary ? `<div class="chat-approval-detail">${escHtml(approval.summary)}</div>` : ''}
+    ${boundaryScope && boundaryScope !== 'workspace' ? `<div class="chat-approval-scope"><span>Boundary</span>${escHtml(boundaryScope.replace(/_/g, ' '))}${boundary?.reason ? `<br>${escHtml(String(boundary.reason))}` : ''}</div>` : ''}
+    ${boundaryPaths.length ? `<div class="chat-approval-scope"><span>External paths</span>${boundaryPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
+    ${sourceFiles.length ? `<div class="chat-approval-scope"><span>Files</span>${sourceFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
+    ${sourceDirs.length ? `<div class="chat-approval-scope"><span>Workspace docs</span>${sourceDirs.map((dir) => escHtml(String(dir))).join('<br>')}</div>` : ''}
+    ${technicalText ? `<details class="chat-approval-technical"><summary>Technical details</summary><pre class="chat-approval-command">${escHtml(String(technicalText))}</pre></details>` : ''}
+    <div class="chat-approval-actions">
+      <button class="chat-approval-btn chat-approval-deny" type="button" onclick="bgtResolveApproval('${approvalId}', 'deny')">Reject</button>
+      <button class="chat-approval-btn chat-approval-approve" type="button" onclick="bgtResolveApproval('${approvalId}', 'approve')">${isOneShot ? 'Approve' : 'Allow once'}</button>
+      ${isOneShot ? '' : `<button class="chat-approval-link" type="button" onclick="bgtResolveApproval('${approvalId}', 'approve', 'session')">Allow this session</button>
+      <button class="chat-approval-link" type="button" onclick="bgtResolveApproval('${approvalId}', 'approve', 'always')">Always allow</button>`}
+    </div>
+  </div>`;
+}
+
 function renderBgTasks() {
   const board = document.getElementById('bgt-board');
   if (!board) return;
@@ -580,7 +652,6 @@ async function bgtRefreshOpenPanel() {
   // Build assistance block outside template literal to avoid backtick nesting issues
   let assistanceHTML = '';
   const taskStatusNorm = String(task.status || '').trim().toLowerCase();
-  const isCommandApprovalPause = task.pauseReason === 'awaiting_command_approval' || pendingApprovals.length > 0;
   const pauseAnalysisHtml = task.pauseAnalysis?.message
     ? `<div style="margin-top:10px;background:#fff;border:1px solid #e9d8ff;border-radius:10px;padding:10px 12px;color:#3d1a6e">
         <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;color:#6d2d9e;margin-bottom:6px">AI Recovery Plan</div>
@@ -619,7 +690,7 @@ async function bgtRefreshOpenPanel() {
       </div>`
     : '';
   console.log('[BGT panel] task.status =', JSON.stringify(task.status), 'norm =', taskStatusNorm);
-  if (taskStatusNorm === 'needs_assistance' || taskStatusNorm === 'paused' || taskStatusNorm === 'stalled' || taskStatusNorm === 'failed' || taskStatusNorm === 'awaiting_user_input') {
+  if (pendingApprovals.length === 0 && (taskStatusNorm === 'needs_assistance' || taskStatusNorm === 'paused' || taskStatusNorm === 'stalled' || taskStatusNorm === 'failed' || taskStatusNorm === 'awaiting_user_input')) {
     const lastPause = [...journal].reverse().find(e => e.type === 'pause' || e.type === 'error');
     const lastStatusPush = [...journal].reverse().find(e => e.type === 'status_push' && e.content);
     const pauseMsg = escHtml((lastPause?.content || lastStatusPush?.content || 'Task paused and waiting for input.').replace(/^Task paused for assistance:\s*/i, ''));
@@ -637,20 +708,7 @@ async function bgtRefreshOpenPanel() {
   }
 
   const approvalHTML = pendingApprovals.length > 0
-    ? `<div style="display:flex;flex-direction:column;gap:10px">${pendingApprovals.map((approval) => `
-      <div style="background:#fff8e8;border:1px solid #f3c677;border-radius:12px;padding:12px 14px">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px">
-          <div style="font-size:12px;font-weight:800;color:#7c4d00">Command approval required</div>
-          <div style="font-size:10px;background:#fff1cc;color:#7c4d00;border-radius:999px;padding:2px 8px;font-weight:700">risk ${Math.round(Number(approval.riskScore || 0))}</div>
-        </div>
-        <div style="font-size:11px;color:#7c4d00;line-height:1.5;margin-bottom:8px">${escHtml(approval.action || 'Run command')}</div>
-        ${approval.reason ? `<div style="font-size:11px;color:#8a5a00;line-height:1.5;margin-bottom:8px">${escHtml(approval.reason)}</div>` : ''}
-        <pre style="margin:0 0 10px 0;padding:10px 12px;background:#1c1f26;color:#f8fafc;border-radius:10px;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${escHtml(approval.command || '')}</pre>
-        <div style="display:flex;justify-content:flex-end;gap:8px">
-          <button onclick="bgtResolveApproval('${escHtml(approval.id)}','deny')" style="border:1px solid #fca5a5;background:#fff0f0;color:#9c1a1a;border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">Reject</button>
-          <button onclick="bgtResolveApproval('${escHtml(approval.id)}','approve')" style="border:none;background:#7c4d00;color:#fff;border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer">Approve</button>
-        </div>
-      </div>`).join('')}</div>`
+    ? `<div class="chat-live-approvals">${pendingApprovals.map(renderTaskApprovalCard).join('')}</div>`
     : '';
 
   body.innerHTML = `
@@ -674,7 +732,7 @@ async function bgtRefreshOpenPanel() {
 		    ${approvalHTML}
 
         <!-- Completed/read-only recovery trail -->
-        ${!assistanceHTML ? recoveryConversationHtml : ''}
+        ${!assistanceHTML && !approvalHTML ? recoveryConversationHtml : ''}
 
 		    <!-- Stats row -->
     <div style="display:flex;gap:12px;flex-wrap:wrap">
@@ -832,18 +890,18 @@ async function bgtCreateSkillProposal(taskId) {
   }
 }
 
-async function bgtResolveApproval(approvalId, action) {
+async function bgtResolveApproval(approvalId, action, grantScope = '') {
   if (!approvalId || !action) return;
   const endpoint = action === 'approve'
     ? `/api/approvals/${approvalId}/approve`
     : `/api/approvals/${approvalId}/deny`;
   try {
-    const result = await api(endpoint, { method: 'POST' });
+    const result = await api(endpoint, { method: 'POST', body: JSON.stringify(grantScope ? { grantScope } : {}) });
     if (!result?.success) {
       showToast(result?.error || 'Could not resolve approval');
       return;
     }
-    bgtToast(action === 'approve' ? 'Command approved' : 'Command rejected', 'Task updated');
+    bgtToast(action === 'approve' ? 'Approval granted' : 'Approval rejected', grantScope ? `Permission: ${grantScope}` : 'Task updated');
     await refreshBgTasks();
     await bgtRefreshOpenPanel();
   } catch (err) {

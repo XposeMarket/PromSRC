@@ -84,7 +84,8 @@ export const writeNoteTool = {
     '(3) when the user shares something that should be tracked across sessions but is too transient for permanent memory (current project state, last edits, what was just completed). ' +
     'Do NOT call this for: casual conversation, greetings, simple questions, one-line answers, purely informational replies, or any turn where nothing actionable or session-relevant occurred. ' +
     'Ask yourself: would a colleague need to know this to pick up where we left off? If no — skip it. ' +
-    'Notes are scoped to today and auto-cleared the next day. ' +
+    'Notes are scoped to today. Brain Dream may prefill the file with temporary carry-forward context from yesterday; append live changes normally. ' +
+    'When a carried item changes, completes, becomes blocked, or is superseded, write that change so the next Thought/Dream can update or remove it. ' +
     'This is the correct tool for subagents to record notes — do NOT use memory_read, memory_browse, persona_read, or persona_update for this purpose.',
   execute: executeWriteNote,
   schema: {

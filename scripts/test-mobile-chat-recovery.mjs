@@ -115,6 +115,26 @@ assert.match(
 );
 assert.match(
   pages,
+  /const preserveActiveTurn = isDevApply && hasActiveTurn;[\s\S]{0,100}if \(!preserveActiveTurn\) _clearMobileLiveRunForSession\(sid\)/,
+  'a no-restart dev apply notification must not finalize an active mobile turn',
+);
+assert.match(
+  pages,
+  /if \(liveIndex >= 0\) __pmChat\.threads\[sid\]\.splice\(liveIndex, 0, statusMessage\)/,
+  'a dev apply status must render immediately before its continuing tool-stream turn',
+);
+assert.match(
+  pages,
+  /currentBubble\.querySelectorAll\('img\[src\]'\)[\s\S]{0,320}stableImageNodes\.set\(src, nodes\)/,
+  'streaming bubble patches must retain already-decoded image nodes',
+);
+assert.match(
+  pages,
+  /stable\.isConnected === false\) node\.replaceWith\(stable\)/,
+  'stable image nodes must be restored synchronously after a streaming repaint',
+);
+assert.match(
+  pages,
   /if \(restartSessionId === MOBILE_CHAT_SESSION_ID\) \{[\s\S]{0,320}_ensureDurableMobileVoiceSession/,
   'mobile slash restart must promote the draft to a durable session first',
 );

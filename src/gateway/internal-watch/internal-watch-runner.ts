@@ -11,6 +11,7 @@ import {
 import { getLastMainSessionId, isModelBusy, setModelBusy } from '../comms/broadcaster';
 import { findArchivedScheduledJob } from '../scheduling/schedule-archive';
 import { addPendingRuntimeSteerForSession } from '../live-runtime-registry';
+import { getApprovalQueue, serializeApprovalForClient } from '../verification-flow';
 
 type RunInteractiveTurn = (
   message: string,
@@ -109,6 +110,10 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
         status: step?.status,
         description: String(step?.description || '').slice(0, 240),
       }));
+    const pendingApprovals = getApprovalQueue().listPending()
+      .filter((approval) => String(approval.taskId || '') === task.id)
+      .slice(0, 8)
+      .map((approval) => serializeApprovalForClient(approval));
     return {
       exists: true,
       taskId: task.id,
@@ -139,6 +144,8 @@ export function observeInternalWatchTarget(watch: InternalWatch, cronScheduler?:
       lastProgressAt: task.lastProgressAt || null,
       originalRequest: String(task.originalAssignment || task.prompt || '').slice(0, 2_000),
       pendingClarificationQuestion: task.pendingClarificationQuestion || null,
+      pendingApprovalCount: pendingApprovals.length,
+      pendingApprovals,
       checkpoint: String(task.resumeContext?.onResumeInstruction || '').slice(-6_000),
       pauseSnapshot: task.pauseSnapshot ? {
         createdAt: task.pauseSnapshot.createdAt,
@@ -210,6 +217,7 @@ function hasChanged(watch: InternalWatch, obs: Observation): boolean {
   if (prev.status && obs.status && prev.status !== obs.status) return true;
   if (Number.isFinite(Number(prev.currentStepIndex)) && Number.isFinite(Number(obs.currentStepIndex)) && Number(prev.currentStepIndex) !== Number(obs.currentStepIndex)) return true;
   if (Number.isFinite(Number(prev.completedSteps)) && Number.isFinite(Number(obs.completedSteps)) && Number(prev.completedSteps) !== Number(obs.completedSteps)) return true;
+  if (Number(prev.pendingApprovalCount || 0) !== Number(obs.pendingApprovalCount || 0)) return true;
   return false;
 }
 

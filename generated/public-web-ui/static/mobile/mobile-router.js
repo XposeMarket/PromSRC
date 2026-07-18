@@ -359,6 +359,20 @@ function renderMobileBootError(err) {
 }
 
 function safeRender() {
+  const finishPrometheusOneSplash = () => {
+    const splash = document.getElementById('pm-one-splash');
+    if (!splash || splash.dataset.dismissScheduled === '1') return;
+    splash.dataset.dismissScheduled = '1';
+    if (window.__PM_ONE_SPLASH_FALLBACK) {
+      window.clearTimeout(window.__PM_ONE_SPLASH_FALLBACK);
+      window.__PM_ONE_SPLASH_FALLBACK = null;
+    }
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    window.setTimeout(() => {
+      splash.classList.add('is-leaving');
+      window.setTimeout(() => splash.remove(), reducedMotion ? 220 : 650);
+    }, reducedMotion ? 120 : 3280);
+  };
   try {
     const result = render();
     if (result && typeof result.catch === 'function') {
@@ -367,6 +381,7 @@ function safeRender() {
         renderMobileBootError(err);
       });
     }
+    finishPrometheusOneSplash();
     return true;
   } catch (err) {
     console.error('[mobile] render failed:', err);

@@ -52,6 +52,7 @@ Important current-turn boundary:
 
 - current-turn tool results are still delivered through the normal active tool-execution flow so browser DOM refs, screenshots, approval waits, and other in-flight tool mechanics keep working as before
 - the compact observation formatter affects what later turns receive as past context, plus what compaction receives as tool history
+- Brain continuity adds two volatile prompt surfaces for main interactive Prometheus: `[BRAIN_ACTIVE_CONTEXT]` is selected from non-expired Thought capsule sidecars by stable thread key, supersession, lexical/project relevance, and a character budget; `[TODAY_NOTES]` preserves the Dream-generated carry-forward section plus the recent tagged live notes. Capture on disk is not item-count capped. Injection remains bounded and temporary state explicitly requires live verification before acting.
 - future active-turn compression in `llm-primary.ts` would be a separate, more invasive change and is not part of the current implementation
 
 Rolling and token-aware compaction are owned by `chat.router.ts`:

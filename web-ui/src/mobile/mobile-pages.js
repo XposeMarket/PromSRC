@@ -2957,14 +2957,14 @@ function _clearMobileVisualStreamTimer(message) {
 
 function _flushMobileVisualStreamText(message, renderSoon = null) {
   if (!message) return;
+  const full = String(message._pmVisualStreamFull || '');
   const pending = String(message._pmVisualStreamPending || '');
-  if (!pending) {
+  if (!full && !pending) {
     _clearMobileVisualStreamTimer(message);
     return;
   }
   if (!message.body || typeof message.body !== 'object') message.body = { text: '' };
-  const previous = String(message.body.text || '');
-  const next = _appendMobileStreamingText(previous, pending);
+  const next = full || _appendMobileStreamingText(String(message.body.text || ''), pending);
   message.finalResponseStarted = true;
   message.body.text = next;
   message.content = next;
@@ -2975,25 +2975,28 @@ function _flushMobileVisualStreamText(message, renderSoon = null) {
 }
 
 function _scheduleMobileVisualStreamFlush(message, renderSoon) {
-  _flushMobileVisualStreamText(message, renderSoon);
+  if (!message || message._pmVisualStreamTimer) return;
+  // Coalesce provider-sized token bursts into calm visual frames. Re-rendering
+  // the entire Markdown tree for every token makes iOS text visibly jump.
+  message._pmVisualStreamTimer = setTimeout(() => {
+    message._pmVisualStreamTimer = 0;
+    _flushMobileVisualStreamText(message, renderSoon);
+  }, 42);
 }
 
 function _appendMobileVisualStreamToken(message, chunk, renderSoon) {
   if (!message) return;
   const text = String(chunk || '');
   if (!text) return;
-  _clearMobileVisualStreamTimer(message);
   if (!message.body || typeof message.body !== 'object') message.body = { text: '' };
   message.finalResponseStarted = true;
   const previousFull = String(message._pmVisualStreamFull || message.body.text || '');
   const nextFull = _appendMobileStreamingText(previousFull, text);
   const appended = nextFull.length >= previousFull.length ? nextFull.slice(previousFull.length) : '';
   if (!appended) return;
-  message.body.text = nextFull;
-  message.content = nextFull;
-  message._pmVisualStreamPending = '';
-  message._pmVisualStreamFull = '';
-  if (typeof renderSoon === 'function') renderSoon();
+  message._pmVisualStreamPending = _appendMobileStreamingText(String(message._pmVisualStreamPending || ''), appended);
+  message._pmVisualStreamFull = nextFull;
+  _scheduleMobileVisualStreamFlush(message, renderSoon);
 }
 
 function _finishMobileVisualStreamText(message, finalText = '', renderSoon = null) {
@@ -4259,12 +4262,22 @@ async function _applyMobileHotRestartNotification(msg = {}) {
     return;
   }
   const restartText = String(msg.text || '').trim();
-  _clearMobileLiveRunForSession(sid);
+  const isDevApply = String(msg.source || '').trim() === 'dev_apply';
+  const localBeforeRefresh = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
+  const hasActiveTurn = localBeforeRefresh.some((item) => item?.role === 'ai' && item?.streaming === true)
+    || !!__pmChat.activeRuns?.[sid]?.busy
+    || !!_readMobileActiveRun(sid);
+  // A coordinated dev_apply can publish its status while the same Prometheus
+  // turn continues using tools. It is not a restart/turn-completion boundary.
+  // Preserve that live turn so the durable status message is followed by the
+  // still-streaming tool trace, like a second Prometheus message.
+  const preserveActiveTurn = isDevApply && hasActiveTurn;
+  if (!preserveActiveTurn) _clearMobileLiveRunForSession(sid);
   const session = await loadMobileChatSession(sid).catch(() => null);
   _rememberMobileSessionGoal(session, sid);
   try { window.__pmMobileGoalChanged?.(); } catch {}
   const history = Array.isArray(session?.history) ? session.history : [];
-  const localThread = __pmChat.threads?.[sid] || [];
+  const localThread = preserveActiveTurn ? localBeforeRefresh : (__pmChat.threads?.[sid] || []);
   __pmChat.threads[sid] = _mergeMobileSessionThreadWithLocal(sid, history, localThread);
   const pendingApprovals = await loadMobileApprovals('pending').catch(() => []);
   for (const approval of Array.isArray(pendingApprovals) ? pendingApprovals : []) {
@@ -4284,14 +4297,19 @@ async function _applyMobileHotRestartNotification(msg = {}) {
     }
   }
   if (!__pmChat.threads[sid].some((item) => _mobileMessageCopyText(item) === restartText) && restartText) {
-    __pmChat.threads[sid].push({
+    const statusMessage = {
       role: 'ai',
       timestamp: Date.now(),
       time: _nowTime(),
       body: { sender: 'Prometheus', text: restartText },
       content: restartText,
       _isRestartNotification: true,
-    });
+    };
+    const liveIndex = preserveActiveTurn
+      ? __pmChat.threads[sid].findIndex((item) => item?.role === 'ai' && item?.streaming === true)
+      : -1;
+    if (liveIndex >= 0) __pmChat.threads[sid].splice(liveIndex, 0, statusMessage);
+    else __pmChat.threads[sid].push(statusMessage);
   }
   // Only take over the chat view if the user is currently viewing that session
   // or a real (non-draft) session. Never override an intentional new-chat state —
@@ -4307,7 +4325,7 @@ async function _applyMobileHotRestartNotification(msg = {}) {
   if (_isMobileChatSessionVisibleToUser(sid)) {
     markMobileChatSessionRead(sid, Date.now()).catch(() => {});
   }
-  if (restartText && __pmRealtimeAgent?.conn?.dc?.readyState === 'open') {
+  if (restartText && !preserveActiveTurn && __pmRealtimeAgent?.conn?.dc?.readyState === 'open') {
     const realtimeSid = String(__pmRealtimeAgent.conn.sessionId || __pmVoice?.targetSessionId || __pmChat.activeSessionId || '').trim();
     const shouldSpeakForSession = realtimeSid === sid || String(__pmVoice?.targetSessionId || '').trim() === sid;
     const notificationKey = String(msg.notificationId || `${sid}:${restartText.length}:${restartText.slice(0, 120)}`);
@@ -6436,7 +6454,11 @@ function _renderChatMessageHtml(m, index = -1) {
   }
   if (b.text) {
     const liveVoiceHtml = _renderMobileRealtimeVoiceAssistantText(m);
-    inner += liveVoiceHtml || `<div class="markdown-body">${_renderMobileMarkdown(_normalizeMobileTraceProseText(b.text), m)}</div>`;
+    // Final-answer text is already authored Markdown. Do not run it through the
+    // trace-prose normalizer: that collapses intentional newlines and turns
+    // headings/lists into strings such as `text### Heading` while streaming.
+    const answerStreaming = m.streaming === true && m._pmFinalReceived !== true;
+    inner += liveVoiceHtml || `<div class="markdown-body pm-final-answer${answerStreaming ? ' pm-final-answer--streaming' : ' pm-final-answer--complete'}">${_renderMobileMarkdown(b.text, m)}</div>`;
     // rendered above with the shared desktop Markdown renderer
   }
   if (false && b.text)   inner += escapeHtml(b.text).replace(/\n/g, '<br>');
@@ -7322,6 +7344,7 @@ function _patchMobileThreadMessage(threadEl, message, index) {
     const closedTraceGroups = new Set();
     const openTerminals = {};
     const stableVisionPreviews = {};
+    const stableImageNodes = new Map();
     const stableTraceSummaryLabels = {};
     let stablePendingImageBatch = null;
     let stableThinkingDots = null;
@@ -7331,6 +7354,17 @@ function _patchMobileThreadMessage(threadEl, message, index) {
       currentEl.querySelectorAll('[data-pm-live-vision-preview]').forEach((node) => {
         const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
         if (key) stableVisionPreviews[key] = node;
+      });
+      // Streaming trace updates rebuild the bubble frequently. Retain every
+      // already-decoded image node (generated media, presented files, and
+      // attachments) so iOS does not flash an empty frame while decoding the
+      // exact same source again after each tool event.
+      currentBubble.querySelectorAll('img[src]').forEach((node) => {
+        const src = String(node.getAttribute('src') || '').trim();
+        if (!src) return;
+        const nodes = stableImageNodes.get(src) || [];
+        nodes.push(node);
+        stableImageNodes.set(src, nodes);
       });
       currentEl.querySelectorAll('.pm-trace-tool-summary strong[data-pm-trace-summary-key]').forEach((node) => {
         const groupKey = node.closest('details.pm-trace-tool-group')?.getAttribute('data-pm-trace-group') || '';
@@ -7375,6 +7409,11 @@ function _patchMobileThreadMessage(threadEl, message, index) {
         const key = String(node.getAttribute('data-pm-live-vision-preview') || '').trim();
         const stable = key ? stableVisionPreviews[key] : null;
         if (stable && stable !== node) node.replaceWith(stable);
+      });
+      currentBubble.querySelectorAll('img[src]').forEach((node) => {
+        const src = String(node.getAttribute('src') || '').trim();
+        const stable = src ? stableImageNodes.get(src)?.shift() : null;
+        if (stable && stable !== node && stable.isConnected === false) node.replaceWith(stable);
       });
       currentBubble.querySelectorAll('.pm-trace-tool-summary strong[data-pm-trace-summary-key]').forEach((node) => {
         const groupKey = node.closest('details.pm-trace-tool-group')?.getAttribute('data-pm-trace-group') || '';
@@ -10632,8 +10671,13 @@ void main() {
     updateChatComposerSpace();
   }
 
+  let chatComposerSpaceRaf = 0;
+  let chatComposerShiftAnimation = null;
+
   function updateChatComposerSpace() {
-    requestAnimationFrame(() => {
+    if (chatComposerSpaceRaf) cancelAnimationFrame(chatComposerSpaceRaf);
+    chatComposerSpaceRaf = requestAnimationFrame(() => {
+      chatComposerSpaceRaf = 0;
       if (!body || !form) return;
       const scrollSnapshot = _mobileChatScrollSnapshot(body);
       const previousSpace = Math.max(0, Number.parseFloat(body.style.getPropertyValue('--pm-chat-composer-space')) || 170);
@@ -10684,12 +10728,30 @@ void main() {
       void body.scrollHeight;
       _restoreMobileChatScroll(body, scrollSnapshot);
       const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
-      const shift = Math.max(-52, Math.min(52, space - previousSpace));
+      const shift = Math.max(-64, Math.min(64, space - previousSpace));
       if (!reduceMotion && Math.abs(shift) >= 2 && typeof threadEl?.animate === 'function') {
-        threadEl.animate(
-          [{ transform: `translateY(${shift}px)` }, { transform: 'translateY(0)' }],
-          { duration: 230, easing: 'cubic-bezier(.22,.72,.26,1)' },
+        // ResizeObserver can fire on several consecutive frames while the
+        // composer or a runtime card grows. Continue from the current visual
+        // offset instead of restarting from zero on every measurement.
+        let currentOffset = 0;
+        try {
+          const matrix = new DOMMatrixReadOnly(getComputedStyle(threadEl).transform);
+          currentOffset = Number.isFinite(matrix.m42) ? matrix.m42 : 0;
+        } catch {}
+        chatComposerShiftAnimation?.cancel?.();
+        chatComposerShiftAnimation = threadEl.animate(
+          [
+            { transform: `translate3d(0, ${currentOffset + shift}px, 0)` },
+            { transform: 'translate3d(0, 0, 0)' },
+          ],
+          { duration: 300, easing: 'cubic-bezier(.22,.74,.22,1)', fill: 'none' },
         );
+        chatComposerShiftAnimation.addEventListener?.('finish', () => {
+          chatComposerShiftAnimation = null;
+        }, { once: true });
+      } else if (reduceMotion) {
+        chatComposerShiftAnimation?.cancel?.();
+        chatComposerShiftAnimation = null;
       }
     });
   }

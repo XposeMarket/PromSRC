@@ -19,6 +19,8 @@ import { BackgroundTaskRunner } from './background-task-runner';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { type TaskControlResponse } from '../tool-builder';
 import { addPendingRuntimeSteerForTask } from '../live-runtime-registry';
+import { resolveApprovalDecision } from '../approval-actions';
+import { getApprovalQueue, serializeApprovalForClient } from '../verification-flow';
 import {
   buildTaskPauseSnapshot,
   formatTaskPauseSnapshot,
@@ -751,6 +753,80 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       tasks: summarized,
       scheduled_jobs: scheduledJobs,
       message: totalMsg ? `Found ${totalMsg}.` : 'No background tasks or scheduled jobs found.',
+    };
+  }
+
+  if (action === 'list_approvals') {
+    if (!taskId) return { success: false, action, code: 'missing_task_id', message: 'task_control(list_approvals) requires task_id.' };
+    const task = loadTask(taskId);
+    if (!task) return { success: false, action, code: 'not_found', message: `Task not found: ${taskId}` };
+    const approvals = getApprovalQueue().listPending()
+      .filter((approval) => String(approval.taskId || '') === task.id)
+      .map(serializeApprovalForClient);
+    return {
+      success: true,
+      action,
+      task: summarizeTaskRecord(task),
+      approvals,
+      message: approvals.length === 1
+        ? `Task "${task.title}" has 1 pending approval.`
+        : `Task "${task.title}" has ${approvals.length} pending approvals.`,
+    };
+  }
+
+  if (action === 'resolve_approval') {
+    if (!taskId) return { success: false, action, code: 'missing_task_id', message: 'task_control(resolve_approval) requires task_id.' };
+    const approvalId = String(args?.approval_id || args?.approvalId || '').trim();
+    if (!approvalId) return { success: false, action, code: 'missing_approval_id', message: 'task_control(resolve_approval) requires approval_id.' };
+    if (args?.user_authorized !== true) {
+      return {
+        success: false,
+        action,
+        code: 'explicit_user_authorization_required',
+        message: 'Set user_authorized=true only after the user explicitly told Prometheus to approve or reject this task approval in the current conversation.',
+      };
+    }
+    if (/^(task_|task_recovery_|task_resume_brief_|subagent_|run_once_|cron_|schedule_|auto_|team_dispatch_|team_member_room_|team_coord_|proposal_|code_exec|background_)/i.test(String(sessionId || ''))) {
+      return { success: false, action, code: 'task_cannot_self_approve', message: 'A task/subagent session cannot resolve task approvals. The user-facing Prometheus session must do it.' };
+    }
+    const task = loadTask(taskId);
+    if (!task) return { success: false, action, code: 'not_found', message: `Task not found: ${taskId}` };
+    const approval = getApprovalQueue().get(approvalId);
+    if (!approval || String(approval.taskId || '') !== task.id) {
+      return { success: false, action, code: 'approval_not_linked', message: `Approval ${approvalId} is not linked to task ${task.id}.` };
+    }
+    const rawDecision = String(args?.decision || '').trim().toLowerCase();
+    const decision = rawDecision === 'approve' || rawDecision === 'approved'
+      ? 'approved'
+      : rawDecision === 'reject' || rawDecision === 'rejected' || rawDecision === 'deny' || rawDecision === 'denied'
+        ? 'rejected'
+        : '';
+    if (!decision) return { success: false, action, code: 'invalid_decision', message: 'decision must be approve or reject.' };
+    const rawScope = String(args?.grant_scope || args?.grantScope || 'once').trim().toLowerCase();
+    if (!['once', 'session', 'always'].includes(rawScope)) {
+      return { success: false, action, code: 'invalid_grant_scope', message: 'grant_scope must be once, session, or always.' };
+    }
+    const resolved = resolveApprovalDecision({
+      approvalId,
+      decision,
+      resolvedBy: `prometheus:${sessionId}`,
+      grantScope: rawScope === 'once' ? '' : rawScope as 'session' | 'always',
+    });
+    if (!resolved.success) {
+      return { success: false, action, code: 'approval_resolution_failed', message: resolved.error || 'Could not resolve approval.' };
+    }
+    appendJournal(task.id, {
+      type: decision === 'approved' ? 'resume' : 'status_push',
+      content: `Task approval ${approvalId} ${decision} by Prometheus after explicit user authorization.`,
+    });
+    broadcastWS({ type: 'task_panel_update', taskId: task.id });
+    return {
+      success: true,
+      action,
+      decision,
+      approval: resolved.approval ? serializeApprovalForClient(resolved.approval) : null,
+      task: summarizeTaskRecord(loadTask(task.id) || task),
+      message: `${decision === 'approved' ? 'Approved' : 'Rejected'} task approval ${approvalId}.`,
     };
   }
 

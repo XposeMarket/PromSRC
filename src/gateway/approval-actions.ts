@@ -9,6 +9,7 @@ import {
 } from './dev-source-approvals';
 import { addPersistentAllowedPath, addSessionAllowedPath } from './path-permissions';
 import { getApprovalQueue, type ApprovalRecord } from './verification-flow';
+import { appendJournal, loadTask, updateResumeContext, updateTaskStatus } from './tasks/task-store';
 
 export interface ResolveApprovalDecisionInput {
   approvalId: string;
@@ -175,6 +176,32 @@ export function resolveApprovalDecision(input: ResolveApprovalDecisionInput): Re
     }
   }
 
+  if (approval.taskId && !hadLiveWaiter) {
+    const task = loadTask(approval.taskId);
+    if (task && !['complete', 'failed'].includes(String(task.status || ''))) {
+      const taskResumePrompt = resumePrompt || (decision === 'approved'
+        ? `Task approval "${approval.id}" was approved. Continue the interrupted task from its saved checkpoint without recreating the approval.`
+        : `Task approval "${approval.id}" was rejected. Continue the interrupted task from its saved checkpoint, do not perform the rejected action, and choose a safe alternative or explain the blocker.`);
+      const messages = Array.isArray(task.resumeContext?.messages) ? task.resumeContext.messages : [];
+      updateResumeContext(task.id, {
+        messages: [
+          ...messages,
+          { role: 'user', content: `[TASK APPROVAL RESOLVED]\n${taskResumePrompt}`, timestamp: Date.now() },
+        ].slice(-80),
+      });
+      updateTaskStatus(task.id, 'queued', { pauseReason: undefined });
+      appendJournal(task.id, {
+        type: decision === 'approved' ? 'resume' : 'status_push',
+        content: `Detached task approval ${approval.id} ${decision}; queued the same task from its checkpoint.`,
+      });
+      import('./tasks/task-router').then(({ launchBackgroundTaskRunner }) => {
+        launchBackgroundTaskRunner(task.id);
+      }).catch((err: any) => {
+        console.warn('[approvals] Could not relaunch task after detached approval:', err?.message || err);
+      });
+    }
+  }
+
   import('../security/log-scrubber').then(({ log }) => {
     log.security('[approvals]', decision.toUpperCase(), 'approval-id:', approvalId, 'action:', approval.action);
   }).catch(() => {});
@@ -184,6 +211,7 @@ export function resolveApprovalDecision(input: ResolveApprovalDecisionInput): Re
     broadcastWS({
       type: decision === 'approved' ? 'approval_approved' : 'approval_denied',
       sessionId: approval.sessionId,
+      taskId: approval.taskId,
       approvalId: approval.id,
       approval: resolved,
       resumePrompt: resumePrompt || undefined,

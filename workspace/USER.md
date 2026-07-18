@@ -38,3 +38,4 @@
 - Spends most time coding; built Prometheus to act as a real assistant and cut manual coding/admin. [2026-04-10]
 - Intent (2026-04-11): standing teams for Xpose website rebuild, Xpose lead gen, and nightly code bug-hunt — confirm current setup in MEMORY/automation if needed.
 - Voice preference: Cedar sounded most normal; prefers a deeper Prometheus/myth tone if available. [2026-05-16]
+- Wants Prom to help track DoorDash income, active vs total time, gas/fuel use, mileage, and discretionary spending so earnings can compound into retained cash. User plans to share ongoing income stats for lightweight running ledger and practical optimization. [2026-07-18]

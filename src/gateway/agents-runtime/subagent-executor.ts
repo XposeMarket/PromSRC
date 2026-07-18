@@ -20294,6 +20294,23 @@ export async function executeTool(name: string, args: any, workspacePath: string
           const activeTaskId = String(activeTask?.id || '').trim() || undefined;
           const approvalOrigin = inferApprovalOrigin(sessionId, activeTask, args);
           const action = `Allow Prometheus dev source edits to: ${scope.allowedFiles.join(', ')}; workspace self docs: ${scope.allowedDirs.join(', ')}`;
+          if (activeTaskId) {
+            updateTaskStatus(activeTaskId, 'needs_assistance', { pauseReason: 'awaiting_approval' });
+            appendJournal(activeTaskId, {
+              type: 'pause',
+              content: `Waiting for dev source edit approval: ${action.slice(0, 220)}`,
+            });
+            try {
+              deps.broadcastWS({
+                type: 'task_needs_assistance',
+                taskId: activeTaskId,
+                title: activeTask?.title,
+                reason: 'Dev source edit approval required',
+                detail: action,
+              });
+              deps.broadcastWS({ type: 'task_panel_update', taskId: activeTaskId });
+            } catch {}
+          }
           const approval = approvalQueue.create({
             sessionId,
             taskId: activeTaskId,
@@ -20428,6 +20445,17 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
           const approved = waitResult as boolean;
           try {
+            if (activeTaskId) {
+              updateTaskStatus(activeTaskId, 'running', { pauseReason: undefined });
+              appendJournal(activeTaskId, {
+                type: approved ? 'resume' : 'status_push',
+                content: approved
+                  ? `Dev source edit approved: ${action.slice(0, 220)}`
+                  : `Dev source edit rejected: ${action.slice(0, 220)}`,
+              });
+              deps.broadcastWS({ type: 'task_running', taskId: activeTaskId, title: activeTask?.title });
+              deps.broadcastWS({ type: 'task_panel_update', taskId: activeTaskId });
+            }
             deps.broadcastWS({
               type: approved ? 'approval_approved' : 'approval_denied',
               sessionId,
@@ -20563,6 +20591,19 @@ export async function executeTool(name: string, args: any, workspacePath: string
           }
           if (existing.status !== 'pending') {
             const isApproved = existing.status === 'approved';
+            const resolvedTask = resolveTaskForSession(sessionId);
+            const resolvedTaskId = String(resolvedTask?.id || '').trim() || undefined;
+            if (resolvedTaskId) {
+              updateTaskStatus(resolvedTaskId, 'running', { pauseReason: undefined });
+              appendJournal(resolvedTaskId, {
+                type: isApproved ? 'resume' : 'status_push',
+                content: `Dev source edit approval ${approvalId} was already ${existing.status}.`,
+              });
+              try {
+                deps.broadcastWS({ type: 'task_running', taskId: resolvedTaskId, title: resolvedTask?.title });
+                deps.broadcastWS({ type: 'task_panel_update', taskId: resolvedTaskId });
+              } catch {}
+            }
             if (isApproved) {
               const existingGrant = getDevSourceEditGrant(sessionId);
               if (!existingGrant) {
@@ -20647,9 +20688,23 @@ export async function executeTool(name: string, args: any, workspacePath: string
 
           const approved2 = waitResult2 as boolean;
           try {
+            const activeTask2 = resolveTaskForSession(sessionId);
+            const activeTaskId2 = String(activeTask2?.id || '').trim() || undefined;
+            if (activeTaskId2) {
+              updateTaskStatus(activeTaskId2, 'running', { pauseReason: undefined });
+              appendJournal(activeTaskId2, {
+                type: approved2 ? 'resume' : 'status_push',
+                content: approved2
+                  ? `Dev source edit approval ${approvalId} approved.`
+                  : `Dev source edit approval ${approvalId} rejected.`,
+              });
+              deps.broadcastWS({ type: 'task_running', taskId: activeTaskId2, title: activeTask2?.title });
+              deps.broadcastWS({ type: 'task_panel_update', taskId: activeTaskId2 });
+            }
             deps.broadcastWS({
               type: approved2 ? 'approval_approved' : 'approval_denied',
               sessionId,
+              taskId: activeTaskId2,
               approvalId,
               approval: serializeApprovalForClient(existing),
             });

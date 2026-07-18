@@ -273,6 +273,9 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/assets/Prometheus.png">
 <link rel="icon" type="image/png" sizes="512x512" href="/assets/Prometheus.png">
 <link rel="shortcut icon" href="/assets/Prometheus.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&display=swap" rel="stylesheet">
 <script>
   (() => {
     const params = new URLSearchParams(window.location.search || '');
@@ -290,6 +293,41 @@
 </head>
 <body class="auth-pending">
 <canvas id="ember-canvas" aria-hidden="true"></canvas>
+<div id="pm-one-splash" class="pm-one-splash" role="status" aria-label="Prometheus One is starting" hidden>
+  <div class="pm-one-starfield pm-one-starfield-far" aria-hidden="true"></div>
+  <div class="pm-one-starfield pm-one-starfield-near" aria-hidden="true"></div>
+  <div class="pm-one-center-blackout" aria-hidden="true"></div>
+  <svg class="pm-one-constellations" viewBox="0 0 390 844" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <defs>
+      <filter id="pm-one-star-glow" x="-250%" y="-250%" width="600%" height="600%"><feGaussianBlur stdDeviation="1.8" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    </defs>
+    <g class="pm-one-constellation-lines">
+      <path d="M-18 126 54 92l48 55 66-20 42 58 61-27 45 52 89-19" />
+      <path d="M18 294 73 252l65 38 47-76 53 35 74-40 52 33" />
+      <path d="M-12 520 57 481l61 44 53-62 66 43 62-52 96 28" />
+      <path d="M21 705 84 662l47 31 57-65 72 43 48-36 91 50" />
+      <path d="M43 43 69 92 38 157 73 252 57 327" />
+      <path d="M339 34 316 98l49 93-53 18 52 78" />
+      <path d="M57 481 29 410l58-48 31-72" />
+      <path d="M299 454 349 390l-18-61 33-42" />
+      <path d="M84 662 52 599l66-74" />
+      <path d="M308 635 299 570l50-88" />
+    </g>
+    <g class="pm-one-constellation-stars">
+      <circle cx="54" cy="92" r="1.8"/><circle cx="102" cy="147" r="1.2"/><circle cx="168" cy="127" r="1.5"/><circle cx="210" cy="185" r="1.1"/><circle cx="271" cy="158" r="1.7"/><circle cx="316" cy="210" r="1.1"/>
+      <circle cx="73" cy="252" r="1.4"/><circle cx="138" cy="290" r="1.1"/><circle cx="185" cy="214" r="1.7"/><circle cx="238" cy="249" r="1.2"/><circle cx="312" cy="209" r="1.5"/><circle cx="364" cy="242" r="1.1"/>
+      <circle cx="57" cy="481" r="1.7"/><circle cx="118" cy="525" r="1.1"/><circle cx="171" cy="463" r="1.4"/><circle cx="237" cy="506" r="1.1"/><circle cx="299" cy="454" r="1.7"/><circle cx="349" cy="482" r="1.2"/>
+      <circle cx="84" cy="662" r="1.6"/><circle cx="131" cy="693" r="1.1"/><circle cx="188" cy="628" r="1.7"/><circle cx="260" cy="671" r="1.1"/><circle cx="308" cy="635" r="1.4"/>
+      <circle class="is-bright" cx="339" cy="98" r="2.1"/><circle class="is-bright" cx="29" cy="410" r="1.8"/><circle class="is-bright" cx="349" cy="390" r="1.8"/>
+    </g>
+  </svg>
+  <div class="pm-one-brand">
+    <div class="pm-one-mark-wrap" aria-hidden="true">
+      <img class="pm-one-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=3" alt="" decoding="sync" fetchpriority="high" />
+    </div>
+    <div class="pm-one-title" aria-label="Prometheus One">Prometheus One</div>
+  </div>
+</div>
 <div id="mobile-root" hidden></div>
 <script>
   (() => {
@@ -304,11 +342,20 @@
         document.body.classList.add('pm-mobile-active');
         document.body.classList.add('pm-mobile-document-scroll');
         document.body.classList.remove('auth-pending');
+        const oneSplash = document.getElementById('pm-one-splash');
+        if (oneSplash) {
+          oneSplash.hidden = false;
+          requestAnimationFrame(() => oneSplash.classList.add('is-running'));
+          window.__PM_ONE_SPLASH_FALLBACK = window.setTimeout(() => {
+            oneSplash.classList.add('is-leaving');
+            window.setTimeout(() => oneSplash.remove(), 650);
+          }, 4300);
+        }
         const mobileCssTag = document.querySelector('link[href*="src/styles/mobile.css"]');
         if (!mobileCssTag) {
           const cssTag = document.createElement('link');
           cssTag.rel = 'stylesheet';
-          cssTag.href = 'src/styles/mobile.css?v=goal-restart-continuity-v15';
+          cssTag.href = 'src/styles/mobile.css?v=prometheus-one-splash-v6';
           cssTag.dataset.promMobileStyle = '1';
           document.head.appendChild(cssTag);
         }
@@ -321,6 +368,17 @@
 </script>
 
 <style>
+  /* First-paint guard: keeps the mobile launch frame black before mobile.css arrives. */
+  body.pm-mobile-active { background: #000 !important; }
+  body.pm-mobile-active #pm-one-splash:not([hidden]) {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background: #000;
+  }
   #ember-canvas {
     position: fixed;
     inset: 0;

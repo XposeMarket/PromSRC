@@ -163,3 +163,48 @@ _Related task: 16d3d854-7446-46d5-8f6d-50d4056760ea_
 _Source: Subagent; session: task_16d3d854-7446-46d5-8f6d-50d4056760ea; task: 16d3d854-7446-46d5-8f6d-50d4056760ea; title: [Subagent] Gaming Engineer; profile: gaming_engineer_mrp3mtdz_
 Figure 8 Drift Vita task: preserved existing workspace edits and recorded known-good VPK metadata (833,830 bytes / 34df…f96). Edited games/figure-8-drift-vita/src/main.cpp: added compact east-edge airport static geometry (runway, threshold bars, taxiway/apron, terminal/hangar, tower, runway-light points); added fixed-state low-poly aircraft with enter/exit flow, throttle, yaw/pitch/roll, takeoff, aerobatic-capable attitude, ground/crash health damage, six-second respawn, aircraft camera/HUD; corrected all four highway ramp endpoints to merge at the nearest deck lane rather than crossing beneath the near lane. Native MSYS2/VitaSDK build completed and generated build-v04/figure8_vita.vpk, 836,647 bytes, SHA-256 0e6d43298d9e29c71b41f2f26f5c886dc977bebd56b915471bc5c6f999cebcb9. Tests: node --test pc-bridge/protocol.test.mjs 4/4 pass; python tools/check_city_layout.py passed; generated city-topdown-airport.png, city-overview-airport.png, city-underpass-rampfix.png. No FTP/upload. Important risk: rear mirror code was removed from the final render path after render-state integration placement was unstable; it is NOT delivered/functionally verified. Build had non-fatal misleading-indentation warnings in airport/plane immediate-mode statements. Hardware smoke needed for airport route/plane handling/ramp approach and performance.
 _Related task: 16d3d854-7446-46d5-8f6d-50d4056760ea_
+
+### [TASK_COMPLETE] 2026-07-17T19:14:04.389Z
+_Source: Mobile chat session; session: mobile_mrp4thiv_bvzqoc; origin: Mobile app_
+Uploaded Dante/Gaming Engineer's latest Figure 8 Drift Vita airport + plane + corrected highway ramps build from `games/figure-8-drift-vita/build-v04/figure8_vita.vpk` to VitaShell FTP `10.0.0.231:1337` at `ux0:/downloads/figure8_vita.vpk`. Downloaded it back and verified exact byte match: 836,647 bytes, SHA-256 `0e6d43298d9e29c71b41f2f26f5c886dc977bebd56b915471bc5c6f999cebcb9`. Rear-view mirror is not included in this build; physical Vita performance/handling test remains.
+_Related task: 16d3d854-7446-46d5-8f6d-50d4056760ea_
+
+### [DEV_EDIT_COMPLETE] 2026-07-17T19:44:04.365Z
+_Source: Mobile chat session; session: mobile_mrpbrcsg_d2b1s3; origin: Mobile app_
+Prometheus One mobile rebrand started. Generated and presented a portrait splash preview using official HQ P1 logo + constellation references, saved under outputs/prometheus-one-mobile-splash-preview/. Implemented live mobile startup sequence via dev edit dev_edit_mrpcc10w_5617edf2 in web-ui/index.html, web-ui/src/styles/mobile.css, and web-ui/src/mobile/mobile-router.js: black first frame, constellation fade, P1 SVG reveal, Cinzel 600 “Prometheus One” reveal, reduced-motion handling, success dismissal + fallback. Updated self/16-mobile-app.md. Syntax and npm run sync:web-ui passed; apply_live batch dev_batch_mrpciv67_8d6966e6 succeeded. Automated mobile smoke worker crashed once before body selection, so manual live browser visual smoke remains.
+
+### [DEV_EDIT_COMPLETE] 2026-07-17T19:58:54.072Z
+_Source: Mobile chat session; session: mobile_mrpcou9e_6lboct_
+Corrected Prometheus One mobile splash after Raul rejected the first pass. Replaced inaccurate reconstructed SVG with official HQ P1 logo at web-ui/src/assets/prometheus-one/p1-logo.png; added layered far/near gold particle fields, glowing/twinkling constellation nodes, restrained connecting lines, centered entrance, Cinzel SemiBold gradient title, and one-pass metallic shimmer; lengthened successful-render dismissal to 3.28s and fallback to 4.3s. Updated self/16-mobile-app.md. npm run sync:web-ui + check passed; dev edit dev_edit_mrpctpeb_4c0264d3 applied live in batch dev_batch_mrpd1y6m_c2a292d1. Automated mobile smoke target crashed independently, so Raul should cold-load on phone for final visual judgment.
+
+### [TASK] 2026-07-17T20:03:56.310Z
+_Source: Mobile chat session; session: mobile_mrpcou9e_6lboct; origin: Mobile app_
+Generated a clean standalone Prometheus One P1 + gold ring + upper-right star asset from Raul's mobile screenshot, with all lower text/tagline and constellation UI removed. Saved at outputs/prometheus-one/brand-assets/openai_codex_2026-07-17T20-02-50-182Z_Edit_reconstruct_the_central_logo_from_the_suppl/openai_codex_2026-07-17T20-03-46-677Z_Edit_reconstruct_the_central_logo_from_the.png. This is a black-background splash asset, 1254x1254, gpt-image-2-medium.
+
+### [DEBUG] 2026-07-17T20:05:43.920Z
+_Source: Mobile chat session; session: mobile_mrpcou9e_6lboct_
+Imagegen tool issue and correction recorded. Direct media_generate routes using provider=openai and provider=xai failed because the runtime requested unsupported partial-image streaming; switching foreground/background did not help. provider=openai_codex succeeded, but it requires all references to be inside workspace, so the uploaded workspace screenshot was used after the live web-ui logo path was rejected. Generated asset was visually validated: only P1, one ring, upper-right star, no lower text/tagline/UI/constellations; uncropped and suitable for splash, though fine metallic details may soften when small. Updated imagegen skill with references/provider-recovery.md documenting the verified fallback and validation flow.
+
+### [DEV_EDIT_COMPLETE] 2026-07-17T20:23:57.021Z
+_Source: Mobile chat session; session: mobile_mrpcou9e_6lboct; origin: Mobile app_
+Prometheus One mobile splash circular-border fix completed under dev_edit_mrpduxya_74eeb2cd. In web-ui/src/styles/mobile.css, removed aspect-ratio:1, object-fit:cover, border-radius:50%, and mix-blend-mode:screen from .pm-one-mark; now uses auto height, contain sizing, square/uncropped rendering, and normal compositing so the generated image's black field blends with the black splash. Bumped p1-mark-ring.png to v2, mobile splash CSS to v4, and service worker to pm-v165. webui_sync_check passed and batch dev_batch_mrpdy7gl_730e2fdc applied live. One transient Windows EPERM lock on generated/public-web-ui/vendor/mermaid/mermaid.min.js cleared on reverify/retry.
+
+### [DEV_EDIT_COMPLETE] 2026-07-17T20:37:53.533Z
+_Source: Mobile chat session; session: mobile_mrpcou9e_6lboct; origin: Mobile app_
+Fixed Prometheus One mobile splash under dev_edit_mrpe7od6_57f5b52f. Raul's screenshots IMG_6968/6969 showed the generated P1 asset as a large opaque white rectangle and constellations running through the intended black center. Converted the generated black-background P1+ring image to a real RGBA transparent PNG, added a centered feathered black exclusion layer above all particle/constellation layers, bumped image/CSS/service-worker cache versions, synced web UI successfully, and applied live in coordinated batch dev_batch_mrpefz0a_f730362e.
+
+### [DEV_EDIT_COMPLETE] 2026-07-17T21:09:51.646Z
+_Source: Mobile chat session; session: mobile_mrpcou9e_6lboct; origin: Mobile app_
+Closed the coordinated handoff for Prometheus One splash dev edit dev_edit_mrpe7od6_57f5b52f after npm run sync:web-ui succeeded, clearing the completed batch so the follow-up title-time white repaint fix can proceed.
+
+### [DEV_EDIT_COMPLETE] 2026-07-17T21:16:57.311Z
+_Source: Mobile chat session; session: mobile_mrpcou9e_6lboct; origin: Mobile app_
+Fixed Prometheus One mobile splash title-time white repaint via independent supervised dev edit dev_edit_mrpfpueq_c7f1209b. The transparent P1 mark is now isolated from the title animation/compositing in a wrapper; coordinated batch dev_batch_mrpftdq6_3f671ecc applied successfully and shared web UI is live.
+
+### [DEV_EDIT_COMPLETE] 2026-07-17T21:17:28.619Z
+_Source: Main chat session; session: prom_c55543af-5aff-4fd1-b154-8f1bc04b7d7a; origin: Prometheus managed thread_
+Prometheus One wrapper-compositor fix completed under dev_edit_mrpfpueq_c7f1209b. Patched web-ui/index.html with .pm-one-mark-wrap, moved entrance opacity/transform/filter animation to the isolated wrapper in web-ui/src/styles/mobile.css, kept the transparent image on a stable translateZ(0)/backface-hidden layer, bumped CSS query to v6 and service worker to pm-v167. Updated self/16-mobile-app.md. webui_sync_check passed; apply_live completed in coordinated batch dev_batch_mrpftdq6_3f671ecc. Live route http://127.0.0.1:18789/?source=pwa#mobile/chat visually showed P1 and Prometheus One together during the shimmer stage, then transitioned into mobile chat; console had no error/warning entries (only verbose password-form notices and install-banner info).
+
+### [DEV_EDIT_COMPLETE] 2026-07-17T21:24:03.640Z
+_Source: Main chat session; session: prom_c55543af-5aff-4fd1-b154-8f1bc04b7d7a_
+Completed final Prometheus One mobile splash behavior evidence. Fresh cold-load at http://127.0.0.1:18789/#mobile/chat produced a title-visible frame showing the transparent gold P1 fully visible with its interior/center remaining black. Delivered screenshot to origin. No further source edits were needed.

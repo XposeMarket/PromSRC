@@ -47,6 +47,11 @@
       "path": "references/asset-workflows.md",
       "type": "doc",
       "description": "Project asset storage, Creative registration, provenance, transparency validation, and delivery guidance."
+    },
+    {
+      "path": "references/provider-recovery.md",
+      "type": "reference",
+      "description": "Known provider fallback, workspace reference-path constraints, and validation steps for one-shot image generation failures."
     }
   ],
   "implicitInvocation": true,

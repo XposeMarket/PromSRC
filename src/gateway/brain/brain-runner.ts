@@ -47,6 +47,11 @@ import {
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
 import type { SkillsManager } from '../skills-runtime/skills-manager';
 import { runSkillCurator } from '../skills-runtime/skill-curator';
+import {
+  applyCarryForwardToIntradayFile,
+  parseBrainCarryForwardDecision,
+  parseBrainThoughtCapsules,
+} from './brain-continuity.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -57,6 +62,12 @@ const DREAM_HOUR           = 23;                    // local hour for dream elig
 const DREAM_MIN            = 30;                    // local minute for dream eligibility
 const DREAM_BUFFER_MIN     = 90;                    // don't start thought if dream is ≤90 min away
 const DREAM_CLEANUP_DELAY_MS = 30 * 60 * 1000;      // run the memory solidifier 30m after dream success
+
+function nextDateKey(dateStr: string): string {
+  const parsed = new Date(`${dateStr}T12:00:00.000Z`);
+  parsed.setUTCDate(parsed.getUTCDate() + 1);
+  return parsed.toISOString().slice(0, 10);
+}
 // Failed model-backed runs used to retry every 30-60 minutes. When an artifact
 // integrity check kept failing, that turned the 15-minute ticker into a costly
 // retry storm. Successful runs retain their normal cadence; only failures back
@@ -837,9 +848,11 @@ export class BrainRunner {
 	    const outFile = `thoughts/${dateStr}/${windowLabel}-thought.md`;
 	    const absOutFile = path.join(getBrainDir(), outFile);
 	    const workspaceOutFile = path.join('Brain', outFile).replace(/\\/g, '/');
+      const capsuleFile = path.posix.join('Brain', 'context-capsules', dateStr, `${windowLabel}-capsules.json`);
+      const absCapsuleFile = path.join(this.deps.workspacePath, capsuleFile);
 	    const prompt = this._buildThoughtPromptV2({
 	      windowStart, windowEnd, dateStr, windowLabel,
-	      thoughtNumber, outFile: absOutFile,
+	      thoughtNumber, outFile: absOutFile, capsuleFile,
 	    });
 
     const sendSSE = (event: string, data: any) => {
@@ -861,9 +874,9 @@ export class BrainRunner {
         const businessCandidatesFile = path.posix.join('Brain', 'business-candidates', dateStr, 'candidates.jsonl');
         const activeWorkFile = path.posix.join('Brain', 'active-work.jsonl');
         setSessionMutationScope(sessionId, {
-	        allowedFiles: [workspaceOutFile, businessCandidatesFile, activeWorkFile],
-	        allowedDirs: [path.posix.dirname(workspaceOutFile), path.posix.dirname(businessCandidatesFile)],
-	      });
+          allowedFiles: [workspaceOutFile, capsuleFile, businessCandidatesFile, activeWorkFile],
+          allowedDirs: [path.posix.dirname(workspaceOutFile), path.posix.dirname(capsuleFile), path.posix.dirname(businessCandidatesFile)],
+        });
 	      const result = await this.deps.handleChat(
 	        prompt,
 	        sessionId,
@@ -969,7 +982,27 @@ export class BrainRunner {
       }
     }
     const fileLooksFresh = artifactFresh();
-    const success = fileLooksFresh && !runFailed;
+    let capsuleArtifactValid = false;
+    try {
+      if (fs.existsSync(absCapsuleFile)) {
+        const stat = fs.statSync(absCapsuleFile);
+        const rawCapsules = fs.readFileSync(absCapsuleFile, 'utf-8');
+        const parsedRaw = JSON.parse(rawCapsules);
+        capsuleArtifactValid = stat.mtimeMs >= (runStartedAt - 5000)
+          && Array.isArray(parsedRaw)
+          && parseBrainThoughtCapsules(rawCapsules).length === parsedRaw.length;
+      }
+      // An empty array is a valid quiet-window result. Recover only the missing
+      // sidecar, never manufacture capsules from prose.
+      if (!capsuleArtifactValid && fileLooksFresh && !runFailed) {
+        fs.mkdirSync(path.dirname(absCapsuleFile), { recursive: true });
+        fs.writeFileSync(absCapsuleFile, '[]\n', 'utf-8');
+        capsuleArtifactValid = true;
+      }
+    } catch {
+      capsuleArtifactValid = false;
+    }
+    const success = fileLooksFresh && capsuleArtifactValid && !runFailed;
 
     const latestAfter = loadLatestState();
     if (success) {
@@ -1056,7 +1089,14 @@ export class BrainRunner {
 	    const absOutFile = path.join(getBrainDir(), outFile);
 	    const workspaceOutFile = path.join('Brain', outFile).replace(/\\/g, '/');
 	    const workspaceProposalsFile = path.join('Brain', 'proposals.md').replace(/\\/g, '/');
-	    const prompt     = this._buildDreamPromptV2({ dateStr, dreamLabel, thoughtCount, outFile: absOutFile });
+      const carryTargetDate = nextDateKey(dateStr);
+      const carryDecisionFile = path.posix.join('Brain', 'continuity', dateStr, 'carry-forward.json');
+      const absCarryDecisionFile = path.join(this.deps.workspacePath, carryDecisionFile);
+      const carryNotesFile = path.posix.join('memory', `${carryTargetDate}-intraday-notes.md`);
+	    const prompt     = this._buildDreamPromptV2({
+        dateStr, dreamLabel, thoughtCount, outFile: absOutFile,
+        carryTargetDate, carryDecisionFile, carryNotesFile,
+      });
 
     const sendSSE = (event: string, data: any) => {
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
@@ -1082,8 +1122,8 @@ export class BrainRunner {
 	      }
 	      const activeWorkFile = path.posix.join('Brain', 'active-work.jsonl');
 	      setSessionMutationScope(sessionId, {
-	        allowedFiles: [workspaceOutFile, workspaceProposalsFile, 'BUSINESS.md', activeWorkFile],
-	        allowedDirs: [path.posix.dirname(workspaceOutFile), 'entities', 'Brain', path.posix.join('Brain', 'business-reconciliation', dateStr)],
+	        allowedFiles: [workspaceOutFile, workspaceProposalsFile, carryDecisionFile, 'BUSINESS.md', activeWorkFile],
+	        allowedDirs: [path.posix.dirname(workspaceOutFile), path.posix.dirname(carryDecisionFile), 'entities', 'Brain', path.posix.join('Brain', 'business-reconciliation', dateStr)],
 	      });
 	      const result = await this.deps.handleChat(
 	        prompt,
@@ -1232,7 +1272,32 @@ export class BrainRunner {
 
     const dreamFresh = artifactFresh(absOutFile);
     const proposalsFresh = artifactFresh(proposalsFilePath);
-    const artifactsFresh = dreamFresh && proposalsFresh;
+    let carryForwardFresh = false;
+    try {
+      if (artifactFresh(absCarryDecisionFile)) {
+        const decision = parseBrainCarryForwardDecision(fs.readFileSync(absCarryDecisionFile, 'utf-8'));
+        if (decision && decision.targetDate === carryTargetDate) {
+          applyCarryForwardToIntradayFile(this.deps.workspacePath, decision);
+          carryForwardFresh = artifactFresh(path.join(this.deps.workspacePath, carryNotesFile));
+        }
+      }
+      if (!carryForwardFresh && dreamFresh && !runFailed) {
+        fs.mkdirSync(path.dirname(absCarryDecisionFile), { recursive: true });
+        const fallback = {
+          targetDate: carryTargetDate,
+          generatedAt: new Date().toISOString(),
+          sourceDream: workspaceOutFile,
+          items: [],
+        };
+        fs.writeFileSync(absCarryDecisionFile, `${JSON.stringify(fallback, null, 2)}\n`, 'utf-8');
+        applyCarryForwardToIntradayFile(this.deps.workspacePath, fallback);
+        carryForwardFresh = artifactFresh(path.join(this.deps.workspacePath, carryNotesFile));
+        artifactRecoveryNotes.push('Recovered missing carry-forward decision with an empty validated next-day section.');
+      }
+    } catch (err: any) {
+      artifactRecoveryNotes.push(`Carry-forward generation failed: ${err?.message || err}`);
+    }
+    const artifactsFresh = dreamFresh && proposalsFresh && carryForwardFresh;
     const proposalIds = this._extractProposalIds(toolResults).slice(-100);
     const proposalContractError = this._detectProposalContractError(proposalsFilePath, proposalIds);
     const success = artifactsFresh && !runFailed && !proposalContractError;
@@ -1853,8 +1918,9 @@ After all writes: print a plain-text summary of what was done tonight (memory up
     windowLabel: string;
     thoughtNumber: number;
     outFile: string;
+    capsuleFile: string;
   }): string {
-    const { windowStart, windowEnd, dateStr, thoughtNumber, outFile } = opts;
+    const { windowStart, windowEnd, dateStr, thoughtNumber, outFile, capsuleFile } = opts;
     const wsStart = fmtUtc(windowStart);
     const wsEnd = fmtUtc(windowEnd);
     const nowStr = fmtLocal(new Date());
@@ -1872,7 +1938,9 @@ After all writes: print a plain-text summary of what was done tonight (memory up
 BRAIN THOUGHT ${thoughtNumber} - Observation + Seed Capture
 Window: ${wsStart} -> ${wsEnd}
 Date: ${dateStr}
-Output: ${outFileRel}
+Outputs:
+- ${outFileRel}
+- ${capsuleFile}
 
 IMPORTANT - FILE PATH CONVENTION:
 All paths in this prompt are relative to the workspace root.
@@ -1885,7 +1953,7 @@ STRICT RULES:
 - Do not call write_proposal or create any proposals
 - Do not create new skills directly
 - Do not update cron jobs, configs, or team state
-- Your direct file writes are limited to the thought output file listed above, ${businessCandidatesFileRel} when business candidates exist, and the Active Work Ledger (Brain/active-work.jsonl)
+- Your direct file writes are limited to the thought output file, ${capsuleFile}, ${businessCandidatesFileRel} when business candidates exist, and the Active Work Ledger (Brain/active-work.jsonl)
 - Do not mutate an existing skill. Read/inspect it, then use skill_candidate_submit for any proposed trigger, metadata, instruction, resource, or new-skill change
 - You may call skill_audit_all for a light read-only fleet metadata scan
 - Candidate submissions must be evidence-backed and scoped to one exact skill gap or repeated workflow
@@ -2019,7 +2087,7 @@ H. Window Verdict
 - Summary: short narrative brain note, 2-4 paragraphs. Put the real summary at the top of the final file, before section A.
 - Wonder: include 1-3 natural "I wonder if..." thoughts. They can be speculative, but label uncertainty honestly and ground them in the day's signals.
 
-STEP 3 - WRITE THE THOUGHT FILE
+STEP 3 - WRITE THE THOUGHT FILE AND CAPSULE SIDECAR
 
 Create the output directory if needed: ${thoughtsDirRel}
 Write the thought file to: ${outFileRel}
@@ -2079,6 +2147,20 @@ Use this exact fenced JSON shape and no extra keys:
   }
 ]
 \`\`\`
+
+
+## Runtime Thought Capsules
+After writing the Markdown, write ${capsuleFile} as a JSON array. There is NO fixed item-count limit: capture every distinct, evidence-supported thread that could usefully change Prometheus's behavior before the next Thought. A busy six-hour window may legitimately produce 10, 20, or more capsules; an inactive window may produce []. Merge duplicate activity under one stable threadKey and omit completed micro-actions with no future implication.
+
+Every object must use exactly this contract:
+{"id":"unique-version-id","threadKey":"stable topic key such as project:galaxy-drift","kind":"active_work|decision|correction|blocker|time_sensitive|opportunity","priority":"critical|high|normal|low","status":"active|in_progress|blocked|dormant|resolved","createdAt":"ISO","expiresAt":"ISO (normally next Thought window; longer only with evidence)","summary":"present-tense concise context","facts":["verified fact"],"nextUsefulAction":"what helps when relevant","relevance":{"projects":["names"],"triggers":["natural user terms"],"surfaces":["main_chat|coding|business|other"]},"evidence":["source refs"],"lastValidatedAt":"ISO","verificationRequired":true,"supersedes":["older capsule ids"]}
+
+Rules:
+- Storage/capture is evidence-driven and never top-N capped. Prompt injection later is separately relevance/budget bounded.
+- Use stable threadKey values so a newer capsule replaces the older state.
+- Set verificationRequired=true for unfinished, blocked, inferred, or externally mutable state.
+- Do not phrase speculation as fact. Weak opportunities expire quickly.
+- Write valid JSON even when empty. Do not wrap this sidecar in Markdown fences.
 
 ## A. Activity Summary
 [populate from your analysis]
@@ -2293,8 +2375,11 @@ After writing the cleanup report, print a plain-text summary and stop.
     dreamLabel: string;
     thoughtCount: number;
     outFile: string;
+    carryTargetDate: string;
+    carryDecisionFile: string;
+    carryNotesFile: string;
   }): string {
-    const { dateStr, thoughtCount, outFile } = opts;
+    const { dateStr, thoughtCount, outFile, carryTargetDate, carryDecisionFile, carryNotesFile } = opts;
     const nowStr = fmtLocal(new Date());
     const thoughtsDirRel = path.join('Brain', 'thoughts', dateStr);
     const businessCandidatesDirRel = path.join('Brain', 'business-candidates', dateStr);
@@ -2320,6 +2405,8 @@ Thoughts available: ${thoughtCount}
 Outputs:
 - ${outFileRel}
 - ${proposalsFileRel} (rewrite as the post-day summary)
+- ${carryDecisionFile} (machine-readable next-day continuity decisions)
+- ${carryNotesFile} (created atomically by the runner from the decision file after validation)
 
 Treat ${dateStr} as the target date for this run, even if the current clock is now on a later day.
 
@@ -2339,6 +2426,7 @@ PHASE 1 - LOAD THE TARGET DATE'S THOUGHTS
 
 List directory: ${thoughtsDirRel}
 Read all *-thought.md files found there.
+Also list Brain/context-capsules/${dateStr} and read every *-capsules.json sidecar. Capsule count is evidence-driven and has no fixed limit; do not discard valid threads just to make a short list.
 
 Also load for context:
 - ${userMdFileRel}
@@ -2579,9 +2667,18 @@ ${brainDreamProposalSubmitRules()}
 
 If zero proposals pass the gate, note that in the dream file.
 
-PHASE 8 - WRITE OUTPUTS
+PHASE 8 - WRITE OUTPUTS AND NEXT-DAY CONTINUITY
 
-8a. Create directory ${dreamsDirRel} if needed.
+Before the Dream report, classify every temporary thread from today's live notes, Thought findings/capsules, previous carry-forward context, Active Work Ledger, and current task/proposal/job/file evidence as refresh, hold, resolve, expire, escalate, or promote.
+
+There is NO fixed item-count limit for valid carry-forward items. If a high-output day leaves 18 distinct unfinished threads, preserve all 18. Quality comes from evidence, dedupe, stable thread keys, and expiry, not arbitrary top-N truncation. A thread may not renew itself merely because yesterday's generated section mentioned it; refresh requires fresh user activity, a newer Thought, or verified live state.
+
+Write ${carryDecisionFile} as valid JSON (no Markdown fence):
+{"targetDate":"${carryTargetDate}","generatedAt":"ISO","sourceDream":"${outFileRel}","items":[{"threadKey":"stable key","title":"human title","state":"active|in_progress|blocked|dormant","verifiedFacts":["current fact"],"looseEnds":["unfinished item"],"nextNaturalOpening":"when/how Prometheus should surface it naturally","reviewBy":"ISO expiry/review time","evidence":["refs"],"lastValidatedAt":"ISO","verificationRequired":true}]}
+
+The runner validates that file and writes its rendered section at the top of ${carryNotesFile}, preserving any live notes already present. The generated header explicitly tells every writer to note when/if a carried item changes, completes, becomes blocked, or is superseded. Do not write ${carryNotesFile} directly.
+
+Then create directory ${dreamsDirRel} if needed.
 Write ${outFileRel} with this structure. Use \`workspace_edit\` with action "create" or "write" for the markdown artifact:
 
 ---

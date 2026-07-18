@@ -25,6 +25,7 @@ import {
   type Stage4MenuSegmentId,
 } from '../runtime/instruction-intent-detector';
 import { memoizePromptProfileBlock, readPromptProfileText } from './prompt-profile-snapshot';
+import { BRAIN_CARRY_FORWARD_MARKERS, buildBrainCapsuleContext } from './brain/brain-continuity.js';
 
 // ─── Prompt-cache assembly ─────────────────────────────────────────────────────
 // Splits the system prompt into a STABLE (cacheable) prefix and a VOLATILE
@@ -81,22 +82,38 @@ function buildSubagentsRosterBlock(): string {
 
 
 // ─── Intraday notes processor ────────────────────────────────────────────────────
-// Parses raw intraday file content into capped-length entries for context injection.
-// Keeps only the last `maxEntries` notes and truncates each body to `maxCharsPerEntry` chars.
-function processIntradayNotes(raw: string, maxEntries = 12, maxCharsPerEntry = 250): string {
+// The Dream-authored carry-forward section is preserved in full (within its own
+// budget). Ordinary live-note entries remain recent-first and capped. Capture on
+// disk is never limited by this prompt-only projection.
+export function processIntradayNotes(
+  raw: string,
+  maxEntries = 12,
+  maxCharsPerEntry = 250,
+  maxCarryChars = 10_000,
+): string {
   if (!raw) return '';
-  // Split on section headers while keeping the header in each chunk
-  const parts = raw.split(/(?=\n?### \[)/);
-  const entries = parts.map(p => p.trim()).filter(p => p.startsWith('### ['));
-  const recent = entries.slice(-maxEntries);
-  return recent.map(entry => {
+  let carry = '';
+  const start = raw.indexOf(BRAIN_CARRY_FORWARD_MARKERS.start);
+  const end = raw.indexOf(BRAIN_CARRY_FORWARD_MARKERS.end);
+  if (start >= 0 && end >= start) {
+    const finish = end + BRAIN_CARRY_FORWARD_MARKERS.end.length;
+    carry = raw.slice(start, finish).trim();
+    if (carry.length > maxCarryChars) carry = `${carry.slice(0, maxCarryChars)}\n...[carry-forward context truncated for prompt budget]`;
+  }
+  const withoutCarry = start >= 0 && end >= start
+    ? `${raw.slice(0, start)}${raw.slice(end + BRAIN_CARRY_FORWARD_MARKERS.end.length)}`
+    : raw;
+  const parts = withoutCarry.split(/(?=\n?### \[)/);
+  const entries = parts.map((part) => part.trim()).filter((part) => part.startsWith('### ['));
+  const recent = entries.slice(-maxEntries).map((entry) => {
     const headerEnd = entry.indexOf('\n');
     if (headerEnd === -1) return entry;
     const header = entry.slice(0, headerEnd);
     const body = entry.slice(headerEnd + 1).trim();
-    const truncated = body.length > maxCharsPerEntry ? body.slice(0, maxCharsPerEntry) + '…' : body;
+    const truncated = body.length > maxCharsPerEntry ? `${body.slice(0, maxCharsPerEntry)}…` : body;
     return `${header}\n${truncated}`;
   }).join('\n\n');
+  return [carry, recent].filter(Boolean).join('\n\n');
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────────
@@ -829,7 +846,7 @@ WORKSPACE ONLY: In the public app, file tools operate on the user workspace and 
 	MANDATORY EDIT ROUTE: For workspace file edits, native workspace wrappers are the default and expected path. Inspect enough to avoid blind edits: use workspace_read(action:"grep"/"search"/"stats"/"read") when the target is uncertain, but if the user/tool output already gives an exact file plus exact old text or line range, go directly to workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines") or workspace_edit(action:"patchset"). Edit tools verify the target and return post-edit context; do not re-read unless the result is ambiguous. Do not use terminal/Python/PowerShell/sed/node scripts to edit files unless the user explicitly asks for shell editing or native tools cannot perform the transformation.
 	EDIT PRIORITY: For source-controlled Prometheus code, skip broad orientation when the file/symbol is already clear. Use dev_source_read(action:"grep"|"search") to locate unknown code, dev_source_read(action:"stats") for unfamiliar/large files, and exact dev_source_read(action:"read", start_line, num_lines) only when grep/edit output is not enough. After approval, prefer dev_source_edit(action:"patchset") for grouped src/web-ui edits; it returns post-edit context. For normal workspace files, prefer workspace_read(action:"search"|"grep") before reads, then workspace_edit(action:"patchset") for grouped edits; keep reads line-windowed for one-off work.`,
 
-  task: `TASK: task_control(action,...) — list/get/steer/resume/rerun/pause/delete. When the user adds, corrects, or changes instructions for active work, resolve the existing task and call task_control(action:"steer", task_id, message). Never create a second task for a steer. task_control(list) returns active tasks AND cron jobs in one call. For agent-owned runs use agent_run_ops(action:"steer") while running and agent_run_ops(action:"recover") only when paused/stalled. Do NOT use read_file for task state.`,
+  task: `TASK: task_control(action,...) — list/get/steer/list_approvals/resolve_approval/resume/rerun/pause/delete. When the user adds, corrects, or changes instructions for active work, resolve the existing task and call task_control(action:"steer", task_id, message). Never create a second task for a steer. When a task watch reports a pending approval, inspect it with list_approvals, tell the user what is waiting, and offer to resolve it. Call resolve_approval only after the user explicitly authorizes that exact approve/reject decision in the current conversation, with user_authorized:true; never self-approve or infer consent. task_control(list) returns active tasks AND cron jobs in one call. For agent-owned runs use agent_run_ops(action:"steer") while running and agent_run_ops(action:"recover") only when paused/stalled. Do NOT use read_file for task state.`,
 
   schedule: `SCHEDULE: schedule_job(action,...) — list/create/update/pause/resume/delete/run_now. Confirm before mutating.
 By default, scheduled jobs are owned by Prometheus itself. Omit subagent_id/team_id for normal schedules. Use subagent_id only when the user explicitly asks for a subagent owner or the task truly needs a specialized delegated agent. Use team_id to schedule a managed team run: the team manager wakes first, derives the run from team goal/memory, and dispatches members. If ownership is ambiguous and delegation would materially change the workflow, ask whether the user wants Prometheus itself or a subagent/team to own it.
@@ -1703,6 +1720,9 @@ export async function buildPersonalityContext(
   const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
   const _skipIntradayInteractive = sessionId.startsWith('proposal_') || executionMode === 'background_agent';
   const intradayNotes = !_skipIntradayInteractive ? processIntradayNotes(readPromptProfileText(intradayPath)) : '';
+  const brainActiveContext = !_skipIntradayInteractive
+    ? buildBrainCapsuleContext(workspacePath, messageText)
+    : '';
 
   // ── Tier 1: first message in session ──────────────────────────────────────
   if (historyLength === 0) {
@@ -1736,6 +1756,7 @@ export async function buildPersonalityContext(
         cisContext,
         retrievedMemoryCtx,
         toolCategoryMatchT1,
+        brainActiveContext,
         intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
         skillCtxT1,
         activeSkillCtxT1,
@@ -1788,6 +1809,7 @@ export async function buildPersonalityContext(
       cisContext,
       retrievedMemoryCtx,
       toolCategoryMatch,
+      brainActiveContext,
       intradayNotes ? `[TODAY_NOTES — read-only context, do NOT call write_note unless you complete something meaningful this turn]\n${intradayNotes}` : '',
       referenceHint,
       skillCtx,
