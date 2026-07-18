@@ -7,6 +7,7 @@
 
 import { api } from '../api.js';
 import { escHtml, renderMd, bgtToast, timeAgo, showToast } from '../utils.js';
+import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { wsEventBus } from '../ws.js';
 import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
 import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
@@ -936,7 +937,7 @@ function applySubagentToolActivity(state, phase, event) {
 }
 
 function moveSubagentVisibleAnswerIntoWorkflowTrace(state) {
-  if (!state) return;
+  if (!state || state.finalResponseStarted) return;
   const text = String(state.content || '').trim();
   if (!text) return;
   appendSubagentLiveTrace(state, state.toolActivityStarted ? 'think' : 'preamble', text);
@@ -2091,7 +2092,7 @@ function renderSubagentRunDetail(agent, run) {
   }
   const journal = Array.isArray(detail.journal) ? detail.journal.slice(-30).reverse() : [];
   return `<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:12px">
-    ${detail.finalSummary ? `<section><div style="font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Output</div><div style="font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(detail.finalSummary)}</div></section>` : ''}
+    ${detail.finalSummary ? `<section><div style="font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Output</div><div class="markdown-body" style="font-size:12px;line-height:1.5;overflow-wrap:anywhere">${renderMd(String(detail.finalSummary))}</div></section>` : ''}
     ${renderSubagentRunRecovery({ ...run, ...detail }, agent.id)}
     <section><div style="font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Progress</div>${renderSubagentRunProgress(detail)}</section>
     <section><div style="font-size:11px;font-weight:900;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Task Prompt</div><div style="font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(detail.prompt || detail.title || '')}</div></section>
@@ -2486,15 +2487,16 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
         if (getSubagentStreamingState(agentId) !== streamState) continue;
 
         switch (event.type) {
+          case 'final_response_start': {
+            beginFinalResponse(streamState);
+            refreshSubagentStreamingUI(agentId);
+            break;
+          }
           case 'token': {
             const chunk = String(event.text || '');
             if (!chunk) break;
-            if (!streamState.finalResponseStarted && !streamState.toolActivityStarted) {
-              appendSubagentLiveTrace(streamState, 'preamble', chunk, { append: true });
-            } else {
-              streamState.finalResponseStarted = true;
-              streamState.content = `${streamState.content || ''}${chunk}`;
-            }
+            beginFinalResponse(streamState);
+            streamState.content = appendFinalResponseDelta(streamState.content, chunk);
             refreshSubagentStreamingUI(agentId);
             break;
           }
@@ -2612,10 +2614,11 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
           }
 
           case 'final': {
-            const reply = String(event.reply || event.text || '').trim();
+            const reply = String(event.reply || event.text || '');
             if (reply) {
-              streamState.finalReply = reply;
-              if (!streamState.content) streamState.content = reply;
+              beginFinalResponse(streamState);
+              streamState.finalReply = reconcileFinalResponse(streamState.content, reply);
+              streamState.content = streamState.finalReply;
               addSubagentProcessEntry('final', reply, undefined, streamState);
               refreshSubagentStreamingUI(agentId, true);
             }
@@ -2623,10 +2626,11 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
           }
 
           case 'done': {
-            const reply = String(event.reply || event.text || '').trim();
+            const reply = String(event.reply || event.text || '');
             if (reply) {
-              streamState.finalReply = reply;
-              if (!streamState.content) streamState.content = reply;
+              beginFinalResponse(streamState);
+              streamState.finalReply = reconcileFinalResponse(streamState.content, reply);
+              streamState.content = streamState.finalReply;
             }
             const thinking = String(event.thinking || '').trim();
             if (thinking && !String(streamState.thinking || '').includes(thinking)) {
@@ -3186,15 +3190,15 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
   const streamState = ensureSubagentExternalStream(agentId, meta);
 
   switch (event.type) {
+    case 'final_response_start': {
+      beginFinalResponse(streamState);
+      break;
+    }
     case 'token': {
       const chunk = String(event.text || '');
       if (chunk) {
-        if (!streamState.finalResponseStarted && !streamState.toolActivityStarted) {
-          appendSubagentLiveTrace(streamState, 'preamble', chunk, { append: true });
-        } else {
-          streamState.finalResponseStarted = true;
-          streamState.content = `${streamState.content || ''}${chunk}`;
-        }
+        beginFinalResponse(streamState);
+        streamState.content = appendFinalResponseDelta(streamState.content, chunk);
       }
       break;
     }
@@ -3301,10 +3305,11 @@ function applySubagentExternalStreamEvent(agentId, rawEvent, meta = {}) {
     }
     case 'final':
     case 'done': {
-      const reply = String(event.reply || event.text || '').trim();
+      const reply = String(event.reply || event.text || '');
       if (reply) {
-        streamState.finalReply = reply;
-        if (!streamState.content) streamState.content = reply;
+        beginFinalResponse(streamState);
+        streamState.finalReply = reconcileFinalResponse(streamState.content, reply);
+        streamState.content = streamState.finalReply;
         addSubagentProcessEntry('final', reply, undefined, streamState);
       }
       streamState.completed = event.type === 'done';

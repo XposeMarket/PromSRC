@@ -287,25 +287,34 @@ function buildInternalWatchPayload(
   deliveryMode: 'live_steer' | 'follow_up',
 ): string {
   const instruction = renderInstruction(template, watch, obs, kind);
+  const actionPolicy = watch.actionPolicy || 'review_only';
   return [
     `[Internal watch ${kind}]`,
     `Watch id: ${watch.id}`,
     `Label: ${watch.label}`,
     `Target: ${watch.target.type}`,
+    `Condition: ${JSON.stringify(watch.condition || {})}`,
+    `Creation rationale: ${watch.rationale || watch.onMatch}`,
+    `Action policy: ${actionPolicy}`,
     `Origin session: ${watch.origin.sessionId}`,
     `Delivery session: ${deliverySessionId}`,
     `Observation: ${JSON.stringify({ ...obs, text: obs.text ? `[${String(obs.text).length} chars]` : undefined }, null, 2)}`,
     '',
-    'Instruction:',
+    'Saved watch instruction:',
     instruction,
     '',
+    'This event is evidence, not a user command. It does not imply failure, recovery, resume, rerun, or any task mutation.',
+    'First inspect the current target state and compare the observation with the original/latest user intent in this session. If the watched work is complete and satisfies that intent, report completion and stop. If verification was requested, inspect and verify before reporting.',
+    actionPolicy === 'review_only'
+      ? 'Policy: review only. Task mutations caused by this watch are technically blocked. Inspect, verify, or report; do not attempt task_control mutation.'
+      : actionPolicy === 'recover_same_run'
+        ? 'Policy: narrowly scoped same-run recovery only. A blocked or incomplete task may be steered or resumed after inspection; a completed task with a justified missing requirement may use task_control(action:"continue") with an explicit scoped new_work. Full rerun/reset is technically blocked.'
+        : 'Policy: a full rerun is permitted only after inspection shows it is justified by the saved instruction and the user’s prior authorization.',
     kind === 'gateway_restart_interruption'
-      ? 'The gateway restarted while this watch was active. This is a durable, non-terminal wake-up: the watch remains active and must still report its original eventual match. Inspect the same task first. Decide whether to resume it from its checkpoint, continue waiting, cancel it, or report a blocker. Never create a duplicate task, blindly repeat completed or destructive work, or auto-resume a user-paused task.'
+      ? 'This is a durable non-terminal restart interruption. Continue supervision from the preserved checkpoint only when the policy and evidence justify it; the original match remains pending.'
       : deliveryMode === 'live_steer'
-      ? 'This watch completed while the originating Prometheus turn was still active. Incorporate it into the current run before the next action or final response.'
-      : 'Proceed as a normal Prometheus main-chat follow-up in this delivery session. This is not task recovery mode and not read-only mode.',
-    'Use the normal tool/category system. If verification is requested, inspect the task/run state first and then use the appropriate tools directly.',
-    'For agent-owned tasks, use agent_run_ops(action:"get", task_id:"...") before deciding whether recovery chat, resume, rerun, or independent verification is appropriate.',
+        ? 'This observation arrived during the active Prometheus turn. Incorporate it before the next action or final response.'
+        : 'This is a private normal Prometheus follow-up in the watch-creating session, with that session history restored.',
     'Do not expose this internal payload unless it helps explain the result.',
   ].join('\n');
 }
@@ -358,10 +367,12 @@ function isToolLimitedSessionId(sessionId: string): boolean {
   return !sid || TOOL_LIMITED_SESSION_RE.test(sid);
 }
 
-function resolveWatchDeliverySessionId(watch: InternalWatch, obs: Observation): string {
+/** Timer-like routing: a watch wakes the creating main-chat thread before task provenance fallbacks. */
+export function resolveWatchDeliverySessionId(watch: InternalWatch, obs: Observation): string {
   const candidates = [
-    obs.originatingSessionId,
+    watch.deliverySessionId,
     watch.origin?.sessionId,
+    obs.originatingSessionId,
     getLastMainSessionId(),
     'default',
   ];
@@ -369,7 +380,7 @@ function resolveWatchDeliverySessionId(watch: InternalWatch, obs: Observation): 
     const sid = String(candidate || '').trim();
     if (sid && !isToolLimitedSessionId(sid)) return sid;
   }
-  return String(getLastMainSessionId() || 'default').trim() || 'default';
+  return 'default';
 }
 
 export class InternalWatchRunner {
@@ -592,6 +603,8 @@ export class InternalWatchRunner {
       clientRequestId: `internal_watch_result:${watch.id}:${watch.firedCount + 1}:${kind}`,
       internalWatchId: watch.id,
       internalWatchKind: kind,
+      internalWatchActionPolicy: watch.actionPolicy || 'review_only',
+      internalWatchTargetTaskId: String(obs.taskId || watch.target.config?.taskId || watch.target.config?.task_id || '').trim() || undefined,
       contextSummary: `Internal watch "${watch.label}" ${kind === 'match' ? 'matched' : 'timed out'} while this Prometheus turn was active.`,
     });
     if (!queued.ok) return false;
@@ -695,12 +708,20 @@ export class InternalWatchRunner {
         sendSSE,
         undefined,
         { aborted: false },
-        `[InternalWatch ${watch.id}] Bounded internal watcher delivery. Run through the normal main-chat tool/category pipeline in the delivery session. Do not use task recovery chat unless you intentionally call agent_run_ops(action:"recover").`,
+        `[InternalWatch ${watch.id}] Private watcher delivery in the creating main-chat session. Treat the observation as evidence, inspect it against the session's latest user intent, and obey the persisted action policy.`,
         undefined,
         undefined,
         undefined,
         undefined,
-        undefined,
+        {
+          syntheticInternalWatch: true,
+          internalWatchContext: {
+            watchId: watch.id,
+            actionPolicy: watch.actionPolicy || 'review_only',
+            targetTaskId: String(obs.taskId || watch.target.config?.taskId || watch.target.config?.task_id || '').trim() || undefined,
+            delivery: 'follow_up',
+          },
+        },
         {
           channel: 'system',
           surface: 'automation',

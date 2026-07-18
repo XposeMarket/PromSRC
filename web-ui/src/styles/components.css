@@ -1454,6 +1454,19 @@ main {
   opacity: 0.82;
 }
 .msg-content { line-height: 1.7; font-size: 13px; white-space: pre-wrap; word-break: break-word; color: #17243b; max-width: 100%; min-width: 0; }
+.goal-completion-report {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.goal-completion-report strong { color: var(--text); font-weight: 700; }
 .msg.user .msg-content {
   color: #ffffff;
   line-height: 1.45;
@@ -2730,6 +2743,10 @@ body.side-chat-split-active #chat-view > .chat-input-area {
   filter: drop-shadow(0 0 4px rgba(90, 180, 255, 0.60));
 }
 
+.chat-context-window-btn.is-over-capacity {
+  background: conic-gradient(#f97316 var(--chat-context-window-deg), rgba(148, 163, 184, 0.20) 0);
+}
+
 .chat-context-window-dot {
   display: none;
 }
@@ -2873,6 +2890,10 @@ button.chat-context-window-row {
   border-radius: inherit;
   background: linear-gradient(90deg, #38a3ff, #7dd3fc);
   transition: width 180ms ease;
+}
+
+.chat-context-window-fill.is-over-capacity {
+  background: linear-gradient(90deg, #f97316, #fb7185);
 }
 
 .chat-context-window-metrics {

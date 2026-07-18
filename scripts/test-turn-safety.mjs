@@ -90,6 +90,10 @@ assert.deepEqual(decideTurnAdmission({
 }), { kind: 'idempotency_conflict', streamId: 'stream-a' });
 
 const coordinator = new SessionTurnCoordinator();
+const atomicFirst = coordinator.tryAcquire('atomic-admission');
+assert.ok(atomicFirst, 'the first concurrent admission must claim the session');
+assert.equal(coordinator.tryAcquire('atomic-admission'), null, 'a concurrent admission must not create a second active turn');
+coordinator.release(atomicFirst);
 const first = await coordinator.acquire('same-session');
 let secondResolved = false;
 const secondPromise = coordinator.acquire('same-session').then((lease) => {
@@ -116,6 +120,13 @@ await assert.rejects(abortedWaiter, (error) => error?.name === 'AbortError');
 coordinator.release(held);
 assert.equal(coordinator.isActive('abort-session'), false);
 
+const orphaned = await coordinator.acquire('reconcile-session');
+const abandonedWaiter = coordinator.acquire('reconcile-session');
+assert.equal(coordinator.discard('reconcile-session'), true, 'an orphaned lease must be discardable as one unit');
+await assert.rejects(abandonedWaiter, (error) => error?.name === 'TurnDiscardedError');
+assert.equal(coordinator.isActive('reconcile-session'), false, 'reconciliation must not promote an abandoned queued request');
+assert.equal(coordinator.release(orphaned), false, 'a discarded lease cannot release a later turn');
+
 const executorSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'agents-runtime', 'subagent-executor.ts'), 'utf8');
 assert.doesNotMatch(executorSource, /captured\.code !== 0 && !captured\.timedOut/);
 assert.match(executorSource, /classifyCommandTermination\(captured\)/);
@@ -124,6 +135,9 @@ const routeSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 
 assert.match(routeSource, /code: 'SESSION_TURN_ACTIVE'/);
 assert.match(routeSource, /code: 'IDEMPOTENCY_KEY_REUSED'/);
 assert.match(routeSource, /mainChatTurnCoordinator\.acquire\(sessionId, abortSignal\?\.signal\)/);
+assert.match(routeSource, /const admissionLease = mainChatTurnCoordinator\.tryAcquire\(resolvedSessionId\)/, 'HTTP admission must acquire before opening a stream');
+assert.match(routeSource, /reconcileMainChatTurn\(resolvedSessionId\)/, 'HTTP admission must reconcile orphaned stream/lease state');
+assert.match(routeSource, /preAcquiredTurnLease: admissionLease/, 'the admitted lease must remain owned by the HTTP lifecycle');
 assert.doesNotMatch(routeSource, /mobileChatRequestDedupe/);
 
 console.log('Command outcome and per-session turn safety regression tests passed.');

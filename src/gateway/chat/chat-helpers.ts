@@ -1223,6 +1223,7 @@ export interface HandleChatResult {
   fileChanges?: any;
   productCarousel?: { title: string; items: any[] };
   richArtifacts?: import('../rich-artifacts').RichArtifact[];
+  goalCompletionReport?: import('../session').MainChatGoalCompletionReport;
 }
 
 // ─── Orchestration session stats stubs (multi-agent system removed) ───────────

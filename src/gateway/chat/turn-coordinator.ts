@@ -89,6 +89,24 @@ export class SessionTurnCoordinator {
     return true;
   }
 
+  /**
+   * Remove an orphaned in-memory turn and reject any callers that were waiting
+   * behind it.  This is deliberately different from `release`: promoting a
+   * waiter after its predecessor has lost its owning runtime can silently run
+   * an old request after the user has recovered the session.
+   */
+  discard(sessionId: string, reason = 'The previous chat turn is no longer active.'): boolean {
+    const sid = this.normalizeSessionId(sessionId);
+    const hadLease = this.active.delete(sid);
+    const queue = this.waiters.get(sid) || [];
+    this.waiters.delete(sid);
+    for (const waiter of queue) {
+      if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener('abort', waiter.onAbort);
+      waiter.reject(this.discardedError(reason));
+    }
+    return hadLease || queue.length > 0;
+  }
+
   private promoteNext(sessionId: string): void {
     const queue = this.waiters.get(sessionId) || [];
     while (queue.length) {
@@ -118,6 +136,12 @@ export class SessionTurnCoordinator {
   private abortError(): Error {
     const error = new Error('Turn coordination was aborted.');
     error.name = 'AbortError';
+    return error;
+  }
+
+  private discardedError(message: string): Error {
+    const error = new Error(message);
+    error.name = 'TurnDiscardedError';
     return error;
   }
 }

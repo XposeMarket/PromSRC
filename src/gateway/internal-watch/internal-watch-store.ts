@@ -6,6 +6,12 @@ import { getConfig } from '../../config/config';
 export type InternalWatchTargetType = 'file' | 'task' | 'scheduled_job' | 'event_queue';
 export type InternalWatchStatus = 'active' | 'matched' | 'timed_out' | 'cancelled' | 'failed';
 export type InternalWatchDeliveryMode = 'run_turn' | 'notify_only';
+/**
+ * Limits task-control actions that are causally triggered by a watch delivery.
+ * Existing watches intentionally normalize to review_only: an observation is
+ * never implicit permission to change the watched work.
+ */
+export type InternalWatchActionPolicy = 'review_only' | 'recover_same_run' | 'full_rerun_allowed';
 
 export interface InternalWatchOrigin {
   sessionId: string;
@@ -45,6 +51,11 @@ export interface InternalWatch {
   target: InternalWatchTarget;
   condition: InternalWatchCondition;
   onMatch: string;
+  /** Why the creating turn asked to be woken; included in the private delivery context. */
+  rationale?: string;
+  /** Optional explicit delivery target. Normally omit this and use origin.sessionId. */
+  deliverySessionId?: string;
+  actionPolicy?: InternalWatchActionPolicy;
   /** run_turn preserves the historical tool-capable follow-up; notify_only broadcasts the match without invoking a model turn. */
   deliveryMode: InternalWatchDeliveryMode;
   onTimeout?: string;
@@ -124,6 +135,11 @@ function normalizeWatch(raw: any): InternalWatch | null {
     },
     condition: raw?.condition && typeof raw.condition === 'object' ? raw.condition : {},
     onMatch: String(raw?.onMatch || '').trim(),
+    rationale: raw?.rationale ? String(raw.rationale).trim().slice(0, 2_000) : undefined,
+    deliverySessionId: raw?.deliverySessionId ? String(raw.deliverySessionId).trim() : undefined,
+    actionPolicy: raw?.actionPolicy === 'recover_same_run' || raw?.actionPolicy === 'full_rerun_allowed'
+      ? raw.actionPolicy
+      : 'review_only',
     deliveryMode: raw?.deliveryMode === 'notify_only' ? 'notify_only' : 'run_turn',
     onTimeout: raw?.onTimeout ? String(raw.onTimeout).trim() : undefined,
     maxFirings: Math.max(1, Math.min(10, Math.floor(Number(raw?.maxFirings) || 1))),
@@ -186,6 +202,9 @@ export function createInternalWatch(input: {
   target: InternalWatchTarget;
   condition?: InternalWatchCondition;
   onMatch: string;
+  rationale?: string;
+  deliverySessionId?: string;
+  actionPolicy?: InternalWatchActionPolicy;
   deliveryMode?: InternalWatchDeliveryMode;
   onTimeout?: string;
   maxFirings?: number;
@@ -227,6 +246,11 @@ export function createInternalWatch(input: {
     },
     condition: input.condition || {},
     onMatch,
+    rationale: input.rationale ? String(input.rationale).trim().slice(0, 2_000) : undefined,
+    deliverySessionId: input.deliverySessionId ? String(input.deliverySessionId).trim() : undefined,
+    actionPolicy: input.actionPolicy === 'recover_same_run' || input.actionPolicy === 'full_rerun_allowed'
+      ? input.actionPolicy
+      : 'review_only',
     deliveryMode: input.deliveryMode === 'notify_only' ? 'notify_only' : 'run_turn',
     onTimeout: input.onTimeout ? String(input.onTimeout).trim() : undefined,
     maxFirings: Math.max(1, Math.min(10, Math.floor(Number(input.maxFirings) || 1))),
@@ -236,10 +260,10 @@ export function createInternalWatch(input: {
   };
 
   const store = loadStore();
-  const dedupeKey = `${watch.origin.sessionId}|${watch.label}|${watch.target.type}|${JSON.stringify(watch.target.config)}|${JSON.stringify(watch.condition)}`;
+  const dedupeKey = `${watch.origin.sessionId}|${watch.deliverySessionId || ''}|${watch.actionPolicy || 'review_only'}|${watch.label}|${watch.target.type}|${JSON.stringify(watch.target.config)}|${JSON.stringify(watch.condition)}`;
   const duplicate = store.watches.find((existing) =>
     existing.status === 'active' &&
-    `${existing.origin.sessionId}|${existing.label}|${existing.target.type}|${JSON.stringify(existing.target.config)}|${JSON.stringify(existing.condition)}` === dedupeKey
+    `${existing.origin.sessionId}|${existing.deliverySessionId || ''}|${existing.actionPolicy || 'review_only'}|${existing.label}|${existing.target.type}|${JSON.stringify(existing.target.config)}|${JSON.stringify(existing.condition)}` === dedupeKey
   );
   if (duplicate) return duplicate;
 

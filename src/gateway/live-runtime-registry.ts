@@ -48,6 +48,8 @@ export interface LiveRuntimeRegistration {
   source?: string;
   chatId?: number;
   detail?: string;
+  /** Stable client-generated id used to reconnect to the same user turn. */
+  clientRequestId?: string;
   abortSignal?: { aborted: boolean };
   onAbort?: () => void;
   recoveryPolicy?: 'resume' | 'rerun' | 'mark_interrupted' | 'do_not_resume';
@@ -66,6 +68,7 @@ export interface LiveRuntimeSnapshot {
   source?: string;
   chatId?: number;
   detail?: string;
+  clientRequestId?: string;
   startedAt: number;
   updatedAt?: number;
   abortable: boolean;
@@ -93,6 +96,8 @@ export interface RuntimeSteerEvent {
   backgroundAgentState?: 'completed' | 'failed';
   internalWatchId?: string;
   internalWatchKind?: 'match' | 'timeout';
+  internalWatchActionPolicy?: 'review_only' | 'recover_same_run' | 'full_rerun_allowed';
+  internalWatchTargetTaskId?: string;
   voiceContextPacketId?: string;
   spokenAck?: string;
   responseMode?: 'silent' | 'narrate' | 'worker_reply';
@@ -421,6 +426,7 @@ function toSnapshot(record: LiveRuntimeRecord): LiveRuntimeSnapshot {
     source: record.source,
     chatId: record.chatId,
     detail: record.detail,
+    clientRequestId: record.clientRequestId,
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
     abortable: record.abortable,
@@ -450,6 +456,7 @@ export function registerLiveRuntime(registration: LiveRuntimeRegistration): stri
     source: registration.source ? String(registration.source) : undefined,
     chatId: Number.isFinite(Number(registration.chatId)) ? Number(registration.chatId) : undefined,
     detail: registration.detail ? String(registration.detail) : undefined,
+    clientRequestId: registration.clientRequestId ? String(registration.clientRequestId) : undefined,
     startedAt: Date.now(),
     updatedAt: Date.now(),
     abortable: !!registration.abortSignal || typeof registration.onAbort === 'function',
@@ -621,6 +628,8 @@ export function addPendingRuntimeSteer(
     backgroundAgentState: input.backgroundAgentState,
     internalWatchId: input.internalWatchId ? String(input.internalWatchId) : undefined,
     internalWatchKind: input.internalWatchKind,
+    internalWatchActionPolicy: input.internalWatchActionPolicy,
+    internalWatchTargetTaskId: input.internalWatchTargetTaskId ? String(input.internalWatchTargetTaskId) : undefined,
     voiceContextPacketId: input.voiceContextPacketId ? String(input.voiceContextPacketId) : undefined,
     spokenAck: input.spokenAck ? String(input.spokenAck).slice(0, 1000) : undefined,
     responseMode: input.responseMode,

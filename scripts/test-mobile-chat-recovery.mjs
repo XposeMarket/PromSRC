@@ -32,8 +32,14 @@ assert.match(api, /fullProcess=1&_fresh=1/, 'forced recovery hydration must requ
 assert.match(router, /const fullProcess = full \|\| req\.query\.fullProcess/, 'session API must support full process recovery');
 assert.match(router, /processEntries: checkpointProcessEntries/, 'active runtime status must expose its durable tool checkpoint');
 assert.match(router, /clientRequestId: runtime\?\.clientRequestId/, 'active runtime status must expose stable turn identity across reconnects');
+assert.match(router, /router\.post\('\/api\/mobile\/chat\/reconcile\/:sessionId'/, 'mobile must have an explicit server reconciliation action');
+assert.match(router, /MAIN_CHAT_ORPHAN_GRACE_MS/, 'ownerless stream/lease state must expire instead of blocking indefinitely');
+assert.match(router, /mainChatTurnCoordinator\.discard\(sid\)/, 'reconciliation must discard both a stale lease and queued stale work');
 
 assert.match(pages, /let mobileRecoveryInFlight = null/, 'mobile recovery must be single-flight');
+assert.match(pages, /reconcileMobileChatTurn\(busySessionId\)/, 'composer gating must consult authoritative server state before queueing behind local cache');
+assert.match(api, /recoveryRetried = true/, 'a stale active-turn response may be recovered at most once');
+assert.match(api, /reconcileMobileChatTurn\(sessionId\)/, 'stream transport must reconcile a stale 409 before retrying the idempotent request');
 assert.match(pages, /aiTurn\._pmFinalReceived = true/, 'a displayed final response must become a monotonic recovery boundary');
 assert.match(
   pages,

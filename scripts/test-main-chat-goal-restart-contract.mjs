@@ -171,6 +171,16 @@ try {
   assert.equal(ownerClosed.goal.turnPlans[0].steps[0].status, 'skipped', 'owner closeout must supersede residual open steps');
   sessions.deleteSession(blockedSessionId);
 
+  const stoppedSessionId = `${sessionId}_stopped`;
+  goalRuntime.handleMainChatGoalCommand(stoppedSessionId, '/goal verify a zero-turn user stop');
+  const stopped = goalRuntime.handleMainChatGoalCommand(stoppedSessionId, '/goal done');
+  assert.equal(stopped.goal.status, 'done');
+  assert.equal(stopped.goal.lastVerdict, 'stopped', 'a user closeout must not masquerade as verified completion');
+  assert.equal(stopped.goal.turnsUsed, 0);
+  assert.match(stopped.message, /^Stopped main-chat goal\./);
+  assert.equal(goalRuntime.buildMainChatGoalCompletionReport(stopped.goal, []), null, 'a zero-turn user stop must not emit success totals');
+  sessions.deleteSession(stoppedSessionId);
+
   console.log('main-chat goal restart contract: ok');
 } finally {
   sessions.deleteSession(sessionId);

@@ -21,7 +21,11 @@ import {
   commitThreadSupervisionFollowUp,
   createThreadSupervision,
   getThreadSupervision,
+  isThreadSupervisionFollowUpDuplicate,
   listThreadSupervisions,
+  pauseThreadSupervision,
+  resumeThreadSupervision,
+  reviseThreadSupervision,
   resolveThreadSupervisionReview,
   updateThreadSupervision,
 } from './thread-supervision';
@@ -75,6 +79,12 @@ function managedPrompt(prompt: string, objective: string, follow: boolean): stri
   if (!work) return '';
   if (!follow || /^\/goal(?:\s|$)/i.test(work)) return work;
   return `/goal ${work}`;
+}
+
+function followUpFingerprint(targetSessionId: string, message: string): string {
+  return crypto.createHash('sha256')
+    .update(`${String(targetSessionId || '').trim()}\n${String(message || '').replace(/\s+/g, ' ').trim()}`)
+    .digest('hex');
 }
 
 function runDetached(
@@ -140,6 +150,7 @@ function createManagedThread(
   const title = String(input?.title || defaults?.title || 'New Prometheus thread').replace(/\s+/g, ' ').trim().slice(0, 80);
   const prompt = String(input?.prompt || input?.instruction || defaults?.prompt || '').trim();
   const objective = String(input?.objective || defaults?.objective || prompt).trim();
+  const acceptanceCriteria = String(input?.acceptance_criteria || input?.acceptanceCriteria || defaults?.acceptance_criteria || defaults?.acceptanceCriteria || objective).trim();
   const follow = input?.follow !== undefined ? input.follow !== false : defaults?.follow !== false;
   const requestedId = String(input?.session_id || input?.sessionId || '').trim();
   const targetSessionId = requestedId || `prom_${crypto.randomUUID()}`;
@@ -155,6 +166,7 @@ function createManagedThread(
         targetSessionId,
         targetTitle: title,
         objective: objective || prompt,
+        acceptanceCriteria: acceptanceCriteria || objective || prompt,
         maxReviews: input?.max_reviews ?? defaults?.max_reviews,
         maxFollowUps: input?.max_follow_ups ?? defaults?.max_follow_ups,
         maxElapsedMs: input?.max_elapsed_ms ?? defaults?.max_elapsed_ms,
@@ -189,6 +201,9 @@ const THREAD_LINK_ACTION_LABELS: Record<string, string> = {
   pin: 'Thread pinned',
   unpin: 'Thread unpinned',
   follow: 'Thread followed',
+  revise_supervision: 'Supervision updated',
+  pause_supervision: 'Supervision paused',
+  resume_supervision: 'Supervision resumed',
   unfollow: 'Thread unfollowed',
 };
 
@@ -317,6 +332,29 @@ export async function executePrometheusThreadOps(
     };
   }
 
+  if (action === 'revise_supervision') {
+    const supervisionId = String(args?.supervision_id || '').trim();
+    if (!supervisionId) throw new Error('supervision_id is required.');
+    return { supervision: reviseThreadSupervision({
+      ownerSessionId,
+      supervisionId,
+      objective: args?.objective,
+      acceptanceCriteria: args?.acceptance_criteria || args?.acceptanceCriteria,
+    }) };
+  }
+
+  if (action === 'pause_supervision') {
+    const supervisionId = String(args?.supervision_id || '').trim();
+    const current = getThreadSupervision(supervisionId);
+    if (!current || current.ownerSessionId !== ownerSessionId) throw new Error('Supervision not found.');
+    return { supervision: pauseThreadSupervision(supervisionId, String(args?.reason || 'Paused by supervising user.')) };
+  }
+
+  if (action === 'resume_supervision') {
+    const supervisionId = String(args?.supervision_id || '').trim();
+    return { supervision: resumeThreadSupervision(supervisionId, ownerSessionId) };
+  }
+
   const targetSessionId = String(args?.session_id || args?.sessionId || args?.target_session_id || '').trim();
   if (!targetSessionId && action !== 'unfollow') throw new Error('session_id is required.');
   if (targetSessionId === ownerSessionId) throw new Error('Peer-thread operations cannot target the current owner session.');
@@ -348,6 +386,10 @@ export async function executePrometheusThreadOps(
       supervisionId: args?.supervision_id,
       broadcast: deps.broadcastWS,
     });
+    const fingerprint = followUpFingerprint(targetSessionId, message);
+    if (supervision && isThreadSupervisionFollowUpDuplicate(supervision.id, fingerprint)) {
+      return { ok: true, deduped: true, supervision: getThreadSupervision(supervision.id) };
+    }
     const result = addPendingRuntimeSteerForSession(targetSessionId, {
       message,
       source: `peer_session:${ownerSessionId}`,
@@ -356,7 +398,7 @@ export async function executePrometheusThreadOps(
       responseMode: args?.requires_response === false ? 'silent' : 'worker_reply',
     });
     if (!result.ok) throw new Error(result.error || 'Could not steer target thread.');
-    if (supervision) commitThreadSupervisionFollowUp(supervision.id);
+    if (supervision) commitThreadSupervisionFollowUp(supervision.id, fingerprint);
     return result as any;
   }
 
@@ -373,6 +415,10 @@ export async function executePrometheusThreadOps(
       supervisionId: args?.supervision_id,
       broadcast: deps.broadcastWS,
     });
+    const fingerprint = followUpFingerprint(targetSessionId, message);
+    if (supervision && isThreadSupervisionFollowUpDuplicate(supervision.id, fingerprint)) {
+      return { queued: false, deduped: true, supervision: getThreadSupervision(supervision.id) };
+    }
     if (args?.wait === true) {
       const result = await deps.runInteractiveTurn(
         message,
@@ -388,11 +434,11 @@ export async function executePrometheusThreadOps(
         undefined,
         { channel: 'system', surface: 'automation', device: 'server', source: 'peer_session', chatId: ownerSessionId, label: 'Prometheus peer thread' },
       );
-      if (supervision) commitThreadSupervisionFollowUp(supervision.id);
+      if (supervision) commitThreadSupervisionFollowUp(supervision.id, fingerprint);
       return { queued: false, completed: true, result };
     }
     runDetached(deps, ownerSessionId, targetSessionId, message);
-    if (supervision) commitThreadSupervisionFollowUp(supervision.id);
+    if (supervision) commitThreadSupervisionFollowUp(supervision.id, fingerprint);
     return { queued: true, sessionId: targetSessionId };
   }
 
@@ -405,6 +451,7 @@ export async function executePrometheusThreadOps(
       targetSessionId,
       targetTitle: getSessionDisplayTitle(target),
       objective,
+      acceptanceCriteria: String(args?.acceptance_criteria || args?.acceptanceCriteria || objective).trim(),
       maxReviews: args?.max_reviews,
       maxFollowUps: args?.max_follow_ups,
       maxElapsedMs: args?.max_elapsed_ms,

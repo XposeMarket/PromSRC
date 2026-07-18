@@ -34,6 +34,7 @@ export interface ChatMessage {
   workStartedAt?: number;
   workEndedAt?: number;
   workDurationMs?: number;
+  goalCompletionReport?: MainChatGoalCompletionReport;
   channel?: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system';
   channelLabel?: string;
   origin?: TurnOrigin;
@@ -53,6 +54,20 @@ export interface ChatMessage {
   }> };
   richArtifacts?: import('./rich-artifacts').RichArtifact[];
   voiceWorkgroup?: any;
+  source?: string;
+  files?: any[];
+  deliveryBatchId?: string;
+  deliveryBatchIndex?: number;
+  deliveryBatchCount?: number;
+}
+
+export interface MainChatGoalCompletionReport {
+  goalId: string;
+  elapsedMs: number;
+  totalTokens: number;
+  totalCostMicros: number;
+  startedAt: number;
+  completedAt: number;
 }
 
 export interface TurnOrigin {
@@ -138,7 +153,7 @@ export interface MainChatGoalState {
   updatedAt: number;
   lastTurnAt?: number;
   completedAt?: number;
-  lastVerdict?: 'done' | 'continue' | 'blocked' | 'failed';
+  lastVerdict?: 'done' | 'stopped' | 'continue' | 'blocked' | 'failed';
   lastReason?: string;
   nextStepDirective?: string;
   lastQualityGrade?: string;
@@ -716,7 +731,7 @@ function normalizeMainChatGoal(input: any, sessionId: string): MainChatGoalState
     updatedAt: Number.isFinite(Number(input.updatedAt ?? input.updated_at)) ? Number(input.updatedAt ?? input.updated_at) : now,
     lastTurnAt: Number.isFinite(Number(input.lastTurnAt ?? input.last_turn_at)) ? Number(input.lastTurnAt ?? input.last_turn_at) : undefined,
     completedAt: Number.isFinite(Number(input.completedAt ?? input.completed_at)) ? Number(input.completedAt ?? input.completed_at) : undefined,
-    lastVerdict: ['done', 'continue', 'blocked', 'failed'].includes(String(input.lastVerdict || input.last_verdict || ''))
+    lastVerdict: ['done', 'stopped', 'continue', 'blocked', 'failed'].includes(String(input.lastVerdict || input.last_verdict || ''))
       ? String(input.lastVerdict || input.last_verdict) as MainChatGoalState['lastVerdict']
       : undefined,
     lastReason: typeof input.lastReason === 'string' ? input.lastReason : (typeof input.last_reason === 'string' ? input.last_reason : undefined),
@@ -1842,6 +1857,8 @@ export interface AddMessageOptions {
   disableCompactionCheck?: boolean;
   disableAutoSave?: boolean;
   maxMessages?: number;
+  /** Keep an in-flight compaction/memory-flush request for the real model reply. */
+  preservePendingMaintenance?: boolean;
 }
 
 export interface AddMessageResult {
@@ -2080,12 +2097,12 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     appendTranscriptArtifacts(id, storedMsg, { synthetic: false });
   }
 
-  if (storedMsg.role === 'assistant' && session.pendingCompaction) {
+  if (storedMsg.role === 'assistant' && session.pendingCompaction && !options.preservePendingMaintenance) {
     compactionApplied = compactHistoryWithSummary(id, session, storedMsg.content, maxMessages);
     session.pendingCompaction = false;
   }
 
-  if (storedMsg.role === 'assistant' && session.pendingMemoryFlush) {
+  if (storedMsg.role === 'assistant' && session.pendingMemoryFlush && !options.preservePendingMaintenance) {
     session.pendingMemoryFlush = false;
   }
 
@@ -2118,6 +2135,52 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     contextLimitTokens,
     thresholdTokens,
   };
+}
+
+/**
+ * Persist a delivery bubble, folding multi-file delivery batches into the same
+ * durable message that the live mobile UI presents.
+ */
+export function addOrMergeDeliveryMessage(id: string, msg: ChatMessage): void {
+  const batchId = String(msg.deliveryBatchId || '').trim();
+  if (batchId) {
+    const session = getSession(id);
+    const existing = [...session.history]
+      .reverse()
+      .find((item) => item.messageKind === 'delivery' && String(item.deliveryBatchId || '').trim() === batchId);
+    if (existing) {
+      const fileKey = (file: any): string => String(file?.path || file?.absPath || file?.workspacePath || file?.name || file || '').trim();
+      const mergedFiles = [...(Array.isArray(existing.files) ? existing.files : []), ...(Array.isArray(msg.files) ? msg.files : [])];
+      const seenFiles = new Set<string>();
+      existing.files = mergedFiles.filter((file) => {
+        const key = fileKey(file);
+        if (!key || seenFiles.has(key)) return false;
+        seenFiles.add(key);
+        return true;
+      });
+      const mergedCanvasFiles = [...(Array.isArray(existing.canvasFiles) ? existing.canvasFiles : []), ...(Array.isArray(msg.canvasFiles) ? msg.canvasFiles : [])];
+      existing.canvasFiles = Array.from(new Set(mergedCanvasFiles.map((file) => String(file || '').trim()).filter(Boolean)));
+      if (!String(existing.content || '').trim() && String(msg.content || '').trim()) existing.content = msg.content;
+      existing.deliveryBatchCount = Math.max(Number(existing.deliveryBatchCount || 0), Number(msg.deliveryBatchCount || 0));
+      session.contextTokenEstimate = estimateActiveContextTokens(session);
+      session.lastActiveAt = Date.now();
+      saveSession(id);
+      void hookBus.fire({
+        type: 'session:history_changed',
+        sessionId: id,
+        timestamp: session.lastActiveAt,
+        historyCount: session.history.length,
+        source: 'add_message',
+      });
+      return;
+    }
+  }
+
+  addMessage(id, msg, {
+    disableCompactionCheck: true,
+    disableMemoryFlushCheck: true,
+    preservePendingMaintenance: true,
+  });
 }
 
 export function getHistory(id: string, maxTurns: number = 10): ChatMessage[] {

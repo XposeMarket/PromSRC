@@ -295,6 +295,16 @@ export interface TaskRecord {
 
   resumeContext: TaskResumeContext;
   finalSummary?: string;
+  /** Immutable snapshots preserved when a completed task is extended with scoped follow-up work. */
+  continuationHistory?: Array<{
+    continuedAt: number;
+    finalSummary?: string;
+    completedAt?: number;
+    currentStepIndex: number;
+    plan: TaskPlanStep[];
+    evidence?: EvidenceBusSnapshot;
+    note: string;
+  }>;
 
   /** Number of times the self-healer has intervened on this task. Resets on manual resume. */
   selfHealAttempts?: number;
@@ -785,6 +795,43 @@ export function listTaskSummaries(filter?: { status?: TaskStatus[]; limit?: numb
   return (limit ? summaries.slice(0, limit) : summaries).map(maybeRepairStaleRunningTaskSummary);
 }
 
+function normalizeContinuationHistory(input: any): TaskRecord['continuationHistory'] {
+  if (!Array.isArray(input)) return undefined;
+  const entries = input.slice(-12).flatMap((entry: any) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const plan = Array.isArray(entry.plan)
+      ? entry.plan.slice(0, 50).map((step: any, idx: number) => normalizeTaskPlanStep(step, idx))
+      : [];
+    const evidence = entry.evidence && typeof entry.evidence === 'object' && Array.isArray(entry.evidence.entries)
+      ? {
+          taskId: String(entry.evidence.taskId || '').slice(0, 160),
+          createdAt: Number.isFinite(Number(entry.evidence.createdAt)) ? Number(entry.evidence.createdAt) : Date.now(),
+          updatedAt: Number.isFinite(Number(entry.evidence.updatedAt)) ? Number(entry.evidence.updatedAt) : Date.now(),
+          entries: entry.evidence.entries.slice(-100).map((item: any) => ({
+            id: String(item?.id || ''),
+            agentId: item?.agentId ? String(item.agentId).slice(0, 160) : undefined,
+            stepIndex: Number.isFinite(Number(item?.stepIndex)) ? Number(item.stepIndex) : 0,
+            t: Number.isFinite(Number(item?.t)) ? Number(item.t) : Date.now(),
+            category: ['finding', 'decision', 'artifact', 'error', 'dedup_key'].includes(String(item?.category)) ? item.category : 'finding',
+            key: item?.key ? String(item.key).slice(0, 200) : undefined,
+            value: String(item?.value || '').slice(0, 1000),
+            confidence: Number.isFinite(Number(item?.confidence)) ? Number(item.confidence) : undefined,
+          })),
+        } as EvidenceBusSnapshot
+      : undefined;
+    return [{
+      continuedAt: Number.isFinite(Number(entry.continuedAt)) ? Number(entry.continuedAt) : Date.now(),
+      finalSummary: typeof entry.finalSummary === 'string' ? entry.finalSummary.slice(0, 2_000) : undefined,
+      completedAt: Number.isFinite(Number(entry.completedAt)) ? Number(entry.completedAt) : undefined,
+      currentStepIndex: Number.isFinite(Number(entry.currentStepIndex)) ? Math.max(0, Number(entry.currentStepIndex)) : 0,
+      plan,
+      evidence,
+      note: String(entry.note || '').slice(0, 2_000),
+    }];
+  });
+  return entries.length ? entries : undefined;
+}
+
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ CRUD Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 
 export function createTask(params: {
@@ -887,7 +934,7 @@ export function loadTask(id: string): TaskRecord | null {
   if (!fs.existsSync(p)) return null;
   try {
     const task = JSON.parse(fs.readFileSync(p, 'utf-8')) as TaskRecord;
-    return { ...task, id: taskId };
+    return { ...task, id: taskId, continuationHistory: normalizeContinuationHistory(task.continuationHistory) };
   } catch {
     return null;
   }
@@ -898,6 +945,7 @@ export function saveTask(task: TaskRecord): void {
   if (task.journal.length > 500) {
     task.journal = task.journal.slice(-500);
   }
+  task.continuationHistory = normalizeContinuationHistory(task.continuationHistory);
   fs.writeFileSync(taskFilePath(task.id), JSON.stringify(task, null, 2), 'utf-8');
   upsertTaskSummary(task);
 }

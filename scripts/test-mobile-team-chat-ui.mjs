@@ -18,8 +18,14 @@ assert(/\.pm-mobile-side-sheet\.open \{[\s\S]*?visibility: visible;/.test(css), 
 
 assert(/Loading team chat&hellip;/.test(pages), 'team chat must show a loading state immediately');
 assert(/function normalizeTeamChatMessage/.test(pages), 'team messages must be normalized before rendering');
-assert(/rendered\.map\(renderTeamChatMessage\)/.test(pages), 'team history must use the resilient renderer');
+assert(/function renderTeamChatMessage/.test(pages), 'team history must use the resilient renderer');
 assert(/rich message render failed/.test(pages), 'one malformed team message must not blank the full history');
+assert(/function _renderMobileAgentChatList/.test(pages), 'team and subagent chats need a shared trace-preserving list renderer');
+assert(/_renderMobileAgentChatList\(listEl, rendered, renderTeamChatMessage\)/.test(pages), 'team chat must use the shared agent-chat renderer');
+assert(/_renderMobileAgentChatList\(listEl, rendered, \(m\) => _renderMobileAgentChatBubble/.test(pages), 'subagent chat must use the shared agent-chat renderer');
+assert(!/inner \+= _renderMobileStreamProcess\(message\)/.test(pages), 'agent chats must not append the legacy Process drawer');
+assert(/micBtn\?\.addEventListener\('click',[\s\S]{0,220}window\.SpeechRecognition \|\| window\.webkitSpeechRecognition/.test(pages), 'agent-chat microphones must start transcription');
+assert(/_installMobileTimestampReveal\(listEl, \(\) => \{\}\)/.test(pages), 'agent chat work timers must open the same trace drawer as main chat');
 assert(/loadTeamChat[\s\S]{0,220}mfetch/.test(api), 'team chat must use the paired mobile fetch path');
 assert(/\.pm-team-chat-list \{[\s\S]*?min-height:/.test(css), 'team history needs a stable readable viewport');
 

@@ -829,7 +829,7 @@ export function getAgentTeamScheduleTools(): any[] {
         description:
           'Create, list, or cancel bounded internal watches that wake a normal tool-capable Prometheus main-chat turn when an internal condition changes. ' +
           'Use after triggering background work, request_team_member_turn(background=true), dispatch_team_agent(background=true), schedule_job(run_now), collectors, build/restart checks, or file-producing jobs so Prometheus does not have to manually poll. ' +
-          'Supported targets: file, task, scheduled_job, event_queue. Watches require a TTL, persist across gateway restart, and default to firing once. delivery_mode defaults to run_turn (the historical regular chat/tool-category path); use notify_only to broadcast completion state without invoking a model turn or injecting control flow.',
+          'Supported targets: file, task, scheduled_job, event_queue. Watches require a TTL, persist across gateway restart, and default to firing once. delivery_mode defaults to run_turn, which wakes the creating chat with its history. A match is evidence, never an implicit task action. action_policy defaults to review_only and is enforced at task_control execution time; use stronger policies only with explicit prior authorization.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -864,6 +864,13 @@ export function getAgentTeamScheduleTools(): any[] {
               type: 'string',
               description: 'Instruction for run_turn delivery, or an operator-readable notification label for notify_only. Supports {{watch_id}}, {{watch_label}}, {{path}}, {{task_id}}, {{job_id}}, {{status}}, {{result}}, {{observation_json}}.',
             },
+            rationale: { type: 'string', description: 'Why this watch is being created and what the creating thread should decide when it wakes. Stored privately with the watch.' },
+            action_policy: {
+              type: 'string',
+              enum: ['review_only', 'recover_same_run', 'full_rerun_allowed'],
+              description: 'Default review_only blocks watch-caused task mutation. recover_same_run permits only steer/message/resume of the watched incomplete run or scoped continue of the watched completed run. full_rerun_allowed additionally permits rerun only when explicitly selected and justified.',
+            },
+            delivery_session_id: { type: 'string', description: 'Optional explicit session to wake. Omit to wake the thread that created the watch.' },
             delivery_mode: {
               type: 'string',
               enum: ['run_turn', 'notify_only'],
@@ -990,13 +997,14 @@ export function getAgentTeamScheduleTools(): any[] {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', description: 'One of: list, latest, get, steer, message, list_approvals, resolve_approval, resume, rerun, pause, cancel, delete' },
+            action: { type: 'string', description: 'One of: list, latest, get, steer, message, list_approvals, resolve_approval, resume, rerun, continue, pause, cancel, delete' },
             task_id: { type: 'string', description: 'Task ID. Strongly recommended for steer; required for get/pause/cancel/delete; optional for resume/rerun.' },
             status: { type: 'string', description: 'Optional filter: queued|running|paused|stalled|needs_assistance|awaiting_user_input|failed|complete|waiting_subagent' },
             include_all_sessions: { type: 'boolean', description: 'If true, list across all sessions/channels; default false (scoped)' },
             include_scheduled: { type: 'boolean', description: 'Include compact scheduled jobs in list output. Default false.' },
             limit: { type: 'number', description: 'Max tasks to return (default 20, max 100)' },
             message: { type: 'string', description: 'New guidance for steer/message. It is injected into the current task; no new task is created.' },
+            new_work: { type: 'string', description: 'Required for continue on a completed task. Appends only this scoped follow-up while preserving the completed plan, final summary, and evidence.' },
             resume_after_message: { type: 'boolean', description: 'If steering a paused task, resume that same task after recording the guidance. Default false.' },
             note: { type: 'string', description: 'Optional operator note for control actions; also accepted as steer text for compatibility.' },
             confirm: { type: 'boolean', description: 'Required true for destructive actions cancel/delete' },
@@ -1221,18 +1229,19 @@ export function getAgentTeamScheduleTools(): any[] {
         description:
           'Find, inspect, create, rename, pin, message, steer, interrupt, and supervise other Prometheus chat sessions. ' +
           'Use create_many to split a request into separate first-class Prometheus threads. follow=true starts Goal mode in each target and reports terminal completion, blocking, or failure back to this owner thread. ' +
-          'This controls Prometheus sessions, not subagents, background task records, or Codex threads.',
+          'For active supervision, work as a manager loop: inspect the target, compare it to the objective and acceptance criteria, decide whether to wait/steer/report, and only accept after independent verification. ' +
+          'revise_supervision, pause_supervision, and resume_supervision preserve the same owner/target workflow; they never silently replace the target thread. This controls Prometheus sessions, not subagents, background task records, or Codex threads.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'find', 'read', 'status', 'create', 'create_many', 'send', 'steer', 'interrupt', 'rename', 'pin', 'unpin', 'follow', 'unfollow', 'supervisions', 'review_decision'],
+              enum: ['list', 'find', 'read', 'status', 'create', 'create_many', 'send', 'steer', 'interrupt', 'rename', 'pin', 'unpin', 'follow', 'unfollow', 'supervisions', 'review_decision', 'revise_supervision', 'pause_supervision', 'resume_supervision'],
               description: 'Peer-session operation. Use steer instead of send while the target is actively running.',
             },
             session_id: { type: 'string', description: 'Target Prometheus session id.' },
-            supervision_id: { type: 'string', description: 'Supervision id for unfollow.' },
+            supervision_id: { type: 'string', description: 'Supervision id for review decisions, supervised send/steer, unfollow, revise, pause, or resume.' },
             review_event_id: { type: 'string', description: 'Exact pending event id for an active-supervision review decision.' },
             decision: { type: 'string', enum: ['wait', 'continue', 'verified_complete', 'needs_user', 'failed'], description: 'Authoritative active-supervision review outcome. Only verified_complete may finalize success.' },
             progress_made: { type: 'boolean', description: 'Supervisor judgment of objective progress during this review. True requires bounded evidence.' },
@@ -1242,6 +1251,7 @@ export function getAgentTeamScheduleTools(): any[] {
             prompt: { type: 'string', description: 'Initial work prompt for create, or message text for send/steer.' },
             message: { type: 'string', description: 'Message for send or steer.' },
             objective: { type: 'string', description: 'Autonomous completion objective for create/follow. Defaults to prompt.' },
+            acceptance_criteria: { type: 'string', description: 'Explicit completion checks for create/follow/revise_supervision. Defaults to objective.' },
             workspace: { type: 'string', description: 'Optional target workspace. Defaults to the owner thread workspace.' },
             follow: { type: 'boolean', description: 'For create/create_many: enter autonomous Goal mode and durably supervise. Default true.' },
             max_reviews: { type: 'number', description: 'Optional active-supervision review budget. Default 12.' },
@@ -1257,7 +1267,7 @@ export function getAgentTeamScheduleTools(): any[] {
             include_automated: { type: 'boolean', description: 'For list: include scheduled automation sessions.' },
             all_owners: { type: 'boolean', description: 'For supervisions/unfollow: operate across owner sessions. Use only when the user asks.' },
             reason: { type: 'string', description: 'Reason for interrupting/pausing a target.' },
-            status: { type: 'string', enum: ['active', 'complete', 'blocked', 'failed', 'cancelled'], description: 'Filter supervision status.' },
+            status: { type: 'string', enum: ['active', 'paused', 'complete', 'blocked', 'failed', 'cancelled'], description: 'Filter supervision status.' },
             channel: { type: 'string', enum: ['terminal', 'telegram', 'web', 'mobile', 'discord', 'whatsapp', 'system'], description: 'Optional session list/search channel filter.' },
             limit: { type: 'number', description: 'Maximum results.' },
             offset: { type: 'number', description: 'Session list offset.' },

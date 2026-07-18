@@ -15,8 +15,10 @@ import {
   type ChatMessage,
   type MainChatGoalPlanStep,
   type MainChatGoalState,
+  type MainChatGoalCompletionReport,
   type MainChatGoalTurnPlan,
 } from './session';
+import type { ModelUsageEvent } from '../providers/model-usage';
 
 export interface MainChatGoalPolicy {
   enabled: boolean;
@@ -85,6 +87,31 @@ function elapsedPauseMs(goal: MainChatGoalState, now: number): number {
   const pauseStartedAt = goalPauseStartedAt(goal);
   if (!pauseStartedAt || String(goal.status || '').toLowerCase() !== 'paused') return pausedMs;
   return Math.max(0, pausedMs + Math.max(0, now - pauseStartedAt));
+}
+
+export function buildMainChatGoalCompletionReport(
+  goal: MainChatGoalState,
+  usageEvents: ModelUsageEvent[],
+  reportedAt = Date.now(),
+): MainChatGoalCompletionReport | null {
+  // A user stop is terminal, but it is not evidence of a completed goal and
+  // must not produce success totals in the primary conversation.
+  if (!goal?.id || String(goal.status || '') !== 'done' || goal.lastVerdict === 'stopped') return null;
+  const startedAt = goalStartTime(goal, reportedAt);
+  const completedAt = Math.max(startedAt, Number(goal.completedAt || reportedAt));
+  const reportEndAt = Math.max(completedAt, Number(reportedAt || completedAt));
+  const relevantUsage = (Array.isArray(usageEvents) ? usageEvents : []).filter((event) => {
+    const timestamp = Date.parse(String(event?.timestamp || ''));
+    return Number.isFinite(timestamp) && timestamp >= startedAt && timestamp <= reportEndAt;
+  });
+  return {
+    goalId: goal.id,
+    elapsedMs: Math.max(0, reportEndAt - startedAt - elapsedPauseMs(goal, reportEndAt)),
+    totalTokens: relevantUsage.reduce((sum, event) => sum + Math.max(0, Number(event.totalTokens || 0)), 0),
+    totalCostMicros: relevantUsage.reduce((sum, event) => sum + Math.max(0, Number(event.totalCostMicros || 0)), 0),
+    startedAt,
+    completedAt: reportEndAt,
+  };
 }
 
 function startPause(
@@ -263,7 +290,7 @@ function statusLine(goal: MainChatGoalState | null): string {
   if (!goal) return 'No active main-chat goal. Set one with /goal <objective>.';
   const bits = [
     `Goal: ${goal.goal}`,
-    `Status: ${goal.status}`,
+    `Status: ${goal.lastVerdict === 'stopped' ? 'stopped' : goal.status}`,
     `Turns: ${goal.turnsUsed}`,
   ];
   if (goal.lastReason) bits.push(`Last reason: ${goal.lastReason}`);
@@ -376,7 +403,7 @@ export function handleMainChatGoalCommand(sessionId: string, message: string): M
         ...goal,
         ...finalizePause(goal, now),
         status: 'done',
-        lastVerdict: 'done',
+        lastVerdict: 'stopped',
         lastReason: note || 'Marked done by user.',
         nextStepDirective: undefined,
         blockedReason: undefined,
@@ -388,7 +415,7 @@ export function handleMainChatGoalCommand(sessionId: string, message: string): M
         updatedAt: now,
       };
     });
-    return { handled: true, message: next ? `Marked main-chat goal done.\n${statusLine(next)}` : 'No main-chat goal to mark done.', shouldStartRunner: false, goal: next };
+    return { handled: true, message: next ? `Stopped main-chat goal.\n${statusLine(next)}` : 'No main-chat goal to stop.', shouldStartRunner: false, goal: next };
   }
 
   if (sub === 'revise') {

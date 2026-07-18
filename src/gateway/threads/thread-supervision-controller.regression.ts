@@ -13,6 +13,7 @@ try {
   const runtimeApi = await import('../live-runtime-registry');
   const supervisionApi = await import('./thread-supervision');
   const controllerApi = await import('./thread-supervision-controller');
+  const threadOps = await import('./thread-ops');
   const toolDefs = await import('../tools/defs/agent-team-schedule');
 
   const forcedReviewTools = toolDefs.ensurePrometheusThreadOpsForSupervision([], true);
@@ -180,6 +181,9 @@ try {
   assert.equal(recovered.reviewInFlight, false, 'restart must release durable in-flight lease');
   assert.equal(recovered.pendingReview, true, 'restart must idempotently requeue leased event');
   assert.ok(recovered.pendingEvent?.messages.some((message: any) => /Evidence before/.test(message.excerpt)));
+  const recoveredEventId = recovered.pendingEvent?.id;
+  supervisionApi.recoverThreadSupervisionReviewLeases();
+  assert.equal(supervisionApi.getThreadSupervision(restart.id)?.pendingEvent?.id, recoveredEventId, 'a repeated restart recovery must not duplicate the already released lease');
 
   makeSession('owner_hash', 'Hash owner');
   makeSession('target_hash', 'Hash target');
@@ -224,7 +228,170 @@ try {
   assert.equal(resolved.status, 'complete');
   assert.equal(resolved.finalVerificationState, 'verified');
 
-  console.log('PASS: active Prometheus supervision coalescing, verification, deferral, safeguards, budgets, and restart recovery');
+  // A real manager loop is a sequence of bounded wake/review turns in the
+  // same owner session, not a replacement task. The first completion claim is
+  // rejected for a deficiency; a later target update is independently accepted.
+  makeSession('owner_cycles', 'Persistent manager');
+  makeSession('target_cycles', 'Managed implementation');
+  let cycles = supervisionApi.createThreadSupervision({
+    ownerSessionId: 'owner_cycles', targetSessionId: 'target_cycles',
+    objective: 'Implement the change and prove it with focused tests.',
+    acceptanceCriteria: 'Changed files are reviewed and focused tests pass.', minReviewIntervalMs: 1,
+  });
+  const expectedRunId = cycles.supervisionRunId;
+  const cycleCalls: Array<{ sessionId: string; prompt: string }> = [];
+  const deficiencyFollowUps: string[] = [];
+  const cycleController = new controllerApi.ActiveThreadSupervisionController({
+    pollIntervalMs: 60_000,
+    runInteractiveTurn: async (prompt: string, sessionId: string) => {
+      if (!prompt.includes(`"supervisionId": "${cycles.id}"`)) return { type: 'chat', text: 'Other supervision is outside this fixture.' };
+      cycleCalls.push({ prompt, sessionId });
+      const current = supervisionApi.getThreadSupervision(cycles.id)!;
+      if (cycleCalls.length === 1) {
+        await threadOps.executePrometheusThreadOps('owner_cycles', {
+          action: 'send', session_id: 'target_cycles', supervision_id: current.id,
+          message: 'Please run and report the missing focused verification before claiming completion.', wait: true,
+        }, {
+          runInteractiveTurn: async (_message: string, targetSessionId: string) => {
+            deficiencyFollowUps.push(targetSessionId);
+            return { type: 'chat', text: 'Target received focused verification request.' };
+          },
+        });
+        supervisionApi.resolveThreadSupervisionReview({
+          ownerSessionId: current.ownerSessionId, supervisionId: current.id, reviewEventId: current.leasedEventId!,
+          decision: 'continue', progressMade: true,
+          reason: 'Target claimed completion but did not provide the requested focused test result.',
+          evidence: ['Target transcript was inspected; the required verification output is absent.'],
+        });
+      } else {
+        supervisionApi.resolveThreadSupervisionReview({
+          ownerSessionId: current.ownerSessionId, supervisionId: current.id, reviewEventId: current.leasedEventId!,
+          decision: 'verified_complete', progressMade: true,
+          reason: 'Supervisor independently reviewed the final update and focused test evidence.',
+          evidence: ['Focused regression passed after the target supplied the missing verification.'],
+        });
+      }
+      return { type: 'chat', text: 'Bounded manager review.' };
+    },
+  });
+  addAssistant('target_cycles', 'Implementation is complete.');
+  await cycleController.tick();
+  cycles = supervisionApi.getThreadSupervision(cycles.id)!;
+  assert.equal(cycles.status, 'active', 'a completion claim with a deficiency must remain supervised');
+  assert.deepEqual(deficiencyFollowUps, ['target_cycles'], 'a deficiency must follow up with the existing target thread');
+  assert.equal(cycles.followUpCount, 1);
+  addAssistant('target_cycles', 'Added the missing focused test and it passes.');
+  const doneCycles = sessionApi.getSession('target_cycles');
+  doneCycles.mainChatGoal = { id: 'goal_cycles', objective: 'cycle', status: 'done', createdAt: Date.now(), updatedAt: Date.now() } as any;
+  sessionApi.flushSession('target_cycles');
+  await cycleController.tick();
+  cycles = supervisionApi.getThreadSupervision(cycles.id)!;
+  assert.equal(cycles.status, 'complete');
+  assert.ok(cycleCalls.length >= 2, 'the same workflow must survive multiple wait/review cycles');
+  assert.ok(cycleCalls.every((call) => call.sessionId === 'owner_cycles'));
+  assert.ok(cycleCalls.every((call) => call.prompt.includes(expectedRunId) && call.prompt.includes('SAME durable supervisory workflow')));
+
+  // Interim output from an active target is retained but not reviewed until
+  // the worker becomes idle, avoiding a competing manager turn.
+  makeSession('owner_active_wait', 'Active wait owner');
+  makeSession('target_active_wait', 'Active wait target');
+  const activeWait = supervisionApi.createThreadSupervision({ ownerSessionId: 'owner_active_wait', targetSessionId: 'target_active_wait', objective: 'Wait for active work' });
+  let activeWaitReviews = 0;
+  const activeWaitController = new controllerApi.ActiveThreadSupervisionController({
+    runInteractiveTurn: async (prompt: string) => {
+      if (!prompt.includes(`"supervisionId": "${activeWait.id}"`)) return { type: 'chat', text: 'Other supervision is outside this fixture.' };
+      activeWaitReviews += 1;
+      const current = supervisionApi.getThreadSupervision(activeWait.id)!;
+      supervisionApi.resolveThreadSupervisionReview({
+        ownerSessionId: current.ownerSessionId, supervisionId: current.id, reviewEventId: current.leasedEventId!,
+        decision: 'wait', progressMade: true, reason: 'Target became idle after a material update.', evidence: ['Observed target update.'],
+      });
+      return { type: 'chat', text: 'Reviewed only after idle.' };
+    },
+  });
+  const activeWaitRuntime = runtimeApi.registerLiveRuntime({ kind: 'main_chat', label: 'active target', sessionId: 'target_active_wait' });
+  addAssistant('target_active_wait', 'Interim progress while target is still running.');
+  await activeWaitController.tick();
+  assert.equal(activeWaitReviews, 0, 'active target should be waited on, not reviewed concurrently');
+  runtimeApi.finishLiveRuntime(activeWaitRuntime);
+  await activeWaitController.tick();
+  assert.equal(activeWaitReviews, 1, 'idle transition should wake the same supervision for review');
+
+  // The bounded fallback poll must be quiet when its observation fingerprint
+  // has not changed: no persistence churn and no managed-thread UI event.
+  makeSession('owner_quiet', 'Quiet owner');
+  makeSession('target_quiet', 'Quiet target');
+  const quiet = supervisionApi.createThreadSupervision({ ownerSessionId: 'owner_quiet', targetSessionId: 'target_quiet', objective: 'Wait quietly' });
+  const quietEvents: any[] = [];
+  const quietController = new controllerApi.ActiveThreadSupervisionController({
+    broadcast: (event: any) => quietEvents.push(event),
+    runInteractiveTurn: async () => ({ type: 'chat', text: 'not used' }),
+  });
+  await quietController.tick();
+  const quietFirst = supervisionApi.getThreadSupervision(quiet.id)!;
+  const eventsAfterFirst = quietEvents.filter((event) => event.supervision?.id === quiet.id).length;
+  await quietController.tick();
+  const quietSecond = supervisionApi.getThreadSupervision(quiet.id)!;
+  assert.equal(quietSecond.updatedAt, quietFirst.updatedAt, 'no-change fallback poll must not rewrite the supervision record');
+  assert.equal(quietEvents.filter((event) => event.supervision?.id === quiet.id).length, eventsAfterFirst, 'no-change fallback poll must not publish UI noise');
+
+  // Same content must not repeatedly steer a running target, and live controls
+  // revise/pause/resume the one durable record rather than creating a new one.
+  makeSession('owner_controls', 'Control owner');
+  makeSession('target_controls', 'Control target');
+  let controls = supervisionApi.createThreadSupervision({ ownerSessionId: 'owner_controls', targetSessionId: 'target_controls', objective: 'Original objective' });
+  const targetRuntime = runtimeApi.registerLiveRuntime({ kind: 'main_chat', label: 'running target', sessionId: 'target_controls' });
+  const firstSteer = await threadOps.executePrometheusThreadOps('owner_controls', {
+    action: 'steer', session_id: 'target_controls', supervision_id: controls.id, message: 'Run the focused verification next.',
+  }, {});
+  const duplicateSteer = await threadOps.executePrometheusThreadOps('owner_controls', {
+    action: 'steer', session_id: 'target_controls', supervision_id: controls.id, message: 'Run the focused verification next.',
+  }, {});
+  assert.equal(firstSteer.ok, true);
+  assert.equal(duplicateSteer.deduped, true, 'duplicate guidance must not consume another intervention');
+  controls = supervisionApi.getThreadSupervision(controls.id)!;
+  assert.equal(controls.followUpCount, 1);
+  controls = (await threadOps.executePrometheusThreadOps('owner_controls', {
+    action: 'revise_supervision', supervision_id: controls.id, objective: 'Revised objective', acceptance_criteria: 'New focused test passes',
+  }, {})).supervision;
+  assert.equal(controls.objectiveRevision, 2);
+  assert.equal(controls.targetSessionId, 'target_controls');
+  controls = (await threadOps.executePrometheusThreadOps('owner_controls', { action: 'pause_supervision', supervision_id: controls.id }, {})).supervision;
+  assert.equal(controls.status, 'paused');
+  controls = (await threadOps.executePrometheusThreadOps('owner_controls', { action: 'resume_supervision', supervision_id: controls.id }, {})).supervision;
+  assert.equal(controls.status, 'active');
+  runtimeApi.finishLiveRuntime(targetRuntime);
+
+  // A missing session is a terminal, explicit failure rather than silently
+  // creating a replacement target or polling forever.
+  const missing = supervisionApi.createThreadSupervision({ ownerSessionId: 'owner_controls', targetSessionId: 'missing_target_thread', objective: 'Cannot be observed' });
+  await cycleController.tick();
+  assert.equal(supervisionApi.getThreadSupervision(missing.id)?.status, 'failed');
+
+  // A target that reports an actual blocker is escalated through the
+  // authoritative decision path, rather than being treated as completion.
+  makeSession('owner_blocked', 'Blocked owner');
+  makeSession('target_blocked', 'Blocked target');
+  const blocked = supervisionApi.createThreadSupervision({ ownerSessionId: 'owner_blocked', targetSessionId: 'target_blocked', objective: 'Needs user choice' });
+  const blockedTarget = sessionApi.getSession('target_blocked');
+  blockedTarget.mainChatGoal = { id: 'goal_blocked', objective: 'blocked', status: 'blocked', createdAt: Date.now(), updatedAt: Date.now() } as any;
+  sessionApi.flushSession('target_blocked');
+  const blockedController = new controllerApi.ActiveThreadSupervisionController({
+    runInteractiveTurn: async (prompt: string) => {
+      if (!prompt.includes(`"supervisionId": "${blocked.id}"`)) return { type: 'chat', text: 'Other supervision is outside this fixture.' };
+      const current = supervisionApi.getThreadSupervision(blocked.id)!;
+      supervisionApi.resolveThreadSupervisionReview({
+        ownerSessionId: current.ownerSessionId, supervisionId: current.id, reviewEventId: current.leasedEventId!,
+        decision: 'needs_user', progressMade: false, reason: 'Target requires a user decision before it can continue.', evidence: ['Target goal is blocked.'],
+      });
+      return { type: 'chat', text: 'Escalated blocker.' };
+    },
+  });
+  await blockedController.tick();
+  assert.equal(supervisionApi.getThreadSupervision(blocked.id)?.status, 'blocked');
+  assert.equal(supervisionApi.getThreadSupervision(blocked.id)?.finalVerificationState, 'escalated');
+
+  console.log('PASS: active Prometheus supervision persistence, review cycles, verification, follow-up safeguards, controls, and restart recovery');
 } finally {
   const resolved = path.resolve(tempRoot);
   const tempBase = path.resolve(os.tmpdir());

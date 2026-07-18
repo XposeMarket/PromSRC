@@ -36,6 +36,7 @@ import {
   setToolActivityDisclosureState,
   toolActivitySummary,
 } from '../tool-activity.js';
+import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 installToolActivityExpansionPersistence();
 // (state.js imports handled via window.* proxy above)
 
@@ -793,6 +794,30 @@ function getChatContextWindowDisplayLimit(data, currentState = {}) {
   ));
 }
 
+function getChatContextWindowUsage(current, capacity, suppliedUsage) {
+  const usedTokens = Math.max(0, Number(suppliedUsage?.usedTokens ?? current) || 0);
+  const capacityTokens = Math.max(0, Number(suppliedUsage?.capacityTokens ?? capacity) || 0);
+  const rawPercent = capacityTokens > 0 ? (usedTokens / capacityTokens) * 100 : 0;
+  const percent = Number.isFinite(Number(suppliedUsage?.percent)) ? Math.max(0, Number(suppliedUsage.percent)) : rawPercent;
+  const overflowTokens = Math.max(0, Number(suppliedUsage?.overflowTokens ?? (usedTokens - capacityTokens)) || 0);
+  const status = suppliedUsage?.status || (capacityTokens <= 0 ? 'unavailable' : overflowTokens > 0 ? 'over_capacity' : usedTokens === capacityTokens ? 'full' : 'normal');
+  return {
+    usedTokens,
+    capacityTokens,
+    percent,
+    progressPercent: Math.min(100, percent),
+    overflowTokens,
+    status,
+  };
+}
+
+function formatChatContextWindowUsage(usage) {
+  const base = `${formatContextTokenCount(usage.usedTokens)} / ${formatContextTokenCount(usage.capacityTokens)} (${Math.round(usage.percent)}%)`;
+  return usage.status === 'over_capacity'
+    ? `${base} · ${formatContextTokenCount(usage.overflowTokens)} over`
+    : base;
+}
+
 function applyChatContextWindowLiveOverlay(data) {
   if (!data || data.success === false) return data;
   const live = chatContextWindowState.liveTurn;
@@ -813,34 +838,28 @@ function applyChatContextWindowLiveOverlay(data) {
       label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}${formatContextToolDurationSuffix(tool)}`,
       tokens: Math.max(0, Number(tool.resultTokens || 0)),
       active: true,
-      includedInContext: true,
-      percentBasis: 'window',
+      includedInContext: false,
+      outOfBand: true,
+      percentLabel: 'pending',
       estimated: false,
     }));
   const liveRow = {
     id: 'live_tool_results',
-    label: `Live tool results${live.toolDurationMsTotal ? ` · ${formatContextDurationLabel(live.toolDurationMsTotal)} total` : ''}`,
+    label: `Live tool output (awaiting refresh)${live.toolDurationMsTotal ? ` · ${formatContextDurationLabel(live.toolDurationMsTotal)} total` : ''}`,
     tokens: liveTokens,
     active: true,
-    includedInContext: true,
-    percentBasis: 'window',
+    includedInContext: false,
+    outOfBand: true,
+    percentLabel: 'pending',
     estimated: false,
     children: toolChildren,
   };
-  const freeIndex = rows.findIndex((row) => row?.id === 'free_space');
-  if (freeIndex >= 0) rows[freeIndex] = { ...rows[freeIndex], tokens: Math.max(0, Number(rows[freeIndex].tokens || 0) - liveTokens) };
   const insertAt = rows.findIndex((row) => row?.id === 'mcp_tools');
   if (insertAt >= 0) rows.splice(insertAt, 0, liveRow);
   else rows.push(liveRow);
-  const overlaidState = {
-    ...currentState,
-    currentStateTokens: Math.max(0, Number(currentState.currentStateTokens || data.currentStateTokens || 0)) + liveTokens,
-    rows,
-  };
   return {
     ...data,
-    currentState: overlaidState,
-    currentStateTokens: overlaidState.currentStateTokens,
+    currentState: { ...currentState, rows },
   };
 }
 
@@ -862,7 +881,9 @@ function renderChatContextWindow(data = chatContextWindowState.data) {
 
   if (!data || data.success === false) {
     btn.style.setProperty('--chat-context-window-deg', '0deg');
+    btn.classList.remove('is-over-capacity');
     if (fill) fill.style.width = '0%';
+    if (fill) fill.classList.remove('is-over-capacity');
     if (total) total.textContent = 'Unavailable';
     setChatContextWindowHeadLabel('Context window');
     renderChatContextRows([], 0);
@@ -872,13 +893,16 @@ function renderChatContextWindow(data = chatContextWindowState.data) {
   const currentState = data.currentState || {};
   const current = Math.max(0, Number(data.currentStateTokens || currentState.currentStateTokens || data.currentInputTokens || 0));
   const windowTokens = getChatContextWindowDisplayLimit(data, currentState);
-  const percent = windowTokens > 0 ? Math.min(100, Math.max(0, (current / windowTokens) * 100)) : 0;
-  btn.style.setProperty('--chat-context-window-deg', `${Math.round(percent * 3.6)}deg`);
-  btn.title = `Context window: ${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} tokens`;
-  if (fill) fill.style.width = `${percent.toFixed(1)}%`;
+  const usage = getChatContextWindowUsage(current, windowTokens, data.contextUsage || currentState.contextUsage);
+  const usageLabel = formatChatContextWindowUsage(usage);
+  btn.style.setProperty('--chat-context-window-deg', `${Math.round(usage.progressPercent * 3.6)}deg`);
+  btn.classList.toggle('is-over-capacity', usage.status === 'over_capacity');
+  btn.title = `Context window: ${usageLabel}${usage.status === 'over_capacity' ? ' — context is over capacity' : ''}`;
+  if (fill) fill.style.width = `${usage.progressPercent.toFixed(1)}%`;
+  if (fill) fill.classList.toggle('is-over-capacity', usage.status === 'over_capacity');
   setChatContextWindowHeadLabel('Context window');
   if (total) {
-    total.textContent = `${formatContextTokenCount(current)} / ${formatContextTokenCount(windowTokens)} (${Math.round(percent)}%)`;
+    total.textContent = usageLabel;
   }
   renderChatContextRows(currentState.rows, windowTokens);
 }
@@ -6708,7 +6732,7 @@ function renderMainGoalStrip() {
   if (!strip) return;
   const chatView = document.getElementById('chat-view');
   const goal = getActiveMainChatGoal();
-  if (!goal || goal.status === 'cleared') {
+  if (!goal || ['cleared', 'done', 'completed'].includes(String(goal.status || '').toLowerCase())) {
     strip.style.display = 'none';
     strip.innerHTML = '';
     chatView?.classList.remove('has-main-goal');
@@ -9864,6 +9888,20 @@ function renderRichArtifacts(msg) {
   }).join('');
 }
 
+function renderGoalCompletionReport(report) {
+  if (!report || typeof report !== 'object') return '';
+  const elapsed = formatGoalElapsed(Math.max(0, Number(report.elapsedMs || 0)));
+  const tokens = Math.max(0, Math.round(Number(report.totalTokens || 0)));
+  const costMicros = Math.max(0, Math.round(Number(report.totalCostMicros || 0)));
+  const cost = costMicros > 0 ? ` · $${(costMicros / 1_000_000).toFixed(costMicros >= 10_000 ? 2 : 4)} est.` : '';
+  return `<div class="goal-completion-report" aria-label="Goal completion totals">
+    <span>Goal complete</span>
+    <strong>${escHtml(elapsed)}</strong>
+    <span aria-hidden="true">·</span>
+    <strong>${escHtml(tokens.toLocaleString())} tokens</strong>${cost ? `<span>${escHtml(cost)}</span>` : ''}
+  </div>`;
+}
+
 function renderThreadLinkArtifacts(msg) {
   const artifacts = Array.isArray(msg?.richArtifacts)
     ? msg.richArtifacts.filter((artifact) => artifact?.type === 'thread_links')
@@ -11730,6 +11768,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderMessageProcessPill(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderThreadLinkArtifacts(msg) : ''}
+                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderGoalCompletionReport(msg.goalCompletionReport) : ''}
               </div>
               ${(msg.approvalRequest || msg.questionRequest) && !msg.content ? '' : actionsHtml}
         </div>
@@ -12919,6 +12958,7 @@ function chatMessageRichnessScore(msg) {
     Array.isArray(msg.fileChanges?.files) ? msg.fileChanges.files.length : 0,
     Array.isArray(msg.productCarousel?.items) ? msg.productCarousel.items.length : 0,
     Array.isArray(msg.richArtifacts) ? msg.richArtifacts.length : 0,
+    msg.goalCompletionReport ? 12 : 0,
   ].reduce((sum, value) => sum + value, 0);
 }
 
@@ -12934,6 +12974,7 @@ function mergeChatMessageMetadata(target, source) {
   if (Array.isArray(source.fileChanges?.files) && source.fileChanges.files.length && !target.fileChanges?.files?.length) target.fileChanges = source.fileChanges;
   if (source.productCarousel?.items?.length && !target.productCarousel?.items?.length) target.productCarousel = source.productCarousel;
   if (Array.isArray(source.richArtifacts) && source.richArtifacts.length && !target.richArtifacts?.length) target.richArtifacts = source.richArtifacts;
+  if (!target.goalCompletionReport && source.goalCompletionReport) target.goalCompletionReport = source.goalCompletionReport;
   return target;
 }
 
@@ -14346,6 +14387,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
   };
   const moveVisibleAnswerTextIntoWorkflowTrace = () => {
+    if (streamState.finalResponseStarted) return;
     const text = String(streamState.streamingAIText || '').trim();
     if (!text) return;
     appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', text);
@@ -14355,9 +14397,7 @@ async function sendChat(queuedMessage = null, options = {}) {
   };
   const movePreToolAnswerTextIntoPreamble = moveVisibleAnswerTextIntoWorkflowTrace;
   const shouldRouteTokenToLiveTrace = () => {
-    if (!window.useAgentMode || streamState.finalResponseStarted) return false;
-    const mode = String(streamState.agentExecutionMode || '').trim();
-    return mode !== 'chat' && !sawToolActivityThisTurn;
+    return false;
   };
   const sessionHistoryRef = thisSession ? (thisSession.history || (thisSession.history = [])) : window.chatHistory;
   if (thisSession && window.activeChatSessionId === thisSessionId) {
@@ -14415,7 +14455,6 @@ async function sendChat(queuedMessage = null, options = {}) {
   streamState = resetSessionStreamState(thisSessionId);
   streamState.turnStartedAt = Date.now();
   resetChatContextWindowLiveTurn(thisSessionId);
-  clearBackgroundSpawnDockForSession(thisSessionId);
 
   // Show the user's message immediately, then do attachment work before the API call.
   let fileContextNote = '';
@@ -14636,6 +14675,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 		  let finalFileChanges = null;
 		  let finalProductCarousel = null;
 		  let finalRichArtifacts = null;
+		  let finalGoalCompletionReport = null;
 		  const canvasPresentedFiles = []; // file paths presented to canvas this turn
 		  const turnGeneratedImages = [];
 		  const turnGeneratedImageKeys = new Set();
@@ -14830,6 +14870,10 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        if (event.type !== 'thinking_delta' && !isReasoningCompanionEvent) flushPendingThinkingBurst();
 
 	        switch (event.type) {
+	          case 'final_response_start':
+	            beginFinalResponse(streamState);
+	            scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
+	            break;
           case 'agent_mode':
             window.lastAgentMode = event.mode || '-';
             window.lastTurnKind = event.turnKind || window.lastTurnKind;
@@ -14846,6 +14890,17 @@ async function sendChat(queuedMessage = null, options = {}) {
           case 'session_mode_locked':
             addProcessEntry('info', `Session mode locked: ${event.mode || 'unknown'}`);
             break;
+
+          case 'coding_context_packet': {
+            const status = String(event.status || 'omitted');
+            const reason = String(event.reason || 'unknown');
+            const age = Number.isFinite(Number(event.ageMs)) ? `, age ${Math.round(Number(event.ageMs) / 1000)}s` : '';
+            window.lastCodingContextPacketDecision = { ...event, receivedAt: Date.now() };
+            if (status !== 'omitted' || event.taskId) {
+              addProcessEntry('info', `Code context: ${status} (${reason}${age})`, { action: 'coding_context_packet', ...event });
+            }
+            break;
+          }
 
           case 'creative_mode': {
             const sid = String(event.sessionId || thisSessionId || '').trim();
@@ -14866,15 +14921,10 @@ async function sendChat(queuedMessage = null, options = {}) {
                 voiceLatencyFirstTokenLogged = true;
                 logDesktopVoiceLatency(thisSessionId, 'worker first token', voiceLatencyTurnStartedAt, { textLen: chunk.length });
               }
-              const treatAsLiveWorkflowProse = shouldRouteTokenToLiveTrace();
-              if (treatAsLiveWorkflowProse) {
-                appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', chunk, { append: true });
-              } else {
-                streamState.finalResponseStarted = true;
-                streamState.streamingAIText = (streamState.streamingAIText || '') + chunk;
-                if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
-                scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
-              }
+              beginFinalResponse(streamState);
+              streamState.streamingAIText = appendFinalResponseDelta(streamState.streamingAIText, chunk);
+              if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
+              scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
             }
             break;
           }
@@ -15449,14 +15499,15 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            finalFileChanges = event.fileChanges || null;
 	            finalProductCarousel = event.productCarousel || null;
 	            finalRichArtifacts = Array.isArray(event.richArtifacts) ? event.richArtifacts : null;
+	            finalGoalCompletionReport = event.goalCompletionReport || finalGoalCompletionReport;
 	            streamState.activeModelBadge = null; // clear badge when turn completes
 	            break;
 
 	          case 'final':
-	            finalReply = String(event.text || event.reply || '');
+	            finalReply = reconcileFinalResponse(streamState.streamingAIText, event.text || event.reply || '');
 	            if (finalReply) {
 	              partialContent = finalReply;
-	              streamState.finalResponseStarted = true;
+	              beginFinalResponse(streamState);
 	              streamState.streamingAIText = finalReply;
 	              if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
 	              scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
@@ -15465,6 +15516,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            if (event.fileChanges) finalFileChanges = event.fileChanges;
 	            if (event.productCarousel) finalProductCarousel = event.productCarousel;
 	            if (Array.isArray(event.richArtifacts)) finalRichArtifacts = event.richArtifacts;
+	            if (event.goalCompletionReport) finalGoalCompletionReport = event.goalCompletionReport;
 	            break;
 
           case 'turn_execution_created':
@@ -15489,6 +15541,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        fileChanges: mergeFileChangesWithBackground(finalFileChanges, thisSessionId) || undefined,
 	        productCarousel: finalProductCarousel || undefined,
 	        richArtifacts: (Array.isArray(finalRichArtifacts) && finalRichArtifacts.length) ? finalRichArtifacts : undefined,
+	        goalCompletionReport: finalGoalCompletionReport || undefined,
 	        canvasFiles: canvasPresentedFiles.length ? [...canvasPresentedFiles] : undefined,
 	        generatedImages: turnGeneratedImages.length ? [...turnGeneratedImages] : undefined,
 	        generatedVideos: turnGeneratedVideos.length ? [...turnGeneratedVideos] : undefined,
@@ -15497,6 +15550,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        processEntries: turnEntries,
 	        liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries.slice() : undefined,
 	      });
+	      clearBackgroundSpawnDockForSession(thisSessionId);
 	    } else {
 	      const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
 	      appendAssistantTurnForUser({
@@ -40097,6 +40151,7 @@ function handleMainChatStreamEvent(msg = {}) {
     renderChatMessages();
   };
   const moveVisibleAnswerTextIntoWorkflowTrace = () => {
+    if (streamState.finalResponseStarted) return;
     const text = String(streamState.streamingAIText || '').trim();
     if (!text) return;
     appendLiveTraceToStreamState(streamState, streamState.toolActivityStarted ? 'think' : 'preamble', text);
@@ -40105,9 +40160,7 @@ function handleMainChatStreamEvent(msg = {}) {
   };
   const movePreToolAnswerTextIntoPreamble = moveVisibleAnswerTextIntoWorkflowTrace;
   const shouldRouteTokenToLiveTrace = () => {
-    if (streamState.finalResponseStarted) return false;
-    const mode = String(streamState.agentExecutionMode || '').trim();
-    return mode !== 'chat' && !streamState.toolActivityStarted;
+    return false;
   };
 
   if (evt.type === 'session_title') {
@@ -40153,17 +40206,16 @@ function handleMainChatStreamEvent(msg = {}) {
       }
     }
     renderIfViewing();
+  } else if (evt.type === 'final_response_start') {
+    beginFinalResponse(streamState);
+    scheduleStreamingRenderFor(sid, renderIfViewing);
   } else if (evt.type === 'token') {
     const chunk = String(evt.text || '');
     if (chunk) {
       window._sessionThinking[sid] = true;
       streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
-      if (shouldRouteTokenToLiveTrace()) {
-        appendLiveTraceToStreamState(streamState, streamState.toolActivityStarted ? 'think' : 'preamble', chunk, { append: true });
-      } else {
-        streamState.finalResponseStarted = true;
-        streamState.streamingAIText = (streamState.streamingAIText || '') + chunk;
-      }
+      beginFinalResponse(streamState);
+      streamState.streamingAIText = appendFinalResponseDelta(streamState.streamingAIText, chunk);
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'agent_mode') {
@@ -40272,9 +40324,8 @@ function handleMainChatStreamEvent(msg = {}) {
     sess.progressState = streamState.runtimeProgressState;
     renderIfViewing();
   } else if (evt.type === 'done') {
-    const reply = String(evt.reply || '').trim();
-    const streamed = String(streamState.streamingAIText || '').trim();
-    const content = reply || streamed;
+    const reply = String(evt.reply || '');
+    const content = reconcileFinalResponse(streamState.streamingAIText, reply);
     if (content) {
       const workEndedAt = Date.now();
       const workStartedAt = Number(streamState.turnStartedAt || 0) || workEndedAt;
@@ -40304,6 +40355,7 @@ function handleMainChatStreamEvent(msg = {}) {
           fileChanges: evt.fileChanges || undefined,
           productCarousel: evt.productCarousel || undefined,
           richArtifacts: Array.isArray(evt.richArtifacts) && evt.richArtifacts.length ? evt.richArtifacts : undefined,
+          goalCompletionReport: evt.goalCompletionReport || undefined,
           processEntries: mergeLiveTraceProcessEntries(streamState.liveTraceEntries, sess.processLog.slice(Number(streamState.currentTurnStartIndex || 0))),
         });
       }
@@ -40315,10 +40367,10 @@ function handleMainChatStreamEvent(msg = {}) {
     setTimeout(() => refreshSessionFromServer(sid).catch(() => {}), 900);
     flushStreamingRenderFor(sid, renderIfViewing);
   } else if (evt.type === 'final') {
-    const text = String(evt.text || evt.reply || '').trim();
+    const text = String(evt.text || evt.reply || '');
     if (text) {
-      streamState.finalResponseStarted = true;
-      streamState.streamingAIText = text;
+      beginFinalResponse(streamState);
+      streamState.streamingAIText = reconcileFinalResponse(streamState.streamingAIText, text);
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'error') {

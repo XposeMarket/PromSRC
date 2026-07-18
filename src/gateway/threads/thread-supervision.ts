@@ -4,7 +4,7 @@ import path from 'path';
 import { getConfig } from '../../config/config';
 import { addMessage, flushSession, getSession, getSessionDisplayTitle, type MainChatGoalStatus } from '../session';
 
-export type ThreadSupervisionStatus = 'active' | 'complete' | 'blocked' | 'failed' | 'cancelled';
+export type ThreadSupervisionStatus = 'active' | 'paused' | 'complete' | 'blocked' | 'failed' | 'cancelled';
 
 export type ThreadSupervisionVerificationState =
   | 'pending'
@@ -52,6 +52,15 @@ export interface ThreadSupervision {
   targetSessionId: string;
   targetTitle: string;
   objective: string;
+  /** Explicit acceptance contract retained across review turns and restarts. */
+  acceptanceCriteria: string;
+  /**
+   * Durable identity for one logical manager workflow. Reviews are separate
+   * model calls so they never hold a gateway request open, but they always
+   * continue this checkpoint in the same owner session.
+   */
+  supervisionRunId: string;
+  objectiveRevision: number;
   status: ThreadSupervisionStatus;
   createdAt: number;
   updatedAt: number;
@@ -61,6 +70,7 @@ export interface ThreadSupervision {
   lastObservedMessageCount: number;
   lastObservedMessageIdentity?: string;
   lastObservedMessageHash?: string;
+  lastObservationFingerprint?: string;
   lastReviewedMessageCount: number;
   lastReviewedMessageHash?: string;
   lastReviewedEventId?: string;
@@ -74,6 +84,8 @@ export interface ThreadSupervision {
   lastDecisionProgressMade?: boolean;
   reviewCount: number;
   followUpCount: number;
+  lastFollowUpFingerprint?: string;
+  lastFollowUpAt?: number;
   consecutiveNoProgressCount: number;
   maxReviews: number;
   maxFollowUps: number;
@@ -88,6 +100,14 @@ export interface ThreadSupervision {
   finalVerificationState: ThreadSupervisionVerificationState;
   finalVerificationReason?: string;
   finalSummary?: string;
+  lastStatusSummary?: string;
+  lastStatusEventAt?: number;
+  restartCheckpoint?: {
+    recoveredAt: number;
+    leasedEventId?: string;
+    reviewCount: number;
+    followUpCount: number;
+  };
   notifiedAt?: number;
 }
 
@@ -106,7 +126,7 @@ function normalizeRecord(input: any): ThreadSupervision | null {
   const ownerSessionId = String(input?.ownerSessionId || '').trim();
   const targetSessionId = String(input?.targetSessionId || '').trim();
   if (!id || !ownerSessionId || !targetSessionId) return null;
-  const validStatuses = new Set<ThreadSupervisionStatus>(['active', 'complete', 'blocked', 'failed', 'cancelled']);
+  const validStatuses = new Set<ThreadSupervisionStatus>(['active', 'paused', 'complete', 'blocked', 'failed', 'cancelled']);
   const status = validStatuses.has(input?.status) ? input.status as ThreadSupervisionStatus : 'active';
   const createdAt = Number(input?.createdAt) || Date.now();
   const positiveInt = (value: any, fallback: number, max: number) => {
@@ -120,6 +140,9 @@ function normalizeRecord(input: any): ThreadSupervision | null {
     targetSessionId,
     targetTitle: String(input?.targetTitle || targetSessionId).trim().slice(0, 100) || targetSessionId,
     objective: String(input?.objective || '').trim().slice(0, 12_000),
+    acceptanceCriteria: String(input?.acceptanceCriteria || input?.objective || '').trim().slice(0, 12_000),
+    supervisionRunId: String(input?.supervisionRunId || id).trim().slice(0, 160) || id,
+    objectiveRevision: Math.max(1, Math.floor(Number(input?.objectiveRevision) || 1)),
     status,
     createdAt,
     updatedAt: Number(input?.updatedAt) || createdAt,
@@ -129,6 +152,7 @@ function normalizeRecord(input: any): ThreadSupervision | null {
     lastObservedMessageCount: Math.max(0, Math.floor(Number(input?.lastObservedMessageCount) || 0)),
     lastObservedMessageIdentity: typeof input?.lastObservedMessageIdentity === 'string' ? input.lastObservedMessageIdentity : undefined,
     lastObservedMessageHash: typeof input?.lastObservedMessageHash === 'string' ? input.lastObservedMessageHash : undefined,
+    lastObservationFingerprint: typeof input?.lastObservationFingerprint === 'string' ? input.lastObservationFingerprint.slice(0, 256) : undefined,
     lastReviewedMessageCount: Math.max(0, Math.floor(Number(input?.lastReviewedMessageCount) || 0)),
     lastReviewedMessageHash: typeof input?.lastReviewedMessageHash === 'string' ? input.lastReviewedMessageHash : undefined,
     lastReviewedEventId: typeof input?.lastReviewedEventId === 'string' ? input.lastReviewedEventId : undefined,
@@ -146,6 +170,8 @@ function normalizeRecord(input: any): ThreadSupervision | null {
     lastDecisionProgressMade: typeof input?.lastDecisionProgressMade === 'boolean' ? input.lastDecisionProgressMade : undefined,
     reviewCount: Math.max(0, Math.floor(Number(input?.reviewCount) || 0)),
     followUpCount: Math.max(0, Math.floor(Number(input?.followUpCount) || 0)),
+    lastFollowUpFingerprint: typeof input?.lastFollowUpFingerprint === 'string' ? input.lastFollowUpFingerprint.slice(0, 256) : undefined,
+    lastFollowUpAt: Number(input?.lastFollowUpAt) || undefined,
     consecutiveNoProgressCount: Math.max(0, Math.floor(Number(input?.consecutiveNoProgressCount) || 0)),
     maxReviews: positiveInt(input?.maxReviews, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxReviews, 100),
     maxFollowUps: positiveInt(input?.maxFollowUps, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxFollowUps, 50),
@@ -168,6 +194,14 @@ function normalizeRecord(input: any): ThreadSupervision | null {
             : 'pending',
     finalVerificationReason: typeof input?.finalVerificationReason === 'string' ? input.finalVerificationReason.slice(0, 8000) : undefined,
     finalSummary: typeof input?.finalSummary === 'string' ? input.finalSummary.slice(0, 8000) : undefined,
+    lastStatusSummary: typeof input?.lastStatusSummary === 'string' ? input.lastStatusSummary.slice(0, 2000) : undefined,
+    lastStatusEventAt: Number(input?.lastStatusEventAt) || undefined,
+    restartCheckpoint: input?.restartCheckpoint && typeof input.restartCheckpoint === 'object' ? {
+      recoveredAt: Number(input.restartCheckpoint.recoveredAt) || createdAt,
+      leasedEventId: typeof input.restartCheckpoint.leasedEventId === 'string' ? input.restartCheckpoint.leasedEventId.slice(0, 200) : undefined,
+      reviewCount: Math.max(0, Math.floor(Number(input.restartCheckpoint.reviewCount) || 0)),
+      followUpCount: Math.max(0, Math.floor(Number(input.restartCheckpoint.followUpCount) || 0)),
+    } : undefined,
     notifiedAt: Number(input?.notifiedAt) || undefined,
   };
 }
@@ -227,6 +261,7 @@ export function createThreadSupervision(input: {
   targetSessionId: string;
   targetTitle?: string;
   objective: string;
+  acceptanceCriteria?: string;
   maxReviews?: number;
   maxFollowUps?: number;
   maxElapsedMs?: number;
@@ -272,12 +307,16 @@ export function createThreadSupervision(input: {
     targetSessionId,
     targetTitle: String(input.targetTitle || targetSessionId).trim().slice(0, 100) || targetSessionId,
     objective: String(input.objective || '').trim().slice(0, 12_000),
+    acceptanceCriteria: String(input.acceptanceCriteria || input.objective || '').trim().slice(0, 12_000),
+    supervisionRunId: `supervision-run_${crypto.randomUUID()}`,
+    objectiveRevision: 1,
     status: 'active',
     createdAt: now,
     updatedAt: now,
     lastObservedMessageCount: history.length,
     lastObservedMessageIdentity: latestIdentity,
     lastObservedMessageHash: latest ? crypto.createHash('sha256').update(`${history.length}:${latestIdentity}`).digest('hex') : undefined,
+    lastObservationFingerprint: latest ? crypto.createHash('sha256').update(`${history.length}:${latestIdentity}`).digest('hex') : undefined,
     lastReviewedMessageCount: history.length,
     lastReviewedMessageHash: latest ? crypto.createHash('sha256').update(`${history.length}:${latestIdentity}`).digest('hex') : undefined,
     reviewCount: 0,
@@ -375,6 +414,12 @@ export function recoverThreadSupervisionReviewLeases(): ThreadSupervision[] {
       pendingReview: true,
       pendingEvent: mergePersistedEvents(record.leasedEvent, record.pendingEvent),
       lastReviewReason: 'Recovered an interrupted active-supervision review lease after restart.',
+      restartCheckpoint: {
+        recoveredAt: Date.now(),
+        leasedEventId: record.leasedEventId,
+        reviewCount: record.reviewCount,
+        followUpCount: record.followUpCount,
+      },
     },
   })));
 }
@@ -411,10 +456,67 @@ export function assertThreadSupervisionFollowUpAllowed(input: {
   return active;
 }
 
-export function commitThreadSupervisionFollowUp(supervisionId: string): ThreadSupervision | null {
+export function isThreadSupervisionFollowUpDuplicate(supervisionId: string, fingerprint: string): boolean {
+  const record = getThreadSupervision(supervisionId);
+  return !!record && record.status === 'active' && !!fingerprint && record.lastFollowUpFingerprint === fingerprint;
+}
+
+export function commitThreadSupervisionFollowUp(supervisionId: string, fingerprint?: string): ThreadSupervision | null {
   const record = getThreadSupervision(supervisionId);
   if (!record || record.status !== 'active') return record;
-  return updateThreadSupervision(record.id, { followUpCount: record.followUpCount + 1 });
+  if (fingerprint && record.lastFollowUpFingerprint === fingerprint) return record;
+  return updateThreadSupervision(record.id, {
+    followUpCount: record.followUpCount + 1,
+    lastFollowUpFingerprint: fingerprint ? String(fingerprint).slice(0, 256) : record.lastFollowUpFingerprint,
+    lastFollowUpAt: Date.now(),
+  });
+}
+
+/** Update the current manager contract without replacing the managed thread. */
+export function reviseThreadSupervision(input: {
+  ownerSessionId: string;
+  supervisionId: string;
+  objective?: string;
+  acceptanceCriteria?: string;
+}): ThreadSupervision {
+  const record = getThreadSupervision(input.supervisionId);
+  if (!record) throw new Error('Supervision not found.');
+  if (record.ownerSessionId !== String(input.ownerSessionId || '').trim()) throw new Error('Only the owner session may revise this supervision.');
+  if (!['active', 'paused'].includes(record.status)) throw new Error(`Supervision is already ${record.status}.`);
+  const objective = String(input.objective || record.objective).trim().slice(0, 12_000);
+  const acceptanceCriteria = String(input.acceptanceCriteria || objective || record.acceptanceCriteria).trim().slice(0, 12_000);
+  if (!objective) throw new Error('objective is required.');
+  const next = updateThreadSupervision(record.id, {
+    objective,
+    acceptanceCriteria,
+    objectiveRevision: record.objectiveRevision + 1,
+    consecutiveNoProgressCount: 0,
+    lastStatusSummary: 'Supervisor objective updated; the existing managed thread remains the target.',
+    lastStatusEventAt: Date.now(),
+  });
+  if (!next) throw new Error('Could not update supervision.');
+  return next;
+}
+
+export function pauseThreadSupervision(id: string, reason = 'Paused by supervising user.'): ThreadSupervision | null {
+  return updateThreadSupervision(id, {
+    status: 'paused', pendingReview: false, reviewInFlight: false,
+    lastStatusSummary: String(reason).slice(0, 2000), lastStatusEventAt: Date.now(),
+  });
+}
+
+export function resumeThreadSupervision(id: string, ownerSessionId: string): ThreadSupervision {
+  const record = getThreadSupervision(id);
+  if (!record) throw new Error('Supervision not found.');
+  if (record.ownerSessionId !== String(ownerSessionId || '').trim()) throw new Error('Only the owner session may resume this supervision.');
+  if (record.status !== 'paused') throw new Error(`Supervision is ${record.status}, not paused.`);
+  const next = updateThreadSupervision(record.id, {
+    status: 'active',
+    lastStatusSummary: 'Supervision resumed in the same owner session and workflow.',
+    lastStatusEventAt: Date.now(),
+  });
+  if (!next) throw new Error('Could not resume supervision.');
+  return next;
 }
 
 export function resolveThreadSupervisionReview(input: {

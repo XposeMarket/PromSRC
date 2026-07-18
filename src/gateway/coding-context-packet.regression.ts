@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -49,7 +50,7 @@ const warm = selectCodingContextPacket({
   now: baseTime + 2_000,
 });
 assert.equal(warm.status, 'injected');
-assert.match(warm.block, /CODING_CONTEXT_PACKET_V2/);
+assert.match(warm.block, /CODING_CONTEXT_PACKET_V3/);
 assert.match(warm.block, /src\/gateway\/prompt-builder\.ts/);
 assert.match(warm.block, /buildPrompt/);
 assert.match(warm.block, /observed_snapshot_sha256/);
@@ -57,6 +58,121 @@ assert.doesNotMatch(warm.block, /authoritative_content_sha256/);
 assert.match(warm.block, /npx tsc --noEmit/);
 assert.doesNotMatch(warm.block, /DO_NOT_REINJECT_RAW_RESULT|raw verification prose/);
 assert.ok(warm.block.length <= 6_000);
+
+const authoritativePath = path.join(root, 'src', 'gateway', 'coding-context-packet.ts');
+const authoritativeContent = fs.readFileSync(authoritativePath);
+const authoritativeHash = crypto.createHash('sha256').update(authoritativeContent).digest('hex');
+observeCodingContext({
+  sessionId: 'structured-evidence-session',
+  objective: 'Continue improving src/gateway/coding-context-packet.ts',
+  projectRoot: root,
+  toolName: 'workspace_edit',
+  args: { action: 'find_replace', path: 'src/gateway/coding-context-packet.ts' },
+  result: 'structured tool result',
+  extra: {
+    codeEvidence: {
+      version: 1,
+      kind: 'code_evidence',
+      tool_name: 'workspace_edit',
+      operation: 'mutation',
+      generated_at: new Date(baseTime + 2_100).toISOString(),
+      generation_ms: 1,
+      truncated: false,
+      files: [{
+        path: 'src/gateway/coding-context-packet.ts',
+        operation: 'update',
+        exists_after: true,
+        authoritative_content_sha256: authoritativeHash,
+        size_bytes: authoritativeContent.length,
+        line_count: 700,
+        changed_ranges: [{ before_start_line: 10, before_end_line: 10, after_start_line: 10, after_end_line: 10 }],
+        post_edit_windows: [{ start_line: 8, end_line: 12, changed_start_line: 10, changed_end_line: 10, content: '  8: before\n> 10: updated\n  12: after', truncated: false }],
+        evidence_complete: true,
+        observed_at: new Date(baseTime + 2_100).toISOString(),
+        provenance: 'tool:workspace_edit:workspace_snapshot',
+      }],
+    },
+  },
+  now: baseTime + 2_100,
+});
+const structured = selectCodingContextPacket({
+  enabled: true,
+  sessionId: 'structured-evidence-session',
+  message: 'Continue with coding-context-packet.ts.',
+  projectRoot: root,
+  executionMode: 'interactive',
+  now: baseTime + 2_200,
+});
+assert.equal(structured.status, 'injected');
+assert.match(structured.block, /state_matches_evidence": true/);
+assert.match(structured.block, /post_edit_windows/);
+assert.match(structured.block, /> 10: updated/);
+assert.doesNotMatch(structured.block, /"required_action"\s*:/);
+const shadowed = selectCodingContextPacket({
+  enabled: true,
+  shadowMode: true,
+  sessionId: 'structured-evidence-session',
+  message: 'Continue with coding-context-packet.ts.',
+  projectRoot: root,
+  executionMode: 'interactive',
+  now: baseTime + 2_300,
+});
+assert.equal(shadowed.status, 'shadowed');
+assert.equal(shadowed.block, '');
+const legacyFallback = selectCodingContextPacket({
+  enabled: true,
+  packetVersion: 2,
+  sessionId: 'structured-evidence-session',
+  message: 'Continue with coding-context-packet.ts.',
+  projectRoot: root,
+  executionMode: 'interactive',
+  now: baseTime + 2_350,
+});
+assert.equal(legacyFallback.status, 'injected');
+assert.match(legacyFallback.block, /CODING_CONTEXT_PACKET_V2/);
+assert.doesNotMatch(legacyFallback.block, /post_edit_windows/);
+
+observeCodingContext({
+  sessionId: 'packet-cap-session', objective: 'Continue capped packet target', projectRoot: root,
+  toolName: 'workspace_edit', args: { action: 'find_replace', path: 'src/gateway/coding-context-packet.ts' }, result: 'ok', now: baseTime + 2_360,
+  extra: { codeEvidence: {
+    version: 1, kind: 'code_evidence', tool_name: 'workspace_edit', operation: 'mutation', generated_at: new Date(baseTime + 2_360).toISOString(), generation_ms: 1, truncated: false,
+    files: [{ path: 'src/gateway/coding-context-packet.ts', operation: 'update', exists_after: true, authoritative_content_sha256: authoritativeHash, changed_ranges: [], post_edit_windows: [{ start_line: 1, end_line: 10, changed_start_line: 1, changed_end_line: 10, content: 'x'.repeat(2_500), truncated: false }], evidence_complete: true, observed_at: new Date(baseTime + 2_360).toISOString(), provenance: 'test' }],
+  } },
+});
+const capped = selectCodingContextPacket({ enabled: true, sessionId: 'packet-cap-session', message: 'Continue capped packet target.', projectRoot: root, executionMode: 'interactive', maxChars: 2_000, now: baseTime + 2_370 });
+assert.deepEqual({ status: capped.status, reason: capped.reason }, { status: 'omitted', reason: 'packet_hard_cap' });
+
+const mismatchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-coding-mismatch-'));
+const mismatchFile = path.join(mismatchRoot, 'target.ts');
+fs.writeFileSync(mismatchFile, 'export const state = 1;\n', 'utf8');
+const mismatchHash = crypto.createHash('sha256').update(fs.readFileSync(mismatchFile)).digest('hex');
+observeCodingContext({
+  sessionId: 'hash-mismatch-session', objective: 'Continue target.ts editing', projectRoot: mismatchRoot,
+  toolName: 'workspace_edit', args: { action: 'find_replace', path: 'target.ts' }, result: 'ok', now: baseTime + 2_400,
+  extra: { codeEvidence: {
+    version: 1, kind: 'code_evidence', tool_name: 'workspace_edit', operation: 'mutation', generated_at: new Date(baseTime + 2_400).toISOString(), generation_ms: 1, truncated: false,
+    files: [{ path: 'target.ts', operation: 'update', exists_after: true, authoritative_content_sha256: mismatchHash, changed_ranges: [], post_edit_windows: [{ start_line: 1, end_line: 1, changed_start_line: 1, changed_end_line: 1, content: '> 1: stale window', truncated: false }], evidence_complete: true, observed_at: new Date(baseTime + 2_400).toISOString(), provenance: 'test' }],
+  } },
+});
+fs.writeFileSync(mismatchFile, 'export const state = 2;\n', 'utf8');
+const mismatch = selectCodingContextPacket({ enabled: true, sessionId: 'hash-mismatch-session', message: 'Continue target.ts.', projectRoot: mismatchRoot, executionMode: 'interactive', now: baseTime + 2_500 });
+assert.equal(mismatch.status, 'injected');
+assert.match(mismatch.block, /state_matches_evidence": false/);
+assert.match(mismatch.block, /on-disk state changed/);
+assert.doesNotMatch(mismatch.block, /stale window/);
+fs.rmSync(mismatchRoot, { recursive: true, force: true });
+
+const configuredFresh = selectCodingContextPacket({
+  enabled: true,
+  sessionId: 'coding-session',
+  message: 'Continue the prompt-builder.ts fix.',
+  projectRoot: root,
+  executionMode: 'interactive',
+  maxAgeMs: 14 * 24 * 60 * 60_000,
+  now: baseTime + 31 * 60_000,
+});
+assert.equal(configuredFresh.status, 'injected');
 
 const ambiguous = selectCodingContextPacket({
   enabled: true,
@@ -227,6 +343,19 @@ assert.match(nextAgentTask.block, /figure-8-drift-vita\/src\/main\.cpp/);
 assert.match(nextAgentTask.block, /previous_runtime_task_id/);
 assert.match(nextAgentTask.block, /Reread this file/);
 
-assert.deepEqual(getCodingContextPacketTelemetry(), { injected: 6, omitted: 2, rejected_stale: 1 });
+observeCodingContext({
+  sessionId: 'subagent-task-two-session', scopeId: 'agent:dante', actorId: 'dante', runtimeTaskId: 'task-two',
+  objective: 'Build a completely unrelated parser utility', projectRoot: root, toolName: 'workspace_edit',
+  args: { action: 'find_replace', path: 'src/parser-utility.ts' }, result: 'edit applied', now: baseTime + 5_000,
+});
+const isolatedAgentTask = selectCodingContextPacket({
+  enabled: true, sessionId: 'subagent-task-three-session', scopeId: 'agent:dante', actorId: 'dante', runtimeTaskId: 'task-three',
+  message: 'Continue the parser utility work.', projectRoot: root, executionMode: 'background_agent', now: baseTime + 6_000,
+});
+assert.equal(isolatedAgentTask.status, 'injected');
+assert.match(isolatedAgentTask.block, /src\/parser-utility\.ts/);
+assert.doesNotMatch(isolatedAgentTask.block, /figure-8-drift-vita/);
+
+assert.deepEqual(getCodingContextPacketTelemetry(), { injected: 11, shadowed: 1, omitted: 3, rejected_stale: 1 });
 try { fs.rmSync(packetStore, { force: true }); } catch {}
 console.log('coding-context-packet regression: ok');

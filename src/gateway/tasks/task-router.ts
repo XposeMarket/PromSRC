@@ -692,6 +692,48 @@ export function completePlainGatewayRestartTask(taskId: string): boolean {
   return true;
 }
 
+/**
+ * Reopens a completed task for one explicit follow-up without erasing the
+ * completed run. The caller is responsible for authorization and launching.
+ */
+export function appendScopedTaskContinuation(task: TaskRecord, followUp: string): TaskRecord {
+  const note = String(followUp || '').trim();
+  if (task.status !== 'complete') throw new Error('only complete tasks can be continued');
+  if (!note) throw new Error('scoped continuation requires new work');
+  const evidence = getEvidenceBusSnapshot(task.id);
+  task.continuationHistory = [
+    ...(task.continuationHistory || []),
+    {
+      continuedAt: Date.now(),
+      finalSummary: task.finalSummary,
+      completedAt: task.completedAt,
+      currentStepIndex: task.currentStepIndex,
+      plan: (task.plan || []).map((step) => ({ ...step })),
+      evidence: evidence || undefined,
+      note: note.slice(0, 2_000),
+    },
+  ].slice(-12);
+  const nextIndex = task.plan.length;
+  task.plan = [...task.plan, { index: nextIndex, description: note.slice(0, 1_000), status: 'pending' }];
+  task.currentStepIndex = nextIndex;
+  task.status = 'queued';
+  task.pauseReason = undefined;
+  task.completedAt = undefined;
+  task.finalSummary = undefined;
+  const resumeMessages = Array.isArray(task.resumeContext?.messages) ? task.resumeContext.messages : [];
+  task.resumeContext = {
+    ...(task.resumeContext || { messages: [], browserSessionActive: false, round: 0, orchestrationLog: [] }),
+    messages: [...resumeMessages, {
+      role: 'user',
+      content: `[SCOPED TASK CONTINUATION]\nThe prior completed work, plan, final summary, and evidence are preserved in continuation history. Do only this additional requirement: ${note}`,
+      timestamp: Date.now(),
+    }].slice(-80),
+  };
+  saveTask(task);
+  appendJournal(task.id, { type: 'plan_mutation', content: `task_control continue appended scoped follow-up step ${nextIndex + 1}: ${note.slice(0, 180)}` });
+  return loadTask(task.id) || task;
+}
+
 export async function handleTaskControlAction(sessionId: string, args: any): Promise<TaskControlResponse> {
   const action = String(args?.action || '').trim().toLowerCase();
   const taskId = String(args?.task_id || args?.id || '').trim();
@@ -837,7 +879,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     return { success: true, action, task: summarizeTaskRecord(task), message: `Loaded task "${task.title}".` };
   }
 
-  const resolveCandidateForAction = (candidateAction: 'resume' | 'rerun' | 'pause' | 'cancel' | 'delete' | 'steer') => {
+  const resolveCandidateForAction = (candidateAction: 'resume' | 'rerun' | 'continue' | 'pause' | 'cancel' | 'delete' | 'steer') => {
     if (taskId) {
       const exact = loadTask(taskId);
       if (!exact) return { task: null as TaskRecord | null, err: `Task not found: ${taskId}` };
@@ -845,7 +887,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     }
 
     const preferredStatuses: TaskStatus[] =
-      candidateAction === 'rerun'
+      candidateAction === 'rerun' || candidateAction === 'continue'
         ? ['needs_assistance', 'stalled', 'paused', 'awaiting_user_input', 'failed', 'complete']
         : candidateAction === 'delete'
           ? ['needs_assistance', 'stalled', 'paused', 'awaiting_user_input', 'failed', 'queued', 'complete', 'waiting_subagent']
@@ -887,6 +929,26 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
         resumeAfterMessage: args?.resume_after_message === true || args?.resumeAfterMessage === true,
       },
     );
+  }
+
+  if (action === 'continue') {
+    const resolved = resolveCandidateForAction('continue');
+    if (!resolved.task) {
+      return { success: false, action, code: resolved.err === 'AMBIGUOUS' ? 'ambiguous' : 'no_candidate', message: resolved.err };
+    }
+    const task = loadTask(resolved.task.id);
+    if (!task) return { success: false, action, code: 'not_found', message: `Task not found: ${resolved.task.id}` };
+    if (task.status !== 'complete') {
+      return { success: false, action, code: 'not_complete', task: summarizeTaskRecord(task), message: `Task "${task.title}" is ${task.status}; use resume or steer for the existing run.` };
+    }
+    const followUp = String(args?.new_work || args?.newWork || args?.note || args?.message || '').trim();
+    if (!followUp) {
+      return { success: false, action, code: 'missing_new_work', message: 'task_control(continue) requires new_work describing the scoped missing requirement.' };
+    }
+    const refreshedForContinuation = appendScopedTaskContinuation(task, followUp);
+    launchBackgroundTaskRunner(task.id);
+    const refreshed = loadTask(task.id) || refreshedForContinuation;
+    return { success: true, action, task: summarizeTaskRecord(refreshed), message: `Continued task "${refreshed.title}" with one scoped follow-up step; completed work and evidence were preserved.` };
   }
 
   if (action === 'resume' || action === 'rerun') {

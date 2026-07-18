@@ -3,6 +3,7 @@
 
 import { api } from '../api.js';
 import { API } from '../state.js';
+import { presentChatError } from '../chat-error-presentation.js';
 
 /* ---------------- pairing / device token ---------------- */
 // All mobile fetches go through `mfetch()` below which automatically attaches
@@ -1585,6 +1586,15 @@ export async function loadMobileChatRunStatus(sessionId) {
   return mfetch(`/api/mobile/chat/runs/${encodeURIComponent(sid)}`);
 }
 
+export async function reconcileMobileChatTurn(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  return mfetch(`/api/mobile/chat/reconcile/${encodeURIComponent(sid)}`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
 export async function updateMobileChatSessionHistory(sessionId, history = [], options = {}) {
   const sid = String(sessionId || '').trim();
   if (!sid) throw new Error('Session id required');
@@ -1849,38 +1859,41 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
     const normalized = new Error(message);
     normalized.cause = err;
     normalized.mobileStreamDisconnected = disconnected;
+    normalized.chatPresentation = presentChatError({ message, mobileStreamDisconnected: disconnected, rawBody: raw });
     return normalized;
   };
 
   (async () => {
     let res;
-    try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-          ...(getDeviceToken() ? { 'X-Pairing-Token': getDeviceToken() } : {}),
+    let recoveryRetried = false;
+    const requestInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+        ...(getDeviceToken() ? { 'X-Pairing-Token': getDeviceToken() } : {}),
+      },
+      body: JSON.stringify({
+        message,
+        sessionId,
+        clientRequestId: typeof clientRequestId === 'string' && clientRequestId.trim() ? clientRequestId.trim() : undefined,
+        origin: {
+          channel: 'mobile',
+          surface: 'mobile_app',
+          device: 'phone',
+          label: 'Mobile app',
+          source: 'mobile_web_ui',
         },
-        body: JSON.stringify({
-          message,
-          sessionId,
-          clientRequestId: typeof clientRequestId === 'string' && clientRequestId.trim() ? clientRequestId.trim() : undefined,
-          origin: {
-            channel: 'mobile',
-            surface: 'mobile_app',
-            device: 'phone',
-            label: 'Mobile app',
-            source: 'mobile_web_ui',
-          },
-          attachments: Array.isArray(attachments) && attachments.length ? attachments : undefined,
-          attachmentPreviews: Array.isArray(attachmentPreviews) && attachmentPreviews.length ? attachmentPreviews : undefined,
-          callerContext: typeof callerContext === 'string' && callerContext.trim() ? callerContext.trim() : undefined,
-          excludedSkillIds: Array.isArray(excludedSkillIds) && excludedSkillIds.length ? excludedSkillIds : undefined,
-          selectedSkillIds: Array.isArray(selectedSkillIds) && selectedSkillIds.length ? selectedSkillIds : undefined,
-        }),
-        signal: ctrl.signal,
-      });
+        attachments: Array.isArray(attachments) && attachments.length ? attachments : undefined,
+        attachmentPreviews: Array.isArray(attachmentPreviews) && attachmentPreviews.length ? attachmentPreviews : undefined,
+        callerContext: typeof callerContext === 'string' && callerContext.trim() ? callerContext.trim() : undefined,
+        excludedSkillIds: Array.isArray(excludedSkillIds) && excludedSkillIds.length ? excludedSkillIds : undefined,
+        selectedSkillIds: Array.isArray(selectedSkillIds) && selectedSkillIds.length ? selectedSkillIds : undefined,
+      }),
+      signal: ctrl.signal,
+    };
+    try {
+      res = await fetch(url, requestInit);
     } catch (err) {
       cb('onError', toChatStreamError(err));
       cb('onDone');
@@ -1888,10 +1901,42 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
     }
 
     if (!res.ok || !res.body) {
-      const body = await res.text?.().catch(() => '') || '';
-      cb('onError', new Error(`Chat HTTP ${res.status}${body ? ': ' + body.slice(0, 200) : ''}`));
+      let body = await res.text?.().catch(() => '') || '';
+      let payload = {};
+      try { payload = JSON.parse(body); } catch {}
+      // A 409 can be a leftover in-memory stream/lease after a reconnect. Ask
+      // the server to reconcile once, then replay this exact idempotent request.
+      // Never loop: a real active runtime remains a normal recoverable error.
+      if (!recoveryRetried && res.status === 409 && String(payload?.code || '') === 'SESSION_TURN_ACTIVE') {
+        recoveryRetried = true;
+        const reconciliation = await reconcileMobileChatTurn(sessionId).catch(() => null);
+        if (reconciliation?.success && reconciliation.active !== true) {
+          try {
+            res = await fetch(url, requestInit);
+            if (res.ok && res.body) {
+              // Continue below with the successful replacement response.
+            } else {
+              body = await res.text?.().catch(() => '') || body;
+              try { payload = JSON.parse(body); } catch {}
+            }
+          } catch (err) {
+            cb('onError', toChatStreamError(err));
+            cb('onDone');
+            return;
+          }
+        }
+      }
+      if (res.ok && res.body) {
+        // Reconciliation succeeded and the idempotent retry was admitted.
+      } else {
+      const presentation = presentChatError({ rawBody: body, httpStatus: res.status, message: `Chat HTTP ${res.status}: ${body}` });
+      const normalized = new Error(presentation.summary);
+      normalized.chatPresentation = presentation;
+      normalized.rawBody = body;
+      cb('onError', normalized);
       cb('onDone');
       return;
+      }
     }
 
     const reader = res.body.getReader();

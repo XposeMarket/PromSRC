@@ -61,6 +61,7 @@ import { executeWeatherLookup } from '../../tools/weather';
 import { executePolymarketLookup } from '../../tools/polymarket';
 import { executeMapLookup } from '../../tools/mapcard';
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../context/model-context';
+import { deriveContextWindowUsage } from '../context/context-window-usage';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
 import { envelopeOversizedToolResult } from '../tool-result-envelope';
 import { hookBus } from '../hooks';
@@ -90,7 +91,7 @@ import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
-import { decideTurnAdmission, mainChatTurnCoordinator } from '../chat/turn-coordinator';
+import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../chat/turn-coordinator';
 import {
   browserOpen,
   browserSnapshot,
@@ -883,6 +884,9 @@ type MainChatStreamState = {
 const mainChatStreams = new Map<string, MainChatStreamState>();
 const MAIN_CHAT_STREAM_MAX_EVENTS = 12000;
 const MAIN_CHAT_STREAM_TTL_MS = 45 * 60 * 1000;
+// A stream/lease without a running runtime can exist briefly while a caller is
+// wiring up SSE.  It must never become a permanent admission lock, though.
+const MAIN_CHAT_ORPHAN_GRACE_MS = 2 * 60 * 1000;
 const MAIN_CHAT_WS_UPDATE_THROTTLE_MS = 900;
 const MAIN_CHAT_WS_DIRECT_EVENTS = new Set([
   'user_message',
@@ -1067,6 +1071,56 @@ function truncateRuntimeProcessText(value: unknown, max = 4000): string {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
+type MainChatTurnReconciliation = {
+  active: boolean;
+  runtime: ReturnType<typeof getLiveRuntime>;
+  stream: MainChatStreamState | null;
+  recovered: boolean;
+  recoveryReason?: 'orphaned_stream_or_lease';
+};
+
+/**
+ * The runtime is the durable owner of a chat turn.  Stream and coordinator
+ * state are delivery/admission helpers only.  When their owner vanished, clear
+ * them together so a reconnect cannot be blocked indefinitely by ghost state.
+ */
+function reconcileMainChatTurn(sessionId: string): MainChatTurnReconciliation {
+  const sid = String(sessionId || '').trim();
+  const runtime = listLiveRuntimes()
+    .filter((item) => isLiveRunningRuntime(item)
+      && (item.kind === 'main_chat' || item.kind === 'main_chat_goal')
+      && String(item.sessionId || '') === sid)
+    .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+  const stream = getMainChatStream(sid);
+  if (runtime) return { active: true, runtime, stream, recovered: false };
+
+  const lease = mainChatTurnCoordinator.getActive(sid);
+  const latestOwnerActivity = Math.max(
+    Number(stream?.updatedAt || stream?.startedAt || 0) || 0,
+    Number(lease?.acquiredAt || 0) || 0,
+  );
+  // Avoid racing a just-created stream from a non-HTTP caller.  The normal
+  // HTTP path registers its runtime synchronously, so only a genuinely
+  // abandoned owner can outlive this grace period.
+  if ((stream?.active || lease) && Date.now() - latestOwnerActivity <= MAIN_CHAT_ORPHAN_GRACE_MS) {
+    return { active: true, runtime: null, stream, recovered: false };
+  }
+
+  let recovered = false;
+  if (stream?.active) {
+    finishMainChatStream(sid, stream.streamId);
+    recovered = true;
+  }
+  if (lease) recovered = mainChatTurnCoordinator.discard(sid) || recovered;
+  return {
+    active: false,
+    runtime: null,
+    stream: getMainChatStream(sid),
+    recovered,
+    ...(recovered ? { recoveryReason: 'orphaned_stream_or_lease' as const } : {}),
+  };
+}
+
 function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: unknown): void {
   const content = truncateRuntimeProcessText(value, 12_000);
   if (!content) return;
@@ -1216,6 +1270,7 @@ import {
 import { goalDecomposeTool, executeGoalDecompose, approveGoal, loadGoal, listGoals } from '../goal-decomposer';
 import {
   blockMainChatGoalFromOwner,
+  buildMainChatGoalCompletionReport,
   buildMainChatGoalContinuationPrompt,
   getAllMainChatGoalRecords,
   handleMainChatGoalCommand,
@@ -1493,6 +1548,7 @@ import { attachWorkspaceCheckpoint, createWorkspaceTurnCheckpoint } from '../../
 import {
   getCodingContextPacketTelemetry,
   observeCodingContext,
+  recordCodingContextPacketDecisionDiagnostic,
   selectCodingContextPacket,
 } from '../coding-context-packet';
 
@@ -2306,7 +2362,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   try {
   const latencyStartAt = Date.now();
@@ -2335,6 +2391,7 @@ async function handleChat(
   const ollama = getOllamaClient();
   const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
   const isSyntheticThreadSupervisionReview = runtimeOptions?.syntheticThreadSupervisionReview === true;
+  let activeInternalWatchContext = runtimeOptions?.internalWatchContext;
   const excludedSkillIds = Array.isArray(runtimeOptions?.excludedSkillIds)
     ? runtimeOptions.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
@@ -2354,12 +2411,19 @@ async function handleChat(
     ? sessionWorkspace
     : configuredWorkspace;
   const workContextConfig = (getConfig().getConfig() as any)?.work_context || {};
-  const codingContextPacketEnabled = process.env.PROMETHEUS_CODING_CONTEXT_PACKET_V2 === '1'
-    || workContextConfig.enabled === true;
+  const codingContextPacketEnabled = process.env.PROMETHEUS_CODING_CONTEXT_PACKET_V3 === '1'
+    || process.env.PROMETHEUS_CODING_CONTEXT_PACKET_V2 === '1'
+    || (workContextConfig.enabled === true && workContextConfig.fast_paths?.coding !== false);
+  const codingContextPacketShadowMode = workContextConfig.shadow_mode === true;
+  const codingContextPacketMaxChars = Math.max(2_000, Math.min(96_000, Math.floor(Number(workContextConfig.max_packet_bytes) || 12_000)));
   if (workspacePath && sessionWorkspace !== workspacePath) {
     setWorkspace(sessionId, workspacePath);
   }
   const rawSendSSE = sendSSE;
+  // Visible model deltas are the final-response channel.  Publish this once
+  // before the first delta so clients never have to guess from tool timing
+  // whether text belongs to commentary/activity or the assistant answer.
+  let finalResponseStreamStarted = false;
   const callerContextText = String(callerContext || '');
   const durableTaskContextMatch = callerContextText.match(/\[BACKGROUND TASK CONTEXT\][\s\S]*?\bTask ID:\s*([a-zA-Z0-9_-]+)/i);
   const durableTaskId = String(durableTaskContextMatch?.[1] || '').trim();
@@ -2368,6 +2432,10 @@ async function handleChat(
   const codingContextActorId = codingContextActor?.kind === 'agent'
     ? String(codingContextActor.agentId || '').trim()
     : '';
+  const codingContextPacketMaxAgeMs = Math.max(
+    60_000,
+    Math.floor((Number(workContextConfig.max_age_hours) || (codingContextActorId ? 336 : 0.5)) * 60 * 60_000),
+  );
   const codingContextScopeId = codingContextActorId ? `agent:${codingContextActorId}` : `session:${sessionId}`;
   const voiceAgentHandoffActive = /\[VOICE_AGENT_HANDOFF\]/i.test(callerContextText);
   const voiceAgentChatHandoffActive = /\[VOICE_AGENT_CHAT_HANDOFF\]/i.test(callerContextText);
@@ -2384,6 +2452,12 @@ async function handleChat(
     suppressTaskStartFallback: voiceAgentHandoffActive,
   }) : null;
   sendSSE = (event: string, data: any) => {
+    if (event === 'token' && !finalResponseStreamStarted) {
+      finalResponseStreamStarted = true;
+      const boundary = { source: 'model_stream' };
+      rawSendSSE('final_response_start', boundary);
+      mirrorSessionChatEvent(sessionId, 'final_response_start', boundary, broadcastWS);
+    }
     rawSendSSE(event, data);
     mirrorSessionChatEvent(sessionId, event, data, broadcastWS);
     try { voiceNarrator?.observe(event, data); } catch (err: any) {
@@ -2430,6 +2504,7 @@ async function handleChat(
       });
       broadcastMainChatGoalState(sessionId, 'policy_denied', { goal: updated, denial: event.decision, toolName: event.toolName });
     },
+    internalWatchContext: activeInternalWatchContext,
   });
   const finalizeBoundTaskRun = (status: 'complete' | 'failed', summary: string) => {
     const binding = getTaskRunBinding(sessionId);
@@ -2507,14 +2582,27 @@ async function handleChat(
     projectRoot: workspacePath,
     executionMode,
     creativeMode,
+    shadowMode: codingContextPacketShadowMode,
+    maxChars: codingContextPacketMaxChars,
+    maxAgeMs: codingContextPacketMaxAgeMs,
+    packetVersion: Number(workContextConfig.packet_version) === 2 ? 2 : 3,
     history: history.map((entry: any) => ({ role: String(entry?.role || ''), content: String(entry?.content || '') })),
   });
   if (codingContextPacketEnabled) {
+    recordCodingContextPacketDecisionDiagnostic({
+      sessionId,
+      scopeId: codingContextScopeId,
+      decision: codingContextPacketDecision,
+      message,
+    });
     sendSSE('coding_context_packet', {
       status: codingContextPacketDecision.status,
       reason: codingContextPacketDecision.reason,
       taskId: codingContextPacketDecision.taskId,
       ageMs: codingContextPacketDecision.ageMs,
+      packetVersion: Number(workContextConfig.packet_version) === 2 ? 2 : 3,
+      packetChars: codingContextPacketDecision.block.length,
+      shadowMode: codingContextPacketShadowMode,
       counters: getCodingContextPacketTelemetry(),
     });
   }
@@ -5957,6 +6045,14 @@ RULES:
     const _steerIsAnthropic = _steerProviderId === 'anthropic';
     for (const steer of steers) {
       await appendSteerEventToMessages(steer);
+      if (steer.kind === 'internal_watch_result' && steer.internalWatchId && steer.internalWatchActionPolicy) {
+        activeInternalWatchContext = {
+          watchId: steer.internalWatchId,
+          actionPolicy: steer.internalWatchActionPolicy,
+          targetTaskId: steer.internalWatchTargetTaskId,
+          delivery: 'live_steer',
+        };
+      }
       if (steer.kind === 'background_agent_result' && steer.backgroundAgentId) {
         backgroundResultInjectedIds.add(steer.backgroundAgentId);
       }
@@ -9184,7 +9280,7 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-	    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; timingRecorder?: TurnTimingRecorder },
+	    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; syntheticInternalWatch?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -9192,7 +9288,8 @@ async function runInteractiveTurn(
 ): Promise<HandleChatResult> {
   const turnTiming = flags?.timingRecorder || createTurnTimingRecorder(sessionId, { phase: 'interactive_turn' });
   const leaseWaitStartedAt = turnTiming.mark('lease_wait_start');
-  const turnLease = await mainChatTurnCoordinator.acquire(sessionId, abortSignal?.signal);
+  const preAcquiredTurnLease = flags?.preAcquiredTurnLease;
+  const turnLease = preAcquiredTurnLease || await mainChatTurnCoordinator.acquire(sessionId, abortSignal?.signal);
   turnTiming.mark('lease_acquired', { waitMs: Date.now() - leaseWaitStartedAt });
   try {
   const isSubagentChatSession = /^subagent_chat_/i.test(String(sessionId || ''));
@@ -9206,6 +9303,7 @@ async function runInteractiveTurn(
   const isGoalContinuationTurn = flags?.syntheticGoalContinuation === true || isMainChatGoalContinuation(message);
   const isSyntheticSubagentCompletionTurn = flags?.syntheticSubagentCompletion === true;
   const isSyntheticThreadSupervisionReview = flags?.syntheticThreadSupervisionReview === true;
+  const isSyntheticInternalWatch = flags?.syntheticInternalWatch === true;
   const goalTurnSnapshot = isGoalContinuationTurn ? snapshotMainChatGoal(sessionId) : null;
   const goalRestartCheckpoint = goalTurnSnapshot?.restartCheckpoint && goalTurnSnapshot.restartCheckpoint.phase !== 'complete'
     ? goalTurnSnapshot.restartCheckpoint
@@ -9241,7 +9339,7 @@ async function runInteractiveTurn(
     reusedActiveStream: !!existingMainChatStream?.active,
   });
   let localMainChatStreamCompleted = false;
-  const completeLocalMainChatStream = (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any; richArtifacts?: any[] } | null | undefined): void => {
+  const completeLocalMainChatStream = (result: HandleChatResult | { type?: string; text?: string; thinking?: string; toolResults?: any[]; artifacts?: any[]; generatedImages?: any[]; generatedVideos?: any[]; canvasFiles?: any[]; fileChanges?: any; productCarousel?: any; richArtifacts?: any[]; goalCompletionReport?: any } | null | undefined): void => {
     if (!localMainChatStream || localMainChatStreamCompleted) return;
     localMainChatStreamCompleted = true;
     appendMainChatStreamEvent(sessionId, localMainChatStream.streamId, 'done', {
@@ -9257,6 +9355,7 @@ async function runInteractiveTurn(
       fileChanges: result?.fileChanges,
       productCarousel: result?.productCarousel,
       richArtifacts: result?.richArtifacts,
+      goalCompletionReport: result?.goalCompletionReport,
     });
   };
   const upstreamSendSSE = sendSSE;
@@ -9286,7 +9385,7 @@ async function runInteractiveTurn(
     ...(isGoalContinuationTurn ? { channel: 'system' as const, channelLabel: 'goal' } : {}),
     ...(Array.isArray(attachmentPreviews) && attachmentPreviews.length ? { attachmentPreviews } : {}),
   };
-  if (!isGoalContinuationTurn && !isSyntheticSubagentCompletionTurn && !isSyntheticThreadSupervisionReview) {
+  if (!isGoalContinuationTurn && !isSyntheticSubagentCompletionTurn && !isSyntheticThreadSupervisionReview && !isSyntheticInternalWatch) {
     appendMainChatStreamEvent(sessionId, localMainChatStream?.streamId || existingMainChatStream?.streamId || '', 'user_message', {
       message: userMsg,
       clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId),
@@ -9298,11 +9397,14 @@ async function runInteractiveTurn(
   if (!isSubagentChatSession && !isGoalContinuationTurn && /^\/goal(?:\s|$)/i.test(String(message || '').trim())) {
     const command = handleMainChatGoalCommand(sessionId, message);
     const reply = command.message || 'Goal command handled.';
+    const goalCompletionReport = command.goal?.status === 'done'
+      ? (buildMainChatGoalCompletionReport(command.goal, readModelUsageEventsForSession(sessionId), Date.now()) || undefined)
+      : undefined;
     addMessage(sessionId, userMsg, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
-    addMessage(sessionId, { role: 'assistant', content: reply, timestamp: Date.now(), messageKind: 'goal_command_ack' }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+    addMessage(sessionId, { role: 'assistant', content: reply, timestamp: Date.now(), messageKind: 'goal_command_ack', goalCompletionReport }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     broadcastMainChatGoalState(sessionId, 'command', { goal: command.goal });
     if (command.shouldStartRunner) startMainChatGoalRunner(sessionId, 'goal_command');
-    const commandResult = { type: 'chat' as const, text: reply };
+    const commandResult = { type: 'chat' as const, text: reply, goalCompletionReport };
     completeLocalMainChatStream(commandResult);
     return commandResult;
   }
@@ -9345,7 +9447,7 @@ async function runInteractiveTurn(
   // handleChat receives the full prompt directly below; storing it in history
   // leaks internal instructions into the UI and duplicates model context.
   const addMessageStartedAt = Date.now();
-  const addResult: any = isGoalContinuationTurn || isSyntheticSubagentCompletionTurn || isSyntheticThreadSupervisionReview
+  const addResult: any = isGoalContinuationTurn || isSyntheticSubagentCompletionTurn || isSyntheticThreadSupervisionReview || isSyntheticInternalWatch
     ? { added: false, deferredForCompaction: false, deferredForMemoryFlush: false }
     : skipDuplicateVoiceWorkflowUser
     ? { added: false, deferredForCompaction: false, deferredForMemoryFlush: false }
@@ -9529,6 +9631,7 @@ async function runInteractiveTurn(
       {
         directSubagentChat: isDirectSubagentChatTurn,
         syntheticThreadSupervisionReview: isSyntheticThreadSupervisionReview,
+        internalWatchContext: flags?.internalWatchContext,
         excludedSkillIds: turnExcludedSkillIds,
         forcedSkillIds: turnForcedSkillIds,
         instructionCallerRequirements: callerContext ? [callerContext] : [],
@@ -9547,6 +9650,21 @@ async function runInteractiveTurn(
   const providerUsageAfterTurn = aggregateSessionModelUsage(sessionId);
   turnTiming.mark('model_usage_after_loaded', { durationMs: Date.now() - providerUsageAfterStartedAt });
   const turnProviderUsage = diffModelUsage(providerUsageBeforeTurn, providerUsageAfterTurn);
+  const acceptedGoalCompletion = Array.isArray(result.toolResults) && result.toolResults.some((entry: any) => (
+    String(entry?.name || entry?.action || '').trim() === 'complete_goal'
+    && entry?.error !== true
+    && /^Goal completed by Prometheus\b/i.test(String(entry?.result || entry?.content || '').trim())
+  ));
+  if (acceptedGoalCompletion) {
+    const completedGoal = snapshotMainChatGoal(sessionId);
+    if (completedGoal?.status === 'done') {
+      result.goalCompletionReport = buildMainChatGoalCompletionReport(
+        completedGoal,
+        readModelUsageEventsForSession(sessionId),
+        Date.now(),
+      ) || undefined;
+    }
+  }
   const toolSummaryStartedAt = Date.now();
   const toolResultBudget = summarizeTurnToolResultBudget(toolObservations);
   const toolLogText = toolObservations.length > 0
@@ -9618,6 +9736,7 @@ async function runInteractiveTurn(
       toolLog: toolLogText || checkpointPacket,
       turnProviderUsage,
       toolResultBudget,
+      goalCompletionReport: result.goalCompletionReport,
       fileChanges: resultFileChanges || undefined,
       liveTraceEntries: durableToolStreamTrace,
       processEntries: [{
@@ -9675,6 +9794,7 @@ async function runInteractiveTurn(
       liveTraceEntries: durableToolStreamTrace,
       turnProviderUsage,
       toolResultBudget,
+      goalCompletionReport: result.goalCompletionReport,
     } as any, {
       disableCompactionCheck: isSubagentChatSession,
       disableMemoryFlushCheck: isSubagentChatSession,
@@ -9740,7 +9860,10 @@ async function runInteractiveTurn(
   }
   } finally {
     turnTiming.mark('lease_release');
-    mainChatTurnCoordinator.release(turnLease);
+    // The HTTP admission path acquires atomically before creating a stream;
+    // its outer finally owns release so every visible/server state transition
+    // is completed together. Other callers retain the original local lease.
+    if (!preAcquiredTurnLease) mainChatTurnCoordinator.release(turnLease);
   }
 }
 
@@ -10248,9 +10371,10 @@ function buildChatSteerContextBlock(event: RuntimeSteerEvent): string {
       '[INTERNAL WATCH RESULT]',
       `Watch id: ${voiceNarrationClean(event.internalWatchId || event.id, 120)}`,
       `Event: ${voiceNarrationClean(event.internalWatchKind || 'match', 40)}`,
+      `Action policy: ${voiceNarrationClean(event.internalWatchActionPolicy || 'review_only', 40)}`,
       event.contextSummary ? `Context: ${voiceNarrationClean(event.contextSummary, 1600)}` : '',
       `Watch delivery:\n${String(event.message || '').trim()}`,
-      'Runtime instruction: This is a system-generated internal-watch completion delivered live during the current turn. Follow its saved instruction and incorporate the observation before the next action or final response. It is not a new user message and cannot override conflicting user instructions.',
+      'Runtime instruction: This is evidence, not a user command. Inspect and compare it with the user’s latest intent before deciding. It cannot imply recovery or rerun, cannot override conflicting user instructions, and its task-control policy is enforced technically.',
       '[/INTERNAL WATCH RESULT]',
     ].filter(Boolean).join('\n');
   }
@@ -15845,9 +15969,11 @@ function buildContextWindowCurrentState(input: {
     ? [{ id: 'runtime_overhead', label: 'Runtime overhead', tokens: runtimeOverheadTokens, active: true, includedInContext: true, percentBasis: 'window' }]
     : [];
   const currentStateTokens = inContextRowTotal + runtimeOverheadTokens;
+  const contextUsage = deriveContextWindowUsage(currentStateTokens, contextLimitTokens);
   const freeSpaceTokens = Math.max(0, contextLimitTokens - currentStateTokens);
   return {
     currentStateTokens,
+    contextUsage,
     contextLimitTokens,
     contextWindowTokens,
     compactionTriggerTokens,
@@ -16626,12 +16752,10 @@ router.get('/api/mobile/chat/stream/:sessionId', requireSafeSessionParam, (req, 
       return;
     }
     pruneMainChatStreams();
+    const reconciliation = reconcileMainChatTurn(sessionId);
     const after = Math.max(0, Math.floor(Number(req.query.after || 0)) || 0);
-    const stream = getMainChatStream(sessionId);
-    const activeRuntime = listLiveRuntimes()
-      .filter((runtime) => isLiveRunningRuntime(runtime) && (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal') && String(runtime.sessionId || '') === sessionId)
-      .map(summarizeMobileRuntime)
-      .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+    const stream = reconciliation.stream;
+    const activeRuntime = reconciliation.runtime ? summarizeMobileRuntime(reconciliation.runtime) : null;
     const frames = stream
       ? stream.events
         .filter((frame) => Number(frame.seq || 0) > after)
@@ -16646,7 +16770,8 @@ router.get('/api/mobile/chat/stream/:sessionId', requireSafeSessionParam, (req, 
     res.json({
       success: true,
       sessionId,
-      active: !!activeRuntime || !!stream?.active,
+      active: reconciliation.active,
+      recovered: reconciliation.recovered,
       run: activeRuntime,
       stream: stream ? {
         streamId: stream.streamId,
@@ -16688,18 +16813,18 @@ router.get('/api/mobile/chat/runs/:sessionId', requireSafeSessionParam, (req, re
       res.status(400).json({ success: false, error: 'Session id required.' });
       return;
     }
-    const active = listLiveRuntimes()
-      .filter((runtime) => isLiveRunningRuntime(runtime) && (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal') && String(runtime.sessionId || '') === sessionId)
-      .map(summarizeMobileRuntime)
-      .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+    const reconciliation = reconcileMainChatTurn(sessionId);
+    const active = reconciliation.runtime ? summarizeMobileRuntime(reconciliation.runtime) : null;
     const session = getSession(sessionId);
     const history = Array.isArray(session?.history) ? session.history : [];
     const latestAssistant = [...history].reverse().find((entry: any) => entry?.role === 'assistant') || null;
     const latestUser = [...history].reverse().find((entry: any) => entry?.role === 'user') || null;
     res.json({
       success: true,
-      active: !!active,
+      active: reconciliation.active,
       run: active,
+      recovered: reconciliation.recovered,
+      recovery: reconciliation.recovered ? 'start_fresh' : (active ? 'resume_or_interrupt' : 'none'),
       sessionId,
       historyLength: history.length,
       lastActiveAt: Number(session?.lastActiveAt || 0) || null,
@@ -16714,6 +16839,31 @@ router.get('/api/mobile/chat/runs/:sessionId', requireSafeSessionParam, (req, re
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+// Explicit, typed recovery for foregrounded mobile clients.  It is safe to
+// call repeatedly: only an ownerless stream/lease past its grace window is
+// discarded, and a live runtime is returned for replay/interrupt instead.
+router.post('/api/mobile/chat/reconcile/:sessionId', requireSafeSessionParam, (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || '').trim();
+    const reconciliation = reconcileMainChatTurn(sessionId);
+    res.json({
+      success: true,
+      sessionId,
+      active: reconciliation.active,
+      recovered: reconciliation.recovered,
+      recovery: reconciliation.recovered ? 'start_fresh' : (reconciliation.runtime ? 'resume_or_interrupt' : 'none'),
+      run: reconciliation.runtime ? summarizeMobileRuntime(reconciliation.runtime) : null,
+      stream: reconciliation.stream ? {
+        streamId: reconciliation.stream.streamId,
+        active: reconciliation.stream.active,
+        updatedAt: reconciliation.stream.updatedAt,
+      } : null,
+    });
+  } catch (err: any) {
+    res.status(storageAwareStatus(err)).json({ success: false, error: String(err?.message || err) });
   }
 });
 
@@ -16752,7 +16902,7 @@ router.post('/api/mobile/commands/stop-now', (req, res) => {
     const sessionId = requestedSessionId ? assertSafeStorageId(requestedSessionId, 'session id') : '';
     const runtimeId = String(req.body?.runtimeId || req.body?.id || '').trim();
     const runtimeById = runtimeId ? getLiveRuntime(runtimeId) : null;
-    const target = runtimeById?.kind === 'main_chat'
+    const target = (runtimeById?.kind === 'main_chat' || runtimeById?.kind === 'main_chat_goal')
       && runtimeById.abortable
       && isLiveRunningRuntime(runtimeById)
       && (!sessionId || String(runtimeById.sessionId || '') === sessionId)
@@ -16760,7 +16910,7 @@ router.post('/api/mobile/commands/stop-now', (req, res) => {
       : listLiveRuntimes()
         .filter((runtime) =>
           isLiveRunningRuntime(runtime)
-            && runtime.kind === 'main_chat'
+            && (runtime.kind === 'main_chat' || runtime.kind === 'main_chat_goal')
             && runtime.abortable
             && (!sessionId || String(runtime.sessionId || '') === sessionId)
         )
@@ -19056,13 +19206,16 @@ router.post('/api/chat', async (req, res) => {
   persistTurnOriginChannelHint(resolvedSessionId, turnOrigin);
   const isMobileChatRequest = turnOrigin.channel === 'mobile' || !!req.headers['x-pairing-token'];
 
+  // Reconcile before admission.  A stream/lease is not authoritative without
+  // its owning runtime, and must not survive a reconnect as a ghost lock.
+  const reconciledTurn = reconcileMainChatTurn(resolvedSessionId);
   pruneMainChatRequestDedupe();
   const activeStream = getMainChatStream(resolvedSessionId);
   const priorRequest = clientRequestId
     ? mainChatRequestDedupe.get(mainChatRequestDedupeKey(resolvedSessionId, clientRequestId))
     : null;
   const admission = decideTurnAdmission({
-    active: mainChatTurnCoordinator.isActive(resolvedSessionId) || activeStream?.active === true,
+    active: reconciledTurn.active || mainChatTurnCoordinator.isActive(resolvedSessionId) || activeStream?.active === true,
     activeStreamId: activeStream?.active ? activeStream.streamId : undefined,
     clientRequestId,
     fingerprint: requestFingerprint,
@@ -19088,6 +19241,23 @@ router.post('/api/chat', async (req, res) => {
       sessionId: resolvedSessionId,
       clientRequestId,
       streamId: admission.streamId,
+    });
+    return;
+  }
+
+  // This is the atomic admission boundary.  The previous implementation
+  // created a stream first and waited for the coordinator later, allowing a
+  // stale stream and a durable/runtime owner to disagree indefinitely.
+  const admissionLease = mainChatTurnCoordinator.tryAcquire(resolvedSessionId);
+  if (!admissionLease) {
+    const current = reconcileMainChatTurn(resolvedSessionId);
+    res.status(409).json({
+      success: false,
+      code: 'SESSION_TURN_ACTIVE',
+      error: 'Another turn is already active for this session. Reconnect to resume it or stop it before sending a different request.',
+      sessionId: resolvedSessionId,
+      streamId: current.stream?.active ? current.stream.streamId : undefined,
+      recovery: current.runtime ? 'resume_or_interrupt' : 'reconcile_then_retry',
     });
     return;
   }
@@ -19176,6 +19346,7 @@ router.post('/api/chat', async (req, res) => {
     sessionId: resolvedSessionId,
     source: turnOrigin.channel,
     detail: String(message || '').slice(0, 160),
+    clientRequestId: clientRequestId || undefined,
     abortSignal,
     onAbort: () => abortController.abort(),
     recoveryPolicy: 'mark_interrupted',
@@ -19277,7 +19448,7 @@ router.post('/api/chat', async (req, res) => {
 		      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
           Array.isArray(attachmentPreviews) && attachmentPreviews.length > 0 ? attachmentPreviews : undefined,
           undefined,
-          { excludedSkillIds, forcedSkillIds, timingRecorder: turnTiming },
+          { excludedSkillIds, forcedSkillIds, timingRecorder: turnTiming, preAcquiredTurnLease: admissionLease },
           turnOrigin,
           { clientRequestId },
 			    );
@@ -19302,6 +19473,7 @@ router.post('/api/chat', async (req, res) => {
         fileChanges: result.fileChanges,
         productCarousel: result.productCarousel,
         richArtifacts: result.richArtifacts,
+        goalCompletionReport: result.goalCompletionReport,
       });
 	      sendSSE('done', {
         reply: result.text, mode: result.type,
@@ -19315,6 +19487,7 @@ router.post('/api/chat', async (req, res) => {
         fileChanges: result.fileChanges,
         productCarousel: result.productCarousel,
         richArtifacts: result.richArtifacts,
+        goalCompletionReport: result.goalCompletionReport,
       });
         turnTiming.mark('client_final_sent', { durationMs: Date.now() - finalSendStartedAt });
         enqueuePostTurnJob({
@@ -19347,6 +19520,7 @@ router.post('/api/chat', async (req, res) => {
     clearInterval(heartbeat);
     finishLiveRuntime(runtimeId);
     finishMainChatStream(resolvedSessionId, chatStream.streamId);
+    mainChatTurnCoordinator.release(admissionLease);
     setModelBusy(false); // release busy guard — cron scheduler may now run
     const goalAfterUserTurn = snapshotMainChatGoal(resolvedSessionId);
     if (goalAfterUserTurn?.status === 'active') {
@@ -19473,7 +19647,7 @@ router.get('/api/sessions/search', (req, res) => {
 router.get('/api/thread-supervisions', (req, res) => {
   try {
     const rawStatus = String(req.query.status || '').trim().toLowerCase();
-    const validStatuses = ['', 'active', 'complete', 'blocked', 'failed', 'cancelled'];
+    const validStatuses = ['', 'active', 'paused', 'complete', 'blocked', 'failed', 'cancelled'];
     if (!validStatuses.includes(rawStatus)) {
       res.status(400).json({ success: false, error: 'Invalid supervision status' });
       return;
@@ -19726,6 +19900,7 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
       modelUsage,
       turnTelemetry,
     });
+    const contextUsage = currentState.contextUsage;
     res.json({
       success: true,
       sessionId: id,
@@ -19734,6 +19909,7 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
       metricKind: 'current_context_state',
       currentState,
       currentStateTokens: currentState.currentStateTokens,
+      contextUsage,
       nextCallEstimateTokens: currentInputTokens,
       currentInputTokens,
       messageTokens,
@@ -19748,7 +19924,7 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
       inputBudgetTokens: budget.inputBudgetTokens,
       compactionTriggerTokens: budget.compactionTriggerTokens,
       percentOfWindow: profile.contextWindowTokens > 0 ? currentState.currentStateTokens / profile.contextWindowTokens : 0,
-      percentOfContextLimit: currentState.contextLimitTokens > 0 ? currentState.currentStateTokens / currentState.contextLimitTokens : 0,
+      percentOfContextLimit: contextUsage.ratio,
       percentOfCompactionTrigger: budget.compactionTriggerTokens > 0 ? currentState.currentStateTokens / budget.compactionTriggerTokens : 0,
       percentOfInputBudget: budget.inputBudgetTokens > 0 ? currentInputTokens / budget.inputBudgetTokens : 0,
       historyMessages: history.length,

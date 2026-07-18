@@ -347,6 +347,7 @@ import {
 } from '../creative/custom-registries';
 import { buildConnectorStatus } from '../tool-builder';
 import { readRawToolResultRange } from '../tool-result-envelope';
+import { attachCodeEvidenceToToolResult, type CodeEvidenceFile } from '../code-evidence';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/legacy-connector-adapter';
 import { classifyCommandTermination } from '../process/command-outcome';
 import { getExtensionRuntimeRegistry } from '../../extensions/runtime-registry';
@@ -526,6 +527,13 @@ export interface ExecuteToolDeps {
   sessionCurrentTurn: Map<string, number>;
   executionPolicy?: ToolExecutionPolicy;
   onHardToolDeny?: (event: { sessionId: string; toolName: string; args: any; decision: HardToolDenyDecision }) => void;
+  /** Set only for a private internal-watch delivery; enforced by automation tools. */
+  internalWatchContext?: {
+    watchId: string;
+    actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed';
+    targetTaskId?: string;
+    delivery: 'follow_up' | 'live_steer';
+  };
   /** Cooperative interruption for long-running desktop waits, macros, capture,
    * and background-worker commands. */
   abortSignal?: { aborted: boolean; signal?: AbortSignal };
@@ -3041,6 +3049,15 @@ function buildPresentedFileArtifact(absPath: string, relPath: string, title?: st
 }
 
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
+  const result = await executeToolRaw(name, args, workspacePath, deps, sessionId);
+  return attachCodeEvidenceToToolResult(result, {
+    workspacePath,
+    toolName: result.name || name,
+    args: result.args || args,
+  });
+}
+
+async function executeToolRaw(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
   let approvalDisplayToolName = name;
   const allowWorkspaceSourceCopy = args?.allow_source_copy === true;
   const mediaGenerateWrapper = normalizeMediaGenerateWrapperTool(name, args);
@@ -5175,6 +5192,37 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const includeTask = args?.include_task === true || args?.includeTask === true;
         const includeEvidence = args?.include_evidence !== false && args?.includeEvidence !== false;
         if (!action) return { name, args, result: 'agent_run_ops requires action', error: true };
+        const watchPolicy = deps.internalWatchContext;
+        const readOnlyAgentRunActions = new Set(['list', 'get']);
+        if (watchPolicy && !readOnlyAgentRunActions.has(action)) {
+          const explicitTaskId = String(args?.task_id || args?.taskId || args?.id || '').trim();
+          const permitted = watchPolicy.actionPolicy === 'recover_same_run'
+            ? action === 'steer' || action === 'resume'
+            : watchPolicy.actionPolicy === 'full_rerun_allowed'
+              ? action === 'steer' || action === 'resume' || action === 'rerun'
+              : false;
+          if (!permitted || !watchPolicy.targetTaskId || explicitTaskId !== watchPolicy.targetTaskId) {
+            return {
+              name,
+              args,
+              result: JSON.stringify({
+                success: false,
+                action,
+                code: 'internal_watch_policy_denied',
+                watch_id: watchPolicy.watchId,
+                policy: watchPolicy.actionPolicy,
+                target_task_id: watchPolicy.targetTaskId || null,
+                allowed_actions: watchPolicy.actionPolicy === 'full_rerun_allowed'
+                  ? ['list', 'get', 'steer', 'resume', 'rerun']
+                  : watchPolicy.actionPolicy === 'recover_same_run'
+                    ? ['list', 'get', 'steer', 'resume']
+                    : ['list', 'get'],
+                message: 'Watch-triggered agent-run mutation requires an explicit task_id matching the watched task and a policy-permitted action.',
+              }, null, 2),
+              error: true,
+            };
+          }
+        }
 
         if (action === 'benchmark_disposable') {
           const benchmarkStartedAt = Date.now();
@@ -7859,6 +7907,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
         if (!patchEdits.length) return { name, args, result: 'edits array is required and must not be empty', error: true };
         const patchResults: Array<{ filename: string; op: string; ok: boolean; result?: string; error?: string }> = [];
         const patchSnapshots: Array<ReturnType<typeof snapshotPreMutation>> = [];
+        const patchEvidenceFiles: CodeEvidenceFile[] = [];
         for (const edit of patchEdits) {
           const pFilename = edit?.filename;
           const pOp = normalizeWorkspacePatchOp(edit?.op);
@@ -7876,13 +7925,22 @@ export async function executeTool(name: string, args: any, workspacePath: string
               ...(Array.isArray((r as any)?.data?.workspaceSnapshots) ? (r as any).data.workspaceSnapshots : []),
             ];
             patchSnapshots.push(...snapshots);
+            if (Array.isArray((r as any)?.extra?.codeEvidence?.files)) {
+              patchEvidenceFiles.push(...(r as any).extra.codeEvidence.files);
+            }
             patchResults.push({ filename: pFilename, op: pOp, ok: !r.error, result: r.error ? undefined : r.result, error: r.error ? r.result : undefined });
           } catch (err: any) {
             patchResults.push({ filename: pFilename, op: pOp, ok: false, error: err?.message || String(err) });
           }
         }
         const allOk = patchResults.every(r => r.ok);
-        return withWorkspaceSnapshots({ name, args, result: JSON.stringify({ applied: patchResults.filter(r => r.ok).length, failed: patchResults.filter(r => !r.ok).length, results: patchResults }, null, 2), error: !allOk }, allOk ? patchSnapshots : []);
+        return withWorkspaceSnapshots({
+          name,
+          args,
+          result: JSON.stringify({ applied: patchResults.filter(r => r.ok).length, failed: patchResults.filter(r => !r.ok).length, results: patchResults }, null, 2),
+          error: !allOk,
+          ...(patchEvidenceFiles.length ? { extra: { codeEvidence: { version: 1, kind: 'code_evidence', tool_name: name, operation: 'mutation', generated_at: new Date().toISOString(), generation_ms: 0, files: patchEvidenceFiles, truncated: false } } } : {}),
+        }, patchSnapshots);
       }
 
       case 'file_tree': {
@@ -8282,6 +8340,26 @@ export async function executeTool(name: string, args: any, workspacePath: string
         const projectRoot = resolveProjectRootForSourceAccess();
         const results: string[] = [];
         const touched = new Set<string>();
+        const evidenceFiles: CodeEvidenceFile[] = [];
+        const withDevEvidence = <T extends ToolResult>(result: T): T => {
+          if (!evidenceFiles.length) return result;
+          return {
+            ...result,
+            extra: {
+              ...(result.extra || {}),
+              codeEvidence: {
+                version: 1,
+                kind: 'code_evidence',
+                tool_name: name,
+                operation: 'mutation',
+                generated_at: new Date().toISOString(),
+                generation_ms: 0,
+                files: evidenceFiles,
+                truncated: false,
+              },
+            },
+          };
+        };
         const normalizeDevSourcePath = (entry: any): string => String(entry?.file || entry?.path || '').replace(/\\/g, '/').replace(/^\.\//, '');
         const resolveDevSourceFile = (requested: string): { isWebUi: boolean; file: string; display: string; absPath: string } => {
           const isWebUi = requested.startsWith('web-ui/');
@@ -8318,15 +8396,15 @@ export async function executeTool(name: string, args: any, workspacePath: string
         for (let i = 0; i < edits.length; i++) {
           const edit = edits[i] || {};
           const requested = normalizeDevSourcePath(edit);
-          if (!requested) return { name, args, result: `ERROR: edits[${i}].file is required.`, error: true };
+          if (!requested) return withDevEvidence({ name, args, result: `ERROR: edits[${i}].file is required.`, error: true });
           let target: { isWebUi: boolean; file: string; display: string; absPath: string };
           try {
             target = resolveDevSourceFile(requested);
           } catch (err: any) {
-            return { name, args, result: `ERROR: ${err?.message || String(err)}`, error: true };
+            return withDevEvidence({ name, args, result: `ERROR: ${err?.message || String(err)}`, error: true });
           }
           const guarded = checkGuards(edit, target);
-          if (guarded) return guarded;
+          if (guarded) return withDevEvidence(guarded);
           const op = String(edit.op || '').toLowerCase();
           let delegatedTool = '';
           let delegatedArgs: any = { file: target.file };
@@ -8347,11 +8425,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
           } else if (op === 'insert_after_anchor') {
             const content = readExistingContent(target);
             const anchor = String(edit.anchor || edit.find || '');
-            if (content === null) return { name, args, result: `ERROR: ${target.display} does not exist.`, error: true };
-            if (!anchor) return { name, args, result: `ERROR: edits[${i}].anchor is required for insert_after_anchor.`, error: true };
+            if (content === null) return withDevEvidence({ name, args, result: `ERROR: ${target.display} does not exist.`, error: true });
+            if (!anchor) return withDevEvidence({ name, args, result: `ERROR: edits[${i}].anchor is required for insert_after_anchor.`, error: true });
             const lines = content.split('\n');
             const lineIndex = lines.findIndex((line) => line.includes(anchor));
-            if (lineIndex < 0) return { name, args, result: buildTextNotFoundRecovery(target.display, content, anchor, target.isWebUi ? 'read_webui_source' : 'read_source'), error: true };
+            if (lineIndex < 0) return withDevEvidence({ name, args, result: buildTextNotFoundRecovery(target.display, content, anchor, target.isWebUi ? 'read_webui_source' : 'read_source'), error: true });
             delegatedTool = delegatedNameFor(target.isWebUi, 'insert_after');
             delegatedArgs.after_line = lineIndex + 1;
             delegatedArgs.content = String(edit.content ?? edit.new_content ?? edit.replace ?? '');
@@ -8364,15 +8442,18 @@ export async function executeTool(name: string, args: any, workspacePath: string
             delegatedArgs.content = String(edit.content ?? edit.new_content ?? edit.replace ?? '');
             delegatedArgs.overwrite = op !== 'create_file';
           } else {
-            return { name, args, result: `ERROR: unsupported patchset op "${op}" at edits[${i}].`, error: true };
+            return withDevEvidence({ name, args, result: `ERROR: unsupported patchset op "${op}" at edits[${i}].`, error: true });
           }
           const result = await executeTool(delegatedTool, delegatedArgs, workspacePath, deps, sessionId);
           results.push(`--- ${target.display} via ${delegatedTool} ---\n${result.result}`);
-          if (result.error) return { name, args, result: results.join('\n\n'), error: true };
+          if (Array.isArray((result as any)?.extra?.codeEvidence?.files)) {
+            evidenceFiles.push(...(result as any).extra.codeEvidence.files);
+          }
+          if (result.error) return withDevEvidence({ name, args, result: results.join('\n\n'), error: true });
           touched.add(target.display);
         }
         const touchedFiles = Array.from(touched);
-        return {
+        return withDevEvidence({
           name,
           args,
           result: [
@@ -8381,7 +8462,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
             getPostSourceEditInstructionForSession(sessionId, touchedFiles),
           ].filter(Boolean).join('\n\n'),
           error: false,
-        };
+        });
       }
 
       // ── read_source: read a file from src/ only ───────────────────────────────
@@ -14414,6 +14495,11 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	          const ttlMsRaw = Number(args.ttl_ms ?? args.ttlMs);
 	          const ttlMs = Number.isFinite(ttlMsRaw) && ttlMsRaw > 0 ? Math.floor(ttlMsRaw) : undefined;
 	          const condition = args.condition && typeof args.condition === 'object' ? args.condition : {};
+	          const actionPolicy = String(args.action_policy || args.actionPolicy || '').trim() === 'recover_same_run'
+	            ? 'recover_same_run'
+	            : String(args.action_policy || args.actionPolicy || '').trim() === 'full_rerun_allowed'
+	              ? 'full_rerun_allowed'
+	              : 'review_only';
 	          const sessionHint = getSessionChannelHint(sessionId);
 
 	          let initialObservation: any = undefined;
@@ -14429,6 +14515,7 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	              target: { type: targetType as any, config: targetConfig },
 	              condition,
 	              onMatch,
+	              actionPolicy,
 	              deliveryMode: String(args.delivery_mode || args.deliveryMode || '').trim() === 'notify_only' ? 'notify_only' : 'run_turn',
 	              maxFirings: 1,
 	              firedCount: 0,
@@ -14452,6 +14539,9 @@ export async function executeTool(name: string, args: any, workspacePath: string
 	            target: { type: targetType as any, config: targetConfig },
 	            condition,
 	            onMatch,
+	            rationale: String(args.rationale || args.reason || '').trim() || undefined,
+	            deliverySessionId: String(args.delivery_session_id || args.deliverySessionId || '').trim() || undefined,
+	            actionPolicy,
 	            deliveryMode: String(args.delivery_mode || args.deliveryMode || '').trim() === 'notify_only' ? 'notify_only' : 'run_turn',
 	            onTimeout: String(args.on_timeout || args.onTimeout || '').trim() || undefined,
 	            maxFirings: Number(args.max_firings ?? args.maxFirings) || undefined,

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { getSession } from './session';
+import { addOrMergeDeliveryMessage, getSession } from './session';
 import { broadcastWS, getSessionChannelHint, linkTelegramSession, sendDiscordNotification, sendWhatsAppNotification } from './comms/broadcaster';
 
 export type DeliveryTarget = 'origin' | 'telegram' | 'mobile' | 'web' | 'discord' | 'whatsapp' | 'cli' | 'terminal' | 'all';
@@ -110,6 +110,73 @@ function buildVisionInjectedPayload(payload: DeliveryPayload): Record<string, an
   };
 }
 
+function extensionForMimeType(mimeType: string): string {
+  const normalized = String(mimeType || '').toLowerCase();
+  if (normalized === 'image/png') return '.png';
+  if (normalized === 'image/gif') return '.gif';
+  if (normalized === 'image/webp') return '.webp';
+  return '.jpg';
+}
+
+/**
+ * Web/mobile delivery notifications used to exist only on the websocket. Store
+ * the same visible bubble in session history before broadcasting it so a cold
+ * reconnect can hydrate both its text and its file descriptor.
+ */
+function persistLocalDelivery(payload: DeliveryPayload, sessionId: string, targets: DeliveryTarget[]): DeliveryPayload {
+  if (!targets.some((target) => target === 'web' || target === 'mobile' || target === 'terminal')) return payload;
+
+  const session = getSession(sessionId);
+  let attachmentPath = String(payload.attachmentPath || '').trim();
+  const imageBase64 = payload.imageBase64 || (payload.imageBuffer ? payload.imageBuffer.toString('base64') : '');
+
+  // Fresh desktop/browser screenshots do not have a source file. Freeze one
+  // durable copy instead of putting a multi-megabyte data URL in session JSON.
+  if (!attachmentPath && imageBase64) {
+    const extension = extensionForMimeType(payload.mimeType || 'image/jpeg');
+    const deliveryDir = path.join(session.workspace, '.prometheus', 'deliveries', sessionId);
+    fs.mkdirSync(deliveryDir, { recursive: true });
+    attachmentPath = path.join(deliveryDir, `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${extension}`);
+    fs.writeFileSync(attachmentPath, Buffer.from(imageBase64, 'base64'));
+  }
+
+  const text = String(payload.text || payload.caption || '').trim()
+    || (attachmentPath ? `File ready: ${payload.fileName || path.basename(attachmentPath)}` : 'Delivered update');
+  const fileName = String(payload.fileName || (attachmentPath ? path.basename(attachmentPath) : '')).trim();
+  const localTarget: 'mobile' | 'web' | 'terminal' = targets.includes('mobile')
+    ? 'mobile'
+    : targets.includes('terminal')
+      ? 'terminal'
+      : 'web';
+  const files = attachmentPath ? [{
+    kind: String(payload.mimeType || '').startsWith('image/') ? 'image' : 'file',
+    path: attachmentPath,
+    name: fileName || path.basename(attachmentPath),
+    fileName: fileName || path.basename(attachmentPath),
+    mimeType: payload.mimeType,
+    deliveryBatchId: payload.batchId,
+    deliveryBatchIndex: payload.batchIndex,
+  }] : undefined;
+
+  addOrMergeDeliveryMessage(sessionId, {
+    messageId: `delivery_${payload.batchId || `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`}`,
+    messageKind: 'delivery',
+    role: 'assistant',
+    content: text,
+    timestamp: Date.now(),
+    channel: localTarget,
+    channelLabel: 'delivery',
+    source: payload.source || 'delivery',
+    files,
+    canvasFiles: attachmentPath ? [attachmentPath] : undefined,
+    deliveryBatchId: payload.batchId,
+    deliveryBatchIndex: payload.batchIndex,
+    deliveryBatchCount: payload.batchCount,
+  });
+
+  return attachmentPath ? { ...payload, attachmentPath, fileName } : payload;
+}
+
 async function deliverTelegram(payload: DeliveryPayload, deps: DeliveryDeps): Promise<string> {
   const telegram = deps.telegramChannel;
   if (!telegram) return 'telegram unavailable';
@@ -157,12 +224,19 @@ export async function deliverToTargets(payload: DeliveryPayload, deps: DeliveryD
   const sessionId = String(payload.sessionId || '').trim() || 'default';
   const target = normalizeTarget(payload.target);
   const targets = resolveTargets(target, sessionId);
+  let localPayload = payload;
   const delivered: string[] = [];
   const errors: string[] = [];
   const hasText = String(payload.text || payload.caption || '').trim().length > 0;
   const textForTextOnlyChannels = String(payload.text || payload.caption || '').trim()
     || (payload.attachmentPath ? `File ready: ${payload.attachmentPath}` : '')
     || (payload.imageBuffer || payload.imageBase64 ? 'Screenshot/image delivered in Prometheus.' : '');
+
+  try {
+    localPayload = persistLocalDelivery(payload, sessionId, targets);
+  } catch (err: any) {
+    errors.push(`history: ${err?.message || err}`);
+  }
 
   for (const t of targets) {
     try {
@@ -175,9 +249,9 @@ export async function deliverToTargets(payload: DeliveryPayload, deps: DeliveryD
         if (textForTextOnlyChannels) await sendWhatsAppNotification(textForTextOnlyChannels);
         delivered.push('whatsapp text');
       } else if (t === 'web' || t === 'mobile' || t === 'terminal') {
-        const event = buildWebPayload({ ...payload, sessionId, text: hasText ? payload.text : textForTextOnlyChannels }, t);
+        const event = buildWebPayload({ ...localPayload, sessionId, text: hasText ? localPayload.text : textForTextOnlyChannels }, t);
         (deps.broadcastWS || broadcastWS)(event);
-        const visionEvent = buildVisionInjectedPayload({ ...payload, sessionId });
+        const visionEvent = buildVisionInjectedPayload({ ...localPayload, sessionId });
         if (visionEvent) (deps.broadcastWS || broadcastWS)({ ...visionEvent, target: t, sessionId });
         delivered.push(`${t} websocket`);
       }

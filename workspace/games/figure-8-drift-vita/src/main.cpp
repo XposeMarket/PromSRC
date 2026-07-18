@@ -125,7 +125,10 @@ float machineGunCooldown=0.0f,muzzleFlashTimer=0.0f;
 // Low-poly airport aircraft: fixed storage, no runtime allocation, and a
 // deliberately bounded flight model tailored to the Vita input cadence.
 struct PlaneState {
-  float x=470.0f,y=0.0f,z=170.0f,yaw=0.0f,pitch=0.0f,roll=0.0f,speed=0.0f,health=100.0f,respawn=0.0f;
+  float x=470.0f,y=0.0f,z=170.0f,yaw=0.0f,pitch=0.0f,roll=0.0f;
+  float speed=0.0f,health=100.0f,respawn=0.0f,throttle=0.0f;
+  // World velocity survives pilot exit; all fields are fixed-size POD for Vita.
+  float vx=0.0f,vy=0.0f,vz=0.0f;
   bool active=true,airborne=false,crashed=false;
 };
 PlaneState plane;
@@ -1578,6 +1581,20 @@ bool projectileHitsPlayerCar(float x,float y,float z,float previousX,float previ
   float px=previousX+dx*t-car.x,pz=previousZ+dz*t-car.z;return px*px+pz*pz<radius*radius;
 }
 
+bool projectileHitsPlane(float x,float y,float z,float previousX,float previousZ,float radius){
+  if(!plane.active)return false;
+  float dx=x-previousX,dz=z-previousZ,length2=dx*dx+dz*dz;
+  float t=clampf(((plane.x-previousX)*dx+(plane.z-previousZ)*dz)/std::max(length2,.0001f),0.0f,1.0f);
+  float px=previousX+dx*t-plane.x,pz=previousZ+dz*t-plane.z;
+  return px*px+pz*pz<radius*radius&&y>=plane.y-.35f&&y<=plane.y+2.4f;
+}
+void damagePlane(float amount,float hitX,float hitZ){
+  if(!plane.active)return;
+  plane.health-=amount;float dx=plane.x-hitX,dz=plane.z-hitZ,dist=std::sqrt(std::max(.05f,dx*dx+dz*dz));
+  plane.vx+=dx/dist*amount*.055f;plane.vz+=dz/dist*amount*.055f;
+  if(plane.health<=0.0f){plane.health=0.0f;plane.active=false;plane.crashed=true;plane.respawn=6.0f;spawnExplosion(plane.x,plane.y+.65f,plane.z);}
+}
+
 void pushPlayerCar(float sourceX,float sourceZ,float force,float lift){
   float dx=car.x-sourceX,dz=car.z-sourceZ,distance=std::sqrt(std::max(dx*dx+dz*dz,.05f));
   float nx=dx/distance,nz=dz/distance;car.vx+=nx*force;car.vz+=nz*force;
@@ -1632,6 +1649,9 @@ void updateRocketsAndExplosions(float dt){
     if(projectileHitsPlayerCar(r.x,r.y,r.z,previousX,previousZ,1.65f)){
       spawnExplosion(r.x,r.y,r.z);pushPlayerCar(previousX,previousZ,24.0f,9.0f);blastCityProps(r.x,r.z,8.5f,28.0f);r.active=false;continue;
     }
+    if(projectileHitsPlane(r.x,r.y,r.z,previousX,previousZ,2.7f)){
+      spawnExplosion(r.x,r.y,r.z);damagePlane(55.0f,previousX,previousZ);r.active=false;continue;
+    }
     if(driveEnvironment==DriveEnvironment::City&&hitCityPropWithProjectile(r.x,r.y,r.z,previousX,previousZ,true)){
       spawnExplosion(r.x,r.y,r.z);blastCityProps(r.x,r.z,8.5f,28.0f);blastPlayerCar(r.x,r.z,8.5f,20.0f,7.5f);r.active=false;continue;
     }
@@ -1647,6 +1667,7 @@ void updateRocketsAndExplosions(float dt){
   }
   for(Bullet&b:bullets){if(!b.active)continue;float previousX=b.x,previousZ=b.z;b.x+=b.vx*dt;b.y+=b.vy*dt;b.z+=b.vz*dt;b.life-=dt;int hit=-1;
     if(projectileHitsPlayerCar(b.x,b.y,b.z,previousX,previousZ,1.42f)){pushPlayerCar(previousX,previousZ,.65f,.18f);b.active=false;continue;}
+    if(projectileHitsPlane(b.x,b.y,b.z,previousX,previousZ,2.3f)){damagePlane(7.0f,previousX,previousZ);b.active=false;continue;}
     if(driveEnvironment==DriveEnvironment::City&&hitCityPropWithProjectile(b.x,b.y,b.z,previousX,previousZ,false)){b.active=false;continue;}
     if(driveEnvironment==DriveEnvironment::City)for(int i=0;i<CITY_BUILDING_COUNT;++i){const CityBuilding&building=CITY_BUILDINGS[i];
       if(b.y>=0&&b.y<=building.height&&std::fabs(b.x-building.x)<=building.width*.5f&&std::fabs(b.z-building.z)<=building.depth*.5f){hit=i;break;}}
@@ -2066,33 +2087,33 @@ void drawParkedCar(const ParkedCar&parked){
   for(float x:{-.92f,.92f})for(float z:{-1.15f,1.15f})cube(x,-.23f,z,.30f,.58f,.58f,.035f,.038f,.042f);
   glPopMatrix();
 }
-
 void drawAirport(){
-  // Airport is one compact district at the east edge: static immediate-mode
-  // geometry, only drawn inside the existing city focus radius.
   texturedRect(AIRPORT_X-AIRPORT_RUNWAY_HALF,AIRPORT_RUNWAY_Z0,AIRPORT_X+AIRPORT_RUNWAY_HALF,AIRPORT_RUNWAY_Z1,.035f,UV_ROAD.u0,UV_ROAD.v0,UV_ROAD.u1,UV_ROAD.v1,12.0f);
-  texturedRect(AIRPORT_X+18,118,AIRPORT_X+58,258,.038f,UV_ROAD.u0,UV_ROAD.v0,UV_ROAD.u1,UV_ROAD.v1,10.0f); // taxiway/apron
-  glColor3f(.96f,.96f,.88f);glBegin(GL_QUADS);
-  for(int i=0;i<8;++i){float z=AIRPORT_RUNWAY_Z0+13+i*22;glVertex3f(AIRPORT_X-1.1f,.07f,z);glVertex3f(AIRPORT_X+1.1f,.07f,z);glVertex3f(AIRPORT_X+1.1f,.07f,z+11);glVertex3f(AIRPORT_X-1.1f,.07f,z+11);}
-  for(int side=-1;side<=1;side+=2)for(int i=0;i<5;++i){float x=AIRPORT_X+side*9,z=AIRPORT_RUNWAY_Z0+8+i*5;glVertex3f(x-1.2f,.07f,z);glVertex3f(x+1.2f,.07f,z);glVertex3f(x+1.2f,.07f,z+2.5f);glVertex3f(x-1.2f,.07f,z+2.5f);}glEnd();
-  // threshold bars and runway number "09" as cheap readable block glyphs.
-  glColor3f(1,1,1);glBegin(GL_QUADS);for(int i=0;i<6;++i){float x=AIRPORT_X-11+i*4;glVertex3f(x,.075f,102);glVertex3f(x+2,.075f,102);glVertex3f(x+2,.075f,108);glVertex3f(x,.075f,108);}glEnd();
-  cube(AIRPORT_X+45,4.0f,145,28,8,18,.60f,.64f,.67f);cube(AIRPORT_X+65,3.0f,188,20,6,24,.48f,.52f,.55f); // terminal/hangar
-  cube(AIRPORT_X+55,11,115,4,22,4,.72f,.74f,.72f);cube(AIRPORT_X+55,23,115,8,2,8,.86f,.86f,.80f); // tower
-  glColor3f(.94f,.68f,.16f);glPointSize(3);glBegin(GL_POINTS);for(int i=0;i<10;++i){float z=AIRPORT_RUNWAY_Z0+10+i*20;glVertex3f(AIRPORT_X-16,.15f,z);glVertex3f(AIRPORT_X+16,.15f,z);}glEnd();glPointSize(1);
+  texturedRect(AIRPORT_X+18,118,AIRPORT_X+58,258,.038f,UV_ROAD.u0,UV_ROAD.v0,UV_ROAD.u1,UV_ROAD.v1,10.0f);
+  glColor3f(.96f,.96f,.88f);glBegin(GL_QUADS);for(int i=0;i<8;++i){float z=AIRPORT_RUNWAY_Z0+13+i*22;glVertex3f(AIRPORT_X-1.1f,.07f,z);glVertex3f(AIRPORT_X+1.1f,.07f,z);glVertex3f(AIRPORT_X+1.1f,.07f,z+11);glVertex3f(AIRPORT_X-1.1f,.07f,z+11);}glEnd();
+  cube(AIRPORT_X+45,4.0f,145,28,8,18,.60f,.64f,.67f);cube(AIRPORT_X+65,3.0f,188,20,6,24,.48f,.52f,.55f);cube(AIRPORT_X+55,11,115,4,22,4,.72f,.74f,.72f);cube(AIRPORT_X+55,23,115,8,2,8,.86f,.86f,.80f);
 }
-
 void drawPlane(){
-  if(!plane.active)return;glPushMatrix();glTranslatef(plane.x,plane.y+.62f,plane.z);glRotatef(plane.yaw*180.0f/PI,0,1,0);glRotatef(-plane.pitch*180.0f/PI,1,0,0);glRotatef(plane.roll*180.0f/PI,0,0,1);
-  cube(0,0,0,1.35f,.45f,4.8f,.82f,.18f,.08f);cube(0,.18f,-.35f,7.4f,.10f,1.15f,.74f,.76f,.79f);cube(0,.45f,1.45f,2.1f,.16f,1.0f,.70f,.74f,.78f);cube(0,.22f,2.05f,.12f,1.35f,.18f,.70f,.74f,.78f);
-  glPopMatrix();
+  if(!plane.active)return;
+  glPushMatrix();glTranslatef(plane.x,plane.y+.62f,plane.z);glRotatef(plane.yaw*180.0f/PI,0,1,0);glRotatef(-plane.pitch*180.0f/PI,1,0,0);glRotatef(plane.roll*180.0f/PI,0,0,1);
+  cube(0,0,0,1.35f,.45f,4.8f,.82f,.18f,.08f);cube(0,.18f,-.35f,7.4f,.10f,1.15f,.74f,.76f,.79f);cube(0,.45f,1.45f,2.1f,.16f,1.0f,.70f,.74f,.78f);cube(0,.22f,2.05f,.12f,1.35f,.18f,.70f,.74f,.78f);glPopMatrix();
 }
-
-
 
 void drawCity(){
-  float renderFocusX=playerControlMode==PlayerControlMode::OnFoot?person.x:car.x;
-  float renderFocusZ=playerControlMode==PlayerControlMode::OnFoot?person.z:car.z;
+  // City streaming must follow what the player is currently piloting.  Plane
+  // bailouts intentionally retain their own body, while aircraft control moves
+  // the active render/stream focus away from the parked car.
+  // Stream/cull around the real view owner.  Aircraft view follows plane even
+  // when its camera is offset, and a bailed-out plane no longer drags city LOD.
+  const bool aircraftView=playerControlMode==PlayerControlMode::Aircraft;
+  float renderFocusX=aircraftView?plane.x:(playerControlMode==PlayerControlMode::OnFoot?person.x:car.x);
+  float renderFocusZ=aircraftView?plane.z:(playerControlMode==PlayerControlMode::OnFoot?person.z:car.z);
+  // Chase-camera offset can be twelve metres behind a looping plane.  Stream
+  // against both the craft and its current view anchor so the airport/world
+  // cannot pop out while the camera is looking back across the flight path.
+  const float streamCameraX=aircraftView?plane.x-std::sin(plane.yaw)*std::cos(plane.pitch)*12.0f:renderFocusX;
+  const float streamCameraZ=aircraftView?plane.z-std::cos(plane.yaw)*std::cos(plane.pitch)*12.0f:renderFocusZ;
+  auto nearStream=[&](float x,float z,float radius){float dx=x-streamCameraX,dz=z-streamCameraZ;return dx*dx+dz*dz<radius*radius;};
   auto nearFocus=[&](float x,float z,float radius){float dx=x-renderFocusX,dz=z-renderFocusZ;return dx*dx+dz*dz<radius*radius;};
   // Tile the ground only around the active player. The old 1000x640 fill made
   // 1,600 immediate-mode quads every City frame before any roads or props.
@@ -2106,9 +2127,21 @@ void drawCity(){
     float z0=std::max(-320.0f,gz*groundTile),z1=std::min(320.0f,(gz+1)*groundTile);
     if(x1>x0&&z1>z0)texturedRect(x0,z0,x1,z1,0,UV_GRASS.u0,UV_GRASS.v0,UV_GRASS.u1,UV_GRASS.v1,groundTile);
   }
+  // The plane camera can lead the aircraft during high-speed turns.  Fill only
+  // a fixed 4x4 set of additional tiles around that view point; duplicate tiles
+  // are harmless and the overhead is strictly bounded.
+  if(aircraftView&&std::fabs(streamCameraX-renderFocusX)+std::fabs(streamCameraZ-renderFocusZ)>8.0f){
+    int cameraMinX=(int)std::floor((streamCameraX-80.0f)/groundTile),cameraMaxX=(int)std::ceil((streamCameraX+80.0f)/groundTile);
+    int cameraMinZ=(int)std::floor((streamCameraZ-70.0f)/groundTile),cameraMaxZ=(int)std::ceil((streamCameraZ+70.0f)/groundTile);
+    for(int gx=cameraMinX;gx<cameraMaxX;++gx)for(int gz=cameraMinZ;gz<cameraMaxZ;++gz){
+      float x0=std::max(-440.0f,gx*groundTile),x1=std::min(560.0f,(gx+1)*groundTile);
+      float z0=std::max(-320.0f,gz*groundTile),z1=std::min(320.0f,(gz+1)*groundTile);
+      if(x1>x0&&z1>z0)texturedRect(x0,z0,x1,z1,0,UV_GRASS.u0,UV_GRASS.v0,UV_GRASS.u1,UV_GRASS.v1,groundTile);
+    }
+  }
   if(nearFocus(-265,210,170.0f)){drawHill(-265,210,82,8.0f);drawPond(-275,208,27,17);}
   if(nearFocus(285,205,175.0f)){drawHill(285,205,88,7.0f);drawPond(286,210,31,19);}
-  if(nearFocus(AIRPORT_X,190,190.0f))drawAirport();
+  if(nearFocus(AIRPORT_X,190,190.0f)||nearStream(AIRPORT_X,190,202.0f))drawAirport();
   static const Vec2 bushes[]={{-240,-135},{-180,-135},{-340,135},{-240,135},{-180,135},
     {180,-138},{220,-138},{275,-138},{395,-138},{230,138},{290,138},{400,138},
     {-315,185},{-225,188},{155,185},{345,184},{175,-15},{175,15},{220,-15},{220,15},
@@ -2716,61 +2749,90 @@ bool cameraPathClear(float cameraX,float cameraY,float cameraZ){
 }
 
 void collisionAwareCamera(float distance,float height,float& outputX,float& outputZ){
-  auto clearAt=[&](float offset){
-    float yaw=cameraYaw+offset;
-    return cameraPathClear(car.x-std::sin(yaw)*distance,height,car.z-std::cos(yaw)*distance);
-  };
+  auto clearAt=[&](float offset){float yaw=cameraYaw+offset;return cameraPathClear(car.x-std::sin(yaw)*distance,height,car.z-std::cos(yaw)*distance);};
   bool straightClear=clearAt(0.0f);
-  if(std::fabs(cameraAvoidanceTarget)>.01f){
-    cameraStraightClearFrames=straightClear?cameraStraightClearFrames+1:0;
-    if(cameraStraightClearFrames>24){cameraAvoidanceTarget=0.0f;cameraStraightClearFrames=0;}
-  }else if(!straightClear){
-    static const float offsets[]={.24f,-.24f,.46f,-.46f,.70f,-.70f,.94f,-.94f};
-    for(float offset:offsets)if(clearAt(offset)){cameraAvoidanceTarget=offset;break;}
-  }
-  if(std::fabs(cameraAvoidanceTarget)>.01f&&!clearAt(cameraAvoidanceTarget)){
-    static const float offsets[]={.24f,-.24f,.46f,-.46f,.70f,-.70f,.94f,-.94f};
-    for(float offset:offsets)if(clearAt(offset)){cameraAvoidanceTarget=offset;break;}
-  }
-  cameraAvoidanceAngle+=(cameraAvoidanceTarget-cameraAvoidanceAngle)*.11f;
-  if(std::fabs(cameraAvoidanceAngle)<.002f)cameraAvoidanceAngle=0.0f;
-  float yaw=cameraYaw+cameraAvoidanceAngle;
-  float desiredX=car.x-std::sin(yaw)*distance,desiredZ=car.z-std::cos(yaw)*distance;
-  float safeTarget=1.0f;
-  if(!cameraPathClear(desiredX,height,desiredZ)){
-    safeTarget=.12f;
-    for(int sample=4;sample<=32;++sample){
-      float t=(float)sample/32.0f;
-      float x=car.x+(desiredX-car.x)*t,z=car.z+(desiredZ-car.z)*t;
-      if(!cameraPathClear(x,height,z))break;
-      safeTarget=t;
-    }
-  }
-  // Collision entry must stay outside geometry; recovery eases back to full
-  // distance. Normal unobstructed driving remains exactly car-relative.
-  if(safeTarget<cameraDistanceScale)cameraDistanceScale=safeTarget;
-  else cameraDistanceScale+=(safeTarget-cameraDistanceScale)*.09f;
-  if(cameraDistanceScale>.998f)cameraDistanceScale=1.0f;
-  outputX=car.x+(desiredX-car.x)*cameraDistanceScale;
-  outputZ=car.z+(desiredZ-car.z)*cameraDistanceScale;
+  if(std::fabs(cameraAvoidanceTarget)>.01f){cameraStraightClearFrames=straightClear?cameraStraightClearFrames+1:0;if(cameraStraightClearFrames>24){cameraAvoidanceTarget=0.0f;cameraStraightClearFrames=0;}}
+  else if(!straightClear){static const float offsets[]={.24f,-.24f,.46f,-.46f,.70f,-.70f,.94f,-.94f};for(float offset:offsets)if(clearAt(offset)){cameraAvoidanceTarget=offset;break;}}
+  if(std::fabs(cameraAvoidanceTarget)>.01f&&!clearAt(cameraAvoidanceTarget)){static const float offsets[]={.24f,-.24f,.46f,-.46f,.70f,-.70f,.94f,-.94f};for(float offset:offsets)if(clearAt(offset)){cameraAvoidanceTarget=offset;break;}}
+  cameraAvoidanceAngle+=(cameraAvoidanceTarget-cameraAvoidanceAngle)*.11f;if(std::fabs(cameraAvoidanceAngle)<.002f)cameraAvoidanceAngle=0.0f;
+  float yaw=cameraYaw+cameraAvoidanceAngle,desiredX=car.x-std::sin(yaw)*distance,desiredZ=car.z-std::cos(yaw)*distance,safeTarget=1.0f;
+  if(!cameraPathClear(desiredX,height,desiredZ)){safeTarget=.12f;for(int sample=4;sample<=32;++sample){float t=(float)sample/32.0f,x=car.x+(desiredX-car.x)*t,z=car.z+(desiredZ-car.z)*t;if(!cameraPathClear(x,height,z))break;safeTarget=t;}}
+  if(safeTarget<cameraDistanceScale)cameraDistanceScale=safeTarget;else cameraDistanceScale+=(safeTarget-cameraDistanceScale)*.09f;if(cameraDistanceScale>.998f)cameraDistanceScale=1.0f;
+  outputX=car.x+(desiredX-car.x)*cameraDistanceScale;outputZ=car.z+(desiredZ-car.z)*cameraDistanceScale;
 }
 
 void constrainPersonCamera(float anchorX,float anchorY,float anchorZ,float&eyeX,float&eyeY,float&eyeZ){
-  if(driveEnvironment==DriveEnvironment::City){
-    float safe=1.0f;
-    for(int sample=2;sample<=30;++sample){float t=(float)sample/30.0f;
-      float x=anchorX+(eyeX-anchorX)*t,y=anchorY+(eyeY-anchorY)*t,z=anchorZ+(eyeZ-anchorZ)*t;bool blocked=false;
-      for(const CityBuilding&building:CITY_BUILDINGS)if(y<building.height+.5f&&std::fabs(x-building.x)<building.width*.5f+.38f&&std::fabs(z-building.z)<building.depth*.5f+.38f){blocked=true;break;}
-      if(blocked){safe=std::max(.10f,t-.07f);break;}
-    }
-    eyeX=anchorX+(eyeX-anchorX)*safe;eyeY=anchorY+(eyeY-anchorY)*safe;eyeZ=anchorZ+(eyeZ-anchorZ)*safe;
-  }
-  eyeY=std::max(.32f,eyeY);
+  if(driveEnvironment==DriveEnvironment::City){float safe=1.0f;for(int sample=2;sample<=30;++sample){float t=(float)sample/30.0f,x=anchorX+(eyeX-anchorX)*t,y=anchorY+(eyeY-anchorY)*t,z=anchorZ+(eyeZ-anchorZ)*t;bool blocked=false;for(const CityBuilding&building:CITY_BUILDINGS)if(y<building.height+.5f&&std::fabs(x-building.x)<building.width*.5f+.38f&&std::fabs(z-building.z)<building.depth*.5f+.38f){blocked=true;break;}if(blocked){safe=std::max(.10f,t-.07f);break;}}eyeX=anchorX+(eyeX-anchorX)*safe;eyeY=anchorY+(eyeY-anchorY)*safe;eyeZ=anchorZ+(eyeZ-anchorZ)*safe;}eyeY=std::max(.32f,eyeY);
 }
 
 float planeDistanceToPerson(){float dx=person.x-plane.x,dz=person.z-plane.z;return std::sqrt(dx*dx+dz*dz);}
 void resetPlane(){plane=PlaneState{};}
-void updatePlane(float dt,const SceCtrlData&pad){if(!plane.active){plane.respawn-=dt;if(plane.respawn<=0)resetPlane();return;}float throttle=(pad.buttons&SCE_CTRL_RTRIGGER)?1.0f:((pad.buttons&SCE_CTRL_LTRIGGER)?-1.0f:0.0f),yawInput=((int)pad.lx-128)/127.0f,pitchInput=-((int)pad.ry-128)/127.0f,rollInput=((int)pad.rx-128)/127.0f;if(std::fabs(yawInput)<.14f)yawInput=0;if(std::fabs(pitchInput)<.14f)pitchInput=0;if(std::fabs(rollInput)<.14f)rollInput=0;plane.speed=clampf(plane.speed+throttle*dt*15.0f-dt*(plane.airborne?1.1f:3.0f),0.0f,72.0f);plane.yaw+=yawInput*dt*(.55f+plane.speed*.018f);plane.roll+=(rollInput*.95f-plane.roll)*clampf(dt*3.5f,0,1);plane.pitch+=(pitchInput*.85f-plane.pitch)*clampf(dt*3.0f,0,1);if(!plane.airborne&&plane.speed>22.0f&&pitchInput>.12f)plane.airborne=true;float fx=std::sin(plane.yaw),fz=std::cos(plane.yaw);if(plane.airborne){plane.y+=std::sin(plane.pitch)*plane.speed*dt;plane.y-=dt*(3.3f-clampf(plane.speed*.07f,0,2.8f));}plane.x+=fx*std::cos(plane.pitch)*plane.speed*dt;plane.z+=fz*std::cos(plane.pitch)*plane.speed*dt;if(plane.y<=0){if(plane.airborne&&std::fabs(plane.pitch)>.48f)plane.health-=85;plane.y=0;plane.airborne=false;plane.pitch*=.35f;}if(plane.x<-440||plane.x>560||plane.z<-320||plane.z>320||plane.health<=0){plane.active=false;plane.crashed=true;plane.respawn=6.0f;}}
+
+// Fixed-storage arcade flight model: velocity is autonomous after bailout, while
+// orientation drives airspeed lift/drag/gravity so it cannot hover or static-drop.
+void updatePlane(float dt,const SceCtrlData&pad,bool controlled){
+  if(!plane.active){plane.respawn-=dt;if(plane.respawn<=0)resetPlane();return;}
+  // Vita's left-stick axis is screen-oriented while this aircraft's yaw basis
+  // is world-oriented; negate it so physical left now banks/yaws left in view.
+  const float rawYaw=controlled?-((int)pad.lx-128)/127.0f:0.0f;
+  const float rawPitch=controlled?-((int)pad.ry-128)/127.0f:0.0f;
+  const float yawInput=std::fabs(rawYaw)<.14f?0.0f:rawYaw;
+  const float pitchInput=std::fabs(rawPitch)<.14f?0.0f:rawPitch;
+  // R/L adjust a persistent throttle; releasing the trigger leaves a real
+  // glide instead of the old binary thrust/static-drop behavior.
+  if(controlled){float throttleInput=(pad.buttons&SCE_CTRL_RTRIGGER)?1.0f:((pad.buttons&SCE_CTRL_LTRIGGER)?-1.0f:0.0f);plane.throttle=clampf(plane.throttle+throttleInput*dt*.62f,0.0f,1.0f);}
+  const float throttle=plane.throttle;
+  float airspeed=std::sqrt(plane.vx*plane.vx+plane.vy*plane.vy+plane.vz*plane.vz);
+  // Negative left-stick input is a left yaw and left bank; keep the two signs paired.
+  plane.yaw+=yawInput*dt*(.30f+clampf(airspeed,0.0f,60.0f)*.018f);
+  plane.roll+=(yawInput*.78f-plane.roll)*clampf(dt*3.6f,0.0f,1.0f);
+  if(plane.airborne){
+    plane.pitch+=pitchInput*dt*1.55f; // deliberately unbounded enough for full loops
+    if(plane.pitch>PI)plane.pitch-=2.0f*PI;
+    if(plane.pitch<-PI)plane.pitch+=2.0f*PI;
+  }else plane.pitch+=(pitchInput*.42f-plane.pitch)*clampf(dt*3.0f,0.0f,1.0f);
+  const float cp=std::cos(plane.pitch),fx=std::sin(plane.yaw)*cp,fy=std::sin(plane.pitch),fz=std::cos(plane.yaw)*cp;
+  if(!plane.airborne){
+    float groundForward=plane.vx*std::sin(plane.yaw)+plane.vz*std::cos(plane.yaw);
+    groundForward=clampf(groundForward+(throttle*18.0f-.32f*groundForward)*dt,0.0f,42.0f);
+    plane.vx=std::sin(plane.yaw)*groundForward;plane.vz=std::cos(plane.yaw)*groundForward;plane.vy=0.0f;plane.speed=groundForward;
+    if(groundForward>20.0f&&pitchInput>.10f){plane.airborne=true;plane.vy=2.4f;}
+  }else{
+    // Thrust, drag and gravity operate on persistent world velocity.  A modest
+    // steering alignment makes aerobatics responsive without erasing inertia.
+    plane.vx+=fx*throttle*15.0f*dt;plane.vy+=fy*throttle*15.0f*dt;plane.vz+=fz*throttle*15.0f*dt;
+    airspeed=std::sqrt(plane.vx*plane.vx+plane.vy*plane.vy+plane.vz*plane.vz);
+    // Gentle velocity alignment retains momentum through bailout and lets pitch
+    // genuinely control loops, rather than snapping the craft into a hover.
+    const float align=clampf(dt*(.24f+airspeed*.008f),0.0f,.055f);
+    plane.vx+=(fx*airspeed-plane.vx)*align;plane.vy+=(fy*airspeed-plane.vy)*align;plane.vz+=(fz*airspeed-plane.vz)*align;
+    const float liftFactor=clampf((airspeed-14.0f)/34.0f,0.0f,1.0f);
+    const bool stalled=airspeed<17.0f&&plane.pitch>.12f;
+    // Lift falls off below takeoff speed and during a high-angle stall; gravity
+    // is always present, so an unpiloted aircraft has an honest glide/crash arc.
+    const float lift=(1.0f+10.2f*liftFactor)*std::max(.0f,cp)*(stalled?.16f:1.0f);
+    plane.vy+=(lift-9.8f)*dt;
+    const float drag=clampf(1.0f-dt*(.024f+airspeed*.0032f+std::fabs(plane.pitch)*.013f+(stalled?.055f:0.0f)),.72f,1.0f);
+    plane.vx*=drag;plane.vy*=drag;plane.vz*=drag;
+    airspeed=std::sqrt(plane.vx*plane.vx+plane.vy*plane.vy+plane.vz*plane.vz);
+    if(airspeed>76.0f){const float scale=76.0f/airspeed;plane.vx*=scale;plane.vy*=scale;plane.vz*=scale;airspeed=76.0f;}
+    plane.speed=airspeed;
+  }
+  plane.x+=plane.vx*dt;plane.z+=plane.vz*dt;plane.y+=plane.vy*dt;
+  if(driveEnvironment==DriveEnvironment::City&&plane.y<34.0f){
+    for(const CityBuilding&building:CITY_BUILDINGS){
+      if(plane.y>building.height+.7f||std::fabs(plane.x-building.x)>building.width*.5f+1.1f||std::fabs(plane.z-building.z)>building.depth*.5f+2.3f)continue;
+      damagePlane(140.0f,plane.x-plane.vx,plane.z-plane.vz);return;
+    }
+  }
+  if(plane.y<=0.0f){
+    const float impact=-plane.vy;plane.y=0.0f;plane.vy=0.0f;
+    // A shallow touchdown rolls out; a hard/downside impact destroys the plane.
+    if(plane.airborne&&impact>9.5f){damagePlane((impact-7.0f)*11.0f,plane.x-plane.vx,plane.z-plane.vz);if(!plane.active)return;}
+    if(plane.active){plane.airborne=false;plane.pitch*=.22f;plane.roll*=.38f;plane.vx*=.76f;plane.vz*=.76f;plane.speed=std::sqrt(plane.vx*plane.vx+plane.vz*plane.vz);}
+  }
+  if(plane.x<-440||plane.x>560||plane.z<-320||plane.z>320)damagePlane(120.0f,plane.x-plane.vx,plane.z-plane.vz);
+}
 
 void renderGame() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -2799,7 +2861,15 @@ void renderGame() {
       gluLookAt(eyeX,eyeY,eyeZ,anchorX+dirX*12,anchorY+dirY*12,anchorZ+dirZ*12,0,1,0);
     }
   }else if(playerControlMode==PlayerControlMode::Aircraft){
-    float fx=std::sin(plane.yaw),fz=std::cos(plane.yaw);gluLookAt(plane.x-fx*13,plane.y+6,plane.z-fz*13,plane.x+fx*20,plane.y+std::sin(plane.pitch)*18,plane.z+fz*20,0,1,0);
+    // Bank-aware chase camera keeps the left/right response visually honest and
+    // looks through loops without coupling city culling to the old car position.
+    float cp=std::cos(plane.pitch),sp=std::sin(plane.pitch),cr=std::cos(plane.roll),sr=std::sin(plane.roll);
+    float fx=std::sin(plane.yaw)*cp,fy=sp,fz=std::cos(plane.yaw)*cp;
+    float rx=std::cos(plane.yaw),rz=-std::sin(plane.yaw);
+    float ux=-std::sin(plane.yaw)*sp,uy=cp,uz=-std::cos(plane.yaw)*sp;
+    float upx=ux*cr-rx*sr,upy=uy*cr,upz=uz*cr-rz*sr;
+    gluLookAt(plane.x-fx*12+upx*3.5f,plane.y-fy*12+upy*3.5f,plane.z-fz*12+upz*3.5f,
+              plane.x+fx*22,plane.y+fy*22,plane.z+fz*22,upx,upy,upz);
   }else if(cameraMode==3||cameraMode==4){
     float fx=std::sin(car.yaw),fz=std::cos(car.yaw),rx=std::cos(car.yaw),rz=-std::sin(car.yaw);
     float cameraPitch=car.bodyPitch+carTerrainPitch,cameraRoll=car.bodyRoll+carTerrainRoll;
@@ -2829,11 +2899,14 @@ void renderGame() {
   drawSkidMarks();
   drawSmoke();
   drawRocketsAndExplosions();
+  // City owns the aircraft's cull against the active camera focus; drawing it
+  // again here used to double-submit the aircraft each City frame.
+  if(driveEnvironment!=DriveEnvironment::City)drawPlane();
   if(playerControlMode==PlayerControlMode::OnFoot){drawCar();if(person.cameraMode==0){drawPerson();drawWeaponWorld();}}
   else if(playerControlMode==PlayerControlMode::Vehicle&&cameraMode!=4)drawCar();
   beginOverlay();
   if(playerControlMode==PlayerControlMode::OnFoot)drawOnFootHud();
-  else if(playerControlMode==PlayerControlMode::Aircraft){char planeHud[48];std::snprintf(planeHud,sizeof(planeHud),"AIRCRAFT HP %d  SPD %d",(int)plane.health,(int)plane.speed);drawRect(22,20,340,64,.10f,.13f,.14f);drawLabel(38,32,planeHud,1.55f);drawRect(220,486,740,528,.10f,.13f,.14f);drawLabel(244,499,"R THROTTLE L BRAKE  LEFT YAW  RIGHT STICK PITCH ROLL",1.05f);}
+  else if(playerControlMode==PlayerControlMode::Aircraft){char planeHud[48];std::snprintf(planeHud,sizeof(planeHud),"AIRCRAFT HP %d  SPD %d",(int)plane.health,(int)plane.speed);drawRect(22,20,340,64,.10f,.13f,.14f);drawLabel(38,32,planeHud,1.55f);drawRect(185,486,775,528,.10f,.13f,.14f);drawLabel(202,499,"R THROTTLE L BRAKE  LEFT STICK YAW/BANK  RIGHT STICK PITCH",1.02f);}
   else{if(cameraMode==4)drawCockpitOverlay();drawHud();}
   endOverlay();
   maybeStreamFrame();
@@ -2923,8 +2996,10 @@ int main() {
         if(pressed&SCE_CTRL_SQUARE)exitVehicle();
         if(playerControlMode==PlayerControlMode::Vehicle)updateCar(dt,pad);
       }else if(playerControlMode==PlayerControlMode::Aircraft){
-        if(pressed&SCE_CTRL_SQUARE){playerControlMode=PlayerControlMode::OnFoot;person.x=plane.x;person.z=plane.z;person.y=plane.y;}
-        else updatePlane(dt,pad);
+        if(pressed&SCE_CTRL_SQUARE){
+          // Bailout inherits plane world velocity; updatePlane continues below.
+          playerControlMode=PlayerControlMode::OnFoot;person.x=plane.x;person.z=plane.z;person.y=plane.y;person.verticalVelocity=plane.vy;
+        } else updatePlane(dt,pad,true);
       }else{
         if(pressed&SCE_CTRL_SELECT)person.cameraMode=(person.cameraMode+1)%2;
         if((pressed&SCE_CTRL_SQUARE)&&personDistanceToCar()<=3.25f)enterVehicle();
@@ -2937,6 +3012,9 @@ int main() {
           updateUnoccupiedCar(dt);
         }
       }
+      // An unoccupied aircraft remains a live body: it glides, descends and
+      // lands/crashes instead of freezing when the pilot jumps out.
+      if(playerControlMode!=PlayerControlMode::Aircraft)updatePlane(dt,pad,false);
       if(driveEnvironment==DriveEnvironment::City)updateCityProps(dt);
       updateRocketsAndExplosions(dt);
       updateCarAir(dt);
