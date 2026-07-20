@@ -243,6 +243,7 @@ workspace/**/logs/
 workspace/temp/
 workspace/**/*.log
 workspace/**/*.cpuprofile
+workspace/**/*.obj
 workspace/**/__pycache__/
 workspace/**/*.pyc
 

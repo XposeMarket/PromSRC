@@ -53,4 +53,8 @@ vita_create_vpk(${PROJECT_NAME}.vpk ${VITA_TITLEID} ${PROJECT_NAME}.self
   NAME ${VITA_APP_NAME}
   FILE assets/environment-atlas.jpg assets/environment-atlas.jpg
   FILE assets/cockpit-dashboard.jpg assets/cockpit-dashboard.jpg
+  FILE assets/sce_sys/icon0.png sce_sys/icon0.png
+  FILE assets/sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
+  FILE assets/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
+  FILE assets/sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
 )

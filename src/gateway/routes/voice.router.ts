@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
 import { getConfig } from '../../config/config.js';
 import { loadTokens } from '../../auth/openai-oauth.js';
-import { getValidXAIToken, isXAIConnected } from '../../auth/xai-oauth.js';
+import { getConfiguredXaiCredentialSummary, getXaiAuthCandidates, isXaiCredentialFailure } from '../../auth/xai-account-pool.js';
 
 export const router = express.Router();
 
@@ -109,18 +109,26 @@ function normalizeVoiceOption(raw: any, provider: string): VoiceOption | null {
 }
 
 async function listXaiVoices(): Promise<VoiceOption[]> {
-  const key = await xaiAuthToken();
-  if (!key) return XAI_TTS_VOICES;
+  const candidates = await getXaiAuthCandidates();
+  if (!candidates.length) return XAI_TTS_VOICES;
   try {
-    const response = await fetch(`${xaiBaseUrl()}/tts/voices`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        'User-Agent': process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0',
-      },
-    });
-    const data: any = await response.json().catch(() => ({}));
-    if (!response.ok) return XAI_TTS_VOICES;
+    let data: any = null;
+    for (const candidate of candidates) {
+      const response = await fetch(`${xaiBaseUrl()}/tts/voices`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${candidate.token}`,
+          'User-Agent': process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0',
+        },
+      });
+      const text = await response.text().catch(() => '');
+      if (response.ok) {
+        try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+        break;
+      }
+      if (!isXaiCredentialFailure(response.status, text)) break;
+    }
+    if (!data) return XAI_TTS_VOICES;
     const rawVoices =
       Array.isArray(data?.voices) ? data.voices
       : Array.isArray(data?.data) ? data.data
@@ -176,26 +184,6 @@ function hasOpenAICodexOAuth(): boolean {
   return loadTokens(getConfig().getConfigDir()) !== null;
 }
 
-function hasXaiOAuth(): boolean {
-  return isXAIConnected(getConfig().getConfigDir());
-}
-
-function looksLikeXaiApiKey(value: string): boolean {
-  return /^xai-[A-Za-z0-9_-]+/.test(String(value || '').trim());
-}
-
-function xaiApiKey(): string {
-  const key = providerApiKey('xai', ['XAI_API_KEY']);
-  return looksLikeXaiApiKey(key) ? key : '';
-}
-
-async function xaiAuthToken(): Promise<string> {
-  const key = xaiApiKey();
-  if (key) return key;
-  if (!hasXaiOAuth()) return '';
-  return getValidXAIToken(getConfig().getConfigDir());
-}
-
 function xaiBaseUrl(): string {
   const configured = String(providerConfig('xai')?.endpoint || XAI_BASE_URL || '').trim();
   return (configured || 'https://api.x.ai/v1').replace(/\/+$/, '');
@@ -212,9 +200,10 @@ function elevenLabsApiKey(): string {
 function getStatus() {
   const openAiConfigured = !!openAiKey();
   const openAiRealtimeConfigured = openAiConfigured || hasOpenAICodexOAuth();
-  const xaiConfigured = !!xaiApiKey() || hasXaiOAuth();
+  const xaiCredentials = getConfiguredXaiCredentialSummary();
+  const xaiConfigured = xaiCredentials.configured;
   const xaiNote = xaiConfigured
-    ? (hasXaiOAuth() && !xaiApiKey() ? 'Connected with xAI OAuth' : undefined)
+    ? (xaiCredentials.oauthConfigured && !xaiCredentials.apiKeyConfigured ? 'Connected with xAI OAuth' : undefined)
     : undefined;
   const groqConfigured = !!groqApiKey();
   const elevenLabsConfigured = !!elevenLabsApiKey();
@@ -353,8 +342,8 @@ async function synthesizeElevenLabs(text: string, voiceId?: string) {
 }
 
 async function synthesizeXai(text: string, voiceId?: string, language?: string, speed?: unknown) {
-  const key = await xaiAuthToken();
-  if (!key) throw new Error('xAI speech is not configured. Connect xAI OAuth or add an xAI API key in Settings -> Models.');
+  const candidates = await getXaiAuthCandidates();
+  if (!candidates.length) throw new Error('xAI speech is not configured. Connect xAI OAuth or add an xAI API key in Settings -> Models.');
   const normalizedSpeed = Number(speed);
   const voice = voiceId || XAI_TTS_VOICE;
   // Match Hermes-Agent's exact wire format: POST /v1/tts with { text, voice_id, language }.
@@ -368,19 +357,27 @@ async function synthesizeXai(text: string, voiceId?: string, language?: string, 
   if (Number.isFinite(normalizedSpeed)) body.speed = Math.max(0.7, Math.min(1.5, normalizedSpeed));
   const url = `${xaiBaseUrl()}/tts`;
   const userAgent = process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0';
-  const result = await fetchBinary(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
-      'User-Agent': userAgent,
-    },
-    body: JSON.stringify(body),
-  });
+  let result: Awaited<ReturnType<typeof fetchBinary>> | null = null;
+  let usedLabel = '';
+  for (const candidate of candidates) {
+    result = await fetchBinary(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${candidate.token}`,
+        'Content-Type': 'application/json',
+        'User-Agent': userAgent,
+      },
+      body: JSON.stringify(body),
+    });
+    usedLabel = candidate.label;
+    if (result.ok || !isXaiCredentialFailure(result.status, result.text)) break;
+    console.warn(`[voice] xAI TTS credential ${candidate.label} failed (${result.status}); trying the next configured account.`);
+  }
+  if (!result) throw new Error('xAI speech has no usable credentials.');
   const logLine = `[${new Date().toISOString()}] [voice] xAI TTS ${url} model=${XAI_TTS_MODEL} voice=${voice} status=${result.status} bytes=${result.buffer.length} mime=${result.mimeType}${!result.ok ? ` body=${(result.text || '').slice(0, 800).replace(/\n/g, ' ')}` : ''}\n`;
   console.log(logLine.trim());
   try { await fs.appendFile('D:\\Prometheus\\voice-xai-debug.log', logLine); } catch {}
-  if (!result.ok) throw new Error(result.text || `xAI TTS failed (${result.status})`);
+  if (!result.ok) throw new Error(result.text || `xAI TTS failed via ${usedLabel} (${result.status})`);
   if (!result.buffer.length) throw new Error('xAI TTS returned empty audio.');
   // Mobile Safari + Chromium both decode MP3 natively. The legacy WAV transcode
   // step was producing zero-length / malformed WAVs on some setups, causing the
@@ -523,8 +520,8 @@ async function transcribeElevenLabs(audio: Buffer, mimeType: string, filename: s
 }
 
 async function transcribeXai(audio: Buffer, mimeType: string, filename: string, language?: string) {
-  const key = await xaiAuthToken();
-  if (!key) throw new Error('xAI speech is not configured. Connect xAI OAuth or add an xAI API key in Settings -> Models.');
+  const candidates = await getXaiAuthCandidates();
+  if (!candidates.length) throw new Error('xAI speech is not configured. Connect xAI OAuth or add an xAI API key in Settings -> Models.');
   let uploadAudio = audio;
   let uploadMimeType = mimeType || 'audio/webm';
   let uploadFilename = filename || `speech-${randomUUID()}.webm`;
@@ -540,20 +537,29 @@ async function transcribeXai(audio: Buffer, mimeType: string, filename: string, 
       try { await fs.appendFile('D:\\Prometheus\\voice-xai-debug.log', `[${new Date().toISOString()}] [voice] xAI STT transcode failed: ${(err as any)?.message || err}\n`); } catch {}
     }
   }
-  const form = new (globalThis as any).FormData();
-  form.append('file', new (globalThis as any).Blob([uploadAudio], { type: uploadMimeType }), uploadFilename);
-  form.append('model', XAI_STT_MODEL);
-  if (language) form.append('language', language);
-  const response = await fetch(`${xaiBaseUrl()}/stt`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${key}`,
-      'User-Agent': process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0',
-    },
-    body: form as any,
-  });
-  const data: any = await response.json().catch(async () => ({ text: await response.text().catch(() => '') }));
-  if (!response.ok) throw new Error(data?.error?.message || data?.error || data?.message || `xAI transcription failed (${response.status})`);
+  let data: any = null;
+  let lastStatus = 502;
+  for (const candidate of candidates) {
+    const form = new (globalThis as any).FormData();
+    form.append('file', new (globalThis as any).Blob([uploadAudio], { type: uploadMimeType }), uploadFilename);
+    form.append('model', XAI_STT_MODEL);
+    if (language) form.append('language', language);
+    const response = await fetch(`${xaiBaseUrl()}/stt`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${candidate.token}`,
+        'User-Agent': process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0',
+      },
+      body: form as any,
+    });
+    const responseText = await response.text().catch(() => '');
+    try { data = responseText ? JSON.parse(responseText) : {}; } catch { data = { text: responseText }; }
+    lastStatus = response.status;
+    if (response.ok) break;
+    if (!isXaiCredentialFailure(response.status, responseText)) break;
+    console.warn(`[voice] xAI STT credential ${candidate.label} failed (${response.status}); trying the next configured account.`);
+  }
+  if (lastStatus < 200 || lastStatus >= 300) throw new Error(data?.error?.message || data?.error || data?.message || `xAI transcription failed (${lastStatus})`);
   return { success: true, provider: 'xai', text: String(data?.text || data?.transcript || '').trim(), raw: data };
 }
 

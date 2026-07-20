@@ -1,0 +1,5 @@
+VitaLink Gate 2 pairing-boundary observer R9
+stage=module_start-entered
+schedule=enable-after-30s-sample-120s-cleanup-then-enumerate
+active-calls=ksceBtSetInquiryScan(1)-then-(0)-cleanup-only
+passive-calls=ksceBtGetLastError-and-ksceBtGetRegisteredInfo

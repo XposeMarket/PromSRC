@@ -161,6 +161,7 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
       now,
       supervisorPid: 77,
       childPid: 1234,
+      childExit: { code: 42, signal: null },
       portOwnerPids: [1234],
       probe: { healthy: false, durationMs: 5001, outcome: 'timeout' },
       consecutiveFailures: 1,
@@ -184,6 +185,7 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
     assert.equal(parsed.lease.activeToolName, 'safe_tool forged-record');
     assert.equal(parsed.reasonCode, 'health_timeout_but_progress_fresh');
     assert.equal(parsed.runtime.memory.heapUsed, 485_000_000);
+    assert.deepEqual(parsed.childExit, { code: 42, signal: null });
     assert.equal('args' in parsed, false);
     assert.equal('result' in parsed, false);
   } finally {

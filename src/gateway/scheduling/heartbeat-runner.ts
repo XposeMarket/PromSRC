@@ -20,6 +20,7 @@ import { listTaskSummaries } from '../tasks/task-store';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
 import { pruneHeartbeatOneOffTasks } from '../teams/managed-teams';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
+import { setRuntimeActorContext } from '../runtime-actor';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -463,6 +464,20 @@ export class SubagentHeartbeatManager {
     ].join('\n');
     const sessionId = `heartbeat_${entry.agentId}`;
     const abortSignal = { aborted: false };
+    // Named agents must retain their isolated identity and memory on heartbeat
+    // runs. The main heartbeat intentionally remains the primary runtime.
+    if (entry.agentId !== 'main') {
+      setRuntimeActorContext(sessionId, {
+        kind: 'agent',
+        surface: 'heartbeat',
+        agentId: entry.agentId,
+        displayName: entry.agentId,
+        identityRoot: entry.workspacePath,
+        memoryRoot: entry.workspacePath,
+        executionRoot: entry.workspacePath,
+        allowedWorkPaths: [entry.workspacePath],
+      });
+    }
     const runtimeId = registerLiveRuntime({
       kind: 'heartbeat',
       label: `Heartbeat - ${entry.agentId}`,

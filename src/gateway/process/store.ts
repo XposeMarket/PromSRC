@@ -1,6 +1,32 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import type { ProcessRunRecord } from './types';
+
+const RENAME_RETRY_DELAYS_MS = [5, 10, 20, 40, 80, 160];
+
+function isRetryableRenameError(error: unknown): boolean {
+  const code = String((error as NodeJS.ErrnoException)?.code || '').toUpperCase();
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY';
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function renameWithRetries(source: string, target: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(source, target);
+      return;
+    } catch (error) {
+      if (!isRetryableRenameError(error) || attempt >= RENAME_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+      sleepSync(RENAME_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -41,9 +67,14 @@ export class ProcessRunStore {
 
   writeRecord(record: ProcessRunRecord): void {
     ensureDir(this.recordsDir);
-    const tmp = `${this.recordPath(record.runId)}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8');
-    fs.renameSync(tmp, this.recordPath(record.runId));
+    const target = this.recordPath(record.runId);
+    const tmp = `${target}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8');
+      renameWithRetries(tmp, target);
+    } finally {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+    }
   }
 
   appendStdout(runId: string, chunk: string): void {

@@ -99,10 +99,28 @@ function buildSummary(exitCode: number | null, stderr: string, stdout: string): 
 export class ProcessSupervisor {
   private readonly store: ProcessRunStore;
   private readonly active = new Map<string, ManagedProcessRun>();
+  private lastPersistenceWarningAt = 0;
 
   constructor(store: ProcessRunStore) {
     this.store = store;
     this.markStaleRunsExited();
+  }
+
+  private warnPersistenceFailure(operation: string, error: unknown): void {
+    const now = Date.now();
+    if (now - this.lastPersistenceWarningAt < 10_000) return;
+    this.lastPersistenceWarningAt = now;
+    console.warn(`[ProcessSupervisor] ${operation} failed; continuing without terminating the gateway:`, (error as any)?.message || error);
+  }
+
+  private appendOutput(runId: string, kind: 'stdout' | 'stderr', text: string): void {
+    try {
+      if (kind === 'stdout') this.store.appendStdout(runId, text);
+      else this.store.appendStderr(runId, text);
+      this.store.appendCombined(runId, text);
+    } catch (error) {
+      this.warnPersistenceFailure(`persisting ${kind} for ${runId}`, error);
+    }
   }
 
   list(limit = 100): ProcessRunRecord[] {
@@ -217,12 +235,10 @@ export class ProcessSupervisor {
       }
       if (kind === 'stdout') {
         record.stdoutBytes += Buffer.byteLength(text);
-        this.store.appendStdout(runId, text);
       } else {
         record.stderrBytes += Buffer.byteLength(text);
-        this.store.appendStderr(runId, text);
       }
-      this.store.appendCombined(runId, text);
+      this.appendOutput(runId, kind, text);
       record.outputPreview = trimPreview(`${record.outputPreview}${text}`);
       record.outputSeq = Number(record.outputSeq || 0) + 1;
       touchOutput();
@@ -362,8 +378,7 @@ export class ProcessSupervisor {
       const text = String(chunk);
       if (captureOutput) stdout += text;
       record.stdoutBytes += Buffer.byteLength(text);
-      this.store.appendStdout(runId, text);
-      this.store.appendCombined(runId, text);
+      this.appendOutput(runId, 'stdout', text);
       record.outputPreview = trimPreview(`${record.outputPreview}${text}`);
       record.outputSeq = Number(record.outputSeq || 0) + 1;
       record.waitingForInputHint = /(?:press any key|password|passphrase|enter .*:|continue\?|y\/n|\[y\/n\]|waiting for input)/i.test(record.outputPreview);
@@ -489,7 +504,11 @@ export class ProcessSupervisor {
   }
 
   private persistAndBroadcast(record: ProcessRunRecord, eventType: string, extra: Record<string, unknown> = {}): void {
-    this.store.writeRecord(record);
+    try {
+      this.store.writeRecord(record);
+    } catch (error) {
+      this.warnPersistenceFailure(`persisting record ${record.runId}`, error);
+    }
     try {
       broadcastWS({ type: eventType, run: record, ...extra, timestamp: Date.now() });
     } catch {
@@ -507,7 +526,11 @@ export class ProcessSupervisor {
         updatedAt: nowIso(),
         terminationReason: record.terminationReason || 'spawn_error',
       };
-      this.store.writeRecord(updated);
+      try {
+        this.store.writeRecord(updated);
+      } catch (error) {
+        this.warnPersistenceFailure(`marking stale record ${record.runId}`, error);
+      }
     }
   }
 }

@@ -1,0 +1,192 @@
+VitaLink Gate 2 high-resolution pairing-boundary observer R10
+scope=bounded inquiry visibility plus passive 50ms error/configuration sampling and 1s registered-device snapshots
+forbidden=callbacks,event-read,pairing-replies,connect,delete,SDP,HID,L2CAP,configuration-writes
+ksceBtSetInquiryScan(1)=0x00000000
+initial-error=0x00000000 initial-configuration=0x00000009
+snapshot sample=0x00000000 begin
+snapshot sample=0x00000000 occupied-or-error=0x00000000 end
+snapshot sample=0x00000014 begin
+snapshot sample=0x00000014 occupied-or-error=0x00000000 end
+snapshot sample=0x00000028 begin
+snapshot sample=0x00000028 occupied-or-error=0x00000000 end
+snapshot sample=0x0000003c begin
+snapshot sample=0x0000003c occupied-or-error=0x00000000 end
+snapshot sample=0x00000050 begin
+snapshot sample=0x00000050 occupied-or-error=0x00000000 end
+snapshot sample=0x00000064 begin
+snapshot sample=0x00000064 occupied-or-error=0x00000000 end
+snapshot sample=0x00000078 begin
+snapshot sample=0x00000078 occupied-or-error=0x00000000 end
+snapshot sample=0x0000008c begin
+snapshot sample=0x0000008c occupied-or-error=0x00000000 end
+snapshot sample=0x000000a0 begin
+snapshot sample=0x000000a0 occupied-or-error=0x00000000 end
+snapshot sample=0x000000b4 begin
+snapshot sample=0x000000b4 occupied-or-error=0x00000000 end
+snapshot sample=0x000000c8 begin
+snapshot sample=0x000000c8 occupied-or-error=0x00000000 end
+snapshot sample=0x000000dc begin
+snapshot sample=0x000000dc occupied-or-error=0x00000000 end
+snapshot sample=0x000000f0 begin
+snapshot sample=0x000000f0 occupied-or-error=0x00000000 end
+snapshot sample=0x00000104 begin
+snapshot sample=0x00000104 occupied-or-error=0x00000000 end
+snapshot sample=0x00000118 begin
+snapshot sample=0x00000118 occupied-or-error=0x00000000 end
+snapshot sample=0x0000012c begin
+snapshot sample=0x0000012c occupied-or-error=0x00000000 end
+snapshot sample=0x00000140 begin
+snapshot sample=0x00000140 occupied-or-error=0x00000000 end
+snapshot sample=0x00000154 begin
+snapshot sample=0x00000154 occupied-or-error=0x00000000 end
+snapshot sample=0x00000168 begin
+snapshot sample=0x00000168 occupied-or-error=0x00000000 end
+snapshot sample=0x0000017c begin
+snapshot sample=0x0000017c occupied-or-error=0x00000000 end
+snapshot sample=0x00000190 begin
+snapshot sample=0x00000190 occupied-or-error=0x00000000 end
+snapshot sample=0x000001a4 begin
+snapshot sample=0x000001a4 occupied-or-error=0x00000000 end
+snapshot sample=0x000001b8 begin
+snapshot sample=0x000001b8 occupied-or-error=0x00000000 end
+snapshot sample=0x000001cc begin
+snapshot sample=0x000001cc occupied-or-error=0x00000000 end
+snapshot sample=0x000001e0 begin
+snapshot sample=0x000001e0 occupied-or-error=0x00000000 end
+snapshot sample=0x000001f4 begin
+snapshot sample=0x000001f4 occupied-or-error=0x00000000 end
+snapshot sample=0x00000208 begin
+snapshot sample=0x00000208 occupied-or-error=0x00000000 end
+snapshot sample=0x0000021c begin
+snapshot sample=0x0000021c occupied-or-error=0x00000000 end
+snapshot sample=0x00000230 begin
+snapshot sample=0x00000230 occupied-or-error=0x00000000 end
+snapshot sample=0x00000244 begin
+snapshot sample=0x00000244 occupied-or-error=0x00000000 end
+snapshot sample=0x00000258 begin
+snapshot sample=0x00000258 occupied-or-error=0x00000000 end
+snapshot sample=0x0000026c begin
+snapshot sample=0x0000026c occupied-or-error=0x00000000 end
+snapshot sample=0x00000280 begin
+snapshot sample=0x00000280 occupied-or-error=0x00000000 end
+snapshot sample=0x00000294 begin
+snapshot sample=0x00000294 occupied-or-error=0x00000000 end
+snapshot sample=0x000002a8 begin
+snapshot sample=0x000002a8 occupied-or-error=0x00000000 end
+snapshot sample=0x000002bc begin
+snapshot sample=0x000002bc occupied-or-error=0x00000000 end
+snapshot sample=0x000002d0 begin
+snapshot sample=0x000002d0 occupied-or-error=0x00000000 end
+snapshot sample=0x000002e4 begin
+snapshot sample=0x000002e4 occupied-or-error=0x00000000 end
+snapshot sample=0x000002f8 begin
+snapshot sample=0x000002f8 occupied-or-error=0x00000000 end
+snapshot sample=0x0000030c begin
+snapshot sample=0x0000030c occupied-or-error=0x00000000 end
+snapshot sample=0x00000320 begin
+snapshot sample=0x00000320 occupied-or-error=0x00000000 end
+snapshot sample=0x00000334 begin
+snapshot sample=0x00000334 occupied-or-error=0x00000000 end
+snapshot sample=0x00000348 begin
+snapshot sample=0x00000348 occupied-or-error=0x00000000 end
+snapshot sample=0x0000035c begin
+snapshot sample=0x0000035c occupied-or-error=0x00000000 end
+snapshot sample=0x00000370 begin
+snapshot sample=0x00000370 occupied-or-error=0x00000000 end
+snapshot sample=0x00000384 begin
+snapshot sample=0x00000384 occupied-or-error=0x00000000 end
+snapshot sample=0x00000398 begin
+snapshot sample=0x00000398 occupied-or-error=0x00000000 end
+snapshot sample=0x000003ac begin
+snapshot sample=0x000003ac occupied-or-error=0x00000000 end
+snapshot sample=0x000003c0 begin
+snapshot sample=0x000003c0 occupied-or-error=0x00000000 end
+snapshot sample=0x000003d4 begin
+snapshot sample=0x000003d4 occupied-or-error=0x00000000 end
+snapshot sample=0x000003e8 begin
+snapshot sample=0x000003e8 occupied-or-error=0x00000000 end
+snapshot sample=0x000003fc begin
+snapshot sample=0x000003fc occupied-or-error=0x00000000 end
+snapshot sample=0x00000410 begin
+snapshot sample=0x00000410 occupied-or-error=0x00000000 end
+snapshot sample=0x00000424 begin
+snapshot sample=0x00000424 occupied-or-error=0x00000000 end
+snapshot sample=0x00000438 begin
+snapshot sample=0x00000438 occupied-or-error=0x00000000 end
+snapshot sample=0x0000044c begin
+snapshot sample=0x0000044c occupied-or-error=0x00000000 end
+snapshot sample=0x00000460 begin
+snapshot sample=0x00000460 occupied-or-error=0x00000000 end
+snapshot sample=0x00000474 begin
+snapshot sample=0x00000474 occupied-or-error=0x00000000 end
+snapshot sample=0x00000488 begin
+snapshot sample=0x00000488 occupied-or-error=0x00000000 end
+snapshot sample=0x0000049c begin
+snapshot sample=0x0000049c occupied-or-error=0x00000000 end
+snapshot sample=0x000004b0 begin
+snapshot sample=0x000004b0 occupied-or-error=0x00000000 end
+snapshot sample=0x000004c4 begin
+snapshot sample=0x000004c4 occupied-or-error=0x00000000 end
+snapshot sample=0x000004d8 begin
+snapshot sample=0x000004d8 occupied-or-error=0x00000000 end
+snapshot sample=0x000004ec begin
+snapshot sample=0x000004ec occupied-or-error=0x00000000 end
+snapshot sample=0x00000500 begin
+snapshot sample=0x00000500 occupied-or-error=0x00000000 end
+snapshot sample=0x00000514 begin
+snapshot sample=0x00000514 occupied-or-error=0x00000000 end
+snapshot sample=0x00000528 begin
+snapshot sample=0x00000528 occupied-or-error=0x00000000 end
+snapshot sample=0x0000053c begin
+snapshot sample=0x0000053c occupied-or-error=0x00000000 end
+snapshot sample=0x00000550 begin
+snapshot sample=0x00000550 occupied-or-error=0x00000000 end
+snapshot sample=0x00000564 begin
+snapshot sample=0x00000564 occupied-or-error=0x00000000 end
+snapshot sample=0x00000578 begin
+snapshot sample=0x00000578 occupied-or-error=0x00000000 end
+snapshot sample=0x0000058c begin
+snapshot sample=0x0000058c occupied-or-error=0x00000000 end
+snapshot sample=0x000005a0 begin
+snapshot sample=0x000005a0 occupied-or-error=0x00000000 end
+snapshot sample=0x000005b4 begin
+snapshot sample=0x000005b4 occupied-or-error=0x00000000 end
+snapshot sample=0x000005c8 begin
+snapshot sample=0x000005c8 occupied-or-error=0x00000000 end
+snapshot sample=0x000005dc begin
+snapshot sample=0x000005dc occupied-or-error=0x00000000 end
+snapshot sample=0x000005f0 begin
+snapshot sample=0x000005f0 occupied-or-error=0x00000000 end
+snapshot sample=0x00000604 begin
+snapshot sample=0x00000604 occupied-or-error=0x00000000 end
+snapshot sample=0x00000618 begin
+snapshot sample=0x00000618 occupied-or-error=0x00000000 end
+snapshot sample=0x0000062c begin
+snapshot sample=0x0000062c occupied-or-error=0x00000000 end
+snapshot sample=0x00000640 begin
+snapshot sample=0x00000640 occupied-or-error=0x00000000 end
+snapshot sample=0x00000654 begin
+snapshot sample=0x00000654 occupied-or-error=0x00000000 end
+snapshot sample=0x00000668 begin
+snapshot sample=0x00000668 occupied-or-error=0x00000000 end
+snapshot sample=0x0000067c begin
+snapshot sample=0x0000067c occupied-or-error=0x00000000 end
+snapshot sample=0x00000690 begin
+snapshot sample=0x00000690 occupied-or-error=0x00000000 end
+snapshot sample=0x000006a4 begin
+snapshot sample=0x000006a4 occupied-or-error=0x00000000 end
+snapshot sample=0x000006b8 begin
+snapshot sample=0x000006b8 occupied-or-error=0x00000000 end
+snapshot sample=0x000006cc begin
+snapshot sample=0x000006cc occupied-or-error=0x00000000 end
+snapshot sample=0x000006e0 begin
+snapshot sample=0x000006e0 occupied-or-error=0x00000000 end
+snapshot sample=0x000006f4 begin
+snapshot sample=0x000006f4 occupied-or-error=0x00000000 end
+snapshot sample=0x00000708 begin
+snapshot sample=0x00000708 occupied-or-error=0x00000000 end
+ksceBtSetInquiryScan(0)=0x00000000
+final-error=0x00000000 final-configuration=0x00000009
+snapshot sample=0x00000709 begin
+snapshot sample=0x00000709 occupied-or-error=0x00000000 end
+stage=cleanup-and-high-resolution-observation-complete

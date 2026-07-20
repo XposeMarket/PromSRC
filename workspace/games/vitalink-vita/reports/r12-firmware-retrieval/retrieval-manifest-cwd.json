@@ -1,0 +1,50 @@
+{
+  "host": "10.0.0.231",
+  "port": 1337,
+  "listings": {
+    "/": [
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 os0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 pd0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 sa0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 tm0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 ud0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 uma0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ur0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ux0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vd0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vs0:"
+    ],
+    "CWD:vs0:": [
+      "drwxr-xr-x 1 vita vita 4096 Mar 17 2017 app",
+      "drwxr-xr-x 1 vita vita 4096 Mar 17 2017 data",
+      "drwxr-xr-x 1 vita vita 4096 Mar 17 2017 sys",
+      "drwxr-xr-x 1 vita vita 4096 Mar 17 2017 tool",
+      "drwxr-xr-x 1 vita vita 4096 Mar 17 2017 vsh",
+      "drwxr-xr-x 1 vita vita 4096 Jul 26 2025 SceIoTrash"
+    ]
+  },
+  "retrieved": [
+    {
+      "remote": "os0:/kd/wlanbt_robin_img_ax.skprx",
+      "local": "reports\\r12-firmware-retrieval\\os0__kd__wlanbt_robin_img_ax.skprx",
+      "size": 310941,
+      "sha256": "927786e1737a6c515b706c34155884ed74e17fd563a2a52523834ecf363f5a3a"
+    }
+  ],
+  "errors": [
+    "LIST_ERROR vs0:: error_perm: 550 Invalid directory.",
+    "LIST_ERROR vs0:/sys: error_perm: 550 Invalid directory.",
+    "LIST_ERROR vs0:/sys/external: error_perm: 550 Invalid directory.",
+    "LIST_ERROR vs0:/app: error_perm: 550 Invalid directory.",
+    "LIST_ERROR vs0:/app/NPXS10026: error_perm: 550 Invalid directory.",
+    "CWD_LIST_ERROR vs0:/app: error_perm: 550 Invalid directory.",
+    "CWD_LIST_ERROR vs0:/app/NPXS10026: error_perm: 550 Invalid directory.",
+    "CWD_LIST_ERROR vs0:/app/NPXS10026/sce_module: error_perm: 550 Invalid directory.",
+    "RETR_ERROR vs0:/app/NPXS10015/eboot.bin: error_perm: 550 File not found.",
+    "RETR_ERROR vs0:/app/NPXS10015/system_settings_core.suprx: error_perm: 550 File not found.",
+    "RETR_ERROR vs0:/app/NPXS10015/peripherals_settings_plugin.rco: error_perm: 550 File not found.",
+    "RETR_ERROR vs0:/app/NPXS10015/network_settings_plugin.rco: error_perm: 550 File not found.",
+    "RETR_ERROR vs0:/app/NPXS10015/system_settings_plugin.rco: error_perm: 550 File not found.",
+    "RETR_ERROR os0:kd/wlanbt_robin_img_ax.skprx: error_perm: 550 File not found."
+  ]
+}

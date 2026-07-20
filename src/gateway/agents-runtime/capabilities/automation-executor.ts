@@ -22,6 +22,7 @@ import {
   type InternalWatchActionPolicy,
 } from '../../internal-watch/internal-watch-store';
 import { observeInternalWatchTarget, refreshInternalWatchObservation } from '../../internal-watch/internal-watch-runner';
+import { evaluateInternalWatchTaskControlPolicy } from '../../internal-watch/internal-watch-policy';
 import { getSessionChannelHint } from '../../comms/broadcaster';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import {
@@ -132,50 +133,9 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
       }
 
       case 'task_control': {
-        const watchPolicy = deps.internalWatchContext;
-        const action = String(args?.action || '').trim().toLowerCase();
-        if (watchPolicy) {
-          const targetTaskId = String(args?.task_id || args?.id || '').trim();
-          const readOnlyActions = new Set(['get', 'list', 'latest', 'list_approvals']);
-          // Continue is deliberately included: it appends one explicit scoped
-          // follow-up to a completed watched task without resetting its proof.
-          const sameRunActions = new Set(['steer', 'message', 'resume', 'continue']);
-          const fullRerunActions = new Set([...sameRunActions, 'rerun']);
-          const isReadOnly = readOnlyActions.has(action);
-          const actionPermitted = watchPolicy.actionPolicy === 'review_only'
-            ? readOnlyActions.has(action)
-            : watchPolicy.actionPolicy === 'recover_same_run'
-              ? readOnlyActions.has(action) || sameRunActions.has(action)
-              : readOnlyActions.has(action) || fullRerunActions.has(action);
-          // Never let candidate resolution select a different task during a
-          // watch wake-up. Every mutation needs an exact watched task id.
-          const targetsWatchedTask = !!watchPolicy.targetTaskId && !!targetTaskId && targetTaskId === watchPolicy.targetTaskId;
-          if (!actionPermitted || (!isReadOnly && !targetsWatchedTask)) {
-            const allowedActions = watchPolicy.actionPolicy === 'review_only'
-              ? ['get', 'list', 'latest', 'list_approvals']
-              : watchPolicy.actionPolicy === 'recover_same_run'
-                ? ['get', 'list', 'latest', 'list_approvals', 'steer', 'message', 'resume', 'continue']
-                : ['get', 'list', 'latest', 'list_approvals', 'steer', 'message', 'resume', 'continue', 'rerun'];
-            return {
-              name,
-              args,
-              result: JSON.stringify({
-                success: false,
-                action,
-                code: 'internal_watch_policy_denied',
-                watch_id: watchPolicy.watchId,
-                policy: watchPolicy.actionPolicy,
-                target_task_id: watchPolicy.targetTaskId || null,
-                allowed_actions: allowedActions,
-                message: watchPolicy.actionPolicy === 'review_only'
-                  ? 'This watch delivery is review_only: inspect, verify, or report. It cannot mutate tasks.'
-                  : watchPolicy.actionPolicy === 'recover_same_run'
-                    ? 'This watch delivery permits only same-run recovery or scoped continuation of its watched task. Full rerun/reset and unrelated task mutation are blocked.'
-                    : 'This watch delivery permits only explicitly authorized recovery actions on its watched task. Unrelated task mutation, cancellation, deletion, and approval decisions are blocked.',
-              }, null, 2),
-              error: true,
-            };
-          }
+        const denial = evaluateInternalWatchTaskControlPolicy(deps.internalWatchContext, args);
+        if (denial) {
+          return { name, args, result: JSON.stringify(denial, null, 2), error: true };
         }
         const out = await deps.handleTaskControlAction(sessionId, args);
         return {

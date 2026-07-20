@@ -37,6 +37,8 @@ import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from '../tools/workspace-context.js';
 import { broadcastWS } from './comms/broadcaster';
 import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
+import { createUserChromePage, UserChromePage } from './user-chrome-transport.js';
+import { getUserChromeExtensionOnboarding, getUserChromeRelay } from './user-chrome-relay.js';
 
 type PwBrowser = any;
 type PwContext = any;
@@ -63,6 +65,8 @@ interface BrowserSession {
   profileDir?: string;
   profileKind: BrowserProfileKind;
   browserTarget: BrowserProfileKind;
+  /** Personal Chrome is extension/debugger backed, never a real-profile CDP port. */
+  transport?: 'cdp' | 'extension';
   lastSnapshot: string;
   lastSnapshotAt: number;  // epoch ms when lastSnapshot was captured; 0 = never
   lastPageUrl: string;
@@ -674,6 +678,24 @@ const browserControlWaiters: Map<string, Array<() => void>> = new Map();
 const browserTeachSessions: Map<string, BrowserTeachSessionSnapshot> = new Map();
 const browserConsolePageSessions: WeakMap<any, Set<BrowserSession>> = new WeakMap();
 const browserConsoleAttachedPages: WeakSet<any> = new WeakSet();
+const userChromeRelayUnsubscribers: Map<string, () => void> = new Map();
+const userChromeTabLocks: Map<number, string> = new Map();
+
+function claimUserChromeTab(sessionId: string, page: UserChromePage): void {
+  const tabId = page.tabId();
+  const owner = userChromeTabLocks.get(tabId);
+  if (owner && owner !== sessionId) throw new Error(`Personal Chrome tab is locked by browser session "${owner}". Select or open a different tab; concurrent agents cannot drive the same personal tab.`);
+  userChromeTabLocks.set(tabId, sessionId);
+}
+
+function releaseUserChromeTabLocks(sessionId: string): void {
+  for (const [tabId, owner] of userChromeTabLocks) if (owner === sessionId) userChromeTabLocks.delete(tabId);
+  const unsubscribe = userChromeRelayUnsubscribers.get(sessionId);
+  if (unsubscribe) {
+    try { unsubscribe(); } catch {}
+    userChromeRelayUnsubscribers.delete(sessionId);
+  }
+}
 let browserSessionRegistryCache: Map<string, PersistedBrowserSessionRecord> | null = null;
 
 function safeBrowserPageUrl(page: any): string {
@@ -695,6 +717,35 @@ function pushBrowserConsoleEntry(session: BrowserSession, entry: Omit<BrowserCon
     location: entry.location,
   });
   if (entries.length > 1000) entries.splice(0, entries.length - 1000);
+}
+
+function attachUserChromeRelayObservers(session: BrowserSession): void {
+  if (session.transport !== 'extension' || userChromeRelayUnsubscribers.has(session.sessionId)) return;
+  const unsubscribe = getUserChromeRelay().onEvent((event) => {
+    if (Number(event?.tabId) !== (session.page as UserChromePage).tabId()) return;
+    if (event?.event === 'tab_removed' || event?.event === 'debugger_detach') {
+      releaseUserChromeTabLocks(session.sessionId);
+      sessions.delete(session.sessionId);
+      return;
+    }
+    if (event?.event !== 'cdp') return;
+    const method = String(event.method || '');
+    const params = event.params || {};
+    if (method === 'Runtime.consoleAPICalled' || method === 'Runtime.exceptionThrown') {
+      const args = Array.isArray(params.args) ? params.args : [];
+      const message = method === 'Runtime.exceptionThrown'
+        ? String(params.exceptionDetails?.text || params.exceptionDetails?.exception?.description || 'page exception')
+        : args.map((arg: any) => String(arg?.value ?? arg?.description ?? arg?.type ?? '')).join(' ');
+      pushBrowserConsoleEntry(session, { source: 'playwright_console', level: String(params.type || 'error'), message, ts: Date.now(), url: session.page.url() });
+    } else if (method === 'Network.responseReceived') {
+      const response = params.response || {};
+      const entries = _networkInterceptLog.get(session.sessionId) || [];
+      entries.push({ url: String(response.url || ''), method: String(params.type || 'GET'), status: Number(response.status || 0), contentType: String(response.mimeType || ''), ts: Date.now() });
+      if (entries.length > 500) entries.splice(0, entries.length - 500);
+      _networkInterceptLog.set(session.sessionId, entries);
+    }
+  });
+  userChromeRelayUnsubscribers.set(session.sessionId, unsubscribe);
 }
 
 function attachBrowserConsoleCollector(session: BrowserSession, page: any): void {
@@ -2018,6 +2069,22 @@ export async function browserDoctor(sessionId: string): Promise<string> {
 
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
+  const selectedTarget = getBrowserSessionMetadata(resolved).ownerType === 'main' ? getMainBrowserTarget(resolved) : 'prometheus';
+  if (selectedTarget === 'user' || session?.transport === 'extension') {
+    const relay = getUserChromeRelay();
+    const status = relay.getStatus();
+    lines.push('INFO Browser profile target: user Chrome via Personal Chrome extension (not CDP).');
+    (status.connected ? ok : fail)('Extension relay', status.connected
+      ? `connected${status.extensionVersion ? ` (extension ${status.extensionVersion})` : ''}; loopback 127.0.0.1:${status.port}`
+      : `not connected. ${getUserChromeExtensionOnboarding().replace(/\n/g, ' ')}`);
+    ok('CDP port', 'not applicable: port 9223 is intentionally not used for the default Chrome profile.');
+    if (session?.transport === 'extension') {
+      ok('Session', `active id=${resolved}, tab=${session.page.url() || '(blank)'}`);
+      try { await session.page.screenshot({ type: 'png' }); ok('Screenshot transport', 'Page.captureScreenshot via chrome.debugger succeeded'); }
+      catch (err: any) { fail('Screenshot transport', String(err?.message || err)); }
+    }
+    return lines.join('\n');
+  }
   if (!session) {
     warn('Session', 'no active browser session');
     const metadata = registerBrowserSessionMetadata(resolved);
@@ -2598,6 +2665,10 @@ async function connectOrLaunchPersistentChrome(
     ? getUserChromeProfileDirectory(sessionId)
     : '';
 
+  if (mainTarget === 'user') {
+    throw new Error('Personal Chrome must use the Prometheus extension relay. The real Chrome profile is never launched with --remote-debugging-port.');
+  }
+
   if (await isPortOpen(debugPort)) {
     try {
       const browser = await connectOverCDPWithTimeout(pw, debugPort);
@@ -2654,6 +2725,12 @@ async function connectOrLaunchPersistentChrome(
 
 async function isSessionAlive(session: BrowserSession): Promise<boolean> {
   try {
+    if (session.transport === 'extension') {
+      const page = session.page as UserChromePage;
+      const tab = await getUserChromeRelay().request('tabs.get', { tabId: page.tabId() }, 2_000);
+      page.updateTab(tab);
+      return true;
+    }
     // A closed page will throw on .url() or return 'about:blank' after CDP disconnect
     const url = session.page.url();
     if (!url && url !== 'about:blank') return false;
@@ -2694,6 +2771,7 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
     console.log(`[Browser] Session "${sessionId}" is dead (Chrome was closed). Evicting and relaunching...`);
     await stopBrowserLiveStream(sessionId, 'Live browser stream stopped because the Chrome session ended.').catch(() => {});
     sessions.delete(sessionId);
+    if (existing.transport === 'extension') releaseUserChromeTabLocks(existing.sessionId);
     try { await existing.page.close(); } catch {}
     try { await existing.browser.close(); } catch {}
   }
@@ -2701,6 +2779,40 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
   const metadata = registerBrowserSessionMetadata(sessionId);
   if (metadata.ownerType === 'main' && getMainBrowserTarget(sessionId) === 'inhouse') {
     throw new Error('The current browser target is Prometheus in-house browser. Use browser_open with target="prometheus" to switch back to regular Chrome/CDP.');
+  }
+
+  // Personal Chrome is not and must never become a CDP launch target. The
+  // extension has chrome.debugger permission and supplies a page-shaped CDP
+  // adapter over an authenticated loopback relay instead.
+  if (metadata.ownerType === 'main' && getMainBrowserTarget(sessionId) === 'user') {
+    const page = await createUserChromePage();
+    claimUserChromeTab(sessionId, page);
+    await page.cdp('Runtime.enable').catch(() => {});
+    await page.cdp('Network.enable').catch(() => {});
+    const context: any = {
+      pages: () => [page],
+      newPage: async () => {
+        const created = await getUserChromeRelay().request('tabs.create', { url: 'about:blank', active: true });
+        const next = new UserChromePage(created);
+        claimUserChromeTab(sessionId, next);
+        session.page = next;
+        return next;
+      },
+      on: () => context,
+      off: () => context,
+      newCDPSession: undefined,
+    };
+    const browser: any = { contexts: () => [context], close: async () => {} };
+    const session: BrowserSession = {
+      sessionId, browser, context, page, ownsBrowser: false, isolated: false,
+      debugPort: undefined, profileDir: getRealChromeProfileDir(), profileKind: 'user', browserTarget: 'user', transport: 'extension',
+      lastSnapshot: '', lastSnapshotAt: 0, lastPageUrl: page.url(), lastPageTitle: '', consoleEntries: [], injectedStaticContext: {}, createdAt: Date.now(),
+    };
+    sessions.set(sessionId, session);
+    attachUserChromeRelayObservers(session);
+    await syncPageMetadata(session).catch(() => {});
+    persistBrowserSessionRecord(session);
+    return session;
   }
 
   const pw = await getPW();
@@ -4408,6 +4520,7 @@ export async function browserSetProfileTarget(
   if (existing && existing.browserTarget !== nextTarget && options?.closeExisting !== false) {
     await stopBrowserLiveStream(resolved, `Browser profile target changed to ${getBrowserProfileLabel(nextTarget)}.`).catch(() => {});
     sessions.delete(resolved);
+    if (existing.transport === 'extension') releaseUserChromeTabLocks(existing.sessionId);
     try { await existing.page.close(); } catch {}
     try { await existing.browser.close(); } catch {}
   }
@@ -4420,7 +4533,7 @@ export async function browserSetProfileTarget(
   return [
     `Browser target set to ${getBrowserProfileLabel(nextTarget)}.`,
     nextTarget === 'user'
-      ? `User Chrome target uses CDP port ${getUserChromeDebugPort()} and user data dir ${getRealChromeProfileDir()}${getUserChromeProfileDirectory(resolved) ? `, Chrome profile "${getUserChromeProfileDirectory(resolved)}"` : ''}. If Chrome is already running normally with that profile, close it first so Prometheus can launch a fresh debugger-enabled Chrome.`
+      ? getUserChromeExtensionOnboarding()
       : (nextTarget === 'inhouse'
         ? 'Prometheus in-house browser uses the embedded Electron browser surface. The current screenshot stream remains available only as fallback.'
         : `Prometheus target uses CDP port ${getMainChromeDebugPort()} and profile ${process.env.CHROME_PROFILE || path.join(os.homedir(), '.prometheus', 'chrome-debug-profile')}.`),
@@ -4450,12 +4563,31 @@ function formatBrowserTabs(session: BrowserSession): string {
 export async function browserListTabs(sessionId: string): Promise<string> {
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (session.transport === 'extension') {
+    const tabs = await getUserChromeRelay().request('tabs.list');
+    const activeId = (session.page as UserChromePage).tabId();
+    return [`Browser tabs for user Chrome via Personal Chrome extension (${tabs.length}):`, ...tabs.map((tab: any, index: number) => `${tab.id === activeId ? '*' : ' '} [${index}] ${tab.title || '(untitled)'} ${tab.url || ''}`)].join('\n');
+  }
   return formatBrowserTabs(session);
 }
 
 export async function browserSelectTab(sessionId: string, index: number): Promise<string> {
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (session.transport === 'extension') {
+    const tabs = await getUserChromeRelay().request('tabs.list');
+    const tab = tabs[Math.max(0, Math.min(tabs.length - 1, Number(index)))];
+    if (!tab) return `ERROR: No browser tab at index ${index}.`;
+    await getUserChromeRelay().request('tabs.activate', { tabId: tab.id, windowId: tab.windowId });
+    const nextPage = new UserChromePage(tab);
+    claimUserChromeTab(session.sessionId, nextPage);
+    session.page = nextPage;
+    await (session.page as UserChromePage).cdp('Runtime.enable').catch(() => {});
+    await (session.page as UserChromePage).cdp('Network.enable').catch(() => {});
+    await syncPageMetadata(session).catch(() => {});
+    persistBrowserSessionRecord(session);
+    return `Selected Personal Chrome tab [${index}].\n${await browserListTabs(sessionId)}`;
+  }
   const pages = session.context.pages();
   const idx = Math.max(0, Math.min(pages.length - 1, Number(index)));
   const page = pages[idx];
@@ -4470,6 +4602,19 @@ export async function browserSelectTab(sessionId: string, index: number): Promis
 
 export async function browserNewTab(sessionId: string, url?: string): Promise<string> {
   const session = await getOrCreateSession(resolveSessionId(sessionId));
+  if (session.transport === 'extension') {
+    const raw = String(url || '').trim();
+    const targetUrl = raw && !/^[a-z][a-z0-9+.-]*:/i.test(raw) ? `https://${raw}` : (raw || 'about:blank');
+    const tab = await getUserChromeRelay().request('tabs.create', { url: targetUrl, active: true });
+    const nextPage = new UserChromePage(tab);
+    claimUserChromeTab(session.sessionId, nextPage);
+    session.page = nextPage;
+    await (session.page as UserChromePage).cdp('Runtime.enable').catch(() => {});
+    await (session.page as UserChromePage).cdp('Network.enable').catch(() => {});
+    await syncPageMetadata(session).catch(() => {});
+    persistBrowserSessionRecord(session);
+    return `Opened new Personal Chrome tab.\n${await browserListTabs(sessionId)}`;
+  }
   const page = await session.context.newPage();
   session.page = page;
   attachBrowserConsoleCollector(session, page);
@@ -4501,6 +4646,20 @@ export async function browserCloseTab(sessionId: string, index?: number): Promis
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (session.transport === 'extension') {
+    const tabs = await getUserChromeRelay().request('tabs.list');
+    const activeId = (session.page as UserChromePage).tabId();
+    const idx = index == null ? tabs.findIndex((tab: any) => tab.id === activeId) : Math.max(0, Math.min(tabs.length - 1, Number(index)));
+    const tab = tabs[idx];
+    if (!tab) return `ERROR: No browser tab at index ${index}.`;
+    await getUserChromeRelay().request('tabs.remove', { tabId: tab.id });
+    userChromeTabLocks.delete(tab.id);
+    const remaining = await getUserChromeRelay().request('tabs.list');
+    if (!remaining.length) { sessions.delete(resolved); return 'Closed the last Chrome tab; Personal Chrome session is now inactive.'; }
+    session.page = new UserChromePage(remaining.find((item: any) => item.active) || remaining[Math.min(idx, remaining.length - 1)]);
+    await syncPageMetadata(session).catch(() => {});
+    return `Closed Personal Chrome tab [${idx}].\n${await browserListTabs(sessionId)}`;
+  }
   const pages = session.context.pages();
   const idx = index == null ? pages.indexOf(session.page) : Math.max(0, Math.min(pages.length - 1, Number(index)));
   const page = pages[idx];
@@ -5456,6 +5615,19 @@ export async function browserClickAndDownload(
 ): Promise<string> {
   const session = sessions.get(resolveSessionId(sessionId));
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
+  if (session.transport === 'extension') {
+    try {
+      await clickByRef(session.page, ref);
+      await session.page.waitForTimeout(500);
+      const downloads = await getUserChromeRelay().request('downloads.search', { query: { limit: 1, orderBy: ['-startTime'] } });
+      const download = Array.isArray(downloads) ? downloads[0] : null;
+      return download
+        ? `Download started in Personal Chrome: ${String(download.filename || download.url || 'unknown file')} (state: ${String(download.state || 'unknown')}). Chrome owns the destination file; Prometheus cannot copy it from the real profile.`
+        : 'Click completed in Personal Chrome. No download record appeared yet; inspect Chrome downloads if the site delays it.';
+    } catch (err: any) {
+      return `ERROR: Personal Chrome download click failed: ${String(err?.message || err)}`;
+    }
+  }
   let downloadPromise: Promise<any> | null = null;
   try {
     const timeoutMs = Math.min(Math.max(Number(options?.timeout_ms || 15000), 1000), 120000);
@@ -5732,6 +5904,7 @@ export async function browserClose(sessionId: string): Promise<string> {
       try { await session.browser.close(); } catch {}
     }
     sessions.delete(resolved);
+    if (session.transport === 'extension') releaseUserChromeTabLocks(session.sessionId);
     if (resolved !== sessionId) sessions.delete(sessionId);
     clearBrowserInteractionState(resolved);
     browserSessionMetadata.delete(resolved);
@@ -5741,6 +5914,7 @@ export async function browserClose(sessionId: string): Promise<string> {
   } catch (err: any) {
     await stopBrowserLiveStream(resolved, 'Live browser stream stopped because the browser tab closed.').catch(() => {});
     sessions.delete(resolved);
+    if (session.transport === 'extension') releaseUserChromeTabLocks(session.sessionId);
     if (resolved !== sessionId) sessions.delete(sessionId);
     clearBrowserInteractionState(resolved);
     browserSessionMetadata.delete(resolved);
@@ -6615,12 +6789,12 @@ export function getBrowserToolDefinitions(): any[] {
       function: {
         name: 'browser_set_profile_target',
         description:
-          'Main chat only: choose which browser lane future browser tools use. target="prometheus" is the regular Prometheus-owned Chrome/CDP flow. target="inhouse" uses the embedded Electron in-app browser surface. target="user_chrome" attaches to Chrome on USER_CHROME_DEBUG_PORT/CHROME_USER_DEBUG_PORT (default 9223) when present, or launches a fresh debugger-enabled Chrome using the user Chrome data dir. If normal Chrome is already open with that profile, the fresh launch may fail until Chrome is closed. Subagents cannot use this and remain isolated.',
+          'Main chat only: choose which browser lane future browser tools use. target="prometheus" is the regular Prometheus-owned Chrome/CDP flow. target="inhouse" uses the embedded Electron browser. target="user_chrome" uses the paired Prometheus Personal Chrome extension and Chrome debugger permission against the already-running real profile; it never uses port 9223 or requires Chrome to close. Subagents cannot use this and remain isolated.',
         parameters: {
           type: 'object',
           required: ['target'],
           properties: {
-            target: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'prometheus = regular Chrome/CDP profile; inhouse = embedded Electron in-app browser; user_chrome = user Chrome profile on USER_CHROME_DEBUG_PORT/CHROME_USER_DEBUG_PORT, default 9223.' },
+            target: { type: 'string', enum: ['prometheus', 'inhouse', 'user_chrome'], description: 'prometheus = regular Chrome/CDP profile; inhouse = embedded Electron browser; user_chrome = paired Personal Chrome extension.' },
             profile_directory: { type: 'string', description: 'Optional Chrome profile directory inside User Data, such as "Default" or "Profile 1", used when launching user_chrome fresh.' },
             close_existing: { type: 'boolean', description: 'Close/recreate the current main browser session if it is using a different target. Default true.' },
           },
@@ -6631,7 +6805,7 @@ export function getBrowserToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'browser_open',
-        description: 'Open a URL in a Prometheus browser lane. Defaults to target="prometheus", the regular Playwright-controlled Chrome/CDP profile. Use target="inhouse" for the embedded Electron in-app browser. Use target="user_chrome" when the user wants their Chrome profile: Prometheus will attach to a CDP-enabled user Chrome if available, or launch a fresh debugger-enabled Chrome using the user Chrome data dir. Browser tools automatically operate on whichever lane was last opened. The in-house browser keeps PERSISTENT, isolated logins per profile: main chat uses the shared "main" profile, and a subagent that opens target="inhouse" gets its own isolated profile by default (so two agents on two accounts never clash) — pass inhouse_profile to share or pick a specific one (e.g. inhouse_profile="main" to reuse the main chat\'s logins, or inhouse_profile="account-b" for a dedicated account). Always use browser_open first to establish a session. Default observe="screenshot"; request observe="snapshot" for DOM refs, or observe="compact"/"none" when speed matters.',
+        description: 'Open a URL in a Prometheus browser lane. Defaults to target="prometheus", the regular Playwright-controlled Chrome/CDP profile. Use target="inhouse" for the embedded Electron browser. Use target="user_chrome" for the paired Personal Chrome extension controlling the already-running real Chrome profile; no debug port or Chrome restart is involved. Browser tools automatically operate on whichever lane was last opened. Always use browser_open first to establish a session. Default observe="screenshot"; request observe="snapshot" for DOM refs, or observe="compact"/"none" when speed matters.',
         parameters: {
           type: 'object', required: ['url'],
           properties: {
@@ -7783,6 +7957,18 @@ export async function browserInterceptNetwork(
   const resolved = resolveSessionId(sessionId);
   const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
+
+  if (session.transport === 'extension') {
+    if (action === 'start') {
+      _networkInterceptLog.set(resolved, []);
+      _networkInterceptHandlers.set(resolved, () => {});
+      return `Network observation started through the Personal Chrome extension${urlFilter ? ` (filter applied when reading: "${urlFilter}")` : ''}. Response bodies are not available through chrome.debugger.`;
+    }
+    if (action === 'stop') {
+      _networkInterceptHandlers.delete(resolved);
+      return `Network observation stopped. ${(_networkInterceptLog.get(resolved) || []).length} entries remain in the log.`;
+    }
+  }
 
   if (action === 'start') {
     // Remove old handler if already intercepting

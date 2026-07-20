@@ -46,6 +46,8 @@ try {
     session_id: targetId,
   }, {});
   assert.ok(pinned.session.pinnedAt > 0);
+  const pinnedPage = sessionApi.listSessionSummaries({ channel: 'web', limit: 20, offset: 0 });
+  assert.equal(pinnedPage.sessions[0]?.id, targetId, 'pinned sessions must remain visible at the front of paginated chat lists');
   const threadLinks = threadOps.buildPrometheusThreadLinksArtifact({
     action: 'pin',
     session_id: targetId,

@@ -1,0 +1,8 @@
+VitaLink Gate 2 inquiry-scan import probe R6
+result=module-loaded-with-target-import
+ksceBtSetInquiryScan=not-called
+ksceBtSetInquiryScan-import-pointer=0x019212a0
+ksceBtGetConfiguration=0x00000019
+ksceBtGetLastError=0x00000000
+Safety=no inquiry scan, inquiry, pairing, connection, SDP, L2CAP, configuration write, or radio changes
+mkdir=returned-error-but-log-path-opened

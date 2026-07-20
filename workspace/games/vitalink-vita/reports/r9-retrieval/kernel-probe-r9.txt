@@ -1,0 +1,28 @@
+VitaLink Gate 2 pairing-boundary observer R9
+scope=proven inquiry visibility plus passive error sampling and registered-device enumeration
+forbidden=pairing replies, connect, delete, SDP, HID, L2CAP, configuration writes
+ksceBtGetConfiguration=0x00000009
+initial-ksceBtGetLastError=0x00000000
+ksceBtSetInquiryScan(1)=0x00000000
+error-change sample=0x00000000 interval-us=0x0003d090 value=0x00000000
+ksceBtSetInquiryScan(0)=0x00000000
+post-cleanup-ksceBtGetLastError=0x00000000
+registered-device-snapshot-begin
+slot=0x00000000 result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x00000001 result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x00000002 result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x00000003 result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x00000004 result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x00000005 result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x00000006 result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x00000007 result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x00000008 result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x00000009 result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x0000000a result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x0000000b result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x0000000c result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x0000000d result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x0000000e result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+slot=0x0000000f result=0x00000000 mac=00:00:00:00:00:00 class=0x00000000 vid=0x00000000 pid=0x00000000
+registered-device-snapshot-end
+stage=cleanup-and-passive-snapshot-complete

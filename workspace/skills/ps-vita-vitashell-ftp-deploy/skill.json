@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "ps-vita-vitashell-ftp-deploy",
+  "name": "PS Vita VitaShell FTP Deploy",
+  "description": "Safely deploy a specific VPK or other file from Windows to a PS Vita with VitaShell FTP mode, then reconnect, retrieve it, and prove an exact byte-for-byte match by size and SHA-256.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [],
+  "categories": [
+    "ps-vita",
+    "ftp",
+    "deployment",
+    "windows",
+    "verification"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "write_note",
+    "ask_prometheus_questions"
+  ],
+  "implicitInvocation": false,
+  "permissions": {
+    "network": true,
+    "workspaceRead": true,
+    "workspaceExecute": true,
+    "workspaceWrite": false
+  },
+  "resources": [
+    {
+      "path": "templates/upload_and_verify_vita_ftp.py",
+      "type": "template",
+      "description": "Canonical argument-driven VitaShell FTP uploader with fresh-connection retrieval and SHA-256 verification."
+    }
+  ]
+}

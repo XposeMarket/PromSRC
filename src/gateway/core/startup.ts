@@ -91,6 +91,7 @@ export interface StartupDeps {
   brainRunner: BrainRunner;
   telegramChannel: any;
   handleChat: any;
+  retriggerInterruptedMainChat: (runtime: any) => boolean;
   buildTools: () => any;
   runTeamAgentViaChat: any;
 }
@@ -225,7 +226,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   const {
     HOST, PORT, config, skillsManager,
     cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
-    handleChat, buildTools, runTeamAgentViaChat,
+    handleChat, retriggerInterruptedMainChat, buildTools, runTeamAgentViaChat,
   } = deps;
 
   try { retireLegacySelfRepairStore(getConfig().getConfigDir()); }
@@ -335,10 +336,11 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     const recovery = recoverInterruptedRuntimes({
       launchBackgroundTaskRunner,
       completePlainGatewayRestartTask,
+      retriggerInterruptedMainChat,
       notify: (message) => console.log(`[RuntimeRecovery] ${message}`),
     });
     if (recovery.inspected > 0) {
-      console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), preserved ${recovery.interruptedChats.length} chat checkpoint(s), finalized ${recovery.crashRecoveredGoalSessionIds.length} crashed main-chat goal(s).`);
+      console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), retriggered ${recovery.retriggeredChats.length} chat turn(s), preserved ${recovery.interruptedChats.length - recovery.retriggeredChats.length} chat checkpoint(s), finalized ${recovery.crashRecoveredGoalSessionIds.length} crashed main-chat goal(s).`);
     }
     // Main-chat goals resume only after gateway:startup has finalized ownership:
     // BOOT owns planned restart/apply boundaries, while runtime recovery owns

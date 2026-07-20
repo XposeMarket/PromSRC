@@ -2,7 +2,10 @@
 
 This file is the short operational loop for Prometheus or any coding agent
 working on the Vita game. Read `AGENTS.md` for hardware-control and recovery
-details.
+details. Read [`VITA_LINK_DEPLOYMENT.md`](VITA_LINK_DEPLOYMENT.md) for the
+condensed game deployment handoff and
+[`../vitalink-vita/VITA_SYSTEM_RUNBOOK.md`](../vitalink-vita/VITA_SYSTEM_RUNBOOK.md)
+for the complete kernel/plugin and Wi-Fi architecture.
 
 ## Source of truth
 
@@ -68,12 +71,71 @@ Get-Item build-v04/figure8_vita.vpk
 Get-FileHash build-v04/figure8_vita.vpk -Algorithm SHA256
 ```
 
+### Windows Application Control / `collect2.exe` recovery
+
+On this machine, Windows Application Control can begin blocking VitaSDK's unsigned
+`collect2.exe` even when the same MSYS2 build worked the previous day. The exact
+symptom is GCC reporting `cannot execute .../collect2.exe: CreateProcess: No such
+file or directory`; Code Integrity events 3033/3077 identify the real signing-policy
+block. Do not misdiagnose this as a missing VitaSDK file.
+
+A policy-compatible replacement can be built from the tracked shim source:
+
+```powershell
+$project = (Resolve-Path .).Path
+$vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
+cmd /d /c "`"$vcvars`" >nul && cl /nologo /O2 /Fe:`"$project\tools\vita-link-shim\collect2.exe`" `"$project\tools\vita-link-shim\collect2.c`""
+$gccDir = 'C:\msys64\usr\local\vitasdk\lib\gcc\arm-vita-eabi\15.2.0'
+if (!(Test-Path "$gccDir\collect2.vitasdk-original.exe")) { Copy-Item "$gccDir\collect2.exe" "$gccDir\collect2.vitasdk-original.exe" }
+Copy-Item "$project\tools\vita-link-shim\collect2.exe" "$gccDir\collect2.exe" -Force
+.\build-vita.sh
+```
+
+The shim forwards GCC's linker arguments directly to `arm-vita-eabi-ld.exe`; keep
+the original binary backup. Verify the resulting VPK entries, size, SHA-256, and
+hardware behavior before deployment. Historical commands and outcomes can also
+be reconstructed from `workspace/audit/chats/transcripts/` when notes are incomplete.
+
+
 ## Deliver and test
 
 Prefer the backend install endpoint documented in `AGENTS.md`. Use upload-only
 or FTP only when direct installation is unavailable. Never claim the Vita was
 updated until the install response succeeds or the remote FTP copy has been
 verified.
+
+### Vita app presentation assets
+
+Package the home-screen icon as `sce_sys/icon0.png` (128×128 PNG). A custom
+LiveArea uses `sce_sys/livearea/contents/template.xml` plus its referenced
+background/startup PNGs. **Every packaged shell PNG must be an indexed 8-bit
+palette (`P`) PNG, not a normal RGB/24-bit PNG.** VitaShell reaches 99% and fails
+with `0x8010113D` when otherwise valid RGB artwork is present. Quantize `icon0.png`,
+the 840×500 background, and the 280×158 startup image to at most 256 colors, then
+verify their decoded mode is `P` from the built VPK itself. Keep editable/generated
+source art under `assets/`, list every packaged file explicitly in
+`vita_create_vpk`, then inspect the VPK archive before deployment. Reinstalling
+the VPK refreshes these shell assets; a plain `eboot.bin` swap does not.
+
+The VitaLink Gate 1 failure on 2026-07-18 added a stricter preflight: do not rely
+on dimensions/mode metadata alone. Fully decode/verify every source PNG, then
+extract and decode it again from the completed VPK. A malformed RGB 128×128 PNG
+passed packaging but produced the same `0x8010113D`; replacing it with a valid
+8-bit palette PNG fixed the package. See
+`../vitalink-vita/VITA_SYSTEM_RUNBOOK.md` for the verified incident record.
+
+
+### Aircraft hardware smoke
+
+On Vita hardware, enter the plane and verify **R accelerates immediately** and
+**L visibly brakes on the runway**. The aircraft HUD includes `THR n%`: holding R
+must make it rise toward 100%, which distinguishes input detection from physics.
+Build speed, then pull back on the right stick or hold **Cross** as the accessible
+alternate rotate control. Ground-contact damping must run only on the transition
+from airborne to grounded; never apply velocity damping every frame merely because
+`plane.y <= 0`, or it will erase runway acceleration and make R appear dead. Do not
+treat static source checks as proof of flight controls; this requires a hardware pass.
+
 
 After installation, test the changed district on hardware. A good city smoke
 test covers ground driving beneath the highway, entering and leaving every ramp,

@@ -13,6 +13,7 @@ import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../r
 import { buildCisContextBlock } from './business/cis-context-builder';
 import { loadSoul, loadPrometheusRuntimeContract, loadVoiceSoul } from '../config/soul-loader';
 import { getRuntimeActorContext, loadRuntimeActorMemoryContext, type RuntimeActorContext } from './runtime-actor';
+import { buildSubagentIdentityMemoryContext } from '../agents/subagent-prompt-context.js';
 import { PROMPT_CACHE_MARKER } from '../providers/LLMProvider';
 import { TOOL_CATEGORY_MANIFEST, TOOL_CATEGORY_MENU_ORDER } from '../runtime/tool-category-manifest';
 import {
@@ -846,7 +847,7 @@ WORKSPACE ONLY: In the public app, file tools operate on the user workspace and 
 	MANDATORY EDIT ROUTE: For workspace file edits, native workspace wrappers are the default and expected path. Inspect enough to avoid blind edits: use workspace_read(action:"grep"/"search"/"stats"/"read") when the target is uncertain, but if the user/tool output already gives an exact file plus exact old text or line range, go directly to workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines") or workspace_edit(action:"patchset"). Edit tools verify the target and return post-edit context; do not re-read unless the result is ambiguous. Do not use terminal/Python/PowerShell/sed/node scripts to edit files unless the user explicitly asks for shell editing or native tools cannot perform the transformation.
 	EDIT PRIORITY: For source-controlled Prometheus code, skip broad orientation when the file/symbol is already clear. Use dev_source_read(action:"grep"|"search") to locate unknown code, dev_source_read(action:"stats") for unfamiliar/large files, and exact dev_source_read(action:"read", start_line, num_lines) only when grep/edit output is not enough. After approval, prefer dev_source_edit(action:"patchset") for grouped src/web-ui edits; it returns post-edit context. For normal workspace files, prefer workspace_read(action:"search"|"grep") before reads, then workspace_edit(action:"patchset") for grouped edits; keep reads line-windowed for one-off work.`,
 
-  task: `TASK: task_control(action,...) — list/get/steer/list_approvals/resolve_approval/resume/rerun/pause/delete. When the user adds, corrects, or changes instructions for active work, resolve the existing task and call task_control(action:"steer", task_id, message). Never create a second task for a steer. When a task watch reports a pending approval, inspect it with list_approvals, tell the user what is waiting, and offer to resolve it. Call resolve_approval only after the user explicitly authorizes that exact approve/reject decision in the current conversation, with user_authorized:true; never self-approve or infer consent. task_control(list) returns active tasks AND cron jobs in one call. For agent-owned runs use agent_run_ops(action:"steer") while running and agent_run_ops(action:"recover") only when paused/stalled. Do NOT use read_file for task state.`,
+  task: `TASK: task_control(action,...) — list/get/steer/list_approvals/resolve_approval/resume/rerun/pause/delete. When the user adds, corrects, or changes instructions for ACTIVE work, resolve the existing task and call task_control(action:"steer", task_id, message). Never create a second task for a steer. Completed subagent tasks are immutable historical records: do not steer, resume, rerun, or continue them. Delegate every later milestone/follow-up as a new subagent task and optionally reference the prior task id in context. When a task watch reports a pending approval, inspect it with list_approvals, tell the user what is waiting, and offer to resolve it. Call resolve_approval only after the user explicitly authorizes that exact approve/reject decision in the current conversation, with user_authorized:true; never self-approve or infer consent. task_control(list) returns active tasks AND cron jobs in one call. For agent-owned runs use agent_run_ops(action:"steer") while running and agent_run_ops(action:"recover") only when paused/stalled. Do NOT use read_file for task state.`,
 
   schedule: `SCHEDULE: schedule_job(action,...) — list/create/update/pause/resume/delete/run_now. Confirm before mutating.
 By default, scheduled jobs are owned by Prometheus itself. Omit subagent_id/team_id for normal schedules. Use subagent_id only when the user explicitly asks for a subagent owner or the task truly needs a specialized delegated agent. Use team_id to schedule a managed team run: the team manager wakes first, derives the run from team goal/memory, and dispatches members. If ownership is ambiguous and delegation would materially change the workflow, ask whether the user wants Prometheus itself or a subagent/team to own it.
@@ -885,13 +886,13 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
     ? `DEBUG: Use workspace files, logs, audit records, generated artifacts, and visible runtime state to diagnose issues in the public app build. Do not assume Prometheus source or dev-only self reference files are available.`
     : `DEBUG: For Prometheus internal/runtime errors, inspect self/index.md first, then use workspace logs/audit when relevant: workspace_read(action:"list", path:"audit"), workspace_read(action:"search", directory:"audit", pattern:...), and workspace_read(action:"read", path:...) on specific transcripts, task records, or compaction summaries. For Prometheus source errors in dev/private builds, use dev_source_read(action:"read"|"grep", surface:"src"|"web-ui", ...) for source errors. For running compiled-backend mismatches, compare src/ with dist/ through dev_source_read(surface:"prom-root") when available.`,
 
-  agents: `AGENTS: chat_with_subagent(agent_id,message) is core for normal persistent chat/check-ins with a standalone non-team subagent. agent_run_ops(action,...) is core for existing agent-owned task runs, live steering, and recovery chats. Activate agents_and_teams for wrappers: agent_ops(action:"list"|"info"|"spawn"|"update"|"delete"|"deploy_analysis_team"), agent_chat_ops(action:"talk"|"message"|"send"|"turn_request"|"reply_wait"|"thread_watch"), team_ops_wrapper(action:"manage"|"delete"|...), and team_collab_ops(...).
-RULES: If an agent already has a matching active run, use agent_run_ops(action:"steer", task_id, message) to join that run. Do not dispatch a new task unless the user explicitly asks for separate/new work. Use agent_run_ops(action:"recover") only for paused/stalled/failed recovery chat and resume/rerun only after an explicit recovery decision. Use chat_with_subagent for Home-thread check-ins unrelated to an active run. Activate agents_and_teams and call agent_ops(action:"list") first when discovery is needed.`,
+  agents: `AGENTS: chat_with_subagent(agent_id,message) is core for normal persistent chat/check-ins with a standalone non-team subagent. agent_run_ops(action,...) is core for existing agent-owned task runs, live steering, and recovery chats. Activate agents_and_teams for wrappers: agent_ops(action:"list"|"info"|"spawn"|"update"|"delete"|"deploy_analysis_team"), agent_chat_ops(action:"chat"|"delegate"|"steer"|"send_mailbox"), team_ops_wrapper(action:"manage"|"delete"|...), and team_collab_ops(...).
+RULES: agent_chat_ops(action:"delegate", agent_id, assignment) already creates exactly one task. The assignment tells the worker to perform the work directly; NEVER put "create/start/spawn a new task/run" inside it. If an agent has a matching ACTIVE run, use agent_run_ops(action:"steer", task_id, message) to join that run. Once a subagent task completes it is immutable: milestone 2 or any later follow-up is a NEW delegated task, never a steer/resume/rerun/continue of milestone 1. Use agent_run_ops(action:"recover") only for paused/stalled/failed recovery chat and resume/rerun only after an explicit recovery decision on unfinished or failed work. Use chat_with_subagent for Home-thread check-ins unrelated to an active run. Activate agents_and_teams and call agent_ops(action:"list") first when discovery is needed.`,
 
   teams: `TEAMS: ask_team_coordinator(goal, context?) for multi-agent team work. spawn_subagent() for single standalone agent tasks.
 WHEN TO USE EACH:
   → chat_with_subagent: core direct chat/check-in with a known standalone non-team agent
-  → agent_ops/agent_chat_ops: agents_and_teams category; create/run one standalone non-team agent, focused task, or background handoff
+  → agent_chat_ops(action:"chat"): persistent conversation; action:"delegate": exactly one new formal task; action:"steer": existing task; action:"send_mailbox": delivery without starting work
   → ask_team_coordinator: multiple agents needed, parallel workstreams, complex goal that benefits from roles (planner+builder+verifier etc.)
 TEAM OPS: Do NOT call granular team_manage directly from main chat. Use ask_team_coordinator for normal managed team work; use team_ops_wrapper/team_collab_ops only when you intentionally need lower-level managed-team operations.`,
 
@@ -966,7 +967,7 @@ export const CATEGORY_POLICIES: Record<string, string> = {
 const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
   browser_automation: 'control and inspect browser pages with browser_session, browser_observe, browser_act, and browser_extract wrappers.',
   desktop_automation: 'control and inspect OS windows/apps with desktop_screen, desktop_apps, desktop_window, desktop_input, desktop_macro, and desktop_background wrappers.',
-  agents_and_teams: 'list/create/update subagents with agent_ops, use agent_chat_ops, team_ops_wrapper, team_collab_ops, managed team tools, dispatch work, or background agent handoff tools. For normal known-agent chat, chat_with_subagent is core and does not need this category.',
+  agents_and_teams: 'list/create/update subagents with agent_ops; use agent_chat_ops chat/delegate/steer/send_mailbox, team_ops_wrapper, team_collab_ops, managed team tools, or background handoffs. Delegate already creates one task, so its assignment must directly describe the work and must not ask the worker to create another task. For normal known-agent chat, chat_with_subagent is core and does not need this category.',
   prometheus_source_read: 'inspect Prometheus app/source files with dev_source_read plus shared search_files/read_files_batch/file_tree helpers for src/ and web-ui/.',
   prometheus_source_write: 'edit Prometheus app/source files after approval with dev_source_edit; use request_dev_source_edit or an approved code_change proposal first.',
   social_intelligence: 'run social_intel for social profile metrics, engagement/growth analysis, and content recommendations.',
@@ -1073,8 +1074,8 @@ DURING PLANS/TASKS: write a note at each meaningful step — capturing gathered 
 
 [TEAMS & AGENTS] Agent/task routes — pick the right one:
   → chat_with_subagent(id,message) — core normal persistent chat/check-in with a known standalone non-team agent.
-  → agent_run_ops(action:"list"|"get"|"steer"|"recover"|"resume"|"rerun",...) — existing subagent/team-agent runs. Use steer for live instruction changes and recover only for paused/stalled recovery chat.
-  → spawn_subagent('id', task, ...) and message_subagent(id,message) — create NEW standalone work only. Never use either to steer an existing task. agent_message_send/agent_turn_request/agent_reply_wait — lower-level mailbox/reply workflows. These require agents_and_teams/team_ops category.
+  → agent_run_ops(action:"list"|"get"|"steer"|"recover"|"resume"|"rerun",...) — existing unfinished/failed subagent/team-agent runs. Use steer for live instruction changes and recover only for paused/stalled recovery chat. Completed subagent tasks cannot be reopened.
+  → spawn_subagent('id', task, ...) and message_subagent(id,assignment) — create NEW standalone work only. These calls already create the run: the assignment must directly describe work, never ask the worker to create/start/spawn another task. Each milestone/follow-up after completion gets a new task id; reference the prior task in context rather than reopening it. agent_message_send/agent_turn_request/agent_reply_wait — lower-level mailbox/reply workflows. These require agents_and_teams/team_ops category.
   → ask_team_coordinator(goal) — always available (core). Multi-agent teams with roles. Use when: parallel workstreams, multiple specializations needed, or task is too large for one agent context.
 Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct team call — use only when a coordinator is waiting on your reply.
 
@@ -1213,7 +1214,7 @@ function shouldAdvancePromptTurn(
 ): boolean {
   if (profile === 'local_llm' || profile === 'teach_mode' || profile === 'voice_agent' || profile === 'direct_subagent') return true;
   if (profile === 'switch_model') return true;
-  if (runtimeActor?.kind === 'agent' && (executionMode === 'cron' || executionMode === 'interactive')) return true;
+  if (runtimeActor?.kind === 'agent' && (executionMode === 'cron' || executionMode === 'interactive' || executionMode === 'heartbeat')) return true;
   if (executionMode === 'background_agent' || executionMode === 'team_subagent' || executionMode === 'team_manager') return true;
   const autonomous = executionMode === 'background_task'
     || executionMode === 'proposal_execution'
@@ -1267,12 +1268,14 @@ export async function capturePersonalityContextSnapshot(
     && !(executionMode === 'cron' && runtimeActor?.kind === 'agent');
   if (advanceBeforeSkillContext) setCurrentTurn(sessionId, historyLength);
   const scheduledAgent = executionMode === 'cron' && runtimeActor?.kind === 'agent';
+  const heartbeatAgent = executionMode === 'heartbeat' && runtimeActor?.kind === 'agent';
   const interactiveAgentSwitch = profile === 'switch_model'
     && executionMode === 'interactive'
     && runtimeActor?.kind === 'agent';
   const usesSessionCategories = profile === 'teach_mode'
     || profile === 'direct_subagent'
     || scheduledAgent
+    || heartbeatAgent
     || interactiveAgentSwitch
     || executionMode === 'background_agent'
     || executionMode === 'team_subagent'
@@ -1433,6 +1436,7 @@ export async function buildPersonalityContext(
   const isDirectSubagentProfile = profile === 'direct_subagent';
   const runtimeActor = snapshot?.runtimeActor || getRuntimeActorContext(sessionId);
   const isScheduledAgentActor = executionMode === 'cron' && runtimeActor?.kind === 'agent';
+  const isHeartbeatAgentActor = executionMode === 'heartbeat' && runtimeActor?.kind === 'agent';
   const isInteractiveAgentSwitch = profile === 'switch_model'
     && executionMode === 'interactive'
     && runtimeActor?.kind === 'agent';
@@ -1527,9 +1531,12 @@ export async function buildPersonalityContext(
       [cisContext, retrievedMemoryCtx, toolCategoryMatchSwitch, skillCtx, activeSkillCtx],
     );
   }
-  if (isDirectSubagentProfile || isScheduledAgentActor || isInteractiveAgentSwitch) {
+  if (isDirectSubagentProfile || isScheduledAgentActor || isHeartbeatAgentActor || isInteractiveAgentSwitch) {
     const runtimeContract = loadPrometheusRuntimeContract();
-    const agentMemory = snapshot ? snapshot.runtimeActorMemory : loadRuntimeActorMemoryContext(sessionId);
+    const agentIdentityMemory = buildSubagentIdentityMemoryContext({
+      identityRoot: runtimeActor?.identityRoot,
+      memoryRoot: runtimeActor?.memoryRoot,
+    });
     const activatedCatsDirectSub = activatedToolCategories();
     if (extraCats) {
       for (const ec of extraCats) {
@@ -1544,7 +1551,7 @@ export async function buildPersonalityContext(
     return assembleContext(
       [
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
-        agentMemory ? `[AGENT_MEMORY - PRIVATE TO THIS AGENT]\nUse memory_read/memory_write with file="memory" for this file. USER/SOUL memory belongs to main Prometheus and is unavailable here.\n${agentMemory}` : '',
+        agentIdentityMemory,
         buildToolsContext(activatedCatsDirectSub, { instructionIntents: options?.instructionIntents }),
       ],
       [
@@ -1561,7 +1568,10 @@ export async function buildPersonalityContext(
   // They intentionally do not receive main Prometheus SOUL.md/config soul.
   if (executionMode === 'background_agent') {
     const runtimeContract = loadPrometheusRuntimeContract();
-    const agentMemory = snapshot ? snapshot.runtimeActorMemory : loadRuntimeActorMemoryContext(sessionId);
+    const agentIdentityMemory = buildSubagentIdentityMemoryContext({
+      identityRoot: runtimeActor?.identityRoot,
+      memoryRoot: runtimeActor?.memoryRoot,
+    });
     const activatedCatsBackground = activatedToolCategories();
     if (extraCats) {
       for (const ec of extraCats) {
@@ -1580,7 +1590,7 @@ export async function buildPersonalityContext(
       [
         messageText ? `[Spawning Prompt from the Main Agent (or whomever is spawning it)]\n${messageText}` : '',
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
-        agentMemory ? `[AGENT_MEMORY - PRIVATE TO THIS AGENT]\nUse memory_read/memory_write with file="memory" for this file. USER/SOUL memory belongs to main Prometheus and is unavailable here.\n${agentMemory}` : '',
+        agentIdentityMemory,
         buildToolsContext(activatedCatsBackground, { instructionIntents: options?.instructionIntents }),
       ],
       [
@@ -1594,7 +1604,10 @@ export async function buildPersonalityContext(
 
   if (executionMode === 'team_subagent') {
     const runtimeContract = loadPrometheusRuntimeContract();
-    const agentMemory = snapshot ? snapshot.runtimeActorMemory : loadRuntimeActorMemoryContext(sessionId);
+    const agentIdentityMemory = buildSubagentIdentityMemoryContext({
+      identityRoot: runtimeActor?.identityRoot,
+      memoryRoot: runtimeActor?.memoryRoot,
+    });
     const activatedCatsSub = activatedToolCategories();
     if (extraCats) {
       for (const ec of extraCats) {
@@ -1612,7 +1625,7 @@ export async function buildPersonalityContext(
     return assembleContext(
       [
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
-        agentMemory ? `[AGENT_MEMORY - PRIVATE TO THIS AGENT]\nUse memory_read/memory_write with file="memory" for this file. USER/SOUL memory belongs to main Prometheus and is unavailable here.\n${agentMemory}` : '',
+        agentIdentityMemory,
         buildToolsContext(activatedCatsSub, { instructionIntents: options?.instructionIntents }),
       ],
       [
@@ -1628,7 +1641,11 @@ export async function buildPersonalityContext(
   // from callerContext and their own memory here, never Prom's USER/SOUL/MEMORY.
   if (executionMode === 'team_manager') {
     const runtimeContract = loadPrometheusRuntimeContract();
-    const agentMemory = snapshot ? snapshot.runtimeActorManagerMemory : loadRuntimeActorMemoryContext(sessionId, 8000);
+    const agentIdentityMemory = buildSubagentIdentityMemoryContext({
+      identityRoot: runtimeActor?.identityRoot,
+      memoryRoot: runtimeActor?.memoryRoot,
+      memoryLimit: 8000,
+    });
     const activatedCatsManager = activatedToolCategories();
     if (extraCats) {
       for (const ec of extraCats) {
@@ -1643,7 +1660,7 @@ export async function buildPersonalityContext(
     return assembleContext(
       [
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
-        agentMemory ? `[AGENT_MEMORY - PRIVATE TO THIS MANAGER]\nUse memory_read/memory_write with file="memory" for this private file. Shared team truth belongs in team memory.json. USER/SOUL memory belongs to main Prometheus and is unavailable here.\n${agentMemory}` : '',
+        agentIdentityMemory,
         buildToolsContext(activatedCatsManager, { instructionIntents: options?.instructionIntents }),
       ],
       [toolCategoryMatchManager, skillCtx, activeSkillCtx],

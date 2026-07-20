@@ -4,8 +4,13 @@ import { renderMd, timeAgo } from '../utils.js';
 import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js';
 
-// ── Pinned sessions (localStorage) ────────────────────────────────────────────
+// ── Pinned sessions ───────────────────────────────────────────────────────────
+// The gateway's session.pinnedAt field is the durable source of truth. The
+// local list remains as an optimistic cache and as a migration source for
+// clients that pinned chats before server-backed pinning was wired up.
 const PM_PINNED_SESSIONS_KEY = 'pm_mobile_pinned_sessions';
+const PM_PINNED_SESSIONS_MIGRATED_KEY = 'pm_mobile_pinned_sessions_server_migrated_v1';
+let _pinnedSessionMigrationPromise = null;
 
 function _getPinnedSessionIds() {
   try {
@@ -20,22 +25,102 @@ function _savePinnedSessionIds(ids) {
 }
 
 function _isPinned(sessionId) {
-  return _getPinnedSessionIds().includes(String(sessionId || ''));
-}
-
-function _togglePin(sessionId) {
   const id = String(sessionId || '');
   if (!id) return false;
+  const cached = _findCachedDrawerSession(id);
+  return Number(cached?.pinnedAt || 0) > 0 || _getPinnedSessionIds().includes(id);
+}
+
+function _setLocalPinned(sessionId, pinned) {
+  const id = String(sessionId || '');
+  if (!id) return;
   const ids = _getPinnedSessionIds();
   const idx = ids.indexOf(id);
-  if (idx >= 0) {
-    ids.splice(idx, 1);
-    _savePinnedSessionIds(ids);
-    return false; // unpinned
-  } else {
-    ids.unshift(id);
-    _savePinnedSessionIds(ids);
-    return true; // pinned
+  if (pinned && idx < 0) ids.unshift(id);
+  if (!pinned && idx >= 0) ids.splice(idx, 1);
+  _savePinnedSessionIds(ids);
+}
+
+function _findCachedDrawerSession(sessionId) {
+  const id = String(sessionId || '');
+  if (!id) return null;
+  const states = [
+    _drawerSessionPaging?.mobile,
+    ...Object.values(_drawerSessionPaging?.channels || {}),
+  ];
+  for (const state of states) {
+    const found = (Array.isArray(state?.sessions) ? state.sessions : []).find((session) => String(session?.id || '') === id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function _setCachedSessionPinned(sessionId, pinnedAt) {
+  const id = String(sessionId || '');
+  if (!id) return;
+  const states = [_drawerSessionPaging?.mobile, ...Object.values(_drawerSessionPaging?.channels || {})];
+  for (const state of states) {
+    for (const session of Array.isArray(state?.sessions) ? state.sessions : []) {
+      if (String(session?.id || '') === id) session.pinnedAt = Number(pinnedAt || 0) || null;
+    }
+  }
+}
+
+function _legacyPinsMigrated() {
+  try { return localStorage.getItem(PM_PINNED_SESSIONS_MIGRATED_KEY) === '1'; }
+  catch { return false; }
+}
+
+async function _migrateLegacyPinnedSessionsToServer() {
+  if (_legacyPinsMigrated()) return;
+  if (_pinnedSessionMigrationPromise) return _pinnedSessionMigrationPromise;
+  _pinnedSessionMigrationPromise = (async () => {
+    const ids = _getPinnedSessionIds();
+    if (ids.length) {
+      const results = await Promise.allSettled(ids.map((id) => mobileGatewayFetch('/api/sessions/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        body: JSON.stringify({ pinned: true }),
+      })));
+      if (results.some((result) => result.status === 'rejected')) return;
+    }
+    try { localStorage.setItem(PM_PINNED_SESSIONS_MIGRATED_KEY, '1'); } catch {}
+  })().finally(() => { _pinnedSessionMigrationPromise = null; });
+  return _pinnedSessionMigrationPromise;
+}
+
+function _syncPinnedCacheFromSessions(sessions) {
+  const rows = Array.isArray(sessions) ? sessions : [];
+  const ids = new Set(_getPinnedSessionIds());
+  const authoritative = _legacyPinsMigrated();
+  for (const session of rows) {
+    const id = String(session?.id || '');
+    if (!id) continue;
+    if (Number(session?.pinnedAt || 0) > 0) ids.add(id);
+    else if (authoritative) ids.delete(id);
+  }
+  _savePinnedSessionIds(Array.from(ids));
+}
+
+async function _togglePin(sessionId) {
+  const id = String(sessionId || '');
+  if (!id) return false;
+  const wasPinned = _isPinned(id);
+  const nextPinned = !wasPinned;
+  _setLocalPinned(id, nextPinned);
+  _setCachedSessionPinned(id, nextPinned ? Date.now() : null);
+  try {
+    const result = await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      body: JSON.stringify({ pinned: nextPinned }),
+    });
+    const pinnedAt = Number(result?.session?.pinnedAt || 0) || null;
+    _setLocalPinned(id, !!pinnedAt);
+    _setCachedSessionPinned(id, pinnedAt);
+    return !!pinnedAt;
+  } catch (err) {
+    _setLocalPinned(id, wasPinned);
+    _setCachedSessionPinned(id, wasPinned ? Date.now() : null);
+    throw err;
   }
 }
 
@@ -346,6 +431,7 @@ async function _loadDrawerSessionPage({ channel = 'mobile', loadSessions, reset 
       }
 
       const incoming = (Array.isArray(page?.sessions) ? page.sessions : []).filter((session) => !_isDrawerSideChatSession(session));
+      _syncPinnedCacheFromSessions(incoming);
       const seen = new Set(reset ? [] : state.sessions.map((s) => String(s?.id || '')));
       const merged = reset ? [] : state.sessions.slice();
       for (const session of incoming) {
@@ -974,10 +1060,14 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
   if (!head || !sessionList || typeof loadSessions !== 'function') return;
   const isCurrent = () => renderSeq === _drawerRenderSeq && renderDrawer === _drawerEl;
   if (_drawerSearch) {
+    const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
+    if (pinnedEl) pinnedEl.innerHTML = '';
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
     return;
   }
   try {
+    await _migrateLegacyPinnedSessionsToServer();
+    if (!isCurrent()) return;
     const drawerState = _loadDrawerState();
     if (drawerState.view === 'mobile') {
       const cachedMobilePage = _drawerPageStateFor('mobile');
@@ -1015,6 +1105,8 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
     }
 
     if (drawerState.view === 'channels') {
+      const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
+      if (pinnedEl) pinnedEl.innerHTML = '';
       head.innerHTML = `
         <button class="pm-drawer-back" type="button" data-drawer-view="mobile">${ICONS.back}<span>Sessions</span></button>
         <div class="pm-drawer-section-title">Channels</div>
@@ -1069,6 +1161,7 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
         <div class="pm-drawer-section-title">${escapeHtml(channelLabel)}</div>
       `;
       sessionList.innerHTML = _sessionPageHtml(pageState, `No ${escapeHtml(channelLabel)} chats yet.`);
+      _renderDrawerPinnedSessions(pageState);
       _wireDrawerInfiniteScroll({ channel: selectedChannel.key, loadSessions, onOpenSession, searchSessions, onNewChat });
     } else {
       if (!_drawerPageStateFor('mobile').initialized) {
@@ -1126,8 +1219,7 @@ function _sessionPageHtml(pageState, emptyText) {
   if (!sessions.length && pageState?.loading) return '<div class="pm-session-empty">Loading...</div>';
   if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
   // Filter out pinned sessions — they appear in the dedicated pinned section above
-  const pinnedIds = _getPinnedSessionIds();
-  const unpinned = pinnedIds.length ? sessions.filter(s => !pinnedIds.includes(String(s.id))) : sessions;
+  const unpinned = sessions.filter((session) => !_isPinned(session?.id));
   if (!unpinned.length && !pageState?.hasMore && !pageState?.loading) return `<div class="pm-session-empty">${emptyText}</div>`;
   return [
     unpinned.map((s) => _sessionButtonHtml(s)).join(''),
@@ -1227,12 +1319,14 @@ function _wireDrawerLongPress(callbacks) {
 function _renderDrawerPinnedSessions(pageState) {
   var pinnedEl = _drawerEl && _drawerEl.querySelector('#pm-drawer-pinned-list');
   if (!pinnedEl) return;
-  var pinnedIds = _getPinnedSessionIds();
-  if (!pinnedIds.length) { pinnedEl.innerHTML = ''; return; }
   var sessions = Array.isArray(pageState && pageState.sessions) ? pageState.sessions : [];
-  var pinnedSessions = pinnedIds
-    .map(function(id) { return sessions.find(function(s) { return String(s.id) === String(id); }); })
-    .filter(Boolean);
+  var localOrder = _getPinnedSessionIds();
+  var pinnedSessions = sessions.filter(function(session) { return _isPinned(session && session.id); });
+  pinnedSessions.sort(function(a, b) {
+    var timeDelta = Number(b && b.pinnedAt || 0) - Number(a && a.pinnedAt || 0);
+    if (timeDelta) return timeDelta;
+    return localOrder.indexOf(String(a && a.id)) - localOrder.indexOf(String(b && b.id));
+  });
   if (!pinnedSessions.length) { pinnedEl.innerHTML = ''; return; }
   pinnedEl.innerHTML =
     '<div class="pm-drawer-pinned-section">' +
@@ -1297,6 +1391,7 @@ function _renderVisibleDrawerSessionPage(channel) {
   const pageState = _drawerPageStateFor(channel);
   const label = channel === 'mobile' ? 'mobile' : channel;
   sessionList.innerHTML = _sessionPageHtml(pageState, channel === 'mobile' ? 'No mobile chats yet.' : `No ${escapeHtml(label)} chats yet.`);
+  _renderDrawerPinnedSessions(pageState);
 }
 
 function _wireDrawerInfiniteScroll({ channel, loadSessions, onOpenSession, searchSessions, onNewChat }) {
@@ -1556,15 +1651,21 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks) {
   });
 
   var pinBtn = sheet.querySelector('[data-sess-action="pin"]');
-  if (pinBtn) pinBtn.addEventListener('click', function() {
+  if (pinBtn) pinBtn.addEventListener('click', async function() {
     pmHaptic(10);
-    var nowPinned = _togglePin(sessionId);
-    close();
-    if (_drawerEl && _drawerCallbacks) {
-      _resetDrawerPageState(_currentDrawerSessionChannel());
-      _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+    pinBtn.disabled = true;
+    try {
+      var nowPinned = await _togglePin(sessionId);
+      close();
+      if (_drawerEl && _drawerCallbacks) {
+        _resetDrawerPageState(_currentDrawerSessionChannel());
+        _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+      }
+      try { if (window.pmToast) window.pmToast(nowPinned ? 'Chat pinned to top' : 'Chat unpinned', 'success'); } catch(e) {}
+    } catch (err) {
+      pinBtn.disabled = false;
+      try { if (window.pmToast) window.pmToast((err && err.message) || 'Could not update pin', 'error'); } catch(e) {}
     }
-    try { if (window.pmToast) window.pmToast(nowPinned ? 'Chat pinned to top' : 'Chat unpinned', 'success'); } catch(e) {}
   });
 
   var deleteBtn = sheet.querySelector('[data-sess-action="delete"]');

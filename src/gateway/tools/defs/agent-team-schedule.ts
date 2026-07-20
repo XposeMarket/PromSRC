@@ -7,7 +7,7 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function' as const,
       function: {
         name: 'agent_ops',
-        description: 'Unified agent lifecycle wrapper for listing, inspecting, creating/spawning, updating, deleting, and deploying analysis teams.',
+        description: 'Unified agent lifecycle wrapper for listing, inspecting, creating/spawning, updating, deleting, and deploying analysis teams. For update, name and reasoning_effort are independent fields and may be changed separately or together.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -30,6 +30,7 @@ export function getAgentTeamScheduleTools(): any[] {
                 system_instructions: { type: 'string' },
                 heartbeat_instructions: { type: 'string' },
                 model: { type: 'string' },
+                reasoning_effort: { type: 'string', enum: ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Reasoning override. Independent of name/model; empty clears it.' },
                 max_steps: { type: 'number' },
                 maxSteps: { type: 'number' },
                 timeout_ms: { type: 'number' },
@@ -48,6 +49,7 @@ export function getAgentTeamScheduleTools(): any[] {
             name: { type: 'string', description: 'For action="update": new display name.' },
             description: { type: 'string', description: 'For action="update": new description.' },
             model: { type: 'string', description: 'For action="update": explicit model route.' },
+            reasoning_effort: { type: 'string', enum: ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'For action="update": reasoning override, independent of name/model. Empty clears it.' },
             max_steps: { type: 'number', description: 'For action="update": maximum tool steps.' },
             timeout_ms: { type: 'number', description: 'For action="update": timeout in milliseconds.' },
           },
@@ -58,17 +60,27 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function' as const,
       function: {
         name: 'agent_chat_ops',
-        description: 'Unified direct/background agent messaging wrapper. chat_with_subagent remains core for ordinary known-agent check-ins.',
+        description:
+          'Unified standalone-agent communication wrapper. Prefer action="chat" for persistent conversation, "delegate" to create exactly one formal background task, "steer" to guide an existing task, and "send_mailbox" to deliver without starting work. ' +
+          'Legacy talk/message/send actions remain accepted. A delegate assignment must describe the work itself; the tool already creates the task.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['talk', 'message', 'send', 'turn_request', 'reply_wait', 'thread_watch'] },
+            action: { type: 'string', enum: ['chat', 'delegate', 'steer', 'send_mailbox', 'talk', 'message', 'send', 'turn_request', 'reply_wait', 'thread_watch'] },
             agent_id: { type: 'string' },
             subagent_id: { type: 'string' },
-            message: { type: 'string' },
-            task_prompt: { type: 'string' },
+            assignment: { type: 'string', description: 'For delegate: direct executable work. Do not say create/start/spawn a task; this call already creates it.' },
+            message: { type: 'string', description: 'For chat, steer, or mailbox delivery. Legacy alias for delegate assignment.' },
+            task_prompt: { type: 'string', description: 'Legacy alias for assignment.' },
             context: { type: 'string' },
+            task_id: { type: 'string', description: 'Required for steer; identifies the existing task to guide.' },
+            target_type: { type: 'string', enum: ['standalone_subagent', 'team_member', 'team_manager'] },
+            team_id: { type: 'string' },
+            request_turn: { type: 'boolean' },
+            background: { type: 'boolean' },
+            user_label: { type: 'string' },
+            force_new_task: { type: 'boolean', description: 'For delegate only: true only when the user explicitly requested separate parallel work.' },
             thread_id: { type: 'string' },
             request_id: { type: 'string' },
             timeout_ms: { type: 'number' },
@@ -342,7 +354,7 @@ export function getAgentTeamScheduleTools(): any[] {
         name: 'agent_update',
         description:
           'Directly update a configured spawn_subagent profile without asking the agent to edit files itself. ' +
-              'Use agent_list first to get the exact agent_id. Supports renaming, description/instruction updates, model/max-step settings, and heartbeat instructions. ' +
+              'Use agent_list first to get the exact agent_id. Supports renaming, reasoning-effort changes, description/instruction updates, model/max-step settings, and heartbeat instructions. Name and reasoning_effort are independent and may be changed separately or together. ' +
           'This keeps config.json, AGENT.md, and the Agents UI in sync for dynamic subagents.',
         parameters: {
           type: 'object',
@@ -411,6 +423,7 @@ export function getAgentTeamScheduleTools(): any[] {
               },
             },
             model: { type: 'string', description: 'Optional model override; pass an empty string to clear' },
+            reasoning_effort: { type: 'string', enum: ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional reasoning override, independent of name/model; pass an empty string to clear' },
             max_steps: { type: 'number', description: 'Maximum tool calls before stopping' },
             timeout_ms: { type: 'number', description: 'Max milliseconds to wait' },
             teamRole: { type: 'string', description: 'Team-specific role title' },
@@ -461,16 +474,19 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'message_subagent',
         description:
-          'Create a NEW background task for a standalone one-off subagent and return a task id immediately. ' +
+          'Delegate direct executable work by creating exactly ONE new background task for a standalone subagent, then return its task id immediately. ' +
+          'Calling this tool already creates and starts the task. The assignment must tell the worker what to perform; never tell it to create, start, spawn, launch, or delegate another task/run. ' +
+          'BAD assignment: "Create a new task to fix the plane." GOOD assignment: "Fix the plane controls and verify the Vita build." ' +
           'Do not use this to add or change instructions on an existing run; inspect it and use agent_run_ops(action="steer") instead. ' +
           'Use this when the user wants the main chat agent to hand work or a question to an existing standalone subagent as a peer while main chat continues. ' +
           'The subagent working conversation and final result stay in the subagent task panel, not the main chat. This is not team dispatch and only works for subagents that are not assigned to a managed team. Call agent_list() first if you are unsure of the ID.',
         parameters: {
           type: 'object',
-          required: ['agent_id', 'message'],
+          required: ['agent_id'],
           properties: {
-            agent_id: { type: 'string', description: 'ID of the standalone subagent to message.' },
-            message: { type: 'string', description: 'Plain-language assignment for the new background task. Include the task or question.' },
+            agent_id: { type: 'string', description: 'ID of the standalone subagent receiving the task.' },
+            assignment: { type: 'string', description: 'Preferred. Direct executable work for the already-created task; omit task-creation lifecycle language.' },
+            message: { type: 'string', description: 'Legacy alias for assignment.' },
             context: { type: 'string', description: 'Optional additional context from the main chat.' },
             force_new_task: { type: 'boolean', description: 'Required true when this agent already has an active run and the user explicitly requested separate parallel work.' },
           },
@@ -957,7 +973,7 @@ export function getAgentTeamScheduleTools(): any[] {
         description:
           'Inspect and operate on existing agent-owned task runs. Use this for subagent Runs/recovery, not normal Home chat. ' +
           'List/get responses include current step, unfinished/failed steps, runtime progress, last tool call, last journal event, and live runner state. ' +
-          'steer injects new guidance into an actively running task without creating another task. recover is only for a paused/stalled run-attached recovery conversation. ' +
+          'steer injects guidance only into unfinished work. Completed subagent runs are immutable historical records: never resume, rerun, continue, or steer one. Delegate each later milestone/follow-up with message_subagent so it receives a new task id. recover is only for a paused/stalled run-attached recovery conversation. ' +
           'Use chat_with_subagent for normal persistent subagent chat. Use message_subagent only when the user explicitly wants a separate new background handoff.',
         parameters: {
           type: 'object',
@@ -966,7 +982,7 @@ export function getAgentTeamScheduleTools(): any[] {
             action: {
               type: 'string',
               enum: ['list', 'get', 'steer', 'recover', 'resume', 'rerun', 'pause', 'cancel', 'benchmark_disposable'],
-              description: 'list/get inspect runs; steer joins active work; recover chats in paused task recovery mode; resume/rerun/pause/cancel control the existing run.',
+              description: 'list/get inspect runs; steer joins unfinished work; recover chats in paused task recovery mode; resume/rerun/pause/cancel control an unfinished or failed run. Completed subagent runs cannot be reopened; delegate a new task for the next milestone.',
             },
             agent_id: { type: 'string', description: 'Optional agent ID. Required for agent-scoped lists; optional with task_id because ownership can be derived from the task.' },
             task_id: { type: 'string', description: 'Task/run ID. Required for get/steer/recover/resume/rerun/pause/cancel.' },
@@ -992,7 +1008,7 @@ export function getAgentTeamScheduleTools(): any[] {
       type: 'function',
       function: {
         name: 'task_control',
-        description: 'Query, steer, and control existing background tasks, including their pending approvals. You may inspect approvals proactively. Resolve one only after the user explicitly authorizes that exact approval in the current conversation; never let a task approve itself.',
+        description: 'Query, steer, and control existing background tasks, including their pending approvals. Completed subagent tasks are immutable: each later milestone or follow-up must be delegated as a new task, never continued/rerun/steered on the completed task. You may inspect approvals proactively. Resolve one only after the user explicitly authorizes that exact approval in the current conversation; never let a task approve itself.',
         parameters: {
           type: 'object',
           required: ['action'],
@@ -1004,7 +1020,7 @@ export function getAgentTeamScheduleTools(): any[] {
             include_scheduled: { type: 'boolean', description: 'Include compact scheduled jobs in list output. Default false.' },
             limit: { type: 'number', description: 'Max tasks to return (default 20, max 100)' },
             message: { type: 'string', description: 'New guidance for steer/message. It is injected into the current task; no new task is created.' },
-            new_work: { type: 'string', description: 'Required for continue on a completed task. Appends only this scoped follow-up while preserving the completed plan, final summary, and evidence.' },
+            new_work: { type: 'string', description: 'For continue on an eligible completed non-agent task. Completed subagent tasks cannot be continued; delegate a new task for the follow-up.' },
             resume_after_message: { type: 'boolean', description: 'If steering a paused task, resume that same task after recording the guidance. Default false.' },
             note: { type: 'string', description: 'Optional operator note for control actions; also accepted as steer text for compatibility.' },
             confirm: { type: 'boolean', description: 'Required true for destructive actions cancel/delete' },

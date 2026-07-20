@@ -365,12 +365,7 @@ function getSubagentChatSessionId(agentId: string): string {
   return `subagent_chat_${sanitizeAgentIdForSession(agentId)}`;
 }
 
-function loadAgentIdentityPrompt(agentWorkspace: string): string {
-  return String(readAgentPromptFile(agentWorkspace, { migrateLegacy: true })?.content || '').trim();
-}
-
 function buildScheduleOwnerCallerContext(agentId: string, agent: any, mainWorkspace: string, artifactWorkspace: string, job: CronJob, taskId: string, runId: string): string {
-  const identityPrompt = loadAgentIdentityPrompt(artifactWorkspace);
   const assignmentsBlock = buildSubagentAssignmentBlock(agentId);
   return [
     '[SUBAGENT CHAT CONTEXT]',
@@ -383,9 +378,7 @@ function buildScheduleOwnerCallerContext(agentId: string, agent: any, mainWorksp
     `Main workspace: ${mainWorkspace}`,
     `Subagent artifact workspace: ${artifactWorkspace}`,
     'Use your prior chat history, schedule memory, and runtime files for continuity. Keep blockers and fixes explicit so future runs can build on them.',
-    identityPrompt
-      ? ['', 'Your configured identity prompt follows. Keep this role and scope during the scheduled run.', '', identityPrompt].join('\n')
-      : 'No subagent identity file was found. Use the schedule prompt and current run context as your guide.',
+    'Your AGENT.md identity and private MEMORY.md are provided by the subagent runtime context.',
     assignmentsBlock ? `\n${assignmentsBlock}` : '',
     '[/SUBAGENT CHAT CONTEXT]',
   ].filter(Boolean).join('\n');

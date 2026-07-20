@@ -2,6 +2,20 @@
 
 Use this runbook whenever working on this PS Vita game. The paired system-control project is `../prometheus-vita/`. It provides system-wide Wi-Fi input, screen viewing, file delivery, and direct game installation.
 
+The canonical cross-project kernel/plugin and Wi-Fi operations guide is
+[`../vitalink-vita/VITA_SYSTEM_RUNBOOK.md`](../vitalink-vita/VITA_SYSTEM_RUNBOOK.md).
+The shorter Figure 8 handoff is
+[`VITA_LINK_DEPLOYMENT.md`](VITA_LINK_DEPLOYMENT.md). Keep these synchronized
+when ports, plugin destinations, update routes, or reboot requirements change.
+
+> Build-system note: use the existing native MSYS2/VitaSDK route documented in
+> `PROMETHEUS_WORKFLOW.md`; WSL is not required on this machine. If GCC says
+> `collect2.exe` is missing even though the file exists, check Windows Code
+> Integrity events 3033/3077 and follow the policy-compatible linker-shim recovery
+> there. For prior exact tool calls, hashes, and upload evidence, search
+> `workspace/audit/chats/transcripts/` before concluding a workflow is unknown.
+
+
 ## Known hardware and paths
 
 - Vita LAN IP: `10.0.0.231` (verify it after a DHCP/network change).
@@ -80,7 +94,9 @@ Invoke-RestMethod http://127.0.0.1:8790/state -Method Post -ContentType applicat
 
 Hardware UI quirks observed on this Vita:
 
-- **Circle is confirm** and Cross is cancel in SceShell/VitaShell dialogs.
+- Cross opens bubbles and selects/installs the highlighted VitaShell entry in
+  the confirmed loop. Select then Cross enters FTP; Select then Circle cancels
+  FTP. Follow the visible modal labels if the region/button preference changes.
 - D-pad Up/Down scrolls LiveArea pages.
 - The analog stick is more reliable for selecting individual bubbles within a page.
 - A `tap` duration around `120` ms is reliable. Very short taps can be missed; long repeated directional taps can move several pages.
@@ -105,6 +121,15 @@ From VitaShell back to Figure 8:
 1. Press PS.
 2. Press D-pad Left.
 3. Press Cross to select/open Figure 8; a second Cross may be required.
+
+## Aircraft control regression guard
+
+The aircraft HUD shows `THR n%`. On hardware, holding R must increase that value
+and runway speed together. If throttle rises but speed stays at zero, inspect the
+ground-contact block before changing button mappings: touchdown damping must happen
+once on the airborne-to-grounded transition, not every frame while `plane.y <= 0`.
+The latter cancels acceleration and exactly mimics a dead R trigger even though the
+same physical trigger works in the car and weapon code.
 
 ## Build the game
 

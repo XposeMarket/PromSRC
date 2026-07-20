@@ -35,7 +35,7 @@ import {
   loadTokens as loadOpenAiCodexTokens,
   refreshTokens as refreshOpenAiCodexTokens,
 } from '../../auth/openai-oauth.js';
-import { getValidXAIToken, isXAIConnected } from '../../auth/xai-oauth.js';
+import { getConfiguredXaiCredentialSummary, getXaiAuthCandidates } from '../../auth/xai-account-pool.js';
 import { getVault } from '../../security/vault';
 import { isOnboardingSession, getMeetAndGreetSystemPrompt } from '../onboarding/meet-prompt';
 import { getOllamaClient } from '../../agents/ollama-client';
@@ -1314,6 +1314,7 @@ import {
   cancelInternalWatch,
 } from '../internal-watch/internal-watch-store';
 import { observeInternalWatchTarget } from '../internal-watch/internal-watch-runner';
+import { runWithInternalWatchTurnContext, setCurrentInternalWatchTurnContext } from '../internal-watch/internal-watch-policy';
 // orchestration/file-op-v2 removed — stubs to prevent reference errors
 type FileOpType = 'CHAT' | 'FILE_EDIT' | 'FILE_CREATE' | 'FILE_ANALYSIS' | 'BROWSER_OP' | 'DESKTOP_OP';
 class FileOpProgressWatchdog { constructor(_n: number) {} record(_x: any) { return { no_progress: false }; } }
@@ -6052,6 +6053,7 @@ RULES:
           targetTaskId: steer.internalWatchTargetTaskId,
           delivery: 'live_steer',
         };
+        setCurrentInternalWatchTurnContext(activeInternalWatchContext);
       }
       if (steer.kind === 'background_agent_result' && steer.backgroundAgentId) {
         backgroundResultInjectedIds.add(steer.backgroundAgentId);
@@ -9280,12 +9282,32 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-	    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; syntheticInternalWatch?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease },
+	    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
     callerOnToken?: (token: string) => void,
 ): Promise<HandleChatResult> {
+  // Install the watch policy around the entire synthetic turn, including
+  // preflight routers and voice/mobile wrappers that bypass executeTool.
+  if (flags?.internalWatchContext && flags.internalWatchContextInstalled !== true) {
+    return runWithInternalWatchTurnContext(flags.internalWatchContext, () => runInteractiveTurn(
+      message,
+      sessionId,
+      sendSSE,
+      pinnedMessages,
+      abortSignal,
+      callerContext,
+      reasoningOptions,
+      attachments,
+      attachmentPreviews,
+      modelOverride,
+      { ...flags, internalWatchContextInstalled: true },
+      turnOriginInput,
+      requestMeta,
+      callerOnToken,
+    ));
+  }
   const turnTiming = flags?.timingRecorder || createTurnTimingRecorder(sessionId, { phase: 'interactive_turn' });
   const leaseWaitStartedAt = turnTiming.mark('lease_wait_start');
   const preAcquiredTurnLease = flags?.preAcquiredTurnLease;
@@ -9304,6 +9326,7 @@ async function runInteractiveTurn(
   const isSyntheticSubagentCompletionTurn = flags?.syntheticSubagentCompletion === true;
   const isSyntheticThreadSupervisionReview = flags?.syntheticThreadSupervisionReview === true;
   const isSyntheticInternalWatch = flags?.syntheticInternalWatch === true;
+  const isSyntheticRestartRecovery = flags?.syntheticRestartRecovery === true;
   const goalTurnSnapshot = isGoalContinuationTurn ? snapshotMainChatGoal(sessionId) : null;
   const goalRestartCheckpoint = goalTurnSnapshot?.restartCheckpoint && goalTurnSnapshot.restartCheckpoint.phase !== 'complete'
     ? goalTurnSnapshot.restartCheckpoint
@@ -9385,7 +9408,7 @@ async function runInteractiveTurn(
     ...(isGoalContinuationTurn ? { channel: 'system' as const, channelLabel: 'goal' } : {}),
     ...(Array.isArray(attachmentPreviews) && attachmentPreviews.length ? { attachmentPreviews } : {}),
   };
-  if (!isGoalContinuationTurn && !isSyntheticSubagentCompletionTurn && !isSyntheticThreadSupervisionReview && !isSyntheticInternalWatch) {
+  if (!isGoalContinuationTurn && !isSyntheticSubagentCompletionTurn && !isSyntheticThreadSupervisionReview && !isSyntheticInternalWatch && !isSyntheticRestartRecovery) {
     appendMainChatStreamEvent(sessionId, localMainChatStream?.streamId || existingMainChatStream?.streamId || '', 'user_message', {
       message: userMsg,
       clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId),
@@ -9447,7 +9470,7 @@ async function runInteractiveTurn(
   // handleChat receives the full prompt directly below; storing it in history
   // leaks internal instructions into the UI and duplicates model context.
   const addMessageStartedAt = Date.now();
-  const addResult: any = isGoalContinuationTurn || isSyntheticSubagentCompletionTurn || isSyntheticThreadSupervisionReview || isSyntheticInternalWatch
+  const addResult: any = isGoalContinuationTurn || isSyntheticSubagentCompletionTurn || isSyntheticThreadSupervisionReview || isSyntheticInternalWatch || isSyntheticRestartRecovery
     ? { added: false, deferredForCompaction: false, deferredForMemoryFlush: false }
     : skipDuplicateVoiceWorkflowUser
     ? { added: false, deferredForCompaction: false, deferredForMemoryFlush: false }
@@ -9576,7 +9599,7 @@ async function runInteractiveTurn(
 
   console.log(`\n[v2] USER: ${message.slice(0, 100)}`);
   let followupHandled: string | null = null;
-  if (shouldCheckBlockedTaskFollowup(message)) {
+  if (!isSyntheticInternalWatch && shouldCheckBlockedTaskFollowup(message)) {
     sendSSE('ui_preflight', { message: 'Checking paused task follow-up...' });
     followupHandled = await tryHandleBlockedTaskFollowup(sessionId, message);
   }
@@ -9614,7 +9637,7 @@ async function runInteractiveTurn(
   const providerUsageBeforeTurn = aggregateSessionModelUsage(sessionId);
   turnTiming.mark('model_usage_before_loaded', { durationMs: Date.now() - providerUsageBeforeStartedAt });
   turnTiming.mark('handle_chat_start');
-  const result = await handleChat(
+  const result = await runWithInternalWatchTurnContext(flags?.internalWatchContext, () => handleChat(
     message,
     sessionId,
 	    sendSSE,
@@ -9637,7 +9660,7 @@ async function runInteractiveTurn(
         instructionCallerRequirements: callerContext ? [callerContext] : [],
         timingRecorder: turnTiming,
       },
-  );
+  ));
   turnTiming.mark('handle_chat_done');
 
   const observationPersistStartedAt = Date.now();
@@ -9865,6 +9888,109 @@ async function runInteractiveTurn(
     // is completed together. Other callers retain the original local lease.
     if (!preAcquiredTurnLease) mainChatTurnCoordinator.release(turnLease);
   }
+}
+
+type InterruptedMainChatRuntime = {
+  id: string;
+  sessionId?: string;
+  source?: string;
+  detail?: string;
+  clientRequestId?: string;
+  recoveryData?: Record<string, any>;
+  checkpoint?: Record<string, any>;
+};
+
+/**
+ * Start a fresh execution owner for a foreground turn whose gateway process
+ * disappeared. The original user message is already durable in session history,
+ * so this path deliberately suppresses a second user-message write while still
+ * giving the model the exact original request and preserved checkpoint context.
+ */
+export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime): boolean {
+  const sessionId = String(runtime?.sessionId || '').trim();
+  const recoveryData = runtime?.recoveryData || {};
+  const message = String(recoveryData.message || runtime?.detail || '').trim();
+  if (!sessionId || !message) return false;
+
+  const admissionLease = mainChatTurnCoordinator.tryAcquire(sessionId);
+  if (!admissionLease) {
+    console.warn(`[RuntimeRecovery] Could not retrigger ${sessionId}: a replacement turn already owns the session.`);
+    return false;
+  }
+
+  const origin = normalizeTurnOrigin(
+    recoveryData.origin || { channel: runtime.source || 'system', surface: 'restart_recovery', device: 'server' },
+    sessionId,
+  );
+  const abortController = new AbortController();
+  const abortSignal = { aborted: false, signal: abortController.signal };
+  const runtimeId = registerLiveRuntime({
+    kind: 'main_chat',
+    label: 'Main chat (restart recovery)',
+    sessionId,
+    source: origin.channel,
+    detail: message.slice(0, 160),
+    clientRequestId: runtime.clientRequestId || undefined,
+    abortSignal,
+    onAbort: () => abortController.abort(),
+    recoveryPolicy: 'mark_interrupted',
+    recoveryData: {
+      ...recoveryData,
+      recoveredFromRuntimeId: runtime.id,
+      restartRecoveryAttemptedAt: Date.now(),
+    },
+  });
+
+  setModelBusy(true);
+  const sendSSE = (event: string, data: any) => {
+    const checkpoint: Record<string, any> = { event, at: Date.now() };
+    if (data?.message) checkpoint.message = String(data.message).slice(0, 1000);
+    if (data?.action || data?.name) checkpoint.toolName = String(data.action || data.name);
+    if (data?.args && typeof data.args === 'object') checkpoint.args = data.args;
+    if (data?.result) checkpoint.result = String(data.result).slice(0, 1000);
+    updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
+  };
+  const checkpointSummary = [
+    '[GATEWAY RESTART RECOVERY]',
+    `The previous gateway process exited while executing this already-persisted user turn (runtime ${runtime.id}).`,
+    'Continue the same turn automatically. Do not ask the user to send "continue" and do not repeat completed or destructive work.',
+    runtime.checkpoint?.toolName ? `Last tool boundary: ${String(runtime.checkpoint.toolName)}` : '',
+    runtime.checkpoint?.message ? `Last recorded progress: ${String(runtime.checkpoint.message).slice(0, 1000)}` : '',
+    'The interruption checkpoint and prior process/tool evidence are present in this session history. Reconcile them before taking the next action.',
+    '[/GATEWAY RESTART RECOVERY]',
+  ].filter(Boolean).join('\n');
+
+  void runInteractiveTurn(
+    message,
+    sessionId,
+    sendSSE,
+    undefined,
+    abortSignal,
+    checkpointSummary,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { syntheticRestartRecovery: true, preAcquiredTurnLease: admissionLease },
+    origin,
+    { clientRequestId: runtime.clientRequestId },
+  ).catch((err: any) => {
+    console.error(`[RuntimeRecovery] Retriggered main-chat turn failed for ${sessionId}:`, err?.message || err);
+    addMessage(sessionId, {
+      role: 'assistant',
+      content: `Automatic recovery could not finish the interrupted turn: ${String(err?.message || err || 'unknown error').slice(0, 500)}`,
+      timestamp: Date.now(),
+      channel: origin.channel,
+      channelLabel: 'restart recovery',
+    } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+  }).finally(() => {
+    finishLiveRuntime(runtimeId);
+    mainChatTurnCoordinator.release(admissionLease);
+    setModelBusy(false);
+  });
+
+  console.log(`[RuntimeRecovery] Automatically retriggered interrupted main-chat turn for ${sessionId} (old=${runtime.id}, new=${runtimeId}).`);
+  return true;
 }
 
 function createSSESender(res: express.Response): (event: string, data: any) => void {
@@ -18193,45 +18319,13 @@ const DEFAULT_XAI_REALTIME_VOICE = process.env.XAI_REALTIME_VOICE || 'eve';
 const XAI_REALTIME_USER_AGENT = process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0';
 const XAI_REALTIME_VOICE_IDS = ['eve', 'ara', 'rex', 'sal', 'leo'];
 
-type XaiRealtimeAuthCandidate = { token: string; auth: 'xai_oauth' | 'api_key' };
-
-function getXaiRealtimeApiKey(): string {
-  const cfg = getConfig().getConfig() as any;
-  const providers = cfg?.llm?.providers && typeof cfg.llm.providers === 'object' ? cfg.llm.providers : {};
-  const raw = typeof providers?.xai?.api_key === 'string'
-    ? String(getConfig().resolveSecret(providers.xai.api_key) || '').trim()
-    : '';
-  const key = String(process.env.XAI_API_KEY || raw || '').trim();
-  return /^xai-[A-Za-z0-9_-]+/.test(key) ? key : '';
-}
-
-function hasXaiRealtimeOAuth(): boolean {
-  return isXAIConnected(getConfig().getConfigDir());
-}
+type XaiRealtimeAuthCandidate = { token: string; auth: 'xai_oauth' | 'api_key'; accountId?: string; label: string };
 
 // Resolve every usable xAI credential for the realtime client_secret mint. For
 // voice mode, prefer the user's connected OAuth account so a stale env/config
 // API key cannot silently override it; keep API key as a fallback candidate.
 async function getXaiRealtimeAuthCandidates(): Promise<XaiRealtimeAuthCandidate[]> {
-  const candidates: XaiRealtimeAuthCandidate[] = [];
-  const seen = new Set<string>();
-  const push = (token: string, auth: XaiRealtimeAuthCandidate['auth']) => {
-    const value = String(token || '').trim();
-    if (!value || seen.has(value)) return;
-    seen.add(value);
-    candidates.push({ token: value, auth });
-  };
-
-  if (hasXaiRealtimeOAuth()) {
-    try {
-      push(await getValidXAIToken(getConfig().getConfigDir()), 'xai_oauth');
-    } catch {
-      // Fall through — API key fallback below may still be usable.
-    }
-  }
-
-  push(getXaiRealtimeApiKey(), 'api_key');
-  return candidates;
+  return getXaiAuthCandidates();
 }
 
 function sanitizeXaiRealtimeModel(value: unknown): string {
@@ -18252,17 +18346,16 @@ function sanitizeXaiRealtimeSpeed(value: unknown): number {
 
 router.get('/api/realtime/xai/status', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  const hasApiKey = !!getXaiRealtimeApiKey();
-  const hasOAuth = hasXaiRealtimeOAuth();
+  const credentials = getConfiguredXaiCredentialSummary();
   res.json({
     success: true,
-    configured: hasApiKey || hasOAuth,
+    configured: credentials.configured,
     model: DEFAULT_XAI_REALTIME_MODEL,
     voice: DEFAULT_XAI_REALTIME_VOICE,
     voices: XAI_REALTIME_VOICE_IDS,
-    auth: hasOAuth ? 'xai_oauth' : (hasApiKey ? 'api_key' : 'none'),
-    oauthConfigured: hasOAuth,
-    apiKeyConfigured: hasApiKey,
+    auth: credentials.oauthConfigured ? 'xai_oauth' : (credentials.apiKeyConfigured ? 'api_key' : 'none'),
+    oauthConfigured: credentials.oauthConfigured,
+    apiKeyConfigured: credentials.apiKeyConfigured,
   });
 });
 
@@ -18335,6 +18428,8 @@ router.post('/api/voice-agent/xai-realtime-bootstrap', async (req, res) => {
       console.log('[xai-realtime] client_secret mint', {
         endpoint: XAI_REALTIME_CLIENT_SECRETS_ENDPOINT,
         auth: candidate.auth,
+        accountId: candidate.accountId || null,
+        accountLabel: candidate.label,
         status: upstream.status,
         ok: upstream.ok,
         responseKeys: parsed && typeof parsed === 'object' ? Object.keys(parsed) : typeof parsed,
@@ -19224,6 +19319,104 @@ router.post('/api/chat', async (req, res) => {
   turnTiming.mark('admission_decided', { kind: admission.kind });
 
   if (admission.kind === 'busy') {
+    // A server-started watch review can become active between the phone's last
+    // websocket frame and its POST. Treat that narrow race as a live steer,
+    // not as a rejected second turn. Persist the user's message before
+    // attaching this response to the already-running watch stream.
+    const watchRuntime = reconciledTurn.runtime?.source === 'internal_watch'
+      ? reconciledTurn.runtime
+      : null;
+    if (watchRuntime?.id) {
+      const steerAttachments = normalizeRuntimeVisionAttachmentsInput(attachments);
+      const steerAttachmentPreviews = normalizeRuntimeAttachmentPreviewsInput(attachmentPreviews);
+      const steer = addPendingRuntimeSteer(watchRuntime.id, {
+        sessionId: resolvedSessionId,
+        message,
+        source: isMobileChatRequest ? 'mobile_internal_watch_auto_steer' : 'internal_watch_auto_steer',
+        clientRequestId: clientRequestId || undefined,
+        kind: 'correction',
+        requiresWorkerResponse: true,
+        attachments: steerAttachments,
+        attachmentPreviews: steerAttachmentPreviews,
+      });
+      if (steer.ok && steer.event) {
+        const now = Date.now();
+        addMessage(resolvedSessionId, {
+          role: 'user',
+          content: message,
+          timestamp: now,
+          channel: turnOrigin.channel,
+          channelLabel: 'steer',
+          origin: turnOrigin,
+          workflowGroupId: `steer_${steer.event.id}`,
+          workflowPart: 'interruption',
+          workflowLabel: 'Message during internal watch review',
+          clientRequestId: clientRequestId || undefined,
+          ...(steerAttachmentPreviews.length ? { attachmentPreviews: steerAttachmentPreviews } : {}),
+        } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+
+        const stream = getMainChatStream(resolvedSessionId);
+        if (stream?.active) {
+          appendMainChatStreamEvent(resolvedSessionId, stream.streamId, 'user_message', {
+            message: {
+              role: 'user',
+              content: message,
+              timestamp: now,
+              channel: turnOrigin.channel,
+              channelLabel: 'steer',
+              origin: turnOrigin,
+              ...(steerAttachmentPreviews.length ? { attachmentPreviews: steerAttachmentPreviews } : {}),
+            },
+            clientRequestId: clientRequestId || undefined,
+          });
+          appendMainChatStreamEvent(resolvedSessionId, stream.streamId, 'info', {
+            message: 'Your message was added to the active internal-watch review.',
+            clientRequestId: clientRequestId || undefined,
+            steerEventId: steer.event.id,
+          });
+          if (clientRequestId) {
+            mainChatRequestDedupe.set(mainChatRequestDedupeKey(resolvedSessionId, clientRequestId), {
+              at: now,
+              sessionId: resolvedSessionId,
+              streamId: stream.streamId,
+              fingerprint: requestFingerprint,
+            });
+          }
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          res.setHeader('X-Accel-Buffering', 'no');
+          try { (res as any).flushHeaders?.(); } catch {}
+          try { res.write(': connected\n\n'); } catch {}
+          await streamExistingMainChatToResponse({
+            res,
+            sessionId: resolvedSessionId,
+            streamId: stream.streamId,
+            clientRequestId,
+          });
+          res.end();
+          return;
+        }
+
+        // Runtime registration intentionally precedes stream creation. This
+        // tiny window still accepts and persists the steer; the websocket
+        // stream will appear as soon as runInteractiveTurn starts.
+        res.status(202);
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.write(`data: ${JSON.stringify({
+          type: 'info',
+          message: 'Your message was queued into the internal-watch review.',
+          clientRequestId: clientRequestId || undefined,
+          runtimeId: watchRuntime.id,
+          steerEventId: steer.event.id,
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'done', queued: true, clientRequestId: clientRequestId || undefined })}\n\n`);
+        res.end();
+        return;
+      }
+    }
     res.status(409).json({
       success: false,
       code: 'SESSION_TURN_ACTIVE',

@@ -7,8 +7,8 @@ import {
   renderChatPage, renderVoicePage, renderSchedulePage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
-  renderHubPage, renderSubagentsPage, renderSubagentDetailPage,
-} from './mobile-pages.js?v=mobile-composer-init-fix-v17';
+  renderHubPage, renderSubagentsPage, renderSubagentDetailPage, renderSubagentChatPage,
+} from './mobile-pages.js?v=mobile-composer-init-fix-v19';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
@@ -315,6 +315,7 @@ function render() {
       return;
     case 'hub':       return renderHubPage(slot, { navigate: mobileNavigate });
     case 'subagents':
+      if (arg && String(extra?.[0] || '').toLowerCase() === 'chat') return renderSubagentChatPage(slot, { agentId: decodeURIComponent(arg), navigate: mobileNavigate });
       if (arg) return renderSubagentDetailPage(slot, { agentId: decodeURIComponent(arg), navigate: mobileNavigate, initialTab: extra?.[0] || '' });
       return renderSubagentsPage(slot, { navigate: mobileNavigate });
     case 'proposals': return renderProposalsPage(slot, { proposalId: arg ? decodeURIComponent(arg) : '', navigate: mobileNavigate });

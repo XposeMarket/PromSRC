@@ -107,15 +107,12 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
   }
   const allowedWorkPaths = resolveTeamAgentAllowedWorkPaths(team, teamWorkspacePath);
 
-  let agentRoleBlock = '';
   if (agent) {
     try {
       const globalAgentWs = String((agent as any)?.workspace || '') || ensureAgentWorkspace(agent as any);
       const identityWs = teamId
         ? ensureTeamAgentIdentity(teamId, agentId, globalAgentWs || undefined)
         : globalAgentWs;
-      const raw = String(readAgentPromptFile(identityWs, { migrateLegacy: true })?.content || '').trim();
-      if (raw) agentRoleBlock = `[YOUR ROLE ON THIS TEAM - ${agentName}]\n${raw}`;
     } catch {}
   }
 
@@ -165,7 +162,6 @@ export function buildTeamSubagentCallerContext(teamId: string, agentId: string, 
           `  -> Prior run context: memory.json, last_run.json, pending.json are in this directory.`,
         ].join('\n')
       : '',
-    agentRoleBlock ? `\n${agentRoleBlock}` : '',
     (() => { const a = buildSubagentAssignmentBlock(agentId); return a ? `\n${a}` : ''; })(),
     roomSummary ? `\n${roomSummary}` : '',
     roomDeltaBlock ? `\n${roomDeltaBlock}` : '',
@@ -316,7 +312,6 @@ export async function runTeamAgentViaChat(
   // ensureTeamAgentIdentity bootstraps AGENT.md from the global agent workspace
   // on first use, then keeps it isolated — so the same agent ID on two different teams
   // can have independent roles without any context bleed.
-  let agentRoleBlock = '';
   let agentIdentityPath = '';
   if (agent) {
     try {
@@ -327,8 +322,6 @@ export async function runTeamAgentViaChat(
         ? ensureTeamAgentIdentity(teamId, agentId, globalAgentWs || undefined)
         : globalAgentWs;
       agentIdentityPath = identityWs;
-      const raw = String(readAgentPromptFile(identityWs, { migrateLegacy: true })?.content || '').trim();
-      if (raw) agentRoleBlock = `[YOUR ROLE ON THIS TEAM — ${agentName}]\n${raw}`;
     } catch {}
   }
 
@@ -441,7 +434,6 @@ export async function runTeamAgentViaChat(
           `  → Prior run context: memory.json, last_run.json, pending.json are in this directory.`,
         ].join('\n')
       : '',
-    agentRoleBlock ? `\n${agentRoleBlock}` : '',
     (() => { const a = buildSubagentAssignmentBlock(agentId); return a ? `\n${a}` : ''; })(),
     roomSummary ? `\n${roomSummary}` : '',
     roomDeltaBlock ? `\n${roomDeltaBlock}` : '',

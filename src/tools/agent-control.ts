@@ -54,7 +54,7 @@ export async function executeAgentList(_args: any): Promise<ToolResult> {
     lines.push('');
   }
 
-  lines.push('Use chat_with_subagent(agent_id, message) for normal persistent chat/check-ins with a standalone non-team subagent. Use agent_run_ops(action:"list"|"get"|"recover", ...) for existing subagent runs and paused task recovery chat. Use message_subagent(agent_id, message) for a new background task handoff whose chat/result stays in the subagent task panel. Use spawn_subagent(...) to create/run one.');
+  lines.push('Use chat_with_subagent(agent_id, message) for normal persistent chat/check-ins with a standalone non-team subagent. Use agent_run_ops(action:"list"|"get"|"steer"|"recover", ...) only for unfinished/failed subagent runs and paused task recovery chat. Completed subagent tasks are immutable; delegate every later milestone/follow-up with message_subagent(agent_id, assignment) so it gets a new task id. The assignment describes work directly and must not tell the worker to create another task. Use spawn_subagent(...) to create/run one.');
 
   return {
     success: true,

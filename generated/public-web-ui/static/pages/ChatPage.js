@@ -14387,7 +14387,6 @@ async function sendChat(queuedMessage = null, options = {}) {
     scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
   };
   const moveVisibleAnswerTextIntoWorkflowTrace = () => {
-    if (streamState.finalResponseStarted) return;
     const text = String(streamState.streamingAIText || '').trim();
     if (!text) return;
     appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', text);
@@ -40151,7 +40150,6 @@ function handleMainChatStreamEvent(msg = {}) {
     renderChatMessages();
   };
   const moveVisibleAnswerTextIntoWorkflowTrace = () => {
-    if (streamState.finalResponseStarted) return;
     const text = String(streamState.streamingAIText || '').trim();
     if (!text) return;
     appendLiveTraceToStreamState(streamState, streamState.toolActivityStarted ? 'think' : 'preamble', text);
@@ -40392,6 +40390,22 @@ function handleMainChatStreamEvent(msg = {}) {
 }
 
 wsEventBus.on('main_chat_stream_event', handleMainChatStreamEvent);
+
+// Internal-watch turns are server-originated and also carry a dedicated
+// envelope. Consuming it as a normal stream frame makes progress visible even
+// if a websocket client missed the parallel main_chat_stream_event broadcast.
+wsEventBus.on('internal_watch_sse', (msg = {}) => {
+  const event = String(msg.eventType || msg.event || '').trim();
+  if (!event) return;
+  handleMainChatStreamEvent({
+    sessionId: msg.sessionId,
+    streamId: msg.streamId,
+    seq: msg.seq,
+    at: msg.at,
+    event,
+    data: { ...msg, type: event, event },
+  });
+});
 
 wsEventBus.on('main_chat_stream_update', (msg = {}) => {
   const sid = String(msg.sessionId || '').trim();

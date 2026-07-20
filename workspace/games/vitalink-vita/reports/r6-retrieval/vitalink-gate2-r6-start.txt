@@ -1,0 +1,4 @@
+VitaLink Gate 2 inquiry-scan import probe R6
+stage=module_start-entered
+ksceBtSetInquiryScan=imported-but-not-called
+radio_mutation=none

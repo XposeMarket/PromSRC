@@ -1,0 +1,39 @@
+VitaLink Gate 2 diagnostic R2 physical reboot result
+Date: 2026-07-19
+
+Result: PASS
+
+Retrieved from Vita after normal reboot:
+
+1. ur0:/data/vitalink-gate2-r2-start.txt
+Size: 107 bytes
+SHA-256: 51ee1f9c19762ea5150b3db7a70e528d3d89ea9403abc15a0b7bb003d26809bd
+Content:
+VitaLink Gate 2 kernel load probe R2
+stage=module_start-entered
+bluetooth_imports=none
+radio_mutation=none
+
+2. ur0:/data/vitalink/kernel-probe-r2.txt
+Size: 245 bytes
+SHA-256: 6d3f513d2c2910d18c63bf36b76ff5103e98eb22b1ecc0c026e22203b91cdc47
+Content:
+VitaLink Gate 2 diagnostic R2
+result=module_start-executed
+scope=kernel loader and filesystem only
+SceBtForDriver=not linked or called
+Safety=no inquiry, pairing, connection, scan, SDP, L2CAP, or radio changes
+mkdir=success-or-directory-created
+
+Loaded artifact read back from ur0:/tai/vitalink_bt_probe_kernel.skprx:
+Size: 4,943 bytes
+SHA-256: bc3f0106afae9a6b78cdd7a58559c69723b3549ea770ff9f8a5c46181d61f0d5
+Result: exact match to local R2 build.
+
+Conclusion:
+- taiHEN config entry and plugin path are valid.
+- Kernel loader reached module_start.
+- SceIofilemgrForDriver imports resolved and both root and nested writes succeeded.
+- R1's missing report was caused by its Bluetooth-linked form, not the general plugin/config/filesystem path.
+- No Bluetooth API was linked or called by R2 and no radio state was changed.
+- The next bounded gate may restore only passive SceBtForDriver imports/calls while preserving the proven early markers.

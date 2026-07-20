@@ -11,6 +11,7 @@ files:
   - src/**/*
   - web-ui/**/*
   - assets/**/*
+  - extensions/prometheus-personal-chrome/**/*
   - bin/**/*
   - scripts/**/*
   - node_modules/**/*
@@ -88,3 +89,8 @@ nsis:
 # asar packaging — bundles source into a fast archive
 # Disabled so tsx can resolve .ts files at runtime inside the app
 asar: false
+
+# Kept external even when a downstream build enables ASAR: Chrome's Load
+# unpacked cannot read an extension from app.asar.
+asarUnpack:
+  - extensions/prometheus-personal-chrome/**/*

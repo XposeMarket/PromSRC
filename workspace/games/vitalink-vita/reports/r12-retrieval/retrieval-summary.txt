@@ -1,0 +1,30 @@
+CONNECTED host=10.0.0.231 port=1337
+LIST_OK remote=/ entries=10
+LIST_ENTRY remote=/ value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 os0:
+LIST_ENTRY remote=/ value=drwxr-xr-x 1 vita vita 32768 Jan 1  2000 pd0:
+LIST_ENTRY remote=/ value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 sa0:
+LIST_ENTRY remote=/ value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 tm0:
+LIST_ENTRY remote=/ value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 ud0:
+LIST_ENTRY remote=/ value=drwxr-xr-x 1 vita vita 32768 Jan 1  2000 uma0:
+LIST_ENTRY remote=/ value=drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ur0:
+LIST_ENTRY remote=/ value=drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ux0:
+LIST_ENTRY remote=/ value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vd0:
+LIST_ENTRY remote=/ value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vs0:
+LIST_ERROR remote=vs0: error=error_perm:550 Invalid directory.
+LIST_ERROR remote=vs0:/sys error=error_perm:550 Invalid directory.
+LIST_ERROR remote=vs0:/sys/external error=error_perm:550 Invalid directory.
+LIST_ERROR remote=vs0:/app error=error_perm:550 Invalid directory.
+LIST_OK remote=vs0:/app/NPXS10015 entries=10
+LIST_ENTRY remote=vs0:/app/NPXS10015 value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 os0:
+LIST_ENTRY remote=vs0:/app/NPXS10015 value=drwxr-xr-x 1 vita vita 32768 Jan 1  2000 pd0:
+LIST_ENTRY remote=vs0:/app/NPXS10015 value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 sa0:
+LIST_ENTRY remote=vs0:/app/NPXS10015 value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 tm0:
+LIST_ENTRY remote=vs0:/app/NPXS10015 value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 ud0:
+LIST_ENTRY remote=vs0:/app/NPXS10015 value=drwxr-xr-x 1 vita vita 32768 Jan 1  2000 uma0:
+LIST_ENTRY remote=vs0:/app/NPXS10015 value=drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ur0:
+LIST_ENTRY remote=vs0:/app/NPXS10015 value=drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ux0:
+LIST_ENTRY remote=vs0:/app/NPXS10015 value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vd0:
+LIST_ENTRY remote=vs0:/app/NPXS10015 value=drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vs0:
+RETR_ERROR remote=vs0:/sys/external/libSceBt.suprx size=UNAVAILABLE:error_perm:550 The file doesn't exist. error=error_perm:550 File not found.
+RETR_ERROR remote=vs0:/sys/external/libSceBtAvrcp.suprx size=UNAVAILABLE:error_perm:550 The file doesn't exist. error=error_perm:550 File not found.
+RETR_ERROR remote=vs0:/vsh/module/SceSettings.suprx size=UNAVAILABLE:error_perm:550 The file doesn't exist. error=error_perm:550 File not found.

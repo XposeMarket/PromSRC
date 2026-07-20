@@ -1,0 +1,9 @@
+VitaLink Gate 2 bounded inquiry-scan visibility probe R7
+stage=cleanup-complete
+ksceBtGetConfiguration=0x00000009
+ksceBtGetLastError=0x00000000
+ksceBtSetInquiryScan(1)=0x00000000
+ksceBtSetInquiryScan(0)=0x00000000
+Scope=Classic inquiry visibility only; no pairing, connection, SDP, HID, L2CAP, or configuration write
+Timing=enable 30 seconds after boot, visible for 90 seconds, then automatic disable cleanup
+mkdir=returned-error-but-log-path-opened

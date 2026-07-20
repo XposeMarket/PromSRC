@@ -1,0 +1,5 @@
+VitaLink Gate 2 callback-notification observer R11
+stage=module_start-entered
+schedule=register-after-30s-observe-90s-at-100ms-cleanup
+active-calls=callback-register-inquiry-enable-disable-unregister
+event-read-and-pairing-replies=not-used

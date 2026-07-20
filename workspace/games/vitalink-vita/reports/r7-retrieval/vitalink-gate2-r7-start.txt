@@ -1,0 +1,4 @@
+VitaLink Gate 2 bounded inquiry-scan visibility probe R7
+stage=module_start-entered
+schedule=enable-after-30s-visible-90s-then-disable
+active_calls=ksceBtSetInquiryScan(1)-then-(0)-cleanup

@@ -12,6 +12,7 @@
 // MUST be first: synchronously consumes the master key handed over stdin by the
 // Electron main process, before any vault access or config side effects run.
 import '../security/vault-key-bootstrap.js';
+import './exit-diagnostics.js';
 
 import path from 'path';
 import fs from 'fs';
@@ -328,6 +329,8 @@ const handleChat: ChatRouterModule['handleChat'] = (...args: Parameters<ChatRout
   getChatRouterModule().handleChat(...args);
 const runInteractiveTurn: ChatRouterModule['runInteractiveTurn'] = (...args: Parameters<ChatRouterModule['runInteractiveTurn']>) =>
   getChatRouterModule().runInteractiveTurn(...args);
+const retriggerInterruptedMainChat: ChatRouterModule['retriggerInterruptedMainChat'] = (...args: Parameters<ChatRouterModule['retriggerInterruptedMainChat']>) =>
+  getChatRouterModule().retriggerInterruptedMainChat(...args);
 setStandaloneSubagentCompletionTurn((...args) => runInteractiveTurn(...args as Parameters<ChatRouterModule['runInteractiveTurn']>));
 const bindTeamNotificationTargetFromSession: ChatRouterModule['bindTeamNotificationTargetFromSession'] = (
   ...args: Parameters<ChatRouterModule['bindTeamNotificationTargetFromSession']>
@@ -800,8 +803,8 @@ initChannelsRouter({
   telegramTeamRoomBridge,
   skillsManager,
   dispatchToAgent: _dispatchToAgent,
-  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, modelOverride, flags, turnOrigin) =>
-    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, undefined, modelOverride, flags, turnOrigin),
+  runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOrigin) =>
+    runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOrigin),
 });
 initTeamsRouter({
   cronScheduler, handleChat, telegramChannel,
@@ -966,7 +969,7 @@ server.listen(PORT, HOST, () => {
     warmChatRouter('pre-startup');
     runStartup({
       HOST, PORT, config, skillsManager, cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
-      handleChat, buildTools, runTeamAgentViaChat,
+      handleChat, retriggerInterruptedMainChat, buildTools, runTeamAgentViaChat,
     }).then(() => {
       // These observers must see runtime recovery's settled task/session state.
       // Starting them earlier can turn a restart into a generic idle/timeout

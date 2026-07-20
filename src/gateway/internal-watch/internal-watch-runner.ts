@@ -10,7 +10,12 @@ import {
 } from './internal-watch-store';
 import { getLastMainSessionId, isModelBusy, setModelBusy } from '../comms/broadcaster';
 import { findArchivedScheduledJob } from '../scheduling/schedule-archive';
-import { addPendingRuntimeSteerForSession } from '../live-runtime-registry';
+import {
+  addPendingRuntimeSteerForSession,
+  finishLiveRuntime,
+  getLiveRuntime,
+  registerLiveRuntime,
+} from '../live-runtime-registry';
 import { getApprovalQueue, serializeApprovalForClient } from '../verification-flow';
 
 type RunInteractiveTurn = (
@@ -687,6 +692,9 @@ export class InternalWatchRunner {
       });
     };
 
+    let runtimeId = '';
+    const abortController = new AbortController();
+    const abortSignal = { aborted: false, signal: abortController.signal };
     try {
       if (watch.deliveryMode === 'notify_only' && kind !== 'gateway_restart_interruption') {
         this.broadcast({
@@ -702,12 +710,40 @@ export class InternalWatchRunner {
         return;
       }
 
+      // A watch-created review is a real main-chat turn. Give it the same
+      // runtime ownership as an HTTP-created turn so clients can discover its
+      // stream and a message arriving during review can be safely steered.
+      runtimeId = registerLiveRuntime({
+        kind: 'main_chat',
+        label: 'Internal watch review',
+        sessionId: deliverySessionId,
+        source: 'internal_watch',
+        detail: `${watch.label}: ${kind}`.slice(0, 160),
+        abortSignal,
+        onAbort: () => {
+          abortSignal.aborted = true;
+          abortController.abort();
+        },
+        recoveryPolicy: 'mark_interrupted',
+        recoveryData: {
+          syntheticInternalWatch: true,
+          watchId: watch.id,
+          watchKind: kind,
+          actionPolicy: watch.actionPolicy || 'review_only',
+        },
+      });
+      sendSSE('runtime_registered', {
+        runtimeId,
+        run: getLiveRuntime(runtimeId),
+        source: 'internal_watch',
+      });
+
       const result = await this.runInteractiveTurn(
         payload,
         deliverySessionId,
         sendSSE,
         undefined,
-        { aborted: false },
+        abortSignal,
         `[InternalWatch ${watch.id}] Private watcher delivery in the creating main-chat session. Treat the observation as evidence, inspect it against the session's latest user intent, and obey the persisted action policy.`,
         undefined,
         undefined,
@@ -749,6 +785,8 @@ export class InternalWatchRunner {
       updateInternalWatch(watch.id, { error: String(err?.message || err) });
       this.broadcast({ type: 'internal_watch_failed', watchId: watch.id, sessionId: deliverySessionId, originSessionId: watch.origin.sessionId, error: String(err?.message || err) });
       throw err;
+    } finally {
+      if (runtimeId) finishLiveRuntime(runtimeId);
     }
   }
 }

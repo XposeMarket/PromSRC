@@ -137,6 +137,8 @@ asar: true
 # Native .node modules cannot be loaded from inside an asar archive.
 # These must be unpacked so Node can require() them from the real filesystem.
 asarUnpack:
+  # Chrome's Load unpacked requires a real directory outside app.asar.
+  - "dist/extensions/prometheus-personal-chrome/**/*"
   - "node_modules/better-sqlite3/**/*"
   - "node_modules/node-pty/**/*"
   - "node_modules/onnxruntime-node/**/*"

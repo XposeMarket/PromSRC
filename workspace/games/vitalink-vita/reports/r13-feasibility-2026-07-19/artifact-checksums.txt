@@ -1,0 +1,6 @@
+# R13 static feasibility artifact checksums
+# Computed/verified locally 2026-07-19; no Vita interaction.
+927786e1737a6c515b706c34155884ed74e17fd563a2a52523834ecf363f5a3a  reports/r12-firmware-retrieval/os0__kd__wlanbt_robin_img_ax.skprx  (310941 bytes)
+053f5434e3a655ce4ebefc1fcbf8c71a80f0f7719f420030b7d8f092d1fb9e01  reports/r12-firmware-retrieval/os0__kd__wlanbt_robin_img_ax.embedded.elf  (310781 bytes; extracted from wrapper offset 0xA0)
+f4e1b7eecdae0289365c9415967f8dea076e463f38cf781d987ab2cf2439b951  reports/r12-firmware-retrieval/vs0__app__NPXS10026__eboot.bin  (517373 bytes; Content Manager, not Settings)
+7b7b006a53c7c4139dca8fa0a45e07a9c25357f57f972fe2d8da807e71243707  reports/r12-firmware-retrieval/vs0__app__NPXS10026__sce_sys__param.sfo  (5132 bytes)

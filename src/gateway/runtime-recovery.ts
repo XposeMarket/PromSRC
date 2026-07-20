@@ -181,7 +181,7 @@ function buildCheckpointText(
     '',
     includeProcessPacket
       ? 'Prometheus saved this checkpoint before shutdown. Continue from the latest known progress instead of restarting completed work.'
-      : 'Prometheus saved a checkpoint before shutdown. Continue from the latest known progress if the user asks.',
+      : 'Prometheus saved a checkpoint before shutdown. The replacement gateway will automatically continue this turn from the latest known progress.',
   ].filter(Boolean);
   return lines.join('\n');
 }
@@ -358,9 +358,11 @@ function shouldAutoResumeTask(task: TaskRecord, runtime: LiveRuntimeSnapshot): b
   if (task.status !== 'paused') return false;
   if (task.pauseReason !== 'gateway_restart') return false;
   if (task.pendingClarificationQuestion) return false;
-  // A task that intentionally crossed a restart boundary must continue on the
-  // replacement gateway. Other interrupted tasks retain the global opt-in.
+  // A task that intentionally crossed a restart boundary or explicitly carries
+  // the normal restart-safe "resume" policy must continue on the replacement
+  // gateway. Pending clarification and do_not_resume remain hard stops.
   return !!taskOwnedRestartToolName(runtime)
+    || runtime.recoveryPolicy === 'resume'
     || process.env.PROMETHEUS_AUTO_RESUME_INTERRUPTED_TASKS === '1';
 }
 
@@ -545,16 +547,19 @@ export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs =
 export function recoverInterruptedRuntimes(opts: {
   launchBackgroundTaskRunner?: (taskId: string) => void;
   completePlainGatewayRestartTask?: (taskId: string) => boolean;
+  retriggerInterruptedMainChat?: (runtime: LiveRuntimeSnapshot) => boolean;
   notify?: (message: string) => void;
 } = {}): {
   inspected: number;
   resumedTasks: string[];
+  retriggeredChats: string[];
   interruptedChats: string[];
   crashRecoveredGoalSessionIds: string[];
 } {
   const runtimes = listInterruptedRuntimes()
     .filter((runtime) => Number(runtime.pid || 0) !== process.pid);
   const resumedTasks: string[] = [];
+  const retriggeredChats: string[] = [];
   const interruptedChats: string[] = [];
   const crashRecoveredGoalSessionIds = new Set<string>();
 
@@ -639,10 +644,20 @@ export function recoverInterruptedRuntimes(opts: {
           }
         }
         interruptedChats.push(runtime.sessionId);
+        // Unexpected foreground turns are safe to retrigger from their durable
+        // request/checkpoint. Planned restart/apply boundaries are excluded: the
+        // BOOT owner handles those, and replaying the tool-owning turn could create
+        // a restart loop. Main-chat goals likewise retain their dedicated runner.
+        const autoRetriggered = runtime.kind === 'main_chat'
+          && !plannedRestartTool
+          && opts.retriggerInterruptedMainChat?.(runtime) === true;
+        if (autoRetriggered) retriggeredChats.push(runtime.sessionId);
         markDurableRuntimeRecovered(runtime.id, 'interrupted', {
           recovery: crashRecoveryFinalized
             ? 'main_chat_goal_crash_recovered'
-            : 'chat_checkpointed',
+            : autoRetriggered
+              ? 'chat_auto_retriggered'
+              : 'chat_checkpointed',
           sessionId: runtime.sessionId,
         });
         continue;
@@ -656,13 +671,14 @@ export function recoverInterruptedRuntimes(opts: {
 
   if (resumedTasks.length || interruptedChats.length) {
     opts.notify?.(
-      `Recovered interrupted work: ${resumedTasks.length} task(s) resumed, ${interruptedChats.length} chat checkpoint(s) preserved.`,
+      `Recovered interrupted work: ${resumedTasks.length} task(s) resumed, ${retriggeredChats.length} chat turn(s) retriggered, ${interruptedChats.length - retriggeredChats.length} chat checkpoint(s) preserved.`,
     );
   }
 
   return {
     inspected: runtimes.length,
     resumedTasks,
+    retriggeredChats,
     interruptedChats,
     crashRecoveredGoalSessionIds: Array.from(crashRecoveredGoalSessionIds),
   };

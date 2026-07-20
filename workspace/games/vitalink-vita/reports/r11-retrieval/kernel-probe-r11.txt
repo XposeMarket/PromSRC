@@ -1,0 +1,16 @@
+VitaLink Gate 2 callback-notification observer R11
+scope=bounded inquiry visibility plus callback notification metadata only
+forbidden=ksceBtReadEvent,pairing-replies,connect,delete,SDP,HID,L2CAP,configuration-writes
+warning=no event payload is consumed; Sony Settings retains native confirmation ownership
+ksceKernelCreateCallback=0x000c2a97 ksceBtRegisterCallback=0x00000000 ksceBtSetInquiryScan(1)=0x00000000 initial-error=0x00000000 initial-configuration=0x00000009
+ksceBtSetInquiryScan(0)=0x00000000 ksceBtUnregisterCallback=0x00000000 final-error=0x00000000 final-configuration=0x00000009
+callback-total=0x00000008 stored=0x00000008 overflow=0x00000000
+callback sequence=0x00000000 tick100ms=0x0000002e notify-id=0xffffffff notify-count=0x00000001 notify-arg=0x00000000 common=0x00000000 error=0x00000000 configuration=0x00000009
+callback sequence=0x00000001 tick100ms=0x0000003d notify-id=0xffffffff notify-count=0x00000001 notify-arg=0x00000000 common=0x00000000 error=0x00000000 configuration=0x00000009
+callback sequence=0x00000002 tick100ms=0x0000004a notify-id=0xffffffff notify-count=0x00000001 notify-arg=0x00000000 common=0x00000000 error=0x00000000 configuration=0x00000009
+callback sequence=0x00000003 tick100ms=0x00000051 notify-id=0xffffffff notify-count=0x00000001 notify-arg=0x00000000 common=0x00000000 error=0x00000000 configuration=0x00000009
+callback sequence=0x00000004 tick100ms=0x00000071 notify-id=0xffffffff notify-count=0x00000001 notify-arg=0x00000000 common=0x00000000 error=0x00000000 configuration=0x00000009
+callback sequence=0x00000005 tick100ms=0x000000e2 notify-id=0xffffffff notify-count=0x00000001 notify-arg=0x00000000 common=0x00000000 error=0x00000000 configuration=0x00000009
+callback sequence=0x00000006 tick100ms=0x000000e2 notify-id=0xffffffff notify-count=0x00000001 notify-arg=0x00000000 common=0x00000000 error=0x00000000 configuration=0x00000009
+callback sequence=0x00000007 tick100ms=0x00000199 notify-id=0xffffffff notify-count=0x00000001 notify-arg=0x00000000 common=0x00000000 error=0x00000000 configuration=0x00000009
+stage=cleanup-and-callback-notification-observation-complete

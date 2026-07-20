@@ -23,6 +23,8 @@ for (const [name, source] of [['mobile', mobile], ['desktop', desktop], ['subage
   assert.match(source, /final_response_start/, `${name} must recognize the explicit final-response boundary`);
 }
 assert.match(gateway, /final_response_start/, 'gateway must publish the final-response boundary before visible token deltas');
-assert.match(mobile, /function _moveMobileAnswerTextIntoTrace\(message, type = 'think'\) \{\s+if \(!message \|\| message\.finalResponseStarted\) return;/, 'mobile tool events must not pull a final answer back into activity');
+assert.match(mobile, /function _moveMobileAnswerTextIntoTrace\(message, type = 'think'\) \{\s+if \(!message\) return;/, 'mobile tool boundaries must move provisional model prose into activity');
+assert.doesNotMatch(mobile, /function _moveMobileAnswerTextIntoTrace\(message, type = 'think'\) \{\s+if \(!message \|\| message\.finalResponseStarted\) return;/, 'the first-token boundary must not prevent later tool boundaries from separating commentary rounds');
+assert.doesNotMatch(desktop, /moveVisibleAnswerTextIntoWorkflowTrace = \(\) => \{\s+if \(streamState\.finalResponseStarted\) return;/, 'desktop tool boundaries must separate provisional commentary rounds too');
 
 console.log('Chat final-response stream contracts passed.');

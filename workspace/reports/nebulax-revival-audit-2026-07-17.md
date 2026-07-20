@@ -296,3 +296,131 @@ Build one responsive app shell that ships:
 NebulaX should be revived as a **cohesive Solana ecosystem**—discovery, Adrenaline intelligence, identity, culture, Arcade, collectibles, and eventually execution/economics—not reduced to a generic terminal. The codebase is useful prototype capital, but it must be treated as a visual/interaction reference rather than production financial infrastructure.
 
 The correct next move is a clean, Adrenaline-first Discovery Beta that establishes secure identity, normalized data, product truthfulness, and a shared ecosystem shell. Trading, NEBX, staking, launchpad, store settlement, and anti-rug claims follow only after their separate technical, legal, security, and operating gates are actually complete.
+
+
+---
+
+## Milestone 1 implementation record — 2026-07-18
+
+**Implemented slice:** `repos/nebulax-test/discovery-beta/` is a clean, adjacent Vite application foundation for the wallet-optional, Adrenaline-first Discovery Beta. It deliberately leaves the canonical static prototype—and its unrelated dirty work—untouched.
+
+### Delivered evidence
+
+- Responsive application shell that retains the prototype's dark/cyan NebulaX visual direction without depending on its distributed CDN/static-page scripts.
+- Read-only GeckoTerminal Solana new-pools adapter with a normalized presentation shape and transparent descriptive lanes: **New pools**, **Momentum**, and **Liquidity**.
+- Explicit source label, fetch timestamp, loading, empty, error/retry, and stale-snapshot states. A two-minute freshness threshold marks an existing snapshot stale rather than presenting it as current.
+- No-wallet browsing and plain-language disclosures that data can be incomplete/delayed/wrong and that the feature is neither advice nor a safety/risk guarantee.
+- Unit tests for adapter normalization and lane derivation; reproducible Vite build and local run instructions in `repos/nebulax-test/discovery-beta/README.md`.
+
+### Preserved exclusions
+
+This slice does **not** connect a wallet or implement authentication, server data, watchlists, swaps, transactions, NEBX, staking, launchpad, rewards, store settlement, custody, or anti-rug claims. The public browser request is intentionally not hidden behind the existing unsafe arbitrary Jupiter proxy.
+
+### Next implementation gate
+
+Create an allowlisted server-owned discovery data boundary with cache/observability and source-contract tests. Only then add signed wallet authentication and server-synced preferences/watchlists; transaction/economic surfaces remain deferred.
+
+
+---
+
+## Milestone 2 implementation record — 2026-07-18
+
+**Implemented slice:** `repos/nebulax-test/discovery-beta/` now routes read-only Discovery Beta traffic through a minimal local Node boundary rather than exposing GeckoTerminal directly to the browser.
+
+- `GET /api/discovery/solana/new-pools` is a fixed, allowlisted endpoint. The server owns the only upstream URL and never accepts client-supplied upstream destinations.
+- The service applies a five-second upstream deadline, validates the expected source contract before normalization, emits controlled public `503` failures, caches successful snapshots for 30 seconds, and provides stale-if-error only for a bounded additional two minutes.
+- Public payload metadata identifies **fresh**, **cached**, and **stale fallback** provenance. `GET /api/health/discovery` exposes only local cache age/availability and aggregate failure time/count; no secrets or upstream details are exposed.
+- Browser UI consumes the server boundary and visibly distinguishes fresh, cached, stale-fallback, and unavailable states. Tests cover source contract, allowlisting, cache/stale fallback, malformed/error handling, and the client adapter.
+
+### Preserved exclusions
+
+No wallet authentication, wallet connection, swaps, transaction creation, NEBX, staking, launchpad, rewards, settlement, custody, or anti-rug guarantees were added.
+
+### Next implementation gate
+
+Implement signed wallet authentication and a server-synced, non-custodial watchlist/preferences model. Keep Discovery read-only and defer any execution/economic surface.
+
+
+---
+
+## Milestone 3 implementation record — 2026-07-19
+
+**Implemented slice:** `repos/nebulax-test/discovery-beta/` now has an optional signed Solana wallet identity boundary and server-synced local-beta watchlist/preferences model. Anonymous Adrenaline Discovery remains usable and read-only; no legacy prototype files, legacy Supabase draft, or Jupiter proxy were reused.
+
+### Delivered evidence
+
+- `server/auth-service.js`: a domain-bound, explicit-expiry sign-in message; cryptographically random one-time nonce; native Node Ed25519 verification against the Solana public key; replay prevention by consuming a nonce before verification; opaque 8-hour in-memory sessions; logout; exact request-key validation; bounded wallet/mint/body input; controlled public errors; 25-item watchlist limit; idempotent add/remove; and wallet-keyed account isolation.
+- `server/persistence.js`: local-beta `version: 1` persistence boundary with atomic, owner-readable JSON writes containing only watchlist/preferences—never private keys, signatures, transactions, balances, or sessions.
+- `server/app.js`: authenticated server routes for challenge/verify/session/logout/watchlist/preferences alongside the unchanged anonymous discovery route. API routes remain fixed and no arbitrary URL forwarding exists.
+- `src/main.js` / `src/data.js` / `src/styles.css`: visible anonymous, connect/signing, authenticated, logged-out, and controlled error states; server-synced token-mint add/remove and bounded preference controls. Wallet absence is presented as an error only for optional sign-in; Discovery browsing remains available.
+- `server/auth-service.test.js` and `server/app.test.js`: security/contract coverage for valid auth, bad signature, nonce expiry/replay, session expiry/logout, cross-user isolation, malformed/oversized payloads, watchlist limits/idempotency, persistence, HTTP contract, and anonymous Discovery regression. Existing `src/data.test.js` and `server/discovery-service.test.js` retain data-boundary coverage.
+
+### Verification and remaining gate
+
+Run `cd repos/nebulax-test/discovery-beta; npm test; npm run build`. Automated auth tests inject deterministic verification only inside tests; browser code uses the native Solana Ed25519 verifier through the local server. A human physical-wallet compatibility pass (Phantom connect/sign, multi-browser behavior, and public deployment cookie/rate-limit/CSRF architecture) remains required before a broader beta. No transaction or economic feature is enabled.
+
+### Recommended Milestone 4
+
+Replace local JSON/in-memory session implementation with a reviewed transactional store, migrations, server-managed secure session cookies, rate limiting, CSRF/operational logging, and CI/deployment controls. Keep all swaps, NEBX, staking, launchpad, rewards, settlement, custody, and safety claims deferred.
+
+
+## Milestone 4 completion evidence — 2026-07-19
+
+The bounded Discovery Beta deployment-hardening gate was implemented in `repos/nebulax-test/discovery-beta` without adding financial execution or token-economic surfaces.
+
+- Replaced the local JSON account boundary and in-memory production session map with `sql.js` SQLite storage using explicit deterministic schema migrations (`accounts`, `watchlist`, and hashed server-session records). The production default is `SqlitePreferenceStore`; `MemoryPreferenceStore` remains injectable only for focused tests. The choice avoids native build tooling, with the documented tradeoff that `DATA_DIR` must be durable and each SQLite file has one writer.
+- Auth now sets a server-managed opaque `nx_session` cookie with `HttpOnly`, `SameSite=Lax`, `Path=/`, explicit max-age, and `Secure` when `NODE_ENV=production`. Session tokens are absent from response JSON and browser storage; only hashes persist server-side. Expiry, logout revocation, and fresh-token rotation on every verified sign-in are enforced server-side.
+- Added 4 KiB body caps, JSON content-type enforcement, strict state-changing origin checks, cross-site fetch rejection, no permissive CORS path, direct-socket keyed rate limits (not forwarding headers), public 429 responses, structured redacted event logging with request correlation, and `GET /api/health/ready`.
+- Production startup fails if `ALLOWED_ORIGIN` is absent. README now specifies `npm ci`, environment requirements, startup migration/durable-volume behavior, deployment constraints, residual gates, and a bounded Milestone 5 operational-readiness recommendation.
+- Fresh verification passed: `npm test` (4 files, 13 tests) and `npm run build` (Vite production bundle). Tests cover cookie flags/non-exposure, hashed session storage, expiry/revocation, isolation, malformed payloads, origin rejection, rate-limit reset, readiness, and anonymous Discovery.
+
+Remaining gates: deployment/TLS/proxy and backup/recovery review; multi-replica rate-limit/store strategy; independent security review; and controlled physical-wallet manual compatibility verification. Milestone 5 remains an operational-readiness/deployment rehearsal only, with no swaps, quotes, transaction construction/broadcasting, Jupiter, NEBX, staking, launchpad, rewards, settlement, custody, token purchase flows, safety claims, or public-launch claim.
+
+
+
+## Milestone 5 controlled operational-readiness rehearsal — 2026-07-19
+
+**Implemented scope:** `repos/nebulax-test/discovery-beta/` received a bounded, single-instance production-like rehearsal only. It remains a read-only Discovery Beta; no swap/quote/transaction, Jupiter execution, NEBX, staking, launchpad, reward, custody, settlement, or safety/anti-rug surface was introduced.
+
+### Executable evidence
+
+- Added production start handling in `server/index.js`: loopback default binding, JSON structured startup/shutdown events, and SIGTERM/SIGINT drain behavior. Production still fails closed if `ALLOWED_ORIGIN` is absent; `/api/health/ready` validates the SQLite schema.
+- Added deterministic database inspection and `scripts/db-tool.js`. `npm run db:backup`, `db:verify`, and `db:restore` verify SQLite integrity and schema version; copy atomically with mode 0600; and refuse missing sources, equal paths, unsafe/incompatible artifacts, implicit overwrite, or restore without explicit `--force`. The recovery runbook requires stopping the sole writer, verifying the backup, restoring deliberately, restarting, checking readiness, and validating controlled account state. Backup/log tooling does not emit rows, tokens, signatures, or wallet material.
+- Added `scripts/deployment-rehearsal.js` and CI invocation. The local temp-data rehearsal verifies migration/readiness, anonymous discovery, JSON/content-type and foreign-origin rejection, production cookie flags and non-exposure, rate-limit/reset, logout revocation, restart persistence, log redaction, and clean shutdown without Phantom, remote source access, or production credentials.
+- Extended persistence tests for safe backup state/schema preservation and corrupt/incompatible artifact failure. The stored session boundary stays hashed/opaque; restore does not recover browser cookie material.
+- README now carries pinned `npm ci` / `npm test` / `npm run build` / `npm start` commands, durable `DATA_DIR` rules, backup/recovery/rollback instructions, a safe same-origin loopback proxy/TLS contract, and an explicit multi-replica decision record. The app does not trust `X-Forwarded-For`; direct-socket behavior is retained. SQLite has one writer and multi-replica support is explicitly deferred pending shared transactional storage, distributed limiting, session strategy, backup ownership, and coordinated migrations.
+
+### Focused security finding and residual gates
+
+The focused review confirmed bounded JSON-only stateful requests, exact-origin rejection, direct-peer limits, opaque HttpOnly/SameSite cookies (Secure in production), fixed discovery boundary, hashed session persistence, and redacted structured events. No new financial scope was warranted. Residual blockers: no independent security review, no configured CSP/production proxy package, no automatic expired-session cleanup, and no physical-wallet compatibility evidence. The manual Phantom/mobile matrix is documented but **not claimed passed**.
+
+### Verification and next gate
+
+Run from `repos/nebulax-test/discovery-beta`: `npm test`, `npm run build`, and `npm run rehearse`. Browser verification remains anonymous Discovery plus controlled wallet-missing behavior; temporary server/browser processes must be stopped after evidence capture. Recommended Milestone 6 is non-economic: only after independent security review, manual wallet evidence, and an approved operational owner, harden Discovery accessibility/observability/proxy-CSP operations. Do not add quotes, swaps, transactions, Jupiter execution, NEBX, staking, launchpad, rewards, custody, settlement, or public safety claims.
+
+
+---
+
+## Milestone 6 implementation evidence — 2026-07-19
+
+**Scope:** bounded pre-release hardening of `repos/nebulax-test/discovery-beta` only. This does not deploy NebulaX, approve public operation, verify a physical wallet, or add transactions, swaps, NEBX, staking, launchpad, rewards, settlement, or custody.
+
+### Evidence-backed security and operations status
+
+- `server/app.js`: API responses now have deterministic UUID request IDs, bounded structured logs (time/event/requestId/outcome/status), categorical bounded metrics, liveness (`/api/health/live`) and separate SQLite readiness (`/api/health/ready`), strict API CSP/clickjacking/nosniff/referrer/permissions/COOP/CORP headers, and no-store caching. There is no permissive CORS.
+- Exact-origin enforcement is required for all production state mutations; JSON-only mutations remain capped at 4 KiB; route and method matching are exact; errors are generic; session cookies remain HttpOnly/SameSite Lax/Secure in production; the API remains intended for loopback-only proxying.
+- `server/persistence.js` and `server/auth-service.js`: auth-triggered bounded cleanup removes expired/revoked sessions, while active sessions survive; SQLite persistence is still single-writer, atomic replacement, integrity/schema-validated for backup/restore, and never stores raw session tokens.
+- `src/main.js` and `src/styles.css`: Discovery shell now includes semantic page structure, skip link, keyboard-visible focus, labelled controls, live status/error messaging, motion reduction, and retained responsive breakpoints. Anonymous browsing and controlled missing-wallet failure remain available.
+- `server/security-observability.test.js`, persistence tests, and rehearsal cover header baseline, failure categories, request IDs, log redaction, metrics boundedness, lifecycle cleanup, restart persistence, and clean shutdown. CI already runs tests/build/rehearsal without production credentials or Phantom.
+
+### Header/proxy ownership and residual gates
+
+The Node API owns `/api/` security headers and no-store responses. The approved TLS proxy/static-host owner must own HTML/asset CSP and cache policy, TLS termination, request-size ceiling, and only enable HSTS once HTTPS guarantees are approved for the exact deployment. Keep the API same-origin/loopback; do not enable proxy-aware client identity without a reviewed allowlist.
+
+**Still unpassed / required before any release decision:** independent human/security review; approved production proxy/TLS and operational/backup owner; desktop/mobile browser smoke with console inspection; and physical Phantom extension/mobile HTTPS compatibility. The physical-wallet matrix remains manual and deliberately unpassed until real browser/hardware evidence is captured without exposing private keys, signatures, or cookies.
+
+**Rollback/recovery:** stop the API writer, run `db:verify` on an offline backup, restore only with explicit `--force`, restart, then verify `/api/health/ready` and controlled account state. Session cookies cannot be recovered because persistence contains hashes only.
+
+**Milestone 7 recommendation:** satisfy the independent review, proxy/operations, and manual browser/wallet gates; address only evidence-backed defects before considering any broader product scope.
+
+**Resume verification note — 2026-07-19:** After the external model-provider interruption, a fresh local production-like API smoke verified `/api/health/live` (200), strict headers/CSP/no-store plus UUID request ID, PATCH rejection (405), missing/foreign-origin mutation rejection (403), and bounded metrics. Fresh desktop browser smoke showed anonymous Discovery data, keyboard-visible semantic controls, responsive shell, and controlled wallet-optional state. A malformed upstream timestamp produced `NaNh old`; `src/normalizer.js` now validates parsed timestamps and renders it as an unavailable age, with a regression test. `npm test` (5 files/17 tests), `npm run build`, and `npm run rehearse` all passed after the fix. Temporary API/preview servers and the isolated browser tab were stopped. Mobile browser/hardware/Phantom HTTPS evidence remains manual and unpassed.

@@ -203,6 +203,7 @@ export interface GatewaySupervisorEvidence {
   timestamp: string;
   supervisorPid: number;
   childPid?: number;
+  childExit?: { code: number | null; signal: string | null };
   portOwnerPids: number[];
   probe: { healthy: boolean; durationMs: number; outcome: string; statusCode?: number };
   consecutiveFailures: number;
@@ -246,6 +247,7 @@ export function buildGatewaySupervisorEvidence(args: {
   now: number;
   supervisorPid: number;
   childPid?: number;
+  childExit?: { code: number | null; signal: string | null };
   portOwnerPids: number[];
   probe: { healthy: boolean; durationMs: number; outcome: string; statusCode?: number };
   consecutiveFailures: number;
@@ -257,6 +259,7 @@ export function buildGatewaySupervisorEvidence(args: {
     timestamp: new Date(args.now).toISOString(),
     supervisorPid: args.supervisorPid,
     childPid: args.childPid,
+    childExit: args.childExit,
     portOwnerPids: args.portOwnerPids.slice(0, 8),
     probe: {
       healthy: args.probe.healthy,

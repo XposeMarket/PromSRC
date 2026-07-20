@@ -1,0 +1,4 @@
+VitaLink Gate 2 passive Bluetooth probe R4
+stage=module_start-entered-before-bt-calls
+bluetooth_imports=ksceBtGetConfiguration,ksceBtGetLastError
+radio_mutation=none

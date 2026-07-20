@@ -6,6 +6,8 @@ import { pathToFileURL } from 'node:url';
 const root = path.resolve('.');
 const tools = await import(pathToFileURL(path.join(root, 'dist/gateway/tools/defs/agent-team-schedule.js')).href);
 const executor = await import(pathToFileURL(path.join(root, 'dist/gateway/agents-runtime/subagent-executor.js')).href);
+const subagentManager = await import(pathToFileURL(path.join(root, 'dist/gateway/agents-runtime/subagent-manager.js')).href);
+const taskRouter = await import(pathToFileURL(path.join(root, 'dist/gateway/tasks/task-router.js')).href);
 const taskRunner = await import(pathToFileURL(path.join(root, 'dist/gateway/tasks/task-runner.js')).href);
 const defs = tools.getAgentTeamScheduleTools();
 const def = (name) => defs.find((entry) => entry.function?.name === name)?.function;
@@ -17,9 +19,24 @@ assert.deepEqual(runOps.parameters.properties.detail.enum, ['compact', 'full']);
 const chat = def('chat_with_subagent');
 assert.ok(chat.parameters.properties.include_history);
 assert.ok(chat.parameters.properties.history_limit);
+const chatOps = def('agent_chat_ops');
+for (const action of ['chat', 'delegate', 'steer', 'send_mailbox']) {
+  assert.ok(chatOps.parameters.properties.action.enum.includes(action), `agent_chat_ops exposes unambiguous ${action} action`);
+}
+assert.ok(chatOps.parameters.properties.assignment);
+assert.ok(chatOps.parameters.properties.task_id);
+const delegate = def('message_subagent');
+assert.ok(delegate.parameters.properties.assignment);
+assert.match(delegate.description, /already creates and starts the task/i);
 const taskControl = def('task_control');
 assert.ok(taskControl.parameters.properties.include_scheduled);
 const agentOps = def('agent_ops');
+assert.ok(agentOps.parameters.properties.patch.properties.reasoning_effort);
+assert.ok(agentOps.parameters.properties.reasoning_effort);
+const agentUpdate = def('agent_update');
+assert.ok(agentUpdate.parameters.properties.name);
+assert.ok(agentUpdate.parameters.properties.reasoning_effort);
+assert.match(agentUpdate.description, /independent/i);
 assert.ok(agentOps.parameters.properties.patch.properties.description);
 assert.ok(agentOps.parameters.properties.patch.properties.max_steps);
 const teamOps = def('team_ops_wrapper');
@@ -41,6 +58,38 @@ assert.match(invalid.result, /INVALID_CREATE_SCHEMA/);
 assert.match(invalid.result, /generated_subagent_id/);
 assert.match(invalid.result, /constraints must be an array/);
 
+assert.deepEqual(
+  subagentManager.validateDirectSubagentAssignment('Fix the plane controls and verify the Vita build.'),
+  { ok: true },
+);
+const nestedDelegation = subagentManager.validateDirectSubagentAssignment(
+  'Create and execute a BRAND-NEW independent task/run now.\n\nFix the plane controls.',
+);
+assert.equal(nestedDelegation.ok, false);
+assert.equal(nestedDelegation.code, 'INVALID_DELEGATION_ASSIGNMENT');
+const rejectedBeforeLookup = await executor.executeTool('message_subagent', {
+  agent_id: 'does_not_need_to_exist_for_validation',
+  assignment: 'Start a new background task to fix the plane controls.',
+}, root, {}, 'agent_contract_test');
+assert.equal(rejectedBeforeLookup.error, true);
+assert.match(rejectedBeforeLookup.result, /INVALID_DELEGATION_ASSIGNMENT/);
+const rejectedThroughWrapper = await executor.executeTool('agent_chat_ops', {
+  action: 'delegate',
+  agent_id: 'does_not_need_to_exist_for_validation',
+  assignment: 'Launch a separate background run now to fix the plane controls.',
+}, root, {}, 'agent_contract_test');
+assert.equal(rejectedThroughWrapper.error, true);
+assert.match(rejectedThroughWrapper.result, /INVALID_DELEGATION_ASSIGNMENT/);
+
+const completedStandaloneAgentTask = { id: 'task_milestone_1', title: 'Milestone 1', status: 'complete', subagentProfile: 'builder' };
+assert.equal(taskRouter.isImmutableCompletedAgentTask(completedStandaloneAgentTask), true);
+assert.equal(taskRouter.isImmutableCompletedAgentTask({ ...completedStandaloneAgentTask, status: 'running' }), false);
+assert.equal(taskRouter.isImmutableCompletedAgentTask({ id: 'ordinary', title: 'Ordinary', status: 'complete' }), false);
+assert.throws(
+  () => taskRouter.appendScopedTaskContinuation(completedStandaloneAgentTask, 'Complete milestone 2'),
+  /immutable.*new task/i,
+);
+
 const taskRunnerSource = fs.readFileSync(path.join(root, 'src/gateway/tasks/task-runner.ts'), 'utf8');
 assert.match(taskRunnerSource, /defaults\.background_task \? 'background_task' : 'background_spawn'/);
 assert.match(taskRunnerSource, /agent_model_default_reasoning/);
@@ -59,6 +108,22 @@ assert.match(executorSource, /reasoning_effort/);
 assert.match(executorSource, /Object\.assign\(args, nestedPatch\)/);
 assert.match(executorSource, /resolved_target_type: 'standalone_subagent'/);
 assert.match(executorSource, /success: completed/);
+assert.match(executorSource, /chat: 'chat_with_subagent'/);
+assert.match(executorSource, /delegate: 'message_subagent'/);
+assert.match(executorSource, /steer: 'agent_run_ops'/);
+assert.doesNotMatch(executorSource, /Direct background message from main chat to standalone subagent/);
+
+const subagentManagerSource = fs.readFileSync(path.join(root, 'src/gateway/agents-runtime/subagent-manager.ts'), 'utf8');
+assert.match(subagentManagerSource, /TASK STATUS: This task\/run already exists/);
+assert.match(subagentManagerSource, /ASSIGNMENT: \$\{taskPrompt\}/);
+assert.match(subagentManagerSource, /patch\.reasoning_effort/);
+
+const taskRouterSource = fs.readFileSync(path.join(root, 'src/gateway/tasks/task-router.ts'), 'utf8');
+assert.match(taskRouterSource, /completed_agent_task_immutable/);
+assert.match(taskRouterSource, /Delegate the next milestone or follow-up as a new task/);
+const tasksRouteSource = fs.readFileSync(path.join(root, 'src/gateway/routes/tasks.router.ts'), 'utf8');
+assert.match(tasksRouteSource, /router\.post\('\/api\/bg-tasks\/:id\/restart'/);
+assert.match(tasksRouteSource, /isImmutableCompletedAgentTask\(task\)/);
 
 const chatRouterSource = fs.readFileSync(path.join(root, 'src/gateway/routes/chat.router.ts'), 'utf8');
 assert.match(chatRouterSource, /const durableTaskId =/);

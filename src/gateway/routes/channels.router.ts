@@ -39,6 +39,20 @@ let _skillsManager: InstanceType<typeof SkillsManager> | undefined;
 
 
 let _dispatchToAgent: (agentId: string, message: string, context: string | undefined, source: string) => Promise<any>;
+type InteractiveTurnResult = {
+  type: string;
+  text: string;
+  thinking?: string;
+  artifacts?: any[];
+  generatedImages?: any[];
+  generatedVideos?: any[];
+  canvasFiles?: any[];
+  fileChanges?: any;
+  productCarousel?: any;
+  richArtifacts?: any[];
+  goalCompletionReport?: any;
+};
+
 let _runInteractiveTurn: (
   message: string,
   sessionId: string,
@@ -48,10 +62,11 @@ let _runInteractiveTurn: (
   callerContext?: string,
   reasoningOptions?: any,
   attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+  attachmentPreviews?: any[],
   modelOverride?: string,
   flags?: any,
   turnOrigin?: any,
-) => Promise<{ type: string; text: string; thinking?: string }>;
+) => Promise<InteractiveTurnResult>;
 
 export function initChannelsRouter(deps: {
   cronScheduler: any;
@@ -69,10 +84,11 @@ export function initChannelsRouter(deps: {
     callerContext?: string,
     reasoningOptions?: any,
     attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+    attachmentPreviews?: any[],
     modelOverride?: string,
     flags?: any,
     turnOrigin?: any,
-  ) => Promise<{ type: string; text: string; thinking?: string }>;
+  ) => Promise<InteractiveTurnResult>;
 }): void {
   _cronScheduler = deps.cronScheduler;
   _telegramChannel = deps.telegramChannel;
@@ -760,12 +776,7 @@ function getChannelSubagentChatSessionId(channel: string, accountId: string, age
   return bits.join('_');
 }
 
-function loadAgentIdentityPrompt(agentWorkspace: string): string {
-  return String(readAgentPromptFile(agentWorkspace, { migrateLegacy: true })?.content || '').trim();
-}
-
 function buildSubagentCallerContext(agentId: string, agent: any, mainWorkspace: string, artifactWorkspace: string): string {
-  const identityPrompt = loadAgentIdentityPrompt(artifactWorkspace);
   const intro = [
     '[SUBAGENT CHAT CONTEXT]',
     `You are chatting directly with the user as the configured agent "${agent?.name || agentId}" (id: ${agentId}).`,
@@ -776,19 +787,9 @@ function buildSubagentCallerContext(agentId: string, agent: any, mainWorkspace: 
     `Subagent artifact workspace: ${artifactWorkspace}`,
     'Keep your own notes, scratch files, and subagent-specific artifacts in the artifact workspace when practical.',
   ];
-  if (!identityPrompt) {
-    intro.push('No subagent identity file was found. Use the configured agent name, description, and current user request as your guide.');
-    intro.push('[/SUBAGENT CHAT CONTEXT]');
-    return intro.join('\n');
-  }
-  return [
-    ...intro,
-    '',
-    'Your configured identity prompt follows. Keep this role and scope, but stay conversational unless the user is asking you to execute.',
-    '',
-    identityPrompt,
-    '[/SUBAGENT CHAT CONTEXT]',
-  ].join('\n');
+  // AGENT.md + private MEMORY.md are injected exactly once by the shared
+  // prompt-context helper after runtime actor roots have been resolved.
+  return [...intro, '[/SUBAGENT CHAT CONTEXT]'].join('\n');
 }
 
 function seedSubagentSessionFromChatStore(agentId: string, sessionId: string, workspacePath: string): void {
@@ -926,7 +927,7 @@ async function runSubagentChatTurn(
     callerContextExtra?: string;
     clientMessageId?: string;
   },
-): Promise<{ result: { type: string; text: string; thinking?: string }; historyEntry: any; messages: any[] }> {
+): Promise<{ result: InteractiveTurnResult; historyEntry: any; messages: any[] }> {
   const startedAt = Date.now();
   const cfg = getConfig().getConfig() as any;
   const teamMemberIds = getTeamMemberAgentIds();
@@ -1005,6 +1006,7 @@ async function runSubagentChatTurn(
         callerContext,
         undefined,
         Array.isArray(visionAttachments) && visionAttachments.length > 0 ? visionAttachments : undefined,
+        undefined,
         effectiveModel.model || undefined,
         { directSubagentChat: true },
       ),
@@ -1032,6 +1034,17 @@ async function runSubagentChatTurn(
         durationMs: finishedAt - startedAt,
         model: effectiveModel.model,
         modelSource: effectiveModel.source,
+        // Keep the same completed-turn presentation data as main chat. This
+        // remains outside the prompt transcript, but survives a reload so the
+        // mobile subagent view can show touched files and delivered artifacts.
+        artifacts: Array.isArray(result?.artifacts) && result.artifacts.length ? result.artifacts : undefined,
+        generatedImages: Array.isArray(result?.generatedImages) && result.generatedImages.length ? result.generatedImages : undefined,
+        generatedVideos: Array.isArray(result?.generatedVideos) && result.generatedVideos.length ? result.generatedVideos : undefined,
+        canvasFiles: Array.isArray(result?.canvasFiles) && result.canvasFiles.length ? result.canvasFiles : undefined,
+        fileChanges: result?.fileChanges || undefined,
+        productCarousel: result?.productCarousel || undefined,
+        richArtifacts: Array.isArray(result?.richArtifacts) && result.richArtifacts.length ? result.richArtifacts : undefined,
+        goalCompletionReport: result?.goalCompletionReport || undefined,
       },
     });
     broadcastWS({ type: 'subagent_chat_message', agentId, message: agentMessage });
@@ -1593,6 +1606,14 @@ router.post('/api/agents/:id/chat/stream', async (req, res) => {
         reply: payload.result?.text || '',
         thinking: payload.result?.thinking || '',
         historyEntry: payload.historyEntry,
+        artifacts: payload.result?.artifacts,
+        generatedImages: payload.result?.generatedImages,
+        generatedVideos: payload.result?.generatedVideos,
+        canvasFiles: payload.result?.canvasFiles,
+        fileChanges: payload.result?.fileChanges,
+        productCarousel: payload.result?.productCarousel,
+        richArtifacts: payload.result?.richArtifacts,
+        goalCompletionReport: payload.result?.goalCompletionReport,
       });
     }
   } catch (err: any) {
@@ -1874,9 +1895,23 @@ const putAgentMd = (req: any, res: any) => {
   res.json({ success: true, path: filePath });
 };
 
+const getAgentMemoryMd = (req: any, res: any) => {
+  const agentId = _sanitizeAgentId(req.params.id);
+  const agent = getAgentById(agentId);
+  if (!agent) return res.status(404).json({ success: false, error: `Agent "${agentId}" not found` });
+  // Always resolve from this agent's isolated workspace; never from the root
+  // Prometheus workspace even when a request arrives through the mobile UI.
+  const workspace = resolveAgentWorkspaceSafe(agent);
+  const filePath = path.join(workspace, 'MEMORY.md');
+  const exists = fs.existsSync(filePath);
+  const content = exists ? fs.readFileSync(filePath, 'utf-8') : '';
+  res.json({ success: true, agentId, path: filePath, exists, content });
+};
+
 // Canonical per-agent identity prompt API.
 router.get('/api/agents/:id/agent-md', getAgentMd);
 router.put('/api/agents/:id/agent-md', putAgentMd);
+router.get('/api/agents/:id/memory-md', getAgentMemoryMd);
 // Backward-compatible aliases for older desktop/mobile clients.
 router.get('/api/agents/:id/system-prompt-md', getAgentMd);
 router.put('/api/agents/:id/system-prompt-md', putAgentMd);

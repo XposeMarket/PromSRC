@@ -20,7 +20,7 @@ import { OllamaClient } from './ollama-client.js';
 import { getToolRegistry, ToolProfile } from '../tools/registry.js';
 import { executeSkillTool } from '../tools/skills.js';
 import { buildSystemPrompt, loadPrometheusRuntimeContract, selectSkillSlugsForMessage } from '../config/soul-loader.js';
-import { readAgentPromptFile } from './agent-prompt-file.js';
+import { buildSubagentIdentityMemoryContext } from './subagent-prompt-context.js';
 import { AgentRole } from '../types.js';
 import { runWithWorkspace, getActiveWorkspace } from '../tools/workspace-context.js';
 
@@ -418,11 +418,10 @@ function buildNodeCallSystemPrompt(
   const today = new Date().toISOString().slice(0, 10);
   const subagentSystemPromptOnly = options.subagentSystemPromptOnly === true;
   const includeAgentSystemPrompt = subagentSystemPromptOnly || options.includeAgentSystemPrompt === true;
-  const agentSystemPrompt = includeAgentSystemPrompt ? loadAgentSystemPrompt(options) : '';
-  const agentMemoryPrompt = subagentSystemPromptOnly ? loadAgentMemoryPrompt(options) : '';
+  const agentIdentityMemory = includeAgentSystemPrompt ? loadAgentIdentityMemoryPrompt(options) : '';
   const mergedExtraInstructions = subagentSystemPromptOnly
-    ? [agentSystemPrompt, agentMemoryPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim()
-    : [agentSystemPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim();
+    ? [agentIdentityMemory, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim()
+    : [agentIdentityMemory, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim();
   // Subagents now support skills — use explicitly passed skillSlugs (set by spawner
   // from agent.skills config or relevance-based fallback). Only fall back to [] if
   // no slugs at all, so we don't inflate context on agents with no relevant skills.
@@ -535,11 +534,10 @@ function buildNativeToolSystemPrompt(
   const today = new Date().toISOString().slice(0, 10);
   const subagentSystemPromptOnly = options.subagentSystemPromptOnly === true;
   const includeAgentSystemPrompt = subagentSystemPromptOnly || options.includeAgentSystemPrompt === true;
-  const agentSystemPrompt = includeAgentSystemPrompt ? loadAgentSystemPrompt(options) : '';
-  const agentMemoryPrompt = subagentSystemPromptOnly ? loadAgentMemoryPrompt(options) : '';
+  const agentIdentityMemory = includeAgentSystemPrompt ? loadAgentIdentityMemoryPrompt(options) : '';
   const mergedExtraInstructions = subagentSystemPromptOnly
-    ? [agentSystemPrompt, agentMemoryPrompt, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim()
-    : (agentSystemPrompt || String(options.extraInstructions || '').trim());
+    ? [agentIdentityMemory, String(options.extraInstructions || '').trim()].filter(Boolean).join('\n\n').trim()
+    : (agentIdentityMemory || String(options.extraInstructions || '').trim());
   const selectedSkillSlugs = Array.isArray(options.skillSlugs) && options.skillSlugs.length
     ? options.skillSlugs
     : [];
@@ -579,32 +577,12 @@ RULES:
  * This function is intentionally generic — it does not reference any specific team,
  * pipeline, or domain. Identity comes entirely from what is written in the workspace files.
  */
-function loadAgentSystemPrompt(options: ReactOptions): string {
+function loadAgentIdentityMemoryPrompt(options: ReactOptions): string {
   const spLookupPath = options.systemPromptWorkspacePath || options.workspacePath;
-  if (!spLookupPath) return SUBAGENT_IDENTITY_STUB;
-
-  const resolved = readAgentPromptFile(spLookupPath, { migrateLegacy: true });
-  const content = String(resolved?.content || '').trim();
-  if (content) return content;
-
-  // No identity file found — inject stub so agent behaves correctly
-  console.warn(`[reactor] loadAgentSystemPrompt: no identity file found in ${spLookupPath} — using stub`);
-  return SUBAGENT_IDENTITY_STUB;
-}
-
-function loadAgentMemoryPrompt(options: ReactOptions): string {
-  const root = options.systemPromptWorkspacePath || options.workspacePath;
-  if (!root) return '';
-  const memoryPath = path.join(root, 'MEMORY.md');
-  try {
-    if (!fs.existsSync(memoryPath)) return '';
-    const content = fs.readFileSync(memoryPath, 'utf-8').trim();
-    if (!content) return '';
-    const capped = content.length <= 6000 ? content : `${content.slice(0, 5960).trimEnd()}\n...[personal memory truncated]`;
-    return `[AGENT_MEMORY]\n${capped}`;
-  } catch {
-    return '';
-  }
+  return buildSubagentIdentityMemoryContext({
+    identityRoot: spLookupPath,
+    memoryRoot: spLookupPath,
+  });
 }
 
 /**
@@ -613,12 +591,6 @@ function loadAgentMemoryPrompt(options: ReactOptions): string {
  * chat assistant. Prevents "I have no tools / I cannot access files" responses.
  * Generic — applies to any subagent in any team or pipeline.
  */
-const SUBAGENT_IDENTITY_STUB = `You are a distinct autonomous agent operating inside Prometheus, not Prom or the main chat.
-You operate in EXECUTE mode: use the tools actually exposed in this runtime to read/write files, run code, and call APIs.
-Inspect the available tools before claiming a capability is unavailable.
-Always verify your work with a tool call before reporting completion.
-If you are unsure what to do, list the workspace directory first, then act.`.trim();
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function extractThinking(raw: string): [string, string] {

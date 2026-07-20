@@ -19,7 +19,7 @@ import { getWorkspace } from '../session';
 import { hookBus } from '../hooks';
 import { updateResumeContext, type TaskStatus } from '../tasks/task-store';
 import { getErrorAudit } from '../../security/error-audit';
-import { handleTaskRecoveryMessage, steerTask } from '../tasks/task-router';
+import { handleTaskRecoveryMessage, isImmutableCompletedAgentTask, steerTask } from '../tasks/task-router';
 import { buildTaskPauseSnapshot, formatTaskPauseSnapshot } from '../tasks/task-recovery';
 import { isStorageBoundaryError } from '../storage/storage-paths';
 
@@ -643,6 +643,12 @@ function launchTaskRunner(taskId: string): void {
 }
 
 router.post('/api/bg-tasks/:id/pause', (req, res) => {
+  const existingTask = loadTask(req.params.id);
+  if (!existingTask) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
+  if (isImmutableCompletedAgentTask(existingTask)) {
+    res.status(409).json({ success: false, code: 'completed_agent_task_immutable', error: `Completed subagent task "${existingTask.title}" is immutable.` });
+    return;
+  }
   const task = updateTaskStatus(req.params.id, 'paused', { pauseReason: 'user_pause' });
   if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
   persistTaskPauseSnapshot(req.params.id, 'user_pause');
@@ -704,6 +710,14 @@ router.post('/api/bg-tasks/:id/resume', (req, res) => {
 router.post('/api/bg-tasks/:id/restart', (req, res) => {
   const task = loadTask(req.params.id);
   if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
+  if (isImmutableCompletedAgentTask(task)) {
+    res.status(409).json({
+      success: false,
+      code: 'completed_agent_task_immutable',
+      error: `Completed subagent task "${task.title}" cannot be restarted. Delegate the next milestone or follow-up as a new task.`,
+    });
+    return;
+  }
   if (task.status === 'running' && BackgroundTaskRunner.isRunning(task.id)) {
     res.json({ success: false, error: 'Task is already actively running.' });
     return;
@@ -755,6 +769,10 @@ router.post('/api/bg-tasks/:id/restart', (req, res) => {
 router.post('/api/bg-tasks/:id/error-response', async (req: any, res: any) => {
   const task = loadTask(req.params.id);
   if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
+  if (isImmutableCompletedAgentTask(task)) {
+    res.status(409).json({ success: false, code: 'completed_agent_task_immutable', error: `Completed subagent task "${task.title}" cannot accept recovery actions. Delegate a new follow-up task.` });
+    return;
+  }
 
   const { action, category, inputs } = req.body || {};
   if (!action) { res.status(400).json({ success: false, error: 'action is required' }); return; }
@@ -878,6 +896,10 @@ router.post('/api/bg-tasks/:id/error-response', async (req: any, res: any) => {
 router.post('/api/bg-tasks/:id/message', async (req: any, res: any) => {
   const task = loadTask(req.params.id);
   if (!task) { res.status(404).json({ success: false, error: 'Task not found' }); return; }
+  if (isImmutableCompletedAgentTask(task)) {
+    res.status(409).json({ success: false, code: 'completed_agent_task_immutable', error: `Completed subagent task "${task.title}" cannot accept more work. Delegate the next milestone or follow-up as a new task.` });
+    return;
+  }
   const userMessage = String(req.body?.message || '').trim();
   if (!userMessage) { res.status(400).json({ success: false, error: 'message is required' }); return; }
 

@@ -8,6 +8,7 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const api = read('web-ui/src/mobile/mobile-api.js');
 const pages = read('web-ui/src/mobile/mobile-pages.js');
+const shell = read('web-ui/src/mobile/mobile-shell.js');
 const ws = read('web-ui/src/ws.js');
 const index = read('web-ui/index.html');
 const router = read('src/gateway/routes/chat.router.ts');
@@ -15,6 +16,7 @@ const settingsRouter = read('src/gateway/routes/settings.router.ts');
 const gatewayServer = read('src/gateway/core/server.ts');
 const broadcaster = read('src/gateway/comms/broadcaster.ts');
 const auditMaterializer = read('src/gateway/audit/materializer.ts');
+const sessionStore = read('src/gateway/session.ts');
 
 const composerRafDeclaration = pages.indexOf('let chatComposerSpaceRaf = 0;');
 const composerShiftDeclaration = pages.indexOf('let chatComposerShiftAnimation = null;');
@@ -28,7 +30,11 @@ assert.ok(
 );
 
 assert.match(api, /const _sessionRequests = new Map\(\)/, 'session hydration requests must be coalesced');
-assert.match(api, /fullProcess=1&_fresh=1/, 'forced recovery hydration must request complete process entries');
+assert.match(api, /const fullProcess = options\.fullProcess === undefined \? force : options\.fullProcess === true/, 'forced recovery hydration must request complete process entries by default');
+assert.match(api, /\$\{fullProcess \? '&fullProcess=1' : ''\}\$\{force \? '&_fresh=1' : ''\}/, 'session hydration must independently encode fresh and full-process modes');
+assert.match(pages, /const PM_MOBILE_CHAT_MESSAGE_PAGE_SIZE = 20/, 'mobile chat history must use bounded 20-message pages');
+assert.match(pages, /\.slice\(firstRenderedIndex\)/, 'mobile chat must only render the active message window');
+assert.match(pages, /if \(isUpwardScroll && scrollTop <= 80\) loadOlderMobileMessages\(\)/, 'scrolling to the top must load the next history page');
 assert.match(router, /const fullProcess = full \|\| req\.query\.fullProcess/, 'session API must support full process recovery');
 assert.match(router, /processEntries: checkpointProcessEntries/, 'active runtime status must expose its durable tool checkpoint');
 assert.match(router, /clientRequestId: runtime\?\.clientRequestId/, 'active runtime status must expose stable turn identity across reconnects');
@@ -37,6 +43,26 @@ assert.match(router, /MAIN_CHAT_ORPHAN_GRACE_MS/, 'ownerless stream/lease state 
 assert.match(router, /mainChatTurnCoordinator\.discard\(sid\)/, 'reconciliation must discard both a stale lease and queued stale work');
 
 assert.match(pages, /let mobileRecoveryInFlight = null/, 'mobile recovery must be single-flight');
+assert.match(
+  pages,
+  /wsEventBus\?\.on\?\.\('internal_watch_sse', onInternalWatchSse\)/,
+  'mobile chat must consume the dedicated internal-watch stream immediately',
+);
+assert.match(
+  pages,
+  /data: \{ \.\.\.msg, type: event, event \}/,
+  'internal-watch envelopes must enter the ordinary mobile tool-stream reducer',
+);
+assert.match(
+  router,
+  /watchRuntime = reconciledTurn\.runtime\?\.source === 'internal_watch'/,
+  'a message racing a server-started watch review must be admitted as a steer',
+);
+assert.match(
+  router,
+  /workflowLabel: 'Message during internal watch review'/,
+  'watch-race steers must be persisted as visible durable user messages',
+);
 assert.match(pages, /reconcileMobileChatTurn\(busySessionId\)/, 'composer gating must consult authoritative server state before queueing behind local cache');
 assert.match(api, /recoveryRetried = true/, 'a stale active-turn response may be recovered at most once');
 assert.match(api, /reconcileMobileChatTurn\(sessionId\)/, 'stream transport must reconcile a stale 409 before retrying the idempotent request');
@@ -109,6 +135,38 @@ assert.match(
 );
 assert.match(pages, /addEventListener\('pageshow', runRecoveryOnReturn\)/, 'bfcache/app resume must trigger recovery');
 assert.match(pages, /_saveMobileThreadCache\(requestedSession, _activeMobileThread\(\)\)/, 'recovered live trace must survive a hard reload');
+assert.match(
+  pages,
+  /_clientRequestId: String\(m\?\._clientRequestId \|\| m\?\.clientRequestId \|\| ''\)\.trim\(\) \|\| undefined/,
+  'server history hydration must preserve the request identity of steer continuations',
+);
+assert.match(
+  pages,
+  /function _findMobileRecoverableAssistantTurn[\s\S]{0,700}messageKind \|\| ''\)\.trim\(\) === 'steer_continuation'/,
+  'recovery must resolve the durable post-steer assistant before creating another bubble',
+);
+assert.match(
+  pages,
+  /messageKind: 'steer_continuation'[\s\S]{0,360}_clientRequestId: latestAi\._clientRequestId/,
+  'a steer must create a durable request-owned continuation turn',
+);
+const sameTurnStart = pages.indexOf('function _mobileMessagesRepresentSameTurn');
+const workflowIdentityCheck = pages.indexOf('const aWorkflowPart = String(a.workflowPart', sameTurnStart);
+const requestIdentityCheck = pages.indexOf('if (aRequest || bRequest)', sameTurnStart);
+assert.ok(
+  sameTurnStart >= 0 && workflowIdentityCheck > sameTurnStart && requestIdentityCheck > workflowIdentityCheck,
+  'workflow segment identity must be checked before a shared runtime request ID',
+);
+assert.match(
+  pages,
+  /String\(msg\._clientRequestId \|\| ''\)\.trim\(\) === candidateRequestId\s*&& _mobileMessagesRepresentSameTurn\(msg, candidate\)/,
+  'a completed pre-steer assistant must not evict a pending continuation with the same request ID',
+);
+assert.match(
+  pages,
+  /_clearRecoveredMobileChatError\(aiTurn\);\s*aiTurn\.streaming = true/,
+  'live frames must clear the connection placeholder and revive the existing continuation in place',
+);
 assert.match(pages, /\.filter\(_isMobileMessageCacheable\)/, 'in-progress trace messages must be cacheable');
 assert.doesNotMatch(
   pages,
@@ -150,11 +208,26 @@ assert.match(
   /stable\.isConnected === false\) node\.replaceWith\(stable\)/,
   'stable image nodes must be restored synchronously after a streaming repaint',
 );
+const fullThreadRenderStart = pages.indexOf('function _renderThread');
+const fullThreadImageCapture = pages.indexOf("threadEl.querySelectorAll('img[src]')", fullThreadRenderStart);
+const fullThreadHtmlReplace = pages.indexOf('threadEl.innerHTML = ', fullThreadImageCapture);
+const fullThreadImageRestore = pages.indexOf('node.replaceWith(stable)', fullThreadHtmlReplace);
+assert.ok(
+  fullThreadRenderStart >= 0
+    && fullThreadImageCapture > fullThreadRenderStart
+    && fullThreadHtmlReplace > fullThreadImageCapture
+    && fullThreadImageRestore > fullThreadHtmlReplace,
+  'full thread renders must retain decoded images from completed turns',
+);
 assert.match(
   pages,
   /if \(restartSessionId === MOBILE_CHAT_SESSION_ID\) \{[\s\S]{0,320}_ensureDurableMobileVoiceSession/,
   'mobile slash restart must promote the draft to a durable session first',
 );
+assert.match(api, /pinnedAt: Number\(s\?\.pinnedAt \|\| 0\) \|\| null/, 'mobile session summaries must retain the durable pinnedAt field');
+assert.match(shell, /_migrateLegacyPinnedSessionsToServer[\s\S]{0,900}body: JSON\.stringify\(\{ pinned: true \}\)/, 'legacy local mobile pins must migrate to durable session pins');
+assert.match(shell, /async function _togglePin[\s\S]{0,900}method: 'PATCH'[\s\S]{0,180}pinned: nextPinned/, 'mobile pin toggles must persist through the session PATCH endpoint');
+assert.match(sessionStore, /if \(!!aPinned !== !!bPinned\) return bPinned \? 1 : -1/, 'durable pinned sessions must sort ahead of ordinary session pagination');
 assert.match(
   settingsRouter,
   /if \(previousSessionId === 'mobile_default'\) \{[\s\S]{0,360}touchSession\(previousSessionId, \{ channel: 'mobile'/,

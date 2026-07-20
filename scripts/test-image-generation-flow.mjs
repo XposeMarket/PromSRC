@@ -122,6 +122,10 @@ assert.match(desktop, /generated-image-preview\\\?cache=/, 'desktop UI must rend
 assert.match(desktop, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'desktop UI must replace partial generated-image previews by stable identity');
 assert.match(mobile, /generated-image-preview\\\?cache=/, 'mobile UI must render cache-backed generated-image previews');
 assert.match(mobile, /previewId[\s\S]*generationId[\s\S]*splice\(priorIndex, 1\)/, 'mobile UI must replace partial generated-image previews by stable identity');
+assert.match(mobile, /hasInlineGeneratedImage[\s\S]{0,260}return \[\]/, 'mobile must not promote background image previews into a duplicate final gallery');
+assert.match(mobile, /sourceValue === 'generated_image'\) message\._pmBackgroundImageGeneration = true/, 'generated-image vision events must mark background working assets as inline-only');
+assert.match(mobile, /case 'tool_call':[\s\S]{0,900}renderStreamingThreadNow\(\)/, 'mobile tool calls must patch the streaming turn without rebuilding every image node');
+assert.match(mobile, /case 'tool_result':[\s\S]{0,1100}renderStreamingThreadNow\(\)/, 'mobile tool results must patch the streaming turn without rebuilding every image node');
 assert.match(skill, /presentation_mode="foreground"[\s\S]*presentation_mode="background"/, 'imagegen skill must teach foreground/background routing');
 assert.match(skill, /PNG alpha `mask`/, 'imagegen skill must document selection mask editing');
 

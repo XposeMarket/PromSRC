@@ -1,0 +1,15 @@
+path=reports/r12-firmware-retrieval/vs0__app__NPXS10026__eboot.bin
+size=517373
+sha256=f4e1b7eecdae0289365c9415967f8dea076e463f38cf781d987ab2cf2439b951
+header_hex=53434500030000004005010000060000001000000000000018930f0000000000
+elf_magic_offset=160
+sce_magic_offset=-1
+term=SceBt offsets=[]
+term=Bluetooth offsets=[]
+term=ksceBt offsets=[]
+term=SceSettings offsets=[]
+term=Settings offsets=[]
+term=NPXS10026 offsets=[]
+term=HID offsets=[]
+term=L2CAP offsets=[]
+term=Pair offsets=[]

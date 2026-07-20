@@ -1,0 +1,74 @@
+{
+  "host": "10.0.0.231",
+  "port": 1337,
+  "listings": {
+    "/": [
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 os0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 pd0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 sa0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 tm0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 ud0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 uma0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ur0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ux0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vd0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vs0:"
+    ],
+    "vs0:/app/NPXS10015": [
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 os0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 pd0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 sa0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 tm0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 ud0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 uma0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ur0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ux0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vd0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vs0:"
+    ],
+    "vs0:/app/NPXS10015/sce_module": [
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 os0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 pd0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 sa0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 tm0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 ud0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 uma0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ur0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ux0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vd0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vs0:"
+    ],
+    "vs0:/app/NPXS10026/sce_module": [
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 os0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 pd0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 sa0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 tm0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 ud0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 uma0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ur0:",
+      "drwxr-xr-x 1 vita vita 32768 Jan 1  2000 ux0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vd0:",
+      "drwxr-xr-x 1 vita vita 16384 Jan 1  2000 vs0:"
+    ]
+  },
+  "retrieved": [
+    {
+      "remote": "vs0:/app/NPXS10026/eboot.bin",
+      "local": "reports\\r12-firmware-retrieval\\vs0__app__NPXS10026__eboot.bin",
+      "size": 517373,
+      "sha256": "f4e1b7eecdae0289365c9415967f8dea076e463f38cf781d987ab2cf2439b951"
+    }
+  ],
+  "errors": [
+    "LIST_ERROR vs0:: error_perm: 550 Invalid directory.",
+    "LIST_ERROR vs0:/sys: error_perm: 550 Invalid directory.",
+    "LIST_ERROR vs0:/sys/external: error_perm: 550 Invalid directory.",
+    "LIST_ERROR vs0:/app: error_perm: 550 Invalid directory.",
+    "LIST_ERROR vs0:/app/NPXS10026: error_perm: 550 Invalid directory.",
+    "RETR_ERROR vs0:/sys/external/libSceBt.suprx: error_perm: 550 File not found.",
+    "RETR_ERROR vs0:/sys/external/libSceBtAvrcp.suprx: error_perm: 550 File not found.",
+    "RETR_ERROR vs0:/sys/external/libSceBtHid.suprx: error_perm: 550 File not found.",
+    "RETR_ERROR vs0:/app/NPXS10015/eboot.bin: error_perm: 550 File not found.",
+    "RETR_ERROR vs0:/app/NPXS10015/sce_module/libSceBt.suprx: error_perm: 550 File not found."
+  ]
+}

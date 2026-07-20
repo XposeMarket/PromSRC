@@ -1,0 +1,22 @@
+VitaLink Gate 1 Bluetooth capability report
+Status: software-only diagnostic; no Bluetooth role was activated.
+Renderer: vita2d
+Renderer init: 0x00000001
+Default PGF font: 0x00000000
+
+Bluetooth user module/library: NOT LINKED / NO PUBLIC IMPORT
+  No public VitaSDK Bluetooth module import is linked by this app.
+Classic HID peripheral role: UNSUPPORTED (HONEST)
+  No public VitaSDK API for Classic HID device/peripheral mode.
+Discoverability / inquiry scan: UNSUPPORTED (HONEST)
+  No documented public adapter exposes discoverability controls.
+Connectable / page scan: UNSUPPORTED (HONEST)
+  No documented public adapter exposes page-scan controls.
+Local Bluetooth identity: UNSUPPORTED (HONEST)
+  No documented public API returns the local Bluetooth address/name.
+Local Class of Device: UNSUPPORTED (HONEST)
+  No documented public API gets or sets Bluetooth Class of Device.
+Local SDP service registration: UNSUPPORTED (HONEST)
+  No public VitaSDK SDP server registration API is available.
+Classic L2CAP server socket: UNSUPPORTED (HONEST)
+  VitaSDK SceNet is IP networking; no public Bluetooth L2CAP listener API.

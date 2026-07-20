@@ -1,0 +1,5 @@
+VitaLink Gate 2 passive Bluetooth probe R3
+result=passive-call-returned
+ksceBtGetConfiguration=0x00000000
+Safety=no inquiry, pairing, connection, scan, SDP, L2CAP, or radio changes
+mkdir=returned-error-but-log-path-opened

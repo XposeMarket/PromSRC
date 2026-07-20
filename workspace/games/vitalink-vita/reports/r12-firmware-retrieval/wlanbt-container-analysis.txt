@@ -1,0 +1,13 @@
+path=reports/r12-firmware-retrieval/os0__kd__wlanbt_robin_img_ax.skprx
+size=310941
+sha256=927786e1737a6c515b706c34155884ed74e17fd563a2a52523834ecf363f5a3a
+header_hex=534345000300000040010100000600000010000000000000382a0600000000009dbe040000000000000000000000000004000000000000008000000000000000
+embedded_elf_offset=160
+term=SceBt offsets=[]
+term=ksceBt offsets=[]
+term=Bluetooth offsets=[]
+term=HID offsets=[]
+term=L2CAP offsets=[]
+term=RegisterCallback offsets=[]
+term=ReadEvent offsets=[]
+embedded_elf=os0__kd__wlanbt_robin_img_ax.embedded.elf size=310781 sha256=053f5434e3a655ce4ebefc1fcbf8c71a80f0f7719f420030b7d8f092d1fb9e01

@@ -1,0 +1,5 @@
+import assert from 'node:assert/strict'; import test from 'node:test'; import { fnv1a, makeUploadHeader, parseUploadAck, VITALINK_KINDS } from './vitalink-upload.mjs';
+test('VitaLink header uses resident uploader v1 framing',()=>{const p=Buffer.from('probe');const h=makeUploadHeader(VITALINK_KINDS.plugin,p);assert.equal(h.length,20);assert.equal(h.readUInt32LE(0),0x50555650);assert.equal(h.readUInt16LE(6),7);assert.equal(h.readUInt32LE(12),fnv1a(p));});
+test('rejects non-resident artifact kinds',()=>assert.throws(()=>makeUploadHeader(99,Buffer.from([1])),/Unsupported/));
+test('accepts only matching uploader acknowledgement',()=>{const p=Buffer.from('probe');const a=Buffer.alloc(16);a.writeUInt32LE(0x41555650);a.writeUInt32LE(0,4);a.writeUInt32LE(p.length,8);a.writeUInt32LE(fnv1a(p),12);assert.deepEqual(parseUploadAck(a,p),{status:0,received:p.length,checksum:fnv1a(p)});});
+test('rejects checksum mismatch',()=>{const p=Buffer.from('probe');const a=Buffer.alloc(16);a.writeUInt32LE(0x41555650);a.writeUInt32LE(p.length,8);assert.throws(()=>parseUploadAck(a,p),/integrity/);});

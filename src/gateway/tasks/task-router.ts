@@ -19,6 +19,7 @@ import { BackgroundTaskRunner } from './background-task-runner';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 import { type TaskControlResponse } from '../tool-builder';
 import { addPendingRuntimeSteerForTask } from '../live-runtime-registry';
+import { evaluateInternalWatchTaskControlPolicy, getCurrentInternalWatchTurnContext } from '../internal-watch/internal-watch-policy';
 import { resolveApprovalDecision } from '../approval-actions';
 import { getApprovalQueue, serializeApprovalForClient } from '../verification-flow';
 import {
@@ -587,7 +588,15 @@ export function steerTask(
   if (!task) return { success: false, action: 'steer', code: 'not_found', message: `Task not found: ${taskId}` };
   if (!message) return { success: false, action: 'steer', code: 'missing_message', message: 'A steer message is required.' };
   if (task.status === 'complete' || task.status === 'failed') {
-    return { success: false, action: 'steer', code: 'terminal', message: `Task "${task.title}" is ${task.status}; rerun it explicitly to do more work.` };
+    const completedAgentTask = isImmutableCompletedAgentTask(task);
+    return {
+      success: false,
+      action: 'steer',
+      code: completedAgentTask ? 'completed_agent_task_immutable' : 'terminal',
+      message: completedAgentTask
+        ? completedAgentTaskFollowUpMessage(task)
+        : `Task "${task.title}" is ${task.status}; create a new task for additional work.`,
+    };
   }
 
   const source = String(opts?.source || 'task_control').trim() || 'task_control';
@@ -692,13 +701,19 @@ export function completePlainGatewayRestartTask(taskId: string): boolean {
   return true;
 }
 
-/**
- * Reopens a completed task for one explicit follow-up without erasing the
- * completed run. The caller is responsible for authorization and launching.
- */
+export function isImmutableCompletedAgentTask(task: TaskRecord | null | undefined): boolean {
+  return !!task && task.status === 'complete' && (!!task.subagentProfile || !!task.teamSubagent);
+}
+
+function completedAgentTaskFollowUpMessage(task: TaskRecord): string {
+  return `Completed subagent task "${task.title}" is immutable and cannot be reopened. Delegate the next milestone or follow-up as a new task (for example with message_subagent / agent_chat_ops(action="delegate")) and reference task ${task.id} in its context when useful.`;
+}
+
+/** Reopens an eligible completed non-agent task for one explicit follow-up. */
 export function appendScopedTaskContinuation(task: TaskRecord, followUp: string): TaskRecord {
   const note = String(followUp || '').trim();
   if (task.status !== 'complete') throw new Error('only complete tasks can be continued');
+  if (isImmutableCompletedAgentTask(task)) throw new Error(completedAgentTaskFollowUpMessage(task));
   if (!note) throw new Error('scoped continuation requires new work');
   const evidence = getEvidenceBusSnapshot(task.id);
   task.continuationHistory = [
@@ -797,6 +812,8 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
       message: totalMsg ? `Found ${totalMsg}.` : 'No background tasks or scheduled jobs found.',
     };
   }
+  const watchPolicyDenial = evaluateInternalWatchTaskControlPolicy(getCurrentInternalWatchTurnContext(), args);
+  if (watchPolicyDenial) return watchPolicyDenial;
 
   if (action === 'list_approvals') {
     if (!taskId) return { success: false, action, code: 'missing_task_id', message: 'task_control(list_approvals) requires task_id.' };
@@ -941,6 +958,9 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     if (task.status !== 'complete') {
       return { success: false, action, code: 'not_complete', task: summarizeTaskRecord(task), message: `Task "${task.title}" is ${task.status}; use resume or steer for the existing run.` };
     }
+    if (isImmutableCompletedAgentTask(task)) {
+      return { success: false, action, code: 'completed_agent_task_immutable', task: summarizeTaskRecord(task), message: completedAgentTaskFollowUpMessage(task) };
+    }
     const followUp = String(args?.new_work || args?.newWork || args?.note || args?.message || '').trim();
     if (!followUp) {
       return { success: false, action, code: 'missing_new_work', message: 'task_control(continue) requires new_work describing the scoped missing requirement.' };
@@ -967,6 +987,9 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     }
     const task = loadTask(resolved.task.id);
     if (!task) return { success: false, action, code: 'not_found', message: `Task not found: ${resolved.task.id}` };
+    if (isImmutableCompletedAgentTask(task)) {
+      return { success: false, action, code: 'completed_agent_task_immutable', task: summarizeTaskRecord(task), message: completedAgentTaskFollowUpMessage(task) };
+    }
     if (BackgroundTaskRunner.isRunning(task.id)) {
       return {
         success: true,
@@ -1003,7 +1026,7 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
 
 	    if (action === 'resume') {
       if (task.status === 'complete') {
-        return { success: false, action, code: 'already_complete', message: `Task "${task.title}" is complete. Use rerun to restart.` };
+        return { success: false, action, code: 'already_complete', message: `Task "${task.title}" is complete. Create a new task for additional work.` };
       }
       const previousFailureMessage = buildPreviousFailureResumeMessage(task, 'resume', note);
       if (previousFailureMessage) {
@@ -1109,6 +1132,9 @@ export async function handleTaskControlAction(sessionId: string, args: any): Pro
     }
     const task = loadTask(resolved.task.id);
     if (!task) return { success: false, action, code: 'not_found', message: `Task not found: ${resolved.task.id}` };
+    if (isImmutableCompletedAgentTask(task)) {
+      return { success: false, action, code: 'completed_agent_task_immutable', task: summarizeTaskRecord(task), message: completedAgentTaskFollowUpMessage(task) };
+    }
     if (BackgroundTaskRunner.isRunning(task.id)) {
       BackgroundTaskRunner.requestPause(task.id);
     }

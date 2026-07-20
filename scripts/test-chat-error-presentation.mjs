@@ -42,6 +42,8 @@ const mobilePages = read('web-ui/src/mobile/mobile-pages.js');
 const goals = read('src/gateway/main-chat-goals.ts');
 assert.match(mobileApi, /presentChatError\(\{ rawBody: body, httpStatus: res\.status/, 'HTTP errors must be typed before the UI sees them');
 assert.match(mobilePages, /function _coalesceMobileChatError/, 'duplicate retry errors must be coalesced');
+assert.match(mobilePages, /function _clearRecoveredMobileChatError/, 'a recovered mobile stream must clear its transient connection warning');
+assert.match(mobilePages, /if \(evt\.type !== 'error'\) _clearRecoveredMobileChatError\(aiTurn\)/, 'the first recovered stream event must dismiss the dropped-connection card');
 assert.match(mobilePages, /_renderMobileChatErrorPresentation/, 'errors must render as status cards, not assistant prose');
 assert.doesNotMatch(mobilePages, /targetAiTurn\.body\.text = \(targetAiTurn\.body\.text \? targetAiTurn\.body\.text \+ '\\n\\n' : ''\) \+ `Warning:/, 'primary stream errors must not be appended as assistant messages');
 assert.match(goals, /lastVerdict: 'stopped'/, 'user-marked-done goals must be persisted as stopped');

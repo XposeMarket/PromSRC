@@ -580,6 +580,7 @@ async function runSupervisedGateway(): Promise<void> {
           now,
           supervisorPid: process.pid,
           childPid: launched.pid,
+          childExit: { code, signal },
           portOwnerPids: [],
           probe: { healthy: false, durationMs: 0, outcome: signal ? 'child_signal_exit' : 'child_exit' },
           consecutiveFailures: 0,

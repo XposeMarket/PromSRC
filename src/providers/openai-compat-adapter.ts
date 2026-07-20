@@ -177,6 +177,8 @@ export interface OpenAICompatConfig {
   apiKey?: string;
   /** Called just before each request to get a fresh token (OAuth providers). */
   getToken?: () => Promise<string>;
+  /** Ordered Bearer tokens. Retryable auth/quota failures advance to the next token. */
+  getAuthCandidates?: () => Promise<Array<{ token: string; label?: string }>>;
   providerId: ProviderID;
   chatCompletionsPath?: string;
   modelsPath?: string;
@@ -206,45 +208,82 @@ export class OpenAICompatAdapter implements LLMProvider {
     return null;
   }
 
-  private async post(path: string, body: object): Promise<any> {
+  private async resolveAuthCandidates(): Promise<Array<{ token: string; label?: string }>> {
+    if (this.config.getAuthCandidates) {
+      const values = await this.config.getAuthCandidates();
+      const seen = new Set<string>();
+      return values.filter((candidate) => {
+        const token = String(candidate?.token || '').trim();
+        if (!token || seen.has(token)) return false;
+        candidate.token = token;
+        seen.add(token);
+        return true;
+      });
+    }
     const auth = await this.getAuthHeader();
+    return auth ? [{ token: auth.replace(/^Bearer\s+/i, ''), label: this.config.authLabel }] : [];
+  }
+
+  private isRetryableCredentialFailure(status: number, text: string): boolean {
+    if ([401, 402, 403, 408, 409, 429].includes(status) || status >= 500) return true;
+    return /(?:insufficient|exhausted|out of)\s+(?:credits?|quota)|(?:credits?|quota|balance|billing).{0,80}(?:insufficient|exhausted|empty|limit|required|too low)/i.test(text);
+  }
+
+  private async fetchWithAuthFallback(url: string, init: RequestInit): Promise<{ response: Response; errorText: string; label?: string }> {
+    const candidates = await this.resolveAuthCandidates();
+    const attempts: Array<{ token?: string; label?: string }> = candidates.length ? candidates : [{}];
+    let last: { response: Response; errorText: string; label?: string } | null = null;
+    for (let index = 0; index < attempts.length; index += 1) {
+      const candidate = attempts[index];
+      const headers = new Headers(init.headers || {});
+      if (candidate.token) headers.set('Authorization', `Bearer ${candidate.token}`);
+      const response = await fetch(url, { ...init, headers });
+      if (response.ok) return { response, errorText: '', label: candidate.label };
+      const errorText = await response.text().catch(() => '');
+      last = { response, errorText, label: candidate.label };
+      const hasNext = index + 1 < attempts.length;
+      if (!hasNext || !this.isRetryableCredentialFailure(response.status, errorText)) break;
+      console.warn(`[${this.id}] Credential ${candidate.label || index + 1} failed (${response.status}); trying the next configured account.`);
+    }
+    return last!;
+  }
+
+  private async post(path: string, body: object): Promise<any> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(this.config.defaultHeaders || {}),
     };
-    if (auth) headers['Authorization'] = auth;
 
     const url = `${this.config.endpoint.replace(/\/$/, '')}${path}`;
-    const response = await fetch(url, {
+    const result = await this.fetchWithAuthFallback(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(300_000),
     });
+    const response = result.response;
 
     if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      const authLabel = this.config.authLabel ? ` via ${this.config.authLabel}` : '';
-      throw new Error(`${this.id} API error ${response.status}${authLabel}: ${text.slice(0, 200)}`);
+      const authLabel = result.label || this.config.authLabel;
+      throw new Error(`${this.id} API error ${response.status}${authLabel ? ` via ${authLabel}` : ''}: ${result.errorText.slice(0, 200)}`);
     }
     return response.json();
   }
 
   private async get(path: string): Promise<any> {
-    const auth = await this.getAuthHeader();
     const headers: Record<string, string> = {
       ...(this.config.defaultHeaders || {}),
     };
-    if (auth) headers['Authorization'] = auth;
 
     const url = `${this.config.endpoint.replace(/\/$/, '')}${path}`;
-    const response = await fetch(url, {
+    const result = await this.fetchWithAuthFallback(url, {
       headers,
       signal: AbortSignal.timeout(10_000),
     });
+    const response = result.response;
 
     if (!response.ok) {
-      const authLabel = this.config.authLabel ? ` via ${this.config.authLabel}` : '';
+      const authLabel = result.label || this.config.authLabel;
       throw new Error(`${this.id} API error ${response.status}${authLabel}`);
     }
     return response.json();
@@ -333,22 +372,20 @@ export class OpenAICompatAdapter implements LLMProvider {
 	  }
 
 	  private async streamChatCompletions(body: any, options?: ChatOptions): Promise<ChatResult> {
-	    const auth = await this.getAuthHeader();
 	    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-	    if (auth) headers['Authorization'] = auth;
 
 		    const url = `${this.config.endpoint.replace(/\/$/, '')}${this.config.chatCompletionsPath || '/v1/chat/completions'}`;
-	    const response = await fetch(url, {
+	    const result = await this.fetchWithAuthFallback(url, {
 	      method: 'POST',
 	      headers,
 	      body: JSON.stringify(body),
 	      signal: AbortSignal.timeout(300_000),
 	    });
+	    const response = result.response;
 
 	    if (!response.ok) {
-	      const text = await response.text().catch(() => '');
-	      const authLabel = this.config.authLabel ? ` via ${this.config.authLabel}` : '';
-	      throw new Error(`${this.id} API error ${response.status}${authLabel}: ${text.slice(0, 200)}`);
+	      const authLabel = result.label || this.config.authLabel;
+	      throw new Error(`${this.id} API error ${response.status}${authLabel ? ` via ${authLabel}` : ''}: ${result.errorText.slice(0, 200)}`);
 	    }
 
 	    const reader = response.body?.getReader();

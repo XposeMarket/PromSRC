@@ -2,7 +2,7 @@ import http from 'http';
 import https from 'https';
 import { WebSocket, WebSocketServer } from 'ws';
 import { getConfig } from '../../config/config';
-import { getValidXAIToken, isXAIConnected } from '../../auth/xai-oauth';
+import { getXaiAuthCandidates } from '../../auth/xai-account-pool';
 import { evaluateGatewayRequest } from '../gateway-auth';
 import { getSessionStatus } from '../routes/account.router';
 
@@ -12,10 +12,6 @@ type AttachedXaiVoiceStreaming = {
   close: () => void;
 };
 
-function apiKey(name: string): string {
-  return String(process.env[name] || '').trim();
-}
-
 function providerConfig(providerId: string): any {
   const raw = getConfig().getConfig() as any;
   const providers = raw?.llm?.providers && typeof raw.llm.providers === 'object' ? raw.llm.providers : {};
@@ -23,32 +19,9 @@ function providerConfig(providerId: string): any {
   return cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {};
 }
 
-function providerSecret(providerId: string, field = 'api_key'): string {
-  const value = providerConfig(providerId)?.[field];
-  if (typeof value !== 'string' || !value.trim()) return '';
-  const trimmed = value.trim();
-  if (trimmed.startsWith('env:')) return String(process.env[trimmed.slice(4)] || '').trim();
-  try {
-    return String(getConfig().resolveSecret(trimmed) || '').trim();
-  } catch {
-    return '';
-  }
-}
-
-function looksLikeXaiApiKey(value: string): boolean {
-  return /^xai-[A-Za-z0-9_-]+/.test(String(value || '').trim());
-}
-
-function xaiApiKey(): string {
-  const configured = apiKey('XAI_API_KEY') || providerSecret('xai', 'api_key');
-  return looksLikeXaiApiKey(configured) ? configured : '';
-}
-
 async function xaiAuthToken(): Promise<string> {
-  const key = xaiApiKey();
-  if (key) return key;
-  if (!isXAIConnected(getConfig().getConfigDir())) return '';
-  return getValidXAIToken(getConfig().getConfigDir());
+  const candidates = await getXaiAuthCandidates();
+  return candidates[0]?.token || '';
 }
 
 function xaiBaseUrl(): string {

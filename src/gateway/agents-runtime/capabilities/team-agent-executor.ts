@@ -53,7 +53,7 @@ import {
 } from '../../teams/team-member-room';
 import { claimAgentForTeamWorkspace } from '../../teams/team-workspace';
 import { notifyMainAgent } from '../../teams/notify-bridge';
-import { SubagentManager } from '../subagent-manager';
+import { SubagentManager, validateDirectSubagentAssignment } from '../subagent-manager';
 import { deleteAgentCompletely, deleteTeamCompletely } from '../entity-delete';
 import type { CapabilityExecutionContext, CapabilityExecutor } from './types';
 import type { ToolResult } from '../../tool-builder';
@@ -359,6 +359,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
                 name: updated.name,
                 description: updated.description,
                 model: updated.model || null,
+                reasoning_effort: updated.reasoning_effort || null,
                 executionWorkspace: updated.executionWorkspace || null,
                 allowedWorkPaths: updated.allowedWorkPaths || [],
                 max_steps: updated.max_steps,
@@ -414,11 +415,14 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
 
       case 'message_subagent': {
         const agentId = String(args.agent_id || '').trim();
-        const message = String(args.message || '').trim();
+        const assignment = String(args.assignment || args.message || '').trim();
         const context = args.context ? String(args.context).trim() : '';
 
         if (!agentId) return { name, args, result: 'message_subagent requires agent_id', error: true };
-        if (!message) return { name, args, result: 'message_subagent requires message', error: true };
+        const assignmentValidation = validateDirectSubagentAssignment(assignment);
+        if (!assignmentValidation.ok) {
+          return { name, args, result: JSON.stringify(assignmentValidation, null, 2), error: true };
+        }
 
         const agent = getAgentById(agentId) as any;
         if (!agent) return { name, args, result: `Unknown subagent: ${agentId}. Call agent_list first.`, error: true };
@@ -461,15 +465,11 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
           const result = await subagentMgr.callSubagent(
             {
               subagent_id: agentId,
-              task_prompt: [
-                `Direct background message from main chat to standalone subagent "${agentId}".`,
-                ``,
-                `Message:`,
-                message,
-                ``,
-                `Work in your subagent task thread. Keep intermediate collaboration in the subagent chat/task UI, not the main chat. If you need user input, ask clearly in the task so it can pause for assistance there.`,
-              ].join('\n'),
-              context_data: context ? { main_chat_context: context } : undefined,
+              task_prompt: assignment,
+              context_data: {
+                delegation: { source: 'main_chat', task_already_created: true, delivery_mode: 'task_panel_only' },
+                ...(context ? { main_chat_context: context } : {}),
+              },
               run_now: true,
               delivery_mode: 'task_panel_only',
             },
@@ -484,7 +484,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
               task_id: result.task_id,
               status: result.status,
               response:
-                `Message sent to subagent "${agentId}" in the background. ` +
+                `One background task was delegated to subagent "${agentId}". ` +
                 `The working conversation and final result will stay in the subagent task panel, so main chat can continue uninterrupted.`,
             }, null, 2),
             error: false,

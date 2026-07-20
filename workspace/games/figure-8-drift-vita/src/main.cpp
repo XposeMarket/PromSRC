@@ -1206,9 +1206,15 @@ void updateCar(float dt, const SceCtrlData &pad) {
                    * clampf((std::fabs(forward) - 7.0f) / 17.0f, 0.0f, 1.0f);
   float existingSlide = clampf((std::fabs(lateral) - 1.4f) / 6.0f, 0.0f, 1.0f);
   float throttleSlide = throttle * existingSlide * clampf((std::fabs(forward) - 12.0f) / 18.0f, 0.0f, 1.0f);
-  float rearUnload = std::max(cornerLoad * (throttle > 0.0f ? 0.52f : 0.18f), throttleSlide * 0.62f);
-  float powerRearGrip = 1.0f - rearUnload;
-  float rearGripTarget = powerRearGrip * (1.0f - car.driftLock * 0.86f);
+  // Rear lateral grip falls with speed and sideways slip. At 65 mph a car in
+  // a slide has materially less rear bite than at 30 mph, enabling a real
+  // breakaway/spin that still rewards countersteer and throttle correction.
+  float speedGripRelease=clampf((std::fabs(forward)-25.0f)/40.0f,0.0f,1.0f);
+  float lateralGripRelease=clampf((std::fabs(lateral)-1.5f)/10.0f,0.0f,1.0f);
+  float rearUnload=std::max(cornerLoad*(throttle>0.0f?.58f:.22f),throttleSlide*.72f);
+  rearUnload=std::max(rearUnload,speedGripRelease*(.20f+.34f*lateralGripRelease));
+  float powerRearGrip=1.0f-rearUnload;
+  float rearGripTarget=powerRearGrip*(1.0f-car.driftLock*.88f);
   float rearGripRate = handbrake ? 18.0f : 9.0f;
   car.rearGripBlend += (rearGripTarget - car.rearGripBlend) * clampf(dt * rearGripRate, 0.0f, 1.0f);
 
@@ -2095,7 +2101,11 @@ void drawAirport(){
 }
 void drawPlane(){
   if(!plane.active)return;
-  glPushMatrix();glTranslatef(plane.x,plane.y+.62f,plane.z);glRotatef(plane.yaw*180.0f/PI,0,1,0);glRotatef(-plane.pitch*180.0f/PI,1,0,0);glRotatef(plane.roll*180.0f/PI,0,0,1);
+  // yawInput/roll are positive for physical left. The chase view looks forward
+  // from behind the aircraft, so its screen basis mirrors the model's local X.
+  // Negate only at this model boundary: positive roll then puts the left wing
+  // down on screen while yaw remains positive/left in world space.
+  glPushMatrix();glTranslatef(plane.x,plane.y+.62f,plane.z);glRotatef(plane.yaw*180.0f/PI,0,1,0);glRotatef(-plane.pitch*180.0f/PI,1,0,0);glRotatef(-plane.roll*180.0f/PI,0,0,1);
   cube(0,0,0,1.35f,.45f,4.8f,.82f,.18f,.08f);cube(0,.18f,-.35f,7.4f,.10f,1.15f,.74f,.76f,.79f);cube(0,.45f,1.45f,2.1f,.16f,1.0f,.70f,.74f,.78f);cube(0,.22f,2.05f,.12f,1.35f,.18f,.70f,.74f,.78f);glPopMatrix();
 }
 
@@ -2775,12 +2785,16 @@ void updatePlane(float dt,const SceCtrlData&pad,bool controlled){
   // Vita's left-stick axis is screen-oriented while this aircraft's yaw basis
   // is world-oriented; negate it so physical left now banks/yaws left in view.
   const float rawYaw=controlled?-((int)pad.lx-128)/127.0f:0.0f;
-  const float rawPitch=controlled?-((int)pad.ry-128)/127.0f:0.0f;
+  // Vita reports stick-up below center; positive pitch is nose-up throughout
+  // the flight model, renderer, and chase camera.
+  const float rawPitch=controlled?((int)pad.ry-128)/127.0f:0.0f;
   const float yawInput=std::fabs(rawYaw)<.14f?0.0f:rawYaw;
   const float pitchInput=std::fabs(rawPitch)<.14f?0.0f:rawPitch;
-  // R/L adjust a persistent throttle; releasing the trigger leaves a real
-  // glide instead of the old binary thrust/static-drop behavior.
-  if(controlled){float throttleInput=(pad.buttons&SCE_CTRL_RTRIGGER)?1.0f:((pad.buttons&SCE_CTRL_LTRIGGER)?-1.0f:0.0f);plane.throttle=clampf(plane.throttle+throttleInput*dt*.62f,0.0f,1.0f);}
+  // R is hold-to-gas and L is hold-to-brake. Do not retain a stale throttle
+  // after release: off-gas flight must be a genuine glide.
+  const bool gasHeld=controlled&&(pad.buttons&SCE_CTRL_RTRIGGER);
+  const bool brakeHeld=controlled&&(pad.buttons&SCE_CTRL_LTRIGGER);
+  plane.throttle=gasHeld?1.0f:0.0f;
   const float throttle=plane.throttle;
   float airspeed=std::sqrt(plane.vx*plane.vx+plane.vy*plane.vy+plane.vz*plane.vz);
   // Negative left-stick input is a left yaw and left bank; keep the two signs paired.
@@ -2794,13 +2808,17 @@ void updatePlane(float dt,const SceCtrlData&pad,bool controlled){
   const float cp=std::cos(plane.pitch),fx=std::sin(plane.yaw)*cp,fy=std::sin(plane.pitch),fz=std::cos(plane.yaw)*cp;
   if(!plane.airborne){
     float groundForward=plane.vx*std::sin(plane.yaw)+plane.vz*std::cos(plane.yaw);
-    groundForward=clampf(groundForward+(throttle*18.0f-.32f*groundForward)*dt,0.0f,42.0f);
+    // Hold R accelerates from rest; L actively decelerates instead of merely
+    // clearing gas. This remains observable through THR and SPD on the HUD.
+    const float runwayForce=throttle*18.0f-(brakeHeld?26.0f:0.0f)-.32f*groundForward;
+    groundForward=clampf(groundForward+runwayForce*dt,0.0f,42.0f);
     plane.vx=std::sin(plane.yaw)*groundForward;plane.vz=std::cos(plane.yaw)*groundForward;plane.vy=0.0f;plane.speed=groundForward;
     if(groundForward>20.0f&&pitchInput>.10f){plane.airborne=true;plane.vy=2.4f;}
   }else{
     // Thrust, drag and gravity operate on persistent world velocity.  A modest
     // steering alignment makes aerobatics responsive without erasing inertia.
-    plane.vx+=fx*throttle*15.0f*dt;plane.vy+=fy*throttle*15.0f*dt;plane.vz+=fz*throttle*15.0f*dt;
+    const float airBrake=brakeHeld?18.0f:0.0f;
+    plane.vx+=fx*(throttle*15.0f-airBrake)*dt;plane.vy+=fy*(throttle*15.0f-airBrake)*dt;plane.vz+=fz*(throttle*15.0f-airBrake)*dt;
     airspeed=std::sqrt(plane.vx*plane.vx+plane.vy*plane.vy+plane.vz*plane.vz);
     // Gentle velocity alignment retains momentum through bailout and lets pitch
     // genuinely control loops, rather than snapping the craft into a hover.
@@ -2829,7 +2847,9 @@ void updatePlane(float dt,const SceCtrlData&pad,bool controlled){
     const float impact=-plane.vy;plane.y=0.0f;plane.vy=0.0f;
     // A shallow touchdown rolls out; a hard/downside impact destroys the plane.
     if(plane.airborne&&impact>9.5f){damagePlane((impact-7.0f)*11.0f,plane.x-plane.vx,plane.z-plane.vz);if(!plane.active)return;}
-    if(plane.active){plane.airborne=false;plane.pitch*=.22f;plane.roll*=.38f;plane.vx*=.76f;plane.vz*=.76f;plane.speed=std::sqrt(plane.vx*plane.vx+plane.vz*plane.vz);}
+    // Touchdown damping is a one-shot impact response. Applying it every
+    // grounded frame erased R-trigger runway acceleration and mimicked dead gas.
+    if(plane.active&&plane.airborne){plane.airborne=false;plane.pitch*=.22f;plane.roll*=.38f;plane.vx*=.76f;plane.vz*=.76f;plane.speed=std::sqrt(plane.vx*plane.vx+plane.vz*plane.vz);}
   }
   if(plane.x<-440||plane.x>560||plane.z<-320||plane.z>320)damagePlane(120.0f,plane.x-plane.vx,plane.z-plane.vz);
 }

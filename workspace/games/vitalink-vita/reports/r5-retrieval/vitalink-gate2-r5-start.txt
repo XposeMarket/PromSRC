@@ -1,0 +1,4 @@
+VitaLink Gate 2 delayed passive Bluetooth probe R5
+stage=module_start-entered
+sampling=12 samples at 10-second intervals
+radio_mutation=none

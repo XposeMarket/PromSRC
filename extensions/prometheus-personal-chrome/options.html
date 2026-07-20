@@ -1,0 +1,9 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Prometheus Personal Chrome pairing</title>
+<style>body{font:14px system-ui;max-width:680px;margin:40px auto;line-height:1.5}input{width:100%;box-sizing:border-box;padding:8px}button{margin-top:12px;padding:8px 14px}.status{margin-top:16px;color:#245}</style>
+<h1>Prometheus Personal Chrome</h1>
+<p>Paste the pairing code from Prometheus’s local <code>user-chrome-extension-pairing.json</code> file. This extension connects only to a loopback relay and never enables Chrome remote debugging.</p>
+<label>Pairing code <input id="secret" autocomplete="off" spellcheck="false"></label>
+<button id="save">Save and connect</button><p class="status" id="status"></p>
+<script type="module" src="options.js"></script>

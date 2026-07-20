@@ -3678,6 +3678,27 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   overflow-x: hidden;
   box-sizing: border-box;
 }
+.pm-chat-history-loader {
+  display: flex;
+  justify-content: center;
+  min-height: 34px;
+  padding: 2px 0 4px;
+}
+.pm-chat-history-loader button {
+  min-height: 34px;
+  padding: 7px 14px;
+  border: 1px solid color-mix(in srgb, var(--pm-orange) 38%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-surface, #171717) 88%, transparent);
+  color: var(--pm-text, #f4f4f4);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+.pm-chat-history-loader button:disabled {
+  cursor: progress;
+  opacity: .65;
+}
 .pm-mobile-empty-chat {
   min-height: calc(100dvh - var(--pm-header-h) - var(--pm-chat-composer-space, 170px) - var(--pm-tabbar-h) - 96px);
   width: 100%;
@@ -9703,7 +9724,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   pointer-events: none;
   z-index: 125;
   isolation: isolate;
-  overflow: clip;
+  overflow: visible;
   border-radius: 20px;
 }
 .pm-voice-preview-host.has-preview {
@@ -12882,6 +12903,98 @@ body.pm-canvas-fullscreen-open {
   scroll-padding-bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 52px);
   overflow-x: hidden;
 }
+.pm-subagent-chat-body {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 0;
+  padding: calc(max(env(safe-area-inset-top), 12px) + var(--pm-header-h) + 8px) 0 calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 8px);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+/* Detail screens opt into document scrolling. Locked Chat is intentionally the
+   exception: only the message list may scroll, with the composer anchored in
+   the safe viewport between the fixed header and tab bar. */
+body.pm-mobile-active.pm-mobile-document-scroll .pm-body.pm-subagent-chat-body {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  flex: none;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  -webkit-overflow-scrolling: auto;
+}
+/* The dedicated sub-agent conversation intentionally differs from ordinary
+   mobile detail pages: it has one bounded message viewport. Lock the route's
+   outer tree so the browser cannot choose the document as a competing scroller
+   or restore that document at the top after async history renders. */
+body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-subagent-chat-locked,
+body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-subagent-chat-locked #mobile-root,
+body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-subagent-chat-locked .pm-app,
+body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-subagent-chat-locked .pm-page {
+  height: 100dvh;
+  min-height: 0 !important;
+  overflow: hidden;
+}
+.pm-subagent-chat-body .pm-sa-chat-shell {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+}
+body.pm-mobile-active .pm-subagent-chat-body .pm-sa-chat-scrollport {
+  flex: 1 1 0;
+  height: 0;
+  padding-bottom: var(--pm-sa-chat-composer-space, 132px);
+  touch-action: pan-y;
+}
+body.pm-mobile-active .pm-subagent-chat-body .pm-sa-chat-shell .pm-agent-chat-composer.pm-composer {
+  position: fixed !important;
+  left: 10px !important;
+  right: 10px !important;
+  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 22px) !important;
+  z-index: 9;
+  margin: 0 !important;
+  border-radius: 24px !important;
+  border-left: 0 !important;
+  border-right: 0 !important;
+  border-bottom: 0 !important;
+  box-shadow: var(--pm-lg-panel-shadow, 0 24px 58px rgba(0,0,0,.34)) !important;
+}
+body.pm-mobile-active.pm-keyboard-open .pm-subagent-chat-body .pm-sa-chat-shell .pm-agent-chat-composer.pm-composer {
+  bottom: calc(var(--pm-keyboard-offset, 0px) + 8px) !important;
+}
+.pm-subagent-memory { display: grid; gap: 10px; }
+.pm-subagent-memory-intro { margin: 0 2px 2px; color: var(--pm-muted); font-size: 13px; }
+.pm-subagent-memory-item {
+  overflow: hidden;
+  border: 1px solid var(--pm-border);
+  border-radius: 14px;
+  background: var(--pm-surface);
+}
+.pm-subagent-memory-item.open { border-color: color-mix(in srgb, var(--pm-orange) 44%, var(--pm-border)); }
+.pm-subagent-memory-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px;
+  border: 0;
+  background: transparent;
+  color: var(--pm-text);
+  font: 700 14px/1.2 var(--pm-font);
+  text-align: left;
+}
+.pm-subagent-memory-toggle > span:first-child { display: inline-flex; align-items: center; gap: 9px; }
+.pm-subagent-memory-toggle svg { width: 17px; height: 17px; color: var(--pm-orange); }
+.pm-subagent-memory-chevron { color: var(--pm-muted); font-size: 18px; transition: transform .16s ease; }
+.pm-subagent-memory-item.open .pm-subagent-memory-chevron { transform: rotate(180deg); }
+.pm-subagent-memory-panel { border-top: 1px solid var(--pm-border); }
+.pm-subagent-memory-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; color: var(--pm-muted); font-size: 12px; }
+.pm-subagent-memory-empty { padding: 8px 14px 16px; color: var(--pm-muted); font-size: 13px; line-height: 1.45; }
 .pm-subagent-detail-body #pm-tab-slot,
 .pm-subagent-detail-body .pm-sa-run-card,
 .pm-subagent-detail-body .pm-sa-run-card > *,

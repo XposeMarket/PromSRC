@@ -1156,7 +1156,14 @@ function getSortedSessionSummaries(
       return admitAutomated && summary.channel === 'system' && /^auto_/i.test(summary.id);
     })
     .filter((summary) => summary.messageCount > 0 || !!summary.pinnedAt)
-    .sort((a, b) => Number(b.lastMessageAt || b.lastActiveAt || b.createdAt || 0) - Number(a.lastMessageAt || a.lastActiveAt || a.createdAt || 0));
+    .sort((a, b) => {
+      const aPinned = Number(a.pinnedAt || 0);
+      const bPinned = Number(b.pinnedAt || 0);
+      if (!!aPinned !== !!bPinned) return bPinned ? 1 : -1;
+      if (aPinned && bPinned && aPinned !== bPinned) return bPinned - aPinned;
+      return Number(b.lastMessageAt || b.lastActiveAt || b.createdAt || 0)
+        - Number(a.lastMessageAt || a.lastActiveAt || a.createdAt || 0);
+    });
 }
 
 export function listSessionSummaries(channel?: Session['channel']): SessionSummary[];

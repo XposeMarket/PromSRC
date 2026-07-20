@@ -696,18 +696,9 @@ export class BackgroundTaskRunner {
     const profileNote = task.subagentProfile
       ? `\nSub-agent role: ${task.subagentProfile}. Stay focused on your assigned task only. Do NOT call subagent_spawn.`
       : '';
-    // #4: surface the subagent's own role file in the system slot (not just the
-    // user turn) so role adherence holds. Only renders when a role file exists.
-    const standaloneRoleBlock = (() => {
-      try {
-        const ws = (task as any).agentWorkspace as string | undefined;
-        if (!ws) return '';
-        const content = String(readAgentPromptFile(ws, { migrateLegacy: true })?.content || '').trim();
-        return content
-          ? `\n[YOUR ROLE]\nKeep this role and scope for the whole task.\n\n${content}`
-          : '';
-      } catch { return ''; }
-    })();
+    // AGENT.md + private MEMORY.md come from the shared runtime prompt helper.
+    // Keeping them out of caller context prevents double injection on retries.
+    const standaloneRoleBlock = '';
     // #5: standing assignments — empty unless this is a named subagent.
     const standaloneAssignments = (() => {
       const a = buildSubagentAssignmentBlock(task.subagentProfile);

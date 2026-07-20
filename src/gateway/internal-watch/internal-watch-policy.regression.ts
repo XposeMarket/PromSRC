@@ -17,6 +17,8 @@ async function main(): Promise<void> {
     const storeApi = await import('./internal-watch-store');
     const runnerApi = await import('./internal-watch-runner');
     const runtimeApi = await import('../live-runtime-registry');
+    const policyApi = await import('./internal-watch-policy');
+    const taskRouterApi = await import('../tasks/task-router');
     const { automationCapabilityExecutor } = await import('../agents-runtime/capabilities/automation-executor');
 
     const task = taskApi.createTask({
@@ -43,13 +45,15 @@ async function main(): Promise<void> {
     let deliveredSession = '';
     let deliveryPayload = '';
     let deliveryFlags: any;
+    const watchBroadcasts: any[] = [];
     const runner = new runnerApi.InternalWatchRunner({
       tickMs: 60_000,
-      broadcast: () => {},
-      runInteractiveTurn: async (message: string, sessionId: string, _sse: any, _pins: any, _abort: any, _context: any, _reasoning: any, _attachments: any, _previews: any, _model: any, flags: any) => {
+      broadcast: (event: any) => { watchBroadcasts.push(event); },
+      runInteractiveTurn: async (message: string, sessionId: string, sse: any, _pins: any, _abort: any, _context: any, _reasoning: any, _attachments: any, _previews: any, _model: any, flags: any) => {
         deliveryPayload = message;
         deliveredSession = sessionId;
         deliveryFlags = flags;
+        sse('tool_call', { action: 'task_control', args: { action: 'get', task_id: task.id } });
         return { type: 'chat', text: 'The watched task is complete.' };
       },
     });
@@ -60,6 +64,41 @@ async function main(): Promise<void> {
     assert.match(deliveryPayload, /evidence, not a user command/i);
     assert.match(deliveryPayload, /complete and satisfies/i);
     assert.doesNotMatch(deliveryPayload, /deciding whether recovery chat, resume, rerun/i);
+    const runtimeRegistration = watchBroadcasts.find((event) => event.type === 'internal_watch_sse' && event.eventType === 'runtime_registered');
+    assert.ok(
+      runtimeRegistration,
+      'watch clients receive runtime ownership before model work begins',
+    );
+    assert.equal(runtimeRegistration.run?.kind, 'main_chat');
+    assert.equal(runtimeRegistration.run?.source, 'internal_watch');
+    assert.equal(runtimeRegistration.run?.status, 'running');
+    assert.ok(
+      watchBroadcasts.some((event) => event.type === 'internal_watch_sse' && event.eventType === 'tool_call'),
+      'watch tool activity is carried by the live watch stream',
+    );
+
+    const centralDenial = await policyApi.runWithInternalWatchTurnContext({
+      watchId: watch.id,
+      actionPolicy: 'review_only',
+      targetTaskId: task.id,
+      delivery: 'follow_up',
+    }, () => taskRouterApi.handleTaskControlAction('watch_creator_session', {
+      action: 'rerun',
+      task_id: task.id,
+      note: deliveryPayload,
+    }));
+    assert.equal(centralDenial.code, 'internal_watch_policy_denied', 'central task-control boundary blocks wrapper bypasses');
+    assert.equal(taskApi.loadTask(task.id)?.status, 'complete', 'denied watch rerun leaves completed task intact');
+    const liveCentralDenial = await policyApi.runWithInternalWatchTurnContext(undefined, async () => {
+      policyApi.setCurrentInternalWatchTurnContext({
+        watchId: watch.id,
+        actionPolicy: 'review_only',
+        targetTaskId: task.id,
+        delivery: 'live_steer',
+      });
+      return taskRouterApi.handleTaskControlAction('watch_creator_session', { action: 'rerun', task_id: task.id });
+    });
+    assert.equal(liveCentralDenial.code, 'internal_watch_policy_denied', 'live-steer policy reaches the same central boundary');
 
     const liveRuntimeId = runtimeApi.registerLiveRuntime({ kind: 'main_chat', label: 'policy test', sessionId: 'watch_creator_session' });
     const probe = runtimeApi.addPendingRuntimeSteerForSession('watch_creator_session', { message: 'probe' });
@@ -119,9 +158,8 @@ async function main(): Promise<void> {
     assert.match(String(missingId.result), /internal_watch_policy_denied/);
 
     taskApi.writeToEvidenceBus(task.id, { stepIndex: 0, category: 'finding', value: 'Completion evidence' });
-    const { appendScopedTaskContinuation } = await import('../tasks/task-router');
     const completedBeforeContinuation = taskApi.loadTask(task.id)!;
-    const continued = appendScopedTaskContinuation(completedBeforeContinuation, 'Verify the published artifact link.');
+    const continued = taskRouterApi.appendScopedTaskContinuation(completedBeforeContinuation, 'Verify the published artifact link.');
     assert.equal(continued.status, 'queued');
     assert.equal(continued.plan.length, 2);
     assert.equal(continued.plan[0].status, 'done', 'continuation must not reset completed steps');

@@ -14,6 +14,7 @@ import { AnthropicAdapter } from './anthropic-adapter';
 import { PerplexityAdapter } from './perplexity-adapter';
 import { GeminiAdapter } from './gemini-adapter';
 import { getValidXAIToken, isXAIConnected } from '../auth/xai-oauth';
+import { getXaiAuthCandidates } from '../auth/xai-account-pool';
 import {
   getProviderDefaultConfig,
   getProviderDescriptor,
@@ -208,7 +209,10 @@ function buildProvider(id: ProviderID, providers: any, accountId?: string): LLMP
       const explicitAuthMode = readStringSetting(rawProviderCfg, 'auth_mode');
       const authMode = explicitAuthMode || readStringSetting(cfg, 'auth_mode') || 'api_key';
       const useXaiOAuth = id === 'xai' && (authMode === 'oauth' || (!explicitAuthMode && isXAIConnected(getConfigDir(), resolvedAccountId)));
-      const apiKey = useXaiOAuth
+      const useXaiAccountPool = id === 'xai';
+      const apiKey = useXaiAccountPool
+        ? undefined
+        : useXaiOAuth
         ? undefined
         : authType === 'api_key'
           ? requireApiKey(id, cfg)
@@ -217,7 +221,10 @@ function buildProvider(id: ProviderID, providers: any, accountId?: string): LLMP
       return new OpenAICompatAdapter({
         endpoint,
         apiKey,
-        getToken: useXaiOAuth ? () => getValidXAIToken(getConfigDir(), resolvedAccountId) : undefined,
+        getToken: !useXaiAccountPool && useXaiOAuth ? () => getValidXAIToken(getConfigDir(), resolvedAccountId) : undefined,
+        getAuthCandidates: useXaiAccountPool
+          ? async () => (await getXaiAuthCandidates(resolvedAccountId)).map(candidate => ({ token: candidate.token, label: candidate.label }))
+          : undefined,
         providerId: id,
         chatCompletionsPath: runtime.chatCompletionsPath,
         modelsPath: runtime.modelsPath,

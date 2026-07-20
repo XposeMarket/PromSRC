@@ -71,7 +71,7 @@ import {
   normalizeDevSourcePatchsetArgs,
 } from '../dev-source-patchset';
 import { executeAgentBuilderTool } from './agent-builder-integration';
-import { SubagentManager } from './subagent-manager';
+import { SubagentManager, validateDirectSubagentAssignment } from './subagent-manager';
 import { appendSubagentChatMessage, getSubagentChatHistory } from './subagent-chat-store';
 import { formatIntradayNoteSourceLine, inferIntradayNoteSource } from '../intraday-note-source';
 import {
@@ -2585,7 +2585,11 @@ function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: stri
       deploy_analysis_team: 'deploy_analysis_team',
     },
     agent_chat_ops: {
-      talk: 'talk_to_subagent',
+      chat: 'chat_with_subagent',
+      delegate: 'message_subagent',
+      steer: 'agent_run_ops',
+      send_mailbox: 'agent_message_send',
+      talk: 'chat_with_subagent',
       message: 'message_subagent',
       send: 'agent_message_send',
       turn_request: 'agent_turn_request',
@@ -2625,7 +2629,10 @@ function normalizeAgentTeamWrapperTool(name: string, rawArgs: any): { name: stri
   if (!target) return { name, args: rawArgs, error: `Unsupported ${name} action "${action}".` };
   if (name === 'agent_chat_ops') {
     if (args.agent_id == null && args.subagent_id != null) args.agent_id = args.subagent_id;
+    if (args.assignment == null && args.task_prompt != null) args.assignment = args.task_prompt;
+    if (target === 'message_subagent' && args.assignment != null) args.message = args.assignment;
     if (args.message == null && args.task_prompt != null) args.message = args.task_prompt;
+    if (target === 'agent_run_ops') args.action = 'steer';
   }
   if (target === 'agent_update') {
     const nestedPatch = isPlainObjectArg(args.patch) ? args.patch : {};
@@ -16910,6 +16917,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 	                name: updated.name,
 	                description: updated.description,
 	                model: updated.model || null,
+	                reasoning_effort: updated.reasoning_effort || null,
 	                executionWorkspace: updated.executionWorkspace || null,
 	                allowedWorkPaths: updated.allowedWorkPaths || [],
 	                max_steps: updated.max_steps,
@@ -17633,11 +17641,14 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         // ── run_task_now ──────────────────────────────────────
         if (name === 'message_subagent') {
           const agentId = String(args.agent_id || '').trim();
-          const message = String(args.message || '').trim();
+          const assignment = String(args.assignment || args.message || '').trim();
           const context = args.context ? String(args.context).trim() : '';
 
           if (!agentId) return { name, args, result: 'message_subagent requires agent_id', error: true };
-          if (!message) return { name, args, result: 'message_subagent requires message', error: true };
+          const assignmentValidation = validateDirectSubagentAssignment(assignment);
+          if (!assignmentValidation.ok) {
+            return { name, args, result: JSON.stringify(assignmentValidation, null, 2), error: true };
+          }
 
           const agent = getAgentById(agentId) as any;
           if (!agent) return { name, args, result: `Unknown subagent: ${agentId}. Call agent_list first.`, error: true };
@@ -17680,15 +17691,11 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             const result = await subagentMgr.callSubagent(
               {
                 subagent_id: agentId,
-                task_prompt: [
-                  `Direct background message from main chat to standalone subagent "${agentId}".`,
-                  ``,
-                  `Message:`,
-                  message,
-                  ``,
-                  `Work in your subagent task thread. Keep intermediate collaboration in the subagent chat/task UI, not the main chat. If you need user input, ask clearly in the task so it can pause for assistance there.`,
-                ].join('\n'),
-                context_data: context ? { main_chat_context: context } : undefined,
+                task_prompt: assignment,
+                context_data: {
+                  delegation: { source: 'main_chat', task_already_created: true, delivery_mode: 'task_panel_only' },
+                  ...(context ? { main_chat_context: context } : {}),
+                },
                 run_now: true,
                 delivery_mode: 'task_panel_only',
               },
@@ -17703,7 +17710,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 task_id: result.task_id,
                 status: result.status,
                 response:
-                  `Message sent to subagent "${agentId}" in the background. ` +
+                  `One background task was delegated to subagent "${agentId}". ` +
                   `The working conversation and final result will stay in the subagent task panel, so main chat can continue uninterrupted.`,
               }, null, 2),
               error: false,

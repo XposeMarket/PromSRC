@@ -135,6 +135,30 @@ function ensureHeartbeatSilenceRule(content: string, title: string): string {
   return `${base}\n\n## Silence Rule\n${HEARTBEAT_SILENCE_RULE}\n`;
 }
 
+export type DirectSubagentAssignmentValidation =
+  | { ok: true }
+  | { ok: false; code: 'INVALID_DELEGATION_ASSIGNMENT'; message: string };
+
+/** Reject delegation prompts that ask the worker to create its own task. */
+export function validateDirectSubagentAssignment(value: unknown): DirectSubagentAssignmentValidation {
+  const assignment = String(value || '').trim();
+  if (!assignment) {
+    return { ok: false, code: 'INVALID_DELEGATION_ASSIGNMENT', message: 'A direct executable assignment is required.' };
+  }
+
+  const firstLine = assignment.split(/\r?\n/, 1)[0].trim().toLowerCase();
+  const startsWithLifecycleVerb = /^(?:please\s+|now\s+|immediately\s+)*(?:create|start|spawn|launch|open|make|set\s+up)\b/.test(firstLine);
+  const namesTaskLifecycle = /\b(?:new|fresh|brand[- ]new|independent|background|separate)\b[^.]{0,80}\b(?:task|run|job|thread)\b|\b(?:task|run|job|thread)\b[^.]{0,50}\b(?:now|itself|independent|separate)\b/.test(firstLine);
+  if (startsWithLifecycleVerb && namesTaskLifecycle) {
+    return {
+      ok: false,
+      code: 'INVALID_DELEGATION_ASSIGNMENT',
+      message: 'The delegation tool already creates and starts exactly one task. Retry with the work itself as the assignment (for example, "Fix the plane controls and verify the Vita build"), not an instruction to create/start/spawn another task or run.',
+    };
+  }
+  return { ok: true };
+}
+
 function normalizePathForCompare(p: string): string {
   const resolved = path.resolve(String(p || ''));
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
@@ -313,6 +337,16 @@ export class SubagentManager {
     const subagentId = String(request.subagent_id || '').trim();
     if (!subagentId) throw new Error('subagent_id is required unless the caller generates one for create_if_missing');
     const runNow = request.run_now !== false;
+    const taskPrompt = String(request.task_prompt || '').trim();
+    if (runNow && !taskPrompt) {
+      throw new Error('task_prompt is required when run_now=true');
+    }
+    if (runNow) {
+      const assignmentValidation = validateDirectSubagentAssignment(taskPrompt);
+      if (!assignmentValidation.ok) {
+        throw new Error(`${assignmentValidation.code}: ${assignmentValidation.message}`);
+      }
+    }
     
     // Load existing or create new
     let definition = this.loadSubagent(subagentId);
@@ -336,11 +370,6 @@ export class SubagentManager {
           context_refs: this.listContextReferences(subagentId),
         },
       };
-    }
-
-    const taskPrompt = String(request.task_prompt || '').trim();
-    if (!taskPrompt) {
-      throw new Error('task_prompt is required when run_now=true');
     }
 
     let agentArtifactWorkspace: string | undefined;
@@ -673,7 +702,8 @@ export class SubagentManager {
           ].join('\n')
         : '',
       attachedSkillsSection,
-      `TASK: ${taskPrompt}`,
+      `TASK STATUS: This task/run already exists. Execute the assignment directly. Do not create, start, spawn, or delegate another task merely to perform this assignment.`,
+      `ASSIGNMENT: ${taskPrompt}`,
       contextSection,
       ``,
       `CONSTRAINTS:`,
@@ -728,6 +758,7 @@ export class SubagentManager {
         allowedWorkPaths: this.normalizeAllowedWorkPaths(def.allowedWorkPaths),
         skillIds: def.skillIds || [],
         model: def.model,
+        reasoning_effort: def.reasoning_effort,
         maxSteps: def.max_steps,
         subagentType: 'dynamic',
         createdAt: def.created_at,
@@ -849,6 +880,18 @@ export class SubagentManager {
     } else {
       next.executionWorkspace = this.normalizeExecutionWorkspace(next.executionWorkspace, next.allowedWorkPaths);
     }
+
+    if (patch.reasoning_effort !== undefined || patch.reasoningEffort !== undefined) {
+      const reasoningEffort = String(patch.reasoning_effort ?? patch.reasoningEffort ?? '').trim().toLowerCase();
+      const allowedReasoningEfforts = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+      if (!reasoningEffort) {
+        delete next.reasoning_effort;
+      } else if (!allowedReasoningEfforts.has(reasoningEffort)) {
+        throw new Error(`reasoning_effort must be one of: ${Array.from(allowedReasoningEfforts).join(', ')}, or an empty string to clear`);
+      } else {
+        next.reasoning_effort = reasoningEffort;
+      }
+    }
     if (patch.voice !== undefined) {
       if (patch.voice && typeof patch.voice === 'object') next.voice = patch.voice;
       else delete (next as any).voice;
@@ -878,6 +921,7 @@ export class SubagentManager {
       name: next.name,
       description: next.description,
       model: next.model,
+      reasoning_effort: next.reasoning_effort,
       maxSteps: next.max_steps,
       subagentType: 'dynamic',
       executionWorkspace: next.executionWorkspace,

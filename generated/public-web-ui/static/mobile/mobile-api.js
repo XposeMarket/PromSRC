@@ -894,6 +894,11 @@ export async function loadSubagentSystemPrompt(agentId) {
   return String(r?.content || '');
 }
 
+export async function loadSubagentMemory(agentId) {
+  const r = await api(`/api/agents/${encodeURIComponent(agentId)}/memory-md`).catch(() => null);
+  return { content: String(r?.content || ''), exists: r?.exists === true };
+}
+
 export async function loadSubagentHeartbeat(agentId) {
   const [status, md] = await Promise.all([
     api(`/api/heartbeat/agents/${encodeURIComponent(agentId)}`).catch(() => null),
@@ -1400,6 +1405,7 @@ function _normalizeSessionSummary(s) {
     lastMessageAt: Number(s?.lastMessageAt || s?.lastActiveAt || s?.updatedAt || s?.createdAt || Date.now()),
     lastActiveAt: Number(s?.lastActiveAt || s?.updatedAt || Date.now()),
     lastAssistantAt: Number(s?.lastAssistantAt || 0) || null,
+    pinnedAt: Number(s?.pinnedAt || 0) || null,
     mobileLastReadAt: Number(s?.mobileLastReadAt || 0) || null,
     mobileUnread: s?.mobileUnread === true,
     activeRun: s?.activeRun === true,
@@ -1541,23 +1547,32 @@ export function invalidateMobileChatSessionCache(sessionId) {
   else _sessionCache.clear();
 }
 
-export async function loadMobileChatSession(sessionId, { force = false } = {}) {
+export async function loadMobileChatSession(sessionId, options = {}) {
+  const { force = false } = options;
   const sid = String(sessionId || '').trim();
   if (!sid) return null;
-  if (!force) {
+  const requestedHistoryLimit = Number.isFinite(Number(options.historyLimit))
+    ? Math.max(20, Math.min(180, Math.floor(Number(options.historyLimit))))
+    : null;
+  const requestedProcessLimit = Number.isFinite(Number(options.processLimit))
+    ? Math.max(20, Math.min(500, Math.floor(Number(options.processLimit))))
+    : null;
+  const fullProcess = options.fullProcess === undefined ? force : options.fullProcess === true;
+  const isBoundedPageRequest = requestedHistoryLimit !== null || requestedProcessLimit !== null || options.fullProcess !== undefined;
+  if (!force && !isBoundedPageRequest) {
     const cached = _sessionCacheGet(sid);
     if (cached) return cached;
   }
-  const requestKey = `${sid}:${force ? 'recovery' : 'normal'}`;
+  const historyLimit = requestedHistoryLimit ?? (force ? 180 : 70);
+  const processLimit = requestedProcessLimit ?? (force ? 500 : 120);
+  const requestKey = `${sid}:${force ? 'recovery' : 'normal'}:${historyLimit}:${processLimit}:${fullProcess ? 'full-process' : 'compact-process'}`;
   const existingRequest = _sessionRequests.get(requestKey);
   if (existingRequest) return existingRequest;
-  const historyLimit = force ? 180 : 70;
-  const processLimit = force ? 500 : 120;
-  const request = mfetch(`/api/sessions/${encodeURIComponent(sid)}?mobile=1&historyLimit=${historyLimit}&processLimit=${processLimit}&includeToolLog=0${force ? '&fullProcess=1&_fresh=1' : ''}`, {
+  const request = mfetch(`/api/sessions/${encodeURIComponent(sid)}?mobile=1&historyLimit=${historyLimit}&processLimit=${processLimit}&includeToolLog=0${fullProcess ? '&fullProcess=1' : ''}${force ? '&_fresh=1' : ''}`, {
     timeoutMs: force ? 30000 : 20000,
   }).then((r) => {
     const session = r?.session || null;
-    if (session) _sessionCacheSet(sid, session);
+    if (session && !isBoundedPageRequest) _sessionCacheSet(sid, session);
     return session;
   }).finally(() => {
     if (_sessionRequests.get(requestKey) === request) _sessionRequests.delete(requestKey);
