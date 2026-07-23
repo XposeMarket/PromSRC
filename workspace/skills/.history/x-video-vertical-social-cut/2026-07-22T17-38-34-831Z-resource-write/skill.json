@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "x-video-vertical-social-cut",
+  "name": "X Video to Vertical Social Cut",
+  "description": "Turn an X/Twitter video or local source clip into a verified 9:16 social export using the proven direct FFmpeg/run-command media path: preserve widescreen foreground, dark blurred background, burned-in captions, and no persistent header by default.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "make a vertical captioned clip from this x video",
+    "turn this twitter video into a tiktok style video",
+    "make a no-header vertical clip from this video",
+    "create a 9:16 social cut with captions"
+  ],
+  "categories": [
+    "direct-ffmpeg",
+    "source-video",
+    "video-editing",
+    "social-video"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "media_assets"
+  ],
+  "permissions": {},
+  "resources": [
+    {
+      "path": "references/proven-direct-ffmpeg-runbook.md",
+      "type": "markdown",
+      "description": "Exact direct-FFmpeg source-video recipe, command templates, Odyssey baseline, and actual-export QA."
+    },
+    {
+      "path": "SKILL.md",
+      "type": "markdown",
+      "description": "Production entrypoint with exact direct-FFmpeg workflow and a link to the full command runbook."
+    },
+    {
+      "path": "references/frederick-james-field-recovery.md",
+      "type": "reference",
+      "description": "Field-tested X download, FFprobe, and dark-source background recovery from the Frederick James 20-second direct FFmpeg cut."
+    }
+  ]
+}

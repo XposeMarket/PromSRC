@@ -64,8 +64,7 @@ function readActiveProviderAndModel(): { providerId: string; model: string } {
   return { providerId, model };
 }
 
-function configuredContextOverride(providerId: string): Partial<ModelContextProfile> {
-  const raw: any = getConfig().getConfig();
+function configuredContextOverride(providerId: string, raw: any = getConfig().getConfig()): Partial<ModelContextProfile> {
   const providerCfg = raw?.llm?.providers?.[providerId] || {};
   const sessionCfg = raw?.session || {};
   const out: Partial<ModelContextProfile> = {};
@@ -79,8 +78,7 @@ function configuredContextOverride(providerId: string): Partial<ModelContextProf
   return out;
 }
 
-function resolveOllamaNumCtx(): number | null {
-  const raw: any = getConfig().getConfig();
+function resolveOllamaNumCtx(raw: any = getConfig().getConfig()): number | null {
   const candidates = [
     raw?.llm?.providers?.ollama?.num_ctx,
     raw?.llm?.num_ctx,
@@ -179,9 +177,19 @@ export function selectModelInfoForContextProfile(models: ModelInfo[] | undefined
   return models.find((m) => String(m?.name || '').trim().toLowerCase() === wanted);
 }
 
-export function resolveActiveModelContextProfile(providerModelInfo?: Partial<ModelInfo>): ModelContextProfile {
-  const { providerId, model } = readActiveProviderAndModel();
-  const override = configuredContextOverride(providerId);
+/**
+ * Resolve a context profile from an explicit route and config snapshot.  Callers
+ * executing a long-lived turn should use this form so a later Settings save
+ * cannot change that turn's context/token budget mid-flight.
+ */
+export function resolveModelContextProfile(
+  providerId: string,
+  model: string,
+  providerModelInfo?: Partial<ModelInfo>,
+  configSnapshot?: any,
+): ModelContextProfile {
+  const raw = configSnapshot || getConfig().getConfig();
+  const override = configuredContextOverride(providerId, raw);
   const metadataContext = Number(providerModelInfo?.contextWindowTokens);
   const metadataOutput = Number(providerModelInfo?.maxOutputTokens);
   let source: ModelContextProfile['source'] = 'fallback';
@@ -193,7 +201,7 @@ export function resolveActiveModelContextProfile(providerModelInfo?: Partial<Mod
       break;
     }
   }
-  const ollamaCtx = providerId === 'ollama' ? resolveOllamaNumCtx() : null;
+  const ollamaCtx = providerId === 'ollama' ? resolveOllamaNumCtx(raw) : null;
   if (ollamaCtx) source = 'ollama_num_ctx';
   if (Number.isFinite(metadataContext) && metadataContext > 512) source = 'provider_metadata';
   if (override.contextWindowTokens) source = 'config_override';
@@ -241,4 +249,9 @@ export function buildContextBudget(profile: ModelContextProfile): ContextBudget 
     toolContextBudgetTokens: Math.max(600, Math.floor(inputBudgetTokens * 0.16)),
     summaryBudgetTokens: Math.max(700, Math.floor(inputBudgetTokens * 0.08)),
   };
+}
+
+export function resolveActiveModelContextProfile(providerModelInfo?: Partial<ModelInfo>): ModelContextProfile {
+  const { providerId, model } = readActiveProviderAndModel();
+  return resolveModelContextProfile(providerId, model, providerModelInfo);
 }

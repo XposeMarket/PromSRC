@@ -17,6 +17,7 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
 import { digestCanonicalToolArgs, previewCanonicalToolArgs } from '../chat/tool-loop-identity';
+import { assembleCacheAwareSystemPrompt } from '../prompt-cache';
 import { enqueuePostTurnJob, getPostTurnQueueStatus } from '../chat/post-turn-queue';
 import { getContextBuildLimiterStatus, runWithContextBuildPermit } from '../chat/context-build-limiter';
 import { getContextBuildWorkerPoolStatus } from '../chat/context-build-worker-client';
@@ -45,6 +46,8 @@ import { estimateContextCostMicros, resolveModelPricing } from '../../providers/
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
 import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin } from '../session';
+import { clearChatModelRoute, setChatModelRoute } from '../session';
+import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
 import {
   collectRichArtifacts,
@@ -61,6 +64,8 @@ import { executeWeatherLookup } from '../../tools/weather';
 import { executePolymarketLookup } from '../../tools/polymarket';
 import { executeMapLookup } from '../../tools/mapcard';
 import { buildContextBudget, estimateMessageTokenBreakdownForModel, estimateMessagesTokensForModel, estimateTextTokensForModel, resolveActiveModelContextProfile } from '../context/model-context';
+import { captureTurnRouteSnapshot, type TurnRouteSnapshot } from '../chat/turn-route-snapshot';
+import { captureChatTurnRouteSnapshot, ChatModelRouteUnavailableError, resolveChatModelRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
 import { deriveContextWindowUsage } from '../context/context-window-usage';
 import { createToolObservationsFromResults, formatToolStateSummaryForContext, persistToolResultsAsObservations, readToolObservations, type ToolObservation } from '../tool-observations';
 import { envelopeOversizedToolResult } from '../tool-result-envelope';
@@ -1280,6 +1285,7 @@ import {
   recordMainChatGoalDeniedAction,
   recordMainChatGoalRuntimeFailure,
   recordMainChatGoalContinuationBoundary,
+  recordMainChatGoalRequirement,
   resolveMainChatGoalPolicy,
   snapshotMainChatGoal,
   completeMainChatGoalFromOwner,
@@ -1410,7 +1416,7 @@ import {
   initSkillWindows,
   setSkillRecoveryFn,
 } from '../skills-runtime/skill-windows';
-import { buildProviderById, getPrimaryModel } from '../../providers/factory';
+import { getPrimaryModel } from '../../providers/factory';
 import { clearTurnModelOverride, getTurnModelOverride } from '../chat/model-switch-state';
 import {
   separateThinkingFromContent,
@@ -1711,8 +1717,8 @@ function resolveConfiguredAgentReasoning(
         : executionMode === 'team_subagent'
           ? ['team_subagent', 'subagent', 'subagent_planner', 'subagent_orchestrator', 'subagent_researcher', 'subagent_analyst', 'subagent_builder', 'subagent_operator', 'subagent_verifier']
           : executionMode === 'proposal_execution'
-            ? ['proposal_executor_high_risk', 'proposal_executor_low_risk', 'background_task']
-            : ['background_task'];
+            ? ['proposal_executor_high_risk', 'proposal_executor_low_risk']
+            : ['main_chat'];
   const activeRef = `${String(providerId || '').trim()}/${String(model || '').trim()}`.toLowerCase();
   const matching = candidates.find((key) => String(defaults[key] || '').trim().toLowerCase() === activeRef && reasoning[key]);
   const key = matching || candidates.find((candidate) => reasoning[candidate]);
@@ -1991,10 +1997,18 @@ function getRollingCompactionProgress(
 ): { nonSummarySinceCheckpoint: number; candidateNonSummaryMessages: Array<any> } {
   const history = Array.isArray(session?.history) ? session.history : [];
   const candidateHistory = incomingUserMsg ? [...history, incomingUserMsg] : [...history];
+  const marker = String((session as any)?.contextStartMessageId || '').trim();
+  const identityFor = (msg: any) => String(msg?.messageId || '').trim()
+    || `legacy:${String(msg?.role || '')}:${Number(msg?.timestamp || 0)}:${Buffer.from(String(msg?.content || '').replace(/\s+/g, ' ').trim().slice(0, 800)).toString('base64').slice(0, 240)}`;
+  const after = marker.startsWith('after:');
+  const markerIdentity = after ? marker.slice('after:'.length) : marker;
+  const markerIndex = markerIdentity ? candidateHistory.findIndex((msg: any) => identityFor(msg) === markerIdentity) : -1;
   const checkpointRaw = Number((session as any)?.contextStartIndex);
-  const checkpoint = Number.isFinite(checkpointRaw)
-    ? Math.max(0, Math.min(Math.floor(checkpointRaw), candidateHistory.length))
-    : 0;
+  const checkpoint = markerIdentity
+    ? (markerIndex >= 0 ? markerIndex + (after ? 1 : 0) : 0)
+    : Number.isFinite(checkpointRaw)
+      ? Math.max(0, Math.min(Math.floor(checkpointRaw), candidateHistory.length))
+      : 0;
   const candidateSinceCheckpoint = candidateHistory.slice(checkpoint);
   const candidateNonSummaryMessages = candidateSinceCheckpoint.filter((msg: any) => !isCompactionSummaryMessage(msg));
   return {
@@ -2051,6 +2065,7 @@ interface ContextCompactorRunInput {
   numCtx: number;
   numPredict: number;
   model?: string;
+  provider?: any;
   abortSignal?: { aborted: boolean; signal?: AbortSignal };
   recordMeta: Record<string, any>;
 }
@@ -2119,6 +2134,7 @@ async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ c
         num_ctx: input.numCtx,
         num_predict: input.numPredict,
         ...(input.model ? { model: input.model } : {}),
+        ...(input.provider ? { provider: input.provider } : {}),
         usageContext: { sessionId: input.sessionId, agentId: 'context_compactor' },
       },
     );
@@ -2200,11 +2216,12 @@ async function maybeRunMidWorkflowCompaction(input: {
   sendSSE: (event: string, data: any) => void;
   abortSignal?: { aborted: boolean; signal?: AbortSignal };
   reasonHint?: string;
+  routeSnapshot?: TurnRouteSnapshot;
 }): Promise<{ compacted: boolean; summaryText?: string; projectedTokens: number; triggerTokens: number }> {
   const cfg = (getConfig().getConfig() as any)?.session || {};
   if (cfg?.rollingCompactionEnabled === false) return { compacted: false, projectedTokens: 0, triggerTokens: 0 };
-  const profile = resolveActiveModelContextProfile();
-  const budget = buildContextBudget(profile);
+  const profile = input.routeSnapshot?.contextProfile || resolveActiveModelContextProfile();
+  const budget = input.routeSnapshot?.contextBudget || buildContextBudget(profile);
   // Correct the raw model-tokenizer estimate toward real provider input-token
   // counts so the mid-workflow trigger fires at the same effective fullness the
   // provider actually sees. Clamped + default-1.0 until enough samples exist.
@@ -2266,7 +2283,10 @@ async function maybeRunMidWorkflowCompaction(input: {
       recentWindow,
       numCtx: Math.min(profile.contextWindowTokens, Math.max(4096, budget.inputBudgetTokens)),
       numPredict: Math.max(900, Math.min(2600, Math.ceil(summaryMaxTokens * 1.2))),
-      model: String(cfg?.rollingCompactionModel || '').trim() || undefined,
+      // An active interactive turn compacts with its admitted route, never a
+      // newly selected global compaction/main provider.
+      model: input.routeSnapshot?.model || String(cfg?.rollingCompactionModel || '').trim() || undefined,
+      provider: input.routeSnapshot?.provider,
       abortSignal: input.abortSignal,
       recordMeta: {
         reason,
@@ -2363,7 +2383,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   try {
   const latencyStartAt = Date.now();
@@ -2379,6 +2399,10 @@ async function handleChat(
   const markLatency = (stage: string, extra: Record<string, any> = {}) => {
     const now = Date.now();
     const elapsedMs = now - latencyStartAt;
+    // Keep the SSE latency feed and the durable turn trace in lockstep. In
+    // particular, first_provider_event and first_visible_token are the TTFT
+    // markers we need after a turn has completed.
+    turnTiming.mark(stage, { latencyElapsedMs: elapsedMs, ...extra });
     try {
       sendSSE('latency_mark', {
         stage,
@@ -2390,6 +2414,11 @@ async function handleChat(
     return now;
   };
   const ollama = getOllamaClient();
+  // Interactive turns receive this from runInteractiveTurn at admission. Keep a
+  // defensive capture for legacy/direct handleChat callers as well.
+  const admittedRouteSnapshot = executionMode === 'interactive'
+    ? runtimeOptions?.turnRouteSnapshot || captureChatTurnRouteSnapshot(sessionId).snapshot
+    : undefined;
   const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
   const isSyntheticThreadSupervisionReview = runtimeOptions?.syntheticThreadSupervisionReview === true;
   let activeInternalWatchContext = runtimeOptions?.internalWatchContext;
@@ -2437,6 +2466,19 @@ async function handleChat(
     60_000,
     Math.floor((Number(workContextConfig.max_age_hours) || (codingContextActorId ? 336 : 0.5)) * 60 * 60_000),
   );
+  // Synthetic goal-continuation headers are control text, not the user's task.
+  // Build a durable objective so observed source evidence remains usable across
+  // restart/compaction boundaries.
+  const durableCodingGoal = snapshotMainChatGoal(sessionId);
+  const codingContextObjective = durableCodingGoal
+    ? [
+        `Goal: ${durableCodingGoal.goal}`,
+        durableCodingGoal.requirementsLedger?.length ? `Requirements: ${durableCodingGoal.requirementsLedger.slice(-12).map((item) => item.text).join(' | ')}` : '',
+        durableCodingGoal.progressSummary ? `Progress: ${durableCodingGoal.progressSummary}` : '',
+        durableCodingGoal.turnPlans?.length ? `Current plan: ${durableCodingGoal.turnPlans.slice(-1)[0]?.steps?.map((step) => `${step.status}:${step.text}`).join(' | ')}` : '',
+        durableCodingGoal.restartCheckpoint ? `Restart checkpoint: ${durableCodingGoal.restartCheckpoint.reason}; ${durableCodingGoal.restartCheckpoint.verificationSummary || ''}` : '',
+      ].filter(Boolean).join('\n').slice(0, 10000)
+    : message;
   const codingContextScopeId = codingContextActorId ? `agent:${codingContextActorId}` : `session:${sessionId}`;
   const voiceAgentHandoffActive = /\[VOICE_AGENT_HANDOFF\]/i.test(callerContextText);
   const voiceAgentChatHandoffActive = /\[VOICE_AGENT_CHAT_HANDOFF\]/i.test(callerContextText);
@@ -2567,8 +2609,8 @@ async function handleChat(
   });
   // Build a compact tool-state summary from recent assistant turns. Full raw
   // observations stay out-of-band for Hub/debugging instead of prompt context.
-  const activeContextProfile = resolveActiveModelContextProfile();
-  const activeContextBudget = buildContextBudget(activeContextProfile);
+  const activeContextProfile = admittedRouteSnapshot?.contextProfile || resolveActiveModelContextProfile();
+  const activeContextBudget = admittedRouteSnapshot?.contextBudget || buildContextBudget(activeContextProfile);
   const recentToolLogMaxChars = Math.max(1000, Math.min(2200, activeContextBudget.toolContextBudgetTokens * 2));
   htime('before getRecentToolObservationsForContext');
   const recentToolLog = executionMode === 'cron' ? '' : getRecentToolObservationsForContext(sessionId, 3, recentToolLogMaxChars, true);
@@ -2583,6 +2625,7 @@ async function handleChat(
     projectRoot: workspacePath,
     executionMode,
     creativeMode,
+    allowCreativeCoding: workContextConfig.fast_paths?.creative === true,
     shadowMode: codingContextPacketShadowMode,
     maxChars: codingContextPacketMaxChars,
     maxAgeMs: codingContextPacketMaxAgeMs,
@@ -2604,6 +2647,10 @@ async function handleChat(
       packetVersion: Number(workContextConfig.packet_version) === 2 ? 2 : 3,
       packetChars: codingContextPacketDecision.block.length,
       shadowMode: codingContextPacketShadowMode,
+      creativeFastPath: creativeMode ? workContextConfig.fast_paths?.creative === true : false,
+      durableGoalObjective: !!durableCodingGoal,
+      amendmentCount: durableCodingGoal?.requirementsLedger?.length || 0,
+      restartCheckpointInjected: !!durableCodingGoal?.restartCheckpoint,
       counters: getCodingContextPacketTelemetry(),
     });
   }
@@ -2688,6 +2735,7 @@ async function handleChat(
     providerId: providerOverride,
     model: modelOverride,
   });
+  let activeGenerationRouteSnapshot = admittedRouteSnapshot;
   const VISION_ONLY_TOOL_NAMES = new Set([
     'browser_vision_screenshot',
     'browser_vision_click',
@@ -3027,10 +3075,12 @@ async function handleChat(
     }
   };
 
+  const switchRouteSnapshots = new Map<string, TurnRouteSnapshot>();
   const resolveProviderModelOverride = (): {
     model?: string;
     provider?: any;
     providerId?: string;
+    routeSnapshot?: TurnRouteSnapshot;
     source: 'turn_override' | 'provider_override' | 'model_override' | 'current_primary' | 'config_default' | 'default';
     reason?: string;
     tier?: 'low' | 'medium';
@@ -3039,10 +3089,22 @@ async function handleChat(
     const turnOverride = getTurnModelOverride(sessionId);
     if (turnOverride?.providerId && turnOverride?.model) {
       try {
+        const key = `${turnOverride.providerId}/${turnOverride.model}`.toLowerCase();
+        let routeSnapshot = switchRouteSnapshots.get(key);
+        if (!routeSnapshot) {
+          // This is deliberately captured once when switch_model takes effect.
+          // Later Settings writes must not rebuild the override client/config.
+          routeSnapshot = captureTurnRouteSnapshot({
+            providerId: String(turnOverride.providerId).trim(),
+            model: String(turnOverride.model).trim(),
+          });
+          switchRouteSnapshots.set(key, routeSnapshot);
+        }
         return {
-          model: String(turnOverride.model).trim() || undefined,
-          provider: buildProviderById(String(turnOverride.providerId).trim()),
-          providerId: String(turnOverride.providerId).trim(),
+          model: routeSnapshot.model,
+          provider: routeSnapshot.provider,
+          providerId: routeSnapshot.providerId,
+          routeSnapshot,
           source: 'turn_override',
           reason: turnOverride.reason,
           tier: turnOverride.tier,
@@ -3057,10 +3119,12 @@ async function handleChat(
     const explicitModel = String(modelOverride || '').trim();
     if (explicitProviderId) {
       try {
+        const routeSnapshot = captureTurnRouteSnapshot({ providerId: explicitProviderId, model: explicitModel || undefined });
         return {
-          model: explicitModel || undefined,
-          provider: buildProviderById(explicitProviderId),
-          providerId: explicitProviderId,
+          model: routeSnapshot.model,
+          provider: routeSnapshot.provider,
+          providerId: routeSnapshot.providerId,
+          routeSnapshot,
           source: 'provider_override',
         };
       } catch (err: any) {
@@ -3074,10 +3138,12 @@ async function handleChat(
       const parsed = parseProviderModelRef(explicitModel);
       if (parsed) {
         try {
+          const routeSnapshot = captureTurnRouteSnapshot({ providerId: parsed.providerId, model: parsed.model });
           return {
-            model: parsed.model,
-            provider: buildProviderById(parsed.providerId),
-            providerId: parsed.providerId,
+            model: routeSnapshot.model,
+            provider: routeSnapshot.provider,
+            providerId: routeSnapshot.providerId,
+            routeSnapshot,
             source: 'model_override',
           };
         } catch (err: any) {
@@ -3086,8 +3152,18 @@ async function handleChat(
       }
     }
 
-    // Interactive chat's current model is the active primary provider/model.
-    // agent_model_defaults.main_chat is a route default, not the live model state.
+    // The admission snapshot is authoritative throughout an interactive turn.
+    // agent_model_defaults.main_chat is a route default, not live turn state.
+    if (admittedRouteSnapshot) {
+      return {
+        model: admittedRouteSnapshot.model,
+        provider: admittedRouteSnapshot.provider,
+        providerId: admittedRouteSnapshot.providerId,
+        routeSnapshot: admittedRouteSnapshot,
+        source: 'current_primary',
+      };
+    }
+
     const cfg = getConfig().getConfig() as any;
     if ((executionMode || 'interactive') === 'interactive') {
       const activeProvider = String(cfg?.llm?.provider || '').trim();
@@ -3096,10 +3172,12 @@ async function handleChat(
         : '';
       if (activeProvider && activeModel) {
         try {
+          const routeSnapshot = captureTurnRouteSnapshot({ providerId: activeProvider, model: activeModel });
           return {
-            model: activeModel,
-            provider: buildProviderById(activeProvider),
-            providerId: activeProvider,
+            model: routeSnapshot.model,
+            provider: routeSnapshot.provider,
+            providerId: routeSnapshot.providerId,
+            routeSnapshot,
             source: 'current_primary',
           };
         } catch (err: any) {
@@ -3119,8 +3197,8 @@ async function handleChat(
           ? ['team_manager', 'manager']
           : executionMode === 'team_subagent'
             ? ['team_subagent', 'subagent']
-            : (executionMode === 'background_task' || executionMode === 'proposal_execution' || executionMode === 'cron')
-              ? ['background_task']
+            : (executionMode === 'background_task' || executionMode === 'cron')
+              ? ['main_chat']
               : [];
     let modeKey = '';
     let modeRef = '';
@@ -3135,10 +3213,12 @@ async function handleChat(
       const parsed = parseProviderModelRef(modeRef);
       if (parsed) {
         try {
+          const routeSnapshot = captureTurnRouteSnapshot({ providerId: parsed.providerId, model: parsed.model });
           return {
-            model: parsed.model,
-            provider: buildProviderById(parsed.providerId),
-            providerId: parsed.providerId,
+            model: routeSnapshot.model,
+            provider: routeSnapshot.provider,
+            providerId: routeSnapshot.providerId,
+            routeSnapshot,
             source: 'config_default',
           };
         } catch (err: any) {
@@ -3154,11 +3234,8 @@ async function handleChat(
 
   let currentModelSystemBlock = '';
   const formatCurrentModelSystemBlock = (generationOverride: ReturnType<typeof resolveProviderModelOverride>): string => {
-    const cfg = getConfig().getConfig() as any;
-    const activeProvider = String(cfg?.llm?.provider || '').trim();
-    const providerId = String(generationOverride.providerId || providerOverride || activeProvider || '').trim() || 'configured primary provider';
-    const providerCfgModel = activeProvider ? String(cfg?.llm?.providers?.[activeProvider]?.model || '').trim() : '';
-    const model = String(generationOverride.model || modelOverride || providerCfgModel || getPrimaryModel() || '').trim() || 'configured primary model';
+    const providerId = String(generationOverride.providerId || providerOverride || '').trim() || 'configured primary provider';
+    const model = String(generationOverride.model || modelOverride || '').trim() || 'configured primary model';
     return [
       '[CURRENT_MODEL]',
       'This block describes the exact provider/model currently running this AI generation.',
@@ -3171,11 +3248,8 @@ async function handleChat(
   const resolveCapabilitiesForGenerationOverride = (
     generationOverride: ReturnType<typeof resolveProviderModelOverride>,
   ): ModelCapabilities => {
-    const cfg = getConfig().getConfig() as any;
-    const activeProvider = String(cfg?.llm?.provider || '').trim();
-    const providerId = String(generationOverride.providerId || providerOverride || activeProvider || '').trim();
-    const providerCfgModel = providerId ? String(cfg?.llm?.providers?.[providerId]?.model || '').trim() : '';
-    const model = String(generationOverride.model || modelOverride || providerCfgModel || getPrimaryModel() || '').trim();
+    const providerId = String(generationOverride.providerId || providerOverride || '').trim();
+    const model = String(generationOverride.model || modelOverride || '').trim();
     return resolvePrimaryModelCapabilities({ providerId, model });
   };
   htime('before initial provider/model resolution');
@@ -3820,6 +3894,9 @@ async function handleChat(
   };
 
   const getToolUsagePricingContext = (): { providerId: string; model: string } => {
+    if (activeGenerationRouteSnapshot) {
+      return { providerId: activeGenerationRouteSnapshot.providerId, model: activeGenerationRouteSnapshot.model };
+    }
     const cfg = getConfig().getConfig() as any;
     const activeProvider = String(cfg?.llm?.provider || '').trim();
     const providerId = String(
@@ -3964,7 +4041,7 @@ async function handleChat(
           scopeId: codingContextScopeId,
           actorId: codingContextActorId || undefined,
           runtimeTaskId: durableTaskId || undefined,
-          objective: message,
+          objective: codingContextObjective,
           projectRoot: workspacePath,
           toolName,
           args: effectiveToolArgs,
@@ -4359,7 +4436,6 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       executionModeSystemBlock ? `${executionModeSystemBlock}\n` : '',
       teachModeSystemBlock ? `${teachModeSystemBlock}\n` : '',
       identityLine,
-      `Current date: ${dateStr}, ${timeStr}.`,
       'Never search for or link Prometheus repos unless the user is asking about Prometheus itself.',
       "This app runs on the user's own machine - browser/desktop automation requests are pre-authorized.",
       'Execution policy: default to action, not refusal. When a user asks you to do something, try to complete it directly with available tools and persistent problem-solving. Do not decline for generic capability reasons. If a request is blocked by a real hard constraint (missing auth, unavailable tool, external outage, or physical impossibility), state the exact blocker in one line and immediately continue with the closest viable path that still advances the user goal.',
@@ -4379,15 +4455,44 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   const buildSystemPrompt = (mode: 'full' | 'switch_model'): string => {
     const baseSystemPrompt = buildBaseSystemPrompt();
     if (mode === 'switch_model') {
-      return `${baseSystemPrompt}${switchModelPersonalityCtx || ''}`;
+      return assembleCacheAwareSystemPrompt({
+        stableParts: [baseSystemPrompt, currentModelSystemBlock],
+        personalityContext: switchModelPersonalityCtx || '',
+        volatileParts: [`Current date: ${dateStr}, ${timeStr}.`],
+      });
     }
     if (executionMode === 'team_subagent' || executionMode === 'team_manager' || executionMode === 'background_agent' || isDirectSubagentChatTurn) {
       // Subagents receive subagent personality context first, then their role file
       // and task/chat context from callerContext as the final, most specific layer.
-      return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${codingContextPacketDecision.block ? '\n\n' + codingContextPacketDecision.block : ''}${personalityCtx}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}`;
+      return assembleCacheAwareSystemPrompt({
+        stableParts: [baseSystemPrompt, currentModelSystemBlock],
+        personalityContext: personalityCtx,
+        volatileBeforePersonality: [
+          `Current date: ${dateStr}, ${timeStr}.`,
+          recentToolLog,
+          codingContextPacketDecision.block,
+        ],
+        volatileAfterPersonality: [
+          callerContext,
+          browserStateCtx,
+        ],
+      });
     }
     const onboardingBlock = isOnboardingSession(sessionId) ? '\n\n' + getMeetAndGreetSystemPrompt() : '';
-    return `${baseSystemPrompt}${currentModelSystemBlock ? '\n\n' + currentModelSystemBlock : ''}${recentToolLog ? '\n\n' + recentToolLog : ''}${codingContextPacketDecision.block ? '\n\n' + codingContextPacketDecision.block : ''}${callerContext ? '\n\n' + callerContext : ''}${browserStateCtx}${personalityCtx}${onboardingBlock}`;
+    return assembleCacheAwareSystemPrompt({
+      stableParts: [baseSystemPrompt, currentModelSystemBlock],
+      personalityContext: personalityCtx,
+      volatileBeforePersonality: [
+        `Current date: ${dateStr}, ${timeStr}.`,
+        recentToolLog,
+        codingContextPacketDecision.block,
+        callerContext,
+        browserStateCtx,
+      ],
+      volatileAfterPersonality: [
+        onboardingBlock,
+      ],
+    });
   };
   const messages: any[] = [
     {
@@ -6335,8 +6440,11 @@ RULES:
         )
       );
 	      const generationOverride = resolveProviderModelOverride();
+        activeGenerationRouteSnapshot = generationOverride.routeSnapshot || admittedRouteSnapshot;
 	      const configuredReasoning = reasoningOptions === undefined
-	        ? resolveConfiguredAgentReasoning(executionMode, generationOverride.providerId, generationOverride.model)
+        ? (activeGenerationRouteSnapshot
+          ? activeGenerationRouteSnapshot.reasoningEffort
+          : resolveConfiguredAgentReasoning(executionMode, generationOverride.providerId, generationOverride.model))
 	        : undefined;
 	      const requestedThinkMode = reasoningOptions?.enabled
 	        ? (reasoningOptions.level === 'extra_high' ? 'xhigh' : (reasoningOptions.level || 'low'))
@@ -6364,10 +6472,14 @@ RULES:
             });
           }
           if (!firstVisibleTokenAt) {
+            const providerTtftMs = providerRequestStartedAt
+              ? Math.max(0, Date.now() - providerRequestStartedAt)
+              : undefined;
             firstVisibleTokenAt = markLatency('first_visible_token', {
               provider: generationOverride.providerId,
               model: generationOverride.model,
               providerWaitMs: firstProviderEventAt ? firstProviderEventAt - providerRequestStartedAt : undefined,
+              providerTtftMs,
             });
           }
           if (isGrokGeneration) {
@@ -6511,7 +6623,7 @@ RULES:
       const generationPromise = ollama.chatWithThinking(messages, 'executor', {
         tools,
         temperature: 0.3,
-        num_ctx: 8192,
+        num_ctx: activeGenerationRouteSnapshot?.contextProfile.contextWindowTokens || 8192,
         num_predict: grokGreetingLikeTurn ? 256 : 4096,
 	        think: primaryThinkMode,
 	        model: generationOverride.model,
@@ -8698,6 +8810,7 @@ RULES:
         reasoningTrail: allThinking,
         sendSSE,
         abortSignal,
+        routeSnapshot: activeGenerationRouteSnapshot,
       });
       if (midCompact.compacted) {
         midWorkflowCompactionsThisTurn++;
@@ -9314,6 +9427,23 @@ async function runInteractiveTurn(
   const turnLease = preAcquiredTurnLease || await mainChatTurnCoordinator.acquire(sessionId, abortSignal?.signal);
   turnTiming.mark('lease_acquired', { waitMs: Date.now() - leaseWaitStartedAt });
   try {
+  // Admission boundary: an explicit chatModelRoute or the current Main Chat
+  // default is captured once and stays immutable through this whole turn.
+  let turnRouteSnapshot: TurnRouteSnapshot;
+  let admittedChatModelRoute: any;
+  try {
+    const admitted = captureChatTurnRouteSnapshot(sessionId);
+    turnRouteSnapshot = admitted.snapshot;
+    admittedChatModelRoute = admitted.state;
+  } catch (error: any) {
+    if (error instanceof ChatModelRouteUnavailableError) {
+      const text = error.state.error || 'This chat model route is unavailable. Reconnect it, choose another model, or use Main Chat default.';
+      sendSSE('error', { code: 'chat_model_route_unavailable', message: text, chatModelRoute: error.state });
+      return { type: 'chat', text };
+    }
+    throw error;
+  }
+  sendSSE('chat_model_route', { ...admittedChatModelRoute, sessionId });
   const isSubagentChatSession = /^subagent_chat_/i.test(String(sessionId || ''));
   const isDirectSubagentChatTurn = isSubagentChatSession && flags?.directSubagentChat === true;
   const turnExcludedSkillIds = Array.isArray(flags?.excludedSkillIds)
@@ -9512,6 +9642,14 @@ async function runInteractiveTurn(
         undefined,
         abortSignal,
         internalCompactionContext,
+        undefined,
+        'interactive',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { turnRouteSnapshot, timingRecorder: turnTiming },
       );
       if (!abortSignal?.aborted && compactResult?.text) {
         addMessage(
@@ -9582,6 +9720,14 @@ async function runInteractiveTurn(
         undefined,
         abortSignal,
         internalFlushContext,
+        undefined,
+        'interactive',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { turnRouteSnapshot, timingRecorder: turnTiming },
       );
       if (!abortSignal?.aborted && flushResult?.text) {
         addMessage(
@@ -9659,6 +9805,7 @@ async function runInteractiveTurn(
         forcedSkillIds: turnForcedSkillIds,
         instructionCallerRequirements: callerContext ? [callerContext] : [],
         timingRecorder: turnTiming,
+        turnRouteSnapshot,
       },
   ));
   turnTiming.mark('handle_chat_done');
@@ -9686,6 +9833,19 @@ async function runInteractiveTurn(
         readModelUsageEventsForSession(sessionId),
         Date.now(),
       ) || undefined;
+    }
+  }
+
+  // Preserve every substantive user steer while a goal is active outside of
+  // compactable transcript history.  This includes amendments that arrive
+  // during the short restart/runner gaps.
+  if (!isGoalContinuationTurn && !isSyntheticSubagentCompletionTurn && !isSyntheticThreadSupervisionReview && !isSyntheticInternalWatch && !isSyntheticRestartRecovery) {
+    const activeGoal = snapshotMainChatGoal(sessionId);
+    if (activeGoal && ['active', 'restarting', 'paused'].includes(String(activeGoal.status || ''))) {
+      const amended = recordMainChatGoalRequirement(sessionId, message, 'user_message');
+      if (amended?.id === activeGoal.id) {
+        sendSSE('goal_context_injected', { goalId: amended.id, amendmentCount: amended.requirementsLedger?.length || 0, source: 'user_message' });
+      }
     }
   }
   const toolSummaryStartedAt = Date.now();
@@ -15230,78 +15390,6 @@ function attachRuntimeProcessEntriesToLatestAssistant(
   }
 }
 
-function historyMessageMergeKey(msg: any): string {
-  const role = msg?.role === 'assistant' || msg?.role === 'ai' ? 'assistant' : msg?.role === 'user' ? 'user' : '';
-  const content = String(msg?.content || '').replace(/\s+/g, ' ').trim().slice(0, 500);
-  if (!role || !content) return '';
-  const eventId = String(msg?.voiceInterruptionEventId || msg?.eventId || '').trim();
-  if (eventId) return `${role}|event:${eventId}|${content}`;
-  return `${role}|${content}`;
-}
-
-function isInterruptedAssistantMessage(msg: any): boolean {
-  const role = msg?.role === 'assistant' || msg?.role === 'ai' ? 'assistant' : '';
-  if (!role) return false;
-  const content = String(msg?.content || '').trim();
-  if (!content) return false;
-  return /^\[(?:Stopped by user|Generation stopped|Interrupted by user)\]/i.test(content)
-    || /^Restart Context Packet\b/i.test(content)
-    || /\b(?:stopped|interrupted|aborted) by user\b/i.test(content);
-}
-
-function mergeHistoryMetadataFromPrior(raw: any, prior: any): any {
-  if (!prior || typeof prior !== 'object' || !raw || typeof raw !== 'object') return raw;
-  const next: any = { ...raw };
-  if (!Array.isArray(next.processEntries) && Array.isArray((prior as any).processEntries)) next.processEntries = (prior as any).processEntries;
-  if (!next.toolLog && (prior as any).toolLog) next.toolLog = (prior as any).toolLog;
-  if (!next.thinking && (prior as any).thinking) next.thinking = (prior as any).thinking;
-  if (!next.fileChanges && (prior as any).fileChanges) next.fileChanges = (prior as any).fileChanges;
-  for (const key of ['generatedImages', 'generatedVideos', 'canvasFiles', 'files', 'artifacts', 'richArtifacts', 'attachmentPreviews']) {
-    if ((!Array.isArray(next[key]) || next[key].length === 0) && Array.isArray((prior as any)[key]) && (prior as any)[key].length) {
-      next[key] = (prior as any)[key];
-    }
-  }
-  const priorBodyFiles = Array.isArray((prior as any)?.body?.files) ? (prior as any).body.files : [];
-  const nextBodyFiles = Array.isArray(next?.body?.files) ? next.body.files : [];
-  if (!nextBodyFiles.length && priorBodyFiles.length) {
-    next.body = { ...(next.body && typeof next.body === 'object' ? next.body : {}), files: priorBodyFiles };
-  }
-  return next;
-}
-
-function mergeHistoryWithExistingMessageMetadata(sessionId: string, incomingHistory: any[]): any[] {
-  const incoming = Array.isArray(incomingHistory) ? incomingHistory : [];
-  if (!incoming.length) return incoming;
-  try {
-    const existing = Array.isArray(getSession(sessionId).history) ? getSession(sessionId).history : [];
-    const byKey = new Map<string, any>();
-    for (const msg of existing) {
-      const key = historyMessageMergeKey(msg);
-      if (key && !byKey.has(key)) byKey.set(key, msg);
-    }
-    const interruptedExisting = existing
-      .filter(isInterruptedAssistantMessage)
-      .filter((msg: any) => Array.isArray(msg?.processEntries) || msg?.toolLog || msg?.fileChanges)
-      .sort((a: any, b: any) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));
-    return incoming.map((raw) => {
-      if (!raw || typeof raw !== 'object') return raw;
-      const prior = byKey.get(historyMessageMergeKey(raw));
-      if (prior && typeof prior === 'object') return mergeHistoryMetadataFromPrior(raw, prior);
-      if (isInterruptedAssistantMessage(raw)) {
-        const rawTs = Number(raw?.timestamp || 0);
-        const nearestInterrupted = interruptedExisting.find((msg: any) => {
-          const msgTs = Number(msg?.timestamp || 0);
-          return !rawTs || !msgTs || Math.abs(msgTs - rawTs) < 10 * 60_000;
-        });
-        if (nearestInterrupted) return mergeHistoryMetadataFromPrior(raw, nearestInterrupted);
-      }
-      return raw;
-    });
-  } catch {
-    return incoming;
-  }
-}
-
 function sessionProcessLogFromHistory(session: any): any[] {
   const out: any[] = [];
   for (const msg of Array.isArray(session?.history) ? session.history : []) {
@@ -19191,6 +19279,8 @@ router.get('/api/push/public-key', (_req, res) => {
 router.get('/api/push/status', (_req, res) => {
   try {
     const subscriptions = listWebPushSubscriptions();
+    const endpoint = String(_req.query?.endpoint || '').trim();
+    const current = endpoint ? subscriptions.find((item) => item.endpoint === endpoint) : null;
     res.json({
       success: true,
       supported: true,
@@ -19205,6 +19295,12 @@ router.get('/api/push/status', (_req, res) => {
         lastErrorAt: item.lastErrorAt || 0,
         lastError: item.lastError || '',
       })),
+      currentSubscription: endpoint ? {
+        registered: !!current,
+        lastSuccessAt: current?.lastSuccessAt || 0,
+        lastErrorAt: current?.lastErrorAt || 0,
+        lastError: current?.lastError || '',
+      } : undefined,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: String(err?.message || err) });
@@ -19238,14 +19334,21 @@ router.post('/api/push/unsubscribe', (req, res) => {
 router.post('/api/push/test', (req, res) => {
   try {
     const sessionId = String(req.body?.sessionId || getLastMainSessionId?.() || 'default').trim() || 'default';
-    sendWebPushToAll({
+    const endpoint = String(req.body?.endpoint || '').trim();
+    void sendWebPushToAll({
       title: 'Notifications are on',
       body: 'Chat response notifications are ready.',
       url: `/?source=pwa#mobile/chat/${encodeURIComponent(sessionId)}`,
       tag: 'prometheus-push-test',
       data: { kind: 'push_test', sessionId },
+    }, { endpoint }).then((deliveries) => {
+      const delivery = endpoint
+        ? deliveries.find((item) => item.endpoint === endpoint) || { ok: false, error: 'This device is not registered for push notifications.' }
+        : undefined;
+      res.json({ success: delivery ? delivery.ok === true : true, subscriptionCount: listWebPushSubscriptions().length, delivery });
+    }).catch((err: any) => {
+      res.status(500).json({ success: false, error: String(err?.message || err) });
     });
-    res.json({ success: true, subscriptionCount: listWebPushSubscriptions().length });
   } catch (err: any) {
     res.status(500).json({ success: false, error: String(err?.message || err) });
   }
@@ -19905,7 +20008,10 @@ router.post('/api/sessions/:id/history', requireSafeSessionParam, (req, res) => 
       });
       return;
     }
-    const history = mergeHistoryWithExistingMessageMetadata(id, rawHistory);
+    const existingHistory = Array.isArray(getSession(id).history) ? getSession(id).history : [];
+    const history = mergeHistoryWithExistingMessageMetadata(existingHistory, rawHistory, {
+      preserveAllExisting: isMobileHistorySyncRequest(req),
+    });
     replaceHistory(id, history as any, { resetCompaction: req.body?.resetCompaction === true });
     flushSession(id);
     res.json({ success: true });
@@ -19983,6 +20089,54 @@ router.patch('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
   }
 });
 
+// Explicit per-chat model route. This is intentionally unrelated to the
+// existing session `pinned`/favorite flag above.
+router.get('/api/sessions/:id/model-route', requireSafeSessionParam, (req, res) => {
+  try {
+    const sessionId = String(req.params.id || '').trim();
+    let state = resolveChatModelRouteSource(sessionId).state;
+    try { state = captureChatTurnRouteSnapshot(sessionId).state; } catch (error: any) {
+      if (error instanceof ChatModelRouteUnavailableError) state = error.state;
+      else throw error;
+    }
+    res.json({ success: true, sessionId, chatModelRoute: state });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: String(error?.message || error) });
+  }
+});
+
+router.put('/api/sessions/:id/model-route', requireSafeSessionParam, (req, res) => {
+  try {
+    const sessionId = String(req.params.id || '').trim();
+    const route = {
+      providerId: String(req.body?.providerId || req.body?.provider || '').trim(),
+      model: String(req.body?.model || '').trim(),
+      reasoningEffort: String(req.body?.reasoningEffort ?? req.body?.reasoning_effort ?? '').trim() || undefined,
+      accountId: String(req.body?.accountId ?? req.body?.account_id ?? '').trim() || undefined,
+    };
+    const state = validateChatModelRoute(route);
+    if (state.availability !== 'ready') {
+      res.status(409).json({ success: false, code: 'chat_model_route_unavailable', error: state.error, chatModelRoute: state });
+      return;
+    }
+    const override = setChatModelRoute(sessionId, route);
+    res.json({ success: true, sessionId, chatModelRoute: { ...state, mode: 'explicit', override } });
+  } catch (error: any) {
+    res.status(400).json({ success: false, error: String(error?.message || error) });
+  }
+});
+
+router.delete('/api/sessions/:id/model-route', requireSafeSessionParam, (req, res) => {
+  try {
+    const sessionId = String(req.params.id || '').trim();
+    clearChatModelRoute(sessionId);
+    const state = resolveChatModelRouteSource(sessionId).state;
+    res.json({ success: true, sessionId, chatModelRoute: state });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: String(error?.message || error) });
+  }
+});
+
 router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.id);
@@ -20046,6 +20200,10 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
         canvasProjectLink: session.canvasProjectLink || null,
         mainChatGoal: session.mainChatGoal || null,
         mainChatGoalHistory: session.mainChatGoalHistory || [],
+        chatModelRoute: (() => {
+          try { return captureChatTurnRouteSnapshot(sessionId).state; }
+          catch (error: any) { return error instanceof ChatModelRouteUnavailableError ? error.state : resolveChatModelRouteSource(sessionId).state; }
+        })(),
         title: getSessionDisplayTitle(session),
         autoTitleLocked: session.autoTitleLocked === true,
       }
@@ -20063,8 +20221,9 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
       res.status(400).json({ error: 'Session id required' });
       return;
     }
-    const profile = resolveActiveModelContextProfile();
-    const budget = buildContextBudget(profile);
+    const routeSnapshot = captureChatTurnRouteSnapshot(id).snapshot;
+    const profile = routeSnapshot.contextProfile;
+    const budget = routeSnapshot.contextBudget;
     const messageCount = resolveRollingCompactionPolicy().messageCount;
     const history = getHistoryForApiCall(id, Math.ceil(messageCount / 2), { maxMessages: messageCount });
     const recentToolContext = getRecentToolObservationsForContext(

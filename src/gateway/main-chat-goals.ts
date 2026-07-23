@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { getConfig } from '../config/config';
 import { getOllamaClient } from '../agents/ollama-client';
-import { getLatestPendingDevSourceEditContinuation } from './dev-source-approvals';
+import { getDevSourceEditContinuation, getLatestPendingDevSourceEditContinuation } from './dev-source-approvals';
 import { getCoordinatedDevEdit } from './dev-edit-coordinator';
 import {
   archiveMainChatGoal,
@@ -25,8 +25,6 @@ export interface MainChatGoalPolicy {
   autoResumeOnRestart: boolean;
   summaryEveryTurns: number;
   summaryMaxWords: number;
-  judgeModel: string;
-  judgeReasoning: string;
   compactionModel: string;
   compactionReasoning: string;
   maxConsecutiveJudgeFailures: number;
@@ -41,7 +39,7 @@ export interface MainChatGoalPolicy {
   };
 }
 
-export interface MainChatGoalJudgeResult {
+export interface MainChatGoalOutcome {
   status: 'done' | 'continue' | 'blocked';
   reason: string;
   /** Concrete instruction for the next autonomous worker turn. Empty only when the goal is done. */
@@ -171,8 +169,6 @@ export function resolveMainChatGoalPolicy(): MainChatGoalPolicy {
     autoResumeOnRestart: cfg.autoResumeOnRestart !== false,
     summaryEveryTurns: Number.isFinite(summaryEveryTurnsRaw) ? Math.max(1, Math.min(50, Math.floor(summaryEveryTurnsRaw))) : 5,
     summaryMaxWords: Number.isFinite(summaryMaxWordsRaw) ? Math.max(120, Math.min(1200, Math.floor(summaryMaxWordsRaw))) : 450,
-    judgeModel: String(cfg.judgeModel || '').trim(),
-    judgeReasoning: String(cfg.judgeReasoning || '').trim(),
     compactionModel: String(cfg.compactionModel || '').trim(),
     compactionReasoning: String(cfg.compactionReasoning || '').trim(),
     maxConsecutiveJudgeFailures: Number.isFinite(maxJudgeRaw) ? Math.max(1, Math.min(20, Math.floor(maxJudgeRaw))) : 3,
@@ -206,6 +202,7 @@ function nowGoal(sessionId: string, goal: string): MainChatGoalState {
     createdAt: now,
     updatedAt: now,
     turnPlans: [],
+    requirementsLedger: [{ id: `goal_requirement_${now}`, text: goal, at: now, source: 'initial_goal' }],
     currentIteration: 1,
     iterations: [{
       iterationNumber: 1,
@@ -249,21 +246,6 @@ function formatDeniedActions(goal: MainChatGoalState, max = 8): string {
 function oneLine(text: string, max = 220): string {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   return clean.length > max ? `${clean.slice(0, max - 1)}...` : clean;
-}
-
-function compactTextArray(input: any, maxItems = 12, maxChars = 360): string[] {
-  if (!Array.isArray(input)) return [];
-  return input
-    .map((item) => oneLine(String(item || ''), maxChars))
-    .filter((item) => {
-      if (!item) return false;
-      const normalized = item.replace(/[\s._-]+/g, ' ').trim().toLowerCase();
-      if (!normalized) return false;
-      if (/^(?:none|no|n\/a|na|null|undefined|\[\]|not applicable|no gaps|no issues|no blockers)$/.test(normalized)) return false;
-      if (/^no (?:known |remaining |unresolved )?(?:issues|gaps|verification gaps|missing acceptance criteria|unresolved issues|blockers|defects)\.?$/.test(normalized)) return false;
-      return true;
-    })
-    .slice(0, maxItems);
 }
 
 function normalizeProgressStatus(input: any): MainChatGoalPlanStep['status'] {
@@ -499,7 +481,7 @@ export function recordMainChatGoalTurnPlanProgress(
   });
 }
 
-function parseGoalJudgeJsonCandidate(candidate: string): any | null {
+function parseGoalJsonCandidate(candidate: string): any | null {
   const text = String(candidate || '').trim();
   if (!text) return null;
   try {
@@ -521,11 +503,11 @@ function extractJsonObject(raw: string): any | null {
   const unfenced = text.startsWith('```')
     ? text.replace(/^```[a-z]*\s*/i, '').replace(/```$/i, '').trim()
     : text;
-  const direct = parseGoalJudgeJsonCandidate(unfenced);
+  const direct = parseGoalJsonCandidate(unfenced);
   if (direct) return direct;
   const match = unfenced.match(/\{[\s\S]*\}/);
   if (!match) return null;
-  return parseGoalJudgeJsonCandidate(match[0]);
+  return parseGoalJsonCandidate(match[0]);
 }
 
 function stripThink(text: string): string {
@@ -535,66 +517,6 @@ function stripThink(text: string): string {
 function compactTextBlock(text: string, max = 1800): string {
   const clean = String(text || '').replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
   return clean.length > max ? `${clean.slice(0, max - 1)}...` : clean;
-}
-
-function buildGoalJudgeSessionContext(goal: MainChatGoalState): string {
-  const session = getSession(goal.sessionId);
-  const history = Array.isArray(session.history) ? session.history : [];
-  if (!history.length) return '(none)';
-
-  const createdAt = Number(goal.createdAt || 0);
-  const beforeGoal = history
-    .filter((msg) => !createdAt || Number(msg.timestamp || 0) <= createdAt)
-    .slice(-10);
-  const sinceGoal = history
-    .filter((msg) => createdAt && Number(msg.timestamp || 0) > createdAt)
-    .slice(-18);
-
-  const seen = new Set<string>();
-  const selected: ChatMessage[] = [];
-  for (const msg of [...beforeGoal, ...sinceGoal]) {
-    const key = `${msg.role}:${msg.timestamp}:${String(msg.content || '').slice(0, 80)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    selected.push(msg);
-  }
-
-  return formatGoalMessages(selected).slice(0, 9000) || '(none)';
-}
-
-function normalizeJudgeDirective(parsed: any, status: MainChatGoalJudgeResult['status'], reason: string): string {
-  const raw = parsed?.directive ?? parsed?.next_step_directive ?? parsed?.nextStepDirective ?? parsed?.next_step ?? '';
-  const directive = compactTextBlock(String(raw || ''), 1200);
-  if (status === 'done') return '';
-  if (directive) return directive;
-  if (status === 'blocked') return `Stop and surface the blocker clearly: ${reason}`;
-  return `Continue the goal by addressing what remains incomplete: ${reason}`;
-}
-
-function formatGoalTurnPlans(goal: MainChatGoalState): string {
-  const plans = Array.isArray(goal.turnPlans) ? goal.turnPlans.slice(-8) : [];
-  if (!plans.length) return '(none)';
-  return plans.map((plan) => {
-    const steps = Array.isArray(plan.steps) ? plan.steps : [];
-    const stepLines = steps.map((step, index) => `  ${index + 1}. [${step.status || 'pending'}] ${oneLine(step.text, 180)}${step.note ? ` | evidence: ${oneLine(step.note, 220)}` : ''}`);
-    return [
-      `Turn ${plan.turnNumber} (${plan.status || 'planned'}, source=${plan.source || 'unknown'})`,
-      ...stepLines,
-      plan.judgeReason ? `  judge: ${oneLine(plan.judgeReason, 260)}` : '',
-    ].filter(Boolean).join('\n');
-  }).join('\n');
-}
-
-function formatGoalIterations(goal: MainChatGoalState): string {
-  const rows = Array.isArray(goal.iterations) ? goal.iterations.slice(-12) : [];
-  if (!rows.length) return '(none)';
-  return rows.map((item) => [
-    `Iteration ${item.iterationNumber} / turn ${item.turnNumber}: status=${item.status}, restarts=${item.restartCount}, verdict=${item.verdict || '(pending)'}, grade=${item.qualityGrade || '(pending)'}`,
-    item.reason ? `  reason: ${oneLine(item.reason, 320)}` : '',
-    item.evidence?.length ? `  evidence: ${item.evidence.map((entry) => oneLine(entry, 180)).join(' | ')}` : '',
-    item.unresolvedIssues?.length ? `  unresolved: ${item.unresolvedIssues.map((entry) => oneLine(entry, 180)).join(' | ')}` : '',
-    item.verificationGaps?.length ? `  verification gaps: ${item.verificationGaps.map((entry) => oneLine(entry, 180)).join(' | ')}` : '',
-  ].filter(Boolean).join('\n')).join('\n');
 }
 
 function isOpenGoalTurnPlan(plan: MainChatGoalTurnPlan | null | undefined): boolean {
@@ -637,7 +559,7 @@ function findResumableGoalTurnPlan(goal: MainChatGoalState): MainChatGoalTurnPla
   return [...plans].reverse().find((plan) => isOpenGoalTurnPlan(plan)) || null;
 }
 
-function reopenPlanStepAfterContinue(plan: MainChatGoalTurnPlan, judge: MainChatGoalJudgeResult, now: number): MainChatGoalTurnPlan {
+function reopenPlanStepAfterContinue(plan: MainChatGoalTurnPlan, judge: MainChatGoalOutcome, now: number): MainChatGoalTurnPlan {
   const steps = Array.isArray(plan.steps) ? plan.steps.map((step) => ({ ...step })) : [];
   if (!steps.length) return plan;
   const hasOpenStep = steps.some((step) => ['pending', 'in_progress', 'failed'].includes(String(step.status || '').toLowerCase()));
@@ -673,154 +595,6 @@ function reopenPlanStepAfterContinue(plan: MainChatGoalTurnPlan, judge: MainChat
     activeIndex: index,
     steps,
   };
-}
-
-export async function judgeMainChatGoal(goal: MainChatGoalState, lastResponse: string): Promise<MainChatGoalJudgeResult> {
-  const response = String(lastResponse || '').trim();
-  if (!response) {
-    return {
-      status: 'continue',
-      reason: 'No assistant response to evaluate yet.',
-      directive: 'Run the next concrete worker turn for the goal and produce observable progress.',
-      confidence: 0,
-      parseFailed: false,
-    };
-  }
-  const policy = resolveMainChatGoalPolicy();
-  const sessionContext = buildGoalJudgeSessionContext(goal);
-  const toolLog = getRecentToolObservationsForContext(goal.sessionId, 18, 8000);
-  const prompt = [
-    'Evaluate whether the assistant has satisfied the active main-chat goal.',
-    'You are an isolated judge using the main model path, but you do not receive the normal soul/memory/persona prompt.',
-    'Return exactly one JSON object with keys: status, reason, directive, confidence, quality_grade, unresolved_issues, missing_acceptance_criteria, verification_gaps, evidence.',
-    'status must be one of: done, continue, blocked.',
-    'Use done only when the actual requested outcome is complete, usable, and backed by direct evidence in chat, tool observations, live verification, or assistant response.',
-    'Source/file writes, patch success, build success, and a final assistant summary are evidence that work happened. They are NOT sufficient by themselves for done.',
-    'For coding/build/app/game goals, done requires all requested acceptance criteria to be met or explicitly out of scope, no known unresolved user-reported defects, no current console/runtime/build errors, and verification appropriate to the artifact.',
-    'For UI/frontend/mobile/game goals, require evidence that the artifact was opened or run, core interactions were tested, the UI was not blank/broken, and errors after load/interactions were addressed.',
-    'If the result is functional but rough, missing expected polish, missing planned features, has inverted/broken controls, has console errors, or has unverified core paths, choose continue. "Done but not good enough" means continue.',
-    'Use blocked only when work cannot continue without user input, credentials, approval, an unavailable external system, or a hard policy/tool constraint.',
-    'Use continue for partial progress, insufficient verification, weak quality, unresolved defects, missing acceptance criteria, or unclear evidence.',
-    'A restart acknowledgement is never completion evidence by itself. If a restart checkpoint exists, require evidence from the recovered post-restart turn that the new gateway is healthy and the changed behavior was actually retested before choosing done.',
-    'Use the durable iteration ledger to compare the latest result with earlier baselines. Repeated claims without new measurements, artifacts, or verified behavior are not material progress.',
-    'The directive field is the instruction that will be given to the next worker turn. Make it concrete, imperative, and focused on the next missing work. Do not ask the user unless status is blocked.',
-    'quality_grade is A, B, C, D, or F. Only A/B with no unresolved issues, no missing acceptance criteria, and no verification gaps may be done.',
-    'If the goal is complete and verified, return status="done", quality_grade="B" or "A", and empty arrays for unresolved_issues, missing_acceptance_criteria, and verification_gaps. Do not carry forward stale gaps from earlier turns after the latest turn fixed or verified them.',
-    'If you choose continue, name exactly what still needs to be done or verified. Do not continue just because more polish is possible unless the original goal requires that polish.',
-    'unresolved_issues, missing_acceptance_criteria, verification_gaps, and evidence must be arrays of short strings.',
-    '',
-    '[GOAL]',
-    goal.goal.slice(0, 3000),
-    '',
-    '[CURRENT_PROGRESS_SUMMARY]',
-    String(goal.progressSummary || '(none)').slice(0, 3000),
-    '',
-    '[LAST_JUDGE_REASON]',
-    String(goal.lastReason || '(none)').slice(0, 1200),
-    '',
-    '[LAST_JUDGE_DIRECTIVE]',
-    String(goal.nextStepDirective || '(none)').slice(0, 1200),
-    '',
-    '[GOAL_TURN_PLANS]',
-    formatGoalTurnPlans(goal).slice(0, 5000),
-    '',
-    '[DURABLE_ITERATION_LEDGER]',
-    formatGoalIterations(goal).slice(0, 5000),
-    '',
-    '[RESTART_CHECKPOINT]',
-    goal.restartCheckpoint ? JSON.stringify(goal.restartCheckpoint).slice(0, 3500) : '(none)',
-    '',
-    '[RELEVANT_CHAT_CONTEXT]',
-    sessionContext,
-    '',
-    '[RECENT_TOOL_OBSERVATIONS]',
-    toolLog || '(none)',
-    '',
-    '[DENIED_ACTIONS]',
-    formatDeniedActions(goal, 8).slice(0, 2500),
-    '',
-    '[LATEST_ASSISTANT_RESPONSE]',
-    response.slice(0, 6000),
-  ].join('\n');
-
-  try {
-    const result = await getOllamaClient().chatWithThinking(
-      [
-        { role: 'system', content: 'You are GoalJudge. Return strict JSON only. No markdown, no prose outside JSON.' },
-        { role: 'user', content: prompt },
-      ],
-      'manager',
-      {
-        temperature: 0,
-        num_ctx: 16384,
-        num_predict: 700,
-        ...(policy.judgeModel || resolveLiveMainChatModelRef() ? { model: policy.judgeModel || resolveLiveMainChatModelRef() } : {}),
-        ...(policy.judgeReasoning ? { think: policy.judgeReasoning as any } : {}),
-        usageContext: { sessionId: goal.sessionId, agentId: 'main_chat_goal_judge' },
-      },
-    );
-    const raw = stripThink(String(result?.message?.content || ''));
-    const parsed = extractJsonObject(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return {
-        status: 'continue',
-        reason: `Judge returned unparseable output: ${oneLine(raw || '(empty)', 180)}`,
-        directive: 'Continue with the next concrete step toward the goal, then verify the result with tools before claiming completion.',
-        confidence: 0,
-        parseFailed: true,
-      };
-    }
-    const statusRaw = String(parsed.status || '').trim().toLowerCase();
-    const status = statusRaw === 'done' || statusRaw === 'blocked' ? statusRaw : 'continue';
-    const reason = oneLine(String(parsed.reason || 'No reason provided.'), 700);
-    const directive = normalizeJudgeDirective(parsed, status, reason);
-    const confidenceNum = Number(parsed.confidence);
-    const confidence = Number.isFinite(confidenceNum) ? Math.max(0, Math.min(1, confidenceNum)) : 0.5;
-    const qualityGrade = oneLine(String(parsed.quality_grade || parsed.qualityGrade || ''), 12).toUpperCase();
-    const unresolvedIssues = compactTextArray(parsed.unresolved_issues ?? parsed.unresolvedIssues);
-    const missingAcceptanceCriteria = compactTextArray(parsed.missing_acceptance_criteria ?? parsed.missingAcceptanceCriteria);
-    const verificationGaps = compactTextArray(parsed.verification_gaps ?? parsed.verificationGaps);
-    const evidence = compactTextArray(parsed.evidence);
-    const hasBlockingGaps = unresolvedIssues.length > 0 || missingAcceptanceCriteria.length > 0 || verificationGaps.length > 0;
-    const completionEvidenceText = [
-      reason,
-      directive,
-      ...evidence,
-      response.slice(0, 2000),
-      toolLog.slice(0, 2000),
-    ].join(' ').toLowerCase();
-    const hasCompletionEvidence = evidence.length > 0
-      || /\b(done|complete|completed|implemented|created|wrote|built|fixed|verified|tested|opened|ran|passed|working|artifact|file|screenshot|no errors|successful)\b/.test(completionEvidenceText);
-    const qualityAllowsDone = ['A', 'B'].includes(qualityGrade)
-      || (!qualityGrade && confidence >= 0.45 && hasCompletionEvidence);
-    const strictStatus = status === 'done' && (hasBlockingGaps || !qualityAllowsDone)
-      ? 'continue'
-      : status;
-    const strictReason = strictStatus !== status
-      ? oneLine(`Judge requested done, but strict completion gate found ${hasBlockingGaps ? 'remaining issues/gaps' : `insufficient completion evidence or low quality grade (${qualityGrade || 'missing'})`}. ${reason}`, 700)
-      : reason;
-    return {
-      status: strictStatus,
-      reason: strictReason,
-      directive: normalizeJudgeDirective(parsed, strictStatus, strictReason),
-      confidence,
-      parseFailed: false,
-      qualityGrade,
-      unresolvedIssues,
-      missingAcceptanceCriteria,
-      verificationGaps,
-      evidence,
-    };
-  } catch (err: any) {
-    const reason = `Judge error: ${err?.message || String(err)}`;
-    return {
-      status: 'continue',
-      reason,
-      directive: 'The judge errored. Continue with the next concrete step toward the goal and gather clear evidence for the next evaluation.',
-      confidence: 0,
-      parseFailed: true,
-    };
-  }
 }
 
 function formatGoalMessages(messages: ChatMessage[]): string {
@@ -871,6 +645,9 @@ export async function maybeSummarizeMainChatGoal(sessionId: string): Promise<Mai
     '',
     '[GOAL]',
     current.goal,
+    '',
+    '[DURABLE_ACCEPTANCE_REQUIREMENTS_AND_AMENDMENTS]',
+    formatGoalRequirements(current),
     '',
     '[PREVIOUS_GOAL_PROGRESS_SUMMARY]',
     current.progressSummary || '(none)',
@@ -964,6 +741,22 @@ export function buildMainChatGoalContinuationPrompt(goal: MainChatGoalState): st
         crashRecovered
           ? 'This was an UNEXPECTED gateway restart before the current changes were verified or applied. Do not claim that the changes are live. Preserve and resume the existing dev edit ID when present. Reread every known touched file before making further edits; when no touched-file evidence exists, treat the checkpoint file list only as possible scope and reread it before mutation. Reconcile partial work without blindly repeating it, then finish verification and use the normal apply/restart path only when the changes are actually ready.'
           : 'This was an intentional restart boundary inside the same goal. Do not stop after acknowledging it. Confirm the new gateway is healthy, perform the post-restart verification or benchmark required by the goal, continue the stored unfinished plan, and include concrete evidence in the eventual completion attempt.',
+    ].join('\n')
+    : '';
+  const restartDevEdit = String(goal.restartCheckpoint?.devEditId || '').trim()
+    ? getDevSourceEditContinuation(goal.restartCheckpoint?.devEditId)
+    : getLatestPendingDevSourceEditContinuation(goal.sessionId);
+  const devEditContinuation = restartDevEdit
+    ? [
+        '',
+        'Durable dev-edit continuation:',
+        `- id: ${restartDevEdit.id}`,
+        `- status: ${restartDevEdit.status}`,
+        `- files: ${(restartDevEdit.affectedFiles || restartDevEdit.allowedFiles || []).join(', ') || '(none)'}`,
+        `- verification: ${restartDevEdit.lastVerification?.summary || restartDevEdit.verification?.join('; ') || '(none)'}`,
+        restartDevEdit.status === 'complete'
+          ? '- LIVE APPLY ALREADY COMPLETED. Do not call prom_apply_dev_changes or trigger another restart for this dev-edit ID; perform only post-restart verification and remaining goal work.'
+          : '- Resume this exact dev-edit ID; do not create a duplicate approval or apply the same completed work twice.',
       ].join('\n')
     : '';
   return [
@@ -982,8 +775,12 @@ export function buildMainChatGoalContinuationPrompt(goal: MainChatGoalState): st
     'Goal:',
     goal.goal,
     '',
+    'Durable acceptance requirements and user amendments:',
+    formatGoalRequirements(goal),
+    '',
     planInstruction,
     restart,
+    devEditContinuation,
     '',
     'Tool routing:',
     'This autonomous goal turn uses the normal main-chat tool route. Core tools such as request_tool_category, skill_list, skill_read, and declare_plan are available; complete_plan_step is injected after declare_plan or when a stored manual plan is resumed. If the current step needs tools that are not currently visible, call request_tool_category with the right category before describing tool use. For workspace files/directories/builds/games, use request_tool_category({"category":"workspace_write","scope":"turn"}) when workspace_read/workspace_edit/workspace_run tools are needed. Do not narrate or claim a tool call unless you actually call the tool.',
@@ -999,10 +796,10 @@ export function buildMainChatGoalContinuationPrompt(goal: MainChatGoalState): st
   ].join('\n');
 }
 
-export function applyMainChatGoalJudgeResult(
+export function applyMainChatGoalOutcome(
   sessionId: string,
   expectedGoalId: string,
-  judge: MainChatGoalJudgeResult,
+  judge: MainChatGoalOutcome,
 ): MainChatGoalState | null {
   return updateMainChatGoal(sessionId, (goal) => {
     if (!goal || goal.id !== expectedGoalId || goal.status !== 'active') return goal;
@@ -1176,10 +973,10 @@ export async function completeMainChatGoalFromOwner(
   sessionId: string,
   expectedGoalId: string,
   attempt: MainChatGoalCompletionAttempt,
-): Promise<{ accepted: boolean; goal: MainChatGoalState | null; verification: MainChatGoalJudgeResult }> {
+): Promise<{ accepted: boolean; goal: MainChatGoalState | null; verification: MainChatGoalOutcome }> {
   const current = snapshotMainChatGoal(sessionId);
   if (!current || current.id !== expectedGoalId || current.status !== 'active') {
-    const verification: MainChatGoalJudgeResult = {
+    const verification: MainChatGoalOutcome = {
       status: 'continue',
       reason: 'The active Goal changed before this completion attempt could be verified.',
       directive: 'Refresh the active Goal state and continue only if it is still active.',
@@ -1190,8 +987,8 @@ export async function completeMainChatGoalFromOwner(
   }
   // Prometheus owns the Goal and explicitly called complete_goal after the
   // handler's deterministic evidence checks. Do not send that decision to a
-  // second LLM or the legacy Goal Judge; persist the owner's closeout directly.
-  const verification: MainChatGoalJudgeResult = {
+  // second LLM; persist the owner's closeout directly.
+  const verification: MainChatGoalOutcome = {
     status: 'done',
     reason: attempt.note,
     directive: '',
@@ -1203,7 +1000,7 @@ export async function completeMainChatGoalFromOwner(
     missingAcceptanceCriteria: [],
     verificationGaps: [],
   };
-  const appliedGoal = applyMainChatGoalJudgeResult(sessionId, expectedGoalId, verification);
+  const appliedGoal = applyMainChatGoalOutcome(sessionId, expectedGoalId, verification);
   const goal = appliedGoal?.status === 'done'
     ? updateMainChatGoal(sessionId, (latest) => {
         if (!latest || latest.id !== expectedGoalId || latest.status !== 'done') return latest;
@@ -1413,6 +1210,17 @@ export function recordMainChatGoalInterruptedForRestart(
     const resumablePlan = findResumableGoalTurnPlan(goal)
       || [...(goal.turnPlans || [])].reverse().find((plan) => isOpenGoalTurnPlan(plan));
     const pendingDevEdit = getLatestPendingDevSourceEditContinuation(sessionId);
+    // Later restart/verification boundaries still need to know that the
+    // original apply is complete.  Do not resurrect it as pending; retain the
+    // durable checkpoint identity strictly as an already-applied boundary.
+    const priorCheckpointEditId = String(goal.restartCheckpoint?.devEditId || '').trim();
+    const priorCompletedDevEdit = priorCheckpointEditId ? getDevSourceEditContinuation(priorCheckpointEditId) : null;
+    const checkpointDevEdit = pendingDevEdit || (priorCompletedDevEdit?.status === 'complete' ? priorCompletedDevEdit : null);
+    const restartProgress = [
+      String(goal.progressSummary || '').trim(),
+      `Planned restart checkpoint (${new Date(now).toISOString()}): ${reason}.`,
+      checkpointDevEdit ? `Dev edit ${checkpointDevEdit.id}: status=${checkpointDevEdit.status}; verification=${checkpointDevEdit.lastVerification?.summary || '(none recorded)'}.` : '',
+    ].filter(Boolean).join('\n').slice(-8000);
     const iterationNumber = Math.max(1, Number(goal.currentIteration || 0) || (goal.iterations?.length || 0) || 1);
     const iterations = [...(goal.iterations || [])];
     let iterationIndex = iterations.findIndex((item) => item.iterationNumber === iterationNumber);
@@ -1440,6 +1248,7 @@ export function recordMainChatGoalInterruptedForRestart(
       lastTurnAt: goal.lastTurnAt,
       lastVerdict: 'continue',
       lastReason: `Interrupted by ${reason}.`,
+      progressSummary: restartProgress,
       failureReason: undefined,
       restartCheckpoint: {
         id: `goal_restart_${now}_${randomUUID().slice(0, 8)}`,
@@ -1449,10 +1258,10 @@ export function recordMainChatGoalInterruptedForRestart(
         planId: resumablePlan?.id,
         activeStepIndex: resumablePlan?.activeIndex,
         runtimeStartedAt: Number(runtimeStartedAt || 0) || undefined,
-        devEditId: pendingDevEdit?.id,
-        affectedFiles: pendingDevEdit?.affectedFiles || pendingDevEdit?.allowedFiles,
-        changedSurfaces: pendingDevEdit?.changedSurfaces,
-        verificationSummary: pendingDevEdit?.lastVerification?.summary,
+        devEditId: checkpointDevEdit?.id,
+        affectedFiles: checkpointDevEdit?.affectedFiles || checkpointDevEdit?.allowedFiles,
+        changedSurfaces: checkpointDevEdit?.changedSurfaces,
+        verificationSummary: checkpointDevEdit?.lastVerification?.summary,
         createdAt: now,
       },
       iterations: iterations.slice(-100),
@@ -1488,6 +1297,15 @@ export function recordActiveMainChatGoalsInterruptedForRestart(
   return Array.from(new Set(checkpointed));
 }
 
+/** Only an explicit live-apply step may be completed by planned-restart recovery. */
+export function findMainChatGoalLiveApplyBoundaryStepIndex(steps: Array<Pick<MainChatGoalPlanStep, 'text'>> | null | undefined): number {
+  return (Array.isArray(steps) ? steps : []).findIndex((step) => {
+    const text = String(step?.text || '');
+    return /\bprom_apply_dev_changes\b/i.test(text)
+      || /\bapply\s+(?:the\s+)?(?:live\s+)?(?:dev\s+)?(?:changes?|edit|deployment)\b/i.test(text);
+  });
+}
+
 export function finalizeMainChatGoalRestartRecovery(
   sessionId: string,
   input: {
@@ -1500,11 +1318,32 @@ export function finalizeMainChatGoalRestartRecovery(
 ): MainChatGoalState | null {
   return updateMainChatGoal(sessionId, (goal) => {
     if (!goal || !goal.restartCheckpoint || !['restarting', 'paused'].includes(String(goal.status || ''))) return goal;
+    // Boot recovery can be replayed by reconnecting lifecycle observers. Its
+    // plan transition and durable progress entry are exactly-once effects.
+    if (goal.restartCheckpoint.phase === 'boot_finalized') return goal;
     const now = Date.now();
+    const planId = String(goal.restartCheckpoint.planId || '').trim();
+    const plans = Array.isArray(goal.turnPlans) ? goal.turnPlans.map((plan) => ({ ...plan, steps: Array.isArray(plan.steps) ? plan.steps.map((step) => ({ ...step })) : [] })) : [];
+    const plan = plans.find((item) => item.id === planId);
+    if (plan?.steps?.length) {
+      const applyIndex = findMainChatGoalLiveApplyBoundaryStepIndex(plan.steps);
+      if (applyIndex >= 0) {
+        plan.steps[applyIndex] = { ...plan.steps[applyIndex], status: 'done', note: 'Planned live apply completed; do not reapply.', updatedAt: now };
+        const nextIndex = plan.steps.findIndex((step, index) => index > applyIndex && step.status !== 'done' && step.status !== 'skipped');
+        if (nextIndex >= 0) {
+          plan.activeIndex = nextIndex;
+          plan.steps[nextIndex] = { ...plan.steps[nextIndex], status: 'in_progress', note: 'Post-restart verification required.', updatedAt: now };
+        }
+        plan.status = nextIndex >= 0 ? 'in_progress' : 'complete';
+        plan.updatedAt = now;
+      }
+    }
     return {
       ...goal,
       status: 'restarting',
       pausedReason: input.reason || goal.pausedReason || goal.restartCheckpoint.reason,
+      turnPlans: plans,
+      progressSummary: [String(goal.progressSummary || '').trim(), `Restart recovered at ${new Date(now).toISOString()}; apply step reconciled atomically. Next: post-restart verification; do not reapply ${input.devEditId || goal.restartCheckpoint.devEditId || 'the completed dev edit'}.`].filter(Boolean).join('\n').slice(-8000),
       restartCheckpoint: {
         ...goal.restartCheckpoint,
         phase: 'boot_finalized',
@@ -1519,6 +1358,24 @@ export function finalizeMainChatGoalRestartRecovery(
       updatedAt: now,
     };
   });
+}
+
+export function recordMainChatGoalRequirement(sessionId: string, text: string, source = 'user_amendment'): MainChatGoalState | null {
+  const requirement = String(text || '').trim();
+  if (!requirement || isMainChatGoalContinuation(requirement) || /^\/goal\b/i.test(requirement)) return getMainChatGoal(sessionId);
+  return updateMainChatGoal(sessionId, (goal) => {
+    if (!goal || !['active', 'restarting', 'paused'].includes(String(goal.status || ''))) return goal;
+    const normalized = requirement.replace(/\s+/g, ' ').trim();
+    const existing = Array.isArray(goal.requirementsLedger) ? goal.requirementsLedger.slice(-79) : [];
+    if (existing.some((item) => item.text.replace(/\s+/g, ' ').trim() === normalized)) return goal;
+    existing.push({ id: `goal_requirement_${Date.now()}_${randomUUID().slice(0, 6)}`, text: normalized.slice(0, 2400), at: Date.now(), source });
+    return { ...goal, requirementsLedger: existing, updatedAt: Date.now() };
+  });
+}
+
+function formatGoalRequirements(goal: MainChatGoalState, max = 20): string {
+  const rows = Array.isArray(goal.requirementsLedger) ? goal.requirementsLedger.slice(-max) : [];
+  return rows.length ? rows.map((item, index) => `${index + 1}. ${oneLine(item.text, 500)}${item.source ? ` (${item.source})` : ''}`).join('\n') : '(none recorded)';
 }
 
 export function finalizeMainChatGoalCrashRecovery(
@@ -1597,121 +1454,6 @@ export function recordMainChatGoalDeniedAction(
 
 export function getAllMainChatGoalRecords() {
   return listMainChatGoalRecords();
-}
-
-export interface GoalApprovalJudgeResult {
-  approved: boolean;
-  reason: string;
-  /** If rejected, concrete instruction for the worker on what to do instead. */
-  redirectDirective: string;
-}
-
-/**
- * Judge-evaluated approval gate for /goal autonomous mode.
- * Called synchronously (awaited) inside tool handlers for request_dev_source_edit
- * and request_final_action_approval instead of blindly auto-approving.
- *
- * The judge decides:
- *   - Does this approval make sense given the active goal?
- *   - Is it necessary and scoped correctly?
- *   - If not, what should the worker do instead?
- *
- * Returns approved=true/false with reason and (on rejection) a redirect directive.
- * Falls back to approved=true on judge error so the goal loop is never permanently
- * blocked by a judge failure.
- */
-export async function judgeGoalApprovalRequest(
-  sessionId: string,
-  approvalType: 'dev_source_edit' | 'final_action',
-  context: {
-    /** Human-readable summary of what is being approved */
-    summary: string;
-    /** Files being unlocked (dev_source_edit only) */
-    files?: string[];
-    /** Action kind (final_action only) */
-    actionKind?: string;
-    /** Target label (final_action only) */
-    targetLabel?: string;
-    /** Plan reason or description provided by the worker */
-    reason?: string;
-    /** The plan object (dev_source_edit only) */
-    plan?: Record<string, any>;
-  },
-): Promise<GoalApprovalJudgeResult> {
-  const goal = getMainChatGoal(sessionId);
-  if (!goal || goal.status !== 'active') {
-    // No active goal — fall back to approved so normal approval flow runs
-    return { approved: true, reason: 'No active goal; approval passed through.', redirectDirective: '' };
-  }
-
-  const policy = resolveMainChatGoalPolicy();
-
-  const approvalDesc = approvalType === 'dev_source_edit'
-    ? [
-        `Type: dev_source_edit (Prometheus source code edit)`,
-        `Files: ${(context.files || []).join(', ') || '(none listed)'}`,
-        `Reason: ${context.reason || '(none)'}`,
-        context.plan ? `Plan user_request: ${String(context.plan.user_request || context.plan.userRequest || '(none)')}` : '',
-        context.plan ? `Plan fix: ${String(context.plan.fix || '(none)')}` : '',
-      ].filter(Boolean).join('\n')
-    : [
-        `Type: final_action (UI action requiring confirmation)`,
-        `Action kind: ${context.actionKind || '(unknown)'}`,
-        `Target: ${context.targetLabel || '(none)'}`,
-        `Summary: ${context.summary || '(none)'}`,
-      ].filter(Boolean).join('\n');
-
-  const prompt = [
-    'You are GoalJudge evaluating an approval request from an autonomous worker running toward a /goal.',
-    'Decide whether this approval is necessary, safe, and aligned with the active goal.',
-    'Return exactly one JSON object with keys: approved (boolean), reason (string, <=300 chars), redirectDirective (string, <=500 chars).',
-    'approved=true: the approval is on-goal, necessary, and safe to grant automatically.',
-    'approved=false: the approval is off-goal, unnecessary, risky, or the worker should take a different approach.',
-    'redirectDirective: if approved=false, give the worker a concrete instruction on what to do instead. If approved=true, leave empty string.',
-    '',
-    '[ACTIVE GOAL]',
-    goal.goal.slice(0, 2000),
-    '',
-    '[CURRENT PROGRESS SUMMARY]',
-    String(goal.progressSummary || '(none)').slice(0, 1500),
-    '',
-    '[LAST JUDGE DIRECTIVE]',
-    String(goal.nextStepDirective || '(none)').slice(0, 800),
-    '',
-    '[APPROVAL REQUEST]',
-    approvalDesc,
-  ].join('\n');
-
-  try {
-    const result = await getOllamaClient().chatWithThinking(
-      [
-        { role: 'system', content: 'You are GoalJudge. Return strict JSON only. No markdown, no prose outside JSON.' },
-        { role: 'user', content: prompt },
-      ],
-      'manager',
-      {
-        temperature: 0,
-        num_ctx: 8192,
-        num_predict: 400,
-        ...(policy.judgeModel || resolveLiveMainChatModelRef() ? { model: policy.judgeModel || resolveLiveMainChatModelRef() } : {}),
-        ...(policy.judgeReasoning ? { think: policy.judgeReasoning as any } : {}),
-        usageContext: { sessionId, agentId: 'main_chat_goal_approval_judge' },
-      },
-    );
-    const raw = stripThink(String(result?.message?.content || ''));
-    const parsed = extractJsonObject(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      // Parse failure — default to approved so the loop doesn't stall
-      return { approved: true, reason: `Approval judge parse failed; defaulting to approved. Raw: ${oneLine(raw, 120)}`, redirectDirective: '' };
-    }
-    const approved = parsed.approved !== false;
-    const reason = oneLine(String(parsed.reason || 'No reason provided.'), 300);
-    const redirectDirective = oneLine(String(parsed.redirectDirective || parsed.redirect_directive || ''), 500);
-    return { approved, reason, redirectDirective };
-  } catch (err: any) {
-    // Judge error — default to approved so the loop doesn't stall
-    return { approved: true, reason: `Approval judge error: ${String(err?.message || err).slice(0, 120)}; defaulting to approved.`, redirectDirective: '' };
-  }
 }
 
 export function snapshotMainChatGoal(sessionId: string): MainChatGoalState | null {

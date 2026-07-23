@@ -14,7 +14,7 @@ import {
 } from './instruction-intent-detector';
 import { getSkillRoutingReport, type SkillRoutingReport } from './skill-routing-resolver';
 
-export const RUNTIME_PROMPT_MANIFEST_VERSION = 4;
+export const RUNTIME_PROMPT_MANIFEST_VERSION = 5;
 
 export type RuntimePromptRole =
   | 'main'
@@ -67,7 +67,9 @@ export interface RuntimePromptSystemMessageSummary {
   estimatedTokens: number;
   hash: string;
   stablePrefixChars: number;
+  stablePrefixHash: string;
   volatileTailChars: number;
+  volatileTailHash: string;
   cacheMarkerPresent: boolean;
 }
 
@@ -189,15 +191,19 @@ function normalizeCapabilities(value: RuntimePromptManifestContext['capabilities
 
 function summarizeSystemMessage(content: string, index: number): RuntimePromptSystemMessageSummary {
   const markerIndex = content.indexOf(PROMPT_CACHE_MARKER);
-  const stablePrefixChars = markerIndex >= 0 ? markerIndex : content.length;
-  const volatileTailChars = markerIndex >= 0 ? Math.max(0, content.length - markerIndex - PROMPT_CACHE_MARKER.length) : 0;
+  const stablePrefix = markerIndex >= 0 ? content.slice(0, markerIndex) : content;
+  const volatileTail = markerIndex >= 0 ? content.slice(markerIndex + PROMPT_CACHE_MARKER.length) : '';
+  const stablePrefixChars = stablePrefix.length;
+  const volatileTailChars = volatileTail.length;
   return {
     index,
     chars: content.length,
     estimatedTokens: estimateTextTokens(content),
     hash: sha256(content),
     stablePrefixChars,
+    stablePrefixHash: sha256(stablePrefix),
     volatileTailChars,
+    volatileTailHash: sha256(volatileTail),
     cacheMarkerPresent: markerIndex >= 0,
   };
 }

@@ -1,0 +1,13 @@
+{
+  "skillId": "prometheus-ash-archive-style",
+  "reason": "resource-delete",
+  "createdAt": "2026-07-20T00:40:15.916Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-ash-archive-style",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/polsia-reference-analysis.md"
+  ],
+  "hash": "ffa2a4ab85b13210"
+}

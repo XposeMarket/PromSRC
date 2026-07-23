@@ -1,0 +1,13 @@
+{
+  "skillId": "prometheus-ash-archive-style",
+  "reason": "resource-delete",
+  "createdAt": "2026-07-20T00:40:13.059Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-ash-archive-style",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "palettes/ash-archive.md"
+  ],
+  "hash": "6288e6eca41a3069"
+}

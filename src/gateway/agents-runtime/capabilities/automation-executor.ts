@@ -1,5 +1,5 @@
 import path from 'path';
-import { backgroundJoin, backgroundProgress, backgroundSpawn, backgroundWait } from '../../tasks/task-runner';
+import { backgroundJoin, backgroundProgress, backgroundSpawn, backgroundSteer, backgroundWait } from '../../tasks/task-runner';
 import {
   automationDashboardTool,
   scheduleJobDetailTool,
@@ -37,9 +37,11 @@ import { systemDiagnosticsTool } from '../../diagnostics/system-diagnostics';
 import { createDiagnosticPacket, getDiagnosticPacket, listDiagnosticPackets, updateDiagnosticPacketStatus } from '../../diagnostics/diagnostic-packet-store';
 import { buildPrometheusThreadLinksArtifact, executePrometheusThreadOps } from '../../threads/thread-ops';
 import { executePrometheusRequestOps } from '../../requests/request-ops';
+import { executePrometheusAuditOps } from '../../audit/audit-ops';
 
 const AUTOMATION_TOOL_NAMES = new Set([
   'background_spawn',
+  'background_steer',
   'background_status',
   'background_progress',
   'background_wait',
@@ -57,6 +59,7 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'automation_dashboard',
   'prometheus_thread_ops',
   'prometheus_request_ops',
+  'prometheus_audit_ops',
   'system_diagnostics',
   'diagnostic_packet',
 ]);
@@ -96,6 +99,15 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         const status = backgroundProgress(bgId);
         if (!status) return { name, args, result: `No background agent found with id: ${bgId}`, error: true };
         return { name, args, result: JSON.stringify(status), error: false };
+      }
+
+      case 'background_steer': {
+        const bgId = String(args.background_id || '').trim();
+        const message = String(args.message || '').trim();
+        if (!bgId) return { name, args, result: 'background_id is required', error: true };
+        if (!message) return { name, args, result: 'message is required', error: true };
+        const result = backgroundSteer(bgId, message, { source: `background_ops_steer:${sessionId}` });
+        return { name, args, result: JSON.stringify(result), error: !result.queued };
       }
 
       case 'background_wait': {
@@ -923,6 +935,15 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           };
         } catch (err: any) {
           return { name, args, result: `prometheus_request_ops error: ${String(err?.message || err)}`, error: true };
+        }
+      }
+
+      case 'prometheus_audit_ops': {
+        try {
+          const out = executePrometheusAuditOps(sessionId, args);
+          return { name, args, result: JSON.stringify({ success: true, ...out }, null, 2), error: false };
+        } catch (err: any) {
+          return { name, args, result: `prometheus_audit_ops error: ${String(err?.message || err)}`, error: true };
         }
       }
 

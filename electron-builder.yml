@@ -73,6 +73,27 @@ win:
         - x64
   icon: assets/Prometheus.ico
 
+# macOS developer build. Production signing/notarization lives in
+# electron-builder-public.yml and is intentionally required there.
+mac:
+  target:
+    - dmg
+    - zip
+  icon: assets/Prometheus.icns
+  category: public.app-category.productivity
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  minimumSystemVersion: "11.0"
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: Prometheus uses the microphone when you start a voice conversation or dictation.
+    NSCameraUsageDescription: Prometheus uses the camera only when you choose to capture or attach an image or video.
+  extraResources:
+    - from: "bin/prometheus-desktop-helper"
+      to: "prometheus-desktop-helper"
+
 # Installer options (NSIS = proper Windows installer)
 nsis:
   oneClick: false

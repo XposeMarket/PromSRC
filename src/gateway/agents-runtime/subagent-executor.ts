@@ -10,6 +10,7 @@ import { createHash } from 'crypto';
 import { resolveRuntimeBinary } from '../../runtime/dependencies';
 import { resolveGatewayRestartScope } from '../../runtime/supervisor-restart-request';
 import { getConfig, getAgents, getAgentById } from '../../config/config';
+import { mainChatRoutePatch } from '../../config/main-chat-route.js';
 import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { resetProvider } from '../../providers/factory.js';
 import { getPolicyEngine } from '../policy';
@@ -164,7 +165,6 @@ import { notifyMainAgent } from '../teams/notify-bridge';
 import { recordAgentRun, reloadAgentSchedules } from '../../scheduler';
 import { normalizeScheduleSpec, parseSchedulePattern } from '../scheduling/schedule-pattern';
 import { getSessionChannelHint, linkTelegramSession } from '../comms/broadcaster';
-import { judgeGoalApprovalRequest } from '../main-chat-goals';
 import { addMessage, flushSession } from '../session';
 
 const getTeamDispatchRuntime = () => require('../teams/team-dispatch-runtime') as typeof import('../teams/team-dispatch-runtime');
@@ -311,7 +311,7 @@ import {
 } from '../memory-index/index';
 import { searchMemoryInWorker } from '../memory-index/search-worker-client';
 // import { runDesktopTask } from '../tasks/desktop-task-runner'; // removed — module deleted
-import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress, backgroundWait } from '../tasks/task-runner';
+import { backgroundSpawn, backgroundStatus, backgroundJoin, backgroundProgress, backgroundSteer, backgroundWait } from '../tasks/task-runner';
 import { saveSiteShortcut } from '../site-shortcuts';
 import { deployAnalysisTeamTool } from '../../tools/deploy-analysis-team.js';
 import { socialIntelTool } from '../../tools/social-scraper.js';
@@ -376,6 +376,7 @@ import {
   createDevSourceEditApprovalScope,
   type DevSourceEditScope,
   getDevSourceEditContinuation,
+  isCompletedDevSourceEditApply,
   grantDevSourceEditApproval,
   getLatestPendingDevSourceEditContinuation,
   getDevSourceEditGrant,
@@ -2969,11 +2970,12 @@ function normalizeBackgroundOpsWrapperTool(name: string, rawArgs: any): { name: 
   if (name !== 'background_ops') return null;
   const args = rawArgs && typeof rawArgs === 'object' ? { ...rawArgs } : {};
   const action = String(args.action || args.operation || args.mode || '').trim().toLowerCase();
-  if (!action) return { name, args, error: 'background_ops requires action "spawn", "status", "progress", "wait", or "join".' };
+  if (!action) return { name, args, error: 'background_ops requires action "spawn", "steer", "status", "progress", "wait", or "join".' };
   delete args.action;
   delete args.operation;
   delete args.mode;
   if (action === 'spawn' || action === 'start') return { name: 'background_spawn', args };
+  if (action === 'steer' || action === 'message') return { name: 'background_steer', args };
   if (action === 'status') return { name: 'background_status', args };
   if (action === 'progress') return { name: 'background_progress', args };
   if (action === 'wait') return { name: 'background_wait', args };
@@ -9834,6 +9836,17 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           url,
           output_dir: buildCreativeWorkspaceRelativePath(storage.workspacePath, downloadsDir),
           audio_only: true,
+          signal: deps.abortSignal?.signal,
+          onProgress: (progress) => deps.sendSSE?.('tool_progress', {
+            action: name,
+            name,
+            message: progress.message,
+            phase: progress.phase,
+            percent: progress.percent,
+            speed: progress.speed,
+            eta: progress.eta,
+            show_pill: true,
+          }),
         });
         if (downloadResult.success !== true) {
           return {
@@ -13295,6 +13308,17 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 	          url: String(args.url || ''),
 	          output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
 	          audio_only: args.audio_only === true,
+	          signal: deps.abortSignal?.signal,
+	          onProgress: (progress) => deps.sendSSE?.('tool_progress', {
+	            action: name,
+	            name,
+	            message: progress.message,
+	            phase: progress.phase,
+	            percent: progress.percent,
+	            speed: progress.speed,
+	            eta: progress.eta,
+	            show_pill: true,
+	          }),
 	        });
 	        return {
 	          name,
@@ -13416,9 +13440,16 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           file_path: String(args.file_path || ''),
           prompt: args.prompt != null ? String(args.prompt) : undefined,
           sample_count: args.sample_count != null ? Number(args.sample_count) : undefined,
-	          output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
+          output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
 	          extract_audio: args.extract_audio !== false,
 	          transcribe: args.transcribe !== false,
+	          signal: deps.abortSignal?.signal,
+	          onProgress: (progress) => deps.sendSSE?.('tool_progress', {
+	            action: name, name, message: progress.message, phase: progress.phase,
+	            current: progress.current, total: progress.total,
+	            ratio: progress.total ? Number(progress.current || 0) / progress.total : undefined,
+	            show_pill: true,
+	          }),
 	        });
 	        return {
 	          name,
@@ -13439,6 +13470,13 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
           extract_audio: args.extract_audio !== false,
           transcribe: args.transcribe !== false,
+          signal: deps.abortSignal?.signal,
+          onProgress: (progress) => deps.sendSSE?.('tool_progress', {
+            action: name, name, message: progress.message, phase: progress.phase,
+            current: progress.current, total: progress.total,
+            ratio: progress.total ? Number(progress.current || 0) / progress.total : undefined,
+            show_pill: true,
+          }),
         });
         return {
           name,
@@ -14188,6 +14226,15 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         const status = backgroundProgress(bgId);
         if (!status) return { name, args, result: `No background agent found with id: ${bgId}`, error: true };
         return { name, args, result: JSON.stringify(status), error: false };
+      }
+
+      case 'background_steer': {
+        const bgId = String(args.background_id || '').trim();
+        const message = String(args.message || '').trim();
+        if (!bgId) return { name, args, result: 'background_id is required', error: true };
+        if (!message) return { name, args, result: 'message is required', error: true };
+        const result = backgroundSteer(bgId, message, { source: `background_ops_steer:${sessionId}` });
+        return { name, args, result: JSON.stringify(result), error: !result.queued };
       }
 
       case 'background_wait': {
@@ -18427,31 +18474,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           try {
             const cm = getConfig();
             const current = cm.getConfig() as any;
-            const currentLlm = current.llm || {};
-            const currentProviders = currentLlm.providers || {};
-            cm.updateConfig({
-              llm: {
-                ...currentLlm,
-                provider: parsed.providerId,
-                providers: {
-                  ...currentProviders,
-                  [parsed.providerId]: {
-                    ...(currentProviders[parsed.providerId] || {}),
-                    model: parsed.model,
-                  },
-                },
-              },
-              models: {
-                ...(current.models || {}),
-                primary: parsed.model,
-                roles: {
-                  ...(current.models?.roles || {}),
-                  manager: parsed.model,
-                  executor: parsed.model,
-                  verifier: parsed.model,
-                },
-              },
-            } as any);
+            cm.updateConfig(mainChatRoutePatch(current, { provider: parsed.providerId, model: parsed.model }) as any);
             resetProvider();
             return {
               name,
@@ -18462,7 +18485,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 provider: parsed.providerId,
                 model: parsed.model,
                 reason: reason || null,
-                note: 'Current primary model updated. This is not an agent_model_defaults change; the next model call in this live chat will use this route.',
+                note: 'Main Chat Agent route updated; the next model call in this live chat will use it.',
               }, null, 2),
               error: false,
             };
@@ -18523,16 +18546,14 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 'switch_model_low',
                 'switch_model_medium',
                 'coordinator',
-                'background_task',
                 'background_spawn',
                 'goal_compactor',
-                'goal_judge',
               ];
               if (!VALID_TYPES.includes(agentType)) {
                 return { name, args, result: `ERROR: Invalid agent_type "${agentType}". Valid values: ${VALID_TYPES.join(', ')}`, error: true };
               }
-              const isGoalSupportRoute = agentType === 'goal_compactor' || agentType === 'goal_judge';
-              const goalPrefix = agentType === 'goal_compactor' ? 'compaction' : 'judge';
+              const isGoalSupportRoute = agentType === 'goal_compactor';
+              const goalPrefix = 'compaction';
               const endpoint = isGoalSupportRoute ? '/api/settings/session' : '/api/settings/agent-model-defaults';
               const payload = isGoalSupportRoute
                 ? { mainChatGoals: {
@@ -18590,11 +18611,6 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 compactor: {
                   model: cfg2.session?.mainChatGoals?.compactionModel || null,
                   reasoning_effort: cfg2.session?.mainChatGoals?.compactionReasoning || null,
-                  fallback: 'current_primary',
-                },
-                judge: {
-                  model: cfg2.session?.mainChatGoals?.judgeModel || null,
-                  reasoning_effort: cfg2.session?.mainChatGoals?.judgeReasoning || null,
                   fallback: 'current_primary',
                 },
               },
@@ -18687,6 +18703,16 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           const activeDevEdit = requestedDevEditId
             ? getDevSourceEditContinuation(requestedDevEditId)
             : getLatestPendingDevSourceEditContinuation(sessionId);
+          if (activeDevEdit?.status === 'complete') {
+            return {
+              name,
+              args,
+              result: `prom_apply_dev_changes skipped: dev edit ${activeDevEdit.id} is already complete/live. Do not apply or restart it again; continue with post-restart verification only.`,
+              data: { dev_edit_id: activeDevEdit.id, idempotent: true, live_status: 'complete' },
+              extra: { dev_edit_id: activeDevEdit.id, idempotent: true, live_status: 'complete' },
+              error: false,
+            };
+          }
           if (!activeDevEdit) {
             return { name, args, result: 'No pending dev edit was found for this handoff wait.', error: true };
           }
@@ -18721,6 +18747,19 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           const activeDevEdit = requestedDevEditId
             ? getDevSourceEditContinuation(requestedDevEditId)
             : getLatestPendingDevSourceEditContinuation(sessionId);
+          // This must happen at the actual apply entrypoint (not only in
+          // await_dev_edit_handoff): a repeated tool call after recovery must
+          // never run verify, sync, build, or restart a completed edit again.
+          if (activeDevEdit && isCompletedDevSourceEditApply(activeDevEdit)) {
+            return {
+              name,
+              args,
+              result: `prom_apply_dev_changes skipped: dev edit ${activeDevEdit.id} is already complete/live. Do not apply or restart it again; continue with post-restart verification only.`,
+              data: { dev_edit_id: activeDevEdit.id, idempotent: true, live_status: 'complete' },
+              extra: { dev_edit_id: activeDevEdit.id, idempotent: true, live_status: 'complete' },
+              error: false,
+            };
+          }
           const explicitAffectedFiles = Array.isArray(args.affected_files)
             ? args.affected_files.map((f: any) => String(f || '').trim()).filter(Boolean)
             : [];
@@ -18947,7 +18986,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 
           if (hasBackend) {
             try {
-              const { buildAndRestart } = require('../lifecycle');
+              const { buildAndRestart, gracefulRestart } = require('../lifecycle');
               const restartTask = resolveTaskForSession(sessionId);
               const sessionHint = getSessionChannelHint(sessionId);
               const isTelegramSession = String(sessionId || '').startsWith('telegram_') || sessionHint?.channel === 'telegram';
@@ -18980,6 +19019,35 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                   members: batchDevEditContinuations,
                 } : undefined,
               };
+              // In the source/tsx dev gateway, verify_only has already run the
+              // approved backend build against the exact content hashes that
+              // the coordinator just rechecked. Do not make users wait for a
+              // second full TypeScript compile before the restart. Packaged
+              // gateways still rebuild because their running code is dist/.
+              const runningSourceGateway = __filename.endsWith('.ts');
+              const backendVerificationIsFresh = batchDevEditContinuations.length > 0
+                && batchDevEditContinuations.every((member) => {
+                  const { canReuseFreshBackendVerification } = require('../dev-verification');
+                  return canReuseFreshBackendVerification({
+                    verification: member.lastVerification,
+                    backendFiles: member.affectedFiles || member.allowedFiles,
+                  });
+                });
+              const reuseVerifiedBackendBuild = runningSourceGateway && backendVerificationIsFresh;
+              if (reuseVerifiedBackendBuild) {
+                await gracefulRestart(ctx);
+                return {
+                  name,
+                  args,
+                  result:
+                    `prom_apply_dev_changes succeeded. ` +
+                    `${hasWeb ? 'Synced web UI, ' : ''}reused the fresh verified backend build and is restarting the gateway` +
+                    `${refreshDesktop ? ', and desktop web UI reload will be requested after reconnect.' : '.'}` +
+                    (devEditContinuation ? ` After restart, write_note with tag "${completionNoteTag}" will complete dev edit ${devEditContinuation.id}.` : ''),
+                  error: false,
+                };
+              }
+
               const buildResult = await buildAndRestart(ctx);
               if (!buildResult.success) {
                 if (coordinatedApply?.batch) markCoordinatedDevApplyBatch(coordinatedApply.batch.id, 'failed', buildResult.output);
@@ -20059,46 +20127,8 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             ttlMs: args?.ttl_ms || args?.ttlMs,
           });
 
-          // Under /goal autonomous mode, route through the judge instead of blindly approving.
-          // The judge evaluates whether this final action is aligned with the active goal,
-          // then either grants or rejects with a redirect directive for the worker.
           if (isGoalAutonomousApprovalBypass) {
-            let judgeResult: import('../main-chat-goals').GoalApprovalJudgeResult;
-            try {
-              judgeResult = await judgeGoalApprovalRequest(sessionId, 'final_action', {
-                summary: scope.summary || `${scope.actionKind} on ${scope.targetLabel}`,
-                actionKind: scope.actionKind,
-                targetLabel: scope.targetLabel,
-                reason: scope.summary,
-              });
-            } catch (err: any) {
-              judgeResult = { approved: true, reason: `Judge threw unexpectedly: ${String(err?.message || err).slice(0, 120)}`, redirectDirective: '' };
-            }
-            if (!judgeResult.approved) {
-              try {
-                appendAuditEntry({
-                  timestamp: new Date().toISOString(),
-                  sessionId,
-                  agentId: inferAgentIdFromSession(sessionId, args),
-                  actionType: 'approval_resolved',
-                  toolName: name,
-                  toolArgs: { action_kind: scope.actionKind, target_label: scope.targetLabel, summary: scope.summary },
-                  policyTier: 'commit',
-                  approvalStatus: 'rejected',
-                  resultSummary: `Goal judge rejected final action approval: ${judgeResult.reason}`,
-                });
-              } catch {}
-              return {
-                name,
-                args,
-                result:
-                  `[GOAL JUDGE REJECTED] Final ${scope.actionKind} action "${scope.targetLabel}" was rejected by the goal judge.\n` +
-                  `Reason: ${judgeResult.reason}\n` +
-                  `What to do instead: ${judgeResult.redirectDirective || 'Re-evaluate whether this action is needed for the goal.'}`,
-                error: true,
-              };
-            }
-            const autoApprovalId = `goal_judge_final_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
+            const autoApprovalId = `goal_autonomous_final_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
             grantFinalActionApproval(sessionId, autoApprovalId, scope, 'goal_autonomous');
             try {
               appendAuditEntry({
@@ -20110,15 +20140,14 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 toolArgs: { action_kind: scope.actionKind, target_label: scope.targetLabel, summary: scope.summary },
                 policyTier: 'commit',
                 approvalStatus: 'approved',
-                resultSummary: `Goal judge approved final action: ${scope.targetLabel} — ${judgeResult.reason}`,
+                resultSummary: `Goal autonomous policy approved final action: ${scope.targetLabel}`,
               });
             } catch {}
             return {
               name,
               args,
               result:
-                `[GOAL JUDGE APPROVED] Final ${scope.actionKind} action "${scope.targetLabel}" was approved by the goal judge. ` +
-                `Judge reason: ${judgeResult.reason} ` +
+                `[GOAL AUTONOMOUS APPROVED] Final ${scope.actionKind} action "${scope.targetLabel}" was approved by the active goal policy. ` +
                 `Use final_action_approval_id="${autoApprovalId}" on the exact next ${scope.nextToolName || 'desktop/browser action'} call. This approval is one-shot.`,
               data: { final_action_approval_id: autoApprovalId, next_tool_name: scope.nextToolName || '' },
               error: false,
@@ -20293,49 +20322,11 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             };
           }
 
-          // Under /goal autonomous mode, route through the judge instead of blindly approving.
-          // The judge evaluates whether this dev source edit is aligned with the active goal,
-          // then either grants the scope or rejects with a redirect directive for the worker.
           if (isGoalAutonomousApprovalBypass) {
-            let judgeResult: import('../main-chat-goals').GoalApprovalJudgeResult;
-            try {
-              judgeResult = await judgeGoalApprovalRequest(sessionId, 'dev_source_edit', {
-                summary: scope.reason || `Edit Prometheus source: ${scope.allowedFiles.join(', ')}`,
-                files: scope.allowedFiles,
-                reason: scope.reason,
-                plan: scope.plan as Record<string, any> | undefined,
-              });
-            } catch (err: any) {
-              judgeResult = { approved: true, reason: `Judge threw unexpectedly: ${String(err?.message || err).slice(0, 120)}`, redirectDirective: '' };
-            }
-            if (!judgeResult.approved) {
-              try {
-                appendAuditEntry({
-                  timestamp: new Date().toISOString(),
-                  sessionId,
-                  agentId: inferAgentIdFromSession(sessionId, args),
-                  actionType: 'approval_resolved',
-                  toolName: name,
-                  toolArgs: { files: scope.allowedFiles, reason: scope.reason },
-                  policyTier: 'commit',
-                  approvalStatus: 'rejected',
-                  resultSummary: `Goal judge rejected dev source edit: ${judgeResult.reason}`,
-                });
-              } catch {}
-              return {
-                name,
-                args,
-                result:
-                  `[GOAL JUDGE REJECTED] Dev source edit for [${scope.allowedFiles.join(', ')}] was rejected by the goal judge.\n` +
-                  `Reason: ${judgeResult.reason}\n` +
-                  `What to do instead: ${judgeResult.redirectDirective || 'Re-evaluate whether this source edit is needed for the goal.'}`,
-                error: true,
-              };
-            }
             try {
               grantDevSourceEditApproval(sessionId, scope, 'goal_autonomous');
             } catch (err: any) {
-              return { name, args, result: `goal judge-approved dev source edit grant failed: ${err.message || err}`, error: true };
+              return { name, args, result: `goal-autonomous dev source edit grant failed: ${err.message || err}`, error: true };
             }
             try {
               appendAuditEntry({
@@ -20347,15 +20338,14 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 toolArgs: { files: scope.allowedFiles, reason: scope.reason },
                 policyTier: 'commit',
                 approvalStatus: 'approved',
-                resultSummary: `Goal judge approved dev source edit: ${scope.allowedFiles.join(', ')} — ${judgeResult.reason}`,
+                resultSummary: `Goal autonomous policy approved dev source edit: ${scope.allowedFiles.join(', ')}`,
               });
             } catch {}
             return {
               name,
               args,
               result:
-                `[GOAL JUDGE APPROVED] Dev source edit scope granted: ${scope.allowedFiles.join(', ')}.\n` +
-                `Judge reason: ${judgeResult.reason}\n` +
+                `[GOAL AUTONOMOUS APPROVED] Dev source edit scope granted: ${scope.allowedFiles.join(', ')}.\n` +
                 `Approved workspace self-doc scope: ${scope.allowedDirs.join(', ')}.\n` +
                 `Approved plan hash: ${scope.planHash || 'none'}; dev_edit_id: ${scope.devEditId}.\n` +
                 `Use source-specific tools for src/web-ui files and scoped workspace file tools for approved self docs. When edits are verified, enter the shared apply barrier through ${formatPromApplyDevChangesInstruction(scope.allowedFiles, scope.reason || 'Goal autonomous dev source edits', 'apply_live', scope.devEditId)}. ` +

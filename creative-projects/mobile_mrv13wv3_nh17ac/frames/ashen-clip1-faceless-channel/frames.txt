@@ -1,0 +1,3 @@
+file 'file:C:/Users/rafel/PromSRC/creative-projects/mobile_mrv13wv3_nh17ac/frames/ashen-clip1-faceless-channel/start.jpg'
+file 'file:C:/Users/rafel/PromSRC/creative-projects/mobile_mrv13wv3_nh17ac/frames/ashen-clip1-faceless-channel/mid.jpg'
+file 'file:C:/Users/rafel/PromSRC/creative-projects/mobile_mrv13wv3_nh17ac/frames/ashen-clip1-faceless-channel/end.jpg'

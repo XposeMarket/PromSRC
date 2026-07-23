@@ -40,6 +40,14 @@ export type WebPushPayload = {
   data?: Record<string, any>;
 };
 
+export type WebPushDeliveryResult = {
+  id: string;
+  endpoint: string;
+  ok: boolean;
+  statusCode?: number;
+  error?: string;
+};
+
 const STORE_VERSION = 1;
 
 function storeDir(): string {
@@ -87,14 +95,20 @@ function getOrCreateKeys(): WebPushKeys {
 function configureWebPush(): WebPushKeys {
   const keys = getOrCreateKeys();
   const cfg = getConfig().getConfig() as any;
-  const subject = String(
+  const configuredSubject = String(
     cfg?.mobile?.publicBaseUrl
       || cfg?.gateway?.publicBaseUrl
       || cfg?.gateway?.remoteAccess?.publicUrl
       || cfg?.remoteAccess?.publicBaseUrl
       || cfg?.remoteAccess?.publicUrl
-      || 'mailto:prometheus@localhost',
+    || 'mailto:prometheus@localhost',
   ).trim();
+  // VAPID only accepts a mailto: address or an HTTPS contact URL. A local
+  // http:// gateway address can otherwise make every push silently fail after
+  // the subscription was successfully saved.
+  const subject = /^(?:mailto:|https:\/\/)/i.test(configuredSubject)
+    ? configuredSubject
+    : 'mailto:prometheus@localhost';
   webpush.setVapidDetails(subject.includes(':') ? subject : `mailto:${subject}`, keys.publicKey, keys.privateKey);
   return keys;
 }
@@ -170,10 +184,24 @@ function markSubscription(id: string, patch: Partial<StoredWebPushSubscription>)
   writeStore(store);
 }
 
-export function sendWebPushToAll(payload: WebPushPayload): void {
-  const subscriptions = listWebPushSubscriptions();
-  if (!subscriptions.length) return;
-  configureWebPush();
+export async function sendWebPushToAll(
+  payload: WebPushPayload,
+  options: { endpoint?: string } = {},
+): Promise<WebPushDeliveryResult[]> {
+  const requestedEndpoint = String(options.endpoint || '').trim();
+  const subscriptions = listWebPushSubscriptions()
+    .filter((item) => !requestedEndpoint || item.endpoint === requestedEndpoint);
+  if (!subscriptions.length) return [];
+  try {
+    configureWebPush();
+  } catch (err: any) {
+    const error = String(err?.message || err || 'Push configuration failed.').slice(0, 1000);
+    for (const item of subscriptions) {
+      markSubscription(item.id, { lastErrorAt: Date.now(), lastError: error });
+    }
+    console.warn(`[web-push] configuration failed: ${error}`);
+    return subscriptions.map((item) => ({ id: item.id, endpoint: item.endpoint, ok: false, error }));
+  }
   const body = JSON.stringify({
     title: payload.title || 'Prometheus',
     body: payload.body || '',
@@ -184,10 +212,12 @@ export function sendWebPushToAll(payload: WebPushPayload): void {
     url: payload.url || '/?source=pwa#mobile/chat',
     data: payload.data || {},
   });
-  for (const item of subscriptions) {
-    webpush.sendNotification(item.subscription, body).then(() => {
+  return Promise.all(subscriptions.map(async (item): Promise<WebPushDeliveryResult> => {
+    try {
+      const response = await webpush.sendNotification(item.subscription, body);
       markSubscription(item.id, { lastSuccessAt: Date.now(), lastError: undefined });
-    }).catch((err: any) => {
+      return { id: item.id, endpoint: item.endpoint, ok: true, statusCode: Number((response as any)?.statusCode || 0) || undefined };
+    } catch (err: any) {
       const statusCode = Number(err?.statusCode || err?.status || 0);
       const bodyText = String(err?.body || err?.response?.body || '').trim();
       const headers = err?.headers && typeof err.headers === 'object'
@@ -201,13 +231,14 @@ export function sendWebPushToAll(payload: WebPushPayload): void {
       ].filter(Boolean).join(' ');
       if (statusCode === 404 || statusCode === 410) {
         removeWebPushSubscription(item.id);
-        return;
+        return { id: item.id, endpoint: item.endpoint, ok: false, statusCode: statusCode || undefined, error: detail.slice(0, 1000) };
       }
       markSubscription(item.id, {
         lastErrorAt: Date.now(),
         lastError: detail.slice(0, 1000),
       });
       console.warn(`[web-push] delivery failed for ${item.id}: ${detail}`);
-    });
-  }
+      return { id: item.id, endpoint: item.endpoint, ok: false, statusCode: statusCode || undefined, error: detail.slice(0, 1000) };
+    }
+  }));
 }

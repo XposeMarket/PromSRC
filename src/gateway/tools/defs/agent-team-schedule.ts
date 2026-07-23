@@ -1311,6 +1311,26 @@ export function getAgentTeamScheduleTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'prometheus_audit_ops',
+        description: 'Read-only operational audit for reconstructing interrupted Prometheus work from the workspace audit mirror and immediate continuity journal. Search and timelines contain bounded redacted message/tool/goal evidence only; it never resumes, approves, or mutates work. After an interruption, inspect this evidence, verify live Goal/request state, then use existing thread/request recovery mechanisms only if appropriate.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['recent_sessions', 'search', 'session_timeline', 'recovery_candidates', 'recovery_brief', 'read_artifact'] },
+            session_id: { type: 'string', description: 'Exact audited session id for a timeline or recovery brief.' },
+            query: { type: 'string', description: 'Bounded redacted audit search text.' },
+            limit: { type: 'number', description: 'Maximum sessions/events/results; default 30, maximum 100.' },
+            artifact_ref: { type: 'string', description: 'Opaque artifact reference returned by an audit result. Only use this for bounded audit artifact reads.' },
+            offset: { type: 'number', description: 'Byte offset for paginated artifact reads.' },
+            max_chars: { type: 'number', description: 'Maximum characters for read_artifact; default 8000, maximum 24000.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'prometheus_request_ops',
         description:
           'Read and recover durable Prometheus requests across sessions: dev-source edits, approvals, proposals, and user questions. ' +
@@ -1364,14 +1384,14 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'background_ops',
         description:
-          'Unified background agent wrapper. action="spawn" starts an ephemeral parallel agent whose result is auto-merged at turn end; action="wait" briefly pauses this foreground turn; action="status"/"progress" checks state; action="join" is system-use only and normally unnecessary.',
+          'Unified background agent wrapper. action="spawn" starts an ephemeral parallel agent. Once spawned, this foreground turn cannot finalize until every same-turn worker has completed or failed and its result is injected into the live context for synthesis. action="steer" sends live guidance to any active worker through the same queued steer path used by an active chat. action="wait" briefly pauses this foreground turn; action="status"/"progress" checks state; action="join" is system-use only and normally unnecessary.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
             action: {
               type: 'string',
-              enum: ['spawn', 'status', 'progress', 'wait', 'join'],
+              enum: ['spawn', 'steer', 'status', 'progress', 'wait', 'join'],
               description: 'Background operation to run.',
             },
             prompt: {
@@ -1384,7 +1404,11 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             background_id: {
               type: 'string',
-              description: 'Background agent ID for status/progress/wait/join.',
+              description: 'Background agent ID for steer/status/progress/wait/join.',
+            },
+            message: {
+              type: 'string',
+              description: 'For steer: the live correction, constraint, or follow-up to deliver to the active background agent.',
             },
             background_ids: {
               type: 'array',
@@ -1422,7 +1446,7 @@ export function getAgentTeamScheduleTools(): any[] {
         name: 'background_spawn',
         description:
           'Spawn a one-time ephemeral background agent (full tool-capable LLM call) to run a task in parallel while you continue your primary work. ' +
-          'Result is automatically merged into your final response — NEVER call background_join manually.\n\n' +
+          'The foreground turn cannot finalize until each spawned worker completes or fails; every completion is injected into the live context before the final response is synthesized. Result is automatically merged — NEVER call background_join manually.\n\n' +
           'PREFER FOR ASAP/URGENT PARALLEL WORK: when work needs to start immediately but should not block your current tool sequence, use background_spawn instead of subagent_spawn. ' +
           'Good fits include independent memory writes, codebase scans, web research, and other data gathering that can run while the main flow continues.\n\n' +
           'USE WHEN all 3 conditions are true:\n' +
@@ -1447,6 +1471,22 @@ export function getAgentTeamScheduleTools(): any[] {
             model: { type: 'string', description: 'Optional model override.' },
             provider: { type: 'string', description: 'Optional provider override.' },
             reasoning_effort: { type: 'string', enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional reasoning override.' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'background_steer',
+        description:
+          'Send a live steer message to an active background agent. The message is queued in that worker\'s runtime inbox and consumed before its next action or final response. Use background_ops(action:"steer") in normal operation.',
+        parameters: {
+          type: 'object',
+          required: ['background_id', 'message'],
+          properties: {
+            background_id: { type: 'string', description: 'Active background agent ID returned by background_spawn.' },
+            message: { type: 'string', description: 'Correction, constraint, or new guidance for the active worker.' },
           },
         },
       },

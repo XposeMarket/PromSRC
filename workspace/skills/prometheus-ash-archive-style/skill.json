@@ -30,24 +30,16 @@
   },
   "resources": [
     {
-      "path": "references/polsia-reference-analysis.md",
-      "type": "reference",
-      "description": "Style extraction from the Polsia/Bencera reference video and how to adapt it for Prometheus without copying it."
+      "path": "SKILL.md",
+      "type": "doc"
     },
     {
-      "path": "palettes/ash-archive.md",
-      "type": "reference",
-      "description": "Canonical Ash & Archive palette tokens for Prometheus creative work."
+      "path": "palettes/prometheus-one.md",
+      "type": "reference"
     },
     {
-      "path": "templates/hyperframes-brief.md",
-      "type": "template",
-      "description": "Pre-authoring brief for Ash & Archive HyperFrames videos."
-    },
-    {
-      "path": "references/mythic-editorial-launch-visuals.md",
-      "type": "reference",
-      "description": "Campaign-specific mythic editorial Prometheus launch visual direction."
+      "path": "templates/prometheus-one-brief.md",
+      "type": "template"
     }
   ],
   "implicitInvocation": false,

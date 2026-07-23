@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "prometheus-ash-archive-style",
+  "name": "prometheus-ash-archive-style",
+  "description": "Apply Prometheus's named Ash and Archive brand direction to visuals, interfaces, promos, and HyperFrames work only when the user explicitly requests Prometheus house style or this aesthetic.",
+  "version": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "ash and archive style",
+    "make it less ai-looking",
+    "prometheus visual direction",
+    "prometheus brand visuals",
+    "industrial editorial style"
+  ],
+  "categories": [
+    "creative",
+    "brand",
+    "video",
+    "hyperframes",
+    "motion-design",
+    "prometheus"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "media_quality"
+  ],
+  "permissions": {
+    "workspaceRead": true,
+    "workspaceWrite": true
+  },
+  "resources": [
+    {
+      "path": "templates/hyperframes-brief.md",
+      "type": "template",
+      "description": "Pre-authoring brief for Ash & Archive HyperFrames videos."
+    },
+    {
+      "path": "SKILL.md",
+      "type": "doc"
+    },
+    {
+      "path": "palettes/prometheus-one.md",
+      "type": "reference"
+    },
+    {
+      "path": "templates/prometheus-one-brief.md",
+      "type": "template"
+    }
+  ],
+  "implicitInvocation": false,
+  "lifecycle": "active"
+}

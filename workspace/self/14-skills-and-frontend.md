@@ -105,6 +105,9 @@ Skill routing is relevance-ranked rather than registry-ordered. A turn may recei
 
 Triggers are normalized, deduplicated, capped at 12 per skill, and generic single-word triggers are rejected. Creating or changing triggers requires positive and negative prompt sets; the proposed route must win its positive cases and stay absent or low-confidence in its negative cases before activation.
 
+New-skill routing preflight evaluates positive prompts against the full candidate so the intended workflow must win. Negative prompts evaluate the proposed trigger phrases only: generic domain words in a skill’s name, description, categories, or tool list must not block installation when the negative prompt does not match a trigger.
+
+
 2026-07-11 catalog migration:
 
 - the original 123 folders were classified and migrated into a 128-entry catalog with 112 active, 15 deprecated compatibility entries, and 1 archived entry

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
-import { execFile } from 'child_process';
+import { execFile, spawn, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import type { ToolResult } from '../types.js';
 
@@ -20,6 +20,13 @@ type AnalyzeImageArgs = {
   prompt?: string;
 };
 
+export type MediaAnalysisProgress = {
+  phase: string;
+  message: string;
+  current?: number;
+  total?: number;
+};
+
 type AnalyzeVideoArgs = {
   file_path: string;
   prompt?: string;
@@ -32,6 +39,8 @@ type AnalyzeVideoArgs = {
   extract_audio?: boolean;
   transcribe?: boolean;
   include_raw_probe?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (progress: MediaAnalysisProgress) => void;
 };
 
 export type VisionFrameInput = {
@@ -133,7 +142,7 @@ function parseJsonFromStdout(stdout: string): any {
   }
 }
 
-async function detectPythonRunner(): Promise<PythonRunner | null> {
+async function detectPythonRunner(signal?: AbortSignal): Promise<PythonRunner | null> {
   const candidates: PythonRunner[] = [
     { cmd: 'python', preArgs: [] },
     { cmd: 'py', preArgs: ['-3'] },
@@ -153,28 +162,34 @@ async function detectPythonRunner(): Promise<PythonRunner | null> {
   ].filter(Boolean) as string[];
 
   for (const candidate of directCandidates) {
+    if (signal?.aborted) throw new Error('video analysis canceled by user');
     try {
       if (!fs.existsSync(candidate)) continue;
       await execFileAsync(candidate, ['--version'], {
         timeout: 8_000,
         windowsHide: true,
         maxBuffer: 256 * 1024,
+        signal,
       });
       return { cmd: candidate, preArgs: [] };
     } catch {
+      if (signal?.aborted) throw new Error('video analysis canceled by user');
       // try next candidate
     }
   }
 
   for (const candidate of candidates) {
+    if (signal?.aborted) throw new Error('video analysis canceled by user');
     try {
       await execFileAsync(candidate.cmd, [...candidate.preArgs, '--version'], {
         timeout: 8_000,
         windowsHide: true,
         maxBuffer: 256 * 1024,
+        signal,
       });
       return candidate;
     } catch {
+      if (signal?.aborted) throw new Error('video analysis canceled by user');
       // try next runner
     }
   }
@@ -188,8 +203,113 @@ function compactTranscriptionError(error: unknown): string {
   return text.slice(0, 220) || 'Configured cloud transcription was unavailable.';
 }
 
-async function transcribeWithLocalWhisper(sourcePath: string): Promise<string> {
-  const runner = await detectPythonRunner();
+const MEDIA_PROCESS_MAX_BUFFER = 16 * 1024 * 1024;
+
+function stopMediaProcess(child: ChildProcess): void {
+  if (!child.pid || child.exitCode != null) return;
+  try { child.kill('SIGTERM'); } catch {}
+  if (process.platform === 'win32') {
+    try {
+      const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+      killer.unref();
+    } catch {}
+  }
+}
+
+export async function runMediaProcess(options: {
+  cmd: string;
+  args: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  onProgress?: (progress: MediaAnalysisProgress) => void;
+  keepalive?: MediaAnalysisProgress;
+}): Promise<{ stdout: string; stderr: string }> {
+  if (options.signal?.aborted) throw new Error('video analysis canceled by user');
+  return await new Promise((resolve, reject) => {
+    const child = spawn(options.cmd, options.args, {
+      cwd: options.cwd,
+      env: options.env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let stderrLines = '';
+    let settled = false;
+    const appendBounded = (current: string, chunk: Buffer | string) => {
+      const next = current + String(chunk);
+      return next.length > MEDIA_PROCESS_MAX_BUFFER ? next.slice(-MEDIA_PROCESS_MAX_BUFFER) : next;
+    };
+    const emit = (progress: MediaAnalysisProgress) => {
+      try { options.onProgress?.(progress); } catch {}
+    };
+    const inspectProgressLine = (line: string) => {
+      const marker = '__PROMETHEUS_PROGRESS__';
+      const at = line.indexOf(marker);
+      if (at < 0) return;
+      try {
+        const parsed = JSON.parse(line.slice(at + marker.length));
+        if (parsed?.message) emit({
+          phase: String(parsed.phase || 'working'),
+          message: String(parsed.message),
+          current: Number.isFinite(Number(parsed.current)) ? Number(parsed.current) : undefined,
+          total: Number.isFinite(Number(parsed.total)) ? Number(parsed.total) : undefined,
+        });
+      } catch {}
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      if (keepalive) clearInterval(keepalive);
+      options.signal?.removeEventListener('abort', onAbort);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => {
+      stopMediaProcess(child);
+      fail(new Error('video analysis canceled by user'));
+    };
+    const timeout = setTimeout(() => {
+      stopMediaProcess(child);
+      fail(new Error(`media analysis process timed out after ${Math.round(options.timeoutMs / 60_000)} minutes`));
+    }, options.timeoutMs);
+    timeout.unref?.();
+    const keepalive = options.keepalive ? setInterval(() => emit(options.keepalive!), 10_000) : null;
+    keepalive?.unref?.();
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    child.stdout.on('data', (chunk) => { stdout = appendBounded(stdout, chunk); });
+    child.stderr.on('data', (chunk) => {
+      stderr = appendBounded(stderr, chunk);
+      stderrLines += String(chunk);
+      const lines = stderrLines.split(/\r?\n|\r/g);
+      stderrLines = lines.pop() || '';
+      lines.forEach(inspectProgressLine);
+    });
+    child.once('error', fail);
+    child.once('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (stderrLines) inspectProgressLine(stderrLines);
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`media analysis process exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}: ${String(stderr || stdout).slice(-1500)}`));
+    });
+  });
+}
+
+async function transcribeWithLocalWhisper(sourcePath: string, options: {
+  signal?: AbortSignal;
+  onProgress?: (progress: MediaAnalysisProgress) => void;
+} = {}): Promise<string> {
+  const runner = await detectPythonRunner(options.signal);
   if (!runner) return '';
   const python = [
     'import json, sys, whisper',
@@ -198,10 +318,13 @@ async function transcribeWithLocalWhisper(sourcePath: string): Promise<string> {
     "print(json.dumps({'text': str(result.get('text', '')).strip()}))",
   ].join('; ');
   const ffmpegPath = resolveRuntimeBinary('ffmpeg', { allowPathFallback: true });
-  const { stdout } = await execFileAsync(runner.cmd, [...runner.preArgs, '-c', python, sourcePath], {
-    timeout: 3 * 60 * 1000,
-    windowsHide: true,
-    maxBuffer: 2 * 1024 * 1024,
+  const { stdout } = await runMediaProcess({
+    cmd: runner.cmd,
+    args: [...runner.preArgs, '-c', python, sourcePath],
+    timeoutMs: 3 * 60 * 1000,
+    signal: options.signal,
+    onProgress: options.onProgress,
+    keepalive: { phase: 'transcribing', message: 'Transcribing audio locally…' },
     env: {
       ...process.env,
       PATH: [path.dirname(ffmpegPath), process.env.PATH || ''].filter(Boolean).join(path.delimiter),
@@ -210,26 +333,28 @@ async function transcribeWithLocalWhisper(sourcePath: string): Promise<string> {
   return String(parseJsonFromStdout(stdout)?.text || '').trim();
 }
 
-async function runVideoAnalyzer(scriptPath: string, args: string[]): Promise<any> {
-  const runner = await detectPythonRunner();
+async function runVideoAnalyzer(scriptPath: string, args: string[], options: {
+  signal?: AbortSignal;
+  onProgress?: (progress: MediaAnalysisProgress) => void;
+} = {}): Promise<any> {
+  const runner = await detectPythonRunner(options.signal);
   if (!runner) throw new Error('Python was not found on this machine.');
   const ffmpegPath = resolveRuntimeBinary('ffmpeg', { allowPathFallback: true });
   const ffprobePath = resolveRuntimeBinary('ffprobe', { allowPathFallback: true });
-  const { stdout } = await execFileAsync(
-    runner.cmd,
-    [...runner.preArgs, scriptPath, '--ffmpeg', ffmpegPath, '--ffprobe', ffprobePath, ...args],
-    {
+  const { stdout } = await runMediaProcess({
+      cmd: runner.cmd,
+      args: [...runner.preArgs, scriptPath, '--ffmpeg', ffmpegPath, '--ffprobe', ffprobePath, ...args],
       cwd: path.dirname(scriptPath),
       env: {
         ...process.env,
         PROMETHEUS_FFMPEG_PATH: ffmpegPath,
         PROMETHEUS_FFPROBE_PATH: ffprobePath,
       },
-      timeout: 10 * 60 * 1000,
-      windowsHide: true,
-      maxBuffer: 16 * 1024 * 1024,
-    },
-  );
+      timeoutMs: 10 * 60 * 1000,
+      signal: options.signal,
+      onProgress: options.onProgress,
+      keepalive: { phase: 'extracting_frames', message: 'Extracting video frames…' },
+    });
   return parseJsonFromStdout(stdout);
 }
 
@@ -385,6 +510,8 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
   if (!requestedPath) return { success: false, error: 'file_path is required' };
 
   try {
+    args.onProgress?.({ phase: 'starting', message: 'Preparing video analysis…' });
+    if (args.signal?.aborted) throw new Error('video analysis canceled by user');
     const absPath = ensureWorkspacePath(workspaceRoot, requestedPath);
     if (!fs.existsSync(absPath)) return { success: false, error: `File not found: ${requestedPath}` };
     if (!fs.statSync(absPath).isFile()) return { success: false, error: `"${requestedPath}" is not a file` };
@@ -426,7 +553,10 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
     if (args?.extract_audio !== false) analyzerArgs.push('--extract-audio');
     if (args?.transcribe !== false) analyzerArgs.push('--transcribe');
 
-    const analyzerResult = await runVideoAnalyzer(scriptPath, analyzerArgs);
+    const analyzerResult = await runVideoAnalyzer(scriptPath, analyzerArgs, {
+      signal: args.signal,
+      onProgress: args.onProgress,
+    });
     const videoSummary = analyzerResult?.video_summary || {};
     const framePaths = Array.isArray(videoSummary?.written)
       ? videoSummary.written.filter((value: unknown) => typeof value === 'string')
@@ -445,21 +575,28 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
 
     if (!transcript && transcriptionRequested) {
       try {
+        args.onProgress?.({ phase: 'transcribing', message: 'Transcribing audio with the configured speech service…' });
         const storage = buildCreativeStorage();
         const result = await creativeTranscribeAudio(storage, {
           source: absPath,
           provider: 'openai',
+          signal: args.signal,
         });
         transcript = String(result.text || '').trim();
         transcriptionProvider = transcript ? String(result.provider || 'openai') : null;
         transcriptionNote = transcript ? 'Transcript produced by the configured speech-to-text provider.' : 'Speech-to-text completed but returned no text.';
       } catch (error: any) {
+        if (args.signal?.aborted) throw new Error('video analysis canceled by user');
         const cloudFailure = compactTranscriptionError(error);
         try {
           const localSource = analyzerResult?.audio?.path && fs.existsSync(analyzerResult.audio.path)
             ? String(analyzerResult.audio.path)
             : absPath;
-          transcript = await transcribeWithLocalWhisper(localSource);
+          args.onProgress?.({ phase: 'transcribing', message: 'Cloud transcription unavailable; transcribing audio locally…' });
+          transcript = await transcribeWithLocalWhisper(localSource, {
+            signal: args.signal,
+            onProgress: args.onProgress,
+          });
           transcriptionProvider = transcript ? 'local-whisper-tiny' : null;
           transcriptionNote = transcript
             ? 'Configured cloud speech-to-text was unavailable; transcript produced locally with Whisper tiny.'
@@ -552,6 +689,7 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
       });
     }
 
+    args.onProgress?.({ phase: 'analyzing', message: 'Analyzing the sampled frames and transcript…' });
     const analysis = await analyzeWithPrimaryVision([
       {
         role: 'system',
@@ -584,6 +722,7 @@ export async function executeAnalyzeVideo(args: AnalyzeVideoArgs): Promise<ToolR
     };
     if (args?.include_raw_probe === true) compactExtraction.raw_probe = probeJson;
 
+    args.onProgress?.({ phase: 'complete', message: 'Video analysis complete.' });
     return {
       success: true,
       stdout: analysis,

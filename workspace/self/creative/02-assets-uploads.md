@@ -96,3 +96,11 @@ Media-aware creative rule:
 - Images should be inspected for subject, text, crop-safe regions, busy regions, brand elements, transparency, and contrast needs.
 - Videos should be inspected for duration, orientation, key moments, dead air, visible text, transcript/audio quality, and candidate in/out points.
 - For long-video clipping, Prometheus should build an edit decision list before composing the final video.
+
+
+### Native source-video composition intake (2026-07-21)
+
+- Imported/workspace MP4s can now be referenced by a regular Creative composition `source-video` clip using the asset/workspace-relative `path` plus optional `assetId`.
+- The clip stores an editorial reframe (`cover`, `contain`, or `blurred-background`), normalized position/scale, optional hook, source-audio preservation, and trim timing. This is for real footage, not HTML Motion media placeholders.
+- Keep the manual edit-decision-list workflow: inspect the source, choose exact ranges, then add those ranges to the composition. The runtime must not flatten every video into a generic auto-clip template.
+

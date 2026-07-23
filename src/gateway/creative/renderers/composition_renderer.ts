@@ -25,8 +25,7 @@ import {
 } from '../contracts';
 import { launchCreativeChromium } from '../playwright-runtime';
 import { wrapForIframePreview } from '../hyperframes-bridge';
-
-const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+import { resolveRuntimeBinary } from '../../../runtime/dependencies';
 
 export type RenderProgress = (event: {
   phase: 'prepare' | 'frames' | 'encode' | 'concat' | 'mux' | 'done';
@@ -69,7 +68,7 @@ function makeWorkdir(prefix: string): string {
 
 function runFfmpeg(args: string[], onLog?: (line: string) => void): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegInstaller.path, args, { windowsHide: true });
+    const proc = spawn(resolveRuntimeBinary('ffmpeg', { allowPathFallback: true }), args, { windowsHide: true });
     let stderr = '';
     proc.stderr.on('data', (chunk) => {
       const text = chunk.toString();
@@ -83,6 +82,169 @@ function runFfmpeg(args: string[], onLog?: (line: string) => void): Promise<void
     });
   });
 }
+
+// Probe once per gateway lifetime. FFmpeg can list an encoder that is compiled in but
+// unusable on the current machine, so only select hardware after a real one-frame encode.
+let sourceVideoEncoderPromise: Promise<'h264_qsv' | 'h264_amf' | 'libx264'> | null = null;
+
+async function canUseSourceVideoEncoder(encoder: 'h264_qsv' | 'h264_amf'): Promise<boolean> {
+  try {
+    await runFfmpeg([
+      '-hide_banner', '-loglevel', 'error',
+      '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=1',
+      '-frames:v', '1', '-c:v', encoder, '-f', 'null', '-',
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function selectSourceVideoEncoder(): Promise<'h264_qsv' | 'h264_amf' | 'libx264'> {
+  if (!sourceVideoEncoderPromise) {
+    sourceVideoEncoderPromise = (async () => {
+      const requested = String(process.env.PROMETHEUS_CREATIVE_H264_ENCODER || '').trim().toLowerCase();
+      if (requested === 'libx264') return 'libx264';
+      if (requested === 'h264_qsv' || requested === 'h264_amf') {
+        return (await canUseSourceVideoEncoder(requested)) ? requested : 'libx264';
+      }
+      // QSV is the faster verified hardware path on this machine; AMF is the fallback.
+      if (await canUseSourceVideoEncoder('h264_qsv')) return 'h264_qsv';
+      if (await canUseSourceVideoEncoder('h264_amf')) return 'h264_amf';
+      return 'libx264';
+    })();
+  }
+  return sourceVideoEncoderPromise;
+}
+
+function sourceVideoEncoderArgs(encoder: 'h264_qsv' | 'h264_amf' | 'libx264', format: 'mp4' | 'webm'): string[] {
+  if (format !== 'mp4') return ['-c:v', 'libvpx-vp9'];
+  if (encoder === 'libx264') {
+    return ['-c:v', 'libx264', '-preset', process.env.PROMETHEUS_CREATIVE_X264_PRESET || 'veryfast', '-crf', process.env.PROMETHEUS_CREATIVE_X264_CRF || '20'];
+  }
+  // Hardware encoders do not share x264 CRF semantics. A bounded 2 Mbps VBR target
+  // preserves readable text and dark footage far better than the previous ~800 kbps output.
+  return ['-c:v', encoder, '-b:v', process.env.PROMETHEUS_CREATIVE_HW_VIDEO_BITRATE || '2M', '-maxrate', process.env.PROMETHEUS_CREATIVE_HW_VIDEO_MAXRATE || '2500k', '-bufsize', process.env.PROMETHEUS_CREATIVE_HW_VIDEO_BUFSIZE || '4M'];
+}
+
+
+function assTimestamp(ms: number): string {
+  const centiseconds = Math.max(0, Math.round(ms / 10));
+  const cs = centiseconds % 100;
+  const totalSeconds = Math.floor(centiseconds / 100);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+function escapeAssText(value: string): string {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/[\r\n]+/g, '\\N').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+}
+
+function writeSourceVideoAss(comp: CreativeComposition, clip: CreativeClip, workdir: string): string | null {
+  const captionTracks = Array.isArray(comp.captions) ? comp.captions : [];
+  const lines: string[] = [];
+  for (const track of captionTracks) {
+    for (const segment of Array.isArray(track?.segments) ? track.segments : []) {
+      const segmentStart = Number(segment?.startMs) || 0;
+      const segmentEnd = Math.max(segmentStart + 1, Number(segment?.endMs) || segmentStart + 1);
+      const startMs = Math.max(0, segmentStart - clip.inMs);
+      const endMs = Math.min(clip.outMs - clip.inMs, segmentEnd - clip.inMs);
+      if (endMs <= startMs) continue;
+      const text = escapeAssText(segment?.text || (Array.isArray(segment?.words) ? segment.words.map((word: any) => word?.text).filter(Boolean).join(' ') : ''));
+      if (text) lines.push(`Dialogue: 0,${assTimestamp(startMs)},${assTimestamp(endMs)},Caption,,0,0,0,,${text}`);
+    }
+  }
+  if (!lines.length) return null;
+  const assPath = path.join(workdir, `${clip.id}-captions.ass`);
+  // Keep burned captions in the lower-middle safe zone: above Reels/TikTok controls,
+  // descriptions, and account chrome, while retaining room for readable two-line copy.
+  const marginV = Math.max(240, Math.round(comp.height * 0.30));
+  const content = `[Script Info]\nScriptType: v4.00+\nPlayResX: ${comp.width}\nPlayResY: ${comp.height}\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\nStyle: Caption,Arial,${Math.max(42, Math.round(comp.width / 17))},&H00FFFFFF,&H0000D7FF,&H00101010,&H9A000000,1,0,0,0,100,100,0,0,1,3,1,2,34,34,${marginV},1\n\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n${lines.join('\n')}\n`;
+  fs.writeFileSync(assPath, content, 'utf8');
+  return assPath;
+}
+
+function ffmpegFilterPath(filePath: string): string {
+  return filePath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+}
+
+async function renderSourceVideoSegment(
+  clip: CreativeClip,
+  comp: CreativeComposition,
+  workspacePath: string,
+  workdir: string,
+  outFile: string,
+  format: 'mp4' | 'webm',
+  onProgress?: RenderProgress,
+): Promise<void> {
+  if (clip.source.kind !== 'source-video') throw new Error('source-video lane requires a source-video source.');
+  const sourcePath = path.isAbsolute(clip.source.path) ? path.resolve(clip.source.path) : path.resolve(workspacePath, clip.source.path);
+  ensureInside(workspacePath, sourcePath);
+  if (!fs.existsSync(sourcePath)) throw new Error(`Source video not found: ${sourcePath}`);
+  const durationMs = Math.max(1, clip.outMs - clip.inMs);
+  const sourceStartMs = Math.max(0, Number(clip.trimStartMs) || 0);
+  // Default to the direct phone-native crop used by the strongest first-pass clips.
+  // Blurred-background remains available as an explicit editorial choice, not an
+  // accidental padded fallback for every imported landscape source.
+  const fit = clip.source.fit || 'cover';
+  const background = String(clip.source.background || comp.background || '#000000').replace(/[^#(),.%a-zA-Z0-9\s-]/g, '') || '#000000';
+  const filters: string[] = [];
+  if (fit === 'cover') {
+    filters.push(`[0:v]scale=${comp.width}:${comp.height}:force_original_aspect_ratio=increase,crop=${comp.width}:${comp.height}[vout]`);
+  } else if (fit === 'contain') {
+    filters.push(`[0:v]scale=${comp.width}:${comp.height}:force_original_aspect_ratio=decrease,pad=${comp.width}:${comp.height}:(ow-iw)/2:(oh-ih)/2:${background}[vout]`);
+  } else {
+    const scale = Math.max(0.1, Math.min(4, Number(clip.source.scale) || 1));
+    const positionX = Math.max(0, Math.min(1, Number(clip.source.positionX) || 0.5));
+    const positionY = Math.max(0, Math.min(1, Number(clip.source.positionY) || 0.5));
+    filters.push(`[0:v]split=2[bgsource][fgsource]`);
+    filters.push(`[bgsource]scale=${comp.width}:${comp.height}:force_original_aspect_ratio=increase,crop=${comp.width}:${comp.height},boxblur=20:10[bg]`);
+    filters.push(`[fgsource]scale=${comp.width}:${comp.height}:force_original_aspect_ratio=decrease,scale=iw*${scale}:ih*${scale}[fg]`);
+    filters.push(`[bg][fg]overlay=(W-w)*${positionX}:(H-h)*${positionY}[vout]`);
+  }
+  let current = 'vout';
+  const hook = String(clip.source.hook || clip.meta?.hook || '').trim();
+  if (hook) {
+    const escapedHook = hook.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'");
+    // Hooks should establish the first beat, not become a permanent template banner.
+    const hookDurationSec = Math.max(1.8, Math.min(3.2, durationMs / 1000 * 0.18)).toFixed(2);
+    filters.push(`[${current}]drawtext=fontfile='C\\:/Windows/Fonts/arialbd.ttf':text='${escapedHook}':fontcolor=white:fontsize=${Math.max(32, Math.round(comp.width / 19))}:x=(w-text_w)/2:y=${Math.max(48, Math.round(comp.height * 0.06))}:box=1:boxcolor=black@0.62:boxborderw=18:enable='between(t,0,${hookDurationSec})'[vhook]`);
+    current = 'vhook';
+  }
+  const assPath = writeSourceVideoAss(comp, clip, workdir);
+  if (assPath) {
+    filters.push(`[${current}]subtitles=filename='${ffmpegFilterPath(assPath)}'[vcaption]`);
+    current = 'vcaption';
+  }
+  const buildArgs = (encoder: 'h264_qsv' | 'h264_amf' | 'libx264'): string[] => [
+    '-y', '-ss', (sourceStartMs / 1000).toFixed(3), '-i', sourcePath,
+    '-t', (durationMs / 1000).toFixed(3), '-filter_complex', filters.join(';'), '-map', `[${current}]`,
+    ...((clip.source.kind !== 'source-video' || clip.source.preserveAudio !== false) ? ['-map', '0:a?'] : []),
+    '-r', String(comp.frameRate),
+    ...sourceVideoEncoderArgs(encoder, format),
+    '-pix_fmt', 'yuv420p',
+    ...(format === 'mp4' ? ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart'] : ['-c:a', 'libopus']),
+    '-shortest', outFile,
+  ];
+  const encoder = format === 'mp4' ? await selectSourceVideoEncoder() : 'libx264';
+  onProgress?.({ phase: 'encode', clipId: clip.id, message: `Rendering source video directly with FFmpeg (${encoder}).` });
+  try {
+    await runFfmpeg(buildArgs(encoder));
+  } catch (error) {
+    // Hardware support can change after startup (driver resets/docks). Keep the export reliable.
+    if (format === 'mp4' && encoder !== 'libx264') {
+      onProgress?.({ phase: 'encode', clipId: clip.id, message: `${encoder} failed; retrying direct source video with libx264.` });
+      await runFfmpeg(buildArgs('libx264'));
+      return;
+    }
+    throw error;
+  }
+
+}
+
 
 /**
  * Render frames for a single clip into outDir as frame_00001.png, frame_00002.png, ...
@@ -453,12 +615,16 @@ export async function renderComposition(options: RenderCompositionOptions): Prom
       const clip = videoClips[i];
       const clipFramesDir = path.join(workdir, `clip_${String(i).padStart(3, '0')}_frames`);
       const clipSegmentFile = path.join(workdir, `clip_${String(i).padStart(3, '0')}.${format}`);
-      await renderClipFrames(clip, comp, workspacePath, clipFramesDir, onProgress);
-      if (onProgress) onProgress({ phase: 'encode', clipId: clip.id });
-      await encodeFrames(clipFramesDir, clipSegmentFile, comp.frameRate, format);
+      if (clip.lane === 'source-video') {
+        await renderSourceVideoSegment(clip, comp, workspacePath, workdir, clipSegmentFile, format, onProgress);
+      } else {
+        await renderClipFrames(clip, comp, workspacePath, clipFramesDir, onProgress);
+        if (onProgress) onProgress({ phase: 'encode', clipId: clip.id });
+        await encodeFrames(clipFramesDir, clipSegmentFile, comp.frameRate, format);
+        // Free disk: delete frames after encode
+        try { fs.rmSync(clipFramesDir, { recursive: true, force: true }); } catch {}
+      }
       segmentFiles.push(clipSegmentFile);
-      // Free disk: delete frames after encode
-      try { fs.rmSync(clipFramesDir, { recursive: true, force: true }); } catch {}
     }
 
     const concatFile = path.join(workdir, `concat.${format}`);

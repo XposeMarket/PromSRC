@@ -37,6 +37,15 @@ export function isSteerableTaskRuntimeKind(kind: LiveRuntimeKind | string | null
     || kind === 'scheduled_task';
 }
 
+/**
+ * Ephemeral background agents have their own fresh chat session.  They are not
+ * foreground chats, but while running they can consume the same queued steer
+ * events between model rounds (and before their final response).
+ */
+export function isSteerableBackgroundAgentRuntimeKind(kind: LiveRuntimeKind | string | null | undefined): boolean {
+  return kind === 'background_agent';
+}
+
 export interface LiveRuntimeRegistration {
   kind: LiveRuntimeKind;
   label: string;
@@ -606,7 +615,9 @@ export function addPendingRuntimeSteer(
   const isTaskTargetedSteer = isSteerableTaskRuntimeKind(record.kind)
     && !!record.taskId
     && String(input.sessionId || '') === `task_${record.taskId}`;
-  if (!isSteerableChatRuntimeKind(record.kind) && !isTaskTargetedSteer) {
+  const isBackgroundAgentSteer = isSteerableBackgroundAgentRuntimeKind(record.kind)
+    && String(input.sessionId || '') === String(record.sessionId || '');
+  if (!isSteerableChatRuntimeKind(record.kind) && !isTaskTargetedSteer && !isBackgroundAgentSteer) {
     return { ok: false, runtime: toSnapshot(record), error: 'Runtime is not steerable.' };
   }
   const message = String(input.message || '').trim();
@@ -663,7 +674,8 @@ export function consumePendingRuntimeSteersForSession(sessionId: string, limit =
   if (!sid) return [];
   const out: RuntimeSteerEvent[] = [];
   for (const record of activeRuntimes.values()) {
-    const isChatMatch = isSteerableChatRuntimeKind(record.kind) && String(record.sessionId || '') === sid;
+    const isChatMatch = (isSteerableChatRuntimeKind(record.kind) || isSteerableBackgroundAgentRuntimeKind(record.kind))
+      && String(record.sessionId || '') === sid;
     const isTaskMatch = isSteerableTaskRuntimeKind(record.kind)
       && !!record.taskId
       && sid === `task_${record.taskId}`;
@@ -724,6 +736,23 @@ export function addPendingRuntimeSteerForSession(
     .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
   if (!runtime) return { ok: false, error: 'No active steerable chat runtime for this session.' };
   return addPendingRuntimeSteer(runtime.id, { ...input, sessionId: sid });
+}
+
+/** Queue a live steer for one active background_spawn run by its public ID. */
+export function addPendingRuntimeSteerForBackgroundAgent(
+  backgroundAgentId: string,
+  input: Omit<RuntimeSteerEvent, 'id' | 'sessionId' | 'createdAt'> & { id?: string; createdAt?: number },
+): { ok: boolean; runtime?: LiveRuntimeSnapshot; event?: RuntimeSteerEvent; error?: string } {
+  const agentId = String(backgroundAgentId || '').trim();
+  if (!agentId) return { ok: false, error: 'Background agent id is required.' };
+  const runtime = Array.from(activeRuntimes.values())
+    .filter((record) => isSteerableBackgroundAgentRuntimeKind(record.kind) && String(record.taskId || '') === agentId)
+    .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0];
+  if (!runtime) return { ok: false, error: 'No active background agent runtime was found for this id.' };
+  return addPendingRuntimeSteer(runtime.id, {
+    ...input,
+    sessionId: String(runtime.sessionId || '').trim(),
+  });
 }
 
 function scheduleCheckpointFlush(id: string, snapshot: LiveRuntimeSnapshot): void {

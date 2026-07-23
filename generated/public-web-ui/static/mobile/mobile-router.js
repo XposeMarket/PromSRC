@@ -8,7 +8,7 @@ import {
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage, renderSubagentChatPage,
-} from './mobile-pages.js?v=mobile-composer-init-fix-v19';
+} from './mobile-pages.js?v=mobile-tool-progress-v21';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
@@ -277,6 +277,10 @@ function render() {
     searchSessions: searchMobileChatSessions,
   });
   const slot = shell.page;
+  // Expose the active mobile surface to the theme layer. This keeps chat and
+  // voice accents native in Blue/Violet while allowing the rest of the app to
+  // share the Prometheus One gold component language.
+  slot.dataset.mobilePage = page;
   window.__pmMobileCleanup = () => {
     if (typeof slot._pmCleanup === 'function') slot._pmCleanup();
   };

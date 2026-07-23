@@ -528,7 +528,7 @@ export function getCisSystemTools(): any[] {
         name: 'set_agent_model',
         description:
           'Safely update provider, model, and reasoning routing in .prometheus/config.json without raw file writes. ' +
-          'Use agent_type to update an allowlisted agent model route, including goal_compactor and goal_judge, or agent_id to update a specific configured agent override. ' +
+          'Use agent_type to update an allowlisted agent model route, including goal_compactor, or agent_id to update a specific configured agent override. ' +
           'Critical outage use: when proposals/background work are blocked by a provider quota event, set proposal_executor_low_risk, coordinator, or subagent_* defaults to a working provider/model such as openai_codex/gpt-5.5. ' +
           'Changes are persisted through the Settings API and take effect for new proposal executions, scheduled background tasks, direct background spawns, team agents, subagents, and model switches.',
         parameters: {
@@ -568,12 +568,10 @@ export function getCisSystemTools(): any[] {
                 'switch_model_low',
                 'switch_model_medium',
                 'coordinator',
-                'background_task',
                 'background_spawn',
                 'goal_compactor',
-                'goal_judge',
               ],
-              description: 'Allowlisted durable model route. goal_compactor and goal_judge update Session > Goal Support; other values update agent_model_defaults.',
+              description: 'Allowlisted durable model route. goal_compactor updates the Summary Compactor route; other values update agent_model_defaults.',
             },
             agent_id: {
               type: 'string',

@@ -3,6 +3,18 @@ const path = require('path');
 const rcedit = require('rcedit');
 
 module.exports = async function stampWindowsIcon(context) {
+  if (context.electronPlatformName === 'darwin') {
+    const desktopHelperSource = path.join(context.packager.projectDir, 'bin', 'prometheus-desktop-helper');
+    const desktopHelperDestination = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'prometheus-desktop-helper');
+    if (!fs.existsSync(desktopHelperSource)) {
+      throw new Error(`[stage-macos-helper] Missing native helper: ${desktopHelperSource}`);
+    }
+    fs.copyFileSync(desktopHelperSource, desktopHelperDestination);
+    fs.chmodSync(desktopHelperDestination, 0o755);
+    console.log(`[stage-macos-helper] Staged ${path.basename(desktopHelperSource)} in app resources`);
+    return;
+  }
+
   if (context.electronPlatformName !== 'win32') return;
 
   const productFilename = context.packager.appInfo.productFilename || 'Prometheus';

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-skin="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-visual">
@@ -235,8 +235,8 @@
     // Each theme has a structural `base` (dark|light) that drives the existing
     // dark/light CSS untouched, plus an `id` exposed as data-skin for overrides.
     window.PROM_THEMES = [
+      { id: 'light', label: 'Prometheus One', base: 'dark'  },
       { id: 'dark',  label: 'Default Dark',  base: 'dark'  },
-      { id: 'light', label: 'Light',         base: 'light' },
       { id: 'blue',  label: 'Olympian Blue', base: 'dark'  },
       { id: 'purple', label: 'Aether Violet', base: 'dark' },
     ];
@@ -249,18 +249,18 @@
       document.documentElement.setAttribute('data-skin', theme.id);
     } catch {
       document.documentElement.setAttribute('data-theme', 'dark');
-      document.documentElement.setAttribute('data-skin', 'dark');
+      document.documentElement.setAttribute('data-skin', 'light');
     }
   })();
 </script>
 <link rel="stylesheet" href="src/styles/fonts.css">
 <link rel="stylesheet" href="src/styles/base.css?v=sidebar-resize-fix">
-<link rel="stylesheet" href="src/styles/components.css">
+<link rel="stylesheet" href="src/styles/components.css?v=chat-welcome-cinzel-v1">
 <link rel="stylesheet" href="src/styles/onboarding.css">
 <link rel="stylesheet" href="src/styles/pages.css?v=generated-image-modal-v3">
 <link rel="stylesheet" href="src/styles/projects.css">
 <link rel="stylesheet" href="src/styles/hub.css?v=skill-hover-actions">
-<link rel="stylesheet" href="src/styles/themes.css?v=blue-theme-1">
+<link rel="stylesheet" href="src/styles/themes.css?v=named-themes-gold-v9">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
 <meta name="application-name" content="Prometheus">
@@ -355,7 +355,7 @@
         if (!mobileCssTag) {
           const cssTag = document.createElement('link');
           cssTag.rel = 'stylesheet';
-          cssTag.href = 'src/styles/mobile.css?v=prometheus-one-splash-v6';
+          cssTag.href = 'src/styles/mobile.css?v=video-progress-pill-v14-original-voice-icon';
           cssTag.dataset.promMobileStyle = '1';
           document.head.appendChild(cssTag);
         }
@@ -2364,7 +2364,7 @@
     <div id="chat-messages">
       <div class="chat-welcome" id="chat-welcome">
         <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" style="width:90px;height:90px;object-fit:contain;opacity:0.90;"></div>
-        <h2>Prometheus</h2>
+        <h2>Prometheus One</h2>
         <p>"I whom you see am Prometheus, who gave fire to mankind."</p>
         <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
       </div>
@@ -2441,6 +2441,7 @@
             <span id="chat-model-name">your model</span>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
             <span style="color:var(--muted)">via <span id="chat-provider-name">Prometheus</span></span>
+            <span id="chat-model-route-source" style="color:var(--muted);font-size:10px">Main Chat default</span>
           </button>
           <button
             id="chat-context-window-btn"
@@ -2506,6 +2507,7 @@
           <div id="model-switcher-popover" style="display:none;position:absolute;bottom:calc(100% + 8px);right:0;background:var(--panel);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 4px 20px rgba(16,32,64,0.13);padding:10px;z-index:100;min-width:220px">
             <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Switch Model</div>
             <div id="model-switcher-list" style="display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto"></div>
+            <button id="model-switcher-follow-default" type="button" style="display:none;margin-top:8px;background:transparent;border:0;color:var(--muted);font:inherit;font-size:11px;cursor:pointer;padding:2px 0">Use Main Chat Default</button>
           </div>
         </div>
       </div>
@@ -3888,7 +3890,7 @@
 
       <!-- Provider selector -->
       <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
-        <div class="right-section-title" style="margin-bottom:8px">LLM Provider</div>
+        <div class="right-section-title" style="margin-bottom:8px">Connect Provider</div>
         <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Backend</label>
         <select id="settings-llm-provider" class="settings-input" onchange="onProviderChange()" style="font-size:13px">
           <option value="ollama">Ollama (local)</option>
@@ -4218,9 +4220,9 @@
 	        </div>
 
         <!-- Right col: Agent Model Defaults -->
-        <div id="agent-model-defaults-col" style="border:1px solid var(--line);border-radius:12px;padding:16px;background:linear-gradient(180deg,#fff 0%,#f9fbff 100%)">
-          <div class="right-section-title" style="margin:0 0 4px">Agent Model Defaults</div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5">
+        <div id="agent-model-defaults-col" style="border:1px solid var(--line);border-radius:12px;padding:16px;background:linear-gradient(180deg,#fff 0%,#f9fbff 100%);display:flex;flex-direction:column">
+          <div class="right-section-title" style="margin:14px 0 4px;padding-top:14px;border-top:1px solid var(--line);order:20">Agent Model Defaults</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5;order:21">
             Preset which model each agent type uses. Agents without an override fall back to the primary model.
           </div>
 
@@ -4240,7 +4242,7 @@
           </div>
 
           <!-- Main Chat -->
-          <div style="margin-bottom:12px">
+          <div style="margin-bottom:12px;order:10">
             <div data-settings-icon-label="messageSquare" style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">Main Chat Agent</div>
             <select id="amd-main-chat-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('main-chat')">
               <option value="">use primary</option>
@@ -4257,8 +4259,8 @@
           </div>
 
           <!-- Proposal Executors -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px">Proposal Executors</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px;order:60">Proposal Executors</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;order:61">
             <div>
               <div data-settings-icon-label="alertTriangle" style="font-size:11px;color:var(--muted);margin-bottom:4px">High Risk</div>
               <select id="amd-proposal-high-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('proposal-high')">
@@ -4296,8 +4298,8 @@
           </div>
 
           <!-- Teams & Agents -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px">Teams &amp; Agents</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px;order:40">Teams &amp; Agents</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;order:41">
             <div>
               <div data-settings-icon-label="users" style="font-size:11px;color:var(--muted);margin-bottom:4px">Coordinator</div>
               <select id="amd-coordinator-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('coordinator')">
@@ -4334,27 +4336,8 @@
             </div>
           </div>
 
-	          <!-- Background Tasks -->
-          <div style="margin-bottom:16px">
-            <div data-settings-icon-label="clock" style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">Background Tasks</div>
-            <select id="amd-background-task-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('background-task')">
-              <option value="">use primary</option>
-                <option value="ollama">Ollama (local)</option>
-                <option value="llama_cpp">llama.cpp (local)</option>
-                <option value="lm_studio">LM Studio (local)</option>
-                <option value="openai">OpenAI</option>
-                <option value="openai_codex">OpenAI Codex / ChatGPT</option>
-                <option value="anthropic">Anthropic Claude</option>
-                <option value="perplexity">Perplexity AI</option>
-                <option value="gemini">Google Gemini</option>
-            </select>
-            <select id="amd-background-task-model" class="settings-input" style="width:100%">
-              <option value="">select provider first</option>
-            </select>
-          </div>
-
 	          <!-- Background Spawn -->
-          <div style="margin-bottom:16px">
+          <div style="margin-bottom:4px;padding-bottom:16px;border-bottom:1px solid var(--line);order:30">
             <div data-settings-icon-label="bolt" style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">Background Spawn</div>
             <select id="amd-background-spawn-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('background-spawn')">
               <option value="">use primary</option>
@@ -4373,9 +4356,9 @@
           </div>
 
           <!-- Subagent Role Defaults -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Subagent Role Defaults</div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Per-role model defaults. Leave blank to inherit from the primary model.</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:50">Subagent Role Defaults</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:10px;order:51">Per-role model defaults. Leave blank to inherit from the primary model.</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;order:52">
             <div>
               <div data-settings-icon-label="clipboard" style="font-size:11px;color:var(--muted);margin-bottom:4px">Planner</div>
               <select id="amd-subagent-planner-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('subagent-planner')"><option value="">— inherit —</option><option value="ollama">Ollama</option><option value="llama_cpp">llama.cpp</option><option value="lm_studio">LM Studio</option><option value="openai">OpenAI</option><option value="openai_codex">OpenAI Codex</option><option value="anthropic">Anthropic Claude</option><option value="perplexity">Perplexity</option><option value="gemini">Gemini</option></select>
@@ -4414,9 +4397,9 @@
           </div>
 
           <!-- Switch Model Tiers -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Switch Model Tiers</div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Models used when the AI calls switch_model() to downshift for lighter tasks. Leave blank to disable that tier.</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:20">Switch Models</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:10px;order:21">Models used when the AI calls switch_model() to downshift for lighter tasks. Leave blank to disable that tier.</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;order:22">
             <div>
               <div data-settings-icon-label="zap" style="font-size:11px;color:var(--muted);margin-bottom:4px">Fast (low)</div>
               <select id="amd-switch-model-low-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('switch-model-low')">
@@ -4453,10 +4436,10 @@
             </div>
           </div>
 
-+          <!-- Goal Support Models -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Goal Support</div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Models used to compact autonomous goal progress and judge completion. Leave blank to use the currently active main-chat provider and model.</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+          <!-- Summary Compactor -->
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:70">Summary Compactor</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:10px;order:71">Model used to compact autonomous goal progress. Leave blank to use the current main-chat provider and model.</div>
+          <div style="margin-bottom:12px;order:72">
             <div>
               <div data-settings-icon-label="layers" style="font-size:11px;color:var(--muted);margin-bottom:4px">Summary Compactor</div>
               <select id="goal-compactor-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="goalRoutingProviderChange('compactor')">
@@ -4469,25 +4452,13 @@
                 <option value="">provider default</option>
               </select>
             </div>
-            <div>
-              <div data-settings-icon-label="checkCircle" style="font-size:11px;color:var(--muted);margin-bottom:4px">Goal Judge</div>
-              <select id="goal-judge-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="goalRoutingProviderChange('judge')">
-                <option value="">use current main chat</option>
-              </select>
-              <select id="goal-judge-model" class="settings-input" style="width:100%;margin-bottom:4px" onchange="syncGoalRoutingReasoning('judge')">
-                <option value="">select provider first</option>
-              </select>
-              <select id="goal-judge-reasoning" class="settings-input" style="width:100%">
-                <option value="">provider default</option>
-              </select>
-            </div>
           </div>
 
 
           <!-- Brain System Models -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Brain System</div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Models used for autonomous Thought and Dream runs. Leave blank to use the primary model.</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:80">Brain System</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:10px;order:81">Models used for autonomous Thought and Dream runs. Leave blank to use the primary model.</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;order:82">
             <div>
               <div data-settings-icon-label="messageSquare" style="font-size:11px;color:var(--muted);margin-bottom:4px">Brain Thought</div>
               <select id="brain-thought-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="brainProviderChange('thought')">
@@ -4523,10 +4494,10 @@
               </select>
             </div>
           </div>
-          <div id="brain-model-status" style="font-size:11px;min-height:16px;margin-bottom:8px"></div>
+          <div id="brain-model-status" style="font-size:11px;min-height:16px;margin-bottom:8px;order:83"></div>
 
-          <div id="amd-status" style="font-size:11px;min-height:16px;margin-bottom:8px"></div>
-	          <div style="font-size:12px;color:var(--muted);margin-bottom:10px"></div>
+          <div id="amd-status" style="font-size:11px;min-height:16px;margin-bottom:8px;order:90"></div>
+	          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;order:91"></div>
 
 	    </div>
 	  </div>
@@ -5980,7 +5951,7 @@ function renderSessionsList() {
 
   // Add "Show more" button if there are more sessions
   if (hasMore) {
-    content += `<button onclick="showMoreSessions()" style="width:100%;margin-top:8px;padding:8px 12px;background:rgba(249,115,22,0.12);border:1px solid rgba(249,115,22,0.30);color:var(--text);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='rgba(249,115,22,0.20)'" onmouseout="this.style.background='rgba(249,115,22,0.12)'">
+    content += `<button class="sessions-show-more-btn" onclick="showMoreSessions()" style="width:100%;margin-top:8px;padding:8px 12px;background:rgba(249,115,22,0.12);border:1px solid rgba(249,115,22,0.30);color:var(--text);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='rgba(249,115,22,0.20)'" onmouseout="this.style.background='rgba(249,115,22,0.12)'">
       + Show more (${unpinned.length - _sessionShowCount} more)
     </button>`;
   }
@@ -6321,6 +6292,59 @@ window.applyReasoningPrefsFromProviderConfig = applyReasoningPrefsFromProviderCo
 window.refreshReasoningPrefsFromSettings = refreshReasoningPrefsFromSettings;
 window.persistProviderReasoningPrefs = persistProviderReasoningPrefs;
 
+function _activeChatModelRouteSessionId() {
+  return String(window.activeChatSessionId || window.agentSessionId || '').trim();
+}
+
+async function refreshActiveChatModelRoute() {
+  const sessionId = _activeChatModelRouteSessionId();
+  if (!sessionId) return null;
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`);
+    const state = data?.chatModelRoute;
+    const route = state?.effective;
+    if (!route?.providerId || !route?.model) return state || null;
+    window._activeProvider = route.providerId;
+    window._activeModel = route.model;
+    window.reasoningLevel = route.reasoningEffort || '';
+    _renderActiveModelLabels(route.model, route.providerId, route.reasoningEffort || '');
+    const source = document.getElementById('chat-model-route-source');
+    if (source) source.textContent = state.mode === 'explicit' ? 'This chat' : 'Main Chat default';
+    const follow = document.getElementById('model-switcher-follow-default');
+    if (follow) follow.style.display = state.mode === 'explicit' ? '' : 'none';
+    window._activeChatModelRoute = state;
+    return state;
+  } catch (err) {
+    console.warn('refreshActiveChatModelRoute:', err);
+    return null;
+  }
+}
+
+async function setActiveChatModelRoute(route) {
+  const sessionId = _activeChatModelRouteSessionId();
+  if (!sessionId) throw new Error('No active chat');
+  const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, {
+    method: 'PUT', body: JSON.stringify(route),
+  });
+  if (data?.success === false) throw new Error(data.error || 'Could not update this chat model');
+  await refreshActiveChatModelRoute();
+  if (typeof window.scheduleChatContextWindowRefresh === 'function') window.scheduleChatContextWindowRefresh(50);
+  return data?.chatModelRoute;
+}
+
+async function followMainChatDefault() {
+  const sessionId = _activeChatModelRouteSessionId();
+  if (!sessionId) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, { method: 'DELETE' });
+    await refreshActiveChatModelRoute();
+    _closeModelSwitcher();
+  } catch (err) { console.warn('followMainChatDefault:', err); }
+}
+
+window.refreshActiveChatModelRoute = refreshActiveChatModelRoute;
+window.followMainChatDefault = followMainChatDefault;
+
 async function toggleModelSwitcher() {
   const popover = document.getElementById('model-switcher-popover');
   if (!popover) return;
@@ -6331,7 +6355,10 @@ async function toggleModelSwitcher() {
   const titleEl = popover.querySelector('div[style*="text-transform:uppercase"]');
   listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px">Loading...</div>';
 
-  const provider = window._activeProvider || 'ollama';
+  const chatRoute = await refreshActiveChatModelRoute();
+  const provider = chatRoute?.effective?.providerId || window._activeProvider || 'ollama';
+  const follow = document.getElementById('model-switcher-follow-default');
+  if (follow) follow.onclick = followMainChatDefault;
 
   if (LOCAL_PROVIDERS.has(provider)) {
     if (titleEl) titleEl.textContent = 'Switch Model';
@@ -6353,7 +6380,7 @@ async function toggleModelSwitcher() {
   }
 
   if (EFFORT_CAPABLE_PROVIDERS.has(provider)) {
-    const llm = await refreshReasoningPrefsFromSettings(provider);
+    const llm = await api('/api/settings/provider').then(data => data?.llm || null).catch(() => null);
     if (titleEl) titleEl.textContent = 'Reasoning Effort';
     const model = _activeModelForProvider(provider, llm);
     if (provider === 'anthropic' && !_supportsAnthropicEffort(model)) {
@@ -6367,7 +6394,7 @@ async function toggleModelSwitcher() {
       return;
     }
     const levels = _effortLevelsForProvider(provider, model);
-    const current = typeof window.reasoningLevel === 'string' ? window.reasoningLevel : '';
+    const current = String(chatRoute?.effective?.reasoningEffort || window.reasoningLevel || '');
     listEl.innerHTML = levels.map(l => `
       <button onclick="setReasoningLevel('${l.v}')" style="text-align:left;background:${l.v === current ? 'var(--brand)' : 'transparent'};color:${l.v === current ? '#fff' : 'var(--text)'};border:1px solid ${l.v === current ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;transition:background 0.1s">
         <div style="font-weight:600">${escHtml(l.label)}</div>
@@ -6408,11 +6435,11 @@ function _closeModelSwitcher() {
 async function switchModel(modelName) {
   _closeModelSwitcher();
   try {
-    await api('/api/settings/model', { method: 'POST', body: JSON.stringify({ primary: modelName }) });
-    _renderActiveModelLabels(modelName, window._activeProvider || '', window.reasoningLevel || '');
-    if (typeof window.scheduleChatContextWindowRefresh === 'function') window.scheduleChatContextWindowRefresh(250);
+    const state = window._activeChatModelRoute || await refreshActiveChatModelRoute();
+    const route = state?.effective || {};
+    await setActiveChatModelRoute({ providerId: route.providerId || window._activeProvider || 'ollama', model: modelName, reasoningEffort: route.reasoningEffort || undefined, accountId: route.accountId || undefined });
   } catch {
-    // silent fail — model will still update on next status poll
+    // The next header refresh will retain the currently admitted/global route.
   }
 }
 
@@ -6461,9 +6488,9 @@ async function setReasoningLevel(level) {
       }
       if (level === 'xhigh' && !_supportsAnthropicXHigh(model)) level = 'high';
     }
-    await persistProviderReasoningPrefs(provider, { reasoning_effort: level });
-    const rawModel = document.getElementById('chat-model-name')?.dataset?.rawModel || window._activeModel || '';
-    _renderActiveModelLabels(rawModel, provider, level);
+    const state = window._activeChatModelRoute || await refreshActiveChatModelRoute();
+    const route = state?.effective || {};
+    await setActiveChatModelRoute({ providerId: route.providerId || provider, model: route.model || window._activeModel || '', reasoningEffort: level || undefined, accountId: route.accountId || undefined });
     _closeModelSwitcher();
   } catch (err) {
     console.warn('setReasoningLevel:', err);
@@ -7036,7 +7063,7 @@ const SKILL_FLAME_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="
 const SKILL_EDIT_ICON  = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
 const SKILL_DEL_ICON   = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>`;
 const SKILL_STAR_ICON  = (filled) => filled
-  ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="#f97316" stroke="#f97316" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`
+  ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`
   : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
 
 function skillSearchText(s) {
@@ -7464,7 +7491,7 @@ function getInitialTheme() {
     const saved = localStorage.getItem(THEME_KEY);
     if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}
-  return 'dark';
+  return 'light';
 }
 
 function applyTheme(themeId) {
@@ -7871,7 +7898,7 @@ let _errBackdrop = null;
     './src/api.js',
     './src/utils.js',
     './src/ws.js',
-    './src/app.js?v=desktop-declared-plan-only-v2',
+    './src/app.js?v=desktop-chat-welcome-cinzel-v4',
   ];
   const mobileSurface = document.body.classList.contains('pm-mobile-active')
     && !window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled;
@@ -8160,7 +8187,7 @@ let _errBackdrop = null;
 </script>
 
 <script>
-/* ── Ember particle effect (dark mode, chat page, center column only) ───── */
+/* ── Ember particle effect (Default Dark/orange skin only) ─────────────── */
 (() => {
   const canvas = document.getElementById('ember-canvas');
   if (!canvas) return;
@@ -8213,8 +8240,8 @@ let _errBackdrop = null;
     return EMBER_THEMES[currentSkin()] || EMBER_THEMES.dark;
   }
 
-  function isDark() {
-    return document.documentElement.getAttribute('data-theme') === 'dark';
+  function embersEnabled() {
+    return currentSkin() === 'dark';
   }
 
   function isOnChatPage() {
@@ -8268,7 +8295,7 @@ let _errBackdrop = null;
   function draw(ts) {
     ctx.clearRect(0, 0, W, H);
 
-    if (!isDark() || !isOnChatPage()) {
+    if (!embersEnabled() || !isOnChatPage()) {
       raf = requestAnimationFrame(draw);
       return;
     }

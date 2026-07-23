@@ -219,6 +219,14 @@ Desktop wrapper performance/behavior notes (2026-07-13):
 
 - proposal/admin fallback tools and legacy compatibility names
 
+
+### Media reliability corrections from the social-clip benchmark (2026-07-21)
+
+- `web_fetch(..., include_media:true)` now attempts X media extraction for valid status URLs even when post-text/thread extraction fails. If media is recovered, the result is usable and clearly reports that text extraction was unavailable; this removes the needless manual `download_media` pivot from the observed X failure.
+- Creative composition rendering resolves FFmpeg through `src/runtime/dependencies.ts`, the shared packaged/dev resolver used for FFmpeg/FFprobe health, instead of assuming PATH or importing a separate binary directly.
+- Creative transcription supports `provider:"auto"`: it uses OpenAI when available, then tries configured xAI STT if all OpenAI auth bridges fail. A missing local-STT fallback remains an explicit future capability rather than a hidden claim.
+
+
 Video-mode tool guard to preserve:
 
 - in Video mode, `creative_apply_ops`, scene element tools, scene asset placement, scene-graph animations/effects/masks, and `creative_trim_clip` are intentionally rejected by the executor

@@ -134,6 +134,7 @@ export const ICONS = {
   mic:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>',
   clipboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/></svg>',
   spark:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/><path d="M19 5l1 1M5 5l-1 1"/></svg>',
+  starburst: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5v19M2.5 12h19M5.3 5.3l13.4 13.4M18.7 5.3 5.3 18.7"/><path d="m12 7.4 1.25 3.35L16.6 12l-3.35 1.25L12 16.6l-1.25-3.35L7.4 12l3.35-1.25L12 7.4Z"/></svg>',
   calendar:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>',
   users:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   robot:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"/><circle cx="9" cy="13" r="1.4"/><circle cx="15" cy="13" r="1.4"/><line x1="12" y1="3" x2="12" y2="7"/><line x1="2" y1="13" x2="4" y2="13"/><line x1="20" y1="13" x2="22" y2="13"/></svg>',
@@ -462,12 +463,20 @@ async function _loadDrawerSessionPage({ channel = 'mobile', loadSessions, reset 
 
 
 function _getThemeList() {
-  return (window.PROM_THEMES && window.PROM_THEMES.length)
+  const themes = (window.PROM_THEMES && window.PROM_THEMES.length)
     ? window.PROM_THEMES
     : [
       { id: 'dark', label: 'Default Dark', base: 'dark' },
-      { id: 'light', label: 'Light', base: 'light' },
+      { id: 'blue', label: 'Olympian Blue', base: 'dark' },
+      { id: 'purple', label: 'Aether Violet', base: 'dark' },
     ];
+
+  // Light remains available to the desktop UI, but the mobile app now cycles
+  // only through its three dark visual systems. Clone the entries so the
+  // shared desktop registry is never mutated.
+  return themes
+    .filter((theme) => theme?.id !== 'light')
+    .map((theme) => theme?.id === 'dark' ? { ...theme, label: 'Prometheus One' } : { ...theme });
 }
 
 function _resolveTheme(themeId) {
@@ -529,19 +538,25 @@ function _applyMobileTheme(themeId) {
   const desktopToggle = document.getElementById('theme-toggle');
   if (desktopToggle) {
     desktopToggle.setAttribute('data-theme-state', resolved);
-    const title = resolved === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    const themes = _getThemeList();
+    const currentIndex = Math.max(0, themes.findIndex((entry) => entry.id === theme.id));
+    const nextTheme = themes[(currentIndex + 1) % themes.length] || themes[0];
+    const title = `Theme: ${theme.label} — switch to ${nextTheme?.label || 'Prometheus One'}`;
     desktopToggle.title = title;
     desktopToggle.setAttribute('aria-label', title);
   }
 
   const mobileToggle = _drawerEl?.querySelector('[data-mobile-theme-toggle]');
   if (mobileToggle) {
-    const isDark = resolved === 'dark';
-    mobileToggle.innerHTML = isDark ? ICONS.sun : ICONS.moon;
-    mobileToggle.setAttribute('aria-pressed', String(isDark));
-    mobileToggle.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
-    mobileToggle.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
-    mobileToggle.setAttribute('aria-pressed-label', isDark ? 'Current theme: dark' : 'Current theme: light');
+    const themes = _getThemeList();
+    const currentIndex = Math.max(0, themes.findIndex((entry) => entry.id === theme.id));
+    const nextTheme = themes[(currentIndex + 1) % themes.length] || themes[0];
+    const title = `Theme: ${theme.label} — switch to ${nextTheme?.label || 'Prometheus One'}`;
+    mobileToggle.innerHTML = ICONS.sun;
+    mobileToggle.setAttribute('aria-pressed', 'true');
+    mobileToggle.setAttribute('aria-label', title);
+    mobileToggle.title = title;
+    mobileToggle.setAttribute('aria-pressed-label', `Current theme: ${theme.label}`);
     mobileToggle.setAttribute('data-theme-id', theme.id);
   }
 
@@ -862,7 +877,12 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   _scrimEl = el(`<div class="pm-drawer-scrim" aria-hidden="true"></div>`);
   _drawerEl = el(`
     <aside class="pm-drawer" role="dialog" aria-label="Menu" aria-modal="true">
-      <div class="pm-drawer-brand"><span class="pm-brand-flame">🔥</span><span>Prometheus</span></div>
+      <div class="pm-drawer-brand">
+        <span class="pm-brand-flame">🔥</span>
+        <span class="pm-drawer-brand-legacy">Prometheus</span>
+        <img class="pm-brand-p1-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=3" alt="" decoding="async">
+        <span class="pm-drawer-brand-p1"><strong>PROMETHEUS 1</strong><small>1 Program. Unlimited abilities.</small></span>
+      </div>
       <button class="pm-theme-toggle" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>
       <button class="pm-drawer-close" type="button" data-mobile-drawer-close aria-label="Close menu">${ICONS.x}</button>
       <label class="pm-drawer-search" aria-label="Search chats">
@@ -871,7 +891,8 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       </label>
       <div class="pm-drawer-top-actions">
         <button class="pm-drawer-new-chat" type="button" data-mobile-new-chat aria-label="New chat">
-          <span class="pm-icon">${ICONS.plus}</span>
+          <span class="pm-icon pm-icon-new-chat-default">${ICONS.plus}</span>
+          <span class="pm-icon pm-icon-new-chat-p1">${ICONS.starburst}</span>
           <span>New chat</span>
         </button>
       </div>

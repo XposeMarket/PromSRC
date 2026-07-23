@@ -676,7 +676,12 @@ export function detectToolCategories(text: string): Set<string> {
     'create a project', 'scaffold', 'new project', 'init project', 'project structure',
   ];
   const TASK = ['task', 'background', 'run this', 'start a', 'status', 'paused', 'resume', 'in progress', 'what tasks', 'running tasks'];
-  const SCHEDULE = ['schedule', 'every day', 'every week', 'at ', 'recurring', 'cron', 'automate', 'remind me', 'daily', 'weekly'];
+  const SCHEDULE = ['schedule', 'every day', 'every week', 'recurring', 'cron', 'automate', 'remind me', 'daily', 'weekly'];
+  // `at ` used to be a raw substring cue. That matched ordinary words such as
+  // "Great thanks" and silently activated the expensive automations tool set.
+  // Keep support for standalone timed requests, but only when `at` introduces a
+  // recognizable clock time.
+  const SCHEDULE_TIME = /\bat\s+(?:\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)|\d{1,2}\s*o['’]?clock|noon|midnight)\b/i;
   const SHELL = [
     'run command', 'execute', 'terminal', 'powershell', 'script', 'command line', 'cmd', 'bash',
     // npm / node
@@ -725,7 +730,7 @@ export function detectToolCategories(text: string): Set<string> {
   if (DESKTOP.some(k => lower.includes(k))) cats.add('desktop');
   if (FILES.some(k => lower.includes(k))) cats.add('files');
   if (TASK.some(k => lower.includes(k))) cats.add('task');
-  if (SCHEDULE.some(k => lower.includes(k))) cats.add('schedule');
+  if (SCHEDULE.some(k => lower.includes(k)) || SCHEDULE_TIME.test(lower)) cats.add('schedule');
   if (SHELL.some(k => lower.includes(k))) cats.add('shell');
   if (MEMORY.some(k => lower.includes(k))) cats.add('memory');
   if (DEBUG.some(k => lower.includes(k))) cats.add('debug');
@@ -870,7 +875,7 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
 
   media_quality: `MEDIA QUALITY: image_check_contrast, image_check_text_overflow, image_detect_empty_regions, image_get_bounds_summary, image_get_element_at_point, image_get_overlaps, video_render_frame, video_render_contact_sheet, video_check_audio_sync, and video_check_caption_timing validate visual/video output. Activate when checking layout polish, frame rendering, captions, or audio timing.`,
 
-  automations: `AUTOMATIONS: schedule_job is core for normal list/create/update/pause/resume/delete/run_now. Activate automations for deeper operator tools: schedule_job_detail/history/log_search/outputs/patch/stuck_control inspect and repair scheduled runs; automation_dashboard returns a unified operator snapshot. prometheus_thread_ops controls other first-class Prometheus chat sessions: find/read/create/create_many/send/steer/interrupt/rename/pin/follow. prometheus_request_ops lists/finds/reads durable dev edits, approvals, proposals, and questions; when the user says work was cut off, call recovery_candidates, inspect the exact request, then recover the existing approved dev edit in its original owner thread. Recovery never approves or marks changes live. Use create_many with follow=true when splitting work into independently visible threads that should continue in Goal mode and report back here. These are Prometheus sessions, not subagents or Codex threads. Confirm before mutating existing jobs. Prompts and new-thread objectives must be self-contained for a fresh session.`,
+  automations: `AUTOMATIONS: schedule_job is core for normal list/create/update/pause/resume/delete/run_now. Activate automations for deeper operator tools: schedule_job_detail/history/log_search/outputs/patch/stuck_control inspect and repair scheduled runs; automation_dashboard returns a unified operator snapshot. prometheus_thread_ops controls other first-class Prometheus chat sessions: find/read/create/create_many/send/steer/interrupt/rename/pin/follow. prometheus_audit_ops is read-only evidence reconstruction for interruptions: inspect recent_sessions, timelines, recovery candidates, and recovery briefs first; then verify live Goal/request state and resume only through existing prometheus_thread_ops, prometheus_request_ops, or Goal recovery. Never use audit evidence to assume a started tool completed or to duplicate a recovery. prometheus_request_ops lists/finds/reads durable dev edits, approvals, proposals, and questions; when the user says work was cut off, call recovery_candidates, inspect the exact request, then recover the existing approved dev edit in its original owner thread. Recovery never approves or marks changes live. Use create_many with follow=true when splitting work into independently visible threads that should continue in Goal mode and report back here. These are Prometheus sessions, not subagents or Codex threads. Confirm before mutating existing jobs. Prompts and new-thread objectives must be self-contained for a fresh session.`,
 
   external_apps: `EXTERNAL APPS: connector_list is core for discovery. Activating external_apps loads wrapper-first connected app tools. For X/Twitter and xAI/Grok use x_search_ops, x_posts, x_users, x_lists, x_dm, and x_admin. For Vercel use vercel_ops. Other connected app tools may still appear directly from their connectors. Check connector_list first when connection status matters.`,
 

@@ -9,6 +9,7 @@ import math
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,11 @@ def run_json(command: list[str]) -> dict[str, Any]:
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, capture_output=True, text=True, check=True)
+
+
+def emit_progress(phase: str, message: str, **extra: Any) -> None:
+    payload = {"phase": phase, "message": message, **extra}
+    print(f"__PROMETHEUS_PROGRESS__{json.dumps(payload, separators=(',', ':'))}", file=sys.stderr, flush=True)
 
 
 def parse_duration(probe: dict[str, Any]) -> float:
@@ -259,6 +265,8 @@ def extract_sample_set(
     output_dir: Path,
     label: str,
     times: list[float],
+    frame_offset: int = 0,
+    frame_total: int = 0,
 ) -> dict[str, Any]:
     set_dir = output_dir / label
     set_dir.mkdir(parents=True, exist_ok=True)
@@ -279,6 +287,14 @@ def extract_sample_set(
                 })
         except Exception as exc:
             errors.append(f"{frame_path.name}: {exc}")
+        completed = frame_offset + index
+        emit_progress(
+            "extracting_frames",
+            f"Extracting frames: {completed} out of {frame_total or len(times)}",
+            current=completed,
+            total=frame_total or len(times),
+            set=label,
+        )
     return {"label": label, "times_seconds": times, "written": written, "frames": frames, "errors": errors}
 
 
@@ -366,6 +382,8 @@ def main() -> int:
     detail_max = clamp_int(args.max_detail_frames, 42, 2, 72)
     detail_count = choose_detail_sample_count(duration, args.detail_samples or None, detail_max)
     batch_size = clamp_int(args.batch_size, 12, 4, 18)
+    frame_total = (quick_count if mode in ("quick", "both") else 0) + (detail_count if mode in ("detail", "both") else 0)
+    emit_progress("extracting_frames", f"Extracting frames: 0 out of {frame_total}", current=0, total=frame_total)
 
     quick = None
     detail = None
@@ -374,7 +392,8 @@ def main() -> int:
 
     if mode in ("quick", "both"):
         quick_times = sample_times(duration, quick_count)
-        quick = extract_sample_set(ffmpeg, video_path, output_dir, "quick", quick_times)
+        quick = extract_sample_set(ffmpeg, video_path, output_dir, "quick", quick_times, 0, frame_total)
+        emit_progress("building_contact_sheets", "Building overview contact sheet…")
         quick["contact_sheet"] = make_labeled_contact_sheet(
             ffmpeg,
             video_path,
@@ -388,7 +407,9 @@ def main() -> int:
 
     if mode in ("detail", "both"):
         detail_times = sample_times(duration, detail_count)
-        detail = extract_sample_set(ffmpeg, video_path, output_dir, "detail", detail_times)
+        detail_offset = quick_count if mode == "both" else 0
+        detail = extract_sample_set(ffmpeg, video_path, output_dir, "detail", detail_times, detail_offset, frame_total)
+        emit_progress("building_contact_sheets", "Building detailed contact sheets…")
         detail["contact_sheet"] = make_labeled_contact_sheet(
             ffmpeg,
             video_path,
@@ -423,7 +444,10 @@ def main() -> int:
         all_written.extend(detail["written"])
         all_errors.extend(detail["errors"])
 
+    if args.extract_audio:
+        emit_progress("extracting_audio", "Extracting audio for transcription…")
     audio = maybe_extract_audio(ffmpeg, video_path, output_dir, bool(args.extract_audio))
+    emit_progress("extraction_complete", "Frame and audio extraction complete.", current=frame_total, total=frame_total)
     print(json.dumps({
         "ok": bool(all_written),
         "probe": {"json": probe},

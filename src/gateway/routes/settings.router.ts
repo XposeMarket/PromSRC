@@ -2,6 +2,7 @@
 // Settings, Credentials, Model, Auth, Memory, Hooks routes
 import { Router } from 'express';
 import { getConfig } from '../../config/config';
+import { mainChatRoutePatch, parseMainChatRoute, preserveLiveMainChatRoute } from '../../config/main-chat-route.js';
 import { getVault } from '../../security/vault';
 import { getMCPManager } from '../mcp-manager';
 import { resolveHookConfig, buildWebhookRouter } from '../comms/webhook-handler';
@@ -583,8 +584,6 @@ function getSessionDefaults() {
     rollingCompactionSummaryMaxWords: 900,
     rollingCompactionModel: '',
     mainChatGoals: {
-      judgeModel: '',
-      judgeReasoning: '',
       compactionModel: '',
       compactionReasoning: '',
     },
@@ -599,10 +598,11 @@ function normalizeAuxReasoning(value: unknown): string {
 function mergeMainChatGoalRouting(incoming: any, existing: any): Record<string, any> {
   const source = incoming && typeof incoming === 'object' ? incoming : {};
   const current = existing && typeof existing === 'object' ? existing : {};
+  const currentWithoutLegacyJudge = { ...current };
+  delete currentWithoutLegacyJudge.judgeModel;
+  delete currentWithoutLegacyJudge.judgeReasoning;
   return {
-    ...current,
-    judgeModel: String(source.judgeModel ?? current.judgeModel ?? '').trim(),
-    judgeReasoning: normalizeAuxReasoning(source.judgeReasoning ?? current.judgeReasoning),
+    ...currentWithoutLegacyJudge,
     compactionModel: String(source.compactionModel ?? current.compactionModel ?? '').trim(),
     compactionReasoning: normalizeAuxReasoning(source.compactionReasoning ?? current.compactionReasoning),
   };
@@ -728,22 +728,8 @@ router.post('/api/settings/model', (req, res) => {
 
   // Provider+model switch from Telegram /model command (or web UI)
   if (provider && model) {
-    const currentLlm = (current as any).llm || {};
-    const currentProviders = currentLlm.providers || {};
-    cm.updateConfig({
-      llm: {
-        ...currentLlm,
-        provider,
-        providers: {
-          ...currentProviders,
-          [provider]: { ...(currentProviders[provider] || {}), model },
-        },
-      },
-      models: {
-        primary: model,
-        roles: { manager: model, executor: model, verifier: model },
-      },
-    } as any);
+    cm.updateConfig(mainChatRoutePatch(current, { provider, model }) as any);
+    resetProvider();
     res.json({ success: true, provider, model });
     return;
   }
@@ -794,7 +780,6 @@ const AGENT_MODEL_DEFAULT_KEYS = [
   'team_manager',
   'subagent',
   'team_subagent',
-  'background_task',
   'background_spawn',
   // Per-role-type subagent defaults
   'subagent_planner',
@@ -864,6 +849,18 @@ function normalizeAgentModelDefaults(raw: any): Record<string, string> {
     if (typeof val === 'string' && val.trim()) normalized[key] = val.trim();
   }
   return normalized;
+}
+
+function mainChatRoutePatchForDefaults(config: any, defaults: Record<string, string>, reasoning: Record<string, string>, explicitMainReasoning = false): Record<string, any> {
+  const parsed = parseMainChatRoute(defaults.main_chat);
+  // A template/default without a main_chat slot is allowed; it must not alter
+  // the live route. When present, it is the one deliberate route switch.
+  if (!parsed) return {};
+  const effort = String(reasoning.main_chat || '').trim();
+  return mainChatRoutePatch(config, {
+    ...parsed,
+    ...(effort || explicitMainReasoning ? { reasoningEffort: effort } : {}),
+  });
 }
 
 function slugTemplateId(name: string): string {
@@ -1004,7 +1001,9 @@ router.post('/api/settings/agent-model-defaults', (req, res) => {
       agent_model_default_templates: templates,
       active_agent_model_default_template: templates[defaultTemplateIdx].id,
     } : {}),
+    ...mainChatRoutePatchForDefaults(current, normalizedDefaults, normalizedReasoning, Object.prototype.hasOwnProperty.call(incoming.reasoning || {}, 'main_chat')),
   } as any);
+  if (normalizedDefaults.main_chat) resetProvider();
   res.json({ success: true, defaults: normalizedDefaults, reasoning: normalizedReasoning });
 });
 
@@ -1077,7 +1076,9 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
       agent_model_default_reasoning: reasoning,
       active_agent_model_default_template: template.id,
     } : {}),
+    ...(isStartupDefault ? mainChatRoutePatchForDefaults(current, defaults, reasoning) : {}),
   } as any);
+  if (isStartupDefault && defaults.main_chat) resetProvider();
   res.json({ success: true, template, templates });
 });
 
@@ -1121,7 +1122,9 @@ router.patch('/api/settings/agent-model-default-templates/:id', (req, res) => {
       agent_model_default_reasoning: reasoning,
       active_agent_model_default_template: template.id,
     } : {}),
+    ...(isStartupDefault ? mainChatRoutePatchForDefaults(current, defaults, reasoning) : {}),
   } as any);
+  if (isStartupDefault && defaults.main_chat) resetProvider();
   res.json({ success: true, template, templates });
 });
 
@@ -1137,14 +1140,18 @@ router.post('/api/settings/agent-model-default-templates/:id/apply', (req, res) 
     return;
   }
   const template = templates[idx];
+  const defaults = normalizeAgentModelDefaults(template.defaults);
+  const reasoning = normalizeAgentModelReasoning(template.reasoning, template.defaults);
   cm.updateConfig({
-    agent_model_defaults: normalizeAgentModelDefaults(template.defaults),
-    agent_model_default_reasoning: normalizeAgentModelReasoning(template.reasoning, template.defaults),
+    agent_model_defaults: defaults,
+    agent_model_default_reasoning: reasoning,
     active_agent_model_default_template: template.id,
     // Applying/selecting a template is a durable selection. Without updating
     // this pointer, the next gateway start can restore a different old template.
     default_agent_model_template: template.id,
+    ...mainChatRoutePatchForDefaults(current, defaults, reasoning),
   } as any);
+  if (defaults.main_chat) resetProvider();
   res.json({
     success: true,
     template,
@@ -1168,12 +1175,16 @@ router.post('/api/settings/agent-model-default-templates/:id/set-default', (req,
     return;
   }
   const template = templates[idx];
+  const defaults = normalizeAgentModelDefaults(template.defaults);
+  const reasoning = normalizeAgentModelReasoning(template.reasoning, template.defaults);
   cm.updateConfig({
-    agent_model_defaults: normalizeAgentModelDefaults(template.defaults),
-    agent_model_default_reasoning: normalizeAgentModelReasoning(template.reasoning, template.defaults),
+    agent_model_defaults: defaults,
+    agent_model_default_reasoning: reasoning,
     active_agent_model_default_template: template.id,
     default_agent_model_template: template.id,
+    ...mainChatRoutePatchForDefaults(current, defaults, reasoning),
   } as any);
+  if (defaults.main_chat) resetProvider();
   res.json({
     success: true,
     template,
@@ -1852,11 +1863,11 @@ router.post('/api/settings/provider', (req, res) => {
     const configManager = getConfig();
     const current = (configManager.getConfig() as any).llm || {};
     const llm = preserveMaskedProviderSecrets(llmIncoming, current);
-    const mergedLlm = {
+    const mergedLlm = preserveLiveMainChatRoute(configManager.getConfig(), {
       ...current,
       ...llm,
       providers: mergeProviderConfigs(current.providers || {}, llm.providers || {}),
-    };
+    });
     const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
     const legacyOllamaEndpoint = String(mergedLlm?.providers?.ollama?.endpoint || '').trim();
     const legacyModelSync = activeModel
@@ -1959,11 +1970,11 @@ router.post('/api/settings/bulk', (req, res) => {
       if (!llmIncoming?.provider) { res.status(400).json({ success: false, error: 'Missing llm.provider' }); return; }
       const currentLlm = current.llm || {};
       const llm = preserveMaskedProviderSecrets(llmIncoming, currentLlm);
-      const mergedLlm = {
+      const mergedLlm = preserveLiveMainChatRoute(current, {
         ...currentLlm,
         ...llm,
         providers: mergeProviderConfigs(currentLlm.providers || {}, llm.providers || {}),
-      };
+      });
       updates.llm = mergedLlm;
       const activeModel = String(mergedLlm?.providers?.[mergedLlm.provider]?.model || '').trim();
       const legacyOllamaEndpoint = String(mergedLlm?.providers?.ollama?.endpoint || '').trim();

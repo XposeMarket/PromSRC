@@ -340,8 +340,6 @@ export interface AgentModelDefaults {
   subagent?: string;
   /** Dedicated managed-team subagent runtime */
   team_subagent?: string;
-  /** Background tasks / scheduled cron jobs */
-  background_task?: string;
   /** Direct background agents spawned from chat */
   background_spawn?: string;
   /** Per-role planner subagents */
@@ -515,15 +513,11 @@ export interface PrometheusConfig {
       autoResumeOnRestart?: boolean;
       summaryEveryTurns?: number;
       summaryMaxWords?: number;
-      judgeModel?: string;
-      judgeReasoning?: ReasoningEffort;
       compactionModel?: string;
       compactionReasoning?: ReasoningEffort;
-      maxConsecutiveJudgeFailures?: number;
       maxConsecutiveRuntimeFailures?: number;
       maxIterations?: number;
       maxNoProgressTurns?: number;
-      completionVerificationEnabled?: boolean;
       permissions?: {
         approvalMode?: 'normal' | 'never';
         hardDenyEnabled?: boolean;

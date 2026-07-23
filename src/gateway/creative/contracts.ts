@@ -642,7 +642,7 @@ export function summarizeCreativeSceneDoc(doc: any): CreativeSceneSummary {
 
 // ── Composition (multi-clip timeline) ────────────────────────────────────────
 
-export type CreativeClipLane = 'html-motion' | 'remotion' | 'hyperframes';
+export type CreativeClipLane = 'html-motion' | 'remotion' | 'hyperframes' | 'source-video';
 
 export type CreativeTransitionKind =
   | 'cut'
@@ -681,6 +681,21 @@ export type CreativeClipSource =
       entryFile?: string | null;
       compositionId?: string | null;
       variables?: Record<string, any>;
+    }
+  | {
+      /** A real imported/workspace video. Rendered directly by FFmpeg, never through a PNG-frame bridge. */
+      kind: 'source-video';
+      path: string;
+      assetId?: string | null;
+      /** cover fills the canvas; contain letterboxes; blurred-background preserves the full 16:9 source in a phone frame. */
+      fit?: 'cover' | 'contain' | 'blurred-background';
+      positionX?: number;
+      positionY?: number;
+      scale?: number;
+      background?: string | null;
+      preserveAudio?: boolean;
+      /** Optional editorial hook rendered above the footage in the social safe area. */
+      hook?: string | null;
     };
 
 export type CreativeClip = {
@@ -790,6 +805,22 @@ function normalizeClipSource(input: any): CreativeClipSource {
       variables: isPlainObject(safe.variables) ? cloneData(safe.variables) : {},
     };
   }
+  if (kindRaw === 'source-video') {
+    const fitRaw = String(safe.fit || 'cover').trim().toLowerCase();
+    const fit = (fitRaw === 'cover' || fitRaw === 'contain' || fitRaw === 'blurred-background') ? fitRaw : 'cover';
+    return {
+      kind: 'source-video',
+      path: normalizeString(safe.path || safe.source, ''),
+      assetId: typeof safe.assetId === 'string' ? safe.assetId : null,
+      fit,
+      positionX: clampNumber(Number.isFinite(Number(safe.positionX)) ? Number(safe.positionX) : 0.5, 0, 1),
+      positionY: clampNumber(Number.isFinite(Number(safe.positionY)) ? Number(safe.positionY) : 0.5, 0, 1),
+      scale: clampNumber(Number.isFinite(Number(safe.scale)) ? Number(safe.scale) : 1, 0.1, 4),
+      background: typeof safe.background === 'string' ? safe.background : null,
+      preserveAudio: safe.preserveAudio !== false,
+      hook: typeof safe.hook === 'string' ? safe.hook : null,
+    };
+  }
   return {
     kind: 'html-motion',
     clipPath: '',
@@ -803,7 +834,7 @@ export function normalizeCreativeClip(input: any, fallback: { fps?: number } = {
   let outMs = Math.max(inMs, Number(safe.outMs) || 0);
   if (outMs <= inMs) outMs = inMs + Math.max(1, Number(safe.durationMs) || 4000);
   const laneRaw = String(safe.lane || safe.source?.kind || '').trim().toLowerCase();
-  const lane = (['html-motion', 'remotion', 'hyperframes'].includes(laneRaw) ? laneRaw : 'html-motion') as CreativeClipLane;
+  const lane = (['html-motion', 'remotion', 'hyperframes', 'source-video'].includes(laneRaw) ? laneRaw : 'html-motion') as CreativeClipLane;
   return {
     id: normalizeString(safe.id, '') || compositionId('clip'),
     trackId: normalizeString(safe.trackId, ''),

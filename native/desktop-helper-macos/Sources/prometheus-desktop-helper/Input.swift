@@ -6,7 +6,7 @@ import ApplicationServices
 // affect the system; we preflight and throw a clear permission error otherwise.
 
 private func requireAccessibility() throws {
-    if !AXIsProcessTrusted() {
+    if !accessibilityTrusted(prompt: true) {
         throw HelperError.permission(
             "Accessibility",
             remedy: "System Settings > Privacy & Security > Accessibility — enable for this app, then restart it."

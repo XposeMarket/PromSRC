@@ -7,7 +7,7 @@ import ApplicationServices
 // All require Accessibility permission.
 
 private func requireAX() throws {
-    if !AXIsProcessTrusted() {
+    if !accessibilityTrusted(prompt: true) {
         throw HelperError.permission(
             "Accessibility",
             remedy: "System Settings > Privacy & Security > Accessibility — enable for this app, then restart it."

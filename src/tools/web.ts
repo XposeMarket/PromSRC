@@ -1710,7 +1710,10 @@ async function buildXMediaReport(
     }
   }
 
-  if (downloadedFiles.length === 0 && hintedTweetCount > 0) {
+  // X's browser payload can expose the post text while omitting media metadata. A
+  // status URL is still a safe, bounded yt-dlp target, so make one direct recovery
+  // attempt whenever extraction found no files instead of silently returning no media.
+  if (downloadedFiles.length === 0 && isXStatusUrl(fallbackUrl)) {
     fallbackPageDownloadAttempted = true;
     const fallbackResult = await executeDownloadMedia({
       url: fallbackUrl,
@@ -1846,7 +1849,9 @@ async function executeXWebFetch(
     reportWebFetchProgress(progress, 'fetch_complete', 'Web fetch complete.');
   }
 
-  if (payload.success && isXStatusUrl(url) && includeMedia) {
+  // Media is independently recoverable from valid X status URLs. Do not gate it on
+  // post-text extraction: login/rate-limit failures previously skipped the proven media resolver entirely.
+  if (isXStatusUrl(url) && includeMedia) {
     try {
       payload.x_media = await buildXMediaReport(payload, url, progress);
     } catch (error: any) {
@@ -1862,6 +1867,13 @@ async function executeXWebFetch(
         analysis_limited: false,
       };
     }
+  }
+
+  if (!payload.success && payload.x_media?.downloaded_files?.length) {
+    payload.success = true;
+    payload.error = undefined;
+    payload.message = 'Post text extraction was unavailable, but media was recovered from the X status URL.';
+    payload.count = Number(payload.x_media.hinted_tweet_count || 0);
   }
 
   const stdoutPayload = payload.x_media

@@ -670,7 +670,6 @@ function resolveAnalysisModelOverride(): { provider?: string; model?: string; so
     const candidates = [
       ['subagent_analyst', defaults.subagent_analyst],
       ['subagent_researcher', defaults.subagent_researcher],
-      ['background_task', defaults.background_task],
       ['manager', defaults.manager],
       ['main_chat', defaults.main_chat],
     ] as Array<[string, any]>;

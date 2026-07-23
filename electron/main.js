@@ -41,7 +41,11 @@ const {
 const GATEWAY_URL  = 'http://127.0.0.1:18789';
 const APP_ID       = 'com.prometheus.desktop';
 const APP_ROOT     = path.join(__dirname, '..');
-const ICON_PATH    = path.join(APP_ROOT, 'assets', 'Prometheus.ico');
+const ICON_PATH    = path.join(
+  APP_ROOT,
+  'assets',
+  process.platform === 'darwin' ? 'Prometheus.png' : 'Prometheus.ico',
+);
 const ICON_IMAGE   = nativeImage.createFromPath(ICON_PATH);
 const MAX_RETRIES  = 200;  // 200 x 300ms = 60s max wait (dev tsx startup can be slow)
 const RETRY_DELAY  = 300;
@@ -629,6 +633,12 @@ function startGateway() {
     PROMETHEUS_PAIRING_ADMIN_TOKEN: PAIRING_ADMIN_TOKEN,
     PROMETHEUS_ELECTRON_BROWSER_RPC_URL: nativeBrowserRpcPort ? `http://127.0.0.1:${nativeBrowserRpcPort}` : '',
     PROMETHEUS_ELECTRON_BROWSER_RPC_TOKEN: nativeBrowserRpcPort ? NATIVE_BROWSER_RPC_TOKEN : '',
+    ...(IS_PACKAGED_RUNTIME ? {
+      PLAYWRIGHT_BROWSERS_PATH: path.join(process.resourcesPath, 'playwright-browsers'),
+    } : {}),
+    ...(IS_PACKAGED_RUNTIME && process.platform === 'darwin' ? {
+      PROMETHEUS_DESKTOP_HELPER_PATH: path.join(process.resourcesPath, 'prometheus-desktop-helper'),
+    } : {}),
     ...(IS_PUBLIC_BUILD ? { PROMETHEUS_PUBLIC_BUILD: '1' } : {}),
   };
 

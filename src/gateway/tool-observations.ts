@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { getConfig } from '../config/config';
 import { estimateTextTokensForModel } from './context/model-context';
+import { appendContinuityToolObservation } from './audit/continuity';
 
 export type ToolObservationStatus = 'ok' | 'error';
 
@@ -310,6 +311,9 @@ export function createToolObservationsFromResults(sessionId: string, turnId: str
 export function persistToolObservations(sessionId: string, observations: ToolObservation[]): void {
   if (!observations.length) return;
   const filePath = observationJsonlPath(sessionId);
+  // Commit the recovery-safe audit hint before canonical persistence so a hard
+  // crash between these writes still leaves continuity evidence.
+  for (const observation of observations) appendContinuityToolObservation(observation);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, observations.map((obs) => JSON.stringify(obs)).join('\n') + '\n', 'utf-8');
 }

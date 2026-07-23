@@ -13,6 +13,7 @@ import { resolveActiveModelContextProfile } from './context/model-context';
 import { getUsageCalibration } from '../providers/model-usage';
 import { getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
 import { hookBus } from './hooks';
+import { appendContinuityEvent, appendContinuityMessage } from './audit/continuity';
 import {
   assertSafeStorageId,
   isSafeStorageId,
@@ -165,6 +166,8 @@ export interface MainChatGoalState {
   pausedReason?: string;
   failureReason?: string;
   progressSummary?: string;
+  /** Durable user-owned acceptance criteria/amendments; never rely on compacted chat alone. */
+  requirementsLedger?: Array<{ id: string; text: string; at: number; source?: string }>;
   pauseStartedAt?: number;
   pausedMs?: number;
   turnPlans?: MainChatGoalTurnPlan[];
@@ -239,6 +242,15 @@ export interface CanvasProjectLink {
   } | null;
 }
 
+export interface ChatModelRoute {
+  version: 1;
+  providerId: string;
+  model: string;
+  reasoningEffort?: string;
+  accountId?: string;
+  updatedAt: number;
+}
+
 export interface Session {
   id: string;
   history: ChatMessage[];
@@ -256,6 +268,8 @@ export interface Session {
   contextTokenEstimate?: number;
   latestContextSummary?: string;
   contextStartIndex?: number;
+  /** Stable identity of the first message retained after the rolling summary. */
+  contextStartMessageId?: string;
   contextSummaryUpdatedAt?: number;
   tags?: string[];
   userTurnCounter?: number;
@@ -271,6 +285,7 @@ export interface Session {
   canvasProjectLink?: CanvasProjectLink | null;
   mainChatGoal?: MainChatGoalState | null;
   mainChatGoalHistory?: MainChatGoalState[];
+  chatModelRoute?: ChatModelRoute;
 }
 
 export interface SessionMutationScope {
@@ -297,6 +312,7 @@ export interface SessionSummary {
   canvasProjectLabel?: string | null;
   canvasProjectLink?: CanvasProjectLink | null;
   mainChatGoal?: MainChatGoalState | null;
+  chatModelRoute?: ChatModelRoute;
 }
 
 export interface SessionSearchResult extends SessionSummary {
@@ -413,6 +429,9 @@ function scrubMainChatGoal(goal: MainChatGoalState | null | undefined): MainChat
     pausedReason: goal.pausedReason ? scrubPersistedText(goal.pausedReason) : goal.pausedReason,
     failureReason: goal.failureReason ? scrubPersistedText(goal.failureReason) : goal.failureReason,
     progressSummary: goal.progressSummary ? scrubPersistedText(goal.progressSummary) : goal.progressSummary,
+    requirementsLedger: Array.isArray(goal.requirementsLedger)
+      ? goal.requirementsLedger.map((item) => ({ ...item, text: scrubPersistedText(item.text) }))
+      : goal.requirementsLedger,
     pauseStartedAt: Number.isFinite(Number(goal.pauseStartedAt)) ? Number(goal.pauseStartedAt) : undefined,
     pausedMs: Number.isFinite(Number(goal.pausedMs)) ? Math.max(0, Math.floor(Number(goal.pausedMs))) : undefined,
     turnPlans: Array.isArray(goal.turnPlans)
@@ -745,6 +764,13 @@ function normalizeMainChatGoal(input: any, sessionId: string): MainChatGoalState
     pausedReason: typeof input.pausedReason === 'string' ? input.pausedReason : (typeof input.paused_reason === 'string' ? input.paused_reason : undefined),
     failureReason: typeof input.failureReason === 'string' ? input.failureReason : (typeof input.failure_reason === 'string' ? input.failure_reason : undefined),
     progressSummary: typeof input.progressSummary === 'string' ? input.progressSummary : (typeof input.progress_summary === 'string' ? input.progress_summary : undefined),
+    requirementsLedger: (Array.isArray(input.requirementsLedger) ? input.requirementsLedger : Array.isArray(input.requirements_ledger) ? input.requirements_ledger : [])
+      .map((item: any, index: number) => ({
+        id: String(item?.id || `requirement_${index}`).slice(0, 120),
+        text: String(item?.text || item?.requirement || '').trim().slice(0, 2400),
+        at: Number.isFinite(Number(item?.at)) ? Number(item.at) : now,
+        source: String(item?.source || 'user').slice(0, 80) || undefined,
+      })).filter((item: any) => item.text).slice(-80),
     pauseStartedAt: Number.isFinite(Number(input.pauseStartedAt ?? input.pause_started_at)) ? Number(input.pauseStartedAt ?? input.pause_started_at) : undefined,
     pausedMs: Number.isFinite(Number(input.pausedMs ?? input.paused_ms)) ? Math.max(0, Math.floor(Number(input.pausedMs ?? input.paused_ms))) : undefined,
     turnPlans: normalizeMainChatGoalTurnPlans(input.turnPlans ?? input.turn_plans, now),
@@ -820,6 +846,7 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
       ? input.canvasProjectLabel
       : null,
     canvasProjectLink: normalizeCanvasProjectLink(input?.canvasProjectLink),
+    chatModelRoute: normalizeChatModelRoute(input?.chatModelRoute),
   };
 }
 
@@ -856,6 +883,23 @@ function saveSessionIndex(index: SessionIndex): void {
   sessionIndexCache = index;
   sessionIndexRevision += 1;
   fs.writeFileSync(sessionIndexPath(), JSON.stringify(index, null, 2), 'utf-8');
+}
+
+function normalizeChatModelRoute(input: any): ChatModelRoute | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const providerId = String(input.providerId || input.provider || '').trim();
+  const model = String(input.model || '').trim();
+  if (!providerId || !model) return undefined;
+  const reasoningEffort = String(input.reasoningEffort || input.reasoning_effort || '').trim();
+  const accountId = String(input.accountId || input.account_id || '').trim();
+  return {
+    version: 1,
+    providerId,
+    model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(accountId ? { accountId } : {}),
+    updatedAt: Number.isFinite(Number(input.updatedAt)) ? Number(input.updatedAt) : Date.now(),
+  };
 }
 
 function isCommandTitleText(value: any): boolean {
@@ -1030,6 +1074,7 @@ function buildSessionSummary(session: Session): SessionSummary {
     canvasProjectLabel: session.canvasProjectLabel || null,
     canvasProjectLink: normalizeCanvasProjectLink(session.canvasProjectLink),
     mainChatGoal: session.mainChatGoal || null,
+    chatModelRoute: normalizeChatModelRoute(session.chatModelRoute),
   };
 }
 
@@ -1212,6 +1257,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
       contextTokenEstimate: Number.isFinite(Number(data?.contextTokenEstimate)) ? Number(data.contextTokenEstimate) : undefined,
       latestContextSummary: typeof data?.latestContextSummary === 'string' ? data.latestContextSummary : undefined,
       contextStartIndex: Number.isFinite(Number(data?.contextStartIndex)) ? Math.max(0, Math.floor(Number(data.contextStartIndex))) : undefined,
+      contextStartMessageId: typeof data?.contextStartMessageId === 'string' ? data.contextStartMessageId : undefined,
       contextSummaryUpdatedAt: Number.isFinite(Number(data?.contextSummaryUpdatedAt)) ? Number(data.contextSummaryUpdatedAt) : undefined,
       userTurnCounter: Number.isFinite(Number(data?.userTurnCounter))
         ? Math.max(0, Math.floor(Number(data.userTurnCounter)))
@@ -1230,6 +1276,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
       canvasProjectLink: normalizeCanvasProjectLink(data?.canvasProjectLink),
       mainChatGoal: normalizeMainChatGoal(data?.mainChatGoal, sessionId),
       mainChatGoalHistory: normalizeMainChatGoalHistory(data?.mainChatGoalHistory, sessionId),
+      chatModelRoute: normalizeChatModelRoute(data?.chatModelRoute),
     };
   } catch {
     return null;
@@ -1359,9 +1406,7 @@ function getCompactedContextHistoryForTokenEstimate(session: Session): ChatMessa
   const summary = String(session.latestContextSummary || '').trim();
   if (!summary) return rawMessages;
 
-  const base = Number.isFinite(Number(session.contextStartIndex))
-    ? Math.max(0, Math.min(Math.floor(Number(session.contextStartIndex)), rawMessages.length))
-    : 0;
+  const base = resolveCompactionStartIndex(session, rawMessages);
   const summaryMsg: ChatMessage = {
     role: 'assistant',
     content: `[Rolling context summary]\n${summary}`,
@@ -1443,6 +1488,31 @@ function trimHistory(session: Session, maxMessages: number): void {
   // API-call context is compacted separately via getHistoryForApiCall().
   void session;
   void maxMessages;
+}
+
+function stableMessageIdentity(msg: ChatMessage): string {
+  const explicit = String(msg?.messageId || '').trim();
+  if (explicit) return explicit;
+  const role = String(msg?.role || '');
+  const timestamp = Number(msg?.timestamp || 0);
+  const content = String(msg?.content || '').replace(/\s+/g, ' ').trim().slice(0, 800);
+  return `legacy:${role}:${timestamp}:${Buffer.from(content).toString('base64').slice(0, 240)}`;
+}
+
+function resolveCompactionStartIndex(session: Session, history: ChatMessage[]): number {
+  const marker = String(session.contextStartMessageId || '').trim();
+  if (marker) {
+    const after = marker.startsWith('after:');
+    const identity = after ? marker.slice('after:'.length) : marker;
+    const match = history.findIndex((msg) => stableMessageIdentity(msg) === identity);
+    if (match >= 0) return after ? match + 1 : match;
+    // A replacement/merge removed the anchor.  Never retain a stale positional
+    // checkpoint that can hide newly inserted user messages.
+    return 0;
+  }
+  return Number.isFinite(Number(session.contextStartIndex))
+    ? Math.max(0, Math.min(Math.floor(Number(session.contextStartIndex)), history.length))
+    : 0;
 }
 
 interface PendingChatAuditBatch {
@@ -1635,6 +1705,7 @@ function appendTranscriptArtifacts(
   opts?: { synthetic?: boolean },
 ): void {
   try {
+    appendContinuityMessage(sessionId, msg, opts?.synthetic === true);
     const cfg = getConfig();
     const workspacePath = cfg.getWorkspacePath();
     const transcriptDir = path.join(workspacePath, 'audit', 'chats', 'transcripts');
@@ -1688,8 +1759,19 @@ export function recordSessionCompaction(
   if (!cleanSummary) return;
   session.latestContextSummary = cleanSummary.slice(0, 12000);
   session.contextStartIndex = Math.max(0, Math.floor(Number(baseMessageCount) || 0));
+  session.contextStartMessageId = session.contextStartIndex < session.history.length
+    ? stableMessageIdentity(session.history[session.contextStartIndex])
+    : session.history.length
+      ? `after:${stableMessageIdentity(session.history[session.history.length - 1])}`
+      : undefined;
   session.contextSummaryUpdatedAt = Date.now();
   appendCompactionArtifacts(sessionId, kind, session.latestContextSummary, session.contextStartIndex, extra);
+  appendContinuityEvent(sessionId, 'compaction', {
+    kind,
+    baseMessageCount: session.contextStartIndex,
+    summary: session.latestContextSummary,
+    ...extra,
+  });
   saveSession(sessionId);
 }
 
@@ -1702,6 +1784,14 @@ export function setMainChatGoal(sessionId: string, goal: MainChatGoalState | nul
   session.mainChatGoal = goal ? normalizeMainChatGoal({ ...goal, sessionId }, sessionId) : null;
   session.lastActiveAt = Date.now();
   saveSession(sessionId);
+  appendContinuityEvent(sessionId, 'goal_state', {
+    goalId: session.mainChatGoal?.id,
+    status: session.mainChatGoal?.status || 'cleared',
+    goal: session.mainChatGoal?.goal,
+    currentIteration: session.mainChatGoal?.currentIteration,
+    restartCheckpoint: session.mainChatGoal?.restartCheckpoint,
+    turnPlans: session.mainChatGoal?.turnPlans?.slice(-2),
+  });
   return session.mainChatGoal || null;
 }
 
@@ -1714,6 +1804,14 @@ export function updateMainChatGoal(
   session.mainChatGoal = next ? normalizeMainChatGoal({ ...next, sessionId }, sessionId) : null;
   session.lastActiveAt = Date.now();
   saveSession(sessionId);
+  appendContinuityEvent(sessionId, 'goal_state', {
+    goalId: session.mainChatGoal?.id,
+    status: session.mainChatGoal?.status || 'cleared',
+    goal: session.mainChatGoal?.goal,
+    currentIteration: session.mainChatGoal?.currentIteration,
+    restartCheckpoint: session.mainChatGoal?.restartCheckpoint,
+    turnPlans: session.mainChatGoal?.turnPlans?.slice(-2),
+  });
   return session.mainChatGoal || null;
 }
 
@@ -1917,6 +2015,7 @@ export function getSession(id: string): Session {
         contextStartIndex: Number.isFinite(Number(data.contextStartIndex))
           ? Math.max(0, Math.floor(Number(data.contextStartIndex)))
           : undefined,
+        contextStartMessageId: typeof data.contextStartMessageId === 'string' ? data.contextStartMessageId : undefined,
         contextSummaryUpdatedAt: Number.isFinite(Number(data.contextSummaryUpdatedAt))
           ? Number(data.contextSummaryUpdatedAt)
           : undefined,
@@ -1941,6 +2040,7 @@ export function getSession(id: string): Session {
         canvasProjectLink: normalizeCanvasProjectLink(data.canvasProjectLink),
         mainChatGoal: normalizeMainChatGoal(data.mainChatGoal, sessionId),
         mainChatGoalHistory: normalizeMainChatGoalHistory(data.mainChatGoalHistory, sessionId),
+        chatModelRoute: normalizeChatModelRoute(data.chatModelRoute),
       };
       sessions.set(sessionId, session);
       return session;
@@ -2232,9 +2332,7 @@ export function getHistoryForApiCall(
 
   let messages: ChatMessage[];
   const summary = String(session.latestContextSummary || '').trim();
-  const base = Number.isFinite(Number(session.contextStartIndex))
-    ? Math.max(0, Math.floor(Number(session.contextStartIndex)))
-    : 0;
+  const base = resolveCompactionStartIndex(session, rawMessages);
 
   const goalSummaryMsg = buildActiveGoalSummaryMessage(session);
 
@@ -2342,6 +2440,7 @@ export function clearHistory(id: string): void {
   session.contextTokenEstimate = 0;
   session.latestContextSummary = undefined;
   session.contextStartIndex = 0;
+  session.contextStartMessageId = undefined;
   session.contextSummaryUpdatedAt = undefined;
   session.lastActiveAt = Date.now();
   saveSession(id);
@@ -2361,9 +2460,8 @@ export function replaceHistory(
 ): void {
   const session = getSession(id);
   const previousSummary = session.latestContextSummary;
-  const previousContextStartIndex = Number.isFinite(Number(session.contextStartIndex))
-    ? Math.max(0, Math.floor(Number(session.contextStartIndex)))
-    : 0;
+  const previousContextStartIndex = resolveCompactionStartIndex(session, session.history || []);
+  const previousContextStartMessageId = session.contextStartMessageId;
   const previousSummaryUpdatedAt = session.contextSummaryUpdatedAt;
   session.history = (Array.isArray(history) ? history : [])
     .map((msg: any) => {
@@ -2378,17 +2476,25 @@ export function replaceHistory(
     .filter((msg) => msg.content.trim().length > 0);
   session.pendingCompaction = false;
   session.pendingMemoryFlush = false;
+  const remapIdentity = String(previousContextStartMessageId || '').replace(/^after:/, '');
+  const remapMatch = previousContextStartMessageId
+    ? session.history.findIndex((msg) => stableMessageIdentity(msg) === remapIdentity)
+    : -1;
+  const remappedContextStartIndex = remapMatch >= 0
+    ? remapMatch + (String(previousContextStartMessageId).startsWith('after:') ? 1 : 0)
+    : -1;
   const shouldPreserveCompaction = options.resetCompaction !== true
     && !!String(previousSummary || '').trim()
-    && previousContextStartIndex > 0
-    && session.history.length >= previousContextStartIndex;
+    && (remappedContextStartIndex >= 0 || (!previousContextStartMessageId && previousContextStartIndex > 0 && session.history.length >= previousContextStartIndex));
   if (shouldPreserveCompaction) {
     session.latestContextSummary = previousSummary;
-    session.contextStartIndex = previousContextStartIndex;
+    session.contextStartIndex = remappedContextStartIndex >= 0 ? remappedContextStartIndex : previousContextStartIndex;
+    session.contextStartMessageId = previousContextStartMessageId;
     session.contextSummaryUpdatedAt = previousSummaryUpdatedAt;
   } else {
     session.latestContextSummary = undefined;
     session.contextStartIndex = 0;
+    session.contextStartMessageId = undefined;
     session.contextSummaryUpdatedAt = undefined;
   }
   session.contextTokenEstimate = estimateActiveContextTokens(session);
@@ -2906,6 +3012,28 @@ export function setSessionPinned(id: string, pinned: boolean): SessionSummary | 
   session.pinnedAt = pinned ? (Number(session.pinnedAt) || Date.now()) : undefined;
   flushSession(sessionId);
   return buildSessionSummary(session);
+}
+
+export function getChatModelRoute(id: string): ChatModelRoute | undefined {
+  return normalizeChatModelRoute(getSession(id).chatModelRoute);
+}
+
+export function setChatModelRoute(id: string, route: Omit<ChatModelRoute, 'version' | 'updatedAt'>): ChatModelRoute {
+  const session = getSession(id);
+  const next = normalizeChatModelRoute({ ...route, version: 1, updatedAt: Date.now() });
+  if (!next) throw new Error('A provider and model are required for this chat route.');
+  session.chatModelRoute = next;
+  session.lastActiveAt = Date.now();
+  flushSession(id);
+  return next;
+}
+
+export function clearChatModelRoute(id: string): void {
+  const session = getSession(id);
+  if (!session.chatModelRoute) return;
+  session.chatModelRoute = undefined;
+  session.lastActiveAt = Date.now();
+  flushSession(id);
 }
 
 function pruneScopedToolCategoryActivations(session: Session): boolean {

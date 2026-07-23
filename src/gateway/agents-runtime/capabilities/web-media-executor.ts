@@ -263,6 +263,17 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           url: String(args.url || ''),
           output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
           audio_only: args.audio_only === true,
+          signal: deps.abortSignal?.signal,
+          onProgress: (progress) => deps.sendSSE?.('tool_progress', {
+            action: name,
+            name,
+            message: progress.message,
+            phase: progress.phase,
+            percent: progress.percent,
+            speed: progress.speed,
+            eta: progress.eta,
+            show_pill: true,
+          }),
         });
         return {
           name,
@@ -398,6 +409,13 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
           extract_audio: args.extract_audio !== false,
           transcribe: args.transcribe !== false,
           include_raw_probe: args.include_raw_probe === true,
+          signal: deps.abortSignal?.signal,
+          onProgress: (progress) => deps.sendSSE?.('tool_progress', {
+            action: name, name, message: progress.message, phase: progress.phase,
+            current: progress.current, total: progress.total,
+            ratio: progress.total ? Number(progress.current || 0) / progress.total : undefined,
+            show_pill: true,
+          }),
         });
         return {
           name,

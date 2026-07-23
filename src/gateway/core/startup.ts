@@ -14,6 +14,7 @@ import path from 'path';
 import fs from 'fs';
 import { getConfig } from '../../config/config';
 import { getAgentById } from '../../config/config';
+import { mainChatRoutePatch, parseMainChatRoute } from '../../config/main-chat-route.js';
 import { detectGpu, logGpuStatus } from '../gpu-detector';
 import { getMCPManager } from '../mcp-manager';
 import { hookBus } from '../hooks';
@@ -257,7 +258,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       if (!template?.defaults) return;
       const keys = [
         'main_chat', 'proposal_executor_high_risk', 'proposal_executor_low_risk',
-        'manager', 'team_manager', 'subagent', 'team_subagent', 'background_task', 'background_spawn',
+        'manager', 'team_manager', 'subagent', 'team_subagent', 'background_spawn',
         'subagent_planner', 'subagent_orchestrator', 'subagent_researcher', 'subagent_analyst',
         'subagent_builder', 'subagent_operator', 'subagent_verifier',
         'switch_model_low', 'switch_model_medium', 'coordinator',
@@ -268,10 +269,13 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
         const val = typeof template.defaults[key] === 'string' ? template.defaults[key].trim() : '';
         if (val) defaults[key] = val;
       }
+      const reasoning = template.reasoning && typeof template.reasoning === 'object' ? template.reasoning : {};
+      const mainRoute = parseMainChatRoute(defaults.main_chat);
       cm2.updateConfig({
         agent_model_defaults: defaults,
-        agent_model_default_reasoning: template.reasoning && typeof template.reasoning === 'object' ? template.reasoning : {},
+        agent_model_default_reasoning: reasoning,
         active_agent_model_default_template: template.id,
+        ...(mainRoute ? mainChatRoutePatch(cfg2, { ...mainRoute, reasoningEffort: String(reasoning.main_chat || '').trim() }) : {}),
       } as any);
     } catch (err: any) {
       console.warn('[startup] Failed to apply default model template:', err?.message || err);

@@ -1470,6 +1470,11 @@ function onProviderChange() {
   if (typeof renderModelsUsage === 'function') renderModelsUsage();
 }
 
+async function refreshCredentialedRoutingProviderChoices() {
+  await fetchCredentialedModelProviderIds(true);
+  renderProviderSelectors();
+}
+
 function scheduleModelStatusRefresh(prov) {
   if (_pendingModelStatusProbeTimer) return;
   _pendingModelStatusProbeTimer = setTimeout(() => {
@@ -1632,8 +1637,11 @@ function collectInUseProviders() {
     const id = String(raw || '').trim();
     if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
   };
-  const main = document.getElementById('settings-llm-provider');
+  // The left connection editor is intentionally excluded: browsing a provider
+  // there must not make usage/routing UI treat it as the active main model.
+  const main = document.getElementById('amd-main-chat-prov');
   if (main && main.value) push(main.value);
+  else push(window._llmSettingsCache?.provider);
   document.querySelectorAll('select[id^="amd-"][id$="-prov"]').forEach(s => { if (s.value) push(s.value); });
   document.querySelectorAll('select[id^="brain-"][id$="-prov"]').forEach(s => { if (s.value) push(s.value); });
   document.querySelectorAll('select[id^="goal-"][id$="-prov"]').forEach(s => { if (s.value) push(s.value); });
@@ -1656,7 +1664,7 @@ async function renderModelsUsage() {
     (r && Array.isArray(r.providers) ? r.providers : []).forEach(p => { byId[p.provider] = p; });
   } catch { /* fall through to no-data cards */ }
 
-  const mainId = (document.getElementById('settings-llm-provider') || {}).value || '';
+  const mainId = (document.getElementById('amd-main-chat-prov') || {}).value || window._llmSettingsCache?.provider || '';
   const cards = inUse.map(id => {
     const isPrimary = id === mainId;
     const data = byId[id];
@@ -1694,7 +1702,6 @@ async function loadSessionCompactionSettings() {
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
     await applyGoalRoutingToForm('compactor', s?.mainChatGoals?.compactionModel || '', s?.mainChatGoals?.compactionReasoning || '');
-    await applyGoalRoutingToForm('judge', s?.mainChatGoals?.judgeModel || '', s?.mainChatGoals?.judgeReasoning || '');
     renderContextBudgetSummary(s.contextProfile, s.contextBudget, s);
     window._settingsSessionLoadedToUI = true;
   } catch (e) {
@@ -1949,7 +1956,10 @@ async function refreshOpenAIModels(silent = false) {
 
 // Build the llm config object from current UI state
 function buildProviderPayload(providerOverride) {
-  const provider = providerOverride || document.getElementById('settings-llm-provider')?.value || 'ollama';
+  // The left selector only chooses which connection form is visible. Provider
+  // saves must not activate it; use the currently-live main-chat route unless
+  // a test/refresh explicitly asks for another provider.
+  const provider = providerOverride || window._llmSettingsCache?.provider || document.getElementById('settings-llm-provider')?.value || 'ollama';
   const providers = {};
   providers.ollama    = { endpoint: document.getElementById('settings-ollama-endpoint')?.value  || 'http://localhost:11434', model: document.getElementById('settings-primary-model')?.value || 'qwen3:4b' };
   providers.llama_cpp = { endpoint: document.getElementById('settings-llamacpp-endpoint')?.value || 'http://localhost:8080',  model: document.getElementById('settings-llamacpp-model')?.value  || '' };
@@ -2080,6 +2090,7 @@ async function _pollCodexOAuth() {
       if (data.success) {
         setSettingsStatus(statusEl, 'info', '');
         await refreshCodexStatus();
+        await refreshCredentialedRoutingProviderChoices();
       } else {
         setSettingsStatus(statusEl, 'error', data.error || 'OAuth failed');
       }
@@ -2103,6 +2114,7 @@ async function submitManualCodexUrl() {
     if (data?.success) {
       setSettingsStatus(statusEl, 'info', '');
       await refreshCodexStatus();
+      await refreshCredentialedRoutingProviderChoices();
     } else {
       setSettingsStatus(statusEl, 'error', data?.error || 'Failed');
     }
@@ -2114,6 +2126,7 @@ async function submitManualCodexUrl() {
 async function disconnectCodex() {
   await api('/api/auth/openai/disconnect', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('openai_codex') }) });
   await refreshCodexStatus();
+  await refreshCredentialedRoutingProviderChoices();
 }
 
 // --- xAI Grok OAuth UI ---------------------------------------------
@@ -2176,6 +2189,7 @@ async function _pollXaiOAuth() {
       if (data.success) {
         setSettingsStatus(statusEl, 'success', 'Connected. Auth Mode was switched to oauth.');
         await refreshXaiStatus();
+        await refreshCredentialedRoutingProviderChoices();
       } else {
         setSettingsStatus(statusEl, 'error', data.error || 'xAI OAuth failed');
       }
@@ -2202,6 +2216,7 @@ async function submitXaiOAuthCode() {
       if (input) input.value = '';
       setSettingsStatus(statusEl, 'success', 'Connected. Auth Mode was switched to oauth.');
       await refreshXaiStatus();
+      await refreshCredentialedRoutingProviderChoices();
     } else {
       setSettingsStatus(statusEl, 'error', data?.error || 'xAI OAuth code exchange failed.');
     }
@@ -2213,6 +2228,7 @@ async function submitXaiOAuthCode() {
 async function disconnectXaiOAuth() {
   await api('/api/auth/xai/disconnect', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('xai') }) });
   await refreshXaiStatus();
+  await refreshCredentialedRoutingProviderChoices();
   setSettingsStatus(document.getElementById('xai-oauth-status'), 'info', 'xAI OAuth disconnected. You can reconnect whenever you need OAuth.');
 }
 
@@ -2452,6 +2468,7 @@ async function connectAnthropic() {
       setSettingsStatus(statusEl, 'info', '');
       if (tokenInput) tokenInput.value = '';
       await refreshAnthropicStatus();
+      await refreshCredentialedRoutingProviderChoices();
       addProcessEntry('final', 'Anthropic connected.');
     } else {
       setSettingsStatus(statusEl, 'error', data?.error || 'Invalid token');
@@ -2488,6 +2505,7 @@ async function testAnthropicConnection() {
 async function disconnectAnthropic() {
   await api('/api/auth/anthropic/disconnect', { method: 'POST', body: JSON.stringify({ accountId: getSelectedProviderAccountId('anthropic') }) });
   await refreshAnthropicStatus();
+  await refreshCredentialedRoutingProviderChoices();
   addProcessEntry('info', 'Anthropic disconnected.');
 }
 
@@ -4100,8 +4118,6 @@ function buildSessionSettingsPayload() {
     mainChatGoals: {
       compactionModel: goalRoute('compactor'),
       compactionReasoning: getSettingsValue('goal-compactor-reasoning').trim(),
-      judgeModel: goalRoute('judge'),
-      judgeReasoning: getSettingsValue('goal-judge-reasoning').trim(),
     },
   };
 }
@@ -4167,8 +4183,12 @@ async function saveSettings() {
     if (activeTab === 'models') {
       await saveModelTabLiveSettings({ showStatus: false });
       savedAnything = true;
+      // A newly saved credential becomes available to all right-side routing
+      // selectors immediately, without changing the live main-chat provider.
+      await fetchCredentialedModelProviderIds(true);
+      renderProviderSelectors();
       if (typeof window.applyReasoningPrefsFromProviderConfig === 'function' && bulkPayload.llm) {
-        window.applyReasoningPrefsFromProviderConfig(bulkPayload.llm, bulkPayload.llm.provider);
+        window.applyReasoningPrefsFromProviderConfig(bulkPayload.llm, window._llmSettingsCache?.provider || bulkPayload.llm.provider);
       }
     } else if (activeTab === 'heartbeat' && typeof saveHeartbeatSettings === 'function') {
       await saveHeartbeatSettings();
@@ -4723,7 +4743,6 @@ const AMD_SLOTS = {
   'proposal-low':    'proposal_executor_low_risk',
   'coordinator':     'coordinator',
   'manager':         'manager',
-  'background-task':  'background_task',
   'background-spawn': 'background_spawn',
   // Per-role-type subagent defaults
   'subagent-planner':       'subagent_planner',
@@ -4968,6 +4987,8 @@ async function persistAgentModelDefaultsFromForm({ showStatus = true } = {}) {
     }
     if (payload.main_chat) {
       showToast('Main model changed', payload.main_chat, 'success', 5000);
+      // Force the next Settings open to read the authoritative live route.
+      _markSettingsCacheBusted('settings-models');
     }
     return data;
   } catch(e) {

@@ -22,6 +22,9 @@ const FILE_TOOLS = new Set([
 const COMMAND_TOOLS = new Set(['workspace_run', 'run_command', 'shell_command', 'terminal_run']);
 const VERIFICATION_COMMAND = /^(?:npm\s+(?:test|run\s+(?:test|build|check|lint|typecheck)[\w:.-]*)|npx\s+(?:tsc|tsx|vitest|jest)\b|pnpm\s+(?:test|run\s+(?:test|build|check|lint|typecheck)[\w:.-]*)|yarn\s+(?:test|run\s+(?:test|build|check|lint|typecheck)[\w:.-]*)|cargo\s+(?:test|check|build)\b|go\s+test\b|pytest\b|python\s+-m\s+pytest\b|dotnet\s+(?:test|build)\b|tsc\b)/i;
 const CONTINUATION_CUE = /^(?:please\s+)?(?:continue|go on|keep going|proceed|finish(?: it)?|carry on|resume|do that|make that change|implement that|fix that|yes[, ]+continue)\b/i;
+const CONTEXT_PACKET_FOLLOW_UP_CUE = /\b(?:coding\s+)?(?:context|coding)\s+packet\b|\bpacket\s+(?:now|status|context)\b|\b(?:does|do|did)\s+(?:it|this|the\s+packet)\s+(?:have|include|persist)\b/i;
+// cleanScalar removes brackets before selection, so accept the normalized form.
+const GOAL_CONTINUATION_CUE = /^(?:\[)?continuing toward active main-chat goal(?:\])?/i;
 const RESOLVED_CUE = /\b(?:implemented|completed|finished|fixed|done)\b[\s\S]{0,180}\b(?:tests?|checks?|validation|build|typecheck)\b[\s\S]{0,80}\b(?:pass(?:ed)?|green|successful)\b/i;
 
 export type CodingContextPacketDecisionStatus = 'injected' | 'shadowed' | 'omitted' | 'rejected_stale';
@@ -61,6 +64,32 @@ interface VerificationFact {
   provenance: string;
 }
 
+interface CommandFact {
+  action: string;
+  command?: string;
+  runRef?: string;
+  kind: 'verification' | 'bounded_run' | 'process';
+  ok: boolean;
+  exitCode?: number;
+  durationMs?: number;
+  artifacts?: string[];
+  failureKind?: string;
+  observedAt: number;
+  provenance: string;
+}
+
+interface DevEditFact {
+  devEditId?: string;
+  stage: 'requested' | 'approved' | 'editing' | 'verified' | 'apply_live' | 'live' | 'failed';
+  files: string[];
+  verificationProfiles: string[];
+  ok: boolean;
+  changedSurfaces?: string[];
+  restartExpected?: boolean;
+  observedAt: number;
+  provenance: string;
+}
+
 interface CodingContextPacket {
   scopeId: string;
   sessionId: string;
@@ -72,6 +101,8 @@ interface CodingContextPacket {
   targets: TargetFact[];
   knownCommands: string[];
   lastVerification?: VerificationFact;
+  recentCommands: CommandFact[];
+  recentDevEdits: DevEditFact[];
   artifacts: string[];
   createdAt: number;
   updatedAt: number;
@@ -95,6 +126,22 @@ export interface CodingContextObservation {
   now?: number;
 }
 
+/** Durable lifecycle seed used when a dev-edit record is written outside a chat tool turn. */
+export interface DevEditContextSeed {
+  id: string;
+  sessionId: string;
+  status: 'approved' | 'applying_live' | 'complete';
+  allowedFiles?: string[];
+  affectedFiles?: string[];
+  changedSurfaces?: string[];
+  verificationProfiles?: string[];
+  verificationProfile?: string;
+  verificationSummary?: string;
+  summary?: string;
+  objective?: string;
+  projectRoot: string;
+}
+
 export interface CodingContextSelectionInput {
   enabled: boolean;
   sessionId: string;
@@ -105,6 +152,8 @@ export interface CodingContextSelectionInput {
   projectRoot: string;
   executionMode: string;
   creativeMode?: string | null;
+  /** Creative sessions may still be source-editing sessions when explicitly enabled. */
+  allowCreativeCoding?: boolean;
   history?: Array<{ role: string; content: string }>;
   now?: number;
   maxChars?: number;
@@ -200,7 +249,20 @@ function ensurePacketsLoaded(): void {
         postEditWindows: normalizeEvidenceWindows(target?.postEditWindows),
         existsAfter: target?.existsAfter !== false,
       })).filter((target: TargetFact) => !!target.path);
-      packets.set(scopeId, { ...packet, scopeId, targets });
+      const recentDevEdits = Array.isArray((packet as any).recentDevEdits)
+        ? (packet as any).recentDevEdits.map((entry: any) => ({
+          devEditId: cleanScalar(entry?.devEditId, 160) || undefined,
+          stage: normalizeDevEditStage(entry?.stage),
+          files: Array.isArray(entry?.files) ? entry.files.map((file: unknown) => cleanScalar(file, 400)).filter(Boolean).slice(0, 12) : [],
+          verificationProfiles: Array.isArray(entry?.verificationProfiles) ? entry.verificationProfiles.map((profile: unknown) => cleanScalar(profile, 80)).filter(Boolean).slice(0, 4) : [],
+          ok: entry?.ok !== false,
+          changedSurfaces: Array.isArray(entry?.changedSurfaces) ? entry.changedSurfaces.map((surface: unknown) => cleanScalar(surface, 80)).filter(Boolean).slice(0, 6) : undefined,
+          restartExpected: entry?.restartExpected === true,
+          observedAt: Number(entry?.observedAt) || 0,
+          provenance: cleanScalar(entry?.provenance, 160) || 'persisted:dev_edit',
+        })).filter((entry: DevEditFact) => entry.observedAt > 0)
+        : [];
+      packets.set(scopeId, { ...packet, scopeId, targets, recentCommands: Array.isArray(packet.recentCommands) ? packet.recentCommands : [], recentDevEdits });
     }
   } catch {}
 }
@@ -277,7 +339,7 @@ function collectPaths(root: string, toolName: string, args: Record<string, unkno
   for (const key of ['path', 'filename', 'file', 'name', 'target', 'source']) {
     if (args[key] !== undefined) add(args[key]);
   }
-  for (const key of ['paths', 'files', 'filenames', 'edits']) {
+  for (const key of ['paths', 'files', 'filenames', 'edits', 'affected_files', 'allowed_files', 'touched_files']) {
     if (Array.isArray(args[key])) for (const value of args[key] as unknown[]) add(value);
   }
   if (/patch/i.test(toolName)) {
@@ -318,6 +380,97 @@ function isFocusedRead(toolName: string, args: Record<string, unknown>): boolean
   if (toolName === 'workspace_read') return toolAction(args) === 'read';
   if (toolName === 'dev_source_read') return toolAction(args) === 'read';
   return /^(?:read_file|read_source|read_webui_source|read_prom_file)$/i.test(toolName);
+}
+
+function normalizeDevEditStage(value: unknown): DevEditFact['stage'] {
+  const stage = cleanScalar(value, 40).toLowerCase();
+  if (stage === 'approved') return 'approved';
+  if (stage === 'approved') return 'approved';
+  if (stage === 'editing' || stage === 'patchset' || stage === 'write' || stage === 'apply') return 'editing';
+  if (stage === 'verified' || stage === 'verify' || stage === 'verify_only') return 'verified';
+  if (stage === 'apply_live') return 'apply_live';
+  if (stage === 'live' || stage === 'applied') return 'live';
+  if (stage === 'failed' || stage === 'error') return 'failed';
+  return 'requested';
+}
+
+function devEditFiles(root: string, toolName: string, args: Record<string, unknown>): string[] {
+  const files = collectPaths(root, toolName, args);
+  const explicit = Array.isArray(args.affected_files) ? args.affected_files : Array.isArray(args.allowed_files) ? args.allowed_files : [];
+  for (const file of explicit) {
+    const resolved = targetPath(root, file, sourcePrefix(toolName, args));
+    if (resolved && !files.includes(resolved)) files.push(resolved);
+  }
+  return files.slice(0, 12);
+}
+
+function devEditProfiles(args: Record<string, unknown>): string[] {
+  const values = Array.isArray(args.verification_profiles)
+    ? args.verification_profiles
+    : [args.verification_profile].filter(Boolean);
+  return Array.from(new Set(values.map((value) => cleanScalar(value, 80)).filter(Boolean))).slice(0, 4);
+}
+
+function isDevEditTool(toolName: string): boolean {
+  return toolName === 'request_dev_source_edit' || toolName === 'dev_source_edit' || toolName === 'prom_apply_dev_changes';
+}
+
+function devEditFact(root: string, toolName: string, args: Record<string, unknown>, input: CodingContextObservation, now: number): DevEditFact | null {
+  if (!isDevEditTool(toolName)) return null;
+  const action = toolAction(args);
+  const data = input.data && typeof input.data === 'object' ? input.data as Record<string, unknown> : {};
+  const extra = input.extra && typeof input.extra === 'object' ? input.extra as Record<string, unknown> : {};
+  const devEditId = cleanScalar(args.dev_edit_id ?? data.dev_edit_id ?? extra.dev_edit_id ?? data.devEditId ?? extra.devEditId, 160) || undefined;
+  const stage = input.error === true ? 'failed' : toolName === 'request_dev_source_edit'
+    ? 'approved'
+    : normalizeDevEditStage(args.dev_edit_stage ?? action);
+  const changedSurfaces = Array.isArray(args.changed_surfaces)
+    ? args.changed_surfaces.map((surface) => cleanScalar(surface, 80)).filter(Boolean).slice(0, 6)
+    : undefined;
+  return {
+    ...(devEditId ? { devEditId } : {}),
+    stage,
+    files: devEditFiles(root, toolName, args),
+    verificationProfiles: devEditProfiles(args),
+    ok: input.error !== true,
+    ...(changedSurfaces?.length ? { changedSurfaces } : {}),
+    ...(action === 'apply_live' || stage === 'apply_live' ? { restartExpected: true } : {}),
+    observedAt: now,
+    provenance: `tool:${toolName}`,
+  };
+}
+
+/**
+ * Persists a dev-edit lifecycle record as coding context immediately.  Unlike
+ * normal observation this path is called by the durable approval store itself,
+ * so an approval/apply completion is not lost in the interval before the next
+ * model turn or a planned gateway restart.
+ */
+export function seedDevEditCodingContext(input: DevEditContextSeed): void {
+  const files = Array.from(new Set([...(input.affectedFiles || []), ...(input.allowedFiles || [])])).slice(0, 12);
+  const statusStage = input.status === 'complete' ? 'live' : input.status === 'applying_live' ? 'apply_live' : 'approved';
+  observeCodingContext({
+    sessionId: input.sessionId,
+    objective: input.objective || `Prometheus self-edit ${input.id}: ${input.summary || input.verificationSummary || 'preserve the approved dev-edit lifecycle and post-restart verification.'}`,
+    projectRoot: input.projectRoot,
+    toolName: 'dev_source_edit',
+    args: {
+      action: 'context_packet_seed',
+      dev_edit_stage: statusStage,
+      dev_edit_id: input.id,
+      files,
+      affected_files: files,
+      allowed_files: input.allowedFiles || [],
+      changed_surfaces: input.changedSurfaces || [],
+      verification_profiles: input.verificationProfiles || (input.verificationProfile ? [input.verificationProfile] : []),
+    },
+    result: input.verificationSummary || input.summary || `Dev edit ${input.id} persisted at status=${input.status}.`,
+    error: false,
+  });
+  // Planned restarts can follow immediately after apply_live.  Do not depend on
+  // the normal short debounce for this durable lifecycle boundary.
+  flushPacketPersistence();
+  appendDiagnostic({ event: 'dev_edit_context_seeded', session_id: cleanScalar(input.sessionId, 200), dev_edit_id: cleanScalar(input.id, 160), stage: statusStage, file_count: files.length, status: input.status });
 }
 
 function isMutation(toolName: string, args: Record<string, unknown>): boolean {
@@ -409,10 +562,42 @@ function targetFromCodeEvidence(root: string, file: CodeEvidenceFile): TargetFac
   };
 }
 
+function redactCommand(value: unknown, maxChars = 360): string {
+  const command = cleanScalar(value, maxChars);
+  if (!command) return '';
+  return command
+    .replace(/(\b(?:password|passwd|token|secret|api[_-]?key|authorization|credential|private[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)\b\s*(?:=|:)\s*)(?:"[^"]*"|'[^']*'|\S+)/gi, '$1***')
+    .replace(/(--(?:password|passwd|token|secret|api[_-]?key|authorization|credential|private[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)(?:=|\s+))(?:"[^"]*"|'[^']*'|\S+)/gi, '$1***')
+    .replace(/(https?:\/\/[^\s:@/]+:)[^\s@/]+@/gi, '$1***@');
+}
+
+function safeCommandForContext(args: Record<string, unknown>): string {
+  return redactCommand(args.command ?? args.cmd ?? args.script);
+}
+
 function safeVerificationCommand(args: Record<string, unknown>): string {
-  const command = cleanScalar(args.command ?? args.cmd ?? args.script, 300);
+  const command = safeCommandForContext(args);
   if (!command || /[;&|><`]/.test(command) || !VERIFICATION_COMMAND.test(command)) return '';
   return command;
+}
+
+function commandFailureKind(error: boolean, exitCode: number | undefined, result: unknown): string | undefined {
+  if (!error && (exitCode === undefined || exitCode === 0)) return undefined;
+  const text = String(result || '').toLowerCase();
+  if (/timed?\s*out|timeout/.test(text)) return 'timed_out';
+  if (/not recognized|not found|enoent/.test(text)) return 'command_not_found';
+  if (/permission|access is denied|eacces/.test(text)) return 'permission_denied';
+  if (exitCode !== undefined) return 'nonzero_exit';
+  return error ? 'tool_error' : 'failed';
+}
+
+function commandKind(action: string, command: string): CommandFact['kind'] {
+  if (VERIFICATION_COMMAND.test(command)) return 'verification';
+  return /^(start|status|log|wait|kill|submit)$/i.test(action) ? 'process' : 'bounded_run';
+}
+
+function runReference(args: Record<string, unknown>): string {
+  return cleanScalar(args.runId ?? args.run_id ?? args.processId ?? args.process_id, 160);
 }
 
 function artifactRefs(values: unknown[]): string[] {
@@ -481,6 +666,13 @@ function lastAssistantLooksResolved(history: Array<{ role: string; content: stri
   return !!assistant && RESOLVED_CUE.test(String(assistant.content || ''));
 }
 
+function isContextPacketFollowUp(message: string, packet: CodingContextPacket): boolean {
+  if (!CONTEXT_PACKET_FOLLOW_UP_CUE.test(message)) return false;
+  // Keep this exception bounded to packets that actually carry the durable
+  // dev-edit or terminal facts the user is asking to inspect.
+  return packet.recentDevEdits.length > 0 || packet.recentCommands.length > 0 || !!packet.lastVerification;
+}
+
 function recordDecision(status: CodingContextPacketDecisionStatus, reason: string, extra: Partial<CodingContextSelection> = {}): CodingContextSelection {
   telemetry[status]++;
   return { status, reason, block: '', ...extra };
@@ -489,7 +681,7 @@ function recordDecision(status: CodingContextPacketDecisionStatus, reason: strin
 export function observeCodingContext(input: CodingContextObservation): void {
   ensurePacketsLoaded();
   const toolName = cleanScalar(input.toolName, 100).toLowerCase();
-  if (!FILE_TOOLS.has(toolName) && !COMMAND_TOOLS.has(toolName)) return;
+  if (!FILE_TOOLS.has(toolName) && !COMMAND_TOOLS.has(toolName) && !isDevEditTool(toolName)) return;
   const sessionId = cleanScalar(input.sessionId, 200);
   const scopeId = cleanScopeId(input.scopeId, sessionId);
   const projectRoot = normalizedRoot(input.projectRoot);
@@ -535,6 +727,8 @@ export function observeCodingContext(input: CodingContextObservation): void {
         projectRoot,
         targets: [],
         knownCommands: [],
+        recentCommands: [],
+        recentDevEdits: [],
         artifacts: [],
         createdAt: now,
         updatedAt: now,
@@ -609,18 +803,61 @@ export function observeCodingContext(input: CodingContextObservation): void {
     }
   }
 
+  const observedDevEdit = devEditFact(projectRoot, toolName, args, input, now);
+  if (observedDevEdit) {
+    const prior = observedDevEdit.devEditId
+      ? packet.recentDevEdits.find((entry) => entry.devEditId === observedDevEdit.devEditId)
+      : undefined;
+    const merged: DevEditFact = prior ? {
+      ...prior,
+      ...observedDevEdit,
+      files: Array.from(new Set([...prior.files, ...observedDevEdit.files])).slice(0, 12),
+      verificationProfiles: Array.from(new Set([...prior.verificationProfiles, ...observedDevEdit.verificationProfiles])).slice(0, 4),
+      changedSurfaces: observedDevEdit.changedSurfaces || prior.changedSurfaces,
+      restartExpected: observedDevEdit.restartExpected || prior.restartExpected,
+    } : observedDevEdit;
+    packet.recentDevEdits = packet.recentDevEdits
+      .filter((entry) => !(merged.devEditId && entry.devEditId && entry.devEditId === merged.devEditId))
+      .concat(merged)
+      .slice(-3);
+  }
+
   if (COMMAND_TOOLS.has(toolName)) {
-    const command = safeVerificationCommand(args);
-    if (command) {
-      packet.knownCommands = Array.from(new Set([...packet.knownCommands, command])).slice(-4);
-      const exitCode = nestedNumber([input.data, input.extra], ['exitCode', 'exit_code', 'code']);
-      const durationMs = nestedNumber([input.extra, input.data], ['durationMs', 'duration_ms', 'elapsedMs', 'elapsed_ms']);
+    const action = toolAction(args) || 'run';
+    const command = safeCommandForContext(args);
+    const runRef = runReference(args);
+    const exitCode = nestedNumber([input.data, input.extra], ['exitCode', 'exit_code', 'code']);
+    const durationMs = nestedNumber([input.extra, input.data], ['durationMs', 'duration_ms', 'elapsedMs', 'elapsed_ms']);
+    const artifacts = artifactRefs(input.artifacts || []);
+    const ok = input.error !== true && (exitCode === undefined || exitCode === 0);
+    if (command || runRef || action) {
+      const fact: CommandFact = {
+        action,
+        ...(command ? { command } : {}),
+        ...(runRef ? { runRef } : {}),
+        kind: commandKind(action, command),
+        ok,
+        ...(exitCode !== undefined ? { exitCode } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(artifacts.length ? { artifacts } : {}),
+        ...(commandFailureKind(input.error === true, exitCode, input.result) ? { failureKind: commandFailureKind(input.error === true, exitCode, input.result) } : {}),
+        observedAt: now,
+        provenance: `tool:${toolName}`,
+      };
+      packet.recentCommands = packet.recentCommands
+        .filter((entry) => !(entry.action === fact.action && entry.command === fact.command && entry.runRef === fact.runRef))
+        .concat(fact)
+        .slice(-6);
+    }
+    const verificationCommand = safeVerificationCommand(args);
+    if (verificationCommand) {
+      packet.knownCommands = Array.from(new Set([...packet.knownCommands, verificationCommand])).slice(-4);
       packet.lastVerification = {
-        command,
-        ok: input.error !== true && (exitCode === undefined || exitCode === 0),
+        command: verificationCommand,
+        ok,
         exitCode,
         durationMs,
-        artifacts: artifactRefs(input.artifacts || []),
+        artifacts,
         observedAt: now,
         provenance: `tool:${toolName}`,
       };
@@ -641,7 +878,13 @@ export function selectCodingContextPacket(input: CodingContextSelectionInput): C
   ensurePacketsLoaded();
   if (!input.enabled) return recordDecision('omitted', 'feature_disabled');
   const supportedModes = new Set(['interactive', 'background_task', 'background_agent', 'team_subagent', 'team_manager']);
-  if (!supportedModes.has(input.executionMode) || input.creativeMode) return recordDecision('omitted', 'non_coding_surface');
+  if (!supportedModes.has(input.executionMode)) return recordDecision('omitted', 'non_coding_surface');
+  // A Creative workspace is an editor surface, not evidence that the active
+  // turn is purely visual.  A packet can only exist after source/file evidence
+  // was observed, and the normal continuation/target checks below still reject
+  // unrelated render/canvas turns.  Keep the old default unless the explicit
+  // creative fast path is configured.
+  if (input.creativeMode && input.allowCreativeCoding !== true) return recordDecision('omitted', 'non_coding_surface');
   const sessionId = cleanScalar(input.sessionId, 200);
   const scopeId = cleanScopeId(input.scopeId, sessionId);
   const packet = packets.get(scopeId);
@@ -657,17 +900,18 @@ export function selectCodingContextPacket(input: CodingContextSelectionInput): C
   }
   const message = cleanScalar(input.message, 1_000);
   const targetReference = referencesKnownTarget(message, packet);
-  const explicitContinuation = CONTINUATION_CUE.test(message);
+  const explicitContinuation = CONTINUATION_CUE.test(message) || GOAL_CONTINUATION_CUE.test(message);
+  const contextPacketFollowUp = isContextPacketFollowUp(message, packet);
   const strongContinuity = hasStrongObjectiveContinuity(message, packet.objective);
   const samePersistentActor = !!input.actorId && packet.actorId === cleanScalar(input.actorId, 200);
   const crossTaskAgentHandoff = samePersistentActor
     && !!input.runtimeTaskId
     && !!packet.lastRuntimeTaskId
     && cleanScalar(input.runtimeTaskId, 200) !== packet.lastRuntimeTaskId;
-  if (!targetReference && !explicitContinuation && !strongContinuity && !crossTaskAgentHandoff) {
+  if (!targetReference && !explicitContinuation && !contextPacketFollowUp && !strongContinuity && !crossTaskAgentHandoff) {
     return recordDecision('omitted', 'ambiguous_continuation', { taskId: packet.taskId, ageMs });
   }
-  if (!targetReference && lastAssistantLooksResolved(input.history || [])) {
+  if (!targetReference && !contextPacketFollowUp && lastAssistantLooksResolved(input.history || [])) {
     return recordDecision('omitted', 'prior_objective_resolved', { taskId: packet.taskId, ageMs });
   }
 
@@ -748,6 +992,30 @@ export function selectCodingContextPacket(input: CodingContextSelectionInput): C
     freshness: { evidence_age_ms: ageMs, packet_updated_at: new Date(packet.updatedAt).toISOString() },
     targets: renderedTargets,
     known_build_test_commands: packet.knownCommands,
+    recent_dev_edits: packet.recentDevEdits.map((edit) => ({
+      ...(edit.devEditId ? { dev_edit_id: edit.devEditId } : {}),
+      stage: edit.stage,
+      approved_files: edit.files,
+      verification_profiles: edit.verificationProfiles,
+      ok: edit.ok,
+      ...(edit.changedSurfaces?.length ? { changed_surfaces: edit.changedSurfaces } : {}),
+      ...(edit.restartExpected ? { restart_expected: true } : {}),
+      observed_at: new Date(edit.observedAt).toISOString(),
+      provenance: edit.provenance,
+    })),
+    recent_run_commands: packet.recentCommands.map((command) => ({
+      action: command.action,
+      ...(command.command ? { command: command.command } : {}),
+      ...(command.runRef ? { run_ref: command.runRef } : {}),
+      kind: command.kind,
+      ok: command.ok,
+      ...(command.exitCode !== undefined ? { exit_code: command.exitCode } : {}),
+      ...(command.durationMs !== undefined ? { duration_ms: command.durationMs } : {}),
+      ...(command.artifacts?.length ? { artifact_references: command.artifacts } : {}),
+      ...(command.failureKind ? { failure_kind: command.failureKind } : {}),
+      observed_at: new Date(command.observedAt).toISOString(),
+      provenance: command.provenance,
+    })),
     last_verification: packet.lastVerification ? {
       command: packet.lastVerification.command,
       ok: packet.lastVerification.ok,
@@ -775,6 +1043,8 @@ export function selectCodingContextPacket(input: CodingContextSelectionInput): C
         ...(Array.isArray(target.post_edit_windows) ? { post_edit_windows: target.post_edit_windows.slice(0, 1) } : {}),
       })),
       artifact_references: payload.artifact_references.slice(-4),
+      recent_dev_edits: payload.recent_dev_edits.slice(-2),
+      recent_run_commands: payload.recent_run_commands.slice(-4),
     };
     body = JSON.stringify(compactPayload);
   }
@@ -785,9 +1055,11 @@ export function selectCodingContextPacket(input: CodingContextSelectionInput): C
     ? 'known_target'
     : explicitContinuation
       ? 'explicit_continuation'
-      : strongContinuity
-        ? 'strong_objective_continuity'
-        : 'persistent_agent_task_handoff';
+      : contextPacketFollowUp
+        ? 'explicit_context_packet_follow_up'
+        : strongContinuity
+          ? 'strong_objective_continuity'
+          : 'persistent_agent_task_handoff';
   if (input.shadowMode) {
     telemetry.shadowed++;
     return { status: 'shadowed', reason: selectionReason, block: '', taskId: packet.taskId, ageMs };

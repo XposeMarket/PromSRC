@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "id": "skill-creator",
+  "name": "skill-creator",
+  "description": "Design or revise a focused Prometheus skill when the user explicitly asks to create, update, improve, review, or troubleshoot a skill. Route inferred reusable lessons through candidate submission and Brain Curator review; do not mutate skills after ordinary workflows.",
+  "version": "4.0.0",
+  "entrypoint": "SKILL.md",
+  "triggers": [
+    "improve this skill",
+    "add a skill",
+    "reusable playbook",
+    "skill description",
+    "skill triggers",
+    "skill metadata",
+    "package skill",
+    "skill catalog",
+    "create skill",
+    "update skill",
+    "repair skill",
+    "skill bundle"
+  ],
+  "categories": [
+    "skills",
+    "meta",
+    "workflow"
+  ],
+  "requiredTools": [
+    "skill_list",
+    "skill_read",
+    "skill_create",
+    "skill_create_bundle",
+    "skill_update_metadata",
+    "skill_repair_metadata"
+  ],
+  "permissions": {},
+  "resources": [],
+  "implicitInvocation": false,
+  "lifecycle": "active"
+}

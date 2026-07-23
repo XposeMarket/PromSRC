@@ -16,7 +16,7 @@ import { parseProviderModelRef } from '../../agents/model-routing.js';
 import { getConfig } from '../../config/config';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { registerBrowserSessionMetadata } from '../browser-tools';
-import { addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
+import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
 
@@ -417,6 +417,14 @@ export interface EphemeralBackgroundWaitResult {
   statuses: EphemeralBackgroundStatus[];
 }
 
+export interface EphemeralBackgroundSteerResult {
+  id: string;
+  state: EphemeralBackgroundState;
+  queued: boolean;
+  eventId?: string;
+  error?: string;
+}
+
 interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   promise: Promise<void>;
   spawnerSessionId?: string;
@@ -564,7 +572,7 @@ export function resolveBackgroundAgentModelRouting(record?: Pick<EphemeralBackgr
   try {
     const cfg = getConfig().getConfig() as any;
     const defaults = cfg?.agent_model_defaults || {};
-    const slot = defaults.background_task ? 'background_task' : 'background_spawn';
+    const slot = 'background_spawn';
     const ref = String(defaults[slot] || '').trim();
     if (ref) {
       const parsed = parseProviderModelRef(ref);
@@ -899,6 +907,39 @@ export function listBackgroundStatuses(): EphemeralBackgroundStatus[] {
   return Array.from(_ephemeralBackgroundRuns.values())
     .map(statusFromRecord)
     .sort((a, b) => b.startedAt - a.startedAt);
+}
+
+/**
+ * Deliver guidance to a running background_spawn worker through its live
+ * runtime inbox. The worker consumes this on its next model loop just like a
+ * foreground chat consumes a user steer.
+ */
+export function backgroundSteer(backgroundId: string, message: string, options: {
+  source?: string;
+  kind?: 'correction' | 'question' | 'constraint' | 'cancel' | 'pause' | 'continue' | 'clarification';
+} = {}): EphemeralBackgroundSteerResult {
+  const rec = _ephemeralBackgroundRuns.get(String(backgroundId || '').trim());
+  if (!rec) return { id: String(backgroundId || '').trim(), state: 'failed', queued: false, error: 'Background agent not found.' };
+  if (isBackgroundTerminal(rec)) {
+    return { id: rec.id, state: rec.state, queued: false, error: `Background agent is already ${rec.state}.` };
+  }
+  const text = String(message || '').trim();
+  if (!text) return { id: rec.id, state: rec.state, queued: false, error: 'A steering message is required.' };
+  const queued = addPendingRuntimeSteerForBackgroundAgent(rec.id, {
+    message: text,
+    source: options.source || 'background_ops_steer',
+    kind: options.kind || 'constraint',
+    requiresWorkerResponse: true,
+    clientRequestId: `background_agent_steer:${rec.id}:${Date.now()}`,
+    contextSummary: `Live guidance for one-shot background agent ${rec.id}.`,
+  });
+  return {
+    id: rec.id,
+    state: rec.state,
+    queued: queued.ok,
+    eventId: queued.event?.id,
+    error: queued.error,
+  };
 }
 
 export function backgroundAbort(backgroundId: string): { ok: boolean; status?: EphemeralBackgroundStatus; error?: string } {

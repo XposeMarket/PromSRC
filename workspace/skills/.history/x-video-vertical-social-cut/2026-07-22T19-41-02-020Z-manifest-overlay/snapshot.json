@@ -1,0 +1,12 @@
+{
+  "skillId": "x-video-vertical-social-cut",
+  "reason": "manifest-overlay",
+  "createdAt": "2026-07-22T19:41:02.027Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\x-video-vertical-social-cut",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "e90dd0f98a42c228"
+}

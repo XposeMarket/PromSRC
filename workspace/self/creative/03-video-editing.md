@@ -49,6 +49,7 @@ Clip trimming and speed metadata are exposed through `creative_trim_clip`, which
 The multi-clip composition model is separate from the scene-graph element timeline.
 Source-backed composition clips currently use lanes:
 
+- `source-video` — imported/workspace footage rendered directly through FFmpeg with trim, reframe, source audio, hook, and caption support; this is the normal editorial lane for actual video.
 - `html-motion`
 - `remotion`
 
@@ -94,4 +95,13 @@ Current limitation:
 
 - HTML Motion MP4 export is strongest for visual composition and deterministic frame output.
 - If preserving, mixing, or ducking source audio matters, verify audio sync and use the broader audio/video path or add an explicit muxing step.
+
+
+### Source-video social editorial lane (2026-07-21)
+
+- `source-video` clips avoid the Chrome/PNG-frame renderer used by HTML Motion, Remotion, and HyperFrames. They render the selected source range directly through the shared runtime FFmpeg resolver, preserving original audio by default.
+- A composition can carry existing timed `captions` into the direct footage render. Captions are burned from actual segment timings, with standard social-safe positioning; a clip can also have a short top hook.
+- Supported footage fit modes are `cover`, `contain`, and `blurred-background`. The latter preserves a landscape source in a 9:16 phone layout over a blurred fill, matching the July 21 Kimi social benchmark style.
+- Acceptance baseline: a manually selected 38–41 second source range can export to H.264/AAC 720×1280 or higher at 30fps, with readable captions, active source audio, a persistent composition record, and sampled visual/audio QA.
+
 - Scene-graph video render jobs are now tracked under `prometheus-creative/render-jobs`, but the agent still needs to inspect rendered frames directly before declaring video work finished.

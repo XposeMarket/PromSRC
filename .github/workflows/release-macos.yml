@@ -1,0 +1,97 @@
+name: Release macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Upload signed artifacts to XposeMarket/prometheus-releases
+        type: boolean
+        default: false
+      release_tag:
+        description: Existing or new release tag (must match package.json version)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release tag
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [[ "${{ inputs.release_tag }}" != "v$version" && "${{ inputs.release_tag }}" != "$version" ]]; then
+            echo "release_tag must be v$version (or $version), got ${{ inputs.release_tag }}" >&2
+            exit 1
+          fi
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: "0"
+      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      PROMETHEUS_REQUIRE_MAC_SIGNING: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies and architecture-native Chromium
+        run: |
+          npm ci
+          npx playwright install chromium
+      - name: Build, sign, notarize, and verify
+        run: npm run build:public:mac:${{ matrix.arch }}
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prometheus-macos-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            release-public/Prometheus-*-mac-${{ matrix.arch }}.dmg
+            release-public/Prometheus-*-mac-${{ matrix.arch }}.dmg.blockmap
+            release-public/Prometheus-*-mac-${{ matrix.arch }}.zip
+
+  publish:
+    if: ${{ inputs.publish }}
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.RELEASES_GH_TOKEN }}
+      RELEASE_REPO: XposeMarket/prometheus-releases
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: prometheus-macos-*
+          path: mac-artifacts
+          merge-multiple: true
+      - name: Generate architecture-aware updater metadata
+        run: node scripts/merge-macos-update-manifest.js --input=mac-artifacts --output=mac-artifacts/latest-mac.yml
+      - name: Create or update public GitHub release
+        shell: bash
+        run: |
+          if ! gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$RELEASE_REPO" --title "$RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" mac-artifacts/* --repo "$RELEASE_REPO" --clobber

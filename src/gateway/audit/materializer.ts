@@ -98,6 +98,10 @@ type SessionPreview = {
   id: string;
   mtimeMs: number;
   lastActiveAt?: number;
+  title?: string;
+  channel?: string;
+  messageCount?: number;
+  goalStatus?: string;
   historyLength?: number;
   hasSummary: boolean;
 };
@@ -310,6 +314,7 @@ function buildDirectoryScaffold(auditRoot: string): void {
     'chats/sessions',
     'chats/transcripts',
     'chats/compactions',
+    'chats/continuity',
     'projects/state',
     'tasks/state',
     'background-tasks',
@@ -347,7 +352,7 @@ function buildAuditReadme(auditRoot: string): void {
     '## Navigation',
     '',
     '- `_index/` global indexes and run metadata',
-    '- `chats/` session snapshots, transcripts, compaction artifacts',
+    '- `chats/` session snapshots, transcripts, compaction artifacts, and immediate continuity journals',
     '- `projects/` project state snapshots',
     '- `tasks/` task/background-task state snapshots',
     '- `proposals/` proposal timeline/state snapshots',
@@ -392,6 +397,10 @@ function buildSessionPreview(configDir: string): SessionPreview[] {
       id: path.basename(item.file, '.json'),
       mtimeMs: item.mtimeMs,
       lastActiveAt: Number(data?.lastActiveAt) || undefined,
+      title: typeof data?.title === 'string' ? data.title.slice(0, 160) : undefined,
+      channel: typeof data?.channel === 'string' ? data.channel.slice(0, 40) : undefined,
+      messageCount: Array.isArray(data?.history) ? data.history.length : undefined,
+      goalStatus: typeof data?.mainChatGoal?.status === 'string' ? data.mainChatGoal.status.slice(0, 40) : undefined,
       historyLength: Array.isArray(data?.history) ? data.history.length : undefined,
       hasSummary: !!String(data?.latestContextSummary || '').trim(),
     });
@@ -522,6 +531,7 @@ function writeIndexes(auditRoot: string, configDir: string, workspacePath: strin
     '- chats/sessions/',
     '- chats/transcripts/',
     '- chats/compactions/',
+    '- chats/continuity/',
     '- projects/state/',
     '- tasks/state/',
     '- proposals/state/',
@@ -554,6 +564,7 @@ function writeIndexes(auditRoot: string, configDir: string, workspacePath: strin
     `- Sessions mirrored: ${byDomain.chats || 0}`,
     `- Transcript files: ${countFiles(path.join(auditRoot, 'chats', 'transcripts'))}`,
     `- Compaction artifacts: ${countFiles(path.join(auditRoot, 'chats', 'compactions'))}`,
+    `- Continuity journals: ${countFiles(path.join(auditRoot, 'chats', 'continuity'))}`,
     '',
     '## Recent Sessions',
     ...sessionPreview.map((s) => {

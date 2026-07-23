@@ -105,6 +105,24 @@ afterPack: scripts/stamp-windows-icon.js
 # from GitHub Releases or a local folder during QA.
 artifactName: ${productName}-Setup-${version}.${ext}
 
+mac:
+  target:
+    - dmg
+    - zip
+  icon: assets/Prometheus.icns
+  category: public.app-category.productivity
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  minimumSystemVersion: "11.0"
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  notarize: true
+  forceCodeSigning: true
+  extendInfo:
+    NSMicrophoneUsageDescription: Prometheus uses the microphone when you start a voice conversation or dictation.
+    NSCameraUsageDescription: Prometheus uses the camera only when you choose to capture or attach an image or video.
+
 win:
   target:
     - target: nsis
@@ -146,8 +164,6 @@ asarUnpack:
   - "node_modules/@ffprobe-installer/**/*"
 
 extraResources:
-  - from: "bin/prometheus-desktop-helper.exe"
-    to: "prometheus-desktop-helper.exe"
   - from: "generated/bundled-skills"
     to: "bundled-skills"
     filter:

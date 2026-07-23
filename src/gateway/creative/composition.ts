@@ -146,8 +146,11 @@ export function addClip(comp: CreativeComposition, input: AddClipInput): Creativ
     ? Math.max(inMs + 1, explicitOut)
     : inMs + Math.max(1, explicitDur || 4000);
   const lane = String(input.lane || input.source?.kind || '').trim().toLowerCase();
-  if (lane !== 'html-motion' && lane !== 'remotion' && lane !== 'hyperframes') {
-    throw new Error('Video composition clips must use html-motion, remotion, or hyperframes lanes.');
+  if (lane !== 'html-motion' && lane !== 'remotion' && lane !== 'hyperframes' && lane !== 'source-video') {
+    throw new Error('Video composition clips must use html-motion, remotion, hyperframes, or source-video lanes.');
+  }
+  if (lane === 'source-video' && (!input.source || input.source.kind !== 'source-video' || !String(input.source.path || '').trim())) {
+    throw new Error('source-video clips require a workspace-relative video path.');
   }
 
   const clip = normalizeCreativeClip({
@@ -324,8 +327,8 @@ export function lintComposition(comp: CreativeComposition): CompositionLintResul
       if (a.outMs <= a.inMs) {
         issues.push({ severity: 'error', code: 'clip_zero_duration', message: 'Clip has non-positive duration.', clipId: a.id, trackId: track.id });
       }
-      if (a.lane !== 'html-motion' && a.lane !== 'remotion' && a.lane !== 'hyperframes') {
-        issues.push({ severity: 'error', code: 'clip_lane_removed', message: 'Video clips must use html-motion, remotion, or hyperframes lanes.', clipId: a.id, trackId: track.id });
+      if (a.lane !== 'html-motion' && a.lane !== 'remotion' && a.lane !== 'hyperframes' && a.lane !== 'source-video') {
+        issues.push({ severity: 'error', code: 'clip_lane_removed', message: 'Video clips must use html-motion, remotion, hyperframes, or source-video lanes.', clipId: a.id, trackId: track.id });
       }
       if (a.lane === 'html-motion' && (a.source.kind !== 'html-motion' || !a.source.clipPath)) {
         issues.push({ severity: 'error', code: 'html_motion_source_missing', message: 'HTML Motion clips require a clipPath source.', clipId: a.id, trackId: track.id });
@@ -339,6 +342,9 @@ export function lintComposition(comp: CreativeComposition): CompositionLintResul
         if (!hasInlineHtml && !hasProjectEntry) {
           issues.push({ severity: 'error', code: 'hyperframes_source_missing', message: 'HyperFrames clips require source HTML or project metadata.', clipId: a.id, trackId: track.id });
         }
+      }
+      if (a.lane === 'source-video' && (a.source.kind !== 'source-video' || !String(a.source.path || '').trim())) {
+        issues.push({ severity: 'error', code: 'source_video_missing', message: 'source-video clips require a workspace-relative video path.', clipId: a.id, trackId: track.id });
       }
       for (let j = i + 1; j < items.length; j++) {
         const b = items[j];

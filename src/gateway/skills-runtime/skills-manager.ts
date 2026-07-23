@@ -479,19 +479,37 @@ export function evaluateSkillTriggerRouting(
   targetSkill: Skill,
   positivePrompts: string[],
   negativePrompts: string[],
-): { passed: boolean; failedPositive: string[]; failedNegative: string[] } {
+): {
+  passed: boolean;
+  failedPositive: string[];
+  failedNegative: string[];
+  failedPositiveDetails: Array<{ prompt: string; top: { id: string; score: number; confidence: SkillRouteConfidence } | null }>;
+  failedNegativeDetails: Array<{ prompt: string; target: { score: number; confidence: SkillRouteConfidence } | null }>;
+} {
   const evaluationSkills = skills.map((skill) => skill.id === targetSkill.id ? targetSkill : skill);
   if (!evaluationSkills.some((skill) => skill.id === targetSkill.id)) evaluationSkills.push(targetSkill);
-  const failedPositive = positivePrompts.filter((prompt) => {
+  const failedPositiveDetails = positivePrompts.flatMap((prompt) => {
     const top = rankSkillMatches(evaluationSkills, prompt, { includeExplicitOnly: true, limit: 1 })[0];
-    return top?.id !== targetSkill.id || top.confidence !== 'high';
+    if (top?.id === targetSkill.id && top.confidence === 'high') return [];
+    return [{ prompt, top: top ? { id: top.id, score: top.score, confidence: top.confidence } : null }];
   });
-  const failedNegative = negativePrompts.filter((prompt) => {
-    const target = rankSkillMatches(evaluationSkills, prompt, { includeExplicitOnly: true, limit: 8 })
-      .find((match) => match.id === targetSkill.id);
-    return !!target && target.confidence !== 'low';
+  // Negative preflight checks must exercise only the proposed trigger surface.
+  // A new skill's broad name, description, categories, and required tools describe
+  // its domain, but must not make it fail installation for adjacent requests.
+  const failedNegativeDetails = negativePrompts.flatMap((prompt) => {
+    const queryWords = composerWordSet(prompt);
+    const score = Math.max(0, ...targetSkill.triggers.map((trigger) => triggerRouteScore(trigger, prompt, queryWords)));
+    const confidence: SkillRouteConfidence = score >= 75 ? 'high' : score >= 45 ? 'medium' : 'low';
+    if (confidence === 'low') return [];
+    return [{ prompt, target: { score, confidence } }];
   });
-  return { passed: failedPositive.length === 0 && failedNegative.length === 0, failedPositive, failedNegative };
+  return {
+    passed: failedPositiveDetails.length === 0 && failedNegativeDetails.length === 0,
+    failedPositive: failedPositiveDetails.map((detail) => detail.prompt),
+    failedNegative: failedNegativeDetails.map((detail) => detail.prompt),
+    failedPositiveDetails,
+    failedNegativeDetails,
+  };
 }
 
 function mergeSkillIds(primary: string[], fallback: string[], limit = 8): string[] {
@@ -777,9 +795,14 @@ export class SkillsManager {
         categories: [],
         requiredTools: [],
         implicitInvocation: data.implicitInvocation !== false,
+        executionEnabled: true,
+        status: 'ready',
+        health: { state: 'ready' },
+        eligibility: { status: 'ready' },
+        lifecycle: 'active',
       } as unknown as Skill;
       const evaluation = evaluateSkillTriggerRouting(this.getAll(), candidate, positive, negative);
-      if (!evaluation.passed) throw new Error(`New skill trigger evaluation failed: ${evaluation.failedPositive.length} positive, ${evaluation.failedNegative.length} negative.`);
+      if (!evaluation.passed) throw new Error(`New skill trigger evaluation failed: ${evaluation.failedPositive.length} positive, ${evaluation.failedNegative.length} negative. Details: ${JSON.stringify({ positive: evaluation.failedPositiveDetails, negative: evaluation.failedNegativeDetails })}`);
     }
 
     const skillDir = path.join(this.skillsDir, id);
@@ -844,9 +867,14 @@ export class SkillsManager {
         categories: data.categories || [],
         requiredTools: data.requiredTools || [],
         implicitInvocation: data.implicitInvocation !== false,
+        executionEnabled: true,
+        status: 'ready',
+        health: { state: 'ready' },
+        eligibility: { status: 'ready' },
+        lifecycle: 'active',
       } as unknown as Skill;
       const evaluation = evaluateSkillTriggerRouting(this.getAll(), candidate, positive, negative);
-      if (!evaluation.passed) throw new Error(`New skill trigger evaluation failed: ${evaluation.failedPositive.length} positive, ${evaluation.failedNegative.length} negative.`);
+      if (!evaluation.passed) throw new Error(`New skill trigger evaluation failed: ${evaluation.failedPositive.length} positive, ${evaluation.failedNegative.length} negative. Details: ${JSON.stringify({ positive: evaluation.failedPositiveDetails, negative: evaluation.failedNegativeDetails })}`);
     }
     const skillDir = path.join(this.skillsDir, id);
     const existing = this.get(id);

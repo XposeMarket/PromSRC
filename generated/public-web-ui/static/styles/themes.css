@@ -482,9 +482,9 @@
 .theme-swatch[data-skin-preview="dark"]  .tsc-bg    { background: #1a1a1a; }
 .theme-swatch[data-skin-preview="dark"]  .tsc-panel { background: #2a2a2a; }
 .theme-swatch[data-skin-preview="dark"]  .tsc-accent{ background: #f97316; }
-.theme-swatch[data-skin-preview="light"] .tsc-bg    { background: #d8d6d2; }
-.theme-swatch[data-skin-preview="light"] .tsc-panel { background: #ffffff; }
-.theme-swatch[data-skin-preview="light"] .tsc-accent{ background: #f97316; }
+.theme-swatch[data-skin-preview="light"] .tsc-bg    { background: #050505; }
+.theme-swatch[data-skin-preview="light"] .tsc-panel { background: #15130f; }
+.theme-swatch[data-skin-preview="light"] .tsc-accent{ background: #d6b75e; }
 .theme-swatch[data-skin-preview="blue"]  .tsc-bg    { background: #07101f; }
 .theme-swatch[data-skin-preview="blue"]  .tsc-panel { background: #122444; }
 .theme-swatch[data-skin-preview="blue"]  .tsc-accent{ background: #3d8bff; }
@@ -501,4 +501,1203 @@
   color: var(--flame);
   font-weight: 800;
   font-size: 14px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   PROMETHEUS ONE — desktop Light-slot replacement, sidebar pass one
+
+   This intentionally targets data-skin="light" rather than data-theme so the
+   Default Dark, Olympian Blue, and Aether Violet desktop skins remain intact.
+   Only the desktop left rail is reskinned in this pass.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar {
+  --p1-void: #050505;
+  --p1-black: #090909;
+  --p1-obsidian: #12110f;
+  --p1-graphite: #24211c;
+  --p1-bronze: #6d5a2b;
+  --p1-gold-muted: #a98a3b;
+  --p1-gold: #d6b75e;
+  --p1-gold-light: #f0d98b;
+  --p1-bone: #f2ebdd;
+  --p1-bone-muted: #b9b0a0;
+  --sidebar-bg: #050505;
+  --sidebar-text: var(--p1-bone);
+  --sidebar-muted: var(--p1-bone-muted);
+  --sidebar-icon-bg: transparent;
+  --sidebar-icon-border: rgba(214, 183, 94, .18);
+  --sidebar-item-bg: rgba(18, 18, 17, .96);
+  --sidebar-item-hover: rgba(214, 183, 94, .08);
+  --sidebar-active-bg: rgba(214, 183, 94, .12);
+  --sidebar-search-bg: rgba(16, 15, 13, .98);
+  --sidebar-seg-bg: rgba(13, 13, 12, .98);
+  --sidebar-seg-active: rgba(214, 183, 94, .13);
+  color: var(--p1-bone);
+  background:
+    radial-gradient(115% 42% at 6% 4%, rgba(214, 183, 94, .065), transparent 62%),
+    radial-gradient(80% 34% at 100% 76%, rgba(109, 90, 43, .05), transparent 72%),
+    linear-gradient(180deg, #050505 0%, #080807 48%, #040404 100%);
+  border-right-color: rgba(214, 183, 94, .18);
+  box-shadow: 16px 0 42px rgba(0, 0, 0, .24);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-fixed {
+  gap: 10px;
+  padding: 13px 11px 9px;
+  border-bottom-color: rgba(214, 183, 94, .12);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-top {
+  min-height: 48px;
+  padding: 0 2px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 0;
+  background: url("../assets/prometheus-one/p1-mark-ring.png") center / contain no-repeat;
+  filter: drop-shadow(0 0 12px rgba(214, 183, 94, .16));
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .logo img {
+  opacity: 0;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .brand {
+  gap: 9px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .brand-title {
+  color: var(--p1-bone);
+  font-size: 0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .brand-title::before {
+  content: "PROMETHEUS 1";
+  font-size: 11px;
+  letter-spacing: 2px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .brand-sub {
+  color: var(--p1-gold-muted);
+  font-size: 0;
+  font-weight: 700;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .brand-sub::before {
+  content: "1 Program. Unlimited abilities.";
+  font-size: 7px;
+  letter-spacing: .1px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .icon-btn {
+  border-color: rgba(214, 183, 94, .30);
+  background: linear-gradient(145deg, rgba(214, 183, 94, .08), rgba(255, 255, 255, .025));
+  color: var(--p1-bone);
+  box-shadow: inset 0 1px 0 rgba(240, 217, 139, .08), 0 7px 18px rgba(0, 0, 0, .28);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .icon-btn:hover {
+  border-color: rgba(240, 217, 139, .56);
+  background: rgba(214, 183, 94, .11);
+  color: var(--p1-gold-light);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .new-chat {
+  min-height: 0;
+  gap: 8px;
+  padding: 7px 10px;
+  border-color: rgba(214, 183, 94, .70);
+  border-radius: 10px;
+  background:
+    radial-gradient(90% 150% at 0% 50%, rgba(214, 183, 94, .13), transparent 54%),
+    linear-gradient(180deg, rgba(24, 21, 15, .98), rgba(11, 11, 10, .98));
+  color: var(--p1-bone);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(169, 138, 59, .10), 0 10px 24px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(240, 217, 139, .12);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .new-chat:hover {
+  border-color: var(--p1-gold-light);
+  background: rgba(214, 183, 94, .12);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon {
+  width: 24px;
+  height: 22px;
+  padding-right: 8px;
+  border: 0;
+  border-right: 1px solid rgba(214, 183, 94, .24);
+  border-radius: 0;
+  background: transparent;
+  color: var(--p1-gold-light);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon svg {
+  display: none;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon::before {
+  content: "✦";
+  font: 17px/1 Georgia, 'Times New Roman', serif;
+  text-shadow: 0 0 8px rgba(214, 183, 94, .35);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-search {
+  min-height: 38px;
+  padding: 0 11px;
+  border-color: rgba(109, 90, 43, .38);
+  border-radius: 10px;
+  background: var(--sidebar-search-bg);
+  box-shadow: inset 0 1px 0 rgba(240, 217, 139, .035), 0 7px 18px rgba(0, 0, 0, .20);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-search:focus-within {
+  border-color: rgba(214, 183, 94, .60);
+  box-shadow: 0 0 0 2px rgba(214, 183, 94, .08), 0 9px 22px rgba(0, 0, 0, .24);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-search input {
+  color: var(--p1-bone);
+  font-weight: 600;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-search input::placeholder,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-search svg {
+  color: rgba(185, 176, 160, .66);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-scroll {
+  gap: 11px;
+  padding: 8px 11px 12px;
+  scrollbar-color: rgba(169, 138, 59, .38) transparent;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(169, 138, 59, .38);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .nav-group {
+  gap: 2px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .nav-item {
+  min-height: 0;
+  gap: 8px;
+  padding: 6px 8px;
+  border-color: transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--p1-bone);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: none;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .nav-item:hover {
+  border-color: transparent;
+  background: rgba(214, 183, 94, .08);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .nav-item.active {
+  border-color: transparent;
+  background: rgba(214, 183, 94, .14);
+  box-shadow: none;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .nav-item .nav-icon {
+  width: 22px;
+  height: 22px;
+  padding-right: 0;
+  border: 1px solid rgba(214, 183, 94, .18);
+  border-radius: 6px;
+  background: rgba(214, 183, 94, .055);
+  color: var(--p1-gold);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .nav-item .nav-icon svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.7;
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .section-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 3px 3px;
+  color: var(--p1-gold-muted);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .section-title::after {
+  content: "✦";
+  flex: 1;
+  overflow: hidden;
+  color: var(--p1-gold);
+  font-size: 10px;
+  letter-spacing: 0;
+  text-align: right;
+  background: linear-gradient(90deg, rgba(109, 90, 43, .38), transparent 84%) left center / calc(100% - 18px) 1px no-repeat;
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .seg-tabs {
+  padding: 3px;
+  gap: 3px;
+  border-color: rgba(109, 90, 43, .30);
+  border-radius: 9px;
+  background: var(--sidebar-seg-bg);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .seg-btn {
+  min-height: 0;
+  padding: 4px 2px;
+  color: var(--p1-bone-muted);
+  border-radius: 6px;
+  font-size: 10px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .seg-btn:hover:not(.active) {
+  background: rgba(214, 183, 94, .07);
+  color: var(--p1-bone);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .seg-btn.active {
+  border-color: rgba(214, 183, 94, .48);
+  background: rgba(214, 183, 94, .13);
+  color: var(--p1-gold-light);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .20);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #jobs-list,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #skills-list,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #skills-search-results {
+  padding: 0;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .session-list,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #jobs-list,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #channels-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item {
+  min-height: 0;
+  margin: 0;
+  padding: 7px 30px 7px 8px;
+  border: 1px solid rgba(109, 90, 43, .22);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(17, 17, 16, .97), rgba(9, 9, 9, .97));
+  color: var(--p1-bone);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .02), 0 5px 14px rgba(0, 0, 0, .14);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item:hover,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item:hover {
+  border-color: rgba(214, 183, 94, .42);
+  background: rgba(214, 183, 94, .07);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item.active,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item.unread.active,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #channels-list .chat-session-item.job-item.channel-chat-item.active {
+  border-color: rgba(214, 183, 94, .64);
+  background: linear-gradient(135deg, rgba(214, 183, 94, .13), rgba(12, 12, 11, .98) 60%);
+  box-shadow: 0 0 0 1px rgba(214, 183, 94, .09), 0 7px 18px rgba(0, 0, 0, .20);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item.unread:not(.active),
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item.is-working {
+  border-color: rgba(214, 183, 94, .44);
+  background: rgba(214, 183, 94, .07);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item::before {
+  background: linear-gradient(180deg, var(--p1-gold-light), var(--p1-gold-muted));
+  inset: 7px auto 7px 0;
+  width: 2px;
+  padding: 0;
+  border-radius: 999px;
+  mask: none;
+  -webkit-mask: none;
+  opacity: .86;
+  animation: none;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item .job-item-title {
+  color: var(--p1-bone);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item .job-item-meta,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item .job-item-time,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item .job-item-meta :is(.badge, .badge-queued, .session-auto-badge) {
+  color: rgba(185, 176, 160, .68) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item .session-working-badge {
+  color: var(--p1-gold-light) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .job-item-unread-dot {
+  background: var(--p1-gold);
+  box-shadow: 0 0 0 3px rgba(214, 183, 94, .11);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-action-btn {
+  color: rgba(185, 176, 160, .64);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-pin-btn:hover,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-pin-btn.active,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-rename-btn:hover {
+  color: var(--p1-gold-light);
+  background: rgba(214, 183, 94, .10);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .sidebar-action {
+  border-color: rgba(214, 183, 94, .30);
+  background: rgba(214, 183, 94, .06);
+  color: var(--p1-gold-light);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .sidebar-action:hover {
+  background: rgba(214, 183, 94, .12);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .sessions-show-more-btn {
+  color: var(--p1-gold-light) !important;
+  border-color: rgba(214, 183, 94, .34) !important;
+  background: rgba(214, 183, 94, .075) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .sessions-show-more-btn:hover {
+  color: var(--p1-bone) !important;
+  border-color: rgba(240, 217, 139, .54) !important;
+  background: rgba(214, 183, 94, .13) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-footer {
+  padding-top: 8px;
+  border-top-color: rgba(214, 183, 94, .14);
+  background: linear-gradient(180deg, rgba(8, 8, 7, .96), #050505);
+  box-shadow: 0 -12px 24px rgba(0, 0, 0, .18);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .more-popover {
+  border-color: rgba(214, 183, 94, .34);
+  background: #0b0b0a;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .48), 0 0 16px rgba(214, 183, 94, .09);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .more-popover-item:hover {
+  border-color: rgba(214, 183, 94, .34);
+  background: rgba(214, 183, 94, .08);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar.collapsed .logo {
+  width: 38px;
+  height: 38px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   PROMETHEUS ONE — desktop chat color pass
+
+   Color-only overrides. Layout, message sizing, composer geometry, and the
+   existing send/stop/voice iconography remain unchanged.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="light"] body:not(.pm-mobile-active) main.main-shell,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view {
+  --text: #f2ebdd;
+  --muted: #aaa294;
+  --panel: #0b0b0a;
+  --panel-2: #141310;
+  --line: rgba(214, 183, 94, .14);
+  --line-strong: rgba(214, 183, 94, .28);
+  --brand: #d6b75e;
+  --flame: #d6b75e;
+  --flame-border: rgba(214, 183, 94, .52);
+  --flame-glow: rgba(214, 183, 94, .12);
+  --pm-orange: #d6b75e;
+  --pm-orange-hot: #f0d98b;
+  --pm-gold: #d6b75e;
+  --pm-ember: #6d5a2b;
+  --composer-bg: rgba(12, 12, 11, .94);
+  --composer-panel: rgba(22, 21, 18, .94);
+  --composer-input: rgba(29, 28, 25, .94);
+  --composer-border: rgba(214, 183, 94, .42);
+  --composer-text: #f2ebdd;
+  --composer-muted: rgba(242, 235, 221, .55);
+  color: var(--text);
+  background: #070707;
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view {
+  background:
+    radial-gradient(90% 50% at 50% 100%, rgba(109, 90, 43, .055), transparent 70%),
+    linear-gradient(180deg, #090909 0%, #060606 100%);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-messages.chat-scroller-active {
+  scrollbar-color: rgba(214, 183, 94, .45) transparent;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-messages.chat-scroller-active::-webkit-scrollbar-thumb {
+  background-color: rgba(214, 183, 94, .45);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-welcome,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-welcome h2,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg-content,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .markdown-body :is(h1, h2, h3, h4, strong),
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .live-turn-prose,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .live-turn-text,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .live-turn-md {
+  color: var(--text);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-welcome-icon {
+  width: 72px;
+  height: 72px;
+  background: url("../assets/prometheus-one/p1-mark-ring.png") center / contain no-repeat;
+  filter: drop-shadow(0 0 14px rgba(214, 183, 94, .18));
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-welcome-icon img {
+  opacity: 0 !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card {
+  border-color: rgba(214, 183, 94, .34);
+  background: rgba(13, 13, 12, .88);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .24);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card:hover,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card:focus-visible {
+  border-color: rgba(240, 217, 139, .68);
+  background: rgba(214, 183, 94, .065);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, .32), 0 0 18px rgba(214, 183, 94, .08);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .markdown-body code {
+  color: #f0dfb2;
+  border-color: rgba(214, 183, 94, .18);
+  background: rgba(214, 183, 94, .075);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .markdown-body pre {
+  border-color: rgba(214, 183, 94, .16);
+  background: rgba(0, 0, 0, .34);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .markdown-body pre code {
+  color: #e8e1d4;
+  background: none;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .markdown-body :is(th, td) {
+  border-color: rgba(214, 183, 94, .18);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .markdown-body th {
+  background: rgba(214, 183, 94, .075);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg.user .msg-body,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg.user.voice-worker-handoff .msg-body {
+  color: #fff;
+  border-color: transparent;
+  background: #303032;
+  box-shadow: 0 7px 20px rgba(0, 0, 0, .24);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg.user .msg-body::before,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg.user .msg-body::after {
+  content: none;
+  display: none;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg.user .msg-content,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg.user .markdown-body :is(h1, h2, h3, h4, strong) {
+  color: #fff;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-body {
+  color: var(--text);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar {
+  border-color: rgba(214, 183, 94, .34);
+  background:
+    url("../assets/prometheus-one/prometheus-avatar-column-gold.png") center / 24px 24px no-repeat,
+    radial-gradient(circle, rgba(214, 183, 94, .10), rgba(10, 10, 9, .96) 72%);
+  box-shadow: inset 0 1px 0 rgba(240, 217, 139, .08), 0 5px 14px rgba(0, 0, 0, .24);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar img {
+  opacity: 0 !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .assistant-work-timer,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .assistant-work-timer-chevron,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .voice-handoff-role {
+  color: #d6b75e;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg-action-btn {
+  color: #8f887c;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .msg-action-btn:hover:not(:disabled) {
+  color: #f0d98b;
+  background: rgba(214, 183, 94, .09);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .live-turn-segment,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .live-turn-tool-group,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .tool-activity-entry {
+  border-left-color: rgba(214, 183, 94, .52);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .tool-activity-entry[data-status="running"],
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .tool-activity-entry[data-status="preparing"],
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .live-turn-tool {
+  border-left-color: #d6b75e;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view :is(.tool-activity-kicker, .live-turn-segment > span) {
+  color: #bda45d;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view :is(.tool-activity-label, .tool-activity-detail-row strong, .live-turn-tool-summary strong) {
+  color: var(--text);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .tool-command-terminal {
+  color: #e8e1d4;
+  border-color: rgba(214, 183, 94, .22);
+  background: #090908;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .tool-command-terminal > pre {
+  color: #ddd6c9;
+  border-top-color: rgba(214, 183, 94, .12);
+  background: #060606;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .process-pill-btn {
+  color: #d6b75e;
+  border-color: rgba(214, 183, 94, .28);
+  background: rgba(214, 183, 94, .065);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .process-pill-btn:hover {
+  color: #f2ebdd;
+  border-color: rgba(240, 217, 139, .52);
+  background: rgba(214, 183, 94, .12);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area {
+  --pm-glow: rgba(214, 183, 94, .18);
+  color: var(--composer-text);
+  border-color: rgba(214, 183, 94, .46);
+  background: linear-gradient(145deg, rgba(20, 19, 16, .97), rgba(7, 7, 7, .98));
+  box-shadow:
+    0 20px 58px rgba(0, 0, 0, .52),
+    0 0 24px rgba(214, 183, 94, .08),
+    inset 0 1px 0 rgba(240, 217, 139, .10);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area:hover,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area:focus-within {
+  --pm-glow: rgba(214, 183, 94, .25);
+  border-color: rgba(240, 217, 139, .64);
+  box-shadow:
+    0 24px 66px rgba(0, 0, 0, .58),
+    0 0 30px rgba(214, 183, 94, .12),
+    inset 0 1px 0 rgba(240, 217, 139, .14);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area::before,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area::after {
+  opacity: .42;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view #chat-input {
+  color: var(--composer-text);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view #chat-input:focus {
+  border-color: rgba(214, 183, 94, .52);
+  box-shadow: 0 0 0 3px rgba(214, 183, 94, .10), inset 0 1px 2px rgba(255, 255, 255, .06);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area .chat-attach-btn,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area .send-btn {
+  color: #fff;
+  background: conic-gradient(from var(--pm-angle), #6d5a2b, #d6b75e, #f0d98b, #a98a3b, #6d5a2b);
+  box-shadow: 0 10px 25px rgba(214, 183, 94, .23), inset 0 1px 0 rgba(255, 255, 255, .30);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area .chat-attach-btn:hover,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area .send-btn:hover {
+  color: #fff;
+  box-shadow: 0 14px 32px rgba(214, 183, 94, .32), 0 0 22px rgba(214, 183, 94, .16), inset 0 1px 0 rgba(255, 255, 255, .34);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area .chat-voice-btn,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-input-area .chat-voice-btn:is(:hover, :focus-visible, .active, .recording, .silent) {
+  color: #fff;
+  background: transparent;
+  box-shadow: none;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view :is(.main-goal-strip, .chat-skill-trigger-pill, .queued-prompts-panel, .chat-file-staging) {
+  color: var(--text);
+  border-color: rgba(214, 183, 94, .28);
+  background: rgba(12, 12, 11, .96);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   PROMETHEUS ONE — complete desktop application color skin
+
+   The repurposed desktop Light slot now uses the application's established
+   dark-surface states and these P1 tokens. These rules intentionally change
+   color, backgrounds, borders, and shadows only; existing page geometry is
+   left alone.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="light"] {
+  --native-color-scheme: dark;
+  --bg: #050505;
+  --bg-soft: #0d0d0c;
+  --panel: #0b0b0a;
+  --panel-2: #151411;
+  --line: rgba(214, 183, 94, .14);
+  --line-strong: rgba(214, 183, 94, .27);
+  --text: #f2ebdd;
+  --fg: #f2ebdd;
+  --muted: #aaa294;
+  --brand: #d6b75e;
+  --brand-2: #9b7d32;
+  --flame: #d6b75e;
+  --flame-mid: #f0d98b;
+  --flame-glow: rgba(214, 183, 94, .14);
+  --flame-border: rgba(214, 183, 94, .50);
+  --pm-orange: #d6b75e;
+  --pm-orange-hot: #f0d98b;
+  --pm-ember: #6d5a2b;
+  --pm-gold: #d6b75e;
+  --composer-bg: rgba(12, 12, 11, .94);
+  --composer-panel: rgba(22, 21, 18, .94);
+  --composer-input: rgba(29, 28, 25, .94);
+  --composer-border: rgba(214, 183, 94, .38);
+  --composer-text: #f2ebdd;
+  --composer-muted: rgba(242, 235, 221, .55);
+  --log-bg: #080807;
+  --log-text: #c7beaf;
+  --log-info: #e1c972;
+  --progress-bg: linear-gradient(180deg, #151411 0%, #0c0c0b 100%);
+  --progress-border: rgba(214, 183, 94, .22);
+  --progress-shadow: 0 10px 28px rgba(0, 0, 0, .38);
+  --progress-header-text: #f2ebdd;
+  --progress-chevron: #b9b0a0;
+  --progress-empty-border: rgba(214, 183, 94, .20);
+  --progress-empty-text: #aaa294;
+  --progress-empty-bg: rgba(214, 183, 94, .045);
+  --progress-text-base: #f2ebdd;
+  --progress-text-pending: #aaa294;
+  --progress-text-done: #aaa294;
+  --progress-text-active: #f2ebdd;
+  --progress-dot-pending-bg: #171613;
+  --progress-dot-pending-text: #aaa294;
+  --progress-dot-pending-border: rgba(214, 183, 94, .22);
+  --progress-dot-done-bg: #a98a3b;
+  --progress-dot-done-text: #fffaf0;
+  --progress-dot-done-border: #d6b75e;
+  --progress-dot-active-bg: #0a0a09;
+  --progress-dot-active-text: #f0d98b;
+  --progress-dot-active-border: rgba(214, 183, 94, .48);
+  --progress-spinner-track: rgba(214, 183, 94, .20);
+  --progress-spinner-head: #d6b75e;
+  --shadow-sm: 0 3px 10px rgba(0, 0, 0, .28);
+  --shadow-md: 0 12px 34px rgba(0, 0, 0, .42);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) {
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(214, 183, 94, .055), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(109, 90, 43, .035), transparent 30%),
+    #050505;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .main-shell-wrap {
+  background: #080808;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .page-view,
+:root[data-skin="light"] body:not(.pm-mobile-active) #connector-view {
+  color: var(--text);
+  background: #090909 !important;
+  border-color: var(--line) !important;
+}
+
+/* Shared header */
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar {
+  --pm-glow: rgba(214, 183, 94, .16);
+  color: var(--text);
+  border-bottom-color: rgba(214, 183, 94, .18);
+  background:
+    radial-gradient(80% 180% at 8% 0%, rgba(214, 183, 94, .075), transparent 62%),
+    linear-gradient(180deg, #0b0b0a, #070707);
+  box-shadow: inset 0 1px 0 rgba(240, 217, 139, .06), 0 8px 24px rgba(0, 0, 0, .18);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar::before {
+  background: conic-gradient(from var(--pm-angle), transparent 0deg, rgba(214, 183, 94, .12) 62deg, rgba(240, 217, 139, .07) 102deg, transparent 156deg, rgba(109, 90, 43, .14) 232deg, transparent 315deg, rgba(214, 183, 94, .08) 360deg);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar::before {
+  background: conic-gradient(from var(--pm-angle), transparent 0deg, rgba(214, 183, 94, .11) 62deg, rgba(240, 217, 139, .065) 102deg, transparent 156deg, rgba(109, 90, 43, .13) 232deg, transparent 315deg, rgba(214, 183, 94, .075) 360deg);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar::after {
+  background: conic-gradient(from var(--pm-angle), rgba(255, 255, 255, .13), rgba(214, 183, 94, .38), rgba(255, 255, 255, .025), rgba(240, 217, 139, .25), rgba(255, 255, 255, .11));
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar::after {
+  background: conic-gradient(from var(--pm-angle), rgba(255, 255, 255, .12), rgba(214, 183, 94, .36), rgba(255, 255, 255, .022), rgba(240, 217, 139, .23), rgba(255, 255, 255, .10));
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar:hover,
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar:focus-within {
+  --pm-glow: rgba(214, 183, 94, .22);
+  box-shadow: 0 0 24px var(--pm-glow), inset 0 1px 0 rgba(240, 217, 139, .09);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .page-title strong {
+  color: var(--text);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .page-title span {
+  color: var(--muted);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar :is(.icon-btn, .panel-toggle-btn, .status-pill) {
+  color: #c6bdad;
+  border-color: rgba(214, 183, 94, .24);
+  background: linear-gradient(145deg, rgba(214, 183, 94, .07), rgba(255, 255, 255, .025));
+  box-shadow: inset 0 1px 0 rgba(240, 217, 139, .07), 0 7px 18px rgba(0, 0, 0, .26);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar :is(.icon-btn, .panel-toggle-btn):hover,
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar .panel-toggle-btn.active {
+  color: #fffaf0;
+  border-color: rgba(240, 217, 139, .56);
+  background: linear-gradient(145deg, rgba(214, 183, 94, .20), rgba(109, 90, 43, .16));
+  box-shadow: 0 0 18px rgba(214, 183, 94, .13), inset 0 1px 0 rgba(240, 217, 139, .12);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar #update-pill {
+  color: #f0d98b !important;
+  border-color: rgba(214, 183, 94, .42) !important;
+  background: rgba(214, 183, 94, .10) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar #update-dropdown {
+  color: var(--text) !important;
+  border-color: rgba(214, 183, 94, .30) !important;
+  background: #0d0d0c !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar #update-progress-fill {
+  background: linear-gradient(90deg, #8f712b, #d6b75e, #f0d98b) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar #update-action-btn {
+  color: #fffaf0 !important;
+  border: 1px solid rgba(214, 183, 94, .48) !important;
+  background: linear-gradient(145deg, #d6b75e, #8f712b) !important;
+}
+
+/* Shared page surfaces, cards, tables, and form controls */
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view, #settings-modal, .skill-modal, .hub-modal) :is(input, select, textarea) {
+  color: var(--text) !important;
+  border-color: var(--line) !important;
+  background: #151411 !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view, #settings-modal, .skill-modal, .hub-modal) :is(input, textarea)::placeholder {
+  color: rgba(170, 162, 148, .70) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view, #settings-modal, .skill-modal, .hub-modal) :is(input, select, textarea):focus {
+  border-color: rgba(214, 183, 94, .58) !important;
+  box-shadow: 0 0 0 3px rgba(214, 183, 94, .09) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view, #settings-modal, .skill-modal, .hub-modal) [style*="background:#fff"],
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view, #settings-modal, .skill-modal, .hub-modal) [style*="background: #fff"] {
+  color: var(--text) !important;
+  border-color: var(--line) !important;
+  background: var(--panel-2) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view, #settings-modal) [style*="linear-gradient(180deg,#fff"],
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view, #settings-modal) [style*="linear-gradient(180deg, #fff"] {
+  color: var(--text) !important;
+  border-color: var(--line) !important;
+  background: linear-gradient(180deg, #171613, #0d0d0c) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view) :is(table, thead, tbody, tr, th, td) {
+  border-color: var(--line) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view) thead tr,
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view) th {
+  color: #d8cfbf;
+  background: rgba(214, 183, 94, .065) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view) tbody tr:hover {
+  background: rgba(214, 183, 94, .045) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view) :is(.task-card, .approval-card, .progress-card, .artifact-card, .artifact-preview, .sys-card, .conn-card, .project-file-card, .channel-hub-card, .usage-provider-card) {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel-2);
+}
+
+/* Gold controls and toggles, preserving semantic success/error buttons */
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view, #settings-modal, .right-panel) :is(.btn:not(.btn-red):not(.btn-green), .skill-search-btn, .skill-install-btn, .cv-btn-connect, .project-editor-save-btn, .memory-compose-submit) {
+  color: #fffaf0;
+  border-color: rgba(214, 183, 94, .48);
+  background: linear-gradient(145deg, #d6b75e, #8f712b);
+  box-shadow: 0 7px 20px rgba(214, 183, 94, .18);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.page-view, #connector-view, #settings-modal, .right-panel) :is(.btn:not(.btn-red):not(.btn-green), .skill-search-btn, .skill-install-btn, .cv-btn-connect, .project-editor-save-btn, .memory-compose-submit):hover {
+  color: #fff;
+  border-color: #f0d98b;
+  background: linear-gradient(145deg, #e1c972, #9b7d32);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .toggle-switch input:checked + .toggle-track {
+  border-color: rgba(214, 183, 94, .62);
+  background: rgba(214, 183, 94, .34);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .toggle-switch input:checked + .toggle-track::after {
+  background: #f0d98b;
+}
+
+/* Approvals, audit, schedules, tasks, and shared information panels */
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.approval-card, #session-approvals-list .approval-card) {
+  border-color: rgba(214, 183, 94, .28) !important;
+  background: rgba(214, 183, 94, .065) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.approval-action, .sys-v, .agent-log-entry-type) {
+  color: #e1c972;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .approval-reason {
+  color: #bbb1a1;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.info-row, .right-section, .project-editor-block, .project-sessions-list) {
+  border-color: var(--line);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sys-meter {
+  background: rgba(214, 183, 94, .10);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sys-meter > i {
+  background: linear-gradient(90deg, #6d5a2b, #d6b75e, #f0d98b);
+}
+
+/* Skills and Hub */
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.skill-card-icon, .skill-card.enabled .skill-card-icon) {
+  color: #f0d98b;
+  border-color: rgba(214, 183, 94, .38);
+  background: rgba(214, 183, 94, .12);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.skill-pin-btn:hover, .skill-pin-btn.active) {
+  color: #f0d98b;
+  background: rgba(214, 183, 94, .10);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .skill-card.pinned {
+  border-color: rgba(214, 183, 94, .48);
+  box-shadow: 0 0 0 1px rgba(214, 183, 94, .12);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.skills-show-more-btn, .skill-hover-popover button:hover) {
+  color: var(--text);
+  border-color: rgba(214, 183, 94, .34);
+  background: rgba(214, 183, 94, .11);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.skill-item-name, .skill-details h4, .skill-details .line code) {
+  color: #e1c972;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.skill-details, .skill-modal-card, .hub-modal-card, .hub-providers-refresh) {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .hub-skill-badge.lifecycle:is([data-value="experimental"], [data-value="draft"]) {
+  color: #e1c972;
+  border-color: rgba(214, 183, 94, .40);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.hub-heat-cell, .hub-legend-cell)[data-level="1"] { background: rgba(109, 90, 43, .28); }
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.hub-heat-cell, .hub-legend-cell)[data-level="2"] { background: #6d5a2b; }
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.hub-heat-cell, .hub-legend-cell)[data-level="3"] { background: #a98a3b; }
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.hub-heat-cell, .hub-legend-cell)[data-level="4"] { background: #d6b75e; }
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.hub-heat-cell, .hub-legend-cell)[data-level="5"] { background: #f0d98b; }
+
+/* Projects, Memory, Teams, and Subagents */
+:root[data-skin="light"] body:not(.pm-mobile-active) .project-card.active-project {
+  border-color: rgba(214, 183, 94, .52);
+  background: rgba(214, 183, 94, .10);
+  box-shadow: 0 0 0 1px rgba(214, 183, 94, .09);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .rp-tab.active {
+  color: #f0d98b;
+  border-bottom-color: #d6b75e;
+  background: rgba(214, 183, 94, .11);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.project-upload-zone:hover, .project-upload-zone.drag-over, .project-editor-textarea:focus) {
+  color: #e1c972;
+  border-color: rgba(214, 183, 94, .54);
+  background: rgba(214, 183, 94, .055);
+  box-shadow: 0 0 0 3px rgba(214, 183, 94, .08);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.memory-compose-dropzone, .memory-compose-file-picker) {
+  color: #e1c972;
+  border-color: rgba(214, 183, 94, .34);
+  background: rgba(214, 183, 94, .065);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(.memory-compose-file-remove, .memory-attachment-open, .memory-detail-chunk) {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel-2);
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .memory-detail-chunk {
+  border-left-color: rgba(214, 183, 94, .52);
+}
+
+/* Settings and shared overlays */
+:root[data-skin="light"] body:not(.pm-mobile-active) #settings-modal > div,
+:root[data-skin="light"] body:not(.pm-mobile-active) :is(#error-response-panel, .skill-modal-card, .hub-modal-card) {
+  color: var(--text) !important;
+  border-color: rgba(214, 183, 94, .22) !important;
+  background: #0d0d0c !important;
+  box-shadow: 0 20px 58px rgba(0, 0, 0, .52) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #settings-modal [style*="linear-gradient(180deg,#fff"],
+:root[data-skin="light"] body:not(.pm-mobile-active) #settings-modal [style*="linear-gradient(180deg, #fff"] {
+  background: linear-gradient(180deg, #171613, #0d0d0c) !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) #settings-modal code {
+  color: #eadfac;
+  border-color: rgba(214, 183, 94, .15);
+  background: #080807 !important;
+}
+
+/* Chat-side workspace uses the same finished P1 shell. */
+:root[data-skin="light"] body:not(.pm-mobile-active) .right-panel {
+  --text: #f2ebdd;
+  --muted: #aaa294;
+  --panel: #0b0b0a;
+  --panel-2: #151411;
+  --line: rgba(214, 183, 94, .14);
+  --line-strong: rgba(214, 183, 94, .27);
+  --brand: #d6b75e;
+  color: var(--text);
+  border-left-color: rgba(214, 183, 94, .18);
+  background: #090909;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .right-panel #right-panel-topbar {
+  color: var(--muted);
+  border-bottom-color: rgba(214, 183, 94, .16) !important;
+  background: #0b0b0a !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .right-panel :is(.progress-card, .conn-tile, .channel-hub-card) {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel-2);
+}
+
+/* Decorative embers belong exclusively to the Default Dark/orange skin. */
+:root[data-skin="light"] body:not(.pm-mobile-active) #ember-canvas,
+:root[data-skin="blue"] body:not(.pm-mobile-active) #ember-canvas,
+:root[data-skin="purple"] body:not(.pm-mobile-active) #ember-canvas {
+  display: none;
+}
+
+/* ── Olympian Blue + Aether Violet: Prometheus One gold chrome ─────────
+   Preserve each skin's blue/violet surfaces and native accents. Only the
+   legacy orange/amber UI chrome is normalized to the P1 metallic gold set. */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) {
+  --p1-shared-gold: #d6b75e;
+  --p1-shared-gold-light: #f0d98b;
+  --p1-shared-gold-dark: #8f712b;
+  --p1-shared-gold-soft: rgba(214, 183, 94, .12);
+  --p1-shared-gold-line: rgba(214, 183, 94, .34);
+  --p1-shared-gold-glow: rgba(214, 183, 94, .24);
+}
+
+/* Header and updater */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .panel-toggle-btn.active {
+  color: #fffaf0;
+  border-color: rgba(240, 217, 139, .58);
+  background: linear-gradient(145deg, #d6b75e, #8f712b);
+  box-shadow: 0 0 18px rgba(214, 183, 94, .22);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #update-pill {
+  color: var(--p1-shared-gold-light) !important;
+  border-color: var(--p1-shared-gold-line) !important;
+  background: var(--p1-shared-gold-soft) !important;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #update-dropdown {
+  border-color: var(--p1-shared-gold-line) !important;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #update-progress-fill,
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #update-action-btn {
+  color: #fffaf0 !important;
+  background: linear-gradient(145deg, #d6b75e, #8f712b) !important;
+}
+
+/* Chat cards, message chrome, slash commands, and workflows */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-pulse-card {
+  border-color: var(--p1-shared-gold-line);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-pulse-card:hover {
+  border-color: rgba(240, 217, 139, .62);
+  box-shadow: 0 0 20px rgba(214, 183, 94, .12);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .msg.user .msg-bubble::after {
+  border-color: rgba(214, 183, 94, .28);
+  box-shadow: 0 0 14px rgba(214, 183, 94, .12), inset 0 1px 0 rgba(255,255,255,.04);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .msg.user .markdown-body blockquote {
+  border-left-color: rgba(214, 183, 94, .52);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.chat-slash-command-popover, .chat-command-chip, .workflow-chip) {
+  border-color: var(--p1-shared-gold-line);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.chat-slash-command-item:hover, .chat-slash-command-item.is-active, .chat-slash-token, .chat-command-chip:hover, .workflow-chip) {
+  color: var(--p1-shared-gold-light);
+  border-color: rgba(214, 183, 94, .46);
+  background: var(--p1-shared-gold-soft);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .msg-shell.workflow-linked::before {
+  background: linear-gradient(180deg, rgba(214,183,94,.15), rgba(240,217,139,.78), rgba(214,183,94,.15));
+}
+
+/* Composer — keep the moving voice glyph itself white; recolor its metal shell. */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-input-area :is(.chat-attach-btn, .send-btn) {
+  color: #fffdf7;
+  border-color: rgba(240, 217, 139, .50);
+  background: conic-gradient(from var(--pm-angle), #6d5a2b, #d6b75e, #f0d98b, #a98a3b, #6d5a2b);
+  box-shadow: 0 10px 24px rgba(143, 113, 43, .28), 0 0 18px rgba(214, 183, 94, .18), inset 0 1px 0 rgba(255,255,255,.34);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-input-area :is(.chat-attach-btn, .send-btn):hover {
+  box-shadow: 0 14px 30px rgba(143, 113, 43, .34), 0 0 24px rgba(214, 183, 94, .25), inset 0 1px 0 rgba(255,255,255,.42);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-input-area :is(.send-btn, .voice-mode-btn) iconify-icon,
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-input-area :is(.send-btn, .voice-mode-btn) svg {
+  color: #fff !important;
+}
+
+/* Shared primary actions and tool/work state */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.btn:not(.btn-red):not(.btn-green), .skill-search-btn, .skill-install-btn, .memory-action-btn--primary, .memory-compose-submit) {
+  color: #fffaf0;
+  border-color: rgba(240, 217, 139, .42);
+  background: linear-gradient(145deg, #d6b75e, #8f712b);
+  box-shadow: 0 6px 20px rgba(143, 113, 43, .28);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.btn:not(.btn-red):not(.btn-green), .skill-search-btn, .skill-install-btn, .memory-action-btn--primary, .memory-compose-submit):hover {
+  background: linear-gradient(145deg, #f0d98b, #a98a3b);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.assistant-work-timer, .live-turn-tool-group, .tool-activity-entry[data-status="running"], .tool-activity-entry[data-status="preparing"]) {
+  color: var(--p1-shared-gold-light);
+  border-color: var(--p1-shared-gold-line);
+}
+
+/* Memory, media, projects, and right-side workspace */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.memory-compose-input:focus, .memory-compose-textarea:focus, .memory-compose-dropzone, .memory-compose-file-picker) {
+  border-color: rgba(214, 183, 94, .50);
+  box-shadow: 0 0 0 3px rgba(214, 183, 94, .08);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.memory-compose-dropzone, .memory-compose-file-picker) {
+  color: var(--p1-shared-gold-light);
+  background: rgba(214, 183, 94, .07);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .memory-detail-chunk {
+  border-left-color: rgba(214, 183, 94, .52);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .project-card.active-project {
+  box-shadow: 0 0 0 1px rgba(214, 183, 94, .10);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel #right-panel-topbar {
+  border-bottom-color: rgba(214, 183, 94, .18) !important;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #connections-grid .conn-tile {
+  border-color: rgba(214, 183, 94, .24);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #session-approvals-badge {
+  color: var(--p1-shared-gold-light) !important;
+  border-color: var(--p1-shared-gold-line) !important;
+  background: var(--p1-shared-gold-soft) !important;
+}
+
+/* Hub lifecycle badges and heat map */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .hub-skill-badge.lifecycle:is([data-value="experimental"], [data-value="draft"]) {
+  color: var(--p1-shared-gold-light);
+  border-color: rgba(214, 183, 94, .42);
+  background: rgba(214, 183, 94, .08);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.hub-heat-cell, .hub-legend-cell)[data-level="1"] { background: rgba(109, 90, 43, .30); }
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.hub-heat-cell, .hub-legend-cell)[data-level="2"] { background: #6d5a2b; }
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.hub-heat-cell, .hub-legend-cell)[data-level="3"] { background: #a98a3b; }
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.hub-heat-cell, .hub-legend-cell)[data-level="4"] { background: #d6b75e; }
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.hub-heat-cell, .hub-legend-cell)[data-level="5"] { background: #f0d98b; }
+
+/* Creative workspace controls. Canvas content colors remain user-controlled. */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.ce-hdr-btn:active, .ce-text-preset-btn:hover, .ce-shape-preset-btn:hover, .ce-ctrl-btn:hover, .ce-export-menu[open] > summary, .creative-export-menu[open] > summary, .creative-export-menu-item:hover:not(:disabled)) {
+  color: var(--p1-shared-gold-light);
+  border-color: var(--p1-shared-gold-line);
+  background: var(--p1-shared-gold-soft);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.ce-export-trigger-btn, .ce-export-btn, .creative-export-submit) {
+  color: #fffaf0;
+  border-color: rgba(240, 217, 139, .48);
+  background: linear-gradient(135deg, #d6b75e, #8f712b);
+  box-shadow: 0 8px 22px rgba(143, 113, 43, .24);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.ce-tab--active, .creative-tab--active) {
+  color: var(--p1-shared-gold-light);
+  border-bottom-color: var(--p1-shared-gold);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.ce-filter-tile--active, .ce-prop-input:focus, .ce-prop-select:focus, .ce-assets-drop-zone--over, .ce-asset-card:hover) {
+  border-color: rgba(214, 183, 94, .50);
+  background-color: rgba(214, 183, 94, .08);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.ce-filter-intensity input[type="range"], .ce-prop-range, .creative-properties input[type="range"]) {
+  accent-color: var(--p1-shared-gold);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.ce-resize-handle:hover, .creative-rp-resize-handle:hover, .ce-track-row__clip, .ce-track-row__clip:hover, .ce-track-row__clip--selected, .ce-timeline-playhead, .ce-range-fill, .creative-export-progress-fill) {
+  border-color: rgba(214, 183, 94, .52);
+  background: rgba(214, 183, 94, .34);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.ce-selection-handle, .ce-rotate-handle, .ce-assets-upload-btn, .ce-video-badge, .creative-job-badge--canceling) {
+  color: var(--p1-shared-gold-light);
+  border-color: var(--p1-shared-gold-line);
+  background: var(--p1-shared-gold-soft);
+}
+
+/* A handful of controls are rendered with inline legacy-orange styles. */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(#settings-modal, #update-dropdown, .right-panel, .creative-editor, .creative-workspace) [style*="color:#f97316"],
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(#settings-modal, #update-dropdown, .right-panel, .creative-editor, .creative-workspace) [style*="color: #f97316"],
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sessions-show-more-btn {
+  color: var(--p1-shared-gold-light) !important;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sessions-show-more-btn {
+  border-color: var(--p1-shared-gold-line) !important;
+  background: var(--p1-shared-gold-soft) !important;
+}
+
+/* P1 identity replaces the legacy flame artwork in every rebranded skin. */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 0;
+  background: url("../assets/prometheus-one/p1-mark-ring.png") center / contain no-repeat;
+  filter: drop-shadow(0 0 12px rgba(214, 183, 94, .18));
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .logo img {
+  opacity: 0;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-title {
+  font-size: 0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-weight: 600;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-title::before {
+  content: "PROMETHEUS 1";
+  color: var(--sidebar-text);
+  font-size: 11px;
+  letter-spacing: 2px;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-sub {
+  font-size: 0;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-sub::before {
+  content: "1 Program. Unlimited abilities.";
+  color: var(--p1-shared-gold);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: .1px;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar.collapsed .logo {
+  width: 38px;
+  height: 38px;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon {
+  width: 72px;
+  height: 72px;
+  background: url("../assets/prometheus-one/p1-mark-ring.png") center / contain no-repeat;
+  filter: drop-shadow(0 0 14px rgba(214, 183, 94, .20));
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon img {
+  opacity: 0 !important;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar {
+  border-color: rgba(214, 183, 94, .36);
+  background:
+    url("../assets/prometheus-one/prometheus-avatar-column-gold.png") center / 24px 24px no-repeat,
+    radial-gradient(circle, rgba(214, 183, 94, .10), rgba(10, 10, 9, .94) 72%);
+  box-shadow: inset 0 1px 0 rgba(240, 217, 139, .09), 0 5px 14px rgba(0, 0, 0, .24);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar img {
+  opacity: 0 !important;
+}
+
+/* Header buttons inherit an orange hover from the dark structural base. */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .topbar :is(.icon-btn, .panel-toggle-btn, .status-pill):is(:hover, :focus-visible),
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .topbar .panel-toggle-btn.active,
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .topbar :is(.icon-btn, .panel-toggle-btn)[aria-expanded="true"] {
+  color: #fffaf0;
+  border-color: rgba(240, 217, 139, .60) !important;
+  background: linear-gradient(145deg, rgba(214, 183, 94, .20), rgba(109, 90, 43, .16));
+  box-shadow: 0 0 18px rgba(214, 183, 94, .15), inset 0 1px 0 rgba(240, 217, 139, .13);
+}
+
+/* Right drawer edge plus hover/open control states use the same gold chrome. */
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel,
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel.open {
+  border-left-color: rgba(214, 183, 94, .34);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel :is(.rp-resize-handle:hover, .rp-resize-handle.dragging) {
+  background: rgba(214, 183, 94, .46);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel button:not(.btn-red):not(.danger):is(:hover, :focus-visible, .active, [aria-expanded="true"], [data-active="true"]),
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel :is(.conn-tile, .progress-card, .canvas-preview-device-btn):is(:hover, :focus-within, .active),
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel :is(.more-popover, details[open]) {
+  border-color: rgba(240, 217, 139, .58) !important;
+  box-shadow: 0 0 0 1px rgba(214, 183, 94, .08), 0 0 16px rgba(214, 183, 94, .10);
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel :is(#side-chats-toggle-btn.active, .canvas-mode-btn.active, .canvas-tab.active) {
+  color: var(--p1-shared-gold-light) !important;
+  border-color: rgba(240, 217, 139, .62) !important;
+}
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel :is(input, select, textarea):is(:hover, :focus) {
+  border-color: rgba(214, 183, 94, .52) !important;
+  outline-color: rgba(214, 183, 94, .24);
 }

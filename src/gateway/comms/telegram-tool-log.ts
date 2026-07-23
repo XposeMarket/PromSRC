@@ -135,6 +135,7 @@ function formatFriendlyToolAction(toolNameRaw: string, args: any = {}): string {
     delete_lines: withParens('Deleting Lines', [pickArg(args, ['path', 'file']), pickArg(args, ['start_line', 'start']), pickArg(args, ['end_line', 'end'])].filter(Boolean).join(' | ')),
     find_replace: withParens('Replacing Text', pickArg(args, ['path', 'file'])),
     background_spawn: withParens('Spawning Background Agent', pickArg(args, ['task', 'prompt', 'message'], 180)),
+    background_steer: withSubject('Steering Background Agent', pickArg(args, ['background_id', 'id'])),
     background_status: withSubject('Checking Background Agent', pickArg(args, ['background_id', 'id'])),
     background_progress: withSubject('Checking Background Agent Progress', pickArg(args, ['background_id', 'id'])),
     background_wait: withSubject('Waiting for Background Agent', pickArg(args, ['background_id', 'id', 'wait_ms', 'timeout_ms'])),

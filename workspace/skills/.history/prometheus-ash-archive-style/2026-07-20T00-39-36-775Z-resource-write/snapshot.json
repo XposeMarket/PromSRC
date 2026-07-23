@@ -1,0 +1,12 @@
+{
+  "skillId": "prometheus-ash-archive-style",
+  "reason": "resource-write",
+  "createdAt": "2026-07-20T00:39:36.779Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\prometheus-ash-archive-style",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "8c6a65e321f87232"
+}

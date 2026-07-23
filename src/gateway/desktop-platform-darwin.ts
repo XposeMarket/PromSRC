@@ -33,7 +33,10 @@ function resolveHelperPath(): string {
   // dist/gateway -> repo root is two levels up from src/gateway at build time;
   // probe a few likely locations relative to this module and cwd.
   const rel = 'native/desktop-helper-macos/.build';
+  const resourcesPath = String((process as any).resourcesPath || '').trim();
   const candidates = [
+    ...(resourcesPath ? [path.resolve(resourcesPath, 'prometheus-desktop-helper')] : []),
+    path.resolve(process.cwd(), 'prometheus-desktop-helper'),
     path.resolve(process.cwd(), 'bin/prometheus-desktop-helper'),
     // build.sh output (direct swiftc) — preferred for local dev.
     path.resolve(__dirname, `../../${rel}/prometheus-desktop-helper`),

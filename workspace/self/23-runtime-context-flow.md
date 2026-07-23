@@ -34,6 +34,9 @@ provider / model / vision flag
     ▼
 [RECENT_TOOL_OBSERVATIONS] ─────────────── session.ts → chat.router.ts:1894
 prior tool run log (session-scoped, lean by default; per-tool telemetry stored but only injected when explicitly requested)
+
+[CODING_CONTEXT_PACKET_V3] ─────────────── coding-context-packet.ts → chat.router.ts:2599
+only selected coding continuations receive this durable, structured packet: targeted files/evidence, known build-test commands, the last verification, and a bounded recent terminal-command ledger. The ledger preserves safe command text or process reference, action/kind, outcome, exit code, duration, artifacts, and compact failure kind. It never reinjects raw command output, and redacts command secrets before packet persistence/injection.
     │
     ▼
 callerContext ──────────────────────────── mode-specific source (see below)

@@ -8,6 +8,7 @@ import { ensurePublicWorkspaceScaffold } from './public-workspace.js';
 import { isPublicDistributionBuild } from '../runtime/distribution.js';
 import { listProviderSecretFieldPaths } from '../providers/provider-registry.js';
 import { ensureAgentPromptFile } from '../agents/agent-prompt-file.js';
+import { seedLegacyMainChatRoute } from './main-chat-route.js';
 
 function migrateLegacyDir(legacyDir: string, targetDir: string): void {
   try {
@@ -362,13 +363,10 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
       autoResumeOnRestart: true,
       summaryEveryTurns: 5,
       summaryMaxWords: 450,
-      judgeModel: '',
       compactionModel: '',
-      maxConsecutiveJudgeFailures: 3,
       maxConsecutiveRuntimeFailures: 3,
       maxIterations: 100,
       maxNoProgressTurns: 8,
-      completionVerificationEnabled: true,
       permissions: {
         approvalMode: 'never',
         hardDenyEnabled: true,
@@ -754,6 +752,14 @@ export class ConfigManager {
 
   constructor() {
     this.config = this.loadConfig();
+    // Older installs only persisted llm.provider/provider.model. Seed the
+    // main-chat mirror once from that already-live route without guessing a
+    // provider or overriding a user-selected template.
+    const legacyMainChatPatch = seedLegacyMainChatRoute(this.config);
+    if (legacyMainChatPatch) {
+      this.config = { ...this.config, ...legacyMainChatPatch };
+      this.saveConfig();
+    }
   }
 
   private loadConfig(): PrometheusConfig {

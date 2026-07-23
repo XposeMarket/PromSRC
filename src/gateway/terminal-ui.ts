@@ -3746,6 +3746,7 @@ function prettify(name: string): string {
     complete_plan_step: 'Completing step',
     step_complete:      'Step complete',
     background_spawn:   'Spawning agent',
+    background_steer:   'Steering agent',
     background_status:  'Checking agents',
     background_progress:'Agent progress',
     background_join:    'Joining agent',

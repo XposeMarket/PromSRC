@@ -40,6 +40,15 @@ export interface DevVerificationPlan {
   steps: DevVerificationStep[];
 }
 
+export interface FreshBackendVerification {
+  profileIds?: unknown;
+  changedFiles?: unknown;
+  success?: unknown;
+  completedAt?: unknown;
+}
+
+const FRESH_BACKEND_VERIFICATION_MAX_AGE_MS = 10 * 60_000;
+
 const PROFILE_IDS: DevSourceVerificationProfile[] = [
   'backend_build',
   'webui_sync_check',
@@ -164,6 +173,33 @@ export function resolveDevVerificationPlan(input: DevVerificationPlanInput): Dev
   }
 
   return { profileIds: effectiveProfiles, source, changedFiles, surfaces, steps };
+}
+
+/**
+ * A dev gateway executes the TypeScript source directly, so a successful and
+ * still-current verify_only backend build is sufficient to restart it.  The
+ * apply coordinator independently verifies the content hashes before this is
+ * consulted; this helper only guards against stale, partial, or unrelated
+ * verification records.
+ */
+export function canReuseFreshBackendVerification(input: {
+  verification?: FreshBackendVerification;
+  backendFiles?: unknown;
+  now?: number;
+}): boolean {
+  const verification = input.verification;
+  if (!verification || verification.success !== true) return false;
+  const completedAt = Number(verification.completedAt);
+  const now = Number(input.now || Date.now());
+  if (!Number.isFinite(completedAt) || now - completedAt < 0 || now - completedAt > FRESH_BACKEND_VERIFICATION_MAX_AGE_MS) {
+    return false;
+  }
+  const profiles = normalizeDevVerificationProfiles(verification.profileIds);
+  if (!profiles.includes('backend_build') && !profiles.includes('full_build')) return false;
+
+  const requiredFiles = normalizeDevChangedFiles(input.backendFiles).filter((file) => file.startsWith('src/'));
+  const verifiedFiles = new Set(normalizeDevChangedFiles(verification.changedFiles));
+  return requiredFiles.length > 0 && requiredFiles.every((file) => verifiedFiles.has(file));
 }
 
 function syntaxKindForPath(file: string, ts: typeof import('typescript')): import('typescript').ScriptKind {

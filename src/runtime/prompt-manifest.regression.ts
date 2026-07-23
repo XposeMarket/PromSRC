@@ -134,6 +134,7 @@ function testMainGolden(): void {
     cacheMarkerPresent: true,
   });
   assert.ok((manifest.systemMessages[0]?.stablePrefixChars || 0) > 0);
+  assert.ok(manifest.systemMessages[0]?.stablePrefixHash, 'manifest must expose a privacy-safe stable-prefix fingerprint');
   assert.ok((manifest.systemMessages[0]?.volatileTailChars || 0) > 0);
   assert.equal(manifest.instructionResolution.mode, 'pilot');
   assert.equal(manifest.instructionResolution.stage3Pilot.enabled, true);
@@ -144,6 +145,26 @@ function testMainGolden(): void {
   assert.equal(manifest.skillRouting?.mode, 'active');
   assert.equal(manifest.skillRouting?.autoInjectedInstructions, false);
   assert.equal(manifest.skillRouting?.instructionsRequireSkillRead, true);
+}
+
+function testCachePrefixFingerprint(): void {
+  const common = {
+    callType: 'chat' as const,
+    provider: 'openai_codex',
+    model: 'gpt-5.6-terra',
+    timestamp: '2026-07-12T12:00:00.000Z',
+  };
+  const first = buildRuntimePromptManifest({
+    ...common,
+    messages: [{ role: 'system', content: `stable policy${PROMPT_CACHE_MARKER}Current date: 09:00.` }],
+  });
+  const second = buildRuntimePromptManifest({
+    ...common,
+    messages: [{ role: 'system', content: `stable policy${PROMPT_CACHE_MARKER}Current date: 09:01.` }],
+  });
+  assert.equal(first.systemMessages[0]?.stablePrefixHash, second.systemMessages[0]?.stablePrefixHash);
+  assert.notEqual(first.systemMessages[0]?.volatileTailHash, second.systemMessages[0]?.volatileTailHash);
+  assert.notEqual(first.messageSurface.hash, second.messageSurface.hash);
 }
 
 function testWorkerAndProviderGolden(): void {
@@ -279,6 +300,7 @@ function main(): void {
   testWorkerAndProviderGolden();
 testGenerateAndPrivacyGolden();
 testShadowResolutionDoesNotChangeProviderSurface();
+testCachePrefixFingerprint();
   console.log('runtime prompt manifest regression checks passed');
 }
 

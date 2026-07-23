@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en" data-resolution="portrait">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1080, height=1920" />
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; background: #080808; font-family: Arial, Helvetica, sans-serif; }
+    #root { width: 1080px; height: 1920px; position: relative; overflow: hidden; background: #080808; }
+    #a-roll { position: absolute; left: 0; top: 180px; width: 1080px; height: 1215px; object-fit: cover; }
+    .topbar { position: absolute; inset: 0 0 auto; height: 180px; padding: 48px 64px 24px; background: linear-gradient(180deg, rgba(8,8,8,0.98), rgba(8,8,8,0.72)); z-index: 4; }
+    .eyebrow { color: #e6c35b; font-size: 27px; font-weight: 800; letter-spacing: 4px; text-transform: uppercase; }
+    .hook { color: #fff; font-size: 56px; font-weight: 900; line-height: 1.02; margin-top: 12px; letter-spacing: -1.5px; }
+    .caption-rail { position: absolute; left: 42px; right: 42px; bottom: 78px; z-index: 5; text-align: center; }
+    .caption { display: inline; color: #fff; background: rgba(0,0,0,0.88); box-decoration-break: clone; -webkit-box-decoration-break: clone; font-size: 59px; font-weight: 900; line-height: 1.14; letter-spacing: -1.2px; padding: 11px 20px 13px; }
+    .accent { color: #f4cd4b; }
+    .progress { position: absolute; left: 42px; right: 42px; bottom: 31px; height: 7px; background: rgba(255,255,255,.18); border-radius: 99px; overflow: hidden; z-index: 6; }
+    .progress > div { height: 100%; width: 0%; background: #e6c35b; border-radius: inherit; }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="38" data-width="1080" data-height="1920">
+    <video id="a-roll" class="clip" src="ashen_-_Kimi_K3_just_paused_new_subscriptions_due_to_their_overwhelming_deman... [2078891869082107905].mp4" muted playsinline data-start="0" data-duration="38" data-track-index="0"></video>
+    <audio id="a-roll-audio" src="ashen_-_Kimi_K3_just_paused_new_subscriptions_due_to_their_overwhelming_deman... [2078891869082107905].mp4" data-start="0" data-duration="38" data-track-index="1" data-volume="1"></audio>
+
+    <div id="topbar" class="clip topbar" data-start="0" data-duration="38" data-track-index="2">
+      <div class="eyebrow">OPEN MODEL NEWS</div>
+      <div class="hook">KIMI K3 IS<br>NOT NORMAL</div>
+    </div>
+
+    <div id="cap1" class="clip caption-rail" data-start="0.4" data-duration="5.2" data-track-index="3"><span class="caption">THE CHINESE HAVE<br>DONE IT AGAIN.</span></div>
+    <div id="cap2" class="clip caption-rail" data-start="5.61" data-duration="6.19" data-track-index="3"><span class="caption">THIS TIME THEY'RE<br>COMING FOR <span class="accent">FRONTIER MODELS.</span></span></div>
+    <div id="cap3" class="clip caption-rail" data-start="11.8" data-duration="4.2" data-track-index="3"><span class="caption">NO, I'M JOKING.</span></div>
+    <div id="cap4" class="clip caption-rail" data-start="16" data-duration="7.4" data-track-index="3"><span class="caption"><span class="accent">KIMI K3</span> CAME OUT<br>THIS WEEK.</span></div>
+    <div id="cap5" class="clip caption-rail" data-start="23.4" data-duration="7.4" data-track-index="3"><span class="caption">IT'S SUPPOSED TO BE<br>THE STRONGEST<br><span class="accent">OPEN-WEIGHT MODEL.</span></span></div>
+    <div id="cap6" class="clip caption-rail" data-start="30.8" data-duration="7.0" data-track-index="3"><span class="caption">EVEN BEATING<br>FRONTIER MODELS ON<br>CERTAIN BENCHMARKS.</span></div>
+
+    <div id="progress" class="clip progress" data-start="0" data-duration="38" data-track-index="4"><div></div></div>
+  </div>
+  <script>
+    window.__timelines = window.__timelines || {};
+    const tl = gsap.timeline({ paused: true });
+    tl.from('#topbar', { opacity: 0, y: -40, duration: 0.45, ease: 'power2.out' }, 0)
+      .from('.caption-rail', { opacity: 0, y: 22, duration: 0.18, stagger: 0.02, ease: 'power2.out' }, 0)
+      .to('#progress > div', { width: '100%', duration: 38, ease: 'none' }, 0);
+    window.__timelines['main'] = tl;
+  </script>
+</body>
+</html>

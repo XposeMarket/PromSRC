@@ -38,7 +38,7 @@ for (const [id, provider] of [
 function getThemeList() {
   return (window.PROM_THEMES && window.PROM_THEMES.length)
     ? window.PROM_THEMES
-    : [{ id: 'dark', label: 'Default Dark', base: 'dark' }, { id: 'light', label: 'Light', base: 'light' }];
+    : [{ id: 'light', label: 'Prometheus One', base: 'dark' }, { id: 'dark', label: 'Default Dark', base: 'dark' }];
 }
 
 function resolveTheme(id) {
@@ -57,7 +57,7 @@ export function getInitialTheme() {
     const saved = localStorage.getItem(THEME_KEY);
     if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}
-  return 'dark';
+  return 'light';
 }
 
 export function applyTheme(themeId) {
@@ -340,7 +340,7 @@ const PAGE_TITLES = {
 };
 
 const PAGE_MODULES = {
-  chat: './pages/ChatPage.js?v=desktop-declared-plan-only-v2',
+  chat: './pages/ChatPage.js?v=desktop-chat-welcome-cinzel-v4',
   bgtasks: './pages/TasksPage.js',
   schedule: './pages/SchedulePage.js',
   teams: './pages/TeamsPage.js',

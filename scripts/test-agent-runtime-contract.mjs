@@ -9,6 +9,7 @@ const executor = await import(pathToFileURL(path.join(root, 'dist/gateway/agents
 const subagentManager = await import(pathToFileURL(path.join(root, 'dist/gateway/agents-runtime/subagent-manager.js')).href);
 const taskRouter = await import(pathToFileURL(path.join(root, 'dist/gateway/tasks/task-router.js')).href);
 const taskRunner = await import(pathToFileURL(path.join(root, 'dist/gateway/tasks/task-runner.js')).href);
+const liveRuntime = await import(pathToFileURL(path.join(root, 'dist/gateway/live-runtime-registry.js')).href);
 const defs = tools.getAgentTeamScheduleTools();
 const def = (name) => defs.find((entry) => entry.function?.name === name)?.function;
 
@@ -43,6 +44,31 @@ const teamOps = def('team_ops_wrapper');
 for (const requiredCreateField of ['name', 'purpose', 'team_context', 'subagent_ids']) {
   assert.ok(teamOps.parameters.properties[requiredCreateField], `team_ops_wrapper exposes ${requiredCreateField}`);
 }
+const backgroundOps = def('background_ops');
+assert.ok(backgroundOps.parameters.properties.action.enum.includes('steer'));
+assert.ok(backgroundOps.parameters.properties.message);
+const backgroundSteer = def('background_steer');
+assert.deepEqual(backgroundSteer.parameters.required, ['background_id', 'message']);
+
+assert.equal(liveRuntime.isSteerableBackgroundAgentRuntimeKind('background_agent'), true);
+const backgroundRuntimeId = liveRuntime.registerLiveRuntime({
+  kind: 'background_agent',
+  label: 'Background steer contract',
+  sessionId: 'background_agent_contract_session',
+  taskId: 'bg_contract_agent',
+  abortSignal: { aborted: false },
+});
+const queuedBackgroundSteer = liveRuntime.addPendingRuntimeSteerForBackgroundAgent('bg_contract_agent', {
+  message: 'Prioritize the new constraint before your next action.',
+  source: 'agent_contract_test',
+  kind: 'constraint',
+  requiresWorkerResponse: true,
+});
+assert.equal(queuedBackgroundSteer.ok, true, queuedBackgroundSteer.error);
+const consumedBackgroundSteer = liveRuntime.consumePendingRuntimeSteersForSession('background_agent_contract_session');
+assert.equal(consumedBackgroundSteer.length, 1);
+assert.equal(consumedBackgroundSteer[0].message, 'Prioritize the new constraint before your next action.');
+liveRuntime.finishLiveRuntime(backgroundRuntimeId);
 
 const invalid = await executor.executeTool('spawn_subagent', {
   run_now: false,
@@ -91,10 +117,13 @@ assert.throws(
 );
 
 const taskRunnerSource = fs.readFileSync(path.join(root, 'src/gateway/tasks/task-runner.ts'), 'utf8');
-assert.match(taskRunnerSource, /defaults\.background_task \? 'background_task' : 'background_spawn'/);
+assert.match(taskRunnerSource, /const slot = 'background_spawn'/);
+assert.doesNotMatch(taskRunnerSource, /defaults\.background_task/);
 assert.match(taskRunnerSource, /agent_model_default_reasoning/);
 assert.doesNotMatch(taskRunnerSource.match(/function resolveBackgroundAgentModelRouting[\s\S]*?function createBackgroundPrompt/)?.[0] || '', /defaults\.main_chat/);
 assert.match(taskRunnerSource, /'background_task',\s*\n\s*undefined,\s*\/\/ toolFilter/);
+assert.match(taskRunnerSource, /function backgroundSteer\(/);
+assert.match(taskRunnerSource, /addPendingRuntimeSteerForBackgroundAgent\(rec\.id/);
 assert.deepEqual(
   taskRunner.resolveBackgroundAgentModelRouting({ model: 'openai_codex/gpt-5.6-luna', reasoningEffort: 'low' }),
   { providerId: 'openai_codex', model: 'gpt-5.6-luna', reasoningEffort: 'low', source: 'background_spawn.override' },
@@ -111,6 +140,8 @@ assert.match(executorSource, /success: completed/);
 assert.match(executorSource, /chat: 'chat_with_subagent'/);
 assert.match(executorSource, /delegate: 'message_subagent'/);
 assert.match(executorSource, /steer: 'agent_run_ops'/);
+assert.match(executorSource, /action === 'steer' \|\| action === 'message'/);
+assert.match(executorSource, /case 'background_steer'/);
 assert.doesNotMatch(executorSource, /Direct background message from main chat to standalone subagent/);
 
 const subagentManagerSource = fs.readFileSync(path.join(root, 'src/gateway/agents-runtime/subagent-manager.ts'), 'utf8');
@@ -131,6 +162,7 @@ assert.match(chatRouterSource, /sessionId\.startsWith\('task_'\) \|\| hasDurable
 assert.match(chatRouterSource, /durableTaskId \|\| sessionId\.replace/);
 
 const backgroundRunnerSource = fs.readFileSync(path.join(root, 'src/gateway/tasks/background-task-runner.ts'), 'utf8');
+assert.doesNotMatch(backgroundRunnerSource, /agent_model_defaults\?\.background_task|_resolveRunOnceModel/);
 assert.match(backgroundRunnerSource, /explicit text-only standalone assignment returned a substantive result/);
 assert.match(backgroundRunnerSource, /String\(liveTask\.originalAssignment \|\| liveTask\.prompt\)/);
 assert.match(backgroundRunnerSource, /addPendingRuntimeSteerForSession\(task\.originatingSessionId/);

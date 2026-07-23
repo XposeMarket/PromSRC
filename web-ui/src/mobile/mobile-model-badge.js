@@ -204,6 +204,29 @@ function _activeModel(llm) {
   return { provider, model };
 }
 
+function _activeChatSessionId() {
+  return String(window.__pmChat?.activeSessionId || '').trim();
+}
+
+async function _loadChatModelRoute() {
+  const sessionId = _activeChatSessionId();
+  if (!sessionId || sessionId === 'mobile_default') return null;
+  try {
+    const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`);
+    return data?.chatModelRoute || null;
+  } catch { return null; }
+}
+
+async function _saveChatModelRoute(route) {
+  const sessionId = _activeChatSessionId();
+  if (!sessionId || sessionId === 'mobile_default') throw new Error('Send the first message before choosing a model for this chat.');
+  const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, {
+    method: 'PUT', body: JSON.stringify(route),
+  });
+  if (data?.success === false) throw new Error(data.error || 'Could not update this chat model');
+  return data?.chatModelRoute || null;
+}
+
 function _modelDetail(detail = {}) {
   const modelRef = String(detail?.modelRef || '').trim();
   const slashIdx = modelRef.indexOf('/');
@@ -243,8 +266,15 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
       return label;
     }
   }
-  const { provider, model } = _activeModel(llm);
-  const cfg = llm?.providers?.[provider] || {};
+  const route = await _loadChatModelRoute();
+  window.__pmChatModelRoute = route;
+  const { provider, model } = route?.effective?.providerId
+    ? { provider: route.effective.providerId, model: route.effective.model }
+    : _activeModel(llm);
+  const cfg = { ...(llm?.providers?.[provider] || {}), model, reasoning_effort: route?.effective?.reasoningEffort || (llm?.providers?.[provider] || {}).reasoning_effort };
+  if (route?.effective?.providerId && _llmCache) {
+    _llmCache = { ..._llmCache, provider, providers: { ...(_llmCache.providers || {}), [provider]: cfg } };
+  }
   _setBadgeFast(supportsFastSpeed(provider, model) && (cfg.speed === 'fast' || cfg.fast_mode === true));
   return _setBadgeLabel(formatModelWithReasoning(model, provider, cfg.reasoning_effort));
 }
@@ -382,6 +412,7 @@ async function _openReasoningSheet() {
   document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
   sheet?.removeAttribute('style');
   await Promise.all([_loadLlm(true), _loadCatalog(false), _loadCredentialedIds(true)]);
+  await refreshMobileModelBadge(true);
   const { provider } = _activeModel(_llmCache);
   const cfg = (_llmCache.providers || {})[provider] || {};
   _renderReasoningBody(provider, cfg);
@@ -395,6 +426,7 @@ function _renderReasoningBody(provider, cfg) {
   const selectedFillWidth = options && options.length ? ((1 / options.length) + selectedProgress * ((options.length - 1) / options.length)) * 100 : 0;
   const modelName = prettifyModelName(cfg.model, provider);
   const effortName = options ? _effortLabel(options[selectedIndex], provider) : 'Default';
+  const sourceLabel = window.__pmChatModelRoute?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
   _setSheetTitle('');
 
   const slider = options ? `
@@ -409,6 +441,7 @@ function _renderReasoningBody(provider, cfg) {
     <button type="button" class="pm-reasoning-summary" id="pm-reasoning-model" aria-label="Choose model and provider">
       <strong>${_esc(modelName)}</strong><span aria-hidden="true">·</span><span id="pm-reasoning-live-label">${_esc(effortName)}</span><span class="pm-reasoning-summary-chev" aria-hidden="true">›</span>
     </button>
+    <div class="pm-msheet-source">${_esc(sourceLabel)}</div>
     ${slider}`);
   if (!body) return;
 
@@ -500,10 +533,12 @@ function _queueReasoningSave(provider, patch, immediate = false) {
   _setBadgeLabel(formatModelWithReasoning(merged.model || _activeModel(_llmCache).model, provider, merged.reasoning_effort));
   clearTimeout(_reasoningSaveTimer);
   const commit = () => {
-    _reasoningSaveChain = _reasoningSaveChain.then(() => mobileGatewayFetch('/api/settings/provider', {
-      method: 'POST',
-      body: JSON.stringify({ llm: { provider, providers: { [provider]: merged } } }),
-    })).catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
+    _reasoningSaveChain = _reasoningSaveChain.then(async () => {
+      const route = await _loadChatModelRoute();
+      const effective = route?.effective || { providerId: provider, model: merged.model || _activeModel(_llmCache).model };
+      await _saveChatModelRoute({ providerId: provider, model: merged.model || effective.model, reasoningEffort: merged.reasoning_effort || undefined, accountId: effective.accountId || undefined });
+      await refreshMobileModelBadge(true);
+    }).catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
   };
   if (immediate) commit();
   else _reasoningSaveTimer = setTimeout(commit, 180);
@@ -516,6 +551,7 @@ async function _openSwitchSheet() {
   document.getElementById('pm-msheet-scrim')?.classList.add('is-model-switch');
   sheet?.removeAttribute('style');
   await Promise.all([_loadLlm(true), _loadCatalog(false), _loadCredentialedIds(true)]);
+  await refreshMobileModelBadge(true);
   _renderAdvancedSheet();
 }
 
@@ -546,12 +582,21 @@ function _renderAdvancedSheet() {
     _advancedRow('Intelligence', options ? _effortLabel(effortValue, provider) : 'Default', 'intelligence', { disabled: !options }),
   ];
   if (supportsFastSpeed(provider, model)) rows.push(_advancedRow('Speed', cfg.speed === 'fast' || cfg.fast_mode === true ? 'Fast' : 'Standard', 'speed'));
-  const body = _setSheetBody(`<div class="pm-advanced-panel">${rows.join('')}</div>`);
+  const source = window.__pmChatModelRoute?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
+  const reset = window.__pmChatModelRoute?.mode === 'explicit' ? '<button type="button" class="pm-msheet-row" data-action="follow-default"><span class="pm-msheet-row-label">Use Main Chat Default</span></button>' : '';
+  const body = _setSheetBody(`<div class="pm-msheet-source">${_esc(source)}</div><div class="pm-advanced-panel">${rows.join('')}</div>${reset}`);
   if (!body) return;
   body.querySelector('[data-action="provider"]')?.addEventListener('click', _renderProviderList);
   body.querySelector('[data-action="model"]')?.addEventListener('click', () => _renderModelList(provider));
   body.querySelector('[data-action="intelligence"]')?.addEventListener('click', () => _renderEffortList(provider));
   body.querySelector('[data-action="speed"]')?.addEventListener('click', () => _renderSpeedList(provider));
+  body.querySelector('[data-action="follow-default"]')?.addEventListener('click', async () => {
+    const sessionId = _activeChatSessionId();
+    await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, { method: 'DELETE' });
+    window.__pmChatModelRoute = await _loadChatModelRoute();
+    await refreshMobileModelBadge(true);
+    _renderAdvancedSheet();
+  });
 }
 
 function _renderSpeedList(provider) {
@@ -667,13 +712,10 @@ function _renderEffortList(provider) {
 async function _switchModel(provider, model, { keepOpen = false, returnToAdvanced = false } = {}) {
   if (!provider || !model) return;
   try {
-    await mobileGatewayFetch('/api/settings/model', {
-      method: 'POST',
-      body: JSON.stringify({ provider, model }),
-    });
-    _llmCache = null;
-    const llm = await _loadLlm(true);
-    const nextCfg = (llm?.providers || {})[provider] || { model };
+    const current = await _loadChatModelRoute();
+    await _saveChatModelRoute({ providerId: provider, model, reasoningEffort: current?.effective?.providerId === provider ? current.effective.reasoningEffort || undefined : undefined, accountId: current?.effective?.providerId === provider ? current.effective.accountId || undefined : undefined });
+    window.__pmChatModelRoute = await _loadChatModelRoute();
+    const nextCfg = { ...((_llmCache?.providers || {})[provider] || {}), model, reasoning_effort: window.__pmChatModelRoute?.effective?.reasoningEffort };
     _toast(`Model → ${prettifyModelName(model, provider)}`, 'success');
     await refreshMobileModelBadge(false, { provider, model });
     try { window.dispatchEvent(new CustomEvent('pm-model-changed', { detail: { provider, model } })); } catch {}

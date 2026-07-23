@@ -1,0 +1,8 @@
+file 'C:\Users\rafel\PromSRC\creative-projects\mobile_mrv13wv3_nh17ac\frames\ashen-faceless-selection\frame_0000s.jpg'
+file 'C:\Users\rafel\PromSRC\creative-projects\mobile_mrv13wv3_nh17ac\frames\ashen-faceless-selection\frame_0120s.jpg'
+file 'C:\Users\rafel\PromSRC\creative-projects\mobile_mrv13wv3_nh17ac\frames\ashen-faceless-selection\frame_0220s.jpg'
+file 'C:\Users\rafel\PromSRC\creative-projects\mobile_mrv13wv3_nh17ac\frames\ashen-faceless-selection\frame_0330s.jpg'
+file 'C:\Users\rafel\PromSRC\creative-projects\mobile_mrv13wv3_nh17ac\frames\ashen-faceless-selection\frame_0400s.jpg'
+file 'C:\Users\rafel\PromSRC\creative-projects\mobile_mrv13wv3_nh17ac\frames\ashen-faceless-selection\frame_0480s.jpg'
+file 'C:\Users\rafel\PromSRC\creative-projects\mobile_mrv13wv3_nh17ac\frames\ashen-faceless-selection\frame_0570s.jpg'
+file 'C:\Users\rafel\PromSRC\creative-projects\mobile_mrv13wv3_nh17ac\frames\ashen-faceless-selection\frame_0630s.jpg'

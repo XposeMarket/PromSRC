@@ -24,6 +24,7 @@ import { addClip, createEmptyComposition } from './composition';
 import { renderComposition } from './renderers/composition_renderer';
 import { extractCreativeLayers, type CreativeLayerExtractionMode } from './layer-extraction';
 import { launchCreativeChromium } from './playwright-runtime';
+import { resolveRuntimeBinary } from '../../runtime/dependencies';
 
 const execFileAsync = promisify(execFile);
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
@@ -1375,50 +1376,134 @@ export async function creativeGenerateVoiceover(
   return { outputPath: written.relPath, ...imported, project };
 }
 
+function creativeTranscriptCachePath(storage: CreativeAssetStorage, sourcePath: string): string {
+  const stat = fs.statSync(sourcePath);
+  const key = crypto.createHash('sha256').update(`${sourcePath}|${stat.size}|${stat.mtimeMs}`).digest('hex').slice(0, 24);
+  const dir = path.join(storage.creativeDir, 'transcripts');
+  ensureDir(dir);
+  return path.join(dir, `${key}.json`);
+}
+
+async function transcribeCreativeLocally(sourcePath: string, signal?: AbortSignal): Promise<string> {
+  const windowsPythonRoots = process.platform === 'win32'
+    ? [
+      'C:\\Python314\\python.exe',
+      'C:\\Python313\\python.exe',
+      'C:\\Python312\\python.exe',
+      'C:\\Python311\\python.exe',
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python314', 'python.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python313', 'python.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'python.exe'),
+    ].filter((candidate) => Boolean(candidate) && fs.existsSync(candidate))
+    : [];
+  const pythonCandidates = [...new Set([process.env.PYTHON, process.env.PYTHON_EXE, ...windowsPythonRoots, 'python', 'py'].filter(Boolean))] as string[];
+  const program = [
+    'import json, sys, whisper',
+    "model = whisper.load_model('tiny')",
+    "result = model.transcribe(sys.argv[1], fp16=False)",
+    "print(json.dumps({'text': str(result.get('text', '')).strip()}))",
+  ].join('; ');
+  const ffmpeg = resolveRuntimeBinary('ffmpeg', { allowPathFallback: true });
+  // Local STT is recovery work, so allow enough time for real footage without letting
+  // a missing model or dead runner silently hold a goal forever. The tiny model is
+  // usually faster than real time, but an older CPU can need several minutes for a
+  // long source. Probe duration once, then give short social clips a tight budget.
+  let sourceDurationMs = 0;
+  try {
+    const ffprobe = resolveRuntimeBinary('ffprobe', { allowPathFallback: true });
+    const { stdout } = await execFileAsync(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'json', sourcePath], {
+      windowsHide: true,
+      timeout: 15_000,
+      maxBuffer: 1024 * 1024,
+    });
+    sourceDurationMs = Math.max(0, Number(JSON.parse(String(stdout || '{}'))?.format?.duration || 0) * 1000);
+  } catch {
+    // The transcription command still gives a useful error if the source is unreadable.
+  }
+  const timeoutMs = Math.min(15 * 60 * 1000, Math.max(90_000, Math.ceil(sourceDurationMs * 1.25) + 60_000));
+  const failures: string[] = [];
+  for (const python of pythonCandidates) {
+    try {
+      const args = python === 'py' ? ['-3', '-c', program, sourcePath] : ['-c', program, sourcePath];
+      const { stdout } = await execFileAsync(python, args, {
+        windowsHide: true,
+        timeout: timeoutMs,
+        maxBuffer: 16 * 1024 * 1024,
+        signal,
+        env: { ...process.env, PATH: [path.dirname(ffmpeg), process.env.PATH || ''].filter(Boolean).join(path.delimiter) },
+      });
+      const parsed = JSON.parse(String(stdout || '').trim());
+      const text = String(parsed?.text || '').trim();
+      if (text) return text;
+      failures.push(`${python}: returned an empty transcript.`);
+    } catch (error: any) {
+      if (signal?.aborted) throw error;
+      const message = String(error?.message || error);
+      failures.push(`${python}: ${message.slice(0, 180)}`);
+      // A timeout means this executable did run but the input needs more compute;
+      // trying every alias repeats the same expensive failure without improving recovery.
+      if (error?.code === 'ETIMEDOUT' || /timed out/i.test(message)) break;
+    }
+  }
+  throw new Error(`Local Whisper fallback failed after ${Math.round(timeoutMs / 1000)}s. ${failures.join(' | ')}`);
+}
+
 export async function creativeTranscribeAudio(
   storage: CreativeAssetStorage,
-  input: { source: string; provider?: 'openai' | 'xai'; language?: string; filename?: string },
+  input: { source: string; provider?: 'openai' | 'xai' | 'auto'; language?: string; filename?: string; signal?: AbortSignal },
 ): Promise<{ provider: string; text: string; raw: any; analysis: any }> {
   if (!input.source) throw new Error('creative_transcribe_audio requires source.');
   const source = resolveLocalSource(storage, input.source);
-  const audio = fs.readFileSync(source.absPath);
-  const provider = input.provider || 'openai';
-  const filename = input.filename || path.basename(source.absPath);
-  let response: Response;
-  const form = new (globalThis as any).FormData();
-  form.append('file', new (globalThis as any).Blob([audio], { type: 'audio/mpeg' }), filename);
-  if (input.language) form.append('language', input.language);
-  if (provider === 'xai') {
-    const key = await xaiVoiceAuthToken();
-    if (!key) throw new Error('xAI transcription is not configured. Connect xAI OAuth or add XAI_API_KEY.');
-    form.append('model', process.env.XAI_STT_MODEL || 'grok-stt');
-    response = await fetch(`${xaiVoiceBaseUrl()}/stt`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'User-Agent': process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0' }, body: form as any });
-  } else {
-    const candidates = await openAiVoiceAuthCandidates();
-    if (!candidates.length) throw new Error('OpenAI transcription is not configured. Add OPENAI_API_KEY/OPENAI_REALTIME_API_KEY, connect OpenAI OAuth, or configure the OpenAI provider.');
-    form.append('model', process.env.OPENAI_STT_MODEL || 'whisper-1');
-    const failures: string[] = [];
-    let okResponse: Response | null = null;
-    for (const candidate of candidates) {
-      const retryForm = new (globalThis as any).FormData();
-      retryForm.append('file', new (globalThis as any).Blob([audio], { type: 'audio/mpeg' }), filename);
-      if (input.language) retryForm.append('language', input.language);
-      retryForm.append('model', process.env.OPENAI_STT_MODEL || 'whisper-1');
-      const attempt = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${candidate.token}` }, body: retryForm as any });
-      if (attempt.ok) {
-        okResponse = attempt;
-        break;
-      }
-      const errText = await attempt.text().catch(() => '');
-      failures.push(`${candidate.auth}: ${errText.slice(0, 240) || attempt.status}`);
-    }
-    if (!okResponse) throw new Error(`OpenAI transcription failed with all configured auth bridges. ${failures.join(' | ')}`);
-    response = okResponse;
-  }
-  const data: any = await response.json().catch(async () => ({ text: await response.text().catch(() => '') }));
-  if (!response.ok) throw new Error(data?.error?.message || data?.error || data?.message || `${provider} transcription failed (${response.status})`);
+  const cachePath = creativeTranscriptCachePath(storage, source.absPath);
   const analysis = await analyzeCreativeAudioSource({ storage, source: source.relPath, resolveLocalPath: (raw) => resolveLocalSource(storage, raw).absPath, force: true });
-  return { provider, text: String(data?.text || data?.transcript || '').trim(), raw: data, analysis };
+  try {
+    const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    if (String(cached?.text || '').trim()) return { provider: 'cache', text: String(cached.text).trim(), raw: cached, analysis };
+  } catch {}
+  const audio = fs.readFileSync(source.absPath);
+  const provider = input.provider === 'auto' ? ((await openAiVoiceAuthCandidates()).length ? 'openai' : 'xai') : (input.provider || 'openai');
+  const filename = input.filename || path.basename(source.absPath);
+  let response: Response | null = null;
+  let cloudFailure = '';
+  try {
+    if (provider === 'xai') {
+      const key = await xaiVoiceAuthToken();
+      if (!key) throw new Error('xAI transcription is not configured.');
+      const form = new (globalThis as any).FormData();
+      form.append('file', new (globalThis as any).Blob([audio], { type: 'audio/mpeg' }), filename);
+      if (input.language) form.append('language', input.language);
+      form.append('model', process.env.XAI_STT_MODEL || 'grok-stt');
+      response = await fetch(`${xaiVoiceBaseUrl()}/stt`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'User-Agent': process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0' }, body: form as any, signal: input.signal });
+    } else {
+      const candidates = await openAiVoiceAuthCandidates();
+      if (!candidates.length) throw new Error('OpenAI transcription is not configured.');
+      const failures: string[] = [];
+      for (const candidate of candidates) {
+        const form = new (globalThis as any).FormData();
+        form.append('file', new (globalThis as any).Blob([audio], { type: 'audio/mpeg' }), filename);
+        if (input.language) form.append('language', input.language);
+        form.append('model', process.env.OPENAI_STT_MODEL || 'whisper-1');
+        const attempt = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${candidate.token}` }, body: form as any, signal: input.signal });
+        if (attempt.ok) { response = attempt; break; }
+        failures.push(`${candidate.auth}: ${(await attempt.text().catch(() => '')).slice(0, 180) || attempt.status}`);
+      }
+      if (!response) throw new Error(`OpenAI transcription failed: ${failures.join(' | ')}`);
+    }
+    if (!response.ok) throw new Error(`Cloud transcription failed (${response.status}): ${(await response.text().catch(() => '')).slice(0, 240)}`);
+    const data: any = await response.json().catch(async () => ({ text: await response!.text().catch(() => '') }));
+    const text = String(data?.text || data?.transcript || '').trim();
+    if (!text) throw new Error('Cloud transcription returned no text.');
+    fs.writeFileSync(cachePath, JSON.stringify({ version: 1, provider, text, createdAt: nowIso() }, null, 2), 'utf8');
+    return { provider, text, raw: data, analysis };
+  } catch (error: any) {
+    if (input.signal?.aborted) throw error;
+    cloudFailure = String(error?.message || error).replace(/\s+/g, ' ').slice(0, 280);
+  }
+  const text = await transcribeCreativeLocally(source.absPath, input.signal);
+  const raw = { provider: 'local-whisper-tiny', cloudFailure, recovered: true };
+  fs.writeFileSync(cachePath, JSON.stringify({ version: 1, provider: 'local-whisper-tiny', text, cloudFailure, createdAt: nowIso() }, null, 2), 'utf8');
+  return { provider: 'local-whisper-tiny', text, raw, analysis };
 }
 
 export async function creativeSyncCaptionsToAudio(

@@ -15,6 +15,12 @@ import ApplicationServices
 
 let HELPER_VERSION = "0.1.0"
 
+func accessibilityTrusted(prompt: Bool = false) -> Bool {
+    if !prompt { return AXIsProcessTrusted() }
+    let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+    return AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
+}
+
 /// Structured error that maps to the JSON-RPC error codes the TS adapter expects.
 struct HelperError: Error {
     let code: Int
@@ -116,7 +122,7 @@ func checkPermissions() -> [[String: Any]] {
     ])
 
     // Accessibility (required for input + window control + a11y tree).
-    let axOk = AXIsProcessTrusted()
+    let axOk = accessibilityTrusted()
     out.append([
         "name": "Accessibility",
         "granted": axOk,

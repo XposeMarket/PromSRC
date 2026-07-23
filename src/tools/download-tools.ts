@@ -85,7 +85,7 @@ async function resolveNodeRuntimePath(): Promise<string> {
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
-import { execFile } from 'child_process';
+import { execFile, spawn, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { getConfig } from '../config/config.js';
 import { getActiveWorkspace } from './workspace-context.js';
@@ -304,15 +304,25 @@ type DownloadMediaArgs = {
   url: string;
   output_dir?: string;
   audio_only?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (progress: DownloadMediaProgress) => void;
 };
 
-type YtDlpRunner = {
+export type DownloadMediaProgress = {
+  phase: 'starting' | 'resolving' | 'downloading' | 'processing' | 'complete';
+  message: string;
+  percent?: string;
+  speed?: string;
+  eta?: string;
+};
+
+export type YtDlpRunner = {
   cmd: string;
   preArgs: string[];
   label: string;
 };
 
-async function detectYtDlpRunner(): Promise<YtDlpRunner | null> {
+async function detectYtDlpRunner(signal?: AbortSignal): Promise<YtDlpRunner | null> {
   const candidates: YtDlpRunner[] = [
     { cmd: 'yt-dlp', preArgs: [], label: 'yt-dlp' },
     { cmd: 'python', preArgs: ['-m', 'yt_dlp'], label: 'python -m yt_dlp' },
@@ -320,14 +330,17 @@ async function detectYtDlpRunner(): Promise<YtDlpRunner | null> {
   ];
 
   for (const candidate of candidates) {
+    if (signal?.aborted) throw new Error('download canceled by user');
     try {
       await execFileAsync(candidate.cmd, [...candidate.preArgs, '--version'], {
         timeout: 8_000,
         windowsHide: true,
         maxBuffer: 512 * 1024,
+        signal,
       });
       return candidate;
     } catch {
+      if (signal?.aborted) throw new Error('download canceled by user');
       // Try next candidate.
     }
   }
@@ -348,13 +361,153 @@ function parseDownloadedPaths(output: string, outputDir: string): string[] {
   return Array.from(paths);
 }
 
+const DOWNLOAD_MEDIA_TIMEOUT_MS = 10 * 60 * 1000;
+const DOWNLOAD_MEDIA_MAX_BUFFER = 8 * 1024 * 1024;
+
+function stopDownloadProcess(child: ChildProcess): void {
+  if (!child.pid || child.exitCode != null) return;
+  try { child.kill('SIGTERM'); } catch {}
+  if (process.platform === 'win32') {
+    // yt-dlp can launch ffmpeg. Kill only this child's process tree so an abort
+    // cannot leave a detached downloader holding the gateway busy guard open.
+    try {
+      const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+      killer.unref();
+    } catch {}
+  }
+}
+
+export async function runYtDlpProcess(
+  runner: YtDlpRunner,
+  commandArgs: string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    onProgress?: (progress: DownloadMediaProgress) => void;
+  },
+): Promise<{ stdout: string; stderr: string }> {
+  if (options.signal?.aborted) throw new Error('download canceled by user');
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn(runner.cmd, commandArgs, {
+      cwd: options.cwd,
+      env: options.env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let lastProgressAt = 0;
+    let lastPhase = '';
+
+    const emit = (progress: DownloadMediaProgress, force = false) => {
+      const now = Date.now();
+      if (!force && progress.phase === lastPhase && now - lastProgressAt < 1_500) return;
+      lastPhase = progress.phase;
+      lastProgressAt = now;
+      try { options.onProgress?.(progress); } catch {}
+    };
+    const appendBounded = (current: string, chunk: Buffer | string) => {
+      const next = current + String(chunk);
+      return next.length > DOWNLOAD_MEDIA_MAX_BUFFER
+        ? next.slice(next.length - DOWNLOAD_MEDIA_MAX_BUFFER)
+        : next;
+    };
+    const inspectLine = (rawLine: string) => {
+      const line = rawLine.trim();
+      if (!line) return;
+      const marker = line.match(/__PROMETHEUS_PROGRESS__\s*\|([^|]*)\|([^|]*)\|([^|]*)/);
+      if (marker) {
+        const percent = marker[1].trim();
+        const speed = marker[2].trim();
+        const eta = marker[3].trim();
+        emit({
+          phase: 'downloading',
+          message: `Downloading media${percent ? `: ${percent}` : ''}${speed ? ` at ${speed}` : ''}${eta && eta !== 'NA' ? ` (ETA ${eta})` : ''}`,
+          percent: percent || undefined,
+          speed: speed || undefined,
+          eta: eta && eta !== 'NA' ? eta : undefined,
+        });
+      } else if (/\[(?:twitter|generic|youtube|x)\]|extracting url|downloading webpage|guest token/i.test(line)) {
+        emit({ phase: 'resolving', message: 'Resolving the media source…' });
+      } else if (/\[(?:merger|ffmpeg|extractaudio|fixup)\]/i.test(line)) {
+        emit({ phase: 'processing', message: 'Processing the downloaded media…' });
+      } else if (/\[download\].*(?:destination|has already been downloaded)/i.test(line)) {
+        emit({ phase: 'downloading', message: 'Downloading media…' });
+      }
+    };
+    const inspectChunk = (chunk: Buffer | string) => {
+      for (const line of String(chunk).split(/\r?\n|\r/g)) inspectLine(line);
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      clearInterval(keepalive);
+      options.signal?.removeEventListener('abort', onAbort);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => {
+      stopDownloadProcess(child);
+      fail(new Error('download canceled by user'));
+    };
+    const timeout = setTimeout(() => {
+      stopDownloadProcess(child);
+      fail(new Error(`download timed out after ${Math.round(DOWNLOAD_MEDIA_TIMEOUT_MS / 60_000)} minutes`));
+    }, DOWNLOAD_MEDIA_TIMEOUT_MS);
+    timeout.unref?.();
+    const keepalive = setInterval(() => {
+      const phase: DownloadMediaProgress['phase'] = lastPhase === 'downloading' || lastPhase === 'processing'
+        ? lastPhase
+        : 'resolving';
+      emit({
+        phase,
+        message: lastPhase === 'downloading'
+          ? 'Download is still in progress…'
+          : lastPhase === 'processing'
+            ? 'Media processing is still in progress…'
+            : 'Still resolving the media source…',
+      }, true);
+    }, 10_000);
+    keepalive.unref?.();
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+
+    child.stdout.on('data', (chunk) => {
+      stdout = appendBounded(stdout, chunk);
+      inspectChunk(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr = appendBounded(stderr, chunk);
+      inspectChunk(chunk);
+    });
+    child.once('error', (error) => fail(error));
+    child.once('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`yt-dlp exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}: ${String(stderr || stdout).slice(-1500)}`));
+    });
+  });
+}
+
 export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<ToolResult> {
   const workspaceRoot = getWorkspaceRoot();
   const url = String(args?.url || '').trim();
   if (!url) return { success: false, error: 'url is required' };
 
   try {
-    const runner = await detectYtDlpRunner();
+    args.onProgress?.({ phase: 'starting', message: 'Starting media download…' });
+    if (args.signal?.aborted) throw new Error('download canceled by user');
+    const runner = await detectYtDlpRunner(args.signal);
     if (!runner) {
       return {
         success: false,
@@ -379,6 +532,15 @@ export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<Too
       '--restrict-filenames',
       '--windows-filenames',
       '--newline',
+      '--progress',
+      '--progress-template',
+      'download:__PROMETHEUS_PROGRESS__|%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s',
+      '--socket-timeout',
+      '30',
+      '--retries',
+      '3',
+      '--fragment-retries',
+      '3',
       '--print',
       'after_move:filepath',
       '-P',
@@ -398,7 +560,8 @@ export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<Too
 
     commandArgs.push(url);
 
-    const { stdout, stderr } = await execFileAsync(runner.cmd, commandArgs, {
+    args.onProgress?.({ phase: 'resolving', message: 'Resolving the media source…' });
+    const { stdout, stderr } = await runYtDlpProcess(runner, commandArgs, {
       cwd: workspaceRoot,
       env: {
         ...process.env,
@@ -406,9 +569,8 @@ export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<Too
         PROMETHEUS_FFPROBE_PATH: ffprobePath,
         PATH: [...mediaBinDirs, process.env.PATH || ''].filter(Boolean).join(path.delimiter),
       },
-      timeout: 10 * 60 * 1000,
-      windowsHide: true,
-      maxBuffer: 8 * 1024 * 1024,
+      signal: args.signal,
+      onProgress: args.onProgress,
     });
 
     let downloadedPaths = parseDownloadedPaths(stdout, absDir);
@@ -431,6 +593,8 @@ export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<Too
         bytes: stat.size,
       };
     });
+
+    args.onProgress?.({ phase: 'complete', message: `Media download complete: ${files.length} file${files.length === 1 ? '' : 's'} saved.` });
 
     return {
       success: true,

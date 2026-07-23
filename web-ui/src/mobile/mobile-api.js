@@ -195,6 +195,70 @@ function _urlBase64ToUint8Array(value) {
   return out;
 }
 
+function _sameApplicationServerKey(left, right) {
+  if (!left || !right) return true;
+  const a = left instanceof Uint8Array ? left : new Uint8Array(left);
+  const b = right instanceof Uint8Array ? right : new Uint8Array(right);
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+async function _saveMobilePushSubscription(subscription) {
+  const deviceName = navigator.userAgent.includes('iPhone') ? 'iPhone PWA' : navigator.userAgent.includes('iPad') ? 'iPad PWA' : 'Mobile PWA';
+  return mfetch('/api/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify({
+      subscription: subscription.toJSON ? subscription.toJSON() : subscription,
+      deviceId: getDeviceToken(),
+      deviceName,
+    }),
+  });
+}
+
+export async function reconcileMobileChatPushNotifications({ requestPermission = false, sendTest = false } = {}) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    throw new Error('Push notifications are not supported on this browser.');
+  }
+  let permission = Notification.permission;
+  if (permission !== 'granted' && requestPermission) permission = await Notification.requestPermission();
+  if (permission !== 'granted') throw new Error('Notification permission was not granted.');
+
+  const reg = await navigator.serviceWorker.ready;
+  try { await reg.update?.(); } catch {}
+  const key = await mfetch('/api/push/public-key');
+  const publicKey = String(key?.publicKey || '').trim();
+  if (!publicKey) throw new Error('Push public key unavailable.');
+  const applicationServerKey = _urlBase64ToUint8Array(publicKey);
+  let subscription = await reg.pushManager.getSubscription();
+  const subscribedKey = subscription?.options?.applicationServerKey;
+  if (subscription && subscribedKey && !_sameApplicationServerKey(subscribedKey, applicationServerKey)) {
+    // The gateway's persisted VAPID key changed. A browser still reports the
+    // old subscription as active, but that endpoint can no longer authenticate
+    // deliveries, so rotate it without asking for notification permission again.
+    try { await subscription.unsubscribe(); } catch {}
+    subscription = null;
+  }
+  if (!subscription) {
+    subscription = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+  }
+  const saved = await _saveMobilePushSubscription(subscription);
+  let test = null;
+  if (sendTest) {
+    test = await mfetch('/api/push/test', {
+      method: 'POST',
+      body: JSON.stringify({ endpoint: subscription.endpoint }),
+    });
+    const delivery = test?.delivery;
+    if (delivery && delivery.ok !== true) {
+      throw new Error(String(delivery.error || 'Push delivery was rejected.'));
+    }
+  }
+  return { ...saved, subscription, test };
+}
+
 export async function getMobilePushStatus() {
   const browserSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
   let permission = 'unsupported';
@@ -208,45 +272,21 @@ export async function getMobilePushStatus() {
       subscription = await reg.pushManager.getSubscription();
     } catch {}
   }
-  const server = await mfetch('/api/push/status').catch(() => null);
+  const endpoint = String(subscription?.endpoint || '').trim();
+  const server = await mfetch(`/api/push/status${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ''}`).catch(() => null);
   return {
     browserSupported,
     permission,
     subscribed: !!subscription,
+    registered: server?.currentSubscription?.registered === true,
+    lastError: String(server?.currentSubscription?.lastError || ''),
     subscriptionCount: Number(server?.subscriptionCount || 0),
     server,
   };
 }
 
 export async function enableMobileChatPushNotifications() {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
-    throw new Error('Push notifications are not supported on this browser.');
-  }
-  const permission = await Notification.requestPermission();
-  if (permission !== 'granted') throw new Error('Notification permission was not granted.');
-  const reg = await navigator.serviceWorker.ready;
-  try { await reg.update?.(); } catch {}
-  let subscription = await reg.pushManager.getSubscription();
-  if (!subscription) {
-    const key = await mfetch('/api/push/public-key');
-    const publicKey = String(key?.publicKey || '').trim();
-    if (!publicKey) throw new Error('Push public key unavailable.');
-    subscription = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: _urlBase64ToUint8Array(publicKey),
-    });
-  }
-  const deviceName = navigator.userAgent.includes('iPhone') ? 'iPhone PWA' : navigator.userAgent.includes('iPad') ? 'iPad PWA' : 'Mobile PWA';
-  const saved = await mfetch('/api/push/subscribe', {
-    method: 'POST',
-    body: JSON.stringify({
-      subscription: subscription.toJSON ? subscription.toJSON() : subscription,
-      deviceId: getDeviceToken(),
-      deviceName,
-    }),
-  });
-  await mfetch('/api/push/test', { method: 'POST', body: JSON.stringify({}) }).catch(() => null);
-  return saved;
+  return reconcileMobileChatPushNotifications({ requestPermission: true, sendTest: true });
 }
 
 export async function disableMobileChatPushNotifications() {

@@ -67,25 +67,20 @@ export function setMeter(id, pct) {
 // ─── Toast / Confirm ──────────────────────────────────────────
 
 export function showToast(title, body, type = 'info', duration = 5000) {
-  const colors = {
-    info:    { bg: 'var(--panel)', border: 'var(--line)',    icon: '\u2139\uFE0F', titleColor: 'var(--text)' },
-    success: { bg: '#efffea',      border: '#b2dfb2',        icon: '\u2713',       titleColor: '#1a6e35' },
-    error:   { bg: '#fff0f0',      border: '#fca5a5',        icon: '\u26A0\uFE0F', titleColor: '#9c1a1a' },
-    warning: { bg: '#fffbea',      border: '#f5d87a',        icon: '\u26A0\uFE0F', titleColor: '#7c4d00' },
-  };
-  const c = colors[type] || colors.info;
+  const normalizedType = type === 'warn' ? 'warning' : (['info', 'success', 'error', 'warning'].includes(type) ? type : 'info');
+  const icons = { info: '\u2139\uFE0F', success: '\u2713', error: '\u26A0\uFE0F', warning: '\u26A0\uFE0F' };
   const toast = document.createElement('div');
   const existing = document.querySelectorAll('.__sc-toast');
   const offset = 24 + [...existing].reduce((sum, t) => sum + t.offsetHeight + 8, 0);
-  toast.className = '__sc-toast';
-  toast.style.cssText = `position:fixed;bottom:${offset}px;right:24px;z-index:99999;background:${c.bg};border:1.5px solid ${c.border};border-radius:12px;padding:12px 16px 12px 14px;min-width:240px;max-width:380px;box-shadow:0 4px 24px rgba(0,0,0,0.13);font-family:var(--font);display:flex;gap:10px;align-items:flex-start;animation:scToastIn 0.2s ease`;
+  toast.className = `__sc-toast __sc-toast--${normalizedType}`;
+  toast.style.cssText = `position:fixed;bottom:${offset}px;right:24px;z-index:99999;`;
   toast.innerHTML = `
-    <span style="font-size:16px;flex-shrink:0;line-height:1.4">${c.icon}</span>
-    <div style="flex:1;min-width:0">
-      <div style="font-size:13px;font-weight:800;color:${c.titleColor};margin-bottom:${body ? '3px' : '0'}">${escHtml(title)}</div>
-      ${body ? `<div style="font-size:12px;color:var(--muted);line-height:1.5;word-break:break-word">${escHtml(String(body))}</div>` : ''}
+    <span class="__sc-toast-icon" aria-hidden="true">${icons[normalizedType]}</span>
+    <div class="__sc-toast-copy">
+      <div class="__sc-toast-title">${escHtml(title)}</div>
+      ${body ? `<div class="__sc-toast-body">${escHtml(String(body))}</div>` : ''}
     </div>
-    <button onclick="this.closest('.__sc-toast').remove()" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:16px;line-height:1;flex-shrink:0;padding:0 0 0 4px">&times;</button>
+    <button class="__sc-toast-close" type="button" aria-label="Dismiss">&times;</button>
   `;
   if (!document.getElementById('__sc-toast-style')) {
     const s = document.createElement('style');
@@ -96,6 +91,7 @@ export function showToast(title, body, type = 'info', duration = 5000) {
   document.body.appendChild(toast);
   const timer = setTimeout(() => { toast.style.transition = 'opacity 0.3s'; toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, duration);
   toast.addEventListener('mouseenter', () => clearTimeout(timer));
+  toast.querySelector('.__sc-toast-close')?.addEventListener('click', () => toast.remove());
 }
 
 export function bgtToast(title, body) {

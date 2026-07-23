@@ -6539,7 +6539,10 @@ async function _loadSessionFromServer(id, options = {}) {
     sess.lastMessageAt = s.lastMessageAt || getSessionLastMessageAt(sess);
     delete sess._needsServerLoad;
     saveChatSessions();
-    if (window.activeChatSessionId === id) scheduleChatContextWindowRefresh(250);
+    if (window.activeChatSessionId === id) {
+      scheduleChatContextWindowRefresh(250);
+      window.refreshActiveChatModelRoute?.();
+    }
   } catch {}
 }
 
@@ -11765,7 +11768,6 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFilePills(msg.canvasFiles) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderFileChanges(msg.fileChanges) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderArtifacts(msg.artifacts) : ''}
-                ${(msg.role === 'ai' || msg.role === 'assistant') ? renderMessageProcessPill(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderReactSteps(msg.steps) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderThreadLinkArtifacts(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderGoalCompletionReport(msg.goalCompletionReport) : ''}
@@ -11796,23 +11798,13 @@ function renderSessionThinkingHtml(sessionId) {
   const showAnswerText = answerStarted && !!String(st.streamingAIText || '');
   const showLiveTrace = !!liveTraceHtml;
   const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml && !pendingQuestionHtml;
-  const currentProcessOpen = !!st.currentTurnProcessOpen;
   const sess = getChatSessionById(sessionId);
   const startIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
   const rawCurrentTurnEntries = startIndex >= 0 && Array.isArray(sess?.processLog) ? sess.processLog.slice(startIndex) : [];
   const currentTurnEntries = mergeLiveTraceProcessEntries(st.liveTraceEntries, rawCurrentTurnEntries);
-  const currentProcessHtml = currentProcessOpen ? formatProcessLines(currentTurnEntries) : '';
   const pendingImageHtml = isGenerateImagePendingFromEntries(st.liveTraceEntries, currentTurnEntries) ? renderGeneratedImageLoadingCard() : '';
   const activeModelBadgeHtml = st.activeModelBadge
     ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(st.activeModelBadge.label)}</span>`
-    : '';
-  const processActionHtml = !(thinkingOnly && !pendingImageHtml) ? `
-    <div class="msg-actions live-msg-actions">
-      <button class="process-pill-btn" onclick="toggleCurrentProcess()">Process</button>
-    </div>
-  ` : '';
-  const processPanelHtml = !(thinkingOnly && !pendingImageHtml)
-    ? `<div id="current-turn-process" style="display:${currentProcessOpen ? 'block' : 'none'};margin-top:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);padding:8px;max-height:220px;overflow:auto;font-size:11px;line-height:1.6">${currentProcessHtml}</div>`
     : '';
   return `
     <div class="msg-shell ai">
@@ -11829,11 +11821,9 @@ function renderSessionThinkingHtml(sessionId) {
               : (showLiveTrace || progressHtml || pendingImageHtml ? '' : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`)
             }
             ${liveApprovalsHtml}
-            ${processPanelHtml}
             ${pendingQuestionHtml}
             ${inlinePlanHtml}
           </div>
-          ${processActionHtml}
         </div>
       </div>
     </div>`;
@@ -12155,7 +12145,7 @@ function renderChatMessages() {
     container.innerHTML = `
       <div class="chat-welcome" id="chat-welcome">
         <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" style="width:90px;height:90px;object-fit:contain;opacity:0.90;"></div>
-        <h2>Prometheus</h2>
+        <h2>Prometheus One</h2>
         <p>"I whom you see am Prometheus, who gave fire to mankind."</p>
         <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
         ${renderEmptyChatStarterCards()}
@@ -12265,6 +12255,15 @@ async function forkConversationFromAssistantMessage(originalIndex, ev) {
   // turn behaves like a fresh chat with no prior context.
   try {
     await syncSessionHistoryToServerById(id, forkedHistory, { resetCompaction: true });
+    const routeResponse = await fetch(`/api/sessions/${encodeURIComponent(String(source.id || ''))}/model-route`);
+    const routeData = routeResponse.ok ? await routeResponse.json() : null;
+    const override = routeData?.chatModelRoute?.override;
+    if (override) {
+      await fetch(`/api/sessions/${encodeURIComponent(id)}/model-route`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(override),
+      });
+    }
   } catch (err) {
     console.warn('[ChatPage] failed to seed forked session history on server:', err);
   }
@@ -40068,9 +40067,19 @@ function _isMobileShellActive() {
   return document.body?.classList?.contains('pm-mobile-active') === true;
 }
 
-function _showChannelActivityToast(sid, channelLabel, preview) {
+function _showChannelActivityToast(sid, channelLabel, preview, options = {}) {
   if (_isMobileShellActive()) return;
-  document.querySelector('.__channel-activity-toast')?.remove();
+  const state = ['live', 'complete', 'failed'].includes(String(options.state || 'live'))
+    ? String(options.state || 'live')
+    : 'live';
+  const title = String(options.title || (state === 'live'
+    ? `Live on ${channelLabel}`
+    : state === 'failed'
+      ? `${channelLabel} needs attention`
+      : `${channelLabel} completed`));
+  const existingForSession = [...document.querySelectorAll('.__channel-activity-toast')]
+    .find((node) => String(node.getAttribute('data-channel-sid') || '') === String(sid || ''));
+  existingForSession?.remove();
   const toast = document.createElement('div');
   let autoDismissTimer = null;
   const dismissToast = () => {
@@ -40083,33 +40092,27 @@ function _showChannelActivityToast(sid, channelLabel, preview) {
     toast.style.transform = 'translateY(10px)';
     setTimeout(() => toast.remove(), 300);
   };
-  toast.className = '__sc-toast __channel-activity-toast';
+  toast.className = `__sc-toast __sc-toast--activity-${state} __channel-activity-toast`;
   const existing = document.querySelectorAll('.__sc-toast');
   const offset = 24 + [...existing].reduce((sum, t) => sum + t.offsetHeight + 8, 0);
-  toast.style.cssText = `position:fixed;bottom:${offset}px;right:24px;z-index:99999;background:var(--panel);border:1.5px solid var(--brand, #6366f1);border-radius:12px;padding:12px 16px 12px 14px;min-width:240px;max-width:380px;box-shadow:0 4px 24px rgba(0,0,0,0.18);font-family:var(--font);display:flex;gap:10px;align-items:flex-start;animation:scToastIn 0.2s ease;transition:opacity 0.3s ease, transform 0.3s ease`;
+  toast.style.cssText = `position:fixed;bottom:${offset}px;right:24px;z-index:99999;`;
   toast.setAttribute('data-channel-sid', sid);
   toast.innerHTML = `
-    <span style="font-size:16px;flex-shrink:0;line-height:1.4">💬</span>
-    <div style="flex:1;min-width:0">
-      <div style="font-size:13px;font-weight:800;color:var(--brand,#6366f1);margin-bottom:3px">Live on ${escHtml(channelLabel)}</div>
-      ${preview ? `<div style="font-size:12px;color:var(--muted);line-height:1.5;word-break:break-word;margin-bottom:6px">${escHtml(String(preview).slice(0, 80))}</div>` : ''}
-      <button class="__channel-switch-btn" style="border:none;background:var(--brand,#6366f1);color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">View live →</button>
+    <span class="__sc-toast-icon" aria-hidden="true">${state === 'live' ? '◌' : state === 'failed' ? '!' : '✓'}</span>
+    <div class="__sc-toast-copy">
+      <div class="__sc-toast-title">${escHtml(title)}</div>
+      ${preview ? `<div class="__sc-toast-body">${escHtml(String(preview).slice(0, 180))}</div>` : ''}
+      <button class="__sc-toast-action __channel-switch-btn" type="button">${state === 'live' ? 'View live' : 'Open update'} →</button>
     </div>
-    <button style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:16px;line-height:1;flex-shrink:0;padding:0 0 0 4px">&times;</button>
+    <button class="__sc-toast-close" type="button" aria-label="Dismiss">&times;</button>
   `;
   toast.querySelector('.__channel-switch-btn').addEventListener('click', () => {
     _switchToChannelSession(sid);
     dismissToast();
   });
-  toast.querySelector('button:last-child').addEventListener('click', dismissToast);
+  toast.querySelector('.__sc-toast-close')?.addEventListener('click', dismissToast);
   document.body.appendChild(toast);
-  autoDismissTimer = setTimeout(dismissToast, 12000);
-  if (!document.getElementById('__sc-toast-style')) {
-    const s = document.createElement('style');
-    s.id = '__sc-toast-style';
-    s.textContent = '@keyframes scToastIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}';
-    document.head.appendChild(s);
-  }
+  autoDismissTimer = setTimeout(dismissToast, state === 'failed' ? 16000 : 12000);
 }
 
 function _switchToChannelSession(sid) {
@@ -40362,6 +40365,12 @@ function handleMainChatStreamEvent(msg = {}) {
     delete window._sessionThinking[sid];
     window._sessionStreamState[sid] = makeEmptyStreamState();
     if (sid !== window.activeChatSessionId) sess.unread = true;
+    if (!isViewing && !_isMobileShellActive()) {
+      _showChannelActivityToast(sid, sess.source || inferChannelFromSessionId(sid), content || 'Prometheus finished the response.', {
+        state: 'complete',
+        title: 'Response ready',
+      });
+    }
     setTimeout(() => refreshSessionFromServer(sid).catch(() => {}), 900);
     flushStreamingRenderFor(sid, renderIfViewing);
   } else if (evt.type === 'final') {
@@ -40376,6 +40385,12 @@ function handleMainChatStreamEvent(msg = {}) {
     addSessionProcessEntry(sid, 'error', text);
     delete window._sessionThinking[sid];
     if (sid !== window.activeChatSessionId) sess.unread = true;
+    if (!isViewing && !_isMobileShellActive()) {
+      _showChannelActivityToast(sid, sess.source || inferChannelFromSessionId(sid), text, {
+        state: 'failed',
+        title: 'Response needs attention',
+      });
+    }
     flushStreamingRenderFor(sid, renderIfViewing);
   }
 
@@ -40628,6 +40643,13 @@ wsEventBus.on('task_notification', (msg) => {
   if (!msg.sessionId) return;
   const notifMessage = msg.message || '';
   const notifSessionId = msg.sessionId;
+  const notificationState = /failed|error|needs[_\s-]?assistance/i.test(`${msg.status || ''} ${notifMessage}`) ? 'failed' : 'complete';
+  if (notifSessionId !== window.activeChatSessionId && !_isMobileShellActive()) {
+    _showChannelActivityToast(notifSessionId, 'Task', notifMessage || msg.taskTitle || 'A task finished.', {
+      state: notificationState,
+      title: notificationState === 'failed' ? 'Task needs attention' : 'Task complete',
+    });
+  }
 
   const sess = (window.chatSessions || []).find(s => s.id === notifSessionId);
   if (sess) {
@@ -40663,7 +40685,6 @@ wsEventBus.on('task_notification', (msg) => {
   if (window.chatSessions) window.chatSessions.push(newSess);
   saveChatSessions();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
-  bgtToast('💬 Task message', notifMessage.slice(0, 80));
 });
 
 const desktopVoiceWorkerAlertQueue = [];
@@ -41410,6 +41431,15 @@ wsEventBus.on('agent_paused', (msg) => {
 
 wsEventBus.on('bg_agent_event', (msg) => {
   pushBackgroundSpawnEvent(msg || {});
+  const sessionId = String(msg?.spawnerSessionId || msg?.sessionId || '').trim();
+  if (sessionId && sessionId !== window.activeChatSessionId && !_isMobileShellActive()) {
+    _showChannelActivityToast(
+      sessionId,
+      'Background agent',
+      msg?.message || msg?.taskPrompt || msg?.task || 'Working on a background task.',
+      { state: 'live', title: 'Background agent working' },
+    );
+  }
 });
 
 // ─── Background agent late-completion injection ───────────────
@@ -41419,6 +41449,16 @@ wsEventBus.on('bg_agent_event', (msg) => {
 // the last AI message as a proper inner panel so it's visible to the user.
 wsEventBus.on('bg_agent_done', (msg) => {
   completeBackgroundSpawnLane(msg || {});
+  const sessionId = String(msg?.spawnerSessionId || msg?.sessionId || '').trim();
+  if (sessionId && sessionId !== window.activeChatSessionId && !_isMobileShellActive()) {
+    const failed = msg?.state === 'failed';
+    _showChannelActivityToast(
+      sessionId,
+      'Background agent',
+      msg?.result || msg?.error || msg?.taskPrompt || (failed ? 'The background task needs attention.' : 'The background task is ready.'),
+      { state: failed ? 'failed' : 'complete', title: failed ? 'Background agent needs attention' : 'Background agent complete' },
+    );
+  }
   if (msg.state !== 'completed' || !msg.result) return;
   if (window.isThinking) {
     addProcessEntry('info', `Background Agent ${msg.bgId}: result ready; merging into final reply.`, { actor: 'Background Agent' });

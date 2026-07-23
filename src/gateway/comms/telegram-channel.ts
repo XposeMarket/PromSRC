@@ -21,6 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { getConfig } from '../../config/config';
+import { mainChatRoutePatch } from '../../config/main-chat-route.js';
 import { readAgentPromptFile, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { getVault } from '../../security/vault';
 import {
@@ -1445,6 +1446,14 @@ export class TelegramChannel {
         },
       },
     } as any);
+
+    // Telegram's reasoning controls target the live main provider. Mirror the
+    // resulting effective route so Settings never shows stale main-chat effort.
+    if (provider === String(currentLlm.provider || '').trim()) {
+      const refreshed = cm.getConfig() as any;
+      const model = String(refreshed?.llm?.providers?.[provider]?.model || refreshed?.models?.primary || '').trim();
+      if (model) cm.updateConfig(mainChatRoutePatch(refreshed, { provider, model }) as any);
+    }
 
     try {
       const { resetProvider } = require('../../providers/factory.js');
@@ -5835,23 +5844,7 @@ export class TelegramChannel {
         }
         const cm = getConfig();
         const current = cm.getConfig() as any;
-        const currentLlm = current.llm || {};
-        const currentProviders = currentLlm.providers || {};
-        cm.updateConfig({
-          llm: {
-            ...currentLlm,
-            provider,
-            providers: {
-              ...currentProviders,
-              [provider]: { ...(currentProviders[provider] || {}), model },
-            },
-          },
-          models: {
-            ...(current.models || {}),
-            primary: model,
-            roles: { ...(current.models?.roles || {}) },
-          },
-        } as any);
+        cm.updateConfig(mainChatRoutePatch(current, { provider, model }) as any);
         try {
           const { resetProvider } = require('../../providers/factory.js');
           if (typeof resetProvider === 'function') resetProvider();

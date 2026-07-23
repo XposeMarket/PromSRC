@@ -1,0 +1,13 @@
+{
+  "skillId": "x-video-vertical-social-cut",
+  "reason": "resource-write",
+  "createdAt": "2026-07-22T19:40:50.255Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\x-video-vertical-social-cut",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json",
+    "references/approved-kimi-benchmark-fast-path.md"
+  ],
+  "hash": "33b8e0dc8b3c6af5"
+}

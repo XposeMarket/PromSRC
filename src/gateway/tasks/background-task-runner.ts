@@ -2855,7 +2855,6 @@ export class BackgroundTaskRunner {
 
   private async _verifyAndDeliverRunOnce(task: TaskRecord, taskResult: string): Promise<void> {
     const noOp = () => {};
-    const { modelOverride, providerOverride } = this._resolveRunOnceModel();
 
     // Collect evidence notes
     const bus = loadEvidenceBus(task.id);
@@ -2875,8 +2874,8 @@ export class BackgroundTaskRunner {
       const verifyResult = await this.handleChat(
         verifyPrompt, verifySessionId, noOp,
         undefined, undefined, undefined,
-        modelOverride || undefined, 'background_task',
-        undefined, undefined, undefined, providerOverride || undefined,
+        undefined, 'background_task',
+        undefined, undefined, undefined, undefined,
       );
       verificationText = (verifyResult?.text || '').trim() || taskResult;
     } catch (err: any) {
@@ -2938,19 +2937,6 @@ export class BackgroundTaskRunner {
     }
 
     console.log(`[RunOnce] Task "${task.title}" (${task.id}) verified and delivered to session ${task.originatingSessionId}`);
-  }
-
-  private _resolveRunOnceModel(): { modelOverride?: string; providerOverride?: string } {
-    try {
-      const cfg = getConfig().getConfig() as any;
-      const ref = String(cfg?.agent_model_defaults?.background_task || '').trim();
-      if (!ref) return {};
-      const slash = ref.indexOf('/');
-      if (slash > 0) return { providerOverride: ref.slice(0, slash), modelOverride: ref.slice(slash + 1) };
-      return { modelOverride: ref };
-    } catch {
-      return {};
-    }
   }
 
   private _buildVerifyPrompt(title: string, taskResult: string, notes: string): string {

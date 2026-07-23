@@ -129,6 +129,7 @@ func capture(_ params: [String: Any]) throws -> [String: Any] {
 
     // Screen Recording gate — fail clearly instead of returning a black frame.
     if #available(macOS 10.15, *), !CGPreflightScreenCaptureAccess() {
+        _ = CGRequestScreenCaptureAccess()
         throw HelperError.permission(
             "Screen Recording",
             remedy: "System Settings > Privacy & Security > Screen Recording — enable for this app, then restart it."

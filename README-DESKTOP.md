@@ -1,6 +1,8 @@
 # Prometheus Desktop App
 
-Turn Prometheus into a native Windows desktop application using Electron.
+Prometheus is packaged as a Windows and macOS desktop application using Electron.
+
+For signed Apple Silicon and Intel release builds, Apple prerequisites, CI publishing, and first-release QA, see [`docs/MACOS-RELEASE.md`](docs/MACOS-RELEASE.md).
 
 ---
 

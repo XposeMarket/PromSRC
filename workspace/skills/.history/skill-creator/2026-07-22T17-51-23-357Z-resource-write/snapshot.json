@@ -1,0 +1,12 @@
+{
+  "skillId": "skill-creator",
+  "reason": "resource-write",
+  "createdAt": "2026-07-22T17:51:23.363Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\skill-creator",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "a154cc03835f2353"
+}

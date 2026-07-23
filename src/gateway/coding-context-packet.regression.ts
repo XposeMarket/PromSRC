@@ -8,6 +8,7 @@ import {
   observeCodingContext,
   reloadCodingContextPacketsForTest,
   resetCodingContextPacketsForTest,
+  seedDevEditCodingContext,
   selectCodingContextPacket,
 } from './coding-context-packet';
 
@@ -56,8 +57,133 @@ assert.match(warm.block, /buildPrompt/);
 assert.match(warm.block, /observed_snapshot_sha256/);
 assert.doesNotMatch(warm.block, /authoritative_content_sha256/);
 assert.match(warm.block, /npx tsc --noEmit/);
+assert.match(warm.block, /recent_run_commands/);
+assert.match(warm.block, /"kind": "verification"/);
 assert.doesNotMatch(warm.block, /DO_NOT_REINJECT_RAW_RESULT|raw verification prose/);
 assert.ok(warm.block.length <= 6_000);
+
+observeCodingContext({
+  sessionId: 'command-ledger-session',
+  objective: 'Continue the packet command ledger work in src/gateway/coding-context-packet.ts',
+  projectRoot: root,
+  toolName: 'workspace_read',
+  args: { action: 'read', path: 'src/gateway/coding-context-packet.ts' },
+  result: 'focused target snapshot',
+  now: baseTime,
+});
+observeCodingContext({
+  sessionId: 'command-ledger-session',
+  objective: 'continue',
+  projectRoot: root,
+  toolName: 'workspace_run',
+  args: { action: 'run', command: 'node scripts/inspect-packet.mjs --token=super-secret' },
+  result: 'inspection completed without raw output injection',
+  error: false,
+  artifacts: [{ path: 'artifacts/packet-inspection.json' }],
+  extra: { exitCode: 0, durationMs: 321 },
+  now: baseTime + 100,
+});
+observeCodingContext({
+  sessionId: 'command-ledger-session',
+  objective: 'continue',
+  projectRoot: root,
+  toolName: 'workspace_run',
+  args: { action: 'run', command: 'node scripts/verify-packet.mjs' },
+  result: 'Error: command timed out after 10 seconds',
+  error: true,
+  extra: { exitCode: 124, durationMs: 10_000 },
+  now: baseTime + 200,
+});
+const commandLedger = selectCodingContextPacket({
+  enabled: true,
+  sessionId: 'command-ledger-session',
+  message: 'Continue the coding-context-packet.ts command ledger work.',
+  projectRoot: root,
+  executionMode: 'interactive',
+  now: baseTime + 300,
+});
+assert.equal(commandLedger.status, 'injected');
+assert.match(commandLedger.block, /node scripts\/inspect-packet\.mjs --token=\*\*\*/);
+assert.match(commandLedger.block, /artifacts\/packet-inspection\.json/);
+assert.match(commandLedger.block, /"exit_code": 0/);
+assert.match(commandLedger.block, /"failure_kind": "timed_out"/);
+assert.doesNotMatch(commandLedger.block, /super-secret|inspection completed without raw output injection/);
+
+observeCodingContext({
+  sessionId: 'dev-edit-session',
+  objective: 'Continue the coding context packet dev edit.',
+  projectRoot: root,
+  toolName: 'request_dev_source_edit',
+  args: {
+    files: ['src/gateway/coding-context-packet.ts', 'src/gateway/coding-context-packet.regression.ts'],
+    verification_profiles: ['backend_build'],
+  },
+  data: { dev_edit_id: 'dev_edit_packet_test' },
+  result: 'approved dev edit with a raw plan that must not be injected',
+  now: baseTime + 400,
+});
+observeCodingContext({
+  sessionId: 'dev-edit-session',
+  objective: 'continue',
+  projectRoot: root,
+  toolName: 'dev_source_edit',
+  args: {
+    action: 'apply_live',
+    dev_edit_id: 'dev_edit_packet_test',
+    affected_files: ['src/gateway/coding-context-packet.ts'],
+    changed_surfaces: ['backend'],
+    verification_profiles: ['backend_build'],
+  },
+  result: 'apply succeeded; do not inject raw coordinator response',
+  now: baseTime + 500,
+});
+reloadCodingContextPacketsForTest();
+const devEditLedger = selectCodingContextPacket({
+  enabled: true,
+  sessionId: 'dev-edit-session',
+  message: 'Continue the coding context packet dev edit.',
+  projectRoot: root,
+  executionMode: 'interactive',
+  now: baseTime + 600,
+});
+assert.equal(devEditLedger.status, 'injected');
+assert.match(devEditLedger.block, /recent_dev_edits/);
+assert.match(devEditLedger.block, /dev_edit_packet_test/);
+assert.match(devEditLedger.block, /"stage": "apply_live"/);
+assert.match(devEditLedger.block, /coding-context-packet\.ts/);
+assert.match(devEditLedger.block, /coding-context-packet\.regression\.ts/);
+assert.match(devEditLedger.block, /backend_build/);
+assert.match(devEditLedger.block, /"restart_expected": true/);
+assert.doesNotMatch(devEditLedger.block, /raw plan that must not be injected|raw coordinator response/);
+
+const naturalPacketFollowUp = selectCodingContextPacket({
+  enabled: true,
+  sessionId: 'dev-edit-session',
+  message: 'Context packet now?',
+  projectRoot: root,
+  executionMode: 'interactive',
+  history: [{ role: 'assistant', content: 'The dev edit completed and backend build passed.' }],
+  now: baseTime + 650,
+});
+assert.equal(naturalPacketFollowUp.status, 'injected');
+assert.equal(naturalPacketFollowUp.reason, 'explicit_context_packet_follow_up');
+assert.match(naturalPacketFollowUp.block, /dev_edit_packet_test/);
+assert.match(naturalPacketFollowUp.block, /"stage": "apply_live"/);
+
+const unrelatedAfterDevEdit = selectCodingContextPacket({
+  enabled: true,
+  sessionId: 'dev-edit-session',
+  message: 'What is the weather tomorrow?',
+  projectRoot: root,
+  executionMode: 'interactive',
+  now: baseTime + 675,
+});
+assert.deepEqual(
+  { status: unrelatedAfterDevEdit.status, reason: unrelatedAfterDevEdit.reason },
+  { status: 'omitted', reason: 'ambiguous_continuation' },
+);
+
+
 
 const authoritativePath = path.join(root, 'src', 'gateway', 'coding-context-packet.ts');
 const authoritativeContent = fs.readFileSync(authoritativePath);
@@ -311,6 +437,31 @@ const sourceWrapper = selectCodingContextPacket({
 assert.equal(sourceWrapper.status, 'injected');
 assert.match(sourceWrapper.block, /src\/gateway\/source-wrapper\.ts/);
 
+const creativeCoding = selectCodingContextPacket({
+  enabled: true,
+  sessionId: 'source-wrapper-session',
+  message: '[Continuing toward active main-chat goal]\nGoal: finish the Creative video source edit.',
+  projectRoot: root,
+  executionMode: 'interactive',
+  creativeMode: 'video',
+  allowCreativeCoding: true,
+  now: baseTime + 1_100,
+});
+assert.equal(creativeCoding.status, 'injected');
+assert.match(creativeCoding.block, /source-wrapper\.ts/);
+const creativeVisual = selectCodingContextPacket({
+  enabled: true,
+  sessionId: 'source-wrapper-session',
+  message: 'Render another frame of the timeline.',
+  projectRoot: root,
+  executionMode: 'interactive',
+  creativeMode: 'video',
+  allowCreativeCoding: true,
+  now: baseTime + 1_100,
+});
+assert.equal(creativeVisual.status, 'omitted');
+assert.equal(creativeVisual.reason, 'ambiguous_continuation');
+
 observeCodingContext({
   sessionId: 'subagent-task-one-session',
   scopeId: 'agent:dante',
@@ -356,6 +507,42 @@ assert.equal(isolatedAgentTask.status, 'injected');
 assert.match(isolatedAgentTask.block, /src\/parser-utility\.ts/);
 assert.doesNotMatch(isolatedAgentTask.block, /figure-8-drift-vita/);
 
-assert.deepEqual(getCodingContextPacketTelemetry(), { injected: 11, shadowed: 1, omitted: 3, rejected_stale: 1 });
+seedDevEditCodingContext({
+  id: 'dev-persist-regression',
+  sessionId: 'dev-persist-session',
+  status: 'approved',
+  allowedFiles: ['src/gateway/coding-context-packet.ts'],
+  changedSurfaces: ['backend'],
+  verificationProfiles: ['backend_build'],
+  objective: 'Persist Prometheus self-edit context across a live restart.',
+  projectRoot: root,
+});
+seedDevEditCodingContext({
+  id: 'dev-persist-regression',
+  sessionId: 'dev-persist-session',
+  status: 'complete',
+  allowedFiles: ['src/gateway/coding-context-packet.ts'],
+  affectedFiles: ['src/gateway/coding-context-packet.ts'],
+  changedSurfaces: ['backend'],
+  verificationProfiles: ['backend_build'],
+  verificationSummary: 'backend build passed; gateway restarted successfully.',
+  objective: 'Persist Prometheus self-edit context across a live restart.',
+  projectRoot: root,
+});
+reloadCodingContextPacketsForTest();
+const persistedDevEdit = selectCodingContextPacket({
+  enabled: true,
+  sessionId: 'dev-persist-session',
+  message: '[Continuing toward active main-chat goal]',
+  projectRoot: root,
+  executionMode: 'interactive',
+  now: Date.now(),
+});
+assert.equal(persistedDevEdit.status, 'injected');
+assert.match(persistedDevEdit.block, /dev-persist-regression/);
+assert.match(persistedDevEdit.block, /"stage": "live"/);
+assert.match(persistedDevEdit.block, /coding-context-packet\.ts/);
+
+assert.deepEqual(getCodingContextPacketTelemetry(), { injected: 16, shadowed: 1, omitted: 5, rejected_stale: 1 });
 try { fs.rmSync(packetStore, { force: true }); } catch {}
 console.log('coding-context-packet regression: ok');

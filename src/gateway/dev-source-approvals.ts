@@ -8,6 +8,7 @@ import {
   markCoordinatedDevEditComplete,
   registerCoordinatedDevEdit,
 } from './dev-edit-coordinator';
+import { seedDevEditCodingContext } from './coding-context-packet';
 
 export interface DevSourceEditEvidence {
   file: string;
@@ -68,6 +69,16 @@ export interface DevSourceEditContinuation {
   updatedAt: number;
   completedAt?: number;
   completionNote?: string;
+}
+
+/**
+ * A completed continuation is a durable apply boundary.  Callers must treat a
+ * repeat apply request as a no-op before running any verification, sync, build,
+ * or lifecycle operation.  Keeping this policy next to the persisted record
+ * makes it usable by every apply entrypoint, rather than only handoff UX.
+ */
+export function isCompletedDevSourceEditApply(continuation: Pick<DevSourceEditContinuation, 'status'> | null | undefined): boolean {
+  return continuation?.status === 'complete';
 }
 
 const grants = new Map<string, DevSourceEditScope>();
@@ -236,6 +247,10 @@ function writeContinuationStore(store: { continuations: DevSourceEditContinuatio
   fs.renameSync(tmp, p);
 }
 
+function devEditProjectRoot(): string {
+  return process.env.PROMETHEUS_APP_ROOT || path.resolve(__dirname, '..', '..');
+}
+
 export function upsertDevSourceEditContinuation(record: DevSourceEditContinuation): DevSourceEditContinuation {
   const store = readContinuationStore();
   const idx = store.continuations.findIndex((item) => item.id === record.id);
@@ -244,6 +259,24 @@ export function upsertDevSourceEditContinuation(record: DevSourceEditContinuatio
   else store.continuations.push(next);
   store.continuations = store.continuations.slice(-100);
   writeContinuationStore(store);
+  try {
+    seedDevEditCodingContext({
+      id: next.id,
+      sessionId: next.sessionId,
+      status: next.status,
+      allowedFiles: next.allowedFiles,
+      affectedFiles: next.affectedFiles,
+      changedSurfaces: next.changedSurfaces,
+      verificationProfiles: next.verificationProfiles,
+      verificationProfile: next.verificationProfile,
+      verificationSummary: next.lastVerification?.summary,
+      summary: next.summary || next.completionNote,
+      objective: next.plan?.userRequest,
+      projectRoot: devEditProjectRoot(),
+    });
+  } catch {
+    // Keep approval persistence independent from the diagnostic context mirror.
+  }
   return next;
 }
 

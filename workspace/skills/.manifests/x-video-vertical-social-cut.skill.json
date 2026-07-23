@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "prometheus-skill-bundle-v1",
+  "entrypoint": "SKILL.md",
+  "version": "1.4.0",
+  "description": "Recreate Raul's approved X/Twitter captioned phone-view social cuts using direct FFmpeg, preserved landscape footage, dark source blur, no headers by default, speech-synced burned captions, fast rendering, and actual-export QA.",
+  "triggers": [
+    "make a vertical captioned clip from this x video",
+    "turn this twitter video into a tiktok style video",
+    "make a no-header vertical clip from this video",
+    "create a 9:16 social cut with captions"
+  ],
+  "id": "x-video-vertical-social-cut"
+}

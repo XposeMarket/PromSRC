@@ -12,11 +12,13 @@ const shell = read('web-ui/src/mobile/mobile-shell.js');
 const ws = read('web-ui/src/ws.js');
 const index = read('web-ui/index.html');
 const router = read('src/gateway/routes/chat.router.ts');
+const historyReconciliation = read('src/gateway/history-reconciliation.ts');
 const settingsRouter = read('src/gateway/routes/settings.router.ts');
 const gatewayServer = read('src/gateway/core/server.ts');
 const broadcaster = read('src/gateway/comms/broadcaster.ts');
 const auditMaterializer = read('src/gateway/audit/materializer.ts');
 const sessionStore = read('src/gateway/session.ts');
+const webPush = read('src/gateway/notifications/web-push.ts');
 
 const composerRafDeclaration = pages.indexOf('let chatComposerSpaceRaf = 0;');
 const composerShiftDeclaration = pages.indexOf('let chatComposerShiftAnimation = null;');
@@ -24,6 +26,12 @@ const firstComposerSpaceCall = pages.indexOf('updateChatComposerSpace();');
 assert.ok(composerRafDeclaration >= 0, 'mobile chat must declare its composer RAF state');
 assert.ok(composerShiftDeclaration >= 0, 'mobile chat must declare its composer animation state');
 assert.ok(firstComposerSpaceCall >= 0, 'mobile chat must size its composer during startup');
+assert.match(api, /reconcileMobileChatPushNotifications/, 'mobile push must reconcile a stale browser subscription with the gateway');
+assert.match(api, /_sameApplicationServerKey/, 'a VAPID key rotation must replace the old browser subscription');
+assert.match(pages, /wsEventBus\.on\('task_notification'/, 'task completion must surface as a mobile in-app notification');
+assert.match(pages, /wsEventBus\.on\('bg_agent_done'/, 'background agent completion must surface as a mobile in-app notification');
+assert.match(pages, /_showMobileCompletionToast/, 'mobile completion notifications must render as tappable top toasts');
+assert.match(webPush, /\^\(\?:mailto:\|https:\\\/\\\/\)/, 'VAPID contact subjects must not use an invalid http gateway URL');
 assert.ok(
   composerRafDeclaration < firstComposerSpaceCall && composerShiftDeclaration < firstComposerSpaceCall,
   'composer animation state must initialize before startup can call updateChatComposerSpace',
@@ -39,10 +47,68 @@ assert.match(router, /const fullProcess = full \|\| req\.query\.fullProcess/, 's
 assert.match(router, /processEntries: checkpointProcessEntries/, 'active runtime status must expose its durable tool checkpoint');
 assert.match(router, /clientRequestId: runtime\?\.clientRequestId/, 'active runtime status must expose stable turn identity across reconnects');
 assert.match(router, /router\.post\('\/api\/mobile\/chat\/reconcile\/:sessionId'/, 'mobile must have an explicit server reconciliation action');
+assert.match(router, /mergeHistoryWithExistingMessageMetadata\(existingHistory, rawHistory, \{[\s\S]{0,100}preserveAllExisting: isMobileHistorySyncRequest\(req\)/, 'mobile history sync must merge into durable server history rather than replacing it');
+assert.match(historyReconciliation, /options\.preserveAllExisting \|\| serverOnly/, 'truncated mobile history must preserve ordinary server messages as well as system metadata');
+assert.match(historyReconciliation, /incomingByKey/, 'reconnect retries must dedupe stable client message identities');
 assert.match(router, /MAIN_CHAT_ORPHAN_GRACE_MS/, 'ownerless stream/lease state must expire instead of blocking indefinitely');
 assert.match(router, /mainChatTurnCoordinator\.discard\(sid\)/, 'reconciliation must discard both a stale lease and queued stale work');
 
 assert.match(pages, /let mobileRecoveryInFlight = null/, 'mobile recovery must be single-flight');
+assert.match(
+  pages,
+  /async function _reconcileMobilePendingApprovals\(\{ retry = true \} = \{\}\)/,
+  'mobile must have one authoritative pending-approval reconciler',
+);
+assert.match(
+  pages,
+  /bus\.on\('ws:open', reconcile\)[\s\S]{0,260}addEventListener\('pageshow', reconcile\)[\s\S]{0,220}visibilitychange', reconcileWhenVisible/,
+  'approval reconciliation must run after websocket recovery, bfcache restore, and foregrounding',
+);
+assert.match(
+  pages,
+  /const delay = \[400, 1200, 3000\]/,
+  'a transient approval hydration failure must retry with bounded backoff',
+);
+assert.match(
+  pages,
+  /const reconcile = \(\) => \{\s*if \(!getDeviceToken\(\)\) return;/,
+  'approval recovery must not poll protected APIs before a phone is paired',
+);
+assert.match(
+  pages,
+  /_getPendingApprovalsForSession\(activeSessionId\)[\s\S]{0,420}!node\.closest\('#pm-global-approval-host'\)/,
+  'pending approvals without an inline render host must use the standalone mobile sheet',
+);
+assert.match(
+  pages,
+  /const voiceRoute = String\(window\.location\?\.hash \|\| ''\)\.startsWith\('#mobile\/voice'\)[\s\S]{0,180}__pmVoice\?\.targetSessionId/,
+  'the standalone approval surface must follow the selected voice target on the voice route',
+);
+assert.match(
+  pages,
+  /pending\.map\(\(approval\) => _renderMobileApprovalCard\(approval\)\)\.join\(''\)/,
+  'the standalone recovery sheet must expose every pending approval for the active session',
+);
+assert.doesNotMatch(
+  pages,
+  /__pmChat\.pendingApprovals\[sid\] = list\.slice\(-8\)/,
+  'unresolved approvals must not be silently discarded by a client-side card cap',
+);
+assert.doesNotMatch(
+  pages,
+  /if \(_mobileBackgroundSpawnIdFromSessionId\(sid\)\) \{[\s\S]{0,220}return activeSid/,
+  'an orphaned background approval must not be attached to whichever chat happens to be open',
+);
+assert.match(
+  pages,
+  /_scheduleMobileThreadCacheSave\(sid\);\s*_renderMobileApprovalSheet\(\);/,
+  'every full chat repaint must restore the standalone approval fallback when needed',
+);
+assert.match(
+  pages,
+  /_reconcileMobilePendingApprovals\(\{ retry: true \}\)\.catch\(\(\) => \[\]\)/,
+  'main-chat recovery must use the retrying approval reconciler instead of a one-shot silent fetch',
+);
 assert.match(
   pages,
   /wsEventBus\?\.on\?\.\('internal_watch_sse', onInternalWatchSse\)/,
@@ -50,8 +116,18 @@ assert.match(
 );
 assert.match(
   pages,
-  /data: \{ \.\.\.msg, type: event, event \}/,
-  'internal-watch envelopes must enter the ordinary mobile tool-stream reducer',
+  /if \(event === 'runtime_registered'\) \{[\s\S]{0,420}source: 'internal_watch'/,
+  'an internal-watch runtime registration must immediately create a visible mobile working turn',
+);
+assert.match(
+  pages,
+  /scheduleMobileRunRecovery\(event === 'runtime_registered' \? 0 : 120, \{ force: true, fullRefresh: false \}\)/,
+  'internal-watch events must recover through the durable main-chat stream instead of racing duplicate tool envelopes',
+);
+assert.match(
+  pages,
+  /\['voice_foreground_worker', 'internal_watch_review'\]\.includes/,
+  'an internal-watch trace-only turn must not be folded into the prior assistant reply',
 );
 assert.match(
   router,

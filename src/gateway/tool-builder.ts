@@ -318,6 +318,7 @@ const AUTOMATION_TOOL_NAMES = new Set([
   'schedule_job_stuck_control',
   'prometheus_thread_ops',
   'prometheus_request_ops',
+  'prometheus_audit_ops',
   // Advanced automation management/diagnostics (schedule_job, automation_dashboard,
   // and timer remain core; only execution-level scheduling stays always-on).
   'task_control',
@@ -457,6 +458,7 @@ const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
   'prom_repo_pull',
   'prom_repo_sync',
   'background_spawn',
+  'background_steer',
   'background_status',
   'background_progress',
   'background_wait',

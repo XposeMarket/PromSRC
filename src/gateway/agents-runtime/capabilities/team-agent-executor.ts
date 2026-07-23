@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getAgentById, getAgents, getConfig } from '../../../config/config';
+import { mainChatRoutePatch } from '../../../config/main-chat-route.js';
 import { parseProviderModelRef } from '../../../agents/model-routing.js';
 import { resetProvider } from '../../../providers/factory.js';
 import { recordAgentRun } from '../../../scheduler';
@@ -119,10 +120,8 @@ const VALID_AGENT_MODEL_TYPES = [
   'switch_model_low',
   'switch_model_medium',
   'coordinator',
-  'background_task',
   'background_agent',
   'goal_compactor',
-  'goal_judge',
 ];
 
 function resolveGatewayAddress(): { host: string; port: number } {
@@ -2349,31 +2348,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
         try {
           const cm = getConfig();
           const current = cm.getConfig() as any;
-          const currentLlm = current.llm || {};
-          const currentProviders = currentLlm.providers || {};
-          cm.updateConfig({
-            llm: {
-              ...currentLlm,
-              provider: parsed.providerId,
-              providers: {
-                ...currentProviders,
-                [parsed.providerId]: {
-                  ...(currentProviders[parsed.providerId] || {}),
-                  model: parsed.model,
-                },
-              },
-            },
-            models: {
-              ...(current.models || {}),
-              primary: parsed.model,
-              roles: {
-                ...(current.models?.roles || {}),
-                manager: parsed.model,
-                executor: parsed.model,
-                verifier: parsed.model,
-              },
-            },
-          } as any);
+          cm.updateConfig(mainChatRoutePatch(current, { provider: parsed.providerId, model: parsed.model }) as any);
           resetProvider();
           return {
             name,
@@ -2384,7 +2359,7 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
               provider: parsed.providerId,
               model: parsed.model,
               reason: reason || null,
-              note: 'Current primary model updated. This is not an agent_model_defaults change.',
+              note: 'Main Chat Agent route updated.',
             }, null, 2),
             error: false,
           };
@@ -2424,8 +2399,8 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
             if (!VALID_AGENT_MODEL_TYPES.includes(agentType)) {
               return { name, args, result: `ERROR: Invalid agent_type "${agentType}". Valid values: ${VALID_AGENT_MODEL_TYPES.join(', ')}`, error: true };
             }
-            const isGoalSupportRoute = agentType === 'goal_compactor' || agentType === 'goal_judge';
-            const goalPrefix = agentType === 'goal_compactor' ? 'compaction' : 'judge';
+            const isGoalSupportRoute = agentType === 'goal_compactor';
+            const goalPrefix = 'compaction';
             const endpoint = isGoalSupportRoute ? '/api/settings/session' : '/api/settings/agent-model-defaults';
             const payload = isGoalSupportRoute
               ? { mainChatGoals: {
@@ -2478,11 +2453,6 @@ export const teamAgentCapabilityExecutor: CapabilityExecutor = {
               compactor: {
                 model: cfg.session?.mainChatGoals?.compactionModel || null,
                 reasoning_effort: cfg.session?.mainChatGoals?.compactionReasoning || null,
-                fallback: 'current_primary',
-              },
-              judge: {
-                model: cfg.session?.mainChatGoals?.judgeModel || null,
-                reasoning_effort: cfg.session?.mainChatGoals?.judgeReasoning || null,
                 fallback: 'current_primary',
               },
             },

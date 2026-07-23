@@ -42,6 +42,7 @@ function testRepresentativeClassification(): void {
     ['memory_graph_snapshot', 'advanced_memory'],
     ['download_media', 'media_assets'],
     ['schedule_job_history', 'automations'],
+    ['prometheus_audit_ops', 'automations'],
     ['connector_gmail_search', 'external_apps'],
     ['x_search_ops', 'external_apps'],
     ['xai_live_search', null], // deprecated and no longer registered

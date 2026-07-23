@@ -38,7 +38,7 @@ import {
   loadMobileSubagents, loadMobileSubagentDetail, loadSubagentSystemPrompt, loadSubagentMemory, loadSubagentHeartbeat,
   tickSubagentHeartbeat, loadSubagentRuns, loadSubagentRunDetail, sendSubagentRunRecovery, loadSubagentChat, loadSubagentContextRefs,
   spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
-  getMobilePushStatus, enableMobileChatPushNotifications, disableMobileChatPushNotifications,
+  getMobilePushStatus, enableMobileChatPushNotifications, disableMobileChatPushNotifications, reconcileMobileChatPushNotifications,
 } from './mobile-api.js';
 import { checkSessionDetailed, getAccount, mountLoginScreen } from '../auth/account.js';
 import { renderMd } from '../utils.js';
@@ -134,6 +134,114 @@ function pmToast(msg, kind = 'info') {
 // Expose so shared mobile modules (e.g. the header model badge) can toast too.
 try { window.pmToast = pmToast; } catch {}
 
+function _cleanMobileCompletionText(value, max = 180) {
+  return String(value || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#*_`>~]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+function _showMobileCompletionToast({ key, title, summary, route } = {}) {
+  if (!document.body?.classList?.contains('pm-mobile-active')) return;
+  const target = String(route || '').trim();
+  const toastKey = String(key || `${title}:${summary}:${target}`).trim();
+  if (!toastKey) return;
+  let host = document.getElementById('pm-completion-toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'pm-completion-toast-host';
+    host.style.cssText = 'position:fixed;top:max(12px, calc(env(safe-area-inset-top) + 8px));left:12px;right:12px;z-index:20000;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+    document.body.appendChild(host);
+  }
+  const existing = host.querySelector(`[data-pm-completion-key="${_pmCssEscape(toastKey)}"]`);
+  if (existing) {
+    clearTimeout(Number(existing.dataset.pmCompletionTimer || 0));
+    existing.dataset.pmCompletionTimer = String(setTimeout(() => existing.remove(), 8000));
+    return;
+  }
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.dataset.pmCompletionKey = toastKey;
+  button.style.cssText = 'pointer-events:auto;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;width:100%;text-align:left;background:rgba(33,29,27,.97);color:#fff;border:1px solid rgba(255,143,56,.65);border-radius:16px;padding:12px 14px;box-shadow:0 12px 30px rgba(0,0,0,.36);font:inherit;';
+  const heading = _cleanMobileCompletionText(title, 90) || 'Prometheus update';
+  const detail = _cleanMobileCompletionText(summary, 180) || 'Tap to open.';
+  button.innerHTML = `<span style="min-width:0"><strong style="display:block;font-size:14px;line-height:1.25">${escapeHtml(heading)}</strong><span style="display:block;margin-top:3px;font-size:12px;line-height:1.35;opacity:.8">${escapeHtml(detail)}</span></span><span aria-hidden="true" style="font-size:20px;color:#ff8f38">›</span>`;
+  const dismiss = () => {
+    clearTimeout(Number(button.dataset.pmCompletionTimer || 0));
+    button.remove();
+  };
+  button.addEventListener('click', () => {
+    dismiss();
+    if (target) window.location.hash = target.startsWith('#') ? target : `#${target}`;
+  });
+  button.addEventListener('pointerdown', () => { try { pmHaptic(8); } catch {} });
+  host.appendChild(button);
+  button.dataset.pmCompletionTimer = String(setTimeout(dismiss, 8000));
+}
+
+function _mobileCompletionRoute(msg = {}) {
+  const teamId = String(msg.teamId || msg.task?.teamId || '').trim();
+  const agentId = String(msg.agentId || msg.task?.agentId || '').trim();
+  const taskId = String(msg.taskId || msg.task?.id || '').trim();
+  const sessionId = String(msg.sessionId || msg.spawnerSessionId || msg.originSessionId || '').trim();
+  if (teamId) return `#mobile/teams/${encodeURIComponent(teamId)}`;
+  if (agentId) return `#mobile/subagents/${encodeURIComponent(agentId)}`;
+  if (taskId) return `#mobile/tasks/${encodeURIComponent(taskId)}`;
+  return sessionId ? `#mobile/chat/${encodeURIComponent(sessionId)}` : '#mobile/chat';
+}
+
+if (!window.__pmMobileCompletionToastBridgeInstalled) {
+  window.__pmMobileCompletionToastBridgeInstalled = true;
+  wsEventBus.on('task_notification', (msg = {}) => {
+    _showMobileCompletionToast({
+      key: `task:${msg.taskId || ''}:${msg.status || 'complete'}:${msg.message || ''}`,
+      title: String(msg.status || '').toLowerCase() === 'failed' ? 'Task failed' : 'Task complete',
+      summary: msg.message || msg.taskTitle || 'A task finished.',
+      route: _mobileCompletionRoute(msg),
+    });
+  });
+  wsEventBus.on('bg_agent_done', (msg = {}) => {
+    _showMobileCompletionToast({
+      key: `background:${msg.bgId || ''}:${msg.state || 'completed'}`,
+      title: String(msg.state || '').toLowerCase() === 'failed' ? 'Background agent failed' : 'Background agent finished',
+      summary: msg.result || msg.error || msg.taskPrompt || msg.task || 'A background agent completed its work.',
+      route: _mobileCompletionRoute(msg),
+    });
+  });
+  wsEventBus.on('main_chat_stream_event', (msg = {}) => {
+    if (String(msg.event || '') !== 'final') return;
+    const sessionId = String(msg.sessionId || '').trim();
+    const onSameOpenChat = sessionId && sessionId === String(__pmChat.activeSessionId || '').trim()
+      && /^#mobile\/chat(?:\/|$)/.test(String(location.hash || ''));
+    if (onSameOpenChat) return;
+    _showMobileCompletionToast({
+      key: `chat:${sessionId}:${msg.streamId || ''}`,
+      title: 'Response ready',
+      summary: msg.data?.text || msg.text || 'Prometheus finished responding.',
+      route: _mobileCompletionRoute(msg),
+    });
+  });
+  wsEventBus.on('delivery_notification', (msg = {}) => {
+    _showMobileCompletionToast({
+      key: `delivery:${msg.batchId || msg.attachmentPath || msg.text || ''}`,
+      title: 'New delivery',
+      summary: msg.text || msg.caption || msg.fileName || 'Prometheus sent an update.',
+      route: _mobileCompletionRoute(msg),
+    });
+  });
+  wsEventBus.on('session_notification', (msg = {}) => {
+    if (!['schedule', 'hot_restart', 'dev_apply'].includes(String(msg.source || ''))) return;
+    _showMobileCompletionToast({
+      key: `session:${msg.notificationId || `${msg.source}:${msg.sessionId}`}`,
+      title: msg.source === 'schedule' ? 'Scheduled work finished' : 'Prometheus update',
+      summary: msg.message || msg.text || 'An automated update is ready.',
+      route: _mobileCompletionRoute(msg),
+    });
+  });
+}
+
 function notifyMobileModelChanged(evt = {}, { sessionId = '' } = {}) {
   const type = String(evt?.type || '').trim();
   if (type !== 'model_switched' && type !== 'main_model_changed') return null;
@@ -186,13 +294,16 @@ async function _refreshMobileChatPushButton() {
   if (!btn) return;
   try {
     const status = await getMobilePushStatus();
-    const on = status.browserSupported && status.permission === 'granted' && status.subscribed;
+    const on = status.browserSupported && status.permission === 'granted' && status.subscribed && status.registered !== false && !status.lastError;
     btn.classList.toggle('active', on);
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     btn.setAttribute('title', on ? 'Notifications on' : 'Enable notifications');
     btn.setAttribute('aria-label', on ? 'Disable notifications' : 'Enable notifications');
     btn.style.color = on ? 'var(--pm-orange)' : '';
-    btn.dataset.pushState = on ? 'on' : status.permission || 'off';
+    btn.dataset.pushState = on ? 'on' : (status.lastError ? 'error' : status.permission || 'off');
+    btn.title = status.lastError
+      ? `Notifications need repair: ${status.lastError}`
+      : (on ? 'Notifications on' : 'Enable notifications');
   } catch {
     btn.dataset.pushState = 'unknown';
   }
@@ -214,7 +325,8 @@ async function _toggleMobileChatPushNotifications() {
       return;
     }
     const status = await getMobilePushStatus();
-    if (status.permission === 'granted' && status.subscribed) {
+    const needsRepair = status.registered === false || !!status.lastError;
+    if (status.permission === 'granted' && status.subscribed && !needsRepair) {
       await disableMobileChatPushNotifications();
       pmToast('Notifications off', 'success');
     } else {
@@ -299,6 +411,7 @@ const __pmChat = (window.__pmChat = window.__pmChat || {
   renderTimers: {},
   patchRenderTimers: {},
   backgroundSpawnLanes: {},
+  toolProgressBySession: {},
   pendingApprovals: {},
   sentClientRequestIds: {},
   queuedPrompts: {},
@@ -308,6 +421,7 @@ const __pmChat = (window.__pmChat = window.__pmChat || {
   editingMessageIndex: -1,
   renderedMessageLimits: {},
   historyPagination: {},
+  resolvedQuestionIds: {},
 });
 
 if (!__pmChat.mainChatGoals || typeof __pmChat.mainChatGoals !== 'object') __pmChat.mainChatGoals = {};
@@ -315,6 +429,8 @@ if (!__pmChat.renderedMessageLimits || typeof __pmChat.renderedMessageLimits !==
 if (!__pmChat.historyPagination || typeof __pmChat.historyPagination !== 'object') __pmChat.historyPagination = {};
 __pmChat.mainChatGoals = { ..._readMobileGoalCache(), ...__pmChat.mainChatGoals };
 if (!__pmChat.goalDetailsOpen || typeof __pmChat.goalDetailsOpen !== 'object') __pmChat.goalDetailsOpen = {};
+if (!__pmChat.toolProgressBySession || typeof __pmChat.toolProgressBySession !== 'object') __pmChat.toolProgressBySession = {};
+if (!__pmChat.resolvedQuestionIds || typeof __pmChat.resolvedQuestionIds !== 'object') __pmChat.resolvedQuestionIds = {};
 
 function _mobileGoalTimestampMs(value) {
   if (value === null || value === undefined || value === '') return 0;
@@ -418,14 +534,14 @@ function _renderMobileGoalPlans(goal) {
     ${plans.map((plan, index) => {
       const steps = Array.isArray(plan?.steps) ? plan.steps : [];
       const done = steps.filter((step) => ['done', 'skipped'].includes(_mobileGoalStepStatus(step?.status))).length;
-      const judge = String(plan?.judgeReason || '').trim();
+      const outcome = String(plan?.judgeReason || '').trim();
       return `<section class="pm-mobile-goal-plan">
         <div class="pm-mobile-goal-plan-head">
           <strong>Turn ${escapeHtml(String(index + 1))}/${escapeHtml(String(total))}</strong>
           <span>${escapeHtml(String(plan?.status || 'planned'))} - ${escapeHtml(String(done))}/${escapeHtml(String(steps.length))}</span>
         </div>
         ${steps.length ? _renderMobileGoalStepList(steps) : '<div class="pm-mobile-goal-empty">This turn has no tracked steps.</div>'}
-        ${judge ? `<div class="pm-mobile-goal-judge">${escapeHtml(judge.slice(0, 520))}</div>` : ''}
+        ${outcome ? `<div class="pm-mobile-goal-outcome">${escapeHtml(outcome.slice(0, 520))}</div>` : ''}
       </section>`;
     }).join('')}
   </div>`;
@@ -1188,6 +1304,21 @@ function _mapServerMessageToMobile(m, index = -1) {
   };
 }
 
+function _reconcileMobilePushSubscriptionSilently() {
+  if (!getDeviceToken()) return;
+  reconcileMobileChatPushNotifications({ requestPermission: false, sendTest: false })
+    .then(() => _refreshMobileChatPushButton())
+    .catch(() => _refreshMobileChatPushButton());
+}
+
+if (!window.__pmMobilePushRepairInstalled) {
+  window.__pmMobilePushRepairInstalled = true;
+  window.addEventListener('pageshow', _reconcileMobilePushSubscriptionSilently);
+  window.addEventListener('online', _reconcileMobilePushSubscriptionSilently);
+  wsEventBus?.on?.('ws:open', _reconcileMobilePushSubscriptionSilently);
+  setTimeout(_reconcileMobilePushSubscriptionSilently, 1200);
+}
+
 if (!__pmChat.patchRenderTimers || typeof __pmChat.patchRenderTimers !== 'object') {
   __pmChat.patchRenderTimers = {};
 }
@@ -1668,6 +1799,7 @@ function _rememberMobileActiveRun(sessionId, state = {}) {
       disconnected: has('disconnected') ? state.disconnected === true : prev.disconnected === true,
       streamId: has('streamId') ? String(state.streamId || '') : String(prev.streamId || ''),
       runtimeId: has('runtimeId') ? String(state.runtimeId || '') : String(prev.runtimeId || ''),
+      clientRequestId: has('clientRequestId') ? String(state.clientRequestId || '') : String(prev.clientRequestId || ''),
       lastSeq: has('lastSeq')
         ? Math.max(0, Math.floor(Number(state.lastSeq || 0)) || 0)
         : Math.max(0, Math.floor(Number(prev.lastSeq || 0)) || 0),
@@ -2087,7 +2219,9 @@ function _mergeMobileAssistantTurnDetails(target, source) {
   }
   if (!target.fileChanges && source.fileChanges) target.fileChanges = source.fileChanges;
   if (!target.approvalRequest && source.approvalRequest) target.approvalRequest = source.approvalRequest;
-  if (!target.questionRequest && source.questionRequest) target.questionRequest = source.questionRequest;
+  if (!target.questionRequest && source.questionRequest && !_mobileQuestionIsResolved(source.questionRequest.id)) {
+    target.questionRequest = source.questionRequest;
+  }
   if (!target.goalCompletionReport && source.goalCompletionReport) target.goalCompletionReport = source.goalCompletionReport;
   if (!String(target._clientRequestId || '').trim() && String(source._clientRequestId || '').trim()) {
     target._clientRequestId = String(source._clientRequestId).trim();
@@ -2155,7 +2289,7 @@ function _pruneMobileStaleStreamingTraceTurns(thread = _activeMobileThread()) {
     if (
       msg._voiceWorkerLocalTurn === true
       || msg._voiceWorkerLocalFinal === true
-      || String(msg.messageKind || '').trim() === 'voice_foreground_worker'
+      || ['voice_foreground_worker', 'internal_watch_review'].includes(String(msg.messageKind || '').trim())
     ) continue;
     let previousAssistantIndex = -1;
     let blockedByUser = false;
@@ -4761,7 +4895,6 @@ function _isMobileExplicitMediaToolName(name) {
     || _isMobileGenerateVideoToolName(value)
     || value === 'present_file'
     || value === 'canvas_present'
-    || value === 'download_media'
     || value.startsWith('creative_')
     || value.startsWith('hyperframes_');
 }
@@ -5061,10 +5194,6 @@ function _mobileApprovalVisibleSessionId(approvalInput = {}) {
   const lane = _mobileBackgroundSpawnLaneForApproval(source);
   if (lane?.sessionId) return String(lane.sessionId).trim();
   const sid = String(source.sessionId || source.sourceSessionId || '').trim();
-  if (_mobileBackgroundSpawnIdFromSessionId(sid)) {
-    const activeSid = String(__pmChat.activeSessionId || '').trim();
-    if (activeSid && activeSid !== sid) return activeSid;
-  }
   return sid || String(__pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
 }
 
@@ -5109,6 +5238,16 @@ function _getPendingApprovalsForSession(sessionId) {
   return [...out.values()];
 }
 
+function _mobileApprovalSurfaceSessionId() {
+  const voiceRoute = String(window.location?.hash || '').startsWith('#mobile/voice');
+  return String(
+    (voiceRoute ? __pmVoice?.targetSessionId : __pmChat.activeSessionId)
+    || __pmChat.activeSessionId
+    || __pmVoice?.targetSessionId
+    || MOBILE_CHAT_SESSION_ID,
+  ).trim() || MOBILE_CHAT_SESSION_ID;
+}
+
 function _upsertMobilePendingApproval(approvalInput = {}) {
   const approval = _normalizeMobileApproval(approvalInput);
   if (!approval.id) return false;
@@ -5120,7 +5259,7 @@ function _upsertMobilePendingApproval(approvalInput = {}) {
   const idx = list.findIndex((item) => String(item?.id || '') === storedApproval.id);
   if (idx >= 0) list[idx] = { ...list[idx], ...storedApproval };
   else list.push(storedApproval);
-  __pmChat.pendingApprovals[sid] = list.slice(-8);
+  __pmChat.pendingApprovals[sid] = list;
   return true;
 }
 
@@ -5140,9 +5279,14 @@ function _updateMobilePendingApproval(id, patch = {}) {
 }
 
 function _renderMobileApprovalSheet() {
-  const pending = Object.values(__pmChat.pendingApprovals || {})
-    .flat()
-    .filter((approval) => approval && approval.id && String(approval.status || 'pending') === 'pending');
+  const activeSessionId = _mobileApprovalSurfaceSessionId();
+  const pending = _getPendingApprovalsForSession(activeSessionId)
+    .filter((approval) => {
+      const id = String(approval?.id || '').trim();
+      if (!id) return false;
+      const selector = `[data-pm-approval-id="${_pmCssEscape(id)}"]`;
+      return ![...document.querySelectorAll(selector)].some((node) => !node.closest('#pm-global-approval-host'));
+    });
   let host = document.getElementById('pm-global-approval-host');
   if (!pending.length) {
     host?.remove();
@@ -5153,7 +5297,6 @@ function _renderMobileApprovalSheet() {
     host.id = 'pm-global-approval-host';
     document.body.appendChild(host);
   }
-  const current = pending.find((approval) => _mobileApprovalVisibleSessionId(approval) === String(__pmChat.activeSessionId || '')) || pending[0];
   const openTerminals = {};
   const approvalDetails = _captureMobileApprovalDetailsState(host);
   try {
@@ -5169,7 +5312,7 @@ function _renderMobileApprovalSheet() {
   } catch {}
   host.innerHTML = `<div class="pm-global-approval-backdrop"></div>
     <div class="pm-global-approval-sheet" role="dialog" aria-live="polite" aria-label="Approval required">
-      ${_renderMobileApprovalCard(current)}
+      ${pending.map((approval) => _renderMobileApprovalCard(approval)).join('')}
     </div>`;
   try {
     _restoreMobileApprovalDetailsState(host, approvalDetails);
@@ -5240,6 +5383,7 @@ async function _resolveMobileApprovalButton(button) {
       const bodyEl = document.getElementById('pm-chat-body');
       if (threadEl) _flushThreadRender(threadEl, bodyEl, sid || 'chat');
     }
+    _renderMobileApprovalSheet();
     if (approved) {
       setTimeout(() => {
         const host = document.querySelector(`[data-process-approval-host="${_pmCssEscape(id)}"]`);
@@ -5264,6 +5408,83 @@ async function _resolveMobileApprovalButton(button) {
   } catch (err) {
     scope?.querySelectorAll('button')?.forEach((btn) => { btn.disabled = false; });
     pmToast(`Approval failed: ${err.message || err}`, 'error');
+  }
+}
+
+let _mobileApprovalReconcileInFlight = null;
+let _mobileApprovalReconcileRetryTimer = null;
+let _mobileApprovalReconcileFailures = 0;
+let _mobileApprovalReconcileWarned = false;
+
+function _replaceMobilePendingApprovals(approvals = []) {
+  const pendingIds = new Set(
+    (Array.isArray(approvals) ? approvals : [])
+      .filter((approval) => String(approval?.status || 'pending').toLowerCase() === 'pending')
+      .map((approval) => String(approval?.id || '').trim())
+      .filter(Boolean),
+  );
+  Object.values(__pmChat.threads || {}).forEach((thread) => {
+    (Array.isArray(thread) ? thread : []).forEach((message) => {
+      const id = String(message?.approvalRequest?.id || '').trim();
+      if (id && String(message.approvalRequest.status || 'pending').toLowerCase() === 'pending' && !pendingIds.has(id)) {
+        message.approvalRequest = _normalizeMobileApproval({ ...message.approvalRequest, status: 'resolved' });
+      }
+    });
+  });
+  Object.values(_mobileBackgroundSpawnLanes()).forEach((lane) => {
+    const id = String(lane?.approvalRequest?.id || '').trim();
+    if (!id || pendingIds.has(id) || String(lane.approvalRequest.status || 'pending').toLowerCase() !== 'pending') return;
+    lane.approvalRequest = _normalizeMobileApproval({ ...lane.approvalRequest, status: 'resolved' });
+    if (lane.status === 'approval_required') lane.status = 'running';
+  });
+  __pmChat.pendingApprovals = {};
+  (Array.isArray(approvals) ? approvals : []).forEach((approval) => {
+    if (String(approval?.status || 'pending').toLowerCase() !== 'pending') return;
+    _upsertMobilePendingApproval(approval);
+  });
+}
+
+function _syncMobileApprovalSurfaces() {
+  const sid = _mobileApprovalSurfaceSessionId();
+  _renderMobileBackgroundSpawnDock(document.getElementById('pm-background-spawn-dock'), sid);
+  const threadEl = document.getElementById('pm-chat-thread');
+  if (threadEl) _flushThreadRender(threadEl, document.getElementById('pm-chat-body'), sid);
+  _renderMobileApprovalSheet();
+}
+
+async function _reconcileMobilePendingApprovals({ retry = true } = {}) {
+  if (_mobileApprovalReconcileInFlight) return _mobileApprovalReconcileInFlight;
+  const request = (async () => {
+    try {
+      const approvals = await loadMobileApprovals('pending');
+      _replaceMobilePendingApprovals(approvals);
+      _mobileApprovalReconcileFailures = 0;
+      _mobileApprovalReconcileWarned = false;
+      if (_mobileApprovalReconcileRetryTimer) clearTimeout(_mobileApprovalReconcileRetryTimer);
+      _mobileApprovalReconcileRetryTimer = null;
+      _syncMobileApprovalSurfaces();
+      return approvals;
+    } catch (err) {
+      _mobileApprovalReconcileFailures += 1;
+      console.warn('[mobile approvals] reconciliation failed:', err?.message || err);
+      if (retry && getDeviceToken() && _mobileApprovalReconcileFailures < 4 && !_mobileApprovalReconcileRetryTimer) {
+        const delay = [400, 1200, 3000][_mobileApprovalReconcileFailures - 1] || 3000;
+        _mobileApprovalReconcileRetryTimer = setTimeout(() => {
+          _mobileApprovalReconcileRetryTimer = null;
+          _reconcileMobilePendingApprovals({ retry: true }).catch(() => {});
+        }, delay);
+      } else if (getDeviceToken() && _mobileApprovalReconcileFailures >= 4 && !_mobileApprovalReconcileWarned) {
+        _mobileApprovalReconcileWarned = true;
+        pmToast('Could not restore pending approvals. Reconnecting will retry.', 'warn');
+      }
+      throw err;
+    }
+  })();
+  _mobileApprovalReconcileInFlight = request;
+  try {
+    return await request;
+  } finally {
+    if (_mobileApprovalReconcileInFlight === request) _mobileApprovalReconcileInFlight = null;
   }
 }
 
@@ -5296,7 +5517,7 @@ function _installMobileApprovalBridge() {
       const bodyEl = document.getElementById('pm-chat-body');
       if (threadEl) _flushThreadRender(threadEl, bodyEl, sid || 'chat');
     }
-
+    _renderMobileApprovalSheet();
   });
   ['approval_approved', 'approval_denied', 'approval_expired', 'approval_failed'].forEach((eventName) => {
     bus.on(eventName, (msg = {}) => {
@@ -5314,9 +5535,22 @@ function _installMobileApprovalBridge() {
         const bodyEl = document.getElementById('pm-chat-body');
         if (threadEl) _flushThreadRender(threadEl, bodyEl, sid || 'chat');
       }
-
+      _renderMobileApprovalSheet();
     });
   });
+  const reconcile = () => {
+    if (!getDeviceToken()) return;
+    _reconcileMobilePendingApprovals({ retry: true }).catch(() => {});
+  };
+  const reconcileWhenVisible = () => {
+    if (document.visibilityState === 'visible') reconcile();
+  };
+  bus.on('ws:open', reconcile);
+  window.addEventListener('online', reconcile);
+  window.addEventListener('pageshow', reconcile);
+  window.addEventListener('focus', reconcile);
+  document.addEventListener('visibilitychange', reconcileWhenVisible);
+  queueMicrotask(reconcile);
 }
 
 _installMobileApprovalBridge();
@@ -6108,6 +6342,9 @@ function _normalizeMobileQuestion(input, extra = {}) {
 function _renderMobileQuestionCard(item) {
   const q = _normalizeMobileQuestion(item);
   if (!q.id || !q.questions.length) return '';
+  // Submission is optimistic: remove the card before the network round-trip so
+  // the stream never leaves an answered card behind while the agent resumes.
+  if (q.status === 'submitting') return '';
   const pending = q.status === 'pending';
   // Escape the inline JS id arg for use inside a double-quoted onclick attribute.
   // Raw JSON.stringify yields a value wrapped in double quotes which terminates
@@ -6420,6 +6657,38 @@ function _findMobileQuestionRecord(qid) {
   }
   return null;
 }
+function _mobileQuestionIsResolved(id) {
+  return __pmChat.resolvedQuestionIds?.[String(id || '').trim()] === true;
+}
+function _setMobileQuestionSubmitting(id) {
+  const qid = String(id || '').trim();
+  if (!qid) return;
+  Object.entries(__pmChat.threads || {}).forEach(([sid, thread]) => {
+    if (!Array.isArray(thread)) return;
+    let changed = false;
+    thread.forEach((message) => {
+      if (String(message?.questionRequest?.id || '') !== qid) return;
+      message.questionRequest = { ...message.questionRequest, status: 'submitting' };
+      changed = true;
+    });
+    if (changed && String(__pmChat.activeSessionId || '').trim() === String(sid)) _renderMobileChatSessionNow(sid);
+  });
+}
+function _removeMobileQuestionFromThread(id) {
+  const qid = String(id || '').trim();
+  if (!qid) return;
+  __pmChat.resolvedQuestionIds[qid] = true;
+  Object.entries(__pmChat.threads || {}).forEach(([sid, thread]) => {
+    if (!Array.isArray(thread)) return;
+    let changed = false;
+    thread.forEach((message) => {
+      if (String(message?.questionRequest?.id || '') !== qid) return;
+      delete message.questionRequest;
+      changed = true;
+    });
+    if (changed && String(__pmChat.activeSessionId || '').trim() === String(sid)) _renderMobileChatSessionNow(sid);
+  });
+}
 async function _submitMobileQuestion(id) {
   const qid = String(id || '').trim();
   // Prefer the locally-rendered question record (already in the thread) so a
@@ -6434,6 +6703,7 @@ async function _submitMobileQuestion(id) {
   const savedPayload = _mobileQuestionPayloadFromDraft(q, _mobileQuestionDrafts.get(qid));
   const hasDomAnswer = payload.answers.some((answer) => (answer.selected || []).length || answer.text || answer.other) || payload.generalOther;
   if (!hasDomAnswer && savedPayload) payload = savedPayload;
+  _setMobileQuestionSubmitting(qid);
   try {
     const result = await window.api(`/api/questions/${encodeURIComponent(qid)}/submit`, { method: 'POST', body: JSON.stringify(payload) });
     const answeredQuestion = { ...(result?.question || q), answers: payload.answers, generalOther: payload.generalOther };
@@ -6458,7 +6728,11 @@ async function _submitMobileQuestion(id) {
         pmToast('Answer queued a resume message', 'info');
       }
     }
-  } catch (err) { pmToast?.(`Question submit failed: ${err?.message || err}`, 'error'); }
+  } catch (err) {
+    // Restore the same card if the answer could not be submitted.
+    _updateMobileQuestionStatus({ questionId: qid, question: q }, 'pending');
+    pmToast?.(`Question submit failed: ${err?.message || err}`, 'error');
+  }
 }
 async function _cancelMobileQuestion(id) {
   const qid = String(id || '').trim();
@@ -6470,6 +6744,7 @@ async function _cancelMobileQuestion(id) {
 function _upsertMobileQuestion(q) {
   const sid = String(q.sessionId || '').trim();
   if (!sid || !q.id) return;
+  if (_mobileQuestionIsResolved(q.id)) return;
   if (!Array.isArray(__pmChat.threads[sid])) __pmChat.threads[sid] = [];
   const thread = __pmChat.threads[sid];
   const existing = thread.filter((m) => String(m?.questionRequest?.id || '') === q.id);
@@ -6483,8 +6758,12 @@ function _upsertMobileQuestion(q) {
 function _updateMobileQuestionStatus(event, status) {
   const id = String(event.questionId || event.id || event.question?.id || '').trim();
   if (!id) return;
+  if (status && status !== 'pending' && status !== 'submitting') {
+    _mobileQuestionDrafts.delete(id);
+    _removeMobileQuestionFromThread(id);
+    return;
+  }
   const sessions = __pmChat.threads || {};
-  if (status && status !== 'pending') _mobileQuestionDrafts.delete(id);
   for (const sid of Object.keys(sessions)) {
     const thread = sessions[sid];
     if (!Array.isArray(thread)) continue;
@@ -7549,6 +7828,7 @@ function _renderThread(threadEl, sessionKey = '') {
   _wireMobileProcessRunActions(threadEl);
   _wireMobileChatEnhancements(threadEl);
   _scheduleMobileThreadCacheSave(sid);
+  _renderMobileApprovalSheet();
 }
 
 function _patchMobileThreadMessage(threadEl, message, index) {
@@ -8493,6 +8773,12 @@ function _pmRemoveComposerSkillMatch(page, input, id) {
 function _pmRenderSkillTriggerPill(page, input) {
   const pill = page?.querySelector?.('#pm-skill-trigger-pill');
   if (!pill) return;
+  // Slash commands own the composer suggestion surface. Do not stack the
+  // unrelated skill matcher beneath it (notably while typing /skill).
+  if (_pmSlashCommandState(input) || _pmSkillCommandState(input) || _pmMatchSlashCommandValue(input?.value || '')) {
+    _pmHideSkillTriggerPill(page);
+    return;
+  }
   if (!String(input?.value || '').trim()) _pmClearSkillExclusions();
   _pmEnsureSkillTriggerCacheLoaded();
   _pmFetchComposerSkillMatches(input?.value || '', page);
@@ -9321,6 +9607,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 9.5 12 15l5.5-5.5" /></svg>
     </button>
     <div class="pm-mobile-queued-prompts" id="pm-mobile-queued-prompts" hidden></div>
+    <div class="pm-tool-progress-dock" id="pm-tool-progress-dock" hidden aria-live="polite"></div>
     <div class="pm-main-plan-dock" id="pm-main-plan-dock" hidden></div>
     <div class="pm-background-spawn-dock" id="pm-background-spawn-dock" hidden></div>
     <div class="pm-mobile-goal-strip" id="pm-mobile-goal-strip" hidden></div>
@@ -9423,6 +9710,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
   const scrollLatestBtn = page.querySelector('#pm-scroll-latest');
   const form     = page.querySelector('#pm-composer');
   const connectionStatus = page.querySelector('#pm-chat-connection-status');
+  const toolProgressDock = page.querySelector('#pm-tool-progress-dock');
   const mainPlanDock = page.querySelector('#pm-main-plan-dock');
   const backgroundSpawnDock = page.querySelector('#pm-background-spawn-dock');
   const goalStrip = page.querySelector('#pm-mobile-goal-strip');
@@ -9491,6 +9779,7 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     _loadMobileEmptyChatBrainCards().catch(() => {});
   }
   const previousBackgroundDockBridge = window.__pmMobileBackgroundSpawnDockChanged;
+  const previousToolProgressDockBridge = window.__pmMobileToolProgressDockChanged;
   const previousQueuedPromptsBridge = window.__pmMobileQueuedPromptsChanged;
   const previousGoalBridge = window.__pmMobileGoalChanged;
   const currentBackgroundDockBridge = () => {
@@ -9532,10 +9821,13 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
       }
     }
   };
+  const currentToolProgressDockBridge = () => updateChatComposerSpace();
   window.__pmMobileBackgroundSpawnDockChanged = currentBackgroundDockBridge;
+  window.__pmMobileToolProgressDockChanged = currentToolProgressDockBridge;
   window.__pmMobileQueuedPromptsChanged = currentQueuedPromptsBridge;
   window.__pmMobileGoalChanged = currentGoalBridge;
   _renderMobileMainPlanDock(mainPlanDock, requestedSession);
+  _renderMobileToolProgressDock(toolProgressDock, requestedSession);
   _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
   _renderMobileGoalPill(goalStrip, requestedSession);
 
@@ -10574,7 +10866,7 @@ void main() {
         }
         // ── Parallel batch 2: approvals + questions (independent) ────────────────
         const [pendingApprovals, pendingQuestions] = await Promise.all([
-          loadMobileApprovals('pending').catch(() => []),
+          _reconcileMobilePendingApprovals({ retry: true }).catch(() => []),
           loadMobileQuestions('pending').catch(() => []),
         ]);
         (Array.isArray(pendingApprovals) ? pendingApprovals : [])
@@ -10606,6 +10898,7 @@ void main() {
       if (status?.active) _clearRecoveredMobileChatError(aiTurn || latestAssistantTurn);
       const runStartedAt = Number(status?.run?.startedAt || remembered?.startedAt || 0) || 0;
       const activeRunKind = String(status?.run?.kind || '').trim();
+      const activeRunSource = String(status?.run?.source || status?.activeRun?.source || '').trim().toLowerCase();
       // Once a final frame has reached the phone, recovery must be monotonic:
       // never reset that answer just because run-status propagation or SSE
       // teardown is a few seconds behind. Finalize the durable local turn and
@@ -10651,12 +10944,14 @@ void main() {
             liveTraceEntries: [],
             activeRunKind,
             agentRuntimeKind: activeRunKind,
+            messageKind: activeRunSource === 'internal_watch' ? 'internal_watch_review' : undefined,
             _clientRequestId: recoveryClientRequestId || undefined,
           };
           activeThread.push(aiTurn);
           hasLocalLiveHistory = false;
         }
         aiTurn.streaming = true;
+        if (activeRunSource === 'internal_watch') aiTurn.messageKind = 'internal_watch_review';
         const statusRuntimeId = String(status?.run?.id || status?.activeRun?.id || '').trim();
         const localRuntimeId = String(aiTurn.runtimeId || remembered?.runtimeId || '').trim();
         const statusClientRequestId = recoveryClientRequestId;
@@ -10973,10 +11268,14 @@ void main() {
       const connectionHeight = connectionStatus && !connectionStatus.hidden
         ? Math.ceil(connectionStatus.getBoundingClientRect?.().height || 0)
         : 0;
+      const toolProgressHeight = toolProgressDock && !toolProgressDock.hidden
+        ? Math.ceil(toolProgressDock.getBoundingClientRect?.().height || 0)
+        : 0;
       page?.style?.setProperty?.('--pm-composer-live-height', `${height}px`);
       page?.style?.setProperty?.('--pm-queued-live-height', `${queuedHeight}px`);
       page?.style?.setProperty?.('--pm-goal-live-height', `${goalHeight}px`);
       page?.style?.setProperty?.('--pm-connection-live-height', `${connectionHeight}px`);
+      page?.style?.setProperty?.('--pm-tool-progress-live-height', `${toolProgressHeight}px`);
       const dockHeight = backgroundSpawnDock && !backgroundSpawnDock.hidden
         ? Math.ceil(backgroundSpawnDock.getBoundingClientRect?.().height || 0)
         : 0;
@@ -10986,14 +11285,14 @@ void main() {
       const runtimeDockHeight = Math.max(dockHeight, planDockHeight);
       page?.style?.setProperty?.('--pm-background-dock-live-height', `${dockHeight}px`);
       page?.style?.setProperty?.('--pm-main-plan-live-height', `${planDockHeight}px`);
-      page?.style?.setProperty?.('--pm-scroll-latest-stack-height', `${queuedHeight + goalHeight + runtimeDockHeight + connectionHeight}px`);
+      page?.style?.setProperty?.('--pm-scroll-latest-stack-height', `${queuedHeight + goalHeight + toolProgressHeight + runtimeDockHeight + connectionHeight}px`);
       const hasExpandedSurface = goalStrip?.dataset?.expanded === 'true'
         || mainPlanDock?.classList?.contains('is-open')
         || backgroundSpawnDock?.classList?.contains('is-open');
       // Open cards get a larger reading gutter than their collapsed pills. The
       // extra 32px keeps the final chat/tool line visibly above the glass edge.
       const clearance = hasExpandedSurface || connectionHeight || queuedHeight ? 78 : (runtimeDockHeight ? 46 : 34);
-      const space = Math.max(170, height + queuedHeight + goalHeight + runtimeDockHeight + connectionHeight + clearance);
+      const space = Math.max(170, height + queuedHeight + goalHeight + toolProgressHeight + runtimeDockHeight + connectionHeight + clearance);
       body.style.setProperty('--pm-chat-composer-space', `${space}px`);
       if (form.classList.contains('is-voice-active') && chatVoiceShell && !chatVoiceShell.hidden) {
         const bodyRect = body.getBoundingClientRect?.();
@@ -11046,7 +11345,7 @@ void main() {
   const chatSurfaceResizeObserver = typeof ResizeObserver === 'function'
     ? new ResizeObserver(() => updateChatComposerSpace())
     : null;
-  [form, connectionStatus, mainPlanDock, backgroundSpawnDock, goalStrip, page?.querySelector?.('#pm-mobile-queued-prompts')]
+  [form, connectionStatus, toolProgressDock, mainPlanDock, backgroundSpawnDock, goalStrip, page?.querySelector?.('#pm-mobile-queued-prompts')]
     .filter(Boolean)
     .forEach((surface) => chatSurfaceResizeObserver?.observe(surface));
 
@@ -11538,6 +11837,7 @@ void main() {
   let _pmKbWasOpen = false;
   let _pmKbPinRaf = 0;
   let _pmKbPinUntil = 0;
+  let _pmKbViewportMode = '';
   function _pmKbPinScroll() {
     if (document.body?.classList?.contains('pm-mobile-document-scroll')) return;
     try {
@@ -11554,7 +11854,8 @@ void main() {
     // Keyboard height = layout viewport height minus the visible (visual)
     // viewport height. The shell stays anchored to the layout viewport, so the
     // composer only needs to float up by this amount.
-    const layoutOffset = Math.max(0, Math.round(window.innerHeight - vv.height));
+    const visualBottom = Math.round((Number(vv.offsetTop || 0) || 0) + Number(vv.height || 0));
+    const layoutOffset = Math.max(0, Math.round(window.innerHeight - visualBottom));
     const baselineOffset = Math.max(0, Math.round(_pmKbBaselineHeight - vv.height));
     const composerFocused = document.activeElement === input
       || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
@@ -11563,10 +11864,20 @@ void main() {
     // innerHeight and visualViewport.height, so their difference stays zero;
     // the pre-focus baseline catches that mode.
     const open = layoutOffset > 90 || (composerFocused && baselineOffset > 90);
-    // Only compensate when the visual viewport shrinks independently. If iOS
-    // already resized the layout viewport, fixed composers naturally sit above
-    // the keyboard and adding baselineOffset would lift them twice.
-    _pmKbApp.style.setProperty('--pm-keyboard-offset', `${open ? layoutOffset : 0}px`);
+    // iOS has two incompatible fixed-position behaviors: some webviews anchor
+    // fixed children to the layout viewport, while others already anchor them
+    // to the visual viewport. Measuring the composer before we apply a lift
+    // selects the right behavior and prevents the double-lift shown in the
+    // report, where the composer jumps to the top of the screen.
+    if (!open) {
+      _pmKbViewportMode = '';
+    } else if (!_pmKbViewportMode) {
+      _pmKbApp.style.setProperty('--pm-keyboard-offset', '0px');
+      const composerBottom = Number(form?.getBoundingClientRect?.().bottom || 0);
+      _pmKbViewportMode = composerBottom > 0 && composerBottom <= visualBottom + 44 ? 'visual' : 'layout';
+    }
+    const keyboardOffset = open && _pmKbViewportMode === 'layout' ? layoutOffset : 0;
+    _pmKbApp.style.setProperty('--pm-keyboard-offset', `${keyboardOffset}px`);
     _pmKbApp.classList.toggle('pm-keyboard-open', open);
     // Do this on the actual nav node instead of depending on ancestor CSS.
     // Installed iOS PWAs may retain an older mobile stylesheet for one launch,
@@ -11619,11 +11930,17 @@ void main() {
     _pmKbBaselineHeight = Math.max(_pmKbBaselineHeight, Number(window.innerHeight || 0), Number(window.visualViewport?.height || 0));
     // Pin aggressively through the keyboard's open animation so the shell never
     // ends up stuck above the keyboard waiting for a manual scroll.
-    _startKbPinLoop(800);
+    _pmKbViewportMode = '';
+    _startKbPinLoop(1200);
     _scheduleKeyboardOffset();
+    // Safari can report the focused element before it settles the visual
+    // viewport. Re-check across that animation instead of leaving the
+    // composer at an intermediate, off-keyboard position.
+    [120, 320, 700].forEach((delay) => setTimeout(_scheduleKeyboardOffset, delay));
   };
   const _onComposerBlurKb = () => {
     _pmKbPinUntil = 0;
+    _pmKbViewportMode = '';
     setTimeout(_scheduleKeyboardOffset, 60);
   };
     input?.addEventListener('focus', _onComposerFocusKb);
@@ -12314,6 +12631,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
         _applyMobileToolActivity(aiTurn, 'result', evt);
+        if (_clearMobileToolProgress(requestedSession, String(evt.action || evt.name || evt.toolName || ''))) {
+          _renderMobileToolProgressDock(toolProgressDock, requestedSession);
+        }
         renderStreamingThreadNow();
         return 'streaming';
       }
@@ -12332,6 +12652,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         if (messageText) {
           _appendMobileProcess(aiTurn, 'info', progressText, evt);
           _applyMobileToolActivity(aiTurn, 'progress', evt);
+        }
+        if (_setMobileToolProgress(requestedSession, evt)) {
+          _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         }
         renderStreamingThreadNow();
         return 'streaming';
@@ -12386,6 +12709,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         invalidateMobileDrawerSessions('mobile');
         return 'streaming';
       case 'final':
+        _clearMobileToolProgress(requestedSession);
+        _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
@@ -12406,6 +12731,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         renderThreadSoon();
         return 'final';
       case 'done':
+        _clearMobileToolProgress(requestedSession);
+        _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
@@ -12419,6 +12746,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         }
         return 'done';
       case 'error':
+        _clearMobileToolProgress(requestedSession);
+        _renderMobileToolProgressDock(toolProgressDock, requestedSession);
         _finishMobileVisualStreamText(aiTurn);
         _recordMobileChatError(aiTurn, { message: String(evt.message || 'Chat error'), rawBody: String(evt.message || ''), payload: evt });
         pmToast(aiTurn.errorPresentation);
@@ -12939,6 +13268,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
+    // Background-agent activity is a turn surface, not session history. Hide
+    // any lanes from the prior turn before the next user turn begins; clearing
+    // their ids also prevents delayed events from resurrecting an old dock.
+    _clearMobileBackgroundSpawnDockForSession(actualSessionId);
     let stagedVoiceImageSummary = '';
     const realtimeProviderForSend = String(__pmRealtimeAgent?.conn?.provider || '').trim();
     if (stagedVoiceImages.length && realtimeProviderForSend === 'xai') {
@@ -13241,6 +13574,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const activeThread = _activeMobileThread();
     const data = msg.data && typeof msg.data === 'object' ? msg.data : msg;
     const activeRunKind = String(msg.activeRunKind || data?.activeRunKind || data?.runKind || '').trim();
+    const isInternalWatchRun = String(data?.source || data?.run?.source || '').trim().toLowerCase() === 'internal_watch';
     const incomingClientRequestId = String(data?.clientRequestId || '').trim();
     const eventType = String(msg.event || data?.event || data?.type || '');
     if (eventType === 'user_message') {
@@ -13317,7 +13651,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         agentExecutionMode: 'execute',
         activeRunKind,
         agentRuntimeKind: activeRunKind,
-        messageKind: isVoiceForegroundWorker ? 'voice_foreground_worker' : undefined,
+        messageKind: isVoiceForegroundWorker
+          ? 'voice_foreground_worker'
+          : (isInternalWatchRun ? 'internal_watch_review' : undefined),
         _clientRequestId: incomingClientRequestId,
       };
       if (handoffIndex >= 0) activeThread.splice(handoffIndex + 1, 0, aiTurn);
@@ -13329,6 +13665,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       aiTurn.activeRunKind = activeRunKind;
       aiTurn.agentRuntimeKind = activeRunKind;
     }
+    if (isInternalWatchRun) aiTurn.messageKind = 'internal_watch_review';
     const evt = {
       ...data,
       type: eventType,
@@ -13351,15 +13688,23 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   const onInternalWatchSse = (msg = {}) => {
     const event = String(msg.eventType || msg.event || '').trim();
     if (!event) return;
-    applyMainChatStreamPayload({
-      sessionId: msg.sessionId,
-      streamId: msg.streamId,
-      seq: msg.seq,
-      at: msg.at,
-      event,
-      activeRunKind: 'main_chat',
-      data: { ...msg, type: event, event },
-    });
+    // Internal-watch delivery already runs through the durable main-chat
+    // stream. Applying both transports here made every tool event race its
+    // replayable counterpart: the trace could briefly render, then be replaced
+    // by an older stream state. Keep this event only as the immediate activity
+    // signal while runtime setup is in flight; the normal stream owns all UI
+    // frames from preflight through done.
+    if (event === 'runtime_registered') {
+      applyMainChatStreamPayload({
+        sessionId: msg.sessionId,
+        at: msg.at,
+        event,
+        activeRunKind: 'main_chat',
+        data: { ...msg, type: event, event, source: 'internal_watch' },
+      });
+      renderThreadNow();
+    }
+    scheduleMobileRunRecovery(event === 'runtime_registered' ? 0 : 120, { force: true, fullRefresh: false });
   };
   const onMainChatGoalSse = (msg = {}) => {
     const sid = String(msg.sessionId || '').trim();
@@ -13567,6 +13912,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     wsEventBus?.off?.('bg_agent_done', onBackgroundSpawnDone);
     if (window.__pmMobileBackgroundSpawnDockChanged === currentBackgroundDockBridge) {
       window.__pmMobileBackgroundSpawnDockChanged = previousBackgroundDockBridge;
+    }
+    if (window.__pmMobileToolProgressDockChanged === currentToolProgressDockBridge) {
+      window.__pmMobileToolProgressDockChanged = previousToolProgressDockBridge;
     }
     if (window.__pmMobileQueuedPromptsChanged === currentQueuedPromptsBridge) {
       window.__pmMobileQueuedPromptsChanged = previousQueuedPromptsBridge;
@@ -15452,27 +15800,27 @@ function _voiceOrbSvg() {
     <svg class="pm-orb-svg" viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
       <defs>
         <radialGradient id="pm-orb-core" cx="38%" cy="32%" r="70%">
-          <stop offset="0%"  stop-color="#fff6e6" stop-opacity="0.95"/>
-          <stop offset="35%" stop-color="#ffd9a8" stop-opacity="0.55"/>
-          <stop offset="70%" stop-color="#ea6a1f" stop-opacity="0.35"/>
-          <stop offset="100%" stop-color="#7a3008" stop-opacity="0.05"/>
+          <stop offset="0%"  stop-color="var(--pm-voice-orb-light, #fff6e6)" stop-opacity="0.95"/>
+          <stop offset="35%" stop-color="var(--pm-voice-orb-hot, #ffd9a8)" stop-opacity="0.55"/>
+          <stop offset="70%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0.35"/>
+          <stop offset="100%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity="0.05"/>
         </radialGradient>
         <radialGradient id="pm-orb-glow" cx="50%" cy="50%" r="60%">
-          <stop offset="0%"   stop-color="#ffb578" stop-opacity="0.65"/>
-          <stop offset="100%" stop-color="#ea6a1f" stop-opacity="0"/>
+          <stop offset="0%"   stop-color="var(--pm-voice-orb-glow, #ffb578)" stop-opacity="0.65"/>
+          <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
         </radialGradient>
         <linearGradient id="pm-wave-grad" x1="0%" y1="50%" x2="100%" y2="50%">
-          <stop offset="0%"   stop-color="#ea6a1f" stop-opacity="0"/>
-          <stop offset="15%"  stop-color="#ea6a1f" stop-opacity="0.9"/>
-          <stop offset="50%"  stop-color="#fff3d8" stop-opacity="1"/>
-          <stop offset="85%"  stop-color="#ea6a1f" stop-opacity="0.9"/>
-          <stop offset="100%" stop-color="#ea6a1f" stop-opacity="0"/>
+          <stop offset="0%"   stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
+          <stop offset="15%"  stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0.9"/>
+          <stop offset="50%"  stop-color="var(--pm-voice-orb-light, #fff3d8)" stop-opacity="1"/>
+          <stop offset="85%"  stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0.9"/>
+          <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
         </linearGradient>
         <filter id="pm-wave-glow" x="-20%" y="-100%" width="140%" height="300%"><feGaussianBlur stdDeviation="4"/></filter>
       </defs>
       <circle cx="160" cy="160" r="158" fill="url(#pm-orb-glow)"/>
       <circle cx="160" cy="160" r="132" fill="url(#pm-orb-core)"/>
-      <g class="pm-orb-grid" stroke="rgba(234,106,31,0.18)" fill="none" stroke-width="0.6">
+      <g class="pm-orb-grid" stroke="var(--pm-voice-orb-grid, rgba(234,106,31,0.18))" fill="none" stroke-width="0.6">
         <ellipse cx="160" cy="160" rx="132" ry="42"/>
         <ellipse cx="160" cy="160" rx="132" ry="86"/>
         <ellipse cx="160" cy="160" rx="42" ry="132"/>
@@ -15481,7 +15829,7 @@ function _voiceOrbSvg() {
       </g>
       <path class="pm-wave pm-wave-halo" d="M14 160 Q40 160 56 160 T96 138 T120 175 T142 142 T160 160 T178 178 T200 145 T220 175 T246 160 T268 160 T306 160" fill="none" stroke="url(#pm-wave-grad)" stroke-width="14" stroke-linecap="round" opacity="0.55" filter="url(#pm-wave-glow)"/>
       <path class="pm-wave pm-wave-main" d="M14 160 Q40 160 56 160 T96 138 T120 175 T142 142 T160 160 T178 178 T200 145 T220 175 T246 160 T268 160 T306 160" fill="none" stroke="url(#pm-wave-grad)" stroke-width="2.2" stroke-linecap="round"/>
-      <g class="pm-sparkles" fill="#fff3d8">
+      <g class="pm-sparkles" fill="var(--pm-voice-orb-light, #fff3d8)">
         <circle cx="92" cy="118" r="1.4"/><circle cx="220" cy="108" r="1.1"/><circle cx="245" cy="210" r="1.6"/><circle cx="88" cy="220" r="1.2"/>
         <circle cx="160" cy="92" r="1.3"/><circle cx="60" cy="170" r="0.9"/><circle cx="260" cy="172" r="1"/><circle cx="180" cy="232" r="1.4"/>
       </g>
@@ -21194,14 +21542,14 @@ function _voiceMainAgentSvg() {
   return `<svg viewBox="0 0 96 96" width="72" height="72" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <radialGradient id="pm-main-agent-glow" cx="50%" cy="42%" r="62%">
-        <stop offset="0%" stop-color="#ffd8a8"/>
-        <stop offset="44%" stop-color="#ea6a1f"/>
-        <stop offset="100%" stop-color="#8f3b16"/>
+        <stop offset="0%" stop-color="var(--pm-voice-orb-hot, #ffd8a8)"/>
+        <stop offset="44%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)"/>
+        <stop offset="100%" stop-color="var(--pm-voice-orb-deep, #8f3b16)"/>
       </radialGradient>
       <linearGradient id="pm-main-agent-line" x1="0" x2="1">
-        <stop offset="0%" stop-color="#ea6a1f" stop-opacity=".1"/>
+        <stop offset="0%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".1"/>
         <stop offset="48%" stop-color="#fff2d2"/>
-        <stop offset="100%" stop-color="#ea6a1f" stop-opacity=".1"/>
+        <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".1"/>
       </linearGradient>
     </defs>
     <circle cx="48" cy="48" r="34" fill="url(#pm-main-agent-glow)" opacity=".92"/>
@@ -23330,7 +23678,7 @@ void main() {
   function _setMode(mode) {
     __pmVoice.dictation = mode;
     _saveVoiceSettings({ dictation: mode });
-    const active = '#ea6a1f';
+    const active = 'var(--pm-voice-control-accent, var(--pm-orange))';
     const inactive = 'transparent';
     const activeColor = '#fff';
     const inactiveColor = 'var(--pm-muted)';
@@ -27488,6 +27836,48 @@ function _applyMobileMainPlanProgress(evt = {}, sessionId = __pmChat.activeSessi
   return state;
 }
 
+function _setMobileToolProgress(sessionId, evt = {}) {
+  if (evt.show_pill !== true) return false;
+  const sid = String(sessionId || '').trim();
+  const message = String(evt.message || '').trim();
+  if (!sid || !message) return false;
+  __pmChat.toolProgressBySession[sid] = {
+    action: String(evt.action || evt.name || evt.toolName || 'tool').trim(),
+    message: message.slice(0, 180),
+    phase: String(evt.phase || 'working').trim(),
+    current: Number.isFinite(Number(evt.current)) ? Number(evt.current) : null,
+    total: Number.isFinite(Number(evt.total)) ? Number(evt.total) : null,
+    updatedAt: Date.now(),
+  };
+  return true;
+}
+
+function _clearMobileToolProgress(sessionId, action = '') {
+  const sid = String(sessionId || '').trim();
+  const state = __pmChat.toolProgressBySession?.[sid];
+  if (!state) return false;
+  const expected = String(action || '').trim();
+  if (expected && state.action && expected !== state.action) return false;
+  delete __pmChat.toolProgressBySession[sid];
+  return true;
+}
+
+function _renderMobileToolProgressDock(dock, sessionId = __pmChat.activeSessionId) {
+  const host = dock || document.getElementById('pm-tool-progress-dock');
+  if (!host) return;
+  const sid = String(sessionId || '').trim();
+  const state = __pmChat.toolProgressBySession?.[sid];
+  host.hidden = !state?.message;
+  host.innerHTML = state?.message ? `
+    <div class="pm-tool-progress-pill" role="status">
+      <span class="pm-tool-progress-spinner" aria-hidden="true"></span>
+      <strong>${escapeHtml(state.message)}</strong>
+    </div>
+  ` : '';
+  host.closest?.('.pm-page')?.classList?.toggle('pm-tool-progress-active', !!state?.message);
+  try { window.__pmMobileToolProgressDockChanged?.(); } catch {}
+}
+
 function _syncMobileRuntimePillPair(host) {
   const page = host?.closest?.('.pm-page');
   if (!page) return;
@@ -28833,7 +29223,7 @@ export async function renderPairPage(page, { code, navigate }) {
               <radialGradient id="pm-pair-core" cx="35%" cy="32%" r="70%">
                 <stop offset="0%" stop-color="#fff6e6" stop-opacity="0.95"/>
                 <stop offset="40%" stop-color="#ffd9a8" stop-opacity="0.55"/>
-                <stop offset="100%" stop-color="#ea6a1f" stop-opacity="0.25"/>
+                <stop offset="100%" stop-color="var(--pm-orange)" stop-opacity="0.25"/>
               </radialGradient>
             </defs>
             <circle cx="100" cy="100" r="92" fill="url(#pm-pair-core)"/>
