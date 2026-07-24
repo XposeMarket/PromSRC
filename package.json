@@ -19,6 +19,7 @@
     "test:prompt-cache": "tsx src/gateway/prompt-cache.regression.ts",
     "test:turn-route-isolation": "tsx src/gateway/chat/turn-route-snapshot.regression.ts",
     "test:chat-model-route": "tsx src/gateway/chat/chat-model-route.regression.ts",
+    "test:thread-ops-model-route": "tsx src/gateway/threads/thread-ops-model-route.regression.ts",
     "test:tool-category-manifest": "tsx src/runtime/tool-category-manifest.regression.ts",
     "test:tool-category-phase4": "tsx src/runtime/tool-category-phase4.validation.ts",
     "test:instruction-segment-resolver": "tsx src/runtime/instruction-segment-registry.regression.ts",

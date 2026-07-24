@@ -206,10 +206,10 @@ class Preview:
 
         color(0.18, 0.44, 0.15)
         gl.glBegin(gl.GL_QUADS)
-        vertex(-430, 0, -320)
-        vertex(560, 0, -320)
-        vertex(560, 0, 320)
-        vertex(-430, 0, 320)
+        vertex(-520, 0, -480)
+        vertex(720, 0, -480)
+        vertex(720, 0, 620)
+        vertex(-520, 0, 620)
         gl.glEnd()
 
         # All sidewalks first, then asphalt, matching the Vita draw order.

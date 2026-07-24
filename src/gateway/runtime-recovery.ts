@@ -544,6 +544,48 @@ export function buildHotRestartRecoverySummary(maxAgeMs = 30 * 60_000, sinceMs =
   return sections.join('\n');
 }
 
+/**
+ * Planned restart/apply turns are deliberately not replayed during the first
+ * recovery pass: BOOT must first reconcile the completed apply boundary and
+ * durable dev-edit continuation.  Once that is done, this launches the same
+ * foreground turn with its original checkpoint, but without re-running the
+ * restart tool that caused the boundary.
+ *
+ * Runtime records are kept in the durable ledger after `recoverInterruptedRuntimes`
+ * marks them checkpointed, so callers pass the exact runtime ids from the
+ * current restart window rather than scanning historical checkpoints.
+ */
+export function resumePlannedRestartMainChats(
+  runtimeIds: string[],
+  retrigger: (runtime: LiveRuntimeSnapshot) => boolean,
+): string[] {
+  const requested = new Set((runtimeIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+  if (!requested.size) return [];
+
+  const resumed: string[] = [];
+  const runtimes = listDurableRuntimes()
+    .filter((runtime) => requested.has(String(runtime.id || '').trim()))
+    .sort((a, b) => runtimeTimestamp(a) - runtimeTimestamp(b));
+
+  for (const runtime of runtimes) {
+    if (runtime.kind !== 'main_chat' || !runtime.sessionId) continue;
+    if (!explicitlyOwnedMainChatRestartToolName(runtime)) continue;
+    if (String(runtime.recoveryData?.recovery || '') !== 'chat_checkpointed') continue;
+    try {
+      if (!retrigger(runtime)) continue;
+      resumed.push(runtime.sessionId);
+      markDurableRuntimeRecovered(runtime.id, 'interrupted', {
+        recovery: 'chat_planned_restart_retriggered',
+        sessionId: runtime.sessionId,
+        resumedAt: Date.now(),
+      });
+    } catch (err: any) {
+      console.warn('[runtime-recovery] Planned foreground restart continuation failed:', runtime.id, err?.message || err);
+    }
+  }
+  return Array.from(new Set(resumed));
+}
+
 export function recoverInterruptedRuntimes(opts: {
   launchBackgroundTaskRunner?: (taskId: string) => void;
   completePlainGatewayRestartTask?: (taskId: string) => boolean;

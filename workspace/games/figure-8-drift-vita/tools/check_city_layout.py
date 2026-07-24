@@ -55,6 +55,15 @@ def conflicts(
 
 def main() -> int:
     roads = samples()
+    # The northern drift complex must retain its outer loop and multiple connected
+    # inner links. This source-level geometry contract guards a regression to a
+    # single isolated circle.
+    drift_roads = [road for road in city.ROADS if road[1] >= 300 or road[3] >= 300]
+    if len(drift_roads) < 20:
+        raise AssertionError("drift complex needs outer loop plus multiple inner links")
+    inner_links = [road for road in drift_roads if road[4] < 9.0]
+    if len(inner_links) < 8:
+        raise AssertionError("drift complex inner links missing")
     failures = [
         *(f"building {message}" for message in conflicts(city.BUILDINGS, roads, 1.5)),
         *(f"industrial obstacle {message}" for message in conflicts(city.INDUSTRIAL_OBSTACLES, roads, 1.0)),
@@ -65,7 +74,7 @@ def main() -> int:
             print(f"  - {failure}")
         return 1
     print(
-        f"City layout OK: {len(city.BUILDINGS)} buildings and "
+        f"City layout OK: {len(city.BUILDINGS)} buildings, {len(drift_roads)} drift-complex roads, and "
         f"{len(city.INDUSTRIAL_OBSTACLES)} industrial obstacles clear every ground road."
     )
     return 0

@@ -1,0 +1,12 @@
+{
+  "skillId": "x-video-vertical-social-cut",
+  "reason": "resource-write",
+  "createdAt": "2026-07-23T13:18:34.565Z",
+  "rootDir": "C:\\Users\\rafel\\PromSRC\\workspace\\skills\\x-video-vertical-social-cut",
+  "copied": [
+    "SKILL.md",
+    "skill.md",
+    "skill.json"
+  ],
+  "hash": "c29d545d50af4f3e"
+}

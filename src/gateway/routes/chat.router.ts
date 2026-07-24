@@ -10115,6 +10115,9 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     `The previous gateway process exited while executing this already-persisted user turn (runtime ${runtime.id}).`,
     'Continue the same turn automatically. Do not ask the user to send "continue" and do not repeat completed or destructive work.',
     runtime.checkpoint?.toolName ? `Last tool boundary: ${String(runtime.checkpoint.toolName)}` : '',
+    /^(gateway_restart|prom_apply_dev_changes)$/i.test(String(runtime.checkpoint?.toolName || ''))
+      ? 'That restart/apply tool boundary completed successfully. Do not invoke that same restart or apply tool again for this work; continue with post-restart verification and every remaining step of the original request.'
+      : '',
     runtime.checkpoint?.message ? `Last recorded progress: ${String(runtime.checkpoint.message).slice(0, 1000)}` : '',
     'The interruption checkpoint and prior process/tool evidence are present in this session history. Reconcile them before taking the next action.',
     '[/GATEWAY RESTART RECOVERY]',

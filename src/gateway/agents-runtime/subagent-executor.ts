@@ -120,6 +120,20 @@ import {
   creativeWriteShotPrompt,
   creativeValidateCompositionLayers,
 } from '../creative/generative-pipeline';
+import {
+  addSocialCutReceipt,
+  applyCreativeSequenceOperations,
+  createCreativeSequence,
+  createCreativeSequenceVariant,
+  inspectCreativeSequence,
+  loadCreativeSequence,
+  saveCreativeSequence,
+  selectCreativeSequenceComposition,
+  type CreativeSequenceDoc,
+  type CreativeSequenceOperation,
+} from '../creative/sequence';
+import { qaCreativeSequenceExport } from '../creative/sequence-qa';
+import { renderComposition } from '../creative/renderers/composition_renderer';
 import { buildObsoleteBrandBlockMessage, containsObsoleteProductBrand, normalizeWorkspaceAliasPath } from '../scheduled-output-guard';
 import {
   listManagedTeams,
@@ -348,15 +362,19 @@ import {
 import { buildConnectorStatus } from '../tool-builder';
 import { readRawToolResultRange } from '../tool-result-envelope';
 import { attachCodeEvidenceToToolResult, type CodeEvidenceFile } from '../code-evidence';
+import { finalizeDevEditMutation, prepareDevEditMutation, type PreparedDevEditMutation } from '../dev-edit-ledger';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../../extensions/legacy-connector-adapter';
 import { classifyCommandTermination } from '../process/command-outcome';
 import { getExtensionRuntimeRegistry } from '../../extensions/runtime-registry';
-import { appendJournal, createTask, getEvidenceBusSnapshot, listTasks, loadTask, saveTask, setTaskStepRunning, updateTaskStatus, type TaskRecord, type TaskStatus } from '../tasks/task-store';
+import { appendJournal, createTask, findTaskBySessionId, getEvidenceBusSnapshot, getTaskSessionLookupRevision, listTasks, loadTask, saveTask, setTaskStepRunning, updateTaskStatus, type TaskRecord, type TaskStatus } from '../tasks/task-store';
 import { ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
 import { bindTaskRunToSession, getTaskRunBinding } from '../tasks/task-run-mirror';
 import type { SkillWindow } from '../prompt-context';
 import { isToolHiddenInPublicBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
 import { getApprovalQueue, serializeApprovalForClient } from '../verification-flow.js';
+// Registers durable dev-apply timeout/rejection handling even in lean gateway
+// startup paths that have not loaded the HTTP approval routes yet.
+import '../approval-actions.js';
 import {
   createPrometheusQuestionPayload,
   getPrometheusQuestionQueue,
@@ -374,6 +392,7 @@ import {
 import { DEV_SRC_SELF_EDIT_MODE, DEV_SRC_SELF_EDIT_REPAIR_MODE } from '../proposals/dev-src-self-edit.js';
 import {
   createDevSourceEditApprovalScope,
+  shouldAutoApproveScopedDevSourceEdit,
   type DevSourceEditScope,
   getDevSourceEditContinuation,
   isCompletedDevSourceEditApply,
@@ -388,9 +407,11 @@ import {
   claimCoordinatedDevEditFile,
   getCoordinatedDevEdit,
   listCoordinatedDevEditPeers,
+  beginCoordinatedDevApplyBatch,
   markCoordinatedDevApplyBatch,
   recordCoordinatedDevEditVerification,
   requestCoordinatedDevEditApply,
+  setCoordinatedDevApplyBatchApproval,
   waitForCoordinatedDevEditFiles,
 } from '../dev-edit-coordinator.js';
 import {
@@ -428,6 +449,7 @@ import { executeRegisteredCapabilityTool } from './capabilities/registry';
 import { appendEntityEvent, listEntities, readEntity, writeEntity } from '../business/entity-store';
 
 const getCreativeMotionRuntime = () => require('../creative/motion-runtime') as typeof import('../creative/motion-runtime');
+let cachedSourceAccessRoot: { workspace: string; sessionId: string; taskRevision: number; root: string } | null = null;
 const getCreativeAssets = () => require('../creative/assets') as typeof import('../creative/assets');
 const getCreativeLayerExtraction = () => require('../creative/layer-extraction') as typeof import('../creative/layer-extraction');
 const getCreativeModelPaths = () => require('../creative/onnx/model-paths') as typeof import('../creative/onnx/model-paths');
@@ -1744,7 +1766,7 @@ function resolveTaskForSession(sessionId: string) {
     }
   }
   try {
-    return listTasks().find((task) => String(task?.sessionId || '') === sid) || null;
+    return findTaskBySessionId(sid);
   } catch {
     return null;
   }
@@ -3057,13 +3079,106 @@ function buildPresentedFileArtifact(absPath: string, relPath: string, title?: st
   };
 }
 
+function devEditMutationFiles(name: string, args: any, projectRoot: string): Array<{ file: string; absPath: string }> {
+  const tool = String(name || '').toLowerCase();
+  const action = String(args?.action || args?.operation || '').toLowerCase();
+  // Patchsets dispatch individual native source mutations through executeTool;
+  // record those individual before/after boundaries rather than one duplicate
+  // aggregate record around the dispatcher.
+  const directMutation = (tool !== 'apply_dev_source_patchset' && /(?:write|find_replace|replace_lines|insert_after|delete)/.test(tool))
+    || (tool === 'dev_source_edit' && action !== 'patchset' && /(?:write|find_replace|replace_lines|insert_after|delete)/.test(action));
+  if (!directMutation) return [];
+  const raw = Array.isArray(args?.edits)
+    ? args.edits.map((item: any) => item?.file ?? item?.path)
+    : [args?.file ?? args?.filename ?? args?.path];
+  const result: Array<{ file: string; absPath: string }> = [];
+  for (const value of raw) {
+    const normalized = String(value || '').replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!normalized) continue;
+    const isWebUi = normalized.startsWith('web-ui/') || /webui/.test(tool);
+    const file = isWebUi
+      ? `web-ui/${normalized.replace(/^web-ui\//, '')}`
+      : `src/${normalized.replace(/^src\//, '')}`;
+    const root = path.join(projectRoot, isWebUi ? 'web-ui' : 'src');
+    const absPath = path.resolve(root, file.replace(/^(?:src|web-ui)\//, ''));
+    if (absPath.startsWith(root)) result.push({ file, absPath });
+  }
+  return Array.from(new Map(result.map(item => [item.file, item])).values());
+}
+
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
-  const result = await executeToolRaw(name, args, workspacePath, deps, sessionId);
-  return attachCodeEvidenceToToolResult(result, {
-    workspacePath,
-    toolName: result.name || name,
-    args: result.args || args,
-  });
+  const executionStartedAt = Date.now();
+  const grant = getDevSourceEditGrant(sessionId);
+  let prepared: PreparedDevEditMutation[] = [];
+  if (grant) {
+    try {
+      const projectRoot = resolvePrometheusRoot();
+      const targets = devEditMutationFiles(name, args, projectRoot)
+        .filter(target => grant.allowedFiles.includes(target.file));
+      // Persisting a before-image is part of the commit boundary: if this
+      // cannot be written, do not touch source. This makes reconstruction
+      // dependable even if the gateway dies between write and apply_live.
+      prepared = targets.map(target => prepareDevEditMutation({
+        devEditId: grant.devEditId,
+        toolName: name,
+        file: target.file,
+        absPath: target.absPath,
+      }));
+    } catch (err: any) {
+      return { name, args, result: `Blocked source mutation: durable dev-edit ledger preparation failed: ${err?.message || err}`, error: true };
+    }
+  }
+  let result: ToolResult;
+  try {
+    result = await executeToolRaw(name, args, workspacePath, deps, sessionId);
+  } catch (err: any) {
+    for (const item of prepared) finalizeDevEditMutation(item, err);
+    throw err;
+  }
+  for (const item of prepared) {
+    try { finalizeDevEditMutation(item, result.error ? result.result : undefined); } catch (err: any) {
+      // The source write succeeded but its immutable forensic record did not.
+      // Surface this loudly; apply_live remains blocked by the pending mutation.
+      result = { ...result, error: true, result: `${result.result}\nDEV-EDIT LEDGER FINALIZATION FAILED: ${err?.message || err}` };
+    }
+  }
+  const evidenceStartedAt = Date.now();
+  // Approved source edits already have a durable before-image, after-image,
+  // hashes, and unified patch in the dev-edit ledger. Reopening and hashing
+  // the same source file for generic code evidence is redundant hot-path I/O.
+  const ledgerBackedSourceMutation = prepared.length > 0 || (
+    !!grant && (
+      name === 'apply_dev_source_patchset'
+      || (name === 'dev_source_edit' && String(args?.action || args?.operation || '').toLowerCase() === 'patchset')
+    )
+  );
+  const evidenced = ledgerBackedSourceMutation
+    ? {
+        ...result,
+        extra: {
+          ...(result.extra || {}),
+          devEditLedger: {
+            devEditId: grant?.devEditId,
+            mutationSequences: prepared.map((item) => item.sequence),
+          },
+        },
+      }
+    : attachCodeEvidenceToToolResult(result, {
+        workspacePath,
+        toolName: result.name || name,
+        args: result.args || args,
+      });
+  return {
+    ...evidenced,
+    extra: {
+      ...(evidenced.extra || {}),
+      executionTiming: {
+        rawExecutionMs: Math.max(0, evidenceStartedAt - executionStartedAt),
+        codeEvidenceMs: Math.max(0, Date.now() - evidenceStartedAt),
+        totalExecutorMs: Math.max(0, Date.now() - executionStartedAt),
+      },
+    },
+  };
 }
 
 async function executeToolRaw(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
@@ -3157,6 +3272,72 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     if (agentTeamWrapper.error) return { name, args, result: agentTeamWrapper.error, error: true };
     name = agentTeamWrapper.name;
     args = agentTeamWrapper.args;
+  }
+  if (name === 'video_compose') {
+    const storage = buildCreativeStorageForTool(workspacePath, sessionId);
+    const action = String(args?.action || '').trim().toLowerCase();
+    try {
+      let saved: { sequence: CreativeSequenceDoc; path: string } | null = null;
+      let data: any = null;
+      if (action === 'create') {
+        saved = saveCreativeSequence(storage, createCreativeSequence({ title: args?.title, sources: args?.sources, width: args?.width, height: args?.height, frameRate: args?.frameRate, fit: args?.fit, captions: args?.captions, audio: args?.audio }, storage));
+        data = { sequence: inspectCreativeSequence(saved.sequence), sequencePath: buildCreativeWorkspaceRelativePath(storage.workspacePath, saved.path) };
+      } else {
+        const sequenceId = String(args?.sequenceId || '').trim();
+        if (!sequenceId) throw new Error(`video_compose ${action || 'action'} requires sequenceId.`);
+        let sequence = loadCreativeSequence(storage, sequenceId);
+        if (action === 'inspect') data = inspectCreativeSequence(sequence);
+        else if (action === 'apply_edit') {
+          sequence = applyCreativeSequenceOperations(sequence, (Array.isArray(args?.operations) ? args.operations : []) as CreativeSequenceOperation[], String(args?.instruction || ''));
+          saved = saveCreativeSequence(storage, sequence);
+          data = { sequence: inspectCreativeSequence(saved.sequence), sequencePath: buildCreativeWorkspaceRelativePath(storage.workspacePath, saved.path) };
+        } else if (action === 'add_social_cut_result') {
+          sequence = addSocialCutReceipt(sequence, storage, String(args?.receiptPath || ''), args?.atMs);
+          saved = saveCreativeSequence(storage, sequence);
+          data = { sequence: inspectCreativeSequence(saved.sequence), sequencePath: buildCreativeWorkspaceRelativePath(storage.workspacePath, saved.path) };
+        } else if (action === 'create_variant') {
+          sequence = createCreativeSequenceVariant(sequence, { format: args?.format, width: args?.width, height: args?.height, reframe: args?.reframe });
+          saved = saveCreativeSequence(storage, sequence);
+          data = { sequence: inspectCreativeSequence(saved.sequence), sequencePath: buildCreativeWorkspaceRelativePath(storage.workspacePath, saved.path) };
+        } else if (action === 'set_captions') {
+          sequence.captions = { ...sequence.captions, ...(isPlainObjectArg(args?.captions) ? args.captions : {}) };
+          saved = saveCreativeSequence(storage, sequence);
+          data = { sequence: inspectCreativeSequence(saved.sequence), sequencePath: buildCreativeWorkspaceRelativePath(storage.workspacePath, saved.path) };
+        } else if (action === 'set_audio_policy') {
+          const audio = isPlainObjectArg(args?.audio) ? args.audio : {};
+          sequence.audio = { dialogueNormalization: { ...sequence.audio.dialogueNormalization, ...(isPlainObjectArg(audio.dialogueNormalization) ? audio.dialogueNormalization : {}) }, musicDucking: { ...sequence.audio.musicDucking, ...(isPlainObjectArg(audio.musicDucking) ? audio.musicDucking : {}) } };
+          saved = saveCreativeSequence(storage, sequence);
+          data = { sequence: inspectCreativeSequence(saved.sequence), sequencePath: buildCreativeWorkspaceRelativePath(storage.workspacePath, saved.path) };
+        } else if (action === 'render') {
+          const selected = selectCreativeSequenceComposition(sequence, args?.variantId || null);
+          const outputFormat = String(args?.outputFormat || 'mp4').toLowerCase() === 'webm' ? 'webm' : 'mp4';
+          const exportsDir = path.join(storage.creativeDir, 'exports');
+          fs.mkdirSync(exportsDir, { recursive: true });
+          const safeName = String(args?.filename || `${sequence.id}-${selected.variant?.id || 'master'}.${outputFormat}`).trim().replace(/[^a-zA-Z0-9._-]+/g, '-');
+          const fileName = safeName.toLowerCase().endsWith(`.${outputFormat}`) ? safeName : `${safeName}.${outputFormat}`;
+          const outputPath = path.join(exportsDir, fileName);
+          const render = await renderComposition({ composition: selected.composition, workspacePath: storage.workspacePath, outputPath, format: outputFormat });
+          const relativeOutput = buildCreativeWorkspaceRelativePath(storage.workspacePath, outputPath);
+          if (selected.variant) {
+            selected.variant.exportPath = relativeOutput;
+            selected.variant.status = 'rendered';
+          } else {
+            sequence.masterRender.exportPath = relativeOutput;
+            sequence.masterRender.status = 'rendered';
+            sequence.masterRender.renderedAt = new Date().toISOString();
+          }
+          saveCreativeSequence(storage, sequence);
+          const qa = args?.autoQa === false ? null : qaCreativeSequenceExport(storage, { sequenceId, artifactPath: relativeOutput, variantId: selected.variant?.id || null });
+          data = { render: { ...render, outputPath: relativeOutput }, qa: qa ? { receipt: qa.receipt, receiptPath: buildCreativeWorkspaceRelativePath(storage.workspacePath, qa.receiptPath) } : null, sequence: inspectCreativeSequence(qa?.sequence || sequence) };
+        } else if (action === 'qa') {
+          const result = qaCreativeSequenceExport(storage, { sequenceId, artifactPath: String(args?.artifactPath || ''), variantId: args?.variantId || null });
+          data = { receipt: result.receipt, receiptPath: buildCreativeWorkspaceRelativePath(storage.workspacePath, result.receiptPath), sequence: inspectCreativeSequence(result.sequence) };
+        } else throw new Error(`Unsupported video_compose action: ${action || '(missing)'}`);
+      }
+      return { name, args, result: JSON.stringify(data, null, 2), error: false, data };
+    } catch (error: any) {
+      return { name, args, result: `video_compose: ${error?.message || String(error)}`, error: true };
+    }
   }
   const creativeWrapper = normalizeCreativeWrapperTool(name, args);
   if (creativeWrapper) {
@@ -3292,13 +3473,22 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     return candidates;
   }
 	  function resolveProjectRootForSourceAccess(): string {
+      const configuredWorkspace = path.resolve(getConfig().getWorkspacePath() || workspacePath);
+      const workspaceRoot = path.resolve(workspacePath);
+      // In the normal main-chat path this is stable for the lifetime of a
+      // workspace. Check this before any task/proposal lookup: otherwise a
+      // tiny source read used to deserialize every historical task first.
+      if (!hasActiveWorkspaceScope() && cachedSourceAccessRoot?.workspace === configuredWorkspace
+        && cachedSourceAccessRoot.sessionId === sessionId
+        && cachedSourceAccessRoot.taskRevision === getTaskSessionLookupRevision()
+        && hasPrometheusSourceShape(cachedSourceAccessRoot.root)) {
+        return cachedSourceAccessRoot.root;
+      }
       const proposalTask = resolveProposalExecutionTask();
       const explicitProjectRoot = String(proposalTask?.proposalExecution?.projectRoot || '').trim();
       if (explicitProjectRoot) {
         return path.resolve(explicitProjectRoot);
       }
-      const configuredWorkspace = path.resolve(getConfig().getWorkspacePath() || workspacePath);
-      const workspaceRoot = path.resolve(workspacePath);
       const scopedCandidates = candidateProjectRootsFromAllowedWorkspaces(configuredWorkspace);
       const candidates = hasActiveWorkspaceScope()
         ? scopedCandidates
@@ -3314,7 +3504,17 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
         if (seen.has(key)) continue;
         seen.add(key);
-        if (hasPrometheusSourceShape(resolved)) return resolved;
+        if (hasPrometheusSourceShape(resolved)) {
+          if (!hasActiveWorkspaceScope()) {
+            cachedSourceAccessRoot = {
+              workspace: configuredWorkspace,
+              sessionId,
+              taskRevision: getTaskSessionLookupRevision(),
+              root: resolved,
+            };
+          }
+          return resolved;
+        }
       }
 	    return path.resolve(workspacePath, '..');
 	  }
@@ -18860,12 +19060,33 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 updatedAt: Date.now(),
               });
               try {
-                recordCoordinatedDevEditVerification({
+                const handoff = recordCoordinatedDevEditVerification({
                   id: activeDevEdit.id,
                   files: plan.changedFiles.length ? plan.changedFiles : affectedFiles,
                   success: !failed,
                   summary: verificationSummary,
                 });
+                if (!failed && handoff?.awakened.length) {
+                  for (const awakened of handoff.awakened) {
+                    const handoffText =
+                      `Dev edit ${activeDevEdit.id} verified successfully and handed off ${awakened.inheritedFiles.join(', ') || awakened.ownedFiles.join(', ')} to your edit ${awakened.id}. ` +
+                      'Reread every handed-off file before editing; the verified source on disk is now the version you must build on.';
+                    try {
+                      addMessage(awakened.sessionId, {
+                        role: 'assistant', messageKind: 'restart_status', content: handoffText,
+                        timestamp: Date.now(), channel: 'system', channelLabel: 'Dev Edit Handoff',
+                      }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+                      flushSession(awakened.sessionId);
+                    } catch {}
+                    try {
+                      deps.broadcastWS?.({
+                        type: 'dev_edit_handoff_ready', sessionId: awakened.sessionId,
+                        devEditId: awakened.id, fromDevEditId: activeDevEdit.id,
+                        files: awakened.inheritedFiles, text: handoffText, timestamp: Date.now(),
+                      });
+                    } catch {}
+                  }
+                }
               } catch {}
             }
             if (failed) {
@@ -18913,6 +19134,22 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               });
             } catch {}
             if (coordinatedApply.role === 'waiting') {
+              if (coordinatedApply.batch && coordinatedApply.batch.leaderId !== activeDevEdit.id && coordinatedApply.blockers.length === 0) {
+                const leader = getDevSourceEditContinuation(coordinatedApply.batch.leaderId);
+                const leaderText =
+                  `Coordinated dev batch ${coordinatedApply.batch.id} is fully verified and ready for its single Apply Live decision. ` +
+                  `You are the elected leader for dev edit ${coordinatedApply.batch.leaderId}; call prom_apply_dev_changes apply_live to present the 30-minute approval card.`;
+                if (leader) {
+                  try {
+                    addMessage(leader.sessionId, {
+                      role: 'assistant', messageKind: 'restart_status', content: leaderText,
+                      timestamp: Date.now(), channel: 'system', channelLabel: 'Dev Apply Ready',
+                    }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+                    flushSession(leader.sessionId);
+                  } catch {}
+                  try { deps.broadcastWS?.({ type: 'dev_apply_leader_ready', sessionId: leader.sessionId, batchId: coordinatedApply.batch.id, text: leaderText, timestamp: Date.now() }); } catch {}
+                }
+              }
               const blockerSummary = coordinatedApply.blockers
                 .map((item) => `${item.id} (${item.phase}${item.waitingFiles.length ? `; waiting: ${item.waitingFiles.join(', ')}` : ''})`)
                 .join('; ');
@@ -18936,6 +19173,70 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               normalizedSurfaces = Array.from(new Set([...normalizedSurfaces, ...getPromApplySurfacesForFiles(affectedFiles)]));
               hasBackend = normalizedSurfaces.some((surface: string) => surface === 'backend' || surface === 'config');
               hasWeb = normalizedSurfaces.some((surface: string) => surface === 'web-ui' || surface === 'mobile' || surface === 'static');
+            }
+          }
+
+          // Source-edit approval is automatic locally; making verified code
+          // live is deliberately a distinct, user-controlled 30-minute gate.
+          if (coordinatedApply?.batch) {
+            const batch = coordinatedApply.batch;
+            const approvalQueue = getApprovalQueue();
+            let approval = batch.approvalId ? approvalQueue.get(batch.approvalId) : null;
+            if (!approval) {
+              const expiresAt = Date.now() + 30 * 60_000;
+              const origin = inferApprovalOrigin(sessionId, resolveTaskForSession(sessionId), args);
+              approval = approvalQueue.create({
+                sessionId,
+                agentId: inferAgentIdFromSession(sessionId, args),
+                originType: origin.originType,
+                originLabel: origin.originLabel,
+                toolName: 'prom_apply_dev_changes',
+                toolArgs: { mode: 'apply_live', batch_id: batch.id, dev_edit_ids: batch.memberIds, affected_files: batch.files },
+                approvalKind: 'dev_apply_live',
+                action: `Apply verified dev batch live: ${batch.memberIds.length} edit(s), ${batch.files.length} file(s)`,
+                reason: `Restart/reload the gateway for verified batch ${batch.id}. This card auto-rejects in 30 minutes.`,
+                policyTier: 'commit', riskScore: 6,
+                affectedSystems: ['Prometheus gateway', ...(hasWeb ? ['Prometheus web UI'] : [])],
+                devApplyLive: { batchId: batch.id, memberIds: batch.memberIds, files: batch.files, expiresAt },
+              });
+              setCoordinatedDevApplyBatchApproval({ batchId: batch.id, approvalId: approval.id, expiresAt });
+              try {
+                appendAuditEntry({ timestamp: new Date().toISOString(), sessionId, agentId: inferAgentIdFromSession(sessionId, args),
+                  actionType: 'approval_requested', toolName: 'prom_apply_dev_changes', toolArgs: approval.toolArgs,
+                  policyTier: 'commit', approvalStatus: 'pending', resultSummary: `Queued 30-minute dev apply approval ${approval.id} for ${batch.id}` });
+                deps.broadcastWS?.({ type: 'approval_created', sessionId, approvalId: approval.id, summary: approval.action,
+                  toolName: 'prom_apply_dev_changes', approval: serializeApprovalForClient(approval) });
+              } catch {}
+            }
+            let approved = approval.status === 'approved';
+            if (approval.status === 'pending') {
+              approved = await new Promise<boolean>((resolve) => {
+                const remaining = Math.max(1, Number(approval!.devApplyLive?.expiresAt || 0) - Date.now());
+                const timer = setTimeout(() => approvalQueue.resolve(approval!.id, false, 'policy:timeout'), remaining);
+                approvalQueue.onResolve(approval!.id, (isApproved) => { clearTimeout(timer); resolve(isApproved); });
+              });
+            }
+            if (!approved) {
+              markCoordinatedDevApplyBatch(batch.id, 'not_live');
+              const notice = `Verified dev batch ${batch.id} was not applied live. Source edits remain saved and audited, but the gateway was not restarted.`;
+              for (const memberId of batch.memberIds) {
+                const member = getDevSourceEditContinuation(memberId);
+                if (!member || member.status === 'complete') continue;
+                upsertDevSourceEditContinuation({ ...member, status: 'verified_not_live', updatedAt: Date.now() });
+                try {
+                  addMessage(member.sessionId, { role: 'assistant', messageKind: 'restart_status', content: notice,
+                    timestamp: Date.now(), channel: 'system', channelLabel: 'Dev Apply Deferred' },
+                    { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+                  flushSession(member.sessionId);
+                } catch {}
+                try { deps.broadcastWS?.({ type: 'session_notification', source: 'dev_apply', previousSessionId: member.sessionId,
+                  sessionId: member.sessionId, title: 'Verified changes not live', text: notice, batchId: batch.id, timestamp: Date.now() }); } catch {}
+              }
+              return { name, args, result: `${notice} Request prom_apply_dev_changes again later to create a new Apply Live batch.`,
+                data: { dev_edit_id: activeDevEdit?.id, batch_id: batch.id, live_status: 'verified_not_live' }, error: false };
+            }
+            if (!beginCoordinatedDevApplyBatch(batch.id)) {
+              return { name, args, result: `prom_apply_dev_changes could not start coordinated batch ${batch.id}; its approval state changed.`, error: true };
             }
           }
 
@@ -20322,60 +20623,6 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             };
           }
 
-          if (isGoalAutonomousApprovalBypass) {
-            try {
-              grantDevSourceEditApproval(sessionId, scope, 'goal_autonomous');
-            } catch (err: any) {
-              return { name, args, result: `goal-autonomous dev source edit grant failed: ${err.message || err}`, error: true };
-            }
-            try {
-              appendAuditEntry({
-                timestamp: new Date().toISOString(),
-                sessionId,
-                agentId: inferAgentIdFromSession(sessionId, args),
-                actionType: 'approval_resolved',
-                toolName: name,
-                toolArgs: { files: scope.allowedFiles, reason: scope.reason },
-                policyTier: 'commit',
-                approvalStatus: 'approved',
-                resultSummary: `Goal autonomous policy approved dev source edit: ${scope.allowedFiles.join(', ')}`,
-              });
-            } catch {}
-            return {
-              name,
-              args,
-              result:
-                `[GOAL AUTONOMOUS APPROVED] Dev source edit scope granted: ${scope.allowedFiles.join(', ')}.\n` +
-                `Approved workspace self-doc scope: ${scope.allowedDirs.join(', ')}.\n` +
-                `Approved plan hash: ${scope.planHash || 'none'}; dev_edit_id: ${scope.devEditId}.\n` +
-                `Use source-specific tools for src/web-ui files and scoped workspace file tools for approved self docs. When edits are verified, enter the shared apply barrier through ${formatPromApplyDevChangesInstruction(scope.allowedFiles, scope.reason || 'Goal autonomous dev source edits', 'apply_live', scope.devEditId)}. ` +
-                `If an overlapping file is queued, await its verified handoff and reread it before editing. Write_note with tag "${scope.plan?.completionNoteTag || 'dev_edit_complete'}" only after the coordinator confirms this edit's batch is live.`,
-              data: {
-                devSourceEdit: {
-                  devEditId: scope.devEditId,
-                  allowedFiles: scope.allowedFiles,
-                  allowedDirs: scope.allowedDirs,
-                  plan: scope.plan,
-                  planHash: scope.planHash,
-                  verificationProfiles: scope.verificationProfiles,
-                  completionNoteTag: scope.plan?.completionNoteTag || 'dev_edit_complete',
-                },
-              },
-              extra: {
-                devSourceEdit: {
-                  devEditId: scope.devEditId,
-                  allowedFiles: scope.allowedFiles,
-                  allowedDirs: scope.allowedDirs,
-                  plan: scope.plan,
-                  planHash: scope.planHash,
-                  verificationProfiles: scope.verificationProfiles,
-                  completionNoteTag: scope.plan?.completionNoteTag || 'dev_edit_complete',
-                },
-              },
-              error: false,
-            };
-          }
-
           const approvalQueue = getApprovalQueue();
           const activeTask = resolveTaskForSession(sessionId);
           const activeTaskId = String(activeTask?.id || '').trim() || undefined;
@@ -20407,6 +20654,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             toolName: name,
             toolArgs: {
               dev_edit_id: scope.devEditId,
+              dev_edit_audit_id: scope.auditId,
               files: scope.allowedFiles,
               allowed_dirs: scope.allowedDirs,
               reason: scope.reason,
@@ -20447,9 +20695,38 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               toolArgs: approval.toolArgs,
               policyTier: 'commit',
               approvalStatus: 'pending',
-              resultSummary: `Queued dev source edit approval ${approval.id}`,
+              resultSummary: `Queued dev source edit approval ${approval.id}; audit ${scope.auditId || scope.devEditId}`,
             });
           } catch {}
+
+          // Auto mode still creates and resolves the exact same one-shot
+          // approval record. It removes only the human wait, never the scoped
+          // request, plan hash, audit trail, or source-write boundary.
+          if (shouldAutoApproveScopedDevSourceEdit(scope)) {
+            const resolved = approvalQueue.resolve(approval.id, true, 'policy:auto_scoped_dev_edit');
+            if (!resolved) return { name, args, result: `Could not auto-resolve dev source edit approval ${approval.id}.`, error: true };
+            try {
+              grantDevSourceEditApproval(sessionId, scope, 'policy:auto_scoped_dev_edit');
+            } catch (err: any) {
+              return { name, args, result: `Auto-approved dev source edit grant failed: ${err?.message || err}`, error: true };
+            }
+            try {
+              deps.broadcastWS({
+                type: 'approval_approved', sessionId, taskId: activeTaskId, approvalId: approval.id,
+                summary: approval.action, approval: serializeApprovalForClient(resolved), autoApproved: true,
+              });
+            } catch {}
+            return {
+              name,
+              args,
+              result: `[AUTO-SCOPED APPROVED] Dev source edit scope granted: ${scope.allowedFiles.join(', ')}.\n` +
+                `Approval: ${approval.id}; dev_edit_id: ${scope.devEditId}; audit_id: ${scope.auditId || scope.devEditId}; plan_hash: ${scope.planHash || 'none'}.\n` +
+                `The request, policy decision, per-mutation diffs, before/after hashes, and verification remain durably recorded. Continue only within the declared files and complete the normal verify/apply_live flow.`,
+              data: { devSourceEdit: { devEditId: scope.devEditId, auditId: scope.auditId, allowedFiles: scope.allowedFiles, allowedDirs: scope.allowedDirs, plan: scope.plan, planHash: scope.planHash, verificationProfiles: scope.verificationProfiles, completionNoteTag: scope.plan?.completionNoteTag || 'dev_edit_complete' } },
+              extra: { devSourceEdit: { devEditId: scope.devEditId, auditId: scope.auditId, allowedFiles: scope.allowedFiles, allowedDirs: scope.allowedDirs, plan: scope.plan, planHash: scope.planHash, verificationProfiles: scope.verificationProfiles, completionNoteTag: scope.plan?.completionNoteTag || 'dev_edit_complete' } },
+              error: false,
+            };
+          }
 
           try {
             deps.broadcastWS({

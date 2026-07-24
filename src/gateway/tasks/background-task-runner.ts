@@ -1665,7 +1665,43 @@ export class BackgroundTaskRunner {
     const abortSignal = { aborted: false };
     taskAbortSignals.set(taskId, abortSignal);  // Store so requestPause can access it
 
+    // A provider may stream a reasoning summary in many small chunks. Keep it
+    // as one chronological journal item instead of flooding the task UI, but
+    // flush it promptly and always before the next tool/result event.
+    let pendingReasoningSummary = '';
+    let reasoningFlushTimer: NodeJS.Timeout | undefined;
+    const flushVisibleReasoning = () => {
+      if (reasoningFlushTimer) clearTimeout(reasoningFlushTimer);
+      reasoningFlushTimer = undefined;
+      const text = pendingReasoningSummary.trim();
+      pendingReasoningSummary = '';
+      if (!text) return;
+      appendJournal(taskId, {
+        type: 'reasoning',
+        content: text.slice(0, 1200),
+        detail: text.length > 1200 ? text.slice(0, 4000) : undefined,
+      });
+      this._broadcast('task_reasoning', { taskId, text: text.slice(0, 1200) });
+      this._broadcast('task_panel_update', { taskId });
+    };
+    const queueVisibleReasoning = (value: unknown) => {
+      const text = String(value || '');
+      if (!text) return;
+      pendingReasoningSummary += text;
+      if (reasoningFlushTimer) clearTimeout(reasoningFlushTimer);
+      reasoningFlushTimer = setTimeout(flushVisibleReasoning, 300);
+      reasoningFlushTimer.unref?.();
+    };
+
     const sendSSE = (event: string, data: any) => {
+      const visibility = String(data?.visibility || '').toLowerCase();
+      if (event === 'reasoning_summary_delta') {
+        // The gateway explicitly marks these summaries as user-visible. Raw
+        // thinking_delta remains private and is deliberately not journaled.
+        queueVisibleReasoning(data?.text || data?.summary || data?.thinking);
+      } else {
+        flushVisibleReasoning();
+      }
       if (this.runtimeId) {
         updateLiveRuntimeCheckpoint(this.runtimeId, {
           event,
@@ -1676,7 +1712,18 @@ export class BackgroundTaskRunner {
         });
       }
       this._broadcast('task_stream_event', { taskId, eventType: event, data });
-      if (event === 'tool_call') {
+      if ((event === 'thinking' || event === 'agent_thought') && visibility !== 'private') {
+        const text = String(data?.thinking || data?.text || data?.message || '').trim();
+        if (text) {
+          appendJournal(taskId, {
+            type: 'reasoning',
+            content: text.slice(0, 1200),
+            detail: text.length > 1200 ? text.slice(0, 4000) : undefined,
+          });
+          this._broadcast('task_reasoning', { taskId, text: text.slice(0, 1200) });
+          this._broadcast('task_panel_update', { taskId });
+        }
+      } else if (event === 'tool_call') {
         currentRoundToolEventCount++;
         this._broadcast('task_panel_update', { taskId });
         const toolName = String(data.action || '');

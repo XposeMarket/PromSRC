@@ -4,6 +4,7 @@ import {
   webSearch,
 } from '../../../tools/web';
 import { executeDownloadMedia, executeDownloadUrl } from '../../../tools/download-tools';
+import { executeVideoSocialCut } from '../../../tools/video-social-cut';
 import { executeCloneRepo } from '../../../tools/repo-tools';
 import { executeAnalyzeImage, executeAnalyzeVideo } from '../../../tools/media-analysis';
 import { executeGenerateImage } from '../../../tools/generate-image';
@@ -25,6 +26,7 @@ const WEB_MEDIA_TOOL_NAMES = new Set([
   'download_url',
   'clone_repo',
   'download_media',
+  'video_social_cut',
   'generate_image',
   'generate_video',
   'analyze_image',
@@ -282,6 +284,40 @@ export const webMediaCapabilityExecutor: CapabilityExecutor = {
             ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'download_media complete' }, null, 2)
             : `ERROR: ${toolResult.error || 'download_media failed'}`,
           error: toolResult.success !== true,
+        };
+      }
+
+      case 'video_social_cut': {
+        const toolResult = await executeVideoSocialCut({
+          source: String(args.source || ''),
+          duration_seconds: args.duration_seconds != null ? Number(args.duration_seconds) : undefined,
+          start_seconds: args.start_seconds != null ? Number(args.start_seconds) : undefined,
+          selection: ['best_hook', 'educational', 'controversial', 'emotional', 'key_point', 'timestamp'].includes(String(args.selection))
+            ? String(args.selection) as any
+            : 'best_hook',
+          captions: args.captions !== false,
+          header: args.header === true,
+          output_dir: args.output_dir != null ? String(args.output_dir) : undefined,
+          filename: args.filename != null ? String(args.filename) : undefined,
+          transcript_window_seconds: args.transcript_window_seconds != null ? Number(args.transcript_window_seconds) : undefined,
+          signal: deps.abortSignal?.signal,
+          onProgress: (progress) => deps.sendSSE?.('tool_progress', {
+            action: name,
+            name,
+            message: progress.message,
+            phase: progress.phase,
+            percent: progress.percent,
+            show_pill: true,
+          }),
+        });
+        return {
+          name,
+          args,
+          result: toolResult.success
+            ? JSON.stringify(toolResult.data || { message: toolResult.stdout || 'video_social_cut complete' }, null, 2)
+            : `ERROR: ${toolResult.error || 'video_social_cut failed'}`,
+          error: toolResult.success !== true,
+          extra: toolResult.success && toolResult.data ? { artifact: toolResult.data.artifact, qa: toolResult.data.qa } : undefined,
         };
       }
 

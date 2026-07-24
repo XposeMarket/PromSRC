@@ -19,6 +19,12 @@
 namespace {
 constexpr float PI = 3.14159265358979323846f;
 constexpr float ROAD_HALF = 6.0f;
+// The city is intentionally larger than the driveable district so the drift
+// complex has grass/approach space and aircraft do not immediately outrun sky.
+constexpr float CITY_WORLD_MIN_X=-520.0f,CITY_WORLD_MAX_X=720.0f;
+constexpr float CITY_WORLD_MIN_Z=-480.0f,CITY_WORLD_MAX_Z=620.0f;
+constexpr float PLANE_SAFE_WORLD_RADIUS=2400.0f;
+constexpr float PLANE_CEILING=420.0f;
 constexpr int MAX_TRACK_SAMPLES = 1400;
 constexpr int FIGURE8_SAMPLES = 360;
 constexpr int MAX_SEGMENTS = 64;
@@ -709,11 +715,19 @@ constexpr CityRoadSegment CITY_EXTENDED_ROADS[]={
   {-320,170,-220,170,6.0f},{-220,170,-100,170,6.0f},{-100,170,100,170,6.0f},
   {100,170,220,170,6.0f},{220,170,360,170,6.0f},
   {-260,120,-260,225,6.0f},{320,120,320,225,6.0f},
-  // Northbound connector and a wide, purpose-built drift circuit beyond the city.
+  // Northbound connector and a wide, purpose-built outer drift circuit.
   {0,162,0,250,8.0f},{0,250,0,300,9.0f},
   {-92,300,92,300,10.0f},{-92,300,-132,348,10.0f},{-132,348,-132,438,10.0f},
   {-132,438,-42,478,10.0f},{-42,478,86,474,10.0f},{86,474,142,418,10.0f},
-  {142,418,142,338,10.0f},{142,338,92,300,10.0f}
+  {142,418,142,338,10.0f},{142,338,92,300,10.0f},
+  // Drift-complex infield. Each link terminates on the outer loop or a link,
+  // creating several driveable lines and transitions instead of one circle.
+  {-92,300,-58,348,8.0f},{-58,348,-58,410,8.0f},{-58,410,-12,438,8.0f},
+  {-12,438,50,418,8.0f},{50,418,86,474,8.0f},
+  {-132,348,-58,348,8.0f},{-58,410,50,418,8.0f},
+  {-58,348,18,370,8.0f},{18,370,50,418,8.0f},
+  {-92,300,-18,322,8.0f},{-18,322,18,370,8.0f},
+  {-42,478,-12,438,8.0f}
 };
 constexpr int CITY_EXTENDED_ROAD_COUNT=sizeof(CITY_EXTENDED_ROADS)/sizeof(CITY_EXTENDED_ROADS[0]);
 // Ground-level Catmull-Rom streets soften the rectangular district grids.
@@ -1531,9 +1545,9 @@ void updatePerson(float dt,const SceCtrlData&pad,uint32_t pressed){
   // Slight aim accel + recoil settle for gunfeel.
   float lookSens=person.cameraMode==1?3.85f:3.35f;
   person.viewYaw+=lookX*dt*lookSens;
-  // Recoil is an impulse into a separate upward kick; no non-input pitch is fed
-  // back into the aim accumulator, preventing the old first-person creep.
-  person.viewPitch=clampf(person.viewPitch+lookY*dt*2.95f+aimRecoil,-1.35f,1.35f);
+  // Aim stays player-authored. Recoil is a render-only positive pitch offset,
+  // so both weapons visibly kick upward then recover without aim drift.
+  person.viewPitch=clampf(person.viewPitch+lookY*dt*2.95f,-1.35f,1.35f);
   aimRecoil+=(0.0f-aimRecoil)*clampf(dt*13.5f,0.0f,1.0f);
   shootShake=std::max(0.0f,shootShake-dt*4.5f);
   float strafe=-((int)pad.lx-128)/127.0f,forward=-((int)pad.ly-128)/127.0f;
@@ -1769,7 +1783,8 @@ void fireRocket(){
   r.x=person.x+dx*1.35f+rx*.28f;r.y=person.y+1.58f+dy*.55f;r.z=person.z+dz*1.35f+rz*.28f;
   r.vx=dx*38.0f;r.vy=dy*38.0f;r.vz=dz*38.0f;r.yaw=person.viewYaw;r.pitch=person.viewPitch;r.life=5.0f;r.active=true;
   spawnRocketMuzzleBurst(r.x,r.y,r.z,dx,dy,dz);
-  aimRecoil-=.085f;shootShake=.22f;addChaos(2.0f);
+  // Positive pitch points upward (dy = sin(viewPitch)); kick the rendered view up.
+  aimRecoil=std::max(aimRecoil,.085f);shootShake=.22f;addChaos(2.0f);
 }
 
 void fireMachineGun(){
@@ -1783,7 +1798,8 @@ void fireMachineGun(){
   Bullet&b=bullets[bulletCursor++%MAX_BULLETS];
   b.x=person.x+dx*1.05f+rx*.22f;b.y=person.y+1.52f+dy*.3f;b.z=person.z+dz*1.05f+rz*.22f;
   b.vx=dx*110.0f;b.vy=dy*110.0f;b.vz=dz*110.0f;b.life=1.6f;b.active=true;muzzleFlashTimer=.05f;
-  aimRecoil-=.018f;shootShake=std::max(shootShake,.08f);addChaos(.35f);
+  // Same positive upward-view convention as the rocket launcher.
+  aimRecoil=std::max(aimRecoil,.018f);shootShake=std::max(shootShake,.08f);addChaos(.35f);
 }
 
 void updateRocketsAndExplosions(float dt){
@@ -1962,11 +1978,13 @@ void drawDestructibleBuilding(const CityBuilding&b,int buildingIndex,const Atlas
 
 void drawSky(){
   if(!environmentTexture)return;
+  // A flight-safe dome: large enough for the expanded city and 420 m ceiling.
   glDepthMask(GL_FALSE);glDisable(GL_CULL_FACE);glEnable(GL_TEXTURE_2D);glBindTexture(GL_TEXTURE_2D,environmentTexture);glColor3f(1,1,1);
-  constexpr int sides=24;glBegin(GL_QUADS);for(int i=0;i<sides;++i){float a=i*2*PI/sides,b=(i+1)*2*PI/sides;
+  constexpr float skyRadius=2600.0f,skyFloor=-40.0f,skyTop=620.0f;
+  constexpr int sides=32;glBegin(GL_QUADS);for(int i=0;i<sides;++i){float a=i*2*PI/sides,b=(i+1)*2*PI/sides;
     float u0=UV_SKY.u0+(i%6)*(UV_SKY.u1-UV_SKY.u0)/6.0f,u1=UV_SKY.u0+((i%6)+1)*(UV_SKY.u1-UV_SKY.u0)/6.0f;
-    glTexCoord2f(u0,UV_SKY.v1);glVertex3f(std::sin(a)*360,-8,std::cos(a)*360);glTexCoord2f(u1,UV_SKY.v1);glVertex3f(std::sin(b)*360,-8,std::cos(b)*360);
-    glTexCoord2f(u1,UV_SKY.v0);glVertex3f(std::sin(b)*360,120,std::cos(b)*360);glTexCoord2f(u0,UV_SKY.v0);glVertex3f(std::sin(a)*360,120,std::cos(a)*360);
+    glTexCoord2f(u0,UV_SKY.v1);glVertex3f(std::sin(a)*skyRadius,skyFloor,std::cos(a)*skyRadius);glTexCoord2f(u1,UV_SKY.v1);glVertex3f(std::sin(b)*skyRadius,skyFloor,std::cos(b)*skyRadius);
+    glTexCoord2f(u1,UV_SKY.v0);glVertex3f(std::sin(b)*skyRadius,skyTop,std::cos(b)*skyRadius);glTexCoord2f(u0,UV_SKY.v0);glVertex3f(std::sin(a)*skyRadius,skyTop,std::cos(a)*skyRadius);
   }glEnd();glDisable(GL_TEXTURE_2D);glDepthMask(GL_TRUE);
 }
 
@@ -2833,8 +2851,8 @@ void drawCity(){
   int groundMinZ=(int)std::floor((renderFocusZ-210.0f)/groundTile);
   int groundMaxZ=(int)std::ceil((renderFocusZ+210.0f)/groundTile);
   for(int gx=groundMinX;gx<groundMaxX;++gx)for(int gz=groundMinZ;gz<groundMaxZ;++gz){
-    float x0=std::max(-440.0f,gx*groundTile),x1=std::min(560.0f,(gx+1)*groundTile);
-    float z0=std::max(-320.0f,gz*groundTile),z1=std::min(320.0f,(gz+1)*groundTile);
+    float x0=std::max(CITY_WORLD_MIN_X,gx*groundTile),x1=std::min(CITY_WORLD_MAX_X,(gx+1)*groundTile);
+    float z0=std::max(CITY_WORLD_MIN_Z,gz*groundTile),z1=std::min(CITY_WORLD_MAX_Z,(gz+1)*groundTile);
     if(x1>x0&&z1>z0)texturedRect(x0,z0,x1,z1,0,UV_GRASS.u0,UV_GRASS.v0,UV_GRASS.u1,UV_GRASS.v1,groundTile);
   }
   // The plane camera can lead the aircraft during high-speed turns.  Fill only
@@ -2844,8 +2862,8 @@ void drawCity(){
     int cameraMinX=(int)std::floor((streamCameraX-80.0f)/groundTile),cameraMaxX=(int)std::ceil((streamCameraX+80.0f)/groundTile);
     int cameraMinZ=(int)std::floor((streamCameraZ-70.0f)/groundTile),cameraMaxZ=(int)std::ceil((streamCameraZ+70.0f)/groundTile);
     for(int gx=cameraMinX;gx<cameraMaxX;++gx)for(int gz=cameraMinZ;gz<cameraMaxZ;++gz){
-      float x0=std::max(-440.0f,gx*groundTile),x1=std::min(560.0f,(gx+1)*groundTile);
-      float z0=std::max(-320.0f,gz*groundTile),z1=std::min(320.0f,(gz+1)*groundTile);
+      float x0=std::max(CITY_WORLD_MIN_X,gx*groundTile),x1=std::min(CITY_WORLD_MAX_X,(gx+1)*groundTile);
+      float z0=std::max(CITY_WORLD_MIN_Z,gz*groundTile),z1=std::min(CITY_WORLD_MAX_Z,(gz+1)*groundTile);
       if(x1>x0&&z1>z0)texturedRect(x0,z0,x1,z1,0,UV_GRASS.u0,UV_GRASS.v0,UV_GRASS.u1,UV_GRASS.v1,groundTile);
     }
   }
@@ -3141,18 +3159,21 @@ void drawLabel(float x,float y,const char* s,float scale=2.5f){
 
 void drawMinimap() {
   constexpr float left=36.0f,top=34.0f,right=278.0f,bottom=117.0f;
-  float minX=-440.0f,maxX=560.0f,minZ=-320.0f,maxZ=320.0f;
-  if(driveEnvironment!=DriveEnvironment::City&&trackSampleCount>0){
-    minX=maxX=track[0].x;minZ=maxZ=track[0].z;
-    for(int i=1;i<trackSampleCount;++i){
-      minX=std::min(minX,track[i].x);maxX=std::max(maxX,track[i].x);
-      minZ=std::min(minZ,track[i].z);maxZ=std::max(maxZ,track[i].z);
-    }
-    minX-=7;maxX+=7;minZ-=7;maxZ+=7;
-  }
-  float spanX=std::max(1.0f,maxX-minX),spanZ=std::max(1.0f,maxZ-minZ);
-  auto mapX=[&](float x){return left+(x-minX)/spanX*(right-left);};
-  auto mapY=[&](float z){return bottom-(z-minZ)/spanZ*(bottom-top);};
+  // Heading-up local navigation: rotate the road world around the player and
+  // show only nearby streets. Player stays centered and always points up-screen.
+  float focusX=car.x,focusZ=car.z,heading=car.yaw;
+  float localHalfX=115.0f,localHalfZ=72.0f;
+  if(driveEnvironment!=DriveEnvironment::City&&trackSampleCount>0){localHalfX=58.0f;localHalfZ=42.0f;}
+  const float sh=std::sin(heading),ch=std::cos(heading);
+  auto mapPoint=[&](float x,float z,float&sx,float&sy){
+    float dx=x-focusX,dz=z-focusZ;
+    float localX=dx*ch-dz*sh,localZ=dx*sh+dz*ch;
+    sx=(left+right)*.5f+localX/localHalfX*(right-left)*.5f;
+    sy=(top+bottom)*.5f-localZ/localHalfZ*(bottom-top)*.5f;
+  };
+  auto mapX=[&](float x){float sx,sy;mapPoint(x,focusZ,sx,sy);return sx;};
+  auto mapY=[&](float z){float sx,sy;mapPoint(focusX,z,sx,sy);return sy;};
+  float minX=focusX-localHalfX*1.7f,maxX=focusX+localHalfX*1.7f,minZ=focusZ-localHalfZ*1.7f,maxZ=focusZ+localHalfZ*1.7f;
 
   drawRect(left,top,right,bottom,.055f,.075f,.08f);
   glColor3f(.48f,.52f,.52f);
@@ -3160,40 +3181,40 @@ void drawMinimap() {
     glLineWidth(2.0f);
     glBegin(GL_LINES);
     for(float road:CITY_ROADS){
-      glVertex3f(mapX(road),mapY(minZ),0);glVertex3f(mapX(road),mapY(maxZ),0);
-      glVertex3f(mapX(minX),mapY(road),0);glVertex3f(mapX(maxX),mapY(road),0);
+      float ax,ay,bx,by;mapPoint(road,minZ,ax,ay);mapPoint(road,maxZ,bx,by);glVertex3f(ax,ay,0);glVertex3f(bx,by,0);
+      mapPoint(minX,road,ax,ay);mapPoint(maxX,road,bx,by);glVertex3f(ax,ay,0);glVertex3f(bx,by,0);
     }
     for(const CityRoadSegment&road:CITY_EXTENDED_ROADS){
-      glVertex3f(mapX(road.x0),mapY(road.z0),0);glVertex3f(mapX(road.x1),mapY(road.z1),0);
+      float ax,ay,bx,by;mapPoint(road.x0,road.z0,ax,ay);mapPoint(road.x1,road.z1,bx,by);glVertex3f(ax,ay,0);glVertex3f(bx,by,0);
     }
     for(int curve=0;curve<5;++curve){const Vec2*control=curve==0?WEST_CURVE_CONTROL:(curve==1?EAST_CURVE_CONTROL:(curve==2?HILL_CURVE_CONTROL:(curve==3?EAST_HILL_CURVE_CONTROL:SOUTH_CURVE_CONTROL)));
       int count=curve==0?WEST_CURVE_COUNT:(curve==1?EAST_CURVE_COUNT:(curve==2?HILL_CURVE_COUNT:(curve==3?EAST_HILL_CURVE_COUNT:SOUTH_CURVE_COUNT))),samples=(count-1)*CURVED_ROAD_STEPS;
       for(int sample=0;sample<samples;++sample){Vec2 a=curvedRoadPoint(control,count,(float)sample/CURVED_ROAD_STEPS);
         Vec2 b=curvedRoadPoint(control,count,(float)(sample+1)/CURVED_ROAD_STEPS);
-        glVertex3f(mapX(a.x),mapY(a.z),0);glVertex3f(mapX(b.x),mapY(b.z),0);}}
+        float ax,ay,bx,by;mapPoint(a.x,a.z,ax,ay);mapPoint(b.x,b.z,bx,by);glVertex3f(ax,ay,0);glVertex3f(bx,by,0);}}
     glColor3f(.72f,.54f,.16f);
     for(int sample=0;sample<HIGHWAY_SAMPLE_COUNT;++sample){Vec2 a=highwayPoint((float)sample/HIGHWAY_STEPS_PER_SEGMENT);
-      Vec2 b=highwayPoint((float)(sample+1)/HIGHWAY_STEPS_PER_SEGMENT);glVertex3f(mapX(a.x),mapY(a.z),0);glVertex3f(mapX(b.x),mapY(b.z),0);}
+      Vec2 b=highwayPoint((float)(sample+1)/HIGHWAY_STEPS_PER_SEGMENT);float ax,ay,bx,by;mapPoint(a.x,a.z,ax,ay);mapPoint(b.x,b.z,bx,by);glVertex3f(ax,ay,0);glVertex3f(bx,by,0);}
     glEnd();
     glColor3f(.58f,.61f,.60f);glLineWidth(2);glBegin(GL_LINE_STRIP);
-    for(int sample=0;sample<PARK_ROAD_SAMPLE_COUNT;++sample){Vec2 p=parkRoadPoint((float)sample/PARK_ROAD_STEPS_PER_SEGMENT);glVertex3f(mapX(p.x),mapY(p.z),0);}glEnd();
+    for(int sample=0;sample<PARK_ROAD_SAMPLE_COUNT;++sample){Vec2 p=parkRoadPoint((float)sample/PARK_ROAD_STEPS_PER_SEGMENT);float px,py;mapPoint(p.x,p.z,px,py);glVertex3f(px,py,0);}glEnd();
     glColor3f(.26f,.29f,.29f);
     glBegin(GL_QUADS);
     for(const CityParking& lot:CITY_PARKING){
-      float x0=mapX(lot.x-lot.width*.5f),x1=mapX(lot.x+lot.width*.5f);
-      float y0=mapY(lot.z+lot.depth*.5f),y1=mapY(lot.z-lot.depth*.5f);
-      glVertex3f(x0,y0,0);glVertex3f(x1,y0,0);glVertex3f(x1,y1,0);glVertex3f(x0,y1,0);
+      float x0,y0,x1,y1,x2,y2,x3,y3;mapPoint(lot.x-lot.width*.5f,lot.z+lot.depth*.5f,x0,y0);mapPoint(lot.x+lot.width*.5f,lot.z+lot.depth*.5f,x1,y1);mapPoint(lot.x+lot.width*.5f,lot.z-lot.depth*.5f,x2,y2);mapPoint(lot.x-lot.width*.5f,lot.z-lot.depth*.5f,x3,y3);
+      glVertex3f(x0,y0,0);glVertex3f(x1,y1,0);glVertex3f(x2,y2,0);glVertex3f(x3,y3,0);
     }
     glEnd();
   }else{
     glColor3f(.72f,.74f,.72f);glLineWidth(3.0f);glBegin(GL_LINE_STRIP);
-    for(int i=0;i<trackSampleCount;++i)glVertex3f(mapX(track[i].x),mapY(track[i].z),0);
-    if(trackClosed&&trackSampleCount>0)glVertex3f(mapX(track[0].x),mapY(track[0].z),0);
+    for(int i=0;i<trackSampleCount;++i){float px,py;mapPoint(track[i].x,track[i].z,px,py);glVertex3f(px,py,0);}
+    if(trackClosed&&trackSampleCount>0){float px,py;mapPoint(track[0].x,track[0].z,px,py);glVertex3f(px,py,0);}
     glEnd();
   }
-  float cx=mapX(car.x),cy=mapY(car.z);
-  float fx=std::sin(car.yaw)*6.5f,fy=-std::cos(car.yaw)*6.5f;
-  float sx=std::cos(car.yaw)*4.0f,sy=std::sin(car.yaw)*4.0f;
+  float cx=(left+right)*.5f,cy=(top+bottom)*.5f;
+  // Because mapPoint is heading-up, the player marker is a fixed north/up arrow.
+  float fx=0.0f,fy=-6.5f;
+  float sx=4.0f,sy=0.0f;
   glColor3f(1.0f,.25f,.05f);glBegin(GL_TRIANGLES);
   glVertex3f(cx+fx,cy+fy,0);glVertex3f(cx-fx*.55f+sx,cy-fy*.55f+sy,0);
   glVertex3f(cx-fx*.55f-sx,cy-fy*.55f-sy,0);glEnd();
@@ -3312,7 +3333,7 @@ void beginOverlay() {
 void endOverlay() { glDisable(GL_BLEND); glEnable(GL_DEPTH_TEST); }
 
 void drawGround() {
-  texturedRect(-190,-190,340,190,0,UV_GRASS.u0,UV_GRASS.v0,UV_GRASS.u1,UV_GRASS.v1,20.0f);
+  texturedRect(CITY_WORLD_MIN_X,CITY_WORLD_MIN_Z,CITY_WORLD_MAX_X,CITY_WORLD_MAX_Z,0,UV_GRASS.u0,UV_GRASS.v0,UV_GRASS.u1,UV_GRASS.v1,20.0f);
 }
 
 void renderMenuWorld() {
@@ -3539,39 +3560,43 @@ void updatePlane(float dt,const SceCtrlData&pad,bool controlled){
   // without removing direct pilot authority or changing the verified trigger mapping.
   if(!yawInput)plane.roll+=(0.0f-plane.roll)*clampf(dt*.55f,0.0f,.04f);
   if(plane.airborne){
-    plane.pitch+=pitchInput*dt*1.55f; // preserved proven pitch rate; faster roll/centering is the bounded pass-2 improvement
-    if(plane.pitch>PI)plane.pitch-=2.0f*PI;
-    if(plane.pitch<-PI)plane.pitch+=2.0f*PI;
-  }else plane.pitch+=(pitchInput*.42f-plane.pitch)*clampf(dt*3.0f,0.0f,1.0f);
+    // Direct pilot authority is stronger than neutral stability; release centers
+    // naturally but never fights an active pitch command.
+    plane.pitch+=pitchInput*dt*1.78f;
+    if(!pitchInput)plane.pitch+=(0.0f-plane.pitch)*clampf(dt*.34f,0.0f,.03f);
+    plane.pitch=clampf(plane.pitch,-.78f,.78f);
+  }else plane.pitch+=(pitchInput*.46f-plane.pitch)*clampf(dt*3.4f,0.0f,1.0f);
   const float cp=std::cos(plane.pitch),fx=std::sin(plane.yaw)*cp,fy=std::sin(plane.pitch),fz=std::cos(plane.yaw)*cp;
   if(!plane.airborne){
     float groundForward=plane.vx*std::sin(plane.yaw)+plane.vz*std::cos(plane.yaw);
     // Hold R accelerates from rest; L actively decelerates instead of merely
     // clearing gas. This remains observable through THR and SPD on the HUD.
-    const float runwayForce=throttle*18.0f-(brakeHeld?26.0f:0.0f)-.32f*groundForward;
-    groundForward=clampf(groundForward+runwayForce*dt,0.0f,42.0f);
+    const float runwayForce=throttle*21.0f-(brakeHeld?28.0f:0.0f)-.28f*groundForward;
+    groundForward=clampf(groundForward+runwayForce*dt,0.0f,50.0f);
     plane.vx=std::sin(plane.yaw)*groundForward;plane.vz=std::cos(plane.yaw)*groundForward;plane.vy=0.0f;plane.speed=groundForward;
     if(groundForward>20.0f&&pitchInput>.10f){plane.airborne=true;plane.vy=2.4f;}
   }else{
     // Thrust, drag and gravity operate on persistent world velocity.  A modest
     // steering alignment makes aerobatics responsive without erasing inertia.
-    const float airBrake=brakeHeld?18.0f:0.0f;
-    plane.vx+=fx*(throttle*15.0f-airBrake)*dt;plane.vy+=fy*(throttle*15.0f-airBrake)*dt;plane.vz+=fz*(throttle*15.0f-airBrake)*dt;
+    const float airBrake=brakeHeld?20.0f:0.0f;
+    // Powered flight has enough thrust to climb and turn; airbrake remains a
+    // deliberate deceleration rather than an implicit glider state.
+    plane.vx+=fx*(throttle*20.0f-airBrake)*dt;plane.vy+=fy*(throttle*20.0f-airBrake)*dt;plane.vz+=fz*(throttle*20.0f-airBrake)*dt;
     airspeed=std::sqrt(plane.vx*plane.vx+plane.vy*plane.vy+plane.vz*plane.vz);
     // Gentle velocity alignment retains momentum through bailout and lets pitch
     // genuinely control loops, rather than snapping the craft into a hover.
     const float align=clampf(dt*(.24f+airspeed*.008f),0.0f,.055f);
     plane.vx+=(fx*airspeed-plane.vx)*align;plane.vy+=(fy*airspeed-plane.vy)*align;plane.vz+=(fz*airspeed-plane.vz)*align;
-    const float liftFactor=clampf((airspeed-14.0f)/34.0f,0.0f,1.0f);
-    const bool stalled=airspeed<17.0f&&plane.pitch>.12f;
-    // Lift falls off below takeoff speed and during a high-angle stall; gravity
-    // is always present, so an unpiloted aircraft has an honest glide/crash arc.
-    const float lift=(1.0f+10.2f*liftFactor)*std::max(.0f,cp)*(stalled?.16f:1.0f);
+    const float liftFactor=clampf((airspeed-13.0f)/38.0f,0.0f,1.0f);
+    const bool stalled=airspeed<16.0f&&plane.pitch>.45f;
+    // Wing lift plus a modest powered-climb contribution makes throttle useful
+    // without allowing hover; loss of airspeed still produces a real descent.
+    const float lift=(1.2f+11.6f*liftFactor)*std::max(.0f,cp)*(stalled?.22f:1.0f)+throttle*1.8f;
     plane.vy+=(lift-9.8f)*dt;
     const float drag=clampf(1.0f-dt*(.024f+airspeed*.0032f+std::fabs(plane.pitch)*.013f+(stalled?.055f:0.0f)),.72f,1.0f);
     plane.vx*=drag;plane.vy*=drag;plane.vz*=drag;
     airspeed=std::sqrt(plane.vx*plane.vx+plane.vy*plane.vy+plane.vz*plane.vz);
-    if(airspeed>76.0f){const float scale=76.0f/airspeed;plane.vx*=scale;plane.vy*=scale;plane.vz*=scale;airspeed=76.0f;}
+    if(airspeed>90.0f){const float scale=90.0f/airspeed;plane.vx*=scale;plane.vy*=scale;plane.vz*=scale;airspeed=90.0f;}
     plane.speed=airspeed;
   }
   plane.x+=plane.vx*dt;plane.z+=plane.vz*dt;plane.y+=plane.vy*dt;
@@ -3589,7 +3614,11 @@ void updatePlane(float dt,const SceCtrlData&pad,bool controlled){
     // grounded frame erased R-trigger runway acceleration and mimicked dead gas.
     if(plane.active&&plane.airborne){plane.airborne=false;plane.pitch*=.22f;plane.roll*=.38f;plane.vx*=.76f;plane.vz*=.76f;plane.speed=std::sqrt(plane.vx*plane.vx+plane.vz*plane.vz);}
   }
-  if(plane.x<-440||plane.x>560||plane.z<-320||plane.z>320)damagePlane(120.0f,plane.x-plane.vx,plane.z-plane.vz);
+  // City bounds are content bounds, not aircraft death walls. Only an extreme
+  // safety radius recovers a lost aircraft, after ample space to turn home.
+  float planeRadius=std::sqrt(plane.x*plane.x+plane.z*plane.z);
+  if(plane.y>PLANE_CEILING){plane.y=PLANE_CEILING;plane.vy=std::min(plane.vy,0.0f);}
+  if(planeRadius>PLANE_SAFE_WORLD_RADIUS)damagePlane(120.0f,plane.x-plane.vx,plane.z-plane.vz);
 }
 
 void renderGame() {
@@ -3605,7 +3634,9 @@ void renderGame() {
   glLoadIdentity();
 
   if(playerControlMode==PlayerControlMode::OnFoot){
-    float cp=std::cos(person.viewPitch),sp=std::sin(person.viewPitch);
+    // aimRecoil is positive-up and only affects the view; it decays to neutral.
+    float renderedPitch=clampf(person.viewPitch+aimRecoil,-1.35f,1.35f);
+    float cp=std::cos(renderedPitch),sp=std::sin(renderedPitch);
     float dirX=std::sin(person.viewYaw)*cp,dirY=sp,dirZ=std::cos(person.viewYaw)*cp;
     float upX=-std::sin(person.viewYaw)*sp,upY=cp,upZ=-std::cos(person.viewYaw)*sp;
     float bobY=std::sin(walkBob*2.0f)*.045f;
@@ -3626,15 +3657,11 @@ void renderGame() {
       gluLookAt(eyeX,eyeY,eyeZ,anchorX+dirX*10,anchorY+dirY*8+.15f,anchorZ+dirZ*10,0,1,0);
     }
   }else if(playerControlMode==PlayerControlMode::Aircraft){
-    // Bank-aware chase camera keeps the left/right response visually honest and
-    // looks through loops without coupling city culling to the old car position.
-    float cp=std::cos(plane.pitch),sp=std::sin(plane.pitch),cr=std::cos(plane.roll),sr=std::sin(plane.roll);
-    float fx=std::sin(plane.yaw)*cp,fy=sp,fz=std::cos(plane.yaw)*cp;
-    float rx=std::cos(plane.yaw),rz=-std::sin(plane.yaw);
-    float ux=-std::sin(plane.yaw)*sp,uy=cp,uz=-std::cos(plane.yaw)*sp;
-    float upx=ux*cr-rx*sr,upy=uy*cr,upz=uz*cr-rz*sr;
-    gluLookAt(plane.x-fx*12+upx*3.5f,plane.y-fy*12+upy*3.5f,plane.z-fz*12+upz*3.5f,
-              plane.x+fx*22,plane.y+fy*22,plane.z+fz*22,upx,upy,upz);
+    // Level chase camera: it follows yaw but intentionally ignores aircraft
+    // pitch/bank, keeping the horizon steady while the plane maneuvers.
+    float fx=std::sin(plane.yaw),fz=std::cos(plane.yaw);
+    gluLookAt(plane.x-fx*13,plane.y+5.0f,plane.z-fz*13,
+              plane.x+fx*26,plane.y+2.2f,plane.z+fz*26,0,1,0);
   }else if(cameraMode==3||cameraMode==4){
     float fx=std::sin(car.yaw),fz=std::cos(car.yaw),rx=std::cos(car.yaw),rz=-std::sin(car.yaw);
     float cameraPitch=car.bodyPitch+carTerrainPitch,cameraRoll=car.bodyRoll+carTerrainRoll;

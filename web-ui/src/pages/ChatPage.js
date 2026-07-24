@@ -16198,6 +16198,7 @@ let creativeHistoryFuture = [];
 let creativeHtmlMotionClip = null;
 // Composition (multi-clip timeline). Video clips are HyperFrames, HTML Motion, or Remotion.
 let creativeComposition = null;
+let creativeSequenceState = { id: null, variantId: null, title: '', status: 'draft', exportPath: null, qaReceiptPath: null };
 let creativeHtmlMotionBlocksState = {
   loading: false,
   loaded: false,
@@ -27264,8 +27265,13 @@ function renderCompositionTimelineStrip() {
   return `
     <div data-composition-strip="true" tabindex="0" onkeydown="canvasCompositionKeyDown(event)" style="margin-bottom:14px;padding:10px;border-radius:10px;border:1px solid rgba(56,189,248,0.18);background:rgba(8,12,24,0.6);outline:none">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#7dd3fc">Composition · ${summary.clipCount} clips · ${summary.trackCount} tracks</div>
-        <div style="display:flex;gap:4px">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0">
+          <div style="font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#d6b35a;white-space:nowrap">${creativeSequenceState.id ? `Sequence · ${escHtml(creativeSequenceState.title || creativeSequenceState.id)} · ${escHtml(creativeSequenceState.status || 'draft')}` : `Composition · ${summary.clipCount} clips · ${summary.trackCount} tracks`}</div>
+          ${creativeSequenceState.exportPath ? `<span title="${escHtml(creativeSequenceState.exportPath)}" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;color:#a8a29e">${escHtml(creativeSequenceState.exportPath)}</span>` : ''}
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">
+          <button onclick="canvasSequenceOpen()" title="Open a persisted video sequence" style="border:1px solid rgba(214,179,90,0.45);background:rgba(214,179,90,0.1);color:#f0d98a;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">Open sequence</button>
+          ${creativeSequenceState.id ? `<button onclick="canvasSequenceSave()" title="Save timeline edits back to this sequence" style="border:1px solid rgba(214,179,90,0.45);background:rgba(214,179,90,0.1);color:#f0d98a;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">Save sequence</button>` : ''}
           <button onclick="canvasCompositionAddTrack('video')" style="border:1px solid rgba(56,189,248,0.35);background:rgba(56,189,248,0.1);color:#7dd3fc;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">+V</button>
           <button onclick="canvasCompositionAddTrack('audio')" style="border:1px solid rgba(16,185,129,0.35);background:rgba(16,185,129,0.1);color:#34d399;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">+A</button>
           <button onclick="canvasCompositionAddTrack('caption')" style="border:1px solid rgba(245,158,11,0.35);background:rgba(245,158,11,0.1);color:#fbbf24;border-radius:6px;padding:3px 7px;font-size:10px;font-weight:700;cursor:pointer">+C</button>
@@ -27410,21 +27416,82 @@ window.canvasCompositionDeleteSelected = function() {
   renderCreativeWorkspace?.();
 };
 
+window.canvasSequenceOpen = async function() {
+  const sid = window.currentChatSessionId || 'default';
+  const root = (window.canvasProjectRoot || '').toString();
+  try {
+    const response = await fetch(`/api/canvas/sequences?sessionId=${encodeURIComponent(sid)}&root=${encodeURIComponent(root)}`);
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || json?.success === false) throw new Error(json?.error || `HTTP ${response.status}`);
+    const sequences = Array.isArray(json.sequences) ? json.sequences : [];
+    if (!sequences.length) throw new Error('No persisted video sequences were found for this Creative project.');
+    const labels = sequences.map((sequence, index) => `${index + 1}. ${sequence.title} (${sequence.summary?.clipCount || 0} clips, ${sequence.masterRender?.status || 'draft'})`).join('\n');
+    const choice = window.prompt(`Open which sequence?\n${labels}`, '1');
+    if (choice === null) return;
+    const selected = sequences[Math.max(0, Math.min(sequences.length - 1, Number(choice) - 1))];
+    if (!selected) throw new Error('Invalid sequence selection.');
+    creativeComposition = selected.composition;
+    creativeSequenceState = { id: selected.id, variantId: null, title: selected.title, status: selected.masterRender?.status || 'draft', exportPath: selected.masterRender?.exportPath || null, qaReceiptPath: selected.masterRender?.qaReceiptPath || null };
+    if (creativeSceneDoc) {
+      creativeSceneDoc.durationMs = Math.max(1000, Number(selected.summary?.durationMs) || Number(selected.composition?.durationMs) || 12000);
+      creativeSceneDoc.frameRate = Math.max(1, Number(selected.summary?.frameRate) || Number(selected.composition?.frameRate) || 30);
+      creativeTimelineMs = Math.max(0, Math.min(creativeSceneDoc.durationMs, creativeTimelineMs));
+    }
+    persistCompositionState();
+    renderCreativeWorkspace?.();
+    showToast?.('Sequence opened', `${selected.title} · ${selected.summary?.clipCount || 0} clips`, 'success');
+  } catch (err) {
+    showToast?.('Could not open sequence', String(err?.message || err), 'error');
+  }
+};
+
+window.canvasSequenceSave = async function() {
+  if (!creativeSequenceState.id || !creativeComposition) return;
+  const sid = window.currentChatSessionId || 'default';
+  const root = (window.canvasProjectRoot || '').toString();
+  const response = await fetch(`/api/canvas/sequences/${encodeURIComponent(creativeSequenceState.id)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId: sid, root, variantId: creativeSequenceState.variantId, composition: creativeComposition }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json?.success === false) throw new Error(json?.error || `HTTP ${response.status}`);
+  creativeSequenceState.status = 'draft';
+  creativeSequenceState.exportPath = null;
+  creativeSequenceState.qaReceiptPath = null;
+  renderCreativeWorkspace?.();
+  showToast?.('Sequence saved', json.path || creativeSequenceState.title, 'success');
+};
+
 window.canvasCompositionRender = async function() {
   const comp = ensureCreativeComposition();
   if (!comp) return;
   const sid = window.currentChatSessionId || 'default';
   const root = (window.canvasProjectRoot || '').toString();
-  showToast?.('Rendering composition…', 'Encoding frames + muxing audio. Watch progress in the toast log.', 'info');
+  showToast?.('Rendering composition…', creativeSequenceState.id ? 'Saving, rendering, decoding, and QA checking this sequence.' : 'Encoding frames + muxing audio. Watch progress in the toast log.', 'info');
   try {
-    const response = await fetch('/api/canvas/composition/render', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: sid, root, composition: comp, format: 'mp4' }),
-    });
+    let response;
+    if (creativeSequenceState.id) {
+      await canvasSequenceSave();
+      response = await fetch(`/api/canvas/sequences/${encodeURIComponent(creativeSequenceState.id)}/render`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: sid, root, variantId: creativeSequenceState.variantId, format: 'mp4' }),
+      });
+    } else {
+      response = await fetch('/api/canvas/composition/render', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: sid, root, composition: comp, format: 'mp4' }),
+      });
+    }
     const json = await response.json().catch(() => ({}));
     if (!response.ok || json?.success === false) throw new Error(json?.error || `HTTP ${response.status}`);
-    showToast?.('Render complete', `Saved to ${json.path}`, 'success');
+    const outputPath = json?.render?.outputPath || json?.path || '';
+    if (creativeSequenceState.id) {
+      creativeSequenceState.status = json?.qa?.passed ? 'qa_passed' : 'qa_failed';
+      creativeSequenceState.exportPath = outputPath;
+      creativeSequenceState.qaReceiptPath = json?.sequence?.masterRender?.qaReceiptPath || null;
+      renderCreativeWorkspace?.();
+    }
+    showToast?.(json?.qa?.passed === false ? 'Render completed with QA failures' : 'Render complete', `${outputPath}${json?.qa ? ` · QA ${json.qa.passed ? 'passed' : 'failed'}` : ''}`, json?.qa?.passed === false ? 'error' : 'success');
   } catch (err) {
     showToast?.('Render failed', String(err?.message || err), 'error');
   }
@@ -30448,7 +30515,9 @@ function renderCreativeWorkspaceStudioV3({ shell, library, stage, props, timelin
         ? getCreativeHtmlMotionTimelineTracks(durationMs)
         : [];
       const totalTrackCount = creativeSceneDoc.elements.length + htmlMotionTracks.length;
-      timelineMeta.textContent = `${totalTrackCount} tracks | ${formatCreativeTimelineTime(durationMs)} | ${Number(creativeSceneDoc.frameRate) || 60} fps | playhead ${formatCreativeTimelineTime(creativeTimelineMs)}${hasAudioTrack ? ' | audio armed' : ''}`;
+      const compositionSummary = creativeComposition ? summarizeComposition(creativeComposition) : null;
+      const visibleTrackCount = totalTrackCount + (compositionSummary?.trackCount || 0);
+      timelineMeta.textContent = `${visibleTrackCount} tracks | ${formatCreativeTimelineTime(durationMs)} | ${Number(creativeSceneDoc.frameRate) || 60} fps | playhead ${formatCreativeTimelineTime(creativeTimelineMs)}${hasAudioTrack ? ' | audio armed' : ''}`;
       const audioStartMs = Math.max(0, Number(audioTrack.startMs) || 0);
       const audioDurationMs = Math.max(0, Number(audioTrack.durationMs) || 0) || Math.max(0, durationMs - audioStartMs);
       const audioLeft = Math.max(0, Math.min(100, (audioStartMs / durationMs) * 100));
@@ -30467,6 +30536,7 @@ function renderCreativeWorkspaceStudioV3({ shell, library, stage, props, timelin
           <div class="creative-timeline-ruler">
             ${ticks.map((tick) => `<div class="creative-timeline-ruler-tick" style="left:${tick.left}%">${escHtml(tick.label)}</div>`).join('')}
           </div>
+          ${renderCompositionTimelineStrip()}
         ` + creativeSceneDoc.elements.map((element, idx) => {
           const label = getCreativeElementDisplayLabelStudioV3(element, idx);
           const keyframes = Array.isArray(element.meta?.keyframes) ? element.meta.keyframes.slice().sort((a, b) => (a.atMs || 0) - (b.atMs || 0)) : [];

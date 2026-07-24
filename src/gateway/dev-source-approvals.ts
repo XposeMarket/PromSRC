@@ -9,6 +9,7 @@ import {
   registerCoordinatedDevEdit,
 } from './dev-edit-coordinator';
 import { seedDevEditCodingContext } from './coding-context-packet';
+import { createDevEditLedger, linkDevEditLedgerApproval } from './dev-edit-ledger';
 
 export interface DevSourceEditEvidence {
   file: string;
@@ -40,6 +41,7 @@ export interface DevSourceEditScope {
   planHash?: string;
   expiresAt: number;
   approvalId?: string;
+  auditId?: string;
 }
 
 export interface DevSourceEditContinuation {
@@ -47,7 +49,7 @@ export interface DevSourceEditContinuation {
   sessionId: string;
   approvalId?: string;
   planHash?: string;
-  status: 'approved' | 'applying_live' | 'complete';
+  status: 'approved' | 'verified_not_live' | 'applying_live' | 'complete';
   completionNoteTag: string;
   plan?: DevSourceEditPlan;
   allowedFiles: string[];
@@ -441,7 +443,7 @@ export function createDevSourceEditApprovalScope(input: {
   });
   const planHash = stableHash(plan);
   const devEditId = String(input.devEditId || '').trim() || `dev_edit_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
-  return {
+  const scope: DevSourceEditScope = {
     devEditId,
     allowedFiles,
     allowedDirs,
@@ -454,6 +456,35 @@ export function createDevSourceEditApprovalScope(input: {
     approvalId: input.approvalId,
     expiresAt: Date.now() + Math.max(60_000, Number(input.ttlMs || DEFAULT_TTL_MS) || DEFAULT_TTL_MS),
   };
+  // The ledger is created before approval/granting so every approved write has a
+  // durable destination. Source mutations fail closed if it cannot be updated.
+  const ledger = createDevEditLedger({
+    id: devEditId,
+    sessionId,
+    approvalId: scope.approvalId,
+    planHash,
+    allowedFiles,
+  });
+  scope.auditId = ledger.displayId;
+  return scope;
+}
+
+/**
+ * Local-private builds may remove the human pause while retaining the exact
+ * request -> durable approval -> scoped grant lifecycle.  This is deliberately
+ * narrower than a general approval bypass.
+ */
+export function shouldAutoApproveScopedDevSourceEdit(scope: DevSourceEditScope): boolean {
+  if (isPublicDistributionBuild()) return false;
+  if (String(process.env.PROMETHEUS_AUTO_APPROVE_DEV_EDITS || '').trim().toLowerCase() === 'false') return false;
+  const files = scope.allowedFiles || [];
+  // Auto mode never grants a shell-shaped verification command. Profiles are
+  // deterministic, reviewed verification routes; arbitrary commands retain
+  // their normal command approval boundary.
+  return files.length > 0
+    && files.length <= 32
+    && !scope.verificationCommand
+    && files.every(file => file.startsWith('src/') || file.startsWith('web-ui/'));
 }
 
 export function grantDevSourceEditApproval(sessionId: string, scope: DevSourceEditScope, approvedBy = 'user'): DevSourceEditScope {
@@ -475,6 +506,7 @@ export function grantDevSourceEditApproval(sessionId: string, scope: DevSourceEd
   activateToolCategory(sid, 'prometheus_source_read');
   activateToolCategory(sid, 'prometheus_source_write');
   const grant = { ...scope, allowedFiles: mergedFiles, allowedDirs: mergedDirs };
+  linkDevEditLedgerApproval(grant.devEditId, grant.approvalId);
   grants.set(sid, grant);
   upsertDevSourceEditContinuation({
     id: grant.devEditId,

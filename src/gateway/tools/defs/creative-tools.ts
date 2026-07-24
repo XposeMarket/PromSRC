@@ -6,8 +6,8 @@ function emptyObjectSchema() {
   return { type: 'object', required: [], properties: {}, additionalProperties: false };
 }
 
-export function getCreativeToolDefs() {
-  const tools = [
+export function getCreativeToolDefs(): any[] {
+  const tools: any[] = [
     {
       type: 'function',
       function: {
@@ -83,6 +83,41 @@ export function getCreativeToolDefs() {
             layers: { type: 'array', items: { type: 'object' } },
             options: { type: 'object' },
           },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'video_compose',
+        description: 'High-level editable video composer. Probes real workspace media, creates persistent 1-10 source sequences, applies deterministic edits, derives aspect variants, renders MP4/WebM artifacts, and automatically records exact-artifact QA.',
+        parameters: {
+          type: 'object',
+          required: ['action'],
+          properties: {
+            action: { type: 'string', enum: ['create', 'inspect', 'apply_edit', 'add_social_cut_result', 'create_variant', 'set_captions', 'set_audio_policy', 'render', 'qa'] },
+            sequenceId: { type: 'string' },
+            title: { type: 'string' },
+            sources: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'object' } },
+            width: { type: 'number' },
+            height: { type: 'number' },
+            frameRate: { type: 'number' },
+            fit: { type: 'string', enum: ['cover', 'contain', 'blurred-background'] },
+            instruction: { type: 'string' },
+            operations: { type: 'array', items: { type: 'object' } },
+            receiptPath: { type: 'string' },
+            atMs: { type: 'number' },
+            format: { type: 'string', enum: ['landscape', 'portrait', 'square', 'four-five'] },
+            reframe: { type: 'string', enum: ['center-crop', 'contain', 'manual'] },
+            captions: { type: 'object' },
+            audio: { type: 'object' },
+            artifactPath: { type: 'string' },
+            variantId: { type: 'string' },
+            filename: { type: 'string' },
+            outputFormat: { type: 'string', enum: ['mp4', 'webm'] },
+            autoQa: { type: 'boolean', description: 'Run exact-artifact technical QA after render. Defaults true.' },
+          },
+          additionalProperties: false,
         },
       },
     },

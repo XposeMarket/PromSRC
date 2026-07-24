@@ -130,7 +130,7 @@ export interface CodingContextObservation {
 export interface DevEditContextSeed {
   id: string;
   sessionId: string;
-  status: 'approved' | 'applying_live' | 'complete';
+  status: 'approved' | 'verified_not_live' | 'applying_live' | 'complete';
   allowedFiles?: string[];
   affectedFiles?: string[];
   changedSurfaces?: string[];
@@ -448,7 +448,7 @@ function devEditFact(root: string, toolName: string, args: Record<string, unknow
  */
 export function seedDevEditCodingContext(input: DevEditContextSeed): void {
   const files = Array.from(new Set([...(input.affectedFiles || []), ...(input.allowedFiles || [])])).slice(0, 12);
-  const statusStage = input.status === 'complete' ? 'live' : input.status === 'applying_live' ? 'apply_live' : 'approved';
+  const statusStage = input.status === 'complete' ? 'live' : input.status === 'applying_live' ? 'apply_live' : input.status === 'verified_not_live' ? 'verified_not_live' : 'approved';
   observeCodingContext({
     sessionId: input.sessionId,
     objective: input.objective || `Prometheus self-edit ${input.id}: ${input.summary || input.verificationSummary || 'preserve the approved dev-edit lifecycle and post-restart verification.'}`,

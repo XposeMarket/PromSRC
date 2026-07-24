@@ -206,6 +206,16 @@ async function renderSourceVideoSegment(
     filters.push(`[bg][fg]overlay=(W-w)*${positionX}:(H-h)*${positionY}[vout]`);
   }
   let current = 'vout';
+  const transitionIn = clip.transitionIn && clip.transitionIn.kind !== 'cut' ? Math.min(durationMs / 2, Math.max(1, Number(clip.transitionIn.durationMs) || 0)) : 0;
+  const transitionOut = clip.transitionOut && clip.transitionOut.kind !== 'cut' ? Math.min(durationMs / 2, Math.max(1, Number(clip.transitionOut.durationMs) || 0)) : 0;
+  if (transitionIn > 0) {
+    filters.push(`[${current}]fade=t=in:st=0:d=${(transitionIn / 1000).toFixed(3)}[vtransitionin]`);
+    current = 'vtransitionin';
+  }
+  if (transitionOut > 0) {
+    filters.push(`[${current}]fade=t=out:st=${Math.max(0, (durationMs - transitionOut) / 1000).toFixed(3)}:d=${(transitionOut / 1000).toFixed(3)}[vtransitionout]`);
+    current = 'vtransitionout';
+  }
   const hook = String(clip.source.hook || clip.meta?.hook || '').trim();
   if (hook) {
     const escapedHook = hook.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'");

@@ -464,6 +464,46 @@ function setTaskPlanFromDeclaredSteps(taskId: string, steps: any[]): void {
   saveTask(task);
 }
 
+const scheduledTaskReasoningBuffers = new Map<string, { text: string; timer: NodeJS.Timeout }>();
+
+function flushScheduledTaskReasoning(
+  taskId: string,
+  broadcast: (data: any) => void,
+  opts?: { scheduleId?: string; scheduleName?: string },
+): void {
+  const pending = scheduledTaskReasoningBuffers.get(taskId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  scheduledTaskReasoningBuffers.delete(taskId);
+  const text = pending.text.trim();
+  if (!text) return;
+  appendJournal(taskId, {
+    type: 'reasoning',
+    content: text.slice(0, 1200),
+    detail: text.length > 1200 ? text.slice(0, 4000) : undefined,
+  });
+  broadcast({ type: 'task_reasoning', taskId, text: text.slice(0, 1200), scheduleId: opts?.scheduleId });
+  broadcast({ type: 'task_panel_update', taskId });
+}
+
+function queueScheduledTaskReasoning(
+  taskId: string,
+  value: unknown,
+  broadcast: (data: any) => void,
+  opts?: { scheduleId?: string; scheduleName?: string },
+): void {
+  const text = String(value || '');
+  if (!text) return;
+  const previous = scheduledTaskReasoningBuffers.get(taskId);
+  if (previous) clearTimeout(previous.timer);
+  const pending = {
+    text: `${previous?.text || ''}${text}`,
+    timer: setTimeout(() => flushScheduledTaskReasoning(taskId, broadcast, opts), 300),
+  };
+  pending.timer.unref?.();
+  scheduledTaskReasoningBuffers.set(taskId, pending);
+}
+
 function mirrorChatEventToTask(
   taskId: string,
   event: string,
@@ -472,6 +512,28 @@ function mirrorChatEventToTask(
   opts?: { scheduleId?: string; scheduleName?: string },
 ): void {
   try {
+    if (event === 'reasoning_summary_delta') {
+      // These are provider-supplied summaries explicitly safe for the UI.
+      // Keep raw thinking_delta private and out of the durable task journal.
+      queueScheduledTaskReasoning(taskId, data?.text || data?.summary || data?.thinking, broadcast, opts);
+      return;
+    }
+    flushScheduledTaskReasoning(taskId, broadcast, opts);
+
+    if ((event === 'thinking' || event === 'agent_thought') && String(data?.visibility || '').toLowerCase() !== 'private') {
+      const text = String(data?.thinking || data?.text || data?.message || '').trim();
+      if (text) {
+        appendJournal(taskId, {
+          type: 'reasoning',
+          content: text.slice(0, 1200),
+          detail: text.length > 1200 ? text.slice(0, 4000) : undefined,
+        });
+        broadcast({ type: 'task_reasoning', taskId, text: text.slice(0, 1200), scheduleId: opts?.scheduleId });
+        broadcast({ type: 'task_panel_update', taskId });
+      }
+      return;
+    }
+
     if (event === 'tool_call') {
       const action = String(data?.action || 'unknown');
       appendJournal(taskId, {
@@ -1705,14 +1767,11 @@ export class CronScheduler {
         // Also intercepts write_note tool calls to persist schedule-scoped insights into schedule memory
         const taskSendSSE = (event: string, data: any) => {
           sendSSE(event, data); // still feeds the cron broadcast pipeline
+          mirrorChatEventToTask(cronTask.id, event, data, this.deps.broadcast, {
+            scheduleId: job.id,
+            scheduleName: job.name,
+          });
           if (event === 'tool_call') {
-            appendJournal(cronTask.id, {
-              type: 'tool_call',
-              content: `${data.action || 'unknown'}(${JSON.stringify(data.args || {}).slice(0, 80)})`,
-            });
-            this.deps.broadcast({ type: 'task_tool_call', taskId: cronTask.id, tool: data.action, args: data.args });
-            this.deps.broadcast({ type: 'task_panel_update', taskId: cronTask.id });
-
             // Intercept write_note → write to evidence bus for visibility in panel,
             // and persist schedule-scoped insights into schedule memory for future runs
             if (data.action === 'write_note') {
@@ -1744,24 +1803,6 @@ export class CronScheduler {
                 }
               }
             }
-          } else if (event === 'tool_result') {
-            appendJournal(cronTask.id, {
-              type: 'tool_result',
-              content: `${data.action || 'unknown'}: ${String(data.result || '').slice(0, 120)}`,
-            });
-          } else if (event === 'progress_state') {
-            updateTaskRuntimeProgress(cronTask.id, {
-              source: data?.source,
-              activeIndex: Number(data?.activeIndex ?? -1),
-              items: Array.isArray(data?.items)
-                ? data.items.map((item: any, idx: number) => ({
-                  id: String(item?.id || `p${idx + 1}`),
-                  text: String(item?.text || ''),
-                  status: String(item?.status || 'pending') as any,
-                }))
-                : [],
-            });
-            this.deps.broadcast({ type: 'task_panel_update', taskId: cronTask.id });
           }
         };
 

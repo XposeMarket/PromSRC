@@ -11,6 +11,7 @@ import { scheduleMemoryTool } from './schedule-memory-tool.js';
 import { talkToManagerTool, getTeamLogsTool, scheduleJobTool, manageTeamGoalTool, manageTeamContextRefTool } from './team-tools.js';
 import { uploadImageTool, fetchImageTool } from './image-tools.js';
 import { downloadUrlTool, downloadMediaTool } from './download-tools.js';
+import { videoSocialCutTool } from './video-social-cut.js';
 import { cloneRepoTool } from './repo-tools.js';
 import { analyzeImageTool, analyzeVideoTool } from './media-analysis.js';
 import { generateImageTool } from './generate-image.js';
@@ -301,6 +302,7 @@ class ToolRegistry {
     this.registerSafe(downloadUrlTool);
     this.registerSafe(cloneRepoTool);
     this.registerSafe(downloadMediaTool);
+    this.registerSafe(videoSocialCutTool);
     this.registerSafe(generateImageTool);
     this.registerSafe(generateVideoTool);
     this.registerSafe(analyzeImageTool);

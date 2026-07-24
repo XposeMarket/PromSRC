@@ -381,10 +381,12 @@ function normalizeTaskApproval(input = {}) {
   const toolName = String(approval.toolName || '').trim();
   const approvalKind = String(approval.approvalKind || '').trim();
   const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
+  const isDevApply = approvalKind === 'dev_apply_live' || toolName === 'prom_apply_dev_changes';
   const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
   const isCommand = approvalKind === 'command' || approvalKind === 'elevated_command' || toolName === 'run_command';
   const title = approvalKind === 'elevated_command' ? 'Administrator command'
     : isDevSource ? 'Dev source edit approval'
+      : isDevApply ? 'Apply verified dev changes live'
       : isFinalAction ? 'Final action approval'
         : isCommand ? 'Command approval'
           : toolName ? `${toolName.replace(/_/g, ' ')} approval` : 'Approval required';
@@ -397,7 +399,7 @@ function normalizeTaskApproval(input = {}) {
     title,
     command: String(approval.command || toolArgs.command || '').trim(),
     summary: String(approval.reason || approval.summary || approval.action || '').trim(),
-    oneShot: approval.oneShot === true || approvalKind === 'elevated_command' || isDevSource || isFinalAction,
+    oneShot: approval.oneShot === true || approvalKind === 'elevated_command' || isDevSource || isDevApply || isFinalAction,
   };
 }
 
@@ -408,6 +410,8 @@ function renderTaskApprovalCard(input = {}) {
   const isOneShot = approval.oneShot === true;
   const sourceFiles = Array.isArray(approval.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
   const sourceDirs = Array.isArray(approval.devSourceEdit?.allowedDirs) ? approval.devSourceEdit.allowedDirs : [];
+  const applyFiles = Array.isArray(approval.devApplyLive?.files) ? approval.devApplyLive.files : [];
+  const applyEdits = Array.isArray(approval.devApplyLive?.memberIds) ? approval.devApplyLive.memberIds : [];
   const boundary = approval.commandBoundary || null;
   const boundaryScope = String(boundary?.scope || '').trim();
   const boundaryPaths = Array.isArray(boundary?.externalPaths) ? boundary.externalPaths.filter(Boolean) : [];
@@ -430,10 +434,12 @@ function renderTaskApprovalCard(input = {}) {
     ${boundaryPaths.length ? `<div class="chat-approval-scope"><span>External paths</span>${boundaryPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
     ${sourceFiles.length ? `<div class="chat-approval-scope"><span>Files</span>${sourceFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
     ${sourceDirs.length ? `<div class="chat-approval-scope"><span>Workspace docs</span>${sourceDirs.map((dir) => escHtml(String(dir))).join('<br>')}</div>` : ''}
+    ${applyEdits.length ? `<div class="chat-approval-scope"><span>Verified edits</span>${escHtml(`${applyEdits.length} edit${applyEdits.length === 1 ? '' : 's'} · one shared restart`)}</div>` : ''}
+    ${applyFiles.length ? `<div class="chat-approval-scope"><span>Changed files</span>${applyFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
     ${technicalText ? `<details class="chat-approval-technical"><summary>Technical details</summary><pre class="chat-approval-command">${escHtml(String(technicalText))}</pre></details>` : ''}
     <div class="chat-approval-actions">
-      <button class="chat-approval-btn chat-approval-deny" type="button" onclick="bgtResolveApproval('${approvalId}', 'deny')">Reject</button>
-      <button class="chat-approval-btn chat-approval-approve" type="button" onclick="bgtResolveApproval('${approvalId}', 'approve')">${isOneShot ? 'Approve' : 'Allow once'}</button>
+      <button class="chat-approval-btn chat-approval-deny" type="button" onclick="bgtResolveApproval('${approvalId}', 'deny')">${approval.approvalKind === 'dev_apply_live' ? 'Keep verified, don’t restart' : 'Reject'}</button>
+      <button class="chat-approval-btn chat-approval-approve" type="button" onclick="bgtResolveApproval('${approvalId}', 'approve')">${approval.approvalKind === 'dev_apply_live' ? 'Apply live' : (isOneShot ? 'Approve' : 'Allow once')}</button>
       ${isOneShot ? '' : `<button class="chat-approval-link" type="button" onclick="bgtResolveApproval('${approvalId}', 'approve', 'session')">Allow this session</button>
       <button class="chat-approval-link" type="button" onclick="bgtResolveApproval('${approvalId}', 'approve', 'always')">Always allow</button>`}
     </div>
@@ -640,7 +646,7 @@ async function bgtRefreshOpenPanel() {
   const recentJournal = journal.slice(-30).reverse();
   const journalHTML = recentJournal.map(entry => {
     const time = new Date(entry.t).toLocaleTimeString();
-    const typeColor = { tool_call:'#0d4faf', tool_result:'#1a6e35', error:'#9c1a1a', plan_mutation:'#6d2d9e', status_push:'#555', pause:'#7c4d00', resume:'#7c4d00', advisor_decision:'#555', heartbeat:'var(--brand)' };
+    const typeColor = { tool_call:'#0d4faf', tool_result:'#1a6e35', reasoning:'#6d2d9e', error:'#9c1a1a', plan_mutation:'#6d2d9e', status_push:'#555', pause:'#7c4d00', resume:'#7c4d00', advisor_decision:'#555', heartbeat:'var(--brand)' };
     const tc = typeColor[entry.type] || '#888';
     return `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px">
       <span style="color:var(--muted);flex-shrink:0;min-width:52px">${time}</span>

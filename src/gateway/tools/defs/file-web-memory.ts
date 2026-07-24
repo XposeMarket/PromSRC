@@ -2058,6 +2058,28 @@ export function getFileWebMemoryTools(): any[] {
     {
       type: 'function',
       function: {
+        name: 'video_social_cut',
+        description: 'Create a deterministic centered 9:16 social clip from a supported page URL or workspace-local video. Downloads or reuses the source, selects a bounded range, burns readable captions with no header, renders directly with packaged FFmpeg, and returns decode/duration/dimension QA, a contact sheet, timings, and SHA-256 artifact identity.',
+        parameters: {
+          type: 'object', required: ['source'],
+          properties: {
+            source: { type: 'string', description: 'Supported page URL or workspace-local video path' },
+            duration_seconds: { type: 'number', minimum: 3, maximum: 180, description: 'Clip duration in seconds. Default 20.' },
+            start_seconds: { type: 'number', minimum: 0, description: 'Optional exact source timestamp in seconds.' },
+            selection: { type: 'string', enum: ['best_hook', 'educational', 'controversial', 'emotional', 'key_point', 'timestamp'], description: 'Selection mode. Transcript-scored modes inspect a bounded opening window; timestamp uses start_seconds exactly.' },
+            captions: { type: 'boolean', description: 'Burn captions into the output. Default true.' },
+            header: { type: 'boolean', description: 'Keep false. V1 intentionally adds no header.' },
+            output_dir: { type: 'string', description: 'Optional workspace-relative output directory.' },
+            filename: { type: 'string', description: 'Optional output MP4 filename.' },
+            transcript_window_seconds: { type: 'number', minimum: 3, maximum: 600, description: 'Bounded transcription window. Default 120 seconds.' },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'media_generate',
         description: 'Unified AI media generation wrapper. Use action="image" for one-shot raster images and action="video" for one-shot MP4 generation. Set presentation_mode="foreground" only when the image itself is the primary deliverable; use "background" for workflow assets that will be applied to a project.',
         parameters: {

@@ -40,6 +40,7 @@ type BootResult =
       automatedSession?: BootAutomatedSession | null;
       notificationId?: string;
       resumableGoalSessionIds?: string[];
+      resumableForegroundRuntimeIds?: string[];
     }
   | { status: 'failed'; reason: string };
 
@@ -58,6 +59,8 @@ type BootRunState = {
 type HotRestartTarget = {
   sessionId: string;
   recoverySummary: string;
+  recoveryRuntimeIds: string[];
+  plannedRestartTool?: string;
   devEdit?: DevSourceEditContinuation;
   telegram: {
     enabled: boolean;
@@ -434,7 +437,7 @@ function buildHotRestartTargets(restartCtx: RestartContext): HotRestartTarget[] 
   if (
     restartCtx.taskId
     && restartCtx.suppressStandaloneRestartMessage
-    && restartCtx.taskInitiatedTool === 'gateway_restart'
+    && (restartCtx.taskInitiatedTool === 'gateway_restart' || restartCtx.taskInitiatedTool === 'prom_apply_dev_changes')
   ) {
     return [];
   }
@@ -442,6 +445,8 @@ function buildHotRestartTargets(restartCtx: RestartContext): HotRestartTarget[] 
     targets.set(recovery.sessionId, {
       sessionId: recovery.sessionId,
       recoverySummary: buildTargetRecoverySummary(recovery.sessionId, recovery, recoveries),
+      recoveryRuntimeIds: recovery.runtimeIds,
+      plannedRestartTool: recovery.plannedRestartTool,
       telegram: telegramTargetForRestartSession(restartCtx, recovery.sessionId, recovery),
       devEdit: batchMemberBySession.get(recovery.sessionId)
         || (restartCtx.devEditContinuation?.sessionId === recovery.sessionId ? restartCtx.devEditContinuation : undefined),
@@ -455,6 +460,8 @@ function buildHotRestartTargets(restartCtx: RestartContext): HotRestartTarget[] 
     targets.set(memberSessionId, {
       sessionId: memberSessionId,
       recoverySummary: buildTargetRecoverySummary(memberSessionId, recovery, recoveries),
+      recoveryRuntimeIds: recovery?.runtimeIds || [],
+      plannedRestartTool: recovery?.plannedRestartTool,
       telegram: telegramTargetForRestartSession(restartCtx, memberSessionId, recovery),
       devEdit: member,
     });
@@ -466,6 +473,8 @@ function buildHotRestartTargets(restartCtx: RestartContext): HotRestartTarget[] 
     targets.set(previousSessionId, {
       sessionId: previousSessionId,
       recoverySummary: buildTargetRecoverySummary(previousSessionId, previousRecovery, recoveries),
+      recoveryRuntimeIds: previousRecovery?.runtimeIds || [],
+      plannedRestartTool: previousRecovery?.plannedRestartTool,
       telegram: telegramTargetForRestartSession(restartCtx, previousSessionId, previousRecovery),
       devEdit: batchMemberBySession.get(previousSessionId)
         || (restartCtx.devEditContinuation?.sessionId === previousSessionId ? restartCtx.devEditContinuation : undefined),
@@ -508,6 +517,12 @@ export async function runBootMd(
         && ['restarting', 'paused'].includes(String(targetGoal.status || ''))
         && !!targetRestartCheckpoint
         && /restart|prom_apply_dev_changes/i.test(`${targetGoal.pausedReason || ''} ${targetRestartCheckpoint.reason || ''}`);
+      // A non-goal foreground turn which called gateway_restart/apply used to
+      // receive a short, tool-disabled BOOT reply and then stop.  It is now
+      // resumed below through the original foreground execution path once this
+      // boot pass has reconciled any dev-edit continuation.
+      const foregroundPlannedRestart = !goalOwnedRestart && !!target.plannedRestartTool;
+      const suppressTerminalRestartReply = goalOwnedRestart || foregroundPlannedRestart;
       const plainManualGatewayRestart = isPlainManualGatewayRestartRequest(lastUserRequest)
         && !target.devEdit
         && (!Array.isArray(restartCtx.affectedFiles) || restartCtx.affectedFiles.length === 0);
@@ -529,9 +544,15 @@ export async function runBootMd(
           changedSurfaces: devEdit?.changedSurfaces,
           verificationSummary: devEdit?.lastVerification?.summary,
         });
-        finalText = devEdit
-          ? 'Dev changes are live and the gateway is healthy. Resuming the same goal iteration for post-restart verification.'
-          : 'Gateway restart completed successfully. Resuming the same goal iteration from its persisted checkpoint.';
+      } else if (foregroundPlannedRestart) {
+        if (target.devEdit) {
+          markDevSourceEditContinuationComplete({
+            id: target.devEdit.id,
+            sessionId: target.sessionId,
+            tag: target.devEdit.completionNoteTag || 'dev_edit_complete',
+            note: `Gateway restart completed successfully. ${restartCtx.summary || target.devEdit.summary || 'Approved dev changes are live.'}`,
+          });
+        }
       } else if (plainManualGatewayRestart) {
         finalText = 'Restarted. Prometheus is back online.';
       } else {
@@ -553,12 +574,12 @@ export async function runBootMd(
         }
       }
 
-      if (!finalText) {
+      if (!finalText && !suppressTerminalRestartReply) {
         finalText = buildHotRestartFallbackMessage(lastUserRequest, lastAssistantResponse);
       }
 
-      console.log(`[boot-md] Hot restart complete for ${target.sessionId}: ${finalText.slice(0, 120)}`);
-      try {
+      console.log(`[boot-md] Hot restart ${suppressTerminalRestartReply ? 'continuation queued' : 'complete'} for ${target.sessionId}: ${finalText.slice(0, 120)}`);
+      if (!suppressTerminalRestartReply) try {
         addMessage(target.sessionId, {
           role: 'assistant',
           messageKind: goalOwnedRestart ? 'restart_status' : undefined,
@@ -582,7 +603,7 @@ export async function runBootMd(
         console.warn(`[boot-md] Failed to persist hot restart message for ${target.sessionId}: ${e?.message}`);
       }
 
-      const notification = queueStartupNotification({
+      const notification = suppressTerminalRestartReply ? undefined : queueStartupNotification({
         sessionId: target.sessionId,
         title: sessionMeta.title,
         text: finalText,
@@ -596,8 +617,10 @@ export async function runBootMd(
       return {
         finalText,
         targetSessionId: target.sessionId,
-        notificationId: notification.id,
+        notificationId: notification?.id,
         goalOwnedRestart,
+        foregroundPlannedRestart,
+        recoveryRuntimeIds: target.recoveryRuntimeIds,
       };
     }));
 
@@ -618,6 +641,9 @@ export async function runBootMd(
       resumableGoalSessionIds: results
         .filter((result) => result.goalOwnedRestart)
         .map((result) => result.targetSessionId),
+      resumableForegroundRuntimeIds: results
+        .filter((result) => result.foregroundPlannedRestart)
+        .flatMap((result) => result.recoveryRuntimeIds),
     };
   }
 

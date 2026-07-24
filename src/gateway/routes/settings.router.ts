@@ -1396,6 +1396,7 @@ router.get('/api/approvals', requireGatewayAuth, (req, res) => {
       command: String(record.toolArgs?.command || ''),
       oneShot: record.approvalKind === 'elevated_command'
         || record.approvalKind === 'dev_source_edit'
+        || record.approvalKind === 'dev_apply_live'
         || record.approvalKind === 'final_action',
       scopedAction: record.commandPermissionCandidate?.action || '',
       scopedTarget: record.commandPermissionCandidate?.targetDisplay || '',

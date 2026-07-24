@@ -1,13 +1,31 @@
 {
   "schemaVersion": "prometheus-skill-bundle-v1",
   "entrypoint": "SKILL.md",
-  "version": "1.4.0",
-  "description": "Recreate Raul's approved X/Twitter captioned phone-view social cuts using direct FFmpeg, preserved landscape footage, dark source blur, no headers by default, speech-synced burned captions, fast rendering, and actual-export QA.",
+  "description": "Download or ingest videos from X/Twitter, YouTube, other yt-dlp-supported pages, direct media URLs, or local files and rapidly turn them into no-header vertical social clips with centered preserved landscape footage, dark source blur, word-timed captions, direct FFmpeg rendering, and actual-export QA.",
   "triggers": [
     "make a vertical captioned clip from this x video",
     "turn this twitter video into a tiktok style video",
     "make a no-header vertical clip from this video",
-    "create a 9:16 social cut with captions"
+    "create a 9:16 social cut with captions",
+    "download online video and make vertical social clip",
+    "youtube video to captioned vertical clip",
+    "local video to vertical social cut"
   ],
+  "categories": [
+    "direct-ffmpeg",
+    "source-video",
+    "video-editing",
+    "social-video",
+    "online-video-download",
+    "youtube",
+    "x-twitter",
+    "long-video-hook-selection"
+  ],
+  "requiredTools": [
+    "workspace_write",
+    "media_assets"
+  ],
+  "lifecycle": "active",
+  "name": "Video to Vertical Social Cut",
   "id": "x-video-vertical-social-cut"
 }

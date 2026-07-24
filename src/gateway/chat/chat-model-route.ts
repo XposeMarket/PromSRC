@@ -19,7 +19,8 @@ export class ChatModelRouteUnavailableError extends Error {
   }
 }
 
-function globalSource(raw: any): ResolvedTurnRouteSource {
+/** Resolve Main Chat's durable route without binding it to a particular session. */
+export function resolveConfiguredMainChatRouteSource(raw = getConfig().getConfig() as any): ResolvedTurnRouteSource {
   const providerId = String(raw?.llm?.provider || 'ollama').trim() || 'ollama';
   return {
     config: raw,
@@ -35,7 +36,7 @@ export function resolveChatModelRouteSource(sessionId: string): { source: Resolv
   const override = getChatModelRoute(sessionId);
   const source = override
     ? { config: raw, providerId: override.providerId, model: override.model, reasoningEffort: override.reasoningEffort, accountId: override.accountId }
-    : globalSource(raw);
+    : resolveConfiguredMainChatRouteSource(raw);
   const providerId = String(source.providerId || '').trim();
   const model = String(source.model || '').trim();
   const reasoningEffort = normalizeReasoningEffort(providerId, model, source.reasoningEffort);

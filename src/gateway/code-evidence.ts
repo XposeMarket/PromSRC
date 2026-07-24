@@ -400,6 +400,11 @@ export function attachCodeEvidenceToToolResult(
   const mutation = isMutationTool(toolName, args);
   const read = isReadTool(toolName, args);
   if (!mutation && !read) return toolResult;
+  // Source reads are performance-critical and already return authoritative
+  // path/line windows. Reopening and hashing the entire source file solely to
+  // attach duplicate read evidence was the dominant avoidable cost. Mutations
+  // still receive full before/after evidence and the immutable dev-edit ledger.
+  if (read && /^(?:read_source|read_webui_source|read_prom_file)$/.test(toolName)) return toolResult;
   const workspacePath = path.resolve(options.workspacePath);
   const projectRoot = resolveProjectRoot(workspacePath);
   const observedAt = new Date(options.now || Date.now()).toISOString();

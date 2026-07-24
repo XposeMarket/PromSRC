@@ -5106,6 +5106,7 @@ function _normalizeMobileApproval(input = {}, fallback = {}) {
     affectedSystems: Array.isArray(source.affectedSystems) ? source.affectedSystems : (Array.isArray(fallback.affectedSystems) ? fallback.affectedSystems : []),
     commandBoundary: source.commandBoundary || fallback.commandBoundary || null,
     devSourceEdit: source.devSourceEdit || fallback.devSourceEdit || null,
+    devApplyLive: source.devApplyLive || fallback.devApplyLive || null,
     finalAction: source.finalAction || fallback.finalAction || null,
     pathAccess: source.pathAccess || fallback.pathAccess || null,
     status: String(source.status || fallback.status || 'pending').toLowerCase(),
@@ -5150,8 +5151,8 @@ function _renderMobileApprovalCard(approvalInput = {}, { compact = false } = {})
     ${pending && technicalText ? `<details class="pm-approval-technical"><summary>Technical details</summary><pre>${escapeHtml(technicalText)}</pre></details>` : ''}
     ${pending ? _pmRenderCommandRunLink(approval) : ''}
     ${pending ? `<div class="pm-chat-approval-actions">
-      <button type="button" class="pm-chat-approval-btn approve" data-pm-approval-action="approve" data-pm-approval-id="${escapeHtml(approval.id)}">Approve</button>
-      <button type="button" class="pm-chat-approval-btn reject" data-pm-approval-action="reject" data-pm-approval-id="${escapeHtml(approval.id)}">Reject</button>
+      <button type="button" class="pm-chat-approval-btn approve" data-pm-approval-action="approve" data-pm-approval-id="${escapeHtml(approval.id)}">${approval.approvalKind === 'dev_apply_live' ? 'Apply live' : 'Approve'}</button>
+      <button type="button" class="pm-chat-approval-btn reject" data-pm-approval-action="reject" data-pm-approval-id="${escapeHtml(approval.id)}">${approval.approvalKind === 'dev_apply_live' ? 'Keep verified' : 'Reject'}</button>
       ${_pmApprovalCanSave(approval) ? `<button type="button" class="pm-chat-approval-btn session" data-pm-approval-action="approve_session" data-pm-approval-id="${escapeHtml(approval.id)}">Trust session</button>
       <button type="button" class="pm-chat-approval-btn always" data-pm-approval-action="approve_always" data-pm-approval-id="${escapeHtml(approval.id)}">Always allow</button>` : ''}
     </div>` : `<div class="pm-chat-approval-done">This request was ${escapeHtml(statusLabel)}.</div>`}
@@ -7664,6 +7665,11 @@ if (typeof window !== 'undefined' && !window.__pmMobileVoiceWorkgroupBridgeInsta
     const result = _safeJsonPreview(event.result || event.output || event.error || '', 140);
     if (_appendMobileVoiceWorkerProcess(taskId, event.error ? 'error' : 'tool_result', `${tool}: ${result || 'complete'}`, event)) _refreshMobileVoiceWorkerJournal(taskId);
   });
+  wsEventBus.on('task_reasoning', (event = {}) => {
+    const taskId = String(event.taskId || '').trim();
+    const text = String(event.text || event.reasoning || '').trim();
+    if (_appendMobileVoiceWorkerProcess(taskId, 'reasoning', text, event)) _refreshMobileVoiceWorkerJournal(taskId);
+  });
   wsEventBus.on('task_step_done', (event = {}) => {
     const taskId = String(event.taskId || '').trim();
     if (_appendMobileVoiceWorkerProcess(taskId, 'status_push', 'Step complete signal received.', event)) _refreshMobileVoiceWorkerJournal(taskId);
@@ -9842,8 +9848,8 @@ export function renderChatPage(page, { navigate, sessionId = null }) {
     input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
   };
   // SpeechRecognition may deliver a final result after the composer has been
-  // cleared. Dictation installs this hook below so a send invalidates that
-  // recognition cycle before its captured starting text can be restored.
+  // cleared. Dictation installs this hook below so a send ends recognition
+  // before its captured starting text can be restored.
   let resetChatDictationComposerState = () => {};
   const resetComposerInput = () => {
     if (!input) return;
@@ -14364,6 +14370,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }, delay);
   };
   resetChatDictationComposerState = () => {
+    // Sending always ends transcription mode. Besides clearing the active
+    // recognizer, invalidate its callbacks so a late result cannot repopulate
+    // the now-empty composer.
+    chatSpeechEnabled = false;
     chatSpeechCycleGeneration += 1;
     if (chatSpeechRestartTimer) clearTimeout(chatSpeechRestartTimer);
     chatSpeechRestartTimer = null;
@@ -14372,9 +14382,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     try { recognition?.abort?.(); } catch {
       try { recognition?.stop?.(); } catch {}
     }
-    // Keep transcription mode active, but make the next cycle start from the
-    // newly-cleared composer rather than the text that was just sent.
-    scheduleChatDictationCycle(80);
+    micBtn?.classList.remove('listening');
   };
   const stopChatDictation = () => {
     chatSpeechEnabled = false;
@@ -27417,14 +27425,20 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
       if (draft) draft.text = '';
       resize();
     }
-    if (dictationEnabled && dictationSpeechRecognition) {
+    // Sending is the end of a dictation turn. Do not restart recognition after
+    // clearing the composer, otherwise the mic remains visibly active and can
+    // write a late transcript into the next message.
+    if (dictationEnabled || dictationRecognition || dictationRestartTimer) {
+      dictationEnabled = false;
       dictationGeneration += 1;
+      if (dictationRestartTimer) clearTimeout(dictationRestartTimer);
+      dictationRestartTimer = null;
       const recognition = dictationRecognition;
       dictationRecognition = null;
       try { recognition?.abort?.(); } catch {
         try { recognition?.stop?.(); } catch {}
       }
-      scheduleDictationCycle(dictationSpeechRecognition, 80);
+      micBtn?.classList.remove('listening');
     }
     renderAttachments();
     update();
@@ -29644,6 +29658,7 @@ function _pmHumanApproval(approval = {}) {
   const args = approval?.toolArgs && typeof approval.toolArgs === 'object' ? approval.toolArgs : {};
   const finalAction = approval?.finalAction || null;
   const isDevSource = kind === 'dev_source_edit' || tool === 'request_dev_source_edit';
+  const isDevApply = kind === 'dev_apply_live' || tool === 'prom_apply_dev_changes';
   const isFinalAction = kind === 'final_action' || tool === 'request_final_action_approval';
   if (isFinalAction) {
     const actionKind = String(finalAction?.actionKind || args.action_kind || 'continue').trim();
@@ -29660,6 +29675,16 @@ function _pmHumanApproval(approval = {}) {
       title: 'Dev source edit approval',
       summary: String(approval?.reason || 'Approve scoped source edits for this session.').trim(),
       detail: files.length ? `${files.length} file${files.length === 1 ? '' : 's'} requested` : '',
+    };
+  }
+  if (isDevApply) {
+    const apply = approval?.devApplyLive || {};
+    const files = Array.isArray(apply.files) ? apply.files : [];
+    const members = Array.isArray(apply.memberIds) ? apply.memberIds : [];
+    return {
+      title: 'Apply verified dev changes live',
+      summary: 'Restart/reload Prometheus for the verified changes.',
+      detail: `${members.length || 1} edit${members.length === 1 ? '' : 's'}, ${files.length} file${files.length === 1 ? '' : 's'} · auto-rejects in 30 minutes`,
     };
   }
   if (kind === 'path_access') {
@@ -29732,6 +29757,7 @@ function _pmApprovalTitle(approval) {
   const tool = String(approval?.toolName || '').trim();
   if (approval?.approvalKind === 'elevated_command') return 'Administrator command';
   if (approval?.approvalKind === 'dev_source_edit' || tool === 'request_dev_source_edit') return 'Dev source edit approval';
+  if (approval?.approvalKind === 'dev_apply_live' || tool === 'prom_apply_dev_changes') return 'Apply verified dev changes live';
   if (approval?.approvalKind === 'final_action' || tool === 'request_final_action_approval') return 'Final action approval';
   if (tool === 'run_command') return 'Command approval';
   if (tool.startsWith('desktop_')) return 'Desktop action';
@@ -30954,7 +30980,7 @@ function _pmRenderTaskJournal(journal) {
     const time = entry?.t ? _formatChatTime(entry.t) : '';
     const type = String(entry?.type || 'event');
     const content = String(entry?.content || entry?.detail || '').trim();
-    const color = type === 'error' ? '#d8473a' : type === 'tool_call' ? '#0d4faf' : type === 'tool_result' ? '#2f7d44' : type === 'pause' ? '#7c4d00' : 'var(--pm-muted)';
+    const color = type === 'error' ? '#d8473a' : type === 'tool_call' ? '#0d4faf' : type === 'tool_result' ? '#2f7d44' : type === 'reasoning' ? '#6d2d9e' : type === 'pause' ? '#7c4d00' : 'var(--pm-muted)';
     const typeClass = type.replace(/[^a-z0-9_-]+/gi, '-').toLowerCase();
     return `<div class="pm-task-journal-row type-${escapeHtml(typeClass)}" style="display:grid;grid-template-columns:54px 82px 1fr;gap:6px;padding:7px 8px;border-bottom:1px solid var(--pm-border);">
       <span style="color:var(--pm-muted);">${escapeHtml(time)}</span>

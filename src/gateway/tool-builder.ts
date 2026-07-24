@@ -268,6 +268,7 @@ const MEMORY_TOOL_NAMES = new Set([
 const MEDIA_TOOL_NAMES = new Set([
   'download_url',
   'download_media',
+  'video_social_cut',
   'analyze_image',
   'analyze_video',
 ]);
@@ -427,6 +428,7 @@ const CREATIVE_HYPERFRAMES_TOOL_NAMES = new Set([
 
 function getCreativeToolCategory(name: string): ToolCategory {
   if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return 'creative_basic';
+  if (name === 'video_compose') return 'creative_video';
   if (CREATIVE_QUALITY_TOOL_NAMES.has(name)) return 'creative_quality';
   if (CREATIVE_HYPERFRAMES_TOOL_NAMES.has(name)) return 'creative_hyperframes';
   if (name.startsWith('hyperframes_')) return 'creative_hyperframes';
@@ -449,6 +451,28 @@ function getCreativeToolCategory(name: string): ToolCategory {
 }
 
 const SCHEMA_HIDDEN_COMPAT_TOOL_NAMES = new Set([
+  // Creative wrappers are the public assistant API. Keep the raw primitives
+  // dispatchable for persisted callers and UI/debug bridges without injecting
+  // roughly 120 duplicate schemas into ordinary model turns.
+  'creative_add_effect', 'creative_add_element', 'creative_add_mask', 'creative_apply_animation',
+  'creative_apply_brand_kit', 'creative_apply_ops', 'creative_apply_style', 'creative_apply_template',
+  'creative_arrange', 'creative_chain_scene', 'creative_checkpoint', 'creative_create_library_pack',
+  'creative_create_project', 'creative_create_storyboard', 'creative_delete_element',
+  'creative_element_inventory', 'creative_export', 'creative_export_trace', 'creative_get_state',
+  'creative_history_status', 'creative_list_library_packs', 'creative_list_references',
+  'creative_project_history', 'creative_purge_scene', 'creative_redo', 'creative_reset_scene',
+  'creative_save_scene', 'creative_search_animations', 'creative_select_element', 'creative_set_blend_mode',
+  'creative_set_canvas', 'creative_storyboard_history', 'creative_toggle_library_pack', 'creative_undo',
+  'creative_update_element', 'get_creative_mode', 'switch_creative_mode',
+  'creative_add_asset', 'creative_analyze_asset', 'creative_extract_layers',
+  'creative_extract_layers_for_generation', 'creative_fit_asset', 'creative_generate_asset',
+  'creative_generation_history', 'creative_import_asset', 'creative_normalize_layer_specs',
+  'creative_register_generation', 'creative_render_ascii_asset', 'creative_search_assets',
+  'creative_search_icons',
+  'creative_composition_add_clip', 'creative_composition_add_track', 'creative_composition_delete_clip',
+  'creative_composition_get', 'creative_composition_move_clip', 'creative_composition_render',
+  'creative_composition_save', 'creative_composition_select_clip', 'creative_composition_set_transition',
+  'creative_composition_split_at', 'creative_composition_trim_clip', 'creative_composition_lint',
   'web_search_single',
   'web_search_multi',
   'web_fetch_batch',

@@ -31,6 +31,16 @@ assert.match(api, /_sameApplicationServerKey/, 'a VAPID key rotation must replac
 assert.match(pages, /wsEventBus\.on\('task_notification'/, 'task completion must surface as a mobile in-app notification');
 assert.match(pages, /wsEventBus\.on\('bg_agent_done'/, 'background agent completion must surface as a mobile in-app notification');
 assert.match(pages, /_showMobileCompletionToast/, 'mobile completion notifications must render as tappable top toasts');
+assert.match(
+  pages,
+  /resetChatDictationComposerState = \(\) => \{[\s\S]{0,560}chatSpeechEnabled = false;[\s\S]{0,560}micBtn\?\.classList\.remove\('listening'\)/,
+  'sending a main-chat message must end transcription mode and clear its active mic state',
+);
+assert.doesNotMatch(
+  pages,
+  /resetChatDictationComposerState = \(\) => \{[\s\S]{0,720}scheduleChatDictationCycle\(/,
+  'sending a main-chat message must not restart transcription after clearing the composer',
+);
 assert.match(webPush, /\^\(\?:mailto:\|https:\\\/\\\/\)/, 'VAPID contact subjects must not use an invalid http gateway URL');
 assert.ok(
   composerRafDeclaration < firstComposerSpaceCall && composerShiftDeclaration < firstComposerSpaceCall,

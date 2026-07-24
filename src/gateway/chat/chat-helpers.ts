@@ -523,6 +523,9 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
     const plannedRestartSessionIds = bootResult?.status === 'ran'
       ? (bootResult.resumableGoalSessionIds || [])
       : [];
+    const plannedForegroundRuntimeIds = bootResult?.status === 'ran'
+      ? (bootResult.resumableForegroundRuntimeIds || [])
+      : [];
     const crashRecoveredSessionIds = consumeCrashRecoveredMainChatGoalSessionIds();
     const resumableSessionIds = Array.from(new Set([
       ...plannedRestartSessionIds,
@@ -530,7 +533,29 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
     ]));
     const resumedGoals = _resumeMainChatGoalsAfterBoot?.(resumableSessionIds) || [];
     if (resumedGoals.length > 0) {
+      broadcastWS({
+        type: 'restart_recovery',
+        status: 'resuming',
+        sessionIds: resumedGoals,
+        message: `Gateway restarted; resuming ${resumedGoals.length} interrupted goal thread${resumedGoals.length === 1 ? '' : 's'}.`,
+      });
       console.log(`[RuntimeRecovery] Auto-resumed ${resumedGoals.length} main-chat goal(s) after startup recovery finalization.`);
+    }
+    if (plannedForegroundRuntimeIds.length > 0) {
+      const { resumePlannedRestartMainChats } = require('../runtime-recovery') as typeof import('../runtime-recovery');
+      // This hook lives below the router boundary, so resolve the foreground
+      // runner lazily after startup instead of creating a static router cycle.
+      const { retriggerInterruptedMainChat } = require('../routes/chat.router') as typeof import('../routes/chat.router');
+      const resumedForeground = resumePlannedRestartMainChats(plannedForegroundRuntimeIds, retriggerInterruptedMainChat);
+      if (resumedForeground.length > 0) {
+        broadcastWS({
+          type: 'restart_recovery',
+          status: 'resuming',
+          sessionIds: resumedForeground,
+          message: `Gateway restarted; resuming ${resumedForeground.length} interrupted thread${resumedForeground.length === 1 ? '' : 's'}.`,
+        });
+        console.log(`[RuntimeRecovery] Auto-resumed ${resumedForeground.length} planned foreground thread(s) after boot finalization.`);
+      }
     }
   } catch (err: any) {
     console.warn('[RuntimeRecovery] Post-BOOT main-chat goal auto-resume failed:', err?.message || err);

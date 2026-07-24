@@ -304,6 +304,8 @@ type DownloadMediaArgs = {
   url: string;
   output_dir?: string;
   audio_only?: boolean;
+  /** Internal caller override. MKV safely contains YouTube AV1 + Opus without lossy transcoding. */
+  merge_output_format?: 'mp4' | 'mkv';
   signal?: AbortSignal;
   onProgress?: (progress: DownloadMediaProgress) => void;
 };
@@ -548,7 +550,7 @@ export async function executeDownloadMedia(args: DownloadMediaArgs): Promise<Too
       '-o',
       '%(title).80s [%(id)s].%(ext)s',
       '--merge-output-format',
-      'mp4',
+      args.merge_output_format === 'mkv' ? 'mkv' : 'mp4',
       '--ffmpeg-location',
       ffmpegPath,
     ];

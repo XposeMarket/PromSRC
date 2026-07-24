@@ -31,7 +31,7 @@ export interface ApprovalRecord {
   /** The tool that is waiting for approval */
   toolName: string;
   toolArgs: Record<string, any>;
-  approvalKind?: 'command' | 'elevated_command' | 'tool' | 'dev_source_edit' | 'final_action' | 'path_access';
+  approvalKind?: 'command' | 'elevated_command' | 'tool' | 'dev_source_edit' | 'dev_apply_live' | 'final_action' | 'path_access';
   /** Path approval fields — populated when approvalKind === 'path_access' */
   pathAccess?: { requestedPath: string };
   /** Human-readable description of what will happen */
@@ -75,11 +75,30 @@ export interface ApprovalRecord {
     screenshotId?: string;
     expiresAt?: number;
   };
+  /** A user-controlled gateway reload for one frozen verified dev-edit batch. */
+  devApplyLive?: {
+    batchId: string;
+    memberIds: string[];
+    files: string[];
+    expiresAt: number;
+  };
   /** ISO timestamp */
   createdAt: string;
   status: 'pending' | 'approved' | 'rejected';
   resolvedAt?: string;
   resolvedBy?: string;
+}
+
+type ApprovalResolutionListener = (record: ApprovalRecord, approved: boolean) => void;
+const approvalResolutionListeners = new Set<ApprovalResolutionListener>();
+
+/**
+ * Cross-cutting one-shot approval effects (for example a dev apply timeout)
+ * must run whether resolution comes from the UI, Telegram, or a server timer.
+ */
+export function registerApprovalResolutionListener(listener: ApprovalResolutionListener): () => void {
+  approvalResolutionListeners.add(listener);
+  return () => approvalResolutionListeners.delete(listener);
 }
 
 function truncateApprovalValue(value: any, max = 4000): any {
@@ -111,6 +130,7 @@ export function serializeApprovalForClient(record: ApprovalRecord): Record<strin
     approvalKind: record.approvalKind,
     oneShot: record.approvalKind === 'elevated_command'
       || record.approvalKind === 'dev_source_edit'
+      || record.approvalKind === 'dev_apply_live'
       || record.approvalKind === 'final_action',
     action: record.action,
     summary: record.action,
@@ -137,6 +157,7 @@ export function serializeApprovalForClient(record: ApprovalRecord): Record<strin
     } : undefined,
     devSourceEdit: record.devSourceEdit ? truncateApprovalValue(record.devSourceEdit) : undefined,
     finalAction: record.finalAction ? truncateApprovalValue(record.finalAction) : undefined,
+    devApplyLive: record.devApplyLive ? truncateApprovalValue(record.devApplyLive) : undefined,
     createdAt: record.createdAt,
     status: record.status,
     resolvedAt: record.resolvedAt,
@@ -251,14 +272,17 @@ class ApprovalQueue {
   }
 
   get(id: string): ApprovalRecord | null {
+    this.expireDueDevApplyApprovals();
     return this.records.get(id) ?? null;
   }
 
   listPending(): ApprovalRecord[] {
+    this.expireDueDevApplyApprovals();
     return [...this.records.values()].filter(r => r.status === 'pending');
   }
 
   listAll(): ApprovalRecord[] {
+    this.expireDueDevApplyApprovals();
     return [...this.records.values()].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
@@ -293,9 +317,25 @@ class ApprovalQueue {
       });
     } catch { /* best effort */ }
 
+    for (const listener of approvalResolutionListeners) {
+      try { listener(record, approved); } catch (err: any) {
+        console.warn('[ApprovalQueue] Resolution listener failed:', err?.message || err);
+      }
+    }
+
     console.log(`[ApprovalQueue] ${approved ? 'APPROVED' : 'REJECTED'} approval ${id} for "${record.toolName}"`);
     this.persistDurableRecords();
     return record;
+  }
+
+  private expireDueDevApplyApprovals(): void {
+    const now = Date.now();
+    for (const record of this.records.values()) {
+      const expiresAt = Number(record.devApplyLive?.expiresAt || 0);
+      if (record.status === 'pending' && expiresAt > 0 && expiresAt <= now) {
+        this.resolve(record.id, false, 'policy:timeout');
+      }
+    }
   }
 
   hasResolveCallback(id: string): boolean {

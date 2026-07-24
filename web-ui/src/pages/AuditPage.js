@@ -223,6 +223,10 @@ function renderAuditEntryDetails(t) {
     if (args.verification_command || args.verification_profile) {
       blocks.push(['Verification', [args.verification_command, args.verification_profile].filter(Boolean).join('\n')]);
     }
+    const devEditId = String(args.dev_edit_id || args.devEditId || '').trim();
+    if (devEditId) {
+      blocks.push(['Immutable Dev Edit', `<button type="button" onclick="loadDevEditAudit('${escHtml(devEditId)}')" style="border:1px solid var(--accent);background:var(--panel);color:var(--accent);border-radius:5px;padding:4px 7px;cursor:pointer;font-size:10px">Open ${escHtml(devEditId)} diff ledger</button><div id="dev-edit-${escHtml(devEditId)}" style="margin-top:6px"></div>`]);
+    }
   } else if (tool.startsWith('proposal_')) {
     if (args.title) blocks.push(['Title', args.title]);
     if (args.summary) blocks.push(['Summary', args.summary]);
@@ -243,7 +247,7 @@ function renderAuditEntryDetails(t) {
       if (!text) return '';
       return `<div style="border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:7px 8px">
         <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px">${escHtml(label)}</div>
-        <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.45;color:var(--text)">${escHtml(text)}</pre>
+        ${label === 'Immutable Dev Edit' ? text : `<pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.45;color:var(--text)">${escHtml(text)}</pre>`}
       </div>`;
     }).join('')}
   </div>`;
@@ -443,7 +447,44 @@ export function auditPage(dir) {
   loadAuditLog();
 }
 
+export async function loadDevEditAudit(id) {
+  const host = document.getElementById(`dev-edit-${id}`);
+  if (!host) return;
+  host.textContent = 'Loading immutable diff ledger…';
+  try {
+    const data = await api(`/api/dev-edits/${encodeURIComponent(id)}`);
+    const edit = data.devEdit;
+    const mutations = Array.isArray(edit?.mutations) ? edit.mutations : [];
+    host.innerHTML = `<div style="font:10px/1.45 'IBM Plex Mono',monospace;color:var(--muted)">
+      <div><strong>${escHtml(edit.displayId || edit.id)}</strong> · ${escHtml(edit.planHash || 'no plan hash')} · ${mutations.length} mutation(s)</div>
+      ${mutations.map((m) => `<div style="margin-top:5px;padding-top:5px;border-top:1px solid var(--line)">
+        <strong>${escHtml(String(m.sequence))}. ${escHtml(m.operation)} ${escHtml(m.file)}</strong> · ${escHtml(m.status)}<br>
+        <span>${escHtml(m.beforeSha256 || '∅')} → ${escHtml(m.afterSha256 || '∅')}</span>
+        ${m.patchPath ? `<button type="button" onclick="loadDevEditPatch('${escHtml(edit.id)}',${Number(m.sequence)})" style="margin-left:6px;border:0;background:transparent;color:var(--accent);cursor:pointer;text-decoration:underline;font-size:10px">view exact patch</button><pre id="dev-edit-patch-${escHtml(edit.id)}-${Number(m.sequence)}" style="display:none;white-space:pre-wrap;max-height:300px;overflow:auto;margin:5px 0 0"></pre>` : ''}
+      </div>`).join('')}
+    </div>`;
+  } catch (err) {
+    host.textContent = `Could not load dev-edit ledger: ${err.message || err}`;
+  }
+}
+
+export async function loadDevEditPatch(id, sequence) {
+  const host = document.getElementById(`dev-edit-patch-${id}-${sequence}`);
+  if (!host) return;
+  try {
+    const response = await fetch(`/api/dev-edits/${encodeURIComponent(id)}/mutations/${sequence}/patch`);
+    if (!response.ok) throw new Error(`API ${response.status}`);
+    host.textContent = await response.text();
+    host.style.display = 'block';
+  } catch (err) {
+    host.textContent = `Could not load patch: ${err.message || err}`;
+    host.style.display = 'block';
+  }
+}
+
 window.loadAuditLog = loadAuditLog;
 window.renderAuditTable = renderAuditTable;
 window.toggleAuditRow = toggleAuditRow;
 window.auditPage = auditPage;
+window.loadDevEditAudit = loadDevEditAudit;
+window.loadDevEditPatch = loadDevEditPatch;

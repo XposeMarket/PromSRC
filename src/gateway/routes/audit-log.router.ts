@@ -16,6 +16,7 @@
 
 import { Router, Request, Response } from 'express';
 import { queryAuditLog, getRecentAuditSummary } from '../audit-log.js';
+import { getDevEditLedger, getDevEditLedgerPatch } from '../dev-edit-ledger.js';
 
 const router = Router();
 
@@ -42,6 +43,20 @@ router.get('/api/audit-log', (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || 'Failed to query audit log' });
   }
+});
+
+// Immutable, mutation-grade source-edit record. The ID accepts either the
+// internal dev_edit_* id or the human-facing DEV-YYYYMMDD-##### audit ID.
+router.get('/api/dev-edits/:id', (req: Request, res: Response) => {
+  const record = getDevEditLedger(String(req.params.id || ''));
+  if (!record) return res.status(404).json({ success: false, error: 'Dev edit not found' });
+  return res.json({ success: true, devEdit: record });
+});
+
+router.get('/api/dev-edits/:id/mutations/:sequence/patch', (req: Request, res: Response) => {
+  const patch = getDevEditLedgerPatch(String(req.params.id || ''), Number(req.params.sequence));
+  if (patch == null) return res.status(404).json({ success: false, error: 'Dev edit patch not found' });
+  res.type('text/plain').send(patch);
 });
 
 export { router };

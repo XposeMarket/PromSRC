@@ -82,6 +82,7 @@ export type PauseReason =
 export type JournalEntryType =
   | 'tool_call'
   | 'tool_result'
+  | 'reasoning'
   | 'advisor_decision'
   | 'status_push'
   | 'pause'
@@ -410,6 +411,8 @@ const TASKS_DIR_NAME = 'tasks';
 const STALE_RUNNING_TASK_MS = 10 * 60 * 1000;
 let taskIndexCache: TaskIndex | null = null;
 let taskIndexWriteCounter = 0;
+let taskSessionIndexCache: Map<string, string> | null = null;
+let taskSessionLookupRevision = 0;
 
 function getStateBaseDir(): string {
   try {
@@ -622,6 +625,8 @@ function loadIndex(): TaskIndex {
 function saveIndex(index: TaskIndex): void {
   index.updatedAt = Date.now();
   taskIndexCache = index;
+  taskSessionIndexCache = null;
+  taskSessionLookupRevision += 1;
   const target = indexFilePath();
   const dir = path.dirname(target);
   const payload = JSON.stringify(index, null, 2);
@@ -793,6 +798,35 @@ export function listTaskSummaries(filter?: { status?: TaskStatus[]; limit?: numb
     .filter((task) => !filter?.status || filter.status.includes(task.status))
     .sort((a, b) => b.startedAt - a.startedAt);
   return (limit ? summaries.slice(0, limit) : summaries).map(maybeRepairStaleRunningTaskSummary);
+}
+
+/**
+ * Resolve the newest task for a session from the compact task index.  This is
+ * deliberately separate from listTasks(): callers on a hot path must never
+ * deserialize every historical task just to prove a session is not a task.
+ */
+export function findTaskBySessionId(sessionId: string): TaskRecord | null {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  if (!taskSessionIndexCache) {
+    const bySession = new Map<string, TaskSummary>();
+    for (const summary of Object.values(loadIndex().summaries)) {
+      const summarySessionId = String(summary?.sessionId || '').trim();
+      if (!summarySessionId) continue;
+      const prior = bySession.get(summarySessionId);
+      if (!prior || Number(summary.startedAt || 0) > Number(prior.startedAt || 0)) {
+        bySession.set(summarySessionId, summary);
+      }
+    }
+    taskSessionIndexCache = new Map(Array.from(bySession.entries()).map(([key, summary]) => [key, summary.id]));
+  }
+  const id = taskSessionIndexCache.get(sid);
+  return id ? loadTask(id) : null;
+}
+
+/** Monotonic in-process invalidation token for caches derived from task sessions. */
+export function getTaskSessionLookupRevision(): number {
+  return taskSessionLookupRevision;
 }
 
 function normalizeContinuationHistory(input: any): TaskRecord['continuationHistory'] {

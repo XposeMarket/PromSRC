@@ -7233,6 +7233,89 @@ router.post('/api/canvas/creative-scene', (req: any, res: any, next: any) => _re
   }
 });
 
+
+// ── Persistent video sequences ─────────────────────────────────────────────
+router.get('/api/canvas/sequences', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const sessionId = String(req.query?.sessionId || 'default').trim() || 'default';
+  try {
+    const storage = resolveCreativeStorage(sessionId, String(req.query?.root || '').trim());
+    const { inspectCreativeSequence, listCreativeSequences } = require('../creative/sequence');
+    const sequences = listCreativeSequences(storage).map((sequence: any) => inspectCreativeSequence(sequence));
+    res.json({ success: true, sequences });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || 'Could not list creative sequences') });
+  }
+});
+
+router.get('/api/canvas/sequences/:sequenceId', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const sessionId = String(req.query?.sessionId || 'default').trim() || 'default';
+  try {
+    const storage = resolveCreativeStorage(sessionId, String(req.query?.root || '').trim());
+    const { inspectCreativeSequence, loadCreativeSequence } = require('../creative/sequence');
+    const sequence = loadCreativeSequence(storage, String(req.params.sequenceId || ''));
+    res.json({ success: true, sequence: inspectCreativeSequence(sequence) });
+  } catch (err: any) {
+    res.status(404).json({ success: false, error: String(err?.message || 'Creative sequence not found') });
+  }
+});
+
+router.post('/api/canvas/sequences/:sequenceId', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const sessionId = String(req.body?.sessionId || 'default').trim() || 'default';
+  try {
+    const storage = resolveCreativeStorage(sessionId, String(req.body?.root || '').trim());
+    const { normalizeCreativeComposition } = require('../creative/contracts');
+    const { inspectCreativeSequence, loadCreativeSequence, saveCreativeSequence } = require('../creative/sequence');
+    const sequence = loadCreativeSequence(storage, String(req.params.sequenceId || ''));
+    const variantId = String(req.body?.variantId || '').trim();
+    if (variantId) {
+      const variant = sequence.variants.find((item: any) => item.id === variantId);
+      if (!variant) throw new Error(`Unknown sequence variant: ${variantId}`);
+      variant.composition = normalizeCreativeComposition(req.body?.composition);
+      variant.status = 'draft';
+      variant.exportPath = null;
+      variant.qaReceiptPath = null;
+    } else {
+      sequence.composition = normalizeCreativeComposition(req.body?.composition);
+      sequence.masterRender = { exportPath: null, qaReceiptPath: null, status: 'draft', renderedAt: null };
+    }
+    const saved = saveCreativeSequence(storage, sequence);
+    res.json({ success: true, sequence: inspectCreativeSequence(saved.sequence), path: buildCreativeStorageRelativePath(storage.workspacePath, saved.path) });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: String(err?.message || 'Could not save creative sequence') });
+  }
+});
+
+router.post('/api/canvas/sequences/:sequenceId/render', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const sessionId = String(req.body?.sessionId || 'default').trim() || 'default';
+  try {
+    const storage = resolveCreativeStorage(sessionId, String(req.body?.root || '').trim());
+    const { inspectCreativeSequence, loadCreativeSequence, saveCreativeSequence, selectCreativeSequenceComposition } = require('../creative/sequence');
+    const { qaCreativeSequenceExport } = require('../creative/sequence-qa');
+    const { renderComposition } = require('../creative/renderers/composition_renderer');
+    const sequence = loadCreativeSequence(storage, String(req.params.sequenceId || ''));
+    const variantId = String(req.body?.variantId || '').trim() || null;
+    const selected = selectCreativeSequenceComposition(sequence, variantId);
+    const outputFormat = String(req.body?.format || 'mp4').toLowerCase() === 'webm' ? 'webm' : 'mp4';
+    const exportsDir = path.join(storage.creativeDir, 'exports');
+    fs.mkdirSync(exportsDir, { recursive: true });
+    const outputPath = path.join(exportsDir, `${sequence.id}-${selected.variant?.id || 'master'}.${outputFormat}`);
+    const render = await renderComposition({ composition: selected.composition, workspacePath: storage.workspacePath, outputPath, format: outputFormat });
+    const relativeOutput = buildCreativeStorageRelativePath(storage.workspacePath, outputPath);
+    if (selected.variant) {
+      selected.variant.exportPath = relativeOutput;
+      selected.variant.status = 'rendered';
+    } else {
+      sequence.masterRender = { exportPath: relativeOutput, qaReceiptPath: null, status: 'rendered', renderedAt: new Date().toISOString() };
+    }
+    saveCreativeSequence(storage, sequence);
+    const qa = qaCreativeSequenceExport(storage, { sequenceId: sequence.id, artifactPath: relativeOutput, variantId });
+    _broadcastWS({ type: 'creative_sequence_rendered', sessionId, sequenceId: sequence.id, variantId, path: relativeOutput, passed: qa.receipt.passed });
+    res.json({ success: true, render: { ...render, outputPath: relativeOutput }, qa: qa.receipt, sequence: inspectCreativeSequence(qa.sequence) });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: String(err?.message || 'Could not render creative sequence') });
+  }
+});
+
 // ── Composition (multi-clip timeline) ─────────────────────────────────────
 router.get('/api/canvas/composition', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
   const targetPath = String(req.query?.path || '').trim();

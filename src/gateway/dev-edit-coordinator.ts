@@ -8,6 +8,8 @@ export type CoordinatedDevEditPhase =
   | 'editing'
   | 'verified_ready'
   | 'verified_handoff'
+  | 'apply_pending'
+  | 'verified_not_live'
   | 'applying'
   | 'applied'
   | 'complete'
@@ -26,6 +28,7 @@ export interface CoordinatedDevEdit {
   supersededVerifiedFiles: string[];
   phase: CoordinatedDevEditPhase;
   verifiedSnapshot?: Record<string, string>;
+  verifiedAt?: number;
   verificationSummary?: string;
   batchId?: string;
   createdAt: number;
@@ -39,7 +42,11 @@ export interface CoordinatedDevApplyBatch {
   memberSessionIds: string[];
   files: string[];
   createdAt: number;
-  status: 'applying' | 'applied' | 'failed';
+  /** The cohort is frozen when the first verified edit asks to go live. */
+  status: 'awaiting_members' | 'awaiting_approval' | 'applying' | 'applied' | 'not_live' | 'failed';
+  leaderId: string;
+  approvalId?: string;
+  approvalExpiresAt?: number;
   failure?: string;
 }
 
@@ -66,8 +73,13 @@ export interface DevEditApplyDecision {
   awakened: CoordinatedDevEdit[];
 }
 
+export interface DevEditVerificationResult {
+  edit: CoordinatedDevEdit;
+  awakened: CoordinatedDevEdit[];
+}
+
 const TERMINAL_PHASES = new Set<CoordinatedDevEditPhase>(['complete', 'failed', 'abandoned']);
-const READY_PHASES = new Set<CoordinatedDevEditPhase>(['verified_handoff', 'applying', 'applied', 'complete']);
+const READY_PHASES = new Set<CoordinatedDevEditPhase>(['verified_handoff', 'apply_pending', 'applying', 'applied', 'complete', 'verified_not_live']);
 const DEFAULT_LEASE_MS = 2 * 60 * 60 * 1000;
 
 function stateRoot(): string {
@@ -172,6 +184,10 @@ function editParticipates(edit: CoordinatedDevEdit): boolean {
     || isLiveSession(edit.sessionId);
 }
 
+function openBatch(store: CoordinatorStore): CoordinatedDevApplyBatch | undefined {
+  return store.batches.find((batch) => batch.status === 'awaiting_members' || batch.status === 'awaiting_approval' || batch.status === 'applying');
+}
+
 export function registerCoordinatedDevEdit(input: {
   id: string;
   sessionId: string;
@@ -190,8 +206,18 @@ export function registerCoordinatedDevEdit(input: {
   for (const file of files) {
     const owner = activeOwnerForFile(store, file, id);
     if (owner) {
-      owned.delete(file);
-      waiting.add(file);
+      // A declined/expired live apply does not pin verified source forever.
+      // With no open batch, the next request receives the verified version and
+      // becomes its owner (it still must reread before writing).
+      if (owner.phase === 'verified_not_live' && verifiedSnapshotIsCurrent(owner) && !openBatch(store)) {
+        owner.ownedFiles = owner.ownedFiles.filter((item) => item !== file);
+        owner.supersededVerifiedFiles = Array.from(new Set([...owner.supersededVerifiedFiles, file]));
+        owned.add(file);
+        waiting.delete(file);
+      } else {
+        owned.delete(file);
+        waiting.add(file);
+      }
     } else {
       waiting.delete(file);
       owned.add(file);
@@ -208,6 +234,7 @@ export function registerCoordinatedDevEdit(input: {
     supersededVerifiedFiles: existing?.supersededVerifiedFiles || [],
     phase: waiting.size ? 'waiting_for_files' : (existing?.phase || 'approved'),
     verifiedSnapshot: existing?.verifiedSnapshot,
+    verifiedAt: existing?.verifiedAt,
     verificationSummary: existing?.verificationSummary,
     batchId: existing?.batchId,
     createdAt: existing?.createdAt || now,
@@ -277,6 +304,7 @@ export function claimCoordinatedDevEditFile(input: {
   edit.touchedFiles = Array.from(new Set([...edit.touchedFiles, file]));
   edit.phase = 'editing';
   edit.verifiedSnapshot = undefined;
+  edit.verifiedAt = undefined;
   edit.verificationSummary = undefined;
   edit.updatedAt = Date.now();
   edit.leaseExpiresAt = Date.now() + DEFAULT_LEASE_MS;
@@ -289,23 +317,29 @@ export function recordCoordinatedDevEditVerification(input: {
   files: string[];
   success: boolean;
   summary?: string;
-}): CoordinatedDevEdit | null {
+}): DevEditVerificationResult | null {
   const store = readStore();
   const edit = store.edits.find((item) => item.id === input.id);
   if (!edit || TERMINAL_PHASES.has(edit.phase)) return null;
   edit.verificationSummary = String(input.summary || '').trim() || undefined;
+  let awakened: CoordinatedDevEdit[] = [];
   if (input.success && edit.waitingFiles.length === 0) {
     const files = normalizeFiles(input.files.length ? input.files : edit.touchedFiles);
     edit.verifiedSnapshot = snapshotFiles(files);
-    edit.phase = 'verified_ready';
+    edit.verifiedAt = Date.now();
+    edit.phase = 'verified_handoff';
+    // Verification, not apply_live, is the safe handoff boundary. The next
+    // editor must read the verified version before it writes its own change.
+    awakened = handOffQueuedFiles(store, edit);
   } else if (!input.success) {
     edit.phase = 'editing';
     edit.verifiedSnapshot = undefined;
+    edit.verifiedAt = undefined;
   }
   edit.updatedAt = Date.now();
   edit.leaseExpiresAt = Date.now() + DEFAULT_LEASE_MS;
   writeStore(store);
-  return cloneEdit(edit);
+  return { edit: cloneEdit(edit), awakened: awakened.map(cloneEdit) };
 }
 
 function verifiedSnapshotIsCurrent(edit: CoordinatedDevEdit): boolean {
@@ -341,18 +375,39 @@ export function requestCoordinatedDevEditApply(id: string): DevEditApplyDecision
   if (edit.waitingFiles.length) {
     throw new Error(`Dev edit ${edit.id} is still waiting for: ${edit.waitingFiles.join(', ')}.`);
   }
-  if (edit.phase !== 'verified_ready' || !verifiedSnapshotIsCurrent(edit)) {
+  if (!['verified_ready', 'verified_handoff', 'verified_not_live', 'apply_pending'].includes(edit.phase) || !verifiedSnapshotIsCurrent(edit)) {
     edit.phase = 'editing';
     edit.verifiedSnapshot = undefined;
+    edit.verifiedAt = undefined;
     edit.updatedAt = Date.now();
     writeStore(store);
     throw new Error(`Dev edit ${edit.id} must pass verify_only against the current file versions before apply_live.`);
   }
   edit.phase = 'verified_handoff';
   edit.updatedAt = Date.now();
+  // Keep this here as a recovery backstop for edits verified by older gateway
+  // versions; normal handoff happens in record...Verification above.
   const awakened = handOffQueuedFiles(store, edit);
-  const participants = store.edits.filter(editParticipates);
-  const blockers = participants.filter((item) => !READY_PHASES.has(item.phase));
+  let batch = openBatch(store);
+  if (!batch) {
+    const participants = store.edits.filter(editParticipates);
+    const leader = participants
+      .filter((item) => READY_PHASES.has(item.phase) && verifiedSnapshotIsCurrent(item))
+      .sort((a, b) => (a.verifiedAt || a.updatedAt) - (b.verifiedAt || b.updatedAt) || a.createdAt - b.createdAt)[0] || edit;
+    batch = {
+      id: `dev_batch_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
+      memberIds: participants.map((item) => item.id),
+      memberSessionIds: Array.from(new Set(participants.map((item) => item.sessionId))),
+      files: [],
+      createdAt: Date.now(),
+      status: 'awaiting_members',
+      leaderId: leader.id,
+    };
+    for (const participant of participants) participant.batchId = batch.id;
+    store.batches.push(batch);
+  }
+  const participants = store.edits.filter((item) => batch!.memberIds.includes(item.id));
+  const blockers = participants.filter((item) => !READY_PHASES.has(item.phase) || !verifiedSnapshotIsCurrent(item));
   if (blockers.length) {
     writeStore(store);
     return {
@@ -362,24 +417,16 @@ export function requestCoordinatedDevEditApply(id: string): DevEditApplyDecision
       awakened: awakened.map(cloneEdit),
     };
   }
-  const members = participants.filter((item) => READY_PHASES.has(item.phase));
-  const batch: CoordinatedDevApplyBatch = {
-    id: `dev_batch_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
-    memberIds: members.map((item) => item.id),
-    memberSessionIds: Array.from(new Set(members.map((item) => item.sessionId))),
-    files: Array.from(new Set(members.flatMap((item) => item.touchedFiles.length ? item.touchedFiles : item.requestedFiles))),
-    createdAt: Date.now(),
-    status: 'applying',
-  };
-  for (const member of members) {
-    member.phase = 'applying';
+  batch.files = Array.from(new Set(participants.flatMap((item) => item.touchedFiles.length ? item.touchedFiles : item.requestedFiles)));
+  batch.status = 'awaiting_approval';
+  for (const member of participants) {
+    member.phase = 'apply_pending';
     member.batchId = batch.id;
     member.updatedAt = Date.now();
   }
-  store.batches.push(batch);
   writeStore(store);
   return {
-    role: 'leader',
+    role: batch.leaderId === edit.id ? 'leader' : 'waiting',
     edit: cloneEdit(edit),
     batch: JSON.parse(JSON.stringify(batch)),
     blockers: [],
@@ -389,7 +436,7 @@ export function requestCoordinatedDevEditApply(id: string): DevEditApplyDecision
 
 export function markCoordinatedDevApplyBatch(
   batchId: string,
-  status: 'applied' | 'failed',
+  status: 'applied' | 'not_live' | 'failed',
   failure?: string,
 ): CoordinatedDevApplyBatch | null {
   const store = readStore();
@@ -398,12 +445,46 @@ export function markCoordinatedDevApplyBatch(
   batch.status = status;
   batch.failure = status === 'failed' ? String(failure || 'Dev apply batch failed.') : undefined;
   for (const edit of store.edits.filter((item) => item.batchId === batchId)) {
-    edit.phase = status === 'applied' ? 'applied' : 'verified_handoff';
+    edit.phase = status === 'applied' ? 'applied' : status === 'not_live' ? 'verified_not_live' : 'verified_handoff';
     if (status === 'failed') edit.batchId = undefined;
     if (status === 'applied') {
       edit.ownedFiles = [];
       edit.waitingFiles = [];
     }
+    edit.updatedAt = Date.now();
+  }
+  if (status === 'not_live') {
+    // Let work queued while the batch approval card was visible continue on
+    // the verified on-disk version. A waiter receives one file at a time FIFO.
+    for (const edit of store.edits.filter((item) => item.batchId === batchId)) {
+      handOffQueuedFiles(store, edit);
+    }
+  }
+  writeStore(store);
+  return JSON.parse(JSON.stringify(batch));
+}
+
+export function setCoordinatedDevApplyBatchApproval(input: {
+  batchId: string;
+  approvalId: string;
+  expiresAt: number;
+}): CoordinatedDevApplyBatch | null {
+  const store = readStore();
+  const batch = store.batches.find((item) => item.id === input.batchId);
+  if (!batch || batch.status !== 'awaiting_approval') return null;
+  batch.approvalId = String(input.approvalId || '').trim() || undefined;
+  batch.approvalExpiresAt = Number(input.expiresAt || 0) || undefined;
+  writeStore(store);
+  return JSON.parse(JSON.stringify(batch));
+}
+
+export function beginCoordinatedDevApplyBatch(batchId: string): CoordinatedDevApplyBatch | null {
+  const store = readStore();
+  const batch = store.batches.find((item) => item.id === batchId);
+  if (!batch || batch.status !== 'awaiting_approval') return null;
+  batch.status = 'applying';
+  for (const edit of store.edits.filter((item) => item.batchId === batchId)) {
+    edit.phase = 'applying';
     edit.updatedAt = Date.now();
   }
   writeStore(store);

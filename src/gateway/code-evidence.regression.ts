@@ -70,6 +70,11 @@ try {
   assert.match(read.extra?.codeEvidence?.files?.[0]?.post_edit_windows?.[0]?.content || '', /api_key = "\*\*\*"/);
   assert.doesNotMatch(read.extra?.codeEvidence?.files?.[0]?.post_edit_windows?.[0]?.content || '', /supersecret/);
 
+  const fastSourceRead = attachCodeEvidenceToToolResult({
+    name: 'read_source', args: { file: 'example.ts', start_line: 1, num_lines: 1 }, result: 'numbered source read', error: false,
+  }, { workspacePath: workspace });
+  assert.equal(fastSourceRead.extra?.codeEvidence, undefined, 'source reads must not re-hash whole files for duplicate evidence');
+
   const moveSource = path.join(workspace, 'move-source.ts');
   const moveDestination = path.join(workspace, 'move-destination.ts');
   fs.writeFileSync(moveSource, 'export const moved = true;\n', 'utf8');

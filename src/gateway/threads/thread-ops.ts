@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import {
   flushSession,
+  getChatModelRoute,
   getHistory,
   getSession,
   getSessionDisplayTitle,
@@ -9,10 +10,13 @@ import {
   renameSession,
   searchSessionSummaries,
   sessionExists,
+  setChatModelRoute,
   setSessionPinned,
   setWorkspace,
   touchSession,
 } from '../session';
+import { resolveChatModelRouteSource, resolveConfiguredMainChatRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
+import type { ResolvedTurnRouteSource } from '../chat/turn-route-snapshot';
 import { handleMainChatGoalCommand } from '../main-chat-goals';
 import { abortLiveRuntime, addPendingRuntimeSteerForSession, listLiveRuntimes } from '../live-runtime-registry';
 import {
@@ -35,10 +39,81 @@ export interface PrometheusThreadOpsDeps {
   broadcastWS?: (data: any) => void;
 }
 
+type ManagedThreadRoute = {
+  providerId: string;
+  model: string;
+  reasoningEffort?: string;
+  accountId?: string;
+};
+
+function requestedRouteValue(input: any, defaults: any, keys: string[]): { present: boolean; value: any } {
+  for (const source of [input, defaults]) {
+    if (!source || typeof source !== 'object') continue;
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) return { present: true, value: source[key] };
+    }
+  }
+  return { present: false, value: undefined };
+}
+
+function requestedRouteString(input: any, defaults: any, keys: string[]): { present: boolean; value?: string } {
+  const requested = requestedRouteValue(input, defaults, keys);
+  const value = String(requested.value ?? '').trim();
+  return { present: requested.present, ...(value ? { value } : {}) };
+}
+
+/**
+ * Turn a thread-creation request into a sticky chat route. No route fields
+ * means no override: the chat continues to inherit Main Chat on every turn.
+ */
+export function resolveManagedThreadModelRoute(
+  input: any,
+  defaults: any,
+  inherited: ResolvedTurnRouteSource = resolveConfiguredMainChatRouteSource(),
+): ManagedThreadRoute | undefined {
+  const provider = requestedRouteString(input, defaults, ['provider_id', 'providerId', 'provider']);
+  const model = requestedRouteString(input, defaults, ['model']);
+  const reasoning = requestedRouteString(input, defaults, ['reasoning_effort', 'reasoningEffort']);
+  const account = requestedRouteString(input, defaults, ['account_id', 'accountId']);
+  if (!provider.present && !model.present && !reasoning.present && !account.present) return undefined;
+
+  const providerId = provider.value || String(inherited.providerId || '').trim();
+  const providerConfig = inherited.config?.llm?.providers?.[providerId] || {};
+  const modelName = model.value || (provider.present ? String(providerConfig.model || '').trim() : String(inherited.model || '').trim());
+  if (!providerId || !modelName) {
+    throw new Error('An explicit thread model route requires a provider and model. Supply provider_id and model, or configure a saved model for that provider.');
+  }
+
+  // Never carry Main Chat's account into a route for another provider.
+  const sourceProvider = String(inherited.providerId || '').trim();
+  const sourceAccount = sourceProvider === providerId ? String(inherited.accountId || '').trim() : '';
+  return {
+    providerId,
+    model: modelName,
+    ...(reasoning.present
+      ? (reasoning.value ? { reasoningEffort: reasoning.value } : {})
+      : (provider.present
+        ? (providerConfig.reasoning_effort ? { reasoningEffort: String(providerConfig.reasoning_effort).trim() } : {})
+        : (inherited.reasoningEffort ? { reasoningEffort: String(inherited.reasoningEffort).trim() } : {}))),
+    ...((account.present ? account.value : sourceAccount)
+      ? { accountId: account.present ? account.value! : sourceAccount }
+      : {}),
+  };
+}
+
 function activeRuntimeForSession(sessionId: string): any | null {
   return listLiveRuntimes()
     .filter((runtime) => String(runtime.sessionId || '') === sessionId)
     .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+}
+
+function sessionRouteState(sessionId: string): Record<string, any> {
+  try { return resolveChatModelRouteSource(sessionId).state; }
+  catch { return { mode: getChatModelRoute(sessionId) ? 'explicit' : 'inherited', availability: 'unavailable' }; }
+}
+
+function sessionSummaryWithRuntime(session: any): Record<string, any> {
+  return { ...session, runtime: activeRuntimeForSession(session.id), chatModelRoute: sessionRouteState(session.id) };
 }
 
 function sessionSnapshot(sessionId: string, includeHistory = false, historyLimit = 40): Record<string, any> {
@@ -67,6 +142,7 @@ function sessionSnapshot(sessionId: string, includeHistory = false, historyLimit
     createdAt: session.createdAt,
     lastActiveAt: session.lastActiveAt,
     pinnedAt: session.pinnedAt || null,
+    chatModelRoute: sessionRouteState(sessionId),
     messageCount: session.history.length,
     runtime,
     mainChatGoal: session.mainChatGoal || null,
@@ -155,7 +231,20 @@ function createManagedThread(
   const requestedId = String(input?.session_id || input?.sessionId || '').trim();
   const targetSessionId = requestedId || `prom_${crypto.randomUUID()}`;
   if (targetSessionId === ownerSessionId) throw new Error('Cannot create work in the owner session itself.');
+  const requestedRoute = resolveManagedThreadModelRoute(input, defaults);
+  const routeState = requestedRoute ? validateChatModelRoute(requestedRoute) : null;
+  if (routeState && routeState.availability !== 'ready') {
+    throw new Error(`Requested thread model route is unavailable: ${routeState.error || 'Choose a configured provider, model, and account.'}`);
+  }
   const session = touchSession(targetSessionId, { channel: 'web', title });
+  const chatModelRoute = requestedRoute
+    ? setChatModelRoute(targetSessionId, {
+        providerId: routeState!.effective.providerId,
+        model: routeState!.effective.model,
+        ...(routeState!.effective.reasoningEffort ? { reasoningEffort: routeState!.effective.reasoningEffort } : {}),
+        ...(routeState!.effective.accountId ? { accountId: routeState!.effective.accountId } : {}),
+      })
+    : undefined;
   const workspace = String(input?.workspace || defaults?.workspace || getWorkspace(ownerSessionId)).trim();
   if (workspace) setWorkspace(targetSessionId, workspace);
   flushSession(targetSessionId);
@@ -183,6 +272,9 @@ function createManagedThread(
     workspace,
     started: !!turnPrompt,
     follow,
+    chatModelRoute: chatModelRoute
+      ? { mode: 'explicit', override: chatModelRoute, effective: routeState!.effective, availability: 'ready' }
+      : resolveChatModelRouteSource(targetSessionId).state,
     supervision,
   };
 }
@@ -276,10 +368,7 @@ export async function executePrometheusThreadOps(
     });
     return {
       ...page,
-      sessions: page.sessions.map((session: any) => ({
-        ...session,
-        runtime: activeRuntimeForSession(session.id),
-      })),
+      sessions: page.sessions.map(sessionSummaryWithRuntime),
     };
   }
 
@@ -291,7 +380,7 @@ export async function executePrometheusThreadOps(
       sessions: searchSessionSummaries(query, {
         channel: args?.channel || undefined,
         limit: Math.max(1, Math.min(200, Number(args?.limit) || 50)),
-      }).map((session) => ({ ...session, runtime: activeRuntimeForSession(session.id) })),
+      }).map(sessionSummaryWithRuntime),
     };
   }
 

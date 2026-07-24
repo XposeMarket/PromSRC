@@ -8,7 +8,9 @@ import {
   grantDevSourceEditApproval,
 } from './dev-source-approvals';
 import { addPersistentAllowedPath, addSessionAllowedPath } from './path-permissions';
-import { getApprovalQueue, type ApprovalRecord } from './verification-flow';
+import { getApprovalQueue, registerApprovalResolutionListener, type ApprovalRecord } from './verification-flow';
+import { markCoordinatedDevApplyBatch } from './dev-edit-coordinator';
+import { getDevSourceEditContinuation, upsertDevSourceEditContinuation } from './dev-source-approvals';
 import { appendJournal, loadTask, updateResumeContext, updateTaskStatus } from './tasks/task-store';
 
 export interface ResolveApprovalDecisionInput {
@@ -32,6 +34,7 @@ export interface ResolveApprovalDecisionResult {
 function isOneShotApproval(approval: ApprovalRecord): boolean {
   return approval.approvalKind === 'elevated_command'
     || approval.approvalKind === 'dev_source_edit'
+    || approval.approvalKind === 'dev_apply_live'
     || approval.toolName === 'request_dev_source_edit'
     || approval.approvalKind === 'final_action'
     || approval.toolName === 'request_final_action_approval';
@@ -229,3 +232,18 @@ export function resolveApprovalDecision(input: ResolveApprovalDecisionInput): Re
     requiresChatResume: !!resumePrompt,
   };
 }
+
+// The queue also invokes this on a durable 30-minute timeout, so a gateway
+// restart cannot turn a missing answer into an implicit live apply.
+registerApprovalResolutionListener((approval, approved) => {
+  if (approval.approvalKind !== 'dev_apply_live' || approved) return;
+  const batchId = String(approval.devApplyLive?.batchId || '').trim();
+  if (!batchId) return;
+  markCoordinatedDevApplyBatch(batchId, 'not_live');
+  for (const id of approval.devApplyLive?.memberIds || []) {
+    const continuation = getDevSourceEditContinuation(id);
+    if (continuation && continuation.status !== 'complete') {
+      upsertDevSourceEditContinuation({ ...continuation, status: 'verified_not_live', updatedAt: Date.now() });
+    }
+  }
+});

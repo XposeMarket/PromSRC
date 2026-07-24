@@ -22,6 +22,12 @@ Use it to create product documents, onboarding, launch material, comparison copy
 | [14-voice-tool-capability-index.md](14-voice-tool-capability-index.md) | Voice/realtime worker tool surface: 39 schemas with source-derived behavior and safety boundaries |
 | [15-gateway-core-and-agent-builder-tools.md](15-gateway-core-and-agent-builder-tools.md) | Gateway-assembly layer: 21 inline core/wrapper tools plus 8 optional Agent Builder workflow tools |
 | [16-voice-agent-and-worker.md](16-voice-agent-and-worker.md) | Complete Voice Agent/realtime versus Prometheus Worker architecture, handoff, safety, camera, interruption, and recovery behavior |
+| [17-special-prometheus-tools-and-flows.md](17-special-prometheus-tools-and-flows.md) | Narrative guide to Prometheus-only one-off systems: X/xurl, fetch/media, delivery, goals, watches, evidence, proposals, deployment, Brain, and dynamic connections |
+| [18-settings-plugins-connectors.md](18-settings-plugins-connectors.md) | Every Settings control plane, configuration/vault behavior, onboarding, connector discovery/setup/repair, plugin/extension lifecycle, MCP, and integration troubleshooting |
+| [19-goals-context-continuity.md](19-goals-context-continuity.md) | Goal lifecycle, checkpoints, summaries and compaction, session/audit continuity, recovery, background work, threads, watches, timers, schedules, and heartbeats |
+| [20-operational-systems.md](20-operational-systems.md) | Governed source edits and proposals, evidence/diagnostics, delivery/artifacts, Browser Teach/composites/Brain, repo/deployment/update, and media flows |
+| [21-every-system-map.md](21-every-system-map.md) | Start-here map of all Prometheus subsystems, system boundaries, ownership, and links to the exact page/tool/system reference |
+| [22-gateway-streams-audit-and-context.md](22-gateway-streams-audit-and-context.md) | Gateway turn flow, tool stream event types and UI rendering, audit mirror, recovery discipline, context-window calculations, and compaction UI |
 | [pages/](pages/README.md) | Individual page references with state, controls, data flow, process logs, approvals, and recovery behavior |
 | [mobile-pages/](mobile-pages/README.md) | Individual paired-mobile route references, including voice, recovery, team/agent tabs, settings reuse, and Creative routing status |
 

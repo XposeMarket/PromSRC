@@ -82,8 +82,6 @@ For one-shot provider image/video generation (`generate_image`, `generate_video`
 - Entity files [2026-07-07]: `workspace/entities/` — one markdown per entity under clients/, projects/, vendors/, contacts/, social/; slug `lowercase-hyphenated`; read before answering about that entity; use folder `_template.md`; update Last Updated on write.
 - Connections [2026-07-07]: Call `connector_list` / `view_connections()` before claiming email, CRM, or platform access. Browser-auth surfaces (Instagram, TikTok, X, LinkedIn) use the Chrome browser session. Details: **self/10-mcp-and-connections.md**.
 - Events queue [2026-07-07]: `workspace/events/pending.json` — cross-session completions and integration notifications; check when relevant; clear after handling.
----
-
 - Daytrading reminder [2026-06-10]: Between 5:00 PM and 5:00 AM, if Raul texts, periodically check whether he is daytrading and gently remind him he should not trade in those hours. Log reminder times in MEMORY or a linked note so the same reminder is not repeated every thread. Only during that window; at most once per active session unless new evidence. [2026-06-10]
 - Desktop UI clicks [2026-06-11]: Prefer screenshot-anchored mouse clicks for visible buttons; use keyboard shortcuts only for real shortcuts or when Raul asks. No modifier-clicks unless the UI truly requires Shift/Ctrl/Alt. [2026-06-11]
 - Prometheus self-docs path [2026-06-13]: Self/reference docs for src changes live under **workspace/self/** (workspace-relative), not project-root `self/` alone. Use workspace file tools on `self/` before editing matching docs. [2026-06-13]
