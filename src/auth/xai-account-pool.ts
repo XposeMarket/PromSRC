@@ -1,5 +1,6 @@
 import { getConfig } from '../config/config';
 import { getValidXAIToken, isXAIConnected } from './xai-oauth';
+import { isRetryableAccountFailure, orderProviderAccountIds } from './provider-account-pool';
 
 export type XAIAuthCandidate = {
   token: string;
@@ -17,15 +18,7 @@ export function orderXaiAccountIds(
   preferredAccountId?: string,
   defaultAccountId?: string,
 ): string[] {
-  const ordered: string[] = [];
-  const push = (value: unknown) => {
-    const id = String(value || '').trim();
-    if (id && accounts[id] && !ordered.includes(id)) ordered.push(id);
-  };
-  push(preferredAccountId);
-  push(defaultAccountId);
-  for (const id of Object.keys(accounts)) push(id);
-  return ordered;
+  return orderProviderAccountIds(accounts, preferredAccountId, defaultAccountId);
 }
 
 function resolveSecret(value: unknown): string {
@@ -115,6 +108,5 @@ export async function getXaiAuthCandidates(preferredAccountId?: string): Promise
 }
 
 export function isXaiCredentialFailure(status: number, responseText = ''): boolean {
-  if ([401, 402, 403, 408, 409, 429].includes(Number(status)) || Number(status) >= 500) return true;
-  return /(?:insufficient|exhausted|out of)\s+(?:credits?|quota)|(?:credits?|quota|balance|billing).{0,80}(?:insufficient|exhausted|empty|limit|required|too low)/i.test(responseText);
+  return isRetryableAccountFailure(status, responseText);
 }

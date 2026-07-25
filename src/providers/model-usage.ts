@@ -12,6 +12,7 @@ export interface ModelUsageEvent {
   actualModel?: string;
   fallbackFrom?: string;
   fallbackReason?: string;
+  accountId?: string;
   callType: 'chat' | 'generate';
   sessionId?: string;
   agentId?: string;
@@ -205,6 +206,7 @@ export function normalizeUsage(usage: ModelUsage | undefined, fallback: {
     actualModel: usage?.actualModel || '',
     fallbackFrom: usage?.fallbackFrom || '',
     fallbackReason: usage?.fallbackReason || '',
+    accountId: usage?.accountId || '',
   };
 }
 
@@ -218,6 +220,7 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
       actualModel: event.actualModel ? String(event.actualModel) : undefined,
       fallbackFrom: event.fallbackFrom ? String(event.fallbackFrom) : undefined,
       fallbackReason: event.fallbackReason ? String(event.fallbackReason) : undefined,
+      accountId: event.accountId ? String(event.accountId) : undefined,
       callType: event.callType,
       sessionId: event.sessionId,
       agentId: event.agentId,

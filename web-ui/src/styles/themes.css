@@ -810,7 +810,7 @@
 :root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item .job-item-meta :is(.badge, .badge-queued, .session-auto-badge) {
   color: rgba(185, 176, 160, .68) !important;
 }
-:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item .session-working-badge {
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item :is(.session-working-badge, .session-unread-badge) {
   color: var(--p1-gold-light) !important;
 }
 :root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .job-item-unread-dot {
@@ -1086,6 +1086,13 @@
   color: #fff;
   background: transparent;
   box-shadow: none;
+}
+/* Dictation is a safety-critical state, so it deliberately wins over each
+   desktop skin's neutral mic treatment. Mirrors the mobile recording red. */
+body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recording {
+  background: #d8473a !important;
+  color: #fff !important;
+  box-shadow: 0 0 0 4px rgba(216,71,58,.16) !important;
 }
 :root[data-skin="light"] body:not(.pm-mobile-active) #chat-view :is(.main-goal-strip, .chat-skill-trigger-pill, .queued-prompts-panel, .chat-file-staging) {
   color: var(--text);
@@ -1488,18 +1495,14 @@
 :root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .msg.user .markdown-body blockquote {
   border-left-color: rgba(214, 183, 94, .52);
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.chat-slash-command-popover, .chat-command-chip, .workflow-chip) {
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.chat-slash-command-popover, .chat-command-chip) {
   border-color: var(--p1-shared-gold-line);
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.chat-slash-command-item:hover, .chat-slash-command-item.is-active, .chat-slash-token, .chat-command-chip:hover, .workflow-chip) {
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.chat-slash-command-item:hover, .chat-slash-command-item.is-active, .chat-slash-token, .chat-command-chip:hover) {
   color: var(--p1-shared-gold-light);
   border-color: rgba(214, 183, 94, .46);
   background: var(--p1-shared-gold-soft);
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .msg-shell.workflow-linked::before {
-  background: linear-gradient(180deg, rgba(214,183,94,.15), rgba(240,217,139,.78), rgba(214,183,94,.15));
-}
-
 /* Composer — keep the moving voice glyph itself white; recolor its metal shell. */
 :root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-input-area :is(.chat-attach-btn, .send-btn) {
   color: #fffdf7;

@@ -97,6 +97,8 @@ export interface ModelUsage {
   actualModel?: string;
   fallbackFrom?: string;
   fallbackReason?: string;
+  /** Named provider account that actually served the call, when known. */
+  accountId?: string;
 }
 
 export interface ChatResult {

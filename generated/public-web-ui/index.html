@@ -2112,6 +2112,11 @@
   <!-- SCROLLABLE BODY -->
   <div class="sidebar-scroll">
 
+    <button id="sidebar-pages-toggle" class="sidebar-pages-toggle" type="button" onclick="toggleSidebarPages(event)" aria-expanded="true" aria-label="Collapse pages" title="Collapse pages">
+      <span>Pages</span>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" width="13" height="13" aria-hidden="true"><polyline points="3,6 8,11 13,6"/></svg>
+    </button>
+
     <!-- PAGE NAVIGATION -->
     <div class="nav-group">
       <div class="nav-item active" id="nav-chat" onclick="setMode('chat')">
@@ -2393,19 +2398,21 @@
         <button class="chat-attach-btn" onclick="document.getElementById('chat-file-input').click()" title="Attach file(s)">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
-        <button class="chat-voice-btn" id="chat-voice-btn" type="button" onclick="toggleVoiceDictation()" title="Dictate message" aria-label="Dictate message">
+        <button class="chat-voice-btn" id="chat-voice-btn" type="button" onclick="toggleComposerTranscription()" title="Dictate message" aria-label="Dictate message">
           <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
-          <svg class="voice-btn-icon voice-btn-icon-wave" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M4 10v4"/><path d="M8 7v10"/><path d="M12 4v16"/><path d="M16 7v10"/><path d="M20 10v4"/></svg>
         </button>
-        <button id="chat-command-chip" class="chat-command-chip" type="button" style="display:none" onclick="clearActiveSlashCommand()" title="Clear command"></button>
-        <textarea
-          id="chat-input"
-          placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
-          rows="1"
-          autocomplete="off"
-        ></textarea>
+        <div class="chat-composer-input-wrap" id="chat-composer-input-wrap">
+          <div class="chat-composer-rich-preview" id="chat-composer-rich-preview" aria-hidden="true" hidden></div>
+          <textarea
+            id="chat-input"
+            placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+            rows="1"
+            autocomplete="off"
+          ></textarea>
+        </div>
         <button class="send-btn" id="send-btn" onclick="handleSendStop()" title="Send">
           <svg id="send-icon" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>
+          <img id="voice-mode-icon" class="send-voice-icon" src="/assets/icons8-sound-wave-50.apng.png" alt="" aria-hidden="true" hidden>
           <svg id="stop-icon" width="13" height="13" viewBox="0 0 14 14" fill="currentColor" style="display:none"><rect x="2" y="2" width="10" height="10" rx="1.5"/></svg>
         </button>
         <audio id="realtime-voice-audio" autoplay style="display:none"></audio>
@@ -2441,8 +2448,6 @@
             <span id="chat-model-speed-icon" class="model-speed-icon" title="Fast mode" aria-label="Fast mode" hidden>⚡</span>
             <span id="chat-model-name">your model</span>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-            <span style="color:var(--muted)">via <span id="chat-provider-name">Prometheus</span></span>
-            <span id="chat-model-route-source" style="color:var(--muted);font-size:10px">Main Chat default</span>
           </button>
           <button
             id="chat-context-window-btn"
@@ -2505,10 +2510,11 @@
             </div>
           </div>
           <!-- Model switcher popover -->
-          <div id="model-switcher-popover" style="display:none;position:absolute;bottom:calc(100% + 8px);right:0;background:var(--panel);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 4px 20px rgba(16,32,64,0.13);padding:10px;z-index:100;min-width:220px">
-            <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Switch Model</div>
-            <div id="model-switcher-list" style="display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto"></div>
-            <button id="model-switcher-follow-default" type="button" style="display:none;margin-top:8px;background:transparent;border:0;color:var(--muted);font:inherit;font-size:11px;cursor:pointer;padding:2px 0">Use Main Chat Default</button>
+          <div id="model-switcher-popover" class="model-switcher-popover" style="display:none;position:absolute;bottom:calc(100% + 8px);right:0;z-index:100" role="dialog" aria-label="Chat model settings">
+            <div id="model-switcher-main" class="model-switcher-panel">
+              <div class="model-switcher-loading">Loading controls…</div>
+            </div>
+            <div id="model-switcher-detail" class="model-switcher-panel model-switcher-detail" hidden></div>
           </div>
         </div>
       </div>
@@ -3513,7 +3519,7 @@
 </div>
 
 <!-- CONNECTOR DETAIL VIEW -->
-<div id="connector-view" style="display:none;position:fixed;top:56px;bottom:0;left:288px;right:0;background:var(--panel);z-index:50;border-left:1px solid var(--line);box-shadow:var(--shadow-md);overflow:hidden;flex-direction:column">
+<div id="connector-view" class="connector-view" style="display:none">
   <div style="padding:18px 24px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-shrink:0">
     <button onclick="closeConnectorView()" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;display:flex;align-items:center" title="Back to chat">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
@@ -3888,6 +3894,12 @@
     </div>
 
     <div id="settings-panel-models" style="display:none;padding:14px 16px">
+
+      <div class="settings-models-usage" id="settings-models-usage" style="display:none">
+        <div class="settings-models-usage-title">Usage &amp; Limits</div>
+        <div class="settings-models-usage-sub">Live subscription limits and tracked token usage for every configured account used by your main chat and assigned subagents.</div>
+        <div class="hub-providers-grid" id="settings-models-usage-grid"></div>
+      </div>
 
       <!-- Provider selector -->
       <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
@@ -4503,11 +4515,6 @@
 	    </div>
 	  </div>
 
-      <div class="settings-models-usage" id="settings-models-usage" style="display:none">
-        <div class="settings-models-usage-title">Usage &amp; Limits</div>
-        <div class="settings-models-usage-sub">Live subscription limits and tracked token usage for the providers your main chat and assigned subagents currently use.</div>
-        <div class="hub-providers-grid" id="settings-models-usage-grid"></div>
-      </div>
 	</div>
 
 	    <div id="settings-panel-channels" style="display:none;padding:14px 16px">
@@ -5220,8 +5227,7 @@ function connectWS() {
 	      if (dot) dot.className = 'dot ' + (online ? 'online' : 'offline');
 	      const statusEl = document.getElementById('ollama-status');
 	      if (statusEl) {
-	        const current = String(statusEl.textContent || 'Provider').replace(/\s+(Online|Offline)$/i, '') || 'Provider';
-	        statusEl.textContent = online ? `${current} Online` : `${current} Offline`;
+	        statusEl.textContent = online ? 'Online' : 'Offline';
 	      }
 	      const ro = document.getElementById('r-ollama');
 	      if (ro) {
@@ -5564,16 +5570,16 @@ function _renderChannelDrill(channelKey) {
       || s.activeRun === true
     );
     return `
-<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}" onclick="openSession('${s.id}')">
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-title="${escHtml(s.title || 'Untitled')}" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="openSession('${s.id}')">
   ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
-      <div class="job-item-title">${s.unread && !isWorking ? '<span class="job-item-unread-dot"></span>' : ''}${escHtml(s.title || 'Untitled')}</div>
+      <div class="job-item-title">${escHtml(s.title || 'Untitled')}</div>
     </div>
   </div>
   <div class="job-item-meta">
     ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
-    ${isWorking ? '<span class="session-working-badge">Working</span>' : ''}
+    ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
     <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.createdAt)}</span>
   </div>
 </div>`;
@@ -5588,7 +5594,7 @@ function _renderChannelDrill(channelKey) {
     );
     const title = escHtml(s.title || s.preview || s.id.slice(0, 20));
     return `
-<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''} session-terminal" onclick="openTerminalSession('${s.id}', '${channelKey}')">
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''} session-terminal" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-title="${title}" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="openTerminalSession('${s.id}', '${channelKey}')">
   ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
@@ -5597,7 +5603,7 @@ function _renderChannelDrill(channelKey) {
   </div>
   <div class="job-item-meta">
     ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
-    ${isWorking ? '<span class="session-working-badge">Working</span>' : ''}
+    ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
     <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.lastActiveAt || s.createdAt)}</span>
   </div>
 </div>`;
@@ -5611,6 +5617,199 @@ function _backToChannelHub() {
   _channelsEditMode = false;
   _renderChannelHub();
 }
+
+let _sessionHoverPreviewTimer = null;
+let _sessionHoverPreviewCloseTimer = null;
+let _sessionHoverPreviewSource = null;
+let _sessionHoverPreviewEditing = false;
+
+function _sessionById(id) {
+  const collections = [
+    window.chatSessions,
+    window.terminalSessions,
+    window.mobileSessions,
+    window.telegramSessions,
+    window.discordSessions,
+    window.whatsappSessions,
+    ...(window.channelSessionsByChannel ? Object.values(window.channelSessionsByChannel) : []),
+  ];
+  return collections.flat().find((session) => session && String(session.id) === String(id)) || null;
+}
+
+function _getSessionHoverPreview() {
+  let popover = document.getElementById('session-hover-preview');
+  if (popover) return popover;
+  popover = document.createElement('div');
+  popover.id = 'session-hover-preview';
+  popover.className = 'session-hover-preview';
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-label', 'Rename chat');
+  popover.addEventListener('pointerenter', () => {
+    if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
+  });
+  // Pointer-down is earlier than click. Clearing here prevents the short
+  // source-to-popover hover gap from closing the editor before it can focus.
+  popover.addEventListener('pointerdown', () => {
+    if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
+  });
+  popover.addEventListener('pointerleave', scheduleSessionHoverPreviewClose);
+  document.body.appendChild(popover);
+  return popover;
+}
+
+function queueSessionHoverPreview(source) {
+  if (!source || source.classList.contains('is-editing') || window.matchMedia('(max-width: 900px)').matches) return;
+  if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
+  if (_sessionHoverPreviewSource === source && document.getElementById('session-hover-preview')?.classList.contains('is-visible')) return;
+  if (_sessionHoverPreviewTimer) clearTimeout(_sessionHoverPreviewTimer);
+  _sessionHoverPreviewTimer = setTimeout(() => showSessionHoverPreview(source), 520);
+}
+
+function scheduleSessionHoverPreviewClose() {
+  if (_sessionHoverPreviewEditing) return;
+  if (_sessionHoverPreviewTimer) clearTimeout(_sessionHoverPreviewTimer);
+  _sessionHoverPreviewTimer = null;
+  if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
+  _sessionHoverPreviewCloseTimer = setTimeout(hideSessionHoverPreview, 180);
+}
+
+function hideSessionHoverPreview() {
+  if (_sessionHoverPreviewEditing) return;
+  if (_sessionHoverPreviewTimer) clearTimeout(_sessionHoverPreviewTimer);
+  if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
+  _sessionHoverPreviewTimer = null;
+  _sessionHoverPreviewCloseTimer = null;
+  _sessionHoverPreviewSource = null;
+  const popover = document.getElementById('session-hover-preview');
+  if (popover) popover.classList.remove('is-visible');
+}
+
+function _renderSessionHoverPreviewTitle(popover, id, title) {
+  popover.dataset.sessionId = id;
+  popover.dataset.sessionTitle = title;
+  popover.innerHTML = '';
+  const row = document.createElement('div');
+  row.className = 'session-hover-preview-row';
+  const titleButton = document.createElement('button');
+  titleButton.type = 'button';
+  titleButton.className = 'session-hover-preview-title';
+  titleButton.textContent = title;
+  titleButton.title = 'Rename chat';
+  titleButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    beginSessionHoverRename(popover);
+  });
+  const deleteButton = document.createElement('button');
+  deleteButton.type = 'button';
+  deleteButton.className = 'session-hover-preview-delete';
+  deleteButton.title = 'Delete chat';
+  deleteButton.setAttribute('aria-label', 'Delete chat');
+  deleteButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>';
+  deleteButton.addEventListener('click', () => confirmSessionHoverDelete(id, title));
+  row.append(titleButton, deleteButton);
+  popover.appendChild(row);
+}
+
+function confirmSessionHoverDelete(id, title) {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return;
+  const remove = async () => {
+    hideSessionHoverPreview();
+    if (typeof window.deleteChatSession !== 'function') {
+      window.showToast?.('Delete unavailable', 'Chat deletion has not loaded yet.', 'error');
+      return;
+    }
+    await window.deleteChatSession(sessionId);
+  };
+  const message = `Delete “${title || 'this chat'}”? This permanently deletes the chat and its history. It cannot be undone.`;
+  if (typeof window.showConfirm === 'function') {
+    window.showConfirm(message, remove, null, {
+      title: 'Delete chat permanently?',
+      confirmText: 'Delete chat',
+      cancelText: 'Keep chat',
+      danger: true,
+    });
+    return;
+  }
+  if (window.confirm(message)) remove();
+}
+
+function showSessionHoverPreview(source) {
+  if (!source?.isConnected || source.classList.contains('is-editing')) return;
+  const id = String(source.dataset.sessionId || '').trim();
+  if (!id) return;
+  const session = _sessionById(id);
+  const title = String(session?.title || source.dataset.sessionTitle || 'New chat').trim() || 'New chat';
+  const popover = _getSessionHoverPreview();
+  _sessionHoverPreviewSource = source;
+  _renderSessionHoverPreviewTitle(popover, id, title);
+  popover.classList.add('is-visible');
+
+  const rect = source.getBoundingClientRect();
+  const preferredWidth = 190; // matches the compact More menu
+  const left = Math.min(rect.right + 8, Math.max(8, window.innerWidth - preferredWidth - 12));
+  const width = Math.min(preferredWidth, Math.max(160, window.innerWidth - left - 12));
+  const top = Math.max(8, Math.min(rect.top + (rect.height / 2) - 27, window.innerHeight - 66));
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  popover.style.width = `${width}px`;
+}
+
+function beginSessionHoverRename(popover) {
+  if (!popover?.classList.contains('is-visible')) return;
+  _sessionHoverPreviewEditing = true;
+  if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
+  _sessionHoverPreviewCloseTimer = null;
+  const title = String(popover.dataset.sessionTitle || 'New chat');
+  popover.innerHTML = '';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'session-hover-preview-input';
+  input.value = title;
+  input.setAttribute('aria-label', 'Chat title');
+  input.addEventListener('keydown', async (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      _sessionHoverPreviewEditing = false;
+      _renderSessionHoverPreviewTitle(popover, popover.dataset.sessionId, title);
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const nextTitle = String(input.value || '').replace(/\s+/g, ' ').trim();
+    if (!nextTitle || nextTitle === title) {
+      _sessionHoverPreviewEditing = false;
+      _renderSessionHoverPreviewTitle(popover, popover.dataset.sessionId, title);
+      return;
+    }
+    input.disabled = true;
+    try {
+      const savedTitle = await saveChatSessionTitle(popover.dataset.sessionId, nextTitle);
+      _sessionHoverPreviewEditing = false;
+      _renderSessionHoverPreviewTitle(popover, popover.dataset.sessionId, savedTitle);
+    } catch {
+      _sessionHoverPreviewEditing = false;
+      _renderSessionHoverPreviewTitle(popover, popover.dataset.sessionId, title);
+    }
+  });
+  input.addEventListener('blur', () => {
+    if (input.disabled) return;
+    _sessionHoverPreviewEditing = false;
+    _renderSessionHoverPreviewTitle(popover, popover.dataset.sessionId, title);
+    requestAnimationFrame(() => {
+      if (!popover.matches(':hover') && !_sessionHoverPreviewSource?.matches(':hover')) {
+        scheduleSessionHoverPreviewClose();
+      }
+    });
+  }, { once: true });
+  popover.appendChild(input);
+  input.focus();
+  input.select();
+}
+
+window.addEventListener('resize', hideSessionHoverPreview);
+window.addEventListener('scroll', hideSessionHoverPreview, true);
 
 async function toggleChatPin(id, ev) {
   if (ev) ev.stopPropagation();
@@ -5674,42 +5873,45 @@ function updateSessionTitleEverywhere(id, title) {
   return changed;
 }
 
-async function renameChatSession(id, ev) {
-  if (ev) ev.stopPropagation();
-  const existing = (window.chatSessions || []).find(s => s.id === id)
-    || (window.terminalSessions || []).find(s => s.id === id)
-    || (window.mobileSessions || []).find(s => s.id === id)
-    || (window.telegramSessions || []).find(s => s.id === id)
-    || (window.discordSessions || []).find(s => s.id === id)
-    || (window.whatsappSessions || []).find(s => s.id === id)
-    || (window.channelSessionsByChannel
-      ? Object.values(window.channelSessionsByChannel).flat().find(s => s && s.id === id)
-      : null);
-  const current = String(existing?.title || existing?.preview || '').trim();
-  const next = window.prompt('Rename chat session', current || 'New chat');
-  if (next == null) return;
-  const title = String(next || '').replace(/\s+/g, ' ').trim();
-  if (!title) return;
+async function saveChatSessionTitle(id, title) {
+  const cleanTitle = String(title || '').replace(/\s+/g, ' ').trim();
+  if (!cleanTitle) throw new Error('A chat title is required');
   try {
     const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title: cleanTitle }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new Error(text || `HTTP ${res.status}`);
     }
     const data = await res.json().catch(() => ({}));
-    const savedTitle = String(data?.session?.title || title).trim() || title;
+    const savedTitle = String(data?.session?.title || cleanTitle).trim() || cleanTitle;
     updateSessionTitleEverywhere(id, savedTitle);
     saveChatSessions();
     renderSessionsList();
     if (_channelsViewOpen) renderChannelsList();
     if (typeof showToast === 'function') showToast('Session renamed', savedTitle, 'success');
+    return savedTitle;
   } catch (err) {
     if (typeof showToast === 'function') showToast('Rename failed', err.message || 'Could not rename session', 'error');
-    else alert(`Rename failed: ${err.message || err}`);
+    throw err;
+  }
+}
+
+async function renameChatSession(id, ev) {
+  if (ev) ev.stopPropagation();
+  const existing = _sessionById(id);
+  const current = String(existing?.title || existing?.preview || '').trim();
+  const next = window.prompt('Rename chat session', current || 'New chat');
+  if (next == null) return;
+  const title = String(next || '').replace(/\s+/g, ' ').trim();
+  if (!title) return;
+  try {
+    await saveChatSessionTitle(id, title);
+  } catch (err) {
+    if (typeof showToast !== 'function') alert(`Rename failed: ${err.message || err}`);
   }
 }
 
@@ -5822,6 +6024,20 @@ function getSessionSortTime(s) {
   return getSessionLastMessageAt(s) || Number(s?.createdAt || 0) || 0;
 }
 
+let _sessionListRefreshFrame = 0;
+function scheduleSessionListRefresh() {
+  if (_sessionListRefreshFrame) return;
+  const refresh = () => {
+    _sessionListRefreshFrame = 0;
+    window.renderSessionsList?.();
+    window.refreshVisibleChannelsList?.();
+  };
+  _sessionListRefreshFrame = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame(refresh)
+    : setTimeout(refresh, 0);
+}
+window.scheduleSessionListRefresh = scheduleSessionListRefresh;
+
 function renderChatSessionCard(s) {
   const isPinned = _pinnedChats.includes(s.id);
   const searchResult = getSessionSearchResult(s.id);
@@ -5843,17 +6059,17 @@ function renderChatSessionCard(s) {
     || s.activeRun === true
   );
   return `
-    <div class="job-item chat-session-item ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${window.sessionsEditMode ? ' is-editing' : ''}" onclick="${openHandler}">
+    <div class="job-item chat-session-item ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${window.sessionsEditMode ? ' is-editing' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-title="${escHtml(s.title || 'New chat')}" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="${openHandler}">
       ${window.sessionsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
       <div class="job-item-head job-item-head--pinned">
         <div class="job-item-title-wrap">
-          <div class="job-item-title">${s.unread && !isWorking ? '<span class="job-item-unread-dot"></span>' : ''}${escHtml(s.title || 'New chat')}</div>
+          <div class="job-item-title">${escHtml(s.title || 'New chat')}</div>
         </div>
       </div>
       <div class="job-item-meta">
         ${s.isProposal ? '<span class="session-auto-badge" style="background:var(--brand)">Proposal</span>' : ''}
         ${sourceBadge ? `<span class="badge badge-queued">${escHtml(sourceBadge)}</span>` : ''}
-        ${isWorking ? '<span class="session-working-badge">Working</span>' : ''}
+        ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
         <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.createdAt)}</span>
       </div>
       ${searchPreview}
@@ -6293,12 +6509,12 @@ window.applyReasoningPrefsFromProviderConfig = applyReasoningPrefsFromProviderCo
 window.refreshReasoningPrefsFromSettings = refreshReasoningPrefsFromSettings;
 window.persistProviderReasoningPrefs = persistProviderReasoningPrefs;
 
-function _activeChatModelRouteSessionId() {
+function getActiveChatModelRouteSessionId() {
   return String(window.activeChatSessionId || window.agentSessionId || '').trim();
 }
 
 async function refreshActiveChatModelRoute() {
-  const sessionId = _activeChatModelRouteSessionId();
+  const sessionId = getActiveChatModelRouteSessionId();
   if (!sessionId) return null;
   try {
     const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`);
@@ -6309,11 +6525,10 @@ async function refreshActiveChatModelRoute() {
     window._activeModel = route.model;
     window.reasoningLevel = route.reasoningEffort || '';
     _renderActiveModelLabels(route.model, route.providerId, route.reasoningEffort || '');
-    const source = document.getElementById('chat-model-route-source');
-    if (source) source.textContent = state.mode === 'explicit' ? 'This chat' : 'Main Chat default';
     const follow = document.getElementById('model-switcher-follow-default');
     if (follow) follow.style.display = state.mode === 'explicit' ? '' : 'none';
     window._activeChatModelRoute = state;
+    window._activeChatModelRouteSessionId = sessionId;
     return state;
   } catch (err) {
     console.warn('refreshActiveChatModelRoute:', err);
@@ -6322,7 +6537,7 @@ async function refreshActiveChatModelRoute() {
 }
 
 async function setActiveChatModelRoute(route) {
-  const sessionId = _activeChatModelRouteSessionId();
+  const sessionId = getActiveChatModelRouteSessionId();
   if (!sessionId) throw new Error('No active chat');
   const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, {
     method: 'PUT', body: JSON.stringify(route),
@@ -6334,7 +6549,7 @@ async function setActiveChatModelRoute(route) {
 }
 
 async function followMainChatDefault() {
-  const sessionId = _activeChatModelRouteSessionId();
+  const sessionId = getActiveChatModelRouteSessionId();
   if (!sessionId) return;
   try {
     await api(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, { method: 'DELETE' });
@@ -6346,85 +6561,258 @@ async function followMainChatDefault() {
 window.refreshActiveChatModelRoute = refreshActiveChatModelRoute;
 window.followMainChatDefault = followMainChatDefault;
 
+const DESKTOP_SWITCHER_EXTRA_MODELS = {
+  xai: ['grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-build-0.1'],
+};
+
+function _desktopSwitcherProviderLabel(id, catalog = []) {
+  return catalog.find((item) => item?.id === id)?.name || PROVIDER_LABELS[id] || id;
+}
+
+async function _desktopSwitcherModelsFor(provider, state) {
+  const models = [];
+  const add = (value) => {
+    const name = String(value?.name || value || '').trim();
+    if (name && !models.includes(name)) models.push(name);
+  };
+  const catalogItem = state.catalog.find((item) => item?.id === provider);
+  (catalogItem?.runtime?.options?.staticModels || []).forEach(add);
+  (AMD_STATIC_MODELS[provider] || DESKTOP_SWITCHER_EXTRA_MODELS[provider] || []).forEach(add);
+  add(state.llm?.providers?.[provider]?.model);
+  if (provider === state.provider) add(state.model);
+  if (provider === 'ollama') {
+    try { (await api('/api/ollama/models')).models?.forEach((item) => add(item?.name || item)); } catch {}
+  }
+  return models;
+}
+
+async function _loadDesktopSwitcherState() {
+  const [route, settings, catalogData, credentialData] = await Promise.all([
+    refreshActiveChatModelRoute(),
+    api('/api/settings/provider').catch(() => null),
+    api('/api/extensions/catalog?kind=provider').catch(() => null),
+    api('/api/settings/credentialed-model-providers').catch(() => null),
+  ]);
+  const llm = settings?.llm || window._llmSettingsCache || { provider: window._activeProvider || 'ollama', providers: {} };
+  const effective = route?.effective || {};
+  const provider = String(effective.providerId || window._activeProvider || llm.provider || 'ollama');
+  const model = String(effective.model || llm.providers?.[provider]?.model || window._activeModel || '');
+  const providerConfig = { ...(llm.providers?.[provider] || {}), model };
+  const credentialed = Array.isArray(credentialData?.providers) ? credentialData.providers.map(String) : [];
+  if (provider && !credentialed.includes(provider)) credentialed.unshift(provider);
+  const order = Object.keys({ ...AMD_STATIC_MODELS, ...DESKTOP_SWITCHER_EXTRA_MODELS, ollama: [], llama_cpp: [], lm_studio: [] });
+  credentialed.sort((a, b) => (order.indexOf(a) < 0 ? 99 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 99 : order.indexOf(b)));
+  return {
+    route, llm, catalog: Array.isArray(catalogData?.items) ? catalogData.items : [], credentialed,
+    provider, model, providerConfig,
+    reasoningEffort: String(effective.reasoningEffort ?? providerConfig.reasoning_effort ?? '').trim(),
+  };
+}
+
+function _desktopSwitcherShowDetail(title, body) {
+  const detail = document.getElementById('model-switcher-detail');
+  if (!detail) return;
+  detail.hidden = false;
+  detail.innerHTML = `<div class="model-switcher-detail-title">${escHtml(title)}</div><div class="model-switcher-options">${body}</div>`;
+}
+
+function _desktopSwitcherClearDetail() {
+  const detail = document.getElementById('model-switcher-detail');
+  if (!detail) return;
+  detail.hidden = true;
+  detail.innerHTML = '';
+}
+
+function _desktopSwitcherOption(label, value, selected, attrs = '') {
+  return `<button type="button" class="model-switcher-option${selected ? ' selected' : ''}" ${attrs}><span>${escHtml(label)}</span><span class="model-switcher-check">${selected ? '✓' : ''}</span>${value ? `<small>${escHtml(value)}</small>` : ''}</button>`;
+}
+
+function _renderDesktopSwitcherMain(state) {
+  const main = document.getElementById('model-switcher-main');
+  if (!main) return;
+  const levels = EFFORT_CAPABLE_PROVIDERS.has(state.provider) ? _effortLevelsForProvider(state.provider, state.model) : [];
+  const effort = levels.find((item) => item.v === state.reasoningEffort) || levels[0];
+  const source = state.route?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
+  main.innerHTML = `
+    <div class="model-switcher-heading">Chat settings</div>
+    <button type="button" class="model-switcher-row" data-switcher-view="providers"><span>Providers</span><strong>${escHtml(_desktopSwitcherProviderLabel(state.provider, state.catalog))}</strong><i>›</i></button>
+    <button type="button" class="model-switcher-row" data-switcher-view="models"><span>Model</span><strong>${escHtml(typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(state.model, state.provider) : state.model || 'Choose')}</strong><i>›</i></button>
+    <button type="button" class="model-switcher-row" data-switcher-view="effort" ${levels.length ? '' : 'disabled'}><span>Effort</span><strong>${escHtml(effort?.label || 'Default')}</strong><i>›</i></button>
+    <div class="model-switcher-source">${escHtml(source)}</div>
+    ${state.route?.mode === 'explicit' ? '<button type="button" class="model-switcher-default" data-switcher-view="default">Use Main Chat Default</button>' : ''}`;
+  main.querySelector('[data-switcher-view="providers"]')?.addEventListener('click', () => _renderDesktopSwitcherProviders(state));
+  main.querySelector('[data-switcher-view="models"]')?.addEventListener('click', () => _renderDesktopSwitcherModels(state, state.provider));
+  main.querySelector('[data-switcher-view="effort"]')?.addEventListener('click', () => _renderDesktopSwitcherEffort(state));
+  main.querySelector('[data-switcher-view="default"]')?.addEventListener('click', followMainChatDefault);
+}
+
+function _renderDesktopSwitcherQuick(state) {
+  const main = document.getElementById('model-switcher-main');
+  if (!main) return;
+  const levels = EFFORT_CAPABLE_PROVIDERS.has(state.provider) ? _effortLevelsForProvider(state.provider, state.model) : [];
+  const activeIndex = Math.max(0, levels.findIndex((item) => item.v === state.reasoningEffort));
+  const effortProgress = levels.length ? (((activeIndex + 0.5) / levels.length) * 100).toFixed(3) : 0;
+  const modelLabel = typeof window.formatModelDisplayName === 'function'
+    ? window.formatModelDisplayName(state.model, state.provider)
+    : state.model || 'Model';
+  main.innerHTML = `
+    <button type="button" class="model-switcher-advanced" data-switcher-advanced>Advanced <span>›</span></button>
+    ${levels.length ? `<div class="model-switcher-effort-slider" style="--effort-progress:${effortProgress}%" role="group" aria-label="Reasoning effort">${levels.map((level, index) => `<button type="button" class="model-switcher-effort-segment${index < activeIndex ? ' filled' : ''}${index === activeIndex ? ' active' : ''}" data-quick-effort="${escHtml(level.v)}" aria-label="${escHtml(level.label)}" aria-pressed="${index === activeIndex ? 'true' : 'false'}"><i></i></button>`).join('')}</div>` : '<div class="model-switcher-quick-empty">This model has no adjustable reasoning level.</div>'}
+    <div class="model-switcher-quick-label"><strong>${escHtml(modelLabel)}</strong><span>${escHtml(levels[activeIndex]?.label || 'Default')}</span><i>⌄</i></div>`;
+  const advancedButton = main.querySelector('[data-switcher-advanced]');
+  const openAdvanced = (event) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    _desktopSwitcherClearDetail();
+    _renderDesktopSwitcherMain(state);
+  };
+  // The composer has outside-click handling of its own. Open on pointer-down
+  // and suppress the follow-up click so that handler cannot consume Advanced
+  // before the panel is swapped. Keep click for keyboard activation.
+  advancedButton?.addEventListener('pointerdown', openAdvanced);
+  advancedButton?.addEventListener('click', openAdvanced);
+  const slider = main.querySelector('.model-switcher-effort-slider');
+  const quickEffortButtons = [...main.querySelectorAll('[data-quick-effort]')];
+  let previewIndex = activeIndex;
+  let isDragging = false;
+  let suppressPointerClick = false;
+  const updateEffortPreview = (index) => {
+    const nextIndex = Math.max(0, Math.min(levels.length - 1, index));
+    if (previewIndex === nextIndex) return;
+    previewIndex = nextIndex;
+    const progress = (((nextIndex + 0.5) / levels.length) * 100).toFixed(3);
+    if (slider) slider.style.setProperty('--effort-progress', `${progress}%`);
+    quickEffortButtons.forEach((button, buttonIndex) => {
+      const selected = buttonIndex === nextIndex;
+      button.classList.toggle('active', selected);
+      button.classList.toggle('filled', buttonIndex < nextIndex);
+      button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    });
+    const label = main.querySelector('.model-switcher-quick-label span');
+    if (label) label.textContent = levels[nextIndex]?.label || 'Default';
+  };
+  const effortIndexForPointer = (clientX) => {
+    if (!slider || levels.length < 2) return 0;
+    const rect = slider.getBoundingClientRect();
+    const progress = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+    return Math.round(progress * (levels.length - 1));
+  };
+  const saveQuickEffort = async (index) => {
+    const effort = levels[index]?.v || '';
+    if (!effort || index === activeIndex) return;
+    try {
+      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined });
+      _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState());
+    } catch (err) { showToast('Could not save reasoning effort', String(err?.message || err), 'error'); }
+  };
+  if (slider) {
+    slider.addEventListener('pointerdown', (event) => {
+      if (event.button != null && event.button !== 0) return;
+      event.preventDefault();
+      isDragging = true;
+      suppressPointerClick = true;
+      slider.classList.add('is-dragging');
+      slider.setPointerCapture?.(event.pointerId);
+      updateEffortPreview(effortIndexForPointer(event.clientX));
+    });
+    slider.addEventListener('pointermove', (event) => {
+      if (isDragging) updateEffortPreview(effortIndexForPointer(event.clientX));
+    });
+    slider.addEventListener('pointerup', async (event) => {
+      if (!isDragging) return;
+      isDragging = false;
+      slider.classList.remove('is-dragging');
+      if (slider.hasPointerCapture?.(event.pointerId)) slider.releasePointerCapture(event.pointerId);
+      await saveQuickEffort(previewIndex);
+    });
+    slider.addEventListener('pointercancel', (event) => {
+      if (!isDragging) return;
+      isDragging = false;
+      suppressPointerClick = false;
+      slider.classList.remove('is-dragging');
+      if (slider.hasPointerCapture?.(event.pointerId)) slider.releasePointerCapture(event.pointerId);
+      updateEffortPreview(activeIndex);
+    });
+  }
+  quickEffortButtons.forEach((button, index) => button.addEventListener('click', async (event) => {
+    if (suppressPointerClick) {
+      suppressPointerClick = false;
+      event.preventDefault();
+      return;
+    }
+    updateEffortPreview(index);
+    await saveQuickEffort(index);
+  }));
+}
+
+async function _renderDesktopSwitcherProviders(state) {
+  if (!state.credentialed.length) {
+    _desktopSwitcherShowDetail('Providers', '<div class="model-switcher-empty">No providers with saved credentials.</div>');
+    return;
+  }
+  _desktopSwitcherShowDetail('Providers', state.credentialed.map((id) => _desktopSwitcherOption(
+    _desktopSwitcherProviderLabel(id, state.catalog), '', id === state.provider, `data-switcher-provider="${escHtml(id)}"`,
+  )).join(''));
+  document.querySelectorAll('[data-switcher-provider]').forEach((button) => button.addEventListener('click', async () => {
+    const provider = button.getAttribute('data-switcher-provider') || '';
+    const models = await _desktopSwitcherModelsFor(provider, state);
+    const model = String(state.llm?.providers?.[provider]?.model || models[0] || '');
+    if (!model) return _renderDesktopSwitcherModels(state, provider);
+    try {
+      await setActiveChatModelRoute({ providerId: provider, model, reasoningEffort: undefined });
+      const next = await _loadDesktopSwitcherState();
+      _renderDesktopSwitcherMain(next);
+      _renderDesktopSwitcherModels(next, provider);
+    } catch (err) { showToast('Could not switch provider', String(err?.message || err), 'error'); }
+  }));
+}
+
+async function _renderDesktopSwitcherModels(state, provider) {
+  _desktopSwitcherShowDetail('Model', '<div class="model-switcher-empty">Loading models…</div>');
+  const models = await _desktopSwitcherModelsFor(provider, state);
+  _desktopSwitcherShowDetail('Model', models.length ? models.map((model) => _desktopSwitcherOption(
+    typeof window.formatModelDisplayName === 'function' ? window.formatModelDisplayName(model, provider) : model,
+    '', provider === state.provider && model === state.model, `data-switcher-model="${escHtml(model)}"`,
+  )).join('') : '<div class="model-switcher-empty">No models are available for this provider.</div>');
+  document.querySelectorAll('[data-switcher-model]').forEach((button) => button.addEventListener('click', async () => {
+    const model = button.getAttribute('data-switcher-model') || '';
+    if (!model) return;
+    try {
+      await setActiveChatModelRoute({ providerId: provider, model, reasoningEffort: provider === state.provider ? state.reasoningEffort || undefined : undefined });
+      const next = await _loadDesktopSwitcherState();
+      _renderDesktopSwitcherMain(next);
+      _renderDesktopSwitcherModels(next, provider);
+    } catch (err) { showToast('Could not switch model', String(err?.message || err), 'error'); }
+  }));
+}
+
+function _renderDesktopSwitcherEffort(state) {
+  const levels = _effortLevelsForProvider(state.provider, state.model);
+  _desktopSwitcherShowDetail('Effort', levels.map((level) => _desktopSwitcherOption(
+    level.label, level.desc, level.v === state.reasoningEffort, `data-switcher-effort="${escHtml(level.v)}"`,
+  )).join(''));
+  document.querySelectorAll('[data-switcher-effort]').forEach((button) => button.addEventListener('click', async () => {
+    const effort = button.getAttribute('data-switcher-effort') || '';
+    try {
+      await setActiveChatModelRoute({ providerId: state.provider, model: state.model, reasoningEffort: effort || undefined });
+      const next = await _loadDesktopSwitcherState();
+      _renderDesktopSwitcherMain(next);
+      _renderDesktopSwitcherEffort(next);
+    } catch (err) { showToast('Could not save reasoning effort', String(err?.message || err), 'error'); }
+  }));
+}
+
 async function toggleModelSwitcher() {
   const popover = document.getElementById('model-switcher-popover');
   if (!popover) return;
   _modelSwitcherOpen = !_modelSwitcherOpen;
-  if (!_modelSwitcherOpen) { popover.style.display = 'none'; return; }
-  popover.style.display = 'block';
-  const listEl = document.getElementById('model-switcher-list');
-  const titleEl = popover.querySelector('div[style*="text-transform:uppercase"]');
-  listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px">Loading...</div>';
-
-  const chatRoute = await refreshActiveChatModelRoute();
-  const provider = chatRoute?.effective?.providerId || window._activeProvider || 'ollama';
-  const follow = document.getElementById('model-switcher-follow-default');
-  if (follow) follow.onclick = followMainChatDefault;
-
-  if (LOCAL_PROVIDERS.has(provider)) {
-    if (titleEl) titleEl.textContent = 'Switch Model';
-    try {
-      const data = await api('/api/ollama/models');
-      const models = (data.models || []).map(m => m.name || m);
-      const current = document.getElementById('chat-model-name')?.textContent || '';
-      if (models.length === 0) {
-        listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px">No models found.</div>';
-        return;
-      }
-      listEl.innerHTML = models.map(m => `
-        <button onclick="switchModel('${escHtml(m)}')" style="text-align:left;background:${m === current ? 'var(--brand)' : 'transparent'};color:${m === current ? '#fff' : 'var(--text)'};border:1px solid ${m === current ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;transition:background 0.1s">${escHtml(m)}</button>
-      `).join('');
-    } catch {
-      listEl.innerHTML = '<div style="font-size:11px;color:var(--err);padding:4px">Failed to load models.</div>';
-    }
-    return;
-  }
-
-  if (EFFORT_CAPABLE_PROVIDERS.has(provider)) {
-    const llm = await api('/api/settings/provider').then(data => data?.llm || null).catch(() => null);
-    if (titleEl) titleEl.textContent = 'Reasoning Effort';
-    const model = _activeModelForProvider(provider, llm);
-    if (provider === 'anthropic' && !_supportsAnthropicEffort(model)) {
-      window.reasoningLevel = '';
-      listEl.innerHTML = `
-        <div style="border:1px solid var(--line);border-radius:8px;padding:9px 10px;background:var(--panel-2);color:var(--muted);font-size:12px;line-height:1.45">
-          <div style="font-weight:700;color:var(--text);margin-bottom:3px">Provider Default</div>
-          <div>${escHtml(model || 'This Claude model')} does not expose configurable thinking effort.</div>
-        </div>
-      `;
-      return;
-    }
-    const levels = _effortLevelsForProvider(provider, model);
-    const current = String(chatRoute?.effective?.reasoningEffort || window.reasoningLevel || '');
-    listEl.innerHTML = levels.map(l => `
-      <button onclick="setReasoningLevel('${l.v}')" style="text-align:left;background:${l.v === current ? 'var(--brand)' : 'transparent'};color:${l.v === current ? '#fff' : 'var(--text)'};border:1px solid ${l.v === current ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;transition:background 0.1s">
-        <div style="font-weight:600">${escHtml(l.label)}</div>
-        <div style="font-size:10px;opacity:0.75">${escHtml(l.desc)}</div>
-      </button>
-    `).join('');
-    return;
-  }
-
-  if (THINKING_CAPABLE_PROVIDERS.has(provider)) {
-    await refreshReasoningPrefsFromSettings(provider);
-    if (titleEl) titleEl.textContent = 'Extended Thinking';
-    const enabled = window.anthropicExtendedThinking !== false;
-    const budget = window.anthropicThinkingBudget || 10000;
-    const budgets = [2048, 5000, 10000, 16000, 24000, 32000];
-    listEl.innerHTML = `
-      <button onclick="setAnthropicThinking(${!enabled})" style="text-align:left;background:${enabled ? 'var(--brand)' : 'transparent'};color:${enabled ? '#fff' : 'var(--text)'};border:1px solid ${enabled ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;margin-bottom:6px">
-        ${enabled ? 'Extended Thinking: ON' : 'Extended Thinking: OFF'}
-      </button>
-      <div style="font-size:10px;color:var(--muted);margin-bottom:4px">Budget (tokens)</div>
-      ${budgets.map(b => `
-        <button onclick="setAnthropicBudget(${b})" style="text-align:left;background:${b === budget ? 'var(--brand)' : 'transparent'};color:${b === budget ? '#fff' : 'var(--text)'};border:1px solid ${b === budget ? 'var(--brand)' : 'var(--line)'};border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;cursor:pointer;width:100%;margin-bottom:4px">${b.toLocaleString()} tokens</button>
-      `).join('')}
-    `;
-    return;
-  }
-
-  if (titleEl) titleEl.textContent = 'Model';
-  listEl.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px">No options for this provider.</div>';
+  if (!_modelSwitcherOpen) { _closeModelSwitcher(); return; }
+  popover.style.display = 'flex';
+  _desktopSwitcherClearDetail();
+  const main = document.getElementById('model-switcher-main');
+  if (main) main.innerHTML = '<div class="model-switcher-loading">Loading controls…</div>';
+  try { _renderDesktopSwitcherQuick(await _loadDesktopSwitcherState()); }
+  catch (err) { if (main) main.innerHTML = `<div class="model-switcher-empty">${escHtml(String(err?.message || 'Could not load model controls.'))}</div>`; }
 }
 
 function _closeModelSwitcher() {
@@ -6857,24 +7245,32 @@ async function checkStatus() {
 	    const backendOnline = isCloud ? true : (status.providerOnline !== undefined ? !!status.providerOnline : !!status.ollama);
 	    dot.className = providerChecking ? 'dot' : 'dot ' + (backendOnline ? 'online' : 'offline');
 	    document.getElementById('ollama-status').textContent = providerChecking
-	      ? `${providerLabel} Checking...`
-	      : (backendOnline ? `${providerLabel} Online` : `${providerLabel} Offline`);
+	      ? 'Checking...'
+	      : (backendOnline ? 'Online' : 'Offline');
 	    const ro = document.getElementById('r-ollama');
 	    if (ro) {
 	      ro.textContent = providerChecking ? 'Checking...' : (backendOnline ? 'Online' : 'Offline');
 	      ro.className = 'info-val ' + (providerChecking ? '' : (backendOnline ? 'green' : 'red'));
 	    }
 
-    const modelName = status.currentModel || '-';
-	    const reasoningEffort = String(status.reasoningEffort || '').trim();
+    // The status endpoint reports the global default. Keep an explicit
+    // per-chat route authoritative so its reasoning label cannot flicker away
+    // whenever the periodic status refresh runs.
+    const activeRoute = String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || '')
+      ? window._activeChatModelRoute?.effective
+      : null;
+    const modelName = String(activeRoute?.model || status.currentModel || '-');
+	    const displayProvider = String(activeRoute?.providerId || provider);
+	    const reasoningEffort = String(activeRoute?.reasoningEffort ?? status.reasoningEffort ?? '').trim();
+	    window._activeProvider = displayProvider;
 	    window._activeModel = modelName;
-	    _renderActiveModelLabels(modelName, provider, reasoningEffort);
+	    _renderActiveModelLabels(modelName, displayProvider, reasoningEffort);
 	    const badge = document.getElementById('current-provider-badge');
 	    if (badge) badge.textContent = isCloud ? providerLabel.toUpperCase() : '';
 	    const cpn = document.getElementById('chat-provider-name');
 	    if (cpn) cpn.textContent = providerLabel;
       if (typeof window.refreshChatContextWindow === 'function') window.refreshChatContextWindow().catch(() => {});
-      if (window._llmSettingsCache) applyReasoningPrefsFromProviderConfig(window._llmSettingsCache, provider);
+      if (window._llmSettingsCache && !activeRoute) applyReasoningPrefsFromProviderConfig(window._llmSettingsCache, provider);
       lastStatusOkAt = Date.now();
 	  } catch {
     if (lastStatusOkAt && (window.isThinking || Date.now() - lastStatusOkAt < 60_000)) return;
@@ -7352,8 +7748,17 @@ let currentAbortController = null;
 let stopGenerationReconcileTimer = null;
 
 function handleSendStop() {
-  if (window._sessionThinking?.[window.activeChatSessionId]) stopGeneration();
-  else { (window.sendChat || sendChat)(); }
+  if (window.isDesktopComposerTurnActive?.() || window._sessionThinking?.[window.activeChatSessionId]) {
+    stopGeneration();
+    return;
+  }
+  const input = document.getElementById('chat-input');
+  if (!(input?.value || '').trim() && !window.hasDesktopComposerOutboundContent?.()) {
+    window.toggleVoiceDictation?.();
+    return;
+  }
+  window.stopComposerTranscription?.({ refocus: false });
+  (window.sendChat || sendChat)();
 }
 
 function finishStoppedGenerationUI(sessionId) {
@@ -7451,21 +7856,14 @@ function stopGeneration() {
 }
 
 function setButtonState(thinking) {
-  const sendIcon = document.getElementById('send-icon');
-  const stopIcon = document.getElementById('stop-icon');
   const btn = document.getElementById('send-btn');
   if (!btn) return;
-  if (thinking) {
-    if (sendIcon) sendIcon.style.display = 'none';
-    if (stopIcon) stopIcon.style.display = '';
-    btn.style.background = 'var(--err)';
-    btn.title = 'Stop generation';
-  } else {
-    if (sendIcon) sendIcon.style.display = '';
-    if (stopIcon) stopIcon.style.display = 'none';
-    btn.style.background = '';
-    btn.title = 'Send';
+  btn.dataset.thinking = thinking ? 'true' : 'false';
+  if (typeof window.updateDesktopComposerSendButton === 'function') {
+    window.updateDesktopComposerSendButton();
+    return;
   }
+  btn.title = thinking ? 'Stop generation' : 'Send';
 }
 
 // ── Canvas Panel + File Upload + Context Pinning — EXTRACTED to ChatPage.js (F3f) ──
@@ -7899,6 +8297,7 @@ let _errBackdrop = null;
     './static/api.js',
     './static/utils.js',
     './static/ws.js',
+    './static/pages/ProjectsPage.js',
     './static/app.js?v=desktop-chat-welcome-cinzel-v4',
   ];
   const mobileSurface = document.body.classList.contains('pm-mobile-active')
@@ -8065,7 +8464,11 @@ let _errBackdrop = null;
       const browserActive = document.body?.classList.contains('browser-surface-active');
       const minW = browserActive ? 620 : 280;
       const maxRatio = browserActive ? 0.5 : (canvasActive ? 0.68 : 0.52);
-      const maxW = viewportWidth ? Math.max(minW, Math.floor(viewportWidth * maxRatio)) : 900;
+      const ratioMaxW = viewportWidth ? Math.floor(viewportWidth * maxRatio) : 900;
+      const canvasMaxW = canvasActive && typeof window.getCanvasPanelMaximumWidth === 'function'
+        ? Number(window.getCanvasPanelMaximumWidth())
+        : Number.POSITIVE_INFINITY;
+      const maxW = Math.max(minW, Math.min(ratioMaxW, canvasMaxW));
       const newW = Math.max(minW, Math.min(maxW, startW + delta));
       rightPanel.style.width = newW + 'px';
       rightPanel.style.minWidth = newW + 'px';

@@ -855,7 +855,7 @@ function toggleCredVis(inputId, btn) {
 // --- Provider-aware Model Settings ------------------------------------------
 
 const BUILTIN_PROVIDER_IDS = ['ollama', 'llama_cpp', 'lm_studio', 'openai', 'openai_codex', 'anthropic', 'perplexity', 'gemini'];
-const ACCOUNT_AWARE_PROVIDER_IDS = new Set(['xai', 'openai_codex', 'anthropic']);
+const ACCOUNT_AWARE_PROVIDER_IDS = new Set(['openai', 'xai', 'openai_codex', 'anthropic']);
 const BUILTIN_STATIC_MODEL_FALLBACKS = {
   openai: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-pro', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-chat-latest', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'o4-mini', 'o3', 'o1'],
   openai_codex: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-codex', 'gpt-5.4-codex-mini', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.3', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini', 'gpt-5.1-codex', 'gpt-5.1'],
@@ -1012,8 +1012,8 @@ function normalizeProviderAccountsForUI(providerId, providerConfig) {
   const accounts = rawAccounts && Object.keys(rawAccounts).length ? rawAccounts : {
     default: {
       id: 'default',
-      label: providerId === 'xai' ? 'xAI account' : providerId === 'anthropic' ? 'Claude account' : 'Codex account',
-      authType: providerId === 'xai' ? (cfg.auth_mode || 'api_key') : providerId === 'anthropic' ? 'setup_token' : 'oauth',
+      label: providerId === 'openai' ? 'OpenAI API account' : providerId === 'xai' ? 'xAI account' : providerId === 'anthropic' ? 'Claude account' : 'Codex account',
+      authType: providerId === 'openai' || providerId === 'xai' ? (cfg.auth_mode || 'api_key') : providerId === 'anthropic' ? 'setup_token' : 'oauth',
       status: 'connected',
       ...(cfg.api_key ? { api_key: cfg.api_key } : {}),
     },
@@ -1062,6 +1062,9 @@ function onProviderAccountChange(providerId) {
     writeProviderFieldElementValue('xai', 'api_key', account.api_key || '');
     syncXaiAuthModeVisibility();
     refreshXaiStatus().catch(() => {});
+  } else if (providerId === 'openai' && account) {
+    const apiKey = document.getElementById('settings-openai-key');
+    if (apiKey) apiKey.value = account.api_key || '';
   } else if (providerId === 'openai_codex') {
     refreshCodexStatus().catch(() => {});
   } else if (providerId === 'anthropic') {
@@ -1078,8 +1081,8 @@ function addProviderAccount(providerId) {
   const id = `${providerId}_${Date.now().toString(36)}`;
   accounts[id] = {
     id,
-    label: providerId === 'xai' ? 'New xAI account' : providerId === 'anthropic' ? 'New Claude account' : 'New Codex account',
-    authType: providerId === 'xai' ? 'api_key' : providerId === 'anthropic' ? 'setup_token' : 'oauth',
+    label: providerId === 'openai' ? 'New OpenAI API account' : providerId === 'xai' ? 'New xAI account' : providerId === 'anthropic' ? 'New Claude account' : 'New Codex account',
+    authType: providerId === 'openai' || providerId === 'xai' ? 'api_key' : providerId === 'anthropic' ? 'setup_token' : 'oauth',
     status: 'disconnected',
   };
   cache.providers[providerId] = { ...cfg, accounts, defaultAccountId: id };
@@ -1108,6 +1111,7 @@ function renderProviderAccountControls(provider) {
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
       <button class="btn btn-sm" onclick="addProviderAccount('${provider.id}')" style="background:#fff;border:1px solid var(--line);color:var(--text)">Add Account</button>
     </div>
+    <div style="margin-top:7px;font-size:11px;color:var(--muted)">The selected account becomes active for this provider when you save Settings.</div>
   </div>`;
 }
 
@@ -1143,6 +1147,8 @@ function applyDynamicProviderConfig(providerId, providerConfig) {
       if (providerId === 'xai') {
         merged.auth_mode = account.authType === 'oauth' ? 'oauth' : 'api_key';
         if (account.api_key) merged.api_key = account.api_key;
+      } else if (providerId === 'openai' && account.api_key) {
+        merged.api_key = account.api_key;
       }
       syncProviderAccountLabel(providerId);
     }
@@ -1410,7 +1416,7 @@ function setVisibleProviderPanel(providerId) {
 }
 
 function hydrateBuiltInProviderAccountControls() {
-  for (const providerId of ['openai_codex', 'anthropic']) {
+  for (const providerId of ['openai', 'openai_codex', 'anthropic']) {
     const panel = document.getElementById(getProviderPanelId(providerId));
     if (!panel) continue;
     panel.querySelector('.settings-provider-account-panel')?.remove();
@@ -1661,16 +1667,23 @@ async function renderModelsUsage() {
   const byId = {};
   try {
     const r = await api('/api/usage/limits', { timeoutMs: 30000 });
-    (r && Array.isArray(r.providers) ? r.providers : []).forEach(p => { byId[p.provider] = p; });
+    (r && Array.isArray(r.providers) ? r.providers : []).forEach(p => {
+      if (!byId[p.provider]) byId[p.provider] = [];
+      byId[p.provider].push(p);
+    });
   } catch { /* fall through to no-data cards */ }
 
   const mainId = (document.getElementById('amd-main-chat-prov') || {}).value || window._llmSettingsCache?.provider || '';
-  const cards = inUse.map(id => {
+  const mainAccountId = String(window._llmSettingsCache?.accountId || getProviderConfigFromCache(mainId)?.defaultAccountId || '').trim();
+  const cards = inUse.flatMap(id => {
     const isPrimary = id === mainId;
-    const data = byId[id];
-    if (data) {
-      const html = renderProviderUsageCard(data);
-      return isPrimary ? html.replace('usage-provider-card"', 'usage-provider-card is-primary"') : html;
+    const entries = byId[id] || [];
+    if (entries.length) {
+      return entries.map(data => {
+        const html = renderProviderUsageCard(data);
+        const isPrimaryAccount = isPrimary && (!data.account_id || data.account_id === mainAccountId);
+        return isPrimaryAccount ? html.replace('usage-provider-card"', 'usage-provider-card is-primary"') : html;
+      });
     }
     // Assigned but no saved credentials → minimal informational card.
     return `<div class="usage-provider-card${isPrimary ? ' is-primary' : ''}">
@@ -2025,13 +2038,23 @@ function buildProviderPayload(providerOverride) {
         defaultAccountId: selected,
         accounts,
       };
+    } else if (providerId === 'openai') {
+      const key = String(document.getElementById('settings-openai-key')?.value || '').trim();
+      accounts[selected].authType = 'api_key';
+      if (key || accounts[selected].api_key) accounts[selected].api_key = key || accounts[selected].api_key;
+      providers.openai = {
+        ...(providers.openai || {}),
+        api_key: key || providers.openai?.api_key || '',
+        defaultAccountId: selected,
+        accounts,
+      };
     } else if (providerId === 'openai_codex') {
       providers.openai_codex = { ...(providers.openai_codex || {}), defaultAccountId: selected, accounts };
     } else if (providerId === 'anthropic') {
       providers.anthropic = { ...(providers.anthropic || {}), defaultAccountId: selected, accounts };
     }
   };
-  ['xai', 'openai_codex', 'anthropic'].forEach(applyAccountState);
+  ['openai', 'xai', 'openai_codex', 'anthropic'].forEach(applyAccountState);
   const activeAccount = providers[provider]?.defaultAccountId || '';
   return { provider, accountId: activeAccount, providers };
 }

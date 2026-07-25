@@ -3,7 +3,14 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 const root = path.join(__dirname, '..');
 const entry = path.join(root, 'src', 'cli', 'index.ts');
-const tsx = path.join(root, 'node_modules', '.bin', 'tsx.cmd');
+const tsx = (() => {
+  const binDir = path.join(root, 'node_modules', '.bin');
+  const unix = path.join(binDir, 'tsx');
+  const windows = path.join(binDir, 'tsx.cmd');
+  if (require('fs').existsSync(unix)) return unix;
+  if (require('fs').existsSync(windows)) return windows;
+  return unix;
+})();
 
 const result = spawnSync(tsx, [entry, ...process.argv.slice(2)], {
   stdio: 'inherit',

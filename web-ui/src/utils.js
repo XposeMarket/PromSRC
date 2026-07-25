@@ -66,13 +66,23 @@ export function setMeter(id, pct) {
 
 // ─── Toast / Confirm ──────────────────────────────────────────
 
-export function showToast(title, body, type = 'info', duration = 5000) {
+export function showToast(title, body, type = 'info', duration = 5000, options = {}) {
+  // A keyed toast is a single, replaceable status surface.  Long-running flows
+  // (voice startup is the main example) can move through several states without
+  // leaving each intermediate state stacked on screen.
+  const key = typeof options?.key === 'string' ? options.key.trim() : '';
+  if (key) {
+    for (const existing of document.querySelectorAll('.__sc-toast')) {
+      if (existing.dataset.scToastKey === key) existing.remove();
+    }
+  }
   const normalizedType = type === 'warn' ? 'warning' : (['info', 'success', 'error', 'warning'].includes(type) ? type : 'info');
   const icons = { info: '\u2139\uFE0F', success: '\u2713', error: '\u26A0\uFE0F', warning: '\u26A0\uFE0F' };
   const toast = document.createElement('div');
   const existing = document.querySelectorAll('.__sc-toast');
   const offset = 24 + [...existing].reduce((sum, t) => sum + t.offsetHeight + 8, 0);
   toast.className = `__sc-toast __sc-toast--${normalizedType}`;
+  if (key) toast.dataset.scToastKey = key;
   toast.style.cssText = `position:fixed;bottom:${offset}px;right:24px;z-index:99999;`;
   toast.innerHTML = `
     <span class="__sc-toast-icon" aria-hidden="true">${icons[normalizedType]}</span>

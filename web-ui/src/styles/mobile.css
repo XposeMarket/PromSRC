@@ -3813,31 +3813,17 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   margin-bottom: 10px;
 }
 .pm-msg.from-user { align-self: flex-end; align-items: flex-end; }
-.pm-msg.workflow-linked {
-  position: relative;
-}
-.pm-msg.workflow-linked::before {
-  content: "";
-  position: absolute;
-  top: -14px;
-  bottom: -14px;
-  width: 2px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--pm-orange) 12%, transparent), color-mix(in srgb, var(--pm-orange) 72%, transparent), color-mix(in srgb, var(--pm-orange) 12%, transparent));
-}
-.pm-msg.from-ai.workflow-linked::before { left: -12px; }
-.pm-msg.from-user.workflow-linked::before { right: -12px; }
-.pm-workflow-chip {
+.pm-workflow-transition-label {
   max-width: 100%;
-  border: 1px solid color-mix(in srgb, var(--pm-orange) 25%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--pm-orange) 10%, transparent);
   color: var(--pm-muted);
-  padding: 3px 8px;
-  font-size: 10px;
-  font-weight: 900;
-  line-height: 1;
-  text-transform: uppercase;
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.pm-msg.from-user .pm-workflow-transition-label {
+  align-self: flex-end;
+  text-align: right;
 }
 .pm-bubble {
   background: var(--pm-surface);
@@ -8373,6 +8359,9 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--pm-orange) 68%, transparent) transparent;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
   gap: 6px;
@@ -8382,6 +8371,14 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   border-radius: 16px;
   box-shadow: var(--pm-shadow-md);
   z-index: 8;
+}
+.pm-chat-slash-popover::-webkit-scrollbar { width: 6px; }
+.pm-chat-slash-popover::-webkit-scrollbar-track { background: transparent; }
+.pm-chat-slash-popover::-webkit-scrollbar-thumb {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-orange) 68%, transparent);
+  background-clip: padding-box;
 }
 .pm-chat-slash-popover[hidden] { display: none; }
 .pm-composer .pm-skill-trigger-pill {

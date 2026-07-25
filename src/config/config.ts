@@ -482,6 +482,33 @@ function isStaleWindowsPath(p: string): boolean {
   return /^[A-Za-z]:[\\]/.test(String(p || ''));
 }
 
+// A persisted macOS/Linux path is not meaningful on Windows. Treat the common
+// home/system roots as stale instead of resolving (for example) "/Users/alice"
+// under the current drive. The inverse Windows-on-Unix case is handled above.
+function isStalePosixPath(p: string): boolean {
+  if (process.platform !== 'win32') return false;
+  return /^\/(?:users|home|private|var|opt)(?:\/|$)/i.test(String(p || '').replace(/\\/g, '/'));
+}
+
+function expandHomePath(rawPath: string): string {
+  const value = String(rawPath || '').trim();
+  if (value === '~') return os.homedir();
+  if (/^~[\\/]/.test(value)) return path.join(os.homedir(), value.slice(2));
+  return value;
+}
+
+/**
+ * Configuration is durable, while cwd is not: packaged Electron, a terminal
+ * install, and a fresh checkout all have different working directories. Make
+ * every persisted filesystem path absolute against the stable config directory
+ * and reject paths clearly copied from a different operating system.
+ */
+function resolvePortableConfigPath(rawPath: unknown, fallback: string): string {
+  const raw = expandHomePath(String(rawPath || '').trim().replace(/^file:\/\//i, ''));
+  if (!raw || isStaleWindowsPath(raw) || isStalePosixPath(raw)) return path.resolve(fallback);
+  return path.resolve(path.isAbsolute(raw) ? raw : path.join(CONFIG_DIR, raw));
+}
+
 // Replace a stale Windows path with a sensible cross-platform fallback.
 // workspace → WORKSPACE_DIR, skills → WORKSPACE_DIR/skills, memory → CONFIG_DIR/memory,
 // everything else → WORKSPACE_DIR (safe catch-all).
@@ -490,6 +517,45 @@ function resolveStaleWindowsPath(p: string): string {
   if (lp.includes('skill')) return path.join(WORKSPACE_DIR, 'skills');
   if (lp.includes('memory')) return path.join(CONFIG_DIR, 'memory');
   return WORKSPACE_DIR;
+}
+
+function normalizeRuntimePathsInConfig(config: PrometheusConfig): PrometheusConfig {
+  const workspacePath = resolvePortableConfigPath(config?.workspace?.path, WORKSPACE_DIR);
+  const skillsPath = resolvePortableConfigPath(config?.skills?.directory, path.join(workspacePath, 'skills'));
+  const memoryPath = resolvePortableConfigPath(config?.memory?.path, path.join(CONFIG_DIR, 'memory'));
+  const filePermissions = (config as any)?.tools?.permissions?.files || {};
+  const rawAllowedPaths = Array.isArray(filePermissions.allowed_paths)
+    ? filePermissions.allowed_paths.map((candidate: unknown) => resolvePortableConfigPath(candidate, workspacePath))
+    : [];
+  const allowedPaths = normalizeConfiguredPathList(rawAllowedPaths, {
+    ensureIncludes: [workspacePath],
+    fallback: [workspacePath],
+  });
+  const rawBlockedPaths = Array.isArray(filePermissions.blocked_paths)
+    ? filePermissions.blocked_paths.map((candidate: unknown) => resolvePortableConfigPath(candidate, workspacePath))
+    : [];
+  const blockedPaths = normalizeConfiguredPathList(rawBlockedPaths);
+
+  return {
+    ...config,
+    workspace: { ...(config.workspace || {}), path: workspacePath },
+    skills: { ...(config.skills || {}), directory: skillsPath },
+    memory: { ...(config.memory || {}), path: memoryPath },
+    tools: {
+      ...(config.tools || {}),
+      permissions: {
+        ...((config.tools as any)?.permissions || {}),
+        files: {
+          ...filePermissions,
+          allowed_paths: normalizeConfiguredPathList(allowedPaths, {
+            ensureIncludes: [workspacePath],
+            fallback: [workspacePath],
+          }),
+          blocked_paths: normalizeConfiguredPathList(blockedPaths),
+        },
+      },
+    },
+  } as PrometheusConfig;
 }
 
 function normalizeLegacyPathsInConfig(loaded: any): any {
@@ -545,7 +611,7 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
   if (out?.tools?.permissions?.files) {
     const currentAllowed = Array.isArray(out.tools.permissions.files.allowed_paths)
       ? out.tools.permissions.files.allowed_paths.map(
-          (p: string) => isStaleWindowsPath(p) ? WORKSPACE_DIR : p,
+          (p: string) => resolvePortableConfigPath(isStaleWindowsPath(p) ? WORKSPACE_DIR : p, WORKSPACE_DIR),
         )
       : [];
     out.tools.permissions.files.allowed_paths = normalizeConfiguredPathList(currentAllowed, {
@@ -555,7 +621,10 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
 
     const currentBlocked = Array.isArray(out.tools.permissions.files.blocked_paths)
       ? out.tools.permissions.files.blocked_paths.map(
-          (p: string) => isStaleWindowsPath(p) ? resolveStaleWindowsPath(p) : p,
+          (p: string) => resolvePortableConfigPath(
+            isStaleWindowsPath(p) ? resolveStaleWindowsPath(p) : p,
+            WORKSPACE_DIR,
+          ),
         )
       : [];
     out.tools.permissions.files.blocked_paths = normalizeConfiguredPathList(currentBlocked);
@@ -840,20 +909,22 @@ export class ConfigManager {
           tools: mergedTools,
         };
 
+        const normalized = normalizeRuntimePathsInConfig(merged);
+
 
         // Zod validation — warn on bad fields but never crash startup
-        const errors = getConfigErrors(merged);
+        const errors = getConfigErrors(normalized);
         if (errors.length > 0) {
           console.warn('[Config] Validation warnings (non-fatal):');
           errors.forEach(e => console.warn('  ⚠️', e));
         }
 
-        return merged;
+        return normalized;
       }
     } catch (error) {
       console.warn('Failed to load config, using defaults:', error);
     }
-    return DEFAULT_CONFIG;
+    return normalizeRuntimePathsInConfig(DEFAULT_CONFIG);
   }
 
   public getConfig(): PrometheusConfig {
@@ -1052,4 +1123,3 @@ export function ensureAgentWorkspace(agent: AgentDefinition): string {
   }
   return ws;
 }
-

@@ -454,7 +454,7 @@ body.right-canvas-open .page-title {
   flex-direction: column;
   gap: 8px;
   padding: 10px 8px 6px;
-  border-bottom: 1px solid rgba(249,115,22,0.10);
+  border-bottom: 0;
 }
 
 /* Scrollable body */
@@ -468,10 +468,79 @@ body.right-canvas-open .page-title {
   flex-direction: column;
   gap: 8px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(249,115,22,0.35) transparent;
+  scrollbar-color: color-mix(in srgb, var(--brand) 38%, transparent) transparent;
 }
 .sidebar-scroll::-webkit-scrollbar { width: 4px; }
-.sidebar-scroll::-webkit-scrollbar-thumb { background: rgba(249,115,22,0.35); border-radius: 999px; }
+.sidebar-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--brand) 38%, transparent); border-radius: 999px; }
+
+/* The separator doubles as a discreet Pages toggle. In the normal state it
+   remains just the original rule; when collapsed it becomes a session-tab-sized
+   control so the sessions list can move up without changing the rest of the UI. */
+.sidebar-pages-toggle {
+  position: relative;
+  flex: 0 0 auto;
+  width: calc(100% + 16px);
+  height: 8px;
+  margin: -8px -8px -8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sidebar-text);
+  cursor: pointer;
+}
+.sidebar-pages-toggle::before {
+  content: '';
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 1px;
+  background: rgba(249,115,22,0.10);
+}
+.sidebar-pages-toggle :is(span, svg) { display: none; }
+.sidebar-pages-toggle:focus-visible { outline: none; }
+.sidebar-pages-toggle:focus-visible::before { height: 2px; background: var(--flame-border); }
+
+.sidebar.pages-collapsed .sidebar-pages-toggle {
+  display: grid;
+  align-items: center;
+  /* Hold the rule at the same x-position as the Sessions heading below.
+     "Pages" is shorter, so an auto-sized first column made its rule begin
+     noticeably too early. */
+  grid-template-columns: 74px minmax(0, 1fr) auto;
+  gap: 9px;
+  width: 100%;
+  min-height: 18px;
+  height: auto;
+  margin: 0;
+  padding: 5px 3px 3px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--p1-gold-muted, var(--pm-gold, var(--sidebar-muted)));
+  font: 700 9px/1 Georgia, 'Times New Roman', serif;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  text-align: left;
+}
+.sidebar.pages-collapsed .sidebar-pages-toggle::before {
+  position: static;
+  display: block;
+  grid-column: 2;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pm-gold, var(--brand)) 42%, transparent), transparent 84%);
+}
+.sidebar.pages-collapsed .sidebar-pages-toggle :is(span, svg) { display: block; }
+.sidebar.pages-collapsed .sidebar-pages-toggle span { grid-column: 1; }
+.sidebar.pages-collapsed .sidebar-pages-toggle svg {
+  grid-column: 3;
+  color: var(--pm-gold, var(--brand));
+  letter-spacing: 0;
+  transition: transform .18s ease, color .15s ease;
+}
+.sidebar.pages-collapsed .sidebar-pages-toggle:hover { color: var(--pm-gold, var(--brand)); }
+.sidebar.pages-collapsed .sidebar-pages-toggle:hover svg { color: var(--p1-gold-light, var(--pm-gold, var(--brand))); }
+.sidebar.pages-collapsed .nav-group { display: none; }
+.sidebar.collapsed .sidebar-pages-toggle { display: none; }
 
 .sidebar-top {
   display: flex;
@@ -880,6 +949,15 @@ main,
 }
 .right-panel.open.canvas-open {
   overflow: hidden;
+}
+.right-panel {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--brand) 38%, transparent) transparent;
+}
+.right-panel::-webkit-scrollbar { width: 4px; }
+.right-panel::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--brand) 38%, transparent);
+  border-radius: 999px;
 }
 .right-panel.open.canvas-open > *:not(#canvas-panel):not(.rp-resize-handle) {
   display: none !important;

@@ -1920,7 +1920,7 @@ function _appendMobileQueuedSteerTurn(sessionId, message, data = {}) {
     content: text,
     workflowGroupId,
     workflowPart: 'interruption',
-    workflowLabel: 'Steer',
+    workflowLabel: 'Message sent as steer',
   });
   if (latestAi) {
     const continuationTurn = {
@@ -6849,8 +6849,20 @@ function _renderMobileVoiceLyrics(text = '', progress = 0, options = {}) {
   return `<div class="pm-voice-chat-lyrics${options.standalone ? ' pm-voice-page-lyrics' : ''}">${html}</div>`;
 }
 
+function _mobileWorkflowTransitionLabel(message) {
+  const groupId = String(message?.workflowGroupId || '');
+  if (/^chat_steer_/i.test(groupId)) {
+    const part = String(message?.workflowPart || '');
+    if (part === 'before_interruption') return 'Tool stream before steer';
+    if (part === 'interruption') return 'Message sent as steer';
+    if (part === 'interruption_response') return 'Response after steer';
+  }
+  return String(message?.workflowLabel || '').trim();
+}
+
 function _renderChatMessageHtml(m, index = -1) {
   const msgIndex = Number.isFinite(Number(index)) ? Number(index) : -1;
+  const workflowLabel = _mobileWorkflowTransitionLabel(m);
   const attachments = Array.isArray(m.body?.attachments) ? m.body.attachments : [];
   const attachmentHtml = attachments.length ? _renderChatAttachmentPreviews(attachments, false) : '';
   const revealTime = m.time ? `<span class="pm-reveal-time" aria-hidden="true">${escapeHtml(m.time)}</span>` : '';
@@ -6862,8 +6874,8 @@ function _renderChatMessageHtml(m, index = -1) {
     const contentHtml = isEditing
       ? _renderMobileUserEditComposer(m, msgIndex, attachmentHtml)
       : `<div class="pm-bubble">${isWorkerHandoff ? '<span class="pm-sender pm-handoff-sender">Voice Agent to Worker</span>' : ''}<div class="markdown-body">${_renderMobileSkillReferencedMarkdown(m.body.text, m.body.selectedSkillRefs || m.selectedSkillRefs)}</div>${attachmentHtml}</div>`;
-    return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}">
-      ${m.workflowLabel && !isWorkerHandoff ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
+    return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}">
+      ${workflowLabel && !isWorkerHandoff ? `<div class="pm-workflow-transition-label">${escapeHtml(workflowLabel)}</div>` : ''}
       ${contentHtml}${isEditing ? '' : _renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
   }
   const b = m.body || {};
@@ -6977,8 +6989,8 @@ function _renderChatMessageHtml(m, index = -1) {
   inner += _renderMobileThreadLinkArtifacts(m);
   inner += _renderMobileGoalCompletionReport(m.goalCompletionReport);
   if (inner.endsWith(statusDividerHtml)) inner = inner.slice(0, -statusDividerHtml.length);
-  return `<div class="pm-msg from-ai${m.workflowGroupId ? ' workflow-linked' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}"${m.streaming ? ' data-streaming="1"' : ''}>
-    ${m.workflowLabel ? `<div class="pm-workflow-chip">${escapeHtml(m.workflowLabel)}</div>` : ''}
+  return `<div class="pm-msg from-ai${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}"${m.streaming ? ' data-streaming="1"' : ''}>
+    ${workflowLabel ? `<div class="pm-workflow-transition-label">${escapeHtml(workflowLabel)}</div>` : ''}
     <div class="pm-bubble">${inner}</div>${_renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
 }
 

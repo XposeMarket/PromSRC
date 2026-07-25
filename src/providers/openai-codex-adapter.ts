@@ -17,6 +17,7 @@ import fs from 'fs';
 import path from 'path';
 import type { LLMProvider, ChatMessage, ContentPart, ChatOptions, ChatResult, GenerateOptions, GenerateResult, ModelInfo, ModelUsage } from './LLMProvider';
 import { loadTokens, getValidToken, buildCodexCloudflareHeaders } from '../auth/openai-oauth';
+import { isRetryableAccountFailure } from '../auth/provider-account-pool';
 import { contentToString, stripCacheMarker } from './content-utils';
 import { getConfig } from '../config/config';
 import { normalizeReasoningEffort, normalizeSpeed } from './reasoning-capabilities';
@@ -154,23 +155,34 @@ export class OpenAICodexAdapter implements LLMProvider {
   readonly id = 'openai_codex' as const;
   private configDir: string;
   private accountId?: string;
+  private accountIds: string[] = [];
 
-  constructor(config: string | { configDir: string; accountId?: string }) {
+  constructor(config: string | { configDir: string; accountId?: string; accountIds?: string[] }) {
     if (typeof config === 'string') {
       this.configDir = config;
       return;
     }
     this.configDir = config.configDir;
     this.accountId = String(config.accountId || '').trim() || undefined;
+    this.accountIds = Array.isArray(config.accountIds)
+      ? config.accountIds.map(id => String(id || '').trim()).filter(Boolean)
+      : [];
   }
 
-  private async getHeaders(): Promise<Record<string, string>> {
-    const token = await getValidToken(this.configDir, this.accountId);
-    const tokens = loadTokens(this.configDir, this.accountId);
-    const accountId = tokens?.account_id || '';
+  private getAccountCandidates(): Array<string | undefined> {
+    const candidates = [this.accountId, ...this.accountIds]
+      .map(id => String(id || '').trim())
+      .filter((id, index, values) => id && values.indexOf(id) === index);
+    return candidates.length ? candidates : [undefined];
+  }
+
+  private async getHeaders(accountId = this.accountId): Promise<Record<string, string>> {
+    const token = await getValidToken(this.configDir, accountId);
+    const tokens = loadTokens(this.configDir, accountId);
+    const chatgptAccountId = tokens?.account_id || '';
 
     const headers: Record<string, string> = {
-      ...buildCodexCloudflareHeaders(token, accountId),
+      ...buildCodexCloudflareHeaders(token, chatgptAccountId),
       'Content-Type':      'application/json',
       'Authorization':     `Bearer ${token}`,
       'OpenAI-Beta':       'responses=experimental',
@@ -287,7 +299,7 @@ export class OpenAICodexAdapter implements LLMProvider {
   }
 
   async chat(messages: ChatMessage[], model: string, options?: ChatOptions): Promise<ChatResult> {
-    const headers = await this.getHeaders();
+    const accountCandidates = this.getAccountCandidates();
 
     // Extract system message as instructions
     const systemMsg = messages.find(m => m.role === 'system');
@@ -309,7 +321,19 @@ export class OpenAICodexAdapter implements LLMProvider {
       fallbackFrom?: string,
       fallbackReason?: string,
       allowIncompleteStreamRetry = true,
+      accountIndex = 0,
     ): Promise<ChatResult> => {
+      const activeAccountId = accountCandidates[accountIndex];
+      let headers: Record<string, string>;
+      try {
+        headers = await this.getHeaders(activeAccountId);
+      } catch (error) {
+        if (accountIndex + 1 < accountCandidates.length) {
+          console.warn('[openai_codex] Selected account is unavailable; trying the next configured account.');
+          return runRequest(requestedModel, allowFallback, fallbackFrom, fallbackReason, allowIncompleteStreamRetry, accountIndex + 1);
+        }
+        throw error;
+      }
       const controller = new AbortController();
       let abortReason = '';
       let requestTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -386,6 +410,10 @@ export class OpenAICodexAdapter implements LLMProvider {
 
         if (!response.ok) {
           const text = await response.text().catch(() => '');
+          if (isRetryableAccountFailure(response.status, text) && accountIndex + 1 < accountCandidates.length) {
+            console.warn(`[openai_codex] Account request failed (${response.status}); trying the next configured account.`);
+            return runRequest(requestedModel, allowFallback, fallbackFrom, fallbackReason, allowIncompleteStreamRetry, accountIndex + 1);
+          }
           const fallbackModel = getChatgptAccountCompatibleModel(requestedModel);
           if (
             allowFallback
@@ -394,7 +422,7 @@ export class OpenAICodexAdapter implements LLMProvider {
             && isUnsupportedChatgptAccountCodexModel(response.status, text)
           ) {
             console.warn(`[openai_codex] Model "${requestedModel}" is unsupported for this ChatGPT account. Retrying with "${fallbackModel}".`);
-            return runRequest(fallbackModel, false, requestedModel, 'unsupported_chatgpt_account_model');
+            return runRequest(fallbackModel, false, requestedModel, 'unsupported_chatgpt_account_model', allowIncompleteStreamRetry, accountIndex);
           }
           writeCodexModelRuntimeStatus({
             configuredModel,
@@ -412,6 +440,7 @@ export class OpenAICodexAdapter implements LLMProvider {
           actualModel: requestedModel,
           fallbackFrom,
           fallbackReason,
+          accountId: activeAccountId,
         };
         writeCodexModelRuntimeStatus({
           configuredModel,
@@ -428,7 +457,7 @@ export class OpenAICodexAdapter implements LLMProvider {
         }
         if (err instanceof CodexIncompleteStreamError && allowIncompleteStreamRetry) {
           console.warn(`[openai_codex] ${err.message} Retrying once.`);
-          return runRequest(requestedModel, allowFallback, fallbackFrom, fallbackReason, false);
+          return runRequest(requestedModel, allowFallback, fallbackFrom, fallbackReason, false, accountIndex);
         }
         throw err;
       } finally {

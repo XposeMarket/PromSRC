@@ -13,6 +13,66 @@ let connectorStatuses = {};
 let activeConnectorId = null;
 let obsidianConnectorState = { bridge: { vaults: [] }, loading: false, syncing: false };
 const oauthPollIntervals = new Map();
+let connectorViewLayoutObserver = null;
+let connectorViewLayoutFrame = null;
+
+function syncConnectorViewToChatColumn() {
+  const view = document.getElementById('connector-view');
+  const chatShell = document.querySelector('main.main-shell');
+  if (!view || !chatShell || view.style.display === 'none') return;
+
+  const bounds = chatShell.getBoundingClientRect();
+  if (bounds.width < 1 || bounds.height < 1) return;
+
+  view.style.left = `${Math.round(bounds.left)}px`;
+  view.style.top = `${Math.round(bounds.top)}px`;
+  view.style.width = `${Math.round(bounds.width)}px`;
+  view.style.height = `${Math.round(bounds.height)}px`;
+  view.style.right = 'auto';
+  view.style.bottom = 'auto';
+}
+
+function scheduleConnectorViewLayoutSync() {
+  if (connectorViewLayoutFrame !== null) return;
+  connectorViewLayoutFrame = requestAnimationFrame(() => {
+    connectorViewLayoutFrame = null;
+    syncConnectorViewToChatColumn();
+  });
+}
+
+function startConnectorViewLayoutSync() {
+  const chatShell = document.querySelector('main.main-shell');
+  if (!chatShell) return;
+
+  if (!connectorViewLayoutObserver && typeof ResizeObserver !== 'undefined') {
+    connectorViewLayoutObserver = new ResizeObserver(scheduleConnectorViewLayoutSync);
+    connectorViewLayoutObserver.observe(chatShell);
+  }
+  window.addEventListener('resize', scheduleConnectorViewLayoutSync);
+  scheduleConnectorViewLayoutSync();
+}
+
+function stopConnectorViewLayoutSync() {
+  connectorViewLayoutObserver?.disconnect();
+  connectorViewLayoutObserver = null;
+  window.removeEventListener('resize', scheduleConnectorViewLayoutSync);
+  if (connectorViewLayoutFrame !== null) {
+    cancelAnimationFrame(connectorViewLayoutFrame);
+    connectorViewLayoutFrame = null;
+  }
+}
+
+function showConnectorView() {
+  const view = document.getElementById('connector-view');
+  if (!view) return;
+
+  view.style.display = 'flex';
+  syncConnectorViewToChatColumn();
+  startConnectorViewLayoutSync();
+
+  const chatView = document.getElementById('chat-view');
+  if (chatView) chatView.style.display = 'none';
+}
 
 function buildConnectorMonogram(name) {
   const tokens = String(name || '')
@@ -262,21 +322,15 @@ function openConnectorView(id) {
   }
   loadConnectorActivity(id, isConnected);
 
-  const view = document.getElementById('connector-view');
-  if (view) view.style.display = 'flex';
-  const chatView = document.getElementById('chat-view');
-  if (chatView) chatView.style.display = 'none';
-  const topbar = document.getElementById('right-panel-topbar');
-  if (topbar) topbar.style.visibility = 'hidden';
+  showConnectorView();
 }
 
 function closeConnectorView() {
   const connectorView = document.getElementById('connector-view');
   if (connectorView) connectorView.style.display = 'none';
+  stopConnectorViewLayoutSync();
   const chatView = document.getElementById('chat-view');
   if (chatView) chatView.style.display = 'flex';
-  const topbar = document.getElementById('right-panel-topbar');
-  if (topbar) topbar.style.visibility = '';
   activeConnectorId = null;
 }
 
@@ -1178,12 +1232,7 @@ function openMcpServerView(id) {
   const activityWrap = document.getElementById('cv-activity-wrap');
   if (activityWrap) activityWrap.style.display = 'none';
 
-  const view = document.getElementById('connector-view');
-  if (view) view.style.display = 'flex';
-  const chatView = document.getElementById('chat-view');
-  if (chatView) chatView.style.display = 'none';
-  const topbar = document.getElementById('right-panel-topbar');
-  if (topbar) topbar.style.visibility = 'hidden';
+  showConnectorView();
 }
 
 function renderMcpServerActions(s, { needsAuth, connected }) {

@@ -15,6 +15,7 @@ import { PerplexityAdapter } from './perplexity-adapter';
 import { GeminiAdapter } from './gemini-adapter';
 import { getValidXAIToken, isXAIConnected } from '../auth/xai-oauth';
 import { getXaiAuthCandidates } from '../auth/xai-account-pool';
+import { orderProviderAccountIds } from '../auth/provider-account-pool';
 import {
   getProviderDefaultConfig,
   getProviderDescriptor,
@@ -91,6 +92,40 @@ function getProviderAccountSettings(id: string, providers: any, requestedAccount
   };
   void base;
   return { cfg, accountId: accountId || undefined };
+}
+
+function getOrderedProviderAccountIds(id: string, providers: any, preferredAccountId?: string): string[] {
+  const providerCfg = providers?.[id] && typeof providers[id] === 'object' && !Array.isArray(providers[id])
+    ? providers[id]
+    : {};
+  const accounts = providerCfg.accounts && typeof providerCfg.accounts === 'object' && !Array.isArray(providerCfg.accounts)
+    ? providerCfg.accounts
+    : {};
+  return orderProviderAccountIds(accounts, preferredAccountId, String(providerCfg.defaultAccountId || '').trim());
+}
+
+function getOpenAIApiKeyCandidates(providers: any, preferredAccountId?: string): Array<{ token: string; label: string }> {
+  const providerCfg = providers?.openai && typeof providers.openai === 'object' && !Array.isArray(providers.openai)
+    ? providers.openai
+    : {};
+  const accounts = providerCfg.accounts && typeof providerCfg.accounts === 'object' && !Array.isArray(providerCfg.accounts)
+    ? providerCfg.accounts
+    : {};
+  const candidates: Array<{ token: string; label: string }> = [];
+  const seen = new Set<string>();
+  const add = (value: unknown, label: string) => {
+    const token = resolveSecretKey(typeof value === 'string' ? value : '') || '';
+    if (!token || seen.has(token)) return;
+    seen.add(token);
+    candidates.push({ token, label });
+  };
+  for (const accountId of getOrderedProviderAccountIds('openai', providers, preferredAccountId)) {
+    const account = accounts[accountId] && typeof accounts[accountId] === 'object' ? accounts[accountId] : {};
+    add(account.api_key, String(account.label || accountId).trim() || accountId);
+  }
+  // Retain the legacy top-level key as the final fallback during migration.
+  add(providerCfg.api_key, 'OpenAI API key');
+  return candidates;
 }
 
 function getProviderDisplayName(id: string): string {
@@ -210,7 +245,10 @@ function buildProvider(id: ProviderID, providers: any, accountId?: string): LLMP
       const authMode = explicitAuthMode || readStringSetting(cfg, 'auth_mode') || 'api_key';
       const useXaiOAuth = id === 'xai' && (authMode === 'oauth' || (!explicitAuthMode && isXAIConnected(getConfigDir(), resolvedAccountId)));
       const useXaiAccountPool = id === 'xai';
+      const useOpenAIAccountPool = id === 'openai' && getOrderedProviderAccountIds('openai', providers, resolvedAccountId).length > 0;
       const apiKey = useXaiAccountPool
+        ? undefined
+        : useOpenAIAccountPool
         ? undefined
         : useXaiOAuth
         ? undefined
@@ -224,6 +262,8 @@ function buildProvider(id: ProviderID, providers: any, accountId?: string): LLMP
         getToken: !useXaiAccountPool && useXaiOAuth ? () => getValidXAIToken(getConfigDir(), resolvedAccountId) : undefined,
         getAuthCandidates: useXaiAccountPool
           ? async () => (await getXaiAuthCandidates(resolvedAccountId)).map(candidate => ({ token: candidate.token, label: candidate.label }))
+          : useOpenAIAccountPool
+          ? async () => getOpenAIApiKeyCandidates(providers, resolvedAccountId)
           : undefined,
         providerId: id,
         chatCompletionsPath: runtime.chatCompletionsPath,
@@ -236,7 +276,11 @@ function buildProvider(id: ProviderID, providers: any, accountId?: string): LLMP
     }
 
     case 'providers/openai-codex-adapter': {
-      return new OpenAICodexAdapter({ configDir: getConfigDir(), accountId: resolvedAccountId });
+      return new OpenAICodexAdapter({
+        configDir: getConfigDir(),
+        accountId: resolvedAccountId,
+        accountIds: getOrderedProviderAccountIds(id, providers, resolvedAccountId),
+      });
     }
 
     case 'providers/anthropic-adapter': {

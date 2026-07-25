@@ -119,6 +119,7 @@ const RIGHT_PANEL_W = 380;
 const SIDEBAR_DEFAULT_W = 280; // matches --sidebar-w
 const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 400;
+const SIDEBAR_PAGES_COLLAPSED_KEY = 'sidebar_pages_collapsed';
 
 function _resetSidebarWidth() {
   document.documentElement.style.removeProperty('--sidebar-w');
@@ -202,6 +203,53 @@ export function toggleSidebar() {
   if (collapsed) _resetSidebarWidth();
   try { localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0'); } catch {}
   _syncPageViewPositions();
+}
+
+// Keeps the page navigation available without making it compete with a long
+// session list. The control itself is the existing divider until collapsed.
+export function setSidebarPagesCollapsed(collapsed, { persist = true } = {}) {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.getElementById('sidebar-pages-toggle');
+  if (!sidebar || !toggle) return;
+  sidebar.classList.toggle('pages-collapsed', !!collapsed);
+  toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  toggle.setAttribute('aria-label', collapsed ? 'Expand pages' : 'Collapse pages');
+  toggle.title = collapsed ? 'Expand pages' : 'Collapse pages';
+  if (persist) {
+    try { localStorage.setItem(SIDEBAR_PAGES_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch {}
+  }
+}
+
+export function toggleSidebarPages(event) {
+  if (event) event.stopPropagation();
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  setSidebarPagesCollapsed(!sidebar.classList.contains('pages-collapsed'));
+}
+
+// Desktop convenience: a deliberate move to the physical left screen edge
+// reopens a collapsed sidebar. A short dwell prevents accidental reveals while
+// simply passing the pointer across the page.
+function initSidebarEdgeReveal() {
+  if (window.matchMedia?.('(pointer: coarse)').matches) return;
+  let revealTimer = null;
+  const cancel = () => {
+    if (revealTimer) clearTimeout(revealTimer);
+    revealTimer = null;
+  };
+  document.addEventListener('pointermove', (event) => {
+    if (event.pointerType && event.pointerType !== 'mouse') return cancel();
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar || !sidebar.classList.contains('collapsed') || sidebar.classList.contains('is-resizing')) return cancel();
+    if (event.clientX > 2 || event.buttons) return cancel();
+    if (revealTimer) return;
+    revealTimer = setTimeout(() => {
+      revealTimer = null;
+      const current = document.getElementById('sidebar');
+      if (current?.classList.contains('collapsed')) toggleSidebar();
+    }, 120);
+  }, { passive: true });
+  window.addEventListener('blur', cancel);
 }
 
 // ── Sidebar drag-resize ───────────────────────────────────────
@@ -473,6 +521,8 @@ window.toggleMoreMenu = toggleMoreMenu;
 window.toggleMorePopover = toggleMorePopover;
 window.closeMorePopover = closeMorePopover;
 window.toggleSidebar = toggleSidebar;
+window.toggleSidebarPages = toggleSidebarPages;
+window.setSidebarPagesCollapsed = setSidebarPagesCollapsed;
 window.toggleRightPanel = toggleRightPanel;
 window.setSidebarSegTab = setSidebarSegTab;
 window._syncPageViewPositions = _syncPageViewPositions;
@@ -499,9 +549,12 @@ window.addEventListener('resize', () => {
       const sidebar = document.getElementById('sidebar');
       if (sidebar) sidebar.classList.add('collapsed');
     }
+    setSidebarPagesCollapsed(localStorage.getItem(SIDEBAR_PAGES_COLLAPSED_KEY) === '1', { persist: false });
     _syncPageViewPositions();
   } catch {}
 })();
+
+initSidebarEdgeReveal();
 
 window.runPrometheusOnboarding = () => runOnboardingIfNeeded().catch((err) => {
   console.warn('[onboarding] manual start failed:', err);

@@ -58,6 +58,10 @@ export interface ProviderTokenTotals {
 export interface ProviderUsage {
   provider: string;
   label: string;
+  /** Opaque configured account identity. Omitted for single-key providers. */
+  account_id?: string;
+  /** User-controlled account label, safe to render in Settings. */
+  account_label?: string;
   configured: boolean;
   /** 'live' = provider usage endpoint; 'internal' = local token accounting only. */
   source: 'live' | 'internal';
@@ -223,13 +227,13 @@ async function fetchAnthropicLive(configDir: string): Promise<LiveResult | null>
   return { windows, plan_label: null, error: null };
 }
 
-async function fetchCodexLive(configDir: string): Promise<LiveResult | null> {
+async function fetchCodexLive(configDir: string, accountId?: string): Promise<LiveResult | null> {
   const oauth = require('../auth/openai-oauth');
-  const tokens = oauth.loadTokens(configDir);
+  const tokens = oauth.loadTokens(configDir, accountId);
   if (!tokens || !tokens.access_token) return null;
 
   let accessToken: string = tokens.access_token;
-  try { accessToken = await oauth.getValidToken(configDir); } catch { /* fall back to stored token */ }
+  try { accessToken = await oauth.getValidToken(configDir, accountId); } catch { /* fall back to stored token */ }
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
@@ -335,17 +339,20 @@ export function selectCodexUsageForModel(live: LiveResult, model: unknown): {
     limit.model_ids.some((id) => normalizeModelId(id) === normalizedModel));
   if (!modelLimit) {
     return {
-      windows: [],
-      error: live.error || 'Codex Spark usage limit was not returned by OpenAI.',
-      usage_scope: 'model',
-      usage_model: normalizedModel,
+      windows: live.windows,
+      error: live.error,
+      usage_scope: 'provider',
+      usage_model: null,
     };
   }
   return {
-    windows: modelLimit.windows,
+    // Spark can carry an additional allowance, but it must not hide the
+    // account-wide Codex windows. Showing both prevents the Settings card from
+    // looking as though Spark is the account's only available limit.
+    windows: [...live.windows, ...modelLimit.windows],
     error: live.error,
-    usage_scope: 'model',
-    usage_model: normalizedModel,
+    usage_scope: 'provider',
+    usage_model: null,
   };
 }
 
@@ -510,13 +517,13 @@ async function refreshLocalGrokAuth(auth: GrokAuth): Promise<GrokAuth | null> {
   return { ...auth, access_token: String(data.access_token), refresh_token: String(data.refresh_token || auth.refresh_token) };
 }
 
-async function loadGrokBillingAuth(configDir: string): Promise<GrokAuth | null> {
+async function loadGrokBillingAuth(configDir: string, accountId?: string): Promise<GrokAuth | null> {
   try {
     const oauth = require('../auth/xai-oauth');
-    const tokens = oauth.loadXAITokens(configDir);
+    const tokens = oauth.loadXAITokens(configDir, accountId);
     if (tokens?.access_token) {
       let accessToken = String(tokens.access_token);
-      try { accessToken = await oauth.getValidXAIToken(configDir); } catch { /* use stored token */ }
+      try { accessToken = await oauth.getValidXAIToken(configDir, accountId); } catch { /* use stored token */ }
       return {
         source: 'prometheus_oauth',
         access_token: accessToken,
@@ -525,7 +532,9 @@ async function loadGrokBillingAuth(configDir: string): Promise<GrokAuth | null> 
       };
     }
   } catch { /* fall back to Grok CLI auth */ }
-  return loadLocalGrokAuth();
+  // The Grok CLI credential has no Prometheus account identity, so only use it
+  // for legacy (non-named) configuration. Never duplicate it across cards.
+  return accountId ? null : loadLocalGrokAuth();
 }
 
 async function grokProxyGet(pathname: string, auth: GrokAuth): Promise<Response> {
@@ -538,15 +547,15 @@ async function grokProxyGet(pathname: string, auth: GrokAuth): Promise<Response>
   }), 15000);
 }
 
-async function fetchGrokLive(configDir: string): Promise<LiveResult | null> {
-  let auth = await loadGrokBillingAuth(configDir);
+async function fetchGrokLive(configDir: string, accountId?: string): Promise<LiveResult | null> {
+  let auth = await loadGrokBillingAuth(configDir, accountId);
   if (!auth?.access_token) return null;
 
   let res = await grokProxyGet('/v1/billing?format=credits', auth);
   if ((res.status === 401 || res.status === 403) && auth.source === 'prometheus_oauth') {
     try {
       const oauth = require('../auth/xai-oauth');
-      const refreshed = await oauth.refreshXAITokens(configDir);
+      const refreshed = await oauth.refreshXAITokens(configDir, accountId);
       auth = { ...auth, access_token: String(refreshed.access_token || auth.access_token), refresh_token: refreshed.refresh_token || auth.refresh_token };
       res = await grokProxyGet('/v1/billing?format=credits', auth);
     } catch { /* keep original response */ }
@@ -584,26 +593,27 @@ async function fetchGrokLive(configDir: string): Promise<LiveResult | null> {
 const LIVE_TTL_MS = 2 * 60 * 1000;
 const liveCache = new Map<string, { ts: number; value: LiveResult }>();
 
-async function getLive(providerId: string, configDir: string): Promise<LiveResult | null> {
-  const cached = liveCache.get(providerId);
+async function getLive(providerId: string, configDir: string, accountId?: string): Promise<LiveResult | null> {
+  const cacheKey = `${providerId}:${String(accountId || 'default')}`;
+  const cached = liveCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < LIVE_TTL_MS) return cached.value;
 
   let result: LiveResult | null = null;
   try {
     if (providerId === 'anthropic') result = await fetchAnthropicLive(configDir);
-    else if (providerId === 'openai_codex') result = await fetchCodexLive(configDir);
-    else if (providerId === 'xai') result = await fetchGrokLive(configDir);
+    else if (providerId === 'openai_codex') result = await fetchCodexLive(configDir, accountId);
+    else if (providerId === 'xai') result = await fetchGrokLive(configDir, accountId);
   } catch (err: any) {
     result = { windows: [], plan_label: null, error: err?.message || String(err) };
   }
 
-  if (result) liveCache.set(providerId, { ts: Date.now(), value: result });
+  if (result) liveCache.set(cacheKey, { ts: Date.now(), value: result });
   return result;
 }
 
 // ─── Internal token accounting ───────────────────────────────────────────────
 
-function internalTokens(providerId: string, events: ReturnType<typeof readModelUsageEvents>): ProviderTokenTotals {
+function internalTokens(providerId: string, events: ReturnType<typeof readModelUsageEvents>, accountId?: string): ProviderTokenTotals {
   const monthStart = new Date();
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
@@ -612,6 +622,7 @@ function internalTokens(providerId: string, events: ReturnType<typeof readModelU
   let total = 0, input = 0, output = 0, calls = 0, monthTotal = 0;
   for (const e of events) {
     if (String(e.provider) !== providerId) continue;
+    if (accountId && String(e.accountId || '') !== accountId) continue;
     const tt = Number(e.totalTokens || 0);
     total += tt;
     input += Number(e.inputTokens || 0);
@@ -703,7 +714,7 @@ function getBudgets(): Record<string, { monthly_token_limit?: number }> {
   }
 }
 
-function getActiveMainModel(): { provider: string; model: string } {
+function getActiveMainModel(): { provider: string; model: string; accountId?: string } {
   try {
     const cfg = getConfig().getConfig() as any;
     const llm = cfg?.llm && typeof cfg.llm === 'object' ? cfg.llm : {};
@@ -712,9 +723,24 @@ function getActiveMainModel(): { provider: string; model: string } {
       ? llm.providers[provider]
       : {};
     const model = String(providerConfig.model || (provider === 'ollama' ? cfg?.models?.primary : '') || '').trim();
-    return { provider, model };
+    const accountId = String(providerConfig.defaultAccountId || (llm.provider === provider ? llm.accountId : '') || '').trim() || undefined;
+    return { provider, model, accountId };
   } catch {
     return { provider: '', model: '' };
+  }
+}
+
+function configuredUsageAccounts(providerId: string): Array<{ id?: string; label?: string }> {
+  try {
+    const provider = (getConfig().getConfig() as any)?.llm?.providers?.[providerId] || {};
+    const accounts = provider?.accounts;
+    if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts)) return [{}];
+    const values = Object.entries(accounts)
+      .filter(([, account]) => account && typeof account === 'object' && !Array.isArray(account))
+      .map(([id, account]: [string, any]) => ({ id, label: String(account.label || id).trim() || id }));
+    return values.length ? values : [{}];
+  } catch {
+    return [{}];
   }
 }
 
@@ -735,10 +761,11 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
     .filter((id) => id && !LOCAL_PROVIDERS.has(id));
   if (!ids.includes('xai') && loadLocalGrokAuth()) ids.push('xai');
 
-  const providers = await Promise.all(ids.map(async (id): Promise<ProviderUsage> => {
-    const live = await getLive(id, configDir);
-    const tokens = internalTokens(id, events);
-    const activeCodexModel = activeMain.provider === id ? activeMain.model : '';
+  const providerEntries = ids.flatMap((id) => configuredUsageAccounts(id).map(account => ({ id, account })));
+  const providers = await Promise.all(providerEntries.map(async ({ id, account }): Promise<ProviderUsage> => {
+    const live = await getLive(id, configDir, account.id);
+    const tokens = internalTokens(id, events, account.id);
+    const activeCodexModel = activeMain.provider === id && activeMain.accountId === account.id ? activeMain.model : '';
     const codexSelection = id === 'openai_codex' && (live || isCodexSparkModel(activeCodexModel))
       ? selectCodexUsageForModel(live || {
           windows: [],
@@ -750,7 +777,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
 
     // xAI/Grok has no live usage endpoint here; augment internal accounting with
     // token counts read from local Grok CLI session files, if present.
-    if (id === 'xai') {
+    if (id === 'xai' && !account.id) {
       const cli = readGrokCliTokens();
       tokens.total += cli.total;
       tokens.calls += cli.calls;
@@ -769,6 +796,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
     return {
       provider: id,
       label: codexSelection?.usage_scope === 'model' ? 'OpenAI · Codex Spark' : labelFor(id),
+      ...(account.id ? { account_id: account.id, account_label: account.label || account.id } : {}),
       configured: true,
       source: live ? 'live' : 'internal',
       plan_label: live?.plan_label ?? null,

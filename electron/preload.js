@@ -9,7 +9,7 @@
  *   window.prometheusApp      — app metadata (version, platform)
  */
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // ─── Auto-Updater Bridge ────────────────────────────────────────────────────
 contextBridge.exposeInMainWorld('prometheusUpdater', {
@@ -56,6 +56,12 @@ contextBridge.exposeInMainWorld('prometheusPairingAdmin', {
 contextBridge.exposeInMainWorld('prometheusFiles', {
   selectCanvasFiles: () => ipcRenderer.invoke('select-canvas-paths', { mode: 'files' }),
   selectCanvasFolder: () => ipcRenderer.invoke('select-canvas-paths', { mode: 'folder' }),
+  // Electron deliberately stopped exposing File.path to renderer code. Keep
+  // this narrow bridge so Canvas drag/drop and browser-file inputs can retain
+  // the selected local file rather than uploading a workspace copy.
+  getCanvasFilePath: (file) => {
+    try { return webUtils.getPathForFile(file); } catch { return ''; }
+  },
 });
 
 // ─── Native In-App Browser Bridge ───────────────────────────────────────────

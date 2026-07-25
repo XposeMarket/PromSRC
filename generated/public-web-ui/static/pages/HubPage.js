@@ -723,9 +723,9 @@ export function renderProviderUsageCard(p) {
     : `<span class="usage-provider-badge">tracked</span>`;
   const err = p.error ? `<div class="usage-provider-err">${escHtml(p.error)}</div>` : '';
   return `
-    <div class="usage-provider-card" data-provider="${escHtml(p.provider)}">
+    <div class="usage-provider-card" data-provider="${escHtml(p.provider)}"${p.account_id ? ` data-account="${escHtml(p.account_id)}"` : ''}>
       <div class="usage-provider-head">
-        <span class="usage-provider-name">${escHtml(p.label || p.provider)}</span>
+        <span class="usage-provider-name">${escHtml(p.account_label ? `${p.label || p.provider} · ${p.account_label}` : (p.label || p.provider))}</span>
         ${badge}
       </div>
       ${body}

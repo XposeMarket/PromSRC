@@ -1321,6 +1321,11 @@ const BROWSER_MODE_TEACH_PANEL_WIDTH = 1260;
 const BROWSER_MODE_MIN_PANEL_WIDTH = 820;
 const BROWSER_MODE_TEACH_MIN_PANEL_WIDTH = 940;
 const IMMERSIVE_CENTER_COL_MIN_WIDTH = 480;
+// Canvas modes may be large, but must never reduce the live chat column to a
+// sliver. The workspace tree belongs inside Canvas and should consume Canvas
+// room before it is allowed to displace the chat surface.
+const CANVAS_CHAT_COLUMN_MIN_WIDTH = 400;
+const CANVAS_CHAT_COLUMN_HARD_MIN_WIDTH = 380;
 const CREATIVE_MODE_PANEL_WIDTH = IMMERSIVE_CANVAS_PANEL_WIDTH;
 let creativeModeSavedPanelWidth = null;
 let canvasPreviewSavedPanelWidth = null;
@@ -1520,10 +1525,38 @@ function getViewportBoundPanelWidth(desiredWidth, minimumWidth = 760, options = 
   return Math.max(minimumWidth, Math.min(desiredWidth, maxWidth));
 }
 
+function getCanvasPanelMaximumWidth() {
+  const workspace = document.getElementById('workspace');
+  const workspaceWidth = workspace?.getBoundingClientRect().width || workspace?.clientWidth || 0;
+  if (!workspaceWidth) return Number.POSITIVE_INFINITY;
+  // Keep a useful chat column on ordinary desktop sizes, while still allowing
+  // Canvas to remain usable on narrower windows.
+  const reservedChatWidth = Math.min(
+    CANVAS_CHAT_COLUMN_MIN_WIDTH,
+    Math.max(CANVAS_CHAT_COLUMN_HARD_MIN_WIDTH, Math.floor(workspaceWidth * 0.46)),
+  );
+  return Math.max(360, Math.floor(workspaceWidth - reservedChatWidth));
+}
+
+function clampCanvasPanelToWorkspace() {
+  const rightPanel = document.getElementById('right-panel');
+  if (!rightPanel || !rightPanel.classList.contains('canvas-open')) return false;
+  const maximumWidth = getCanvasPanelMaximumWidth();
+  const currentWidth = rightPanel.getBoundingClientRect().width || rightPanel.offsetWidth || 0;
+  if (!Number.isFinite(maximumWidth) || !currentWidth || currentWidth <= maximumWidth) return false;
+  setRightPanelWidth(maximumWidth, { minimumWidth: 1, preserveChatColumn: true });
+  return true;
+}
+
 function setRightPanelWidth(width, options = {}) {
   const rightPanel = document.getElementById('right-panel');
   if (!rightPanel) return;
-  const boundedWidth = getViewportBoundPanelWidth(width, options.minimumWidth || 760, options);
+  let boundedWidth = getViewportBoundPanelWidth(width, options.minimumWidth || 760, options);
+  const canvasLikeSurface = rightPanel.classList.contains('canvas-open')
+    || !!normalizeCreativeMode(window.currentCreativeMode);
+  if (options.preserveChatColumn !== false && canvasLikeSurface) {
+    boundedWidth = Math.min(boundedWidth, getCanvasPanelMaximumWidth());
+  }
   rightPanel.style.width = `${boundedWidth}px`;
   rightPanel.style.minWidth = `${boundedWidth}px`;
   if (options.lockMax) rightPanel.style.maxWidth = `${boundedWidth}px`;
@@ -3175,6 +3208,7 @@ function isCanvasWidthLocked(tab = getActiveCanvasTab()) {
 function syncCanvasSurfaceWidthLock(tab = getActiveCanvasTab()) {
   const rightPanel = document.getElementById('right-panel');
   if (!rightPanel) return;
+  clampCanvasPanelToWorkspace();
   if (isCreativeModeLocked()) {
     updateCreativeModeControls();
     if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
@@ -3280,6 +3314,10 @@ function shouldHideCenterColumnForImmersivePanels() {
   if (!sidebar || !rightPanel || !workspace) return false;
   if (sidebar.classList.contains('collapsed')) return false;
   if (!rightPanel.classList.contains('open')) return false;
+  // With the primary sidebar open, a Design workspace should be genuinely
+  // immersive. Keeping a narrow live-chat strip beside it only produces a
+  // clipped, unusable column.
+  if (isCreativeModeLocked() && rightPanel.classList.contains('canvas-open')) return true;
   const immersiveRightPanelActive = isCreativeModeLocked() || (canvasOpen && isBrowserCanvasSurfaceActive());
   if (!immersiveRightPanelActive) return false;
   const workspaceWidth = workspace.getBoundingClientRect().width || workspace.clientWidth || 0;
@@ -3289,17 +3327,37 @@ function shouldHideCenterColumnForImmersivePanels() {
     || Number.parseFloat(rightPanel.style.width)
     || Number.parseFloat(rightPanel.style.minWidth)
     || 0;
-  return (workspaceWidth - rightPanelWidth) < IMMERSIVE_CENTER_COL_MIN_WIDTH;
+  const minimumCenterWidth = isCreativeModeLocked()
+    ? CANVAS_CHAT_COLUMN_HARD_MIN_WIDTH
+    : CANVAS_CHAT_COLUMN_MIN_WIDTH;
+  return (workspaceWidth - rightPanelWidth) < minimumCenterWidth;
 }
 
 function syncCenterColumnVisibility() {
   const body = document.body;
   const centerCol = document.getElementById('centerCol');
   const shouldHide = shouldHideCenterColumnForImmersivePanels();
+  const wasHidden = body?.classList.contains('immersive-center-hidden') === true;
   if (body) body.classList.toggle('immersive-center-hidden', shouldHide);
   if (centerCol) {
     if (shouldHide) centerCol.setAttribute('aria-hidden', 'true');
     else centerCol.removeAttribute('aria-hidden');
+  }
+  const rightPanel = document.getElementById('right-panel');
+  const workspace = document.getElementById('workspace');
+  if (shouldHide && rightPanel && workspace && isCreativeModeLocked()) {
+    const workspaceWidth = workspace.getBoundingClientRect().width || workspace.clientWidth || 0;
+    if (workspaceWidth) {
+      setRightPanelWidth(workspaceWidth, { minimumWidth: 1, preserveChatColumn: false });
+    }
+  } else if (wasHidden && rightPanel && canvasOpen && isCreativeModeLocked()) {
+    // Returning the Chat column (for example when the sidebar is collapsed)
+    // also restores the normal capped creative width.
+    setRightPanelWidth(CREATIVE_MODE_PANEL_WIDTH, {
+      minimumWidth: 960,
+      lockMax: true,
+      preserveChatColumn: true,
+    });
   }
 }
 
@@ -5149,7 +5207,11 @@ function applyCreativeModeUI(options = {}) {
       creativeModeSavedPanelWidth = rightPanel.style.width || `${rightPanel.offsetWidth || 0}px`;
     }
     if (shouldAutoOpen || canvasOpen) {
-      setRightPanelWidth(CREATIVE_MODE_PANEL_WIDTH, { minimumWidth: 960, lockMax: true });
+      setRightPanelWidth(CREATIVE_MODE_PANEL_WIDTH, {
+        minimumWidth: 960,
+        lockMax: true,
+        preserveChatColumn: true,
+      });
       if (shouldAutoOpen && !canvasOpen) toggleCanvas(true, { force: true });
     }
   } else if (rightPanel) {
@@ -5170,7 +5232,14 @@ function applyCreativeModeUI(options = {}) {
     if (topbar) topbar.style.display = 'none';
   }
   updateCreativeModeControls();
-  if (canvasOpen) canvasRenderTabs();
+  if (canvasOpen) {
+    // Reapply the active view when the creative mode changes. In particular,
+    // entering Design Mode must reload the preview so its selection/hover
+    // handlers can be attached to a preview that was opened beforehand.
+    const activeTab = getActiveCanvasTab();
+    applyCanvasViewMode(activeTab?.mode || 'code', activeTab || null);
+    canvasRenderTabs();
+  }
   renderCanvasPublishControls();
   syncCanvasSurfaceWidthLock();
   if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
@@ -5373,7 +5442,7 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
     channelLabel: 'steer',
     workflowGroupId: groupId,
     workflowPart: 'interruption',
-    workflowLabel: 'Steer',
+    workflowLabel: 'Message sent as steer',
   });
   if (st) {
     st.forceAppendAssistantAfterInterruption = true;
@@ -6827,6 +6896,11 @@ async function mainGoalAction(action) {
 
 function syncActiveChat() {
   const sess = window.chatSessions.find(s => s.id === window.activeChatSessionId);
+  // Model/reasoning is per chat. Refresh it on every session switch instead of
+  // letting the global provider-health poll overwrite the composer label.
+  if (sess?.id && typeof window.refreshActiveChatModelRoute === 'function') {
+    window.refreshActiveChatModelRoute().catch(() => {});
+  }
   window.chatHistory = sess ? (sess.history || []) : [];
   window.processLogEntries = sess ? (sess.processLog || []) : [];
   window.currentCreativeMode = normalizeCreativeMode(sess?.creativeMode);
@@ -7157,8 +7231,9 @@ async function openSession(id) {
 function markSessionUnread(sessionId) {
   const sess = window.chatSessions.find(s => s.id === sessionId);
   if (sess && sessionId !== window.activeChatSessionId) {
+    const becameUnread = !sess.unread;
     sess.unread = true;
-    if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+    if (becameUnread) window.scheduleSessionListRefresh?.();
   }
 }
 
@@ -10882,17 +10957,37 @@ async function restoreWorkspaceCheckpointFromDiff(checkpointId, button = null) {
   }
 }
 
-function renderDesktopSlashCommandTokens(html) {
-  let out = String(html || '');
-  const commands = (Array.isArray(CHAT_SLASH_COMMANDS) ? CHAT_SLASH_COMMANDS : [])
-    .map((item) => String(item.command || '').trim())
-    .filter(Boolean)
-    .sort((a, b) => b.length - a.length);
-  for (const command of commands) {
-    const escaped = escHtml(command);
-    out = out.split(escaped).join(`<span class="inline-command-token"><span class="inline-command-token-icon" aria-hidden="true"></span>${escaped}</span>`);
+function getDesktopSlashCommandTokenAt(text, index) {
+  const value = String(text || '');
+  if (value.charAt(index) !== '/') return null;
+  const previous = index > 0 ? value.charAt(index - 1) : '';
+  if (previous && !/\s/.test(previous)) return null;
+  const lower = value.toLowerCase();
+  for (const item of sortedSlashCommands()) {
+    const command = String(item.command || '').trim();
+    if (!command || lower.slice(index, index + command.length) !== command.toLowerCase()) continue;
+    const next = value.charAt(index + command.length);
+    if (next && !/\s/.test(next)) continue;
+    return { item, end: index + command.length };
   }
-  return out;
+  return null;
+}
+
+function renderDesktopSlashCommandTokens(text) {
+  const value = String(text || '');
+  let html = '';
+  for (let index = 0; index < value.length;) {
+    const match = getDesktopSlashCommandTokenAt(value, index);
+    if (match) {
+      const command = escHtml(value.slice(index, match.end));
+      html += `<span class="inline-command-token"><span class="inline-command-token-icon" aria-hidden="true"></span>${command}</span>`;
+      index = match.end;
+      continue;
+    }
+    html += escHtml(value.charAt(index));
+    index += 1;
+  }
+  return html.replace(/\*\*([^*\n][^*\n]{0,120})\*\*/g, '<strong>$1</strong>');
 }
 
 async function openInFileLocation(targetPath) {
@@ -10917,14 +11012,15 @@ async function openInFileLocation(targetPath) {
 function renderUserMessageContent(msg) {
   let text = msg.content || '';
   const attachments = Array.isArray(msg.attachmentPreviews) ? msg.attachmentPreviews : [];
+  const designSelections = attachments.filter((attachment) => attachment && attachment.kind === 'design-selection');
   if (attachments.length) {
     text = text.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
-    text = text.replace(/\n\n\[Design Mode selected element attached\][\s\S]*$/, '').trim();
+    if (!designSelections.length) text = text.replace(/\n\n\[Design Mode selected element attached\][\s\S]*$/, '').trim();
   }
   text = text.replace(/\n\n\[UPLOADED FILES\][\s\S]*$/, '').trim();
-  text = text.replace(/\n\n\[Design Mode selected element attached\][\s\S]*$/, '').trim();
+  if (!designSelections.length) text = text.replace(/\n\n\[Design Mode selected element attached\][\s\S]*$/, '').trim();
   const imageAttachments = attachments.filter((a) => a && a.kind === 'image' && (a.dataUrl || a.workspacePath));
-  const fileAttachments = attachments.filter((a) => a && a.kind !== 'image');
+  const fileAttachments = attachments.filter((a) => a && a.kind !== 'image' && a.kind !== 'design-selection');
   const imgHtml = imageAttachments.length
     ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:5px">${imageAttachments.map((p) => {
         const src = p.dataUrl || `/api/canvas/inline?path=${encodeURIComponent(String(p.workspacePath || ''))}`;
@@ -10949,10 +11045,22 @@ function renderUserMessageContent(msg) {
         </div>`;
       }).join('')}</div>`
     : '';
-  const textHtml = text
-    ? renderDesktopSlashCommandTokens(escHtml(text).replace(/\*\*([^*\n][^*\n]{0,120})\*\*/g, '<strong>$1</strong>'))
+  const designSelectionHtml = designSelections.length
+    ? `<div class="design-selection-message-attachments">${designSelections.map((selection) => {
+        const selector = String(selection.selector || '').trim();
+        const name = String(selection.name || '').replace(/^Selected:\s*/i, '').trim();
+        const preview = String(selection.previewText || '').trim().replace(/\s+/g, ' ');
+        const label = preview || name || selector || 'Selected element';
+        const title = [selector ? `Selected: ${selector}` : '', preview ? `Text: ${preview}` : ''].filter(Boolean).join('\n');
+        return `<div class="design-selection-message-chip" title="${escHtml(title || label)}">
+          <iconify-icon icon="solar:cursor-square-bold-duotone" width="13" height="13" aria-hidden="true"></iconify-icon>
+          <span>Design element</span>
+          <strong>${escHtml(label)}</strong>
+        </div>`;
+      }).join('')}</div>`
     : '';
-  return `${imgHtml}${fileHtml}${textHtml ? `<div class="msg-content">${textHtml}</div>` : ''}`;
+  const textHtml = text ? renderDesktopSlashCommandTokens(text) : '';
+  return `${imgHtml}${fileHtml}${textHtml ? `<div class="msg-content">${textHtml}</div>` : ''}${designSelectionHtml}`;
 }
 
 function isRenderableLiveTraceImageSource(value) {
@@ -11709,6 +11817,17 @@ function renderGoalContinuationMessage(msg) {
   </div>`;
 }
 
+function workflowTransitionLabel(msg) {
+  const groupId = String(msg?.workflowGroupId || '');
+  if (/^chat_steer_/i.test(groupId)) {
+    const part = String(msg?.workflowPart || '');
+    if (part === 'before_interruption') return 'Tool stream before steer';
+    if (part === 'interruption') return 'Message sent as steer';
+    if (part === 'interruption_response') return 'Response after steer';
+  }
+  return String(msg?.workflowLabel || '').trim();
+}
+
 function renderVisibleChatHistoryHtml(history = [], options = {}) {
   const visibleHistory = collapseDuplicateAssistantMessageEntries((history || [])
     .map((msg, originalIndex) => ({ msg, originalIndex })))
@@ -11728,9 +11847,11 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
     const channelTag = isTelegramMsg
       ? '<span class="msg-channel-tag">(telegram)</span>'
       : (isTimerMsg ? '<span class="msg-channel-tag">(timer)</span>' : (isGoalMsg ? '<span class="msg-channel-tag">(goal)</span>' : (isSideBoundary ? '<span class="msg-channel-tag">(side)</span>' : '')));
-    const displayRole = isTimerMsg ? 'assistant' : msg.role;
+    const rawRole = isTimerMsg ? 'assistant' : msg.role;
+    const displayRole = (rawRole === 'ai' || rawRole === 'assistant') ? 'assistant' : rawRole;
     const isUser = displayRole === 'user';
     const isWorkerHandoff = isUser && isVoiceAgentWorkerHandoffMessage(msg);
+    const workflowLabel = workflowTransitionLabel(msg);
     const isEditingThisUserMessage = !options.readonly && isUser && window.editingUserMessageIndex === originalIndex;
     const userContentHtml = isEditingThisUserMessage
       ? renderUserEditComposer(msg, originalIndex)
@@ -11751,11 +11872,11 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
     const hasVisualContent = !isUser && /\bvisual-block\b/.test(assistantContentHtml);
     const actionsHtml = options.readonly || isSideBoundary ? '' : renderMessageActions(msg, originalIndex);
     return `
-    <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowGroupId ? ' workflow-linked' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}${isSideBoundary ? ' side-chat-boundary-msg' : ''}">
+    <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}${isSideBoundary ? ' side-chat-boundary-msg' : ''}" data-chat-message-index="${originalIndex}">
       <div class="msg ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
         ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
         <div class="msg-bubble-stack">
-          ${msg.workflowLabel ? `<div class="workflow-chip">${escHtml(msg.workflowLabel)}</div>` : ''}
+          ${workflowLabel ? `<div class="workflow-transition-label">${escHtml(workflowLabel)}</div>` : ''}
           <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${(msg.approvalRequest || msg.questionRequest) && !msg.content ? ' msg-body-approval-only' : ''}">
                 ${!isUser ? renderAssistantWorkTimer(msg) : ''}
                 ${!isUser ? renderCompletedAssistantTraceDrawer(msg) : ''}
@@ -11779,8 +11900,7 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
   }).join('');
 }
 
-function renderSessionThinkingHtml(sessionId) {
-  if (!isSessionThinking(sessionId)) return '';
+function renderSessionThinkingBodyHtml(sessionId) {
   const st = getSessionStreamState(sessionId) || {};
   const startupProgressPattern = /^(request received\. starting chat turn|preparing chat context|preparing prometheus runtime|building model context)/i;
   const progressLines = (Array.isArray(st.currentProgressLines) ? st.currentProgressLines : [])
@@ -11807,11 +11927,6 @@ function renderSessionThinkingHtml(sessionId) {
     ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(st.activeModelBadge.label)}</span>`
     : '';
   return `
-    <div class="msg-shell ai">
-      <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="${sessionId === window.activeChatSessionId ? 'thinking-msg' : `thinking-msg-${escHtml(sessionId)}`}">
-        <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
-        <div class="msg-bubble-stack">
-          <div class="msg-body">
             ${renderAssistantWorkTimer(null, { active: true, startedAt: Number(st.turnStartedAt || 0) })}
             ${!thinkingOnly ? `<div class="msg-role">Prom${activeModelBadgeHtml}</div>` : ''}
             ${showLiveTrace ? liveTraceHtml : (!showAnswerText ? progressHtml : '')}
@@ -11822,7 +11937,25 @@ function renderSessionThinkingHtml(sessionId) {
             }
             ${liveApprovalsHtml}
             ${pendingQuestionHtml}
-            ${inlinePlanHtml}
+            ${inlinePlanHtml}`;
+}
+
+function renderSessionThinkingHtml(sessionId) {
+  if (!isSessionThinking(sessionId)) return '';
+  const st = getSessionStreamState(sessionId) || {};
+  const thinkingOnly = !String(st.streamingAIText || '').trim()
+    && !Array.isArray(st.liveTraceEntries || []).length
+    && !Array.isArray(st.currentProgressLines || []).length
+    && !Array.isArray(st.pendingApprovals || []).length
+    && !getRuntimePlanItems(st.runtimeProgressState).length
+    && !findPendingPrometheusQuestionForSession(sessionId);
+  return `
+    <div class="msg-shell ai">
+      <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="${sessionId === window.activeChatSessionId ? 'thinking-msg' : `thinking-msg-${escHtml(sessionId)}`}">
+        <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
+        <div class="msg-bubble-stack">
+          <div class="msg-body" data-live-stream-body="${escHtml(sessionId)}">
+            <div data-live-stream-content>${renderSessionThinkingBodyHtml(sessionId)}</div>
           </div>
         </div>
       </div>
@@ -11871,7 +12004,6 @@ function renderSideChatPaneHtml() {
             <button type="button" style="background:none;border:none;padding:0;cursor:default;color:var(--muted);font-size:11px;font-family:inherit;display:inline-flex;align-items:center;gap:3px" title="Side chat model">
               <span>${escHtml(document.getElementById('chat-model-name')?.textContent || 'gpt-5.5')}</span>
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-              <span style="color:var(--muted)">via <span>${escHtml(document.getElementById('chat-provider-name')?.textContent || 'ChatGPT')}</span></span>
             </button>
             <button class="chat-context-window-btn" type="button" onclick="showToast('Side chat context is inherited from the parent chat.', '', 'info')" title="Context window" aria-label="Context window">
               <span class="chat-context-window-dot"></span>
@@ -12151,6 +12283,7 @@ function renderChatMessages() {
         ${renderEmptyChatStarterCards()}
       </div>`;
     loadEmptyChatBrainCards();
+    renderChatMessageNavigator();
     return;
   }
 
@@ -12180,6 +12313,7 @@ function renderChatMessages() {
     restoreQuestionDraftState(_questionDraft);
     restoreApprovalDetailsState(_approvalDetailsState);
     restoreApprovalProcessState(_approvalProcessState);
+    renderChatMessageNavigator();
     return;
   }
 
@@ -12193,6 +12327,102 @@ function renderChatMessages() {
   restoreQuestionDraftState(_questionDraft);
   restoreApprovalDetailsState(_approvalDetailsState);
   restoreApprovalProcessState(_approvalProcessState);
+  renderChatMessageNavigator();
+}
+
+function renderChatMessageNavigator() {
+  const chatView = document.getElementById('chat-view');
+  const container = document.getElementById('chat-messages');
+  if (!chatView || !container) return;
+  chatView.querySelector('.chat-message-navigator')?.remove();
+  if (container.classList.contains('side-chat-split-shell')) return;
+  const messages = Array.from(container.querySelectorAll('.msg-shell.user[data-chat-message-index]'));
+  if (!messages.length) return;
+  const history = Array.isArray(window.chatHistory) ? window.chatHistory : [];
+
+  const textForPreview = (value, fallback) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, 180) || fallback;
+  const pairedResponseFor = (historyIndex) => {
+    for (let index = historyIndex + 1; index < history.length; index += 1) {
+      const entry = history[index];
+      if (String(entry?.role || '').toLowerCase() === 'user') break;
+      if (isInternalChatMessage(entry)) continue;
+      if (entry?.role === 'ai' || entry?.role === 'assistant') {
+        const content = textForPreview(entry.content, '');
+        if (content) return content;
+      }
+    }
+    return 'Prometheus is still preparing a response.';
+  };
+
+  const navigator = document.createElement('nav');
+  navigator.className = 'chat-message-navigator';
+  navigator.setAttribute('aria-label', 'Message navigator');
+  navigator.innerHTML = messages.map((node, position) => {
+    const index = String(node.getAttribute('data-chat-message-index') || '');
+    const historyIndex = Number(index);
+    const prompt = textForPreview(history[historyIndex]?.content, `Message ${position + 1}`);
+    const response = pairedResponseFor(historyIndex);
+    return `<button type="button" class="chat-message-nav-marker" data-chat-message-target="${escHtml(index)}" aria-label="Go to message ${position + 1}"><span class="chat-message-nav-preview"><strong>${escHtml(prompt)}</strong><small>${escHtml(response)}</small></span></button>`;
+  }).join('');
+  navigator.querySelectorAll('[data-chat-message-target]').forEach((button) => button.addEventListener('click', () => {
+    const index = button.getAttribute('data-chat-message-target');
+    const target = container.querySelector(`.msg-shell[data-chat-message-index="${CSS.escape(String(index || ''))}"]`);
+    if (!target) return;
+    window.chatMessagesUserScrolledUp = true;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.remove('navigator-target');
+    void target.offsetWidth;
+    target.classList.add('navigator-target');
+    setTimeout(() => target.classList.remove('navigator-target'), 1400);
+  }));
+  chatView.appendChild(navigator);
+  updateChatMessageNavigatorActive(container);
+}
+
+function updateChatMessageNavigatorActive(container = document.getElementById('chat-messages')) {
+  const chatView = document.getElementById('chat-view');
+  const navigator = chatView?.querySelector('.chat-message-navigator');
+  if (!container || !navigator) return;
+  const targets = Array.from(container.querySelectorAll('.msg-shell.user[data-chat-message-index]'));
+  const readLine = container.scrollTop + (container.clientHeight * 0.38);
+  let active = targets[0] || null;
+  targets.forEach((node) => { if (node.offsetTop <= readLine) active = node; });
+  const activeIndex = String(active?.getAttribute('data-chat-message-index') || '');
+  navigator.querySelectorAll('[data-chat-message-target]').forEach((button) => {
+    button.classList.toggle('active', button.getAttribute('data-chat-message-target') === activeIndex);
+  });
+}
+
+// Tool events can arrive several times per second. Rebuilding the entire chat
+// transcript for each one destroys open disclosures and interrupts scrolling.
+// Once the live bubble exists, update that bubble alone; a full render remains
+// the safe fallback for first paint and interactive approval/question cards.
+function patchStreamingChatBubble(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid !== String(window.activeChatSessionId || '') || !isSessionThinking(sid)) return false;
+  const bubble = document.getElementById('thinking-msg');
+  const content = bubble?.querySelector?.('[data-live-stream-content]');
+  if (!bubble || !content) return false;
+  if (content.querySelector('.chat-question-card, .chat-approval-card')) return false;
+
+  const openGroups = new Set();
+  content.querySelectorAll('details.live-turn-tool-group[open]').forEach((node) => {
+    const key = String(node.getAttribute('data-live-trace-group') || '');
+    if (key) openGroups.add(key);
+  });
+  content.innerHTML = renderSessionThinkingBodyHtml(sid);
+  content.querySelectorAll('details.live-turn-tool-group[data-live-trace-group]').forEach((node) => {
+    if (openGroups.has(String(node.getAttribute('data-live-trace-group') || ''))) node.open = true;
+  });
+  if (!window.chatMessagesUserScrolledUp) {
+    const container = document.getElementById('chat-messages');
+    if (container) container.scrollTop = container.scrollHeight;
+  }
+  return true;
+}
+
+function renderStreamingChatUpdate(sessionId) {
+  if (!patchStreamingChatBubble(sessionId)) renderChatMessages();
 }
 
 function syncAssistantWorkTimer() {
@@ -13647,6 +13877,7 @@ let skillTriggerLastKey = '';
 let skillTriggerCacheLoadPromise = null;
 let skillTriggerExcludedIds = new Set();
 let selectedComposerSkillIds = [];
+let selectedComposerSkillRefs = [];
 let skillCommandSelectionIndex = 0;
 
 const SKILL_TRIGGER_STOPWORDS = new Set([
@@ -13741,12 +13972,38 @@ function normalizeSelectedSkillIds(value) {
   return ids;
 }
 
-function rememberSelectedComposerSkill(id) {
+function normalizeSelectedComposerSkillRefs(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const refs = [];
+  raw.forEach((item) => {
+    const title = String(item?.title || item?.name || '').trim();
+    const id = String(item?.id || title).trim();
+    const key = (id || title).toLowerCase();
+    if (!title || !key || seen.has(key)) return;
+    seen.add(key);
+    refs.push({ id: id || title, title });
+  });
+  return refs;
+}
+
+function rememberSelectedComposerSkill(id, title = '') {
   selectedComposerSkillIds = normalizeSelectedSkillIds([...selectedComposerSkillIds, id]).slice(0, 8);
+  const skillId = String(id || '').trim();
+  const skillTitle = String(title || id || '').trim();
+  if (!skillTitle) return;
+  const key = (skillId || skillTitle).toLowerCase();
+  const next = selectedComposerSkillRefs.filter((item) => {
+    const itemKey = String(item?.id || item?.title || '').trim().toLowerCase();
+    return itemKey && itemKey !== key;
+  });
+  next.push({ id: skillId || skillTitle, title: skillTitle });
+  selectedComposerSkillRefs = next.slice(-8);
 }
 
 function clearSelectedComposerSkills() {
   selectedComposerSkillIds = [];
+  selectedComposerSkillRefs = [];
 }
 
 function normalizeSkillTriggerExclusionId(value) {
@@ -13927,6 +14184,69 @@ function sortedSlashCommands() {
   return CHAT_SLASH_COMMANDS.slice().sort((a, b) => b.command.length - a.command.length);
 }
 
+function hasDesktopSlashCommandToken(text) {
+  const value = String(text || '');
+  for (let index = value.indexOf('/'); index >= 0; index = value.indexOf('/', index + 1)) {
+    if (getDesktopSlashCommandTokenAt(value, index)) return true;
+  }
+  return false;
+}
+
+function getDesktopSkillRefMatchAt(text, index, refs) {
+  const lower = String(text || '').toLowerCase();
+  for (const ref of refs) {
+    const title = String(ref?.title || '').trim();
+    if (!title) continue;
+    const end = index + title.length;
+    if (lower.slice(index, end) === title.toLowerCase()) return { ref, end };
+  }
+  return null;
+}
+
+function renderDesktopComposerRichTextHtml(value, refs = selectedComposerSkillRefs) {
+  const text = String(value || '');
+  const normalizedRefs = normalizeSelectedComposerSkillRefs(refs)
+    .sort((a, b) => String(b.title || '').length - String(a.title || '').length);
+  let html = '';
+  for (let index = 0; index < text.length;) {
+    const skillMatch = getDesktopSkillRefMatchAt(text, index, normalizedRefs);
+    if (skillMatch) {
+      html += `<span class="chat-composer-skill-token">${escHtml(text.slice(index, skillMatch.end))}</span>`;
+      index = skillMatch.end;
+      continue;
+    }
+    const match = getDesktopSlashCommandTokenAt(text, index);
+    if (match) {
+      html += `<span class="chat-composer-command-token">${escHtml(text.slice(index, match.end))}</span>`;
+      index = match.end;
+      continue;
+    }
+    html += escHtml(text.charAt(index));
+    index += 1;
+  }
+  return html;
+}
+
+function updateDesktopComposerRichPreview(input = document.getElementById('chat-input')) {
+  if (!input || input.id !== 'chat-input') return;
+  const wrapper = document.getElementById('chat-composer-input-wrap');
+  const preview = document.getElementById('chat-composer-rich-preview');
+  if (!wrapper || !preview) return;
+  const text = String(input.value || '');
+  const refs = normalizeSelectedComposerSkillRefs(selectedComposerSkillRefs);
+  const hasSkillToken = refs.some((ref) => ref.title && text.toLowerCase().includes(ref.title.toLowerCase()));
+  const hasCommandToken = hasDesktopSlashCommandToken(text);
+  const hasRichPreview = hasSkillToken || hasCommandToken;
+  wrapper.classList.toggle('has-rich-preview', hasRichPreview);
+  preview.hidden = !hasRichPreview;
+  if (!hasRichPreview) {
+    preview.textContent = '';
+    return;
+  }
+  preview.innerHTML = renderDesktopComposerRichTextHtml(text, refs);
+  preview.scrollTop = input.scrollTop || 0;
+}
+
 function matchSlashCommandValue(value) {
   const text = String(value || '');
   const lower = text.toLowerCase();
@@ -14008,7 +14328,7 @@ function replaceSkillCommandWithSelection(skill, input = document.getElementById
   input.value = `${state.value.slice(0, state.start)}${replacement}${state.value.slice(state.end)}`;
   const nextCursor = state.start + replacement.length;
   input.setSelectionRange(nextCursor, nextCursor);
-  rememberSelectedComposerSkill(skill.id || skill.name || name);
+  rememberSelectedComposerSkill(skill.id || skill.name || name, name);
   resizeChatInput(input);
   hideSlashCommandPopover();
   handleSkillTriggerInput(input);
@@ -14077,7 +14397,11 @@ function renderSlashCommandPopover(inputValue = '') {
 function refreshActiveSlashCommandChrome() {
   const input = document.getElementById('chat-input');
   const chip = document.getElementById('chat-command-chip');
-  if (!chip || !input) return;
+  if (!input) return;
+  if (!chip) {
+    input.placeholder = getChatInputDefaultPlaceholder();
+    return;
+  }
   if (!activeSlashCommand) {
     chip.style.display = 'none';
     chip.textContent = '';
@@ -14092,8 +14416,9 @@ function refreshActiveSlashCommandChrome() {
 function setActiveSlashCommand(item, remainder = '') {
   const input = document.getElementById('chat-input');
   if (!input || !item) return;
-  activeSlashCommand = item;
-  input.value = String(remainder || '');
+  activeSlashCommand = null;
+  input.value = `${item.command}${remainder ? ` ${String(remainder).trimStart()}` : ' '}`;
+  input.setSelectionRange(input.value.length, input.value.length);
   resizeChatInput(input);
   refreshActiveSlashCommandChrome();
   hideSlashCommandPopover();
@@ -14122,26 +14447,27 @@ function selectSlashCommand(command) {
     activeSlashCommand = null;
     refreshActiveSlashCommandChrome();
     resizeChatInput(input);
+    updateDesktopComposerRichPreview(input);
     renderSlashCommandPopover(input.value);
     input.focus();
     return;
   }
-  if (slashState && slashState.start > 0 && input) {
-    const replacement = `${item.command} `;
+  if (!input) return;
+  const replacement = `${item.command} `;
+  if (slashState) {
     input.value = `${slashState.value.slice(0, slashState.start)}${replacement}${slashState.value.slice(slashState.end)}`;
     const nextCursor = slashState.start + replacement.length;
     input.setSelectionRange(nextCursor, nextCursor);
-    activeSlashCommand = null;
-    refreshActiveSlashCommandChrome();
-    resizeChatInput(input);
-    hideSlashCommandPopover();
-    input.focus();
-    return;
+  } else {
+    input.value = replacement;
+    input.setSelectionRange(input.value.length, input.value.length);
   }
-  const current = String(input?.value || '');
-  const typedMatch = matchSlashCommandValue(current);
-  const remainder = typedMatch?.item.command === item.command ? typedMatch.remainder : '';
-  setActiveSlashCommand(item, remainder);
+  activeSlashCommand = null;
+  refreshActiveSlashCommandChrome();
+  resizeChatInput(input);
+  updateDesktopComposerRichPreview(input);
+  hideSlashCommandPopover();
+  input.focus();
 }
 
 function clearActiveSlashCommand(options = {}) {
@@ -14153,9 +14479,7 @@ function clearActiveSlashCommand(options = {}) {
 
 function getChatComposerValue() {
   const input = document.getElementById('chat-input');
-  const value = String(input?.value || '').trim();
-  if (!activeSlashCommand) return value;
-  return `${activeSlashCommand.command}${value ? ` ${value}` : ''}`.trim();
+  return String(input?.value || '').trim();
 }
 
 function handleImmediateChatSlashCommand(message) {
@@ -14184,30 +14508,21 @@ function handleSlashCommandInput(input) {
   if (getSkillCommandState(input)) {
     skillCommandSelectionIndex = 0;
     renderSlashCommandPopover(value);
+    updateDesktopComposerRichPreview(input);
     return;
   }
-  if (activeSlashCommand) {
-    if (getSlashCommandState(input)) {
-      activeSlashCommand = null;
-      refreshActiveSlashCommandChrome();
-      slashCommandSelectionIndex = 0;
-      renderSlashCommandPopover(value);
-    }
-    return;
-  }
-  const match = matchSlashCommandValue(value);
-  if (match) {
-    setActiveSlashCommand(match.item, match.remainder);
-    return;
-  }
+  activeSlashCommand = null;
+  refreshActiveSlashCommandChrome();
   slashCommandSelectionIndex = 0;
   renderSlashCommandPopover(value);
+  updateDesktopComposerRichPreview(input);
 }
 
 function clearChatComposerAfterSend(input) {
   if (input) {
     input.value = '';
     input.style.height = 'auto';
+    updateDesktopComposerRichPreview(input);
   }
   clearActiveSlashCommand({ focus: false });
   clearSkillTriggerExclusions();
@@ -14290,7 +14605,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     if (!isSessionVisibleInChatSurface(thisSessionId)) return;
     const beforeTextLen = String(document.getElementById('streaming-text-content')?.textContent || '').length;
     if (window.activeChatSessionId === thisSessionId) applyStreamStateToWindow(thisSessionId);
-    renderChatMessages();
+    renderStreamingChatUpdate(thisSessionId);
     markLiveStreamMotionAfterRender(thisSessionId, beforeTextLen);
   };
   const pushProgressLine = (line) => {
@@ -15618,9 +15933,13 @@ async function sendChat(queuedMessage = null, options = {}) {
   // Per-session cleanup
   delete window._sessionThinking[thisSessionId];
   delete window._sessionAbortControllers[thisSessionId];
+  // Do this before the final non-streaming paint. A late render must never
+  // reuse the completed turn's state and recreate an empty Working bubble.
+  window._sessionStreamState[thisSessionId] = makeEmptyStreamState();
   syncActiveSessionRunState();
   const isViewingThisSession = window.activeChatSessionId === thisSessionId;
   if (isViewingThisSession) {
+    applyStreamStateToWindow(thisSessionId);
     if (typeof window.setButtonState === 'function') window.setButtonState(false);
     window.currentPreflightStatus = '';
     window.currentProgressLines = [];
@@ -16037,10 +16356,19 @@ function renderBackgroundSpawnDock() {
 function updateBackgroundSpawnDockOffset() {
   const chatView = document.getElementById('chat-view');
   const inputArea = document.querySelector('#chat-view > .chat-input-area');
+  const queuedPanel = document.getElementById('queued-prompts-panel');
   if (!chatView || !inputArea) return;
   requestAnimationFrame(() => {
-    const height = Math.ceil(inputArea.getBoundingClientRect?.().height || 0);
-    const bottom = Math.max(128, height + 34);
+    const chatRect = chatView.getBoundingClientRect?.();
+    const inputRect = inputArea.getBoundingClientRect?.();
+    const height = Math.ceil(inputRect?.height || 0);
+    const composerBottomGutter = Math.max(0, Math.ceil((chatRect?.bottom || 0) - (inputRect?.bottom || 0)));
+    const queuedVisible = queuedPanel && getComputedStyle(queuedPanel).display !== 'none';
+    const queuedHeight = queuedVisible ? Math.ceil(queuedPanel.getBoundingClientRect?.().height || 0) : 0;
+    // The queue nests behind the composer by 34px. Only its exposed height
+    // needs docking room; the overlap is intentionally occupied by composer.
+    const queueLift = queuedHeight ? Math.max(0, queuedHeight - 34) + 10 : 16;
+    const bottom = Math.max(128, composerBottomGutter + height + queueLift);
     chatView.style.setProperty('--background-spawn-dock-bottom', `${bottom}px`);
   });
 }
@@ -16142,6 +16470,7 @@ document.getElementById('chat-input').addEventListener('keydown', e => {
   }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
+    stopComposerTranscription({ refocus: false });
     sendChat();
   }
 });
@@ -16151,6 +16480,11 @@ document.getElementById('chat-input').addEventListener('input', function() {
   resizeChatInput(this);
   handleSlashCommandInput(this);
   handleSkillTriggerInput(this);
+  updateDesktopComposerRichPreview(this);
+  updateDesktopComposerSendButton();
+});
+document.getElementById('chat-input').addEventListener('scroll', function() {
+  updateDesktopComposerRichPreview(this);
 });
 document.getElementById('chat-input').addEventListener('blur', () => {
   setTimeout(hideSlashCommandPopover, 120);
@@ -16187,8 +16521,11 @@ let canvasProjectRoot = null;
 let canvasProjectLabel = null;
 let canvasProjectLink = null;
 let canvasPublishState = null;
-let canvasBrowserCollapsed = false;
+// The file tree is an optional Canvas utility, not part of the default work
+// surface. Keep it closed until the user deliberately expands it.
+let canvasBrowserCollapsed = true;
 let canvasPreviewDevice = 'responsive';
+let canvasPreviewUpdateVersion = 0;
 const canvasFolderExpanded = new Set();
 let creativeSceneDoc = createSceneDocument();
 let creativeSelectedId = null;
@@ -16313,6 +16650,12 @@ let voiceDictationActive = false;
 let voiceDictationEnabled = false;
 let voiceDictationBaseText = '';
 let voiceDictationFinalText = '';
+let composerTranscriptionRecognition = null;
+let composerTranscriptionEnabled = false;
+let composerTranscriptionGeneration = 0;
+let composerTranscriptionRestartTimer = null;
+let composerTranscriptionBaseText = '';
+let composerTranscriptionFinalText = '';
 let voiceProvidersStatus = { sttProviders: [], ttsProviders: [] };
 let voiceSttProvider = 'browser';
 let voiceTtsProvider = 'browser';
@@ -16334,6 +16677,13 @@ let realtimeVoiceConnecting = null;
 let xaiStreamingDictationConnection = null;
 let xaiStreamingDictationFinalText = '';
 let xaiStreamingDictationInterimText = '';
+const DESKTOP_VOICE_TOAST_KEY = 'desktop-voice-status';
+
+// Voice startup has several transport handoffs (realtime → streaming STT →
+// batch STT). Treat them as one changing status, not a separate toast per hop.
+function showDesktopVoiceStatus(title, body = '', type = 'info', duration = 5000) {
+  showToast(title, body, type, duration, { key: DESKTOP_VOICE_TOAST_KEY });
+}
 let realtimeVoiceModeEpoch = 0;
 let realtimeListenMode = 'auto_send';
 let realtimeHoldSpaceActive = false;
@@ -16684,6 +17034,142 @@ function resizeChatInput(input = document.getElementById('chat-input')) {
   if (!input) return;
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  updateDesktopComposerRichPreview(input);
+  updateDesktopComposerSendButton();
+}
+
+function hasDesktopComposerOutboundContent() {
+  const input = document.getElementById('chat-input');
+  return !!(String(input?.value || '').trim() || pendingChatFiles.length);
+}
+
+function isDesktopComposerTurnActive() {
+  const sessionId = String(window.activeChatSessionId || '').trim();
+  const activeSession = (window.chatSessions || []).find((session) => String(session?.id || '') === sessionId);
+  return !!(
+    window._sessionThinking?.[sessionId]
+    || window.isThinking
+    || activeSession?.activeRun === true
+  );
+}
+
+function updateDesktopComposerSendButton() {
+  const btn = document.getElementById('send-btn');
+  if (!btn) return;
+  const sendIcon = document.getElementById('send-icon');
+  const voiceIcon = document.getElementById('voice-mode-icon');
+  const stopIcon = document.getElementById('stop-icon');
+  // Session state is the authority here. The button must never expose voice
+  // mode while Prometheus has an active turn, even if a late UI update left
+  // its previous data attribute behind.
+  const thinking = isDesktopComposerTurnActive() || btn.dataset.thinking === 'true';
+  const voiceMode = !thinking && !hasDesktopComposerOutboundContent();
+  btn.classList.toggle('voice-mode-btn', voiceMode);
+  btn.classList.toggle('is-voice', voiceMode);
+  if (sendIcon) sendIcon.style.display = thinking || voiceMode ? 'none' : '';
+  if (voiceIcon) voiceIcon.hidden = !voiceMode;
+  if (stopIcon) stopIcon.style.display = thinking ? '' : 'none';
+  btn.style.background = thinking ? 'var(--err)' : '';
+  btn.title = thinking ? 'Stop generation' : voiceMode ? 'Start voice mode' : 'Send';
+  btn.setAttribute('aria-label', btn.title);
+}
+
+function writeComposerTranscription(interimText = '') {
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  const pieces = [composerTranscriptionBaseText, composerTranscriptionFinalText, interimText]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean);
+  input.value = pieces.join(pieces.length > 1 ? ' ' : '');
+  resizeChatInput(input);
+}
+
+function stopComposerTranscription(options = {}) {
+  composerTranscriptionEnabled = false;
+  composerTranscriptionGeneration += 1;
+  if (composerTranscriptionRestartTimer) clearTimeout(composerTranscriptionRestartTimer);
+  composerTranscriptionRestartTimer = null;
+  const recognition = composerTranscriptionRecognition;
+  composerTranscriptionRecognition = null;
+  try { recognition?.stop?.(); } catch {
+    try { recognition?.abort?.(); } catch {}
+  }
+  const btn = document.getElementById('chat-voice-btn');
+  btn?.classList.remove('recording', 'active');
+  btn?.setAttribute('aria-label', 'Dictate message');
+  if (options.refocus !== false) document.getElementById('chat-input')?.focus();
+}
+
+function startComposerTranscriptionCycle(Recognition) {
+  if (!composerTranscriptionEnabled || composerTranscriptionRecognition) return;
+  try {
+    const recognition = new Recognition();
+    const generation = composerTranscriptionGeneration;
+    composerTranscriptionRecognition = recognition;
+    recognition.lang = navigator.language || 'en-US';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.onstart = () => {
+      if (generation !== composerTranscriptionGeneration) return;
+      const btn = document.getElementById('chat-voice-btn');
+      btn?.classList.add('recording', 'active');
+      btn?.setAttribute('aria-label', 'Stop dictation');
+    };
+    recognition.onresult = (event) => {
+      if (generation !== composerTranscriptionGeneration) return;
+      let interimText = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const transcript = String(event.results[i]?.[0]?.transcript || '').trim();
+        if (!transcript) continue;
+        if (event.results[i].isFinal) composerTranscriptionFinalText = `${composerTranscriptionFinalText} ${transcript}`.trim();
+        else interimText = `${interimText} ${transcript}`.trim();
+      }
+      writeComposerTranscription(interimText);
+    };
+    recognition.onerror = (event) => {
+      if (generation !== composerTranscriptionGeneration) return;
+      const error = String(event?.error || 'unknown');
+      if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(error)) {
+        stopComposerTranscription({ refocus: false });
+        showToast(error === 'audio-capture' ? 'The microphone is not available.' : 'Microphone permission was denied.', '', 'error');
+      } else if (!['no-speech', 'aborted'].includes(error)) {
+        console.warn('[composer dictation] speech recognition error:', error);
+      }
+    };
+    recognition.onend = () => {
+      if (generation !== composerTranscriptionGeneration) return;
+      if (composerTranscriptionRecognition === recognition) composerTranscriptionRecognition = null;
+      if (!composerTranscriptionEnabled) return;
+      composerTranscriptionRestartTimer = setTimeout(() => {
+        composerTranscriptionRestartTimer = null;
+        startComposerTranscriptionCycle(Recognition);
+      }, 140);
+    };
+    recognition.start();
+  } catch (err) {
+    composerTranscriptionRecognition = null;
+    composerTranscriptionEnabled = false;
+    document.getElementById('chat-voice-btn')?.classList.remove('recording', 'active');
+    showToast('Dictation could not start', String(err?.message || err), 'error');
+  }
+}
+
+function toggleComposerTranscription() {
+  const Recognition = getSpeechRecognitionCtor();
+  if (!Recognition) {
+    showToast('Voice dictation unavailable', 'This browser does not expose SpeechRecognition.', 'error');
+    return;
+  }
+  if (composerTranscriptionEnabled) {
+    stopComposerTranscription();
+    return;
+  }
+  composerTranscriptionBaseText = String(document.getElementById('chat-input')?.value || '').trim();
+  composerTranscriptionFinalText = '';
+  composerTranscriptionEnabled = true;
+  composerTranscriptionGeneration += 1;
+  showToast('Listening', 'Dictation is writing into the chat box. Press Enter to send.', 'info', 2000);
+  startComposerTranscriptionCycle(Recognition);
 }
 
 function setVoiceDictationState(active) {
@@ -16694,31 +17180,14 @@ function setVoiceDictationState(active) {
 function setUnifiedVoiceButtonState() {
   const btn = document.getElementById('chat-voice-btn');
   if (!btn) return;
-  const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
-  const gate = getRealtimeWakeGate?.();
-  const realtimeActive = !!realtimeVoiceRepliesEnabled;
-  const regularActive = !!voiceDictationEnabled;
-  const recording = !!voiceDictationActive || !!(realtimeActive && realtimeDictationRecording);
-  btn.classList.toggle('recording', recording);
-  btn.classList.toggle('active', regularActive || realtimeActive);
-  btn.classList.toggle('silent', !!gate);
-  btn.classList.toggle('unconfigured', mode === 'openai_realtime' && !realtimeVoiceConfigured);
-  btn.dataset.voiceMode = mode;
-  const showWave = realtimeActive || mode === 'openai_realtime';
-  const micIcon = btn.querySelector('.voice-btn-icon-mic');
-  const waveIcon = btn.querySelector('.voice-btn-icon-wave');
-  if (micIcon) micIcon.hidden = showWave;
-  if (waveIcon) waveIcon.hidden = !showWave;
-  const modeLabel = mode === 'openai_realtime' ? 'OpenAI Realtime' : mode === 'xai' ? 'xAI / Grok' : 'Default voice';
-  btn.title = gate
-    ? `Silent until "${gate.phrase}"`
-    : realtimeVoiceStarting
-      ? 'Starting OpenAI Realtime voice'
-      : realtimeActive
-      ? 'Stop OpenAI Realtime voice'
-      : regularActive
-        ? 'Stop dictation'
-        : `Start ${modeLabel}`;
+  // The composer mic is intentionally independent from voice mode. It always
+  // remains the lightweight browser transcription control, never a realtime
+  // or auto-submit entry point.
+  btn.classList.toggle('recording', composerTranscriptionEnabled && !!composerTranscriptionRecognition);
+  btn.classList.toggle('active', composerTranscriptionEnabled);
+  btn.classList.remove('silent', 'unconfigured');
+  btn.dataset.voiceMode = 'browser';
+  btn.title = composerTranscriptionEnabled ? 'Stop dictation' : 'Dictate message';
   btn.setAttribute('aria-label', btn.title);
 }
 
@@ -16787,7 +17256,7 @@ function getRecorderMimeType() {
 function toggleBrowserDictation() {
   const Recognition = getSpeechRecognitionCtor();
   if (!Recognition) {
-    showToast('Voice dictation unavailable', 'This browser does not expose SpeechRecognition.', 'error');
+    showDesktopVoiceStatus('Voice dictation unavailable', 'This browser does not expose SpeechRecognition.', 'error');
     return;
   }
 
@@ -16805,11 +17274,11 @@ function toggleBrowserDictation() {
     }
     stopRealtimeVoicePlayback({ recordInterrupt: true, reason: 'dictation_started' });
     setVoiceDictationState(true);
-    showToast('Listening', 'Dictation is writing into the chat box.', 'info', 1800);
+    showDesktopVoiceStatus('Listening', 'Dictation is writing into the chat box.', 'info', 1800);
   };
   voiceRecognition.onerror = (event) => {
     const message = event?.error ? `Speech recognition error: ${event.error}` : 'Speech recognition stopped.';
-    showToast('Dictation stopped', message, 'error');
+    showDesktopVoiceStatus('Dictation stopped', message, 'error');
   };
   voiceRecognition.onend = () => {
     setVoiceDictationState(false);
@@ -16841,7 +17310,7 @@ function toggleBrowserDictation() {
     voiceRecognition.start();
   } catch (err) {
     setVoiceDictationState(false);
-    showToast('Dictation could not start', String(err?.message || err), 'error');
+    showDesktopVoiceStatus('Dictation could not start', String(err?.message || err), 'error');
   }
 }
 
@@ -16926,7 +17395,7 @@ async function startXaiStreamingDictation() {
   }
   const selected = getProviderInfo('stt', 'xai');
   if (!selected?.configured) {
-    showToast('Voice provider not configured', `${selected?.label || 'xAI / Grok'} needs its API key on the gateway.`, 'error');
+    showDesktopVoiceStatus('Voice provider not configured', `${selected?.label || 'xAI / Grok'} needs its API key on the gateway.`, 'error');
     return;
   }
   const startedAt = Date.now();
@@ -16952,7 +17421,6 @@ async function startXaiStreamingDictation() {
   xaiStreamingDictationConnection = { ws, stream, audioContext, source, processor, mutedGain, stopping: false };
   setVoiceDictationState(true);
   voiceDictationEnabled = true;
-  showToast('Listening', 'xAI streaming dictation is live.', 'info', 1400);
   let ready = false;
   let fellBack = false;
   const fallbackToBatch = async (reason) => {
@@ -16962,7 +17430,7 @@ async function startXaiStreamingDictation() {
     stopXaiStreamingDictation(true);
     voiceDictationEnabled = true;
     voiceRepliesEnabled = true;
-    showToast('xAI streaming unavailable', 'Using xAI batch transcription instead.', 'error');
+    showDesktopVoiceStatus('xAI streaming unavailable', 'Using standard xAI transcription instead. Your microphone is still ready.', 'warning', 7000);
     await toggleBackendDictationFallback();
   };
   const readyTimeout = setTimeout(() => {
@@ -16984,7 +17452,6 @@ async function startXaiStreamingDictation() {
       return;
     }
     if (type === 'error') {
-      showToast('xAI streaming STT failed', String(data?.error?.message || data?.error || 'Unknown error'), 'error');
       fallbackToBatch(data?.error?.message || data?.error || 'xAI streaming error');
     }
   });
@@ -17054,8 +17521,8 @@ async function transcribeBackendRecording(blob) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.success === false) throw new Error(data?.error || `Transcription failed (${response.status})`);
   appendDictationText(data.text || '');
-  if (data.text) showToast('Transcribed', `${provider.toUpperCase()} wrote into the chat box.`, 'success', 1800);
-  else showToast('No speech detected', '', 'info', 1800);
+  if (data.text) showDesktopVoiceStatus('Transcribed', `${provider.toUpperCase()} wrote into the chat box.`, 'success', 1800);
+  else showDesktopVoiceStatus('No speech detected', '', 'info', 1800);
 }
 
 async function toggleBackendDictation(options = {}) {
@@ -17069,16 +17536,16 @@ async function toggleBackendDictation(options = {}) {
       return;
     } catch (err) {
       console.warn('[voice] xAI streaming dictation failed, falling back to batch STT', err);
-      showToast('xAI streaming unavailable', 'Using xAI batch transcription instead.', 'error');
+      showDesktopVoiceStatus('xAI streaming unavailable', 'Using standard xAI transcription instead. Your microphone is still ready.', 'warning', 7000);
     }
   }
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-    showToast('Voice recording unavailable', 'This browser cannot record microphone audio for backend STT.', 'error');
+    showDesktopVoiceStatus('Voice recording unavailable', 'This browser cannot record microphone audio for backend STT.', 'error');
     return;
   }
   const selected = getProviderInfo('stt', voiceSttProvider);
   if (!selected?.configured) {
-    showToast('Voice provider not configured', `${selected?.label || voiceSttProvider} needs its API key on the gateway.`, 'error');
+    showDesktopVoiceStatus('Voice provider not configured', `${selected?.label || voiceSttProvider} needs its API key on the gateway.`, 'error');
     return;
   }
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -17090,7 +17557,7 @@ async function toggleBackendDictation(options = {}) {
     if (voiceDictationEnabled && event.data && event.data.size > 0) backendVoiceChunks.push(event.data);
   };
   backendVoiceRecorder.onerror = (event) => {
-    showToast('Recording failed', String(event?.error?.message || event?.error || 'Unknown recording error'), 'error');
+    showDesktopVoiceStatus('Recording failed', String(event?.error?.message || event?.error || 'Unknown recording error'), 'error');
   };
   backendVoiceRecorder.onstop = async () => {
     const chunks = backendVoiceChunks.slice();
@@ -17106,15 +17573,15 @@ async function toggleBackendDictation(options = {}) {
     if (!chunks.length) return;
     const blob = new Blob(chunks, { type: backendVoiceMimeType || 'audio/webm' });
     try {
-      showToast('Transcribing', `Sending audio to ${selected?.label || voiceSttProvider}.`, 'info', 1600);
+      showDesktopVoiceStatus('Transcribing', `Sending audio to ${selected?.label || voiceSttProvider}.`, 'info', 1600);
       await transcribeBackendRecording(blob);
     } catch (err) {
-      showToast('Transcription failed', String(err?.message || err), 'error');
+      showDesktopVoiceStatus('Transcription failed', String(err?.message || err), 'error');
     }
   };
   backendVoiceRecorder.start();
   setVoiceDictationState(true);
-  showToast('Recording', `Tap the mic again to transcribe with ${selected?.label || voiceSttProvider}.`, 'info', 2200);
+  showDesktopVoiceStatus('Recording', `Tap the mic again to transcribe with ${selected?.label || voiceSttProvider}.`, 'info', 2200);
 }
 
 function toggleVoiceDictation() {
@@ -17149,7 +17616,7 @@ function toggleVoiceDictation() {
     if (xaiStreamingDictationConnection) {
       stopXaiStreamingDictation(true);
     }
-    showToast('Dictation off', '', 'info', 1400);
+    showDesktopVoiceStatus('Dictation off', '', 'info', 1400);
     return;
   }
   disableRealtimeVoiceMode();
@@ -17161,17 +17628,10 @@ function toggleVoiceDictation() {
   // xAI realtime opt-in: speech-to-speech over WebSocket, same agent machinery
   // as OpenAI Realtime. If realtime can't start, fall back to the standard xAI
   // STT/TTS route rather than leaving the user with no working voice.
-  if (mode === 'xai') {
-    // Visible on-screen diagnostic so the chosen route is unambiguous on Safari
-    // (where the console isn't easily inspected).
-    showToast('xAI voice route', wantsXaiRealtimeMode()
-      ? 'Realtime ON → starting Grok speech-to-speech (WebSocket)…'
-      : 'Realtime OFF → standard xAI STT/TTS', 'info', 3500);
-  }
   if (mode === 'xai' && wantsXaiRealtimeMode()) {
     toggleRealtimeVoiceReplies().catch((err) => {
       const reason = String(err?.message || err || 'Unknown error').slice(0, 300);
-      showToast('xAI realtime failed — using standard xAI voice', reason, 'error', 8000);
+      showDesktopVoiceStatus('xAI realtime unavailable', 'Using standard xAI dictation instead. Check your xAI account or API access to restore realtime voice.', 'warning', 8000);
       try { addSessionProcessEntry(window.activeChatSessionId || 'default', 'warn', `xAI realtime failed: ${reason} (fell back to standard xAI voice)`, { actor: 'Voice Agent (xAI Realtime)' }); } catch {}
       console.warn('[xai-realtime] start failed, falling back to standard xAI route', err);
       startStandardDesktopDictation('xai');
@@ -17188,13 +17648,13 @@ function startStandardDesktopDictation(mode) {
     const xaiTtsReady = isVoiceProviderConfigured('tts', 'xai');
     const xaiSttReady = isVoiceProviderConfigured('stt', 'xai');
     if (!xaiTtsReady) {
-      showToast('xAI/Grok voice unavailable', 'Connect xAI/Grok voice credentials, then try again. Using Default dictation for now.', 'error', 3200);
+      showDesktopVoiceStatus('xAI/Grok voice unavailable', 'Connect xAI/Grok voice credentials, then try again. Using Default dictation for now.', 'error', 3200);
       voiceSttProvider = 'browser';
       voiceTtsProvider = 'browser';
     } else {
       voiceTtsProvider = 'xai';
       voiceSttProvider = xaiSttReady ? 'xai' : 'browser';
-      if (!xaiSttReady) showToast('xAI/Grok transcription unavailable', 'Using browser dictation with xAI/Grok response voice.', 'info', 2600);
+      if (!xaiSttReady) showDesktopVoiceStatus('xAI/Grok transcription unavailable', 'Using browser dictation with xAI/Grok response voice.', 'info', 2600);
     }
     storeVoiceProvider('stt', voiceSttProvider);
     storeVoiceProvider('tts', voiceTtsProvider);
@@ -17216,7 +17676,7 @@ function startStandardDesktopDictation(mode) {
   }
   toggleBackendDictation().catch((err) => {
     setVoiceDictationState(false);
-    showToast('Dictation could not start', String(err?.message || err), 'error');
+    showDesktopVoiceStatus('Dictation could not start', String(err?.message || err), 'error');
   });
 }
 
@@ -19862,6 +20322,11 @@ const voiceAgentRealtimeTurn = {
   dispatchedWorkerThisResponse: false,
   lastUserTranscript: '',
   lastAssistantTranscript: '',
+  liveUserTranscript: '',
+  liveAssistantTranscript: '',
+  desktopUserTurn: null,
+  desktopAssistantTurn: null,
+  suppressAssistantTranscript: false,
   nudged: false,
   pendingWorkerDispatch: null,
   recentTranscriptEvents: [],
@@ -20324,37 +20789,154 @@ function seedVoiceAgentRealtimeConversationHistory(dc, sessionId) {
   }
 }
 
-// Push a realtime-agent turn into the visible desktop chat thread so the user
-// sees their own spoken messages and Prom's replies in the main chat — not just
-// the process log. Display-only: the realtime session itself owns the audio.
-function appendRealtimeAgentChatMessage(sessionId, role, text) {
+function extractRealtimeAgentEventText(event = {}, options = {}) {
+  const parts = [];
+  const seen = new Set();
+  const push = (value) => {
+    if (value == null || (typeof value === 'object' && !Array.isArray(value))) return;
+    if (Array.isArray(value)) return;
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!text) return;
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    parts.push(text);
+  };
+  ['transcript', 'text', 'delta', 'content', 'output_text', 'audio_transcript'].forEach((key) => push(event?.[key]));
+  const nested = event?.item || event?.response || event?.message || null;
+  ['transcript', 'text', 'delta', 'content', 'output_text', 'audio_transcript'].forEach((key) => push(nested?.[key]));
+  const content = Array.isArray(nested?.content)
+    ? nested.content
+    : (Array.isArray(event?.content) ? event.content : []);
+  content.forEach((part) => {
+    ['transcript', 'text', 'delta', 'content', 'output_text', 'audio_transcript'].forEach((key) => push(part?.[key]));
+  });
+  if (!parts.length) return '';
+  if (options.preferLongest) {
+    return [...parts].sort((a, b) => b.length - a.length)[0] || '';
+  }
+  return parts[0] || '';
+}
+
+function chooseRealtimeAgentFinalUserTranscript(eventTranscript = '', liveTranscript = '') {
+  const eventText = String(eventTranscript || '').replace(/\s+/g, ' ').trim();
+  const liveText = String(liveTranscript || '').replace(/\s+/g, ' ').trim();
+  if (eventText && liveText) {
+    if (liveText.length >= Math.max(12, Math.floor(eventText.length * 0.7)) && liveText.length >= eventText.length) return liveText;
+    if (eventText.includes(liveText) || liveText.includes(eventText)) {
+      return eventText.length >= liveText.length ? eventText : liveText;
+    }
+  }
+  return eventText || liveText || '';
+}
+
+function refreshRealtimeAgentChatSurface(sessionId) {
   const sid = String(sessionId || window.activeChatSessionId || '').trim();
-  const content = cleanVoiceSpeechText(text);
-  if (!sid || !content) return;
+  if (!sid) return;
   const sess = getChatSessionById(sid);
   if (!sess) return;
+  try { persistSession(sid); } catch {}
+  if (window.activeChatSessionId === sid) {
+    window.chatHistory = Array.isArray(sess.history) ? sess.history : [];
+    try { renderChatMessages(); } catch {}
+  }
+}
+
+// Keep a live streaming bubble in the desktop chat thread while speech is still
+// arriving, then finalize it into a normal message — same behavior as mobile.
+function ensureRealtimeAgentChatTurn(sessionId, role) {
+  const sid = String(sessionId || window.activeChatSessionId || '').trim();
+  if (!sid) return null;
+  const sess = getChatSessionById(sid);
+  if (!sess) return null;
   if (!Array.isArray(sess.history)) sess.history = [];
-  const pendingEntries = role === 'user' ? [] : takePendingVoiceAgentProcessEntries(sid);
+  const key = role === 'user' ? 'desktopUserTurn' : 'desktopAssistantTurn';
+  const existing = voiceAgentRealtimeTurn[key];
+  if (existing && sess.history.includes(existing)) return existing;
   const message = {
     role: role === 'user' ? 'user' : 'ai',
-    content,
+    content: '',
     timestamp: Date.now(),
     source: 'voice_agent_realtime',
     channel: 'voice',
     channelLabel: 'Realtime voice',
-    processEntries: pendingEntries.length ? pendingEntries : undefined,
+    streaming: true,
+    voiceRealtimeActive: role !== 'user',
   };
-  if (pendingEntries.length) {
-    message.workStartedAt = message.timestamp;
-    message.workEndedAt = message.timestamp;
-    message.workDurationMs = 0;
+  if (role !== 'user') {
+    const pendingEntries = takePendingVoiceAgentProcessEntries(sid);
+    if (pendingEntries.length) {
+      message.processEntries = pendingEntries;
+      message.workStartedAt = message.timestamp;
+      message.workEndedAt = message.timestamp;
+      message.workDurationMs = 0;
+    }
   }
   sess.history.push(message);
-  try { persistSession(sid); } catch {}
-  if (window.activeChatSessionId === sid) {
-    window.chatHistory = sess.history;
-    try { renderChatMessages(); } catch {}
+  voiceAgentRealtimeTurn[key] = message;
+  return message;
+}
+
+function updateRealtimeAgentChatTurn(sessionId, role, text, options = {}) {
+  const sid = String(sessionId || window.activeChatSessionId || '').trim();
+  const turn = ensureRealtimeAgentChatTurn(sid, role);
+  if (!turn) return null;
+  const next = String(text || '');
+  if (options.append) {
+    turn.content = `${String(turn.content || '')}${next}`;
+  } else {
+    turn.content = next;
   }
+  turn.streaming = options.finalize !== true;
+  turn.timestamp = Number(turn.timestamp || Date.now()) || Date.now();
+  if (role !== 'user') {
+    turn.voiceRealtimeActive = true;
+    turn.voiceRealtimeUpdatedAt = Date.now();
+    const pendingEntries = takePendingVoiceAgentProcessEntries(sid);
+    if (pendingEntries.length) {
+      turn.processEntries = mergeVoiceAgentProcessEntryLists(turn.processEntries, pendingEntries);
+      if (!turn.workStartedAt) turn.workStartedAt = Date.now();
+      turn.workEndedAt = Date.now();
+      turn.workDurationMs = Math.max(0, Number(turn.workEndedAt || 0) - Number(turn.workStartedAt || turn.workEndedAt || 0));
+    }
+  }
+  if (options.render !== false) refreshRealtimeAgentChatSurface(sid);
+  return turn;
+}
+
+function finalizeRealtimeAgentChatTurn(sessionId, role, text) {
+  const sid = String(sessionId || window.activeChatSessionId || '').trim();
+  const content = cleanVoiceSpeechText(text);
+  const key = role === 'user' ? 'desktopUserTurn' : 'desktopAssistantTurn';
+  if (!content) {
+    const sess = getChatSessionById(sid);
+    const existing = voiceAgentRealtimeTurn[key];
+    if (sess && Array.isArray(sess.history) && existing) {
+      const idx = sess.history.indexOf(existing);
+      if (idx >= 0) sess.history.splice(idx, 1);
+      refreshRealtimeAgentChatSurface(sid);
+    }
+    voiceAgentRealtimeTurn[key] = null;
+    return null;
+  }
+  const turn = updateRealtimeAgentChatTurn(sid, role, content, { finalize: true, render: false });
+  if (!turn) return null;
+  turn.streaming = false;
+  turn.content = content;
+  if (role !== 'user') {
+    turn.voiceRealtimeActive = true;
+    turn.voiceRealtimeFinalizedAt = Date.now();
+  }
+  voiceAgentRealtimeTurn[key] = null;
+  refreshRealtimeAgentChatSurface(sid);
+  return turn;
+}
+
+// Push a realtime-agent turn into the visible desktop chat thread so the user
+// sees their own spoken messages and Prom's replies in the main chat — not just
+// the process log. Display-only: the realtime session itself owns the audio.
+function appendRealtimeAgentChatMessage(sessionId, role, text) {
+  return finalizeRealtimeAgentChatTurn(sessionId, role, text);
 }
 
 // Disabled deterministic recovery: realtime must emit dispatch_prometheus_worker.
@@ -20382,7 +20964,7 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
   const type = String(event?.type || '');
   if (window.__voiceAgentRealtimeDebug) {
     try {
-      console.debug('[voice-agent-realtime] event', type, type === 'error' ? event?.error : (event?.transcript ?? ''));
+      console.debug('[voice-agent-realtime] event', type, type === 'error' ? event?.error : (event?.transcript ?? event?.delta ?? ''));
     } catch {}
   }
 
@@ -20397,7 +20979,7 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
   }
   if (type === 'response.function_call_arguments.done') {
     const callId = String(event.call_id || '').trim();
-    const name = String(event.name || '').trim();
+    const name = String(event.name || voiceAgentRealtimeFunctionCallBuffers.get(callId)?.name || '').trim();
     const argsStr = String(event.arguments || voiceAgentRealtimeFunctionCallBuffers.get(callId)?.argsStr || '');
     voiceAgentRealtimeFunctionCallBuffers.delete(callId);
     let args = {};
@@ -20410,6 +20992,9 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
     voiceAgentRealtimeTurn.hadFunctionCall = false;
     voiceAgentRealtimeTurn.dispatchedWorkerThisResponse = false;
     voiceAgentRealtimeTurn.lastAssistantTranscript = '';
+    voiceAgentRealtimeTurn.liveAssistantTranscript = '';
+    voiceAgentRealtimeTurn.desktopAssistantTurn = null;
+    voiceAgentRealtimeTurn.suppressAssistantTranscript = false;
     return;
   }
   if (type === 'response.output_item.added' && event.item?.type === 'function_call') {
@@ -20422,13 +21007,34 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
     return;
   }
 
+  // Live user transcript deltas — show the bubble as speech is recognized.
+  if (type === 'conversation.item.input_audio_transcription.delta' || type === 'conversation.item.input_audio_transcription.updated') {
+    const delta = extractRealtimeAgentEventText(event, { preferLongest: type.endsWith('.updated') });
+    if (!delta) return;
+    voiceAgentRealtimeTurn.liveUserTranscript = type.endsWith('.updated')
+      ? delta
+      : `${voiceAgentRealtimeTurn.liveUserTranscript || ''}${delta}`;
+    updateRealtimeAgentChatTurn(sessionId, 'user', voiceAgentRealtimeTurn.liveUserTranscript);
+    return;
+  }
+
   // User-side transcript (what the user said)
   if (type === 'conversation.item.input_audio_transcription.completed') {
-    const transcript = String(event.transcript || '').trim();
+    const eventTranscript = String(extractRealtimeAgentEventText(event, { preferLongest: true }) || '').trim();
+    const liveTranscript = String(voiceAgentRealtimeTurn.liveUserTranscript || '').trim();
+    const transcript = chooseRealtimeAgentFinalUserTranscript(eventTranscript, liveTranscript);
     if (transcript) {
-      if (shouldIgnoreVoiceAgentRealtimeTranscriptEvent(sessionId, event, transcript)) return;
-      if (handleRealtimeAgentQuietTranscript(transcript)) return;
+      if (shouldIgnoreVoiceAgentRealtimeTranscriptEvent(sessionId, event, transcript)) {
+        voiceAgentRealtimeTurn.liveUserTranscript = '';
+        return;
+      }
+      if (handleRealtimeAgentQuietTranscript(transcript)) {
+        voiceAgentRealtimeTurn.liveUserTranscript = '';
+        finalizeRealtimeAgentChatTurn(sessionId, 'user', '');
+        return;
+      }
       voiceAgentRealtimeTurn.lastUserTranscript = transcript;
+      voiceAgentRealtimeTurn.liveUserTranscript = '';
       voiceAgentRealtimeTurn.nudged = false;
       addSessionProcessEntry(sessionId, 'user', `User: ${transcript}`, { actor: 'Voice Agent (Realtime)' });
       appendRealtimeAgentChatMessage(sessionId, 'user', transcript);
@@ -20448,13 +21054,56 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
     return;
   }
 
+  // Some providers only expose the user utterance on item create/done events.
+  if ((type === 'conversation.item.created' || type === 'conversation.item.done' || type === 'conversation.item.completed')
+    && String(event?.item?.role || '').toLowerCase() === 'user') {
+    const transcript = extractRealtimeAgentEventText(event, { preferLongest: true });
+    if (transcript && !String(voiceAgentRealtimeTurn.lastUserTranscript || '').trim()) {
+      voiceAgentRealtimeTurn.liveUserTranscript = chooseRealtimeAgentFinalUserTranscript(
+        transcript,
+        voiceAgentRealtimeTurn.liveUserTranscript || '',
+      );
+      updateRealtimeAgentChatTurn(sessionId, 'user', voiceAgentRealtimeTurn.liveUserTranscript);
+    }
+    return;
+  }
+
+  // Live assistant transcript / text deltas — stream into a normal chat bubble.
+  if (
+    type === 'response.audio_transcript.delta'
+    || type === 'response.output_audio_transcript.delta'
+    || type === 'response.text.delta'
+    || type === 'response.output_text.delta'
+    || type === 'response.content_part.delta'
+  ) {
+    if (voiceAgentRealtimeQuiet.active || voiceAgentRealtimeTurn.suppressAssistantTranscript) return;
+    const delta = extractRealtimeAgentEventText(event);
+    if (!delta) return;
+    voiceAgentRealtimeTurn.liveAssistantTranscript = `${voiceAgentRealtimeTurn.liveAssistantTranscript || ''}${delta}`;
+    if (voiceAgentRealtimeTurn.dispatchedWorkerThisResponse) return;
+    updateRealtimeAgentChatTurn(sessionId, 'ai', voiceAgentRealtimeTurn.liveAssistantTranscript);
+    return;
+  }
+
   // Assistant-side transcript (what Prom said) — for chat history + display
-  if (type === 'response.audio_transcript.done' || type === 'response.output_audio_transcript.done') {
-    const transcript = cleanVoiceSpeechText(event.transcript || '');
+  if (
+    type === 'response.audio_transcript.done'
+    || type === 'response.output_audio_transcript.done'
+    || type === 'response.text.done'
+    || type === 'response.output_text.done'
+    || type === 'response.content_part.done'
+    || (type === 'response.output_item.done' && String(event?.item?.role || event?.item?.type || '').toLowerCase() !== 'function_call')
+  ) {
+    if (voiceAgentRealtimeQuiet.active || voiceAgentRealtimeTurn.suppressAssistantTranscript) return;
+    const transcript = cleanVoiceSpeechText(
+      extractRealtimeAgentEventText(event, { preferLongest: true }) || voiceAgentRealtimeTurn.liveAssistantTranscript || '',
+    );
     if (transcript) {
       voiceAgentRealtimeTurn.lastAssistantTranscript = transcript;
+      voiceAgentRealtimeTurn.liveAssistantTranscript = '';
       if (voiceAgentRealtimeTurn.dispatchedWorkerThisResponse) {
         removeRecentRealtimeAgentChatMessage(sessionId, 'ai', transcript);
+        voiceAgentRealtimeTurn.desktopAssistantTurn = null;
         return;
       }
       addSessionProcessEntry(sessionId, 'info', `Prom: ${transcript}`, { actor: 'Voice Agent (Realtime)' });
@@ -20470,6 +21119,18 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
       voiceAgentRealtimeConnection.narrationPending = false;
       voiceAgentRealtimeConnection.lastResponseEndedAt = Date.now();
     }
+    // If we only got deltas and never a terminal transcript event, finalize whatever we have.
+    const pendingAssistant = cleanVoiceSpeechText(
+      voiceAgentRealtimeTurn.liveAssistantTranscript || voiceAgentRealtimeTurn.desktopAssistantTurn?.content || '',
+    );
+    if (pendingAssistant && !voiceAgentRealtimeTurn.dispatchedWorkerThisResponse && !voiceAgentRealtimeQuiet.active) {
+      voiceAgentRealtimeTurn.lastAssistantTranscript = pendingAssistant;
+      voiceAgentRealtimeTurn.liveAssistantTranscript = '';
+      addSessionProcessEntry(sessionId, 'info', `Prom: ${pendingAssistant}`, { actor: 'Voice Agent (Realtime)' });
+      appendRealtimeAgentChatMessage(sessionId, 'ai', pendingAssistant);
+    } else if (!pendingAssistant && voiceAgentRealtimeTurn.desktopAssistantTurn) {
+      finalizeRealtimeAgentChatTurn(sessionId, 'ai', '');
+    }
     if (voiceAgentRealtimeQuiet.pendingActivate) {
       voiceAgentRealtimeQuiet.pendingActivate = false;
       activateRealtimeAgentQuietMode();
@@ -20484,7 +21145,11 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
     console.warn('[voice-agent-realtime] server error', event);
     if (message) {
       addSessionProcessEntry(sessionId, 'warn', `Realtime error: ${message}`, { actor: 'Voice Agent (Realtime)' });
-      showToast('Realtime error', message, 'error', 5000);
+      if (voiceAgentRealtimeConnection?.provider === 'xai') {
+        showDesktopVoiceStatus('xAI realtime error', message, 'error', 8000);
+      } else {
+        showToast('Realtime error', message, 'error', 5000);
+      }
     }
     return;
   }
@@ -21266,17 +21931,14 @@ async function handleXaiRealtimeEvent(event, sessionId, playback) {
   // the debug flag (a rejected session.update is the usual cause of "no transcription").
   if (type === 'session.created' || type === 'session.updated') {
     try { console.info('[xai-realtime]', type, event?.session ? { voice: event.session.voice, turn_detection: event.session.turn_detection, audio: event.session.audio } : event); } catch {}
-    if (type === 'session.updated') {
-      const sess = event?.session || {};
-      const inFmt = sess.input_audio_format || sess?.audio?.input?.format?.type || '?';
-      try { showToast('xAI session configured', `voice=${sess.voice || '?'} in=${typeof inFmt === 'string' ? inFmt : JSON.stringify(inFmt)} vad=${sess?.turn_detection?.type || 'none'}`, 'info', 5000); } catch {}
-    }
+    // Session details remain available in the console/process log. They are
+    // useful diagnostics, not a user-facing notification.
   }
   if (type === 'error' || type === 'response.error' || /\.error$/.test(type)) {
     const msg = String(event?.error?.message || event?.error || event?.message || JSON.stringify(event)).slice(0, 400);
     console.warn('[xai-realtime] server error event', type, event);
     addSessionProcessEntry(sessionId, 'warn', `xAI realtime error: ${msg}`, { actor: 'Voice Agent (xAI Realtime)' });
-    try { showToast('xAI realtime error', msg, 'error', 8000); } catch {}
+    try { showDesktopVoiceStatus('xAI realtime error', msg, 'error', 8000); } catch {}
   }
   // Streamed assistant audio
   if (type === 'response.output_audio.delta' || type === 'response.audio.delta') {
@@ -21654,7 +22316,11 @@ async function toggleRealtimeVoiceReplies() {
         : 'Realtime end-to-end agent is ready. Hold Space to talk.';
       realtimeVoiceStarting = true;
       setRealtimeVoiceButtonState();
-      showToast('Starting realtime agent', listenMode === 'always_listening' ? 'Opening your microphone and realtime session...' : 'Opening realtime session...', 'info', 2200);
+      // xAI may fall through to another transport. Keep that route change out
+      // of the toast stack; its final state is reported by the keyed status.
+      if (!xaiRealtime) {
+        showToast('Starting realtime agent', listenMode === 'always_listening' ? 'Opening your microphone and realtime session...' : 'Opening realtime session...', 'info', 2200);
+      }
       const sid = window.activeChatSessionId || 'default';
       try {
         await startVoiceAgentRealtimeSession(sid, { listenMode });
@@ -21668,7 +22334,8 @@ async function toggleRealtimeVoiceReplies() {
         if (listenMode === 'always_listening') setVoiceAgentRealtimeMicEnabled(true);
         addSessionProcessEntry(sid, 'info', `Realtime agent connected (${listenMode}).`, { actor: 'Voice Agent (Realtime)' });
         setRealtimeVoiceButtonState();
-        showToast('Realtime agent on', listenMessage, 'success', 3200);
+        if (xaiRealtime) showDesktopVoiceStatus('xAI realtime voice on', listenMessage, 'success', 3200);
+        else showToast('Realtime agent on', listenMessage, 'success', 3200);
       } catch (err) {
         if (realtimeVoiceModeEpoch !== epoch || /stopped/i.test(String(err?.message || err))) return;
         realtimeVoiceStarting = false;
@@ -21874,12 +22541,18 @@ function updateDesignSelectionChip() {
     const text = String(context.text || '').trim().replace(/\s+/g, ' ');
     const snippet = String(context.htmlSnippet || context.snippet || '').trim().replace(/\s+/g, ' ');
     const truncatedLabel = label.length > 42 ? `${label.slice(0, 40)}...` : label;
-    const truncatedContext = (text || snippet).slice(0, 90);
+    // A raw outerHTML snippet can be one long, unbreakable attribute string
+    // (for example an input element). Keep the composer chip compact and let
+    // its title carry the full selection context instead.
+    const contextSummary = text || (context.id ? `#${context.id}` : (context.tagName || 'element'));
+    const truncatedContext = contextSummary.length > 48
+      ? `${contextSummary.slice(0, 46)}…`
+      : contextSummary;
     pills.style.display = 'flex';
     pills.innerHTML = `<div class="chat-file-pill" title="${escHtml([`Selected design element: ${label}`, text ? `Text: ${text}` : '', snippet ? `Snippet: ${snippet.slice(0, 500)}` : ''].filter(Boolean).join('\n\n'))}">
       <span class="pill-icon"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon></span>
       <span class="pill-name">${escHtml(truncatedLabel)}</span>
-      ${truncatedContext ? `<span class="pill-ext">${escHtml(truncatedContext)}</span>` : `<span class="pill-ext">${escHtml(context.tagName || 'el')}</span>`}
+      ${truncatedContext ? `<span class="pill-ext" title="${escHtml(contextSummary)}">${escHtml(truncatedContext)}</span>` : `<span class="pill-ext">${escHtml(context.tagName || 'el')}</span>`}
       <button class="pill-remove" onclick="clearDesignSelectionContext()" title="Remove">&times;</button>
     </div>`;
   };
@@ -22051,7 +22724,9 @@ function setCanvasProjectState(projectRoot, projectLabel, options = {}) {
     canvasProjectLink = null;
     canvasPublishState = null;
   }
-  if (canvasProjectRoot && options.expandBrowser !== false) {
+  // Project/file events are frequent (including background saves). They must
+  // never reopen a tree the user chose to keep out of the way.
+  if (canvasProjectRoot && options.expandBrowser === true) {
     canvasBrowserCollapsed = false;
   } else if (canvasProjectRoot && !hadWorkspaceBrowser) {
     canvasBrowserCollapsed = true;
@@ -30992,6 +31667,12 @@ function buildCreativeSceneCallerContext() {
       tab ? `preview_mode: ${tab.mode || 'preview'}` : '',
       projectFiles.length ? `project_files:\n${projectFiles.map((filePath) => `- ${filePath}`).join('\n')}` : '',
       designSelectedElementContext ? `[DESIGN_SELECTION]\n${JSON.stringify(designSelectedElementContext).slice(0, 2600)}` : '',
+      designSelectedElementContext?.sourceAnchor?.file
+        ? `Source anchor: ${designSelectedElementContext.sourceAnchor.file}${designSelectedElementContext.sourceAnchor.line ? `:${designSelectedElementContext.sourceAnchor.line}:${designSelectedElementContext.sourceAnchor.column || 1}` : ''}. Start there, then verify the surrounding source before editing.`
+        : '',
+      designSelectedElementContext?.sourceCandidates?.length
+        ? `Verified source candidates:\n${designSelectedElementContext.sourceCandidates.slice(0, 6).map((candidate) => `- ${candidate.file}:${candidate.line}:${candidate.column} (${candidate.matchedBy}, ${candidate.confidence})${candidate.preview ? ` — ${candidate.preview}` : ''}`).join('\n')}`
+        : '',
       designSelectedElementContext ? 'Use the selected preview element as the primary focus. Read and edit the live project files already open in the canvas; do not only describe code changes.' : '',
       designMultiSelectedElements.length ? `[DESIGN_MULTI_SELECTION]\n${JSON.stringify(designMultiSelectedElements.map((entry) => entry.context)).slice(0, 12000)}` : '',
       designMultiSelectedElements.length ? `The user has attached ${designMultiSelectedElements.length} preview element${designMultiSelectedElements.length === 1 ? '' : 's'} for multi-edit. Apply the requested change across ALL of them by editing the corresponding source files.` : '',
@@ -33960,6 +34641,36 @@ function getDesignPreviewEntryPath(tab) {
   return 'index.html';
 }
 
+function escapeCanvasPreviewAttribute(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// Keep Design previews independent from the save request.  Loading the page through
+// the project-preview route meant a Code → Preview transition could show a stale or
+// blank document while its write was still in flight.  srcdoc renders the editor's
+// current contents immediately; this base URL preserves normal relative assets.
+function buildDesignPreviewDocument(content, previewPath) {
+  const parts = String(previewPath || '').split('/').filter(Boolean);
+  parts.pop();
+  const sessionId = encodeURIComponent(String(window.agentSessionId || 'default'));
+  const directory = parts.length ? `${encodeCanvasPreviewPath(parts.join('/'))}/` : '';
+  const baseHref = `/api/canvas/project-preview/${sessionId}/${directory}`;
+  const baseTag = `<base href="${escapeCanvasPreviewAttribute(baseHref)}">`;
+  const source = String(content || '');
+
+  if (/<head\b[^>]*>/i.test(source)) {
+    return source.replace(/<head\b[^>]*>/i, (match) => `${match}${baseTag}`);
+  }
+  if (/<html\b[^>]*>/i.test(source)) {
+    return source.replace(/<html\b[^>]*>/i, (match) => `${match}<head>${baseTag}</head>`);
+  }
+  return `<!doctype html><html><head>${baseTag}</head><body>${source}</body></html>`;
+}
+
 async function syncDirtyDesignTabsToDisk() {
   const normalizedRoot = normalizeCanvasPath(canvasProjectRoot || '');
   if (!normalizedRoot) return 0;
@@ -34273,11 +34984,14 @@ function extractDesignElementContext(element, frame) {
   const rect = element.getBoundingClientRect();
   const frameRect = frame.getBoundingClientRect();
   const computed = frame.contentWindow?.getComputedStyle?.(element);
+  const sourceAnchor = getDesignSelectionSourceAnchor(element);
   return {
     tagName: String(element.tagName || '').toLowerCase(),
     id: element.id || '',
     classList: Array.from(element.classList || []),
     selector: buildDesignElementSelector(element),
+    sourceAnchor,
+    sourceCandidates: [],
     text: String(element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 240),
     htmlSnippet: String(element.outerHTML || '').slice(0, 600),
     bounds: {
@@ -34301,6 +35015,96 @@ function extractDesignElementContext(element, frame) {
       margin: computed.margin,
     } : {},
   };
+}
+
+function getDesignSelectionSourceAnchor(element) {
+  const tab = canvasTabs.find((candidate) => candidate.id === activeCanvasTabId);
+  const source = String(tab?.content || '');
+  const file = String(tab?.diskPath || '');
+  if (!source || !file || !element) return file ? { file } : null;
+
+  const countMatches = (needle) => {
+    if (!needle) return { index: -1, count: 0 };
+    let index = source.indexOf(needle);
+    let count = 0;
+    let first = index;
+    while (index >= 0) {
+      count += 1;
+      if (count > 1) break;
+      index = source.indexOf(needle, index + Math.max(1, needle.length));
+    }
+    return { index: first, count };
+  };
+  const id = String(element.id || '').trim();
+  const text = String(element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
+  const candidates = [
+    id ? `id="${id}"` : '',
+    id ? `id='${id}'` : '',
+    text.length >= 2 && text.length <= 160 ? text : '',
+  ].filter(Boolean);
+  for (const needle of candidates) {
+    const match = countMatches(needle);
+    if (match.count !== 1 || match.index < 0) continue;
+    const before = source.slice(0, match.index);
+    return {
+      file,
+      line: before.split(/\r?\n/).length,
+      column: match.index - Math.max(0, before.lastIndexOf('\n') + 1) + 1,
+      matchedBy: id && needle.includes(id) ? 'id' : 'text',
+    };
+  }
+  return { file };
+}
+
+function getDesignSourceResolverRevision(tab) {
+  const source = String(tab?.content || '');
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${source.length}:${(hash >>> 0).toString(36)}`;
+}
+
+async function resolveDesignSelectionSourceCandidates(context) {
+  const tab = canvasTabs.find((candidate) => candidate.id === activeCanvasTabId);
+  if (!context || !tab?.diskPath) return;
+  const selection = {
+    selector: String(context.selector || ''),
+    id: String(context.id || ''),
+    classList: Array.isArray(context.classList) ? context.classList.slice(0, 6) : [],
+    text: String(context.text || '').slice(0, 220),
+    tagName: String(context.tagName || ''),
+  };
+  try {
+    const response = await fetch('/api/canvas/design-source-resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: String(window.activeChatSessionId || window.agentSessionId || 'default'),
+        sourcePath: tab.diskPath,
+        revision: getDesignSourceResolverRevision(tab),
+        sourceContent: String(tab.content || '').slice(0, 768 * 1024),
+        selection,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.success === false || context !== designSelectedElementContext) return;
+    const candidates = Array.isArray(data?.candidates) ? data.candidates.slice(0, 12) : [];
+    context.sourceCandidates = candidates;
+    if ((!context.sourceAnchor || !context.sourceAnchor.line) && candidates[0]) {
+      const first = candidates[0];
+      context.sourceAnchor = {
+        file: first.file,
+        line: first.line,
+        column: first.column,
+        matchedBy: first.matchedBy,
+      };
+    }
+  } catch {
+    // The local active-file anchor remains available if source resolution is
+    // temporarily unavailable; selection must never block the chat surface.
+  }
 }
 
 function getCreativeHtmlMotionElementSelector(element) {
@@ -36329,17 +37133,12 @@ async function submitDesignChatPopover() {
     try { await window.stageFiles(attachments); } catch {}
   }
   const context = designSelectedElementContext || (designLastClickedElement && designLastClickedFrame ? extractDesignElementContext(designLastClickedElement, designLastClickedFrame) : null);
-  const contextPacket = context ? [
-    '',
-    '[Design Mode selected element attached]',
-    `selector: ${context.selector || ''}`,
-    context.tagName ? `tag: ${context.tagName}` : '',
-    context.text ? `text: ${String(context.text).replace(/\s+/g, ' ').slice(0, 500)}` : '',
-    context.file ? `file: ${context.file}` : '',
-    context.htmlSnippet ? `snippet: ${String(context.htmlSnippet).replace(/\s+/g, ' ').slice(0, 900)}` : '',
-    'Apply the requested change to the source file(s) backing the current canvas. If direct file tools are unavailable, return valid Design JSON ops only.',
-  ].filter(Boolean).join('\n') : '';
-  mainInput.value = `${text}${contextPacket}`;
+  if (context && !designSelectedElementContext) designSelectedElementContext = context;
+  // The full selection context travels in the private Design caller context.
+  // Keep the visible user turn concise and readable.
+  mainInput.value = context
+    ? `${text}\n\n[Design Mode selected element attached]`
+    : text;
   hideDesignChatPopover();
   try { await sendChat(); } catch (err) { showToast(`Send failed: ${err.message}`, 'error'); }
 }
@@ -36353,6 +37152,7 @@ function applyDesignPreviewSelection(element, frame) {
   if (element && element instanceof frame.contentWindow.HTMLElement) {
     element.setAttribute('data-prometheus-design-selected', 'true');
     designSelectedElementContext = extractDesignElementContext(element, frame);
+    void resolveDesignSelectionSourceCandidates(designSelectedElementContext);
     updateDesignSelectionChip();
     addProcessEntry('info', `Design: selected ${designSelectedElementContext?.selector || designSelectedElementContext?.tagName || 'element'} in preview.`);
   } else {
@@ -36609,7 +37409,16 @@ function toggleCanvas(nextOpen = null, options = {}) {
       if (typeof window.toggleSidebar === 'function') window.toggleSidebar();
     }
     panel.style.display = 'flex';
-    if (!isCreativeModeLocked()) {
+    if (isCreativeModeLocked()) {
+      // Closing the right drawer clears its inline width. Reopening Canvas
+      // must restore the creative workspace width instead of inheriting the
+      // ordinary narrow context-drawer width.
+      setRightPanelWidth(CREATIVE_MODE_PANEL_WIDTH, {
+        minimumWidth: 960,
+        lockMax: true,
+        preserveChatColumn: true,
+      });
+    } else {
       const rightPanel = document.getElementById('right-panel');
       const currentWidth = rightPanel?.offsetWidth || 0;
       if (currentWidth < CANVAS_PANEL_MIN_WIDTH) {
@@ -36886,7 +37695,13 @@ function applyCanvasViewMode(mode, tab) {
     if (previewFrame) previewFrame.style.display = 'none';
     if (codeModeBtn) codeModeBtn.classList.add('active');
     if (previewModeBtn) previewModeBtn.classList.remove('active');
-    if (canvasEditor) setTimeout(() => { canvasEditor.refresh(); canvasEditor.focus(); }, 10);
+    if (canvasEditor) {
+      setTimeout(() => {
+        canvasEditor.setSize('100%', '100%');
+        canvasEditor.refresh();
+        canvasEditor.focus();
+      }, 10);
+    }
   }
   syncCanvasSurfaceWidthLock(tab);
 }
@@ -36931,13 +37746,13 @@ function canvasRenderTabs() {
   if (previewModeBtn) previewModeBtn.classList.toggle('active', !!(tab && tab.mode === 'preview'));
   // Show save button only for non-image files with a disk path
   if (saveBtn) saveBtn.style.display = (tab && tab.diskPath && !tab.isImage && !tab.isBinary) ? 'flex' : 'none';
-  applyCanvasViewMode(tab?.mode || 'code', tab || null);
 }
 
 async function canvasUpdatePreview() {
   const frame = document.getElementById('canvas-preview-frame');
   const tab = canvasTabs.find(t => t.id === activeCanvasTabId);
   if (!frame || !tab) return;
+  const updateVersion = ++canvasPreviewUpdateVersion;
   const content = tab.content || '';
   const ext = (tab.name || '').split('.').pop().toLowerCase();
   const isDesignMode = normalizeCreativeMode(window.currentCreativeMode) === 'design';
@@ -36945,16 +37760,25 @@ async function canvasUpdatePreview() {
   frame.onload = null;
   const useProjectPreview = isDesignMode && !!canvasProjectRoot && !tab.isImage && !tab.isBinary;
   const isScriptedPreview = useProjectPreview || isHtmlFile(tab.name) || content.trim().startsWith('<');
-  frame.setAttribute('sandbox', isScriptedPreview ? 'allow-scripts allow-downloads' : 'allow-downloads');
+  // Design Mode adds editing behavior directly to the preview document. A
+  // sandbox without allow-same-origin gives that document an opaque origin,
+  // which prevents the parent from attaching the hover/selection handlers.
+  // Keep the rest of the sandbox restrictions in place (no forms, popups, or
+  // top-level navigation); this exception is limited to the local authoring
+  // surface while Design Mode is active.
+  const sandboxPermissions = [isScriptedPreview ? 'allow-scripts' : '', 'allow-downloads'];
+  if (isDesignMode && !tab.isImage && !tab.isBinary) sandboxPermissions.push('allow-same-origin');
+  frame.setAttribute('sandbox', sandboxPermissions.filter(Boolean).join(' '));
   if (useProjectPreview) {
     const previewPath = getDesignPreviewEntryPath(tab);
     if (previewPath) {
-      try {
-        await syncDirtyDesignTabsToDisk();
-      } catch (err) {
+      // Persist in the background, but never make the visible preview wait for it.
+      // Waiting here caused intermittent blank previews until the whole page reloaded.
+      void syncDirtyDesignTabsToDisk().catch((err) => {
         addProcessEntry('warn', `Design preview sync failed: ${String(err?.message || err || 'Unknown error')}`);
-      }
-      frame.removeAttribute('srcdoc');
+      });
+      if (updateVersion !== canvasPreviewUpdateVersion || activeCanvasTabId !== tab.id) return;
+      frame.removeAttribute('src');
       frame.onload = () => {
         try {
           const doc = frame.contentDocument;
@@ -36964,8 +37788,7 @@ async function canvasUpdatePreview() {
           setupDesignPreviewSelection(frame, tab);
         } catch {}
       };
-      const sessionId = encodeURIComponent(String(window.agentSessionId || 'default'));
-      frame.src = `/api/canvas/project-preview/${sessionId}/${encodeCanvasPreviewPath(previewPath)}?v=${Date.now()}`;
+      frame.srcdoc = buildDesignPreviewDocument(content, previewPath);
       return;
     }
   }
@@ -37189,12 +38012,20 @@ function getCanvasFileIcon(ext) {
   return '📎';
 }
 
+function chatPendingFileKey(fileLike) {
+  const file = fileLike?.file || fileLike || {};
+  const path = String(file?.path || fileLike?.path || '').trim().toLowerCase();
+  if (path) return `path:${path}`;
+  return `file:${String(file?.name || fileLike?.name || '').trim().toLowerCase()}:${Number(file?.size || fileLike?.size || 0)}:${String(file?.type || fileLike?.type || '').toLowerCase()}`;
+}
+
 function renderChatFilePills() {
   const staging = document.getElementById('chat-file-staging');
   if (!staging) return;
   if (!pendingChatFiles.length) {
     staging.style.display = 'none';
     staging.innerHTML = '';
+    updateDesktopComposerSendButton();
     return;
   }
   staging.style.display = 'flex';
@@ -37210,6 +38041,7 @@ function renderChatFilePills() {
       <button class="pill-remove" onclick="removeChatFile(${idx})" title="Remove">&times;</button>
     </div>`;
   }).join('');
+  updateDesktopComposerSendButton();
 }
 
 function openImgPreview(src, name) {
@@ -37244,7 +38076,16 @@ function removeChatFile(idx) {
 }
 
 async function stageFiles(fileList) {
-  const promises = Array.from(fileList).map(file => new Promise(resolve => {
+  const queuedKeys = new Set(pendingChatFiles.map(chatPendingFileKey));
+  const incomingKeys = new Set();
+  const uniqueFiles = Array.from(fileList).filter((file) => {
+    const key = chatPendingFileKey(file);
+    if (queuedKeys.has(key) || incomingKeys.has(key)) return false;
+    incomingKeys.add(key);
+    return true;
+  });
+  if (!uniqueFiles.length) return Promise.resolve([]);
+  const promises = uniqueFiles.map(file => new Promise(resolve => {
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     if (TEXT_EXTENSIONS.has(ext)) {
       const reader = new FileReader();
@@ -37265,9 +38106,16 @@ async function stageFiles(fileList) {
     }
   }));
   const stagingPromise = Promise.all(promises).then((staged) => {
-    pendingChatFiles.push(...staged);
+    const currentKeys = new Set(pendingChatFiles.map(chatPendingFileKey));
+    const newEntries = staged.filter((entry) => {
+      const key = chatPendingFileKey(entry);
+      if (currentKeys.has(key)) return false;
+      currentKeys.add(key);
+      return true;
+    });
+    pendingChatFiles.push(...newEntries);
     renderChatFilePills();
-    return staged;
+    return newEntries;
   }).finally(() => {
     pendingChatFileStagingPromises = pendingChatFileStagingPromises.filter((p) => p !== stagingPromise);
   });
@@ -37400,6 +38248,35 @@ function getClipboardImageFiles(clipboardData) {
     .filter((file) => getClipboardFileKind(file) === 'image');
 }
 
+async function getBrowserClipboardImageFiles() {
+  // Chromium occasionally omits an image from ClipboardEvent.clipboardData
+  // while still exposing it through the async Clipboard API (notably copied
+  // macOS screenshots in a normal browser tab).
+  if (!navigator.clipboard?.read) return [];
+  const files = [];
+  const seen = new Set();
+  const addFile = (file) => {
+    const normalized = normalizePastedAttachmentFile(file, files.length);
+    if (!normalized || getClipboardFileKind(normalized) !== 'image') return;
+    const key = `${normalized.name}:${normalized.size}:${normalized.type}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push(normalized);
+  };
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items || []) {
+      const imageType = Array.from(item?.types || []).find((type) => /^image\//i.test(String(type)));
+      if (!imageType) continue;
+      const blob = await item.getType(imageType);
+      if (blob) addFile(blob);
+    }
+  } catch (err) {
+    console.debug('[ChatPage] async clipboard image read unavailable:', err);
+  }
+  return files;
+}
+
 function isChatPasteTarget(target) {
   const input = document.getElementById('chat-input');
   const chatView = document.getElementById('chat-view');
@@ -37419,21 +38296,47 @@ function isNonChatEditableTarget(target) {
 function handleChatPaste(event) {
   if (!isChatPasteTarget(event.target) || isNonChatEditableTarget(event.target)) return;
   const files = getClipboardAttachmentFiles(event.clipboardData);
-  if (!files.length) return;
-
   const pastedText = event.clipboardData?.getData?.('text/plain') || '';
-  if (!pastedText.trim()) event.preventDefault();
-  stageFiles(files);
-  const videoCount = files.filter((file) => getClipboardFileKind(file) === 'video').length;
-  const imageCount = files.filter((file) => getClipboardFileKind(file) === 'image').length;
-  const title = files.length === 1
-    ? (videoCount ? 'Video staged' : imageCount ? 'Screenshot staged' : 'Attachment staged')
-    : `${files.length} attachments staged`;
-  showToast(
-    title,
-    'Press Send when you are ready.',
-    'success'
-  );
+  const stageClipboardFiles = (incoming) => {
+    if (!incoming?.length) return;
+    stageFiles(incoming).catch((err) => {
+      showToast('Could not stage attachment', String(err?.message || err || 'Unknown clipboard error.'), 'error');
+    });
+    const videoCount = incoming.filter((file) => getClipboardFileKind(file) === 'video').length;
+    const imageCount = incoming.filter((file) => getClipboardFileKind(file) === 'image').length;
+    const title = incoming.length === 1
+      ? (videoCount ? 'Video staged' : imageCount ? 'Screenshot staged' : 'Attachment staged')
+      : `${incoming.length} attachments staged`;
+    showToast(title, 'Press Send when you are ready.', 'success');
+  };
+
+  if (files.length) {
+    // Once a file is present, it is the user's attachment intent even if a
+    // browser also supplies a text/html representation of that screenshot.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    stageClipboardFiles(files);
+    return;
+  }
+
+  // Browser screenshots can arrive without clipboardData.files. When there is
+  // no text to paste, claim the paste and ask the secure async Clipboard API
+  // for an image before the browser silently discards it.
+  if (pastedText.trim()) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  getBrowserClipboardImageFiles().then((fallbackFiles) => {
+    if (fallbackFiles.length) stageClipboardFiles(fallbackFiles);
+  });
+}
+
+function ensureChatPasteListener() {
+  if (window.__prometheusChatPasteInit) return;
+  window.__prometheusChatPasteInit = true;
+  // Capture phase makes file/image clipboard handling win before editor or
+  // browser listeners can consume the event. Register at module load rather
+  // than waiting for the delayed composer setup in browser builds.
+  document.addEventListener('paste', handleChatPaste, true);
 }
 
 function readFileAsBase64(file) {
@@ -37643,11 +38546,10 @@ function chatFileUploadInit() {
     if (files && files.length) stageFiles(files);
   });
 
-  if (!window.__prometheusChatPasteInit) {
-    window.__prometheusChatPasteInit = true;
-    document.addEventListener('paste', handleChatPaste);
-  }
+  ensureChatPasteListener();
 }
+
+ensureChatPasteListener();
 
 function setupChatMessageScrollbarFade() {
   const messages = document.getElementById('chat-messages');
@@ -37675,6 +38577,7 @@ function setupChatMessageScrollbarFade() {
 
   messages.addEventListener('scroll', () => {
     window.chatMessagesUserScrolledUp = !isNearBottom(messages, 60);
+    updateChatMessageNavigatorActive(messages);
   }, { passive: true });
 }
 
@@ -37701,7 +38604,16 @@ function sanitizeCanvasImportSegment(value) {
 }
 
 function getCanvasNativeFilePath(file) {
-  return normalizeCanvasPath(file?.path || file?.webkitRelativePathNative || '');
+  const legacyPath = file?.path || file?.webkitRelativePathNative || '';
+  if (legacyPath) return normalizeCanvasPath(legacyPath);
+  // In the desktop app Electron's preload resolves the OS path for a File.
+  // Browsers deliberately cannot reveal that path, so they fall through to
+  // the existing workspace upload flow below.
+  try {
+    return normalizeCanvasPath(window.prometheusFiles?.getCanvasFilePath?.(file) || '');
+  } catch {
+    return '';
+  }
 }
 
 function inferCanvasNativeFolderPath(files) {
@@ -37844,7 +38756,11 @@ async function canvasImportDirectory(files) {
 }
 
 function canvasHasNativePathPicker() {
-  return !!(window.prometheusFiles && typeof window.prometheusFiles.selectCanvasFiles === 'function' && typeof window.prometheusFiles.selectCanvasFolder === 'function');
+  return !!(
+    window.prometheusFiles
+    && typeof window.prometheusFiles.selectCanvasFiles === 'function'
+    && typeof window.prometheusFiles.selectCanvasFolder === 'function'
+  );
 }
 
 async function canvasPickFiles() {
@@ -38216,7 +39132,7 @@ async function canvasLoadWorkspaceFiles(rootOverride = null, options = {}) {
     if (d.projectRoot || canvasProjectRoot) {
       setCanvasProjectState(d.projectRoot || canvasProjectRoot, d.projectLabel || canvasProjectLabel, {
         persist: false,
-        expandBrowser: options.expandBrowser !== false,
+        expandBrowser: options.expandBrowser === true,
       });
     } else {
       updateCanvasWorkspaceChrome();
@@ -38727,7 +39643,9 @@ function upsertInlinePrometheusQuestion(questionInput, options = {}) {
     window.chatHistory = sess.history;
     renderChatMessages();
   } else {
+    const becameUnread = !sess.unread;
     sess.unread = true;
+    if (becameUnread) window.scheduleSessionListRefresh?.();
   }
   persistSession(sessionId);
   return true;
@@ -39147,6 +40065,7 @@ window.setAgentSessionId = setAgentSessionId;
 window.isCreativeModeLocked = isCreativeModeLocked;
 window.isCanvasWidthLocked = isCanvasWidthLocked;
 window.getCanvasWidthLockMessage = getCanvasWidthLockMessage;
+window.getCanvasPanelMaximumWidth = getCanvasPanelMaximumWidth;
 window.setCanvasPreviewDevice = setCanvasPreviewDevice;
 window.setCreativeModeFromUI = setCreativeModeFromUI;
 window.exitCreativeModeFromUI = exitCreativeModeFromUI;
@@ -39266,6 +40185,12 @@ window.renderBackgroundSpawnDock = renderBackgroundSpawnDock;
 window.openProcessLogFile = openProcessLogFile;
 window.clearChat = clearChat;
 window.toggleVoiceDictation = toggleVoiceDictation;
+window.toggleComposerTranscription = toggleComposerTranscription;
+window.stopComposerTranscription = stopComposerTranscription;
+window.updateDesktopComposerSendButton = updateDesktopComposerSendButton;
+window.hasDesktopComposerOutboundContent = hasDesktopComposerOutboundContent;
+window.isDesktopComposerTurnActive = isDesktopComposerTurnActive;
+updateDesktopComposerSendButton();
 window.toggleRealtimeVoiceReplies = toggleRealtimeVoiceReplies;
 window.onVoiceModeChanged = onVoiceModeChanged;
 window.onVoiceProviderChanged = onVoiceProviderChanged;
@@ -39457,6 +40382,7 @@ window.canvasRenderFileTree = canvasRenderFileTree;
 window.canvasRenderWorkspaceTree = canvasRenderWorkspaceTree;
 
 window.addEventListener('resize', () => {
+  if (canvasOpen) clampCanvasPanelToWorkspace();
   if (canvasOpen && getActiveCanvasTab()?.mode === 'preview') {
     syncCanvasPreviewDeviceFrame();
     repositionDesignPopovers();
@@ -39532,7 +40458,9 @@ wsEventBus.on('main_chat_goal_updated', async (msg) => {
       syncActiveChat();
     }
   } else {
+    const becameUnread = !sess.unread;
     sess.unread = true;
+    if (becameUnread) window.scheduleSessionListRefresh?.();
   }
   saveChatSessions();
 });
@@ -40220,7 +41148,7 @@ function handleMainChatStreamEvent(msg = {}) {
     applyStreamStateToWindow(sid);
     syncActiveSessionRunState();
     renderProgressPanel();
-    renderChatMessages();
+    renderStreamingChatUpdate(sid);
   };
   const moveVisibleAnswerTextIntoWorkflowTrace = () => {
     const text = String(streamState.streamingAIText || '').trim();

@@ -184,7 +184,7 @@ const PROVIDER_OAUTH_VAULT_KEYS: Record<string, string[]> = {
   anthropic: ['anthropic.oauth_tokens'],
   xai: ['xai.oauth_tokens'],
 };
-const ACCOUNT_AWARE_PROVIDERS = new Set(['xai', 'openai_codex', 'anthropic']);
+const ACCOUNT_AWARE_PROVIDERS = new Set(['openai', 'xai', 'openai_codex', 'anthropic']);
 
 function providerAccountVaultKey(providerId: string, accountId: string, field = 'api_key'): string {
   return `llm.${providerId}.accounts.${accountId}.${field}`;
@@ -209,7 +209,7 @@ function getProviderAccounts(providerId: string, providerCfg: any): Record<strin
     : {};
   if (Object.keys(accounts).length) return accounts;
 
-  const legacyAuthType = providerId === 'xai'
+  const legacyAuthType = providerId === 'openai' || providerId === 'xai'
     ? String(providerCfg?.auth_mode || '').trim() || 'api_key'
     : providerId === 'anthropic'
       ? 'setup_token'
@@ -217,8 +217,8 @@ function getProviderAccounts(providerId: string, providerCfg: any): Record<strin
   return {
     default: {
       id: 'default',
-      label: providerId === 'xai' ? 'xAI account' : providerId === 'anthropic' ? 'Claude account' : 'Codex account',
-      authType: legacyAuthType === 'oauth' ? 'oauth' : legacyAuthType,
+      label: providerId === 'openai' ? 'OpenAI API account' : providerId === 'xai' ? 'xAI account' : providerId === 'anthropic' ? 'Claude account' : 'Codex account',
+      authType: legacyAuthType,
       status: 'connected',
       ...(typeof providerCfg?.api_key === 'string' && providerCfg.api_key ? { api_key: providerCfg.api_key } : {}),
     },

@@ -22,12 +22,22 @@ import {
 } from './assets';
 import { addClip, createEmptyComposition } from './composition';
 import { renderComposition } from './renderers/composition_renderer';
-import { extractCreativeLayers, type CreativeLayerExtractionMode } from './layer-extraction';
+import type { CreativeLayerExtractionMode } from './layer-extraction';
 import { launchCreativeChromium } from './playwright-runtime';
 import { resolveRuntimeBinary } from '../../runtime/dependencies';
 
 const execFileAsync = promisify(execFile);
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+
+type LayerExtractionModule = typeof import('./layer-extraction');
+let layerExtractionModulePromise: Promise<LayerExtractionModule> | null = null;
+
+async function getLayerExtractionModule(): Promise<LayerExtractionModule> {
+  if (!layerExtractionModulePromise) {
+    layerExtractionModulePromise = import('./layer-extraction');
+  }
+  return layerExtractionModulePromise;
+}
 
 export type CreativeGenerationRecord = {
   id: string;
@@ -2924,6 +2934,7 @@ export async function creativeExtractLayersForGeneration(
     layerAssetBatchName?: string;
   },
 ): Promise<{ extraction: any; registeredLayers: CreativeGenerationRecord[]; generation: CreativeGenerationRecord; referenceAssets: any[]; startImageCandidates: any[]; backgroundPlate: any | null }> {
+  const { extractCreativeLayers } = await getLayerExtractionModule();
   const extraction = await extractCreativeLayers(storage, {
     source: input.source,
     mode: input.mode,

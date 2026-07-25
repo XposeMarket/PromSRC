@@ -1189,6 +1189,32 @@
 .file-pill-btn:hover { background:var(--brand); color:#fff; border-color:var(--brand); }
 .file-pill-btn + .file-pill-btn { border-left:0; }
 :root[data-theme="dark"] .file-pill { background:var(--panel); border-color:var(--line); box-shadow:none; }
+.design-selection-message-attachments { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+.design-selection-message-chip {
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  min-width:0;
+  max-width:min(100%, 260px);
+  padding:4px 7px;
+  border:1px solid color-mix(in srgb, var(--brand) 34%, var(--line));
+  border-radius:7px;
+  background:color-mix(in srgb, var(--brand) 8%, var(--panel-2));
+  color:var(--muted);
+  font-size:10px;
+  font-weight:750;
+  line-height:1.2;
+}
+.design-selection-message-chip iconify-icon { flex:0 0 auto; color:var(--brand); }
+.design-selection-message-chip > span { flex:0 0 auto; }
+.design-selection-message-chip > strong {
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--text);
+  font-weight:800;
+}
 :root[data-theme="dark"] .file-pill-icon { background:rgba(76,141,255,0.1); }
 :root[data-theme="dark"] .canvas-tab.active { background: var(--panel); }
 :root[data-theme="dark"] .canvas-tab:hover { background: var(--panel-2); }
@@ -2922,6 +2948,8 @@
   gap: 6px;
   padding: 8px 0 0;
   margin: 0 0 6px 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 .chat-file-pill {
   display: inline-flex;
@@ -2935,6 +2963,8 @@
   font-weight: 600;
   color: var(--text);
   max-width: 220px;
+  min-width: 0;
+  overflow: hidden;
   cursor: default;
   position: relative;
 }
@@ -2959,6 +2989,10 @@
   color: #fff;
   flex-shrink: 0;
   letter-spacing: 0.04em;
+  max-width: min(32vw, 116px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chat-file-pill .pill-remove {
   flex-shrink: 0;
@@ -3288,6 +3322,20 @@
   pointer-events: none;
 }
 #chat-view { position: relative; overflow: hidden; }
+
+/* The detail surface is fixed to the live chat-column bounds by
+   ConnectionsPage, leaving both side panels outside of the connector view. */
+#connector-view.connector-view {
+  position: fixed;
+  z-index: 50;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  flex-direction: column;
+}
 
 .panel-chat-shell {
   flex: 1 1 auto;

@@ -4518,6 +4518,237 @@ async function executeVercelDeploy(sessionId: string): Promise<any> {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
+type DesignSourceCandidate = {
+  file: string;
+  line: number;
+  column: number;
+  endLine: number;
+  endColumn: number;
+  startOffset: number;
+  endOffset: number;
+  matchedBy: string;
+  confidence: 'high' | 'medium';
+  preview: string;
+};
+
+type DesignSourceCacheEntry = {
+  expiresAt: number;
+  candidates: DesignSourceCandidate[];
+  scannedFiles: number;
+};
+
+const designSourceResolverCache = new Map<string, DesignSourceCacheEntry>();
+const DESIGN_SOURCE_CACHE_TTL_MS = 5 * 60_000;
+const DESIGN_SOURCE_MAX_FILES = 120;
+const DESIGN_SOURCE_MAX_FILE_BYTES = 768 * 1024;
+const DESIGN_SOURCE_MAX_TOTAL_BYTES = 3 * 1024 * 1024;
+const DESIGN_SOURCE_EXTENSIONS = new Set(['.html', '.htm', '.css', '.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx', '.vue', '.svelte']);
+const DESIGN_SOURCE_IGNORED_DIRS = new Set(['.git', 'node_modules', '.next', 'dist', 'build', 'coverage', '.cache', 'vendor']);
+
+function normalizeDesignResolverText(value: unknown, maxLength = 360): string {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function designResolverCacheKey(sessionId: string, sourcePath: string, revision: string, selection: any): string {
+  const selector = normalizeDesignResolverText(selection?.selector, 420);
+  const id = normalizeDesignResolverText(selection?.id, 160);
+  const text = normalizeDesignResolverText(selection?.text, 220);
+  const classes = Array.isArray(selection?.classList)
+    ? selection.classList.map((item: unknown) => normalizeDesignResolverText(item, 80)).filter(Boolean).slice(0, 6).join('.')
+    : '';
+  return [sessionId, sourcePath, revision || 'disk', selector, id, text, classes].join('|');
+}
+
+function designSourcePosition(source: string, startOffset: number, length: number) {
+  const start = Math.max(0, startOffset);
+  const end = Math.min(source.length, start + Math.max(1, length));
+  const beforeStart = source.slice(0, start);
+  const beforeEnd = source.slice(0, end);
+  const startLine = beforeStart.split(/\r?\n/).length;
+  const endLine = beforeEnd.split(/\r?\n/).length;
+  const startLineBreak = Math.max(-1, beforeStart.lastIndexOf('\n'));
+  const endLineBreak = Math.max(-1, beforeEnd.lastIndexOf('\n'));
+  return {
+    line: startLine,
+    column: start - startLineBreak,
+    endLine,
+    endColumn: end - endLineBreak,
+  };
+}
+
+function designSourceLinePreview(source: string, offset: number): string {
+  const lineStart = source.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const nextBreak = source.indexOf('\n', offset);
+  return source.slice(lineStart, nextBreak >= 0 ? nextBreak : source.length).trim().slice(0, 260);
+}
+
+function addDesignSourceMatches(
+  candidates: DesignSourceCandidate[],
+  source: string,
+  file: string,
+  needle: string,
+  matchedBy: string,
+  confidence: 'high' | 'medium',
+): void {
+  if (!needle || needle.length < 2 || candidates.length >= 24) return;
+  let start = 0;
+  let count = 0;
+  while (start < source.length && count < 4 && candidates.length < 24) {
+    const index = source.indexOf(needle, start);
+    if (index < 0) break;
+    const duplicate = candidates.some((candidate) => candidate.file === file && candidate.startOffset === index);
+    if (!duplicate) {
+      const pos = designSourcePosition(source, index, needle.length);
+      candidates.push({
+        file,
+        ...pos,
+        startOffset: index,
+        endOffset: index + needle.length,
+        matchedBy,
+        confidence,
+        preview: designSourceLinePreview(source, index),
+      });
+    }
+    count += 1;
+    start = index + Math.max(1, needle.length);
+  }
+}
+
+function collectDesignResolverNeedles(selection: any): Array<{ value: string; matchedBy: string; confidence: 'high' | 'medium' }> {
+  const id = normalizeDesignResolverText(selection?.id, 160);
+  const selector = normalizeDesignResolverText(selection?.selector, 420);
+  const text = normalizeDesignResolverText(selection?.text, 220);
+  const classList = Array.isArray(selection?.classList)
+    ? selection.classList.map((item: unknown) => normalizeDesignResolverText(item, 80)).filter(Boolean).slice(0, 4)
+    : [];
+  const needles: Array<{ value: string; matchedBy: string; confidence: 'high' | 'medium' }> = [];
+  if (id) {
+    needles.push({ value: `id="${id}"`, matchedBy: 'id', confidence: 'high' });
+    needles.push({ value: `id='${id}'`, matchedBy: 'id', confidence: 'high' });
+    needles.push({ value: `#${id}`, matchedBy: 'id selector', confidence: 'high' });
+  }
+  if (selector && selector.length <= 360) needles.push({ value: selector, matchedBy: 'selector', confidence: 'high' });
+  for (const className of classList) needles.push({ value: `.${className}`, matchedBy: 'class selector', confidence: 'medium' });
+  if (text.length >= 2 && text.length <= 160) needles.push({ value: text, matchedBy: 'visible text', confidence: 'medium' });
+  return needles;
+}
+
+async function collectDesignResolverFiles(root: string, entryFile: string): Promise<string[]> {
+  const files = new Set<string>([entryFile]);
+  const queue = [root];
+  while (queue.length && files.size < DESIGN_SOURCE_MAX_FILES) {
+    const directory = queue.shift() as string;
+    let entries: fs.Dirent[] = [];
+    try { entries = await fs.promises.readdir(directory, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (files.size >= DESIGN_SOURCE_MAX_FILES) break;
+      if (entry.isDirectory()) {
+        if (!DESIGN_SOURCE_IGNORED_DIRS.has(entry.name.toLowerCase())) queue.push(path.join(directory, entry.name));
+        continue;
+      }
+      const candidate = path.join(directory, entry.name);
+      if (DESIGN_SOURCE_EXTENSIONS.has(path.extname(candidate).toLowerCase())) files.add(candidate);
+    }
+  }
+  return Array.from(files);
+}
+
+async function resolveDesignSourceCandidates(
+  projectRoot: string,
+  entryFile: string,
+  selection: any,
+  entrySourceOverride = '',
+): Promise<{ candidates: DesignSourceCandidate[]; scannedFiles: number }> {
+  const needles = collectDesignResolverNeedles(selection);
+  if (!needles.length) return { candidates: [], scannedFiles: 0 };
+  const files = await collectDesignResolverFiles(projectRoot, entryFile);
+  const candidates: DesignSourceCandidate[] = [];
+  let scannedFiles = 0;
+  let totalBytes = 0;
+  for (const filePath of files) {
+    if (totalBytes >= DESIGN_SOURCE_MAX_TOTAL_BYTES || candidates.length >= 24) break;
+    let isEntryOverride = filePath === entryFile && !!entrySourceOverride;
+    let source = entrySourceOverride;
+    if (isEntryOverride && Buffer.byteLength(source, 'utf-8') > DESIGN_SOURCE_MAX_FILE_BYTES) {
+      // Oversized previews fall back to the on-disk entry instead of making
+      // the resolver silently skip the file altogether.
+      isEntryOverride = false;
+      source = '';
+    }
+    if (!isEntryOverride) {
+      let stat: fs.Stats;
+      try { stat = await fs.promises.stat(filePath); } catch { continue; }
+      if (!stat.isFile() || stat.size > DESIGN_SOURCE_MAX_FILE_BYTES) continue;
+      try { source = await fs.promises.readFile(filePath, 'utf-8'); } catch { continue; }
+    }
+    const sourceBytes = Buffer.byteLength(source, 'utf-8');
+    if (sourceBytes > DESIGN_SOURCE_MAX_FILE_BYTES) continue;
+    totalBytes += sourceBytes;
+    scannedFiles += 1;
+    const relativeFile = path.relative(projectRoot, filePath).replace(/\\/g, '/') || path.basename(filePath);
+    for (const needle of needles) {
+      addDesignSourceMatches(candidates, source, relativeFile, needle.value, needle.matchedBy, needle.confidence);
+    }
+  }
+  candidates.sort((left, right) => {
+    const confidence = (candidate: DesignSourceCandidate) => candidate.confidence === 'high' ? 0 : 1;
+    return confidence(left) - confidence(right) || left.file.localeCompare(right.file) || left.startOffset - right.startOffset;
+  });
+  return { candidates: candidates.slice(0, 12), scannedFiles };
+}
+
+// POST /api/canvas/design-source-resolve
+// Resolves a selected preview element to verified source candidates. Results are
+// cached per client preview revision so repeated selection/chat actions do not
+// rescan the project.
+router.post('/api/canvas/design-source-resolve', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const sessionId = String(req.body?.sessionId || 'default').trim().slice(0, 180) || 'default';
+  const sourcePath = String(req.body?.sourcePath || '').trim();
+  const revision = String(req.body?.revision || '').trim().slice(0, 180);
+  const sourceContent = typeof req.body?.sourceContent === 'string'
+    ? req.body.sourceContent.slice(0, DESIGN_SOURCE_MAX_FILE_BYTES)
+    : '';
+  const selection = req.body?.selection && typeof req.body.selection === 'object' ? req.body.selection : null;
+  if (!sourcePath || !selection) {
+    res.status(400).json({ success: false, error: 'sourcePath and selection are required' });
+    return;
+  }
+  let entryFile = '';
+  let projectRoot = '';
+  try {
+    entryFile = resolveCanvasPath(sourcePath).absPath;
+    const configuredProjectRoot = getCanvasProjectRoot(sessionId);
+    projectRoot = configuredProjectRoot ? resolveCanvasPath(configuredProjectRoot).absPath : path.dirname(entryFile);
+    if (!isPathInside(projectRoot, entryFile)) projectRoot = path.dirname(entryFile);
+  } catch {
+    res.status(403).json({ success: false, error: 'Source path is outside the allowed Canvas workspace' });
+    return;
+  }
+  const cacheKey = designResolverCacheKey(sessionId, entryFile, revision, selection);
+  const cached = designSourceResolverCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    res.json({ success: true, cached: true, candidates: cached.candidates, scannedFiles: cached.scannedFiles });
+    return;
+  }
+  try {
+    const result = await resolveDesignSourceCandidates(projectRoot, entryFile, selection, sourceContent);
+    designSourceResolverCache.set(cacheKey, {
+      expiresAt: Date.now() + DESIGN_SOURCE_CACHE_TTL_MS,
+      candidates: result.candidates,
+      scannedFiles: result.scannedFiles,
+    });
+    if (designSourceResolverCache.size > 160) {
+      const now = Date.now();
+      for (const [key, value] of designSourceResolverCache) {
+        if (value.expiresAt <= now || designSourceResolverCache.size > 120) designSourceResolverCache.delete(key);
+      }
+    }
+    res.json({ success: true, cached: false, candidates: result.candidates, scannedFiles: result.scannedFiles });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: String(err?.message || err || 'Design source resolution failed') });
+  }
+});
+
 // GET /api/canvas/file?path=<workspace-relative-path>
 // Returns file content from the workspace for the canvas to display.
 router.get('/api/canvas/file', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {

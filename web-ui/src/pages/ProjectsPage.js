@@ -275,13 +275,21 @@ window.filterProjects = function(q) {
 
 window.newProject = function() {
   const modal = document.getElementById('new-project-modal');
-  if (modal) modal.classList.add('open');
+  if (modal) {
+    // The markup starts with inline display:none. Keep the modal functional
+    // even if the Projects stylesheet was cached or failed to load.
+    modal.classList.add('open');
+    modal.style.display = 'flex';
+  }
   setTimeout(() => document.getElementById('new-project-name')?.focus(), 100);
 };
 
 window.closeNewProjectModal = function() {
   const modal = document.getElementById('new-project-modal');
-  if (modal) modal.classList.remove('open');
+  if (modal) {
+    modal.classList.remove('open');
+    modal.style.display = 'none';
+  }
   const input = document.getElementById('new-project-name');
   if (input) input.value = '';
 };

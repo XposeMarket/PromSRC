@@ -55,7 +55,9 @@ async function main(): Promise<void> {
 
   const adapterSource = fs.readFileSync('src/providers/openai-codex-adapter.ts', 'utf8');
   assert.match(adapterSource, /allowIncompleteStreamRetry\s*=\s*true/, 'incomplete streams must have a one-retry guard');
-  assert.match(adapterSource, /return runRequest\(requestedModel, allowFallback, fallbackFrom, fallbackReason, false\)/, 'the retry must disable itself after one attempt');
+  assert.match(adapterSource, /return runRequest\(requestedModel, allowFallback, fallbackFrom, fallbackReason, false, accountIndex\)/, 'the retry must disable itself after one attempt while staying on the same account');
+  assert.match(adapterSource, /isRetryableAccountFailure\(response\.status, text\)/, 'quota and credential failures must advance to another configured account');
+  assert.match(adapterSource, /accountId: activeAccountId/, 'the account that served the request must be recorded with usage');
 
   const chatSource = fs.readFileSync('src/gateway/routes/chat.router.ts', 'utf8');
   const fallbackStart = chatSource.indexOf('if (!finalText || finalText.length < 5)');
