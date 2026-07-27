@@ -6011,6 +6011,11 @@ function setDraftChatSession(id = generateSessionId()) {
   window.currentCreativeMode = null;
   window.runtimeProgressState = null;
   if (typeof resetSessionStreamState === 'function') resetSessionStreamState(nextId);
+  // A fresh draft must not inherit the previous chat's presentation state.
+  // In particular, `window.isThinking` is a compatibility mirror that may
+  // still describe a background chat which is streaming.
+  const draftIsThinking = syncActiveSessionRunState();
+  if (typeof window.setButtonState === 'function') window.setButtonState(draftIsThinking);
   return nextId;
 }
 
@@ -6466,6 +6471,7 @@ function loadStoredSessionStubsForStartup() {
 
 function sessionStubFromServer(s) {
   const channel = String(s.channel || 'web');
+  const projectId = String(s.projectId || '').trim();
   return normalizeStoredSession({
     id: s.id,
     title: s.title || s.preview || s.id,
@@ -6487,7 +6493,9 @@ function sessionStubFromServer(s) {
     createdAt: s.createdAt || Date.now(),
     updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
     lastMessageAt: s.lastMessageAt || s.lastActiveAt || s.createdAt || Date.now(),
-    source: channel !== 'web' ? channel : undefined,
+    projectId: projectId || null,
+    projectName: projectId ? (String(s.projectName || '').trim() || null) : null,
+    source: projectId ? 'project' : (channel !== 'web' ? channel : undefined),
     automated: channel !== 'web',
     _needsServerLoad: true,
   });
@@ -6526,6 +6534,8 @@ function mergeServerSessionSummaries(summaries) {
         updatedAt: Math.max(localUpdatedAt, serverUpdatedAt) || serverStub.updatedAt,
         lastMessageAt: Math.max(localLastMessageAt, serverLastMessageAt) || existing.lastMessageAt || serverStub.lastMessageAt || 0,
         source: serverStub.source || existing.source,
+        projectId: serverStub.projectId || existing.projectId || null,
+        projectName: serverStub.projectName || existing.projectName || null,
         automated: existing.automated || serverStub.automated,
         creativeMode: existing.creativeMode ?? serverStub.creativeMode,
         canvasProjectRoot: existing.canvasProjectRoot || serverStub.canvasProjectRoot,
@@ -11193,7 +11203,18 @@ function isLiveTraceThoughtEntry(entry) {
 }
 
 function liveTraceGroupStableKey(group, index = 0) {
-  return `trace_group_${String(group?.kind || 'group')}_${index}`;
+  const kind = String(group?.kind || 'group');
+  const first = Array.isArray(group?.entries) ? group.entries[0] : null;
+  // Position is not stable: a later preamble inserts a thought group before
+  // the following tool group. Anchor the DOM group to the first durable trace
+  // entry instead so an open summary survives that insertion.
+  const entryKey = String(
+    first?.activity?.callId
+    || first?.activity?.activityId
+    || first?.id
+    || `${kind}_${index}`
+  ).trim();
+  return `trace_group_${kind}_${entryKey}`;
 }
 
 function liveTraceGroups(entries) {
@@ -11784,6 +11805,31 @@ function renderEmptyChatStarterCards() {
   </div>`;
 }
 
+const PROJECT_EMPTY_CHAT_PROMPTS = [
+  'What are we doing in {project} tonight?',
+  'Where should we begin with {project}?',
+  'What would move {project} forward right now?',
+  'What are we making in {project}?',
+  'What needs attention in {project}?',
+  'Which thread should we pull in {project}?',
+  'What is the next useful step for {project}?',
+  'What should we understand, build, or fix in {project}?',
+  'How can I help shape {project} today?',
+  'What is the most important thing to resolve in {project}?',
+];
+
+function getEmptyProjectChatWelcome() {
+  const session = getChatSessionById(window.activeChatSessionId);
+  const projectId = String(session?.projectId || document.body?.dataset?.projectId || '').trim();
+  if (!projectId) return null;
+  const projectName = String(session?.canvasProjectLabel || document.body?.dataset?.projectName || 'this project').trim() || 'this project';
+  const seed = `${projectId}:${window.activeChatSessionId || ''}`;
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) hash = ((hash << 5) - hash) + seed.charCodeAt(index) | 0;
+  const template = PROJECT_EMPTY_CHAT_PROMPTS[Math.abs(hash) % PROJECT_EMPTY_CHAT_PROMPTS.length];
+  return { prompt: template.replace('{project}', projectName) };
+}
+
 function applyEmptyChatStarterPrompt(index) {
   const card = getEmptyChatStarterCards()[index];
   const input = document.getElementById('chat-input');
@@ -12271,18 +12317,23 @@ function renderChatMessages() {
     .filter((entry) => !isInternalChatMessage(entry.msg));
   const voicePendingHtml = renderVoicePendingTurns();
   const sideActive = window.sideChatSplitOpen && !!getActiveSideChatLink();
+  const projectWelcome = getEmptyProjectChatWelcome();
 
   if (!sideActive && visibleHistory.length === 0 && !voicePendingHtml) {
     if (chatView) chatView.classList.add('chat-empty');
     container.innerHTML = `
-      <div class="chat-welcome" id="chat-welcome">
+      <div class="chat-welcome${projectWelcome ? ' chat-welcome-project' : ''}" id="chat-welcome">
         <div class="chat-welcome-icon"><img src="/assets/Prometheus.png" style="width:90px;height:90px;object-fit:contain;opacity:0.90;"></div>
         <h2>Prometheus One</h2>
-        <p>"I whom you see am Prometheus, who gave fire to mankind."</p>
-        <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
-        ${renderEmptyChatStarterCards()}
+        ${projectWelcome
+          ? `<p>${escHtml(projectWelcome.prompt)}</p>`
+          : `
+            <p>"I whom you see am Prometheus, who gave fire to mankind."</p>
+            <div class="hint">c. 440–430 BCE, from Prometheus Bound.</div>
+            ${renderEmptyChatStarterCards()}`
+        }
       </div>`;
-    loadEmptyChatBrainCards();
+    if (!projectWelcome) loadEmptyChatBrainCards();
     renderChatMessageNavigator();
     return;
   }
@@ -12393,10 +12444,130 @@ function updateChatMessageNavigatorActive(container = document.getElementById('c
   });
 }
 
-// Tool events can arrive several times per second. Rebuilding the entire chat
-// transcript for each one destroys open disclosures and interrupts scrolling.
-// Once the live bubble exists, update that bubble alone; a full render remains
-// the safe fallback for first paint and interactive approval/question cards.
+function getLiveTraceNodeKey(node) {
+  if (!node) return '';
+  return String(
+    node.getAttribute?.('data-activity-key')
+    || node.getAttribute?.('data-live-entry-id')
+    || ''
+  ).trim();
+}
+
+function getLiveTraceGroupLogicalKey(group) {
+  if (!group) return '';
+  const traceEntry = group.querySelector?.('[data-activity-key], [data-live-entry-id]');
+  return getLiveTraceNodeKey(traceEntry);
+}
+
+function getLiveTraceDisclosureKey(node, index = 0) {
+  if (node?.matches?.('details.live-turn-tool-group')) {
+    return `trace-group:${String(node.getAttribute('data-live-trace-group') || '')}`;
+  }
+  return String(
+    node?.getAttribute?.('data-tool-disclosure-key')
+    || node?.getAttribute?.('data-command-run-id')
+    || `${node?.className || 'details'}:${index}`
+  ).trim();
+}
+
+function captureLiveTraceDisclosureState(root) {
+  const state = new Map();
+  root?.querySelectorAll?.('details').forEach((node, index) => {
+    const key = getLiveTraceDisclosureKey(node, index);
+    if (!key) return;
+    const scrollable = node.querySelector('.tool-activity-details, pre[data-command-terminal-output]');
+    state.set(key, { open: node.open, scrollTop: Number(scrollable?.scrollTop || 0) });
+  });
+  return state;
+}
+
+function restoreLiveTraceDisclosureState(root, state) {
+  if (!state?.size) return;
+  root?.querySelectorAll?.('details').forEach((node, index) => {
+    const key = getLiveTraceDisclosureKey(node, index);
+    const saved = state.get(key);
+    if (!saved) return;
+    node.open = saved.open;
+    const scrollable = node.querySelector('.tool-activity-details, pre[data-command-terminal-output]');
+    if (scrollable) scrollable.scrollTop = saved.scrollTop;
+  });
+}
+
+// Merge a live tool group in place. Existing entries retain their DOM nodes
+// until their own data changes, while newly observed entries are appended.
+// This keeps a user-opened metadata disclosure stable while the stream grows.
+function patchLiveTraceGroup(currentGroup, nextGroup) {
+  const currentSummary = currentGroup.querySelector(':scope > summary');
+  const nextSummary = nextGroup.querySelector(':scope > summary');
+  if (currentSummary && nextSummary) currentSummary.innerHTML = nextSummary.innerHTML;
+  if (nextGroup.hasAttribute('data-live-trace-current')) currentGroup.setAttribute('data-live-trace-current', '1');
+  else currentGroup.removeAttribute('data-live-trace-current');
+
+  const currentTrace = currentGroup.querySelector(':scope > .live-turn-tool-body > .live-turn-trace');
+  const nextTrace = nextGroup.querySelector(':scope > .live-turn-tool-body > .live-turn-trace');
+  if (!currentTrace || !nextTrace) return false;
+
+  const currentEntries = new Map();
+  Array.from(currentTrace.children).forEach((node) => {
+    const key = getLiveTraceNodeKey(node);
+    if (key) currentEntries.set(key, node);
+  });
+  Array.from(nextTrace.children).forEach((nextNode) => {
+    const key = getLiveTraceNodeKey(nextNode);
+    const currentNode = key ? currentEntries.get(key) : null;
+    if (!currentNode) {
+      currentTrace.appendChild(nextNode.cloneNode(true));
+      return;
+    }
+    if (currentNode.innerHTML === nextNode.innerHTML) return;
+    const disclosures = captureLiveTraceDisclosureState(currentNode);
+    currentNode.innerHTML = nextNode.innerHTML;
+    restoreLiveTraceDisclosureState(currentNode, disclosures);
+  });
+  return true;
+}
+
+function patchLiveTurnTimeline(content, nextContent) {
+  const currentTimeline = content.querySelector(':scope > .live-turn-timeline');
+  const nextTimeline = nextContent.querySelector(':scope > .live-turn-timeline');
+  if (!currentTimeline || !nextTimeline) return false;
+
+  const currentGroups = new Map();
+  currentTimeline.querySelectorAll(':scope > details.live-turn-tool-group[data-live-trace-group]').forEach((node) => {
+    const groupKey = String(node.getAttribute('data-live-trace-group') || '');
+    currentGroups.set(groupKey, node);
+    const logicalKey = getLiveTraceGroupLogicalKey(node);
+    if (logicalKey) currentGroups.set(`entry:${logicalKey}`, node);
+  });
+  nextTimeline.querySelectorAll(':scope > details.live-turn-tool-group[data-live-trace-group]').forEach((nextGroup) => {
+    const key = String(nextGroup.getAttribute('data-live-trace-group') || '');
+    const logicalKey = getLiveTraceGroupLogicalKey(nextGroup);
+    const currentGroup = currentGroups.get(key) || (logicalKey ? currentGroups.get(`entry:${logicalKey}`) : null);
+    if (currentGroup) {
+      currentGroup.setAttribute('data-live-trace-group', key);
+      patchLiveTraceGroup(currentGroup, nextGroup);
+      return;
+    }
+    currentTimeline.appendChild(nextGroup.cloneNode(true));
+  });
+  return true;
+}
+
+function patchStreamingAnswerText(content, nextContent) {
+  const currentText = content.querySelector('#streaming-text-content');
+  const nextText = nextContent.querySelector('#streaming-text-content');
+  // Switching between a trace-only turn and a final response changes the
+  // bubble's structure, so let the caller take the safe one-time fallback.
+  if (!!currentText !== !!nextText) return false;
+  if (currentText && nextText && currentText.innerHTML !== nextText.innerHTML) {
+    currentText.innerHTML = nextText.innerHTML;
+  }
+  return true;
+}
+
+// Tool events can arrive several times per second. Once a live tool timeline
+// exists, update only its changed groups and append new entries. A full stream
+// body render remains the safe fallback for first paint and structural changes.
 function patchStreamingChatBubble(sessionId) {
   const sid = String(sessionId || '').trim();
   if (!sid || sid !== String(window.activeChatSessionId || '') || !isSessionThinking(sid)) return false;
@@ -12405,18 +12576,27 @@ function patchStreamingChatBubble(sessionId) {
   if (!bubble || !content) return false;
   if (content.querySelector('.chat-question-card, .chat-approval-card')) return false;
 
-  const openGroups = new Set();
-  content.querySelectorAll('details.live-turn-tool-group[open]').forEach((node) => {
-    const key = String(node.getAttribute('data-live-trace-group') || '');
-    if (key) openGroups.add(key);
-  });
-  content.innerHTML = renderSessionThinkingBodyHtml(sid);
-  content.querySelectorAll('details.live-turn-tool-group[data-live-trace-group]').forEach((node) => {
-    if (openGroups.has(String(node.getAttribute('data-live-trace-group') || ''))) node.open = true;
-  });
-  if (!window.chatMessagesUserScrolledUp) {
-    const container = document.getElementById('chat-messages');
-    if (container) container.scrollTop = container.scrollHeight;
+  const container = document.getElementById('chat-messages');
+  const scrollTop = Number(container?.scrollTop || 0);
+  const shouldFollow = !!container && (container.scrollHeight - (container.scrollTop + container.clientHeight)) <= 60;
+  const nextContent = document.createElement('div');
+  nextContent.innerHTML = renderSessionThinkingBodyHtml(sid);
+
+  const patchedAnswer = patchStreamingAnswerText(content, nextContent);
+  const hasTimeline = !!content.querySelector(':scope > .live-turn-timeline')
+    || !!nextContent.querySelector(':scope > .live-turn-timeline');
+  const patchedTimeline = !hasTimeline || patchLiveTurnTimeline(content, nextContent);
+  if (!patchedAnswer || !patchedTimeline) {
+    const disclosures = captureLiveTraceDisclosureState(content);
+    content.innerHTML = nextContent.innerHTML;
+    restoreLiveTraceDisclosureState(content, disclosures);
+  }
+
+  // Only follow the stream when the reader was already at the bottom. Opening
+  // a tool summary or reading its metadata must never pull the chat away.
+  if (container) {
+    if (shouldFollow) container.scrollTop = container.scrollHeight;
+    else container.scrollTop = scrollTop;
   }
   return true;
 }
@@ -12430,7 +12610,7 @@ function syncAssistantWorkTimer() {
   if (active) {
     if (!window._assistantWorkTimer) {
       window._assistantWorkTimer = setInterval(() => {
-        if (typeof window.renderChatMessages === 'function') window.renderChatMessages();
+        renderStreamingChatUpdate(window.activeChatSessionId);
       }, 2500);
     }
   } else if (window._assistantWorkTimer) {
@@ -13337,7 +13517,9 @@ function clearLiveTurnStateForSession(sessionId) {
   resetSessionStreamState(sid);
   const sess = getChatSessionById(sid);
   if (sess) {
+    sess.activeRun = false;
     sess.history = reconcileChatHistoryAfterMerge(sess.history || []);
+    persistSession(sid);
   }
   if (sid === window.activeChatSessionId) {
     applyStreamStateToWindow(sid);
@@ -15933,6 +16115,8 @@ async function sendChat(queuedMessage = null, options = {}) {
   // Per-session cleanup
   delete window._sessionThinking[thisSessionId];
   delete window._sessionAbortControllers[thisSessionId];
+  if (thisSession) thisSession.activeRun = false;
+  persistSession(thisSessionId);
   // Do this before the final non-streaming paint. A late render must never
   // reuse the completed turn's state and recreate an empty Working bubble.
   window._sessionStreamState[thisSessionId] = makeEmptyStreamState();
@@ -16732,7 +16916,7 @@ let realtimeVoicePendingInterruptContext = null;
 
 const OPENAI_REALTIME_VOICE_IDS = new Set(['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar']);
 const DESKTOP_VOICE_SETTINGS_KEY = 'pm_voice_settings_v1';
-const DESKTOP_VOICE_MODES = new Set(['default', 'openai_realtime', 'xai']);
+const DESKTOP_VOICE_MODES = new Set(['openai_realtime', 'xai']);
 let desktopVoiceSettings = loadDesktopVoiceSettings();
 
 const CANVAS_LANG_MAP = {
@@ -16785,20 +16969,17 @@ function storeVoiceSetting(key, value) {
 
 function normalizeDesktopVoiceMode(value) {
   const mode = String(value || '').trim();
-  return DESKTOP_VOICE_MODES.has(mode) ? mode : 'default';
+  return DESKTOP_VOICE_MODES.has(mode) ? mode : 'openai_realtime';
 }
 
 function loadDesktopVoiceSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(DESKTOP_VOICE_SETTINGS_KEY) || '{}');
-    const legacyStt = localStorage.getItem('prometheus_voice_stt_provider') || '';
-    const legacyTts = localStorage.getItem('prometheus_voice_tts_provider') || '';
-    const legacyMode = saved.voiceMode
-      || (legacyStt === 'xai' || legacyTts === 'xai' ? 'xai' : 'default');
+    const legacyMode = saved.voiceMode === 'xai' ? 'xai' : 'openai_realtime';
     return {
       voiceMode: normalizeDesktopVoiceMode(legacyMode),
-      sttProvider: saved.sttProvider || legacyStt || 'browser',
-      ttsProvider: saved.ttsProvider || legacyTts || 'browser',
+      sttProvider: 'auto',
+      ttsProvider: 'realtime',
       realtimeVoice: saved.realtimeVoice || getStoredVoiceSetting('realtime_voice', 'marin'),
       realtimeSpeed: Number(saved.realtimeSpeed || getStoredVoiceSetting('realtime_voice_speed', '1.1') || 1.1),
       serverVoice: saved.serverVoice || getStoredVoiceSetting('voice_xai_voice', 'eve'),
@@ -16811,9 +16992,9 @@ function loadDesktopVoiceSettings() {
     };
   } catch {
     return {
-      voiceMode: 'default',
-      sttProvider: 'browser',
-      ttsProvider: 'browser',
+      voiceMode: 'openai_realtime',
+      sttProvider: 'auto',
+      ttsProvider: 'realtime',
       realtimeVoice: 'marin',
       realtimeSpeed: 1.1,
       serverVoice: 'eve',
@@ -16840,18 +17021,17 @@ function saveDesktopVoiceSettings(settings = {}) {
 function getDesktopVoiceDefaultProvider() {
   if (realtimeVoiceConfigured) return 'openai_realtime';
   const xaiReady = isVoiceProviderConfigured('stt', 'xai') && isVoiceProviderConfigured('tts', 'xai');
-  return xaiReady ? 'xai' : 'default';
+  return xaiReady ? 'xai' : 'openai_realtime';
 }
 
 function applyDesktopVoiceProviderDefaults() {
   const provider = getDesktopVoiceDefaultProvider();
-  if (provider === 'default') return false;
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
   const autoProviderDefault = String(desktopVoiceSettings.autoProviderDefault || '');
   const isDefaultRoute =
     !desktopVoiceSettings.sttProviderLocked ||
     autoProviderDefault ||
-    mode === 'default' ||
+    mode === 'openai_realtime' ||
     (
       String(desktopVoiceSettings.sttProvider || 'browser') === 'browser' &&
       String(desktopVoiceSettings.ttsProvider || 'browser') === 'browser'
@@ -16860,8 +17040,8 @@ function applyDesktopVoiceProviderDefaults() {
   if (mode === provider && autoProviderDefault === provider) return false;
   const next =
     provider === 'openai_realtime'
-      ? { voiceMode: 'openai_realtime', sttProvider: 'browser', ttsProvider: 'browser' }
-      : { voiceMode: 'xai', sttProvider: 'xai', ttsProvider: 'xai', serverVoice: desktopVoiceSettings.serverVoice || 'eve' };
+      ? { voiceMode: 'openai_realtime', sttProvider: 'auto', ttsProvider: 'realtime' }
+      : { voiceMode: 'xai', sttProvider: 'auto', ttsProvider: 'realtime', serverVoice: desktopVoiceSettings.serverVoice || 'eve' };
   saveDesktopVoiceSettings({
     ...next,
     sttProviderLocked: true,
@@ -17048,7 +17228,6 @@ function isDesktopComposerTurnActive() {
   const activeSession = (window.chatSessions || []).find((session) => String(session?.id || '') === sessionId);
   return !!(
     window._sessionThinking?.[sessionId]
-    || window.isThinking
     || activeSession?.activeRun === true
   );
 }
@@ -17059,10 +17238,10 @@ function updateDesktopComposerSendButton() {
   const sendIcon = document.getElementById('send-icon');
   const voiceIcon = document.getElementById('voice-mode-icon');
   const stopIcon = document.getElementById('stop-icon');
-  // Session state is the authority here. The button must never expose voice
-  // mode while Prometheus has an active turn, even if a late UI update left
-  // its previous data attribute behind.
-  const thinking = isDesktopComposerTurnActive() || btn.dataset.thinking === 'true';
+  // Session state is the authority here. Do not retain the previous chat's
+  // DOM/global state when a user opens a fresh chat while it is still running.
+  const thinking = isDesktopComposerTurnActive();
+  btn.dataset.thinking = thinking ? 'true' : 'false';
   const voiceMode = !thinking && !hasDesktopComposerOutboundContent();
   btn.classList.toggle('voice-mode-btn', voiceMode);
   btn.classList.toggle('is-voice', voiceMode);
@@ -17505,9 +17684,9 @@ async function toggleBackendDictationFallback() {
 
 async function transcribeBackendRecording(blob) {
   if (!voiceDictationEnabled) return;
-  const provider = voiceSttProvider;
+  const provider = 'auto';
   const audioBase64 = await blobToBase64(blob);
-  const response = await fetch('/api/voice/stt', {
+    const response = await fetch('/api/voice/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -18432,7 +18611,7 @@ function getCachedRealtimeVoiceWorkerContextPacket(sessionId) {
 async function prefetchRealtimeVoiceWorkerContextPacket(sessionId, options = {}) {
   const sid = String(sessionId || 'default').trim() || 'default';
   try {
-    const response = await fetch('/api/voice-agent/context', {
+    const response = await fetch('/api/voice-agent/realtime-context', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -18953,7 +19132,7 @@ function handleRealtimeTranscriptionEvent(event, epoch = realtimeVoiceModeEpoch)
     beginImplicitRealtimeUtteranceIfSubmitted();
     const itemId = String(event?.item_id || 'current');
     const previous = realtimeDictationDeltas.get(itemId) || '';
-    const candidate = `${previous}${String(event?.delta || '')}`.trim();
+    const candidate = appendRealtimeAgentTranscriptDelta(previous, String(event?.delta || ''));
     if (!realtimeDictationFirstDeltaLogged) {
       realtimeDictationFirstDeltaLogged = true;
       logDesktopVoiceLatency(window.activeChatSessionId || 'default', 'first STT delta', realtimeDictationUtteranceStartedAt || Date.now(), {
@@ -19326,7 +19505,6 @@ function renderVoiceModeSelect() {
   const xaiReady = isVoiceProviderConfigured('stt', 'xai') && isVoiceProviderConfigured('tts', 'xai');
   const xaiLabel = xaiReady ? 'xAI / Grok' : 'xAI / Grok (not connected)';
   select.innerHTML = [
-    { value: 'default', label: 'Default' },
     { value: 'openai_realtime', label: realtimeLabel },
     { value: 'xai', label: xaiLabel },
   ].map((option) => `<option value="${escHtml(option.value)}">${escHtml(option.label)}</option>`).join('');
@@ -19369,9 +19547,7 @@ async function renderOutputVoiceSelect() {
 async function renderRealtimeVoiceSelect() {
   const select = document.getElementById('realtime-voice-select');
   if (!select) return;
-  const voices = await getVoiceCatalog('openai_realtime');
-  const allowedVoices = voices.filter((voice) => OPENAI_REALTIME_VOICE_IDS.has(voice.id));
-  const list = allowedVoices.length ? allowedVoices : fallbackVoiceCatalog('openai_realtime');
+  const list = fallbackVoiceCatalog('openai_realtime').filter((voice) => OPENAI_REALTIME_VOICE_IDS.has(voice.id));
   const stored = normalizeRealtimeVoice(getStoredVoiceSetting('realtime_voice', 'marin'));
   realtimeVoiceSelection = list.some((voice) => voice.id === stored) ? stored : 'marin';
   if (realtimeVoiceSelection !== stored) storeVoiceSetting('realtime_voice', realtimeVoiceSelection);
@@ -19422,8 +19598,6 @@ function renderRealtimeListenModeSelect() {
 function renderVoiceProviderControls() {
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
   renderVoiceModeSelect();
-  renderVoiceProviderSelect('stt');
-  renderVoiceProviderSelect('tts');
   const controls = document.getElementById('voice-provider-controls');
   const showControls = regularVoiceControlsVisible || realtimeVoiceRepliesEnabled;
   if (controls) {
@@ -19451,8 +19625,7 @@ function renderVoiceProviderControls() {
   if (xaiRealtimeLabel) xaiRealtimeLabel.hidden = mode !== 'xai';
   if (xaiRealtimeToggle) xaiRealtimeToggle.checked = desktopVoiceSettings.voiceAgentXaiRealtime === true;
   const voiceLabel = document.getElementById('voice-output-voice-label');
-  if (voiceLabel && mode !== 'xai') voiceLabel.hidden = true;
-  renderOutputVoiceSelect().catch(() => {});
+  if (voiceLabel) voiceLabel.hidden = true;
   renderRealtimeVoiceSelect().catch(() => {});
   renderRealtimeVoiceSpeedSelect();
   renderRealtimeNarrationModeSelect();
@@ -19462,47 +19635,44 @@ function renderVoiceProviderControls() {
 
 async function refreshVoiceProviderStatus() {
   desktopVoiceSettings = loadDesktopVoiceSettings();
-  voiceSttProvider = desktopVoiceSettings.sttProvider || getStoredVoiceProvider('stt', 'browser');
-  voiceTtsProvider = desktopVoiceSettings.ttsProvider || getStoredVoiceProvider('tts', 'browser');
+  voiceSttProvider = 'auto';
+  voiceTtsProvider = 'realtime';
   realtimeVoiceSelection = desktopVoiceSettings.realtimeVoice || getStoredVoiceSetting('realtime_voice', 'marin');
   loadRealtimeVoiceSpeed();
   realtimeVoiceSpeed = normalizeRealtimeVoiceSpeed(desktopVoiceSettings.realtimeSpeed || realtimeVoiceSpeed);
   loadRealtimeNarrationMode();
   loadRealtimeListenMode();
   try {
-    const response = await fetch('/api/voice/status');
+    const response = await fetch('/api/realtime/status');
     const data = await response.json().catch(() => ({}));
-    if (data?.success) {
+    if (data) {
       voiceProvidersStatus = {
-        sttProviders: Array.isArray(data.sttProviders) ? data.sttProviders : [],
-        ttsProviders: Array.isArray(data.ttsProviders) ? data.ttsProviders : [],
+        sttProviders: [{ id: 'auto', label: 'Transcription', configured: true }],
+        ttsProviders: [
+          { id: 'openai_realtime', label: 'OpenAI Realtime', configured: !!data?.configured },
+          { id: 'xai', label: 'xAI Realtime', configured: true },
+        ],
       };
-      realtimeVoiceConfigured = !!getProviderInfo('tts', 'openai_realtime')?.configured;
+      realtimeVoiceConfigured = !!data?.configured;
       applyDesktopVoiceProviderDefaults();
-      if (voiceTtsProvider === 'openai_realtime') {
-        voiceTtsProvider = 'browser';
-        storeVoiceProvider('tts', voiceTtsProvider);
-      }
     }
   } catch {
     voiceProvidersStatus = {
-      sttProviders: [{ id: 'browser', label: 'Browser dictation', configured: true, free: true }],
-      ttsProviders: [{ id: 'browser', label: 'Browser voice', configured: true, free: true }],
+      sttProviders: [{ id: 'auto', label: 'Transcription', configured: true }],
+      ttsProviders: [{ id: 'openai_realtime', label: 'OpenAI Realtime', configured: false }, { id: 'xai', label: 'xAI Realtime', configured: true }],
     };
     realtimeVoiceConfigured = false;
   }
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
   if (mode === 'openai_realtime') {
-    voiceSttProvider = 'browser';
-    voiceTtsProvider = 'browser';
+    voiceSttProvider = 'auto';
+    voiceTtsProvider = 'realtime';
   } else if (mode === 'xai') {
-    const xaiTtsReady = isVoiceProviderConfigured('tts', 'xai');
-    const xaiSttReady = isVoiceProviderConfigured('stt', 'xai');
-    voiceTtsProvider = xaiTtsReady ? 'xai' : 'browser';
-    voiceSttProvider = xaiSttReady ? 'xai' : 'browser';
+    voiceTtsProvider = 'realtime';
+    voiceSttProvider = 'auto';
   } else {
-    voiceSttProvider = 'browser';
-    voiceTtsProvider = 'browser';
+    voiceSttProvider = 'auto';
+    voiceTtsProvider = 'realtime';
   }
   storeVoiceProvider('stt', voiceSttProvider);
   storeVoiceProvider('tts', voiceTtsProvider);
@@ -19568,6 +19738,16 @@ function onRealtimeVoiceChanged() {
   saveDesktopVoiceSettings({ realtimeVoice: realtimeVoiceSelection });
   if (select) select.value = realtimeVoiceSelection;
   closeRealtimeVoiceConnection();
+  const activeSession = voiceAgentRealtimeConnection;
+  if (activeSession?.provider === 'openai_realtime' || activeSession?.transport === 'codex_app_server') {
+    const sessionId = String(activeSession.sessionId || window.activeChatSessionId || 'default').trim() || 'default';
+    const listenMode = activeSession.listenMode || voiceAgentRealtimeListenMode || 'push_to_talk';
+    stopVoiceAgentRealtimeSession();
+    startVoiceAgentRealtimeSession(sessionId, { listenMode }).catch((err) => {
+      showToast('Voice change failed', err?.message || String(err), 'error', 5000);
+    });
+    showToast('Switching voice', 'Reconnecting the live voice session…', 'info', 1800);
+  }
 }
 
 function onRealtimeVoiceSpeedChanged() {
@@ -20286,7 +20466,7 @@ async function refreshVoiceAgentRealtimeWorkerContext(reason = 'manual_refresh',
   const sid = String(voiceAgentRealtimeConnection?.sessionId || window.activeChatSessionId || '').trim();
   if (!sid || !voiceAgentRealtimeConnection?.dc || voiceAgentRealtimeConnection.dc.readyState !== 'open') return null;
   try {
-    const response = await fetch('/api/voice-agent/context', {
+    const response = await fetch('/api/voice-agent/realtime-context', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: sid, source: `desktop_realtime_${reason}` }),
@@ -20573,7 +20753,17 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
     const startedAt = Date.now();
     addSessionProcessEntry(sid, 'info', 'Voice Agent (Realtime): bootstrapping session.', { actor: 'Voice Agent (Realtime)' });
 
-    // 1. Bootstrap — gateway builds instructions, tools, and mints ephemeral token
+    // 1. Bootstrap Prometheus context/tools. When the local Codex app-server
+    // bridge is available this is context-only and never mints or reads an API key.
+    const realtimeStatusResp = await fetch('/api/realtime/status', { cache: 'no-store' });
+    const realtimeStatus = await realtimeStatusResp.json().catch(() => ({}));
+    const useCodexOauthBridge = realtimeStatusResp.ok
+      && realtimeStatus?.codexBridgeAvailable === true
+      && realtimeStatus?.transport === 'codex_app_server'
+      && realtimeStatus?.auth === 'chatgpt_oauth_app_server';
+    if (realtimeStatus?.authMode === 'codex_oauth' && !useCodexOauthBridge) {
+      throw new Error(realtimeStatus?.codexBridgeError || 'Codex is not signed in with ChatGPT OAuth for Realtime voice.');
+    }
     const wakeGate = getRealtimeWakeGate?.();
     voiceAgentRealtimeQuiet.active = !!(wakeGate?.active && wakeGate?.suppressVoice === true);
     voiceAgentRealtimeQuiet.pendingActivate = false;
@@ -20589,6 +20779,7 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
           ? { wakePhrase: wakeGate.phrase, wakeGateActive: wakeGate?.suppressVoice === true }
           : undefined,
         deviceTime: desktopVoiceDeviceTimeContext(),
+        contextOnly: useCodexOauthBridge,
       }),
     });
     const bootstrap = await bootstrapResp.json().catch(() => ({}));
@@ -20639,21 +20830,46 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${bootstrap.clientSecret}`,
-        'Content-Type': 'application/sdp',
-      },
-      body: offer.sdp,
-    });
-    const answerSdp = await sdpResp.text();
-    if (!sdpResp.ok) throw new Error(answerSdp || `Realtime call failed (${sdpResp.status})`);
+    let answerSdp = '';
+    let codexBridgeSessionId = '';
+    if (useCodexOauthBridge) {
+      const sdpResp = await fetch('/api/realtime/codex-bridge/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sdp: offer.sdp,
+          voice: bootstrap.voice,
+          instructions: bootstrap.instructions,
+        }),
+      });
+      const bridgeResult = await sdpResp.json().catch(() => ({}));
+      if (!sdpResp.ok || !bridgeResult?.success) {
+        throw new Error(bridgeResult?.error || `Codex OAuth realtime bridge failed (${sdpResp.status})`);
+      }
+      answerSdp = String(bridgeResult.sdp || '');
+      codexBridgeSessionId = String(bridgeResult.sessionId || '');
+    } else {
+      const sdpResp = await fetch('https://api.openai.com/v1/realtime/calls', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${bootstrap.clientSecret}`,
+          'Content-Type': 'application/sdp',
+        },
+        body: offer.sdp,
+      });
+      answerSdp = await sdpResp.text();
+      if (!sdpResp.ok) throw new Error(answerSdp || `Realtime call failed (${sdpResp.status})`);
+    }
+    answerSdp = `${String(answerSdp || '').replace(/\r\n|\r|\n/g, '\n').replace(/\s+$/g, '').replace(/\n/g, '\r\n')}\r\n`;
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     await dcOpen;
     if (window.__voiceAgentRealtimeDebug) {
       console.debug('[voice-agent-realtime] data channel open; bootstrap', {
-        model: bootstrap.model, voice: bootstrap.voice, toolCount: bootstrap.toolCount, listenMode,
+        model: bootstrap.model,
+        voice: bootstrap.voice,
+        toolCount: bootstrap.toolCount,
+        listenMode,
+        auth: useCodexOauthBridge ? 'chatgpt_oauth_app_server' : (bootstrap.auth || 'api_key'),
       });
     }
 
@@ -20686,6 +20902,12 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
               transcription: { model: 'gpt-realtime-whisper' },
             },
           },
+          ...(useCodexOauthBridge && bootstrap.instructions
+            ? { instructions: bootstrap.instructions }
+            : {}),
+          ...(useCodexOauthBridge && Array.isArray(bootstrap.tools) && bootstrap.tools.length
+            ? { tools: bootstrap.tools, tool_choice: 'auto' }
+            : {}),
         },
       };
       dc.send(JSON.stringify(sessionUpdate));
@@ -20698,7 +20920,19 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
     // the voice agent continues the conversation instead of starting fresh.
     seedVoiceAgentRealtimeConversationHistory(dc, sid);
 
-    voiceAgentRealtimeConnection = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode };
+    voiceAgentRealtimeConnection = {
+      pc,
+      dc,
+      audio,
+      micStream,
+      micTrack,
+      sessionId: sid,
+      listenMode,
+      provider: 'openai_realtime',
+      transport: useCodexOauthBridge ? 'codex_app_server' : 'openai_public_realtime',
+      auth: useCodexOauthBridge ? 'chatgpt_oauth_app_server' : (bootstrap.auth || 'api_key'),
+      codexBridgeSessionId,
+    };
     if (voiceAgentRealtimeQuiet.active) sendRealtimeAgentCreateResponseFlag(false);
     startVoiceAgentRealtimeContextRefreshLoop(voiceAgentRealtimeConnection);
     pc.addEventListener('connectionstatechange', () => {
@@ -20709,7 +20943,8 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
       }
     });
     logDesktopVoiceLatency?.(sid, 'realtime-agent ready', startedAt);
-    addSessionProcessEntry(sid, 'info', `Voice Agent (Realtime): connected (${listenMode}).`, { actor: 'Voice Agent (Realtime)' });
+    const voiceAuthLabel = useCodexOauthBridge ? 'ChatGPT OAuth via Codex' : (bootstrap.auth || 'API key');
+    addSessionProcessEntry(sid, 'info', `Voice Agent (Realtime): connected (${listenMode}, ${voiceAuthLabel}).`, { actor: 'Voice Agent (Realtime)' });
     return voiceAgentRealtimeConnection;
   })().finally(() => {
     voiceAgentRealtimeConnecting = null;
@@ -20729,6 +20964,14 @@ function stopVoiceAgentRealtimeSession() {
     voiceAgentRealtimeContextRefreshTimer = null;
   }
   try { conn?.cleanup?.(); } catch {}
+  if (conn?.codexBridgeSessionId) {
+    fetch('/api/realtime/codex-bridge/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: conn.codexBridgeSessionId }),
+      keepalive: true,
+    }).catch(() => {});
+  }
   try { conn?.dc?.close(); } catch {}
   try { conn?.pc?.close(); } catch {}
   try { if (conn?.audio) conn.audio.srcObject = null; } catch {}
@@ -20816,6 +21059,24 @@ function extractRealtimeAgentEventText(event = {}, options = {}) {
     return [...parts].sort((a, b) => b.length - a.length)[0] || '';
   }
   return parts[0] || '';
+}
+
+// Completed-event text is deliberately normalized by the extractor above.
+// Realtime deltas can carry the leading space that marks the next word, so
+// retain that boundary while a chat bubble is still streaming.
+function rawRealtimeAgentTranscriptDelta(event = {}) {
+  const candidates = [event?.delta, event?.transcript, event?.text, event?.content, event?.output_text];
+  const raw = candidates.find((value) => typeof value === 'string');
+  return typeof raw === 'string' ? raw.replace(/\r?\n/g, ' ') : '';
+}
+
+function appendRealtimeAgentTranscriptDelta(previous = '', rawDelta = '') {
+  const before = String(previous || '');
+  const next = String(rawDelta || '');
+  if (!next) return before;
+  if (!before) return next.trimStart();
+  if (/^\s/.test(next) || /\s$/.test(before) || /^[,.;:!?%)\]}]/.test(next)) return `${before}${next}`;
+  return `${before} ${next}`;
 }
 
 function chooseRealtimeAgentFinalUserTranscript(eventTranscript = '', liveTranscript = '') {
@@ -21009,11 +21270,14 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
 
   // Live user transcript deltas — show the bubble as speech is recognized.
   if (type === 'conversation.item.input_audio_transcription.delta' || type === 'conversation.item.input_audio_transcription.updated') {
-    const delta = extractRealtimeAgentEventText(event, { preferLongest: type.endsWith('.updated') });
+    const isSnapshot = type.endsWith('.updated');
+    const delta = isSnapshot
+      ? extractRealtimeAgentEventText(event, { preferLongest: true })
+      : (rawRealtimeAgentTranscriptDelta(event) || extractRealtimeAgentEventText(event));
     if (!delta) return;
-    voiceAgentRealtimeTurn.liveUserTranscript = type.endsWith('.updated')
+    voiceAgentRealtimeTurn.liveUserTranscript = isSnapshot
       ? delta
-      : `${voiceAgentRealtimeTurn.liveUserTranscript || ''}${delta}`;
+      : appendRealtimeAgentTranscriptDelta(voiceAgentRealtimeTurn.liveUserTranscript || '', delta);
     updateRealtimeAgentChatTurn(sessionId, 'user', voiceAgentRealtimeTurn.liveUserTranscript);
     return;
   }
@@ -21077,9 +21341,12 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
     || type === 'response.content_part.delta'
   ) {
     if (voiceAgentRealtimeQuiet.active || voiceAgentRealtimeTurn.suppressAssistantTranscript) return;
-    const delta = extractRealtimeAgentEventText(event);
+    const delta = rawRealtimeAgentTranscriptDelta(event) || extractRealtimeAgentEventText(event);
     if (!delta) return;
-    voiceAgentRealtimeTurn.liveAssistantTranscript = `${voiceAgentRealtimeTurn.liveAssistantTranscript || ''}${delta}`;
+    voiceAgentRealtimeTurn.liveAssistantTranscript = appendRealtimeAgentTranscriptDelta(
+      voiceAgentRealtimeTurn.liveAssistantTranscript || '',
+      delta,
+    );
     if (voiceAgentRealtimeTurn.dispatchedWorkerThisResponse) return;
     updateRealtimeAgentChatTurn(sessionId, 'ai', voiceAgentRealtimeTurn.liveAssistantTranscript);
     return;
@@ -21226,6 +21493,35 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
         }).filter(Boolean)
       : [];
     if (!tasks.length && singleTask) tasks.push({ title: String(args.title || '').trim(), prompt: singleTask });
+    // Compatibility bridge for an already-open realtime session using the
+    // retired tool name. New voice models receive voice_thread_ops directly.
+    // Never recreate the old primary-worker/workgroup transport here.
+    if (tasks.length) {
+      const threadArgs = tasks.length === 1
+        ? {
+            action: 'create',
+            title: tasks[0].title || 'Voice task',
+            prompt: tasks[0].prompt,
+            objective: tasks[0].prompt,
+            follow: true,
+          }
+        : {
+            action: 'create_many',
+            follow: true,
+            threads: tasks.map((task) => ({
+              title: task.title || 'Voice task',
+              prompt: task.prompt,
+              objective: task.prompt,
+            })),
+          };
+      return executeVoiceAgentRealtimeFunctionCall({
+        name: 'voice_thread_ops',
+        call_id: callId,
+        args: threadArgs,
+      }, sessionId);
+    }
+    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: false, error: 'A task is required to create a Prometheus thread.' }));
+    return;
     const dispatchLabel = tasks.length > 1
       ? `${tasks.length} workers: ${tasks.map((task) => task.title || task.prompt).join('; ')}`
       : String(tasks[0]?.prompt || singleTask || '').trim();
@@ -22100,12 +22396,7 @@ function playAudioBase64(audioBase64, mimeType) {
 }
 
 function speakWithBrowserVoice(text) {
-  const content = String(text || '').trim();
-  if (!content || !window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(content.slice(0, 5000));
-  utterance.lang = navigator.language || 'en-US';
-  window.speechSynthesis.speak(utterance);
+  // Spoken output belongs exclusively to an active realtime session.
 }
 
 // Streaming voice-agent call: POSTs to /api/voice-agent/input with stream:true,
@@ -22113,6 +22404,8 @@ function speakWithBrowserVoice(text) {
 // hears the first word ~200-400ms after the model starts generating.
 // Returns a promise resolving with the full result payload (same shape as JSON).
 async function streamVoiceAgentInput(body, onChunk) {
+  throw new Error('The legacy streamed voice-agent route was removed. Use OpenAI or xAI Realtime.');
+  /*
   const response = await fetch('/api/voice-agent/input', {
     method: 'POST',
     headers: {
@@ -22152,12 +22445,14 @@ async function streamVoiceAgentInput(body, onChunk) {
       }
     }
   }
-  return finalResult || {};
+  return finalResult || {}; */
 }
 
 // Per-call streaming TTS dispatcher. Each chunk fetched and played sequentially,
 // pre-fetching the next chunk while the current one plays for seamless audio.
 function createStreamingTtsDispatcher(provider) {
+  return { enqueue() {}, wait() { return Promise.resolve(); } };
+  /*
   const voiceProvider = provider === 'openai' || provider === 'xai' ? provider : '';
   const selectedVoice = provider === 'xai'
     ? (desktopVoiceSettings.serverVoice || getStoredVoiceSetting(`voice_${voiceProvider}_voice`, 'eve'))
@@ -22198,10 +22493,12 @@ function createStreamingTtsDispatcher(provider) {
         });
     },
     wait() { return chain.catch(() => {}); },
-  };
+  }; */
 }
 
 async function speakWithServerTts(text, provider) {
+  return;
+  /*
   const chunkMax = provider === 'groq' ? 180 : 400;
   const chunks = splitVoiceText(text, chunkMax).filter(Boolean);
   if (!chunks.length) return;
@@ -22231,7 +22528,7 @@ async function speakWithServerTts(text, provider) {
     const data = await nextFetch;
     if (i + 1 < chunks.length) nextFetch = fetchChunk(chunks[i + 1]);
     await playAudioBase64(data.audioBase64, data.mimeType);
-  }
+  } */
 }
 
 async function speakAssistantReply(text) {
@@ -37554,6 +37851,36 @@ function canvasNewFile() {
   canvasOpenTab(id);
 }
 
+// Open generated or API-provided text in the existing code canvas without
+// pretending it is a writable workspace file. Project CONTEXT.md uses this
+// bridge so the sidebar can show the full living document safely.
+function canvasOpenContent(content, name = 'untitled.txt') {
+  const tabName = String(name || 'untitled.txt');
+  const tabContent = String(content || '');
+  let tab = canvasTabs.find((candidate) => candidate.virtualKey === `content:${tabName}`);
+  if (!tab) {
+    tab = {
+      id: 'ctab_' + Math.random().toString(36).slice(2),
+      virtualKey: `content:${tabName}`,
+      name: tabName,
+      content: tabContent,
+      savedContent: tabContent,
+      dirty: false,
+      mode: 'code',
+      language: getCanvasLang(tabName),
+    };
+    canvasTabs.push(tab);
+  } else {
+    tab.content = tabContent;
+    tab.savedContent = tabContent;
+    tab.dirty = false;
+    tab.mode = 'code';
+    tab.language = getCanvasLang(tabName);
+  }
+  if (!canvasOpen) toggleCanvas(true);
+  canvasOpenTab(tab.id);
+}
+
 function canvasOpenTab(id) {
   activeCanvasTabId = id;
   const tab = canvasTabs.find(t => t.id === id);
@@ -40301,6 +40628,7 @@ window.buildFileContextNote = buildFileContextNote;
 window.chatFileUploadInit = chatFileUploadInit;
 window.setupChatMessageScrollbarFade = setupChatMessageScrollbarFade;
 window.canvasInitDrop = canvasInitDrop;
+window.canvasOpenContent = canvasOpenContent;
 window.canvasPickFiles = canvasPickFiles;
 window.canvasPickFolder = canvasPickFolder;
 window.canvasHandleFileInput = canvasHandleFileInput;
@@ -40749,6 +41077,7 @@ function appendTelegramMessageToSession(sessionId, message) {
   applyAutoSessionTitleOnce(sess, sess.history);
   if (next.role === 'assistant') {
     delete window._sessionThinking[sid];
+    sess.activeRun = false;
     window._sessionStreamState[sid] = makeEmptyStreamState();
   }
   if (sid !== window.activeChatSessionId) sess.unread = true;
@@ -41382,6 +41711,7 @@ function handleMainChatStreamEvent(msg = {}) {
     const text = String(evt.message || 'Unknown error').trim();
     addSessionProcessEntry(sid, 'error', text);
     delete window._sessionThinking[sid];
+    sess.activeRun = false;
     if (sid !== window.activeChatSessionId) sess.unread = true;
     if (!isViewing && !_isMobileShellActive()) {
       _showChannelActivityToast(sid, sess.source || inferChannelFromSessionId(sid), text, {

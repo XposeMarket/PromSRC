@@ -32,6 +32,23 @@ try {
   assert.equal(created.count, 2);
   assert.notEqual(created.created[0].id, created.created[1].id);
   assert.equal(sessionApi.getSession(created.created[0].id).title, 'First managed thread');
+  assert.equal(sessionApi.getSession(created.created[0].id).channel, 'web', 'desktop/web-originated threads must remain in the web channel');
+
+  const mobileOwnerId = 'prom_test_mobile_owner';
+  sessionApi.touchSession(mobileOwnerId, { channel: 'mobile', title: 'Mobile owner' });
+  sessionApi.flushSession(mobileOwnerId);
+  const mobileCreated = await threadOps.executePrometheusThreadOps(mobileOwnerId, {
+    action: 'create_many',
+    follow: false,
+    threads: [
+      { title: 'Mobile managed thread', prompt: '' },
+      { title: 'Second mobile managed thread', prompt: '' },
+    ],
+  }, {});
+  assert.equal(mobileCreated.count, 2);
+  for (const thread of mobileCreated.created) {
+    assert.equal(sessionApi.getSession(thread.id).channel, 'mobile', 'mobile-originated threads must remain in the mobile channel');
+  }
 
   const targetId = created.created[0].id;
   const renamed = await threadOps.executePrometheusThreadOps(ownerId, {
@@ -70,6 +87,9 @@ try {
   assert.equal(read.session.title, 'Renamed managed thread');
 
   let launchedPrompt = '';
+  let resolveDetachedTurn;
+  const detachedTurn = new Promise((resolve) => { resolveDetachedTurn = resolve; });
+  const managedEvents = [];
   const followedCreate = await threadOps.executePrometheusThreadOps(ownerId, {
     action: 'create',
     title: 'Autonomous managed thread',
@@ -78,12 +98,25 @@ try {
   }, {
     runInteractiveTurn: async (prompt) => {
       launchedPrompt = prompt;
-      return { type: 'chat', text: 'Goal accepted' };
+      return detachedTurn;
     },
+    broadcastWS: (event) => managedEvents.push(event),
   });
   assert.match(launchedPrompt, /^\/goal Finish the isolated verification objective$/);
   assert.equal(followedCreate.session.follow, true);
   assert.equal(followedCreate.session.supervision.status, 'active');
+  assert.deepEqual(followedCreate.session.launch, {
+    accepted: true,
+    state: 'queued',
+    responsePending: true,
+    responseReceived: false,
+    completionEvent: 'managed_thread_turn_complete',
+  }, 'thread creation must report an accepted pending launch, never a completed reply');
+  assert.equal(managedEvents.length, 0, 'no completion event may exist before the detached target turn resolves');
+  resolveDetachedTurn({ type: 'chat', text: 'Goal accepted' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(managedEvents[0]?.type, 'managed_thread_turn_complete');
+  assert.equal(managedEvents[0]?.summary, 'Goal accepted');
   supervisionApi.cancelThreadSupervision(followedCreate.session.supervision.id);
 
   const supervision = supervisionApi.createThreadSupervision({

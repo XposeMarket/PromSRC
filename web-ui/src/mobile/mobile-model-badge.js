@@ -55,6 +55,7 @@ const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 let _llmCache = null;            // full llm config { provider, providers }
 let _catalogCache = null;        // [{ id, name, runtime, ... }]
 let _credentialedIds = null;     // [providerId, ...]
+let _mobileDraftModelRoute = null; // Unsaved new-chat override; never writes Settings.
 
 function _esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
@@ -210,7 +211,8 @@ function _activeChatSessionId() {
 
 async function _loadChatModelRoute() {
   const sessionId = _activeChatSessionId();
-  if (!sessionId || sessionId === 'mobile_default') return null;
+  if (!sessionId) return null;
+  if (sessionId === 'mobile_default') return _mobileDraftModelRoute;
   try {
     const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`);
     return data?.chatModelRoute || null;
@@ -219,12 +221,52 @@ async function _loadChatModelRoute() {
 
 async function _saveChatModelRoute(route) {
   const sessionId = _activeChatSessionId();
-  if (!sessionId || sessionId === 'mobile_default') throw new Error('Send the first message before choosing a model for this chat.');
+  if (!sessionId) throw new Error('No active chat.');
+  if (sessionId === 'mobile_default') {
+    const override = {
+      providerId: String(route?.providerId || '').trim(),
+      model: String(route?.model || '').trim(),
+      reasoningEffort: String(route?.reasoningEffort || '').trim() || undefined,
+      accountId: String(route?.accountId || '').trim() || undefined,
+    };
+    if (!override.providerId || !override.model) throw new Error('Choose a provider and model.');
+    _mobileDraftModelRoute = {
+      mode: 'explicit',
+      availability: 'ready',
+      override,
+      effective: { ...override },
+    };
+    window.__pmChatModelRoute = _mobileDraftModelRoute;
+    return _mobileDraftModelRoute;
+  }
   const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, {
     method: 'PUT', body: JSON.stringify(route),
   });
   if (data?.success === false) throw new Error(data.error || 'Could not update this chat model');
   return data?.chatModelRoute || null;
+}
+
+export function resetMobileDraftModelRoute() {
+  _mobileDraftModelRoute = null;
+  _llmCache = null;
+  if (_activeChatSessionId() === 'mobile_default') {
+    window.__pmChatModelRoute = null;
+    refreshMobileModelBadge(true).catch(() => {});
+  }
+}
+
+export async function applyMobileDraftModelRouteToSession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  const route = _mobileDraftModelRoute?.override;
+  if (!sid || sid === 'mobile_default' || !route?.providerId || !route?.model) return null;
+  const data = await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sid)}/model-route`, {
+    method: 'PUT',
+    body: JSON.stringify(route),
+  });
+  if (data?.success === false) throw new Error(data.error || 'Could not apply the selected model to this chat');
+  _mobileDraftModelRoute = null;
+  window.__pmChatModelRoute = data?.chatModelRoute || null;
+  return window.__pmChatModelRoute;
 }
 
 function _modelDetail(detail = {}) {
@@ -426,7 +468,6 @@ function _renderReasoningBody(provider, cfg) {
   const selectedFillWidth = options && options.length ? ((1 / options.length) + selectedProgress * ((options.length - 1) / options.length)) * 100 : 0;
   const modelName = prettifyModelName(cfg.model, provider);
   const effortName = options ? _effortLabel(options[selectedIndex], provider) : 'Default';
-  const sourceLabel = window.__pmChatModelRoute?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
   _setSheetTitle('');
 
   const slider = options ? `
@@ -441,7 +482,6 @@ function _renderReasoningBody(provider, cfg) {
     <button type="button" class="pm-reasoning-summary" id="pm-reasoning-model" aria-label="Choose model and provider">
       <strong>${_esc(modelName)}</strong><span aria-hidden="true">·</span><span id="pm-reasoning-live-label">${_esc(effortName)}</span><span class="pm-reasoning-summary-chev" aria-hidden="true">›</span>
     </button>
-    <div class="pm-msheet-source">${_esc(sourceLabel)}</div>
     ${slider}`);
   if (!body) return;
 
@@ -582,21 +622,12 @@ function _renderAdvancedSheet() {
     _advancedRow('Intelligence', options ? _effortLabel(effortValue, provider) : 'Default', 'intelligence', { disabled: !options }),
   ];
   if (supportsFastSpeed(provider, model)) rows.push(_advancedRow('Speed', cfg.speed === 'fast' || cfg.fast_mode === true ? 'Fast' : 'Standard', 'speed'));
-  const source = window.__pmChatModelRoute?.mode === 'explicit' ? 'This chat' : 'Main Chat default';
-  const reset = window.__pmChatModelRoute?.mode === 'explicit' ? '<button type="button" class="pm-msheet-row" data-action="follow-default"><span class="pm-msheet-row-label">Use Main Chat Default</span></button>' : '';
-  const body = _setSheetBody(`<div class="pm-msheet-source">${_esc(source)}</div><div class="pm-advanced-panel">${rows.join('')}</div>${reset}`);
+  const body = _setSheetBody(`<div class="pm-advanced-panel">${rows.join('')}</div>`);
   if (!body) return;
   body.querySelector('[data-action="provider"]')?.addEventListener('click', _renderProviderList);
   body.querySelector('[data-action="model"]')?.addEventListener('click', () => _renderModelList(provider));
   body.querySelector('[data-action="intelligence"]')?.addEventListener('click', () => _renderEffortList(provider));
   body.querySelector('[data-action="speed"]')?.addEventListener('click', () => _renderSpeedList(provider));
-  body.querySelector('[data-action="follow-default"]')?.addEventListener('click', async () => {
-    const sessionId = _activeChatSessionId();
-    await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sessionId)}/model-route`, { method: 'DELETE' });
-    window.__pmChatModelRoute = await _loadChatModelRoute();
-    await refreshMobileModelBadge(true);
-    _renderAdvancedSheet();
-  });
 }
 
 function _renderSpeedList(provider) {

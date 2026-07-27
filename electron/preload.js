@@ -56,6 +56,14 @@ contextBridge.exposeInMainWorld('prometheusPairingAdmin', {
 contextBridge.exposeInMainWorld('prometheusFiles', {
   selectCanvasFiles: () => ipcRenderer.invoke('select-canvas-paths', { mode: 'files' }),
   selectCanvasFolder: () => ipcRenderer.invoke('select-canvas-paths', { mode: 'folder' }),
+  selectProjectFolder: () => ipcRenderer.invoke('select-canvas-paths', {
+    mode: 'folder',
+    title: 'Choose Project Directory',
+  }),
+  selectProjectPath: () => ipcRenderer.invoke('select-canvas-paths', {
+    mode: 'any',
+    title: 'Choose Project File or Directory',
+  }),
   // Electron deliberately stopped exposing File.path to renderer code. Keep
   // this narrow bridge so Canvas drag/drop and browser-file inputs can retain
   // the selected local file rather than uploading a workspace copy.

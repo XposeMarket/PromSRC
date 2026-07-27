@@ -1616,15 +1616,15 @@ body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recordin
   background: var(--p1-shared-gold-soft) !important;
 }
 
-/* P1 identity replaces the legacy flame artwork in every rebranded skin. */
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .logo {
+/* P1 identity replaces the legacy flame artwork in every desktop skin. */
+:root:is([data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .logo {
   width: 44px;
   height: 44px;
   border-radius: 0;
   background: url("../assets/prometheus-one/p1-mark-ring.png") center / contain no-repeat;
   filter: drop-shadow(0 0 12px rgba(214, 183, 94, .18));
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .logo img {
+:root:is([data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .logo img {
   opacity: 0;
 }
 :root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-title {
@@ -1652,13 +1652,13 @@ body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recordin
   width: 38px;
   height: 38px;
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon {
+:root:is([data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon {
   width: 72px;
   height: 72px;
   background: url("../assets/prometheus-one/p1-mark-ring.png") center / contain no-repeat;
   filter: drop-shadow(0 0 14px rgba(214, 183, 94, .20));
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon img {
+:root:is([data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon img {
   opacity: 0 !important;
 }
 :root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar {

@@ -3007,11 +3007,6 @@ async function loadAgentVoiceOptions(preserveSelected = false) {
     browser: ['default'],
   };
   let voices = fallbacks[provider] || [];
-  try {
-    const data = await api(`/api/voice/voices?provider=${encodeURIComponent(provider)}`, { timeoutMs: 8000 });
-    const loaded = Array.isArray(data?.voices) ? data.voices.map(v => typeof v === 'string' ? v : (v?.id || v?.name || '')).filter(Boolean) : [];
-    if (loaded.length) voices = loaded;
-  } catch {}
   const options = Array.from(new Set([...voices, previous].filter(Boolean)));
   voiceEl.innerHTML = `<option value="">provider default</option>${options.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('')}`;
   if (previous && options.includes(previous)) voiceEl.value = previous;

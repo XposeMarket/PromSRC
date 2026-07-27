@@ -257,15 +257,15 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
   --pm-header-h:      56px;
   --pm-tabbar-h:      68px;
   --pm-lg-header-blur: 1.5px;
-  --pm-lg-header-saturate: 1.7;
+  --pm-lg-header-saturate: 1;
   --pm-lg-header-brightness: 1.04;
   --pm-lg-header-border-alpha: .22;
   --pm-lg-pill-blur: 2.5px;
-  --pm-lg-pill-saturate: 2.1;
+  --pm-lg-pill-saturate: 1;
   --pm-lg-pill-brightness: 1.02;
   --pm-lg-pill-border-alpha: .18;
   --pm-lg-panel-blur: 2px;
-  --pm-lg-panel-saturate: .95;
+  --pm-lg-panel-saturate: 1;
   --pm-lg-panel-brightness: .8;
   --pm-lg-tabbar-border-alpha: .10;
   --pm-lg-composer-border-alpha: .06;
@@ -283,7 +283,7 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
   --pm-lg-lens-opacity: .56;
   --pm-lg-lens-scale: 1.054;
   --pm-lg-lens-blur: 1.7px;
-  --pm-lg-lens-saturate: 2.7;
+  --pm-lg-lens-saturate: 1;
   --pm-lg-lens-contrast: .7;
   --pm-lg-lens-brightness: 1.075;
   --pm-lg-lens-hotspot-alpha: .095;
@@ -294,7 +294,7 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
   --pm-lg-rim-outset: 0px;
   --pm-lg-rim-width: 9px;
   --pm-lg-rim-blur: 0px;
-  --pm-lg-rim-saturate: 2.6;
+  --pm-lg-rim-saturate: 1;
   --pm-lg-rim-brightness: 1.04;
   --pm-lg-halo-width: 0px;
 }
@@ -672,16 +672,15 @@ body.pm-mobile-drawer-open .pm-app {
 .pm-header .pm-icon-btn {
   color: var(--pm-text);
   border-radius: 50%;
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.05), rgba(255,255,255,0) 52%, color-mix(in srgb, var(--pm-orange) 1.5%, transparent));
+  background: rgba(255,255,255,.025);
   backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
   -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .22));
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.6),
     inset 0 -1.5px 1.5px rgba(255,255,255,.32),
-    0 6px 16px rgba(40,28,16,.16),
-    0 1px 4px rgba(40,28,16,.08);
+    0 6px 16px rgba(0,0,0,.16),
+    0 1px 4px rgba(0,0,0,.08);
   transition: transform .16s ease, background .2s ease;
   -webkit-tap-highlight-color: transparent;
 }
@@ -707,13 +706,11 @@ body.pm-mobile-drawer-open .pm-app {
 }
 .pm-header .pm-icon-btn::after { border-radius: 50%; }
 .pm-header .pm-icon-btn:active {
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.16), rgba(255,255,255,.05) 52%, color-mix(in srgb, var(--pm-orange) 4%, transparent));
+  background: rgba(255,255,255,.10);
   transform: scale(.94);
 }
 :root[data-theme="dark"] .pm-header .pm-icon-btn {
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.015) 52%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+  background: rgba(255,255,255,.04);
   border-color: rgba(255,255,255,var(--pm-lg-header-border-alpha, .12));
   box-shadow:
     inset 0 1px 1px rgba(255,255,255,.24),
@@ -721,8 +718,8 @@ body.pm-mobile-drawer-open .pm-app {
     0 1px 4px rgba(0,0,0,.22);
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .pm-header .pm-icon-btn { background: rgba(255,250,241,.9); }
-  :root[data-theme="dark"] .pm-header .pm-icon-btn { background: rgba(29,32,36,.9); }
+  .pm-header .pm-icon-btn { background: rgba(255,255,255,.9); }
+  :root[data-theme="dark"] .pm-header .pm-icon-btn { background: rgba(29,29,29,.9); }
 }
 /* Online/offline status as a small floating glass pill, inline with the buttons. */
 .pm-header .pm-online {
@@ -738,15 +735,17 @@ body.pm-mobile-drawer-open .pm-app {
   font-weight: 700;
   line-height: 1.2;
   color: var(--pm-text);
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.02) 52%, color-mix(in srgb, var(--pm-orange) 3%, transparent));
-  backdrop-filter: blur(var(--pm-lg-pill-blur, 18px)) saturate(var(--pm-lg-pill-saturate, 2.1)) brightness(var(--pm-lg-pill-brightness, 1.02));
-  -webkit-backdrop-filter: blur(var(--pm-lg-pill-blur, 18px)) saturate(var(--pm-lg-pill-saturate, 2.1)) brightness(var(--pm-lg-pill-brightness, 1.02));
-  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-pill-border-alpha, .18));
+  background: rgba(255,255,255,.045);
+  backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
+  -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .18));
   box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.42),
-    0 6px 16px rgba(40,28,16,.16);
+    inset 0 1.5px 1px rgba(255,255,255,.34),
+    inset 0 -1.5px 2px rgba(255,255,255,.13),
+    0 8px 18px rgba(0,0,0,.16),
+    0 1px 4px rgba(0,0,0,.1);
   position: relative;
+  transition: transform .16s ease, background .2s ease;
 }
 .pm-header .pm-online::before {
   content: '';
@@ -761,16 +760,16 @@ body.pm-mobile-drawer-open .pm-app {
   box-shadow: 0 0 0 3px rgba(216,71,58,.16);
 }
 :root[data-theme="dark"] .pm-header .pm-online {
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.015) 52%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
-  border-color: rgba(255,255,255,var(--pm-lg-pill-border-alpha, .12));
+  background: rgba(255,255,255,.05);
+  border-color: rgba(255,255,255,var(--pm-lg-header-border-alpha, .13));
   box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.24),
-    0 6px 16px rgba(0,0,0,.34);
+    inset 0 1px 1px rgba(255,255,255,.22),
+    0 8px 20px rgba(0,0,0,.34),
+    0 1px 4px rgba(0,0,0,.24);
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .pm-header .pm-online { background: rgba(255,250,241,.9); }
-  :root[data-theme="dark"] .pm-header .pm-online { background: rgba(29,32,36,.9); }
+  .pm-header .pm-online { background: rgba(255,255,255,.9); }
+  :root[data-theme="dark"] .pm-header .pm-online { background: rgba(29,29,29,.9); }
 }
 /* The status pill doubles as the interactive model badge (button). Reset the
    native button chrome and suppress the iOS long-press callout/selection so a
@@ -854,16 +853,15 @@ body.pm-model-badge-pressing * {
   padding: 14px;
   border-radius: 28px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, .88), rgba(250, 247, 241, .76)),
-    linear-gradient(135deg, rgba(255, 255, 255, .62), rgba(255, 247, 235, .46) 58%, color-mix(in srgb, var(--pm-orange) 8%, transparent));
+    linear-gradient(180deg, rgba(255, 255, 255, .88), rgba(250, 250, 250, .76));
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,.42);
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,.62),
     inset 0 -1px 0 rgba(255,255,255,.22),
-    0 18px 58px rgba(35, 24, 14, .22),
-    0 2px 10px rgba(35, 24, 14, .10);
-  backdrop-filter: blur(22px) saturate(1.55) brightness(1.04);
-  -webkit-backdrop-filter: blur(22px) saturate(1.55) brightness(1.04);
+    0 18px 58px rgba(0, 0, 0, .22),
+    0 2px 10px rgba(0, 0, 0, .10);
+  backdrop-filter: blur(22px) saturate(1) brightness(1.04);
+  -webkit-backdrop-filter: blur(22px) saturate(1) brightness(1.04);
   opacity: 0;
   transform: translateY(-8px) scale(.97);
   transform-origin: top center;
@@ -902,8 +900,7 @@ body.pm-model-badge-pressing * {
 :root[data-theme="dark"] .pm-msheet {
   border-color: rgba(255,255,255,.16);
   background:
-    linear-gradient(180deg, rgba(39, 39, 42, .88), rgba(22, 22, 24, .78)),
-    linear-gradient(135deg, rgba(255,255,255,.13), rgba(255,255,255,.055) 58%, color-mix(in srgb, var(--pm-orange) 8%, transparent));
+    linear-gradient(180deg, rgba(39, 39, 42, .88), rgba(22, 22, 24, .78));
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,.16),
     inset 0 -1px 0 rgba(255,255,255,.06),
@@ -1124,8 +1121,8 @@ body.pm-model-badge-pressing * {
     0 18px 58px rgba(0,0,0,.36),
     0 0 42px rgba(255,255,255,.12);
   overflow: hidden;
-  -webkit-backdrop-filter: blur(22px) saturate(1.35);
-  backdrop-filter: blur(22px) saturate(1.35);
+  -webkit-backdrop-filter: blur(22px) saturate(1);
+  backdrop-filter: blur(22px) saturate(1);
 }
 .pm-reasoning-fill {
   position: absolute;
@@ -1135,11 +1132,16 @@ body.pm-model-badge-pressing * {
   bottom: 7px;
   width: var(--pm-reasoning-fill-width, calc((100% - 14px) / (var(--pm-reasoning-steps) + 1)));
   border-radius: 999px;
-  background: linear-gradient(180deg, #ffffff 0%, #f7f7f7 100%);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--pm-orange) 84%, white 16%) 0%,
+      var(--pm-orange) 100%
+    );
   box-shadow:
-    0 7px 20px rgba(0,0,0,.28),
-    inset 0 1px 1px rgba(255,255,255,.85),
-    inset 0 -2px 4px rgba(0,0,0,.08);
+    0 7px 20px color-mix(in srgb, var(--pm-orange) 30%, rgba(0,0,0,.28)),
+    inset 0 1px 1px rgba(255,255,255,.48),
+    inset 0 -2px 4px rgba(0,0,0,.14);
   transition: width .16s cubic-bezier(.2,.9,.2,1);
   pointer-events: none;
 }
@@ -1201,8 +1203,8 @@ body.pm-model-badge-pressing * {
     linear-gradient(180deg, rgba(55, 55, 58, .74), rgba(25, 25, 27, .82)),
     linear-gradient(135deg, rgba(255,255,255,.15), rgba(255,255,255,.04)) !important;
   box-shadow: 0 -22px 70px rgba(0,0,0,.46), inset 0 1px 0 rgba(255,255,255,.14) !important;
-  -webkit-backdrop-filter: blur(30px) saturate(1.45) brightness(.92) !important;
-  backdrop-filter: blur(30px) saturate(1.45) brightness(.92) !important;
+  -webkit-backdrop-filter: blur(30px) saturate(1) brightness(.92) !important;
+  backdrop-filter: blur(30px) saturate(1) brightness(.92) !important;
   justify-content: flex-start;
   color: #fff;
 }
@@ -1365,14 +1367,13 @@ body.pm-model-badge-pressing * {
   gap: 0;
   padding: 2px;
   border-radius: 999px;
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.09), rgba(255,255,255,.025) 52%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+  background: rgba(255,255,255,.045);
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .18));
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.34),
     inset 0 -1.5px 2px rgba(255,255,255,.13),
-    0 8px 18px rgba(40,28,16,.16),
-    0 1px 4px rgba(40,28,16,.1);
+    0 8px 18px rgba(0,0,0,.16),
+    0 1px 4px rgba(0,0,0,.1);
   backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
   -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
   pointer-events: auto;
@@ -1408,8 +1409,7 @@ body.pm-model-badge-pressing * {
   transform: scale(.96);
 }
 :root[data-theme="dark"] .pm-header-action-cluster {
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.1), rgba(255,255,255,.022) 52%, color-mix(in srgb, var(--pm-orange) 8%, transparent));
+  background: rgba(255,255,255,.05);
   border-color: rgba(255,255,255,var(--pm-lg-header-border-alpha, .13));
   box-shadow:
     inset 0 1px 1px rgba(255,255,255,.22),
@@ -1671,16 +1671,15 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   border-radius: 999px;
   /* Genuinely see-through: light blur so shapes behind stay readable, with a
      saturation/brightness lift to keep the glass crisp (the iOS look). */
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.04), rgba(255,255,255,0) 46%, color-mix(in srgb, var(--pm-orange) 1.5%, transparent));
+  background: rgba(255,255,255,.02);
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-tabbar-border-alpha, .10));
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.32),     /* dimmed top rim light */
     inset 0 -10px 26px rgba(255,255,255,.04),    /* inner floor glow */
-    0 18px 48px rgba(40,28,16,.20),
-    0 4px 12px rgba(40,28,16,.10);
+    0 18px 48px rgba(0,0,0,.20),
+    0 4px 12px rgba(0,0,0,.10);
   z-index: 5;
   transform: translateZ(0);
   /* Let the tabbar own horizontal drags (slider gesture) instead of the page. */
@@ -1707,8 +1706,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   transition: opacity .18s ease;
 }
 :root[data-theme="dark"] .pm-tabbar {
-  background:
-    linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.01) 48%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+  background: rgba(255,255,255,.04);
   border-color: rgba(255,255,255,var(--pm-lg-tabbar-border-alpha, .08));
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.18),
@@ -2000,10 +1998,10 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .pm-tabbar {
-    background: rgba(255,250,241,.92);
+    background: rgba(255,255,255,.92);
   }
   :root[data-theme="dark"] .pm-tabbar {
-    background: rgba(29,32,36,.92);
+    background: rgba(29,29,29,.92);
   }
 }
 
@@ -2191,6 +2189,34 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   color: var(--pm-orange);
   opacity: .8;
 }
+.pm-drawer-pinned-toggle {
+  appearance: none;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.pm-drawer-pinned-chevron {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  transition: transform 160ms ease;
+}
+.pm-drawer-pinned-chevron svg { width: 12px; height: 12px; }
+.pm-drawer-pinned-toggle[aria-expanded="false"] .pm-drawer-pinned-chevron { transform: rotate(-90deg); }
+.pm-drawer-pinned-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pm-drawer-pinned-content[hidden] { display: none; }
 .pm-drawer-search-results {
   margin-top: 4px;
   display: flex;
@@ -4713,7 +4739,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.14) 0%, rgba(255,255,255,.025) 22%,
       transparent 48%, transparent 72%,
       rgba(255,255,255,.05) 92%, rgba(255,255,255,.11) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.025) 58%, color-mix(in srgb, var(--pm-orange) 5.5%, transparent));
+    rgba(255,255,255,.04);
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   box-shadow:
@@ -4806,7 +4832,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 22%,
       transparent 48%, transparent 72%,
       rgba(255,255,255,.025) 92%, rgba(255,255,255,.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 58%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+    rgba(255,255,255,.03);
 }
 
 /* ── Long-press popover for user message actions ── */
@@ -4824,7 +4850,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.14) 0%, rgba(255,255,255,.025) 18%,
       transparent 42%, transparent 72%,
       rgba(255,255,255,.045) 90%, rgba(255,255,255,.10) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.075), rgba(255,255,255,.025) 58%, color-mix(in srgb, var(--pm-orange) 4%, transparent));
+    rgba(255,255,255,.04);
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
@@ -4844,7 +4870,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 18%,
       transparent 42%, transparent 72%,
       rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 58%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+    rgba(255,255,255,.03);
   border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.18),
@@ -6802,7 +6828,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.02) 60%, color-mix(in srgb, var(--pm-orange) 3%, transparent));
+    rgba(255,255,255,.035);
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   /* Light transparent rim to match the tab bar below (codex had dropped this to
@@ -6813,8 +6839,8 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.32),     /* top rim light — same as tabbar */
     inset 0 -1.5px 1.5px rgba(255,255,255,.16),  /* bottom rim light */
-    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(40,28,16,var(--pm-lg-shadow-alpha, .09)),
-    0 1px 4px rgba(40,28,16,.06);
+    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .09)),
+    0 1px 4px rgba(0,0,0,.06);
   z-index: 4;
   transition:
     bottom var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
@@ -6845,7 +6871,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 60%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+    rgba(255,255,255,.03);
   border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.18),
@@ -6883,7 +6909,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   border-radius: 999px;
   background:
     linear-gradient(to bottom, rgba(255,255,255,.16), rgba(255,255,255,.025) 38%, rgba(255,255,255,.085)),
-    linear-gradient(135deg, rgba(255,255,255,.09), rgba(255,255,255,.025) 62%, color-mix(in srgb, var(--pm-orange) 4.5%, transparent));
+    rgba(255,255,255,.045);
   color: var(--pm-text);
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.34),
@@ -6926,7 +6952,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   border-color: rgba(255,255,255,.14);
   background:
     linear-gradient(to bottom, rgba(255,255,255,.12), rgba(255,255,255,.018) 40%, rgba(255,255,255,.07)),
-    linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.018) 62%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+    rgba(255,255,255,.035);
 }
 .pm-keyboard-open .pm-scroll-latest {
   bottom: calc(var(--pm-keyboard-offset, 0px) + var(--pm-composer-live-height, 72px) + var(--pm-scroll-latest-stack-height, 0px) + 24px);
@@ -7009,13 +7035,13 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.02) 60%, color-mix(in srgb, var(--pm-orange) 3%, transparent));
+    rgba(255,255,255,.035);
   color: var(--pm-text);
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.32),
     inset 0 -1.5px 1.5px rgba(255,255,255,.16),
-    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(40,28,16,var(--pm-lg-shadow-alpha, .09)),
-    0 1px 4px rgba(40,28,16,.06);
+    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .09)),
+    0 1px 4px rgba(0,0,0,.06);
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   padding: 7px 13px 7px 10px;
@@ -7039,7 +7065,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 60%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+    rgba(255,255,255,.03);
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.18),
     inset 0 -1.5px 1.5px rgba(255,255,255,.09),
@@ -7102,12 +7128,12 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.02) 60%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+    rgba(255,255,255,.035);
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.32),
     inset 0 -1.5px 1.5px rgba(255,255,255,.16),
-    0 8px 18px rgba(40,28,16,.12),
-    0 1px 4px rgba(40,28,16,.08);
+    0 8px 18px rgba(0,0,0,.12),
+    0 1px 4px rgba(0,0,0,.08);
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   font-size: 12px;
@@ -7155,7 +7181,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 60%, color-mix(in srgb, var(--pm-orange) 6%, transparent));
+    rgba(255,255,255,.03);
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.18),
     inset 0 -1.5px 1.5px rgba(255,255,255,.09),
@@ -7375,12 +7401,12 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.02) 60%, color-mix(in srgb, var(--pm-orange) 3%, transparent));
+    rgba(255,255,255,.035);
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.32),
     inset 0 -1.5px 1.5px rgba(255,255,255,.16),
-    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(40,28,16,var(--pm-lg-shadow-alpha, .09)),
-    0 1px 4px rgba(40,28,16,.06);
+    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .09)),
+    0 1px 4px rgba(0,0,0,.06);
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
 }
@@ -7391,7 +7417,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 60%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+    rgba(255,255,255,.03);
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.18),
     inset 0 -1.5px 1.5px rgba(255,255,255,.09),
@@ -7427,7 +7453,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   padding: 7px 14px 7px 11px;
   border: 1px solid rgba(255,255,255,.22);
   border-radius: 999px;
-  background: linear-gradient(135deg, rgba(255,255,255,.15), rgba(255,255,255,.055) 62%, color-mix(in srgb, var(--pm-orange) 5.5%, transparent));
+  background: rgba(255,255,255,.08);
   box-shadow: var(--pm-shadow-md);
   color: var(--pm-text);
   backdrop-filter: blur(18px) saturate(1.25);
@@ -7435,7 +7461,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 }
 :root[data-theme="dark"] .pm-tool-progress-pill {
   border-color: rgba(255,255,255,.13);
-  background: linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.03) 62%, color-mix(in srgb, var(--pm-orange) 6%, transparent));
+  background: rgba(255,255,255,.05);
 }
 .pm-tool-progress-pill strong {
   min-width: 0;
@@ -7520,7 +7546,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   padding: 6px 13px 6px 9px;
   border: 1px solid rgba(255,255,255,.22);
   border-radius: 999px;
-  background: linear-gradient(135deg, rgba(255,255,255,.15), rgba(255,255,255,.055) 62%, color-mix(in srgb, var(--pm-orange) 4.5%, transparent));
+  background: rgba(255,255,255,.08);
   box-shadow: var(--pm-shadow-md);
   color: var(--pm-text);
   font: inherit;
@@ -7642,7 +7668,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   padding: 7px 14px;
   border: 1px solid rgba(255,255,255,.22);
   border-radius: 999px;
-  background: linear-gradient(135deg, rgba(255,255,255,.15), rgba(255,255,255,.055) 62%, color-mix(in srgb, var(--pm-orange) 4.5%, transparent));
+  background: rgba(255,255,255,.08);
   box-shadow: var(--pm-shadow-md);
   color: var(--pm-text);
   font: inherit;
@@ -7651,7 +7677,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 }
 :root[data-theme="dark"] .pm-background-spawn-pill {
   border-color: rgba(255,255,255,.13);
-  background: linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.03) 62%, color-mix(in srgb, var(--pm-orange) 5.5%, transparent));
+  background: rgba(255,255,255,.05);
 }
 .pm-background-spawn-pill strong {
   font-size: 12px;
@@ -7691,7 +7717,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   border: 1px solid rgba(255,255,255,.22);
   border-radius: 16px;
   background:
-    linear-gradient(135deg, rgba(255,255,255,.15), rgba(255,255,255,.05) 58%, color-mix(in srgb, var(--pm-orange) 3.5%, transparent));
+    rgba(255,255,255,.08);
   box-shadow: var(--pm-shadow-md);
   backdrop-filter: blur(18px) saturate(1.25);
   -webkit-backdrop-filter: blur(18px) saturate(1.25);
@@ -7699,7 +7725,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 :root[data-theme="dark"] .pm-background-spawn-lane {
   border-color: rgba(255,255,255,.13);
   background:
-    linear-gradient(135deg, rgba(255,255,255,.09), rgba(255,255,255,.025) 58%, color-mix(in srgb, var(--pm-orange) 4.5%, transparent));
+    rgba(255,255,255,.045);
 }
 .pm-background-spawn-summary {
   position: relative;
@@ -8033,9 +8059,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   padding: 6px;
   border: 1px solid rgba(255,255,255,.18);
   border-radius: 14px;
-  background:
-    linear-gradient(145deg, rgba(40,42,46,.78), rgba(23,24,27,.62) 60%, color-mix(in srgb, var(--pm-orange) 8%, transparent)),
-    var(--pm-surface);
+  background: rgba(255,255,255,.04);
   box-shadow: 0 16px 40px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.16);
   backdrop-filter: blur(20px) saturate(1.3);
   -webkit-backdrop-filter: blur(20px) saturate(1.3);
@@ -8399,8 +8423,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.02) 60%, color-mix(in srgb, var(--pm-orange) 3%, transparent)),
-    var(--pm-surface-strong);
+    rgba(255,255,255,.035);
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
   border-radius: var(--pm-lg-radius, 18px);
   color: var(--pm-text);
@@ -8408,8 +8431,8 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.32),
     inset 0 -1.5px 1.5px rgba(255,255,255,.16),
-    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(40,28,16,var(--pm-lg-shadow-alpha, .09)),
-    0 1px 4px rgba(40,28,16,.06);
+    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .09)),
+    0 1px 4px rgba(0,0,0,.06);
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   z-index: 12;
@@ -8421,8 +8444,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 60%, color-mix(in srgb, var(--pm-orange) 5%, transparent)),
-    var(--pm-surface-strong);
+    rgba(255,255,255,.03);
   border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.18),
@@ -8795,7 +8817,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.14) 0%, rgba(255,255,255,.025) 18%,
       transparent 42%, transparent 72%,
       rgba(255,255,255,.045) 90%, rgba(255,255,255,.10) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.075), rgba(255,255,255,.025) 58%, color-mix(in srgb, var(--pm-orange) 4%, transparent));
+    rgba(255,255,255,.04);
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.30),
     inset 0 -1.5px 1.5px rgba(255,255,255,.14),
@@ -8818,7 +8840,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
       rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 18%,
       transparent 42%, transparent 72%,
       rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 58%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+    rgba(255,255,255,.03);
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.18),
     inset 0 -1.5px 1.5px rgba(255,255,255,.09),
@@ -10043,7 +10065,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
       rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.015) 60%, color-mix(in srgb, var(--pm-orange) 5%, transparent));
+    rgba(255,255,255,.03);
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   border: 0;
@@ -12991,7 +13013,7 @@ body.pm-canvas-fullscreen-open {
   border: 1px solid rgba(255,255,255,.11);
   border-radius: 17px;
   background:
-    linear-gradient(135deg, rgba(255,255,255,.055), rgba(255,255,255,.018) 54%, color-mix(in srgb, var(--pm-orange) 1.8%, transparent)),
+    rgba(255,255,255,.03),
     rgba(14, 16, 20, .58);
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,.08),
@@ -13369,7 +13391,7 @@ body.pm-canvas-fullscreen-open {
       rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
       transparent 34%, transparent 72%,
       rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
-    linear-gradient(135deg, rgba(255,255,255,.07), rgba(255,255,255,.02) 60%, color-mix(in srgb, var(--pm-orange) 3%, transparent));
+    rgba(255,255,255,.035);
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .06));
@@ -13378,8 +13400,8 @@ body.pm-canvas-fullscreen-open {
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,var(--pm-lg-inset-highlight-alpha, .24)),
     inset 0 -1.5px 1.5px rgba(255,255,255,var(--pm-lg-inset-floor-alpha, .13)),
-    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(40,28,16,var(--pm-lg-shadow-alpha, .09)),
-    0 1px 4px rgba(40,28,16,.06);
+    0 var(--pm-lg-shadow-y, 8px) var(--pm-lg-shadow-blur, 18px) rgba(0,0,0,var(--pm-lg-shadow-alpha, .09)),
+    0 1px 4px rgba(0,0,0,.06);
 }
 .pm-creative-composer-row { display: flex; align-items: center; gap: 6px; }
 .pm-creative-composer > :not(.pm-glass-lens) { position: relative; z-index: 1; }
@@ -13870,12 +13892,12 @@ body.pm-mobile-active #settings-save-btn {
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .22));
   border-radius: 14px;
   background:
-    linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.02) 52%, color-mix(in srgb, var(--pm-orange) 3%, transparent));
+    rgba(255,255,255,.04);
   -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(2) brightness(1.05);
   backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(2) brightness(1.05);
   box-shadow:
     0 1px 0 rgba(255,255,255,.4) inset,
-    0 12px 30px rgba(40,28,16,.2);
+    0 12px 30px rgba(0,0,0,.2);
   color: var(--pm-text);
   padding: 8px;
   animation: pm-chat-settings-popover 140ms ease;

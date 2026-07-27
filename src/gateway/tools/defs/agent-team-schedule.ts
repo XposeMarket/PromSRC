@@ -1243,8 +1243,8 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'prometheus_thread_ops',
         description:
-          'Find, inspect, create, rename, pin, message, steer, interrupt, and supervise other Prometheus chat sessions. A created chat inherits the current Main Chat route unless provider_id, model, reasoning_effort, or account_id is supplied; any supplied route field creates a sticky route for that chat only. ' +
-          'Use create_many to split a request into separate first-class Prometheus threads. follow=true starts Goal mode in each target and reports terminal completion, blocking, or failure back to this owner thread. ' +
+          'Find, inspect, create, rename, pin, message, steer, interrupt, and supervise other Prometheus chat sessions. A created chat inherits its origin chat channel and the current Main Chat route unless provider_id, model, reasoning_effort, or account_id is supplied; any supplied route field creates a sticky route for that chat only. ' +
+          'Use create_many to split a request into separate first-class Prometheus threads. Creation only accepts and queues the target turn: it is not a target reply, completion, or verification. A real target result exists only after a later read/status or managed completion update. follow=true starts Goal mode in each target and reports terminal completion, blocking, or failure back to this owner thread. ' +
           'For active supervision, work as a manager loop: inspect the target, compare it to the objective and acceptance criteria, decide whether to wait/steer/report, and only accept after independent verification. ' +
           'revise_supervision, pause_supervision, and resume_supervision preserve the same owner/target workflow; they never silently replace the target thread. This controls Prometheus sessions, not subagents, background task records, or Codex threads.',
         parameters: {
@@ -1273,7 +1273,7 @@ export function getAgentTeamScheduleTools(): any[] {
             model: { type: 'string', description: 'For create/create_many: exact model id for this new chat. Pair with provider_id when selecting a different provider.' },
             reasoning_effort: { type: 'string', enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'For create/create_many: optional reasoning effort for this new chat. If supplied, the chat gets a sticky route.' },
             account_id: { type: 'string', description: 'For create/create_many: optional configured account id for the selected provider. If omitted, that provider\'s saved default account is used.' },
-            follow: { type: 'boolean', description: 'For create/create_many: enter autonomous Goal mode and durably supervise. Default true.' },
+            follow: { type: 'boolean', description: 'For create/create_many: enter autonomous Goal mode and durably supervise. Default true. Creation returns while the target reply is still pending.' },
             max_reviews: { type: 'number', description: 'Optional active-supervision review budget. Default 12.' },
             max_follow_ups: { type: 'number', description: 'Optional supervised send/steer budget. Default 6.' },
             max_elapsed_ms: { type: 'number', description: 'Optional elapsed-time budget. Default 24 hours.' },

@@ -70,14 +70,7 @@ export function renderAgentVoicePicker(agent, scope = 'agent-voice') {
 
 async function loadVoiceOptions(provider) {
   const key = String(provider || '').trim();
-  if (!key) return [];
-  try {
-    const data = await api(`/api/voice/voices?provider=${encodeURIComponent(key)}`, { timeoutMs: 8000 });
-    const voices = Array.isArray(data?.voices) ? data.voices : [];
-    return voices.map((v) => typeof v === 'string' ? v : (v?.id || v?.name || '')).filter(Boolean);
-  } catch {
-    return FALLBACK_VOICES[key] || [];
-  }
+  return FALLBACK_VOICES[key] || [];
 }
 
 export async function agentVoicePickerHydrate(scope = 'agent-voice', agent = null) {

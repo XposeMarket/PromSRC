@@ -111,7 +111,6 @@ function isStreamingHttpRequest(req: http.IncomingMessage): boolean {
 
   if (accept.includes('text/event-stream')) return true;
   if (method === 'POST' && pathname === '/api/chat') return true;
-  if (method === 'POST' && pathname === '/api/voice-agent/input') return true;
   if (method === 'POST' && /^\/api\/teams\/[^/]+\/chat$/.test(pathname)) return true;
   if (method === 'GET' && /^\/api\/bg-tasks\/[^/]+\/stream$/.test(pathname)) return true;
   if (method === 'GET' && (pathname === '/api/teams/events' || /^\/api\/teams\/[^/]+\/events$/.test(pathname))) return true;

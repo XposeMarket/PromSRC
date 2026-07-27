@@ -57,6 +57,8 @@ export interface ProjectKnowledgeFile {
 export interface Project {
   id: string;
   name: string;
+  /** Optional user-selected directory that scopes this project's work. */
+  workspacePath?: string;
   instructions: string;
   memorySnapshot: string;
   sessions: ProjectSession[];
@@ -94,6 +96,12 @@ export function getProjectKnowledgeFilePath(projectId: string, relativeName: str
   });
 }
 
+export function getProjectContextFilePath(projectId: string): string {
+  return resolveConfinedStoragePath(getProjectWorkspaceDir(projectId), 'CONTEXT.md', {
+    label: 'project context file',
+  });
+}
+
 function ensureProjectDirs(id: string): void {
   for (const dir of [getProjectsDir(), getProjectWorkspaceDir(id), getProjectKnowledgeDir(id)]) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -108,6 +116,58 @@ function generateId(): string {
 
 function estimateTokens(content: string): number {
   return Math.ceil(content.length / 4);
+}
+
+function contextSeed(name: string): string {
+  return [
+    `# ${name}`,
+    '',
+    '> This file is the living context for this project. Keep durable project facts, decisions, and status current.',
+    '',
+    '## Overview',
+    '',
+    '*(Prometheus will fill this in after your first substantive conversation.)*',
+    '',
+    '## Project Instructions',
+    '',
+    '## Project Memory',
+    '',
+    '## Status Updates',
+    '',
+    '## Goals',
+    '',
+    '## Key People & Entities',
+    '',
+    '## Tech Stack & Tools',
+    '',
+    '## Timeline & Milestones',
+    '',
+    '## Notes',
+    '',
+  ].join('\n');
+}
+
+function replaceContextSection(content: string, heading: string, value: string, aliases: string[] = []): string {
+  const section = `## ${heading}\n\n${value.trim()}\n`;
+  for (const candidate of [heading, ...aliases]) {
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`^##\\s+${escaped}\\s*$[\\s\\S]*?(?=^##\\s|$(?![\\s\\S]))`, 'm');
+    if (pattern.test(content)) return content.replace(pattern, section);
+  }
+  return `${content.trimEnd()}\n\n${section}`;
+}
+
+function ensureProjectContextFile(project: Project): string {
+  const contextPath = getProjectContextFilePath(project.id);
+  if (!fs.existsSync(contextPath)) fs.writeFileSync(contextPath, contextSeed(project.name), 'utf-8');
+  return contextPath;
+}
+
+export function getProjectContextContent(projectId: string): string | null {
+  const project = loadProjectFromDisk(projectId);
+  if (!project) return null;
+  const contextPath = ensureProjectContextFile(project);
+  try { return fs.readFileSync(contextPath, 'utf-8'); } catch { return null; }
 }
 
 function saveProject(project: Project): void {
@@ -156,39 +216,14 @@ export function getProject(id: string): Project | null {
   return loadProjectFromDisk(id);
 }
 
-export function createProject(name: string): Project {
+export function createProject(name: string, workspacePath = ''): Project {
   const id = generateId();
   const now = Date.now();
   ensureProjectDirs(id);
 
-  // Seed CONTEXT.md
-  const contextPath = resolveConfinedStoragePath(getProjectWorkspaceDir(id), 'CONTEXT.md', { label: 'project context file' });
-  if (!fs.existsSync(contextPath)) {
-    fs.writeFileSync(contextPath, [
-      `# ${name}`,
-      '',
-      '> This file is automatically maintained by Prometheus as the living context for this project.',
-      '> It is injected into every chat session within this project.',
-      '',
-      '## Overview',
-      '',
-      '*(Prometheus will fill this in after your first conversation.)*',
-      '',
-      '## Goals',
-      '',
-      '## Key People & Entities',
-      '',
-      '## Tech Stack & Tools',
-      '',
-      '## Timeline & Milestones',
-      '',
-      '## Notes',
-      '',
-    ].join('\n'), 'utf-8');
-  }
-
   const project: Project = {
     id, name,
+    ...(workspacePath ? { workspacePath: path.resolve(workspacePath) } : {}),
     instructions: '',
     memorySnapshot: '',
     sessions: [],
@@ -196,6 +231,7 @@ export function createProject(name: string): Project {
     createdAt: now,
     updatedAt: now,
   };
+  ensureProjectContextFile(project);
   saveProject(project);
   console.log(`[ProjectStore] Created project "${name}" (${id})`);
   return project;
@@ -203,25 +239,26 @@ export function createProject(name: string): Project {
 
 export function updateProject(
   id: string,
-  updates: Partial<Pick<Project, 'name' | 'instructions' | 'memorySnapshot'>>
+  updates: Partial<Pick<Project, 'name' | 'workspacePath' | 'instructions' | 'memorySnapshot'>>
 ): Project | null {
   const project = loadProjectFromDisk(id);
   if (!project) return null;
 
   if (updates.name !== undefined) project.name = updates.name;
+  if (updates.workspacePath !== undefined) project.workspacePath = updates.workspacePath ? path.resolve(updates.workspacePath) : undefined;
   if (updates.instructions !== undefined) project.instructions = updates.instructions;
-  if (updates.memorySnapshot !== undefined) {
-    project.memorySnapshot = updates.memorySnapshot;
-    // Mirror into CONTEXT.md Memory Snapshot section
-    const contextPath = resolveConfinedStoragePath(getProjectWorkspaceDir(id), 'CONTEXT.md', { label: 'project context file' });
+  if (updates.memorySnapshot !== undefined) project.memorySnapshot = updates.memorySnapshot;
+  if (updates.instructions !== undefined || updates.memorySnapshot !== undefined) {
     try {
-      const existing = fs.existsSync(contextPath) ? fs.readFileSync(contextPath, 'utf-8') : '';
-      const marker = '## Memory Snapshot';
-      const newSection = `${marker}\n\n${updates.memorySnapshot}\n`;
-      const updated = existing.includes(marker)
-        ? existing.replace(new RegExp(`${marker}[\\s\\S]*?(?=\n##\\s|$)`), newSection)
-        : existing + '\n' + newSection;
-      fs.writeFileSync(contextPath, updated, 'utf-8');
+      const contextPath = ensureProjectContextFile(project);
+      let content = fs.readFileSync(contextPath, 'utf-8');
+      if (updates.instructions !== undefined) {
+        content = replaceContextSection(content, 'Project Instructions', project.instructions);
+      }
+      if (updates.memorySnapshot !== undefined) {
+        content = replaceContextSection(content, 'Project Memory', project.memorySnapshot, ['Memory Snapshot']);
+      }
+      fs.writeFileSync(contextPath, content, 'utf-8');
     } catch (e: any) {
       console.warn(`[ProjectStore] CONTEXT.md update failed for ${id}:`, e?.message);
     }
@@ -421,30 +458,24 @@ export function buildProjectContextBlock(sessionId: string): string | null {
 
   const lines: string[] = [`[PROJECT: ${project.name}]`, ''];
 
-  if (project.instructions?.trim()) {
-    lines.push('## Project Instructions');
-    lines.push(project.instructions.trim());
+  if (project.workspacePath?.trim()) {
+    lines.push('## Linked Project Directory');
+    lines.push(project.workspacePath.trim());
+    lines.push('Use this directory as the project workspace. Keep file reads, edits, and commands scoped to it unless the user explicitly asks otherwise.');
     lines.push('');
   }
 
-  if (project.memorySnapshot?.trim()) {
-    lines.push('## Project Memory');
-    lines.push(project.memorySnapshot.trim());
-    lines.push('');
-  }
-
-  // CONTEXT.md
-  const contextPath = resolveConfinedStoragePath(getProjectWorkspaceDir(project.id), 'CONTEXT.md', { label: 'project context file' });
-  if (fs.existsSync(contextPath)) {
-    try {
-      const content = fs.readFileSync(contextPath, 'utf-8').trim();
-      if (content) {
-        lines.push('## Project Context');
-        lines.push(content.length > 2000 ? content.slice(0, 2000) + '\n... (truncated)' : content);
-        lines.push('');
-      }
-    } catch {}
-  }
+  // CONTEXT.md is the single source of truth for project instructions, memory,
+  // durable facts, and status. Do not inject the metadata fields separately.
+  const contextPath = getProjectContextFilePath(project.id);
+  try {
+    const content = getProjectContextContent(project.id)?.trim() || '';
+    if (content) {
+      lines.push('## Project Context');
+      lines.push(content.length > 2000 ? content.slice(0, 2000) + '\n... (truncated)' : content);
+      lines.push('');
+    }
+  } catch {}
 
   // Knowledge files listing
   const knowledgeFiles = listKnowledgeFiles(project.id);
@@ -458,12 +489,11 @@ export function buildProjectContextBlock(sessionId: string): string | null {
     lines.push('');
   }
 
-  // ── MANDATORY project context writing rule (injected at top of system context) ──
-  // This is intentionally terse and imperative — buried instructions get ignored.
-  // (contextPath is already declared above — reuse it)
+  // ── Project context maintenance guidance ──────────────────────────────────
+  // Keep this targeted: CONTEXT.md is for durable project state, not a transcript.
   const isFirstSession = project.sessions.length <= 1;
-  lines.unshift('');  // blank line after rule
-  lines.unshift(`MANDATORY RULE — PROJECT CONTEXT: After EVERY turn where the user shares anything about this project (goals, people, tools, clients, deadlines, decisions), you MUST call create_file or find_replace to update the file at: ${contextPath} — Update the relevant sections (Overview, Goals, Key People & Entities, Tech Stack & Tools, Timeline & Milestones). Do this in the SAME turn, before replying. Never skip this. Never leave placeholder text in the file.`);
+  lines.unshift('');
+  lines.unshift(`PROJECT CONTEXT MAINTENANCE: Keep ${contextPath} current only when a meaningful project change occurs: a durable goal or fact, decision, scope/boundary, plan or milestone, work started, completed, blocked, or materially changed. Update the relevant section (including Status Updates) in the same turn when it matters. Skip casual conversation, routine questions, transient details, and turns with no durable project change. Revise existing entries instead of duplicating them; CONTEXT.md is a concise living record, not a turn-by-turn transcript.`);
   if (isFirstSession) {
     lines.unshift('This is the FIRST session for this project. The user has not described it yet. Your first message must ask what the project is about.');
   }

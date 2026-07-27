@@ -2422,10 +2422,7 @@
           <span id="token-count-badge" style="margin-left:8px;color:var(--muted);font-size:10px"></span>
           <span id="queued-prompts-indicator" style="display:none;margin-left:8px;color:var(--brand);font-weight:700"></span>
           <span class="voice-provider-controls unified-voice-provider-controls" id="voice-provider-controls" hidden>
-            <label>Mode <select id="voice-mode-provider" onchange="onVoiceModeChanged()"><option value="default">Default</option><option value="openai_realtime">OpenAI Realtime</option><option value="xai">xAI / Grok</option></select></label>
-            <label id="voice-mic-provider-label" hidden>Mic <select id="voice-stt-provider" onchange="onVoiceProviderChanged()"><option value="browser">Browser</option></select></label>
-            <label id="voice-speak-provider-label" hidden>Speak <select id="voice-tts-provider" onchange="onVoiceProviderChanged()"><option value="browser">Browser</option></select></label>
-            <label id="voice-output-voice-label" hidden>Voice <select id="voice-output-voice" onchange="onVoiceProviderChanged()"><option value="">Default</option></select></label>
+            <label>Realtime <select id="voice-mode-provider" onchange="onVoiceModeChanged()"><option value="openai_realtime">OpenAI Realtime</option><option value="xai">xAI / Grok Realtime</option></select></label>
             <label id="realtime-voice-label" hidden>Voice <select id="realtime-voice-select" onchange="onRealtimeVoiceChanged()"><option value="marin">Marin</option></select></label>
             <span class="voice-settings-wrap">
               <button id="voice-settings-btn" class="voice-settings-btn" type="button" onclick="toggleVoiceSettingsPopover(event)" title="Voice settings" aria-label="Voice settings" aria-expanded="false">
@@ -2905,21 +2902,72 @@
 </div>
 
 <!-- Schedule Create/Edit Modal -->
+<style>
+  #schedule-modal .schedule-modal-dialog {
+    width: min(980px, 96vw);
+  }
+  #schedule-modal .schedule-modal-form {
+    display: grid !important;
+    grid-template-columns: minmax(250px, 0.8fr) minmax(420px, 1.45fr);
+    align-items: start;
+    gap: 18px 22px !important;
+  }
+  #schedule-modal .schedule-basic-field,
+  #schedule-modal .schedule-agent-field,
+  #schedule-modal .schedule-channel-field {
+    grid-column: 1;
+  }
+  #schedule-modal .schedule-prompt-field {
+    grid-column: 2;
+    grid-row: 1 / span 5;
+  }
+  #schedule-modal #schedule-prompt {
+    min-height: 360px !important;
+    line-height: 1.5;
+  }
+  #schedule-modal .schedule-skills-field {
+    grid-column: 2;
+  }
+  #schedule-modal .schedule-skills-picker {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  #schedule-modal #schedule-skill-select {
+    min-width: 0;
+  }
+  #schedule-modal .schedule-context-field {
+    grid-column: 1 / -1;
+  }
+  @media (max-width: 760px) {
+    #schedule-modal .schedule-modal-dialog { width: min(620px, 96vw); }
+    #schedule-modal .schedule-modal-form { grid-template-columns: 1fr; }
+    #schedule-modal .schedule-basic-field,
+    #schedule-modal .schedule-agent-field,
+    #schedule-modal .schedule-channel-field,
+    #schedule-modal .schedule-prompt-field,
+    #schedule-modal .schedule-skills-field,
+    #schedule-modal .schedule-context-field {
+      grid-column: auto;
+      grid-row: auto;
+    }
+    #schedule-modal #schedule-prompt { min-height: 260px !important; }
+  }
+</style>
 <div id="schedule-modal" style="display:none;position:fixed;inset:0;background:rgba(10,20,40,0.35);z-index:9999;align-items:center;justify-content:center;padding:18px">
-  <div style="width:min(520px,96vw);max-height:92vh;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-md)">
+  <div class="schedule-modal-dialog" style="max-height:92vh;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-md)">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);flex-shrink:0;position:sticky;top:0;background:var(--panel);z-index:1">
       <div id="schedule-modal-title" style="font-weight:800">Create Schedule</div>
       <button onclick="closeScheduleModal()" style="border:0;background:none;font-size:18px;cursor:pointer;color:var(--muted);line-height:1">&#x2715;</button>
     </div>
-    <div style="padding:16px;display:flex;flex-direction:column;gap:14px">
+    <div class="schedule-modal-form" style="padding:18px 20px;display:flex;flex-direction:column;gap:14px">
       <!-- Name -->
-      <div>
+      <div class="schedule-basic-field">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Name</label>
         <input id="schedule-name" type="text" placeholder="e.g., Daily standup" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)" />
       </div>
 
       <!-- Occurrence picker (Piece 6) -->
-      <div>
+      <div class="schedule-basic-field">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Frequency</label>
         <select id="schedule-occurrence" onchange="onScheduleOccurrenceChange()" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
           <option value="manual">Never (manual only)</option>
@@ -2936,13 +2984,13 @@
       </div>
 
       <!-- Time picker (shown for daily/every48) -->
-      <div id="schedule-time-row" style="display:none">
+      <div id="schedule-time-row" class="schedule-basic-field" style="display:none">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Time</label>
         <input id="schedule-time" type="time" value="09:00" style="width:160px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)" />
       </div>
 
       <!-- Custom cron input (shown for custom) -->
-      <div id="schedule-custom-cron-row" style="display:none">
+      <div id="schedule-custom-cron-row" class="schedule-basic-field" style="display:none">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Cron Expression</label>
         <div style="display:flex;gap:8px">
           <input id="schedule-pattern" type="text" placeholder="0 9 * * *" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2);font-family:'IBM Plex Mono',monospace" />
@@ -2952,7 +3000,7 @@
       </div>
 
       <!-- Timezone -->
-      <div>
+      <div class="schedule-basic-field">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Timezone</label>
         <select id="schedule-timezone" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
           <option value="UTC">UTC</option>
@@ -2967,13 +3015,13 @@
       </div>
 
       <!-- Prompt -->
-      <div>
+      <div class="schedule-prompt-field">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Prompt / Action</label>
         <textarea id="schedule-prompt" placeholder="What should happen when this schedule runs?" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2);resize:vertical;min-height:80px;font-family:'IBM Plex Mono',monospace"></textarea>
       </div>
 
       <!-- Subagent picker (Piece 6) -->
-      <div>
+      <div class="schedule-agent-field">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Run As Agent</label>
         <select id="schedule-subagent" onchange="_updateHeartbeatMdPreview(this.value)" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
           <option value="">Main agent (default)</option>
@@ -2989,7 +3037,7 @@
       </div>
 
       <!-- Attached skills -->
-      <div id="schedule-skills-row">
+      <div id="schedule-skills-row" class="schedule-skills-field">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <label style="display:block;font-size:12px;font-weight:700;color:var(--text)">Attached Skills</label>
           <button type="button" onclick="reloadScheduleSkills()" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:4px 9px;font-size:11px;font-weight:600;cursor:pointer">Refresh</button>
@@ -2997,7 +3045,7 @@
         <div id="schedule-skill-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
           <span style="font-size:11px;color:var(--muted)">No skills attached.</span>
         </div>
-        <div style="display:flex;gap:8px">
+        <div class="schedule-skills-picker" style="display:flex;gap:8px">
           <select id="schedule-skill-select" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
             <option value="">Attach skill...</option>
           </select>
@@ -3006,7 +3054,7 @@
       </div>
 
       <!-- Context References -->
-      <div id="schedule-context-row">
+      <div id="schedule-context-row" class="schedule-context-field">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Context &amp; Reference</label>
         <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:8px">
           <input id="schedule-ctx-title" type="text" placeholder="Reference title..." style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2);color:var(--text)" />
@@ -3037,7 +3085,7 @@
       </div>
 
       <!-- Delivery Channel -->
-      <div>
+      <div class="schedule-channel-field">
         <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Delivery Channel</label>
         <select id="schedule-channel" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
           <option value="web">Web (notification)</option>
@@ -3384,6 +3432,51 @@
   </div>
   <!-- End Canvas Panel -->
 
+  <!-- Project context is an inline right-rail section, not a separate sidebar. -->
+  <div id="project-session-section" class="right-section" style="padding:0">
+    <div style="padding:12px 16px 6px">
+      <div class="right-section-title" style="margin:0">Project</div>
+    </div>
+  <div id="rp-project-tab" class="rp-tab-content">
+    <div style="padding:12px 12px 7px">
+      <div style="font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Project workspace</div>
+      <div id="project-workspace-name" style="margin-top:6px;font-size:13px;font-weight:800;color:var(--text)">Project</div>
+      <div id="project-workspace-path" style="margin-top:4px;font-size:10px;color:var(--muted);line-height:1.5;overflow-wrap:anywhere">No linked path</div>
+    </div>
+    <button id="project-context-card" class="project-context-card" type="button" onclick="openProjectContextInCanvas()">
+      <span class="project-context-card-icon" aria-hidden="true">↗</span>
+      <span class="project-context-card-copy">
+        <strong>CONTEXT.md</strong>
+        <small>Open the complete living project context in Canvas</small>
+      </span>
+      <span class="project-context-card-action">Open</span>
+    </button>
+  </div>
+
+  <div id="rp-context-tab" class="rp-tab-content">
+    <div class="project-editors-wrap">
+      <div id="project-instructions-editor" class="project-editor-block">
+        <button class="project-editor-label" type="button" onclick="toggleProjectEditor('project-instructions-editor')">
+          <span>Project instructions</span><span class="project-editor-chevron">⌄</span>
+        </button>
+        <div class="project-editor-body">
+          <textarea id="proj-instructions-ta" class="project-editor-textarea" placeholder="Instructions that should guide every chat in this project..."></textarea>
+          <button class="project-editor-save-btn" type="button" onclick="saveProjectInstructions()">Save instructions</button>
+        </div>
+      </div>
+      <div id="project-memory-editor" class="project-editor-block">
+        <button class="project-editor-label" type="button" onclick="toggleProjectEditor('project-memory-editor')">
+          <span>Project memory</span><span class="project-editor-chevron">⌄</span>
+        </button>
+        <div class="project-editor-body">
+          <textarea id="proj-memory-ta" class="project-editor-textarea" placeholder="Keep durable facts, decisions, and useful context for this project..."></textarea>
+          <button class="project-editor-save-btn" type="button" onclick="saveProjectMemorySnapshot()">Save memory</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+
   <!-- Right panel topbar: always visible, switches between Context and Canvas -->
   <div id="right-panel-topbar" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--line);flex-shrink:0;background:var(--panel);min-height:38px;position:sticky;top:0;z-index:10">
     <span style="font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Context</span>
@@ -3466,7 +3559,7 @@
   <div id="agent-execution-panel" style="display:none"></div>
 
   <!-- PROCESS LOG -->
-  <div style="display:flex;flex-direction:column;flex:1 1 320px;overflow:hidden;min-height:280px">
+  <div id="process-log-section" style="display:flex;flex-direction:column;flex:1 1 320px;overflow:hidden;min-height:280px">
     <div style="padding:8px 16px 6px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);flex-shrink:0">
       <a href="javascript:void(0)" onclick="openProcessLogFile()" style="font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);text-decoration:none;cursor:pointer;hover:color:var(--brand)">Process Log</a>
       <button onclick="clearProcessLog()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:10px;font-family:inherit">✕ clear</button>
@@ -3486,6 +3579,36 @@
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button onclick="closeNewProjectModal()" style="padding:8px 18px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer">Cancel</button>
       <button onclick="confirmNewProject()" style="padding:8px 18px;border:none;border-radius:8px;background:var(--brand);color:#fff;font-size:13px;font-weight:700;cursor:pointer">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- PROJECT DIRECTORY SETUP -->
+<div id="project-directory-modal" class="project-setup-modal" aria-modal="true" role="dialog" aria-labelledby="project-directory-title">
+  <div class="project-setup-dialog">
+    <div class="project-setup-icon"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=3" alt="Prometheus One" /></div>
+    <h2 id="project-directory-title">Link a project directory?</h2>
+    <p>Choose a file or folder in File Explorer, or paste a local path below, so Prometheus can keep this project’s chats, files, and commands scoped to the right place.</p>
+    <input id="project-directory-path-input" class="project-setup-path" type="text" autocomplete="off" spellcheck="false" placeholder="Paste a file or folder path" onkeydown="if(event.key==='Enter')usePastedProjectDirectory()" />
+    <div class="project-setup-actions">
+      <button class="project-setup-secondary" onclick="skipProjectDirectory()">Not now</button>
+      <button class="project-setup-secondary" onclick="usePastedProjectDirectory()">Link pasted path</button>
+      <button class="project-setup-primary" onclick="chooseProjectDirectory()">Choose file or folder</button>
+    </div>
+    <button class="project-setup-back" onclick="closeProjectDirectoryModal()">Back to project name</button>
+  </div>
+</div>
+
+<div id="project-directory-permission-modal" class="project-setup-modal" aria-modal="true" role="dialog" aria-labelledby="project-directory-permission-title">
+  <div class="project-setup-dialog">
+    <div class="project-setup-icon project-setup-icon-warning"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=3" alt="Prometheus One" /></div>
+    <h2 id="project-directory-permission-title">Allow this directory?</h2>
+    <p>This path is outside Prometheus’s configured workspace. Choose a file or folder in File Explorer, then allow Prometheus to read, write, and modify it for this project.</p>
+    <input id="project-directory-permission-path" class="project-setup-path" type="text" autocomplete="off" spellcheck="false" placeholder="Paste a file or folder path" oninput="updatePastedProjectDirectory(this.value)" />
+    <div class="project-setup-actions">
+      <button class="project-setup-secondary" onclick="closeProjectDirectoryPermissionModal()">Go back</button>
+      <button class="project-setup-secondary" onclick="chooseProjectDirectory()">Choose a path</button>
+      <button id="project-directory-permission-allow" class="project-setup-primary" onclick="allowProjectDirectory()">Allow and link</button>
     </div>
   </div>
 </div>
@@ -6078,6 +6201,9 @@ function renderChatSessionCard(s) {
 
 function isTopLevelWebChatSession(s) {
   if (!s || typeof s !== 'object') return false;
+  // Project chats live exclusively in their owning project's tree.  This
+  // remains true for pinned and server-rehydrated sessions as well.
+  if (String(s.projectId || '').trim() || String(s.source || '').toLowerCase() === 'project') return false;
   if (_isChannelSession(s)) return false;
   if (s.sideChat === true || s.parentSessionId) return false;
   if (/^side_/i.test(String(s.id || ''))) return false;
@@ -7765,6 +7891,11 @@ function finishStoppedGenerationUI(sessionId) {
   if (!sid) return;
   delete window._sessionThinking?.[sid];
   delete window._sessionAbortControllers?.[sid];
+  // The server's session summary can briefly retain `activeRun` after an
+  // abort. It is only a cached presentation marker; once reconciliation says
+  // the run is idle it must not keep the composer in its Abort state.
+  const session = (window.chatSessions || []).find((item) => String(item?.id || '') === sid);
+  if (session) session.activeRun = false;
   if (sid === window.activeChatSessionId) {
     currentAbortController = null;
     window.isThinking = false;
@@ -7780,6 +7911,7 @@ function finishStoppedGenerationUI(sessionId) {
     if (typeof window.renderChatMessages === 'function') window.renderChatMessages();
     if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   }
+  if (session && typeof window.saveChatSessions === 'function') window.saveChatSessions();
 }
 
 function scheduleStoppedGenerationReconcile(sessionId, delayMs = 2500) {
@@ -7790,7 +7922,7 @@ function scheduleStoppedGenerationReconcile(sessionId, delayMs = 2500) {
     stopGenerationReconcileTimer = null;
     const stillMarkedThinking = !!window._sessionThinking?.[sid];
     if (!stillMarkedThinking) {
-      if (sid === window.activeChatSessionId) setButtonState(false);
+      finishStoppedGenerationUI(sid);
       return;
     }
     try {

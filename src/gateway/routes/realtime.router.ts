@@ -3,6 +3,7 @@ import { getConfig } from '../../config/config.js';
 import { buildCodexCloudflareHeaders, getValidToken, loadTokens, refreshTokens } from '../../auth/openai-oauth.js';
 import { buildSystemPrompt, loadSkills } from '../../config/soul-loader.js';
 import { loadVoiceAgentMemory } from '../prompt-context.js';
+import { getCodexRealtimeBridge } from '../realtime/codex-app-server-bridge.js';
 
 export const router = express.Router();
 
@@ -13,6 +14,14 @@ const REALTIME_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realtime/cli
 const REALTIME_INSTRUCTIONS_MAX_CHARS = Number(process.env.OPENAI_REALTIME_INSTRUCTIONS_MAX_CHARS || 18000);
 const REALTIME_CONTEXT_PACK_CACHE_TTL_MS = Math.max(5_000, Number(process.env.OPENAI_REALTIME_CONTEXT_PACK_CACHE_TTL_MS || 60_000) || 60_000);
 let realtimeContextPackCache: { instructions: string; builtAt: number; workspacePath: string } | null = null;
+
+type RealtimeAuthMode = 'auto' | 'codex_oauth' | 'api_key';
+
+function getRealtimeAuthMode(): RealtimeAuthMode {
+  const mode = String(process.env.PROMETHEUS_OPENAI_REALTIME_AUTH_MODE || 'auto').trim().toLowerCase();
+  if (mode === 'codex_oauth' || mode === 'api_key') return mode;
+  return 'auto';
+}
 
 function resolveRealtimeSecret(value: unknown): string {
   const raw = typeof value === 'string' ? value.trim() : '';
@@ -218,18 +227,33 @@ function buildRealtimeContextPack(): string {
   return instructions;
 }
 
-router.get('/api/realtime/status', (_req, res) => {
+router.get('/api/realtime/status', async (_req, res) => {
   const hasApiKey = !!getRealtimeApiKey();
   const hasOAuth = hasOpenAICodexOAuth();
+  const authMode = getRealtimeAuthMode();
+  const codexBridge = authMode === 'api_key'
+    ? { available: false, error: 'Disabled by PROMETHEUS_OPENAI_REALTIME_AUTH_MODE=api_key.' }
+    : await getCodexRealtimeBridge().status();
+  const useCodexBridge = codexBridge.available && authMode !== 'api_key';
+  const allowPublicRealtime = authMode !== 'codex_oauth';
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     success: true,
-    configured: hasApiKey || hasOAuth,
+    configured: useCodexBridge || (allowPublicRealtime && (hasApiKey || hasOAuth)),
     model: sanitizeRealtimeModel(undefined),
     voice: sanitizeRealtimeVoice(undefined),
-    auth: hasApiKey ? 'api_key' : (hasOAuth ? 'openai_codex_oauth' : 'none'),
+    auth: useCodexBridge
+      ? 'chatgpt_oauth_app_server'
+      : (allowPublicRealtime ? (hasApiKey ? 'api_key' : (hasOAuth ? 'openai_codex_oauth' : 'none')) : 'none'),
+    transport: useCodexBridge || authMode === 'codex_oauth' ? 'codex_app_server' : 'openai_public_realtime',
+    authMode,
     oauthConfigured: hasOAuth,
     apiKeyConfigured: hasApiKey,
+    codexBridgeAvailable: codexBridge.available,
+    codexBridgeAccountType: codexBridge.accountType,
+    codexBridgePlanType: codexBridge.planType,
+    codexBridgeVoices: codexBridge.voices,
+    codexBridgeError: codexBridge.error,
   });
 });
 
@@ -249,6 +273,63 @@ router.get('/api/realtime/context-pack', (_req, res) => {
       error: `Could not build Realtime context pack: ${err?.message || err}`,
     });
   }
+});
+
+router.post('/api/realtime/codex-bridge/call', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (getRealtimeAuthMode() === 'api_key') {
+    res.status(409).json({
+      success: false,
+      auth: 'none',
+      error: 'The Codex OAuth realtime bridge is disabled by PROMETHEUS_OPENAI_REALTIME_AUTH_MODE=api_key.',
+    });
+    return;
+  }
+
+  let sdp = String(req.body?.sdp || '');
+  if (!sdp.endsWith('\r\n')) sdp = `${sdp.replace(/\s+$/g, '')}\r\n`;
+  if (!sdp.startsWith('v=') || !/\r?\nm=audio\s/i.test(sdp)) {
+    res.status(400).json({
+      success: false,
+      auth: 'none',
+      error: `Valid Realtime SDP audio offer is required. Received ${sdp.length} bytes.`,
+    });
+    return;
+  }
+
+  try {
+    const prompt = sanitizeRealtimeInstructions(req.body?.instructions) || buildRealtimeContextPack();
+    const result = await getCodexRealtimeBridge().startRealtimeSession({
+      sdp,
+      prompt,
+      voice: sanitizeRealtimeVoice(req.body?.voice),
+      cwd: getConfig().getWorkspacePath(),
+    });
+    res.json({
+      success: true,
+      auth: 'chatgpt_oauth_app_server',
+      transport: 'codex_app_server',
+      ...result,
+    });
+  } catch (err: any) {
+    res.status(502).json({
+      success: false,
+      auth: 'chatgpt_oauth_app_server',
+      transport: 'codex_app_server',
+      error: String(err?.message || err),
+    });
+  }
+});
+
+router.post('/api/realtime/codex-bridge/stop', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const sessionId = String(req.body?.sessionId || '').trim();
+  if (!sessionId) {
+    res.status(400).json({ success: false, error: 'sessionId is required.' });
+    return;
+  }
+  const stopped = await getCodexRealtimeBridge().stopRealtimeSession(sessionId);
+  res.json({ success: true, stopped });
 });
 
 function buildRealtimeClientSecretBody(req: express.Request): any {

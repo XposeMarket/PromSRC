@@ -6,7 +6,12 @@ import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
 } from './mobile-shell.js?v=slash-command-style-align-v1';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
-import { attachMobileButtonHaptic, pmHaptic } from './mobile-model-badge.js';
+import {
+  applyMobileDraftModelRouteToSession,
+  attachMobileButtonHaptic,
+  pmHaptic,
+  resetMobileDraftModelRoute,
+} from './mobile-model-badge.js';
 import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
 import {
   loadMobileSchedules, toggleSchedule, runScheduleNow, updateMobileSchedule,
@@ -25,7 +30,7 @@ import {
   mobileGatewayFetch, mobileGatewayTextFetch, buildMobileGatewayWsUrl,
   loadTeamWorkspace, loadTeamWorkspaceFile, loadMemoryGraph,
   loadBgTasks, loadBgTaskDetail, loadBgTaskEvidence, sendBgTaskMessage, runBgTaskAction, loadVoiceStatus,
-  transcribeVoiceAudio, synthesizeVoiceAudio, loadVoiceVoices,
+  transcribeVoiceAudio,
   loadMobileMoreSummary, loadMobileHubOverview, loadMobileAuditRuns, loadMobileMemoryOverview,
   loadMobileProposals, loadMobileProposal, approveMobileProposal, denyMobileProposal,
   loadMobileApprovals, approveMobileApproval, denyMobileApproval, loadMobileQuestions,
@@ -857,8 +862,11 @@ function _compactMobileThreadCacheMessage(m) {
     generatedVideos: _compactMobileThreadCacheMedia(m?.generatedVideos),
     files: _compactMobileThreadCacheMedia(m?.files),
     artifacts: _compactMobileThreadCacheMedia(m?.artifacts),
+    // Keep every supported rich card in the offline/reconnect snapshot. Voice
+    // show_ui cards use concrete types such as weather, chart, and sources;
+    // filtering to only legacy `visual` cards made them vanish after recovery.
     richArtifacts: Array.isArray(m?.richArtifacts)
-      ? m.richArtifacts.filter((item) => item?.type === 'visual' || item?.type === 'thread_links').slice(-8).map((item) => ({ ...item }))
+      ? m.richArtifacts.filter((item) => item && typeof item === 'object').slice(-8).map((item) => ({ ...item }))
       : undefined,
     productCarousel: m?.productCarousel && typeof m.productCarousel === 'object' ? {
       title: String(m.productCarousel.title || '').slice(0, 160),
@@ -1062,6 +1070,7 @@ async function enrichMobileSessionGroupsForDrawer(loadSessions) {
 function _startMobileNewChat(navigate) {
   _clearMobileLastChatSession();
   __pmChat.activeSessionId = MOBILE_CHAT_SESSION_ID;
+  resetMobileDraftModelRoute();
   _clearMobileDraftSessionState();
   __pmChat.editingMessageIndex = -1;
   __pmVoice.targetSessionId = MOBILE_CHAT_SESSION_ID;
@@ -1080,6 +1089,7 @@ function _startMobileNewChat(navigate) {
 function _startMobileNewVoiceDraft() {
   _clearMobileLastChatSession();
   __pmChat.activeSessionId = MOBILE_CHAT_SESSION_ID;
+  resetMobileDraftModelRoute();
   _clearMobileDraftSessionState();
   __pmChat.editingMessageIndex = -1;
   __pmVoice.targetSessionId = MOBILE_CHAT_SESSION_ID;
@@ -1146,6 +1156,7 @@ async function _ensureDurableMobileVoiceSession({ title = 'Mobile chat', source 
   const cleanTitle = String(title || 'Mobile chat').replace(/\s+/g, ' ').trim().slice(0, 72) || 'Mobile chat';
   try {
     await createMobileChatSession(sid, { title: cleanTitle });
+    await applyMobileDraftModelRouteToSession(sid);
     if (draftThread.length) {
       await updateMobileChatSessionHistory(sid, _mobileHistoryForServer(draftThread), { resetCompaction: true });
     }
@@ -1513,7 +1524,9 @@ function _mobileHistoryForServer(thread = _activeMobileThread()) {
         liveTraceEntries: Array.isArray(msg.liveTraceEntries) && msg.liveTraceEntries.length ? msg.liveTraceEntries : undefined,
       };
     })
-    .filter((msg) => msg.content.trim())
+    // A realtime Voice show_ui card can intentionally have no text bubble.
+    // It is still a durable chat turn and must survive history replacement.
+    .filter((msg) => msg.content.trim() || (Array.isArray(msg.richArtifacts) && msg.richArtifacts.length))
     .map((msg, index) => ({ ...msg, sourceIndex: index }));
 }
 
@@ -2214,9 +2227,7 @@ function _mergeMobileAssistantTurnDetails(target, source) {
   mergeList('artifacts');
   _mergeMobileMediaIntoMessage(target, _collectMessageMedia(source));
   _mergeMobileProductCarouselIntoMessage(target, source.productCarousel);
-  if (Array.isArray(source.richArtifacts) && source.richArtifacts.length && !(Array.isArray(target.richArtifacts) && target.richArtifacts.length)) {
-    target.richArtifacts = source.richArtifacts;
-  }
+  _mergeMobileRichArtifacts(target, source.richArtifacts);
   if (!target.fileChanges && source.fileChanges) target.fileChanges = source.fileChanges;
   if (!target.approvalRequest && source.approvalRequest) target.approvalRequest = source.approvalRequest;
   if (!target.questionRequest && source.questionRequest && !_mobileQuestionIsResolved(source.questionRequest.id)) {
@@ -2262,6 +2273,32 @@ function _mergeMobileAssistantTurnDetails(target, source) {
     && !target.workEndedAt
     && !Number.isFinite(Number(target.workDurationMs))
   );
+  return target;
+}
+
+function _mergeMobileRichArtifacts(target, incomingArtifacts) {
+  if (!target || !Array.isArray(incomingArtifacts) || !incomingArtifacts.length) return target;
+  const artifacts = Array.isArray(target.richArtifacts) ? target.richArtifacts.slice() : [];
+  const artifactKey = (artifact) => {
+    const type = String(artifact?.type || '').trim();
+    const id = String(artifact?.id || '').trim();
+    if (type && id) return `${type}:${id}`;
+    try { return `${type}:${JSON.stringify(artifact)}`; }
+    catch { return `${type}:${String(artifact?.title || '')}`; }
+  };
+  const positions = new Map(artifacts.map((artifact, index) => [artifactKey(artifact), index]));
+  for (const artifact of incomingArtifacts) {
+    if (!artifact || typeof artifact !== 'object') continue;
+    const key = artifactKey(artifact);
+    const index = positions.get(key);
+    if (index === undefined) {
+      positions.set(key, artifacts.length);
+      artifacts.push(artifact);
+    } else {
+      artifacts[index] = { ...artifacts[index], ...artifact };
+    }
+  }
+  if (artifacts.length) target.richArtifacts = artifacts;
   return target;
 }
 
@@ -6928,12 +6965,14 @@ function _renderChatMessageHtml(m, index = -1) {
   }
   inner += _renderMobileChatErrorPresentation(m.errorPresentation);
   if (b.text) {
-    const liveVoiceHtml = _renderMobileRealtimeVoiceAssistantText(m);
     // Final-answer text is already authored Markdown. Do not run it through the
     // trace-prose normalizer: that collapses intentional newlines and turns
     // headings/lists into strings such as `text### Heading` while streaming.
     const answerStreaming = m.streaming === true && m._pmFinalReceived !== true;
-    inner += liveVoiceHtml || `<div class="markdown-body pm-final-answer${answerStreaming ? ' pm-final-answer--streaming' : ' pm-final-answer--complete'}">${_renderMobileMarkdown(b.text, m)}</div>`;
+    // Chat history must stay visually stable while a realtime response is
+    // spoken. Karaoke/rolling lyrics belong only to the dedicated voice stage,
+    // never to an assistant bubble in the normal chat page.
+    inner += `<div class="markdown-body pm-final-answer${answerStreaming ? ' pm-final-answer--streaming' : ' pm-final-answer--complete'}">${_renderMobileMarkdown(b.text, m)}</div>`;
     // rendered above with the shared desktop Markdown renderer
   }
   if (false && b.text)   inner += escapeHtml(b.text).replace(/\n/g, '<br>');
@@ -11704,7 +11743,7 @@ void main() {
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
-        if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
+        _mergeMobileRichArtifacts(aiTurn, evt.richArtifacts);
         if (evt.goalCompletionReport) aiTurn.goalCompletionReport = evt.goalCompletionReport;
         if (evt.text) {
           beginFinalResponse(aiTurn);
@@ -11719,7 +11758,7 @@ void main() {
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
-        if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
+        _mergeMobileRichArtifacts(aiTurn, evt.richArtifacts);
         if (evt.goalCompletionReport) aiTurn.goalCompletionReport = evt.goalCompletionReport;
         if (evt.reply) {
           beginFinalResponse(aiTurn);
@@ -12732,7 +12771,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
-        if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
+        _mergeMobileRichArtifacts(aiTurn, evt.richArtifacts);
         if (evt.text) {
           beginFinalResponse(aiTurn);
           _finishMobileVisualStreamText(aiTurn, String(evt.text));
@@ -12754,7 +12793,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         _collectMediaFromToolEvent(aiTurn, evt);
         if (evt.fileChanges) aiTurn.fileChanges = evt.fileChanges;
         if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(aiTurn, evt.productCarousel);
-        if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) aiTurn.richArtifacts = evt.richArtifacts;
+        _mergeMobileRichArtifacts(aiTurn, evt.richArtifacts);
         if (evt.goalCompletionReport) aiTurn.goalCompletionReport = evt.goalCompletionReport;
         if (evt.reply) {
           beginFinalResponse(aiTurn);
@@ -13283,6 +13322,13 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       if (__pmVoice.activeVoiceRuntime) __pmVoice.activeVoiceRuntime.isStreamActive = false;
       __pmVoice.activeVoiceRuntime = null;
       invalidateMobileDrawerSessions('mobile');
+      try {
+        await createMobileChatSession(actualSessionId, { title: 'New Chat' });
+        await applyMobileDraftModelRouteToSession(actualSessionId);
+      } catch (err) {
+        pmToast(`Could not start chat with the selected model: ${String(err?.message || err)}`, 'error');
+        return;
+      }
     }
     const activeThread = __pmChat.threads[actualSessionId] || (__pmChat.threads[actualSessionId] = []);
     __pmChat.thread = activeThread;
@@ -14555,22 +14601,12 @@ function _outputProviderForMode(mode) {
 function _loadVoiceSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(PM_VOICE_SETTINGS_KEY) || '{}');
-    const legacyMode =
-      saved.voiceMode ||
-      (saved.sttProvider === 'openai_realtime' || saved.ttsProvider === 'openai_realtime' ? 'openai_realtime' :
-        (saved.sttProvider === 'xai' || saved.ttsProvider === 'xai' ? 'xai' : 'default'));
+    const voiceMode = saved.voiceMode === 'xai' ? 'xai' : 'openai_realtime';
     const listenMode = ['push_to_speak', 'always_listening'].includes(saved.listenMode) ? saved.listenMode : 'push_to_speak';
-    const sttProvider = ['browser', 'openai_realtime', 'xai'].includes(saved.sttProvider)
-      ? saved.sttProvider
-      : _inputProviderForMode(legacyMode);
-    const ttsProvider = ['browser', 'openai_realtime', 'xai'].includes(saved.ttsProvider)
-      ? saved.ttsProvider
-      : _outputProviderForMode(legacyMode);
-    const voiceMode = saved.voiceMode === 'custom' ? 'custom' : _voicePresetForProviders(sttProvider, ttsProvider);
     return {
       voiceMode,
-      sttProvider,
-      ttsProvider,
+      sttProvider: 'auto',
+      ttsProvider: 'realtime',
       realtimeVoice: saved.realtimeVoice || 'marin',
       realtimeSpeed: Number(saved.realtimeSpeed || 1.05),
       serverVoice: saved.serverVoice || '',
@@ -14581,11 +14617,11 @@ function _loadVoiceSettings() {
       wakeGateActive: listenMode === 'always_listening' && saved.wakeGateActive === true,
       sttProviderLocked: saved.sttProviderLocked === true,
       autoProviderDefault: saved.autoProviderDefault || '',
-      voiceAgentRealtimeAgent: saved.voiceAgentRealtimeAgent === true,
-      voiceAgentXaiRealtime: saved.voiceAgentXaiRealtime === true,
+      voiceAgentRealtimeAgent: voiceMode === 'openai_realtime',
+      voiceAgentXaiRealtime: voiceMode === 'xai',
     };
   } catch {
-    return { voiceMode: 'default', sttProvider: 'browser', ttsProvider: 'browser', realtimeVoice: 'marin', realtimeSpeed: 1.05, serverVoice: '', xaiSpeed: 1.0, dictation: 'quiet', listenMode: 'push_to_speak', wakePhrase: '', wakeGateActive: false, sttProviderLocked: false, autoProviderDefault: '', voiceAgentRealtimeAgent: false, voiceAgentXaiRealtime: false };
+    return { voiceMode: 'openai_realtime', sttProvider: 'auto', ttsProvider: 'realtime', realtimeVoice: 'marin', realtimeSpeed: 1.05, serverVoice: '', xaiSpeed: 1.0, dictation: 'quiet', listenMode: 'push_to_speak', wakePhrase: '', wakeGateActive: false, sttProviderLocked: true, autoProviderDefault: '', voiceAgentRealtimeAgent: true, voiceAgentXaiRealtime: false };
   }
 }
 
@@ -14603,9 +14639,7 @@ function _mobileRealtimeListenModeFromSettings(settings = __pmVoice?.settings ||
 
 function _mobileRealtimeProviderKeyFromSettings(settings = __pmVoice?.settings || {}) {
   const mode = String(settings?.voiceMode || '').trim();
-  if (mode === 'openai_realtime' && settings?.voiceAgentRealtimeAgent === true) return 'openai_realtime';
-  if (mode === 'xai' && settings?.voiceAgentXaiRealtime === true) return 'xai_realtime';
-  return 'split';
+  return mode === 'xai' ? 'xai_realtime' : 'openai_realtime';
 }
 
 function _mobileRealtimeTurnDetectionForListenMode(listenMode, settings = __pmVoice?.settings || {}) {
@@ -14729,6 +14763,16 @@ function _applyVoiceSettingsLive(previous = {}, next = {}, changed = {}) {
     : '';
   const realtimeKeys = ['voiceMode', 'sttProvider', 'ttsProvider', 'listenMode', 'wakePhrase', 'wakeGateActive', 'realtimeVoice', 'realtimeSpeed', 'serverVoice', 'xaiSpeed', 'voiceAgentRealtimeAgent', 'voiceAgentXaiRealtime'];
   const touchedRealtime = keys.some((key) => realtimeKeys.includes(key));
+  const openAiAgentVoiceChanged = activeProviderKey === 'openai_realtime'
+    && keys.includes('realtimeVoice')
+    && String(previous.realtimeVoice || '') !== String(next.realtimeVoice || '');
+  // Do this before updating any other realtime connection: OpenAI rejects a
+  // voice mutation after assistant audio, and the agent session is authoritative
+  // while full realtime voice is active.
+  if (openAiAgentVoiceChanged) {
+    _restartMobileRealtimeAgentForSettings('openai_voice_changed');
+    return;
+  }
   if (keys.some((key) => ['realtimeVoice', 'realtimeSpeed', 'ttsProvider', 'voiceMode'].includes(key))) {
     _updateRealtimeSpeechConnectionFromSettings('settings_changed');
     if (String(previous.ttsProvider || '') === 'openai_realtime' && String(next.ttsProvider || '') !== 'openai_realtime') _closeRealtimeSpeechConnection?.();
@@ -14743,6 +14787,10 @@ function _applyVoiceSettingsLive(previous = {}, next = {}, changed = {}) {
     return;
   }
   if (!activeConn) return;
+  // OpenAI Realtime locks a conversation's voice once assistant audio exists.
+  // A new WebRTC session is the supported way to switch voices; preserve the
+  // user's listening mode and reconnect in the background instead of sending a
+  // session.update that the service will reject.
   if (activeConn.provider === 'xai' && keys.some((key) => ['serverVoice', 'realtimeVoice', 'xaiSpeed'].includes(key))) {
     _restartMobileRealtimeAgentForSettings('xai_voice_or_speed_changed');
     return;
@@ -14965,7 +15013,7 @@ async function _prefetchMobileVoiceWorkerContextPacket(sessionId, options = {}) 
   if (mobileVoiceWorkerContextPacketPromise && options.force !== true) return mobileVoiceWorkerContextPacketPromise;
   mobileVoiceWorkerContextPacketPromise = (async () => {
     try {
-      const result = await mobileGatewayFetch('/api/voice-agent/context', {
+      const result = await mobileGatewayFetch('/api/voice-agent/realtime-context', {
         method: 'POST',
         body: JSON.stringify({
           sessionId: sid,
@@ -14996,6 +15044,28 @@ function _prewarmMobileVoiceWorkerContext(options = {}) {
   const sid = String(options.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || '').trim();
   if (!sid) return;
   _prefetchMobileVoiceWorkerContextPacket(sid, options).catch(() => {});
+}
+
+function _prewarmMobileCodexRealtimeBridge() {
+  if (_mobileRealtimeProviderKeyFromSettings(__pmVoice?.settings || {}) !== 'openai_realtime') return null;
+  if (__pmVoice?.codexRealtimeBridgeWarmPromise) return __pmVoice.codexRealtimeBridgeWarmPromise;
+  const promise = mobileGatewayFetch('/api/realtime/status', { method: 'GET' })
+    .then((status) => {
+      _voiceDebug?.('codex-realtime-bridge-prewarm', {
+        available: status?.codexBridgeAvailable === true,
+        transport: status?.transport || '',
+      });
+      return status;
+    })
+    .catch((err) => {
+      _voiceDebug?.('codex-realtime-bridge-prewarm-failed', { message: err?.message || String(err) });
+      return null;
+    })
+    .finally(() => {
+      if (__pmVoice) __pmVoice.codexRealtimeBridgeWarmPromise = null;
+    });
+  __pmVoice.codexRealtimeBridgeWarmPromise = promise;
+  return promise;
 }
 
 function _getMobileVoiceWorkerContextPacketForTurn(sessionId, options = {}) {
@@ -15048,9 +15118,11 @@ const __pmVoice = (window.__pmVoice = window.__pmVoice || {
   previewTransitionToken: 0,
 });
 __pmVoice.settings = { ..._loadVoiceSettings(), ...(__pmVoice.settings || {}) };
-if (!['default', 'openai_realtime', 'xai', 'custom'].includes(__pmVoice.settings.voiceMode)) __pmVoice.settings.voiceMode = 'default';
-if (!['browser', 'openai_realtime', 'xai'].includes(__pmVoice.settings.sttProvider)) __pmVoice.settings.sttProvider = _inputProviderForMode(__pmVoice.settings.voiceMode);
-if (!['browser', 'openai_realtime', 'xai'].includes(__pmVoice.settings.ttsProvider)) __pmVoice.settings.ttsProvider = _outputProviderForMode(__pmVoice.settings.voiceMode);
+if (!['openai_realtime', 'xai'].includes(__pmVoice.settings.voiceMode)) __pmVoice.settings.voiceMode = 'openai_realtime';
+__pmVoice.settings.sttProvider = 'auto';
+__pmVoice.settings.ttsProvider = 'realtime';
+__pmVoice.settings.voiceAgentRealtimeAgent = __pmVoice.settings.voiceMode === 'openai_realtime';
+__pmVoice.settings.voiceAgentXaiRealtime = __pmVoice.settings.voiceMode === 'xai';
 __pmVoice.dictation = __pmVoice.settings.dictation || __pmVoice.dictation || 'quiet';
 
 const PM_VOICE_ROOM_STATE_KEY = 'pm_voice_room_state_v1';
@@ -15646,6 +15718,14 @@ function _voiceSetStatus(s, hint) {
   if (hint != null && hintEl) hintEl.textContent = hint;
 }
 
+// Realtime handlers live outside the rendered voice-panel closure. Route their
+// status updates through this module-level helper so a successful voice tool
+// cannot be marked failed merely because the panel-local `_setStatus` is out
+// of scope.
+function _setMobileVoiceStatus(s, hint) {
+  _voiceSetStatus(s, hint);
+}
+
 function _voiceStatusPreviewText(text, fallback = '') {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   if (!clean) return fallback;
@@ -15744,15 +15824,46 @@ function _setMobileVoiceLyricProgress(text, progress, hint = 'Prometheus is resp
 
 function _mobileRealtimeAudioPlaybackMs(turn = null) {
   const activeTurn = turn || _mobileRealtimeActiveAssistantTurn();
+  if (!activeTurn) return 0;
   const audio = __pmRealtimeAgent?.conn?.audio;
-  const mediaStartRaw = activeTurn?.voiceRealtimeMediaStartTime;
-  const mediaStart = Number(mediaStartRaw);
   const mediaNow = Number(audio?.currentTime);
-  if (mediaStartRaw != null && Number.isFinite(mediaStart) && Number.isFinite(mediaNow) && mediaNow >= mediaStart) {
-    return Math.max(0, (mediaNow - mediaStart) * 1000);
+  if (Number.isFinite(mediaNow)) {
+    const previousMediaTime = Number(activeTurn.voiceRealtimeMediaLastTime);
+    if (!Number.isFinite(previousMediaTime)) {
+      activeTurn.voiceRealtimeMediaLastTime = mediaNow;
+      activeTurn.voiceRealtimePlaybackClockPrimedAt = Date.now();
+      return Number(activeTurn.voiceRealtimePlaybackMs || 0) || 0;
+    }
+    const rawDeltaMs = (mediaNow - previousMediaTime) * 1000;
+    activeTurn.voiceRealtimeMediaLastTime = mediaNow;
+    // A live WebRTC element may briefly jump its media timeline when a track is
+    // attached. Never let that historical jump skip the lyric highlight ahead.
+    if (rawDeltaMs > 0 && rawDeltaMs < 750) {
+      activeTurn.voiceRealtimePlaybackMs = (Number(activeTurn.voiceRealtimePlaybackMs || 0) || 0) + rawDeltaMs;
+      activeTurn.voiceRealtimePlaybackClockObservedAt = Date.now();
+      return activeTurn.voiceRealtimePlaybackMs;
+    }
+    if (Number(activeTurn.voiceRealtimePlaybackMs || 0) > 0) return activeTurn.voiceRealtimePlaybackMs;
   }
   const started = Number(activeTurn?.voiceRealtimeAudioStartedAt || activeTurn?.voiceRealtimeUpdatedAt || Date.now());
   return Math.max(0, Date.now() - started);
+}
+
+function _mobileRealtimeRawTranscriptDelta(event = {}) {
+  const candidates = [event?.delta, event?.transcript, event?.text, event?.content, event?.output_text];
+  const raw = candidates.find((value) => typeof value === 'string');
+  return typeof raw === 'string' ? raw.replace(/\r?\n/g, ' ') : '';
+}
+
+function _appendMobileRealtimeTranscriptDelta(previous = '', rawDelta = '') {
+  const before = String(previous || '');
+  const next = String(rawDelta || '');
+  if (!next) return before;
+  if (!before) return next.trimStart();
+  if (/^\s/.test(next) || /\s$/.test(before) || /^[,.;:!?%)\]}]/.test(next)) return `${before}${next}`;
+  // The event helper intentionally trims display text; preserve the boundary
+  // here so word-level Realtime deltas do not render as "Doyouhave...".
+  return `${before} ${next}`;
 }
 
 function _setMobileVoicePlaybackLyricProgress(localProgress) {
@@ -15905,16 +16016,9 @@ async function _loadServerVoiceCatalog(provider) {
   const id = String(provider || '').trim();
   if (!id) return [];
   if (__pmVoice.voiceCatalog?.[id]) return __pmVoice.voiceCatalog[id];
-  try {
-    const data = await loadVoiceVoices(id);
-    const voices = Array.isArray(data?.voices) && data.voices.length ? data.voices : _serverVoiceFallback(id);
-    __pmVoice.voiceCatalog = { ...(__pmVoice.voiceCatalog || {}), [id]: voices };
-    return voices;
-  } catch {
-    const voices = _serverVoiceFallback(id);
-    __pmVoice.voiceCatalog = { ...(__pmVoice.voiceCatalog || {}), [id]: voices };
-    return voices;
-  }
+  const voices = _serverVoiceFallback(id);
+  __pmVoice.voiceCatalog = { ...(__pmVoice.voiceCatalog || {}), [id]: voices };
+  return voices;
 }
 
 function _voiceProviderSummary() {
@@ -17458,9 +17562,7 @@ function _cancelMobileRealtimeAgentResponseForDispatch() {
   } else {
     _voiceDebug('realtime-agent-cancel-skipped', { reason: 'no_active_response' });
   }
-  if (__pmRealtimeAgent.conn?.provider !== 'xai') {
-    try { __pmRealtimeAgent.conn?.dc?.send?.(JSON.stringify({ type: 'output_audio_buffer.clear' })); } catch {}
-  }
+  _clearMobileRealtimeAgentOutputAudioIfStarted('dispatch');
   try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
   __pmRealtimeAgent.activeResponse = false;
   __pmRealtimeAgent.narrationPending = false;
@@ -17468,6 +17570,26 @@ function _cancelMobileRealtimeAgentResponseForDispatch() {
   _restoreMobileRealtimeInputAfterOutput('response_cancelled_for_dispatch');
   __pmVoice.realtimeSpeechActiveResponse = '';
   __pmVoice.speaking = false;
+}
+
+function _clearMobileRealtimeAgentOutputAudioIfStarted(reason = 'manual') {
+  const conn = __pmRealtimeAgent?.conn;
+  if (!conn || conn.provider === 'xai') return false;
+  const turn = __pmRealtimeAgent?.turn || {};
+  const audioMs = (Number(turn.voiceRealtimeAudioMs || 0) || 0) + (Number(turn.voiceRealtimePendingAudioMs || 0) || 0);
+  // Clearing before any audio has been delivered makes Realtime try to truncate
+  // a zero-length assistant audio item, which it rejects. Cancelling the response
+  // is enough in that case.
+  if (audioMs < 80) {
+    _voiceDebug('realtime-agent-output-clear-skipped', { reason, audioMs });
+    return false;
+  }
+  try {
+    conn.dc?.send?.(JSON.stringify({ type: 'output_audio_buffer.clear' }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function _mobileRealtimeAgentEffectiveSessionId(sessionId) {
@@ -17513,16 +17635,14 @@ function _activateMobileRealtimeAgentQuietMode(options = {}) {
   } else {
     _voiceDebug('realtime-agent-cancel-skipped', { reason: 'quiet_mode_no_active_response' });
   }
-  if (__pmRealtimeAgent.conn?.provider !== 'xai') {
-    try { __pmRealtimeAgent.conn?.dc?.send?.(JSON.stringify({ type: 'output_audio_buffer.clear' })); } catch {}
-  }
+  _clearMobileRealtimeAgentOutputAudioIfStarted('quiet_mode');
   try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
   __pmRealtimeAgent.activeResponse = false;
   __pmVoice.realtimeSpeechActiveResponse = false;
   _restoreMobileRealtimeInputAfterOutput('quiet_mode_cancel');
   _sendMobileRealtimeAgentCreateResponseFlag(false);
   pmToast(phrase ? `Quiet mode — say "${phrase}" to wake` : 'Quiet mode on', 'info');
-  _setStatus('Quiet mode', phrase ? `Say "${phrase}" to wake Prometheus` : 'Silent until you wake Prometheus');
+  _setMobileVoiceStatus('Quiet mode', phrase ? `Say "${phrase}" to wake Prometheus` : 'Silent until you wake Prometheus');
 }
 
 function _deactivateMobileRealtimeAgentQuietMode() {
@@ -17718,7 +17838,16 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     _voiceDebug('realtime-agent-bootstrap-start', { sessionId: sid, listenMode });
     const quietState = _syncMobileRealtimeAgentQuietFromSettings();
     const wakePhrase = quietState.wakePhrase;
-    const workerContextPacket = await _prefetchMobileVoiceWorkerContextPacket(sid, { source: 'mobile_realtime_bootstrap', force: true });
+    const [workerContextPacket, realtimeStatus] = await Promise.all([
+      _prefetchMobileVoiceWorkerContextPacket(sid, { source: 'mobile_realtime_bootstrap' }),
+      _prewarmMobileCodexRealtimeBridge() || mobileGatewayFetch('/api/realtime/status', { method: 'GET' }).catch(() => ({})),
+    ]);
+    const useCodexOauthBridge = realtimeStatus?.codexBridgeAvailable === true
+      && realtimeStatus?.transport === 'codex_app_server'
+      && realtimeStatus?.auth === 'chatgpt_oauth_app_server';
+    if (realtimeStatus?.authMode === 'codex_oauth' && !useCodexOauthBridge) {
+      throw new Error(realtimeStatus?.codexBridgeError || 'Codex is not signed in with ChatGPT OAuth for Realtime voice.');
+    }
     const bootstrap = await mobileGatewayFetch('/api/voice-agent/realtime-bootstrap', {
       method: 'POST',
       body: JSON.stringify({
@@ -17730,6 +17859,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
           ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true }
           : undefined,
         deviceTime: _mobileVoiceDeviceTimeContext(),
+        contextOnly: useCodexOauthBridge,
         ...(workerContextPacket ? { contextPacket: workerContextPacket } : {}),
       }),
     });
@@ -17820,9 +17950,23 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       micEnabled: micTrack.enabled,
     });
     let answerSdp = '';
+    let codexBridgeSessionId = '';
     const model = String(bootstrap.model || _realtimeSpeechModel || 'gpt-realtime-2').trim();
     const clientSecret = String(bootstrap.clientSecret || '').trim();
-    if (clientSecret) {
+    if (useCodexOauthBridge) {
+      const bridgeResult = await mobileGatewayFetch('/api/realtime/codex-bridge/call', {
+        method: 'POST',
+        body: JSON.stringify({
+          sdp: offerSdp,
+          voice: bootstrap.voice,
+          instructions: bootstrap.instructions,
+        }),
+      });
+      if (!bridgeResult?.success) throw new Error(bridgeResult?.error || 'Codex OAuth realtime bridge failed');
+      answerSdp = String(bridgeResult.sdp || '');
+      codexBridgeSessionId = String(bridgeResult.sessionId || '');
+    }
+    if (!answerSdp && clientSecret) {
       try {
         const directResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
           method: 'POST',
@@ -17875,6 +18019,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
         return _startMobileOpenAiRealtimeWebSocketSession(sid, { listenMode, bootstrap });
       }
     }
+    answerSdp = `${String(answerSdp || '').replace(/\r\n|\r|\n/g, '\n').replace(/\s+$/g, '').replace(/\n/g, '\r\n')}\r\n`;
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     await dcOpen;
 
@@ -17902,6 +18047,12 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
               speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
             },
           },
+          ...(useCodexOauthBridge && bootstrap.instructions
+            ? { instructions: bootstrap.instructions }
+            : {}),
+          ...(useCodexOauthBridge && Array.isArray(bootstrap.tools) && bootstrap.tools.length
+            ? { tools: bootstrap.tools, tool_choice: 'auto' }
+            : {}),
         },
       }));
       _voiceDebug('realtime-agent-session-update', { sessionId: sid, listenMode, quietActive: __pmRealtimeAgent.quiet.active });
@@ -17919,7 +18070,20 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       try { if (audio) audio.srcObject = null; } catch {}
       throw new Error('Realtime agent bootstrap superseded');
     }
-    __pmRealtimeAgent.conn = { pc, dc, audio, micStream, micTrack, sessionId: sid, listenMode, sharedMic: true };
+    __pmRealtimeAgent.conn = {
+      pc,
+      dc,
+      audio,
+      micStream,
+      micTrack,
+      sessionId: sid,
+      listenMode,
+      sharedMic: true,
+      provider: 'openai_realtime',
+      transport: useCodexOauthBridge ? 'codex_app_server' : 'openai_public_realtime',
+      auth: useCodexOauthBridge ? 'chatgpt_oauth_app_server' : (bootstrap.auth || 'api_key'),
+      codexBridgeSessionId,
+    };
     if (__pmRealtimeAgent.quiet.active) _sendMobileRealtimeAgentCreateResponseFlag(false);
     const logState = (reason) => _voiceDebug('realtime-agent-pc-state', {
       sessionId: sid,
@@ -17971,6 +18135,12 @@ function _stopMobileRealtimeAgentSession() {
   _clearMobileRealtimeAgentPendingCreateResponse();
   _stopMobileRealtimeAgentContextRefreshLoop();
   try { conn?.cleanup?.(); } catch {}
+  if (conn?.codexBridgeSessionId) {
+    mobileGatewayFetch('/api/realtime/codex-bridge/stop', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: conn.codexBridgeSessionId }),
+    }).catch(() => {});
+  }
   try { conn?.dc?.close(); } catch {}
   try { conn?.pc?.close(); } catch {}
   try { if (conn?.audio) conn.audio.srcObject = null; } catch {}
@@ -18873,6 +19043,21 @@ function _ensureMobileRealtimeAgentChatTurn(sessionId, role) {
   return turn;
 }
 
+function _ensureMobileRealtimeAgentTurnOrder(sessionId) {
+  const sid = String(sessionId || '').trim();
+  const thread = __pmChat.threads?.[sid];
+  const userTurn = __pmRealtimeAgent.turn?.mobileUserTurn;
+  const assistantTurn = __pmRealtimeAgent.turn?.mobileAssistantTurn;
+  if (!Array.isArray(thread) || !userTurn || !assistantTurn) return false;
+  const userIndex = thread.indexOf(userTurn);
+  const assistantIndex = thread.indexOf(assistantTurn);
+  if (userIndex < 0 || assistantIndex < 0 || assistantIndex > userIndex) return false;
+  thread.splice(assistantIndex, 1);
+  thread.splice(thread.indexOf(userTurn) + 1, 0, assistantTurn);
+  _voiceDebug('realtime-agent-turn-order-repaired', { sessionId: sid, userIndex, assistantIndex });
+  return true;
+}
+
 function _finalizeMobileRealtimeAgentChatTurn(sessionId, role, text) {
   const sid = String(sessionId || '').trim();
   const turn = _ensureMobileRealtimeAgentChatTurn(sid, role);
@@ -18943,6 +19128,12 @@ function _startMobileRealtimeAssistantLyricProgress(sessionId = '') {
   }
   __pmRealtimeAgent.turn.voiceRealtimePendingMediaStartTime = null;
   if (!Number(turn.voiceRealtimeAudioStartedAt || 0)) turn.voiceRealtimeAudioStartedAt = Date.now();
+  // Establish this reply's playback baseline once. The media element stays live
+  // for the whole conversation, so its absolute currentTime is not a reply clock.
+  if (!Number.isFinite(Number(turn.voiceRealtimeMediaLastTime))) {
+    const mediaNow = Number(__pmRealtimeAgent?.conn?.audio?.currentTime);
+    if (Number.isFinite(mediaNow)) turn.voiceRealtimeMediaLastTime = mediaNow;
+  }
   turn.voiceRealtimeActive = true;
   if (!Number.isFinite(Number(turn.voiceRealtimeProgress))) turn.voiceRealtimeProgress = 0;
   if (__pmRealtimeAgent.turn.voiceLyricTimer) return;
@@ -18970,7 +19161,7 @@ function _finishMobileRealtimeAssistantLyricProgress(sessionId = '', options = {
   const sid = String(sessionId || __pmRealtimeAgent?.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || '').trim();
   const turn = _mobileRealtimeActiveAssistantTurn(sid);
   if (!turn) return;
-  const delayMs = Math.max(350, Math.min(2400, Number(options.delayMs || 900) || 900));
+  const delayMs = Math.max(650, Math.min(2400, Number(options.delayMs || 900) || 900));
   turn.voiceRealtimeProgress = 1;
   _setMobileVoiceLyricProgress(String(turn.body?.text || turn.content || ''), 1, 'Realtime agent response');
   _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_assistant_audio_progress_done', force: true });
@@ -19006,6 +19197,10 @@ function _noteMobileRealtimeAssistantAudioChunk(sessionId = '', int16 = null) {
   if (turn.voiceRealtimeMediaStartTime == null) {
     const mediaTime = Number(__pmRealtimeAgent?.conn?.audio?.currentTime);
     if (Number.isFinite(mediaTime)) turn.voiceRealtimeMediaStartTime = mediaTime;
+  }
+  if (!Number.isFinite(Number(turn.voiceRealtimeMediaLastTime))) {
+    const mediaTime = Number(__pmRealtimeAgent?.conn?.audio?.currentTime);
+    if (Number.isFinite(mediaTime)) turn.voiceRealtimeMediaLastTime = mediaTime;
   }
   _startMobileRealtimeAssistantLyricProgress(sid);
 }
@@ -19164,9 +19359,14 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
   }
   if (type === 'conversation.item.input_audio_transcription.delta' || type === 'conversation.item.input_audio_transcription.updated') {
     if (_shouldIgnoreMobileRealtimeTranscriptForCurrentTurn(event, type)) return;
-    const delta = _eventText(event, { preferLongest: type.endsWith('.updated') });
+    const isSnapshot = type.endsWith('.updated');
+    const delta = isSnapshot
+      ? _eventText(event, { preferLongest: true })
+      : (_mobileRealtimeRawTranscriptDelta(event) || _eventText(event));
     if (delta) {
-      __pmRealtimeAgent.turn.liveUserTranscript = type.endsWith('.updated') ? delta : `${__pmRealtimeAgent.turn.liveUserTranscript || ''}${delta}`;
+      __pmRealtimeAgent.turn.liveUserTranscript = isSnapshot
+        ? delta
+        : _appendMobileRealtimeTranscriptDelta(__pmRealtimeAgent.turn.liveUserTranscript || '', delta);
       _voiceShowRealtimeUserTranscript(__pmRealtimeAgent.turn.liveUserTranscript, 'Realtime transcript');
       _voiceDebug('realtime-agent-user-transcript-delta', { textLen: String(__pmRealtimeAgent.turn.liveUserTranscript || '').length, type, itemId: _mobileRealtimeTranscriptItemId(event) });
     }
@@ -19233,6 +19433,10 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
           __pmRealtimeAgent.stagedImageTurn = null;
         } else {
           _finalizeMobileRealtimeAgentChatTurn(sid, 'user', transcript);
+          // Realtime can emit response text before its final input transcript.
+          // Keep the pair in conversational order even when those event streams
+          // arrive out of order.
+          _ensureMobileRealtimeAgentTurnOrder(sid);
         }
         _persistMobileThreadSnapshot(sid);
         _renderRecent();
@@ -19270,14 +19474,23 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     || type === 'response.content_part.delta'
   ) {
     if (__pmRealtimeAgent.quiet.active || __pmRealtimeAgent.quiet.suppressResponse || __pmRealtimeAgent.turn.suppressAssistantTranscript) return;
-    const delta = _eventText(event);
+    // `_eventText` normalizes/trim()s its result for completed messages.  A
+    // Realtime transcript delta often carries the leading token whitespace, so
+    // using it here made streamed text render as "Surething.Doyou..." until the
+    // final transcript replaced it.
+    const rawDelta = _mobileRealtimeRawTranscriptDelta(event);
+    const delta = rawDelta || _eventText(event);
     if (delta) {
-      __pmRealtimeAgent.turn.liveAssistantTranscript = `${__pmRealtimeAgent.turn.liveAssistantTranscript || ''}${delta}`;
-      _voiceShowRealtimeAgentMessage(__pmRealtimeAgent.turn.liveAssistantTranscript, 'Realtime agent is responding', { highlight: delta });
+      const liveTranscript = _appendMobileRealtimeTranscriptDelta(
+        __pmRealtimeAgent.turn.liveAssistantTranscript || '',
+        delta,
+      );
+      __pmRealtimeAgent.turn.liveAssistantTranscript = liveTranscript;
+      _voiceShowRealtimeAgentMessage(liveTranscript, 'Realtime agent is responding', { highlight: delta });
       if (_currentMobileSubagentVoiceTarget()) return;
       const turn = _ensureMobileRealtimeAgentChatTurn(sessionId, 'ai');
       if (turn) {
-        turn.body.text = `${turn.body?.text || ''}${delta}`;
+        turn.body.text = _appendMobileRealtimeTranscriptDelta(turn.body?.text || '', delta);
         turn.content = String(turn.body.text || '');
         turn.voiceRealtimeActive = true;
         turn.voiceRealtimeHighlight = '';
@@ -19376,7 +19589,10 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     if (activeLyricTurn) {
       const estimatedMs = Math.max(Number(activeLyricTurn.voiceRealtimeAudioMs || 0) || 0, _estimateMobileRealtimeSpeechMs(activeLyricTurn.body?.text || activeLyricTurn.content || lastRealtimeReply));
       const playedMs = _mobileRealtimeAudioPlaybackMs(activeLyricTurn);
-      const remainingMs = Math.max(550, Math.min(120000, estimatedMs - playedMs));
+      // Keep the karaoke rendering alive through the actual output tail.  The
+      // per-turn media clock above filters historical WebRTC timeline jumps;
+      // this small cushion accounts for the browser's playout buffer.
+      const remainingMs = Math.max(850, Math.min(120000, estimatedMs - playedMs + 350));
       responseStatusHoldMs = Math.max(1200, remainingMs + 900);
       setTimeout(() => _finishMobileRealtimeAssistantLyricProgress(sessionId, { delayMs: 900 }), remainingMs);
     }
@@ -19621,6 +19837,35 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
       : String(workerTasks[0]?.prompt || '').trim();
     const task = String(args.task || args.prompt || batchTaskText || '').trim();
     if (!workerTasks.length && task) workerTasks.push({ title: String(args.title || '').trim(), prompt: task });
+    // Compatibility bridge for an already-open realtime session using the
+    // retired tool name. New voice models receive voice_thread_ops directly.
+    // This deliberately bypasses the former worker-group transport.
+    if (workerTasks.length) {
+      const threadArgs = workerTasks.length === 1
+        ? {
+            action: 'create',
+            title: workerTasks[0].title || 'Voice task',
+            prompt: workerTasks[0].prompt,
+            objective: workerTasks[0].prompt,
+            follow: true,
+          }
+        : {
+            action: 'create_many',
+            follow: true,
+            threads: workerTasks.map((workerTask) => ({
+              title: workerTask.title || 'Voice task',
+              prompt: workerTask.prompt,
+              objective: workerTask.prompt,
+            })),
+          };
+      return _executeMobileRealtimeAgentFunctionCall({
+        name: 'voice_thread_ops',
+        call_id: callId,
+        args: threadArgs,
+      }, sessionId);
+    }
+    _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: false, error: 'A task is required to create a Prometheus thread.' }));
+    return;
     const subagentTarget = _currentMobileSubagentVoiceTarget();
     const spokenTranscript = String(__pmRealtimeAgent.turn.liveUserTranscript || __pmRealtimeAgent.turn.lastUserTranscript || '').trim();
     const visibleTranscript = String(spokenTranscript || task || '').trim();
@@ -19970,6 +20215,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
             processEntries: artifactProcessEntries.length ? artifactProcessEntries : undefined,
           });
           _renderMobileChatSessionNow(sid);
+          _persistMobileThreadSnapshot(sid);
         }
         if (typeof __pmRealtimeAgent.enqueueArtifacts === 'function') {
           __pmRealtimeAgent.enqueueArtifacts(voiceArtifacts);
@@ -20714,6 +20960,8 @@ function _createMobileVoiceStreamingDispatcher() {
 }
 
 async function _ttsSpeak(text) {
+  // Legacy TTS is retired. OpenAI/xAI realtime owns all spoken output.
+  return;
   text = _cleanVoiceSpeechText(text);
   if (!text) return;
   __pmVoice.currentSpokenSegment = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
@@ -20848,6 +21096,7 @@ async function _ttsSpeak(text) {
 }
 
 function _ttsStop() {
+  return;
   try { window.speechSynthesis?.cancel(); } catch {}
   if (__pmVoice.lyricRaf) {
     cancelAnimationFrame(__pmVoice.lyricRaf);
@@ -21729,14 +21978,6 @@ export async function renderVoicePage(page, ctx) {
                 <option value="always_listening">Always listening</option>
               </select>
             </label>
-            <label id="pm-voice-realtime-agent-label" style="display:none;grid-column:1 / -1;font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">
-              <input type="checkbox" id="pm-voice-realtime-agent" style="margin-right:6px;vertical-align:middle;" />
-              Realtime end-to-end agent (audio in → model → audio out, no gateway voice agent)
-            </label>
-            <label id="pm-voice-xai-realtime-label" style="display:none;grid-column:1 / -1;font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">
-              <input type="checkbox" id="pm-voice-xai-realtime" style="margin-right:6px;vertical-align:middle;" />
-              Use xAI Realtime (live Grok speech-to-speech over WebSocket)
-            </label>
             <label id="pm-voice-server-voice-label" style="display:none;font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">Response Voice
               <select id="pm-voice-server-voice" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;"></select>
             </label>
@@ -21746,8 +21987,8 @@ export async function renderVoicePage(page, ctx) {
             <label id="pm-voice-speed-control" style="display:none;font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">Speed <span id="pm-voice-speed-label"></span>
               <input id="pm-voice-speed" type="range" min="0.75" max="1.3" step="0.05" style="margin-top:7px;width:100%;" />
             </label>
-            <button id="pm-voice-advanced-toggle" type="button" class="pm-btn ghost" style="grid-column:1 / -1;padding:7px 11px;font-size:12px;">Advanced voice routing</button>
-            <div id="pm-voice-advanced-panel" style="display:none;grid-column:1 / -1;border-top:1px solid var(--pm-border);padding-top:9px;margin-top:2px;">
+            <button id="pm-voice-advanced-toggle" type="button" class="pm-btn ghost" hidden>Advanced voice routing</button>
+            <div id="pm-voice-advanced-panel" hidden>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
                 <label style="font-size:11px;font-weight:800;color:var(--pm-muted);text-transform:uppercase;">Input
                   <select id="pm-voice-input-provider" style="margin-top:4px;width:100%;border:1px solid var(--pm-border);border-radius:8px;padding:7px;background:var(--pm-surface-strong);color:var(--pm-text);color-scheme:light dark;">
@@ -21777,13 +22018,13 @@ export async function renderVoicePage(page, ctx) {
         </div>
 
       <section class="pm-voice-controls">
-        <button class="pm-voice-control-btn pm-voice-repeat-btn" id="pm-voice-repeat" type="button" aria-label="Repeat last response" title="Repeat last response">
+        <button class="pm-voice-control-btn pm-voice-repeat-btn" id="pm-voice-repeat" type="button" aria-label="Repeat last response" title="Repeat last response" hidden>
           ${ICONS.refresh}<span>Repeat last response</span>
         </button>
         <button id="pm-voice-settings-toggle" type="button" class="pm-voice-control-btn pm-voice-settings-icon" aria-label="Voice settings" title="Voice settings">
           ${ICONS.gear}
         </button>
-        <div class="pm-voice-mode-toggle" role="group" aria-label="Voice narration mode">
+        <div class="pm-voice-mode-toggle" role="group" aria-label="Voice narration mode" hidden>
           <button data-mode="quiet"     id="pm-voice-mode-quiet"     type="button">Quiet</button>
           <button data-mode="milestone" id="pm-voice-mode-milestone" type="button">Milestone</button>
         </div>
@@ -21844,6 +22085,8 @@ export async function renderVoicePage(page, ctx) {
   const speedLabel = page.querySelector('#pm-voice-speed-label');
   const advancedToggle = page.querySelector('#pm-voice-advanced-toggle');
   const advancedPanel = page.querySelector('#pm-voice-advanced-panel');
+  advancedToggle?.remove();
+  advancedPanel?.remove();
   const inputProviderSelect = page.querySelector('#pm-voice-input-provider');
   const outputProviderSelect = page.querySelector('#pm-voice-output-provider');
   const targetBtn  = page.querySelector('#pm-voice-session-target');
@@ -23422,30 +23665,19 @@ void main() {
     const ttsProviders = Array.isArray(__pmVoice.voiceStatus?.ttsProviders) ? __pmVoice.voiceStatus.ttsProviders : [];
     const realtimeReady = _isRealtimeConnected(__pmVoice.lastVoiceStatus);
     const xaiReady = sttProviders.some(p => p?.configured && p?.id === 'xai') && ttsProviders.some(p => p?.configured && p?.id === 'xai');
-    const selectedMode = ['default', 'openai_realtime', 'xai', 'custom'].includes(settings.voiceMode) ? settings.voiceMode : _syncVoicePresetFromRouting();
-    const outputProvider = String(settings.ttsProvider || _outputProviderForMode(selectedMode));
-    const customRoutingSelected = selectedMode === 'custom';
+    const selectedMode = settings.voiceMode === 'xai' ? 'xai' : 'openai_realtime';
+    const outputProvider = selectedMode === 'xai' ? 'xai' : 'openai_realtime';
     if (listenModeSelect) listenModeSelect.value = _voiceListenMode();
-    // Realtime-agent toggle: only visible when voice mode is openai_realtime
-    const realtimeAgentLabel = page.querySelector('#pm-voice-realtime-agent-label');
-    const realtimeAgentCheckbox = page.querySelector('#pm-voice-realtime-agent');
-    if (realtimeAgentLabel) realtimeAgentLabel.style.display = selectedMode === 'openai_realtime' ? '' : 'none';
-    if (realtimeAgentCheckbox) realtimeAgentCheckbox.checked = settings.voiceAgentRealtimeAgent === true;
-    // xAI realtime toggle: only visible when voice mode is xai
-    const xaiRealtimeLabel = page.querySelector('#pm-voice-xai-realtime-label');
-    const xaiRealtimeCheckbox = page.querySelector('#pm-voice-xai-realtime');
-    if (xaiRealtimeLabel) xaiRealtimeLabel.style.display = selectedMode === 'xai' ? '' : 'none';
-    if (xaiRealtimeCheckbox) xaiRealtimeCheckbox.checked = settings.voiceAgentXaiRealtime === true;
+    settings.voiceAgentRealtimeAgent = selectedMode === 'openai_realtime';
+    settings.voiceAgentXaiRealtime = selectedMode === 'xai';
     voiceModeSelect.innerHTML = [
-      _providerOptionHtml('default', 'Default', selectedMode),
       _providerOptionHtml('openai_realtime', `OpenAI Realtime${realtimeReady ? '' : ' (not connected)'}`, selectedMode),
       _providerOptionHtml('xai', `xAI / Grok${xaiReady ? '' : ' (not connected)'}`, selectedMode),
-      _providerOptionHtml('custom', 'Custom routing', selectedMode),
     ].join('');
     if (inputProviderSelect) inputProviderSelect.value = String(settings.sttProvider || _inputProviderForMode(selectedMode));
     if (outputProviderSelect) outputProviderSelect.value = outputProvider;
-    if (advancedToggle) advancedToggle.style.display = customRoutingSelected ? '' : 'none';
-    if (advancedPanel) advancedPanel.style.display = customRoutingSelected ? 'block' : 'none';
+    if (advancedToggle) advancedToggle.style.display = 'none';
+    if (advancedPanel) advancedPanel.style.display = 'none';
     const selectedServerTts = outputProvider === 'xai' && _routingProviderReady('xai', 'output') ? 'xai' : '';
     realtimeVoiceSelect.innerHTML = REALTIME_VOICE_OPTIONS
       .map(id => _providerOptionHtml(id, id[0].toUpperCase() + id.slice(1), settings.realtimeVoice || 'marin'))
@@ -23514,19 +23746,12 @@ void main() {
     if (willOpen) setTimeout(() => document.addEventListener('pointerdown', _voiceSettingsOutsideHandler, true), 0);
   });
   voiceModeSelect.addEventListener('change', () => {
-    const mode = voiceModeSelect.value || 'default';
+    const mode = voiceModeSelect.value === 'xai' ? 'xai' : 'openai_realtime';
     const wasListening = __pmVoice.listening;
-    if (mode === 'custom') {
-      _saveVoiceSettings({ voiceMode: 'custom', sttProviderLocked: true });
-      if (advancedPanel) advancedPanel.style.display = 'block';
-      _recomputeVoiceProvider();
-      _paintProviderBanner();
-      return;
-    }
     _saveVoiceSettings({
       voiceMode: mode,
-      sttProvider: _inputProviderForMode(mode),
-      ttsProvider: _outputProviderForMode(mode),
+      sttProvider: 'auto',
+      ttsProvider: 'realtime',
       serverVoice: mode === 'xai' ? (__pmVoice.settings?.serverVoice || 'eve') : '',
       sttProviderLocked: true,
       autoProviderDefault: '',
@@ -23656,6 +23881,7 @@ void main() {
     _paintVoiceSettings();
     _paintProviderBanner();
     _prewarmMobileVoiceWorkerContext({ sessionId: __pmVoice.targetSessionId || __pmChat.activeSessionId, source: 'mobile_voice_page_ready' });
+    _prewarmMobileCodexRealtimeBridge();
     // If mic permission was already granted in a prior session, warm the mic stream
     // and realtime connection now so the very first PTT press is instant.
     const inputNow = String(__pmVoice.settings?.sttProvider || _inputProviderForMode(__pmVoice.settings?.voiceMode || 'default'));
@@ -24706,7 +24932,7 @@ void main() {
           _ttsStop();
           const itemId = String(data?.item_id || 'current');
           const previous = __pmVoice.realtimeDeltas.get(itemId) || '';
-          const next = `${previous}${String(data?.delta || '')}`.trim();
+          const next = _appendMobileRealtimeTranscriptDelta(previous, String(data?.delta || ''));
           __pmVoice.realtimeDeltas.set(itemId, next);
           if (!__pmVoice.realtimeFirstDeltaLogged) {
             __pmVoice.realtimeFirstDeltaLogged = true;
@@ -25952,7 +26178,7 @@ void main() {
           _setStatus('Transcribing…', `Sending audio to ${provider}`);
           const blob = new Blob(chunks, { type: mediaMimeType || 'audio/webm' });
           _voiceDebug('stt-recording-finalized', {
-            provider,
+            provider: 'auto',
             mimeType: blob.type || mediaMimeType || 'audio/webm',
             bytes: blob.size || 0,
             recordMs: stopToTranscribeStartedAt - recordingStartedAt,
@@ -27628,7 +27854,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
     if (Array.isArray(evt.canvasFiles)) message.canvasFiles = evt.canvasFiles;
     if (evt.fileChanges) message.fileChanges = evt.fileChanges;
     if (evt.productCarousel) message.productCarousel = evt.productCarousel;
-    if (Array.isArray(evt.richArtifacts)) message.richArtifacts = evt.richArtifacts;
+    _mergeMobileRichArtifacts(message, evt.richArtifacts);
     if (evt.goalCompletionReport) message.goalCompletionReport = evt.goalCompletionReport;
   };
   const type = String(evt.type || '').trim();
@@ -27725,7 +27951,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;
       if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
-      if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) message.richArtifacts = evt.richArtifacts;
+      _mergeMobileRichArtifacts(message, evt.richArtifacts);
       message.toolActivityStarted = true;
       message._progress = ok ? '' : `${action} failed`;
       _pushMobileStreamProcessEntry(message, ok ? 'result' : 'error', `${action}${text ? ` -> ${text}` : ' complete'}`, { ...evt, error: !ok }, false);
@@ -27774,7 +28000,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;
       if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
-      if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) message.richArtifacts = evt.richArtifacts;
+      _mergeMobileRichArtifacts(message, evt.richArtifacts);
       beginFinalResponse(message);
       message.content = reconcileFinalResponse(message.content || message.text || message.body?.text || '', text);
       message.text = message.content;
@@ -27788,7 +28014,7 @@ function _applyMobileAgentStreamEvent(message, evt, fallbackName = 'Agent') {
       try { _collectMediaFromToolEvent(message, evt); } catch {}
       if (evt.fileChanges) message.fileChanges = evt.fileChanges;
       if (evt.productCarousel) _mergeMobileProductCarouselIntoMessage(message, evt.productCarousel);
-      if (Array.isArray(evt.richArtifacts) && evt.richArtifacts.length) message.richArtifacts = evt.richArtifacts;
+      _mergeMobileRichArtifacts(message, evt.richArtifacts);
       beginFinalResponse(message);
       message.content = reconcileFinalResponse(message.content || message.text || message.body?.text || '', text);
       message.text = message.content;

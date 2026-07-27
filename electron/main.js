@@ -1532,11 +1532,18 @@ handleTrustedMain('pairing-admin:request', async (_event, payload = {}) => {
 handleTrustedMain('get-app-version', () => CURRENT_VERSION);
 
 handleTrustedMain('select-canvas-paths', async (_event, options = {}) => {
-  const mode = options && options.mode === 'folder' ? 'folder' : 'files';
+  const mode = options && options.mode === 'folder'
+    ? 'folder'
+    : options && options.mode === 'any'
+      ? 'any'
+      : 'files';
+  const requestedTitle = typeof options?.title === 'string' ? options.title.trim() : '';
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: mode === 'folder' ? 'Add Folder to Canvas' : 'Add Files to Canvas',
+    title: requestedTitle || (mode === 'folder' ? 'Add Folder to Canvas' : mode === 'any' ? 'Choose File or Folder' : 'Add Files to Canvas'),
     properties: mode === 'folder'
       ? ['openDirectory']
+      : mode === 'any'
+        ? ['openFile', 'openDirectory']
       : ['openFile', 'multiSelections'],
   });
   if (result.canceled) return [];

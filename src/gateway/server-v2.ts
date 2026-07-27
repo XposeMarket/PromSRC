@@ -159,6 +159,7 @@ import { router as processesRouter } from './routes/processes.router';
 import { router as codingRouter } from './routes/coding.router';
 import { router as realtimeRouter } from './routes/realtime.router';
 import { router as voiceRouter } from './routes/voice.router';
+import { shutdownCodexRealtimeBridge } from './realtime/codex-app-server-bridge';
 import { addCanvasFile, getCanvasContextBlock } from './routes/canvas-state';
 import { getMCPManager } from './mcp-manager';
 import {
@@ -711,7 +712,7 @@ startupMark('express app created');
 app.use((req, _res, next) => {
   try {
     const path = String(req.path || '').trim();
-    if (path === '/api/voice/tts' || path === '/api/voice/stt' || path === '/api/mobile/voice-debug' || path === '/api/realtime/call') {
+    if (path === '/api/voice/transcribe' || path === '/api/mobile/voice-debug' || path === '/api/realtime/call') {
       const ua = String(req.headers['user-agent'] || '').slice(0, 160);
       const pairing = req.headers['x-pairing-token'] ? 'pairing=yes' : 'pairing=no';
       appendMobileVoiceDebugLog(`[${new Date().toISOString()}] [voice-preauth] ${req.method} ${path} ${pairing} ua="${ua}"\n`);
@@ -893,6 +894,7 @@ setShutdownHooks({
   stopBrain: () => brainRunner.stop(),
   stopRuntimeWorkers: () => {
     stopThreadSupervisionRunner();
+    shutdownCodexRealtimeBridge();
     return Promise.all([
       shutdownMemorySearchWorker(),
       shutdownMemoryIndexRefreshWorker(),
@@ -1013,6 +1015,7 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   try { stopAgentSchedules(); } catch {}
   try { heartbeatRunner.stop(); } catch {}
   try { brainRunner.stop(); } catch {}
+  try { shutdownCodexRealtimeBridge(); } catch {}
   try { flushAllSessions(); } catch (err: any) {
     console.warn('[Gateway] Session flush failed:', err?.message || err);
   }

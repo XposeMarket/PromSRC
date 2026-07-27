@@ -188,6 +188,118 @@ body.projects-edit-mode .project-card-delete-btn { display: flex; }
 }
 .project-session-item:last-child { border-bottom: none; }
 .project-session-item:hover { background: color-mix(in srgb, var(--panel) 82%, transparent); }
+
+/* Projects are a compact tree, not a stack of cards. */
+#projects-list { padding: 4px 8px 12px; }
+.project-card {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+  box-shadow: none;
+}
+.project-card:hover,
+.project-card.active-project {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.project-card-header {
+  min-height: 32px;
+  padding: 6px 7px;
+  gap: 7px;
+  border-radius: 7px;
+}
+.project-card-header:hover { background: color-mix(in srgb, var(--panel) 84%, transparent); }
+.project-card.active-project > .project-card-header { color: var(--text); }
+.project-card-icon {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+}
+.project-card-name { flex: 1; font-size: 12px; font-weight: 650; }
+.project-card-meta,
+.project-card-sub { display: none; }
+.project-card-add-btn {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+}
+.project-card:hover .project-card-add-btn,
+.project-card:focus-within .project-card-add-btn { opacity: 1; }
+.project-card-add-btn:hover { background: var(--panel-2); color: var(--text); }
+.project-card-chevron { margin-left: 1px; font-size: 9px; }
+.project-sessions-list {
+  margin: 0 0 3px 24px;
+  border: 0;
+  background: transparent;
+}
+.project-session-item {
+  min-height: 30px;
+  padding: 6px 7px;
+  gap: 7px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+}
+.project-session-item:hover { background: color-mix(in srgb, var(--panel) 84%, transparent); }
+.project-session-item.active-session { background: color-mix(in srgb, var(--brand) 18%, var(--panel) 82%); color: var(--text); }
+.project-session-name { font-size: 11px; }
+.project-session-time { display: none; }
+
+/* New-project directory scoping flow. */
+.project-setup-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, .56);
+}
+.project-setup-modal.open { display: flex; }
+.project-setup-dialog {
+  width: min(440px, 100%);
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow-lg);
+}
+.project-setup-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 15px;
+  place-items: center;
+  border: 1px solid var(--flame-border);
+  border-radius: 12px;
+  background: var(--flame-glow);
+  color: var(--brand);
+}
+.project-setup-icon-warning { color: var(--yellow); }
+.project-setup-icon img { width: 34px; height: 34px; object-fit: contain; }
+.project-setup-dialog h2 { margin: 0 0 9px; font-size: 18px; color: var(--text); }
+.project-setup-dialog p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.project-setup-path { display: block; box-sizing: border-box; width: 100%; margin: 14px 0 0; padding: 9px 10px; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); font: 11px 'Manrope', sans-serif; }
+.project-setup-path:focus { outline: none; border-color: var(--brand); }
+.project-setup-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+.project-setup-primary,
+.project-setup-secondary,
+.project-setup-back { border-radius: 8px; padding: 9px 13px; font: 700 12px 'Manrope', sans-serif; cursor: pointer; }
+.project-setup-primary { border: 1px solid var(--brand); background: var(--brand); color: #fff; }
+.project-setup-secondary { border: 1px solid var(--line); background: transparent; color: var(--text); }
+.project-setup-back { margin-top: 12px; padding: 0; border: 0; background: transparent; color: var(--muted); }
+.project-setup-back:hover { color: var(--text); text-decoration: underline; }
 .project-session-item.active-session {
   background: color-mix(in srgb, var(--flame-glow) 55%, var(--panel) 45%);
   color: var(--text);
@@ -228,23 +340,27 @@ body.projects-edit-mode .project-card-delete-btn { display: flex; }
 body.projects-edit-mode .project-session-delete-btn { display: flex; }
 .project-session-delete-btn:hover { background: #fee2e2; color: var(--err); }
 
-/* ─── Right panel: project tabs ─────────────────────────────────── */
+/* ─── Right panel: inline project section ───────────────────────── */
 
-/* Shown only when in a project session */
-#right-panel-project-tabs {
-  display: none;
-  align-items: stretch;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel-2);
-  flex-shrink: 0;
-  min-height: 38px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
+/* Keep the normal right-rail header and its Canvas button. Project context
+   replaces generic connections inline below it instead of becoming a tabbed
+   secondary sidebar. */
+#project-session-section { display: none; }
+body.in-project-session #right-panel-topbar { display: flex !important; order: -1; }
+body.in-project-session #project-session-section {
+  display: block;
+  flex: 0 1 auto;
+  max-height: min(66vh, 720px);
+  overflow-y: auto;
 }
-body.in-project-session #right-panel-project-tabs { display: flex; }
-/* Hide the normal topbar when in project session */
-body.in-project-session #right-panel-topbar { display: none !important; }
+body.in-project-session #rp-project-tab,
+body.in-project-session #rp-context-tab { display: block !important; }
+body.in-project-session #rp-context-tab { border-top: 1px solid var(--line); }
+/* Generic chat integrations/context do not displace the project section. */
+body.in-project-session #connections-section,
+body.in-project-session #mcp-servers-section,
+body.in-project-session #agent-context-section,
+body.in-project-session #session-approvals-section { display: none !important; }
 
 .rp-tab {
   flex: 1;
@@ -277,9 +393,9 @@ body.in-project-session #right-panel-topbar { display: none !important; }
   border-bottom-color: var(--brand);
 }
 
-/* Right panel tab content sections */
+/* Legacy project tab content classes are retained for compatibility. */
 .rp-tab-content { display: none; }
-.rp-tab-content.active { display: flex; flex-direction: column; }
+.rp-tab-content.active { display: block; }
 
 /* Connectors section — shown via tab when in project, shown directly otherwise */
 #connections-section-wrap { display: flex; flex-direction: column; }
@@ -330,6 +446,28 @@ body.in-project-session #right-panel-topbar { display: none !important; }
   width: 100%;
   text-align: center;
 }
+
+.project-context-card {
+  width: calc(100% - 24px);
+  margin: 8px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+  font-family: 'Manrope', sans-serif;
+}
+.project-context-card:hover { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, var(--panel-2)); }
+.project-context-card-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 7px; color: var(--brand); font-size: 16px; flex: 0 0 auto; }
+.project-context-card-copy { min-width: 0; display: flex; flex: 1; flex-direction: column; gap: 2px; }
+.project-context-card-copy strong { font-size: 12px; letter-spacing: .02em; }
+.project-context-card-copy small { color: var(--muted); font-size: 10px; line-height: 1.4; }
+.project-context-card-action { color: var(--brand); font-size: 11px; font-weight: 800; }
 
 /* Upload drop zone */
 .project-upload-zone {

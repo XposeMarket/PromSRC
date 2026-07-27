@@ -3954,6 +3954,7 @@ button.chat-context-window-row {
 
 #chat-input,
 #side-chat-input,
+.subagent-panel-chat-composer .chat-textarea,
 #mission-input,
 #skill-search-input {
   flex: 1;
@@ -3969,7 +3970,8 @@ button.chat-context-window-row {
 }
 
 #chat-input,
-#side-chat-input {
+#side-chat-input,
+.subagent-panel-chat-composer .chat-textarea {
   min-width: 0;
   min-height: 48px;
   max-height: 150px;
@@ -4002,15 +4004,18 @@ button.chat-context-window-row {
   height: 0;
 }
 #chat-input::placeholder,
-#side-chat-input::placeholder {
+#side-chat-input::placeholder,
+.subagent-panel-chat-composer .chat-textarea::placeholder {
   color: var(--composer-muted);
 }
 #chat-input:focus,
 #side-chat-input:focus,
+.subagent-panel-chat-composer .chat-textarea:focus,
 #mission-input:focus,
 #skill-search-input:focus { border-color: #9fc1f7; box-shadow: 0 0 0 4px rgba(22, 104, 227, 0.11); }
 #chat-input:focus,
-#side-chat-input:focus {
+#side-chat-input:focus,
+.subagent-panel-chat-composer .chat-textarea:focus {
   border-color: color-mix(in srgb, var(--pm-orange), transparent 38%);
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--pm-orange), transparent 82%),
@@ -8062,7 +8067,8 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   100% { background-color: transparent; box-shadow: 0 0 0 0 rgba(249, 115, 22, 0); }
 }
 
-/* Embedded subagent chat must not inherit the main chat composer's absolute layout. */
+/* Embedded subagent chat uses the regular desktop composer visual system, while
+   remaining flow-positioned inside the split detail panel. */
 .subagent-panel-chat-shell {
   min-height: 0;
   overflow: hidden;
@@ -8082,25 +8088,11 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   max-width: 100% !important;
   margin: 12px 0 0 !important;
   box-sizing: border-box;
-  border-radius: 18px;
-  padding: 10px 12px 8px !important;
   z-index: 1;
 }
 .subagent-panel-chat-composer .chat-input-row {
-  display: flex;
-  align-items: flex-end;
-  min-height: 48px;
-  width: 100%;
-}
-.subagent-panel-chat-composer .chat-textarea {
-  flex: 1 1 auto;
-  min-width: 0;
-  width: 100%;
-}
-.subagent-panel-chat-composer .chat-attach-btn,
-.subagent-panel-chat-composer .chat-voice-btn,
-.subagent-panel-chat-composer .send-btn {
-  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
 }
 .model-speed-icon {
   display: inline-flex;

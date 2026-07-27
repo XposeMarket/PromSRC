@@ -236,7 +236,11 @@ function createManagedThread(
   if (routeState && routeState.availability !== 'ready') {
     throw new Error(`Requested thread model route is unavailable: ${routeState.error || 'Choose a configured provider, model, and account.'}`);
   }
-  const session = touchSession(targetSessionId, { channel: 'web', title });
+  // Threads are peer chats of their creator. Keep them in the same channel so
+  // the originating client (mobile, desktop/web, terminal, etc.) can discover
+  // them in its own chat list instead of always sending them to desktop/web.
+  const ownerChannel = getSession(ownerSessionId).channel || 'web';
+  const session = touchSession(targetSessionId, { channel: ownerChannel, title });
   const chatModelRoute = requestedRoute
     ? setChatModelRoute(targetSessionId, {
         providerId: routeState!.effective.providerId,
@@ -271,6 +275,15 @@ function createManagedThread(
     title,
     workspace,
     started: !!turnPrompt,
+    launch: {
+      accepted: true,
+      state: turnPrompt ? 'queued' : 'idle',
+      responsePending: !!turnPrompt,
+      responseReceived: false,
+      // Creation is intentionally detached. A reply is real only after the
+      // managed_thread_turn_complete event or a subsequent read/status shows it.
+      completionEvent: turnPrompt ? 'managed_thread_turn_complete' : null,
+    },
     follow,
     chatModelRoute: chatModelRoute
       ? { mode: 'explicit', override: chatModelRoute, effective: routeState!.effective, availability: 'ready' }
@@ -280,6 +293,7 @@ function createManagedThread(
 }
 
 const THREAD_LINK_ACTION_LABELS: Record<string, string> = {
+  status: 'Thread status',
   create: 'Thread created',
   start: 'Thread created',
   create_many: 'Thread created',

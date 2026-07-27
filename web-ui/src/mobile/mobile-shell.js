@@ -199,6 +199,8 @@ let _drawerCallbacks = null;
 let _drawerRefreshing = false;
 let _drawerRenderSeq = 0;
 let _drawerChannelsCache = null;
+let _drawerStateCache = null;
+let _drawerPinnedCollapsed = false;
 let _mobileNoSelectGuardInstalled = false;
 const PM_DRAWER_REFRESH_TTL_MS = 30_000;
 const PM_NO_SELECT_INTERACTIVE_SELECTOR = [
@@ -848,18 +850,29 @@ function _ensureLiquidGlassFilters() {
   if (svg) document.body.appendChild(svg);
 }
 
+function _normalizeDrawerState(state) {
+  const view = state?.view === 'channels' || state?.view === 'channelChats' ? state.view : 'mobile';
+  return {
+    view,
+    channel: view === 'channelChats' ? String(state?.channel || '').trim() : '',
+  };
+}
+
 function _loadDrawerState() {
+  if (_drawerStateCache) return { ..._drawerStateCache };
   try {
     const raw = JSON.parse(localStorage.getItem(PM_DRAWER_STATE_KEY) || '{}');
-    const view = raw?.view === 'channels' || raw?.view === 'channelChats' ? raw.view : 'mobile';
-    return { view, channel: String(raw?.channel || '') };
+    _drawerStateCache = _normalizeDrawerState(raw);
   } catch {
-    return { view: 'mobile', channel: '' };
+    _drawerStateCache = { view: 'mobile', channel: '' };
   }
+  return { ..._drawerStateCache };
 }
 
 function _saveDrawerState(state) {
-  try { localStorage.setItem(PM_DRAWER_STATE_KEY, JSON.stringify(state || { view: 'mobile', channel: '' })); } catch {}
+  _drawerStateCache = _normalizeDrawerState(state);
+  try { localStorage.setItem(PM_DRAWER_STATE_KEY, JSON.stringify(_drawerStateCache)); } catch {}
+  return { ..._drawerStateCache };
 }
 
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
@@ -1073,18 +1086,51 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   return { app, page, tabbar };
 }
 
-async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
+async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll = false }) {
   const renderSeq = ++_drawerRenderSeq;
   const renderDrawer = _drawerEl;
   const head = renderDrawer?.querySelector('#pm-drawer-session-head');
   const sessionList = renderDrawer?.querySelector('#pm-mobile-session-list');
   if (!head || !sessionList || typeof loadSessions !== 'function') return;
   const isCurrent = () => renderSeq === _drawerRenderSeq && renderDrawer === _drawerEl;
+  const preservedScrollTop = preserveScroll ? Math.max(0, Number(renderDrawer.scrollTop) || 0) : null;
+  const restoreScroll = () => {
+    if (preservedScrollTop === null || !isCurrent()) return;
+    const apply = () => {
+      if (!isCurrent()) return;
+      const maxScrollTop = Math.max(0, renderDrawer.scrollHeight - renderDrawer.clientHeight);
+      renderDrawer.scrollTop = Math.min(preservedScrollTop, maxScrollTop);
+    };
+    apply();
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
+  };
   if (_drawerSearch) {
     const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
     if (pinnedEl) pinnedEl.innerHTML = '';
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
     return;
+  }
+  const requestedDrawerState = _loadDrawerState();
+  if (requestedDrawerState.view === 'channels') {
+    const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
+    if (pinnedEl) pinnedEl.innerHTML = '';
+    head.innerHTML = `
+      <button class="pm-drawer-back" type="button" data-drawer-view="mobile">${ICONS.back}<span>Sessions</span></button>
+      <div class="pm-drawer-section-title">Channels</div>
+    `;
+    sessionList.innerHTML = '<div class="pm-session-empty pm-session-loading">Loading channels...</div>';
+  } else if (requestedDrawerState.view === 'channelChats') {
+    const label = _channelLabel(requestedDrawerState.channel) || requestedDrawerState.channel;
+    head.innerHTML = `
+      <button class="pm-drawer-back" type="button" data-drawer-view="channels">${ICONS.back}<span>Channels</span></button>
+      <div class="pm-drawer-section-title">${escapeHtml(label)}</div>
+    `;
+    sessionList.innerHTML = '<div class="pm-session-empty pm-session-loading">Loading chats...</div>';
+  }
+  if (requestedDrawerState.view !== 'mobile') {
+    // The back control is visible before the async fetch finishes, so wire it
+    // now instead of leaving the drawer momentarily unresponsive.
+    _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
   }
   try {
     await _migrateLegacyPinnedSessionsToServer();
@@ -1207,8 +1253,24 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
   } catch (err) {
     if (!isCurrent()) return;
     console.warn('[mobile drawer] render failed', err);
-    if (head) head.innerHTML = '<div class="pm-drawer-section-title">Sessions</div>';
+    const drawerState = _loadDrawerState();
+    if (head && drawerState.view === 'channels') {
+      head.innerHTML = `
+        <button class="pm-drawer-back" type="button" data-drawer-view="mobile">${ICONS.back}<span>Sessions</span></button>
+        <div class="pm-drawer-section-title">Channels</div>
+      `;
+    } else if (head && drawerState.view === 'channelChats') {
+      const label = _channelLabel(drawerState.channel) || drawerState.channel;
+      head.innerHTML = `
+        <button class="pm-drawer-back" type="button" data-drawer-view="channels">${ICONS.back}<span>Channels</span></button>
+        <div class="pm-drawer-section-title">${escapeHtml(label)}</div>
+      `;
+    } else if (head) {
+      head.innerHTML = '<div class="pm-drawer-section-title">Sessions</div>';
+    }
     sessionList.innerHTML = '<div class="pm-session-empty">Could not load sessions.</div>';
+  } finally {
+    restoreScroll();
   }
 }
 
@@ -1351,24 +1413,41 @@ function _renderDrawerPinnedSessions(pageState) {
   if (!pinnedSessions.length) { pinnedEl.innerHTML = ''; return; }
   pinnedEl.innerHTML =
     '<div class="pm-drawer-pinned-section">' +
-      '<div class="pm-drawer-section-title">Pinned</div>' +
-      pinnedSessions.map(function(s) { return _sessionButtonHtml(s); }).join('') +
+      '<button class="pm-drawer-section-title pm-drawer-pinned-toggle" type="button" data-drawer-pinned-toggle aria-expanded="' + String(!_drawerPinnedCollapsed) + '" aria-controls="pm-drawer-pinned-content">' +
+        '<span>Pinned</span><span class="pm-drawer-pinned-chevron" aria-hidden="true">' + ICONS.chev + '</span>' +
+      '</button>' +
+      '<div class="pm-drawer-pinned-content" id="pm-drawer-pinned-content"' + (_drawerPinnedCollapsed ? ' hidden' : '') + '>' +
+        pinnedSessions.map(function(s) { return _sessionButtonHtml(s); }).join('') +
+      '</div>' +
     '</div>';
 }
 
 function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
   _drawerEl.querySelectorAll('[data-drawer-view]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       const view = btn.getAttribute('data-drawer-view') || 'mobile';
       _saveDrawerState({ view, channel: view === 'channelChats' ? _loadDrawerState().channel : '' });
-      _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat });
+      _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll: true });
     });
   });
   _drawerEl.querySelectorAll('[data-channel-key]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       _saveDrawerState({ view: 'channelChats', channel: btn.getAttribute('data-channel-key') || '' });
-      _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat });
+      _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll: true });
     });
+  });
+  _drawerEl.querySelector('[data-drawer-pinned-toggle]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    _drawerPinnedCollapsed = !_drawerPinnedCollapsed;
+    const toggle = event.currentTarget;
+    const content = _drawerEl.querySelector('#pm-drawer-pinned-content');
+    toggle.setAttribute('aria-expanded', String(!_drawerPinnedCollapsed));
+    if (content) content.hidden = _drawerPinnedCollapsed;
   });
   _drawerEl.querySelector('[data-session-load-more]')?.addEventListener('click', () => _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchSessions, onNewChat }));
   _drawerEl.querySelector('[data-mobile-new-chat]')?.addEventListener('click', () => {

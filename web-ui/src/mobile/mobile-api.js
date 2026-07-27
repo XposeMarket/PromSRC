@@ -406,20 +406,15 @@ export async function verifyPairingMe() {
 }
 
 export async function createVoiceInterruptionEvent(payload = {}) {
-  return mfetch('/api/voice-agent/input', {
-    method: 'POST',
-    body: JSON.stringify({
-      ...(payload || {}),
-      transcript: String(payload?.userInterruptionTranscript || payload?.transcript || '').trim(),
-      source: String(payload?.source || 'mobile_voice_agent'),
-    }),
-  });
+  throw new Error('The legacy voice-agent route was removed. Use OpenAI or xAI Realtime.');
 }
 
 // Streaming variant: POSTs with { stream: true } and consumes the SSE response,
 // invoking onChunk(text) per sentence as the model generates the spokenReply.
 // Returns a promise resolving with the full result payload from the `done` event.
 export async function streamVoiceAgentInputMobile(payload = {}, onChunk) {
+  throw new Error('The legacy voice-agent stream was removed. Use OpenAI or xAI Realtime.');
+  /*
   const token = getDeviceToken();
   const headers = new Headers({
     'Content-Type': 'application/json',
@@ -467,7 +462,7 @@ export async function streamVoiceAgentInputMobile(payload = {}, onChunk) {
       }
     }
   }
-  return finalResult || {};
+  return finalResult || {}; */
 }
 
 /* ---------------- helpers ---------------- */
@@ -1386,37 +1381,24 @@ export async function runBgTaskAction(taskId, action) {
 }
 
 export async function loadVoiceStatus() {
-  const [realtime, voice, creds] = await Promise.all([
+  const [realtime, creds] = await Promise.all([
     mfetch('/api/realtime/status').catch(() => null),
-    mfetch('/api/voice/status').catch(() => null),
     mfetch('/api/settings/credentialed-model-providers').catch(() => null),
   ]);
   return {
     realtime: realtime || { configured: false },
-    voice: voice || { sttProviders: [], ttsProviders: [] },
+    voice: { sttProviders: [{ id: 'auto', configured: true }], ttsProviders: [] },
     providers: creds?.providers || creds?.ids || [],
   };
 }
 
 export async function transcribeVoiceAudio({ provider, audioBase64, mimeType, filename, language }) {
-  return mfetch('/api/voice/stt', {
+  return mfetch('/api/voice/transcribe', {
     method: 'POST',
     body: JSON.stringify({ provider, audioBase64, mimeType, filename, language }),
   });
 }
 
-export async function synthesizeVoiceAudio({ provider, text, voice, voiceId, language, speed, delivery }) {
-  return mfetch('/api/voice/tts', {
-    method: 'POST',
-    body: JSON.stringify({ provider, text, voice, voiceId, language, speed, delivery }),
-  });
-}
-
-export async function loadVoiceVoices(provider) {
-  const id = String(provider || '').trim();
-  if (!id) return { voices: [] };
-  return mfetch(`/api/voice/voices?provider=${encodeURIComponent(id)}`);
-}
 
 export async function saveTeamContextReference(teamId, title, body) {
   return api(`/api/teams/${encodeURIComponent(teamId)}/context-references`, {

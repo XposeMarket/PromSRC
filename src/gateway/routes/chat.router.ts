@@ -1253,6 +1253,7 @@ import {
   formatScheduleMemoryForPrompt,
 } from '../scheduling/schedule-memory';
 import { BackgroundTaskRunner } from '../tasks/background-task-runner';
+import { buildPrometheusThreadLinksArtifact, executePrometheusThreadOps } from '../threads/thread-ops';
 import {
   addVoiceWorkgroupWorker,
   createVoiceWorkgroup,
@@ -2482,12 +2483,9 @@ async function handleChat(
   const codingContextScopeId = codingContextActorId ? `agent:${codingContextActorId}` : `session:${sessionId}`;
   const voiceAgentHandoffActive = /\[VOICE_AGENT_HANDOFF\]/i.test(callerContextText);
   const voiceAgentChatHandoffActive = /\[VOICE_AGENT_CHAT_HANDOFF\]/i.test(callerContextText);
-  const linkedVoiceWorkgroup = voiceAgentChatHandoffActive
-    ? listVoiceWorkgroupsForSession(sessionId).find((workgroup) => {
-        if (['complete', 'failed'].includes(String(workgroup.status || '').toLowerCase())) return false;
-        return workgroup.workers.some((worker) => worker.kind === 'primary_chat' && !['complete', 'failed'].includes(String(worker.status || '').toLowerCase()));
-      }) || null
-    : null;
+  // Voice delegation is now thread-only. Do not attach new background work to
+  // historical workgroups even when an older handoff marker is present.
+  const linkedVoiceWorkgroup: any = null;
   const voiceNarrator = voiceAgentHandoffActive ? createVoiceNarrator(sessionId, message, (data) => {
     rawSendSSE('voice_milestone', data);
     mirrorSessionChatEvent(sessionId, 'voice_milestone', data, broadcastWS);
@@ -4001,7 +3999,7 @@ async function handleChat(
           const taskId = String(parsed?.id || '').trim();
           if (taskId) {
             const current = loadVoiceWorkgroup(linkedVoiceWorkgroup.id) || linkedVoiceWorkgroup;
-            if (!current.workers.some((worker) => worker.taskId === taskId)) {
+            if (!current.workers.some((worker: any) => worker.taskId === taskId)) {
               const prompt = String(effectiveToolArgs?.task_prompt || effectiveToolArgs?.prompt || '').trim();
               const updated = addVoiceWorkgroupWorker(linkedVoiceWorkgroup.id, {
                 taskId,
@@ -11306,7 +11304,11 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
   }
   const displayPhase = currentPhase && currentPhase !== 'running' ? currentPhase : '';
   const displayTool = activeToolName && activeToolName !== 'skill_list' ? friendlyVoiceToolName(activeToolName) : '';
-  const voiceWorkgroups = subagentId ? [] : listVoiceWorkgroupsForSession(sid).slice(0, 4).map((workgroup) => {
+  // Historical workgroup files are intentionally not loaded into live Voice
+  // context. New Voice work is represented by first-class thread supervision.
+  const voiceWorkgroups: any[] = [];
+  /* retired workgroup context mapper retained temporarily for migration review
+  const legacyVoiceWorkgroups = subagentId ? [] : listVoiceWorkgroupsForSession(sid).slice(0, 4).map((workgroup) => {
     const workers = workgroup.workers.map((worker) => {
       const task = loadTask(worker.taskId);
       const status = String(task?.status || worker.status || 'queued');
@@ -11379,19 +11381,19 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
       mode: workgroup.mode,
       workers,
     };
-  });
+  }); */
   const activeVoiceWorkgroups = voiceWorkgroups.filter((workgroup) => !['complete', 'failed'].includes(workgroup.status));
-  const completedWorkerResults = voiceWorkgroups.flatMap((workgroup) => workgroup.workers
-    .filter((worker) => worker.status === 'complete' && worker.finalResult)
-    .map((worker) => ({
+  const completedWorkerResults = voiceWorkgroups.flatMap((workgroup: any) => workgroup.workers
+    .filter((worker: any) => worker.status === 'complete' && worker.finalResult)
+    .map((worker: any) => ({
       workgroupId: workgroup.id,
       taskId: worker.taskId,
       title: worker.title,
       result: worker.finalResult,
     })));
-  const voiceWorkgroupLines = voiceWorkgroups.slice(0, 2).map((workgroup) => {
+  const voiceWorkgroupLines = voiceWorkgroups.slice(0, 2).map((workgroup: any) => {
     const workerBits = workgroup.workers.slice(0, 5)
-      .map((worker) => {
+      .map((worker: any) => {
         const latestActivity = worker.recentActivity[worker.recentActivity.length - 1]?.detail || worker.lastToolCall;
         const detail = latestActivity || worker.currentStep;
         return `${worker.title} (${worker.status}${detail ? `: ${compactVoiceText(detail, 160)}` : ''})`;
@@ -11400,7 +11402,7 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
     return `Voice workgroup ${workgroup.id}: ${workgroup.status}; ${workgroup.completedCount}/${workgroup.workerCount} complete${workerBits ? `; ${workerBits}` : ''}`;
   }).filter(Boolean);
   const effectiveCurrentGoal = currentGoal || (activeVoiceWorkgroups[0]?.workers || [])
-    .map((worker) => worker.title)
+    .map((worker: any) => worker.title)
     .filter(Boolean)
     .slice(0, 3)
     .join('; ');
@@ -12036,7 +12038,7 @@ function buildVoiceSkillRuntimeGuidance(skill: any): string {
     .slice(0, 12);
   return [
     'Use this skill as workflow guidance inside Realtime voice.',
-    'Call only provided voice_* tools and canonical read-only skill_* tools from this layer. Explicit user-authorized social posts/messages are allowed through voice browser/desktop UI tools when the content and destination are clear. If the skill needs files, shell commands, downloads/uploads, credentials, source edits, purchases/payments, account settings/security changes, destructive submits, or durable system changes, dispatch_prometheus_worker instead.',
+    'Call only provided voice_* tools and canonical read-only skill_* tools from this layer. Explicit user-authorized social posts/messages are allowed through voice browser/desktop UI tools when the content and destination are clear. If the skill needs files, shell commands, downloads/uploads, credentials, source edits, purchases/payments, account settings/security changes, destructive submits, or durable system changes, create or steer a first-class Prometheus thread with voice_thread_ops instead.',
     equivalents.length ? `Voice-safe tool equivalents: ${equivalents.join('; ')}.` : '',
   ].filter(Boolean).join(' ');
 }
@@ -12522,9 +12524,6 @@ function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>)
       timer: 'voice_timer',
       automation_dashboard: 'voice_automation_dashboard',
       worker_status: 'voice_worker_status',
-      task_control: 'voice_task_control',
-      task_directory: 'voice_task_directory',
-      task_watch: 'voice_task_watch',
       agent_directory: 'voice_agent_directory',
       agent_control: 'voice_agent_control',
       send_screenshot: 'voice_send_screenshot',
@@ -12556,20 +12555,40 @@ function normalizeVoiceAgentWrapperTool(name: string, args: Record<string, any>)
   return { name, args };
 }
 
+/**
+ * Voice owns the conversation, but thread lifecycle work belongs to the same
+ * first-class peer-session control plane used by main Prometheus. Reuse its
+ * schema verbatim so Voice never drifts into a second, reduced thread system.
+ */
+function buildVoiceThreadOpsDefinition(): any {
+  const canonical = getAgentTeamScheduleTools()
+    .find((tool: any) => String(tool?.function?.name || tool?.name || '') === 'prometheus_thread_ops');
+  if (!canonical?.function) throw new Error('prometheus_thread_ops tool definition is unavailable.');
+  return {
+    ...canonical,
+    function: {
+      ...canonical.function,
+      name: 'voice_thread_ops',
+      description: 'Voice-native control plane for first-class Prometheus chat threads. Find, inspect, create, model-route, message, steer, interrupt, rename, pin, and durably supervise threads. Voice remains the user-facing coordinator; threads perform independent or blocking mechanics. IMPORTANT: create/create_many only confirm that a turn was accepted and queued; they do not mean the target replied, completed, or verified anything. Report a target result only after a later read/status or a managed_thread_turn_complete update. This is the only Voice delegation path: never create a voice worker group or background task group.',
+    },
+  };
+}
+
 function buildVoiceToolDefinitions(): any[] {
   const tools = [
+    buildVoiceThreadOpsDefinition(),
     {
       type: 'function',
       function: {
         name: 'voice_ops',
-        description: 'Unified voice operations wrapper for quick operations plus global task discovery/control, opt-in task watches, and constrained standalone-subagent chat/dispatch/run control. Controlling an outside task never tracks it automatically; create a task_watch only when the user asks for updates.',
+        description: 'Unified voice operations wrapper for quick conversational operations and constrained standalone-subagent chat/dispatch/run control. First-class thread creation, steering, and supervision belong to voice_thread_ops.',
         parameters: {
           type: 'object',
           required: ['action'],
           properties: {
             action: {
               type: 'string',
-              enum: ['web_search', 'web_fetch', 'write_note', 'agent_memory', 'set_wake_phrase', 'enter_quiet_mode', 'set_quiet_until', 'memory_search', 'timer', 'automation_dashboard', 'worker_status', 'task_directory', 'task_control', 'task_watch', 'agent_directory', 'agent_control', 'send_screenshot', 'generate_image', 'generate_video'],
+              enum: ['web_search', 'web_fetch', 'write_note', 'agent_memory', 'set_wake_phrase', 'enter_quiet_mode', 'set_quiet_until', 'memory_search', 'timer', 'automation_dashboard', 'worker_status', 'agent_directory', 'agent_control', 'send_screenshot', 'generate_image', 'generate_video'],
             },
             query: { type: 'string' },
             url: { type: 'string' },
@@ -13927,6 +13946,73 @@ async function executeVoiceAgentControl(sessionId: string, args: Record<string, 
   return voiceToolResult(control.success === true, control.message || `${controlAction} applied.`, { control, tracking: 'none' });
 }
 
+function summarizeVoiceThreadOperation(action: string, output: Record<string, any>): string {
+  const session = output?.session || (Array.isArray(output?.created) ? output.created[0] : null);
+  const title = String(session?.title || output?.supervision?.targetTitle || '').trim();
+  const count = Number(output?.count || (Array.isArray(output?.created) ? output.created.length : 0));
+  const target = title ? ` ${title}` : '';
+  switch (action) {
+    case 'create': case 'start': return `Created and queued thread${target}; its response is still pending.`;
+    case 'create_many': case 'start_many': return `Created and queued ${count || 0} independent threads; their responses are still pending.`;
+    case 'send': case 'chat': return `Sent the thread an update${target}.`;
+    case 'steer': return `Steered the active thread${target}.`;
+    case 'interrupt': case 'stop': return `Paused the thread${target}.`;
+    case 'follow': return `I am now supervising${target}.`;
+    case 'unfollow': return `Stopped supervising${target}.`;
+    case 'rename': return `Renamed the thread${target}.`;
+    case 'pin': return `Pinned the thread${target}.`;
+    case 'unpin': return `Unpinned the thread${target}.`;
+    case 'revise_supervision': return 'Updated the supervision objective.';
+    case 'pause_supervision': return 'Paused supervision.';
+    case 'resume_supervision': return 'Resumed supervision.';
+    case 'review_decision': return `Recorded the supervision decision: ${String(output?.supervision?.lastDecision || 'updated')}.`;
+    case 'read': return `Loaded thread${target}.`;
+    case 'status': return `Loaded thread status${target}.`;
+    case 'list': return `Found ${Array.isArray(output?.sessions) ? output.sessions.length : 0} threads.`;
+    case 'find': case 'search': return `Found ${Array.isArray(output?.sessions) ? output.sessions.length : 0} matching threads.`;
+    case 'supervisions': case 'followed': return `Loaded ${Array.isArray(output?.supervisions) ? output.supervisions.length : 0} supervision records.`;
+    default: return 'Thread operation complete.';
+  }
+}
+
+async function executeVoiceThreadOps(sessionId: string, args: Record<string, any>): Promise<string> {
+  const voiceTarget = args?.voiceTarget && typeof args.voiceTarget === 'object' ? args.voiceTarget : null;
+  if (String(voiceTarget?.kind || '').trim() === 'subagent') {
+    return voiceToolResult(false, 'Thread orchestration belongs to the main Prometheus voice session. The selected subagent can only control its own work.');
+  }
+  const action = String(args?.action || '').trim().toLowerCase();
+  if (!action) return voiceToolResult(false, 'A thread action is required.');
+  const output = await executePrometheusThreadOps(sessionId, args, {
+    runInteractiveTurn,
+    broadcastWS,
+  });
+  const summary = summarizeVoiceThreadOperation(action, output);
+  const threadLinks = buildPrometheusThreadLinksArtifact(args, output);
+  if (threadLinks) {
+    addMessage(sessionId, {
+      role: 'assistant',
+      content: summary,
+      timestamp: Date.now(),
+      messageKind: 'voice_thread_ops',
+      source: 'voice_thread_ops',
+      richArtifacts: [threadLinks],
+    } as any, { disableMemoryFlushCheck: true, disableCompactionCheck: true } as any);
+    broadcastWS({
+      type: 'voice_thread_ops',
+      sessionId,
+      action,
+      summary,
+      output,
+      richArtifacts: [threadLinks],
+    });
+  }
+  return voiceToolResult(true, summary, {
+    action,
+    output,
+    ...(threadLinks ? { richArtifacts: [threadLinks] } : {}),
+  });
+}
+
 async function executeVoiceAgentTool(sessionId: string, name: string, args: Record<string, any>): Promise<string> {
   const workspacePath = getConfig().getWorkspacePath();
   try {
@@ -14676,8 +14762,8 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         });
       }
       if (isDangerousVoiceLaunchText(launchText)) {
-        return voiceToolResult(false, 'Refusing to launch installer/build-tool shortcuts from the voice desktop app launcher. Use Worker if an install or tooling setup is actually required.', {
-          useTool: 'dispatch_prometheus_worker',
+        return voiceToolResult(false, 'Refusing to launch installer/build-tool shortcuts from the voice desktop app launcher. Create a Prometheus thread if an install or tooling setup is actually required.', {
+          useTool: 'voice_thread_ops',
         });
       }
       const result = await desktopLaunchApp(app, '', Math.min(20000, Math.max(1000, Number(args.wait_ms || args.waitMs || 6000) || 6000)), appId);
@@ -14823,6 +14909,9 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
     }
     if (name === 'voice_task_control') {
       return await executeVoiceTaskControl(sessionId, args || {});
+    }
+    if (name === 'voice_thread_ops') {
+      return await executeVoiceThreadOps(sessionId, args || {});
     }
     if (name === 'voice_task_directory') {
       return executeVoiceTaskDirectory(args || {});
@@ -15235,19 +15324,23 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     identity.identityLine,
     '',
     identity.roleLine,
+    'You are the live coordinator for the user\'s work, not a pass-through dispatcher. Speak and act in first person; never mention workers, background tasks, dispatching, tool calls, or backend plumbing unless the user asks.',
+    'Choose the lightest mode that moves the user forward: converse and decide here; do a quick bounded check here with a provided voice tool; or create/control a first-class Prometheus thread for independent or blocking mechanics.',
+    'Voice owns the relationship, judgment, continuity, user choices, and approvals. Threads perform file, code, shell, long-running, or other broad execution work and return a concise outcome, blocker, and any decision needed from the user.',
+    'Thread-launch truth rule: voice_thread_ops create/create_many succeeds as soon as a target turn is accepted and queued. That tool result is NOT a target reply, completion, progress update, or verification. Never say a thread answered, found something, finished, or is working correctly from creation alone. Say only that it was started/queued and its response is pending. Report a result only after voice_thread_ops read/status shows the target reply or a managed_thread_turn_complete update provides it.',
     'You are the live voice layer and you MAY call the provided voice_* tools plus canonical read-only skill_* tools directly.',
     'The voice_* tools are safe wrappers around existing Prometheus tools, and skill_* tools are the normal Prometheus skill list/read/resource tools. Those provided tools are the only tools you may use from this layer.',
     'Do not say web search, fetch, notes, memory search, skill list/read, timers, or screenshot capture/delivery are only available to the Worker when a matching voice_* or skill_* tool is provided.',
-    'Use compact voice wrapper tools for fast conversational support and live browser/desktop UI control. Realtime voice may open, observe, click, type, fill, press keys, focus windows, launch apps, scroll, and complete explicit user-authorized social posts/messages through voice_browser and voice_desktop when the content and destination are clear. Use voice_ops for quick search/fetch, notes, memory, timers, runtime voice settings, screenshot delivery, operator status, and simple image/video generation. If the request needs files, shell/run commands, source editing, MCP/connectors, downloads/uploads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, deletes, installs, destructive actions, or durable system changes, choose handoff_new_work or steer_worker instead.',
+    'Use compact voice wrapper tools for fast conversational support and live browser/desktop UI control. Realtime voice may open, observe, click, type, fill, press keys, focus windows, launch apps, scroll, and complete explicit user-authorized social posts/messages through voice_browser and voice_desktop when the content and destination are clear. Use voice_ops for quick search/fetch, notes, memory, timers, runtime voice settings, screenshot delivery, operator status, and simple image/video generation. If the request needs files, shell/run commands, source editing, MCP/connectors, downloads/uploads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, deletes, installs, destructive actions, or durable system changes, use voice_thread_ops action=create or create_many. Default to the current Main Chat route; only set provider_id, model, reasoning_effort, or account_id when the user explicitly requests it.',
     '',
     'When the user asks something answerable from your context, answer directly.',
-    'When the user asks for current Worker status/progress/context, call voice_ops with action worker_status and answer from the returned live packet; never steer the Worker just to ask it for status.',
+    'When the user asks for current live-run status/progress/context, call voice_ops with action worker_status and answer from the returned live packet; never steer a thread just to ask it for status.',
     'When the user requests work that can be handled by a voice_* or skill_* tool, call that tool and answer_now from the result.',
     'Skill scout rule for voice: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call voice_browser or voice_desktop immediately.',
     identity.handoffLine,
-    'When the user interrupts an active worker, decide whether to answer, steer, interrupt, hand off new work, or stay quiet. A normal status question or casual comment is not a steer.',
+    'When the user interrupts active work, decide whether to answer, steer, interrupt, create a new thread, or stay quiet. A normal status question or casual comment is not a steer.',
     '',
-    'Hard boundary: never claim you used full Worker tools or changed files/accounts from the voice layer. You may truthfully say you searched, fetched, saved a note, checked memory, listed/read skills, or set a timer when a matching voice_* or skill_* tool result confirms it.',
+    'Hard boundary: never claim a file, account, or durable change completed from the voice layer unless the relevant direct tool or Prometheus thread result confirms it. You may truthfully say you searched, fetched, saved a note, checked memory, listed/read skills, or set a timer when a matching voice_* or skill_* tool result confirms it.',
     `Speak like ${identity.speakerName}: warm, specific, alive, and context-aware. Avoid generic acknowledgements like "I\'ll get started on that" unless no better context exists.`,
     identity.isSubagent ? `If you need to acknowledge heavier work, say it as ${identity.speakerName}'s own action, such as "I am on it" or "I will handle that." Never say "I will get the worker" or "I will ask Prometheus."` : '',
     'For voice tests, first messages, and no-context check-ins, do not answer with generic "I am here" or "I\'m here" phrasing. Acknowledge what the user is testing or saying.',
@@ -15258,20 +15351,21 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     '- answer_now: use when the user asks a status/context/question answerable from the injected context or from voice_* or skill_* tool results. Do not dispatch or steer the worker.',
     '- steer_worker: use only when there is an active worker and the user changes direction, adds a constraint, corrects the task, or explicitly asks the worker to do something within the active run. Do not use for status/update questions.',
     '- interrupt_worker: use only for explicit cancel/stop/abort intent.',
-    '- handoff_new_work: use when the user asks for new work that requires tools outside voice_* and skill_*, files, non-voice browser/desktop capabilities, coding, media/account actions, or long reasoning and there is no active worker to steer.',
+    '- handoff_new_work: use only as a routing signal for new work that needs a first-class Prometheus thread. The execution layer creates that thread through voice_thread_ops; never create a worker group.',
     '- no_reply: use only when the transcript is empty, duplicate, or just says continue/resume without needing speech.',
     '',
     'Voice tool rules:',
-    '- voice_ops: quick operations plus task_directory, task_control, task_watch, agent_directory, and agent_control. Existing outside tasks can be discovered and controlled globally, but are not tracked unless the user explicitly asks for a task_watch. Standalone-subagent chat, new dispatch, and existing run recovery are separate agent_control actions.',
+    '- voice_thread_ops: the full Prometheus thread control plane. Use it to find, read, create, model-route, message, steer, interrupt, rename, pin, and supervise threads. For several genuinely independent work items use create_many; do not create a voice worker group. A thread created without model fields follows the current Main Chat route dynamically. Create returns a queued launch, never a reply; wait for completion evidence before describing its outcome.',
+    '- voice_ops: quick operations plus legacy task discovery/control, task watches, and standalone-agent control. It is not the Voice delegation path.',
     '- Quiet-mode intent must be a real instruction. Do not call quiet tools for mentions, examples, debugging, or questions about the words "quiet" or "Prometheus".',
     '- When a quiet tool succeeds, give one natural acknowledgement in spokenReply. The runtime will activate quiet mode after the acknowledgement finishes.',
     '- skill_list: canonical skill discovery. Use it to orient yourself with available workflows and triggers for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled/matchedCount/returnedCount/truncated from the result; never say the returned list length is the total number of skills unless truncated is false and matchedCount equals totalInstalled.',
-    '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. When a relevant skill is found or injected by trigger context, load it before acting; follow it only through voice_* tools and hand off to Worker for non-voice capabilities.',
-    '- voice_browser: use action open, snapshot, screenshot, click, vision_click, fill, type, vision_type, press_key, scroll, or wait for live browser UI. Explicit user-authorized social posts/messages are allowed when content and destination are clear. Use Worker for uploads/downloads, passwords/payment info, purchases/payments, destructive actions, account settings/security changes, files, or durable external changes.',
-    '- voice_desktop: use action screenshot, list_windows, focus_window, window_control, find_app, launch_app, click, window_click, window_type, window_press_key, or window_scroll for live desktop UI. For window_control include window_action minimize/maximize/restore/close. Prefer window-scoped selectors and fresh screenshots. Use Worker for file edits, shell, installs, destructive confirmations, purchases/payments, account settings/security changes, or durable system changes.',
-    '- Screenshot ownership: screenshot capture and screenshot sending stay in the voice layer. Do not dispatch/steer Worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser action screenshot, voice_desktop action screenshot, or voice_ops action send_screenshot.',
+    '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. When a relevant skill is found or injected by trigger context, load it before acting; follow it only through voice_* tools and create a thread for non-voice capabilities.',
+    '- voice_browser: use action open, snapshot, screenshot, click, vision_click, fill, type, vision_type, press_key, scroll, or wait for live browser UI. Explicit user-authorized social posts/messages are allowed when content and destination are clear. Use a Prometheus thread for uploads/downloads, passwords/payment info, purchases/payments, destructive actions, account settings/security changes, files, or durable external changes.',
+    '- voice_desktop: use action screenshot, list_windows, focus_window, window_control, find_app, launch_app, click, window_click, window_type, window_press_key, or window_scroll for live desktop UI. For window_control include window_action minimize/maximize/restore/close. Prefer window-scoped selectors and fresh screenshots. Use a Prometheus thread for file edits, shell, installs, destructive confirmations, purchases/payments, account settings/security changes, or durable system changes.',
+    '- Screenshot ownership: screenshot capture and screenshot sending stay in the voice layer. Do not create or steer a thread for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser action screenshot, voice_desktop action screenshot, or voice_ops action send_screenshot.',
     '- Current time is injected. Do not call a tool just to know the time/date. If [CURRENT_TIME].exactLocalTimeAvailable is true and source is device, answer local time/date questions directly from timeLabel/dateLabel. If exactLocalTimeAvailable is false, do not claim exact user-local time; say the fallbackResponse and direct the user to their device clock.',
-    '- If the user says not to hand off to Worker and asks for search/fetch/note/memory/timer/screenshot capture/screenshot send/wake phrase changes/quiet mode, prefer voice_ops or the matching browser/desktop wrapper. If the user asks to update live voice-agent behavior memory, use voice_ops action agent_memory. For skills, prefer skill_list, skill_read, skill_resource_list, or skill_resource_read.',
+    '- If the user says not to create a thread and asks for search/fetch/note/memory/timer/screenshot capture/screenshot send/wake phrase changes/quiet mode, prefer voice_ops or the matching browser/desktop wrapper. If the user asks to update live voice-agent behavior memory, use voice_ops action agent_memory. For skills, prefer skill_list, skill_read, skill_resource_list, or skill_resource_read.',
     '- For a "test web search" request without a concrete query, run a tiny harmless search for "OpenAI Realtime API voice tools" and report that the smoke test worked.',
     '',
     '[CURRENT_TIME]',
@@ -16215,7 +16309,7 @@ function buildContextWindowCurrentState(input: {
   };
 }
 
-function persistVoiceAgentVisibleTurn(sessionId: string, transcript: string, voiceReply: string, action: string, eventId: string, processEntries: any[]): string {
+function persistVoiceAgentVisibleTurn(sessionId: string, transcript: string, voiceReply: string, action: string, eventId: string, processEntries: any[], richArtifacts: any[] = []): string {
   const rawSid = String(sessionId || '').trim();
   const userText = compactVoiceText(transcript || '', 1200);
   const replyText = String(voiceReply || '').trim();
@@ -16270,6 +16364,7 @@ function persistVoiceAgentVisibleTurn(sessionId: string, transcript: string, voi
       workflowPart: action === 'interrupt_worker' ? 'abort_response' : 'interruption_response',
       workflowLabel: action === 'interrupt_worker' ? 'Abort response' : 'Interruption response',
       voiceInterruptionEventId: id || undefined,
+      richArtifacts: Array.isArray(richArtifacts) && richArtifacts.length ? richArtifacts : undefined,
     } as any, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     flushSession(sid);
   } catch (err: any) {
@@ -17320,7 +17415,7 @@ router.post('/api/mobile/commands/screenshot', async (req, res) => {
   }
 });
 
-router.post('/api/voice-agent/context', (req, res) => {
+router.post('/api/voice-agent/realtime-context', (req, res) => {
   try {
     const body = req.body || {};
     const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
@@ -17339,7 +17434,7 @@ router.post('/api/voice-agent/context', (req, res) => {
   }
 });
 
-router.get('/api/voice-agent/context/:sessionId', requireSafeSessionParam, (req, res) => {
+router.get('/api/voice-agent/realtime-context/:sessionId', requireSafeSessionParam, (req, res) => {
   try {
     const sessionId = String(req.params.sessionId || 'default').trim() || 'default';
     const query = req.query as any;
@@ -17358,7 +17453,7 @@ router.get('/api/voice-agent/context/:sessionId', requireSafeSessionParam, (req,
   }
 });
 
-router.post('/api/voice-agent/narrate', (req, res) => {
+router.post('/api/_removed/voice-agent-narrate', (req, res) => {
   try {
     const body = req.body || {};
     const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
@@ -17397,7 +17492,7 @@ function isRealtimeVoiceAgentInputRequest(body: any): boolean {
   );
 }
 
-router.post('/api/voice-agent/input', async (req, res) => {
+router.post('/api/_removed/voice-agent-input', async (req, res) => {
   try {
     const requestStartedAt = Date.now();
     const body = req.body || {};
@@ -17520,7 +17615,37 @@ router.post('/api/voice-agent/input', async (req, res) => {
         totalMs: Date.now() - requestStartedAt,
       });
     }
-    const action = decision.action;
+    let action = decision.action;
+    // Legacy non-realtime voice routing still emits handoff_new_work. Convert
+    // that signal into the new first-class thread path before the client can
+    // start the retired foreground/workgroup worker flow.
+    if (action === 'handoff_new_work' && !voiceAgentTargetIdentity(voiceTarget).isSubagent) {
+      const threadPrompt = String(decision.workerInstruction || transcript).trim();
+      if (threadPrompt) {
+        const threadRaw = await executeVoiceThreadOps(sessionId, {
+          action: 'create',
+          title: compactVoiceText(threadPrompt, 80) || 'Voice task',
+          prompt: threadPrompt,
+          objective: threadPrompt,
+          follow: true,
+          voiceTarget,
+        });
+        const threadResult = parseVoiceToolResult(threadRaw);
+        if (threadResult.ok !== false) {
+          decision = {
+            ...decision,
+            action: 'answer_now',
+            spokenReply: decision.spokenReply || 'I’m on it. I’ll keep you posted as it moves.',
+            reason: `${decision.reason || 'voice_handoff'};thread_created`,
+          };
+          action = decision.action;
+          pushVoiceAgentProcessEntry(voiceProcessEntries, 'info', 'Voice handoff created a first-class Prometheus thread.', {
+            stage: 'voice_thread_handoff',
+            summary: threadResult.summary || '',
+          });
+        }
+      }
+    }
     if (action === 'handoff_new_work') {
       voiceAgentWorkerHandoffSessions.set(sessionId, {
         at: Date.now(),
@@ -17622,8 +17747,9 @@ router.post('/api/voice-agent/input', async (req, res) => {
     // to a real mobile_<id> session during persistence. The client adopts this
     // so its live conversation points at the durable, drawer-listed session.
     let resolvedSessionId = sessionId;
-    if (action === 'handoff_new_work' && voiceReply) {
-      resolvedSessionId = persistVoiceAgentVisibleTurn(sessionId, transcript, voiceReply, action, eventId, voiceProcessEntries) || sessionId;
+    const visibleVoiceArtifacts = Array.isArray(decision.richArtifacts) ? decision.richArtifacts : [];
+    if (voiceReply && (action === 'handoff_new_work' || visibleVoiceArtifacts.length)) {
+      resolvedSessionId = persistVoiceAgentVisibleTurn(sessionId, transcript, voiceReply, action, eventId, voiceProcessEntries, visibleVoiceArtifacts) || sessionId;
     }
     appendVoiceInterruptionLog(storedEvent);
     if (activeRuntime?.id) {
@@ -17864,10 +17990,10 @@ function clampRealtimeInstructions(value: string, max = REALTIME_AGENT_INSTRUCTI
   return `${text.slice(0, Math.max(0, max - 18)).trimEnd()}\n...[truncated]`;
 }
 
-// Convert the chat-completions style voice tool defs to OpenAI Realtime format,
-// and add Realtime-specific worker-control tools (dispatch/steer/interrupt)
-// that the model uses to signal the browser to do something outside the audio
-// loop. The browser receives these via response.function_call events.
+// Convert the chat-completions style Voice definitions to Realtime format. The
+// canonical voice_thread_ops tool is intentionally included in this set so the
+// realtime coordinator creates first-class Prometheus threads directly rather
+// than delegating through a separate worker-group transport.
 function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext): any[] {
   const identity = voiceAgentTargetIdentity(voiceTarget);
   const chatTools = buildVoiceToolDefinitions();
@@ -17877,54 +18003,11 @@ function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext): an
     description: tool.function?.description || tool.description,
     parameters: tool.function?.parameters || tool.parameters,
   }));
-  realtimeTools.push({
-    type: 'function',
-    name: 'dispatch_prometheus_worker',
-    description: identity.isSubagent
-      ? `Technical dispatch signal for heavy or durable work. The app routes this into the selected subagent chat for ${identity.label}, not the main Prometheus chat. Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. In speech, phrase the work as your own work as ${identity.label}; do not say you are getting a worker or asking Prometheus.`
-      : 'Hand off heavy or durable work to Prometheus Workers. The FIRST task always becomes the primary foreground Worker linked to the CURRENT chat, with its normal reasoning/tool/final stream. A workgroup is created only when tasks[] contains a SECOND or later task; those additional Workers become durable background tasks and report completion to you while the primary continues. Use for files, shell/run commands, source edits, MCP/connectors, uploads/downloads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, destructive external submits, or anything outside the voice_* and skill_* tool set. Do not use for ordinary live browser/desktop UI navigation or explicit user-authorized social posts/messages that voice_browser and voice_desktop can handle. CRITICAL: call this function IMMEDIATELY and do not speak an acknowledgement before or after the call. The app visibly posts the worker handoff. Never claim a Worker is running unless you actually called this function or voice_ops action worker_status reports it active.',
-    parameters: {
-      type: 'object',
-      required: [],
-      properties: {
-        task: { type: 'string', description: 'Natural-language description of the single worker task. Include any constraints or details the user mentioned.' },
-        tasks: {
-          type: 'array',
-          description: 'Ordered Worker assignments. Item 1 is the primary Worker linked to this chat. Items 2+ are durable background Workers in the workgroup.',
-          items: {
-            type: 'object',
-            required: ['prompt'],
-            properties: {
-              title: { type: 'string', description: 'Short display name for this worker task.' },
-              prompt: { type: 'string', description: 'Self-contained worker instruction for this task.' },
-            },
-            additionalProperties: false,
-          },
-        },
-        delivery: { type: 'string', enum: ['report_each', 'grouped_summary', 'task_panel_only'], description: 'How results should return to the chat. Default report_each.' },
-        spoken_ack: { type: 'string', description: 'Optional. The exact ack you already spoke or are about to speak — included for logs.' },
-      },
-      additionalProperties: false,
-    },
-  });
   if (!identity.isSubagent) {
     realtimeTools.push({
       type: 'function',
-      name: 'send_to_prometheus_chat',
-      description: 'Send a planning, analysis, brainstorming, explanation, review, or other discussion request to the stronger Prometheus Worker inside the CURRENT chat. This is a normal foreground chat turn: its reasoning, tool stream, milestones, and final answer remain visible in the chat, and it does not create a task or voice workgroup. Use this when the user wants to consult the Worker or develop a plan together. Do not use it for source edits, commands, files, or other durable execution; use dispatch_prometheus_worker for those. Call immediately without a separate spoken handoff acknowledgement; the app visibly posts the handoff and returns milestone/final summaries to voice.',
-      parameters: {
-        type: 'object',
-        required: ['message'],
-        properties: {
-          message: { type: 'string', description: 'A self-contained restatement of what the user wants the Prometheus Worker to discuss or analyze in the current chat.' },
-        },
-        additionalProperties: false,
-      },
-    });
-    realtimeTools.push({
-      type: 'function',
       name: 'restart_gateway_quick',
-      description: 'Quickly restart the Prometheus gateway directly from voice without dispatching a Worker and without running npm build. First speak a short acknowledgement such as "All right, restarting the gateway now." Then call this function. The connection will close during restart; after the replacement gateway is healthy, the normal hot-restart notification will confirm success aloud.',
+      description: 'Quickly restart the Prometheus gateway directly from voice without creating a thread and without running npm build. First speak a short acknowledgement such as "All right, restarting the gateway now." Then call this function. The connection will close during restart; after the replacement gateway is healthy, the normal hot-restart notification will confirm success aloud.',
       parameters: {
         type: 'object',
         properties: {
@@ -18021,7 +18104,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
       ? `If the user asks "who are you?", answer that you are ${identity.label}, a standalone subagent under Prometheus, then summarize your configured subagent role from the context below. Do not answer that you are a voice layer, voice interface, realtime voice, or provider voice.`
       : '',
     identity.isSubagent
-      ? `When work needs durable execution, use dispatch_prometheus_worker as the technical signal, but the app routes it into ${identity.label}'s subagent chat. In speech, say "I am on it" or "I will handle that"; never say you will get the worker, ask Prometheus, or hand it to Prometheus.`
+      ? `Your direct subagent voice stays scoped to its own work. The main Prometheus voice session owns cross-thread orchestration.`
       : '',
     'Your audio voice label or provider voice name, such as Eve, Marin, Alloy, or any similar setting, is only the sound used for speech output. It is never your name, persona, identity, role, or agent name. If asked who you are, answer from the identity above.',
     '',
@@ -18036,58 +18119,49 @@ function buildRealtimeVoiceAgentInstructions(args: {
     args.voiceAgentMemory ? args.voiceAgentMemory : '',
     args.voiceAgentMemory ? '' : '',
     '## When to call which tool',
+    '- voice_thread_ops: the first-class Prometheus thread control plane. Use it to create, inspect, message, steer, interrupt, model-route, and supervise threads. Default new threads to the current Main Chat route. Only specify provider_id, model, reasoning_effort, or account_id when the user explicitly requests it. Use create_many only for genuinely independent work; there are no Voice worker groups.',
     '- voice_ops: unified quick voice operations. It also provides task_directory for global task discovery, task_control for existing-task operations, task_watch for explicit opt-in notifications, agent_directory for subagent discovery, and agent_control for standalone-subagent chat/dispatch/run recovery. Controlling an outside task never tracks it automatically.',
     '- Visual cards use the show_ui wrapper (render a card in the app while you speak the gist — keep speech short, the card carries the detail). Actions: weather (forecast), market (crypto/memecoins), stocks (equities/ETFs), prediction_market (Polymarket odds), map (places/locations), sources (news/citations), comparison (side-by-side table), chart (line/bar/area from numbers), product_carousel (products), agent_work (operator snapshot — gather via voice_ops action automation_dashboard first), and run_result (finished-task summary). For sources or product_carousel, pass the user\'s query directly; show_ui searches and assembles the items, so do not call it first with an empty items array and do not separately call voice_ops web_search unless show_ui reports a search failure. If the user asks for unspecified news sources, use query "latest news". All are keyless and read-only; call show_ui directly instead of dispatching the Worker for these.',
     '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. Load relevant workflow instructions before browser/desktop/tool actions when skill trigger context points to them. Follow skill instructions only through voice_* tools; explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker if they require files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
     '- voice_browser uses the same Prometheus browser runtime as regular chat. Use action open, snapshot, screenshot, page_text, focused_item, click, vision_click, fill, type, vision_type, press_key, scroll, drag, wait, or close for live browser work. Hand off only for file transfer, credentials, purchases/payments, destructive actions, account settings/security changes, or durable work.',
     '- voice_desktop uses the same Prometheus desktop runtime as regular chat. Use action screenshot, monitors, list_windows, focus_window, window_control, find_app, launch_app, click, drag, scroll, type, type_raw, press_key, wait, get_clipboard, set_clipboard, window_click, window_type, window_press_key, or window_scroll. For window_control include window_action minimize/maximize/restore/close. Use fresh screenshots and the same coordinate/SOM targeting rules as regular Prometheus.',
-    '- Screenshot ownership: screenshot capture and screenshot sending stay in the voice layer. Do not call dispatch_prometheus_worker for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser action screenshot, voice_desktop action screenshot, or voice_ops action send_screenshot.',
-    !identity.isSubagent
-      ? '- send_to_prometheus_chat: consult the stronger Prometheus Worker for planning, analysis, brainstorming, explanations, reviews, or an ongoing discussion. This stays in the current chat with the full normal stream and creates no task. Call it immediately and stay quiet around the handoff; milestone mode and the final summary will bring the result back into voice.'
-      : '',
-    identity.isSubagent
-      ? `- dispatch_prometheus_worker: TECHNICAL HANDOFF for heavy/durable work. The browser routes it into ${identity.label}'s selected subagent chat. Call it IMMEDIATELY and do not speak an acknowledgement before or after it. Do not describe this as getting a worker or asking Prometheus.`
-      : '- dispatch_prometheus_worker: HAND OFF heavy/durable work — code, file ops, shell/run commands, MCP/connectors, uploads/downloads, long research, media processing, approvals, credentials, purchases/payments, destructive external actions, account settings/security changes, or anything outside voice_* and skill_*. The first assignment is always the primary foreground Worker linked to this chat. Only assignments 2+ become durable background tasks; their completion updates return to you even while the primary is still active. For multiple independent work items, pass one ordered tasks[] array with the primary task first. Do not dispatch for explicit user-authorized social posts/messages that voice browser/desktop tools can complete. Call this function IMMEDIATELY and do not speak an acknowledgement before or after it. The app shows the worker handoff.',
+    '- Screenshot ownership: screenshot capture and screenshot sending stay in the voice layer. Do not create a thread for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser action screenshot, voice_desktop action screenshot, or voice_ops action send_screenshot.',
     '- steer_active_worker / interrupt_active_worker: ONLY when a live foreground worker runtime is currently active (check the worker context below) AND the user is correcting, changing, pausing, or cancelling that active runtime. If the worker status says tasks are paused, stalled, awaiting input, failed, or paused after gateway restart, use voice_ops action task_control instead.',
     '',
     '## Routing decisions you make implicitly',
     '- If the user asks something answerable from your context (memory, identity, recall, small talk) — answer directly, no tool.',
-    !identity.isSubagent
-      ? '- If the user asks the Worker to make or critique a plan, reason deeply, analyze something, or continue a substantive current-chat discussion without performing durable work, call send_to_prometheus_chat. Never turn that consultation into dispatch_prometheus_worker.'
-      : '',
-    '- If the user asks for status/progress/context about the active Worker — call voice_ops action worker_status, then use recentActivity, lastToolCall, runtimeProgress, and progressAgeMs to say what it is actually doing. Do not merely repeat the plan step, and do not send the status question to the Worker as a steer.',
-    '- If the main Prometheus user asks only to restart/reboot the gateway without a build or additional work, speak one short acknowledgement and call restart_gateway_quick. Do not dispatch a Worker for a plain quick restart. The restarted gateway will provide the success confirmation.',
-    '- When a voice-dispatched Worker completes, read completedWorkerResults or worker.finalResult and tell the user the actual verified result, not only that it completed.',
+    '- If the user asks for brainstorming, prioritization, judgment, a recommendation, or an interactive plan, stay in this voice conversation. Do not create a thread merely because the request uses a tool.',
+    '- If the user asks for status/progress/context about the active live run — call voice_ops action worker_status, then use recentActivity, lastToolCall, runtimeProgress, and progressAgeMs to say what it is actually doing. Do not merely repeat the plan step, and do not send the status question to the thread as a steer.',
+    '- If the main Prometheus user asks only to restart/reboot the gateway without a build or additional work, speak one short acknowledgement and call restart_gateway_quick. Do not create a thread for a plain quick restart. The restarted gateway will provide the success confirmation.',
+    '- When a managed thread updates, translate only the meaningful outcome: what changed, why it matters, and the next decision if one exists. Do not narrate logs, tool names, IDs, or routine internal transitions.',
+    '- A managed_thread_turn_complete update is the completion signal for the specific turn. Do not infer it from a successful create, create_many, send, or steer tool return. Until that update or a fresh read/status, say the response is pending.',
     '- Skill scout rule: use skill_list for multi-step workflows or unfamiliar app/site procedures. Do NOT run skill scout for direct live UI control like open, screenshot, click, scroll, press key, type, focus, maximize, minimize, restore, or close; call voice_browser or voice_desktop immediately.',
     '- If the user wants quick voice-scope work — call voice_ops, voice_browser, voice_desktop, or skill_* as appropriate, then narrate the result. For automation/operator status snapshots, call voice_ops action automation_dashboard.',
     '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_ops action agent_memory instead of voice_ops action write_note.',
     identity.isSubagent
-      ? `- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. The app routes it into ${identity.label}'s subagent chat and ${identity.label} will report progress.`
-      : '- If the user wants heavy/durable real work outside voice scope — call dispatch_prometheus_worker FIRST, with no spoken acknowledgement before or after it. A single assignment stays linked to the chat. For several independent work items, call it once with an ordered tasks[]: the first stays in chat and the rest become background tasks. The Voice Agent continues tracking and acknowledging background completions while the primary works.',
-    '- If the user asks to resume, pause, rerun, cancel, or unpause paused/restarted tasks — call voice_ops with action task_control and task_action resume/pause/rerun/cancel. If task ids are not known, omit task_id so it targets the latest voice workgroup.',
-    '- If the user says to tell a paused/blocked worker something, call voice_ops with action task_control, task_action message, message set to their guidance, and resume_after_message true only when they also ask to continue/resume.',
-    '- For an existing task outside the voice workgroup, call voice_ops action task_directory with scope all_tasks to resolve it, then task_control with its exact task_id. Do not add it to dispatch_prometheus_worker tasks[].',
-    '- Resuming, messaging, or otherwise controlling an outside task leaves tracking off. Create voice_ops action task_watch only when the user explicitly asks to be notified or kept updated. If they did not specify, you may briefly offer notification after the action but do not create a watch yet.',
-    '- For compound requests, dispatch new requested work in one dispatch_prometheus_worker tasks[] call and separately control any existing task by exact id. Never turn an existing task resume into another newly dispatched worker.',
+      ? '- For durable work outside this subagent voice scope, report the need to the main Prometheus coordinator; do not create a worker group.'
+      : '- For heavy or durable work outside voice scope, call voice_thread_ops action=create immediately. For several independent work items, call create_many. Keep user choices, approvals, and interactive judgment here in Voice.',
+    '- For existing thread work, call voice_thread_ops find/read/status, then send or steer the exact thread. Use follow when the user asks for ongoing supervision; do not create a duplicate thread.',
+    '- For a correction to an active current runtime, steer_active_worker remains available as a compatibility control. Prefer voice_thread_ops steer for an identified first-class thread.',
     '- Use agent_directory before agent_control when a standalone subagent id is unknown. agent_control chat is persistent conversation, dispatch starts new background work, and run_* operates an existing agent-owned task. Managed-team members are intentionally excluded from this standalone tool.',
     '- If the user interrupts an active live runtime with an actual correction, new constraint, pause, or direction change — call steer_active_worker. Do not use steer_active_worker for paused background tasks.',
     '- If the user explicitly cancels/stops/aborts — call interrupt_active_worker.',
     '',
     '## Tool calls are REAL actions — never fake them',
     '- A tool only runs if you actually emit the function call. Saying "on it", "handing that off", "I started the worker", or "let me search" does NOT run anything by itself.',
-    '- CRITICAL for hand-offs: when the user wants real work, emit the dispatch_prometheus_worker function call in the same turn and stay quiet around it. Speaking an acknowledgement WITHOUT emitting the function call is a failure because the work never starts.',
+    '- CRITICAL for hand-offs: when the user wants durable or blocking work, emit voice_thread_ops action=create (or create_many only for genuinely independent work) in the same turn. Speaking an acknowledgement WITHOUT creating or steering the thread is a failure because the work never starts.',
     '- CRITICAL for live UI control: when the user asks you to click, scroll, press a key, type, fill, focus, maximize, minimize, restore, close, open, or screenshot the current browser/desktop, your next action must be voice_browser or voice_desktop with the matching action. Do not say you will do it without the function call.',
-    '- CRITICAL for screenshot delivery: when the user asks to send/share/show/deliver a screenshot, call voice_ops action send_screenshot. Do not dispatch Worker for ordinary screenshot delivery while this tool exists.',
+    '- CRITICAL for screenshot delivery: when the user asks to send/share/show/deliver a screenshot, call voice_ops action send_screenshot. Do not create a thread for ordinary screenshot delivery while this tool exists.',
     '- If a browser/desktop target is ambiguous, first call voice_browser action snapshot or voice_desktop action screenshot with mode som, then call the action tool from the returned refs/coordinates.',
-    '- CRITICAL for status: never say you messaged, asked, notified, or sent something to the Worker when the user only asked a status/update question. Call voice_ops action worker_status and answer from the returned context instead.',
+    '- CRITICAL for status: never say you messaged, asked, notified, or sent something to a thread when the user only asked a status/update question. Call voice_thread_ops action=status or read and answer from the returned context instead.',
     '- Likewise, never claim a search/note/screenshot/timer happened unless you actually called the matching voice_* tool and received its result; never claim skill counts or skill instructions unless skill_list, skill_read, skill_resource_list, or skill_resource_read returned them.',
     '- After you say you are doing something, the corresponding function call MUST be in your output.',
     '',
     '## Hard boundaries',
-    '- Never claim you used full Worker tools or changed files/accounts from the voice layer unless a voice_* tool result confirms it. Skill_* results only confirm skill discovery or skill instruction reads.',
+    '- Never claim you changed files/accounts from the voice layer unless the relevant direct tool or Prometheus thread result confirms it. Skill_* results only confirm skill discovery or skill instruction reads.',
     '- Never narrate that you are calling a tool ("let me search for that" means just call voice_ops action web_search and report the result).',
-    '- Screenshot tools provide fresh visual context. Browser/desktop UI control is allowed through voice_browser and voice_desktop, including explicit user-authorized social posts/messages when content and destination are clear. Durable/file/account settings/security/destructive work must go to Worker.',
+    '- Screenshot tools provide fresh visual context. Browser/desktop UI control is allowed through voice_browser and voice_desktop, including explicit user-authorized social posts/messages when content and destination are clear. Durable/file/account settings/security/destructive work must go to a first-class Prometheus thread.',
     '',
     '## Worker context (current state — read-only orientation)',
     args.contextBlock || '(no extended context available)',
@@ -18108,12 +18182,6 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     const body = req.body || {};
     const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const voiceTarget = normalizeVoiceAgentTarget(body);
-    const authCandidates = await getRealtimeAgentAuthCandidates();
-    if (!authCandidates.length) {
-      res.status(400).json({ ok: false, success: false, error: 'OpenAI Realtime requires OPENAI_API_KEY, OPENAI_REALTIME_API_KEY, or a connected OpenAI Codex OAuth account.' });
-      return;
-    }
-
     const activeRuntime = findActiveMainChatRuntimeForSession(sessionId, String(body.expectedRuntimeId || body.runtimeId || body.activeRunId || ''));
     const contextPacket = getReusableVoiceContextPacket(sessionId, body, activeRuntime);
     const voiceRuntimeContext = voiceRuntimeContextText(body.voiceRuntime || body.voice_runtime);
@@ -18152,6 +18220,27 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     const model = sanitizeRealtimeAgentModel(body.model);
     const voice = sanitizeRealtimeAgentVoice(body.voice);
     const speed = sanitizeRealtimeAgentSpeed(body.speed);
+    if (body.contextOnly === true) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        ok: true,
+        success: true,
+        contextOnly: true,
+        model,
+        voice,
+        speed,
+        instructions,
+        tools,
+        toolCount: tools.length,
+      });
+      return;
+    }
+
+    const authCandidates = await getRealtimeAgentAuthCandidates();
+    if (!authCandidates.length) {
+      res.status(400).json({ ok: false, success: false, error: 'OpenAI Realtime requires OPENAI_API_KEY, OPENAI_REALTIME_API_KEY, or a connected OpenAI Codex OAuth account.' });
+      return;
+    }
 
     // gpt-realtime session config — audio.input MUST include turn_detection
     // (server VAD) and transcription so the model autoresponds when the user
@@ -18655,6 +18744,8 @@ function normalizePrimaryVoiceWorker(body: any): NormalizedPrimaryVoiceWorker | 
 }
 
 router.get('/api/voice-agent/workgroups/session/:sessionId', requireSafeSessionParam, (req, res) => {
+  res.status(410).json({ ok: false, success: false, error: 'Voice worker groups were retired. Use thread supervision instead.' });
+  return;
   try {
     const sessionId = String(req.params.sessionId || '').trim();
     const requestedLimit = Number(req.query.limit || 8);
@@ -18667,6 +18758,8 @@ router.get('/api/voice-agent/workgroups/session/:sessionId', requireSafeSessionP
 });
 
 router.get('/api/voice-agent/workgroups/:id', (req, res) => {
+  res.status(410).json({ ok: false, success: false, error: 'Voice worker groups were retired. Use thread supervision instead.' });
+  return;
   try {
     const workgroup = loadVoiceWorkgroup(String(req.params.id || ''));
     if (!workgroup) {
@@ -18680,6 +18773,8 @@ router.get('/api/voice-agent/workgroups/:id', (req, res) => {
 });
 
 router.patch('/api/voice-agent/workgroups/:id/workers/:taskId', (req, res) => {
+  res.status(410).json({ ok: false, success: false, error: 'Voice worker groups were retired. Use thread supervision instead.' });
+  return;
   try {
     const workgroupId = assertSafeStorageId(String(req.params.id || ''), 'voice workgroup id');
     const taskId = assertSafeStorageId(String(req.params.taskId || ''), 'voice worker id');
@@ -18698,11 +18793,12 @@ router.patch('/api/voice-agent/workgroups/:id/workers/:taskId', (req, res) => {
       res.status(404).json({ ok: false, success: false, error: 'Voice workgroup or worker not found.' });
       return;
     }
-    const worker = workgroup.workers.find((entry) => entry.taskId === taskId);
+    const activeWorkgroup = workgroup!;
+    const worker = activeWorkgroup.workers.find((entry) => entry.taskId === taskId);
     broadcastWS({
       type: 'voice_worker_update',
       id: `voice_worker_${taskId}_primary_${Date.now()}`,
-      sessionId: workgroup.parentSessionId,
+      sessionId: activeWorkgroup.parentSessionId,
       workgroupId,
       taskId,
       title: worker?.title || 'Primary chat worker',
@@ -18716,7 +18812,7 @@ router.patch('/api/voice-agent/workgroups/:id/workers/:taskId', (req, res) => {
       finalResult: worker?.finalResult || '',
       timestamp: Date.now(),
     });
-    res.json({ ok: true, success: true, workgroup, worker });
+    res.json({ ok: true, success: true, workgroup: activeWorkgroup, worker });
   } catch (err: any) {
     res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
   }
@@ -18755,6 +18851,16 @@ router.post('/api/voice-agent/restart-gateway-quick', (req, res) => {
 });
 
 router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
+  // Retired: Voice now delegates only through first-class Prometheus threads.
+  // Keep the route as an explicit migration response so older clients cannot
+  // silently recreate a workgroup while they are being upgraded.
+  res.status(410).json({
+    ok: false,
+    success: false,
+    error: 'Voice worker groups were retired. Use voice_thread_ops to create and supervise Prometheus threads.',
+    replacement: 'voice_thread_ops',
+  });
+  return;
   try {
     const body = req.body || {};
     const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
@@ -18792,8 +18898,12 @@ router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
     const workerTotal = tasks.length + workerIndexOffset;
 
     if (primaryWorker) {
+      const primary = primaryWorker!;
       addVoiceWorkgroupWorker(workgroup.id, {
-        ...primaryWorker,
+        taskId: primary.taskId || `legacy_voice_primary_${Date.now()}`,
+        title: primary.title || 'Primary chat worker',
+        prompt: primary.prompt || sourceTranscript || 'Voice worker',
+        status: primary.status || 'running',
         index: 0,
         kind: 'primary_chat',
         currentStep: 'Working in this chat',
@@ -19849,6 +19959,24 @@ function markActiveRunsOnSessionList<T extends any>(input: T): T {
   return input;
 }
 
+/** Project membership is stored in the project store rather than the session
+ * record.  Expose it on every list response so clients can keep project chats
+ * out of the ordinary Chats sidebar. */
+function attachProjectMembershipToSessionList<T extends any>(input: T): T {
+  const attach = (session: any) => {
+    if (!session || typeof session !== 'object') return session;
+    const project = findProjectBySessionId(String(session.id || ''));
+    return project
+      ? { ...session, projectId: project.id, projectName: project.name }
+      : session;
+  };
+  if (Array.isArray(input)) return input.map(attach) as T;
+  if (input && typeof input === 'object' && Array.isArray((input as any).sessions)) {
+    return { ...(input as any), sessions: (input as any).sessions.map(attach) } as T;
+  }
+  return input;
+}
+
 // ── List sessions endpoint ────────────────────────────────────────────────────
 router.get('/api/sessions', async (req, res) => {
   try {
@@ -19872,11 +20000,11 @@ router.get('/api/sessions', async (req, res) => {
         offset: Number(req.query.offset),
         includeAutomated,
       });
-      res.json(markActiveRunsOnSessionList(page));
+      res.json(markActiveRunsOnSessionList(attachProjectMembershipToSessionList(page)));
       return;
     }
 
-    res.json({ sessions: markActiveRunsOnSessionList(listSessionSummaries(channel as any)) });
+    res.json({ sessions: markActiveRunsOnSessionList(attachProjectMembershipToSessionList(listSessionSummaries(channel as any))) });
   } catch (err: any) {
     console.error('[/api/sessions] Error:', err);
     res.status(500).json({ error: err.message || 'Failed to list sessions' });

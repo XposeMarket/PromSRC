@@ -500,10 +500,11 @@ async function renderVoice(content, navigate) {
       <span>Status</span><strong>${voice.realtime?.configured ? 'Configured' : 'Not configured'}</strong>
       <span>Preferred</span><strong>${voice.providers?.includes('openai_codex') || voice.providers?.includes('openai') ? 'OpenAI Realtime' : 'Best connected provider'}</strong>
     </div>`, 'mic', 'pm-card-strong')}
-    ${card('Speech Providers', `<div class="pm-settings-chip-row">
-      ${[...new Set([...stt, ...tts, ...(voice.providers || [])])].map(p => `<span class="pm-pill ${p ? 'active' : 'gray'}">${escapeHtml(providerLabel(p))}</span>`).join('') || '<span class="pm-card-body">No speech providers detected.</span>'}
+    ${card('Realtime Voice', `<div class="pm-settings-chip-row">
+      <span class="pm-pill ${voice.realtime?.configured ? 'active' : 'gray'}">OpenAI Realtime</span>
+      <span class="pm-pill active">xAI Realtime</span>
     </div>`, 'send')}
-    ${card('Configure Voice', `<div class="pm-card-body">Voice uses the same model and credential connections as the rest of Prometheus.</div>
+    ${card('Configure Voice', `<div class="pm-card-body">The chat mic only transcribes into the composer. Spoken conversations use OpenAI or xAI Realtime.</div>
       <div class="pm-row-buttons" style="margin-top:10px;">
         <button class="pm-btn primary" data-go-models>${ICONS.brain} Models</button>
         <button class="pm-btn" data-go-creds>${ICONS.gear} Credentials</button>

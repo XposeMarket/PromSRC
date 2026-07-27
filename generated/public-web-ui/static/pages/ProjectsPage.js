@@ -3,8 +3,7 @@
  *
  * Handles:
  *  - Sidebar: Projects tab, project cards, session dropdowns, edit mode
- *  - Right panel: Canvas/Connectors/Context tab switching (project sessions only)
- *  - Project Context tab: file grid, upload, token meter
+ *  - Right panel: inline project context plus Canvas integration
  *  - Agent context: Project Instructions + Memory Snapshot editors
  *  - New Project modal flow + onboarding message
  *  - Project/session deletion with workspace cleanup via API
@@ -17,7 +16,7 @@
  *   closeNewProjectModal(), toggleProjectsEditMode(),
  *   filterProjects(q), setRightPanelTab(tab),
  *   saveProjectInstructions(), saveProjectMemorySnapshot(),
- *   toggleProjectEditor(blockId), onProjectFileInput(event)
+ *   toggleProjectEditor(blockId), openProjectContextInCanvas()
  */
 
 import { api } from '../api.js';
@@ -25,13 +24,18 @@ import { showToast, showConfirm, timeAgo } from '../utils.js';
 
 // ─── State ──────────────────────────────────────────────────────────────────
 let _projects = [];           // Array<ProjectRecord>
-let _activeProjectId = null;  // currently open project (card expanded)
+const _expandedProjectIds = new Set();
 let _projectsEditMode = false;
-let _currentRpTab = 'canvas'; // 'canvas' | 'connectors' | 'context'
+let _currentRpTab = 'project'; // 'canvas' | 'project' | 'context'
 let _currentProjectSessionId = null; // session currently open in chat
+let _pendingProjectName = '';
+let _pendingProjectWorkspacePath = '';
 
 // ─── Init ───────────────────────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded', () => {
+// This page is dynamically imported by the desktop shell.  Dynamic imports can
+// resolve after DOMContentLoaded, so listening only for that event leaves the
+// project tree visible but inert on some app starts.
+function initialiseProjectSidebar() {
   const list = document.getElementById('projects-list');
   if (list && list.dataset.delegatedActions !== 'true') {
     list.dataset.delegatedActions = 'true';
@@ -53,7 +57,13 @@ window.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
     loadProjects();
   }, 400);
-});
+}
+
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', initialiseProjectSidebar, { once: true });
+} else {
+  initialiseProjectSidebar();
+}
 
 // ─── API calls ──────────────────────────────────────────────────────────────
 
@@ -61,6 +71,28 @@ async function loadProjects() {
   try {
     const data = await api('/api/projects');
     _projects = Array.isArray(data) ? data : (data.projects || []);
+    // The project store is the source of truth for membership.  Tag already
+    // hydrated chat stubs too, so the ordinary Chats list never briefly shows
+    // a project session while the session API is refreshing.
+    const ownership = new Map();
+    _projects.forEach((project) => {
+      (project.sessions || []).forEach((session) => ownership.set(String(session.id || ''), project));
+    });
+    let changed = false;
+    (window.chatSessions || []).forEach((session) => {
+      const owner = ownership.get(String(session?.id || ''));
+      if (!owner) return;
+      if (session.projectId !== owner.id || session.projectName !== owner.name || session.source !== 'project') {
+        session.projectId = owner.id;
+        session.projectName = owner.name;
+        session.source = 'project';
+        changed = true;
+      }
+    });
+    if (changed) {
+      window.saveChatSessions?.();
+      window.renderSessionsList?.();
+    }
     renderProjectsList();
   } catch (e) {
     // API not wired yet — silently show empty state
@@ -69,11 +101,11 @@ async function loadProjects() {
   }
 }
 
-async function createProjectApi(name) {
+async function createProjectApi(name, workspacePath = '') {
   return await api('/api/projects', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, ...(workspacePath ? { workspacePath } : {}) }),
   });
 }
 
@@ -204,20 +236,15 @@ function renderProjectsList(filter = '') {
 }
 
 function renderProjectCard(p) {
-  const sessionCount = (p.sessions || []).length;
-  const lastActive = p.updatedAt ? timeAgo(p.updatedAt) : 'never';
-  const isOpen = _activeProjectId === p.id;
+  const isOpen = _expandedProjectIds.has(p.id);
   const sessionRows = (p.sessions || []).map(s => renderProjectSessionItem(p.id, s)).join('');
 
   return `
 <div class="project-card${isOpen ? ' open' : ''}${_currentProjectSessionId && (p.sessions||[]).find(s=>s.id===_currentProjectSessionId) ? ' active-project' : ''}"
      id="proj-card-${p.id}">
-  <div class="project-card-header" data-project-action="toggle" data-project-id="${escHtmlLocal(p.id)}">
-    <div class="project-card-icon">🗂</div>
-    <div class="project-card-meta">
-      <div class="project-card-name">${escHtmlLocal(p.name)}</div>
-      <div class="project-card-sub">${sessionCount} session${sessionCount !== 1 ? 's' : ''} · ${lastActive}</div>
-    </div>
+  <div class="project-card-header" data-project-action="toggle" data-project-id="${escHtmlLocal(p.id)}" title="${escHtmlLocal(p.workspacePath || p.name)}">
+    <div class="project-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></div>
+    <div class="project-card-name">${escHtmlLocal(p.name)}</div>
     <button class="project-card-add-btn" title="New chat in project" data-project-action="new-session" data-project-id="${escHtmlLocal(p.id)}">+</button>
     <button class="project-card-delete-btn" title="Delete project" data-project-action="delete-project" data-project-id="${escHtmlLocal(p.id)}" data-project-name="${escHtmlLocal(p.name)}">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
@@ -233,13 +260,11 @@ function renderProjectCard(p) {
 function renderProjectSessionItem(projectId, s) {
   const isActive = s.id === _currentProjectSessionId;
   const title = s.title || s.id?.slice(0, 12) || 'Untitled';
-  const when = s.updatedAt ? timeAgo(s.updatedAt) : '';
   return `
 <div class="project-session-item${isActive ? ' active-session' : ''}"
      data-project-action="open-session" data-project-id="${escHtmlLocal(projectId)}" data-session-id="${escHtmlLocal(s.id)}">
   <span class="project-session-dot"></span>
   <span class="project-session-name">${escHtmlLocal(title)}</span>
-  <span class="project-session-time">${when}</span>
   <button class="project-session-delete-btn" title="Delete session" data-project-action="delete-session" data-project-id="${escHtmlLocal(projectId)}" data-session-id="${escHtmlLocal(s.id)}" data-session-title="${escHtmlLocal(title)}">✕</button>
 </div>`;
 }
@@ -251,7 +276,8 @@ function escHtmlLocal(str) {
 // ─── Project card toggle ─────────────────────────────────────────────────────
 
 window.toggleProjectCard = function(projectId) {
-  _activeProjectId = _activeProjectId === projectId ? null : projectId;
+  if (_expandedProjectIds.has(projectId)) _expandedProjectIds.delete(projectId);
+  else _expandedProjectIds.add(projectId);
   renderProjectsList(document.getElementById('project-search')?.value || '');
 };
 
@@ -292,6 +318,7 @@ window.closeNewProjectModal = function() {
   }
   const input = document.getElementById('new-project-name');
   if (input) input.value = '';
+  _pendingProjectName = '';
 };
 
 window.confirmNewProject = async function() {
@@ -299,52 +326,190 @@ window.confirmNewProject = async function() {
   const name = input?.value?.trim();
   if (!name) { input?.focus(); return; }
 
-  closeNewProjectModal();
+  _pendingProjectName = name;
+  const modal = document.getElementById('new-project-modal');
+  if (modal) { modal.classList.remove('open'); modal.style.display = 'none'; }
+  document.getElementById('project-directory-modal')?.classList.add('open');
+};
 
-  try {
-    const project = await createProjectApi(name);
-    showToast(`Project "${name}" created!`);
-    await loadProjects();
-
-    // Expand the new project card
-    _activeProjectId = project.id;
-    renderProjectsList();
-
-    // Create first session in this project
-    await newProjectSession(project.id, true);
-  } catch (e) {
-    showToast('Failed to create project. Make sure the backend is wired.', 'error');
-    console.error('createProject error:', e);
+window.closeProjectDirectoryModal = function() {
+  document.getElementById('project-directory-modal')?.classList.remove('open');
+  _pendingProjectWorkspacePath = '';
+  if (_pendingProjectName) {
+    const input = document.getElementById('new-project-name');
+    if (input) input.value = _pendingProjectName;
+    window.newProject();
   }
 };
 
-window.closeNewProjectModal = closeNewProjectModal;
+function normalisePathForComparison(value) {
+  return String(value || '').trim().replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function pathIsInside(selectedPath, rootPath) {
+  const selected = normalisePathForComparison(selectedPath);
+  const root = normalisePathForComparison(rootPath);
+  return !!selected && !!root && (selected === root || selected.startsWith(`${root}/`));
+}
+
+async function createProjectFromPendingSetup(workspacePath = '') {
+  const name = _pendingProjectName;
+  if (!name) return;
+  document.getElementById('project-directory-modal')?.classList.remove('open');
+  document.getElementById('project-directory-permission-modal')?.classList.remove('open');
+  try {
+    const project = await createProjectApi(name, workspacePath);
+    _pendingProjectName = '';
+    _pendingProjectWorkspacePath = '';
+    const input = document.getElementById('new-project-name');
+    if (input) input.value = '';
+    showToast(`Project "${name}" created!`);
+    await loadProjects();
+    _expandedProjectIds.add(project.id);
+    renderProjectsList();
+    await newProjectSession(project.id);
+  } catch (e) {
+    showToast('Failed to create project. Make sure the selected directory is allowed.', 'error');
+    console.error('createProject error:', e);
+  }
+}
+
+window.skipProjectDirectory = function() {
+  void createProjectFromPendingSetup('');
+};
+
+function getSelectedLocalPath(result) {
+  if (Array.isArray(result)) return String(result[0] || '').trim();
+  if (typeof result === 'string') return result.trim();
+  if (result && typeof result === 'object') {
+    if (Array.isArray(result.paths)) return String(result.paths[0] || '').trim();
+    return String(result.path || result.filePath || '').trim();
+  }
+  return '';
+}
+
+function updateProjectDirectoryPermissionSelection(selected) {
+  const value = String(selected || '').trim();
+  const pathEl = document.getElementById('project-directory-permission-path');
+  const allowButton = document.getElementById('project-directory-permission-allow');
+  if (pathEl) pathEl.value = value;
+  if (allowButton) allowButton.disabled = !value;
+}
+
+async function continueProjectDirectorySetup(value) {
+  const selected = String(value || '').trim();
+  if (!selected) {
+    showToast('Paste or choose a file or folder path first.', 'error');
+    return;
+  }
+  const configured = await api('/api/settings/paths');
+  const roots = [configured?.workspace_path, ...(Array.isArray(configured?.allowed_paths) ? configured.allowed_paths : [])];
+  if (roots.some((root) => pathIsInside(selected, root))) {
+    await createProjectFromPendingSetup(selected);
+    return;
+  }
+  _pendingProjectWorkspacePath = selected;
+  const pasteInput = document.getElementById('project-directory-path-input');
+  if (pasteInput) pasteInput.value = selected;
+  document.getElementById('project-directory-modal')?.classList.remove('open');
+  updateProjectDirectoryPermissionSelection(selected);
+  document.getElementById('project-directory-permission-modal')?.classList.add('open');
+}
+
+window.usePastedProjectDirectory = function() {
+  const value = document.getElementById('project-directory-path-input')?.value || '';
+  void continueProjectDirectorySetup(value).catch((error) => {
+    showToast(error?.message || 'Could not use that project path.', 'error');
+    console.error('pasted project path failed:', error);
+  });
+};
+
+window.updatePastedProjectDirectory = function(value) {
+  _pendingProjectWorkspacePath = String(value || '').trim();
+  updateProjectDirectoryPermissionSelection(_pendingProjectWorkspacePath);
+};
+
+async function selectProjectLocalPath() {
+  const bridge = window.prometheusFiles;
+  const select = bridge?.selectProjectPath
+    || bridge?.selectProjectFolder
+    || bridge?.selectCanvasFolder;
+  if (typeof select !== 'function') {
+    throw new Error('The native File Explorer picker is available only in the Prometheus Desktop app.');
+  }
+  return await select.call(bridge);
+}
+
+window.chooseProjectDirectory = async function() {
+  try {
+    const result = await selectProjectLocalPath();
+    const selected = getSelectedLocalPath(result);
+    if (!selected) return;
+    await continueProjectDirectorySetup(selected);
+  } catch (error) {
+    showToast(error?.message || 'Could not open File Explorer to select a project path.', 'error');
+    console.error('project directory selection failed:', error);
+  }
+};
+
+window.closeProjectDirectoryPermissionModal = function() {
+  document.getElementById('project-directory-permission-modal')?.classList.remove('open');
+  document.getElementById('project-directory-modal')?.classList.add('open');
+  _pendingProjectWorkspacePath = '';
+  updateProjectDirectoryPermissionSelection('');
+};
+
+window.allowProjectDirectory = async function() {
+  const selected = String(document.getElementById('project-directory-permission-path')?.value || _pendingProjectWorkspacePath || '').trim();
+  if (!selected) {
+    showToast('Choose a file or folder before allowing access.', 'error');
+    return;
+  }
+  try {
+    const configured = await api('/api/settings/paths');
+    const allowed = Array.isArray(configured?.allowed_paths) ? configured.allowed_paths : [];
+    await api('/api/settings/paths', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspace_path: configured?.workspace_path || '',
+        allowed_paths: [...allowed, selected],
+        blocked_paths: Array.isArray(configured?.blocked_paths) ? configured.blocked_paths : [],
+      }),
+    });
+    await createProjectFromPendingSetup(selected);
+  } catch (error) {
+    showToast('Could not add the directory to allowed paths.', 'error');
+    console.error('project directory permission failed:', error);
+  }
+};
 
 // ─── Session management ──────────────────────────────────────────────────────
 
-window.newProjectSession = async function(projectId, isOnboarding = false) {
+window.newProjectSession = async function(projectId) {
   try {
     const result = await api(`/api/projects/${projectId}/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isOnboarding }),
+      body: JSON.stringify({}),
     });
 
     await loadProjects();
-    await openProjectSession(projectId, result.sessionId, isOnboarding);
+    await openProjectSession(projectId, result.sessionId);
   } catch (e) {
     showToast('Could not create project session.', 'error');
     console.error(e);
   }
 };
 
-window.openProjectSession = async function(projectId, sessionId, isOnboarding = false) {
+window.openProjectSession = async function(projectId, sessionId) {
   if (window.currentMode !== 'chat' && typeof window.setMode === 'function') {
     window.setMode('chat');
   }
 
   _currentProjectSessionId = sessionId;
-  _activeProjectId = projectId;
+  _expandedProjectIds.add(projectId);
+  const project = _projects.find((item) => item.id === projectId) || null;
 
   // Mark body as in-project-session — triggers CSS changes for right panel
   document.body.classList.add('in-project-session');
@@ -376,6 +541,8 @@ window.openProjectSession = async function(projectId, sessionId, isOnboarding = 
         processLog: [],
         source: 'project',
         projectId,
+        canvasProjectRoot: project?.workspacePath || null,
+        canvasProjectLabel: project?.name || null,
         automated: false,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -384,6 +551,8 @@ window.openProjectSession = async function(projectId, sessionId, isOnboarding = 
     } else {
       existing.source = existing.source || 'project';
       existing.projectId = existing.projectId || projectId;
+      existing.canvasProjectRoot = project?.workspacePath || existing.canvasProjectRoot || null;
+      existing.canvasProjectLabel = project?.name || existing.canvasProjectLabel || null;
       existing.automated = false;
       if (typeof window.saveChatSessions === 'function') window.saveChatSessions();
     }
@@ -402,51 +571,10 @@ window.openProjectSession = async function(projectId, sessionId, isOnboarding = 
   // Load project data into right panel editors
   await loadProjectEditors(projectId);
 
-  // Set canvas tab as default when entering project session
-  setRightPanelTab('canvas');
+  // A project opens on its own workspace rather than generic chat connectors.
+  setRightPanelTab('project');
 
-  // If onboarding, fire the welcome message after a short delay
-  if (isOnboarding) {
-    setTimeout(() => sendOnboardingMessage(projectId), 800);
-  }
 };
-
-function sendOnboardingMessage(projectId) {
-  // Send a real hidden trigger so Prometheus generates a warm onboarding welcome.
-  // We patch chatHistory AFTER sendChat completes to remove the trigger bubble.
-  if (typeof window.sendChat !== 'function') return;
-
-  // Intercept: strip the trigger message from chatHistory + DOM once the reply arrives.
-  // We use a MutationObserver on #chat-messages to catch when the AI bubble is added,
-  // then delete the user trigger bubble and its chatHistory entry.
-  const chatMessages = document.getElementById('chat-messages');
-  if (chatMessages) {
-    const observer = new MutationObserver(() => {
-      // Look for the trigger bubble in the DOM and remove it
-      const bubbles = chatMessages.querySelectorAll('.msg.user, .msg.You');
-      for (const bubble of bubbles) {
-        if (bubble.textContent.includes('__project_onboarding_start__')) {
-          bubble.remove();
-        }
-      }
-      // Also strip from chatHistory
-      if (Array.isArray(window.chatHistory)) {
-        const before = window.chatHistory.length;
-        window.chatHistory = window.chatHistory.filter(
-          m => !String(m.content || '').includes('__project_onboarding_start__')
-        );
-        if (window.chatHistory.length !== before && typeof window.persistActiveChat === 'function') {
-          window.persistActiveChat();
-        }
-      }
-    });
-    observer.observe(chatMessages, { childList: true, subtree: true });
-    // Disconnect after 10 seconds — the reply will have arrived well before then
-    setTimeout(() => observer.disconnect(), 10000);
-  }
-
-  window.sendChat('__project_onboarding_start__');
-}
 
 // ─── Deletion ────────────────────────────────────────────────────────────────
 
@@ -457,7 +585,7 @@ window.confirmDeleteProject = async function(projectId, projectName) {
       try {
         await deleteProjectApi(projectId);
         showToast(`Project "${projectName}" deleted.`);
-        if (_activeProjectId === projectId) _activeProjectId = null;
+        _expandedProjectIds.delete(projectId);
         if (_currentProjectSessionId) {
           const proj = _projects.find(p => p.id === projectId);
           const owned = (proj?.sessions || []).find(s => s.id === _currentProjectSessionId);
@@ -504,164 +632,33 @@ window.confirmDeleteProjectSession = async function(projectId, sessionId, sessio
 
 window.setRightPanelTab = function(tab) {
   _currentRpTab = tab;
-
-  // Update tab button states
-  ['canvas', 'connectors', 'context'].forEach(t => {
-    document.getElementById(`rp-tab-${t}`)?.classList.toggle('active', t === tab);
-  });
-
   const canvasPanel = document.getElementById('canvas-panel');
-  const connectionsSection = document.getElementById('connections-section');
-  const contextTab = document.getElementById('rp-context-tab');
-
-  // Hide all first
-  if (canvasPanel) canvasPanel.style.display = 'none';
-  if (connectionsSection) connectionsSection.style.display = 'none';
-  if (contextTab) contextTab.style.display = 'none';
-
   if (tab === 'canvas') {
-    // Show canvas — use existing toggleCanvas logic
-    if (canvasPanel) canvasPanel.style.display = 'flex';
-    if (typeof window.openCanvas === 'function') window.openCanvas();
-  } else if (tab === 'connectors') {
-    if (connectionsSection) connectionsSection.style.display = 'block';
-    // Reload connectors if needed
-    if (typeof window.renderConnectors === 'function') window.renderConnectors();
-  } else if (tab === 'context') {
-    if (contextTab) contextTab.style.display = 'flex';
-    const projId = document.body.dataset.projectId;
-    if (projId) refreshProjectFileGrid(projId);
-  }
-};
-
-// ─── Project file grid ───────────────────────────────────────────────────────
-
-async function refreshProjectFileGrid(projectId) {
-  const grid = document.getElementById('project-file-grid');
-  if (!grid) return;
-
-  const files = await loadProjectFiles(projectId);
-  renderFileGrid(files, projectId);
-  updateTokenMeter(files);
-}
-
-function getFileIcon(filename) {
-  const ext = filename.split('.').pop().toLowerCase();
-  const icons = {
-    md: '📝', txt: '📄', pdf: '📕', doc: '📘', docx: '📘',
-    xls: '📗', xlsx: '📗', csv: '📊', json: '🔧', js: '⚡',
-    ts: '⚡', py: '🐍', html: '🌐', css: '🎨', png: '🖼',
-    jpg: '🖼', jpeg: '🖼', gif: '🖼', zip: '📦', mp4: '🎬',
-  };
-  return icons[ext] || '📄';
-}
-
-function renderFileGrid(files, projectId) {
-  const grid = document.getElementById('project-file-grid');
-  if (!grid) return;
-  if (grid.dataset.delegatedActions !== 'true') {
-    grid.dataset.delegatedActions = 'true';
-    grid.addEventListener('click', (event) => {
-      const target = event.target?.closest?.('[data-project-file-action="open"]');
-      if (!target || !grid.contains(target)) return;
-      void window.openProjectFileInCanvas(
-        String(target.dataset.projectId || ''),
-        String(target.dataset.fileId || ''),
-        String(target.dataset.fileName || ''),
-      );
-    });
-  }
-
-  if (!files.length) {
-    grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--muted);font-size:11px;padding:16px 0">No knowledge files yet.<br>Upload files to build project context.</div>`;
+    // ChatPage owns the Canvas lifecycle. Calling its explicit open state keeps
+    // the normal Canvas button, editor setup, and panel sizing intact.
+    if (typeof window.toggleCanvas === 'function') window.toggleCanvas(true);
+    else if (canvasPanel) canvasPanel.style.display = 'flex';
     return;
   }
-
-  grid.innerHTML = files.map(f => `
-    <div class="project-file-card" data-project-file-action="open" data-project-id="${escHtmlLocal(projectId)}" data-file-id="${escHtmlLocal(f.id)}" data-file-name="${escHtmlLocal(f.name)}" title="${escHtmlLocal(f.name)}">
-      <div class="project-file-icon">${getFileIcon(f.name)}</div>
-      <div class="project-file-name">${escHtmlLocal(f.name)}</div>
-    </div>
-  `).join('');
-}
-
-function updateTokenMeter(files) {
-  const totalTokens = files.reduce((sum, f) => sum + (f.tokens || 0), 0);
-  const maxTokens = 50000; // approximate budget
-  const pct = Math.min(100, Math.round((totalTokens / maxTokens) * 100));
-
-  const label = document.getElementById('project-token-label');
-  const fill = document.getElementById('project-token-fill');
-  const pctEl = document.getElementById('project-token-pct');
-
-  if (label) label.textContent = `${totalTokens.toLocaleString()} tokens`;
-  if (fill) fill.style.width = `${pct}%`;
-  if (pctEl) pctEl.textContent = `${pct}%`;
-}
-
-window.openProjectFileInCanvas = function(projectId, fileId, fileName) {
-  // Open canvas and load this project file
-  if (typeof window.toggleCanvas === 'function') window.toggleCanvas();
-  setRightPanelTab('canvas');
-  // Load file into canvas — use existing canvas API
-  if (typeof window.canvasLoadProjectFile === 'function') {
-    window.canvasLoadProjectFile(projectId, fileId, fileName);
-  } else {
-    // Fallback: fetch file content and open in canvas
-    api(`/api/projects/${projectId}/files/${fileId}/content`)
-      .then(data => {
-        if (typeof window.canvasOpenContent === 'function') {
-          window.canvasOpenContent(data.content, fileName);
-        }
-      })
-      .catch(() => showToast('Could not open file.', 'error'));
-  }
+  if (canvasPanel) canvasPanel.style.display = 'none';
 };
 
-// ─── File upload ─────────────────────────────────────────────────────────────
-
-window.onProjectFileInput = async function(event) {
+window.openProjectContextInCanvas = async function() {
   const projectId = document.body.dataset.projectId;
   if (!projectId) return;
-
-  const files = Array.from(event.target.files || []);
-  if (!files.length) return;
-
-  for (const file of files) {
-    try {
-      await uploadProjectFile(projectId, file);
-      showToast(`${file.name} added to project.`);
-    } catch (e) {
-      showToast(`Failed to upload ${file.name}.`, 'error');
+  try {
+    const data = await api(`/api/projects/${projectId}/context`);
+    window.setRightPanelTab('canvas');
+    if (typeof window.canvasOpenContent === 'function') {
+      window.canvasOpenContent(String(data?.content || ''), 'CONTEXT.md');
+    } else {
+      showToast('Canvas is not ready yet.', 'error');
     }
+  } catch (error) {
+    showToast('Could not open CONTEXT.md.', 'error');
+    console.error('project context canvas open failed:', error);
   }
-  event.target.value = '';
-  await refreshProjectFileGrid(projectId);
 };
-
-// Drag and drop on upload zone
-window.addEventListener('DOMContentLoaded', () => {
-  setTimeout(() => {
-    const zone = document.getElementById('project-upload-zone');
-    if (!zone) return;
-    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
-    zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-    zone.addEventListener('drop', async e => {
-      e.preventDefault();
-      zone.classList.remove('drag-over');
-      const projectId = document.body.dataset.projectId;
-      if (!projectId) return;
-      const files = Array.from(e.dataTransfer.files);
-      for (const file of files) {
-        try {
-          await uploadProjectFile(projectId, file);
-          showToast(`${file.name} uploaded.`);
-        } catch { showToast(`Failed to upload ${file.name}.`, 'error'); }
-      }
-      await refreshProjectFileGrid(projectId);
-    });
-  }, 600);
-});
 
 // ─── Project editors ─────────────────────────────────────────────────────────
 
@@ -675,9 +672,13 @@ async function loadProjectEditors(projectId) {
 
   const instrTA = document.getElementById('proj-instructions-ta');
   const memTA = document.getElementById('proj-memory-ta');
+  const workspaceName = document.getElementById('project-workspace-name');
+  const workspacePath = document.getElementById('project-workspace-path');
 
   if (instrTA) instrTA.value = project.instructions || '';
   if (memTA) memTA.value = project.memorySnapshot || '';
+  if (workspaceName) workspaceName.textContent = project.name || 'Project';
+  if (workspacePath) workspacePath.textContent = project.workspacePath || 'No linked path — project context is stored in Prometheus.';
 }
 
 window.saveProjectInstructions = async function() {
@@ -719,9 +720,11 @@ function _maybeClearProjectState(sessionId) {
     : null;
   if (cachedSession?.projectId) {
     _currentProjectSessionId = sessionId;
-    _activeProjectId = cachedSession.projectId;
+    _expandedProjectIds.add(cachedSession.projectId);
     document.body.classList.add('in-project-session');
     document.body.dataset.projectId = cachedSession.projectId;
+    void loadProjectEditors(cachedSession.projectId);
+    window.setRightPanelTab?.(_currentRpTab === 'canvas' ? 'project' : _currentRpTab);
     return;
   }
   if (!_projects.length) return;
@@ -731,15 +734,17 @@ function _maybeClearProjectState(sessionId) {
   );
   if (ownerProject) {
     _currentProjectSessionId = sessionId;
-    _activeProjectId = ownerProject.id;
+    _expandedProjectIds.add(ownerProject.id);
     document.body.classList.add('in-project-session');
     document.body.dataset.projectId = ownerProject.id;
+    void loadProjectEditors(ownerProject.id);
+    window.setRightPanelTab?.(_currentRpTab === 'canvas' ? 'project' : _currentRpTab);
     return;
   }
   if (!ownerProject) {
     // Not a project session — clear all project UI state
     _currentProjectSessionId = null;
-    _currentRpTab = 'canvas';
+    _currentRpTab = 'project';
     document.body.classList.remove('in-project-session');
     delete document.body.dataset.projectId;
 
@@ -754,6 +759,8 @@ function _maybeClearProjectState(sessionId) {
     // Hide the context tab content
     const contextTab = document.getElementById('rp-context-tab');
     if (contextTab) contextTab.style.display = 'none';
+    const projectTab = document.getElementById('rp-project-tab');
+    if (projectTab) projectTab.style.display = 'none';
 
     // Hide the agent-context project editors (instructions + memory snapshot)
     const agentContext = document.getElementById('agent-context-section');
@@ -773,4 +780,3 @@ window._maybeClearProjectState = _maybeClearProjectState;
 // ─── Expose for external use ─────────────────────────────────────────────────
 window.loadProjects = loadProjects;
 window.renderProjectsList = renderProjectsList;
-window.refreshProjectFileGrid = refreshProjectFileGrid;

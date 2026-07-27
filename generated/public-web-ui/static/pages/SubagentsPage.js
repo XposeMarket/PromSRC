@@ -2,7 +2,8 @@
  * SubagentsPage.js — Standalone subagent management
  *
  * Shows all standalone (non-team) subagents in a card grid.
- * Click an agent to open a detail panel with Overview, AGENT.md, Runs, and Chat tabs.
+ * Click an agent to open a detail panel with the mobile-parity Overview, Chat,
+ * Memory, Runs, and Heartbeat tabs.
  */
 
 import { api } from '../api.js';
@@ -23,7 +24,7 @@ installToolActivityExpansionPersistence();
 // ── State ─────────────────────────────────────────────────────────────────────
 let subagentsData = [];          // All standalone agents (not team members)
 let activeSubagentId = null;     // Currently open detail panel
-let subagentDetailTab = 'overview'; // overview | systemprompt | memory | heartbeat | runs | chat
+let subagentDetailTab = 'overview'; // overview | chat | memory | runs | heartbeat
 let subagentRuns = [];
 let activeSubagentRunId = '';
 let subagentRunDetails = {};
@@ -405,13 +406,13 @@ function refreshSubagentChatComposerState(agentId) {
     btn.title = abortMode ? 'Stop the active subagent chat turn' : voiceMode ? 'Start voice mode' : busy ? 'Queue this message for the subagent' : 'Send message';
     btn.setAttribute('aria-label', abortMode ? 'Stop' : voiceMode ? 'Start voice mode' : busy ? 'Queue message' : 'Send');
     btn.onclick = () => abortMode ? abortSubagentChat(agentId) : sendSubagentChat(agentId);
-    btn.style.background = abortMode ? '#e05c5c' : 'var(--brand)';
-    btn.style.boxShadow = abortMode ? '0 10px 24px rgba(224,92,92,0.24)' : '0 10px 24px rgba(76,141,255,0.24)';
+    btn.style.background = abortMode ? '#e05c5c' : '';
+    btn.style.boxShadow = abortMode ? '0 10px 24px rgba(224,92,92,0.24)' : '';
     btn.innerHTML = abortMode
-      ? '<iconify-icon icon="solar:stop-bold" width="20" height="20"></iconify-icon>'
+      ? '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><rect x="2" y="2" width="10" height="10" rx="1.5"/></svg>'
       : voiceMode
-        ? '<iconify-icon icon="solar:microphone-3-bold-duotone" width="20" height="20"></iconify-icon>'
-        : '<iconify-icon icon="solar:arrow-up-bold" width="20" height="20"></iconify-icon>';
+        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>'
+        : '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>';
   }
   const badge = document.getElementById('subagent-chat-queue-badge');
   if (badge) {
@@ -430,7 +431,7 @@ function resizeSubagentChatInput() {
   const input = document.getElementById('subagent-chat-input');
   if (!input) return;
   input.style.height = 'auto';
-  input.style.height = `${Math.min(180, Math.max(64, input.scrollHeight))}px`;
+  input.style.height = `${Math.min(150, Math.max(48, input.scrollHeight))}px`;
 }
 
 function removeSubagentChatFile(agentId, idx) {
@@ -604,6 +605,7 @@ let subagentSystemPrompt = '';
 let subagentContextRefs = [];
 let subagentSkillsCache = [];
 let subagentMemoryNotes = '';
+let subagentMemoryExists = false;
 let subagentHbConfig = { enabled: false, intervalMinutes: 30 };
 let subagentHbMd = '';
 let _subagentCtxRefEditId = null;   // ref id currently in edit modal
@@ -797,6 +799,7 @@ async function openSubagentDetail(agentId) {
   subagentSystemPrompt = '';
   subagentContextRefs = [];
   subagentMemoryNotes = '';
+  subagentMemoryExists = false;
   subagentHbConfig = { enabled: false, intervalMinutes: 30 };
   subagentHbMd = '';
 
@@ -1681,8 +1684,8 @@ function renderSubagentBoard(agentId) {
 
   body.innerHTML = `
     <div style="display:flex;border-bottom:1px solid var(--line);flex-shrink:0;overflow-x:auto;scrollbar-width:none">
-      ${['overview','systemprompt','memory','heartbeat','runs','chat'].map(tab => {
-        const labels = { overview:'Overview', systemprompt:'AGENT.md', memory:'Memory', heartbeat:'Heartbeat', runs:`Runs (${subagentRuns.length})`, chat:'Chat' };
+      ${['overview','chat','memory','runs','heartbeat'].map(tab => {
+        const labels = { overview:'Overview', chat:'Chat', memory:'Memory', runs:`Runs (${subagentRuns.length})`, heartbeat:'Heartbeat' };
         const isActive = tab === subagentDetailTab;
         return `<button onclick="switchSubagentTab('${tab}','${escHtml(agentId)}')" style="padding:10px 14px;font-size:12px;font-weight:${isActive?'700':'500'};border:none;background:none;cursor:pointer;white-space:nowrap;color:${isActive?'var(--brand)':'var(--muted)'};border-bottom:2px solid ${isActive?'var(--brand)':'transparent'};margin-bottom:-1px;transition:all 0.15s">${labels[tab]}</button>`;
       }).join('')}
@@ -1702,7 +1705,6 @@ function renderSubagentBoard(agentId) {
 function renderSubagentTabContent(agent) {
   switch (subagentDetailTab) {
     case 'overview':    return renderSubagentOverviewTab(agent);
-    case 'systemprompt': return renderSubagentSystemPromptTab(agent);
     case 'memory':      return renderSubagentMemoryTab(agent);
     case 'heartbeat':   return renderSubagentHeartbeatTab(agent);
     case 'runs':        return renderSubagentRunsTab(agent);
@@ -1715,17 +1717,8 @@ async function switchSubagentTab(tab, agentId) {
   subagentDetailTab = tab;
   if (!subagentsData.find(a => a.id === agentId)) return;
 
-  if (tab === 'systemprompt' && !subagentSystemPrompt) {
-    try {
-      const d = await api(`/api/agents/${encodeURIComponent(agentId)}/agent-md`);
-      subagentSystemPrompt = d.content || '';
-    } catch {}
-  }
   if (tab === 'memory') {
-    try {
-      const d = await api(`/api/agents/${encodeURIComponent(agentId)}/workspace/notes`);
-      subagentMemoryNotes = d.notes || '';
-    } catch {}
+    await reloadSubagentMemory(agentId, { render: false });
   }
   if (tab === 'heartbeat' && !subagentHbMd) {
     try {
@@ -1791,6 +1784,15 @@ function renderSubagentOverviewTab(agent) {
   const color = agentColor(agent.id);
   const lastRunEntry = subagentRuns[0];
   const nextRun = agent.cronSchedule ? `<code style="background:var(--panel-2);padding:2px 6px;border-radius:4px;font-size:11px">${escHtml(agent.cronSchedule)}</code>` : '<span style="color:var(--muted)">Not scheduled</span>';
+  const status = getSubagentStreamingState(agent.id) || agent.lastRun?.inProgress
+    ? { label: 'running', color: '#0d4faf', bg: '#eaf2ff', border: '#bcd4f8' }
+    : agent.isTeamMember
+      ? { label: 'team', color: '#0d4faf', bg: '#eaf2ff', border: '#bcd4f8' }
+      : agent.cronSchedule
+        ? { label: 'scheduled', color: '#9a3412', bg: '#fff7ed', border: '#fed7aa' }
+        : { label: 'idle', color: 'var(--muted)', bg: 'var(--panel-2)', border: 'var(--line)' };
+  const allowedTools = Array.isArray(agent.allowed_tools) ? agent.allowed_tools : (Array.isArray(agent.allowedTools) ? agent.allowedTools : []);
+  const mcpServers = Array.isArray(agent.mcp_servers) ? agent.mcp_servers : (Array.isArray(agent.mcpServers) ? agent.mcpServers : []);
 
   const infoRows = [
     ['Agent ID', `<code style="font-size:11px;background:var(--panel-2);padding:2px 6px;border-radius:4px">${escHtml(agent.id)}</code>`],
@@ -1844,7 +1846,7 @@ function renderSubagentOverviewTab(agent) {
       <div style="display:flex;align-items:center;gap:14px">
         <div style="flex-shrink:0">${drawAgentSVG(agent, true, 0.8)}</div>
         <div>
-          <div style="font-size:15px;font-weight:800;margin-bottom:3px">${escHtml(agent.name||agent.id)}</div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><div style="font-size:15px;font-weight:800">${escHtml(agent.name||agent.id)}</div><span style="font-size:10px;font-weight:800;text-transform:capitalize;color:${status.color};background:${status.bg};border:1px solid ${status.border};border-radius:999px;padding:2px 8px">${status.label}</span></div>
           ${agent.description ? `<div style="font-size:12px;color:var(--muted);line-height:1.5">${escHtml(agent.description)}</div>` : ''}
           <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
             ${agent.cronSchedule ? `<span style="font-size:10px;background:#f0fdf4;color:#166534;border:1px solid #bbf7d0;border-radius:999px;padding:2px 8px;font-weight:700">⏰ Scheduled</span>` : ''}
@@ -1865,6 +1867,17 @@ function renderSubagentOverviewTab(agent) {
       ${_renderAgentModelPicker(agent, 'sa-model')}
       ${_renderAgentVoicePicker(agent, 'sa-voice')}
 
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+        <section style="border:1px solid var(--line);border-radius:10px;padding:11px;background:var(--panel-2)">
+          <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:7px">Allowed Tools</div>
+          <div style="font-size:11px;line-height:1.55">${allowedTools.length ? allowedTools.slice(0, 8).map((tool) => `<span style="display:inline-block;margin:0 4px 4px 0;border:1px solid var(--line);border-radius:999px;background:var(--panel);padding:2px 7px">${escHtml(String(tool))}</span>`).join('') + (allowedTools.length > 8 ? `<span style="color:var(--muted)">+${allowedTools.length - 8}</span>` : '') : '<span style="color:var(--muted)">All tools</span>'}</div>
+        </section>
+        <section style="border:1px solid var(--line);border-radius:10px;padding:11px;background:var(--panel-2)">
+          <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:7px">MCP Servers</div>
+          <div style="font-size:11px;line-height:1.55">${mcpServers.length ? mcpServers.map((server) => `<span style="display:inline-block;margin:0 4px 4px 0;border:1px solid var(--line);border-radius:999px;background:var(--panel);padding:2px 7px">${escHtml(String(server))}</span>`).join('') : '<span style="color:var(--muted)">None</span>'}</div>
+        </section>
+      </div>
+
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
           <div>
@@ -1880,6 +1893,7 @@ function renderSubagentOverviewTab(agent) {
       <div style="display:flex;gap:8px">
         <button onclick="spawnSubagentTask('${escHtml(agent.id)}')" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer">▶ Run Task</button>
         <button onclick="switchSubagentTab('chat','${escHtml(agent.id)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:8px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer">💬 Chat</button>
+        <button onclick="tickSubagentHbFromDetail('${escHtml(agent.id)}')" style="border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:8px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer">↻ Tick</button>
         <button onclick="refreshSubagentDetail('${escHtml(agent.id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer">↻</button>
         ${agent.marketplaceProfile?.packId ? `<button onclick="uninstallAgentProfilePack('${escHtml(agent.id)}')" style="border:1px solid #fecaca;background:#fff1f2;color:#991b1b;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer">Uninstall Pack</button>` : ''}
       </div>
@@ -1942,25 +1956,25 @@ function renderSubagentSystemPromptTab(agent) {
 }
 
 function renderSubagentMemoryTab(agent) {
+  const files = [
+    { key: 'agent', title: 'AGENT.md', content: subagentSystemPrompt, exists: !!subagentSystemPrompt, empty: 'No AGENT.md is set for this agent yet.' },
+    { key: 'memory', title: 'MEMORY.md', content: subagentMemoryNotes, exists: subagentMemoryExists, empty: 'No personal memory file exists for this agent yet.' },
+  ];
   return `
     <div style="display:flex;flex-direction:column;gap:10px;height:100%">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div>
           <div style="font-size:13px;font-weight:800">Memory</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">Latest notes from this agent's memory directory</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Private, read-only context for this agent</div>
         </div>
         <button onclick="reloadSubagentMemory('${escHtml(agent.id)}')" style="border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">↻ Reload</button>
       </div>
-      ${subagentMemoryNotes
-        ? `<div style="flex:1;min-height:300px;overflow-y:auto;border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel-2);color:var(--text);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(subagentMemoryNotes)}</div>`
-        : `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;padding:48px;text-align:center">
-            <div>
-              <div style="font-size:32px;margin-bottom:10px">🧠</div>
-              <div style="font-weight:700;margin-bottom:6px">No memory yet</div>
-              <div style="font-size:12px">Memory notes are written by this agent during runs and appear here.</div>
-            </div>
-          </div>`
-      }
+      ${files.map((file) => `<details style="border:1px solid var(--line);border-radius:10px;background:var(--panel-2);overflow:hidden">
+        <summary style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:11px 12px;font-size:12px;font-weight:800;list-style:none"><span>📄 ${file.title}</span><span style="font-size:10px;color:var(--muted);font-weight:700">${file.exists ? 'Read-only' : 'Not found'}</span></summary>
+        <div style="border-top:1px solid var(--line)">
+          ${file.content ? `<pre style="margin:0;max-height:360px;overflow:auto;padding:12px;font-size:12px;font-family:'IBM Plex Mono',monospace;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--text)">${escHtml(file.content)}</pre>` : `<div style="padding:14px;color:var(--muted);font-size:12px">${file.empty}</div>`}
+        </div>
+      </details>`).join('')}
     </div>`;
 }
 
@@ -2036,8 +2050,7 @@ function renderSubagentRunProgress(taskOrRun) {
 
 function renderSubagentRunRecovery(task, agentId) {
   const canRecover = !!task?.canRecover || ['needs_assistance', 'awaiting_user_input', 'paused', 'stalled', 'failed'].includes(String(task?.status || '').toLowerCase());
-  const canSteerLive = ['running', 'queued', 'waiting_subagent'].includes(String(task?.status || '').toLowerCase());
-  const canMessageRun = canRecover || canSteerLive;
+  const canMessageRun = canRecover;
   const turns = Array.isArray(task?.recoveryConversation) ? task.recoveryConversation.slice(-16) : [];
   const pauseMessage = String(task?.pauseAnalysis?.message || '').trim();
   const pending = String(task?.pendingClarificationQuestion || '').trim();
@@ -2061,8 +2074,8 @@ function renderSubagentRunRecovery(task, agentId) {
   return `
     <section style="border:1px solid ${canMessageRun ? 'rgba(251,146,60,.45)' : 'var(--line)'};background:var(--panel-2);border-radius:10px;padding:11px;display:flex;flex-direction:column;gap:9px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-        <div style="font-size:12px;font-weight:900;color:${canMessageRun ? 'var(--brand)' : 'var(--text)'}">${canSteerLive ? 'Live Task Steering' : 'Recovery Chat'}</div>
-        <span style="font-size:10px;color:var(--muted)">${canSteerLive ? 'joins current run' : canRecover ? 'task mode' : 'read only'}</span>
+        <div style="font-size:12px;font-weight:900;color:${canMessageRun ? 'var(--brand)' : 'var(--text)'}">Recovery Chat</div>
+        <span style="font-size:10px;color:var(--muted)">${canRecover ? 'task mode' : 'read only'}</span>
       </div>
       ${pending ? `<div style="font-size:12px;line-height:1.45"><strong>Pending question:</strong> ${escHtml(pending)}</div>` : ''}
       ${pauseMessage ? `<div style="font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere"><strong>Pause analysis:</strong><br>${escHtml(pauseMessage.slice(0, 1400))}</div>` : ''}
@@ -2071,10 +2084,10 @@ function renderSubagentRunRecovery(task, agentId) {
         <input id="sa-run-recovery-files-${escHtml(taskId)}" type="file" multiple accept="image/*,video/*,.pdf,.txt,.md,.json,.csv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml" style="display:none" onchange="updateSubagentRunRecoveryFileLabel('${escHtml(taskId)}')" />
         <div id="sa-run-recovery-files-label-${escHtml(taskId)}" style="display:none;margin-bottom:6px;font-size:11px;color:var(--muted)"></div>
         <div style="display:flex;gap:8px;align-items:flex-end">
-          ${canSteerLive ? '' : `<button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="document.getElementById('sa-run-recovery-files-${escHtml(taskId)}')?.click()">
+          <button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="document.getElementById('sa-run-recovery-files-${escHtml(taskId)}')?.click()">
             <iconify-icon icon="solar:paperclip-bold-duotone" width="17" height="17"></iconify-icon>
-          </button>`}
-          <textarea id="sa-run-recovery-${escHtml(taskId)}" rows="1" placeholder="${canSteerLive ? 'Steer this current run — no new task will be created...' : 'Reply to this run...'}" class="chat-textarea" style="min-height:42px;max-height:140px"></textarea>
+          </button>
+          <textarea id="sa-run-recovery-${escHtml(taskId)}" rows="1" placeholder="Reply to this run..." class="chat-textarea" style="min-height:42px;max-height:140px"></textarea>
           <button class="send-btn" onclick="sendSubagentRunRecovery('${escHtml(agentId)}','${escHtml(taskId)}')" title="Send">
             <iconify-icon icon="solar:arrow-up-bold" width="20" height="20"></iconify-icon>
           </button>
@@ -2222,20 +2235,25 @@ function renderSubagentChatTab(agent) {
       </div>
       <div class="chat-input-area panel-chat-composer subagent-panel-chat-composer" style="flex-shrink:0">
         <input id="subagent-chat-file-input" type="file" multiple style="display:none" onchange="onSubagentChatFilesChosen(${subagentChatJsArg(agent.id)}, this)" />
-        <div id="subagent-chat-composer" style="flex:1;display:flex;flex-direction:column;gap:6px">
-          <div id="subagent-chat-queue-badge" style="display:${queuedCount ? 'inline-flex' : 'none'};align-self:flex-start;align-items:center;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800">${queuedCount} queued</div>
-          <div id="subagent-chat-file-staging" class="chat-file-staging panel-chat-file-staging" style="display:none"></div>
-          <div class="chat-input-row" style="align-items:flex-end">
-            <button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="openSubagentChatFilePicker()">
-              <iconify-icon icon="solar:paperclip-bold-duotone" width="17" height="17"></iconify-icon>
+        <div id="subagent-chat-composer" style="display:flex;flex-direction:column;gap:6px">
+          <div id="subagent-chat-file-staging" class="chat-file-staging" style="display:none"></div>
+          <div class="chat-input-row">
+            <button type="button" class="chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="openSubagentChatFilePicker()">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             </button>
             <button type="button" id="subagent-chat-voice-button" class="chat-voice-btn" title="Start voice mode" aria-label="Start voice mode" onclick="startSubagentDesktopVoice(${subagentChatJsArg(agent.id)})">
-              <iconify-icon icon="solar:microphone-3-bold-duotone" width="18" height="18"></iconify-icon>
+              <svg class="voice-btn-icon voice-btn-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
             </button>
-            <textarea id="subagent-chat-input" rows="1" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`}" class="chat-textarea" style="min-height:42px;max-height:150px" onpaste="handleSubagentChatPaste(event, ${subagentChatJsArg(agent.id)})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${subagentChatJsArg(agent.id)});}">${escHtml(subagentChatDraft)}</textarea>
+            <div class="chat-composer-input-wrap">
+              <textarea id="subagent-chat-input" rows="1" placeholder="${isSending ? `Queue a message for ${escHtml(agent.name||agent.id)}...` : `Message ${escHtml(agent.name||agent.id)}...`}" class="chat-textarea" autocomplete="off" onpaste="handleSubagentChatPaste(event, ${subagentChatJsArg(agent.id)})" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendSubagentChat(${subagentChatJsArg(agent.id)});}">${escHtml(subagentChatDraft)}</textarea>
+            </div>
             <button id="subagent-chat-send-button" class="send-btn" onclick="${isSending ? `abortSubagentChat('${escHtml(agent.id)}')` : `sendSubagentChat('${escHtml(agent.id)}')`}" title="${isSending ? 'Stop' : 'Send'}">
-              ${isSending ? '<iconify-icon icon="solar:stop-bold" width="20" height="20"></iconify-icon>' : '<iconify-icon icon="solar:arrow-up-bold" width="20" height="20"></iconify-icon>'}
+              ${isSending ? '<svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><rect x="2" y="2" width="10" height="10" rx="1.5"/></svg>' : '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="22 2 15 22 11 13 2 9"/></svg>'}
             </button>
+          </div>
+          <div class="agent-toggle" style="display:flex;align-items:center;gap:8px;margin:0">
+            <div class="chat-hint" style="margin:0;flex:1">Enter to send · Shift+Enter for newline <span id="subagent-chat-queue-badge" style="display:${queuedCount ? 'inline' : 'none'};margin-left:8px;color:var(--brand);font-weight:700">${queuedCount} queued</span></div>
+            <span style="color:var(--muted);font-size:11px;white-space:nowrap">${escHtml(agent.effectiveModel || agent.model || 'Default model')}</span>
           </div>
         </div>
       </div>
@@ -2276,8 +2294,6 @@ async function sendSubagentRunRecovery(agentId, taskId) {
   const fileInput = document.getElementById(`sa-run-recovery-files-${id}`);
   const message = String(textarea?.value || '').trim();
   const selectedFiles = Array.from(fileInput?.files || []);
-  const runStatus = String(subagentRunDetails[id]?.task?.status || '').toLowerCase();
-  const isLiveSteer = ['running', 'queued', 'waiting_subagent'].includes(runStatus);
   if (!id || (!message && !selectedFiles.length)) return;
   try {
     let attachmentPreviews = [];
@@ -2286,13 +2302,11 @@ async function sendSubagentRunRecovery(agentId, taskId) {
       const uploadResults = await uploadSubagentChatStagedFiles(staged);
       attachmentPreviews = subagentUploadResultsToAttachmentPreviews(uploadResults);
     }
-    const data = await api(isLiveSteer
-      ? `/api/bg-tasks/${encodeURIComponent(id)}/message`
-      : `/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(id)}/recovery`, {
+    const data = await api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(id)}/recovery`, {
       method: 'POST',
       body: JSON.stringify({
         message: message || (attachmentPreviews.length ? 'Please review the attached file(s).' : ''),
-        ...(isLiveSteer ? {} : { attachmentPreviews }),
+        attachmentPreviews,
       }),
       timeoutMs: 300000,
     });
@@ -2302,7 +2316,7 @@ async function sendSubagentRunRecovery(agentId, taskId) {
     if (data?.task) subagentRunDetails[id] = { task: data.task, run: data.run || null, evidenceBus: data.evidenceBus || null };
     const runsData = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`).catch(() => null);
     if (Array.isArray(runsData?.runs)) subagentRuns = runsData.runs;
-    showToast(isLiveSteer ? 'Task steered' : 'Recovery updated', isLiveSteer ? (data?.message || 'Guidance joined the current run') : data?.resumed ? 'Run resumed' : 'Reply sent', 'success');
+    showToast('Recovery updated', data?.resumed ? 'Run resumed' : 'Reply sent', 'success');
     renderSubagentBoard(agentId);
   } catch (err) {
     showToast('Recovery error', err.message || 'Failed to send recovery reply', 'error');
@@ -2437,6 +2451,7 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
     fallbackTimer: null,
     source: 'localSse',
     startedAt: startTs,
+    runtimeId: '',
   };
   setSubagentStreamingState(agentId, streamState);
   renderSubagentBoard(agentId);
@@ -2487,6 +2502,10 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
         if (getSubagentStreamingState(agentId) !== streamState) continue;
 
         switch (event.type) {
+          case 'runtime_registered': {
+            streamState.runtimeId = String(event.runtimeId || event.run?.id || '').trim();
+            break;
+          }
           case 'final_response_start': {
             beginFinalResponse(streamState);
             refreshSubagentStreamingUI(agentId);
@@ -2714,15 +2733,27 @@ async function sendSubagentChat(agentId, queuedMessage = null) {
   });
 }
 
-function abortSubagentChat(agentId) {
+async function abortSubagentChat(agentId) {
   const controller = subagentChatAbortControllers[agentId];
-  if (controller && !controller.signal.aborted) controller.abort();
   const streamState = getSubagentStreamingState(agentId);
   if (streamState) {
     streamState.abortRequested = true;
     pushSubagentProgressLine('Stopping...', streamState);
     refreshSubagentStreamingUI(agentId, true);
+    const runtimeId = String(streamState.runtimeId || '').trim();
+    if (runtimeId) {
+      try {
+        await api('/api/mobile/commands/stop', {
+          method: 'POST',
+          body: JSON.stringify({ id: runtimeId, source: 'desktop_subagent_stream_abort' }),
+          timeoutMs: 12000,
+        });
+      } catch (err) {
+        console.warn('[Subagents] could not stop live runtime:', err);
+      }
+    }
   }
+  if (controller && !controller.signal.aborted) controller.abort();
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -2895,11 +2926,16 @@ async function uploadSubagentContextFile(agentId, input) {
 }
 
 // ── Memory Tab Actions ────────────────────────────────────────────────────────
-async function reloadSubagentMemory(agentId) {
+async function reloadSubagentMemory(agentId, { render = true } = {}) {
   try {
-    const d = await api(`/api/agents/${encodeURIComponent(agentId)}/workspace/notes`);
-    subagentMemoryNotes = d.notes || '';
-    renderSubagentBoard(agentId);
+    const [agentMd, memoryMd] = await Promise.all([
+      api(`/api/agents/${encodeURIComponent(agentId)}/agent-md`).catch(() => ({})),
+      api(`/api/agents/${encodeURIComponent(agentId)}/memory-md`).catch(() => ({})),
+    ]);
+    subagentSystemPrompt = agentMd.content || '';
+    subagentMemoryNotes = memoryMd.content || '';
+    subagentMemoryExists = memoryMd.exists === true;
+    if (render) renderSubagentBoard(agentId);
   } catch (err) {
     showToast('Error', err.message, 'error');
   }
@@ -2994,12 +3030,9 @@ async function refreshSubagentDetail(agentId) {
   subagentSystemPrompt = '';
   subagentHbMd = '';
   await loadSubagentBoardData(agentId);
-  // Reload current tab data too
-  if (subagentDetailTab === 'systemprompt') {
-    try { const d = await api(`/api/agents/${encodeURIComponent(agentId)}/agent-md`); subagentSystemPrompt = d.content || ''; } catch {}
-  }
+  // Reload current tab data too.
   if (subagentDetailTab === 'memory') {
-    try { const d = await api(`/api/agents/${encodeURIComponent(agentId)}/workspace/notes`); subagentMemoryNotes = d.notes || ''; } catch {}
+    await reloadSubagentMemory(agentId, { render: false });
   }
   if (subagentDetailTab === 'heartbeat') {
     try {

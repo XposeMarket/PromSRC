@@ -42,15 +42,39 @@ import {
   listKnowledgeFiles,
   getKnowledgeFileContent,
   getProjectKnowledgeFilePath,
+  getProjectContextContent,
 } from '../projects/project-store.js';
 import { refreshProjectContextFromLatestPriorSession } from '../projects/project-learning.js';
 import { getSession, sessionExists } from '../session.js';
 import { isStorageBoundaryError } from '../storage/storage-paths.js';
+import { getConfig } from '../../config/config.js';
 
 const router = Router();
 
 function sendProjectError(res: Response, err: any, fallback: string): void {
   res.status(isStorageBoundaryError(err) ? 400 : 500).json({ error: err?.message || fallback });
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function resolveAllowedProjectDirectory(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const selected = path.resolve(raw);
+  const cfg = getConfig().getConfig() as any;
+  const allowedRoots = [cfg?.workspace?.path, ...(Array.isArray(cfg?.tools?.permissions?.files?.allowed_paths)
+    ? cfg.tools.permissions.files.allowed_paths
+    : [])]
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean)
+    .map((entry) => path.resolve(entry));
+  if (!allowedRoots.some((root) => isPathInside(root, selected))) {
+    throw new Error('Project directory is outside the configured workspace paths. Add it to Settings before linking it.');
+  }
+  return selected;
 }
 
 function hydrateProjectSessions(project: any): any {
@@ -89,7 +113,7 @@ router.post('/api/projects', (req: Request, res: Response) => {
   try {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
-    res.status(201).json(createProject(name));
+    res.status(201).json(createProject(name, resolveAllowedProjectDirectory(req.body?.workspacePath)));
   } catch (err: any) { sendProjectError(res, err, 'Failed to create project'); }
 });
 
@@ -101,10 +125,19 @@ router.get('/api/projects/:id', (req: Request, res: Response) => {
   } catch (err: any) { sendProjectError(res, err, 'Failed to get project'); }
 });
 
+router.get('/api/projects/:id/context', (req: Request, res: Response) => {
+  try {
+    const content = getProjectContextContent(req.params.id);
+    if (content === null) return res.status(404).json({ error: 'Project context not found' });
+    res.json({ filename: 'CONTEXT.md', content });
+  } catch (err: any) { sendProjectError(res, err, 'Failed to read project context'); }
+});
+
 router.patch('/api/projects/:id', (req: Request, res: Response) => {
   try {
     const updates: any = {};
     if (req.body?.name !== undefined) updates.name = String(req.body.name).trim();
+    if (req.body?.workspacePath !== undefined) updates.workspacePath = resolveAllowedProjectDirectory(req.body.workspacePath);
     if (req.body?.instructions !== undefined) updates.instructions = String(req.body.instructions);
     if (req.body?.memorySnapshot !== undefined) updates.memorySnapshot = String(req.body.memorySnapshot);
     const project = updateProject(req.params.id, updates);
