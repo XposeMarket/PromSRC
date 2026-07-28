@@ -68,11 +68,12 @@ let _instance = null;
  * @param {object}  opts.scene — window.prometheusCreativeScene ref
  * @param {object}  opts.api   — window.prometheusCreativeCore ref
  */
-export function createCreativeEditor({ root, scene, api }) {
+export function createCreativeEditor({ root, scene, api, compositionBridge = null }) {
   const store = createStore(createEditorState());
   let layout = null;
   let _hiddenChildren = [];
   let sceneRef = scene || window.prometheusCreativeScene || null;
+  let compositionBridgeRef = compositionBridge || window.prometheusCreativeCompositionBridge || null;
 
   // Sync store.durationMs from scene
   function syncDuration() {
@@ -218,7 +219,11 @@ export function createCreativeEditor({ root, scene, api }) {
 
     // ── Bottom: timeline ─────────────────────────────────────────────────────
     _timelineEditor = createTimelineEditor({
-      container: p.timeline, store, getScene, applyOps: applyEditorOps,
+      container: p.timeline,
+      store,
+      getScene,
+      applyOps: applyEditorOps,
+      getCompositionBridge: () => compositionBridgeRef || window.prometheusCreativeCompositionBridge || null,
     });
 
     // Export button
@@ -438,7 +443,12 @@ export function createCreativeEditor({ root, scene, api }) {
     }
   }
 
-  return { mount, unmount, dispose, store, setScene, getScene, hydrateCreativeAssets };
+  function setCompositionBridge(nextBridge) {
+    compositionBridgeRef = nextBridge || window.prometheusCreativeCompositionBridge || null;
+    _timelineEditor?.render?.();
+  }
+
+  return { mount, unmount, dispose, store, setScene, getScene, setCompositionBridge, hydrateCreativeAssets };
 }
 
 function normalizeCreativeEditorAssets(payload = {}) {
@@ -500,18 +510,20 @@ function normalizeCreativeEditorAsset(raw = {}) {
  * syncCreativeEditor — the single call-site function invoked from ChatPage.js.
  * Handles mount/unmount lifecycle based on active creative mode.
  */
-export async function syncCreativeEditor({ mode, shell, scene, api }) {
+export async function syncCreativeEditor({ mode, shell, scene, api, compositionBridge = null }) {
   const enabled = await resolveFlag();
   if (!enabled) return;
 
   // Only mount the video editor for 'video' mode.
   // Image, design, and other modes keep their own native canvas UI untouched.
   const isVideoMode = mode === 'video';
+  const bridge = compositionBridge || window.prometheusCreativeCompositionBridge || null;
 
   if (isVideoMode && shell) {
     if (!_instance) {
-      _instance = createCreativeEditor({ root: shell, scene, api });
+      _instance = createCreativeEditor({ root: shell, scene, api, compositionBridge: bridge });
     }
+    _instance.setCompositionBridge?.(bridge);
     _instance.setScene?.(scene || window.prometheusCreativeScene);
     _instance.mount(shell, { mode, scene });
     if (window.prometheusCreativeAssetsState) {

@@ -89,6 +89,7 @@ import {
   type SkillWindow,
 } from '../prompt-context';
 import { buildPersonalityContextIsolated } from './context-build-worker-client';
+import type { TurnTimingRecorder } from './turn-timing';
 import {
   browserOpen,
   browserSnapshot,
@@ -598,6 +599,7 @@ export async function buildPersonalityContext(
   extraCats?: Set<string>,
   options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent'; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
   signal?: AbortSignal,
+  timing?: TurnTimingRecorder,
 ): Promise<string> {
   return buildPersonalityContextIsolated(
     sessionId,
@@ -611,6 +613,7 @@ export async function buildPersonalityContext(
     extraCats,
     options,
     signal,
+    timing,
   );
 }
 

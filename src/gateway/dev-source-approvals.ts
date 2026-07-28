@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import {
+  abandonCoordinatedDevEditsForSession,
   markCoordinatedDevEditComplete,
   registerCoordinatedDevEdit,
 } from './dev-edit-coordinator';
@@ -49,7 +50,7 @@ export interface DevSourceEditContinuation {
   sessionId: string;
   approvalId?: string;
   planHash?: string;
-  status: 'approved' | 'verified_not_live' | 'applying_live' | 'complete';
+  status: 'approved' | 'verified_not_live' | 'applying_live' | 'complete' | 'abandoned';
   completionNoteTag: string;
   plan?: DevSourceEditPlan;
   allowedFiles: string[];
@@ -71,6 +72,8 @@ export interface DevSourceEditContinuation {
   updatedAt: number;
   completedAt?: number;
   completionNote?: string;
+  abandonedAt?: number;
+  abandonReason?: string;
 }
 
 /**
@@ -285,7 +288,7 @@ export function upsertDevSourceEditContinuation(record: DevSourceEditContinuatio
 export function getLatestPendingDevSourceEditContinuation(sessionId?: string): DevSourceEditContinuation | null {
   const sid = String(sessionId || '').trim();
   const items = readContinuationStore().continuations
-    .filter((item) => item && item.status !== 'complete')
+    .filter((item) => item && item.status !== 'complete' && item.status !== 'abandoned')
     .filter((item) => !sid || item.sessionId === sid)
     .sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
   return items[0] || null;
@@ -467,6 +470,47 @@ export function createDevSourceEditApprovalScope(input: {
   });
   scope.auditId = ledger.displayId;
   return scope;
+}
+
+/**
+ * Record a deliberate runtime stop or terminal provider failure without
+ * erasing the evidence of edits already made. A later attempt must begin with
+ * a fresh approval/resume decision instead of silently reviving this work.
+ */
+export function abandonDevSourceEditContinuationsForSession(input: {
+  sessionId: string;
+  reason?: string;
+}): DevSourceEditContinuation[] {
+  const sessionId = String(input.sessionId || '').trim();
+  if (!sessionId) return [];
+  const now = Date.now();
+  const reason = String(input.reason || 'runtime_aborted').trim().slice(0, 500) || 'runtime_aborted';
+  const abandoned = readContinuationStore().continuations
+    .filter((item) => item?.sessionId === sessionId)
+    .filter((item) => item.status !== 'complete' && item.status !== 'abandoned' && item.status !== 'applying_live')
+    .map((item) => upsertDevSourceEditContinuation({
+      ...item,
+      status: 'abandoned',
+      abandonedAt: now,
+      abandonReason: reason,
+      updatedAt: now,
+    }));
+  // Coordination records can outlive a continuation-store write, so release
+  // them even when there was nothing new to mark in this store.
+  try { abandonCoordinatedDevEditsForSession({ sessionId, reason }); } catch {}
+  if (!abandoned.length) return abandoned;
+  const grant = grants.get(sessionId);
+  if (grant && abandoned.some((item) => item.id === grant.devEditId)) grants.delete(sessionId);
+  appendAuditEntry({
+    sessionId,
+    actionType: 'approval_resolved',
+    toolName: 'dev_edit_abort_cleanup',
+    toolArgs: { devEditIds: abandoned.map((item) => item.id), reason },
+    policyTier: 'commit',
+    approvalStatus: 'rejected',
+    resultSummary: `Abandoned ${abandoned.length} unfinished dev edit(s), retained their evidence, and released their coordination claims.`,
+  });
+  return abandoned;
 }
 
 /**

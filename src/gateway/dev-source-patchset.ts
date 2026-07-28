@@ -71,6 +71,111 @@ export function normalizeDevSourcePatchsetArgs(rawArgs: any): any {
  * whose line endings are mixed. Replacement newlines follow the file's
  * dominant style.
  */
+export function detectDominantNewline(content: string): '\r\n' | '\n' {
+  const text = String(content || '');
+  const crlfCount = (text.match(/\r\n/g) || []).length;
+  const lfCount = (text.match(/(?<!\r)\n/g) || []).length;
+  return crlfCount > lfCount ? '\r\n' : '\n';
+}
+
+/**
+ * Split text into logical lines without trailing CR characters.
+ * Handles LF, CRLF, bare CR, and mixed endings without polluting line text.
+ */
+export function splitLinesEolSafe(content: string): string[] {
+  const text = String(content ?? '');
+  if (!text) return [''];
+  const lines = text.split(/\r\n|\n|\r/);
+  // Preserve trailing empty line semantics of String#split('\n') for files ending in newline.
+  return lines;
+}
+
+export function joinLinesWithNewline(lines: string[], newline: '\r\n' | '\n' = '\n'): string {
+  return (Array.isArray(lines) ? lines : []).join(newline);
+}
+
+export function splitContentForLineEdit(content: string): { lines: string[]; newline: '\r\n' | '\n' } {
+  const text = String(content ?? '');
+  return {
+    lines: splitLinesEolSafe(text),
+    newline: detectDominantNewline(text),
+  };
+}
+
+/**
+ * Split incoming edit payload text into logical lines (no trailing CR),
+ * independent of the target file's EOL style.
+ */
+export function splitIncomingEditLines(text: string): string[] {
+  return splitLinesEolSafe(String(text ?? ''));
+}
+
+export function applyReplaceLinesEolSafe(
+  content: string,
+  startLine: number,
+  endLine: number,
+  newContent: string,
+): { updated: string; lines: string[]; newline: '\r\n' | '\n'; endClamped: number; newLines: string[]; start: number } {
+  const { lines, newline } = splitContentForLineEdit(content);
+  const start = Math.max(1, Math.floor(Number(startLine) || 1));
+  const end = Math.max(start, Math.floor(Number(endLine) || start));
+  const originalLength = lines.length;
+  const endClamped = start <= originalLength ? Math.min(end, originalLength) : 0;
+  const newLines = splitIncomingEditLines(newContent);
+  if (start <= originalLength) {
+    lines.splice(start - 1, Math.max(0, endClamped - start + 1), ...newLines);
+  }
+  return {
+    updated: joinLinesWithNewline(lines, newline),
+    lines,
+    newline,
+    endClamped,
+    newLines,
+    start,
+  };
+}
+
+export function applyInsertAfterEolSafe(
+  content: string,
+  afterLine: number,
+  insertContent: string,
+): { updated: string; lines: string[]; newline: '\r\n' | '\n'; insertAt: number; newLines: string[] } {
+  const { lines, newline } = splitContentForLineEdit(content);
+  const after = Math.max(0, Math.floor(Number(afterLine) || 0));
+  const insertAt = Math.min(after, lines.length);
+  const newLines = splitIncomingEditLines(insertContent);
+  lines.splice(insertAt, 0, ...newLines);
+  return {
+    updated: joinLinesWithNewline(lines, newline),
+    lines,
+    newline,
+    insertAt,
+    newLines,
+  };
+}
+
+export function applyDeleteLinesEolSafe(
+  content: string,
+  startLine: number,
+  endLine: number,
+): { updated: string; lines: string[]; newline: '\r\n' | '\n'; endClamped: number; start: number } {
+  const { lines, newline } = splitContentForLineEdit(content);
+  const start = Math.max(1, Math.floor(Number(startLine) || 1));
+  const end = Math.max(start, Math.floor(Number(endLine) || start));
+  const originalLength = lines.length;
+  const endClamped = start <= originalLength ? Math.min(end, originalLength) : 0;
+  if (start <= originalLength) {
+    lines.splice(start - 1, Math.max(0, endClamped - start + 1));
+  }
+  return {
+    updated: joinLinesWithNewline(lines, newline),
+    lines,
+    newline,
+    endClamped,
+    start,
+  };
+}
+
 export function applyLineEndingTolerantFindReplace(
   content: string,
   find: string,
@@ -104,8 +209,7 @@ export function applyLineEndingTolerantFindReplace(
   }
   if (!matches.length) return null;
 
-  const globalCrlfCount = (content.match(/\r\n/g) || []).length;
-  const globalLfCount = (content.match(/(?<!\r)\n/g) || []).length;
+  const globalNewline = detectDominantNewline(content);
   let updated = content;
   for (const match of [...matches].reverse()) {
     const matchedText = content.slice(match.start, match.end);
@@ -113,7 +217,7 @@ export function applyLineEndingTolerantFindReplace(
     const localLfCount = (matchedText.match(/(?<!\r)\n/g) || []).length;
     const newline = localCrlfCount || localLfCount
       ? (localCrlfCount >= localLfCount ? '\r\n' : '\n')
-      : (globalCrlfCount > globalLfCount ? '\r\n' : '\n');
+      : globalNewline;
     const alignedReplace = replace.replace(/\r\n/g, '\n').replace(/\n/g, newline);
     updated = updated.slice(0, match.start) + alignedReplace + updated.slice(match.end);
   }

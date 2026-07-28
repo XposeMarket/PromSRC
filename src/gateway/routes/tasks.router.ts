@@ -2,7 +2,7 @@
 // Tasks, Background Tasks, Schedules, Error Response routes
 import { Router } from 'express';
 // Proposal imports removed — all /api/proposals* routes live in proposals.router.ts
-import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
+import { ensureAgentWorkspace, getAgentById, getAgents, getConfig } from '../../config/config';
 import { addMessage } from '../session';
 import { broadcastWS } from '../comms/broadcaster';
 import {
@@ -291,7 +291,15 @@ router.put('/api/bg-tasks/heartbeat/config', (req, res) => {
 
 router.get('/api/heartbeat/agents', (_req, res) => {
   try {
-    const agents = _heartbeatRunner.listAgentConfigs();
+    // The configured agent registry is authoritative.  Register newly-created
+    // agents on demand, and never return a runner entry for a deleted agent or
+    // an old workspace directory.
+    const configured = getAgents().filter((agent: any) => agent && agent.id !== 'main' && agent.default !== true);
+    const configuredIds = new Set(configured.map((agent: any) => String(agent.id)));
+    for (const agent of configured) {
+      _heartbeatRunner.registerAgent(agent.id, ensureAgentWorkspace(agent));
+    }
+    const agents = _heartbeatRunner.listAgentConfigs().filter((agent: any) => configuredIds.has(String(agent.agentId)));
     res.json({ success: true, agents });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message });

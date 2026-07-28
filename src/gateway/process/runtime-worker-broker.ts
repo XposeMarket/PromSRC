@@ -294,6 +294,11 @@ export class RuntimeWorkerBroker {
     return this.readyPromise;
   }
 
+  /** Start the child process without submitting work. Safe to call repeatedly. */
+  async warmup(): Promise<void> {
+    await this.ensureReady();
+  }
+
   async run<TResult = unknown>(kind: string, payload: unknown, timeoutMs = this.options.defaultJobTimeoutMs): Promise<TResult> {
     if (this.runClaimed || this.pending.size > 0 || this.state === 'busy') {
       throw new Error(`${this.options.name} is already running a job.`);

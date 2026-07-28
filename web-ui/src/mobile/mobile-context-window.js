@@ -16,11 +16,14 @@ let _outsideHandler = null;
 let _planFetchAt = 0;
 let _planData = null;
 let _activeProvider = '';
+let _activeAccountId = '';
 let _lastSessionId = '';
 let _modelChangeListenerBound = false;
 let _refreshSeq = 0;
 let _refreshTimer = 0;
 let _getSessionId = null;
+let _getProvider = null;
+let _getAccountId = null;
 let _liveTurn = null;
 
 function _fmtDuration(value) {
@@ -310,7 +313,14 @@ function _renderPlan() {
   const body = document.getElementById('pm-ctx-plan-body');
   if (!wrap || !body) return;
   const providers = (_planData && Array.isArray(_planData.providers)) ? _planData.providers : [];
-  const prov = providers.find((p) => String(p.provider).toLowerCase() === String(_activeProvider).toLowerCase());
+  const activeProvider = String(_activeProvider || '').toLowerCase();
+  const activeAccount = String(_activeAccountId || '').trim();
+  const matches = providers.filter((p) => String(p.provider).toLowerCase() === activeProvider);
+  const prov = (activeAccount
+    ? matches.find((p) => String(p.account_id || '') === activeAccount)
+    : null)
+    || matches.find((p) => Array.isArray(p.windows) && p.windows.length)
+    || matches[0];
   if (!prov) { wrap.hidden = true; body.innerHTML = ''; return; }
 
   const windows = Array.isArray(prov.windows) ? prov.windows : [];
@@ -341,17 +351,29 @@ function _renderPlan() {
   wrap.hidden = false;
 }
 
-async function _refresh(sessionId, { force = false, provider = '' } = {}) {
+async function _refresh(sessionId, { force = false, provider = '', accountId = '' } = {}) {
   const seq = ++_refreshSeq;
   _lastSessionId = String(sessionId || _lastSessionId || '');
   const providerOverride = String(provider || '').trim().toLowerCase();
+  const accountOverride = String(accountId || '').trim();
   if (force) {
     _planFetchAt = 0;
     _planData = null;
     if (providerOverride) _activeProvider = providerOverride;
+    else if (typeof _getProvider === 'function') _activeProvider = String(_getProvider() || '').trim().toLowerCase();
     else _activeProvider = '';
-  } else if (providerOverride) {
-    _activeProvider = providerOverride;
+    if (accountOverride) _activeAccountId = accountOverride;
+    else if (typeof _getAccountId === 'function') _activeAccountId = String(_getAccountId() || '').trim();
+    else _activeAccountId = '';
+  } else {
+    if (providerOverride) _activeProvider = providerOverride;
+    else if (!_activeProvider && typeof _getProvider === 'function') {
+      _activeProvider = String(_getProvider() || '').trim().toLowerCase();
+    }
+    if (accountOverride) _activeAccountId = accountOverride;
+    else if (!_activeAccountId && typeof _getAccountId === 'function') {
+      _activeAccountId = String(_getAccountId() || '').trim();
+    }
   }
 
   // Context window for the active session.
@@ -364,12 +386,27 @@ async function _refresh(sessionId, { force = false, provider = '' } = {}) {
     }
   } catch { if (seq === _refreshSeq) _renderContext(null); }
 
-  // Active provider (for plan-usage scoping) + usage limits. Model-change events
-  // force this cache so plan usage updates at the same time as the context ring.
+  // Active provider/account (for plan-usage scoping) + usage limits. Model-change
+  // events force this cache so plan usage updates with the context ring.
   try {
-    if (!_activeProvider) {
-      const p = await mobileGatewayFetch('/api/settings/provider');
-      _activeProvider = String(p?.llm?.provider || '').toLowerCase();
+    if (!_activeProvider || !_activeAccountId) {
+      const scopedProvider = typeof _getProvider === 'function' ? String(_getProvider() || '').trim().toLowerCase() : '';
+      const scopedAccount = typeof _getAccountId === 'function' ? String(_getAccountId() || '').trim() : '';
+      if (!_activeProvider && scopedProvider) _activeProvider = scopedProvider;
+      if (!_activeAccountId && scopedAccount) _activeAccountId = scopedAccount;
+      if (!_activeProvider || !_activeAccountId) {
+        const p = await mobileGatewayFetch('/api/settings/provider');
+        if (!_activeProvider) _activeProvider = String(p?.llm?.provider || '').toLowerCase();
+        if (!_activeAccountId) {
+          const providerId = _activeProvider || String(p?.llm?.provider || '').toLowerCase();
+          const providerCfg = p?.llm?.providers?.[providerId] || {};
+          _activeAccountId = String(
+            p?.llm?.accountId
+            || providerCfg.defaultAccountId
+            || '',
+          ).trim();
+        }
+      }
     }
     const now = Date.now();
     if (force || !_planData || now - _planFetchAt > 60000) {
@@ -377,14 +414,17 @@ async function _refresh(sessionId, { force = false, provider = '' } = {}) {
       if (lim && lim.success !== false) { _planData = lim; _planFetchAt = now; }
     }
     if (seq === _refreshSeq) _renderPlan();
-    if (force) console.info('[mobile context] refreshed after model change', { sessionId, provider: _activeProvider });
+    if (force) console.info('[mobile context] refreshed after model change', { sessionId, provider: _activeProvider, accountId: _activeAccountId });
   } catch { /* leave plan hidden */ }
 }
 
 function _providerFromModelChange(detail = {}) {
   const modelRef = String(detail?.modelRef || '').trim();
   const slashIdx = modelRef.indexOf('/');
-  return String(detail?.provider || detail?.providerId || (slashIdx > 0 ? modelRef.slice(0, slashIdx) : '') || '').trim().toLowerCase();
+  const provider = String(detail?.provider || detail?.providerId || (slashIdx > 0 ? modelRef.slice(0, slashIdx) : '') || '').trim().toLowerCase();
+  const accountId = String(detail?.accountId || detail?.account_id || '').trim();
+  if (accountId) _activeAccountId = accountId;
+  return provider;
 }
 
 function _bindModelChangeListener(getSessionId) {
@@ -392,7 +432,9 @@ function _bindModelChangeListener(getSessionId) {
   _modelChangeListenerBound = true;
   window.__pmMobileRefreshContextWindow = (detail = {}) => {
     const sid = String(detail?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || _lastSessionId || '');
-    return _refresh(sid, { force: true, provider: _providerFromModelChange(detail) });
+    const provider = _providerFromModelChange(detail);
+    const accountId = String(detail?.accountId || detail?.account_id || (typeof _getAccountId === 'function' ? _getAccountId() : '') || '').trim();
+    return _refresh(sid, { force: true, provider, accountId });
   };
   window.addEventListener('pm-model-changed', (event) => {
     window.__pmMobileRefreshContextWindow?.(event?.detail || {});
@@ -432,11 +474,13 @@ function _open_(getSessionId) {
   document.addEventListener('pointerdown', _outsideHandler, true);
 }
 
-export function wireMobileContextWindow(page, { getSessionId } = {}) {
+export function wireMobileContextWindow(page, { getSessionId, getProvider, getAccountId } = {}) {
   const chip = page.querySelector('#pm-ctx-chip');
   const toggle = page.querySelector('#pm-ctx-toggle');
   if (!chip) return;
   _getSessionId = typeof getSessionId === 'function' ? getSessionId : null;
+  _getProvider = typeof getProvider === 'function' ? getProvider : null;
+  _getAccountId = typeof getAccountId === 'function' ? getAccountId : null;
   _bindModelChangeListener(getSessionId);
   window.__pmMobileContextTurnStart = (detail = {}) => _resetLiveTurn(String(detail?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || ''));
   window.__pmMobileContextTurnDone = (detail = {}) => _settleLiveTurn(String(detail?.sessionId || (typeof getSessionId === 'function' ? getSessionId() : '') || ''));
@@ -470,5 +514,8 @@ export function wireMobileContextWindow(page, { getSessionId } = {}) {
 
   // Pre-load so the ring shows the real fill as soon as the chat opens,
   // not just after the popover is first tapped.
-  _refresh(typeof getSessionId === 'function' ? getSessionId() : '');
+  _refresh(typeof getSessionId === 'function' ? getSessionId() : '', {
+    provider: typeof getProvider === 'function' ? getProvider() : '',
+    accountId: typeof getAccountId === 'function' ? getAccountId() : '',
+  });
 }

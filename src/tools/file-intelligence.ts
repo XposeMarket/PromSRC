@@ -143,9 +143,16 @@ export function resolveResultCharBudget(args: any, defaultChars: number): number
   return Math.max(800, Math.min(hardChars, requestedChars));
 }
 
+export function patternLooksLikeRegex(pattern: string): boolean {
+  // Common regex metacharacters agents accidentally pass in literal mode.
+  return /[|\\.*+?^${}()[\]]/.test(String(pattern || ''));
+}
+
 export function createSearchMatcher(pattern: string, opts: { regex?: boolean; literal?: boolean; caseInsensitive?: boolean } = {}): SearchMatcher {
   const raw = String(pattern || '');
-  const useRegex = opts.regex === true && opts.literal !== true;
+  // Explicit literal always wins. Explicit regex wins over default.
+  // Otherwise stay literal so patterns like "a|b" do not silently become alternation.
+  const useRegex = opts.literal === true ? false : opts.regex === true;
   const source = useRegex ? raw : escapeRegExp(raw);
   const flags = `g${opts.caseInsensitive ? 'i' : ''}`;
   return {
@@ -164,7 +171,7 @@ export function detectLanguage(filePath: string): string {
 }
 
 export function trimToolLine(line: string, max = 500): string {
-  const value = String(line ?? '');
+  const value = String(line ?? '').replace(/\r$/, '');
   return value.length <= max ? value : `${value.slice(0, max)}...[line truncated]`;
 }
 
@@ -815,7 +822,7 @@ export function collectGrepMatchesInText(
   matcher: SearchMatcher,
   opts: { maxResults: number; contextLines?: number; before?: number; after?: number; charBefore?: number; charAfter?: number; charWindow?: number },
 ): { matches: GrepMatchRecord[]; totalMatches: number; truncatedCount: number; limitReached: boolean } {
-  const lines = String(content || '').split('\n');
+  const lines = String(content || '').split(/\r\n|\n|\r/);
   const maxResults = Math.max(1, Math.floor(Number(opts.maxResults) || 50));
   const contextLines = Math.max(0, Math.min(3, Math.floor(Number(opts.contextLines) || 0)));
   const explicitCharWindow = Math.floor(Number(opts.charWindow) || 0);
@@ -912,6 +919,9 @@ export function buildNoMatchHints(input: { pattern: string; searched: string; mo
     'try case_insensitive:true if casing may differ',
     input.pathHint ? `verify the searched path: ${input.pathHint}` : `searched only ${input.searched}`,
   ];
+  if (input.mode === 'literal' && patternLooksLikeRegex(input.pattern)) {
+    hints.unshift('pattern contains regex metacharacters but search_mode is literal; set regex:true if you meant a regex (e.g. a|b), or keep literal for an exact string match');
+  }
   if (input.excluded?.length) hints.push(`default excludes may hide matches: ${input.excluded.slice(0, 8).join(', ')}`);
   if (/[-_\s]/.test(input.pattern)) hints.push('try alternate separators such as spaces, hyphens, underscores, or camelCase');
   return hints;

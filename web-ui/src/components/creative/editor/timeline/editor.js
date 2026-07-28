@@ -120,19 +120,47 @@ function renderTicks(duration) {
   return out;
 }
 
-export function createTimelineEditor({ container, store, getScene, applyOps }) {
+function renderCompositionClip(clip, duration, selectedId) {
+  const start = Math.max(0, Number(clip?.inMs) || 0);
+  const end = Math.max(start + 100, Number(clip?.outMs) || start + 1000);
+  const left = (start / duration) * 100;
+  const width = Math.max(0.4, ((end - start) / duration) * 100);
+  const selected = selectedId && selectedId === clip.id ? ' is-selected' : '';
+  const label = clip.label || clip.source?.path || clip.id;
+  return `
+    <div class="ce-track-row__clip ce-clip--video${selected}" data-ce-comp-clip="${safeHtml(clip.id)}"
+      style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"
+      title="${safeHtml(label)} • ${fmtTime(start)} - ${fmtTime(end)}">
+      <span class="ce-timeline-clip-label">${safeHtml(label)}</span>
+    </div>
+  `;
+}
+
+export function createTimelineEditor({ container, store, getScene, applyOps, getCompositionBridge = null }) {
   let drag = null;
+
+  function bridge() {
+    try { return typeof getCompositionBridge === 'function' ? getCompositionBridge() : null; } catch { return null; }
+  }
 
   function render() {
     const scene = getScene() || {};
-    const duration = Math.max(1000, Number(scene.durationMs) || Number(store.getState().durationMs) || 12000);
+    const b = bridge();
+    const comp = b?.getComposition?.() || null;
+    const seq = b?.getSequenceState?.() || null;
+    const duration = Math.max(
+      1000,
+      Number(comp?.durationMs) || Number(scene.durationMs) || Number(store.getState().durationMs) || 12000,
+    );
     const elements = Array.isArray(scene.elements) ? scene.elements : [];
     const selectedIds = store.getState().selectedIds || [];
-    const timeMs = clamp(Number(store.getState().timeMs) || 0, 0, duration);
+    const timeMs = clamp(Number(store.getState().timeMs) || Number(b?.getPlayheadMs?.()) || 0, 0, duration);
     const playheadLeft = (timeMs / duration) * 100;
     const lanes = buildLanes(elements, duration);
+    const compClips = Array.isArray(comp?.clips) ? comp.clips.slice().sort((a, c) => (a.inMs || 0) - (c.inMs || 0)) : [];
+    const selectedCompId = comp?.selectedClipId || null;
 
-    const laneRowsHtml = lanes.length
+    const sceneRowsHtml = lanes.length
       ? lanes.map(lane => `
           <div class="ce-track-row" data-ce-cat="${lane.cat}">
             <div class="ce-track-row__lane" data-ce-lane>
@@ -140,17 +168,44 @@ export function createTimelineEditor({ container, store, getScene, applyOps }) {
             </div>
           </div>
         `).join('')
-      : '<div class="ce-timeline-stub__empty">Drop or generate media to build the edit.</div>';
+      : '';
 
-    const gutterHtml = lanes.map(lane =>
-      `<div class="ce-tl-gutter-row" title="${safeHtml(lane.label)}">${safeHtml(lane.label)}</div>`
+    const compositionRowHtml = compClips.length
+      ? `
+          <div class="ce-track-row" data-ce-cat="video" data-ce-composition-lane="1">
+            <div class="ce-track-row__lane" data-ce-lane>
+              ${compClips.map(clip => renderCompositionClip(clip, duration, selectedCompId)).join('')}
+            </div>
+          </div>
+        `
+      : '';
+
+    const laneRowsHtml = (compositionRowHtml + sceneRowsHtml)
+      || '<div class="ce-timeline-stub__empty">Open a sequence or drop media to build the edit.</div>';
+
+    const gutterRows = [];
+    if (compClips.length) gutterRows.push({ label: seq?.id ? 'Sequence' : 'Composition' });
+    for (const lane of lanes) gutterRows.push({ label: lane.label });
+    const gutterHtml = gutterRows.map(row =>
+      `<div class="ce-tl-gutter-row" title="${safeHtml(row.label)}">${safeHtml(row.label)}</div>`
     ).join('');
+
+    const seqTitle = seq?.id
+      ? `Sequence · ${safeHtml(seq.title || seq.id)} · ${safeHtml(seq.status || 'draft')}`
+      : (compClips.length ? `Composition · ${compClips.length} clips` : 'Timeline');
 
     container.innerHTML = `
       <div class="ce-timeline-stub ce-timeline-editor ce-timeline-multitrack">
-        <div class="ce-timeline-stub__header">
-          <span class="ce-timeline-stub__label">Timeline</span>
-          <span class="ce-timeline-stub__dur">${fmtTime(timeMs)} / ${fmtTime(duration)}</span>
+        <div class="ce-timeline-stub__header" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span class="ce-timeline-stub__label">${seqTitle}</span>
+          <span style="display:flex;align-items:center;gap:6px">
+            <span class="ce-timeline-stub__dur">${fmtTime(timeMs)} / ${fmtTime(duration)}</span>
+            <button type="button" data-ce-comp-action="open" style="border:1px solid rgba(214,179,90,0.45);background:rgba(214,179,90,0.1);color:#f0d98a;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer">Open sequence</button>
+            ${seq?.id ? '<button type="button" data-ce-comp-action="save" style="border:1px solid rgba(214,179,90,0.45);background:rgba(214,179,90,0.1);color:#f0d98a;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer">Save</button>' : ''}
+            <button type="button" data-ce-comp-action="split" style="border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.05);color:#f5f5f4;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer">Split</button>
+            <button type="button" data-ce-comp-action="delete" style="border:1px solid rgba(244,63,94,0.35);background:rgba(244,63,94,0.1);color:#fca5a5;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer">Del</button>
+            <button type="button" data-ce-comp-action="render" style="border:1px solid rgba(168,85,247,0.35);background:rgba(168,85,247,0.1);color:#c4b5fd;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:700;cursor:pointer">Render</button>
+          </span>
         </div>
         <div class="ce-tl-body">
           <div class="ce-tl-gutter">
@@ -240,7 +295,28 @@ export function createTimelineEditor({ container, store, getScene, applyOps }) {
     }, { history: commit });
   }
 
+  container.addEventListener('click', (e) => {
+    const actionBtn = e.target.closest?.('[data-ce-comp-action]');
+    if (actionBtn) {
+      const action = actionBtn.getAttribute('data-ce-comp-action');
+      const b = bridge();
+      if (action === 'open') b?.openSequence?.();
+      else if (action === 'save') b?.saveSequence?.();
+      else if (action === 'render') b?.render?.();
+      else if (action === 'split') b?.splitAtPlayhead?.();
+      else if (action === 'delete') b?.deleteSelected?.();
+      e.preventDefault();
+      return;
+    }
+    const compClip = e.target.closest?.('[data-ce-comp-clip]');
+    if (compClip) {
+      bridge()?.selectClip?.(compClip.getAttribute('data-ce-comp-clip'));
+      e.preventDefault();
+    }
+  });
+
   container.addEventListener('pointerdown', (e) => {
+    if (e.target.closest?.('[data-ce-comp-action],[data-ce-comp-clip]')) return;
     const clip = e.target.closest?.('[data-ce-clip]');
     if (clip) {
       startDrag(e, clip);

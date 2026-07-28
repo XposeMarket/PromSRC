@@ -107,6 +107,8 @@ function copyPublicWebVendorAssets() {
   copyVendorFile('node_modules/@iconify/iconify/dist/iconify.min.js', 'iconify/iconify.min.js');
   copyVendorFile('node_modules/@lottiefiles/lottie-player/dist/lottie-player.js', 'lottie-player/lottie-player.js');
   copyVendorFile('node_modules/chart.js/dist/chart.umd.js', 'chart/chart.umd.js');
+  copyVendorFile('node_modules/maplibre-gl/dist/maplibre-gl.js', 'maplibre/maplibre-gl.js');
+  copyVendorFile('node_modules/maplibre-gl/dist/maplibre-gl.css', 'maplibre/maplibre-gl.css');
   copyVendorFile('node_modules/mermaid/dist/mermaid.min.js', 'mermaid/mermaid.min.js');
   writeLocalFontCss();
 }

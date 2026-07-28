@@ -5243,7 +5243,14 @@ function applyCreativeModeUI(options = {}) {
   renderCanvasPublishControls();
   syncCanvasSurfaceWidthLock();
   if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
-  syncCreativeEditor({ mode: normalizeCreativeMode(window.currentCreativeMode), shell: document.getElementById('canvas-creative-shell'), scene: window.prometheusCreativeScene, api: window.prometheusCreativeCore });
+  window.prometheusCreativeCompositionBridge = getCreativeCompositionBridge();
+  syncCreativeEditor({
+    mode: normalizeCreativeMode(window.currentCreativeMode),
+    shell: document.getElementById('canvas-creative-shell'),
+    scene: window.prometheusCreativeScene,
+    api: window.prometheusCreativeCore,
+    compositionBridge: window.prometheusCreativeCompositionBridge,
+  });
 }
 
 function revealCreativeCanvasForWorkspaceOutput(mode = window.currentCreativeMode) {
@@ -10250,16 +10257,11 @@ function renderRunResultArtifact(a) {
   </div>`;
 }
 
-function mapEmbedSrc(center, markers, zoom) {
-  const located = markers.filter((m) => Number.isFinite(Number(m.lat)) && Number.isFinite(Number(m.lng)));
-  const lat = Number(center?.lat), lng = Number(center?.lng);
-  // bbox span shrinks as zoom grows; clamp to a reasonable default.
-  const span = Math.max(0.01, 0.08 / Math.max(1, (Number(zoom) || 12) / 12));
-  const latS = Number.isFinite(lat) ? lat : (located[0]?.lat || 0);
-  const lngS = Number.isFinite(lng) ? lng : (located[0]?.lng || 0);
-  const W = lngS - span, S = latS - span, E = lngS + span, N = latS + span;
-  const mark = located[0] ? `&marker=${located[0].lat},${located[0].lng}` : '';
-  return `https://www.openstreetmap.org/export/embed.html?bbox=${W},${S},${E},${N}&layer=mapnik${mark}`;
+function richMapSrcdoc(center, markers, zoom) {
+  const located = markers.filter((m) => Number.isFinite(Number(m.lat)) && Number.isFinite(Number(m.lng))).map((m) => ({ ...m, lat: Number(m.lat), lng: Number(m.lng) }));
+  const fallback = located[0] || { lat: 0, lng: 0 };
+  const payload = JSON.stringify({ center: { lat: Number(center?.lat) || fallback.lat, lng: Number(center?.lng) || fallback.lng }, zoom: Math.max(2, Math.min(18, Number(zoom) || 12)), markers: located }).replace(/</g, '\\u003c');
+  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css"><style>html,body,#map{margin:0;width:100%;height:100%;overflow:hidden;background:#09151d}.maplibregl-canvas{filter:brightness(.72) saturate(.82) contrast(1.06)}.maplibregl-ctrl-group{overflow:hidden!important;border:1px solid rgba(164,205,219,.22)!important;border-radius:10px!important;background:rgba(10,25,34,.86)!important;box-shadow:0 8px 22px rgba(0,0,0,.3)!important;backdrop-filter:blur(10px)}.maplibregl-ctrl-group button{width:31px!important;height:31px!important}.maplibregl-ctrl-group button span{filter:invert(1) hue-rotate(145deg) saturate(.55)}.maplibregl-ctrl-attrib{padding:2px 6px!important;border-radius:8px 0 0 0!important;background:rgba(8,20,28,.74)!important;color:#9eb4bd!important;font:10px/1.35 system-ui!important}.maplibregl-ctrl-attrib a{color:#c2d6da!important}.pm-pin{width:18px;height:18px;border:3px solid #f5fbfc;border-radius:50% 50% 50% 0;background:#31b6cf;box-shadow:0 0 0 4px rgba(49,182,207,.2),0 5px 14px rgba(0,0,0,.45);transform:rotate(-45deg)}.pm-pin:after{content:'';position:absolute;inset:4px;border-radius:50%;background:#073745}.maplibregl-popup-content{padding:9px 11px!important;border:1px solid rgba(166,221,230,.2)!important;border-radius:10px!important;background:#0d202a!important;color:#e9f5f7!important;font:12px/1.35 system-ui!important;box-shadow:0 10px 28px rgba(0,0,0,.35)!important}.maplibregl-popup-tip{border-top-color:#0d202a!important;border-bottom-color:#0d202a!important}</style></head><body><div id="map"></div><script src="/vendor/maplibre/maplibre-gl.js"><\/script><script>const payload=${payload};const map=new maplibregl.Map({container:'map',style:{version:8,sources:{carto:{type:'raster',tiles:['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],tileSize:256,attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>'}},layers:[{id:'background',type:'background',paint:{'background-color':'#09151d'}},{id:'carto',type:'raster',source:'carto',paint:{'raster-saturation':-.18,'raster-contrast':.08}}]},center:[payload.center.lng,payload.center.lat],zoom:payload.zoom,attributionControl:false});map.addControl(new maplibregl.NavigationControl({showCompass:false}),'top-right');map.addControl(new maplibregl.AttributionControl({compact:true}));const popup=(m)=>{const node=document.createElement('div');const title=document.createElement('strong');title.textContent=m.label||'Location';node.append(title);if(m.address){const sub=document.createElement('div');sub.style.opacity='.72';sub.style.marginTop='2px';sub.textContent=m.address;node.append(sub)}return node};map.on('load',()=>{const bounds=new maplibregl.LngLatBounds();payload.markers.forEach((m)=>{bounds.extend([m.lng,m.lat]);const pin=document.createElement('div');pin.className='pm-pin';new maplibregl.Marker({element:pin,anchor:'bottom'}).setLngLat([m.lng,m.lat]).setPopup(new maplibregl.Popup({offset:18,closeButton:false}).setDOMContent(popup(m))).addTo(map)});if(payload.markers.length>1)map.fitBounds(bounds,{padding:42,maxZoom:14,duration:0})});<\/script></body></html>`;
 }
 
 function renderMapArtifact(a) {
@@ -10267,7 +10269,7 @@ function renderMapArtifact(a) {
   const markers = Array.isArray(a.markers) ? a.markers : [];
   if (!markers.length) return '';
   const title = String(a.title || '').trim();
-  const iframe = `<iframe class="map-frame" src="${escHtml(mapEmbedSrc(a.center, markers, a.zoom))}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>`;
+  const iframe = `<iframe class="map-frame" title="Interactive map" srcdoc="${escHtml(richMapSrcdoc(a.center, markers, a.zoom))}" loading="lazy"></iframe>`;
   const list = markers.map((m, i) => {
     const name = String(m.label || `Location ${i + 1}`);
     const cat = String(m.category || '').trim();
@@ -10301,15 +10303,25 @@ function renderWeatherArtifact(a) {
   const daily = Array.isArray(a.daily) ? a.daily : [];
   const hourly = Array.isArray(a.hourly) ? a.hourly : [];
   if (!loc && !daily.length) return '';
-  const days = daily.map((d) => `
-    <div class="wx-day">
+  const selectDay = `const c=this.closest('.weather-artifact');const i=Number(this.dataset.wxDay);c.querySelectorAll('.wx-day').forEach((b)=>{const active=Number(b.dataset.wxDay)===i;b.classList.toggle('is-active',active);b.setAttribute('aria-pressed',String(active))});c.querySelectorAll('.wx-hourly-panel').forEach((p)=>{p.hidden=Number(p.dataset.wxPanel)!==i});`;
+  const days = daily.map((d, i) => `
+    <button type="button" class="wx-day${i === 0 ? ' is-active' : ''}" data-wx-day="${i}" aria-pressed="${i === 0 ? 'true' : 'false'}" onclick="${selectDay}">
       <div class="wx-day-name">${escHtml(String(d.day || ''))}</div>
       <div class="wx-day-icon">${escHtml(String(d.icon || '🌡️'))}</div>
       <div class="wx-day-hi">${d.high != null ? escHtml(String(d.high)) + '°' : ''}</div>
       <div class="wx-day-lo">${d.low != null ? escHtml(String(d.low)) + '°' : ''}</div>
-    </div>`).join('');
-  const hrs = hourly.length ? awSparklineSvg(hourly.map((h) => Number(h.temp)).filter((n) => Number.isFinite(n)), true) : '';
-  const hrLabels = hourly.length ? `<div class="wx-hourly-labels">${hourly.map((h) => `<span>${escHtml(String(h.time || ''))}<em>${h.temp != null ? escHtml(String(h.temp)) + '°' : ''}</em></span>`).join('')}</div>` : '';
+    </button>`).join('');
+  const panels = daily.map((d, i) => {
+    const date = String(d.date || '');
+    const hours = hourly.filter((h) => (date ? String(h.date || '') === date : i === 0 && !h.date));
+    const cells = hours.map((h) => {
+      const precip = Number(h.precipitationProbability);
+      const feels = Number(h.feelsLike);
+      const showFeels = Number.isFinite(feels) && Math.abs(feels - Number(h.temp)) >= 2;
+      return `<div class="wx-hour"><span class="wx-hour-time">${escHtml(String(h.time || ''))}</span><span class="wx-hour-icon">${escHtml(String(h.icon || '🌡️'))}</span><strong>${h.temp != null ? escHtml(String(h.temp)) + '°' : '—'}</strong>${showFeels ? `<small>Feels ${escHtml(String(feels))}°</small>` : ''}${Number.isFinite(precip) && precip > 0 ? `<small class="wx-hour-rain">💧 ${precip}%</small>` : ''}</div>`;
+    }).join('');
+    return `<div class="wx-hourly-panel" data-wx-panel="${i}"${i === 0 ? '' : ' hidden'}><div class="wx-hourly-title"><strong>${escHtml(String(d.day || ''))} hourly</strong><span>Swipe for more</span></div>${cells ? `<div class="wx-hourly-track">${cells}</div>` : `<div class="wx-hourly-empty">Hourly details are unavailable for this day.</div>`}</div>`;
+  }).join('');
   return `<div class="weather-artifact">
     <div class="wx-head">
       <div class="wx-loc">${escHtml(loc)}</div>
@@ -10317,7 +10329,7 @@ function renderWeatherArtifact(a) {
       <div class="wx-cond">${escHtml(String(cur.icon || ''))} ${escHtml(String(cur.condition || ''))}</div>
     </div>
     ${days ? `<div class="wx-days">${days}</div>` : ''}
-    ${hrs ? `<div class="wx-hourly">${hrs}${hrLabels}</div>` : ''}
+    ${panels ? `<div class="wx-hourly">${panels}</div>` : ''}
   </div>`;
 }
 
@@ -10340,53 +10352,20 @@ function renderComparisonArtifact(a) {
   </div>`;
 }
 
-const CHART_COLORS = ['#5a91ff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4'];
+function richChartSrcdoc(artifact, dark = false) {
+  const series = (Array.isArray(artifact?.series) ? artifact.series : []).map((s) => ({ ...s, points: (Array.isArray(s?.points) ? s.points : (Array.isArray(s?.data) ? s.data : [])).map((p, i) => ({ x: p?.x ?? p?.label ?? p?.date ?? p?.time ?? i + 1, y: Number(p?.y ?? p?.value) })).filter((p) => Number.isFinite(p.y)) })).filter((s) => s.points.length);
+  const payload = JSON.stringify({ chartType: artifact?.chartType, series, xLabel: artifact?.xLabel, yLabel: artifact?.yLabel, unit: artifact?.unit, stacked: artifact?.stacked === true, dark }).replace(/</g, '\\u003c');
+  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:${dark ? '#141b22' : '#fff'};font-family:system-ui,sans-serif}#chart{height:100%;width:100%}</style></head><body><canvas id="chart"></canvas><script src="/vendor/chart/chart.umd.js"><\/script><script>const a=${payload};const palette=['#55a7ff','#42d392','#f6b44d','#fb7185','#b58cff','#2dd4bf','#f472b6','#a3e635'];const labels=[...new Set(a.series.flatMap(s=>s.points.map(p=>String(p.x))))];const rgba=(hex,alpha)=>{const clean=String(hex||'').replace('#','');if(!/^[0-9a-f]{6}$/i.test(clean))return 'rgba(85,167,255,'+alpha+')';const n=parseInt(clean,16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+alpha+')'};const radial=['pie','doughnut'].includes(a.chartType);const type=a.chartType==='area'?'line':(a.chartType==='scatter'?'scatter':(radial?a.chartType:(a.chartType==='bar'?'bar':'line')));const datasets=a.series.map((s,i)=>{const color=s.color||palette[i%palette.length];const values=radial?s.points.map(p=>p.y):(type==='scatter'?s.points.map(p=>({x:p.x,y:p.y})):labels.map(x=>{const p=s.points.find(point=>String(point.x)===x);return p?p.y:null}));return {label:s.label||'Series '+(i+1),data:values,borderColor:color,backgroundColor:radial?s.points.map((p,j)=>p.color||palette[j%palette.length]):rgba(color,type==='bar'?'.72':(a.chartType==='area'?'.25':'.12')),borderWidth:radial?1:2,fill:a.chartType==='area',tension:.32,pointRadius:type==='line'?2.5:(type==='scatter'?4:0),pointHoverRadius:5,borderRadius:type==='bar'?5:0,stack:a.stacked?'prometheus':undefined};});const tickColor=a.dark?'#9fb1bd':'#64748b';const gridColor=a.dark?'rgba(173,208,220,.12)':'rgba(100,116,139,.14)';new Chart(document.getElementById('chart'),{type,data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},plugins:{legend:{display:!radial&&datasets.length>1,position:'bottom',labels:{color:tickColor,boxWidth:10,boxHeight:10,padding:14,font:{size:11}}},tooltip:{backgroundColor:a.dark?'#0b1820':'#0f172a',padding:10,callbacks:{label:c=>{const v=c.parsed.y??c.raw;return ' '+c.dataset.label+': '+String(v)+(a.unit||'')}}}},scales:radial?{}:{x:{stacked:a.stacked,ticks:{color:tickColor,maxRotation:0,autoSkip:true,maxTicksLimit:7,font:{size:10}},title:{display:!!a.xLabel,text:a.xLabel,color:tickColor,font:{size:10,weight:'600'}},grid:{display:false}},y:{stacked:a.stacked,ticks:{color:tickColor,font:{size:10},callback:v=>String(v)+(a.unit||'')},title:{display:!!a.yLabel,text:a.yLabel,color:tickColor,font:{size:10,weight:'600'}},grid:{color:gridColor}}}}});<\/script></body></html>`;
+}
 
 function renderChartArtifact(a) {
-  const series = Array.isArray(a?.series) ? a.series.filter((s) => s && Array.isArray(s.points) && s.points.length) : [];
-  if (!series.length) return '';
   const title = String(a?.title || '').trim();
-  const type = ['line', 'bar', 'area'].includes(a?.chartType) ? a.chartType : 'line';
-  const W = 460, H = 180, padL = 8, padR = 8, padT = 10, padB = 10;
-  const allY = series.flatMap((s) => s.points.map((p) => Number(p.y)).filter((n) => Number.isFinite(n)));
-  const minY = Math.min(0, ...allY), maxY = Math.max(...allY);
-  const rangeY = (maxY - minY) || 1;
-  const maxLen = Math.max(...series.map((s) => s.points.length));
-  const innerW = W - padL - padR, innerH = H - padT - padB;
-  const xAt = (i) => padL + (maxLen <= 1 ? innerW / 2 : (i / (maxLen - 1)) * innerW);
-  const yAt = (y) => padT + innerH - ((Number(y) - minY) / rangeY) * innerH;
-
-  let body = '';
-  if (type === 'bar') {
-    const groupW = innerW / maxLen;
-    const barW = Math.max(2, (groupW / series.length) * 0.7);
-    series.forEach((s, si) => {
-      const color = s.color || CHART_COLORS[si % CHART_COLORS.length];
-      s.points.forEach((p, i) => {
-        const x = padL + i * groupW + si * (groupW / series.length) + (groupW / series.length - barW) / 2;
-        const y = yAt(p.y), y0 = yAt(0);
-        body += `<rect x="${x.toFixed(1)}" y="${Math.min(y, y0).toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.abs(y0 - y).toFixed(1)}" fill="${color}" rx="1.5"/>`;
-      });
-    });
-  } else {
-    series.forEach((s, si) => {
-      const color = s.color || CHART_COLORS[si % CHART_COLORS.length];
-      const d = s.points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yAt(p.y).toFixed(1)}`).join(' ');
-      if (type === 'area') {
-        const area = `${d} L${xAt(s.points.length - 1).toFixed(1)},${yAt(minY).toFixed(1)} L${xAt(0).toFixed(1)},${yAt(minY).toFixed(1)} Z`;
-        body += `<path d="${area}" fill="${color}" opacity="0.14"/>`;
-      }
-      body += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
-    });
-  }
-  const legend = series.length > 1 || series[0].label
-    ? `<div class="chart-legend">${series.map((s, si) => `<span><i style="background:${s.color || CHART_COLORS[si % CHART_COLORS.length]}"></i>${escHtml(String(s.label || `Series ${si + 1}`))}</span>`).join('')}</div>`
-    : '';
-  return `<div class="chart-artifact">
-    ${title ? `<div class="chart-heading">${escHtml(title)}</div>` : ''}
-    <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">${body}</svg>
-    ${legend}
-  </div>`;
+  const source = String(a?.source || '').trim();
+  const updatedAt = a?.updatedAt ? new Date(a.updatedAt) : null;
+  const freshness = updatedAt && Number.isFinite(updatedAt.getTime()) ? `Updated ${updatedAt.toLocaleString()}` : '';
+  const dark = document.documentElement?.dataset?.theme === 'dark';
+  const chart = richChartSrcdoc(a, dark);
+  return `<div class="chart-artifact">${title ? `<div class="chart-heading">${escHtml(title)}</div>` : ''}<div class="chart-frame-wrap"><iframe class="chart-frame" title="Interactive ${escHtml(String(a?.chartType || 'line'))} chart" srcdoc="${escHtml(chart)}" loading="lazy"></iframe></div>${(source || freshness) ? `<div class="chart-meta">${source ? `<span>${escHtml(source)}</span>` : ''}${freshness ? `<span>${escHtml(freshness)}</span>` : ''}</div>` : ''}</div>`;
 }
 
 function renderSourcesArtifact(artifact) {
@@ -33551,6 +33530,29 @@ function ensureCreativeComposition() {
   if (!creativeComposition) creativeComposition = createVideoCompositionFromActiveClip();
   return creativeComposition;
 }
+
+function getCreativeCompositionBridge() {
+  return {
+    getComposition: () => creativeComposition,
+    getSequenceState: () => ({ ...creativeSequenceState }),
+    ensureComposition: () => ensureCreativeComposition(),
+    openSequence: () => window.canvasSequenceOpen?.(),
+    saveSequence: () => window.canvasSequenceSave?.(),
+    render: () => window.canvasCompositionRender?.(),
+    splitAtPlayhead: () => window.canvasCompositionSplitAtPlayhead?.(),
+    deleteSelected: () => window.canvasCompositionDeleteSelected?.(),
+    selectClip: (clipId) => {
+      const comp = ensureCreativeComposition();
+      if (!comp) return;
+      comp.selectedClipId = clipId || null;
+      persistCompositionState();
+      renderCreativeWorkspace?.();
+    },
+    getPlayheadMs: () => Number(creativeTimelineMs) || 0,
+  };
+}
+
+window.prometheusCreativeCompositionBridge = getCreativeCompositionBridge();
 
 function recomputeCompositionDuration(comp) {
   const computed = comp.clips.reduce((max, c) => Math.max(max, c.outMs || 0), 0);

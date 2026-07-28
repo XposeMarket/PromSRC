@@ -10,6 +10,7 @@ import path from 'path';
 import {
   loadTask, saveTask, updateTaskStatus, setTaskStepRunning, appendJournal,
   updateResumeContext, listTasks, deleteTask, mutatePlan, getEvidenceBusSnapshot,
+  findTaskCandidatesForOwnerSession, findTaskCandidatesForReplySession,
   createTask, type TaskRecord, type TaskStatus,
 } from './task-store';
 import { addMessage, clearHistory } from '../session';
@@ -117,7 +118,7 @@ function buildPreviousFailureResumeMessage(task: TaskRecord, action: 'resume' | 
 }
 
 function findRecoveryTaskForReplySession(sessionId: string, statuses?: TaskStatus[]): TaskRecord | null {
-  const blocked = listTasks({ status: statuses || RECOVERY_BLOCKED_STATUSES })
+  const blocked = findTaskCandidatesForReplySession(sessionId, { status: statuses || RECOVERY_BLOCKED_STATUSES })
     .filter((task) => isRecoveryBlockedTask(task))
     .filter((task) => matchesTaskReplySession(task, sessionId))
     .sort((a, b) => b.lastProgressAt - a.lastProgressAt);
@@ -424,15 +425,13 @@ function persistRecoveryConversationUpdate(
 }
 
 export function latestTaskForSession(sessionId: string, statuses: TaskStatus[]): TaskRecord | null {
-  const tasks = listTasks({ status: statuses })
-    .filter(t => t.sessionId === sessionId)
+  const tasks = findTaskCandidatesForOwnerSession(sessionId, { status: statuses })
     .sort((a, b) => b.lastProgressAt - a.lastProgressAt);
   return tasks[0] || null;
 }
 
 export function findBlockedTaskForSession(sessionId: string): TaskRecord | null {
-  const blocked = listTasks({ status: ['needs_assistance', 'stalled', 'paused', 'failed', 'awaiting_user_input'] })
-    .filter(t => t.sessionId === sessionId)
+  const blocked = findTaskCandidatesForOwnerSession(sessionId, { status: ['needs_assistance', 'stalled', 'paused', 'failed', 'awaiting_user_input'] })
     .filter(t =>
       t.status === 'needs_assistance'
       || t.status === 'stalled'
@@ -449,8 +448,7 @@ export function findBlockedTaskForSession(sessionId: string): TaskRecord | null 
  * (i.e. the AI asked a clarification question and needs a reply to proceed).
  */
 export function findClarificationWaitingTask(sessionId: string): TaskRecord | null {
-  const tasks = listTasks({ status: ['awaiting_user_input'] })
-    .filter(t => t.sessionId === sessionId)
+  const tasks = findTaskCandidatesForOwnerSession(sessionId, { status: ['awaiting_user_input'] })
     .sort((a, b) => b.lastProgressAt - a.lastProgressAt);
   return tasks[0] || null;
 }

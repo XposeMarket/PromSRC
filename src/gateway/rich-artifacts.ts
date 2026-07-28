@@ -175,6 +175,8 @@ export interface StocksArtifact extends BaseRichArtifact {
 
 export interface WeatherDaily {
   day: string;
+  /** Local YYYY-MM-DD date used to connect a day tab to its hourly forecast. */
+  date?: string;
   high?: number;
   low?: number;
   code?: number;
@@ -183,8 +185,15 @@ export interface WeatherDaily {
 }
 
 export interface WeatherHourly {
+  /** Local YYYY-MM-DD date. Older persisted artifacts may omit this. */
+  date?: string;
   time: string;
   temp?: number;
+  feelsLike?: number;
+  precipitationProbability?: number;
+  code?: number;
+  icon?: string;
+  condition?: string;
 }
 
 export interface WeatherArtifact extends BaseRichArtifact {
@@ -218,16 +227,24 @@ export interface ComparisonArtifact extends BaseRichArtifact {
 export interface ChartSeries {
   label?: string;
   color?: string;
+  /** Legacy alias accepted on input; all persisted artifacts use points. */
+  data?: Array<{ x?: number | string; y?: number; value?: number; label?: string; date?: string; time?: string }>;
   points: Array<{ x: number | string; y: number }>;
 }
 
 export interface ChartArtifact extends BaseRichArtifact {
   type: 'chart';
-  chartType?: 'line' | 'bar' | 'area';
+  chartType?: 'line' | 'bar' | 'area' | 'scatter' | 'pie' | 'doughnut';
   series: ChartSeries[];
   xLabel?: string;
   yLabel?: string;
   unit?: string;
+  /** Stack bar datasets when the metric is composed of parts. */
+  stacked?: boolean;
+  /** Human-readable data provenance, such as "Yahoo Finance" or "Prometheus telemetry". */
+  source?: string;
+  /** ISO timestamp for live data freshness. */
+  updatedAt?: string;
 }
 
 // ─── visual (model-authored chart / Mermaid / SVG / HTML) ───────────────────

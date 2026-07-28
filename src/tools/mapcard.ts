@@ -1,6 +1,6 @@
 // src/tools/mapcard.ts
-// Builds the `map` rich artifact. Keyless: markers may carry lat/lng directly,
-// or an address that is geocoded via OpenStreetMap Nominatim (best-effort).
+// Builds the `map` rich artifact. The UI renders it as a dark MapLibre map;
+// markers may carry lat/lng directly or be geocoded via OSM Nominatim.
 
 import type { MapArtifact, MapMarker } from '../gateway/rich-artifacts';
 

@@ -242,7 +242,7 @@ registerApprovalResolutionListener((approval, approved) => {
   markCoordinatedDevApplyBatch(batchId, 'not_live');
   for (const id of approval.devApplyLive?.memberIds || []) {
     const continuation = getDevSourceEditContinuation(id);
-    if (continuation && continuation.status !== 'complete') {
+    if (continuation && !['complete', 'abandoned'].includes(continuation.status)) {
       upsertDevSourceEditContinuation({ ...continuation, status: 'verified_not_live', updatedAt: Date.now() });
     }
   }

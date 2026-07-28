@@ -8,6 +8,7 @@ import {
   type SkillWindow,
 } from '../prompt-context.js';
 import type { SkillsManager } from '../skills-runtime/skills-manager.js';
+import type { TurnTimingRecorder } from './turn-timing.js';
 
 interface ContextBuildResult {
   context: string;
@@ -16,6 +17,7 @@ interface ContextBuildResult {
 
 interface ContextBuildTask {
   sessionId: string;
+  queuedAt: number;
   payload: {
     sessionId: string;
     workspacePath: string;
@@ -31,6 +33,7 @@ interface ContextBuildTask {
   reject: (error: Error) => void;
   settled: boolean;
   abortListener?: () => void;
+  timing?: TurnTimingRecorder;
 }
 
 interface WorkerSlot {
@@ -53,6 +56,10 @@ export interface ContextBuildWorkerPoolStatus {
   fallbacks: number;
   fallbackActive: number;
   lastError?: string;
+  warmupState: 'idle' | 'warming' | 'ready' | 'failed';
+  warmupStartedAt?: number;
+  warmupCompletedAt?: number;
+  warmupError?: string;
   brokers: RuntimeWorkerBrokerStatus[];
 }
 
@@ -91,6 +98,11 @@ let cancelled = 0;
 let fallbacks = 0;
 let fallbackActive = 0;
 let lastError = '';
+let warmupPromise: Promise<void> | null = null;
+let warmupState: ContextBuildWorkerPoolStatus['warmupState'] = 'idle';
+let warmupStartedAt: number | undefined;
+let warmupCompletedAt: number | undefined;
+let warmupError = '';
 
 function abortError(message = 'Context build was cancelled.'): Error {
   const error = new Error(message);
@@ -126,6 +138,10 @@ async function runNext(slot: WorkerSlot): Promise<void> {
   if (shuttingDown || slot.active) return;
   const task = queue.shift();
   if (!task) return;
+  const claimedAt = Date.now();
+  task.timing?.mark('context_worker_queue_wait_done', {
+    durationMs: Math.max(0, claimedAt - task.queuedAt),
+  });
   if (task.signal?.aborted) {
     cancelled += 1;
     settle(task, { error: abortError() });
@@ -140,6 +156,7 @@ async function runNext(slot: WorkerSlot): Promise<void> {
     return;
   }
   slot.active = task;
+  const startupWaitStartedAt = Date.now();
   let aborted = false;
   const onActiveAbort = () => {
     aborted = true;
@@ -151,11 +168,29 @@ async function runNext(slot: WorkerSlot): Promise<void> {
     task.signal.addEventListener('abort', onActiveAbort, { once: true });
   }
   try {
+    task.timing?.mark('context_worker_ready_wait_start', {
+      worker: slot.broker.getStatus().name,
+      state: slot.broker.getStatus().state,
+    });
+    await slot.broker.warmup();
+    task.timing?.mark('context_worker_ready_wait_done', {
+      worker: slot.broker.getStatus().name,
+      durationMs: Date.now() - startupWaitStartedAt,
+    });
+    const executionStartedAt = Date.now();
+    task.timing?.mark('context_worker_execution_start', {
+      worker: slot.broker.getStatus().name,
+      queueWaitMs: Math.max(0, claimedAt - task.queuedAt),
+    });
     const result = await slot.broker.run<ContextBuildResult>(
       'build_personality_context',
       task.payload,
       remainingMs,
     );
+    task.timing?.mark('context_worker_execution_done', {
+      worker: slot.broker.getStatus().name,
+      durationMs: Date.now() - executionStartedAt,
+    });
     if (aborted || task.signal?.aborted) {
       cancelled += 1;
       settle(task, { error: abortError() });
@@ -169,6 +204,10 @@ async function runNext(slot: WorkerSlot): Promise<void> {
       }
     }
   } catch (error: any) {
+    task.timing?.mark('context_worker_execution_failed', {
+      worker: slot.broker.getStatus().name,
+      error: String(error?.message || error).slice(0, 240),
+    });
     const normalized = aborted || task.signal?.aborted
       ? abortError()
       : error instanceof Error ? error : new Error(String(error));
@@ -183,14 +222,14 @@ async function runNext(slot: WorkerSlot): Promise<void> {
   }
 }
 
-function enqueue(task: Omit<ContextBuildTask, 'settled' | 'resolve' | 'reject'>): Promise<string> {
+function enqueue(task: Omit<ContextBuildTask, 'settled' | 'resolve' | 'reject' | 'queuedAt'>): Promise<string> {
   if (shuttingDown) return Promise.reject(new Error('Context build worker pool is shutting down.'));
   if (task.signal?.aborted) return Promise.reject(abortError());
   if (queue.length >= maxQueued && slots.every((slot) => !!slot.active)) {
     return Promise.reject(new Error(`Context build worker queue is full (${maxQueued} queued maximum).`));
   }
   return new Promise<string>((resolve, reject) => {
-    const queued: ContextBuildTask = { ...task, resolve, reject, settled: false };
+    const queued: ContextBuildTask = { ...task, queuedAt: Date.now(), resolve, reject, settled: false };
     if (queued.signal) {
       const onQueuedAbort = () => {
         if (slots.some((slot) => slot.active === queued)) return;
@@ -234,6 +273,7 @@ export async function buildPersonalityContextIsolated(
   extraCats?: Set<string>,
   options?: BuildPersonalityContextOptions,
   signal?: AbortSignal,
+  timing?: TurnTimingRecorder,
 ): Promise<string> {
   if (!enabled) {
     return buildPersonalityContext(
@@ -249,6 +289,8 @@ export async function buildPersonalityContextIsolated(
       options,
     );
   }
+  const snapshotStartedAt = Date.now();
+  timing?.mark('personality_snapshot_capture_start');
   const snapshot = await capturePersonalityContextSnapshot(
     sessionId,
     workspacePath,
@@ -260,6 +302,7 @@ export async function buildPersonalityContextIsolated(
     extraCats,
     options,
   );
+  timing?.mark('personality_snapshot_capture_done', { durationMs: Date.now() - snapshotStartedAt });
   if (signal?.aborted) {
     cancelled += 1;
     throw abortError();
@@ -279,6 +322,7 @@ export async function buildPersonalityContextIsolated(
   );
   let context: string;
   try {
+    timing?.mark('context_worker_queue_wait_start');
     context = await enqueue({
       sessionId,
       payload: {
@@ -292,12 +336,15 @@ export async function buildPersonalityContextIsolated(
       },
       signal,
       deadlineAt: Date.now() + timeoutMs,
+      timing,
     });
   } catch (error: any) {
     const normalized = error instanceof Error ? error : new Error(String(error));
     if (normalized.name === 'AbortError' || signal?.aborted) throw normalized;
     context = await guardedFallback(fallback, normalized);
   }
+  const finalizationStartedAt = Date.now();
+  timing?.mark('personality_snapshot_finalize_start');
   await finalizePersonalityContextSnapshot(
     sessionId,
     workspacePath,
@@ -305,7 +352,30 @@ export async function buildPersonalityContextIsolated(
     snapshot,
     setCurrentTurn,
   );
+  timing?.mark('personality_snapshot_finalize_done', { durationMs: Date.now() - finalizationStartedAt });
   return context;
+}
+
+/** Prestart the bounded worker pool without capturing any user/session context. */
+export async function warmContextBuildWorkerPool(): Promise<void> {
+  if (!enabled || shuttingDown) return;
+  if (warmupPromise) return warmupPromise;
+  warmupState = 'warming';
+  warmupStartedAt = Date.now();
+  warmupError = '';
+  warmupPromise = Promise.all(slots.map((slot) => slot.broker.warmup()))
+    .then(() => {
+      warmupState = 'ready';
+      warmupCompletedAt = Date.now();
+    })
+    .catch((error: any) => {
+      warmupState = 'failed';
+      warmupCompletedAt = Date.now();
+      warmupError = String(error?.message || error);
+      warmupPromise = null;
+      throw error;
+    });
+  return warmupPromise;
 }
 
 export function getContextBuildWorkerPoolStatus(): ContextBuildWorkerPoolStatus {
@@ -323,6 +393,10 @@ export function getContextBuildWorkerPoolStatus(): ContextBuildWorkerPoolStatus 
     fallbacks,
     fallbackActive,
     lastError: lastError || undefined,
+    warmupState,
+    warmupStartedAt,
+    warmupCompletedAt,
+    warmupError: warmupError || undefined,
     brokers: slots.map((slot) => slot.broker.getStatus()),
   };
 }
@@ -338,4 +412,6 @@ export async function shutdownContextBuildWorkerPool(): Promise<void> {
     }
   }
   await Promise.all(slots.map((slot) => recycleSlot(slot)));
+  warmupPromise = null;
+  if (warmupState !== 'failed') warmupState = 'idle';
 }

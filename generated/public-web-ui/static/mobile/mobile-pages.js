@@ -13,6 +13,8 @@ import {
   resetMobileDraftModelRoute,
 } from './mobile-model-badge.js';
 import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
+import { formatModelWithReasoning } from '../model-display.js';
+
 import {
   loadMobileSchedules, toggleSchedule, runScheduleNow, updateMobileSchedule,
   getCachedMobilePageData,
@@ -31,7 +33,7 @@ import {
   loadTeamWorkspace, loadTeamWorkspaceFile, loadMemoryGraph,
   loadBgTasks, loadBgTaskDetail, loadBgTaskEvidence, sendBgTaskMessage, runBgTaskAction, loadVoiceStatus,
   transcribeVoiceAudio,
-  loadMobileMoreSummary, loadMobileHubOverview, loadMobileAuditRuns, loadMobileMemoryOverview,
+  loadMobileMoreSummary, loadMobileHubOverview, loadMobileHubGoals, loadMobileAuditRuns, loadMobileMemoryOverview,
   loadMobileProposals, loadMobileProposal, approveMobileProposal, denyMobileProposal,
   loadMobileApprovals, approveMobileApproval, denyMobileApproval, loadMobileQuestions,
   loadMobileProcessRuns, loadMobileProcessRunLog, rerunMobileProcessRun, killMobileProcessRun, submitMobileProcessInput,
@@ -157,7 +159,6 @@ function _showMobileCompletionToast({ key, title, summary, route } = {}) {
   if (!host) {
     host = document.createElement('div');
     host.id = 'pm-completion-toast-host';
-    host.style.cssText = 'position:fixed;top:max(12px, calc(env(safe-area-inset-top) + 8px));left:12px;right:12px;z-index:20000;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
     document.body.appendChild(host);
   }
   const existing = host.querySelector(`[data-pm-completion-key="${_pmCssEscape(toastKey)}"]`);
@@ -168,11 +169,18 @@ function _showMobileCompletionToast({ key, title, summary, route } = {}) {
   }
   const button = document.createElement('button');
   button.type = 'button';
+  button.className = 'pm-completion-toast';
   button.dataset.pmCompletionKey = toastKey;
-  button.style.cssText = 'pointer-events:auto;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;width:100%;text-align:left;background:rgba(33,29,27,.97);color:#fff;border:1px solid rgba(255,143,56,.65);border-radius:16px;padding:12px 14px;box-shadow:0 12px 30px rgba(0,0,0,.36);font:inherit;';
   const heading = _cleanMobileCompletionText(title, 90) || 'Prometheus update';
   const detail = _cleanMobileCompletionText(summary, 180) || 'Tap to open.';
-  button.innerHTML = `<span style="min-width:0"><strong style="display:block;font-size:14px;line-height:1.25">${escapeHtml(heading)}</strong><span style="display:block;margin-top:3px;font-size:12px;line-height:1.35;opacity:.8">${escapeHtml(detail)}</span></span><span aria-hidden="true" style="font-size:20px;color:#ff8f38">›</span>`;
+  button.setAttribute('aria-label', `${heading}. ${detail}. Open chat.`);
+  button.innerHTML = `
+    <span class="pm-completion-toast-copy">
+      <strong class="pm-completion-toast-title">${escapeHtml(heading)}</strong>
+      <span class="pm-completion-toast-detail">${escapeHtml(detail)}</span>
+    </span>
+    <span class="pm-completion-toast-chevron" aria-hidden="true">›</span>
+  `;
   const dismiss = () => {
     clearTimeout(Number(button.dataset.pmCompletionTimer || 0));
     button.remove();
@@ -277,6 +285,45 @@ function notifyMobileModelChanged(evt = {}, { sessionId = '' } = {}) {
 
 const FLAME = '<span class="pm-brand-flame">🔥</span>';
 const PM_CHAT_VOICE_ICON_SRC = '/assets/icons8-sound-wave-50.apng.png';
+
+function _mobileSubagentModelParts(agent = {}) {
+  const raw = agent?.raw && typeof agent.raw === 'object' ? agent.raw : {};
+  const modelRef = String(agent?.effectiveModel || agent?.model || raw.effectiveModel || raw.model || '').trim();
+  const slash = modelRef.indexOf('/');
+  const providerFromRef = slash > 0 ? modelRef.slice(0, slash).trim() : '';
+  const modelFromRef = slash > 0 ? modelRef.slice(slash + 1).trim() : modelRef;
+  const provider = String(
+    raw.provider
+    || raw.providerId
+    || raw.modelProvider
+    || providerFromRef
+    || '',
+  ).trim().toLowerCase();
+  const model = String(raw.modelId || modelFromRef || '').trim();
+  const effort = String(
+    raw.reasoningEffort
+    || raw.reasoning_effort
+    || raw.effort
+    || '',
+  ).trim();
+  const accountId = String(
+    raw.accountId
+    || raw.account_id
+    || raw.defaultAccountId
+    || '',
+  ).trim();
+  return { provider, model, effort, accountId, modelRef };
+}
+
+function _mobileSubagentHeaderLabel(agent = {}) {
+  const name = String(agent?.name || agent?.id || 'Subagent').trim() || 'Subagent';
+  const parts = _mobileSubagentModelParts(agent);
+  const modelLabel = parts.model
+    ? formatModelWithReasoning(parts.model, parts.provider, parts.effort)
+    : 'Default model';
+  return `${name}/${modelLabel}`;
+}
+
 
 function _notifyMobileChatVoiceUpdate(sessionId, detail = {}) {
   const sid = String(sessionId || '').trim();
@@ -6038,14 +6085,27 @@ function _renderMobileWeather(a) {
   const unit = String(a.unit || 'F').toUpperCase();
   const cur = a.current || {};
   const daily = Array.isArray(a.daily) ? a.daily : [];
+  const hourly = Array.isArray(a.hourly) ? a.hourly : [];
   if (!loc && !daily.length) return '';
-  const days = daily.map((d) => `
-    <div class="pm-wx-day">
+  const selectDay = `const c=this.closest('.pm-weather');const i=Number(this.dataset.pmWxDay);c.querySelectorAll('.pm-wx-day').forEach((b)=>{const active=Number(b.dataset.pmWxDay)===i;b.classList.toggle('is-active',active);b.setAttribute('aria-pressed',String(active))});c.querySelectorAll('.pm-wx-hourly-panel').forEach((p)=>{p.hidden=Number(p.dataset.pmWxPanel)!==i});`;
+  const days = daily.map((d, i) => `
+    <button type="button" class="pm-wx-day${i === 0 ? ' is-active' : ''}" data-pm-wx-day="${i}" aria-pressed="${i === 0 ? 'true' : 'false'}" onclick="${selectDay}">
       <div class="pm-wx-day-name">${escapeHtml(String(d.day || ''))}</div>
       <div class="pm-wx-day-icon">${escapeHtml(String(d.icon || '🌡️'))}</div>
       <div class="pm-wx-day-hi">${d.high != null ? escapeHtml(String(d.high)) + '°' : ''}</div>
       <div class="pm-wx-day-lo">${d.low != null ? escapeHtml(String(d.low)) + '°' : ''}</div>
-    </div>`).join('');
+    </button>`).join('');
+  const panels = daily.map((d, i) => {
+    const date = String(d.date || '');
+    const hours = hourly.filter((h) => (date ? String(h.date || '') === date : i === 0 && !h.date));
+    const cells = hours.map((h) => {
+      const precip = Number(h.precipitationProbability);
+      const feels = Number(h.feelsLike);
+      const showFeels = Number.isFinite(feels) && Math.abs(feels - Number(h.temp)) >= 2;
+      return `<div class="pm-wx-hour"><span class="pm-wx-hour-time">${escapeHtml(String(h.time || ''))}</span><span class="pm-wx-hour-icon">${escapeHtml(String(h.icon || '🌡️'))}</span><strong>${h.temp != null ? escapeHtml(String(h.temp)) + '°' : '—'}</strong>${showFeels ? `<small>Feels ${escapeHtml(String(feels))}°</small>` : ''}${Number.isFinite(precip) && precip > 0 ? `<small class="pm-wx-hour-rain">💧 ${precip}%</small>` : ''}</div>`;
+    }).join('');
+    return `<div class="pm-wx-hourly-panel" data-pm-wx-panel="${i}"${i === 0 ? '' : ' hidden'}><div class="pm-wx-hourly-title"><strong>${escapeHtml(String(d.day || ''))} hourly</strong><span>Swipe for more</span></div>${cells ? `<div class="pm-wx-hourly-track">${cells}</div>` : `<div class="pm-wx-hourly-empty">Hourly details are unavailable for this day.</div>`}</div>`;
+  }).join('');
   return `<div class="pm-weather">
     <div class="pm-wx-head">
       <div class="pm-wx-loc">${escapeHtml(loc)}</div>
@@ -6053,6 +6113,7 @@ function _renderMobileWeather(a) {
       <div class="pm-wx-cond">${escapeHtml(String(cur.icon || ''))} ${escapeHtml(String(cur.condition || ''))}</div>
     </div>
     ${days ? `<div class="pm-wx-days">${days}</div>` : ''}
+    ${panels ? `<div class="pm-wx-hourly">${panels}</div>` : ''}
   </div>`;
 }
 
@@ -6072,43 +6133,17 @@ function _renderMobileComparison(a) {
   return `<div class="pm-comparison">${title ? `<div class="pm-cmp-heading">${escapeHtml(title)}</div>` : ''}<div class="pm-cmp-scroll"><table class="pm-cmp-table"><thead>${head}</thead><tbody>${body}</tbody></table></div></div>`;
 }
 
-const PM_CHART_COLORS = ['#5a91ff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4'];
+function _pmRichChartSrcdoc(artifact) {
+  const series = (Array.isArray(artifact?.series) ? artifact.series : []).map((s) => ({ ...s, points: (Array.isArray(s?.points) ? s.points : (Array.isArray(s?.data) ? s.data : [])).map((p, i) => ({ x: p?.x ?? p?.label ?? p?.date ?? p?.time ?? i + 1, y: Number(p?.y ?? p?.value) })).filter((p) => Number.isFinite(p.y)) })).filter((s) => s.points.length);
+  const payload = JSON.stringify({ chartType: artifact?.chartType, series, xLabel: artifact?.xLabel, yLabel: artifact?.yLabel, unit: artifact?.unit, stacked: artifact?.stacked === true }).replace(/</g, '\\u003c');
+  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#101a22;font-family:system-ui,sans-serif}#chart{height:100%;width:100%}</style></head><body><canvas id="chart"></canvas><script src="/vendor/chart/chart.umd.js"><\/script><script>const a=${payload};const palette=['#55a7ff','#42d392','#f6b44d','#fb7185','#b58cff','#2dd4bf','#f472b6','#a3e635'];const labels=[...new Set(a.series.flatMap(s=>s.points.map(p=>String(p.x))))];const rgba=(hex,alpha)=>{const clean=String(hex||'').replace('#','');if(!/^[0-9a-f]{6}$/i.test(clean))return 'rgba(85,167,255,'+alpha+')';const n=parseInt(clean,16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+alpha+')'};const radial=['pie','doughnut'].includes(a.chartType);const type=a.chartType==='area'?'line':(a.chartType==='scatter'?'scatter':(radial?a.chartType:(a.chartType==='bar'?'bar':'line')));const datasets=a.series.map((s,i)=>{const color=s.color||palette[i%palette.length];const values=radial?s.points.map(p=>p.y):(type==='scatter'?s.points.map(p=>({x:p.x,y:p.y})):labels.map(x=>{const p=s.points.find(point=>String(point.x)===x);return p?p.y:null}));return {label:s.label||'Series '+(i+1),data:values,borderColor:color,backgroundColor:radial?s.points.map((p,j)=>p.color||palette[j%palette.length]):rgba(color,type==='bar'?'.72':(a.chartType==='area'?'.25':'.12')),borderWidth:radial?1:2,fill:a.chartType==='area',tension:.32,pointRadius:type==='line'?2.5:(type==='scatter'?4:0),pointHoverRadius:5,borderRadius:type==='bar'?5:0,stack:a.stacked?'prometheus':undefined};});const tick='#9fb1bd',grid='rgba(173,208,220,.12)';new Chart(document.getElementById('chart'),{type,data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},plugins:{legend:{display:!radial&&datasets.length>1,position:'bottom',labels:{color:tick,boxWidth:10,boxHeight:10,padding:12,font:{size:10}}},tooltip:{backgroundColor:'#0b1820',padding:10,callbacks:{label:c=>{const v=c.parsed.y??c.raw;return ' '+c.dataset.label+': '+String(v)+(a.unit||'')}}}},scales:radial?{}:{x:{stacked:a.stacked,ticks:{color:tick,maxRotation:0,autoSkip:true,maxTicksLimit:5,font:{size:9}},title:{display:!!a.xLabel,text:a.xLabel,color:tick,font:{size:9,weight:'600'}},grid:{display:false}},y:{stacked:a.stacked,ticks:{color:tick,font:{size:9},callback:v=>String(v)+(a.unit||'')},title:{display:!!a.yLabel,text:a.yLabel,color:tick,font:{size:9,weight:'600'}},grid:{color:grid}}}}});<\/script></body></html>`;
+}
 function _renderMobileChart(a) {
-  const series = Array.isArray(a?.series) ? a.series.filter((s) => s && Array.isArray(s.points) && s.points.length) : [];
-  if (!series.length) return '';
   const title = String(a?.title || '').trim();
-  const type = ['line', 'bar', 'area'].includes(a?.chartType) ? a.chartType : 'line';
-  const W = 320, H = 150, pad = 8;
-  const allY = series.flatMap((s) => s.points.map((p) => Number(p.y)).filter((n) => Number.isFinite(n)));
-  const minY = Math.min(0, ...allY), maxY = Math.max(...allY), rangeY = (maxY - minY) || 1;
-  const maxLen = Math.max(...series.map((s) => s.points.length));
-  const innerW = W - pad * 2, innerH = H - pad * 2;
-  const xAt = (i) => pad + (maxLen <= 1 ? innerW / 2 : (i / (maxLen - 1)) * innerW);
-  const yAt = (y) => pad + innerH - ((Number(y) - minY) / rangeY) * innerH;
-  let body = '';
-  if (type === 'bar') {
-    const groupW = innerW / maxLen;
-    const barW = Math.max(2, (groupW / series.length) * 0.7);
-    series.forEach((s, si) => {
-      const color = s.color || PM_CHART_COLORS[si % PM_CHART_COLORS.length];
-      s.points.forEach((p, i) => {
-        const x = pad + i * groupW + si * (groupW / series.length);
-        const y = yAt(p.y), y0 = yAt(0);
-        body += `<rect x="${x.toFixed(1)}" y="${Math.min(y, y0).toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.abs(y0 - y).toFixed(1)}" fill="${color}" rx="1.5"/>`;
-      });
-    });
-  } else {
-    series.forEach((s, si) => {
-      const color = s.color || PM_CHART_COLORS[si % PM_CHART_COLORS.length];
-      const d = s.points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yAt(p.y).toFixed(1)}`).join(' ');
-      if (type === 'area') body += `<path d="${d} L${xAt(s.points.length - 1).toFixed(1)},${yAt(minY).toFixed(1)} L${xAt(0).toFixed(1)},${yAt(minY).toFixed(1)} Z" fill="${color}" opacity="0.14"/>`;
-      body += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
-    });
-  }
-  const legend = (series.length > 1 || series[0].label)
-    ? `<div class="pm-chart-legend">${series.map((s, si) => `<span><i style="background:${s.color || PM_CHART_COLORS[si % PM_CHART_COLORS.length]}"></i>${escapeHtml(String(s.label || `Series ${si + 1}`))}</span>`).join('')}</div>`
-    : '';
-  return `<div class="pm-chart">${title ? `<div class="pm-chart-heading">${escapeHtml(title)}</div>` : ''}<svg class="pm-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${body}</svg>${legend}</div>`;
+  const source = String(a?.source || '').trim();
+  const updatedAt = a?.updatedAt ? new Date(a.updatedAt) : null;
+  const freshness = updatedAt && Number.isFinite(updatedAt.getTime()) ? `Updated ${updatedAt.toLocaleString()}` : '';
+  return `<div class="pm-chart">${title ? `<div class="pm-chart-heading">${escapeHtml(title)}</div>` : ''}<div class="pm-chart-frame-wrap"><iframe class="pm-chart-frame" title="Interactive chart" srcdoc="${escapeHtml(_pmRichChartSrcdoc(a))}" loading="lazy"></iframe></div>${(source || freshness) ? `<div class="pm-chart-meta">${source ? `<span>${escapeHtml(source)}</span>` : ''}${freshness ? `<span>${escapeHtml(freshness)}</span>` : ''}</div>` : ''}</div>`;
 }
 
 function _renderMobileRunResult(a) {
@@ -6132,16 +6167,18 @@ function _renderMobileRunResult(a) {
   </div>`;
 }
 
+function _pmRichMapSrcdoc(center, markers, zoom) {
+  const located = markers.filter((m) => Number.isFinite(Number(m.lat)) && Number.isFinite(Number(m.lng))).map((m) => ({ ...m, lat: Number(m.lat), lng: Number(m.lng) }));
+  const fallback = located[0] || { lat: 0, lng: 0 };
+  const payload = JSON.stringify({ center: { lat: Number(center?.lat) || fallback.lat, lng: Number(center?.lng) || fallback.lng }, zoom: Math.max(2, Math.min(18, Number(zoom) || 12)), markers: located }).replace(/</g, '\\u003c');
+  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css"><style>html,body,#map{margin:0;width:100%;height:100%;overflow:hidden;background:#09151d}.maplibregl-canvas{filter:brightness(.72) saturate(.82) contrast(1.06)}.maplibregl-ctrl-group{overflow:hidden!important;border:1px solid rgba(164,205,219,.22)!important;border-radius:10px!important;background:rgba(10,25,34,.86)!important;box-shadow:0 8px 22px rgba(0,0,0,.3)!important}.maplibregl-ctrl-group button{width:30px!important;height:30px!important}.maplibregl-ctrl-group button span{filter:invert(1) hue-rotate(145deg) saturate(.55)}.maplibregl-ctrl-attrib{padding:2px 6px!important;border-radius:8px 0 0 0!important;background:rgba(8,20,28,.74)!important;color:#9eb4bd!important;font:9px/1.25 system-ui!important}.maplibregl-ctrl-attrib a{color:#c2d6da!important}.pm-pin{width:17px;height:17px;border:3px solid #f5fbfc;border-radius:50% 50% 50% 0;background:#31b6cf;box-shadow:0 0 0 4px rgba(49,182,207,.2),0 5px 14px rgba(0,0,0,.45);transform:rotate(-45deg)}.pm-pin:after{content:'';position:absolute;inset:4px;border-radius:50%;background:#073745}.maplibregl-popup-content{padding:8px 10px!important;border:1px solid rgba(166,221,230,.2)!important;border-radius:10px!important;background:#0d202a!important;color:#e9f5f7!important;font:11px/1.3 system-ui!important}.maplibregl-popup-tip{border-top-color:#0d202a!important;border-bottom-color:#0d202a!important}</style></head><body><div id="map"></div><script src="/vendor/maplibre/maplibre-gl.js"><\/script><script>const payload=${payload};const map=new maplibregl.Map({container:'map',style:{version:8,sources:{carto:{type:'raster',tiles:['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],tileSize:256,attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>'}},layers:[{id:'background',type:'background',paint:{'background-color':'#09151d'}},{id:'carto',type:'raster',source:'carto',paint:{'raster-saturation':-.18,'raster-contrast':.08}}]},center:[payload.center.lng,payload.center.lat],zoom:payload.zoom,attributionControl:false});map.addControl(new maplibregl.NavigationControl({showCompass:false}),'top-right');map.addControl(new maplibregl.AttributionControl({compact:true}));const popup=(m)=>{const node=document.createElement('div');const title=document.createElement('strong');title.textContent=m.label||'Location';node.append(title);if(m.address){const sub=document.createElement('div');sub.style.opacity='.72';sub.style.marginTop='2px';sub.textContent=m.address;node.append(sub)}return node};map.on('load',()=>{const bounds=new maplibregl.LngLatBounds();payload.markers.forEach((m)=>{bounds.extend([m.lng,m.lat]);const pin=document.createElement('div');pin.className='pm-pin';new maplibregl.Marker({element:pin,anchor:'bottom'}).setLngLat([m.lng,m.lat]).setPopup(new maplibregl.Popup({offset:17,closeButton:false}).setDOMContent(popup(m))).addTo(map)});if(payload.markers.length>1)map.fitBounds(bounds,{padding:36,maxZoom:14,duration:0})});<\/script></body></html>`;
+}
+
 function _renderMobileMap(a) {
   if (!a || typeof a !== 'object') return '';
   const markers = Array.isArray(a.markers) ? a.markers : [];
   if (!markers.length) return '';
   const title = String(a.title || '').trim();
-  const located = markers.filter((m) => Number.isFinite(Number(m.lat)) && Number.isFinite(Number(m.lng)));
-  const c = a.center || located[0] || {};
-  const lat = Number(c.lat), lng = Number(c.lng);
-  const span = 0.06;
-  const src = Number.isFinite(lat) ? `https://www.openstreetmap.org/export/embed.html?bbox=${lng - span},${lat - span},${lng + span},${lat + span}&layer=mapnik${located[0] ? `&marker=${located[0].lat},${located[0].lng}` : ''}` : '';
   const list = markers.map((m, i) => {
     const name = String(m.label || `Location ${i + 1}`);
     const cat = String(m.category || '').trim();
@@ -6152,7 +6189,7 @@ function _renderMobileMap(a) {
       : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name + ' ' + addr)}`;
     return `<div class="pm-map-marker"><div class="pm-map-num">${i + 1}</div><div><div class="pm-map-top"><strong>${escapeHtml(name)}</strong>${rating ? `<span class="pm-map-rating">${escapeHtml(rating)}</span>` : ''}</div>${(cat || addr) ? `<div class="pm-map-sub">${[escapeHtml(cat), escapeHtml(addr)].filter(Boolean).join(' · ')}</div>` : ''}<a class="pm-map-link" href="${escapeHtml(dirHref)}" target="_blank" rel="noopener noreferrer">Directions ↗</a></div></div>`;
   }).join('');
-  return `<div class="pm-map">${title ? `<div class="pm-map-heading">${escapeHtml(title)}</div>` : ''}${src ? `<div class="pm-map-frame-wrap"><iframe class="pm-map-frame" src="${escapeHtml(src)}" loading="lazy"></iframe></div>` : ''}<div class="pm-map-markers">${list}</div></div>`;
+  return `<div class="pm-map">${title ? `<div class="pm-map-heading">${escapeHtml(title)}</div>` : ''}<div class="pm-map-frame-wrap"><iframe class="pm-map-frame" title="Interactive map" srcdoc="${escapeHtml(_pmRichMapSrcdoc(a.center, markers, a.zoom))}" loading="lazy"></iframe></div><div class="pm-map-markers">${list}</div></div>`;
 }
 
 function _renderMobileSources(a) {
@@ -30480,15 +30517,102 @@ function _pmHubStat(label, value) {
   return `<span><b>${escapeHtml(String(value))}</b><em>${escapeHtml(label)}</em></span>`;
 }
 
-function _pmTokenLevel(value, max) {
+function _pmHubLatestGoalSection(latestGoal, loading = false) {
+  const title = loading
+    ? 'Loading latest goal…'
+    : (latestGoal ? _pmGoalTitle(latestGoal) : 'No goals yet');
+  const body = loading
+    ? 'Your most recently updated goal will appear here.'
+    : (latestGoal ? (_pmGoalBody(latestGoal) || String(latestGoal.status || 'In progress')) : 'Main chat goals will appear here once Prometheus records them.');
+  const timestamp = latestGoal ? _pmDateTime(latestGoal.updatedAt || latestGoal.completedAt || latestGoal.createdAt) : '';
+  return `
+    <section class="pm-hub-profile-section" id="pm-hub-latest-goal">
+      <div class="pm-hub-section-head"><strong>Latest goal</strong><span>${escapeHtml(timestamp)}</span></div>
+      <h2>${escapeHtml(title)}</h2>
+      <p>${escapeHtml(body)}</p>
+    </section>
+  `;
+}
+
+function _pmTokenOpacity(value, max) {
   const n = Math.max(0, Number(value) || 0);
   if (n <= 0) return 0;
   const ratio = n / Math.max(1, Number(max) || 1);
-  if (ratio >= 0.8) return 5;
-  if (ratio >= 0.55) return 4;
-  if (ratio >= 0.32) return 3;
-  if (ratio >= 0.14) return 2;
-  return 1;
+  // Preserve detail on light-usage days but reserve fully solid Prometheus
+  // gold for the single highest day.
+  return Math.min(1, 0.12 + (0.88 * Math.sqrt(ratio)));
+}
+
+function _pmTokenActivityPopover(cell) {
+  const date = String(cell?.dataset?.date || '');
+  const tokens = Math.max(0, Number(cell?.dataset?.tokens || 0));
+  if (!date) return;
+  document.getElementById('pm-token-activity-popover')?.remove();
+  const popover = document.createElement('div');
+  popover.id = 'pm-token-activity-popover';
+  popover.className = 'pm-token-activity-popover';
+  const formattedDate = new Date(`${date}T00:00:00`).toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+  });
+  popover.innerHTML = `<strong>${escapeHtml(formattedDate)}</strong><span>${escapeHtml(_pmCompactNumber(tokens))} tokens</span>`;
+  document.body.appendChild(popover);
+  const rect = cell.getBoundingClientRect();
+  const margin = 8;
+  const popWidth = popover.offsetWidth || 164;
+  const popHeight = popover.offsetHeight || 52;
+  let left = rect.left + (rect.width / 2) - (popWidth / 2);
+  let top = rect.top - popHeight - margin;
+  if (top < margin) top = rect.bottom + margin;
+  left = Math.max(margin, Math.min(left, window.innerWidth - popWidth - margin));
+  top = Math.max(margin, Math.min(top, window.innerHeight - popHeight - margin));
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+}
+
+function _wirePmTokenActivityPopover(scope) {
+  const cells = Array.from(scope?.querySelectorAll?.('.pm-hub-token-cell[data-date]') || []);
+  if (!cells.length) return;
+  let activePointerId = null;
+  let dismissTimer = null;
+  const dismiss = () => {
+    if (dismissTimer) clearTimeout(dismissTimer);
+    dismissTimer = null;
+    document.getElementById('pm-token-activity-popover')?.remove();
+  };
+  const show = (cell) => {
+    if (!cell) return;
+    if (dismissTimer) clearTimeout(dismissTimer);
+    _pmTokenActivityPopover(cell);
+  };
+  const cellAt = (x, y) => document.elementFromPoint(x, y)?.closest?.('.pm-hub-token-cell[data-date]');
+  const endTouch = () => {
+    activePointerId = null;
+    window.removeEventListener('pointermove', moveTouch, true);
+    window.removeEventListener('pointerup', endTouch, true);
+    window.removeEventListener('pointercancel', endTouch, true);
+    dismissTimer = setTimeout(dismiss, 850);
+  };
+  const moveTouch = (event) => {
+    if (activePointerId !== event.pointerId) return;
+    const cell = cellAt(event.clientX, event.clientY);
+    if (cell) show(cell);
+  };
+  cells.forEach((cell) => {
+    cell.addEventListener('pointerdown', (event) => {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      activePointerId = event.pointerId;
+      show(cell);
+      window.addEventListener('pointermove', moveTouch, true);
+      window.addEventListener('pointerup', endTouch, true);
+      window.addEventListener('pointercancel', endTouch, true);
+    });
+    cell.addEventListener('pointerenter', (event) => {
+      if (event.pointerType === 'mouse') show(cell);
+    });
+    cell.addEventListener('pointerleave', (event) => {
+      if (event.pointerType === 'mouse' && activePointerId === null) dismiss();
+    });
+  });
 }
 
 function _pmTokenActivityGrid(activity = {}) {
@@ -30500,13 +30624,16 @@ function _pmTokenActivityGrid(activity = {}) {
   const leading = Number.isFinite(first.getTime()) ? first.getDay() : 0;
   const values = daily.map((row) => Math.max(0, Number(row.tokens || row.count || 0)));
   const max = Math.max(1, ...values);
+  const weeks = Math.ceil((leading + daily.length) / 7);
   const labels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day) => `<span>${day}</span>`).join('');
   let cells = '';
   for (let i = 0; i < leading; i++) cells += '<i class="empty"></i>';
   daily.forEach((row) => {
     const tokens = Math.max(0, Number(row.tokens || row.count || 0));
     const title = `${row.date}: ${_pmCompactNumber(tokens)} tokens`;
-    cells += `<i data-level="${_pmTokenLevel(tokens, max)}" title="${escapeHtml(title)}"></i>`;
+    const activity = tokens > 0 ? 'true' : 'false';
+    const opacity = _pmTokenOpacity(tokens, max).toFixed(3);
+    cells += `<i class="pm-hub-token-cell" data-date="${escapeHtml(row.date)}" data-tokens="${tokens}" data-active="${activity}" style="--pm-token-alpha:${opacity}" aria-label="${escapeHtml(title)}"></i>`;
   });
   const months = [];
   const seen = new Set();
@@ -30519,14 +30646,12 @@ function _pmTokenActivityGrid(activity = {}) {
     months.push(`<span style="grid-column:${Math.floor((leading + index) / 7) + 1}">${escapeHtml(d.toLocaleDateString(undefined, { month: 'short' }))}</span>`);
   });
   return `
-    <div class="pm-hub-token-scroll">
-      <div class="pm-hub-token-calendar">
+    <div class="pm-hub-token-calendar" style="--pm-token-weeks:${weeks}">
         <div class="pm-hub-token-labels">${labels}</div>
-        <div>
+        <div class="pm-hub-token-grid-wrap">
           <div class="pm-hub-token-months">${months.join('')}</div>
           <div class="pm-hub-token-cells">${cells}</div>
         </div>
-      </div>
     </div>
   `;
 }
@@ -30539,8 +30664,10 @@ export async function renderHubPage(page, { navigate } = {}) {
   `;
   wireHeaderActions(page, {});
   const body = page.querySelector('#pm-hub-body');
+  let loadGeneration = 0;
   const load = async () => {
     try {
+      const generation = ++loadGeneration;
       body.innerHTML = _pmMoreSkeleton();
       const data = await loadMobileHubOverview();
       const account = _pmHubAccount();
@@ -30594,11 +30721,7 @@ export async function renderHubPage(page, { navigate } = {}) {
             </div>
           </div>
         </section>
-        <section class="pm-hub-profile-section">
-          <div class="pm-hub-section-head"><strong>Latest goal</strong><span>${escapeHtml(latestGoal ? _pmDateTime(latestGoal.updatedAt || latestGoal.completedAt || latestGoal.createdAt) : '')}</span></div>
-          <h2>${escapeHtml(latestGoal ? _pmGoalTitle(latestGoal) : 'No goals yet')}</h2>
-          <p>${escapeHtml(latestGoal ? (_pmGoalBody(latestGoal) || String(latestGoal.status || 'In progress')) : 'Main chat goals will appear here once Prometheus records them.')}</p>
-        </section>
+        ${_pmHubLatestGoalSection(latestGoal, data.goalsLoaded === false)}
         <section class="pm-hub-profile-section">
           <div class="pm-hub-section-head"><strong>Most used tools</strong></div>
           <div class="pm-hub-usage-list">
@@ -30606,6 +30729,14 @@ export async function renderHubPage(page, { navigate } = {}) {
           </div>
         </section>
       `;
+      _wirePmTokenActivityPopover(body);
+      if (data.goalsLoaded === false) {
+        loadMobileHubGoals().then((goals) => {
+          if (generation !== loadGeneration || !body.isConnected) return;
+          const goalSlot = body.querySelector('#pm-hub-latest-goal');
+          if (goalSlot) goalSlot.outerHTML = _pmHubLatestGoalSection(goals[0] || null);
+        }).catch(() => {});
+      }
       return true;
     } catch (err) {
       body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.target}</div><h2>Could not load Hub</h2><p>${escapeHtml(err.message || '')}</p></div>`;
@@ -30821,51 +30952,8 @@ export async function renderProposalsPage(page, { proposalId = '', navigate }) {
   const body = page.querySelector('#pm-proposals-body');
   const filterEl = page.querySelector('#pm-proposals-filter');
   let proposals = [];
-  let approvals = [];
 
   const paint = () => {
-    const approvalHtml = approvals.length ? `<section class="pm-card pm-more-section">
-      <div class="pm-card-head">Fast Approvals</div>
-      ${approvals.map((approval) => {
-        const human = _pmHumanApproval(approval);
-        const technical = _pmApprovalTechnicalText(approval);
-        const files = Array.isArray(approval?.devSourceEdit?.allowedFiles) ? approval.devSourceEdit.allowedFiles : [];
-        const devPlan = approval?.devSourceEdit?.plan || null;
-        const evidence = Array.isArray(devPlan?.evidence) ? devPlan.evidence : [];
-        const steps = Array.isArray(devPlan?.steps) ? devPlan.steps : [];
-        const expectedWorkflow = Array.isArray(devPlan?.expectedWorkflow)
-          ? devPlan.expectedWorkflow
-          : (Array.isArray(devPlan?.expected_workflow) ? devPlan.expected_workflow : []);
-        return `<article class="pm-proposal-review-card" style="margin-top:10px">
-          <div class="pm-proposal-head">
-            <span class="pm-more-icon">${ICONS.clipboard}</span>
-            <div>
-              <strong>${escapeHtml(_pmApprovalTitle(approval))}</strong>
-              <div class="pm-proposal-badges"><span class="pm-proposal-status pending">PENDING</span><span>risk ${escapeHtml(String(approval.riskScore ?? 0))}</span></div>
-            </div>
-          </div>
-          <p>${escapeHtml(human.summary)}</p>
-          ${human.detail ? `<div class="pm-approval-detail">${escapeHtml(human.detail)}</div>` : ''}
-          ${devPlan?.reasoning ? `<div class="pm-approval-detail"><strong>Reasoning:</strong> ${escapeHtml(String(devPlan.reasoning))}</div>` : ''}
-          ${devPlan?.currentState || devPlan?.fix ? `<div class="pm-approval-detail">${[
-            devPlan.currentState ? `Current: ${String(devPlan.currentState)}` : '',
-            devPlan.fix ? `Fix: ${String(devPlan.fix)}` : '',
-          ].filter(Boolean).map(escapeHtml).join('<br>')}</div>` : ''}
-          ${evidence.length ? `<details class="pm-approval-technical" open><summary>Evidence</summary><pre>${escapeHtml(evidence.slice(0, 5).map((item) => `${item.file || 'file'}${item.lines ? `:${item.lines}` : ''} - ${item.finding || ''}`).join('\n'))}</pre></details>` : ''}
-          ${steps.length ? `<details class="pm-approval-technical"><summary>Plan</summary><pre>${escapeHtml(steps.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'))}</pre></details>` : ''}
-          ${expectedWorkflow.length ? `<details class="pm-approval-technical" open><summary>Expected workflow after edits</summary><pre>${escapeHtml(expectedWorkflow.slice(0, 8).map((step, idx) => `${idx + 1}. ${step}`).join('\n'))}</pre></details>` : ''}
-          ${files.length ? `<div class="pm-proposal-files">${files.slice(0, 4).map((file) => `<span>${escapeHtml(file)}</span>`).join('')}</div>` : ''}
-          ${technical ? `<details class="pm-approval-technical"><summary>Technical details</summary><pre>${escapeHtml(technical)}</pre></details>` : ''}
-          ${_pmRenderCommandRunLink(approval)}
-          <div class="pm-proposal-actions">
-            <button class="pm-btn success pm-proposal-action-btn" data-approve-approval="${escapeHtml(approval.id)}">Approve</button>
-            <button class="pm-btn danger pm-proposal-action-btn" data-deny-approval="${escapeHtml(approval.id)}">Reject</button>
-            ${_pmApprovalCanSave(approval) ? `<button class="pm-btn ghost pm-proposal-action-btn" data-approve-approval-session="${escapeHtml(approval.id)}">Trust session</button>
-            <button class="pm-btn ghost pm-proposal-action-btn" data-approve-approval-always="${escapeHtml(approval.id)}">Always allow</button>` : ''}
-          </div>
-        </article>`;
-      }).join('')}
-    </section>` : '';
     const proposalHtml = proposals.length ? proposals.map((proposal) => {
       const isPending = String(proposal.status || '').toLowerCase() === 'pending';
       return `<article class="pm-card pm-proposal-card" data-proposal-id="${escapeHtml(proposal.id)}">
@@ -30887,9 +30975,9 @@ export async function renderProposalsPage(page, { proposalId = '', navigate }) {
         </div>
       </article>`;
     }).join('') : '';
-    body.innerHTML = approvalHtml || proposalHtml
-      ? `${approvalHtml}${proposalHtml}`
-      : `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.doc}</div><h2>No proposals here</h2><p>Agent-generated proposals and fast approvals will appear here when they need review.</p></div>`;
+    body.innerHTML = proposalHtml
+      ? proposalHtml
+      : `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.doc}</div><h2>No proposals here</h2><p>Agent-generated proposals will appear here when they need review.</p></div>`;
     wireProposalList();
   };
 
@@ -30897,11 +30985,7 @@ export async function renderProposalsPage(page, { proposalId = '', navigate }) {
     try {
       body.innerHTML = _pmMoreSkeleton();
       const status = filterEl?.value || 'pending';
-      [proposals, approvals] = await Promise.all([
-        loadMobileProposals(status),
-        status === 'pending' || status === 'all' ? loadMobileApprovals('pending') : Promise.resolve([]),
-      ]);
-      approvals = approvals.filter((approval) => !_pmIsDevSourceApproval(approval));
+      proposals = await loadMobileProposals(status);
       paint();
     } catch (err) {
       body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.doc}</div><h2>Could not load proposals</h2><p>${escapeHtml(err.message || '')}</p></div>`;
@@ -30916,25 +31000,6 @@ export async function renderProposalsPage(page, { proposalId = '', navigate }) {
       if (!r || r.success === false) throw new Error(r?.error || `${kind} failed`);
       pmToast(kind === 'approve' ? 'Proposal approved' : 'Proposal denied', 'success');
       await load();
-    } catch (err) {
-      pmToast(err.message || 'Action failed', 'error');
-    } finally {
-      btn.disabled = false;
-    }
-  };
-
-  const actApproval = async (id, kind, btn, grantScope = '') => {
-    if (!id) return;
-    btn.disabled = true;
-    try {
-      const r = kind === 'approve' ? await approveMobileApproval(id, grantScope) : await denyMobileApproval(id);
-      if (!r || r.success === false) throw new Error(r?.error || `${kind} failed`);
-      pmToast(kind === 'approve' ? (grantScope === 'always' ? 'Always allowed' : grantScope === 'session' ? 'Allowed this session' : 'Approved') : 'Rejected', 'success');
-      await load();
-      if (kind === 'approve') {
-        const host = body.querySelector(`[data-process-approval-host="${_pmCssEscape(id)}"]`);
-        if (host) _pmLoadApprovalProcessRun(id, host).then(() => _wireMobileProcessRunActions(host)).catch(() => {});
-      }
     } catch (err) {
       pmToast(err.message || 'Action failed', 'error');
     } finally {
@@ -30958,22 +31023,6 @@ export async function renderProposalsPage(page, { proposalId = '', navigate }) {
     body.querySelectorAll('[data-deny-proposal]').forEach((btn) => btn.addEventListener('click', (event) => {
       event.stopPropagation();
       act(btn.getAttribute('data-deny-proposal'), 'deny', btn);
-    }));
-    body.querySelectorAll('[data-approve-approval]').forEach((btn) => btn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      actApproval(btn.getAttribute('data-approve-approval'), 'approve', btn);
-    }));
-    body.querySelectorAll('[data-approve-approval-session]').forEach((btn) => btn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      actApproval(btn.getAttribute('data-approve-approval-session'), 'approve', btn, 'session');
-    }));
-    body.querySelectorAll('[data-approve-approval-always]').forEach((btn) => btn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      actApproval(btn.getAttribute('data-approve-approval-always'), 'approve', btn, 'always');
-    }));
-    body.querySelectorAll('[data-deny-approval]').forEach((btn) => btn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      actApproval(btn.getAttribute('data-deny-approval'), 'deny', btn);
     }));
     _wireMobileProcessRunActions(body);
   }
@@ -32634,20 +32683,54 @@ export async function renderSubagentChatPage(page, { agentId, navigate }) {
   // This route owns a nested message scroller. Ordinary mobile pages use the
   // document scroller, so opt out before the async history renders.
   document.body.classList.add('pm-mobile-subagent-chat-locked');
+  const sessionId = `subagent_chat_${agentId}`;
+  let agentRef = null;
+  const header = renderMobileHeader({
+    title: 'Subagent',
+    online: true,
+    leftIcon: 'back',
+    hideTitle: true,
+    hideBrand: true,
+  });
   page.innerHTML = `
-    <header class="pm-header">
-      <button class="pm-icon-btn" data-action="back" aria-label="Back to subagent overview">${ICONS.back}</button>
-      <div class="pm-brand">${FLAME}<span>Prometheus</span></div>
-      <div class="pm-header-actions"><button class="pm-icon-btn" data-action="settings" aria-label="Settings">${ICONS.gear}</button></div>
-    </header>
+    ${header}
+    ${renderMobileContextChip()}
     <div class="pm-body pm-subagent-chat-body" id="pm-subagent-chat-body"><div class="pm-card" style="text-align:center;padding:24px;color:var(--pm-muted);">Loading chat…</div></div>
   `;
+  // Seed the shared model-badge slot with Name/Model Effort for this subagent.
+  // Main chat keeps using refreshMobileModelBadge; subagent chat owns this label.
+  const badgeLabel = page.querySelector('.pm-model-badge .pm-model-badge-label');
+  if (badgeLabel) badgeLabel.textContent = 'Loading…';
+  const badgeBtn = page.querySelector('.pm-model-badge');
+  if (badgeBtn) {
+    badgeBtn.classList.add('pm-subagent-model-badge');
+    badgeBtn.setAttribute('aria-label', 'Subagent model');
+    badgeBtn.title = 'Subagent model';
+  }
   wireHeaderActions(page, { onBack: () => navigate?.(`#mobile/subagents/${encodeURIComponent(agentId)}`) });
+  wireMobileContextWindow(page, {
+    getSessionId: () => sessionId,
+    getProvider: () => _mobileSubagentModelParts(agentRef || {}).provider,
+    getAccountId: () => _mobileSubagentModelParts(agentRef || {}).accountId,
+  });
   const body = page.querySelector('#pm-subagent-chat-body');
   let activeStream = null;
   try {
     const agent = await loadMobileSubagentDetail(agentId);
     if (!agent) throw new Error('Subagent not found');
+    agentRef = agent;
+    const label = _mobileSubagentHeaderLabel(agent);
+    if (badgeLabel) badgeLabel.textContent = label;
+    if (badgeBtn) {
+      badgeBtn.title = label;
+      badgeBtn.setAttribute('aria-label', label);
+    }
+    // Re-scope plan usage now that we know the agent provider/account.
+    window.__pmMobileRefreshContextWindow?.({
+      sessionId,
+      provider: _mobileSubagentModelParts(agent).provider,
+      accountId: _mobileSubagentModelParts(agent).accountId,
+    });
     await _renderSubagentChatTab(body, agent, (stream) => { activeStream = stream; });
   } catch (err) {
     body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.robot}</div><h2>Couldn’t load subagent chat</h2><p>${escapeHtml(err?.message || 'Network error')}</p></div>`;
@@ -32658,6 +32741,8 @@ export async function renderSubagentChatPage(page, { agentId, navigate }) {
     document.body.classList.remove('pm-mobile-subagent-chat-locked');
   };
 }
+
+
 
 function openDispatchSheet(agentId, anchorBtn) {
   const overlay = document.createElement('div');

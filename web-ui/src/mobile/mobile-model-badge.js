@@ -277,10 +277,15 @@ function _modelDetail(detail = {}) {
   return { provider, model };
 }
 
+function _isSubagentModelBadge(el) {
+  return !!(el?.closest?.('.pm-subagent-model-badge') || el?.classList?.contains?.('pm-subagent-model-badge'));
+}
+
 function _setBadgeLabel(label) {
   const safe = String(label || '').trim() || 'Online';
   window.__pmModelBadgeLabel = safe;
   document.querySelectorAll('.pm-model-badge .pm-model-badge-label').forEach((el) => {
+    if (_isSubagentModelBadge(el)) return;
     el.textContent = safe;
   });
   return safe;
@@ -289,12 +294,18 @@ function _setBadgeLabel(label) {
 function _setBadgeFast(fast) {
   window.__pmModelBadgeFast = !!fast;
   document.querySelectorAll('.pm-model-badge .pm-model-speed-icon').forEach((el) => {
+    if (_isSubagentModelBadge(el)) return;
     el.hidden = !fast;
   });
 }
 
 // ── Badge label refresh ──────────────────────────────────────────────────────
 export async function refreshMobileModelBadge(force = false, modelChangeDetail = null) {
+  // Subagent chat owns its header badge (Name/Model Effort). Don't clobber it
+  // with the main-chat route when that page is active.
+  if (document.querySelector('.pm-subagent-model-badge') && !modelChangeDetail?.forceSubagent) {
+    return window.__pmModelBadgeLabel || 'Online';
+  }
   const eventModel = _modelDetail(modelChangeDetail || {});
   const llm = await _loadLlm(force);
   if (eventModel.model || eventModel.provider) {
@@ -777,6 +788,8 @@ export function initMobileModelBadge() {
     if (!badge) return;
     event.preventDefault();
     event.stopPropagation();
+    // Subagent chat badge is display-only (Name/Model Effort).
+    if (_isSubagentModelBadge(badge)) return;
     _openReasoningSheet();
   });
 

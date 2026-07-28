@@ -91,7 +91,7 @@ export async function executeWeatherLookup(args: WeatherArgs): Promise<WeatherRe
   try {
     const url = `${FORECAST_BASE}?latitude=${lat}&longitude=${lon}`
       + `&current=temperature_2m,weather_code`
-      + `&hourly=temperature_2m`
+      + `&hourly=temperature_2m,apparent_temperature,precipitation_probability,weather_code`
       + `&daily=weather_code,temperature_2m_max,temperature_2m_min`
       + `&temperature_unit=${tempUnit}&forecast_days=${days}&timezone=auto`;
     fc = await jsonFetch(url);
@@ -113,6 +113,7 @@ export async function executeWeatherLookup(args: WeatherArgs): Promise<WeatherRe
     const code = fc.daily.weather_code?.[i];
     daily.push({
       day: i === 0 ? 'Today' : WEEKDAYS[d.getDay()],
+      date: dTime[i],
       high: typeof fc.daily.temperature_2m_max?.[i] === 'number' ? Math.round(fc.daily.temperature_2m_max[i]) : undefined,
       low: typeof fc.daily.temperature_2m_min?.[i] === 'number' ? Math.round(fc.daily.temperature_2m_min[i]) : undefined,
       code: typeof code === 'number' ? code : undefined,
@@ -120,18 +121,24 @@ export async function executeWeatherLookup(args: WeatherArgs): Promise<WeatherRe
     });
   }
 
-  // Next ~24h of hourly temps, starting near "now".
+  // Keep a true hourly forecast for every returned day. The card groups these
+  // records under the selected daily tab; past hours today are omitted.
   const hourly: WeatherHourly[] = [];
   const hTime: string[] = fc?.hourly?.time || [];
   const nowMs = Date.now();
-  let startIdx = hTime.findIndex((t) => new Date(t).getTime() >= nowMs);
-  if (startIdx < 0) startIdx = 0;
-  for (let i = startIdx; i < Math.min(startIdx + 24, hTime.length); i += 3) {
+  for (let i = 0; i < hTime.length; i += 1) {
     const t = new Date(hTime[i]);
+    if (t.getTime() < nowMs) continue;
     const hr = t.getHours();
+    const code = fc.hourly.weather_code?.[i];
     hourly.push({
+      date: hTime[i].slice(0, 10),
       time: `${((hr + 11) % 12) + 1}${hr < 12 ? 'am' : 'pm'}`,
       temp: typeof fc.hourly.temperature_2m?.[i] === 'number' ? Math.round(fc.hourly.temperature_2m[i]) : undefined,
+      feelsLike: typeof fc.hourly.apparent_temperature?.[i] === 'number' ? Math.round(fc.hourly.apparent_temperature[i]) : undefined,
+      precipitationProbability: typeof fc.hourly.precipitation_probability?.[i] === 'number' ? Math.round(fc.hourly.precipitation_probability[i]) : undefined,
+      code: typeof code === 'number' ? code : undefined,
+      ...wmo(code),
     });
   }
 

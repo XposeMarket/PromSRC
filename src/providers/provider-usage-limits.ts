@@ -392,53 +392,190 @@ function money(value: number | null, unit: string | null): string {
     : `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`;
 }
 
-function normaliseGrokBillingWindow(body: any): UsageWindow | null {
-  const root = body?.config && typeof body.config === 'object' ? body.config : body;
-  const pool = body?.weeklyPool || body?.sharedPool || body?.usagePool || body?.credits || root;
-  const used = firstPathNumber(pool, [
-    'used.val', 'used.value', 'usedCredits.val', 'usedCredits', 'usage.used.val', 'usage.used',
-    'totalUsed.val', 'totalUsed', 'amountUsed.val', 'amountUsed',
-  ]);
-  const limit = firstPathNumber(pool, [
-    'weeklyLimit.val', 'weeklyLimit', 'monthlyLimit.val', 'monthlyLimit', 'limit.val', 'limit',
-    'total.val', 'total', 'pool.val', 'pool', 'creditLimit.val', 'creditLimit',
-  ]);
-  const explicitRemaining = firstPathNumber(pool, [
-    'remaining.val', 'remaining', 'remainingCredits.val', 'remainingCredits', 'available.val', 'available',
-    'balance.val', 'balance',
-  ]);
-  const remaining = explicitRemaining != null ? explicitRemaining
+function periodLabelFromType(raw: unknown, fallback = 'Weekly'): string {
+  const text = String(raw || '').trim();
+  if (/week/i.test(text)) return 'Weekly';
+  if (/month/i.test(text)) return 'Monthly';
+  if (/day/i.test(text)) return 'Daily';
+  if (/hour/i.test(text)) return 'Hourly';
+  return fallback;
+}
+
+function productUsageLabel(product: unknown): string {
+  const raw = String(product || '').trim();
+  if (!raw) return 'Product';
+  if (/^api$/i.test(raw)) return 'API';
+  if (/grok\s*chat/i.test(raw) || /^chat$/i.test(raw)) return 'Grok Chat';
+  if (/image/i.test(raw)) return 'Images';
+  if (/video/i.test(raw)) return 'Video';
+  return raw.replace(/[_-]+/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function buildUsageWindow(opts: {
+  label: string;
+  usedPercent?: number | null;
+  used?: number | null;
+  limit?: number | null;
+  remaining?: number | null;
+  unit?: string | null;
+  resetAt?: string | null;
+  detail?: string | null;
+}): UsageWindow | null {
+  const used = opts.used != null && Number.isFinite(opts.used) ? Number(opts.used) : null;
+  const limit = opts.limit != null && Number.isFinite(opts.limit) && Number(opts.limit) > 0 ? Number(opts.limit) : null;
+  const remaining = opts.remaining != null && Number.isFinite(opts.remaining)
+    ? Math.max(0, Number(opts.remaining))
     : (used != null && limit != null ? Math.max(0, limit - used) : null);
-  const usedPercent = firstPathNumber(pool, ['used_percent', 'usedPercent', 'percentUsed', 'utilization', 'percentage'])
-    ?? (used != null && limit != null && limit > 0 ? (used / limit) * 100 : null);
-  const resetAt = resetIsoFrom({
-    reset_at: firstPathString(pool, [
-      'reset_at', 'resetAt', 'resets_at', 'resetsAt', 'billingPeriodEnd', 'billing_period_end',
-      'periodEnd', 'period_end', 'nextResetAt', 'next_reset_at',
-    ]),
-    reset_after_seconds: firstPathNumber(pool, [
-      'reset_after_seconds', 'resetAfterSeconds', 'resets_in_seconds', 'secondsUntilReset',
-      'seconds_until_reset', 'resetCountdownSeconds',
-    ]),
-  });
-  const period = firstPathString(pool, ['period', 'window', 'cadence', 'limitType'])
-    || (firstPathString(pool, ['billingPeriodStart', 'billing_period_start']) ? 'Monthly' : 'Weekly');
-  const unit = firstPathString(pool, ['unit', 'currency']) || 'credits';
+  let usedPercent = opts.usedPercent != null && Number.isFinite(opts.usedPercent)
+    ? Number(opts.usedPercent)
+    : (used != null && limit != null ? (used / limit) * 100 : null);
+  if (usedPercent == null && remaining == null && !opts.resetAt && !opts.detail) return null;
+  if (usedPercent == null) usedPercent = 0;
+  const unit = opts.unit || ((used != null || limit != null || remaining != null) ? 'credits' : null);
   const parts = [
     remaining != null && limit != null ? `Remaining ${money(remaining, unit)} / ${money(limit, unit)}` : '',
-    used != null ? `Used ${money(used, unit)}` : '',
+    used != null && limit == null ? `Used ${money(used, unit)}` : '',
+    used != null && limit != null && remaining == null ? `Used ${money(used, unit)} / ${money(limit, unit)}` : '',
   ].filter(Boolean);
   return {
-    label: /month/i.test(period) ? 'Monthly pool' : /day/i.test(period) ? `${period} pool` : 'Weekly pool',
-    used_percent: clampPct(usedPercent ?? 0),
-    reset_at: resetAt,
+    label: opts.label,
+    used_percent: clampPct(usedPercent),
+    reset_at: opts.resetAt || null,
     used,
     limit,
     remaining,
     unit,
-    detail: parts.join(' · ') || null,
+    detail: opts.detail || parts.join(' · ') || null,
   };
 }
+
+/** Parse Grok CLI billing payloads (credits + plain monthly) into usage windows. */
+export function normaliseGrokBillingWindows(creditsBody: any, plainBody?: any): UsageWindow[] {
+  const creditsRoot = creditsBody?.config && typeof creditsBody.config === 'object' ? creditsBody.config : creditsBody;
+  const plainRoot = plainBody?.config && typeof plainBody.config === 'object' ? plainBody.config : plainBody;
+  const windows: UsageWindow[] = [];
+  const seen = new Set<string>();
+  const push = (window: UsageWindow | null) => {
+    if (!window) return;
+    const key = `${window.label}|${window.used_percent}|${window.reset_at || ''}|${window.detail || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    windows.push(window);
+  };
+
+  const period = creditsRoot?.currentPeriod && typeof creditsRoot.currentPeriod === 'object'
+    ? creditsRoot.currentPeriod
+    : null;
+  const periodLabel = periodLabelFromType(
+    period?.type || firstPathString(creditsRoot, ['period', 'window', 'cadence', 'limitType']),
+    firstPathString(creditsRoot, ['billingPeriodStart', 'billing_period_start']) ? 'Weekly' : 'Weekly',
+  );
+  const periodReset = firstString(
+    period?.end,
+    firstPathString(creditsRoot, [
+      'billingPeriodEnd', 'billing_period_end', 'periodEnd', 'period_end', 'reset_at', 'resetAt', 'resets_at', 'resetsAt',
+    ]),
+  );
+  const creditPct = firstPathNumber(creditsRoot, [
+    'creditUsagePercent', 'credit_usage_percent', 'usagePercent', 'usage_percent', 'used_percent', 'usedPercent',
+  ]);
+  push(buildUsageWindow({
+    label: periodLabel,
+    usedPercent: creditPct,
+    resetAt: periodReset,
+    unit: 'credits',
+    detail: creditPct != null ? `${clampPct(creditPct)}% of ${periodLabel.toLowerCase()} allowance used` : null,
+  }));
+
+  const productUsage = Array.isArray(creditsRoot?.productUsage)
+    ? creditsRoot.productUsage
+    : (Array.isArray(creditsRoot?.product_usage) ? creditsRoot.product_usage : []);
+  for (const entry of productUsage) {
+    if (!entry || typeof entry !== 'object') continue;
+    const pct = firstNumber(entry.usagePercent, entry.usage_percent, entry.used_percent, entry.usedPercent, entry.percent);
+    if (pct == null) continue;
+    const label = `${periodLabel} · ${productUsageLabel(entry.product || entry.name || entry.id)}`;
+    push(buildUsageWindow({
+      label,
+      usedPercent: pct,
+      resetAt: periodReset,
+      unit: 'credits',
+    }));
+  }
+
+  // Plain /v1/billing exposes absolute monthly credit counters for some plans.
+  if (plainRoot && typeof plainRoot === 'object') {
+    const used = firstPathNumber(plainRoot, ['used.val', 'used.value', 'used', 'totalUsed.val', 'totalUsed']);
+    const limit = firstPathNumber(plainRoot, [
+      'monthlyLimit.val', 'monthlyLimit', 'weeklyLimit.val', 'weeklyLimit', 'limit.val', 'limit', 'creditLimit.val', 'creditLimit',
+    ]);
+    const onDemandUsed = firstPathNumber(plainRoot, ['onDemandUsed.val', 'onDemandUsed', 'on_demand_used.val']);
+    const onDemandCap = firstPathNumber(plainRoot, ['onDemandCap.val', 'onDemandCap', 'on_demand_cap.val']);
+    const monthlyReset = firstPathString(plainRoot, [
+      'billingPeriodEnd', 'billing_period_end', 'periodEnd', 'period_end', 'reset_at', 'resetAt',
+    ]);
+    if ((used != null && used > 0) || (limit != null && limit > 0)) {
+      push(buildUsageWindow({
+        label: limit != null && limit > 0 ? 'Monthly credits' : 'Credits used (month)',
+        used,
+        limit: limit != null && limit > 0 ? limit : null,
+        resetAt: monthlyReset,
+        unit: 'credits',
+      }));
+    }
+    if ((onDemandUsed != null && onDemandUsed > 0) || (onDemandCap != null && onDemandCap > 0)) {
+      push(buildUsageWindow({
+        label: 'On-demand',
+        used: onDemandUsed,
+        limit: onDemandCap != null && onDemandCap > 0 ? onDemandCap : null,
+        resetAt: monthlyReset,
+        unit: 'credits',
+      }));
+    }
+  }
+
+  // Legacy / alternate shapes: weeklyPool, sharedPool, credits object, etc.
+  if (!windows.length) {
+    const pool = creditsBody?.weeklyPool || creditsBody?.sharedPool || creditsBody?.usagePool || creditsBody?.credits || creditsRoot;
+    const used = firstPathNumber(pool, [
+      'used.val', 'used.value', 'usedCredits.val', 'usedCredits', 'usage.used.val', 'usage.used',
+      'totalUsed.val', 'totalUsed', 'amountUsed.val', 'amountUsed',
+    ]);
+    const limit = firstPathNumber(pool, [
+      'weeklyLimit.val', 'weeklyLimit', 'monthlyLimit.val', 'monthlyLimit', 'limit.val', 'limit',
+      'total.val', 'total', 'pool.val', 'pool', 'creditLimit.val', 'creditLimit',
+    ]);
+    const explicitRemaining = firstPathNumber(pool, [
+      'remaining.val', 'remaining', 'remainingCredits.val', 'remainingCredits', 'available.val', 'available',
+      'balance.val', 'balance',
+    ]);
+    const usedPercent = firstPathNumber(pool, ['used_percent', 'usedPercent', 'percentUsed', 'utilization', 'percentage', 'creditUsagePercent']);
+    const resetAt = resetIsoFrom({
+      reset_at: firstPathString(pool, [
+        'reset_at', 'resetAt', 'resets_at', 'resetsAt', 'billingPeriodEnd', 'billing_period_end',
+        'periodEnd', 'period_end', 'nextResetAt', 'next_reset_at',
+      ]),
+      reset_after_seconds: firstPathNumber(pool, [
+        'reset_after_seconds', 'resetAfterSeconds', 'resets_in_seconds', 'secondsUntilReset',
+        'seconds_until_reset', 'resetCountdownSeconds',
+      ]),
+    });
+    const periodFallback = firstPathString(pool, ['period', 'window', 'cadence', 'limitType'])
+      || (firstPathString(pool, ['billingPeriodStart', 'billing_period_start']) ? 'Monthly' : 'Weekly');
+    push(buildUsageWindow({
+      label: /month/i.test(String(periodFallback)) ? 'Monthly pool' : /day/i.test(String(periodFallback)) ? `${periodFallback} pool` : 'Weekly pool',
+      usedPercent,
+      used,
+      limit,
+      remaining: explicitRemaining,
+      resetAt,
+      unit: firstPathString(pool, ['unit', 'currency']) || 'credits',
+    }));
+  }
+
+  return windows;
+}
+
 
 function localGrokAuthPath(): string {
   const os = require('os');
@@ -551,31 +688,50 @@ async function fetchGrokLive(configDir: string, accountId?: string): Promise<Liv
   let auth = await loadGrokBillingAuth(configDir, accountId);
   if (!auth?.access_token) return null;
 
-  let res = await grokProxyGet('/v1/billing?format=credits', auth);
-  if ((res.status === 401 || res.status === 403) && auth.source === 'prometheus_oauth') {
+  const loadBilling = async (current: GrokAuth) => {
+    const [creditsRes, plainRes] = await Promise.all([
+      grokProxyGet('/v1/billing?format=credits', current),
+      grokProxyGet('/v1/billing', current),
+    ]);
+    return { creditsRes, plainRes, auth: current };
+  };
+
+  let { creditsRes, plainRes, auth: activeAuth } = await loadBilling(auth);
+  if ((creditsRes.status === 401 || creditsRes.status === 403) && activeAuth.source === 'prometheus_oauth') {
     try {
       const oauth = require('../auth/xai-oauth');
       const refreshed = await oauth.refreshXAITokens(configDir, accountId);
-      auth = { ...auth, access_token: String(refreshed.access_token || auth.access_token), refresh_token: refreshed.refresh_token || auth.refresh_token };
-      res = await grokProxyGet('/v1/billing?format=credits', auth);
+      activeAuth = {
+        ...activeAuth,
+        access_token: String(refreshed.access_token || activeAuth.access_token),
+        refresh_token: refreshed.refresh_token || activeAuth.refresh_token,
+      };
+      ({ creditsRes, plainRes, auth: activeAuth } = await loadBilling(activeAuth));
     } catch { /* keep original response */ }
-  } else if ((res.status === 401 || res.status === 403) && auth.source === 'grok_cli_auth') {
-    const refreshed = await refreshLocalGrokAuth(auth).catch(() => null);
+  } else if ((creditsRes.status === 401 || creditsRes.status === 403) && activeAuth.source === 'grok_cli_auth') {
+    const refreshed = await refreshLocalGrokAuth(activeAuth).catch(() => null);
     if (refreshed) {
-      auth = refreshed;
-      res = await grokProxyGet('/v1/billing?format=credits', auth);
+      activeAuth = refreshed;
+      ({ creditsRes, plainRes, auth: activeAuth } = await loadBilling(activeAuth));
     }
   }
-  if (!res.ok) return { windows: [], plan_label: null, error: `Grok billing ${res.status}` };
+  if (!creditsRes.ok && !plainRes.ok) {
+    return { windows: [], plan_label: null, error: `Grok billing ${creditsRes.status || plainRes.status}` };
+  }
 
-  const billing: any = await res.json().catch(() => ({}));
-  const windows = [normaliseGrokBillingWindow(billing)].filter(Boolean) as UsageWindow[];
+  const creditsBilling: any = creditsRes.ok ? await creditsRes.json().catch(() => ({})) : {};
+  const plainBilling: any = plainRes.ok ? await plainRes.json().catch(() => ({})) : {};
+  const windows = normaliseGrokBillingWindows(creditsBilling, plainBilling);
 
-  let planLabel = firstPathString(billing, [
+  let planLabel = firstPathString(creditsBilling, [
     'plan.label', 'plan.name', 'subscription.plan', 'subscription.name', 'account.plan', 'planLabel',
+    'config.plan.label', 'config.plan.name', 'config.subscription.plan',
+  ]) || firstPathString(plainBilling, [
+    'plan.label', 'plan.name', 'subscription.plan', 'subscription.name', 'account.plan', 'planLabel',
+    'config.plan.label', 'config.plan.name',
   ]);
   try {
-    const settings = await grokProxyGet('/v1/settings', auth);
+    const settings = await grokProxyGet('/v1/settings', activeAuth);
     if (settings.ok) {
       const body: any = await settings.json().catch(() => ({}));
       planLabel = firstPathString(body, [
@@ -585,7 +741,16 @@ async function fetchGrokLive(configDir: string, accountId?: string): Promise<Liv
     }
   } catch { /* billing is enough */ }
 
-  return { windows, plan_label: planLabel, error: windows.length ? null : 'Grok billing response had no recognised credit pool' };
+  if (!planLabel) {
+    const periodType = firstPathString(creditsBilling, ['config.currentPeriod.type', 'currentPeriod.type']);
+    if (/week/i.test(String(periodType || ''))) planLabel = 'X Premium / weekly';
+  }
+
+  return {
+    windows,
+    plan_label: planLabel,
+    error: windows.length ? null : 'Grok billing response had no recognised credit pool',
+  };
 }
 
 // ─── Live cache ──────────────────────────────────────────────────────────────
@@ -762,7 +927,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
   if (!ids.includes('xai') && loadLocalGrokAuth()) ids.push('xai');
 
   const providerEntries = ids.flatMap((id) => configuredUsageAccounts(id).map(account => ({ id, account })));
-  const providers = await Promise.all(providerEntries.map(async ({ id, account }): Promise<ProviderUsage> => {
+  const providers = (await Promise.all(providerEntries.map(async ({ id, account }): Promise<ProviderUsage | null> => {
     const live = await getLive(id, configDir, account.id);
     const tokens = internalTokens(id, events, account.id);
     const activeCodexModel = activeMain.provider === id && activeMain.accountId === account.id ? activeMain.model : '';
@@ -775,8 +940,7 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
         }, activeCodexModel)
       : null;
 
-    // xAI/Grok has no live usage endpoint here; augment internal accounting with
-    // token counts read from local Grok CLI session files, if present.
+    // Local Grok CLI session files only map to the legacy/unnamed account.
     if (id === 'xai' && !account.id) {
       const cli = readGrokCliTokens();
       tokens.total += cli.total;
@@ -793,6 +957,18 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
         }
       : null;
 
+    const windows = codexSelection?.windows || live?.windows || [];
+    const error = codexSelection?.error ?? live?.error ?? null;
+    const hasSignal = windows.length > 0
+      || !!error
+      || tokens.total > 0
+      || tokens.calls > 0
+      || !!budget
+      || !!live?.plan_label;
+
+    // Skip hollow multi-account shells (e.g. xAI "default" with no OAuth/usage).
+    if (account.id && !hasSignal) return null;
+
     return {
       provider: id,
       label: codexSelection?.usage_scope === 'model' ? 'OpenAI · Codex Spark' : labelFor(id),
@@ -800,14 +976,14 @@ export async function getProviderUsageLimits(credentialedIds: string[]): Promise
       configured: true,
       source: live ? 'live' : 'internal',
       plan_label: live?.plan_label ?? null,
-      windows: codexSelection?.windows || live?.windows || [],
+      windows,
       usage_scope: codexSelection?.usage_scope || 'provider',
       usage_model: codexSelection?.usage_model || null,
       budget,
       tokens,
-      error: codexSelection?.error ?? live?.error ?? null,
+      error,
     };
-  }));
+  }))).filter((entry): entry is ProviderUsage => !!entry);
 
   return { fetched_at: new Date().toISOString(), providers };
 }

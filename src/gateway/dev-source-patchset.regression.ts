@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import {
+  applyDeleteLinesEolSafe,
+  applyInsertAfterEolSafe,
   applyLineEndingTolerantFindReplace,
+  applyReplaceLinesEolSafe,
   normalizeDevSourcePatchsetArgs,
+  splitLinesEolSafe,
 } from './dev-source-patchset';
 
 const providerStyle = normalizeDevSourcePatchsetArgs({
@@ -54,5 +58,22 @@ const deleteByEmptyReplacement = normalizeDevSourcePatchsetArgs({
 });
 assert.equal(deleteByEmptyReplacement.edits[0].op, 'find_replace');
 assert.equal(deleteByEmptyReplacement.edits[0].replace, '');
+
+const crlfFile = 'one\r\ntwo\r\nthree\r\n';
+assert.deepEqual(splitLinesEolSafe(crlfFile), ['one', 'two', 'three', '']);
+const replacedLines = applyReplaceLinesEolSafe(crlfFile, 2, 2, 'TWO\nTWO_B');
+assert.equal(replacedLines.updated, 'one\r\nTWO\r\nTWO_B\r\nthree\r\n');
+assert.doesNotMatch(replacedLines.updated, /\rtwo/);
+assert.ok(!replacedLines.lines.some((line) => line.includes('\r')));
+
+const inserted = applyInsertAfterEolSafe(crlfFile, 1, 'midA\nmidB');
+assert.equal(inserted.updated, 'one\r\nmidA\r\nmidB\r\ntwo\r\nthree\r\n');
+
+const deleted = applyDeleteLinesEolSafe(crlfFile, 2, 3);
+assert.equal(deleted.updated, 'one\r\n');
+assert.equal(deleted.endClamped, 3);
+
+const lfIntoCrlf = applyReplaceLinesEolSafe('a\r\nb\r\nc\r\n', 1, 3, 'x\ny');
+assert.equal(lfIntoCrlf.updated, 'x\r\ny\r\n');
 
 console.log('dev-source patchset regression: ok');

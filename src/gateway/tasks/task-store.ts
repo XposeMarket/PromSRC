@@ -395,6 +395,19 @@ export interface TaskSummary {
   managerEnabled?: boolean;
   executorProvider?: string;
   executorReasoningEffort?: string;
+  /** Compact routing fields used to avoid deserializing historical tasks on chat admission. */
+  replyLookupVersion?: 1;
+  originatingSessionId?: string;
+  subagentProfile?: string;
+  proposalTeamId?: string;
+  proposalManagerSessionId?: string;
+}
+
+export interface TaskIndexLookupStats {
+  kind: 'owner_session' | 'reply_session';
+  indexEntries: number;
+  candidateCount: number;
+  loadedCount: number;
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ Index Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -413,6 +426,9 @@ let taskIndexCache: TaskIndex | null = null;
 let taskIndexWriteCounter = 0;
 let taskSessionIndexCache: Map<string, string> | null = null;
 let taskSessionLookupRevision = 0;
+let lastTaskIndexLookupStats: TaskIndexLookupStats = {
+  kind: 'owner_session', indexEntries: 0, candidateCount: 0, loadedCount: 0,
+};
 
 function getStateBaseDir(): string {
   try {
@@ -573,6 +589,19 @@ function normalizeTaskSummary(input: any): TaskSummary | null {
     executorReasoningEffort: typeof input?.executorReasoningEffort === 'string' && input.executorReasoningEffort.trim()
       ? input.executorReasoningEffort.slice(0, 32)
       : undefined,
+    replyLookupVersion: input?.replyLookupVersion === 1 ? 1 : undefined,
+    originatingSessionId: typeof input?.originatingSessionId === 'string' && input.originatingSessionId.trim()
+      ? input.originatingSessionId.trim()
+      : undefined,
+    subagentProfile: typeof input?.subagentProfile === 'string' && input.subagentProfile.trim()
+      ? input.subagentProfile.trim().slice(0, 160)
+      : undefined,
+    proposalTeamId: typeof input?.proposalTeamId === 'string' && input.proposalTeamId.trim()
+      ? input.proposalTeamId.trim()
+      : undefined,
+    proposalManagerSessionId: typeof input?.proposalManagerSessionId === 'string' && input.proposalManagerSessionId.trim()
+      ? input.proposalManagerSessionId.trim()
+      : undefined,
   };
 }
 
@@ -713,6 +742,21 @@ function buildTaskSummary(task: TaskRecord): TaskSummary {
     executorReasoningEffort: typeof task.executorReasoningEffort === 'string' && task.executorReasoningEffort.trim()
       ? task.executorReasoningEffort.slice(0, 32)
       : undefined,
+    replyLookupVersion: 1,
+    originatingSessionId: typeof task.originatingSessionId === 'string' && task.originatingSessionId.trim()
+      ? task.originatingSessionId.trim()
+      : undefined,
+    subagentProfile: typeof task.subagentProfile === 'string' && task.subagentProfile.trim()
+      ? task.subagentProfile.trim().slice(0, 160)
+      : undefined,
+    proposalTeamId: typeof task.proposalExecution?.teamExecution?.teamId === 'string'
+      && task.proposalExecution.teamExecution.teamId.trim()
+      ? task.proposalExecution.teamExecution.teamId.trim()
+      : undefined,
+    proposalManagerSessionId: typeof task.proposalExecution?.teamExecution?.managerSessionId === 'string'
+      && task.proposalExecution.teamExecution.managerSessionId.trim()
+      ? task.proposalExecution.teamExecution.managerSessionId.trim()
+      : undefined,
   };
 }
 
@@ -822,6 +866,104 @@ export function findTaskBySessionId(sessionId: string): TaskRecord | null {
   }
   const id = taskSessionIndexCache.get(sid);
   return id ? loadTask(id) : null;
+}
+
+function normalizedSubagentReplySessionId(profile: string | undefined): string {
+  const id = String(profile || '').trim().replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120);
+  return id ? `subagent_chat_${id}` : '';
+}
+
+function summaryMayMatchReplySession(summary: TaskSummary, sessionId: string): boolean {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return false;
+  if (summary.sessionId === sid || summary.originatingSessionId === sid) return true;
+  if (normalizedSubagentReplySessionId(summary.subagentProfile) === sid) return true;
+
+  const teamId = String(summary.teamSubagent?.teamId || '').trim();
+  const teamAgentId = String(summary.teamSubagent?.agentId || '').trim();
+  if (teamId && (teamId === sid || (teamAgentId && `team_member_room_${teamId}___AGENT___${teamAgentId}` === sid))) return true;
+
+  const proposalTeamId = String(summary.proposalTeamId || '').trim();
+  if (proposalTeamId && (
+    proposalTeamId === sid
+    || summary.proposalManagerSessionId === sid
+    || `team_coord_${proposalTeamId}` === sid
+  )) return true;
+
+  // Direct-thread session IDs are allocated by managed-teams and are not
+  // derivable from the stable room naming convention. Resolve only the small
+  // set of team summaries so the subsequent exact recovery matcher retains
+  // its existing member/manager semantics without opening unrelated task files.
+  if (teamId && teamAgentId) {
+    try {
+      const { getTeamDirectThread } = require('../teams/managed-teams.js') as typeof import('../teams/managed-teams.js');
+      if (getTeamDirectThread(teamId, 'member', teamAgentId)?.sessionId === sid) return true;
+    } catch {
+      // Optional route metadata; stable owner/room routes remain available.
+    }
+  }
+  if (proposalTeamId) {
+    try {
+      const { getTeamDirectThread } = require('../teams/managed-teams.js') as typeof import('../teams/managed-teams.js');
+      if (getTeamDirectThread(proposalTeamId, 'manager', 'manager')?.sessionId === sid) return true;
+    } catch {
+      // Optional route metadata; stable owner/room routes remain available.
+    }
+  }
+
+  // A pre-v1 summary lacks originating/subagent/proposal route fields. Keep a
+  // conservative compatibility path until startup upgrades that compact index.
+  return summary.replyLookupVersion !== 1;
+}
+
+/**
+ * Rewrites only the compact index when an older build did not persist reply
+ * routes. This is intentionally explicit so the main-chat hot path never pays
+ * a historical full-task scan after gateway startup has completed.
+ */
+export function prepareTaskReplyLookupIndex(): { rebuilt: boolean; taskCount: number } {
+  const idx = loadIndex();
+  const summaries = Object.values(idx.summaries);
+  if (!summaries.some((summary) => summary.replyLookupVersion !== 1)) {
+    return { rebuilt: false, taskCount: summaries.length };
+  }
+  const rebuilt = rebuildTaskIndex();
+  return { rebuilt: true, taskCount: rebuilt.ids.length };
+}
+
+/** Compact-index candidate lookup for reply/recovery routes. */
+export function findTaskCandidatesForReplySession(
+  sessionId: string,
+  filter?: { status?: TaskStatus[] },
+): TaskRecord[] {
+  const sid = String(sessionId || '').trim();
+  const summaries = listTaskSummaries(filter);
+  const candidates = sid ? summaries.filter((summary) => summaryMayMatchReplySession(summary, sid)) : [];
+  const tasks = candidates.map((summary) => loadTask(summary.id)).filter((task): task is TaskRecord => !!task);
+  lastTaskIndexLookupStats = {
+    kind: 'reply_session', indexEntries: summaries.length, candidateCount: candidates.length, loadedCount: tasks.length,
+  };
+  return tasks;
+}
+
+/** Compact-index candidate lookup for owner-session task routes. */
+export function findTaskCandidatesForOwnerSession(
+  sessionId: string,
+  filter?: { status?: TaskStatus[] },
+): TaskRecord[] {
+  const sid = String(sessionId || '').trim();
+  const summaries = listTaskSummaries(filter);
+  const candidates = sid ? summaries.filter((summary) => summary.sessionId === sid) : [];
+  const tasks = candidates.map((summary) => loadTask(summary.id)).filter((task): task is TaskRecord => !!task);
+  lastTaskIndexLookupStats = {
+    kind: 'owner_session', indexEntries: summaries.length, candidateCount: candidates.length, loadedCount: tasks.length,
+  };
+  return tasks;
+}
+
+/** Read-count evidence for the most recent compact task lookup (primarily diagnostics/tests). */
+export function getLastTaskIndexLookupStats(): TaskIndexLookupStats {
+  return { ...lastTaskIndexLookupStats };
 }
 
 /** Monotonic in-process invalidation token for caches derived from task sessions. */

@@ -1342,10 +1342,14 @@ function _wireDrawerLongPress(callbacks) {
   if (_drawerEl._pmLongPressDown) _drawerEl.removeEventListener('pointerdown', _drawerEl._pmLongPressDown);
   if (_drawerEl._pmLongPressMove) _drawerEl.removeEventListener('pointermove', _drawerEl._pmLongPressMove);
   if (_drawerEl._pmLongPressUp) { _drawerEl.removeEventListener('pointerup', _drawerEl._pmLongPressUp); _drawerEl.removeEventListener('pointercancel', _drawerEl._pmLongPressUp); }
+  if (_drawerEl._pmLongPressContextMenu) _drawerEl.removeEventListener('contextmenu', _drawerEl._pmLongPressContextMenu, true);
 
   var onDown = function(e) {
     var sessionBtn = _resolveSessionButton(e.target);
     if (!sessionBtn) return;
+    // Disable WebKit's text-selection gesture before its long-press threshold.
+    // The class is removed immediately for scrolling/taps and stays during the menu.
+    document.documentElement.classList.add('pm-session-long-press-pending');
     _sessLongFired = false;
     _sessLongTargetId = sessionBtn.getAttribute('data-session-id');
     _sessLongTargetTitle = (sessionBtn.querySelector('.pm-session-title') || {}).textContent || '';
@@ -1356,9 +1360,13 @@ function _wireDrawerLongPress(callbacks) {
       _sessLongPressTimer = null;
       _sessLongFired = true;
       pmHaptic(18);
+      // iOS can otherwise select drawer text and show its native copy menu.
+      try { window.getSelection?.()?.removeAllRanges(); } catch {}
+      document.documentElement.classList.remove('pm-session-long-press-pending');
       sessionBtn.classList.add('pm-session-long-pressed');
       setTimeout(function() { sessionBtn.classList.remove('pm-session-long-pressed'); }, 300);
-      _openSessionContextSheet(_sessLongTargetId, _sessLongTargetTitle, _sessLongCallbacks || {});
+      _openSessionContextSheet(_sessLongTargetId, _sessLongTargetTitle, _sessLongCallbacks || {}, sessionBtn.getBoundingClientRect());
+      document.documentElement.classList.add('pm-session-context-open');
     }, _SESS_LONG_PRESS_MS);
   };
 
@@ -1371,20 +1379,29 @@ function _wireDrawerLongPress(callbacks) {
       clearTimeout(_sessLongPressTimer);
       _sessLongPressTimer = null;
       _sessLongFired = false;
+      document.documentElement.classList.remove('pm-session-long-press-pending');
     }
   };
 
   var onUp = function() {
-    if (_sessLongPressTimer) { clearTimeout(_sessLongPressTimer); _sessLongPressTimer = null; }
+    if (_sessLongPressTimer) {
+      clearTimeout(_sessLongPressTimer);
+      _sessLongPressTimer = null;
+      document.documentElement.classList.remove('pm-session-long-press-pending');
+    }
   };
 
   _drawerEl._pmLongPressDown = onDown;
   _drawerEl._pmLongPressMove = onMove;
   _drawerEl._pmLongPressUp = onUp;
+  _drawerEl._pmLongPressContextMenu = function(e) {
+    if (_resolveSessionButton(e.target)) e.preventDefault();
+  };
   _drawerEl.addEventListener('pointerdown', onDown);
   _drawerEl.addEventListener('pointermove', onMove);
   _drawerEl.addEventListener('pointerup', onUp);
   _drawerEl.addEventListener('pointercancel', onUp);
+  _drawerEl.addEventListener('contextmenu', _drawerEl._pmLongPressContextMenu, true);
 
   // Suppress the normal click that fires after a long-press release
   if (!_drawerEl._pmLongPressClickGuard) {
@@ -1526,18 +1543,46 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
   nav.hidden = true;
   sessions.hidden = true;
   results.hidden = false;
-  list.innerHTML = '<div class="pm-session-empty">Searching full chat history...</div>';
+  list.innerHTML = '<div class="pm-session-empty">Searching chats...</div>';
 
   if (_drawerSearchTimer) clearTimeout(_drawerSearchTimer);
   const seq = ++_drawerSearchSeq;
   _drawerSearchTimer = setTimeout(async () => {
+    const renderMatches = (items) => {
+      list.innerHTML = items.map((s) => _searchResultButtonHtml(s, query)).join('');
+      list.querySelectorAll('[data-session-id]').forEach((btn) => {
+        const openSession = () => {
+          const sessionId = btn.getAttribute('data-session-id');
+          closeDrawer();
+          if (typeof onOpenSession === 'function') onOpenSession(sessionId);
+        };
+        btn.addEventListener('click', () => {
+          pmHaptic(10);
+          openSession();
+        });
+      });
+      _wireDrawerLongPress({ onOpenSession, loadSessions, searchSessions, onNewChat });
+    };
+    let titleMatches = [];
     let matches = [];
     let failed = false;
     try {
-      if (typeof searchSessions === 'function') matches = await searchSessions(query, { limit: 100 });
+      // Session titles are in the compact index, so show those immediately.
+      // A second request fills in message-body matches without blocking typing.
+      if (typeof searchSessions === 'function') titleMatches = await searchSessions(query, { limit: 30, mode: 'title' });
     } catch {
       failed = true;
-      matches = [];
+      titleMatches = [];
+    }
+    if (seq !== _drawerSearchSeq || query !== _drawerSearch) return;
+    titleMatches = (Array.isArray(titleMatches) ? titleMatches : []).filter((session) => !_isDrawerSideChatSession(session));
+    if (titleMatches.length) renderMatches(titleMatches);
+
+    try {
+      if (typeof searchSessions === 'function') matches = await searchSessions(query, { limit: 100, mode: 'content' });
+    } catch {
+      failed = true;
+      matches = titleMatches;
     }
     if (seq !== _drawerSearchSeq || query !== _drawerSearch) return;
     matches = (Array.isArray(matches) ? matches : []).filter((session) => !_isDrawerSideChatSession(session));
@@ -1551,19 +1596,7 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
       return;
     }
 
-    list.innerHTML = matches.map((s) => _searchResultButtonHtml(s, query)).join('');
-    list.querySelectorAll('[data-session-id]').forEach((btn) => {
-      const openSession = () => {
-        const sessionId = btn.getAttribute('data-session-id');
-        closeDrawer();
-        if (typeof onOpenSession === 'function') onOpenSession(sessionId);
-      };
-      btn.addEventListener('click', () => {
-        pmHaptic(10);
-        openSession();
-      });
-    });
-    _wireDrawerLongPress({ onOpenSession, loadSessions, searchSessions, onNewChat });
+    renderMatches(matches);
 
   }, 180);
 }
@@ -1622,6 +1655,11 @@ function _channelButtonHtml(channel) {
 function _sessionButtonHtml(session) {
   const title = String(session?.title || session?.id || 'New chat');
   const preview = String(session?.preview || '').trim();
+  const normalizedTitle = title.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+  const normalizedPreview = preview.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+  const visiblePreview = normalizedPreview && normalizedPreview !== normalizedTitle
+    ? preview
+    : (preview ? '' : 'No messages yet');
   const lastMessageAt = Number(session?.lastMessageAt || session?.lastActiveAt || 0);
   const state = _sessionStateMeta(session);
   const isActive = _isActiveDrawerSession(session?.id);
@@ -1631,7 +1669,7 @@ function _sessionButtonHtml(session) {
     <button class="pm-session-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-state="${state.stateName}"${ariaCurrent}>
       <span class="pm-session-row-top"><span class="pm-session-title">${escapeHtml(title)}</span>${state.stateLabel}</span>
       <span class="pm-session-meta-row">
-        <span class="pm-session-preview">${escapeHtml(preview || 'No messages yet')}</span>
+        ${visiblePreview ? `<span class="pm-session-preview">${escapeHtml(visiblePreview)}</span>` : ''}
         <span class="pm-session-time">${escapeHtml(lastMessageAt ? timeAgo(lastMessageAt) : _formatSessionDate(session.createdAt))}</span>
       </span>
     </button>
@@ -1676,6 +1714,7 @@ function _escapeRegExp(text) {
 
 // ── Session context sheet (long-press menu) ───────────────────────────────────
 function _closeSessionSheet() {
+  document.documentElement.classList.remove('pm-session-long-press-pending', 'pm-session-context-open');
   const scrim = document.getElementById('pm-sess-sheet-scrim');
   const sheet = document.getElementById('pm-sess-sheet');
   if (scrim) scrim.classList.remove('open');
@@ -1684,11 +1723,12 @@ function _closeSessionSheet() {
 }
 
 function _closeSessionSheetImmediate() {
+  document.documentElement.classList.remove('pm-session-long-press-pending', 'pm-session-context-open');
   document.getElementById('pm-sess-sheet-scrim') && document.getElementById('pm-sess-sheet-scrim').remove();
   document.getElementById('pm-sess-sheet') && document.getElementById('pm-sess-sheet').remove();
 }
 
-function _openSessionContextSheet(sessionId, sessionTitle, callbacks) {
+function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect = null) {
   _closeSessionSheetImmediate();
   const pinned = _isPinned(sessionId);
   const cb = callbacks || {};
@@ -1737,7 +1777,27 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks) {
 
   document.body.appendChild(scrim);
   document.body.appendChild(sheet);
-  requestAnimationFrame(function() { scrim.classList.add('open'); sheet.classList.add('open'); });
+  requestAnimationFrame(function() {
+    if (anchorRect) {
+      const margin = 10;
+      const width = Math.min(360, window.innerWidth - (margin * 2));
+      const height = sheet.offsetHeight || 230;
+      const left = Math.max(margin, Math.min(anchorRect.left, window.innerWidth - width - margin));
+      let top = anchorRect.bottom + margin;
+      let origin = 'top left';
+      if (top + height > window.innerHeight - margin) {
+        top = anchorRect.top - height - margin;
+        origin = 'bottom left';
+      }
+      top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
+      sheet.style.setProperty('--pm-msheet-width', `${width}px`);
+      sheet.style.setProperty('--pm-msheet-left', `${left}px`);
+      sheet.style.setProperty('--pm-msheet-top', `${top}px`);
+      sheet.style.transformOrigin = origin;
+    }
+    scrim.classList.add('open');
+    sheet.classList.add('open');
+  });
 
   var close = function() { _closeSessionSheet(); };
   scrim.addEventListener('click', close);
@@ -1746,6 +1806,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks) {
 
   var renameBtn = sheet.querySelector('[data-sess-action="rename"]');
   if (renameBtn) renameBtn.addEventListener('click', function() {
+    pmHaptic(10);
     _closeSessionSheetImmediate();
     _openSessionRenameSheet(sessionId, sessionTitle, cb);
   });
@@ -1770,6 +1831,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks) {
 
   var deleteBtn = sheet.querySelector('[data-sess-action="delete"]');
   if (deleteBtn) deleteBtn.addEventListener('click', function() {
+    pmHaptic(10);
     _closeSessionSheetImmediate();
     _openSessionDeleteConfirmSheet(sessionId, sessionTitle, cb);
   });

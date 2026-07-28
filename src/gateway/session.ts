@@ -1285,7 +1285,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
 
 export function searchSessionSummaries(
   query: string,
-  options: { channel?: Session['channel']; limit?: number } = {},
+  options: { channel?: Session['channel']; limit?: number; includeContent?: boolean } = {},
 ): SessionSearchResult[] {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return [];
@@ -1294,10 +1294,31 @@ export function searchSessionSummaries(
     : 80;
   const summaries = listSessionSummaries(options.channel);
   const results: SessionSearchResult[] = [];
+  const titleMatchedIds = new Set<string>();
 
+  // Titles are already in the compact session index. Search them first so a
+  // mobile type-ahead never has to open every history file before returning
+  // the obvious matches.
   for (const summary of summaries) {
     const title = String(summary.title || 'New chat');
     const titleIndex = title.toLowerCase().indexOf(q);
+    if (titleIndex < 0) continue;
+    titleMatchedIds.add(summary.id);
+    results.push({
+      ...summary,
+      matchedRole: 'title',
+      matchedContent: title,
+      matchedIndex: titleIndex,
+    });
+    if (results.length >= limit) return results;
+  }
+
+  if (options.includeContent === false) return results;
+
+  // Full-message matching is intentionally the second phase. It can involve
+  // large persisted histories, while title matches should remain instant.
+  for (const summary of summaries) {
+    if (titleMatchedIds.has(summary.id)) continue;
     const session = readSessionFileForSearch(summary.id);
     const history = Array.isArray(session?.history) ? session.history : [];
     const matchedMessage = history.find((msg) => {
@@ -1311,13 +1332,6 @@ export function searchSessionSummaries(
         matchedRole: matchedMessage.role === 'assistant' ? 'assistant' : 'user',
         matchedContent: content,
         matchedIndex: content.toLowerCase().indexOf(q),
-      });
-    } else if (titleIndex >= 0) {
-      results.push({
-        ...summary,
-        matchedRole: 'title',
-        matchedContent: title,
-        matchedIndex: titleIndex,
       });
     } else {
       continue;

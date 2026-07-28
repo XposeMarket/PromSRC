@@ -602,6 +602,21 @@ export function abortLiveRuntime(id: string): { ok: boolean; runtime?: LiveRunti
     console.warn('[live-runtime] Failed to cancel pending questions on abort:', err?.message || err);
   }
 
+  // A user stop is a terminal boundary for unfinished dev edits in this chat.
+  // Keep their audit/verification evidence, but release their coordinator
+  // ownership immediately so a stale aborted request cannot block later work
+  // or a gateway restart. This is dynamic to keep the runtime registry free of
+  // a static dependency cycle with the approval subsystem.
+  try {
+    const sessionId = String(record.sessionId || '').trim();
+    if (sessionId && isSteerableChatRuntimeKind(record.kind)) {
+      const { abandonDevSourceEditContinuationsForSession } = require('./dev-source-approvals');
+      abandonDevSourceEditContinuationsForSession({ sessionId, reason: 'user_aborted_runtime' });
+    }
+  } catch (err: any) {
+    console.warn('[live-runtime] Failed to release aborted dev-edit coordination:', err?.message || err);
+  }
+
   persistRuntime(toSnapshot(record), 'abort_requested');
   return { ok: true, runtime: toSnapshot(record) };
 }

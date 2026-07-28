@@ -183,7 +183,8 @@ import { scheduleMemoryIndexRefresh, shutdownMemoryIndexRefreshWorker } from './
 import { shutdownMemorySearchWorker } from './memory-index/search-worker-client';
 import { warmModelUsageIndex } from '../providers/model-usage';
 import { getContextBuildLimiterStatus } from './chat/context-build-limiter';
-import { getContextBuildWorkerPoolStatus, shutdownContextBuildWorkerPool } from './chat/context-build-worker-client';
+import { getContextBuildWorkerPoolStatus, shutdownContextBuildWorkerPool, warmContextBuildWorkerPool } from './chat/context-build-worker-client';
+import { prepareTaskReplyLookupIndex } from './tasks/task-store';
 import { getModelCallWorkerPoolStatus, shutdownModelCallWorkerPool } from './process/model-call-worker-pool';
 import { getPostTurnQueueStatus } from './chat/post-turn-queue';
 import { requireGatewayAuth } from './gateway-auth';
@@ -632,36 +633,24 @@ startupMark('brain runner constructed');
 }
 (function registerSubagentHeartbeats() {
   try {
-    const workspacePath = getConfig().getWorkspacePath();
-    const subagentsDir = path.join(workspacePath, '.prometheus', 'subagents');
-    if (fs.existsSync(subagentsDir)) {
-      const entries = fs.readdirSync(subagentsDir);
-      for (const entry of entries) {
-        const agentDir = path.join(subagentsDir, entry);
-        if (!fs.statSync(agentDir).isDirectory()) continue;
-        const heartbeatPath = path.join(agentDir, 'HEARTBEAT.md');
-        if (!fs.existsSync(heartbeatPath)) {
-          fs.writeFileSync(heartbeatPath, [
-            `# HEARTBEAT.md - ${entry}`,
-            '',
-            '## Heartbeat Checklist',
-            '- Perform only clearly actionable tasks for this role.',
-            '- Persist outputs to files in this workspace.',
-            '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
-            '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
-          ].join('\n'), 'utf-8');
-        }
-        heartbeatRunner.registerAgent(entry, agentDir);
-        console.log(`[HeartbeatRunner] Auto-registered standalone subagent "${entry}"`);
-      }
-    }
-
+    // Heartbeats are available only to agents that are still configured.  The
+    // previous directory scan resurrected deleted agents whenever an old
+    // workspace folder remained on disk.
     for (const agent of getAgents()) {
       if (!agent || agent.id === 'main' || agent.default === true) continue;
-      const agentDir = String((agent as any).workspace || '').trim();
-      if (!agentDir || !fs.existsSync(agentDir)) continue;
+      const agentDir = ensureAgentWorkspace(agent);
       const heartbeatPath = path.join(agentDir, 'HEARTBEAT.md');
-      if (!fs.existsSync(heartbeatPath)) continue;
+      if (!fs.existsSync(heartbeatPath)) {
+        fs.writeFileSync(heartbeatPath, [
+          `# HEARTBEAT.md - ${agent.id}`,
+          '',
+          '## Heartbeat Checklist',
+          '- Perform only clearly actionable tasks for this role.',
+          '- Persist outputs to files in this workspace.',
+          '- If no action was taken or nothing applies, reply exactly HEARTBEAT_OK and nothing else. This is the silence token and must not notify the user.',
+          '- When creating or editing any HEARTBEAT.md for yourself or another agent, always keep this HEARTBEAT_OK silence rule in that file.',
+        ].join('\n'), 'utf-8');
+      }
       heartbeatRunner.registerAgent(agent.id, agentDir);
       console.log(`[HeartbeatRunner] Auto-registered configured agent "${agent.id}"`);
     }
@@ -952,6 +941,26 @@ try {
 } catch (e: any) {
   console.warn('[Vault] Derived-key warmup failed:', e?.message || e);
 }
+
+try {
+  const taskLookupIndex = prepareTaskReplyLookupIndex();
+  if (taskLookupIndex.rebuilt) {
+    console.log(`[tasks] Upgraded compact reply lookup index for ${taskLookupIndex.taskCount} task(s) before accepting traffic.`);
+  }
+  startupMark('task reply lookup index prepared');
+} catch (e: any) {
+  // The lookup retains its conservative legacy compatibility route if this
+  // best-effort startup upgrade cannot run.
+  console.warn('[tasks] Compact reply lookup index warmup failed:', e?.message || e);
+}
+
+void warmContextBuildWorkerPool()
+  .then(() => {
+    console.log('[context-build] Worker pool prewarmed.');
+    startupMark('context build workers prewarmed');
+  })
+  .catch((e: any) => console.warn('[context-build] Worker pool prewarm failed:', e?.message || e));
+startupMark('context build worker prewarm scheduled');
 
 server.listen(PORT, HOST, () => {
   startupMark('server listen callback');

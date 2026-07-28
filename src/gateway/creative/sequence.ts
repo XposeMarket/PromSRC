@@ -315,8 +315,16 @@ export function createCreativeSequenceVariant(sequenceInput: CreativeSequenceDoc
   composition.id = sequenceId('comp');
   composition.width = Math.max(2, input.width || preset[0]);
   composition.height = Math.max(2, input.height || preset[1]);
-  composition.meta = { ...composition.meta, variantOf: sequence.composition.id, reframe: input.reframe || 'center-crop' };
-  sequence.variants.push({ id: sequenceId('variant'), format: input.format, width: composition.width, height: composition.height, reframe: input.reframe || 'center-crop', composition, exportPath: null, qaReceiptPath: null, status: 'draft' });
+  const reframe = input.reframe || 'center-crop';
+  // center-crop/manual fill the target canvas; contain preserves full source with bars.
+  const fit = reframe === 'contain' ? 'contain' : 'cover';
+  composition.meta = { ...composition.meta, variantOf: sequence.composition.id, reframe };
+  for (const clip of composition.clips) {
+    if (clip.source.kind === 'source-video') {
+      clip.source = { ...clip.source, fit };
+    }
+  }
+  sequence.variants.push({ id: sequenceId('variant'), format: input.format, width: composition.width, height: composition.height, reframe, composition, exportPath: null, qaReceiptPath: null, status: 'draft' });
   sequence.updatedAt = new Date().toISOString();
   return sequence;
 }

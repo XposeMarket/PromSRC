@@ -339,6 +339,26 @@ export class SubagentHeartbeatManager {
     console.log(`[HeartbeatRunner] Registered agent "${agentId}" (enabled=${config.enabled}, interval=${config.intervalMinutes}min)`);
   }
 
+  /**
+   * Stop and forget an agent that has been deleted.  Keeping the runner's
+   * in-memory entry around made deleted agents continue to appear in Settings
+   * until the gateway was restarted.
+   */
+  unregisterAgent(agentId: string): void {
+    const id = String(agentId || '').trim();
+    if (!id || id === 'main') return;
+    const entry = this.agents.get(id);
+    if (entry) {
+      this._stopTimer(entry);
+      this.agents.delete(id);
+    }
+    if (Object.prototype.hasOwnProperty.call(this.persisted.agents, id)) {
+      delete this.persisted.agents[id];
+      savePersistedConfig(this.configPath, this.persisted);
+    }
+    console.log(`[HeartbeatRunner] Unregistered agent "${id}"`);
+  }
+
   // ─── Lifecycle ────────────────────────────────────────────────────────────
 
   start(): void {

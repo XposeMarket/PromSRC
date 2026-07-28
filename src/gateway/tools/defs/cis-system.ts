@@ -2043,23 +2043,22 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'show_chart',
         description:
-          'Minimal native SVG line/bar/area chart (no axes ticks/gridlines/value labels). For most data charts PREFER the `chart-visualizer` skill instead — it renders polished Chart.js charts with axes, labels, gridlines, and tooltips. Only use show_chart for a deliberately minimal inline sparkline-style chart, or when Chart.js is unavailable.',
+          'Show an interactive native chart with axes, labels, tooltips, and a visible data source. Use it for real numeric data. Canonical data is series[].points[] with {x,y}; legacy series[].data[] is also accepted and normalized. Include source and updatedAt whenever data came from a live lookup.',
         parameters: {
           type: 'object',
           required: ['series'],
           properties: {
             title: { type: 'string', description: 'Optional chart heading.' },
-            chartType: { type: 'string', enum: ['line', 'bar', 'area'], description: 'Chart style. Default line.' },
+            chartType: { type: 'string', enum: ['line', 'bar', 'area', 'scatter', 'pie', 'doughnut'], description: 'Chart style. Default line.' },
             series: {
               type: 'array',
               description: 'One or more data series.',
               items: {
                 type: 'object',
-                required: ['points'],
-                properties: {
+                  properties: {
                   label: { type: 'string', description: 'Series name (shown in legend).' },
                   color: { type: 'string', description: 'Optional CSS color, e.g. "#22c55e".' },
-                  points: {
+                    points: {
                     type: 'array',
                     description: 'Data points.',
                     items: {
@@ -2070,13 +2069,21 @@ export function getCisSystemTools(): any[] {
                         y: { type: 'number', description: 'Y value.' },
                       },
                     },
+                    },
+                    data: {
+                      type: 'array',
+                      description: 'Legacy alias for points. Prefer points for new charts.',
+                      items: { type: 'object' },
+                    },
                   },
-                },
               },
             },
             xLabel: { type: 'string', description: 'Optional X axis label.' },
             yLabel: { type: 'string', description: 'Optional Y axis label.' },
             unit: { type: 'string', description: 'Optional value unit suffix, e.g. "$", "%".' },
+            stacked: { type: 'boolean', description: 'Stack bar datasets when true.' },
+            source: { type: 'string', description: 'Data provenance, e.g. "Yahoo Finance" or "Prometheus telemetry".' },
+            updatedAt: { type: 'string', description: 'ISO timestamp for when live data was fetched.' },
           },
         },
       },
@@ -2135,7 +2142,7 @@ export function getCisSystemTools(): any[] {
       function: {
         name: 'show_map',
         description:
-          'Display a map card (OpenStreetMap, keyless) with one or more location markers — for local/place results like "pizza near me", store locations, or any geographic answer. Each marker may carry lat/lng directly, or an address that will be geocoded. Markers are listed below the map with name, category, rating, and links.',
+          'Display a dark, interactive MapLibre map card with one or more location markers — for local/place results like "pizza near me", store locations, or any geographic answer. Each marker may carry lat/lng directly, or an address that will be geocoded through OpenStreetMap. Markers are listed below the map with name, category, rating, and links.',
         parameters: {
           type: 'object',
           required: ['markers'],

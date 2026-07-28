@@ -15,6 +15,7 @@ async function main(): Promise<void> {
     buildPersonalityContextIsolated,
     getContextBuildWorkerPoolStatus,
     shutdownContextBuildWorkerPool,
+    warmContextBuildWorkerPool,
   } = await import('./context-build-worker-client');
   const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-context-pool-'));
   fs.mkdirSync(path.join(workspacePath, 'memory'), { recursive: true });
@@ -25,6 +26,8 @@ async function main(): Promise<void> {
     buildTurnContext: () => '',
     getSkill: () => null,
   };
+  const timingMarks: Array<{ label: string; extra?: Record<string, unknown> }> = [];
+  const timing = { mark: (label: string, extra?: Record<string, unknown>) => { timingMarks.push({ label, extra }); return Date.now(); } } as any;
   const build = (messageText: string, signal?: AbortSignal) => buildPersonalityContextIsolated(
     'context_pool_regression',
     workspacePath,
@@ -37,9 +40,12 @@ async function main(): Promise<void> {
     undefined,
     undefined,
     signal,
+    timing,
   );
 
   try {
+    await Promise.all([warmContextBuildWorkerPool(), warmContextBuildWorkerPool()]);
+    assert.equal(getContextBuildWorkerPoolStatus().warmupState, 'ready');
     const slow = build('__PROMETHEUS_CONTEXT_TEST_CPU__');
     await new Promise((resolve) => setTimeout(resolve, 75));
     const controller = new AbortController();
@@ -60,6 +66,24 @@ async function main(): Promise<void> {
     assert.equal(status.active, 0);
     assert.ok(status.completed >= 2);
     assert.ok(status.cancelled >= 1);
+    for (const label of [
+      'personality_snapshot_capture_start',
+      'personality_snapshot_capture_done',
+      'context_worker_queue_wait_start',
+      'context_worker_queue_wait_done',
+      'context_worker_ready_wait_start',
+      'context_worker_ready_wait_done',
+      'context_worker_execution_start',
+      'context_worker_execution_done',
+      'personality_snapshot_finalize_start',
+      'personality_snapshot_finalize_done',
+    ]) {
+      assert.ok(timingMarks.some((mark) => mark.label === label), `missing timing mark: ${label}`);
+    }
+    const queueDone = timingMarks.find((mark) => mark.label === 'context_worker_queue_wait_done');
+    const executionDone = timingMarks.find((mark) => mark.label === 'context_worker_execution_done');
+    assert.ok(Number(queueDone?.extra?.durationMs) < 500, 'queue wait must end when the worker claims the task, before execution');
+    assert.ok(Number(executionDone?.extra?.durationMs) >= 500, 'execution timing must cover the worker job itself');
   } finally {
     await shutdownContextBuildWorkerPool();
     fs.rmSync(workspacePath, { recursive: true, force: true });
@@ -68,4 +92,3 @@ async function main(): Promise<void> {
 }
 
 void main();
-

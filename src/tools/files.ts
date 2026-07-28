@@ -30,6 +30,13 @@ import {
   validateFileSyntax,
   type SearchMatcher,
 } from './file-intelligence';
+import {
+  applyDeleteLinesEolSafe,
+  applyInsertAfterEolSafe,
+  applyLineEndingTolerantFindReplace,
+  applyReplaceLinesEolSafe,
+  splitLinesEolSafe,
+} from '../gateway/dev-source-patchset';
 
 const execFileAsync = promisify(execFile);
 const PATCH_OUTPUT_MAX_CHARS = 8000;
@@ -45,7 +52,7 @@ const FILE_TOOL_READ_INLINE_LIMIT_CHARS = 12000;
 const FILE_TOOL_TREE_INLINE_LIMIT_CHARS = 8000;
 
 function trimReturnedFileLine(line: string, maxChars = FILE_TOOL_MAX_LINE_CHARS): string {
-  const value = String(line ?? '');
+  const value = String(line ?? '').replace(/\r$/, '');
   return value.length <= maxChars ? value : `${value.slice(0, maxChars)}...[line truncated]`;
 }
 
@@ -65,7 +72,7 @@ function formatPostEditContext(
   changedEndLine: number,
   summary: string,
 ): string {
-  const lines = String(content || '').split('\n');
+  const lines = splitLinesEolSafe(String(content || ''));
   const lineCount = lines.length;
   const start = Math.max(1, Math.min(Math.floor(Number(changedStartLine) || 1), Math.max(1, lineCount)));
   const end = Math.max(start, Math.min(Math.floor(Number(changedEndLine) || start), Math.max(1, lineCount)));
@@ -415,7 +422,7 @@ export async function executeRead(args: ReadToolArgs): Promise<ToolResult> {
       };
     }
     const content = await fs.readFile(absPath, 'utf-8');
-    const allLines = content.split('\n');
+    const allLines = splitLinesEolSafe(content);
     const exactLine = resolvePositiveLineArg(args.line ?? args.line_number ?? args.lineNumber ?? args.physical_line);
     if (exactLine != null) {
       const renderedLine = formatPhysicalLineWindow(args.path, allLines, {
@@ -1339,7 +1346,7 @@ export async function executeReadFilesBatch(args: ReadFilesBatchArgs): Promise<T
         continue;
       }
       const content = await fs.readFile(absPath, 'utf-8');
-      const allLines = content.split('\n');
+      const allLines = splitLinesEolSafe(content);
       const startLine = Math.max(1, Number(entry.start_line || 1) || 1);
       const allowFull = entry.full === true || entry.allow_large === true || args.full === true || args.allow_large === true;
       const hasWindow = entry.start_line !== undefined || entry.num_lines !== undefined || args.num_lines !== undefined;
@@ -1478,51 +1485,52 @@ export async function executeApplyWorkspacePatchset(args: ApplyWorkspacePatchset
         const replaceStr = String(edit.replace ?? edit.new_text ?? edit.newText ?? '');
         if (!findStr) { results.push({ filename: String(filename), op, ok: false, error: 'find is required' }); continue; }
         const content = await fs.readFile(absPath, 'utf-8');
-        if (!content.includes(findStr)) { results.push({ filename: String(filename), op, ok: false, error: `Text not found: "${findStr.slice(0, 60)}"` }); continue; }
-        const newContent = edit.replace_all
-          ? content.split(findStr).join(replaceStr)
-          : content.replace(findStr, replaceStr);
+        const fr = applyLineEndingTolerantFindReplace(content, findStr, replaceStr, edit.replace_all === true);
+        if (!fr) { results.push({ filename: String(filename), op, ok: false, error: `Text not found: "${findStr.slice(0, 60)}"` }); continue; }
+        const newContent = fr.updated;
         snapshots.push(snapshotBeforeMutation(absPath, 'patchset:find_replace', String(filename)));
         await fs.writeFile(absPath, newContent, 'utf-8');
-        const startLine = lineNumberAtOffset(content, content.indexOf(findStr));
+        const startLine = lineNumberAtOffset(content, fr.firstIndex);
         const replacementLines = Math.max(1, replaceStr.replace(/\r\n/g, '\n').split('\n').length);
-        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), newContent, startLine, Math.max(startLine, startLine + replacementLines - 1), `Updated ${filename}: find_replace applied.`) });
+        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), newContent, startLine, Math.max(startLine, startLine + replacementLines - 1), `Updated ${filename}: find_replace applied${edit.replace_all === true ? ` (${fr.count} occurrences)` : ''}.`) });
 
       } else if (op === 'replace_lines') {
         const startL = Math.max(1, Number(edit.start_line ?? edit.startLine) || 1);
         const endL = Math.max(startL, Number(edit.end_line ?? edit.endLine) || startL);
         const newContent = String(edit.new_content ?? edit.content ?? '');
         const content = await fs.readFile(absPath, 'utf-8');
-        const lines = content.split('\n');
-        const newLines = newContent.split('\n');
-        lines.splice(startL - 1, endL - startL + 1, ...newLines);
-        const updated = lines.join('\n');
+        const originalLines = splitLinesEolSafe(content);
+        if (startL > originalLines.length) {
+          results.push({ filename: String(filename), op, ok: false, error: `start_line ${startL} out of range (${originalLines.length} lines)` });
+          continue;
+        }
+        const replaced = applyReplaceLinesEolSafe(content, startL, endL, newContent);
         snapshots.push(snapshotBeforeMutation(absPath, 'patchset:replace_lines', String(filename)));
-        await fs.writeFile(absPath, updated, 'utf-8');
-        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), updated, startL, Math.max(startL, startL + newLines.length - 1), `Updated ${filename}: replaced lines ${startL}-${endL}.`) });
+        await fs.writeFile(absPath, replaced.updated, 'utf-8');
+        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), replaced.updated, startL, Math.max(startL, startL + replaced.newLines.length - 1), `Updated ${filename}: replaced lines ${startL}-${replaced.endClamped}.`) });
 
       } else if (op === 'insert_after') {
         const afterL = Math.max(0, Number(edit.after_line ?? edit.afterLine) || 0);
         const ins = String(edit.content ?? edit.new_content ?? '');
         const content = await fs.readFile(absPath, 'utf-8');
-        const lines = content.split('\n');
-        const newLines = ins.split('\n');
-        lines.splice(afterL, 0, ...newLines);
-        const updated = lines.join('\n');
+        const inserted = applyInsertAfterEolSafe(content, afterL, ins);
         snapshots.push(snapshotBeforeMutation(absPath, 'patchset:insert_after', String(filename)));
-        await fs.writeFile(absPath, updated, 'utf-8');
-        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), updated, afterL + 1, Math.max(afterL + 1, afterL + newLines.length), `Updated ${filename}: inserted after line ${afterL}.`) });
+        await fs.writeFile(absPath, inserted.updated, 'utf-8');
+        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), inserted.updated, inserted.insertAt + 1, Math.max(inserted.insertAt + 1, inserted.insertAt + inserted.newLines.length), `Updated ${filename}: inserted after line ${afterL}.`) });
 
       } else if (op === 'delete_lines') {
         const startL = Math.max(1, Number(edit.start_line ?? edit.startLine) || 1);
         const endL = Math.max(startL, Number(edit.end_line ?? edit.endLine) || startL);
         const content = await fs.readFile(absPath, 'utf-8');
-        const lines = content.split('\n');
-        lines.splice(startL - 1, endL - startL + 1);
-        const updated = lines.join('\n');
+        const originalLines = splitLinesEolSafe(content);
+        if (startL > originalLines.length) {
+          results.push({ filename: String(filename), op, ok: false, error: `start_line ${startL} out of range (${originalLines.length} lines)` });
+          continue;
+        }
+        const deleted = applyDeleteLinesEolSafe(content, startL, endL);
         snapshots.push(snapshotBeforeMutation(absPath, 'patchset:delete_lines', String(filename)));
-        await fs.writeFile(absPath, updated, 'utf-8');
-        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), updated, Math.min(startL, Math.max(1, lines.length)), Math.min(startL, Math.max(1, lines.length)), `Updated ${filename}: deleted lines ${startL}-${endL}.`) });
+        await fs.writeFile(absPath, deleted.updated, 'utf-8');
+        results.push({ filename: String(filename), op, ok: true, result: formatPostEditContext(String(filename), deleted.updated, Math.min(startL, Math.max(1, deleted.lines.length)), Math.min(startL, Math.max(1, deleted.lines.length)), `Updated ${filename}: deleted lines ${startL}-${deleted.endClamped}.`) });
 
       } else {
         results.push({ filename: String(filename), op, ok: false, error: `Unknown op: ${op}` });

@@ -62,12 +62,14 @@ function devEditRecord(
     : continuation.allowedFiles);
   const touchedFiles = cleanList(coordinated?.touchedFiles);
   const remainingFiles = requestedFiles.filter((file) => !touchedFiles.includes(file));
-  const phase = String(coordinated?.phase || (continuation.status === 'complete' ? 'complete' : 'approved'));
+  const phase = String(coordinated?.phase || (['complete', 'abandoned'].includes(continuation.status) ? continuation.status : 'approved'));
   const applying = continuation.status === 'applying_live' || phase === 'applying' || phase === 'applied';
-  const recoverable = continuation.status !== 'complete'
+  const recoverable = !['complete', 'abandoned'].includes(continuation.status)
     && !DEV_EDIT_TERMINAL_PHASES.has(phase)
     && !applying;
-  const safeNextAction = continuation.status === 'complete' || phase === 'complete'
+  const safeNextAction = continuation.status === 'abandoned' || phase === 'abandoned'
+    ? 'start_new_approved_request_or_explicitly_restore'
+    : continuation.status === 'complete' || phase === 'complete'
     ? 'none_complete'
     : applying
       ? 'wait_for_apply_or_restart_recovery'
@@ -114,6 +116,8 @@ function devEditRecord(
       verification: continuation.lastVerification || null,
       verificationProfiles: continuation.verificationProfiles || [],
       completionNoteTag: continuation.completionNoteTag,
+      abandonedAt: continuation.abandonedAt,
+      abandonReason: continuation.abandonReason,
       appliedLive: continuation.status === 'complete' || phase === 'applied' || phase === 'complete',
       recoverable,
       safeNextAction,

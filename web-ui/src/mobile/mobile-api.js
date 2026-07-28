@@ -1243,16 +1243,37 @@ export async function loadMobileMoreSummary() {
 }
 
 export async function loadMobileHubOverview() {
-  const [models, tools, goals, skills, curator, tokenActivity] = await Promise.all([
-    _withTimeout(api('/api/hub/models/overview?range=all', { timeoutMs: 7000 }), null, 7300),
-    _withTimeout(api('/api/hub/tools/overview?range=30d', { timeoutMs: 7000 }), null, 7300),
-    _withTimeout(api('/api/hub/goals', { timeoutMs: 4500 }), null, 4800),
-    _withTimeout(api('/api/hub/skills/usage?range=month', { timeoutMs: 7000 }), null, 7300),
-    _withTimeout(api('/api/hub/skills/review', { timeoutMs: 7000 }), null, 7300),
-    _withTimeout(api('/api/hub/tokens/activity', { timeoutMs: 7000 }), null, 7300),
+  // First paint is intentionally limited to the two compact analytics calls
+  // actually visible in the profile. Goals, skill curation, and the richer
+  // token endpoint can each be much slower on an established workspace.
+  const [models, tools] = await Promise.all([
+    _withTimeout(api('/api/hub/models/overview?range=all', { timeoutMs: 3500 }), null, 3800),
+    _withTimeout(api('/api/hub/tools/overview?range=30d', { timeoutMs: 3500 }), null, 3800),
   ]);
-  const goalList = Array.isArray(goals?.goals) ? goals.goals.slice() : [];
-  goalList.sort((a, b) => Date.parse(b?.updatedAt || b?.completedAt || b?.createdAt || 0) - Date.parse(a?.updatedAt || a?.completedAt || a?.createdAt || 0));
+  // The model overview already carries the per-day model-token series. Build
+  // a complete six-month calendar from it immediately; sparse raw records
+  // must not collapse the calendar into stretched rectangles.
+  const sixMonthsAgo = new Date();
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  sixMonthsAgo.setHours(0, 0, 0, 0);
+  const tokensByDate = new Map((Array.isArray(models?.daily) ? models.daily : []).map((row) => [
+    String(row?.date || ''), Math.max(0, Number(row?.tokens ?? row?.count ?? 0)),
+  ]));
+  const fallbackDaily = [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (const day = new Date(sixMonthsAgo); day <= today; day.setDate(day.getDate() + 1)) {
+    const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+    const tokens = tokensByDate.get(date) || 0;
+    fallbackDaily.push({ date, tokens, count: tokens });
+  }
+  const fallbackPeakTokens = fallbackDaily.reduce((peak, row) => Math.max(peak, row.tokens), 0);
+  const activityStats = {
+    ...(models?.stats || {}),
+    totalTokens: Number(models?.stats?.totalTokens || models?.stats?.total || 0),
+    peakTokens: fallbackPeakTokens,
+    activeDays: Number(models?.stats?.activeDays || fallbackDaily.filter((row) => row.tokens > 0).length),
+  };
   return {
     models: models?.stats || {},
     modelDaily: Array.isArray(models?.daily) ? models.daily : [],
@@ -1261,21 +1282,22 @@ export async function loadMobileHubOverview() {
     toolDaily: Array.isArray(tools?.daily) ? tools.daily : [],
     topTools: Array.isArray(tools?.topTools) ? tools.topTools : [],
     tokenActivity: {
-      daily: Array.isArray(tokenActivity?.daily) ? tokenActivity.daily : [],
-      stats: tokenActivity?.stats || {},
+      daily: fallbackDaily,
+      stats: activityStats,
     },
-    goals: goalList,
-    goalCounts: goals?.counts || {},
-    skills: Array.isArray(skills?.skills) ? skills.skills : [],
-    curator: {
-      suggestions: Array.isArray(curator?.suggestions) ? curator.suggestions : [],
-      activity: Array.isArray(curator?.activity) ? curator.activity : [],
-      pending: Number(curator?.pending || 0),
-      quarantined: Number(curator?.quarantined || 0),
-      appliedActivity: Number(curator?.appliedActivity || 0),
-      observedActivity: Number(curator?.observedActivity || 0),
-    },
+    goals: [],
+    goalsLoaded: false,
+    goalCounts: {},
+    skills: [],
+    curator: { suggestions: [], activity: [], pending: 0, quarantined: 0, appliedActivity: 0, observedActivity: 0 },
   };
+}
+
+export async function loadMobileHubGoals() {
+  const goals = await api('/api/hub/goals', { timeoutMs: 20_000 });
+  const list = Array.isArray(goals?.goals) ? goals.goals.slice() : [];
+  list.sort((a, b) => Date.parse(b?.updatedAt || b?.completedAt || b?.createdAt || 0) - Date.parse(a?.updatedAt || a?.completedAt || a?.createdAt || 0));
+  return list;
 }
 
 export async function applyMobileSkillCuratorSuggestion(id) {
@@ -1509,10 +1531,10 @@ export async function loadMobileSessionGroups(options = {}) {
 loadMobileSessionGroups.loadPage = loadMobileSessionPage;
 
 
-export async function searchMobileChatSessions(query, { limit = 100 } = {}) {
+export async function searchMobileChatSessions(query, { limit = 100, mode = 'content' } = {}) {
   const q = String(query || '').trim();
   if (!q) return [];
-  const params = new URLSearchParams({ q, limit: String(limit) });
+  const params = new URLSearchParams({ q, limit: String(limit), mode: mode === 'title' ? 'title' : 'content' });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12000);
   let r;

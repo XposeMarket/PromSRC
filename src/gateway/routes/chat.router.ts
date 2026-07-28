@@ -4259,11 +4259,15 @@ async function handleChat(
   sendSSE('ui_preflight', { message: 'Building model context...' });
   const contextBuildStartedAt = markLatency('context_build_start');
   const contextAdmissionStartedAt = Date.now();
+  turnTiming.mark('context_queue_wait_start');
   let contextPermitAcquiredAt = contextAdmissionStartedAt;
   const personalityCtx = await runWithContextBuildPermit(
     sessionId,
     () => {
       contextPermitAcquiredAt = Date.now();
+      turnTiming.mark('context_queue_wait_done', {
+        durationMs: Math.max(0, contextPermitAcquiredAt - contextAdmissionStartedAt),
+      });
       return buildPersonalityContext(
         sessionId,
         workspacePath,
@@ -4276,6 +4280,7 @@ async function handleChat(
         browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
         personalityProfile,
         abortSignal?.signal,
+        turnTiming,
       );
     },
     abortSignal?.signal,
@@ -5143,7 +5148,13 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
     console.log(
       `[Orchestrator] Preflight start (${preflightCfg.secondary.provider}:${preflightCfg.secondary.model})`,
     );
+    const preflightTaskLookupStartedAt = Date.now();
+    turnTiming.mark('preflight_blocked_task_lookup_start');
     const preflightBlockedTask = findBlockedTaskForSession(sessionId);
+    turnTiming.mark('preflight_blocked_task_lookup_done', {
+      durationMs: Date.now() - preflightTaskLookupStartedAt,
+      found: !!preflightBlockedTask,
+    });
     const preflight = await callSecondaryPreflight({
       userMessage: message,
       recentHistory: history.slice(-4).map(h => ({ role: h.role, content: h.content })),
@@ -9745,7 +9756,13 @@ async function runInteractiveTurn(
   let followupHandled: string | null = null;
   if (!isSyntheticInternalWatch && shouldCheckBlockedTaskFollowup(message)) {
     sendSSE('ui_preflight', { message: 'Checking paused task follow-up...' });
+    const blockedFollowupLookupStartedAt = Date.now();
+    turnTiming.mark('blocked_recovery_followup_lookup_start');
     followupHandled = await tryHandleBlockedTaskFollowup(sessionId, message);
+    turnTiming.mark('blocked_recovery_followup_lookup_done', {
+      durationMs: Date.now() - blockedFollowupLookupStartedAt,
+      handled: !!followupHandled,
+    });
   }
   if (followupHandled) {
     if (!abortSignal?.aborted) {
@@ -9762,6 +9779,8 @@ async function runInteractiveTurn(
   const canvasCtx = getCanvasContextBlock(sessionId);
   const originCtx = formatTurnOriginContext(turnOrigin, sessionId);
   const assignedTaskAttentionCtx = (() => {
+    const assignedTaskLookupStartedAt = Date.now();
+    turnTiming.mark('assigned_task_attention_lookup_start');
     try {
       const task = findBlockedTaskForSession(sessionId);
       if (!task) return '';
@@ -9774,6 +9793,10 @@ async function runInteractiveTurn(
       ].join('\n');
     } catch {
       return '';
+    } finally {
+      turnTiming.mark('assigned_task_attention_lookup_done', {
+        durationMs: Date.now() - assignedTaskLookupStartedAt,
+      });
     }
   })();
   const mergedCallerContext = [originCtx, callerContext, canvasCtx || undefined, assignedTaskAttentionCtx || undefined].filter(Boolean).join('\n\n') || undefined;
@@ -11972,9 +11995,14 @@ async function buildVoiceShowArtifact(name: string, args: Record<string, any>): 
       return { ok: true, summary: `Comparison of ${rows.length} item(s).`, artifact: { id: `comparison-${Date.now()}`, type: 'comparison', title: args.title, columns, rows, labelKey: args.labelKey, highlightColumn: args.highlightColumn } };
     }
     case 'show_chart': {
-      const series = (Array.isArray(args.series) ? args.series : []).filter((s: any) => s && Array.isArray(s.points) && s.points.length);
+      const series = (Array.isArray(args.series) ? args.series : []).map((s: any) => ({
+        ...s,
+        points: (Array.isArray(s?.points) ? s.points : (Array.isArray(s?.data) ? s.data : []))
+          .map((point: any, index: number) => ({ x: point?.x ?? point?.label ?? point?.date ?? point?.time ?? index + 1, y: Number(point?.y ?? point?.value) }))
+          .filter((point: any) => Number.isFinite(point.y)),
+      })).filter((s: any) => s.points.length);
       if (!series.length) return { ok: false, summary: 'No chart data.', artifact: null };
-      return { ok: true, summary: 'Showing the chart.', artifact: { id: `chart-${Date.now()}`, type: 'chart', title: args.title, chartType: ['line', 'bar', 'area'].includes(args.chartType) ? args.chartType : 'line', series, xLabel: args.xLabel, yLabel: args.yLabel, unit: args.unit } };
+      return { ok: true, summary: 'Showing the chart.', artifact: { id: `chart-${Date.now()}`, type: 'chart', title: args.title, chartType: ['line', 'bar', 'area', 'scatter', 'pie', 'doughnut'].includes(args.chartType) ? args.chartType : 'line', series, xLabel: args.xLabel, yLabel: args.yLabel, unit: args.unit, stacked: args.stacked === true, source: args.source, updatedAt: args.updatedAt } };
     }
     case 'show_agent_work':
       return { ok: true, summary: 'Here is the snapshot.', artifact: { id: `agent_work-${Date.now()}`, type: 'agent_work', greeting: args.greeting, title: args.title, subtitle: args.subtitle, summaryRows: args.summaryRows, priorities: args.priorities, teams: args.teams, activeWork: args.activeWork } };
@@ -13446,12 +13474,12 @@ function buildVoiceToolDefinitions(): any[] {
           properties: {
             action: { type: 'string', enum: ['weather', 'market', 'stocks', 'prediction_market', 'map', 'sources', 'comparison', 'chart', 'product_carousel', 'agent_work', 'run_result'] },
             title: { type: 'string' }, source: { type: 'string' }, layout: { type: 'string', enum: ['cards', 'list'] },
-            location: { type: 'string' }, latitude: { type: 'number' }, longitude: { type: 'number' }, unit: { type: 'string', enum: ['F', 'C'] }, days: { type: 'number' },
+            location: { type: 'string' }, latitude: { type: 'number' }, longitude: { type: 'number' }, unit: { type: 'string' }, days: { type: 'number' },
             coins: { type: 'array', items: { type: 'string' } }, symbols: { type: 'array', items: { type: 'string' } }, vs_currency: { type: 'string' }, sparkline: { type: 'boolean' }, range: { type: 'string' },
             query: { type: 'string', description: 'Natural-language lookup query. Sufficient by itself for sources or product_carousel.' }, slug: { type: 'string' }, limit: { type: 'number' }, max_results: { type: 'number' }, merchant: { type: 'string' }, zoom: { type: 'number' }, center: { type: 'object' }, markers: { type: 'array', items: { type: 'object' } },
             items: { type: 'array', items: { type: 'object' }, description: 'Source/news items or product items, depending on action.' },
             columns: { type: 'array', items: { type: 'object' } }, rows: { type: 'array', items: { type: 'object' } }, labelKey: { type: 'string' }, highlightColumn: { type: 'string' },
-            chartType: { type: 'string', enum: ['line', 'bar', 'area'] }, series: { type: 'array', items: { type: 'object' } }, xLabel: { type: 'string' }, yLabel: { type: 'string' },
+            chartType: { type: 'string', enum: ['line', 'bar', 'area', 'scatter', 'pie', 'doughnut'] }, series: { type: 'array', items: { type: 'object' } }, xLabel: { type: 'string' }, yLabel: { type: 'string' }, stacked: { type: 'boolean' }, updatedAt: { type: 'string' },
             greeting: { type: 'string' }, subtitle: { type: 'string' }, summaryRows: { type: 'array', items: { type: 'object' } }, priorities: { type: 'array', items: { type: 'object' } }, teams: { type: 'array', items: { type: 'object' } }, activeWork: { type: 'array', items: { type: 'object' } },
             taskId: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' }, files: { type: 'array', items: {} }, links: { type: 'array', items: { type: 'object' } },
           },
@@ -13495,7 +13523,7 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'show_map',
-        description: 'Show a map card (OpenStreetMap, keyless) with location markers. Use for local/place results. Markers take lat/lng or an address.',
+        description: 'Show a dark, interactive MapLibre map card with location markers. Use for local/place results. Markers take lat/lng or an address; addresses are geocoded keylessly through OpenStreetMap.',
         parameters: { type: 'object', required: ['markers'], properties: { title: { type: 'string' }, center: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' } } }, zoom: { type: 'number' }, markers: { type: 'array', items: { type: 'object', required: ['label'], properties: { label: { type: 'string' }, lat: { type: 'number' }, lng: { type: 'number' }, address: { type: 'string' }, category: { type: 'string' }, rating: { type: 'number' }, url: { type: 'string' } } } } }, additionalProperties: false },
       },
     },
@@ -13519,8 +13547,8 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'show_chart',
-        description: 'Show a minimal native line/bar/area chart from numeric series you provide.',
-        parameters: { type: 'object', required: ['series'], properties: { title: { type: 'string' }, chartType: { type: 'string', enum: ['line', 'bar', 'area'] }, series: { type: 'array', items: { type: 'object', required: ['points'], properties: { label: { type: 'string' }, color: { type: 'string' }, points: { type: 'array', items: { type: 'object', required: ['x', 'y'], properties: { x: {}, y: { type: 'number' } } } } } } }, xLabel: { type: 'string' }, yLabel: { type: 'string' }, unit: { type: 'string' } }, additionalProperties: false },
+        description: 'Show an interactive line, area, bar, scatter, pie, or doughnut chart from numeric data. Prefer series[].points[] with {x,y}; legacy series[].data[] is normalized for compatibility. Include source and updatedAt for live data.',
+        parameters: { type: 'object', required: ['series'], properties: { title: { type: 'string' }, chartType: { type: 'string', enum: ['line', 'bar', 'area', 'scatter', 'pie', 'doughnut'] }, series: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, color: { type: 'string' }, points: { type: 'array', items: { type: 'object', required: ['x', 'y'], properties: { x: {}, y: { type: 'number' } } } }, data: { type: 'array', description: 'Legacy alias for points.', items: { type: 'object' } } } } }, xLabel: { type: 'string' }, yLabel: { type: 'string' }, unit: { type: 'string' }, stacked: { type: 'boolean' }, source: { type: 'string' }, updatedAt: { type: 'string' } }, additionalProperties: false },
       },
     },
     {
@@ -19914,6 +19942,20 @@ router.post('/api/chat', async (req, res) => {
         });
     }
 		  } catch (err: any) {
+		    if (!abortSignal.aborted && isTerminalProviderCapacityFailure(err)) {
+          // A quota/credit terminal error cannot make progress in this turn.
+          // Treat it like a user abort for unfinished dev edits, while keeping
+          // their patch and verification evidence available for a new request.
+          try {
+            const { abandonDevSourceEditContinuationsForSession } = require('../dev-source-approvals');
+            abandonDevSourceEditContinuationsForSession({
+              sessionId: resolvedSessionId,
+              reason: `provider_terminal_failure:${String(err?.message || err).slice(0, 300)}`,
+            });
+          } catch (cleanupErr: any) {
+            console.warn('[v2] Failed to release dev-edit coordination after provider failure:', cleanupErr?.message || cleanupErr);
+          }
+        }
 		    if (!abortSignal.aborted) markProviderStatus(false);
 	    if (!abortSignal.aborted) {
       console.error('[v2] ERROR:', err);
@@ -19939,6 +19981,12 @@ router.post('/api/chat', async (req, res) => {
     if (!res.destroyed && !res.writableEnded) res.end();
   }
 });
+
+/** Provider errors that cannot be recovered by continuing this same turn. */
+function isTerminalProviderCapacityFailure(error: unknown): boolean {
+  const text = String((error as any)?.message || error || '');
+  return /personal-team-blocked:spending-limit|usage_limit_reached|usage\s+limit|run out of credits|out of credits|insufficient\s+(?:credits?|quota|usage)|(?:credits?|quota|usage).{0,100}(?:exhausted|limit|exceeded)|rate_limit_error/i.test(text);
+}
 
 function markActiveRunsOnSessionList<T extends any>(input: T): T {
   const activeSessionIds = new Set(
@@ -20042,15 +20090,21 @@ router.get('/api/sessions/search', (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     const channel = String(req.query.channel || '').trim();
+    const mode = String(req.query.mode || 'content').trim().toLowerCase();
     const limit = Number(req.query.limit || 80);
     const validChannels = ['', 'terminal', 'telegram', 'web', 'mobile', 'discord', 'whatsapp', 'system'];
     if (!validChannels.includes(channel)) {
       res.status(400).json({ error: 'Invalid channel. Valid values: terminal, telegram, web, system' });
       return;
     }
+    if (!['title', 'content'].includes(mode)) {
+      res.status(400).json({ error: 'Invalid search mode. Valid values: title, content' });
+      return;
+    }
     const sessions = searchSessionSummaries(q, {
       channel: channel ? channel as any : undefined,
       limit,
+      includeContent: mode !== 'title',
     }).map((session) => {
       const project = findProjectBySessionId(session.id);
       return project
@@ -20063,6 +20117,7 @@ router.get('/api/sessions/search', (req, res) => {
     });
     res.json({
       query: q,
+      mode,
       sessions: markActiveRunsOnSessionList(sessions),
     });
   } catch (err: any) {

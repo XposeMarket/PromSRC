@@ -68,8 +68,12 @@ import { executePromRepoSyncTool } from '../prom-repo-sync';
 import { buildToolBenchmarkAggregate } from '../tool-observations';
 import { buildGeneratedImageVisionEvent } from '../generated-image-preview';
 import {
+  applyDeleteLinesEolSafe,
+  applyInsertAfterEolSafe,
   applyLineEndingTolerantFindReplace,
+  applyReplaceLinesEolSafe,
   normalizeDevSourcePatchsetArgs,
+  splitLinesEolSafe,
 } from '../dev-source-patchset';
 import { executeAgentBuilderTool } from './agent-builder-integration';
 import { SubagentManager, validateDirectSubagentAssignment } from './subagent-manager';
@@ -477,7 +481,7 @@ function hasProvidedArg(args: Record<string, any>, key: string): boolean {
 }
 
 function trimReturnedFileLine(line: string, maxChars = FILE_TOOL_MAX_LINE_CHARS): string {
-  const value = String(line ?? '');
+  const value = String(line ?? '').replace(/\r$/, '');
   return value.length <= maxChars ? value : `${value.slice(0, maxChars)}...[line truncated]`;
 }
 
@@ -3762,7 +3766,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     summary: string,
     opts: { before?: number; after?: number; maxChars?: number } = {},
   ): string {
-    const lines = String(content || '').split('\n');
+    const lines = splitLinesEolSafe(String(content || ''));
     const lineCount = lines.length;
     const start = Math.max(1, Math.min(Math.floor(Number(changedStartLine) || 1), Math.max(1, lineCount)));
     const end = Math.max(start, Math.min(Math.floor(Number(changedEndLine) || start), Math.max(1, lineCount)));
@@ -3786,8 +3790,8 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     ].join('\n');
   }
   function buildTextNotFoundRecovery(displayPath: string, content: string, findText: string, readToolName: string): string {
-    const allLines = content.split('\n');
-    const findLines = String(findText || '').split('\n');
+    const allLines = splitLinesEolSafe(content);
+    const findLines = splitLinesEolSafe(String(findText || ''));
     const normalizedFind = normalizeFindTextForRecovery(findText);
     const targetWindow = Math.max(1, Math.min(40, findLines.length || 1));
     const candidates: Array<{ reason: string; startLine: number; endLine: number; score: number }> = [];
@@ -5235,21 +5239,26 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       .map((s: any) => ({
         label: s?.label ? String(s.label) : undefined,
         color: s?.color ? String(s.color) : undefined,
-        points: (Array.isArray(s?.points) ? s.points : [])
-          .map((p: any) => ({ x: p?.x, y: Number(p?.y) }))
+        // `points` is the canonical contract. Accept `data` from older model
+        // responses so an otherwise valid visual never fails to render.
+        points: (Array.isArray(s?.points) ? s.points : (Array.isArray(s?.data) ? s.data : []))
+          .map((p: any, index: number) => ({ x: p?.x ?? p?.label ?? p?.date ?? p?.time ?? index + 1, y: Number(p?.y ?? p?.value) }))
           .filter((p: any) => Number.isFinite(p.y)),
       }))
       .filter((s: any) => s.points.length);
-    if (!series.length) return { name, args, result: 'show_chart requires series[] with points[].', error: true };
+    if (!series.length) return { name, args, result: 'show_chart requires series[] with points[] (or legacy data[]) containing numeric y/value fields.', error: true };
     const artifact = {
       id: `chart-${Date.now()}`,
       type: 'chart' as const,
       title: args?.title ? String(args.title) : undefined,
-      chartType: ['line', 'bar', 'area'].includes(String(args?.chartType)) ? String(args.chartType) : 'line',
+      chartType: ['line', 'bar', 'area', 'scatter', 'pie', 'doughnut'].includes(String(args?.chartType)) ? String(args.chartType) : 'line',
       series,
       xLabel: args?.xLabel ? String(args.xLabel) : undefined,
       yLabel: args?.yLabel ? String(args.yLabel) : undefined,
       unit: args?.unit ? String(args.unit) : undefined,
+      stacked: args?.stacked === true,
+      source: args?.source ? String(args.source) : undefined,
+      updatedAt: args?.updatedAt ? String(args.updatedAt) : undefined,
     };
     return { name, args, result: `Chart ready — ${series.length} series.`, error: false, extra: { richArtifacts: [artifact] } };
   }
@@ -7286,7 +7295,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               continue;
             }
             bContent = fs.readFileSync(bResolved.absPath, 'utf-8');
-            const bAllLines = bContent.split('\n');
+            const bAllLines = splitLinesEolSafe(bContent);
             if (entry.start_line !== undefined || entry.num_lines !== undefined) {
               const bStart = Math.max(1, Math.floor(Number(entry.start_line) || 1));
               const requested = Math.max(1, Math.floor(Number(entry.num_lines) || batchCap));
@@ -7346,7 +7355,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         }
         const filePath = resolvedFile.absPath;
         const content = fs.readFileSync(filePath, 'utf-8');
-        const allLines = content.split('\n');
+        const allLines = splitLinesEolSafe(content);
         const explicitStart = Math.floor(Number(args.start_line) || 0);
         const aroundLine = Math.floor(Number(args.around_line ?? args.aroundLine) || 0);
         if (explicitStart > allLines.length || aroundLine > allLines.length) {
@@ -7417,23 +7426,21 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 	          const resolved = resolveWorkspacePath(String(filename), { requireFile: true });
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'replace_lines');
 	          if (blocked) return blocked;
-	          const lines = fs.readFileSync(resolved.absPath, 'utf-8').split('\n');
-	          if (start > lines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, start, 'read_file', 'start_line'), error: true };
-	          const endClamped = Math.min(end, lines.length);
-	          const newLines = String(args.new_content ?? '').split('\n');
-	          lines.splice(start - 1, endClamped - start + 1, ...newLines);
-	          const updated = lines.join('\n');
+	          const content = fs.readFileSync(resolved.absPath, 'utf-8');
+	          const originalLines = splitLinesEolSafe(content);
+	          if (start > originalLines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, originalLines, start, 'read_file', 'start_line'), error: true };
+	          const replaced = applyReplaceLinesEolSafe(content, start, end, String(args.new_content ?? ''));
 	          const snapshot = snapshotPreMutation(resolved, 'replace_lines');
-	          fs.writeFileSync(resolved.absPath, updated, 'utf-8');
+	          fs.writeFileSync(resolved.absPath, replaced.updated, 'utf-8');
 	          return withWorkspaceSnapshots({
 	            name,
 	            args,
 	            result: formatPostEditContext(
 	              resolved.normalizedRel,
-	              updated,
+	              replaced.updated,
 	              start,
-	              Math.max(start, start + newLines.length - 1),
-	              `OK ${resolved.normalizedRel}: replaced lines ${start}-${endClamped}.`,
+	              Math.max(start, start + replaced.newLines.length - 1),
+	              `OK ${resolved.normalizedRel}: replaced lines ${start}-${replaced.endClamped}.`,
 	            ),
 	            error: false,
 	          }, [snapshot]);
@@ -7450,21 +7457,20 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 	          const resolved = resolveWorkspacePath(String(filename), { requireFile: true });
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'insert_after');
 	          if (blocked) return blocked;
-	          const lines = fs.readFileSync(resolved.absPath, 'utf-8').split('\n');
-	          if (afterLine > lines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, afterLine, 'read_file', 'after_line'), error: true };
-	          const newLines = String(args.content ?? '').split('\n');
-	          lines.splice(afterLine, 0, ...newLines);
-	          const updated = lines.join('\n');
+	          const content = fs.readFileSync(resolved.absPath, 'utf-8');
+	          const originalLines = splitLinesEolSafe(content);
+	          if (afterLine > originalLines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, originalLines, afterLine, 'read_file', 'after_line'), error: true };
+	          const inserted = applyInsertAfterEolSafe(content, afterLine, String(args.content ?? ''));
 	          const snapshot = snapshotPreMutation(resolved, 'insert_after');
-	          fs.writeFileSync(resolved.absPath, updated, 'utf-8');
+	          fs.writeFileSync(resolved.absPath, inserted.updated, 'utf-8');
 	          return withWorkspaceSnapshots({
 	            name,
 	            args,
 	            result: formatPostEditContext(
 	              resolved.normalizedRel,
-	              updated,
-	              afterLine + 1,
-	              Math.max(afterLine + 1, afterLine + newLines.length),
+	              inserted.updated,
+	              inserted.insertAt + 1,
+	              Math.max(inserted.insertAt + 1, inserted.insertAt + inserted.newLines.length),
 	              `OK ${resolved.normalizedRel}: inserted after line ${afterLine}.`,
 	            ),
 	            error: false,
@@ -7484,22 +7490,21 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 	          const resolved = resolveWorkspacePath(String(filename), { requireFile: true });
 	          const blocked = enforceMutationScope(resolved.normalizedRel, 'file', 'delete_lines');
 	          if (blocked) return blocked;
-	          const lines = fs.readFileSync(resolved.absPath, 'utf-8').split('\n');
-	          if (start > lines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, lines, start, 'read_file', 'start_line'), error: true };
-	          const endClamped = Math.min(end, lines.length);
-	          lines.splice(start - 1, endClamped - start + 1);
-	          const updated = lines.join('\n');
+	          const content = fs.readFileSync(resolved.absPath, 'utf-8');
+	          const originalLines = splitLinesEolSafe(content);
+	          if (start > originalLines.length) return { name, args, result: buildLineOutOfRangeRecovery(resolved.normalizedRel, originalLines, start, 'read_file', 'start_line'), error: true };
+	          const deleted = applyDeleteLinesEolSafe(content, start, end);
 	          const snapshot = snapshotPreMutation(resolved, 'delete_lines');
-	          fs.writeFileSync(resolved.absPath, updated, 'utf-8');
+	          fs.writeFileSync(resolved.absPath, deleted.updated, 'utf-8');
 	          return withWorkspaceSnapshots({
 	            name,
 	            args,
 	            result: formatPostEditContext(
 	              resolved.normalizedRel,
-	              updated,
-	              Math.min(start, Math.max(1, lines.length)),
-	              Math.min(start, Math.max(1, lines.length)),
-	              `OK ${resolved.normalizedRel}: deleted lines ${start}-${endClamped}.`,
+	              deleted.updated,
+	              Math.min(start, Math.max(1, deleted.lines.length)),
+	              Math.min(start, Math.max(1, deleted.lines.length)),
+	              `OK ${resolved.normalizedRel}: deleted lines ${start}-${deleted.endClamped}.`,
 	            ),
 	            error: false,
 	          }, [snapshot]);
@@ -8314,18 +8319,58 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             }
           }
         };
-        const gs_rawPath = gs_searchBoth ? '' : String(args.path || '').trim();
+        const gs_fileArg = String(args.file || args.filename || '').replace(/\\/g, '/').trim();
+        const gs_rawPath = gs_searchBoth ? '' : String(args.path || gs_fileArg || '').trim();
+        const gs_searchOneFile = (absPath: string, rootDir: string, label: string): boolean => {
+          if (!fs.existsSync(absPath)) return false;
+          let st: fs.Stats;
+          try { st = fs.statSync(absPath); } catch { return false; }
+          if (!st.isFile()) return false;
+          const relPathNoLabel = path.relative(rootDir, absPath).replace(/\\/g, '/');
+          const relPath = label + '/' + relPathNoLabel;
+          if (!matchesGlobList(relPath, gs_globs)) {
+            gs_filesSkipped += 1;
+            return true;
+          }
+          let content = '';
+          try { content = fs.readFileSync(absPath, 'utf-8'); } catch { return true; }
+          gs_filesSearched += 1;
+          const grep = collectGrepMatchesInText(relPath, content, gs_matcher, {
+            maxResults: Math.max(1, gs_storeLimit - gs_matches.length),
+            contextLines: gs_contextLines,
+            before: Number(args.before) || 40,
+            after: Number(args.after) || 80,
+            charBefore: Number(args.char_before) || undefined,
+            charAfter: Number(args.char_after) || undefined,
+            charWindow: Number(args.char_window) || undefined,
+          });
+          gs_totalMatches += grep.totalMatches;
+          if (gs_matches.length < gs_storeLimit) {
+            gs_matches.push(...grep.matches.slice(0, Math.max(0, gs_storeLimit - gs_matches.length)));
+          }
+          return true;
+        };
         if (gs_useSrc) {
-          const gs_srcSubdir = gs_rawPath ? path.resolve(gs_srcRoot, gs_rawPath) : gs_srcRoot;
-          if (!gs_srcSubdir.startsWith(gs_srcRoot)) return { name, args, result: `ERROR: path "${gs_rawPath}" is outside src/`, error: true };
-          if (!fs.existsSync(gs_srcSubdir)) return { name, args, result: buildPathNotFoundRecovery(`src/${gs_rawPath}`, gs_srcRoot, gs_rawPath, 'list_source', { displayPrefix: 'src/', directoriesOnly: true }), error: true };
-          gs_walkDir(gs_srcSubdir, gs_srcRoot, 'src');
+          const gs_srcTarget = gs_rawPath ? path.resolve(gs_srcRoot, gs_rawPath.replace(/^\.?\/?src\//, '')) : gs_srcRoot;
+          if (!gs_srcTarget.startsWith(gs_srcRoot)) return { name, args, result: `ERROR: path "${gs_rawPath}" is outside src/`, error: true };
+          if (!fs.existsSync(gs_srcTarget)) return { name, args, result: buildPathNotFoundRecovery(`src/${gs_rawPath.replace(/^\.?\/?src\//, '')}`, gs_srcRoot, gs_rawPath.replace(/^\.?\/?src\//, ''), 'list_source', { displayPrefix: 'src/' }), error: true };
+          if (!gs_searchOneFile(gs_srcTarget, gs_srcRoot, 'src')) {
+            if (!fs.statSync(gs_srcTarget).isDirectory()) {
+              return { name, args, result: `ERROR: path "${gs_rawPath}" is not a searchable file or directory under src/`, error: true };
+            }
+            gs_walkDir(gs_srcTarget, gs_srcRoot, 'src');
+          }
         }
         if (gs_useWebUi) {
-          const gs_webUiSubdir = gs_rawPath ? path.resolve(gs_webUiRoot, gs_rawPath) : gs_webUiRoot;
-          if (!gs_webUiSubdir.startsWith(gs_webUiRoot)) return { name, args, result: `ERROR: path "${gs_rawPath}" is outside web-ui/`, error: true };
-          if (!fs.existsSync(gs_webUiSubdir)) return { name, args, result: buildPathNotFoundRecovery(`web-ui/${gs_rawPath}`, gs_webUiRoot, gs_rawPath, 'list_webui_source', { displayPrefix: 'web-ui/', directoriesOnly: true }), error: true };
-          gs_walkDir(gs_webUiSubdir, gs_webUiRoot, 'web-ui');
+          const gs_webUiTarget = gs_rawPath ? path.resolve(gs_webUiRoot, gs_rawPath.replace(/^\.?\/?web-ui\//, '')) : gs_webUiRoot;
+          if (!gs_webUiTarget.startsWith(gs_webUiRoot)) return { name, args, result: `ERROR: path "${gs_rawPath}" is outside web-ui/`, error: true };
+          if (!fs.existsSync(gs_webUiTarget)) return { name, args, result: buildPathNotFoundRecovery(`web-ui/${gs_rawPath.replace(/^\.?\/?web-ui\//, '')}`, gs_webUiRoot, gs_rawPath.replace(/^\.?\/?web-ui\//, ''), 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
+          if (!gs_searchOneFile(gs_webUiTarget, gs_webUiRoot, 'web-ui')) {
+            if (!fs.statSync(gs_webUiTarget).isDirectory()) {
+              return { name, args, result: `ERROR: path "${gs_rawPath}" is not a searchable file or directory under web-ui/`, error: true };
+            }
+            gs_walkDir(gs_webUiTarget, gs_webUiRoot, 'web-ui');
+          }
         }
         const gs_searchedLabel = gs_searchBoth ? 'src/ + web-ui/' : (gs_useSrc ? 'src/' + (gs_rawPath ? gs_rawPath : '') : 'web-ui/' + (gs_rawPath ? gs_rawPath : ''));
         const gs_sortedMatches = gs_matches.sort(compareGrepMatches(gs_pattern)).slice(0, gs_maxResults);
@@ -8376,9 +8421,6 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           return { name, args, result: buildPathNotFoundRecovery(gp_resolved.normalizedRel || '.', gp_projectRoot, gp_resolved.normalizedRel || '', 'list_prom', { include: (candidateRel) => isPromAllowedPath(candidateRel) }), error: true };
         }
         const gp_rootStat = fs.statSync(gp_resolved.absPath);
-        if (!gp_rootStat.isDirectory()) {
-          return { name, args, result: `"${gp_resolved.normalizedRel || '.'}" is not a directory`, error: true };
-        }
         const gp_requestedMaxResults = Math.floor(Number(args.max_results) || 50);
         const gp_contextLines = Math.max(0, Math.min(3, Math.floor(Number(args.context || 0))));
         const gp_maxResults = Math.max(1, Math.min(80, gp_requestedMaxResults));
@@ -8393,6 +8435,53 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         let gp_totalMatches = 0;
         let gp_filesSearched = 0;
         let gp_filesSkipped = 0;
+        if (gp_rootStat.isFile()) {
+          const relFromRoot = gp_resolved.normalizedRel || path.basename(gp_resolved.absPath);
+          if (!matchesGlobList(relFromRoot, gp_globs)) {
+            gp_filesSkipped += 1;
+          } else {
+            let content = '';
+            try { content = fs.readFileSync(gp_resolved.absPath, 'utf-8'); } catch { content = ''; }
+            if (content) {
+              gp_filesSearched += 1;
+              const grep = collectGrepMatchesInText(relFromRoot || '.', content, gp_matcher, {
+                maxResults: gp_storeLimit,
+                contextLines: gp_contextLines,
+                before: Number(args.before) || 40,
+                after: Number(args.after) || 80,
+                charBefore: Number(args.char_before) || undefined,
+                charAfter: Number(args.char_after) || undefined,
+                charWindow: Number(args.char_window) || undefined,
+              });
+              gp_totalMatches += grep.totalMatches;
+              gp_matches.push(...grep.matches);
+            }
+          }
+          const gp_sortedMatches = gp_matches.sort(compareGrepMatches(gp_pattern)).slice(0, gp_maxResults);
+          const gp_payload = {
+            searched: gp_resolved.normalizedRel || '.',
+            pattern: gp_pattern,
+            search_mode: gp_matcher.mode,
+            files_searched: gp_filesSearched,
+            files_skipped: gp_filesSkipped,
+            match_count: gp_totalMatches,
+            returned_count: gp_sortedMatches.length,
+            truncated_count: Math.max(0, gp_totalMatches - gp_sortedMatches.length),
+            result_limit: {
+              requested: gp_requestedMaxResults,
+              applied: gp_maxResults,
+              context_lines: gp_contextLines,
+              limit_reached: gp_totalMatches > gp_sortedMatches.length,
+              note: 'Result payloads are hard-clamped. Narrow path/glob/pattern or rerun a targeted read_prom_file for exact content.',
+            },
+            no_match_hints: gp_totalMatches === 0 ? buildNoMatchHints({ pattern: gp_pattern, searched: gp_resolved.normalizedRel || '.', mode: gp_matcher.mode, excluded: Array.from(gp_excludes) }) : undefined,
+            matches: gp_sortedMatches,
+          };
+          return { name, args, result: JSON.stringify(gp_payload, null, 2), error: false };
+        }
+        if (!gp_rootStat.isDirectory()) {
+          return { name, args, result: `"${gp_resolved.normalizedRel || '.'}" is not a searchable file or directory`, error: true };
+        }
         const gp_walkDir = (dir: string): void => {
           let entries: fs.Dirent[] = [];
           try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -8695,7 +8784,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         }
         const content = fs.readFileSync(absPath, 'utf-8');
         const relDisplay = 'src/' + absPath.slice(srcRoot.length + 1).replace(/\\/g, '/');
-        const allLines = content.split('\n');
+        const allLines = splitLinesEolSafe(content);
         return { name, args, result: renderNumberedRead(relDisplay, allLines, args), error: false };
       }
 
@@ -8792,7 +8881,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           return { name, args, result: `${displayPath}/:\n${entries.join('\n') || '(empty)'}`, error: false };
         }
         const content = fs.readFileSync(resolved.absPath, 'utf-8');
-        const allLines = content.split('\n');
+        const allLines = splitLinesEolSafe(content);
 	        return { name, args, result: renderNumberedRead(resolved.normalizedRel || path.basename(resolved.absPath), allLines, args), error: false };
 	      }
 
@@ -9065,7 +9154,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         }
         const rwu_content = fs.readFileSync(rwu_absPath, 'utf-8');
         const rwu_display = 'web-ui/' + rwu_absPath.slice(rwu_webUiRoot.length + 1).replace(/\\/g, '/');
-        const rwu_allLines = rwu_content.split('\n');
+        const rwu_allLines = splitLinesEolSafe(rwu_content);
         return { name, args, result: renderNumberedRead(rwu_display, rwu_allLines, args), error: false };
       }
 
@@ -9093,14 +9182,13 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           return { name, args, result: buildPathNotFoundRecovery(`src/${frs_rel}`, frs_srcRoot, frs_rel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
         const frs_content = fs.readFileSync(frs_absPath, 'utf-8');
-        if (!applyTolerantFindReplace(frs_content, frs_find, frs_replace, args.replace_all === true)) {
+        const frs_replaceAll = args.replace_all === true;
+        const _frSrc = applyTolerantFindReplace(frs_content, frs_find, frs_replace, frs_replaceAll);
+        if (!_frSrc) {
           return { name, args, result: buildTextNotFoundRecovery(`src/${frs_rel}`, frs_content, frs_find, 'read_source'), error: true };
         }
-        const frs_replaceAll = args.replace_all === true;
-        const _frSrc = applyTolerantFindReplace(frs_content, frs_find, frs_replace, frs_replaceAll)!; const frs_occurrences = _frSrc.count;
-        const frs_updated = _frSrc.updated; void (frs_replaceAll
-          ? 0
-          : 0);
+        const frs_occurrences = _frSrc.count;
+        const frs_updated = _frSrc.updated;
         const frs_invalidEdit = rejectInvalidSourceEdit(name, args, frs_absPath, frs_updated);
         if (frs_invalidEdit) return frs_invalidEdit;
         fs.writeFileSync(frs_absPath, frs_updated, 'utf-8');
@@ -9144,19 +9232,18 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           const rls_normalizedRel = rls_rel.replace(/^\.?\/?src\//, '');
           return { name, args, result: buildPathNotFoundRecovery(`src/${rls_normalizedRel}`, rls_srcRoot, rls_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
-        const rls_lines = fs.readFileSync(rls_absPath, 'utf-8').split('\n');
-        if (rls_start > rls_lines.length) {
-          return { name, args, result: buildLineOutOfRangeRecovery(`src/${rls_rel.replace(/^\.?\/?src\//, '')}`, rls_lines, rls_start, 'read_source', 'start_line'), error: true };
+        const rls_content = fs.readFileSync(rls_absPath, 'utf-8');
+        const rls_originalLines = splitLinesEolSafe(rls_content);
+        if (rls_start > rls_originalLines.length) {
+          return { name, args, result: buildLineOutOfRangeRecovery(`src/${rls_rel.replace(/^\.?\/?src\//, '')}`, rls_originalLines, rls_start, 'read_source', 'start_line'), error: true };
         }
-        const rls_endClamped = Math.min(rls_end, rls_lines.length);
-        const rls_newLines = rls_newContent.split('\n');
-        rls_lines.splice(rls_start - 1, rls_endClamped - rls_start + 1, ...rls_newLines);
-        const rls_updated = rls_lines.join('\n');
+        const rls_replaced = applyReplaceLinesEolSafe(rls_content, rls_start, rls_end, rls_newContent);
+        const rls_updated = rls_replaced.updated;
         const rls_invalidEdit = rejectInvalidSourceEdit(name, args, rls_absPath, rls_updated);
         if (rls_invalidEdit) return rls_invalidEdit;
         fs.writeFileSync(rls_absPath, rls_updated, 'utf-8');
         const rls_display = 'src/' + rls_absPath.slice(rls_srcRoot.length + 1).replace(/\\/g, '/');
-        console.log(`[edit_source] replace_lines_source: ${rls_display} lines ${rls_start}-${rls_endClamped} (session: ${rls_sid})`);
+        console.log(`[edit_source] replace_lines_source: ${rls_display} lines ${rls_start}-${rls_replaced.endClamped} (session: ${rls_sid})`);
         return {
           name,
           args,
@@ -9164,8 +9251,8 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             rls_display,
             rls_updated,
             rls_start,
-            Math.max(rls_start, rls_start + rls_newLines.length - 1),
-            `✅ ${rls_display}: replaced lines ${rls_start}-${rls_endClamped} (now ${rls_lines.length} lines).`,
+            Math.max(rls_start, rls_start + rls_replaced.newLines.length - 1),
+            `✅ ${rls_display}: replaced lines ${rls_start}-${rls_replaced.endClamped} (now ${rls_replaced.lines.length} lines).`,
           )}\n${getPostSourceEditInstructionForSession(sessionId, [rls_display])}`,
           error: false,
         };
@@ -9193,11 +9280,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           const ias_normalizedRel = ias_rel.replace(/^\.?\/?src\//, '');
           return { name, args, result: buildPathNotFoundRecovery(`src/${ias_normalizedRel}`, ias_srcRoot, ias_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
-        const ias_lines = fs.readFileSync(ias_absPath, 'utf-8').split('\n');
-        const ias_insertAt = Math.min(ias_afterLine, ias_lines.length);
-        const ias_newLines = ias_content.split('\n');
-        ias_lines.splice(ias_insertAt, 0, ...ias_newLines);
-        const ias_updated = ias_lines.join('\n');
+        const ias_fileContent = fs.readFileSync(ias_absPath, 'utf-8');
+        const ias_inserted = applyInsertAfterEolSafe(ias_fileContent, ias_afterLine, ias_content);
+        const ias_updated = ias_inserted.updated;
         const ias_invalidEdit = rejectInvalidSourceEdit(name, args, ias_absPath, ias_updated);
         if (ias_invalidEdit) return ias_invalidEdit;
         fs.writeFileSync(ias_absPath, ias_updated, 'utf-8');
@@ -9209,9 +9294,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           result: `${formatPostEditContext(
             ias_display,
             ias_updated,
-            ias_insertAt + 1,
-            Math.max(ias_insertAt + 1, ias_insertAt + ias_newLines.length),
-            `✅ ${ias_display}: inserted after line ${ias_afterLine} (now ${ias_lines.length} lines).`,
+            ias_inserted.insertAt + 1,
+            Math.max(ias_inserted.insertAt + 1, ias_inserted.insertAt + ias_inserted.newLines.length),
+            `✅ ${ias_display}: inserted after line ${ias_afterLine} (now ${ias_inserted.lines.length} lines).`,
           )}\n${getPostSourceEditInstructionForSession(sessionId, [ias_display])}`,
           error: false,
         };
@@ -9239,27 +9324,27 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           const dls_normalizedRel = dls_rel.replace(/^\.?\/?src\//, '');
           return { name, args, result: buildPathNotFoundRecovery(`src/${dls_normalizedRel}`, dls_srcRoot, dls_normalizedRel, 'list_source', { displayPrefix: 'src/' }), error: true };
         }
-        const dls_lines = fs.readFileSync(dls_absPath, 'utf-8').split('\n');
-        if (dls_start > dls_lines.length) {
-          return { name, args, result: buildLineOutOfRangeRecovery(`src/${dls_rel.replace(/^\.?\/?src\//, '')}`, dls_lines, dls_start, 'read_source', 'start_line'), error: true };
+        const dls_content = fs.readFileSync(dls_absPath, 'utf-8');
+        const dls_originalLines = splitLinesEolSafe(dls_content);
+        if (dls_start > dls_originalLines.length) {
+          return { name, args, result: buildLineOutOfRangeRecovery(`src/${dls_rel.replace(/^\.?\/?src\//, '')}`, dls_originalLines, dls_start, 'read_source', 'start_line'), error: true };
         }
-        const dls_endClamped = Math.min(dls_end, dls_lines.length);
-        dls_lines.splice(dls_start - 1, dls_endClamped - dls_start + 1);
-        const dls_updated = dls_lines.join('\n');
+        const dls_deleted = applyDeleteLinesEolSafe(dls_content, dls_start, dls_end);
+        const dls_updated = dls_deleted.updated;
         const dls_invalidEdit = rejectInvalidSourceEdit(name, args, dls_absPath, dls_updated);
         if (dls_invalidEdit) return dls_invalidEdit;
         fs.writeFileSync(dls_absPath, dls_updated, 'utf-8');
         const dls_display = 'src/' + dls_absPath.slice(dls_srcRoot.length + 1).replace(/\\/g, '/');
-        console.log(`[edit_source] delete_lines_source: ${dls_display} lines ${dls_start}-${dls_endClamped} (session: ${dls_sid})`);
+        console.log(`[edit_source] delete_lines_source: ${dls_display} lines ${dls_start}-${dls_deleted.endClamped} (session: ${dls_sid})`);
         return {
           name,
           args,
           result: `${formatPostEditContext(
             dls_display,
             dls_updated,
-            Math.min(dls_start, Math.max(1, dls_lines.length)),
-            Math.min(dls_start, Math.max(1, dls_lines.length)),
-            `✅ ${dls_display}: deleted lines ${dls_start}-${dls_endClamped} (now ${dls_lines.length} lines).`,
+            Math.min(dls_start, Math.max(1, dls_deleted.lines.length)),
+            Math.min(dls_start, Math.max(1, dls_deleted.lines.length)),
+            `✅ ${dls_display}: deleted lines ${dls_start}-${dls_deleted.endClamped} (now ${dls_deleted.lines.length} lines).`,
           )}\n${getPostSourceEditInstructionForSession(sessionId, [dls_display])}`,
           error: false,
         };
@@ -9414,14 +9499,13 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           return { name, args, result: buildPathNotFoundRecovery(`web-ui/${frwu_rel}`, frwu_webUiRoot, frwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
         const frwu_content = fs.readFileSync(frwu_absPath, 'utf-8');
-        if (!applyTolerantFindReplace(frwu_content, frwu_find, frwu_replace, args.replace_all === true)) {
+        const frwu_replaceAll = args.replace_all === true;
+        const _frWui = applyTolerantFindReplace(frwu_content, frwu_find, frwu_replace, frwu_replaceAll);
+        if (!_frWui) {
           return { name, args, result: buildTextNotFoundRecovery(`web-ui/${frwu_rel}`, frwu_content, frwu_find, 'read_webui_source'), error: true };
         }
-        const frwu_replaceAll = args.replace_all === true;
-        const _frWui = applyTolerantFindReplace(frwu_content, frwu_find, frwu_replace, frwu_replaceAll)!; const frwu_occurrences = _frWui.count;
-        const frwu_updated = _frWui.updated; void (frwu_replaceAll
-          ? 0
-          : 0);
+        const frwu_occurrences = _frWui.count;
+        const frwu_updated = _frWui.updated;
         const frwu_invalidEdit = rejectInvalidSourceEdit(name, args, frwu_absPath, frwu_updated);
         if (frwu_invalidEdit) return frwu_invalidEdit;
         fs.writeFileSync(frwu_absPath, frwu_updated, 'utf-8');
@@ -9465,19 +9549,18 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         if (!fs.existsSync(rlwu_absPath)) {
           return { name, args, result: buildPathNotFoundRecovery(`web-ui/${rlwu_rel}`, rlwu_webUiRoot, rlwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
-        const rlwu_lines = fs.readFileSync(rlwu_absPath, 'utf-8').split('\n');
-        if (rlwu_start > rlwu_lines.length) {
-          return { name, args, result: buildLineOutOfRangeRecovery(`web-ui/${rlwu_rel}`, rlwu_lines, rlwu_start, 'read_webui_source', 'start_line'), error: true };
+        const rlwu_content = fs.readFileSync(rlwu_absPath, 'utf-8');
+        const rlwu_originalLines = splitLinesEolSafe(rlwu_content);
+        if (rlwu_start > rlwu_originalLines.length) {
+          return { name, args, result: buildLineOutOfRangeRecovery(`web-ui/${rlwu_rel}`, rlwu_originalLines, rlwu_start, 'read_webui_source', 'start_line'), error: true };
         }
-        const rlwu_endClamped = Math.min(rlwu_end, rlwu_lines.length);
-        const rlwu_newLines = rlwu_newContent.split('\n');
-        rlwu_lines.splice(rlwu_start - 1, rlwu_endClamped - rlwu_start + 1, ...rlwu_newLines);
-        const rlwu_updated = rlwu_lines.join('\n');
+        const rlwu_replaced = applyReplaceLinesEolSafe(rlwu_content, rlwu_start, rlwu_end, rlwu_newContent);
+        const rlwu_updated = rlwu_replaced.updated;
         const rlwu_invalidEdit = rejectInvalidSourceEdit(name, args, rlwu_absPath, rlwu_updated);
         if (rlwu_invalidEdit) return rlwu_invalidEdit;
         fs.writeFileSync(rlwu_absPath, rlwu_updated, 'utf-8');
         const rlwu_display = 'web-ui/' + rlwu_absPath.slice(rlwu_webUiRoot.length + 1).replace(/\\/g, '/');
-        console.log(`[edit_webui] replace_lines_webui_source: ${rlwu_display} lines ${rlwu_start}-${rlwu_endClamped} (session: ${rlwu_sid})`);
+        console.log(`[edit_webui] replace_lines_webui_source: ${rlwu_display} lines ${rlwu_start}-${rlwu_replaced.endClamped} (session: ${rlwu_sid})`);
         return {
           name,
           args,
@@ -9485,8 +9568,8 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             rlwu_display,
             rlwu_updated,
             rlwu_start,
-            Math.max(rlwu_start, rlwu_start + rlwu_newLines.length - 1),
-            `OK ${rlwu_display}: replaced lines ${rlwu_start}-${rlwu_endClamped} (now ${rlwu_lines.length} lines).`,
+            Math.max(rlwu_start, rlwu_start + rlwu_replaced.newLines.length - 1),
+            `OK ${rlwu_display}: replaced lines ${rlwu_start}-${rlwu_replaced.endClamped} (now ${rlwu_replaced.lines.length} lines).`,
           )}\n${getPostSourceEditInstructionForSession(sessionId, [rlwu_display])}`,
           error: false,
         };
@@ -9513,11 +9596,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         if (!fs.existsSync(iawu_absPath)) {
           return { name, args, result: buildPathNotFoundRecovery(`web-ui/${iawu_rel}`, iawu_webUiRoot, iawu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
-        const iawu_lines = fs.readFileSync(iawu_absPath, 'utf-8').split('\n');
-        const iawu_insertAt = Math.min(iawu_afterLine, iawu_lines.length);
-        const iawu_newLines = iawu_content.split('\n');
-        iawu_lines.splice(iawu_insertAt, 0, ...iawu_newLines);
-        const iawu_updated = iawu_lines.join('\n');
+        const iawu_fileContent = fs.readFileSync(iawu_absPath, 'utf-8');
+        const iawu_inserted = applyInsertAfterEolSafe(iawu_fileContent, iawu_afterLine, iawu_content);
+        const iawu_updated = iawu_inserted.updated;
         const iawu_invalidEdit = rejectInvalidSourceEdit(name, args, iawu_absPath, iawu_updated);
         if (iawu_invalidEdit) return iawu_invalidEdit;
         fs.writeFileSync(iawu_absPath, iawu_updated, 'utf-8');
@@ -9529,9 +9610,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           result: `${formatPostEditContext(
             iawu_display,
             iawu_updated,
-            iawu_insertAt + 1,
-            Math.max(iawu_insertAt + 1, iawu_insertAt + iawu_newLines.length),
-            `OK ${iawu_display}: inserted after line ${iawu_afterLine} (now ${iawu_lines.length} lines).`,
+            iawu_inserted.insertAt + 1,
+            Math.max(iawu_inserted.insertAt + 1, iawu_inserted.insertAt + iawu_inserted.newLines.length),
+            `OK ${iawu_display}: inserted after line ${iawu_afterLine} (now ${iawu_inserted.lines.length} lines).`,
           )}\n${getPostSourceEditInstructionForSession(sessionId, [iawu_display])}`,
           error: false,
         };
@@ -9558,27 +9639,27 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         if (!fs.existsSync(dlwu_absPath)) {
           return { name, args, result: buildPathNotFoundRecovery(`web-ui/${dlwu_rel}`, dlwu_webUiRoot, dlwu_rel, 'list_webui_source', { displayPrefix: 'web-ui/' }), error: true };
         }
-        const dlwu_lines = fs.readFileSync(dlwu_absPath, 'utf-8').split('\n');
-        if (dlwu_start > dlwu_lines.length) {
-          return { name, args, result: buildLineOutOfRangeRecovery(`web-ui/${dlwu_rel}`, dlwu_lines, dlwu_start, 'read_webui_source', 'start_line'), error: true };
+        const dlwu_content = fs.readFileSync(dlwu_absPath, 'utf-8');
+        const dlwu_originalLines = splitLinesEolSafe(dlwu_content);
+        if (dlwu_start > dlwu_originalLines.length) {
+          return { name, args, result: buildLineOutOfRangeRecovery(`web-ui/${dlwu_rel}`, dlwu_originalLines, dlwu_start, 'read_webui_source', 'start_line'), error: true };
         }
-        const dlwu_endClamped = Math.min(dlwu_end, dlwu_lines.length);
-        dlwu_lines.splice(dlwu_start - 1, dlwu_endClamped - dlwu_start + 1);
-        const dlwu_updated = dlwu_lines.join('\n');
+        const dlwu_deleted = applyDeleteLinesEolSafe(dlwu_content, dlwu_start, dlwu_end);
+        const dlwu_updated = dlwu_deleted.updated;
         const dlwu_invalidEdit = rejectInvalidSourceEdit(name, args, dlwu_absPath, dlwu_updated);
         if (dlwu_invalidEdit) return dlwu_invalidEdit;
         fs.writeFileSync(dlwu_absPath, dlwu_updated, 'utf-8');
         const dlwu_display = 'web-ui/' + dlwu_absPath.slice(dlwu_webUiRoot.length + 1).replace(/\\/g, '/');
-        console.log(`[edit_webui] delete_lines_webui_source: ${dlwu_display} lines ${dlwu_start}-${dlwu_endClamped} (session: ${dlwu_sid})`);
+        console.log(`[edit_webui] delete_lines_webui_source: ${dlwu_display} lines ${dlwu_start}-${dlwu_deleted.endClamped} (session: ${dlwu_sid})`);
         return {
           name,
           args,
           result: `${formatPostEditContext(
             dlwu_display,
             dlwu_updated,
-            Math.min(dlwu_start, Math.max(1, dlwu_lines.length)),
-            Math.min(dlwu_start, Math.max(1, dlwu_lines.length)),
-            `OK ${dlwu_display}: deleted lines ${dlwu_start}-${dlwu_endClamped} (now ${dlwu_lines.length} lines).`,
+            Math.min(dlwu_start, Math.max(1, dlwu_deleted.lines.length)),
+            Math.min(dlwu_start, Math.max(1, dlwu_deleted.lines.length)),
+            `OK ${dlwu_display}: deleted lines ${dlwu_start}-${dlwu_deleted.endClamped} (now ${dlwu_deleted.lines.length} lines).`,
           )}\n${getPostSourceEditInstructionForSession(sessionId, [dlwu_display])}`,
           error: false,
         };

@@ -3,7 +3,7 @@
  *
  * Endpoints:
  *   GET /api/hub/skills/usage?range=day|week|month
- *   GET /api/hub/tokens/activity                    (daily token activity from first detected use)
+ *   GET /api/hub/tokens/activity?range=6m           (daily token activity, six months by default on mobile)
  *   GET /api/hub/tools/heatmap?year=YYYY&month=MM   (legacy monthly tool calls)
  *   GET /api/hub/skills/:id/content                 (read-only SKILL.md content)
  *   GET /api/hub/achievements                       (stub, returns [])
@@ -131,11 +131,12 @@ function dateKeyFromDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-type HubStatsRange = 'all' | '30d' | '7d' | '1d';
+type HubStatsRange = 'all' | '6m' | '30d' | '7d' | '1d';
 
 function normalizeHubStatsRange(rawRange: string): HubStatsRange {
   const value = String(rawRange || '').trim().toLowerCase();
   if (value === 'all') return 'all';
+  if (value === '6m' || value === '6mo' || value === 'six-months') return '6m';
   if (value === '30d' || value === 'month') return '30d';
   if (value === '7d' || value === 'week') return '7d';
   if (value === '1d' || value === 'day' || value === '24h') return '1d';
@@ -161,6 +162,11 @@ function rangeWindow(rawRange: string, timestamps: string[]): { range: HubStatsR
   if (range === '30d') {
     const start = new Date(today);
     start.setDate(start.getDate() - 29);
+    return { range, sinceMs: start.getTime(), heatmapStartMs: start.getTime(), untilMs };
+  }
+  if (range === '6m') {
+    const start = new Date(today);
+    start.setMonth(start.getMonth() - 6);
     return { range, sinceMs: start.getTime(), heatmapStartMs: start.getTime(), untilMs };
   }
   const allStart = Number.isFinite(earliestMs) ? dayStart(new Date(earliestMs)) : today;
@@ -327,7 +333,7 @@ function addTokenBucket(buckets: Record<string, number>, timestamp: string, toke
   buckets[key] = (buckets[key] || 0) + n;
 }
 
-router.get('/api/hub/tokens/activity', (_req: Request, res: Response) => {
+router.get('/api/hub/tokens/activity', (req: Request, res: Response) => {
   try {
     const modelEvents = readModelUsageEvents();
     const observations = readAllToolObservations(100_000);
@@ -349,7 +355,11 @@ router.get('/api/hub/tokens/activity', (_req: Request, res: Response) => {
       ...auditTimestamps,
       ...sessionTimestamps,
     ].filter(Boolean);
-    const window = rangeWindow('all', allTimestamps);
+    // Keep headline totals lifetime-based, while allowing clients to request a
+    // compact visual history.  The mobile Hub requests six months so its
+    // calendar stays fully visible without horizontal scrolling.
+    const lifetimeWindow = rangeWindow('all', allTimestamps);
+    const activityWindow = rangeWindow(String(req.query.range || 'all'), allTimestamps);
     const buckets: Record<string, number> = {};
     let modelTokens = 0;
     let toolContextTokens = 0;
@@ -360,7 +370,7 @@ router.get('/api/hub/tokens/activity', (_req: Request, res: Response) => {
 
     for (const e of modelEvents) {
       const t = Date.parse(e.timestamp || '');
-      if (!Number.isFinite(t) || t < window.sinceMs || t >= window.untilMs) continue;
+      if (!Number.isFinite(t) || t < lifetimeWindow.sinceMs || t >= lifetimeWindow.untilMs) continue;
       const total = Math.max(0, Number(e.totalTokens || 0));
       modelTokens += total;
       inputTokens += Math.max(0, Number(e.inputTokens || 0));
@@ -372,7 +382,7 @@ router.get('/api/hub/tokens/activity', (_req: Request, res: Response) => {
 
     for (const obs of observations) {
       const t = Number(obs.createdAt || 0);
-      if (!Number.isFinite(t) || t < window.sinceMs || t >= window.untilMs) continue;
+      if (!Number.isFinite(t) || t < lifetimeWindow.sinceMs || t >= lifetimeWindow.untilMs) continue;
       const estimate = (obs?.tokenEstimate || {}) as any;
       const tokens = Math.max(0, Number(estimate.totalTokens || 0))
         || Math.max(0, Number(estimate.argsTokens || 0)) + Math.max(0, Number(estimate.resultTokens || 0));
@@ -380,14 +390,15 @@ router.get('/api/hub/tokens/activity', (_req: Request, res: Response) => {
       addTokenBucket(buckets, new Date(t).toISOString(), tokens);
     }
 
-    const daily = buildDailySeries(window.sinceMs, window.untilMs, buckets).map((row) => ({
+    const lifetimeDaily = buildDailySeries(lifetimeWindow.sinceMs, lifetimeWindow.untilMs, buckets);
+    const daily = buildDailySeries(activityWindow.sinceMs, activityWindow.untilMs, buckets).map((row) => ({
       date: row.date,
       tokens: row.count,
       count: row.count,
     }));
     const stats = {
-      firstDate: daily[0]?.date || dateKeyFromDate(new Date()),
-      lastDate: daily[daily.length - 1]?.date || dateKeyFromDate(new Date()),
+      firstDate: dateKeyFromDate(new Date(lifetimeWindow.sinceMs)),
+      lastDate: dateKeyFromDate(new Date(lifetimeWindow.untilMs - 1)),
       totalTokens: modelTokens + toolContextTokens,
       modelTokens,
       toolContextTokens,
@@ -395,12 +406,12 @@ router.get('/api/hub/tokens/activity', (_req: Request, res: Response) => {
       outputTokens,
       reasoningTokens,
       cacheTokens,
-      activeDays: daily.filter((row) => row.tokens > 0).length,
-      days: daily.length,
-      peakTokens: daily.reduce((max, row) => Math.max(max, row.tokens), 0),
+      activeDays: lifetimeDaily.filter((row) => row.count > 0).length,
+      days: lifetimeDaily.length,
+      peakTokens: lifetimeDaily.reduce((max, row) => Math.max(max, row.count), 0),
       ...streaksFromCounts(buckets),
     };
-    res.json({ success: true, daily, stats });
+    res.json({ success: true, range: activityWindow.range, daily, stats });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || String(err) });
   }

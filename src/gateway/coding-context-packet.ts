@@ -130,7 +130,7 @@ export interface CodingContextObservation {
 export interface DevEditContextSeed {
   id: string;
   sessionId: string;
-  status: 'approved' | 'verified_not_live' | 'applying_live' | 'complete';
+  status: 'approved' | 'verified_not_live' | 'applying_live' | 'complete' | 'abandoned';
   allowedFiles?: string[];
   affectedFiles?: string[];
   changedSurfaces?: string[];

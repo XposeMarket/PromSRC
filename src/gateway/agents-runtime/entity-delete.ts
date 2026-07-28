@@ -10,6 +10,7 @@ import {
   saveManagedTeam,
 } from '../teams/managed-teams';
 import { getTeamWorkspacePath } from '../teams/team-workspace';
+import { getHeartbeatRunnerInstance } from '../scheduling/heartbeat-runner';
 
 export interface DeleteAgentResult {
   success: boolean;
@@ -149,6 +150,9 @@ export function deleteAgentCompletely(input: {
     : removeAgentFromTeams(agentId, input.broadcastTeamEvent);
   const deletedScheduledJobs = deleteBoundSubagentJobs(input.cronScheduler, agentId);
   const removedPaths = removeSubagentFiles(agentId, target);
+  // Remove the live timer and persisted heartbeat override as part of deleting
+  // the agent, rather than leaving a stale Settings > Heartbeat card behind.
+  getHeartbeatRunnerInstance()?.unregisterAgent(agentId);
   reloadAgentSchedules();
 
   return { success: true, agentId, removedPaths, deletedScheduledJobs, affectedTeams };
