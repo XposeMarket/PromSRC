@@ -93,6 +93,8 @@ export interface ThreadSupervision {
   minReviewIntervalMs: number;
   maxConsecutiveNoProgress: number;
   pendingReview: boolean;
+  /** Surface currently responsible for the owner-side review turn. */
+  reviewDeliverySurface?: 'voice' | 'chat';
   pendingEvent?: ThreadSupervisionPendingEvent;
   reviewInFlight?: boolean;
   leasedEventId?: string;
@@ -179,6 +181,7 @@ function normalizeRecord(input: any): ThreadSupervision | null {
     minReviewIntervalMs: positiveInt(input?.minReviewIntervalMs, DEFAULT_THREAD_SUPERVISION_BUDGETS.minReviewIntervalMs, 60 * 60 * 1000),
     maxConsecutiveNoProgress: positiveInt(input?.maxConsecutiveNoProgress, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxConsecutiveNoProgress, 20),
     pendingReview: input?.pendingReview === true,
+    reviewDeliverySurface: input?.reviewDeliverySurface === 'voice' ? 'voice' : input?.reviewDeliverySurface === 'chat' ? 'chat' : undefined,
     pendingEvent: input?.pendingEvent && typeof input.pendingEvent === 'object' ? input.pendingEvent : undefined,
     reviewInFlight: input?.reviewInFlight === true,
     leasedEventId: typeof input?.leasedEventId === 'string' ? input.leasedEventId : undefined,
@@ -593,6 +596,7 @@ export function resolveThreadSupervisionReview(input: {
 export function notifyThreadSupervision(record: ThreadSupervision, broadcast?: (data: any) => void): void {
   if (record.notifiedAt || !['complete', 'blocked', 'failed'].includes(record.status)) return;
   const heading = record.status === 'complete' ? 'completed' : record.status === 'blocked' ? 'needs attention' : 'failed';
+  const summary = String(record.finalSummary || record.finalVerificationReason || '').replace(/\s+/g, ' ').trim();
   try {
     addMessage(record.ownerSessionId, {
       role: 'assistant',
@@ -633,5 +637,29 @@ export function notifyThreadSupervision(record: ThreadSupervision, broadcast?: (
       targetSessionId: record.targetSessionId,
       supervision: getThreadSupervision(record.id) || record,
     });
+    // A supervision review is executed by the durable owner-side chat runtime.
+    // Mirror its terminal result as a voice update on that same owner session;
+    // the active AVAS client will append it to its current voice thread instead
+    // of routing it to the target thread's Worker.
+    // A Voice-delivered review is already speaking from AVAS itself. Only
+    // synthesize a worker-update narration for legacy/non-Voice completion
+    // paths; otherwise the user hears the terminal result twice.
+    if (record.reviewDeliverySurface !== 'voice') {
+      broadcast?.({
+        type: 'voice_worker_update',
+        id: `thread_supervision_${record.id}_${record.status}_${Date.now()}`,
+        sessionId: record.ownerSessionId,
+        taskId: record.targetSessionId,
+        title: record.targetTitle,
+        kind: record.status === 'complete' ? 'complete' : 'paused',
+        critical: true,
+        status: record.status,
+        text: summary
+          ? `${record.targetTitle} ${heading}. ${summary}`
+          : `${record.targetTitle} ${heading}.`,
+        finalResult: summary,
+        timestamp: Date.now(),
+      });
+    }
   } catch {}
 }

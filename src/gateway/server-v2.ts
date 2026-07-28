@@ -159,7 +159,7 @@ import { router as processesRouter } from './routes/processes.router';
 import { router as codingRouter } from './routes/coding.router';
 import { router as realtimeRouter } from './routes/realtime.router';
 import { router as voiceRouter } from './routes/voice.router';
-import { shutdownCodexRealtimeBridge } from './realtime/codex-app-server-bridge';
+import { getCodexRealtimeBridge, shutdownCodexRealtimeBridge } from './realtime/codex-app-server-bridge';
 import { addCanvasFile, getCanvasContextBlock } from './routes/canvas-state';
 import { getMCPManager } from './mcp-manager';
 import {
@@ -682,6 +682,8 @@ const internalWatchRunner = new InternalWatchRunner({
 const activeThreadSupervisionController = new ActiveThreadSupervisionController({
   runInteractiveTurn: (message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput) =>
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput),
+  routeOwnerReviewToVoice: (ownerSessionId, prompt) =>
+    getCodexRealtimeBridge().appendRealtimeTextForOwner(ownerSessionId, prompt),
   broadcast: broadcastWS,
 });
 let stopThreadSupervisionRunner: () => void = () => undefined;

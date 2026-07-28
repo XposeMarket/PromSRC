@@ -193,14 +193,37 @@ function runDetached(
     undefined,
     origin,
   ).then((result: any) => {
+    const summary = String(result?.text || '').slice(0, 2000);
+    const targetTitle = getSessionDisplayTitle(getSession(targetSessionId)) || 'The thread';
     deps.broadcastWS?.({
       type: 'managed_thread_turn_complete',
       ownerSessionId,
       targetSessionId,
       supervisionId,
-      summary: String(result?.text || '').slice(0, 2000),
+      summary,
     });
+    // Unsupervised threads can report their result immediately. A supervised
+    // thread must instead wait for its owner-side verification turn; that
+    // terminal supervision notification below is the truthful voice result.
+    if (!supervisionId) {
+      deps.broadcastWS?.({
+        type: 'voice_worker_update',
+        id: `managed_thread_${targetSessionId}_complete_${Date.now()}`,
+        sessionId: ownerSessionId,
+        taskId: targetSessionId,
+        title: targetTitle,
+        kind: 'complete',
+        critical: true,
+        status: 'complete',
+        text: summary
+          ? `${targetTitle} completed. ${summary}`
+          : `${targetTitle} completed.`,
+        finalResult: summary,
+        timestamp: Date.now(),
+      });
+    }
   }).catch((err: any) => {
+    const error = String(err?.message || err);
     if (supervisionId) {
       updateThreadSupervision(supervisionId, {
         status: 'failed',
@@ -212,7 +235,19 @@ function runDetached(
       ownerSessionId,
       targetSessionId,
       supervisionId,
-      error: String(err?.message || err),
+      error,
+    });
+    deps.broadcastWS?.({
+      type: 'voice_worker_update',
+      id: `managed_thread_${targetSessionId}_failed_${Date.now()}`,
+      sessionId: ownerSessionId,
+      taskId: targetSessionId,
+      title: getSessionDisplayTitle(getSession(targetSessionId)) || 'The thread',
+      kind: 'paused',
+      critical: true,
+      status: 'failed',
+      text: `A thread you started could not complete: ${error}`,
+      timestamp: Date.now(),
     });
   });
 }

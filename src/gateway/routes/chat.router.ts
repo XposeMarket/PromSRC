@@ -18177,6 +18177,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- If the user explicitly cancels/stops/aborts — call interrupt_active_worker.',
     '',
     '## Tool calls are REAL actions — never fake them',
+    '- Tool authority: the provided voice_* tools, canonical read-only skill_* tools, and explicit realtime control tools are your entire action surface. Never call native Codex shell, filesystem, browser, desktop, or worker tools from Voice. Use the matching voice_* tool, and use voice_thread_ops only when the request genuinely needs a first-class Prometheus thread.',
     '- A tool only runs if you actually emit the function call. Saying "on it", "handing that off", "I started the worker", or "let me search" does NOT run anything by itself.',
     '- CRITICAL for hand-offs: when the user wants durable or blocking work, emit voice_thread_ops action=create (or create_many only for genuinely independent work) in the same turn. Speaking an acknowledgement WITHOUT creating or steering the thread is a failure because the work never starts.',
     '- CRITICAL for live UI control: when the user asks you to click, scroll, press a key, type, fill, focus, maximize, minimize, restore, close, open, or screenshot the current browser/desktop, your next action must be voice_browser or voice_desktop with the matching action. Do not say you will do it without the function call.',

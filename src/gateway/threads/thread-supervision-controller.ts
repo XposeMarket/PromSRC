@@ -15,6 +15,7 @@ import {
 
 export interface ActiveThreadSupervisionControllerDeps {
   runInteractiveTurn: (...args: any[]) => Promise<any>;
+  routeOwnerReviewToVoice?: (ownerSessionId: string, prompt: string) => Promise<boolean>;
   broadcast?: (data: any) => void;
   now?: () => number;
   pollIntervalMs?: number;
@@ -22,6 +23,7 @@ export interface ActiveThreadSupervisionControllerDeps {
 
 const DONE_CLAIM_RE = /\b(?:done|completed|complete|finished|implemented|fixed|verified|all checks pass(?:ed)?)\b/i;
 const DEFAULT_THREAD_SUPERVISION_POLL_INTERVAL_MS = 5000;
+const VOICE_REVIEW_LEASE_TIMEOUT_MS = 90_000;
 
 function digest(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -258,6 +260,19 @@ function buildSupervisorPrompt(record: ThreadSupervision): string {
   ].join('\n');
 }
 
+function buildVoiceSupervisorPrompt(record: ThreadSupervision): string {
+  return [
+    buildSupervisorPrompt(record).replace(/\bprometheus_thread_ops\b/g, 'voice_thread_ops'),
+    '',
+    '[VOICE DELIVERY]',
+    'This managed-thread event belongs to your current live voice conversation.',
+    'Handle the review yourself as the active Voice Agent. Do not dispatch or wake the owner chat Worker.',
+    'After calling voice_thread_ops action="review_decision", speak one natural result or blocker to the user.',
+    'Do not mention this routing event, supervision internals, JSON, or tool protocol.',
+    '[/VOICE DELIVERY]',
+  ].join('\n');
+}
+
 function isSessionBusy(sessionId: string): boolean {
   return listLiveRuntimes().some((runtime) => String(runtime.sessionId || '') === sessionId && runtime.status !== 'completed' && runtime.status !== 'aborted');
 }
@@ -304,6 +319,34 @@ export class ActiveThreadSupervisionController {
     this.tickRunning = true;
     const now = this.deps.now?.() ?? Date.now();
     try {
+      // If AVAS disconnected after accepting a review event, release that
+      // voice lease so a future active surface can retry it. Never leave a
+      // supervised thread permanently wedged on a dead voice session.
+      const staleVoiceReviews = listThreadSupervisions({ status: 'active', includeTerminal: false, limit: 500 })
+        .filter((record) => (
+          record.reviewInFlight
+          && record.reviewDeliverySurface === 'voice'
+          && Number(record.lastReviewAt || 0) > 0
+          && now - Number(record.lastReviewAt || 0) >= VOICE_REVIEW_LEASE_TIMEOUT_MS
+        ))
+        .map((record) => ({
+          id: record.id,
+          patch: {
+            reviewInFlight: false,
+            reviewDeliverySurface: undefined,
+            pendingReview: true,
+            pendingEvent: record.leasedEvent
+              ? mergePendingEvent(record.pendingEvent, record.leasedEvent)
+              : record.pendingEvent,
+            leasedEventId: undefined,
+            leasedEvent: undefined,
+            lastReviewReason: 'Voice review session timed out; event released for the next active surface.',
+            lastStatusSummary: 'Voice review timed out and was safely requeued.',
+            lastStatusEventAt: now,
+          } as Partial<ThreadSupervision>,
+        }));
+      if (staleVoiceReviews.length) updateThreadSupervisionsBatch(staleVoiceReviews);
+
       const runtimeSessions = new Set(listLiveRuntimes().map((runtime) => String(runtime.sessionId || '')).filter(Boolean));
       const observationUpdates: Array<{ id: string; patch: Partial<ThreadSupervision> }> = [];
       const observationFailures = new Set<string>();
@@ -400,6 +443,29 @@ export class ActiveThreadSupervisionController {
     this.publish(leased, 'reviewing');
     this.inFlight.add(record.id);
     try {
+      if (this.deps.routeOwnerReviewToVoice) {
+        // Mark Voice ownership before appendText so a very fast tool result
+        // cannot race terminal notification and produce duplicate narration.
+        updateThreadSupervision(leased.id, {
+          reviewDeliverySurface: 'voice',
+          lastReviewReason: `Routing ${eventId} to the active Voice Agent.`,
+          lastStatusSummary: 'Active Voice Agent is reviewing the managed-thread update.',
+          lastStatusEventAt: Date.now(),
+        });
+        const routedToVoice = await this.deps.routeOwnerReviewToVoice(
+          leased.ownerSessionId,
+          buildVoiceSupervisorPrompt(leased),
+        );
+        if (routedToVoice) return;
+        updateThreadSupervision(leased.id, {
+          reviewDeliverySurface: 'chat',
+          lastReviewReason: `No active Voice Agent; reviewing ${eventId} in chat.`,
+          lastStatusSummary: 'No active Voice session; owner chat is reviewing the managed-thread update.',
+          lastStatusEventAt: Date.now(),
+        });
+      } else {
+        updateThreadSupervision(leased.id, { reviewDeliverySurface: 'chat' });
+      }
       await this.deps.runInteractiveTurn(
         buildSupervisorPrompt(leased),
         leased.ownerSessionId,

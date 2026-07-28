@@ -45,6 +45,32 @@ function getRealtimeApiKey(): string {
   ).trim();
 }
 
+function sanitizeCodexBridgeDynamicTools(value: unknown): any[] {
+  if (!Array.isArray(value)) return [];
+  const tools: any[] = [];
+  const seen = new Set<string>();
+  for (const raw of value.slice(0, 96)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const name = String((raw as any).name || (raw as any).function?.name || '').trim();
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(name) || seen.has(name)) continue;
+    seen.add(name);
+    const description = String((raw as any).description || (raw as any).function?.description || '').trim().slice(0, 8000);
+    const candidateSchema = (raw as any).inputSchema
+      || (raw as any).parameters
+      || (raw as any).function?.parameters;
+    const inputSchema = candidateSchema && typeof candidateSchema === 'object' && !Array.isArray(candidateSchema)
+      ? candidateSchema
+      : { type: 'object', properties: {}, additionalProperties: true };
+    tools.push({
+      type: 'function',
+      name,
+      description,
+      inputSchema,
+    });
+  }
+  return tools;
+}
+
 function getConfigDir(): string {
   return getConfig().getConfigDir();
 }
@@ -253,6 +279,9 @@ router.get('/api/realtime/status', async (_req, res) => {
     codexBridgeAccountType: codexBridge.accountType,
     codexBridgePlanType: codexBridge.planType,
     codexBridgeVoices: codexBridge.voices,
+    codexBridgeRealtimeVersion: codexBridge.realtimeVersion,
+    codexBridgeActiveVoices: codexBridge.activeVoices,
+    codexBridgeDefaultVoice: codexBridge.defaultVoice,
     codexBridgeError: codexBridge.error,
   });
 });
@@ -304,6 +333,8 @@ router.post('/api/realtime/codex-bridge/call', async (req, res) => {
       prompt,
       voice: sanitizeRealtimeVoice(req.body?.voice),
       cwd: getConfig().getWorkspacePath(),
+      ownerSessionId: String(req.body?.ownerSessionId || '').trim(),
+      tools: sanitizeCodexBridgeDynamicTools(req.body?.tools),
     });
     res.json({
       success: true,
@@ -321,6 +352,51 @@ router.post('/api/realtime/codex-bridge/call', async (req, res) => {
   }
 });
 
+router.post('/api/realtime/codex-bridge/tool-output', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const sessionId = String(req.body?.sessionId || '').trim();
+  const requestId = String(req.body?.requestId || '').trim();
+  if (!sessionId || !requestId) {
+    res.status(400).json({ success: false, error: 'sessionId and requestId are required.' });
+    return;
+  }
+  const accepted = await getCodexRealtimeBridge().submitDynamicToolOutput({
+    sessionId,
+    requestId,
+    output: String(req.body?.output || ''),
+    success: req.body?.success !== false,
+    previewDataUrl: String(req.body?.previewDataUrl || ''),
+  });
+  if (!accepted) {
+    res.status(404).json({ success: false, error: 'The Codex realtime tool request is no longer active.' });
+    return;
+  }
+  res.json({ success: true });
+});
+
+// AVAS v3 does not expose the public Realtime response-create commands on the
+// browser data channel.  Use the app-server's realtime speech append operation
+// to return a managed-thread completion through the original voice session.
+router.post('/api/realtime/codex-bridge/speak', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const sessionId = String(req.body?.sessionId || '').trim();
+  const text = clampText(String(req.body?.text || ''), 8_000);
+  if (!sessionId || !text) {
+    res.status(400).json({ success: false, error: 'sessionId and speakable text are required.' });
+    return;
+  }
+  try {
+    const accepted = await getCodexRealtimeBridge().appendRealtimeSpeech(sessionId, text);
+    if (!accepted) {
+      res.status(404).json({ success: false, error: 'The Codex realtime session is no longer active.' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(502).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
 router.post('/api/realtime/codex-bridge/stop', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const sessionId = String(req.body?.sessionId || '').trim();
@@ -330,6 +406,26 @@ router.post('/api/realtime/codex-bridge/stop', async (req, res) => {
   }
   const stopped = await getCodexRealtimeBridge().stopRealtimeSession(sessionId);
   res.json({ success: true, stopped });
+});
+
+// The ChatGPT OAuth AVAS transport exposes transcripts through app-server
+// notifications, not reliably through the browser's WebRTC data channel. The
+// UI polls this small per-session buffer to keep its visible chat in sync with
+// the spoken conversation.
+router.get('/api/realtime/codex-bridge/events', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const sessionId = String(req.query?.sessionId || '').trim();
+  if (!sessionId) {
+    res.status(400).json({ success: false, error: 'sessionId is required.' });
+    return;
+  }
+  const afterId = Number(req.query?.afterId || 0);
+  const events = await getCodexRealtimeBridge().waitForRealtimeEvents(sessionId, afterId);
+  res.json({
+    success: true,
+    events,
+    latestId: events.length ? events[events.length - 1].id : (Number.isFinite(afterId) ? afterId : 0),
+  });
 });
 
 function buildRealtimeClientSecretBody(req: express.Request): any {
@@ -513,4 +609,3 @@ router.post('/api/realtime/call', async (req, res) => {
     });
   }
 });
-

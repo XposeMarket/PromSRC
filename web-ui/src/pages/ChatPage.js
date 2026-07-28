@@ -16893,10 +16893,12 @@ let realtimeDraftInterimText = '';
 let realtimeDraftStartedAt = 0;
 let realtimeVoicePendingInterruptContext = null;
 
-const OPENAI_REALTIME_VOICE_IDS = new Set(['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar']);
+const OPENAI_PUBLIC_REALTIME_VOICE_IDS = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'];
+const CODEX_AVAS_REALTIME_VOICE_IDS = ['juniper', 'maple', 'spruce', 'ember', 'vale', 'breeze', 'arbor', 'sol', 'cove'];
 const DESKTOP_VOICE_SETTINGS_KEY = 'pm_voice_settings_v1';
 const DESKTOP_VOICE_MODES = new Set(['openai_realtime', 'xai']);
 let desktopVoiceSettings = loadDesktopVoiceSettings();
+let realtimeVoiceStatus = null;
 
 const CANVAS_LANG_MAP = {
   js:'javascript', ts:'javascript', jsx:'javascript', tsx:'javascript', mjs:'javascript',
@@ -17220,15 +17222,17 @@ function updateDesktopComposerSendButton() {
   // Session state is the authority here. Do not retain the previous chat's
   // DOM/global state when a user opens a fresh chat while it is still running.
   const thinking = isDesktopComposerTurnActive();
+  const realtimeActive = realtimeVoiceStarting || realtimeVoiceRepliesEnabled;
   btn.dataset.thinking = thinking ? 'true' : 'false';
-  const voiceMode = !thinking && !hasDesktopComposerOutboundContent();
+  const voiceMode = !thinking && !realtimeActive && !hasDesktopComposerOutboundContent();
   btn.classList.toggle('voice-mode-btn', voiceMode);
   btn.classList.toggle('is-voice', voiceMode);
-  if (sendIcon) sendIcon.style.display = thinking || voiceMode ? 'none' : '';
+  btn.classList.toggle('realtime-voice-stop', realtimeActive);
+  if (sendIcon) sendIcon.style.display = thinking || voiceMode || realtimeActive ? 'none' : '';
   if (voiceIcon) voiceIcon.hidden = !voiceMode;
-  if (stopIcon) stopIcon.style.display = thinking ? '' : 'none';
-  btn.style.background = thinking ? 'var(--err)' : '';
-  btn.title = thinking ? 'Stop generation' : voiceMode ? 'Start voice mode' : 'Send';
+  if (stopIcon) stopIcon.style.display = thinking || realtimeActive ? '' : 'none';
+  btn.style.background = thinking || realtimeActive ? 'var(--err)' : '';
+  btn.title = thinking ? 'Stop generation' : realtimeActive ? (realtimeVoiceStarting ? 'Cancel realtime voice' : 'Exit realtime voice') : voiceMode ? 'Start voice mode' : 'Send';
   btn.setAttribute('aria-label', btn.title);
 }
 
@@ -17338,15 +17342,26 @@ function setVoiceDictationState(active) {
 function setUnifiedVoiceButtonState() {
   const btn = document.getElementById('chat-voice-btn');
   if (!btn) return;
-  // The composer mic is intentionally independent from voice mode. It always
-  // remains the lightweight browser transcription control, never a realtime
-  // or auto-submit entry point.
+  // When Realtime is active this becomes its explicit, visible exit control.
+  const realtimeActive = realtimeVoiceStarting || realtimeVoiceRepliesEnabled;
+  btn.classList.toggle('voice-mode-active', realtimeActive);
+  if (realtimeActive) {
+    btn.classList.remove('recording', 'active', 'silent', 'unconfigured');
+    btn.dataset.voiceMode = 'openai_realtime';
+    btn.title = realtimeVoiceStarting ? 'Cancel realtime voice' : 'Exit realtime voice';
+    btn.setAttribute('aria-label', btn.title);
+    updateDesktopComposerSendButton();
+    return;
+  }
+  // The composer mic remains the lightweight browser transcription control
+  // while Realtime is off.
   btn.classList.toggle('recording', composerTranscriptionEnabled && !!composerTranscriptionRecognition);
   btn.classList.toggle('active', composerTranscriptionEnabled);
   btn.classList.remove('silent', 'unconfigured');
   btn.dataset.voiceMode = 'browser';
   btn.title = composerTranscriptionEnabled ? 'Stop dictation' : 'Dictate message';
   btn.setAttribute('aria-label', btn.title);
+  updateDesktopComposerSendButton();
 }
 
 function writeDictationTranscript(interimText = '') {
@@ -19461,7 +19476,32 @@ function selectedRegularVoiceProvider() {
 
 function normalizeRealtimeVoice(value) {
   const voice = String(value || '').trim();
-  return OPENAI_REALTIME_VOICE_IDS.has(voice) ? voice : 'marin';
+  const supported = currentRealtimeVoiceIds();
+  return supported.includes(voice) ? voice : currentRealtimeDefaultVoice();
+}
+
+function isCodexAvasRealtimeTransport(status = realtimeVoiceStatus) {
+  return status?.auth === 'chatgpt_oauth_app_server'
+    && status?.transport === 'codex_app_server'
+    && status?.codexBridgeAvailable === true;
+}
+
+function currentRealtimeVoiceIds(status = realtimeVoiceStatus) {
+  if (isCodexAvasRealtimeTransport(status)) {
+    const live = Array.isArray(status?.codexBridgeActiveVoices)
+      ? status.codexBridgeActiveVoices.map((voice) => String(voice || '').trim()).filter(Boolean)
+      : [];
+    return live.length ? [...new Set(live)] : [...CODEX_AVAS_REALTIME_VOICE_IDS];
+  }
+  return [...OPENAI_PUBLIC_REALTIME_VOICE_IDS];
+}
+
+function currentRealtimeDefaultVoice(status = realtimeVoiceStatus) {
+  const supported = currentRealtimeVoiceIds(status);
+  const advertised = isCodexAvasRealtimeTransport(status)
+    ? String(status?.codexBridgeDefaultVoice || '').trim()
+    : 'marin';
+  return supported.includes(advertised) ? advertised : (supported[0] || 'marin');
 }
 
 function getRenderableVoiceProviders(kind) {
@@ -19526,10 +19566,15 @@ async function renderOutputVoiceSelect() {
 async function renderRealtimeVoiceSelect() {
   const select = document.getElementById('realtime-voice-select');
   if (!select) return;
-  const list = fallbackVoiceCatalog('openai_realtime').filter((voice) => OPENAI_REALTIME_VOICE_IDS.has(voice.id));
-  const stored = normalizeRealtimeVoice(getStoredVoiceSetting('realtime_voice', 'marin'));
-  realtimeVoiceSelection = list.some((voice) => voice.id === stored) ? stored : 'marin';
+  const ids = currentRealtimeVoiceIds();
+  const list = ids.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1) }));
+  const defaultVoice = currentRealtimeDefaultVoice();
+  const stored = normalizeRealtimeVoice(getStoredVoiceSetting('realtime_voice', defaultVoice));
+  realtimeVoiceSelection = list.some((voice) => voice.id === stored) ? stored : defaultVoice;
   if (realtimeVoiceSelection !== stored) storeVoiceSetting('realtime_voice', realtimeVoiceSelection);
+  if (desktopVoiceSettings.realtimeVoice !== realtimeVoiceSelection) {
+    saveDesktopVoiceSettings({ realtimeVoice: realtimeVoiceSelection });
+  }
   select.innerHTML = list.map((voice) => `<option value="${escHtml(voice.id)}">${escHtml(voice.label || voice.id)}</option>`).join('');
   select.value = realtimeVoiceSelection;
 }
@@ -19625,6 +19670,7 @@ async function refreshVoiceProviderStatus() {
     const response = await fetch('/api/realtime/status');
     const data = await response.json().catch(() => ({}));
     if (data) {
+      realtimeVoiceStatus = data;
       voiceProvidersStatus = {
         sttProviders: [{ id: 'auto', label: 'Transcription', configured: true }],
         ttsProviders: [
@@ -19636,6 +19682,7 @@ async function refreshVoiceProviderStatus() {
       applyDesktopVoiceProviderDefaults();
     }
   } catch {
+    realtimeVoiceStatus = null;
     voiceProvidersStatus = {
       sttProviders: [{ id: 'auto', label: 'Transcription', configured: true }],
       ttsProviders: [{ id: 'openai_realtime', label: 'OpenAI Realtime', configured: false }, { id: 'xai', label: 'xAI Realtime', configured: true }],
@@ -19779,9 +19826,12 @@ async function refreshRealtimeVoiceStatus() {
   try {
     const response = await fetch('/api/realtime/status');
     const data = await response.json().catch(() => ({}));
+    realtimeVoiceStatus = data;
     realtimeVoiceConfigured = !!data?.configured;
     btn.classList.toggle('unconfigured', !realtimeVoiceConfigured);
+    await renderRealtimeVoiceSelect();
   } catch {
+    realtimeVoiceStatus = null;
     realtimeVoiceConfigured = false;
   }
   setRealtimeVoiceButtonState();
@@ -19986,17 +20036,35 @@ function isDesktopVoiceNarrationActive() {
   return realtimeNarrationMode === 'milestones' && !!(realtimeVoiceRepliesEnabled || voiceRepliesEnabled);
 }
 
-function speakVoiceAgentRealtimeMilestone(text, options = {}) {
+async function appendCodexBridgeRealtimeSpeech(connection, text) {
+  const sessionId = String(connection?.codexBridgeSessionId || '').trim();
+  const speakable = cleanVoiceSpeechText(text);
+  if (connection?.transport !== 'codex_app_server' || !sessionId || !speakable) return false;
+  const response = await fetch('/api/realtime/codex-bridge/speak', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, text: speakable }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.success === false) {
+    throw new Error(data?.error || `Codex realtime speech append failed (${response.status})`);
+  }
+  return true;
+}
+
+async function speakVoiceAgentRealtimeMilestone(text, options = {}) {
   const spoken = cleanVoiceSpeechText(text);
   if (!spoken) return;
   if (desktopVoiceOutputBusy()) {
     setTimeout(() => speakVoiceAgentRealtimeMilestone(spoken, { ...options, force: true }), 750);
     return;
   }
-  const dc = voiceAgentRealtimeConnection?.dc;
+  const connection = voiceAgentRealtimeConnection;
+  const dc = connection?.dc;
   if (!dc || dc.readyState !== 'open') return;
   if (!shouldSpeakRealtimeNarration(spoken, { ...options, minGapMs: Number(options.minGapMs ?? 20000) || 20000 })) return;
   try {
+    if (await appendCodexBridgeRealtimeSpeech(connection, spoken)) return;
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
@@ -20158,6 +20226,26 @@ let voiceAgentRealtimeConnecting = null;
 let voiceAgentRealtimeListenMode = 'idle';      // 'idle' | 'push_to_talk' | 'always_listening'
 const voiceAgentRealtimeFunctionCallBuffers = new Map(); // call_id -> { name, argsStr }
 let voiceAgentRealtimeLastHotRestartSummaryKey = '';
+
+function stabilizeVoiceAgentRealtimeOutput(audio, stream) {
+  if (!audio || !stream) return false;
+  const forceFullElementVolume = () => {
+    if (audio.muted) audio.muted = false;
+    if (audio.defaultMuted) audio.defaultMuted = false;
+    if (Number(audio.volume || 0) < 0.999) audio.volume = 1;
+  };
+  forceFullElementVolume();
+  if (!audio.__prometheusRealtimeVolumeGuard) {
+    audio.__prometheusRealtimeVolumeGuard = true;
+    audio.addEventListener('volumechange', forceFullElementVolume);
+  }
+  // Keep WebRTC's native output route. Creating a MediaStreamDestination can
+  // leave desktop audio silent when the browser refuses to resume a new audio
+  // context after the stream arrives.
+  audio.srcObject = stream;
+  forceFullElementVolume();
+  return true;
+}
 
 // Quiet mode for the realtime end-to-end agent. We keep OpenAI's own STT running
 // (transcription stays on) but flip turn_detection.create_response OFF so the model
@@ -20490,6 +20578,7 @@ const voiceAgentRealtimeTurn = {
   pendingWorkerDispatch: null,
   recentTranscriptEvents: [],
 };
+let voiceAgentRealtimeCodexBridgeEventPoll = null;
 const REALTIME_HANDOFF_RECOVERY_ENABLED = false;
 const REALTIME_HANDOFF_CLAIM_RE = /\b(hand(?:ing|ed)?\s*(?:it|that|this)?\s*off|to the worker|kick(?:ing)?\s*(?:it|that)?\s*off|i('?ve|\s*have)?\s*started|getting started|i'?ll\s*(?:start|get|run|handle|take care)|on it|working on (?:it|that)|in progress|started (?:it|that|the|on)|spun? up|firing up)\b/i;
 
@@ -20719,12 +20808,43 @@ function isVoiceAgentRealtimeMode() {
   return false;
 }
 
+function installCodexV3RealtimeCommandGuard(dc) {
+  if (!dc || dc.__prometheusCodexV3Guard) return;
+  const nativeSend = dc.send.bind(dc);
+  // ChatGPT OAuth AVAS v3 carries microphone/audio over WebRTC, but its data
+  // channel is *not* the public OpenAI Realtime event API. Public commands
+  // such as conversation.item.create and response.create are rejected by v3
+  // (and were producing a toast per attempted context/history update). The
+  // session's voice, prompt, and client-managed Prometheus handoff policy are
+  // supplied by thread/realtime/start.
+  const publicRealtimeCommands = /^(?:conversation\.item\.create|response\..+|input_audio_buffer\..+|output_audio_buffer\..+|session\.update)$/;
+  dc.send = (payload) => {
+    let event = null;
+    try { event = typeof payload === 'string' ? JSON.parse(payload) : null; } catch {}
+    if (event && publicRealtimeCommands.test(String(event.type || ''))) {
+      if (window.__voiceAgentRealtimeDebug) console.debug('[voice-agent-realtime] skipped public command on Codex AVAS v3', event.type);
+      return;
+    }
+    return nativeSend(payload);
+  };
+  dc.__prometheusCodexV3Guard = true;
+}
+
 async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
   // Provider dispatch: xAI uses a native WebSocket transport, OpenAI uses WebRTC.
   if (wantsXaiRealtimeMode()) return startXaiRealtimeSession(sessionId, options);
   if (voiceAgentRealtimeConnection?.dc?.readyState === 'open') return voiceAgentRealtimeConnection;
   if (voiceAgentRealtimeConnecting) return voiceAgentRealtimeConnecting;
   const sid = String(sessionId || window.activeChatSessionId || 'default').trim() || 'default';
+  // The welcome screen is backed by a draft ID until its first real turn. A
+  // voice session is that first turn, so materialize it before transcript
+  // events arrive instead of silently dropping them against a missing session.
+  if (sid === String(window.activeChatSessionId || '').trim()) {
+    const session = ensureActiveChatSessionExists();
+    window.chatHistory = Array.isArray(session.history) ? session.history : (session.history = []);
+    window.processLogEntries = Array.isArray(session.processLog) ? session.processLog : (session.processLog = []);
+    try { saveChatSessions(); } catch {}
+  }
   const listenMode = String(options.listenMode || 'push_to_talk').trim();
   voiceAgentRealtimeListenMode = listenMode;
 
@@ -20781,7 +20901,7 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
     audio.muted = false;
     audio.volume = 1;
     pc.ontrack = (event) => {
-      audio.srcObject = event.streams[0];
+      stabilizeVoiceAgentRealtimeOutput(audio, event.streams[0]);
       audio.play?.().catch((err) => {
         console.warn('[voice-agent-realtime] audio playback blocked', err);
       });
@@ -20817,8 +20937,10 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sdp: offer.sdp,
+          ownerSessionId: sid,
           voice: bootstrap.voice,
           instructions: bootstrap.instructions,
+          tools: Array.isArray(bootstrap.tools) ? bootstrap.tools : [],
         }),
       });
       const bridgeResult = await sdpResp.json().catch(() => ({}));
@@ -20842,6 +20964,7 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
     answerSdp = `${String(answerSdp || '').replace(/\r\n|\r|\n/g, '\n').replace(/\s+$/g, '').replace(/\n/g, '\r\n')}\r\n`;
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     await dcOpen;
+    if (useCodexOauthBridge) installCodexV3RealtimeCommandGuard(dc);
     if (window.__voiceAgentRealtimeDebug) {
       console.debug('[voice-agent-realtime] data channel open; bootstrap', {
         model: bootstrap.model,
@@ -20912,12 +21035,13 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
       auth: useCodexOauthBridge ? 'chatgpt_oauth_app_server' : (bootstrap.auth || 'api_key'),
       codexBridgeSessionId,
     };
+    startCodexBridgeRealtimeEventPoll(voiceAgentRealtimeConnection);
     if (voiceAgentRealtimeQuiet.active) sendRealtimeAgentCreateResponseFlag(false);
     startVoiceAgentRealtimeContextRefreshLoop(voiceAgentRealtimeConnection);
     pc.addEventListener('connectionstatechange', () => {
       if (['closed', 'failed', 'disconnected'].includes(pc.connectionState)) {
         if (voiceAgentRealtimeConnection?.pc === pc) {
-          voiceAgentRealtimeConnection = null;
+          stopVoiceAgentRealtimeSession();
         }
       }
     });
@@ -20933,6 +21057,7 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
 
 function stopVoiceAgentRealtimeSession() {
   const conn = voiceAgentRealtimeConnection;
+  stopCodexBridgeRealtimeEventPoll();
   voiceAgentRealtimeConnection = null;
   voiceAgentRealtimeConnecting = null;
   voiceAgentRealtimeListenMode = 'idle';
@@ -21179,6 +21304,196 @@ function appendRealtimeAgentChatMessage(sessionId, role, text) {
   return finalizeRealtimeAgentChatTurn(sessionId, role, text);
 }
 
+function realtimeBridgeTranscriptRole(params = {}) {
+  const entry = params?.entry || params?.transcript || params?.item || params?.message || params || {};
+  const role = String(
+    params?.role || entry?.role || entry?.speaker || entry?.participant || entry?.item?.role || '',
+  ).toLowerCase();
+  return /^(user|human|input)$/.test(role) ? 'user' : 'ai';
+}
+
+function normalizeCodexBridgeRealtimeTranscript(notification = {}) {
+  const method = String(notification?.method || '');
+  const params = notification?.params || {};
+  if (method === 'thread/realtime/tool/call') {
+    return {
+      type: 'response.function_call_arguments.done',
+      call_id: String(params?.requestId || params?.callId || ''),
+      name: String(params?.tool || ''),
+      arguments: JSON.stringify(params?.arguments && typeof params.arguments === 'object' ? params.arguments : {}),
+      __prometheusCodexBridge: true,
+      __prometheusCodexToolCall: true,
+    };
+  }
+  if (/(?:handoff[\/_-]?requested|handoff_request)$/i.test(method)) {
+    return {
+      ...params,
+      type: 'handoff_request',
+      __prometheusCodexBridge: true,
+    };
+  }
+  if (!/^thread\/realtime\/transcript\/(?:delta|done)$/.test(method)) return null;
+  const entry = params?.entry || params?.transcript || params?.item || params?.message || params;
+  const role = realtimeBridgeTranscriptRole(params);
+  const done = /\/done$/.test(method);
+  const text = extractRealtimeAgentEventText(entry, { preferLongest: done })
+    || extractRealtimeAgentEventText(params, { preferLongest: done });
+  if (!text) return null;
+  const type = role === 'user'
+    ? `conversation.item.input_audio_transcription.${done ? 'completed' : 'delta'}`
+    : `response.audio_transcript.${done ? 'done' : 'delta'}`;
+  return {
+    ...entry,
+    type,
+    role,
+    item: { ...(entry?.item || {}), role },
+    ...(done ? { transcript: text } : { delta: text }),
+    __prometheusCodexBridge: true,
+  };
+}
+
+function shouldApplyCodexBridgeTranscriptFallback(event = {}) {
+  if (!event?.__prometheusCodexBridge) return true;
+  if (event?.__prometheusCodexToolCall) return true;
+  const type = String(event?.type || '');
+  if (type === 'handoff_request') return true;
+  const user = type.startsWith('conversation.item.input_audio_transcription');
+  const done = /(?:completed|\.done)$/.test(type);
+  const incoming = cleanVoiceSpeechText(extractRealtimeAgentEventText(event, { preferLongest: true }));
+  const live = cleanVoiceSpeechText(user
+    ? voiceAgentRealtimeTurn.liveUserTranscript
+    : voiceAgentRealtimeTurn.liveAssistantTranscript);
+  const final = cleanVoiceSpeechText(user
+    ? voiceAgentRealtimeTurn.lastUserTranscript
+    : voiceAgentRealtimeTurn.lastAssistantTranscript);
+  // The WebRTC data channel is the low-latency source. App-server events are
+  // retained as a reliable fallback/finalizer, but must not replay the same
+  // words halfway through an already visible live transcript.
+  if (!done) return !live;
+  if (!incoming) return !final;
+  const incomingKey = normalizeRealtimeAgentMatchText(incoming);
+  const currentKey = normalizeRealtimeAgentMatchText(live || final);
+  if (incomingKey && currentKey && (incomingKey === currentKey || currentKey.includes(incomingKey))) return false;
+  return true;
+}
+
+function sendCodexV3HandoffOutput(handoffId, outputText) {
+  const dc = voiceAgentRealtimeConnection?.dc;
+  const id = String(handoffId || '').trim();
+  if (!id || !dc || dc.readyState !== 'open') return false;
+  try {
+    // This is AVAS v3's client-managed-handoff completion event. It is not a
+    // public Realtime function-call output, so it intentionally bypasses the
+    // v3 public-command guard above.
+    dc.send(JSON.stringify({
+      type: 'conversation.handoff.append',
+      handoff_id: id,
+      output_text: String(outputText || '').slice(0, 12000),
+    }));
+    return true;
+  } catch (err) {
+    console.warn('[voice-agent-realtime] Codex v3 handoff output failed', err);
+    return false;
+  }
+}
+
+function codexV3HandoffResultText(result) {
+  const candidate = typeof result === 'string'
+    ? result
+    : (result?.text || result?.content || result?.message || result?.result || '');
+  const text = cleanVoiceSpeechText(typeof candidate === 'string' ? candidate : '');
+  return text || 'Prometheus completed the requested action. Summarize the result naturally for the user.';
+}
+
+async function handleCodexV3HandoffRequest(event, sessionId) {
+  const conn = voiceAgentRealtimeConnection;
+  const handoffId = String(event?.handoff_id || event?.handoffId || event?.id || '').trim();
+  if (!conn || !handoffId) return;
+  const seen = conn.codexV3Handoffs || (conn.codexV3Handoffs = new Set());
+  if (seen.has(handoffId)) return;
+  seen.add(handoffId);
+  if (seen.size > 64) seen.delete(seen.values().next().value);
+
+  const transcript = cleanVoiceSpeechText(
+    String(event?.active_transcript || event?.input_transcript || extractRealtimeAgentEventText(event, { preferLongest: true }) || ''),
+  );
+  if (!transcript) {
+    sendCodexV3HandoffOutput(handoffId, 'Prometheus could not recover the spoken request. Ask the user to repeat it briefly.');
+    return;
+  }
+
+  const entry = {
+    type: 'tool',
+    content: `Prometheus voice handoff: ${transcript.slice(0, 220)}`,
+    actor: 'Voice Agent (Prometheus)',
+    extra: { actor: 'Voice Agent (Prometheus)', action: 'prometheus_voice_handoff', transcript },
+    ts: new Date().toLocaleTimeString(),
+  };
+  addSessionProcessEntry(sessionId, entry.type, entry.content, entry.extra);
+  rememberVoiceAgentProcessEntries(sessionId, [entry]);
+
+  try {
+    if (typeof window.sendChat !== 'function') throw new Error('Prometheus chat runtime is unavailable.');
+    // The low-latency Realtime transcript already rendered a temporary user
+    // bubble. sendChat creates the durable Prometheus turn, so replace rather
+    // than duplicate that same spoken request in the chat history.
+    removeRecentRealtimeAgentChatMessage(sessionId, 'user', transcript);
+    const result = await window.sendChat(transcript, {
+      skipVoiceAgent: true,
+      voiceSource: 'codex_v3_client_managed_handoff',
+      sessionIdOverride: sessionId,
+    });
+    sendCodexV3HandoffOutput(handoffId, codexV3HandoffResultText(result));
+  } catch (err) {
+    const message = String(err?.message || err || 'The Prometheus handoff failed.');
+    addSessionProcessEntry(sessionId, 'error', `Prometheus voice handoff failed: ${message}`, { actor: 'Voice Agent (Prometheus)' });
+    sendCodexV3HandoffOutput(handoffId, `Prometheus could not complete that action: ${message}`);
+  }
+}
+
+function stopCodexBridgeRealtimeEventPoll() {
+  if (voiceAgentRealtimeCodexBridgeEventPoll) {
+    voiceAgentRealtimeCodexBridgeEventPoll.stopped = true;
+    try { voiceAgentRealtimeCodexBridgeEventPoll.controller?.abort?.(); } catch {}
+  }
+  voiceAgentRealtimeCodexBridgeEventPoll = null;
+}
+
+function startCodexBridgeRealtimeEventPoll(conn) {
+  stopCodexBridgeRealtimeEventPoll();
+  const bridgeSessionId = String(conn?.codexBridgeSessionId || '').trim();
+  if (!bridgeSessionId) return;
+  const poll = { conn, bridgeSessionId, afterId: 0, fetching: false, stopped: false, controller: null };
+  const run = async () => {
+    if (poll.fetching) return;
+    poll.fetching = true;
+    while (!poll.stopped && voiceAgentRealtimeConnection === conn) {
+      try {
+        poll.controller = new AbortController();
+        const response = await fetch(`/api/realtime/codex-bridge/events?sessionId=${encodeURIComponent(bridgeSessionId)}&afterId=${encodeURIComponent(poll.afterId)}`, {
+          cache: 'no-store', signal: poll.controller.signal,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data?.success === false) break;
+        for (const notification of (Array.isArray(data?.events) ? data.events : [])) {
+          poll.afterId = Math.max(poll.afterId, Number(notification?.id || 0) || 0);
+          const event = normalizeCodexBridgeRealtimeTranscript(notification);
+          if (event && shouldApplyCodexBridgeTranscriptFallback(event)) await handleVoiceAgentRealtimeEvent(event, conn.sessionId);
+        }
+        poll.afterId = Math.max(poll.afterId, Number(data?.latestId || 0) || 0);
+      } catch (err) {
+        if (!poll.stopped && window.__voiceAgentRealtimeDebug) console.warn('[voice-agent-realtime] Codex transcript relay failed', err);
+        if (!poll.stopped) await new Promise((resolve) => setTimeout(resolve, 250));
+      } finally {
+        poll.controller = null;
+      }
+    }
+    poll.fetching = false;
+  };
+  voiceAgentRealtimeCodexBridgeEventPoll = poll;
+  run();
+}
+
 // Disabled deterministic recovery: realtime must emit dispatch_prometheus_worker.
 // Do not infer a Worker handoff from assistant transcript text.
 function maybeRecoverHallucinatedRealtimeHandoff(sessionId) {
@@ -21206,6 +21521,16 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
     try {
       console.debug('[voice-agent-realtime] event', type, type === 'error' ? event?.error : (event?.transcript ?? event?.delta ?? ''));
     } catch {}
+  }
+
+  if (type === 'handoff_request') {
+    // The app-server owns AVAS handoff routing and resumes the Codex turn with
+    // the registered Prometheus dynamic tools. Treating this as a transcript
+    // fallback would bypass voice_thread_ops and incorrectly send every turn
+    // to the main Worker.
+    if (voiceAgentRealtimeConnection?.transport === 'codex_app_server') return;
+    await handleCodexV3HandoffRequest(event, sessionId);
+    return;
   }
 
   // Streaming function-call argument accumulation
@@ -21791,8 +22116,37 @@ async function downscaleDataUrlForRealtime(dataUrl, maxDim = 1280, quality = 0.8
 }
 
 async function sendVoiceAgentRealtimeFunctionOutput(callId, output, options = {}) {
-  const dc = voiceAgentRealtimeConnection?.dc;
-  if (!dc || dc.readyState !== 'open' || !callId) return;
+  const conn = voiceAgentRealtimeConnection;
+  if (!callId) return;
+  if (conn?.transport === 'codex_app_server' && conn?.codexBridgeSessionId) {
+    let success = options.success !== false;
+    try {
+      const parsed = JSON.parse(String(output || '{}'));
+      if (parsed?.ok === false || parsed?.success === false) success = false;
+    } catch {}
+    try {
+      const response = await fetch('/api/realtime/codex-bridge/tool-output', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: conn.codexBridgeSessionId,
+          requestId: String(callId),
+          output: String(output || ''),
+          success,
+          previewDataUrl: String(options?.preview?.dataUrl || ''),
+        }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data?.error || `Codex realtime tool output failed (${response.status})`);
+      }
+    } catch (err) {
+      addSessionProcessEntry(conn.sessionId || window.activeChatSessionId, 'error', `Realtime tool output failed: ${String(err?.message || err)}`, { actor: 'Voice Agent (Realtime)' });
+    }
+    return;
+  }
+  const dc = conn?.dc;
+  if (!dc || dc.readyState !== 'open') return;
   try {
     const preview = options.preview && typeof options.preview === 'object' ? options.preview : null;
     const previewDataUrl = String(preview?.dataUrl || '').trim();
@@ -42044,8 +42398,10 @@ async function speakDesktopVoiceWorkerAlert(update) {
   const text = String(update?.text || '').trim();
   if (!text) return;
   if (wantsVoiceAgentRealtimeMode()) {
-    const dc = voiceAgentRealtimeConnection?.dc;
+    const connection = voiceAgentRealtimeConnection;
+    const dc = connection?.dc;
     if (!dc || dc.readyState !== 'open') return;
+    if (await appendCodexBridgeRealtimeSpeech(connection, text)) return;
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {

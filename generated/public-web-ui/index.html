@@ -7878,6 +7878,10 @@ function handleSendStop() {
     stopGeneration();
     return;
   }
+  if (document.getElementById('send-btn')?.classList.contains('realtime-voice-stop')) {
+    window.toggleVoiceDictation?.();
+    return;
+  }
   const input = document.getElementById('chat-input');
   if (!(input?.value || '').trim() && !window.hasDesktopComposerOutboundContent?.()) {
     window.toggleVoiceDictation?.();

@@ -14588,7 +14588,8 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 /* ---------------- VOICE ---------------- */
 
 const PM_VOICE_SETTINGS_KEY = 'pm_voice_settings_v1';
-const REALTIME_VOICE_OPTIONS = ['marin', 'cedar', 'alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse'];
+const PUBLIC_REALTIME_VOICE_OPTIONS = ['marin', 'cedar', 'alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse'];
+const CODEX_AVAS_REALTIME_VOICE_OPTIONS = ['juniper', 'maple', 'spruce', 'ember', 'vale', 'breeze', 'arbor', 'sol', 'cove'];
 const SERVER_VOICE_FALLBACKS = {
   openai: [
     { id: 'alloy', label: 'Alloy' },
@@ -14611,8 +14612,41 @@ const SERVER_VOICE_FALLBACKS = {
     { id: 'sal', label: 'Sal' },
     { id: 'leo', label: 'Leo' },
   ],
-  openai_realtime: REALTIME_VOICE_OPTIONS.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1) })),
+  openai_realtime: PUBLIC_REALTIME_VOICE_OPTIONS.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1) })),
 };
+
+function _isMobileCodexAvasRealtime(status = __pmVoice?.lastVoiceStatus) {
+  const realtime = status?.realtime || {};
+  return realtime?.auth === 'chatgpt_oauth_app_server'
+    && realtime?.transport === 'codex_app_server'
+    && realtime?.codexBridgeAvailable === true;
+}
+
+function _mobileRealtimeVoiceOptions(status = __pmVoice?.lastVoiceStatus) {
+  const realtime = status?.realtime || {};
+  if (_isMobileCodexAvasRealtime(status)) {
+    const live = Array.isArray(realtime?.codexBridgeActiveVoices)
+      ? realtime.codexBridgeActiveVoices.map((voice) => String(voice || '').trim()).filter(Boolean)
+      : [];
+    return live.length ? [...new Set(live)] : [...CODEX_AVAS_REALTIME_VOICE_OPTIONS];
+  }
+  return [...PUBLIC_REALTIME_VOICE_OPTIONS];
+}
+
+function _mobileRealtimeDefaultVoice(status = __pmVoice?.lastVoiceStatus) {
+  const realtime = status?.realtime || {};
+  const options = _mobileRealtimeVoiceOptions(status);
+  const advertised = _isMobileCodexAvasRealtime(status)
+    ? String(realtime?.codexBridgeDefaultVoice || '').trim()
+    : 'marin';
+  return options.includes(advertised) ? advertised : (options[0] || 'marin');
+}
+
+function _mobileRealtimeVoice(value = __pmVoice?.settings?.realtimeVoice, status = __pmVoice?.lastVoiceStatus) {
+  const options = _mobileRealtimeVoiceOptions(status);
+  const voice = String(value || '').trim();
+  return options.includes(voice) ? voice : _mobileRealtimeDefaultVoice(status);
+}
 
 function _voicePresetForProviders(inputProvider, outputProvider) {
   const input = String(inputProvider || '').trim();
@@ -16257,14 +16291,27 @@ function _speakVoiceLiveStatus(text, options = {}) {
   __pmVoice.liveMilestoneTimer = setTimeout(flush, Math.min(600, Math.max(120, minGap)));
 }
 
-function _speakMobileRealtimeAgentMilestone(text, options = {}) {
+async function _appendMobileCodexBridgeRealtimeSpeech(connection, text) {
+  const sessionId = String(connection?.codexBridgeSessionId || '').trim();
+  const speakable = _cleanVoiceSpeechText(text);
+  if (connection?.transport !== 'codex_app_server' || !sessionId || !speakable) return false;
+  const data = await mobileGatewayFetch('/api/realtime/codex-bridge/speak', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId, text: speakable }),
+  });
+  if (data?.success === false) throw new Error(data?.error || 'Codex realtime speech append failed.');
+  return true;
+}
+
+async function _speakMobileRealtimeAgentMilestone(text, options = {}) {
   const spoken = _cleanVoiceSpeechText(text);
   if (!spoken || __pmVoice.dictation !== 'milestone') return;
   if (_voiceWorkerOutputBusy()) {
     setTimeout(() => _speakMobileRealtimeAgentMilestone(spoken, { ...options, force: true }), 750);
     return;
   }
-  const dc = __pmRealtimeAgent?.conn?.dc;
+  const connection = __pmRealtimeAgent?.conn;
+  const dc = connection?.dc;
   if (!dc || dc.readyState !== 'open') return;
   const now = Date.now();
   const recent = __pmVoice.milestoneRecent instanceof Map ? __pmVoice.milestoneRecent : new Map();
@@ -16280,6 +16327,7 @@ function _speakMobileRealtimeAgentMilestone(text, options = {}) {
   __pmVoice.lastMilestoneRealtimeAt = now;
   __pmVoice.lastVoiceMilestone = spoken.slice(0, 500);
   try {
+    if (await _appendMobileCodexBridgeRealtimeSpeech(connection, spoken)) return;
     dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
@@ -17832,6 +17880,26 @@ async function _persistRealtimeSubagentDirectReply(target, assistantText) {
 }
 
 
+function _installMobileCodexV3RealtimeCommandGuard(dc) {
+  if (!dc || dc.__prometheusCodexV3Guard) return;
+  const nativeSend = dc.send.bind(dc);
+  // AVAS v3 uses app-server-specific data-channel events. Browser-public
+  // Realtime commands are invalid here; voice/prompt/client-managed Prometheus
+  // handoffs came from the thread/realtime/start request that established this
+  // WebRTC call.
+  const publicRealtimeCommands = /^(?:conversation\.item\.create|response\..+|input_audio_buffer\..+|output_audio_buffer\..+|session\.update)$/;
+  dc.send = (payload) => {
+    let event = null;
+    try { event = typeof payload === 'string' ? JSON.parse(payload) : null; } catch {}
+    if (event && publicRealtimeCommands.test(String(event.type || ''))) {
+      _voiceDebug('codex-v3-public-command-skipped', { type: event.type });
+      return;
+    }
+    return nativeSend(payload);
+  };
+  dc.__prometheusCodexV3Guard = true;
+}
+
 async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
   if (_wantsMobileXaiRealtime()) return _startMobileXaiRealtimeSession(sessionId, options);
   let sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
@@ -17890,7 +17958,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       body: JSON.stringify({
         sessionId: sid,
         voiceTarget: _mobileVoiceTargetPayload(),
-        voice: String(__pmVoice?.settings?.realtimeVoice || 'marin'),
+        voice: _mobileRealtimeVoice(),
         speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
         voiceRuntime: wakePhrase
           ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true }
@@ -17995,8 +18063,10 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
         method: 'POST',
         body: JSON.stringify({
           sdp: offerSdp,
+          ownerSessionId: sid,
           voice: bootstrap.voice,
           instructions: bootstrap.instructions,
+          tools: Array.isArray(bootstrap.tools) ? bootstrap.tools : [],
         }),
       });
       if (!bridgeResult?.success) throw new Error(bridgeResult?.error || 'Codex OAuth realtime bridge failed');
@@ -18059,6 +18129,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     answerSdp = `${String(answerSdp || '').replace(/\r\n|\r|\n/g, '\n').replace(/\s+$/g, '').replace(/\n/g, '\r\n')}\r\n`;
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     await dcOpen;
+    if (useCodexOauthBridge) _installMobileCodexV3RealtimeCommandGuard(dc);
 
     // The backend bootstrap bakes server_vad turn detection into the minted
     // client secret for ALL modes (it never receives listenMode). Re-assert the
@@ -18080,7 +18151,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
               transcription: { model: 'gpt-realtime-whisper' },
             },
             output: {
-              voice: __pmVoice?.settings?.realtimeVoice || 'marin',
+              voice: _mobileRealtimeVoice(),
               speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
             },
           },
@@ -18121,6 +18192,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       auth: useCodexOauthBridge ? 'chatgpt_oauth_app_server' : (bootstrap.auth || 'api_key'),
       codexBridgeSessionId,
     };
+    _startMobileCodexBridgeRealtimeEventPoll(__pmRealtimeAgent.conn);
     if (__pmRealtimeAgent.quiet.active) _sendMobileRealtimeAgentCreateResponseFlag(false);
     const logState = (reason) => _voiceDebug('realtime-agent-pc-state', {
       sessionId: sid,
@@ -18139,7 +18211,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     pc.addEventListener('signalingstatechange', () => logState('signalingstatechange'));
     pc.addEventListener('connectionstatechange', () => {
       if (['closed', 'failed', 'disconnected'].includes(pc.connectionState) && __pmRealtimeAgent.conn?.pc === pc) {
-        __pmRealtimeAgent.conn = null;
+        _stopMobileRealtimeAgentSession();
       }
     });
     logState('ready');
@@ -18157,6 +18229,7 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
 
 function _stopMobileRealtimeAgentSession() {
   const conn = __pmRealtimeAgent.conn;
+  _stopMobileCodexBridgeRealtimeEventPoll();
   __pmRealtimeAgent.conn = null;
   __pmRealtimeAgent.connecting = null;
   __pmRealtimeAgent.connectingSessionId = '';
@@ -19284,6 +19357,175 @@ function _shouldIgnoreMobileRealtimeTranscriptForCurrentTurn(event = {}, type = 
   return false;
 }
 
+function _mobileCodexBridgeTranscriptRole(params = {}) {
+  const entry = params?.entry || params?.transcript || params?.item || params?.message || params || {};
+  const role = String(params?.role || entry?.role || entry?.speaker || entry?.participant || entry?.item?.role || '').toLowerCase();
+  return /^(user|human|input)$/.test(role) ? 'user' : 'ai';
+}
+
+function _mobileCodexBridgeEventText(value = {}) {
+  const entry = value?.entry || value?.transcript || value?.item || value?.message || value || {};
+  const candidates = [
+    entry?.transcript, entry?.text, entry?.delta, entry?.content, entry?.output_text, entry?.audio_transcript,
+    entry?.item?.transcript, entry?.item?.text, entry?.item?.content,
+  ];
+  if (Array.isArray(entry?.content)) candidates.push(...entry.content.map((part) => part?.transcript || part?.text || part?.content));
+  return candidates
+    .filter((candidate) => typeof candidate === 'string')
+    .map((candidate) => candidate.replace(/\s+/g, ' ').trim())
+    .sort((a, b) => b.length - a.length)[0] || '';
+}
+
+function _normalizeMobileCodexBridgeRealtimeTranscript(notification = {}) {
+  const method = String(notification?.method || '');
+  const params = notification?.params || {};
+  if (method === 'thread/realtime/tool/call') {
+    return {
+      type: 'response.function_call_arguments.done',
+      call_id: String(params?.requestId || params?.callId || ''),
+      name: String(params?.tool || ''),
+      arguments: JSON.stringify(params?.arguments && typeof params.arguments === 'object' ? params.arguments : {}),
+      __prometheusCodexBridge: true,
+      __prometheusCodexToolCall: true,
+    };
+  }
+  if (/(?:handoff[\/_-]?requested|handoff_request)$/i.test(method)) {
+    return { ...params, type: 'handoff_request', __prometheusCodexBridge: true };
+  }
+  if (!/^thread\/realtime\/transcript\/(?:delta|done)$/.test(method)) return null;
+  const entry = params?.entry || params?.transcript || params?.item || params?.message || params;
+  const role = _mobileCodexBridgeTranscriptRole(params);
+  const done = /\/done$/.test(method);
+  const text = _mobileCodexBridgeEventText(entry) || _mobileCodexBridgeEventText(params);
+  if (!text) return null;
+  return {
+    ...entry,
+    type: role === 'user'
+      ? `conversation.item.input_audio_transcription.${done ? 'completed' : 'delta'}`
+      : `response.audio_transcript.${done ? 'done' : 'delta'}`,
+    role,
+    item: { ...(entry?.item || {}), role },
+    ...(done ? { transcript: text } : { delta: text }),
+    __prometheusCodexBridge: true,
+  };
+}
+
+function _shouldApplyMobileCodexBridgeTranscriptFallback(event = {}) {
+  if (!event?.__prometheusCodexBridge) return true;
+  if (event?.__prometheusCodexToolCall) return true;
+  const type = String(event?.type || '');
+  if (type === 'handoff_request') return true;
+  const user = type.startsWith('conversation.item.input_audio_transcription');
+  const done = /(?:completed|\.done)$/.test(type);
+  const clean = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const incoming = clean(_mobileCodexBridgeEventText(event));
+  const live = clean(user ? __pmRealtimeAgent.turn.liveUserTranscript : __pmRealtimeAgent.turn.liveAssistantTranscript);
+  const final = clean(user ? __pmRealtimeAgent.turn.lastUserTranscript : __pmRealtimeAgent.turn.lastAssistantTranscript);
+  // WebRTC transcript events render alongside the first spoken audio. The
+  // app-server feed is only a fallback so it cannot replay a delayed copy.
+  if (!done) return !live;
+  const current = live || final;
+  if (incoming && current && (incoming === current || current.includes(incoming))) return false;
+  return true;
+}
+
+function _sendMobileCodexV3HandoffOutput(handoffId, outputText) {
+  const dc = __pmRealtimeAgent?.conn?.dc;
+  const id = String(handoffId || '').trim();
+  if (!id || !dc || dc.readyState !== 'open') return false;
+  try {
+    dc.send(JSON.stringify({
+      type: 'conversation.handoff.append',
+      handoff_id: id,
+      output_text: String(outputText || '').slice(0, 12000),
+    }));
+    return true;
+  } catch (err) {
+    _voiceDebug('codex-v3-handoff-output-failed', { message: err?.message || String(err) });
+    return false;
+  }
+}
+
+async function _handleMobileCodexV3HandoffRequest(event, sessionId) {
+  const conn = __pmRealtimeAgent?.conn;
+  const handoffId = String(event?.handoff_id || event?.handoffId || event?.id || '').trim();
+  if (!conn || !handoffId) return;
+  const seen = conn.codexV3Handoffs || (conn.codexV3Handoffs = new Set());
+  if (seen.has(handoffId)) return;
+  seen.add(handoffId);
+  if (seen.size > 64) seen.delete(seen.values().next().value);
+  const transcript = _cleanVoiceSpeechText(String(
+    event?.active_transcript || event?.input_transcript || _mobileCodexBridgeEventText(event) || '',
+  ));
+  if (!transcript) {
+    _sendMobileCodexV3HandoffOutput(handoffId, 'Prometheus could not recover the spoken request. Ask the user to repeat it briefly.');
+    return;
+  }
+
+  const trace = _startMobileRealtimeAgentToolTrace(sessionId, 'prometheus_voice_handoff', { task: transcript }, {
+    source: 'codex_v3_client_managed_handoff',
+  });
+  const recent = _addRealtimeAgentRecentCommand('prometheus_voice_handoff', { task: transcript });
+  __pmVoice.showToolStatus?.('Prometheus handoff', 'Prometheus is handling this request');
+  try {
+    if (typeof __pmRealtimeAgent.submitToWorker !== 'function') throw new Error('Prometheus chat runtime is unavailable.');
+    _removeMobileRealtimeAgentChatTurn(sessionId, 'user', transcript);
+    const result = await __pmRealtimeAgent.submitToWorker(transcript, {
+      source: 'codex_v3_client_managed_handoff',
+      skipVoiceAgentHandoff: true,
+      visibleTranscript: transcript,
+    });
+    const ok = result !== false;
+    const summary = ok ? 'Prometheus accepted the request and is streaming the work in chat.' : 'Prometheus did not accept the request.';
+    _finishMobileRealtimeAgentToolTrace(sessionId, trace, 'prometheus_voice_handoff', { task: transcript }, ok, summary, {
+      source: 'codex_v3_client_managed_handoff',
+    });
+    _finishRealtimeAgentRecentCommand(recent, ok, summary);
+    _sendMobileCodexV3HandoffOutput(handoffId, summary);
+  } catch (err) {
+    const message = String(err?.message || err || 'The Prometheus handoff failed.');
+    _finishMobileRealtimeAgentToolTrace(sessionId, trace, 'prometheus_voice_handoff', { task: transcript }, false, message, {
+      source: 'codex_v3_client_managed_handoff',
+    });
+    _finishRealtimeAgentRecentCommand(recent, false, message);
+    _sendMobileCodexV3HandoffOutput(handoffId, `Prometheus could not complete that action: ${message}`);
+  }
+}
+
+function _stopMobileCodexBridgeRealtimeEventPoll() {
+  const poll = __pmRealtimeAgent?.codexBridgeEventPoll;
+  if (poll?.timer) clearInterval(poll.timer);
+  if (__pmRealtimeAgent) __pmRealtimeAgent.codexBridgeEventPoll = null;
+}
+
+function _startMobileCodexBridgeRealtimeEventPoll(conn) {
+  _stopMobileCodexBridgeRealtimeEventPoll();
+  const bridgeSessionId = String(conn?.codexBridgeSessionId || '').trim();
+  if (!bridgeSessionId) return;
+  const poll = { conn, bridgeSessionId, afterId: 0, fetching: false, timer: null };
+  const run = async () => {
+    if (poll.fetching || __pmRealtimeAgent?.conn !== conn) return;
+    poll.fetching = true;
+    try {
+      const data = await mobileGatewayFetch(`/api/realtime/codex-bridge/events?sessionId=${encodeURIComponent(bridgeSessionId)}&afterId=${encodeURIComponent(poll.afterId)}`, { method: 'GET' });
+      if (!data?.success) return;
+      for (const notification of (Array.isArray(data?.events) ? data.events : [])) {
+        poll.afterId = Math.max(poll.afterId, Number(notification?.id || 0) || 0);
+        const event = _normalizeMobileCodexBridgeRealtimeTranscript(notification);
+        if (event && _shouldApplyMobileCodexBridgeTranscriptFallback(event)) await _handleMobileRealtimeAgentEvent(event, conn.sessionId);
+      }
+      poll.afterId = Math.max(poll.afterId, Number(data?.latestId || 0) || 0);
+    } catch (err) {
+      _voiceDebug('codex-bridge-transcript-relay-failed', { message: err?.message || String(err) });
+    } finally {
+      poll.fetching = false;
+    }
+  };
+  poll.timer = setInterval(run, 350);
+  __pmRealtimeAgent.codexBridgeEventPoll = poll;
+  run();
+}
+
 async function _handleMobileRealtimeAgentEvent(event, sessionId) {
   sessionId = _mobileRealtimeAgentEffectiveSessionId(sessionId);
   const type = String(event?.type || '');
@@ -19322,6 +19564,11 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     responseStatus: event?.response?.status || '',
     keys: event && typeof event === 'object' ? Object.keys(event).slice(0, 12) : [],
   });
+  if (type === 'handoff_request') {
+    if (__pmRealtimeAgent?.conn?.transport === 'codex_app_server') return;
+    await _handleMobileCodexV3HandoffRequest(event, sessionId);
+    return;
+  }
   if (type === 'response.audio.delta' || type === 'response.output_audio.delta') {
     const b64 = String(event?.delta || event?.audio || '');
     if (b64) {
@@ -20321,8 +20568,32 @@ async function _downscaleDataUrlForRealtime(dataUrl, maxDim = 960, quality = 0.7
 }
 
 async function _sendMobileRealtimeAgentFunctionOutput(callId, output, options = {}) {
-  const dc = __pmRealtimeAgent.conn?.dc;
-  if (!dc || dc.readyState !== 'open' || !callId) return;
+  const conn = __pmRealtimeAgent.conn;
+  if (!callId) return;
+  if (conn?.transport === 'codex_app_server' && conn?.codexBridgeSessionId) {
+    let success = options.success !== false;
+    try {
+      const parsed = JSON.parse(String(output || '{}'));
+      if (parsed?.ok === false || parsed?.success === false) success = false;
+    } catch {}
+    try {
+      await mobileGatewayFetch('/api/realtime/codex-bridge/tool-output', {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionId: conn.codexBridgeSessionId,
+          requestId: String(callId),
+          output: String(output || ''),
+          success,
+          previewDataUrl: String(options?.preview?.dataUrl || ''),
+        }),
+      });
+    } catch (err) {
+      _voiceDebug('codex-v3-tool-output-failed', { callId: String(callId), message: String(err?.message || err) });
+    }
+    return;
+  }
+  const dc = conn?.dc;
+  if (!dc || dc.readyState !== 'open') return;
   try {
     const preview = options.preview && typeof options.preview === 'object' ? options.preview : null;
     const previewDataUrl = String(preview?.dataUrl || '').trim();
@@ -21583,7 +21854,7 @@ async function _trySubmitVoiceAsLiveSteer(sessionId, transcript = '') {
   }
 }
 
-async function _prepareVoiceAgentHandoff(sessionId, transcript = '') {
+async function _prepareVoiceAgentHandoff(sessionId, transcript = '', options = {}) {
   const sid = String(sessionId || '').trim();
   const text = String(transcript || '').trim();
   if (!sid || !text) return { shouldContinueToWorker: true, result: null };
@@ -22959,8 +23230,10 @@ void main() {
     await _waitForVoiceWorkerOutputIdle();
     const text = String(update?.text || '').trim();
     if (!text) return;
-    const dc = __pmRealtimeAgent?.conn?.dc;
+    const connection = __pmRealtimeAgent?.conn;
+    const dc = connection?.dc;
     if (dc?.readyState === 'open') {
+      if (await _appendMobileCodexBridgeRealtimeSpeech(connection, text)) return;
       dc.send(JSON.stringify({
         type: 'conversation.item.create',
         item: {
@@ -23716,9 +23989,15 @@ void main() {
     if (advancedToggle) advancedToggle.style.display = 'none';
     if (advancedPanel) advancedPanel.style.display = 'none';
     const selectedServerTts = outputProvider === 'xai' && _routingProviderReady('xai', 'output') ? 'xai' : '';
-    realtimeVoiceSelect.innerHTML = REALTIME_VOICE_OPTIONS
-      .map(id => _providerOptionHtml(id, id[0].toUpperCase() + id.slice(1), settings.realtimeVoice || 'marin'))
+    const realtimeVoiceOptions = _mobileRealtimeVoiceOptions(__pmVoice.lastVoiceStatus);
+    const selectedRealtimeVoice = _mobileRealtimeVoice(settings.realtimeVoice, __pmVoice.lastVoiceStatus);
+    realtimeVoiceSelect.innerHTML = realtimeVoiceOptions
+      .map(id => _providerOptionHtml(id, id[0].toUpperCase() + id.slice(1), selectedRealtimeVoice))
       .join('');
+    realtimeVoiceSelect.value = selectedRealtimeVoice;
+    if (selectedRealtimeVoice !== settings.realtimeVoice) {
+      _saveVoiceSettings({ realtimeVoice: selectedRealtimeVoice });
+    }
     if (realtimeVoiceLabel) realtimeVoiceLabel.style.display = outputProvider === 'openai_realtime' ? '' : 'none';
     if (selectedServerTts && serverVoiceLabel && serverVoiceSelect) {
       serverVoiceLabel.style.display = '';

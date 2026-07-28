@@ -291,6 +291,56 @@ try {
   assert.ok(cycleCalls.every((call) => call.sessionId === 'owner_cycles'));
   assert.ok(cycleCalls.every((call) => call.prompt.includes(expectedRunId) && call.prompt.includes('SAME durable supervisory workflow')));
 
+  // When the owner has an active Voice Agent, the managed-thread event must
+  // re-enter AVAS and must never fall through to the owner chat Worker.
+  makeSession('owner_voice', 'Voice owner');
+  makeSession('target_voice', 'Voice target');
+  const voiceOwned = supervisionApi.createThreadSupervision({
+    ownerSessionId: 'owner_voice',
+    targetSessionId: 'target_voice',
+    objective: 'Return this result to the active voice surface.',
+    minReviewIntervalMs: 1,
+  });
+  addAssistant('target_voice', 'The voice-owned target completed with verified evidence.');
+  let voiceReviewCalls = 0;
+  let ownerChatWorkerCalls = 0;
+  const voiceReviewEvents: any[] = [];
+  const voiceController = new controllerApi.ActiveThreadSupervisionController({
+    broadcast: (event: any) => voiceReviewEvents.push(event),
+    routeOwnerReviewToVoice: async (ownerSessionId: string, prompt: string) => {
+      voiceReviewCalls += 1;
+      assert.equal(ownerSessionId, 'owner_voice');
+      assert.match(prompt, /\bvoice_thread_ops\b/);
+      assert.doesNotMatch(prompt, /\bprometheus_thread_ops\b/);
+      const current = supervisionApi.getThreadSupervision(voiceOwned.id)!;
+      supervisionApi.resolveThreadSupervisionReview({
+        ownerSessionId,
+        supervisionId: current.id,
+        reviewEventId: current.leasedEventId!,
+        decision: 'verified_complete',
+        progressMade: true,
+        reason: 'The active Voice Agent verified the managed-thread result.',
+        evidence: ['Target evidence was returned directly to Voice.'],
+        broadcast: (event: any) => voiceReviewEvents.push(event),
+      });
+      return true;
+    },
+    runInteractiveTurn: async () => {
+      ownerChatWorkerCalls += 1;
+      return { type: 'chat', text: 'This Worker path must not run.' };
+    },
+  });
+  await voiceController.tick();
+  assert.equal(voiceReviewCalls, 1);
+  assert.equal(ownerChatWorkerCalls, 0, 'active Voice ownership must prevent the owner chat Worker from running');
+  assert.equal(supervisionApi.getThreadSupervision(voiceOwned.id)?.status, 'complete');
+  assert.equal(supervisionApi.getThreadSupervision(voiceOwned.id)?.reviewDeliverySurface, 'voice');
+  assert.equal(
+    voiceReviewEvents.filter((event) => event.type === 'voice_worker_update').length,
+    0,
+    'AVAS already speaks its own review, so terminal notification must not synthesize duplicate audio',
+  );
+
   // Interim output from an active target is retained but not reviewed until
   // the worker becomes idle, avoiding a competing manager turn.
   makeSession('owner_active_wait', 'Active wait owner');
