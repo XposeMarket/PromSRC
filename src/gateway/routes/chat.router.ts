@@ -17905,6 +17905,9 @@ const REALTIME_AGENT_CLIENT_SECRETS_ENDPOINT = 'https://api.openai.com/v1/realti
 const DEFAULT_REALTIME_AGENT_MODEL = 'gpt-realtime-2';
 const DEFAULT_REALTIME_AGENT_VOICE = 'marin';
 const DEFAULT_REALTIME_AGENT_TRANSCRIPTION_MODEL = 'gpt-realtime-whisper';
+const PUBLIC_REALTIME_AGENT_VOICE_IDS = new Set([
+  'alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar',
+]);
 const REALTIME_AGENT_INSTRUCTIONS_MAX = 18000;
 const realtimeAgentCallTokens = new Map<string, {
   clientSecret: string;
@@ -17999,6 +18002,11 @@ async function getRealtimeAgentAuthCandidates(): Promise<RealtimeAgentAuthCandid
 function sanitizeRealtimeAgentVoice(value: unknown): string {
   const voice = String(value || DEFAULT_REALTIME_AGENT_VOICE).trim();
   return /^[a-zA-Z0-9._:-]+$/.test(voice) ? voice : DEFAULT_REALTIME_AGENT_VOICE;
+}
+
+function sanitizePublicRealtimeAgentVoice(value: unknown): string {
+  const voice = sanitizeRealtimeAgentVoice(value).toLowerCase();
+  return PUBLIC_REALTIME_AGENT_VOICE_IDS.has(voice) ? voice : DEFAULT_REALTIME_AGENT_VOICE;
 }
 
 function sanitizeRealtimeAgentModel(value: unknown): string {
@@ -18247,7 +18255,12 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
     const tools = buildRealtimeVoiceAgentTools(voiceTarget);
 
     const model = sanitizeRealtimeAgentModel(body.model);
-    const voice = sanitizeRealtimeAgentVoice(body.voice);
+    // AVAS voices (for example `juniper`) are valid only when this route is
+    // context-only for the Codex app-server bridge. A public V2 session must
+    // use a voice accepted by the public Realtime endpoint.
+    const voice = body.contextOnly === true
+      ? sanitizeRealtimeAgentVoice(body.voice)
+      : sanitizePublicRealtimeAgentVoice(body.voice);
     const speed = sanitizeRealtimeAgentSpeed(body.speed);
     if (body.contextOnly === true) {
       res.setHeader('Cache-Control', 'no-store');

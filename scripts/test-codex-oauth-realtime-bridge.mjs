@@ -16,6 +16,10 @@ const chatPage = read('web-ui/src/pages/ChatPage.js');
 const generatedChatPage = read('generated/public-web-ui/static/pages/ChatPage.js');
 const mobilePages = read('web-ui/src/mobile/mobile-pages.js');
 const generatedMobilePages = read('generated/public-web-ui/static/mobile/mobile-pages.js');
+const mobileRouter = read('web-ui/src/mobile/mobile-router.js');
+const mobileShell = read('web-ui/index.html');
+const mobileServiceWorker = read('web-ui/service-worker.js');
+const generatedMobileServiceWorker = read('generated/public-web-ui/service-worker.js');
 
 assert.match(bridge, /account\?\.type !== 'chatgpt'/, 'bridge must reject non-ChatGPT app-server accounts');
 assert.match(bridge, /\['app-server', '--listen', 'stdio:\/\/', '--enable', 'realtime_conversation'\]/, 'bridge must launch the experimental app-server transport');
@@ -24,6 +28,12 @@ assert.match(bridge, /'Codex\.app', 'Contents', 'Resources', 'codex'/, 'bridge m
 assert.match(bridge, /this\.request\('thread\/realtime\/start'/, 'bridge must use thread/realtime/start');
 assert.match(bridge, /version: REALTIME_CONVERSATION_VERSION/, 'bridge must explicitly select the AVAS Realtime protocol instead of inheriting the app-server v1 default');
 assert.match(bridge, /REALTIME_CONVERSATION_VERSION = 'v3'/, 'bridge must use the current AVAS-compatible Realtime v3 protocol');
+assert.match(bridge, /REALTIME_VOICE_CATALOG_VERSION = 'v1'/, 'AVAS conversation v3 must preserve the Codex v1 voice catalog');
+assert.match(bridge, /voicesResult\?\.voices\?\.v1/, 'bridge status must advertise Codex voices accepted by AVAS conversation v3');
+assert.match(bridge, /defaultV1/, 'bridge status must advertise the v3-compatible Codex default voice');
+assert.match(bridge, /MIN_CODEX_LIVE_VERSION = \[0, 146, 0\]/, 'bridge must reject runtimes that predate Codex Voice/Live v3');
+assert.match(bridge, /refusing to fall back to public Realtime Voice v2/, 'outdated runtimes must fail closed instead of silently selecting public Realtime Voice');
+assert.match(bridge, /voice: resolvedVoice/, 'bridge must normalize stale client voices before starting AVAS v3');
 assert.doesNotMatch(bridge, /clientManagedHandoffs: true/, 'v3 client-managed handoffs are not a Prometheus tool-delegation API');
 assert.match(bridge, /dynamicTools: Array\.isArray\(input\.tools\)/, 'Codex OAuth threads must receive the canonical Prometheus voice tools');
 assert.match(bridge, /method === 'item\/tool\/call'/, 'bridge must receive Codex dynamic-tool requests');
@@ -38,6 +48,8 @@ assert.match(router, /\/api\/realtime\/codex-bridge\/call/, 'gateway must expose
 assert.match(router, /auth: 'chatgpt_oauth_app_server'/, 'bridge responses must identify ChatGPT OAuth app-server auth');
 assert.match(router, /codexBridgeActiveVoices: codexBridge\.activeVoices/, 'gateway status must expose the active AVAS voice family');
 assert.match(router, /codexBridgeDefaultVoice: codexBridge\.defaultVoice/, 'gateway status must expose the active AVAS default voice');
+assert.match(router, /codexBridgeVoiceVersion: codexBridge\.voiceVersion/, 'gateway status must distinguish the voice catalog version from the AVAS conversation version');
+assert.match(router, /codexBridgeRuntimeVersion: codexBridge\.runtimeVersion/, 'gateway status must expose the Codex runtime serving Voice/Live');
 assert.match(router, /\/api\/realtime\/codex-bridge\/events/, 'gateway must expose Codex app-server transcript events to the UI');
 assert.match(router, /\/api\/realtime\/codex-bridge\/tool-output/, 'gateway must expose the Codex dynamic-tool result bridge');
 assert.match(router, /\/api\/realtime\/codex-bridge\/speak/, 'gateway must expose the Codex active-session speech bridge');
@@ -66,6 +78,12 @@ assert.match(mobilePages, /\/api\/realtime\/codex-bridge\/call/, 'mobile voice m
 assert.match(mobilePages, /_startMobileCodexBridgeRealtimeEventPoll/, 'mobile voice must render Codex app-server transcript events');
 assert.match(mobilePages, /_shouldApplyMobileCodexBridgeTranscriptFallback/, 'mobile must prefer low-latency WebRTC transcripts and use the bridge as a fallback');
 assert.match(mobilePages, /_installMobileCodexV3RealtimeCommandGuard/, 'mobile must not send public Realtime commands into the AVAS v3 data channel');
+assert.match(mobilePages, /function _isMobileCodexV3RealtimeConnection\(/, 'mobile must identify AVAS v3 before selecting its control path');
+assert.match(mobilePages, /codex-v3-session-native-turn-control/, 'mobile AVAS v3 must not configure the public Realtime data channel');
+assert.match(mobilePages, /codex-v3-ptt-release-server-vad/, 'mobile PTT must close AVAS turns by gating the mic instead of sending public commit/create events');
+assert.match(mobilePages, /realtime-agent-ptt-bootstrap-resolved/, 'mobile PTT must ignore a press released before WebRTC finishes connecting');
+assert.match(mobilePages, /codex-v3-skill-context-managed-by-thread/, 'mobile AVAS v3 must not inject public conversation items after a transcript');
+assert.match(mobilePages, /direct: useCodexOauthBridge/, 'mobile AVAS output must use direct WebRTC playback on iOS');
 assert.match(mobilePages, /tools: Array\.isArray\(bootstrap\.tools\)/, 'mobile must register canonical voice tools on the Codex thread');
 assert.match(mobilePages, /ownerSessionId: sid/, 'mobile must bind the AVAS session to its Prometheus owner chat');
 assert.match(mobilePages, /thread\/realtime\/tool\/call/, 'mobile must execute Codex dynamic-tool requests through the voice executor');
@@ -78,6 +96,19 @@ assert.match(mobilePages, /_clearMobileRealtimeAgentOutputAudioIfStarted\('quiet
 assert.match(mobilePages, /function _ensureMobileRealtimeAgentTurnOrder\(/, 'mobile realtime must repair transcript/response ordering races');
 assert.match(mobilePages, /_restartMobileRealtimeAgentForSettings\('openai_voice_changed'\)/, 'voice changes must restart OpenAI realtime sessions');
 assert.match(mobilePages, /_prewarmMobileCodexRealtimeBridge\(\)/, 'mobile voice must prewarm the Codex bridge');
+assert.doesNotMatch(mobilePages, /codexBridgeRealtimeVersion \|\| ''\)\.trim\(\)\.toLowerCase\(\) === 'v3'/, 'mobile must not reject a healthy Codex bridge when a cached status omits its informational version');
+assert.match(mobilePages, /const requiresCodexOauthBridge =/, 'mobile must require the app-server bridge when ChatGPT OAuth is the only configured OpenAI auth');
+assert.match(mobilePages, /public Realtime v2 fallback is disabled/, 'mobile ChatGPT OAuth must fail closed instead of silently entering public v2');
+assert.match(mobilePages, /Codex OAuth realtime v3 bridge returned an invalid SDP answer/, 'mobile must fail an invalid v3 bridge response instead of falling through to v2');
+assert.match(mobilePages, /if \(useCodexOauthBridge\)[\s\S]{0,2500}?else \{[\s\S]{0,3000}?mobileGatewayTextFetch/s, 'mobile public Realtime fallbacks must stay outside the selected v3 bridge path');
+assert.match(generatedMobilePages, /Codex OAuth realtime v3 bridge returned an invalid SDP answer/, 'generated mobile UI must keep the v3-only bridge path');
+assert.match(mobileShell, /mobile-codex-live-v3-v5/, 'mobile entrypoint must invalidate the prior mislabeled Realtime router bundle');
+assert.match(mobileRouter, /mobile-codex-live-v3-v5/, 'mobile router must invalidate the prior mislabeled Realtime modules');
+assert.match(mobilePages, /Codex Voice \/ Live/, 'mobile must label the OAuth app-server transport as Codex Voice / Live');
+assert.match(mobileServiceWorker, /const VERSION = 'pm-v\d+-2026-07-29-[^']+'/, 'mobile service worker must carry a versioned cache revision that purges pre-v3 bundles');
+assert.doesNotMatch(mobileServiceWorker, /pm-v210-2026-07-29-mobile-realtime-v3/, 'mobile service worker must not retain the pre-v3 cache revision');
+assert.match(generatedMobileServiceWorker, /const VERSION = 'pm-v\d+-2026-07-29-[^']+'/, 'generated service worker must carry the current cache revision');
+assert.doesNotMatch(generatedMobileServiceWorker, /pm-v210-2026-07-29-mobile-realtime-v3/, 'generated service worker must not retain the pre-v3 cache revision');
 assert.match(mobilePages, /function _appendMobileRealtimeTranscriptDelta\(/, 'streamed transcript deltas must retain word boundaries');
 assert.match(mobilePages, /voiceRealtimeMediaLastTime/, 'lyric timing must use a per-turn media playback clock');
 assert.match(mobilePages, /rawDeltaMs < 750/, 'lyric timing must ignore historical WebRTC media-clock jumps');
@@ -85,7 +116,11 @@ assert.doesNotMatch(mobilePages, /liveVoiceHtml \|\|/, 'normal mobile chat bubbl
 assert.match(chatPage, /function appendRealtimeAgentTranscriptDelta\(/, 'desktop streamed transcripts must retain word boundaries');
 assert.match(chatPage, /function currentRealtimeVoiceIds\(/, 'desktop must render the live transport-specific Realtime voice list');
 assert.match(mobilePages, /function _mobileRealtimeVoiceOptions\(/, 'mobile must render the live transport-specific Realtime voice list');
-assert.match(mobilePages, /voice: _mobileRealtimeVoice\(\)/, 'mobile AVAS bootstrap must normalize stale voices against the live catalog');
+assert.match(mobilePages, /const selectedRealtimeVoice = _mobileRealtimeVoice\(/, 'mobile must select a voice from the exact realtime transport status');
+assert.match(mobilePages, /voice: selectedRealtimeVoice/, 'mobile bootstrap and public session updates must use the transport-selected voice');
+assert.match(mobilePages, /const selectedVoiceStatus = useCodexOauthBridge/, 'mobile must choose AVAS or public-v2 voices from the transport selected for that attempt');
+assert.match(mobilePages, /prewarmedRealtimeStatus[\s\S]{0,500}?mobileGatewayFetch\('\/api\/realtime\/status'/, 'mobile must retry status after a failed bridge prewarm instead of silently taking the public fallback');
+assert.match(chatRouter, /sanitizePublicRealtimeAgentVoice/, 'the public Realtime bootstrap must reject AVAS-only voices');
 assert.match(supervisionController, /routeOwnerReviewToVoice/, 'managed-thread supervision must prefer the active Voice Agent over the owner chat Worker');
 assert.match(supervisionController, /if \(routedToVoice\) return;/, 'a Voice-routed review must not fall through into runInteractiveTurn');
 

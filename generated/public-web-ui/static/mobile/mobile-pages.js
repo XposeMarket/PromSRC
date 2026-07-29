@@ -12288,7 +12288,7 @@ void main() {
     const settings = __pmVoice?.settings || {};
     const mode = String(settings.voiceMode || 'default');
     const provider = String(settings.ttsProvider || __pmVoice?.provider?.ttsProvider || _outputProviderForMode(mode) || 'browser');
-    if (provider === 'openai_realtime') return `OpenAI Realtime · ${String(settings.realtimeVoice || __pmVoice?.provider?.voice || 'saved voice')}`;
+    if (provider === 'openai_realtime') return `${_mobileRealtimeProviderLabel()} · ${String(settings.realtimeVoice || __pmVoice?.provider?.voice || 'saved voice')}`;
     if (provider === 'xai') return `xAI / Grok · ${String(settings.serverVoice || __pmVoice?.provider?.ttsVoice || 'saved voice')}`;
     if (provider === 'openai') return `OpenAI · ${String(settings.serverVoice || __pmVoice?.provider?.ttsVoice || 'saved voice')}`;
     return 'Browser voice';
@@ -14726,6 +14726,16 @@ function _mobileRealtimeTurnDetectionForListenMode(listenMode, settings = __pmVo
   };
 }
 
+function _mobileRealtimeProviderLabel(status = __pmVoice?.lastVoiceStatus) {
+  return _isMobileCodexAvasRealtime(status) ? 'Codex Voice / Live' : 'OpenAI Realtime';
+}
+
+function _isMobileCodexV3RealtimeConnection(conn = __pmRealtimeAgent?.conn) {
+  // The mobile client only selects this transport when status reports AVAS v3.
+  // Its WebRTC data channel is not the public OpenAI Realtime event protocol.
+  return conn?.transport === 'codex_app_server';
+}
+
 function _sendMobileRealtimeAgentSessionUpdateFromSettings(reason = 'settings_live_update') {
   const conn = __pmRealtimeAgent?.conn;
   const dc = conn?.dc;
@@ -14733,9 +14743,29 @@ function _sendMobileRealtimeAgentSessionUpdateFromSettings(reason = 'settings_li
   const settings = __pmVoice?.settings || {};
   const listenMode = _mobileRealtimeListenModeFromSettings(settings);
   const turnDetection = _mobileRealtimeTurnDetectionForListenMode(listenMode, settings);
+  // A public Realtime fallback must never inherit an AVAS-only voice saved
+  // while the Codex OAuth bridge was active (for example, `juniper`).
+  const realtimeVoiceStatus = conn.transport === 'codex_app_server'
+    ? __pmVoice?.lastVoiceStatus
+    : { realtime: {} };
+  const realtimeVoice = _mobileRealtimeVoice(settings.realtimeVoice, realtimeVoiceStatus);
   conn.listenMode = listenMode;
   __pmRealtimeAgent.listenMode = listenMode;
   _syncMobileRealtimeAgentQuietFromSettings?.();
+  if (_isMobileCodexV3RealtimeConnection(conn)) {
+    // AVAS v3 rejects public `session.update` events. It owns VAD/turn
+    // lifecycle from thread/realtime/start; PTT gates only the mic track.
+    const ptt = __pmRealtimeAgent.ptt || {};
+    const shouldEnable = listenMode === 'always_listening'
+      || (ptt.held === true && String(ptt.sessionId || '') === String(conn.sessionId || ''));
+    _setMobileRealtimeAgentMicEnabled(shouldEnable);
+    _voiceDebug?.('codex-v3-session-settings-applied-natively', {
+      reason,
+      listenMode,
+      micEnabled: shouldEnable,
+    });
+    return true;
+  }
   try {
     if (conn.provider === 'xai') {
       const speed = Number(settings.xaiSpeed || 1.0);
@@ -14763,7 +14793,7 @@ function _sendMobileRealtimeAgentSessionUpdateFromSettings(reason = 'settings_li
               transcription: { model: 'gpt-realtime-whisper' },
             },
             output: {
-              voice: settings.realtimeVoice || 'marin',
+              voice: realtimeVoice,
               speed: Number(settings.realtimeSpeed || 1.05),
             },
           },
@@ -17068,6 +17098,9 @@ const __pmRealtimeAgent = {
   contextRefreshTimer: null,
   pendingCreateResponse: null,
   outputGuard: { suspended: false, restoreSending: null, restoreTrackEnabled: null, until: 0, restoreTimer: null },
+  // PTT can be pressed while the WebRTC/AVAS session is still opening. Keep
+  // the gesture explicitly so a release cannot later turn the mic on.
+  ptt: { held: false, sessionId: '', pressId: 0, pressedAt: 0 },
   // Camera/photo staging: a captured image is held here (NOT sent to the model)
   // and shown in the chat bubble. It is flushed to the model as an attachment to
   // the user's NEXT spoken turn (flush on speech_started / PTT release), so the
@@ -17127,8 +17160,13 @@ function _maybeRecoverMobileHallucinatedHandoff() {
 }
 
 function _sendMobileRealtimeAgentCreateResponseFlag(enabled) {
-  const dc = __pmRealtimeAgent.conn?.dc;
+  const conn = __pmRealtimeAgent.conn;
+  const dc = conn?.dc;
   if (!dc || dc.readyState !== 'open') return;
+  if (_isMobileCodexV3RealtimeConnection(conn)) {
+    _voiceDebug?.('codex-v3-create-response-flag-managed-by-avas', { enabled: !!enabled });
+    return;
+  }
   const listenMode = __pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode;
   // Quiet mode (create_response gating) only applies to always-listening server VAD.
   // In push-to-talk there is no turn_detection, so don't reinstate server VAD here.
@@ -17281,8 +17319,13 @@ function _clearMobileRealtimeAgentPendingCreateResponse() {
 }
 
 function _sendMobileRealtimeAgentResponseCreate(reason = 'manual') {
-  const dc = __pmRealtimeAgent.conn?.dc;
+  const conn = __pmRealtimeAgent.conn;
+  const dc = conn?.dc;
   if (!dc || dc.readyState !== 'open') return false;
+  if (_isMobileCodexV3RealtimeConnection(conn)) {
+    _voiceDebug('codex-v3-response-create-managed-by-avas', { reason });
+    return false;
+  }
   try {
     dc.send(JSON.stringify({ type: 'response.create' }));
     _voiceDebug('realtime-agent-response-create', { reason });
@@ -17294,6 +17337,10 @@ function _sendMobileRealtimeAgentResponseCreate(reason = 'manual') {
 }
 
 function _scheduleMobileRealtimeAgentResponseAfterSkillContext(reason = 'ptt_release') {
+  if (_isMobileCodexV3RealtimeConnection()) {
+    _voiceDebug('codex-v3-response-after-skill-context-managed-by-avas', { reason });
+    return false;
+  }
   _clearMobileRealtimeAgentPendingCreateResponse();
   const pending = { createdAt: Date.now(), reason, timer: null };
   pending.timer = setTimeout(() => {
@@ -17377,9 +17424,16 @@ function _shouldInjectMobileRealtimeAgentSkillContext(sessionId, transcript) {
 }
 
 async function _injectMobileRealtimeAgentSkillContext(sessionId, transcript, options = {}) {
-  const dc = __pmRealtimeAgent.conn?.dc;
+  const conn = __pmRealtimeAgent.conn;
+  const dc = conn?.dc;
   const text = String(transcript || '').trim();
   if (!dc || dc.readyState !== 'open' || !text) return false;
+  if (_isMobileCodexV3RealtimeConnection(conn)) {
+    // AVAS v3 already has the canonical tool policy in its app-server thread;
+    // public conversation.item.create is not a valid way to add a late hint.
+    _voiceDebug('codex-v3-skill-context-managed-by-thread', { sessionId, textLen: text.length });
+    return false;
+  }
   if (!_shouldInjectMobileRealtimeAgentSkillContext(sessionId, text)) return false;
   try {
     const data = await mobileGatewayFetch('/api/voice-agent/realtime-skill-context', {
@@ -17943,22 +17997,51 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     _voiceDebug('realtime-agent-bootstrap-start', { sessionId: sid, listenMode });
     const quietState = _syncMobileRealtimeAgentQuietFromSettings();
     const wakePhrase = quietState.wakePhrase;
-    const [workerContextPacket, realtimeStatus] = await Promise.all([
+    const [workerContextPacket, prewarmedRealtimeStatus] = await Promise.all([
       _prefetchMobileVoiceWorkerContextPacket(sid, { source: 'mobile_realtime_bootstrap' }),
-      _prewarmMobileCodexRealtimeBridge() || mobileGatewayFetch('/api/realtime/status', { method: 'GET' }).catch(() => ({})),
+      _prewarmMobileCodexRealtimeBridge(),
     ]);
+    // A failed prewarm resolves to null. Fetch once more rather than silently
+    // falling back to public Realtime with a voice selected for AVAS v3.
+    const realtimeStatus = prewarmedRealtimeStatus
+      || await mobileGatewayFetch('/api/realtime/status', { method: 'GET' }).catch(() => ({}));
     const useCodexOauthBridge = realtimeStatus?.codexBridgeAvailable === true
       && realtimeStatus?.transport === 'codex_app_server'
       && realtimeStatus?.auth === 'chatgpt_oauth_app_server';
-    if (realtimeStatus?.authMode === 'codex_oauth' && !useCodexOauthBridge) {
-      throw new Error(realtimeStatus?.codexBridgeError || 'Codex is not signed in with ChatGPT OAuth for Realtime voice.');
+    // The bridge endpoint itself owns protocol selection and currently starts
+    // AVAS v3. Do not make mobile reject an otherwise healthy bridge because
+    // a cached/older status payload omitted the informational version field.
+    // Desktop already uses these three authoritative transport fields.
+    const requiresCodexOauthBridge = realtimeStatus?.authMode === 'codex_oauth'
+      || (realtimeStatus?.oauthConfigured === true && realtimeStatus?.apiKeyConfigured !== true);
+    if (requiresCodexOauthBridge && !useCodexOauthBridge) {
+      throw new Error(
+        realtimeStatus?.codexBridgeError
+        || 'ChatGPT OAuth Realtime requires the Codex app-server bridge; public Realtime v2 fallback is disabled.',
+      );
     }
+    // Select from the voice family of the transport this exact attempt will
+    // use. Merely advertising an available Codex bridge is not enough: if the
+    // attempt falls back to public v2, an AVAS-only voice such as `spruce`
+    // would otherwise be rejected by the public Realtime session.
+    const selectedVoiceStatus = useCodexOauthBridge
+      ? { realtime: realtimeStatus || {} }
+      : { realtime: {} };
+    const selectedRealtimeVoice = _mobileRealtimeVoice(
+      __pmVoice?.settings?.realtimeVoice,
+      selectedVoiceStatus,
+    );
+    _voiceDebug('realtime-agent-transport-voice-selected', {
+      transport: useCodexOauthBridge ? 'codex_app_server' : 'openai_public_realtime',
+      voice: selectedRealtimeVoice,
+      requestedVoice: String(__pmVoice?.settings?.realtimeVoice || ''),
+    });
     const bootstrap = await mobileGatewayFetch('/api/voice-agent/realtime-bootstrap', {
       method: 'POST',
       body: JSON.stringify({
         sessionId: sid,
         voiceTarget: _mobileVoiceTargetPayload(),
-        voice: _mobileRealtimeVoice(),
+        voice: selectedRealtimeVoice,
         speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
         voiceRuntime: wakePhrase
           ? { wakePhrase, wakeGateActive: __pmVoice?.settings?.wakeGateActive === true }
@@ -17995,7 +18078,10 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
         streamCount: event.streams?.length || 0,
         trackState: event.track?.readyState || '',
       });
-      _attachMobileRealtimeOutput(audio, event.streams[0]);
+      // AVAS output is already a decoded WebRTC MediaStream. Routing it
+      // through a second AudioContext stream can go silent on iOS after a
+      // session handoff, so keep the Codex bridge on the direct-output path.
+      _attachMobileRealtimeOutput(audio, event.streams[0], { direct: useCodexOauthBridge });
     };
 
     // Reuse the shared warm mic — the SAME stream xAI realtime + the soundwave
@@ -18072,58 +18158,62 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       if (!bridgeResult?.success) throw new Error(bridgeResult?.error || 'Codex OAuth realtime bridge failed');
       answerSdp = String(bridgeResult.sdp || '');
       codexBridgeSessionId = String(bridgeResult.sessionId || '');
-    }
-    if (!answerSdp && clientSecret) {
-      try {
-        const directResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${clientSecret}`,
-            'Content-Type': 'application/sdp',
-          },
-          body: offerSdp,
-        });
-        answerSdp = await directResponse.text();
-        if (!directResponse.ok) {
+      if (!_isUsableRealtimeOfferSdp(answerSdp)) {
+        throw new Error('Codex OAuth realtime v3 bridge returned an invalid SDP answer.');
+      }
+    } else {
+      if (clientSecret) {
+        try {
+          const directResponse = await fetch('https://api.openai.com/v1/realtime/calls', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${clientSecret}`,
+              'Content-Type': 'application/sdp',
+            },
+            body: offerSdp,
+          });
+          answerSdp = await directResponse.text();
+          if (!directResponse.ok) {
+            _voiceDebug('realtime-agent-direct-call-failed', {
+              sessionId: sid,
+              status: directResponse.status,
+              model,
+              error: String(answerSdp || '').slice(0, 500),
+              sdpLength: offerSdp.length,
+            });
+            answerSdp = '';
+          }
+        } catch (err) {
           _voiceDebug('realtime-agent-direct-call-failed', {
             sessionId: sid,
-            status: directResponse.status,
+            status: 0,
             model,
-            error: String(answerSdp || '').slice(0, 500),
+            error: err?.message || String(err),
             sdpLength: offerSdp.length,
           });
-          answerSdp = '';
         }
-      } catch (err) {
-        _voiceDebug('realtime-agent-direct-call-failed', {
-          sessionId: sid,
-          status: 0,
-          model,
-          error: err?.message || String(err),
-          sdpLength: offerSdp.length,
-        });
       }
-    }
-    if (!answerSdp) {
-      try {
-        answerSdp = await mobileGatewayTextFetch('/api/voice-agent/realtime-call', {
-          method: 'POST',
-          body: JSON.stringify({
-            callToken: bootstrap.callToken,
-            sdp: offerSdp,
-          }),
-        });
-      } catch (err) {
-        _voiceDebug('realtime-agent-gateway-call-failed', {
-          sessionId: sid,
-          model,
-          error: err?.message || String(err),
-          sdpLength: offerSdp.length,
-        });
-        try { pc.close(); } catch {}
-        try { if (audio) audio.srcObject = null; } catch {}
-        try { micStream.getTracks?.().forEach((track) => track.stop()); } catch {}
-        return _startMobileOpenAiRealtimeWebSocketSession(sid, { listenMode, bootstrap });
+      if (!answerSdp) {
+        try {
+          answerSdp = await mobileGatewayTextFetch('/api/voice-agent/realtime-call', {
+            method: 'POST',
+            body: JSON.stringify({
+              callToken: bootstrap.callToken,
+              sdp: offerSdp,
+            }),
+          });
+        } catch (err) {
+          _voiceDebug('realtime-agent-gateway-call-failed', {
+            sessionId: sid,
+            model,
+            error: err?.message || String(err),
+            sdpLength: offerSdp.length,
+          });
+          try { pc.close(); } catch {}
+          try { if (audio) audio.srcObject = null; } catch {}
+          try { micStream.getTracks?.().forEach((track) => track.stop()); } catch {}
+          return _startMobileOpenAiRealtimeWebSocketSession(sid, { listenMode, bootstrap });
+        }
       }
     }
     answerSdp = `${String(answerSdp || '').replace(/\r\n|\r|\n/g, '\n').replace(/\s+$/g, '').replace(/\n/g, '\r\n')}\r\n`;
@@ -18131,46 +18221,40 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     await dcOpen;
     if (useCodexOauthBridge) _installMobileCodexV3RealtimeCommandGuard(dc);
 
-    // The backend bootstrap bakes server_vad turn detection into the minted
-    // client secret for ALL modes (it never receives listenMode). Re-assert the
-    // correct per-mode session config at runtime, exactly as the known-good
-    // (pre-camera) path did, or push-to-talk fights server VAD and never
-    // produces a clean turn:
-    //   always_listening -> server VAD auto-commits + auto-replies.
-    //   push_to_speak    -> turn_detection disabled; audio only flows while the
-    //                       mic track is enabled (button held), and we manually
-    //                       commit + create_response on release.
-    try {
-      dc.send(JSON.stringify({
-        type: 'session.update',
-        session: {
-          type: 'realtime',
-          audio: {
-            input: {
-              turn_detection: _mobileRealtimeTurnDetectionForListenMode(listenMode),
-              transcription: { model: 'gpt-realtime-whisper' },
-            },
-            output: {
-              voice: _mobileRealtimeVoice(),
-              speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
+    if (useCodexOauthBridge) {
+      // AVAS v3 receives voice, prompt, tools, and server-VAD policy in
+      // thread/realtime/start. Public Realtime commands are invalid on this
+      // channel; PTT below controls only the microphone track.
+      _voiceDebug('codex-v3-session-native-turn-control', { sessionId: sid, listenMode });
+    } else {
+      // The public Realtime fallback supports the browser event protocol, so
+      // it still needs per-mode configuration and chat-history injection.
+      try {
+        dc.send(JSON.stringify({
+          type: 'session.update',
+          session: {
+            type: 'realtime',
+            audio: {
+              input: {
+                turn_detection: _mobileRealtimeTurnDetectionForListenMode(listenMode),
+                transcription: { model: 'gpt-realtime-whisper' },
+              },
+              output: {
+                voice: selectedRealtimeVoice,
+                speed: Number(__pmVoice?.settings?.realtimeSpeed || 1.05),
+              },
             },
           },
-          ...(useCodexOauthBridge && bootstrap.instructions
-            ? { instructions: bootstrap.instructions }
-            : {}),
-          ...(useCodexOauthBridge && Array.isArray(bootstrap.tools) && bootstrap.tools.length
-            ? { tools: bootstrap.tools, tool_choice: 'auto' }
-            : {}),
-        },
-      }));
-      _voiceDebug('realtime-agent-session-update', { sessionId: sid, listenMode, quietActive: __pmRealtimeAgent.quiet.active });
-    } catch (err) {
-      _voiceDebug('realtime-agent-session-update-failed', { message: err?.message || String(err) });
-    }
+        }));
+        _voiceDebug('realtime-agent-session-update', { sessionId: sid, listenMode, quietActive: __pmRealtimeAgent.quiet.active });
+      } catch (err) {
+        _voiceDebug('realtime-agent-session-update-failed', { message: err?.message || String(err) });
+      }
 
-    // Seed the live session with the chat thread the user just had on screen so
-    // the voice agent continues the conversation instead of starting fresh.
-    _seedMobileRealtimeAgentConversationHistory(dc, sid);
+      // Seed the live public-Realtime session with the chat thread the user
+      // just had on screen so the voice agent continues the conversation.
+      _seedMobileRealtimeAgentConversationHistory(dc, sid);
+    }
 
     if (__pmRealtimeAgent.connectingStartId !== startId) {
       try { dc?.close(); } catch {}
@@ -18235,6 +18319,12 @@ function _stopMobileRealtimeAgentSession() {
   __pmRealtimeAgent.connectingSessionId = '';
   __pmRealtimeAgent.connectingStartId = '';
   __pmRealtimeAgent.listenMode = 'idle';
+  __pmRealtimeAgent.ptt = {
+    held: false,
+    sessionId: '',
+    pressId: (__pmRealtimeAgent.ptt?.pressId || 0) + 1,
+    pressedAt: 0,
+  };
   __pmRealtimeAgent.pendingImages = [];
   __pmRealtimeAgent.stagedImageTurn = null;
   __pmRealtimeAgent.functionCallBuffers.clear();
@@ -18357,8 +18447,19 @@ function _isMobileRealtimeOutputGuardActive() {
   return Date.now() < Number(guard.until || 0);
 }
 
-function _attachMobileRealtimeOutput(audio, stream) {
+function _attachMobileRealtimeOutput(audio, stream, options = {}) {
   if (!audio || !stream) return false;
+  if (options.direct === true) {
+    try { __pmVoice.realtimeOutputSource?.disconnect?.(); } catch {}
+    try { __pmVoice.realtimeOutputGain?.disconnect?.(); } catch {}
+    try { __pmVoice.realtimeOutputCompressor?.disconnect?.(); } catch {}
+    audio.srcObject = stream;
+    audio.muted = false;
+    audio.volume = 1;
+    audio.play?.().catch(() => {});
+    _voiceDebug?.('realtime-agent-output-direct', { transport: 'codex_app_server' });
+    return true;
+  }
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) throw new Error('AudioContext unavailable');
@@ -21108,12 +21209,31 @@ function _mobileRealtimeAgentPttPress(sessionId) {
     });
     _stopMobileRealtimeAgentSession();
   }
+  const ptt = __pmRealtimeAgent.ptt || (__pmRealtimeAgent.ptt = { held: false, sessionId: '', pressId: 0, pressedAt: 0 });
+  ptt.held = true;
+  ptt.sessionId = sid;
+  ptt.pressedAt = Date.now();
+  const pressId = ++ptt.pressId;
   if (typeof __pmRealtimeAgent.autoCaptureCameraFrames === 'function') {
     __pmRealtimeAgent.autoCaptureCameraFrames('ptt_press', { count: 1, cooldownMs: 650 }).catch(() => {});
   }
   if (!__pmRealtimeAgent.conn) {
     _startMobileRealtimeAgentSession(sid, { listenMode: 'push_to_talk' })
-      .then(() => _setMobileRealtimeAgentMicEnabled(true))
+      .then((conn) => {
+        // A release can happen while AVAS/WebRTC is still opening. Only honor
+        // the press when it is still the current held gesture; otherwise the
+        // previous flow left the microphone enabled after that release.
+        const stillHeld = ptt.held === true
+          && ptt.pressId === pressId
+          && String(ptt.sessionId || '') === sid
+          && String(conn?.sessionId || '') === sid;
+        _setMobileRealtimeAgentMicEnabled(stillHeld);
+        _voiceDebug('realtime-agent-ptt-bootstrap-resolved', {
+          sessionId: sid,
+          stillHeld,
+          transport: conn?.transport || '',
+        });
+      })
       .catch((err) => _voiceDebug('realtime-agent-ptt-start-failed', { message: err?.message || String(err) }));
     return;
   }
@@ -21121,7 +21241,20 @@ function _mobileRealtimeAgentPttPress(sessionId) {
 }
 
 function _mobileRealtimeAgentPttRelease() {
+  const ptt = __pmRealtimeAgent.ptt || (__pmRealtimeAgent.ptt = { held: false, sessionId: '', pressId: 0, pressedAt: 0 });
+  const pressedSessionId = String(ptt.sessionId || '').trim();
+  const heldForMs = ptt.pressedAt ? Math.max(0, Date.now() - ptt.pressedAt) : 0;
+  ptt.held = false;
+  ptt.pressedAt = 0;
+  ++ptt.pressId;
   const conn = __pmRealtimeAgent.conn;
+  if (!conn || (pressedSessionId && String(conn.sessionId || '').trim() !== pressedSessionId)) {
+    _voiceDebug('realtime-agent-ptt-release-before-ready', {
+      sessionId: pressedSessionId,
+      hasConnection: !!conn,
+    });
+    return;
+  }
   const commitAndRespond = () => {
     const dc = __pmRealtimeAgent.conn?.dc;
     if (dc?.readyState === 'open') {
@@ -21135,6 +21268,18 @@ function _mobileRealtimeAgentPttRelease() {
       } catch {}
     }
   };
+  if (_isMobileCodexV3RealtimeConnection(conn)) {
+    // AVAS v3 has server VAD configured by thread/realtime/start. Disabling
+    // this track delivers silence, closes the VAD turn, and lets AVAS reply.
+    // Public commit/create events are invalid on the v3 data channel.
+    _setMobileRealtimeAgentMicEnabled(false);
+    _voiceDebug('codex-v3-ptt-release-server-vad', {
+      sessionId: conn.sessionId,
+      heldForMs,
+      micEnabled: conn.micTrack?.enabled === true,
+    });
+    return;
+  }
   if (conn?.provider === 'xai') {
     const capture = conn.xaiCapture || {};
     _voiceDebug('xai-realtime-capture-release', {
@@ -23981,7 +24126,7 @@ void main() {
     settings.voiceAgentRealtimeAgent = selectedMode === 'openai_realtime';
     settings.voiceAgentXaiRealtime = selectedMode === 'xai';
     voiceModeSelect.innerHTML = [
-      _providerOptionHtml('openai_realtime', `OpenAI Realtime${realtimeReady ? '' : ' (not connected)'}`, selectedMode),
+      _providerOptionHtml('openai_realtime', `${_mobileRealtimeProviderLabel()}${realtimeReady ? '' : ' (not connected)'}`, selectedMode),
       _providerOptionHtml('xai', `xAI / Grok${xaiReady ? '' : ' (not connected)'}`, selectedMode),
     ].join('');
     if (inputProviderSelect) inputProviderSelect.value = String(settings.sttProvider || _inputProviderForMode(selectedMode));
@@ -24042,7 +24187,7 @@ void main() {
     const stt = String(p.sttProvider || __pmVoice.settings?.sttProvider || 'browser');
     const tts = String(p.ttsProvider || __pmVoice.settings?.ttsProvider || 'browser');
     const providerLabel = (id, kind) => {
-      if (id === 'openai_realtime') return 'OpenAI Realtime';
+      if (id === 'openai_realtime') return _mobileRealtimeProviderLabel();
       if (id === 'xai') return 'xAI / Grok';
       if (kind === 'input') return 'Browser';
       return 'Device voice';

@@ -299,10 +299,20 @@ Mobile supports regular browser/server voice and Realtime/WebRTC paths. Relevant
 - `GET /api/realtime/context-pack`
 - `POST /api/realtime/client-secret`
 - `POST /api/realtime/call`
+- `POST /api/realtime/codex-bridge/call`
+- `POST /api/realtime/codex-bridge/stop`
+- `POST /api/realtime/codex-bridge/speak`
+- `GET /api/realtime/codex-bridge/events`
 - `POST /api/mobile/voice-debug`
 
 Realtime/mobile audio details:
 
+- ChatGPT OAuth voice uses `src/gateway/realtime/codex-app-server-bridge.ts` and Codex app-server, not the public Realtime API. WebRTC must request conversation protocol `v3` (Frameless Bidi / Codex Voice Live); v3 deliberately uses the original Codex `listVoices.v1` catalog: Juniper, Maple, Spruce, Ember, Vale, Breeze, Arbor, Sol, and Cove.
+- Do not confuse conversation protocol v3 with public Realtime Voice v2. If a Codex voice such as `spruce` fails as “not supported for v2,” the app-server runtime is stale or the start request did not reach v3. Prometheus now rejects detected Codex runtimes older than `0.146.0` instead of silently presenting a public v2 fallback.
+- On Windows, the Store Codex desktop bundle cannot normally be launched by an external gateway because of WindowsApps execution ACLs. The bridge therefore uses the installed/global `@openai/codex` executable; keep it current with the desktop app’s app-server generation. `GET /api/realtime/status` exposes `codexBridgeRuntimeVersion`, `codexBridgeRealtimeVersion`, `codexBridgeVoiceVersion`, and the authoritative active voice catalog.
+- Mobile calls `/api/voice-agent/realtime-bootstrap` with `contextOnly: true` before the Codex bridge exchange. This builds Prometheus instructions/tools without minting a public Realtime session. Public Realtime fallback sanitizes against its own voice IDs so a saved Codex-only voice cannot leak into a v2 call.
+- Codex Voice / Live owns VAD and turn lifecycle. Mobile PTT gates the shared mic track; it must not send public `session.update`, input-buffer commit, or `response.create` commands over the AVAS v3 data channel. Managed Prometheus speech returns through app-server `thread/realtime/appendSpeech`.
+- The mobile voice picker must derive options from `codexBridgeActiveVoices`, label this transport `Codex Voice / Live`, and soft-restart the WebRTC session to change voices after assistant audio exists. The rolling voice-overlay transcript is separate from stable chat-message text; chat messages must use finalized transcript text and sequence-aware ordering.
 - `mobile-pages.js` chooses supported `MediaRecorder` MIME types, preferring iOS-friendly formats where needed.
 - Realtime SDP exchange can go through the gateway `POST /api/realtime/call` or direct client-secret flow through `POST /api/realtime/client-secret`.
 - Server TTS playback uses Web Audio when possible and falls back to an HTML audio element.

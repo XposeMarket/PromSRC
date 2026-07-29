@@ -1,4 +1,4 @@
-import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
+import { ChildProcessWithoutNullStreams, spawn, spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import os from 'os';
@@ -26,8 +26,10 @@ export type CodexRealtimeBridgeStatus = {
   executable?: string;
   accountType?: string;
   planType?: string;
+  runtimeVersion?: string;
   voices?: any;
   realtimeVersion?: string;
+  voiceVersion?: string;
   activeVoices?: string[];
   defaultVoice?: string;
   error?: string;
@@ -38,6 +40,9 @@ export type CodexRealtimeBridgeSession = {
   threadId: string;
   sdp: string;
   realtimeSessionId?: string;
+  voice?: string;
+  realtimeVersion?: string;
+  voiceVersion?: string;
 };
 
 export type CodexRealtimeBridgeEvent = {
@@ -70,6 +75,31 @@ const REQUEST_TIMEOUT_MS = Math.max(5_000, Number(process.env.PROMETHEUS_CODEX_R
 const REALTIME_START_TIMEOUT_MS = Math.max(10_000, Number(process.env.PROMETHEUS_CODEX_REALTIME_START_TIMEOUT_MS || 45_000) || 45_000);
 const STATUS_CACHE_TTL_MS = Math.max(2_000, Number(process.env.PROMETHEUS_CODEX_STATUS_CACHE_TTL_MS || 15_000) || 15_000);
 const REALTIME_CONVERSATION_VERSION = 'v3';
+const REALTIME_VOICE_CATALOG_VERSION = 'v1';
+const MIN_CODEX_LIVE_VERSION = [0, 146, 0] as const;
+
+function detectCodexRuntimeVersion(executable: string): string {
+  const useShell = process.platform === 'win32' && /\.cmd$/i.test(executable);
+  const result = spawnSync(executable, ['--version'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+    windowsHide: true,
+    shell: useShell,
+  });
+  return String(result.stdout || result.stderr || '').match(/\b(\d+\.\d+\.\d+(?:-[^\s]+)?)\b/)?.[1] || '';
+}
+
+function supportsCodexLiveV3(version: string): boolean {
+  const parts = String(version).match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!parts) return true;
+  const actual = parts.slice(1).map(Number);
+  for (let index = 0; index < MIN_CODEX_LIVE_VERSION.length; index += 1) {
+    if (actual[index] !== MIN_CODEX_LIVE_VERSION[index]) {
+      return actual[index] > MIN_CODEX_LIVE_VERSION[index];
+    }
+  }
+  return true;
+}
 
 function executableCandidates(): string[] {
   const candidates: string[] = [];
@@ -134,6 +164,7 @@ export function normalizeRealtimeSdp(value: unknown): string {
 class CodexAppServerBridge {
   private child: ChildProcessWithoutNullStreams | null = null;
   private executable = '';
+  private runtimeVersion = '';
   private nextId = 1;
   private stdoutBuffer = '';
   private pending = new Map<JsonRpcId, PendingRequest>();
@@ -160,6 +191,13 @@ class CodexAppServerBridge {
   private async startProcess(): Promise<void> {
     this.executable = resolveCodexExecutable();
     const useShell = process.platform === 'win32' && /\.cmd$/i.test(this.executable);
+    this.runtimeVersion = detectCodexRuntimeVersion(this.executable);
+    if (!supportsCodexLiveV3(this.runtimeVersion)) {
+      throw new Error(
+        `Codex ${this.runtimeVersion} is too old for Codex Voice/Live v3. `
+        + 'Upgrade @openai/codex to 0.146.0 or newer; refusing to fall back to public Realtime Voice v2.',
+      );
+    }
     const child = spawn(
       this.executable,
       ['app-server', '--listen', 'stdio://', '--enable', 'realtime_conversation'],
@@ -415,11 +453,12 @@ class CodexAppServerBridge {
         executable: this.executable,
         accountType: account.type,
         planType: String(account.planType || ''),
+        runtimeVersion: this.runtimeVersion,
         voices: voicesResult?.voices,
         realtimeVersion: REALTIME_CONVERSATION_VERSION,
-        // AVAS v3 currently uses the voice family exposed as `v1` by
-        // thread/realtime/listVoices. The `v2` family belongs to the public
-        // OpenAI Realtime transport and is rejected by AVAS v3.
+        // Frameless Bidi v3 deliberately preserves the original Codex Voice
+        // behavior and therefore uses the listVoices `v1` catalog.
+        voiceVersion: REALTIME_VOICE_CATALOG_VERSION,
         activeVoices: Array.isArray(voicesResult?.voices?.v1) ? voicesResult.voices.v1 : [],
         defaultVoice: String(voicesResult?.voices?.defaultV1 || ''),
       };
@@ -429,6 +468,7 @@ class CodexAppServerBridge {
       const value: CodexRealtimeBridgeStatus = {
         available: false,
         executable: this.executable || resolveCodexExecutable(),
+        runtimeVersion: this.runtimeVersion || undefined,
         error: String(error?.message || error),
       };
       this.cachedStatus = { value, at: Date.now() };
@@ -445,6 +485,17 @@ class CodexAppServerBridge {
     tools?: any[];
   }): Promise<CodexRealtimeBridgeSession> {
     await this.ensureStarted();
+    const bridgeStatus = await this.status();
+    if (!bridgeStatus.available) {
+      throw new Error(bridgeStatus.error || 'The Codex OAuth realtime bridge is unavailable.');
+    }
+    const activeVoices = Array.isArray(bridgeStatus.activeVoices)
+      ? bridgeStatus.activeVoices.map((voice) => String(voice || '').trim()).filter(Boolean)
+      : [];
+    const requestedVoice = String(input.voice || '').trim();
+    const resolvedVoice = activeVoices.includes(requestedVoice)
+      ? requestedVoice
+      : (String(bridgeStatus.defaultVoice || '').trim() || activeVoices[0] || 'cove');
     const account = await this.request('account/read', { refreshToken: true });
     if (account?.account?.type !== 'chatgpt') {
       throw new Error('The Codex OAuth bridge requires Codex to be signed in with ChatGPT.');
@@ -480,12 +531,10 @@ class CodexAppServerBridge {
 
     await this.request('thread/realtime/start', {
       threadId,
-      // ChatGPT OAuth-backed AVAS calls require realtime v1 or v3. The v3
-      // conversation protocol uses the AVAS voice family advertised under the
-      // listVoices `v1` key, not the public Realtime `v2` voice family.
+      // Frameless Bidi v3 uses the original Codex Voice (`v1`) catalog.
       version: REALTIME_CONVERSATION_VERSION,
       outputModality: 'audio',
-      voice: input.voice,
+      voice: resolvedVoice,
       prompt: input.prompt,
       transport: { type: 'webrtc', sdp: input.sdp },
     }, REALTIME_START_TIMEOUT_MS);
@@ -518,6 +567,9 @@ class CodexAppServerBridge {
       threadId,
       sdp: answerSdp,
       realtimeSessionId: String(started?.params?.realtimeSessionId || '').trim() || undefined,
+      voice: resolvedVoice,
+      realtimeVersion: REALTIME_CONVERSATION_VERSION,
+      voiceVersion: REALTIME_VOICE_CATALOG_VERSION,
     };
   }
 

@@ -119,7 +119,8 @@ Realtime audio-output details:
 
 Gateway Realtime behavior:
 
-- `/api/realtime/status` reports whether Realtime is configured and whether auth is API-key or OpenAI Codex OAuth backed
+- `/api/realtime/status` reports whether voice is configured for the ChatGPT OAuth Codex app-server bridge or the public Realtime API-key path
+- the preferred ChatGPT OAuth path is `src/gateway/realtime/codex-app-server-bridge.ts`: it starts Codex app-server with `realtime_conversation`, negotiates browser WebRTC through `/api/realtime/codex-bridge/call`, and does not exchange OAuth into a platform API key
 - `/api/realtime/client-secret` mints ephemeral Realtime client secrets for both normal realtime sessions and transcription sessions
 - default realtime model: `gpt-realtime`
 - default realtime voice: `marin`
@@ -168,6 +169,18 @@ Recovery runbook when realtime 500s on OAuth:
 - Check token: decode `tokens.id_token` auth namespace (`https://api.openai.com/auth`). If `organization_id` is missing, the exchange will fail.
 - Fix: ensure `codex_cli_simplified_flow` is NOT in the authorize params, restart gateway, Disconnect→Connect (fresh login), then the callback auto-mints `tokens.api_key`. `scripts/mint-realtime-key.ts` exchanges the current LOGIN id_token and saves the key (must NOT refresh first — refresh strips `organization_id`).
 - If a fresh login STILL lacks `organization_id` (multi-org edge): pick/confirm one org in the consent screen, or set a real `OPENAI_API_KEY`, or use xAI realtime.
+
+## 12A-1) ChatGPT OAuth Codex Voice / Live bridge (2026-07-29)
+
+The public Realtime OAuth-to-API-key workaround above remains relevant only when Prometheus intentionally uses the public `/v1/realtime/*` path. ChatGPT OAuth voice now prefers Codex app-server, matching Codex desktop semantics:
+
+- `thread/realtime/start` must explicitly pass `version: "v3"` with WebRTC transport. In current Codex, v3 is Frameless Bidi / Codex Voice Live and selects the Codex voice catalog exposed as `thread/realtime/listVoices().voices.v1`.
+- The Codex catalog is Juniper, Maple, Spruce, Ember, Vale, Breeze, Arbor, Sol, and Cove. Public Realtime v2 voices such as Marin/Coral are a different protocol family and must not be presented as Codex Voice / Live.
+- A real failure saying ``realtime voice `spruce` is not supported for v2`` proves that the running app-server resolved the start as public Realtime Voice v2. On Windows this happened because the bridge launched global `@openai/codex` 0.133.0 while Codex desktop bundled a newer app-server. Upgrade the externally launchable CLI to 0.146.0 or newer; WindowsApps ACLs prevent an external gateway from directly spawning the Store-bundled executable.
+- The bridge detects the CLI version, refuses known runtimes older than 0.146.0, and exposes runtime/protocol/catalog fields through `/api/realtime/status`. Never “fix” this by normalizing a Codex voice into the v2 catalog.
+- `/api/voice-agent/realtime-bootstrap` is called with `contextOnly: true` for this transport. It supplies Prometheus instructions and tools but does not mint a public client secret. The app-server owns the upstream ChatGPT OAuth session and returns the SDP answer.
+- AVAS v3 does not use the public browser data-channel control contract. Do not send public `session.update`, input-buffer commit, or `response.create` events. Gate PTT with the shared microphone track and return managed Prometheus speech with `thread/realtime/appendSpeech`.
+- Voice changes require a soft WebRTC-session restart once assistant audio exists. Mobile chat ordering and highlighting must use stable finalized transcript records; rolling overlay transcription is presentation-only.
 
 ## 12A-2) SECOND BUG: mic connects but no transcription/audio — iOS dual-getUserMedia (2026-06-03)
 

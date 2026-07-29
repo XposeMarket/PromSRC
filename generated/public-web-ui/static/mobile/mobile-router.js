@@ -2,19 +2,19 @@
 // Activates ONLY when location.hash starts with "#mobile" or pathname starts with "/mobile".
 // Otherwise stays out of the way so the desktop UI is untouched.
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=mobile-drawer-scroll-v9';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=mobile-codex-live-v3-v5';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage, renderSubagentChatPage,
-} from './mobile-pages.js?v=mobile-tool-progress-v21';
+} from './mobile-pages.js?v=mobile-codex-live-v3-v5';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
   prefetchMobileSecondaryPages,
   searchMobileChatSessions,
-} from './mobile-api.js?v=slash-command-style-align-v1';
+} from './mobile-api.js?v=mobile-codex-live-v3-v5';
 import { connectWS, ensureWSConnected } from '../ws.js';
 
 // Once a device has ever entered mobile mode (or completed pairing), this flag
