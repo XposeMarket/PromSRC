@@ -1,6 +1,6 @@
 ## 38) Runtime Prompt Verbatim Inventory
 
-> Re-verified 2026-07-12 against canonical `PromSRC`. The authoritative current source/role/cost map is [26-runtime-instruction-census.md](26-runtime-instruction-census.md). Historical verbatim strings below remain useful for diffing, but stale line numbers and pre-isolation matrices are not authoritative.
+> Re-verified 2026-08-01 against canonical `PromSRC`. The authoritative current source/role/cost map is [26-runtime-instruction-census.md](26-runtime-instruction-census.md). Historical verbatim strings below remain useful for diffing, but stale line numbers and pre-isolation matrices are not authoritative.
 
 ---
 
@@ -13,6 +13,7 @@ Approximate token contribution by source for a typical **main chat (interactive)
 | Base identity + routing policies | ~400 | core identity block, skill recovery, team/HyperFrames/creative routing, plan protocol, response style — chat.router.ts:3191–3199 |
 | Execution mode block | ~50–100 | empty for interactive; background_task/team_manager are longest |
 | `[MODEL_CAPABILITIES]` | ~30 | provider/model/vision flag |
+| `[WORKING_CONTEXT_PACKETS]` | ~0–2,250 | up to five recent rich-turn handoffs, bounded to ~9,000 chars; simple turns do not create packets |
 | `[RECENT_TOOL_OBSERVATIONS]` | ~0–500 | grows with long tool logs; resets each session |
 | Caller context overlay | ~0–1,500 | zero for main chat; team_manager caller is the heaviest (~1,500) |
 | `[BROWSER SESSION ACTIVE]` | ~50 | only when a tab is open |
@@ -40,7 +41,7 @@ Approximate token contribution by source for a typical **main chat (interactive)
 
 ---
 
-Last fully re-audited against those runtime surfaces on: 2026-07-12. See document 26 for current symbol locations and disagreements.
+Last fully re-audited against those runtime surfaces on: 2026-08-01. See document 26 for current symbol locations and disagreements.
 
 Companion to [21-runtime-prompt-map.md](21-runtime-prompt-map.md). That file maps architecture and overlap; **this file lists the literal fixed strings** each builder emits, where they land (system vs user message), and which runtime receives them.
 
@@ -60,11 +61,12 @@ Companion to [21-runtime-prompt-map.md](21-runtime-prompt-map.md). That file map
 |-------|--------|--------|
 | 1 | `buildBaseSystemPrompt()` | `chat.router.ts:3191–3199` |
 | 2 | `[MODEL_CAPABILITIES]…` | `chat.router.ts:2398–2411` |
-| 3 | `[RECENT_TOOL_OBSERVATIONS]…` | `session.ts` via `chat.router.ts:1894` |
-| 4 | `callerContext` (if any) | task/team/cron/boot overlays |
-| 5 | `browserStateCtx` (if browser open) | `chat.router.ts:3090–3099` |
-| 6 | `personalityCtx` from `buildPersonalityContext()` | `prompt-context.ts:964–1320` |
-| 7 | Onboarding block (if `onboarding_*` session) | `meet-prompt.ts` |
+| 3 | `[WORKING_CONTEXT_PACKETS]…` | `session.ts` → `turn-context-packet.ts` → `chat.router.ts` |
+| 4 | `[RECENT_TOOL_OBSERVATIONS]…` | `session.ts` via `chat.router.ts` |
+| 5 | `callerContext` (if any) | task/team/cron/boot overlays |
+| 6 | `browserStateCtx` (if browser open) | `chat.router.ts` |
+| 7 | `personalityCtx` from `buildPersonalityContext()` | `prompt-context.ts` |
+| 8 | Onboarding block (if `onboarding_*` session) | `meet-prompt.ts` |
 
 **Exception — `team_subagent`:** personality comes **before** callerContext (`chat.router.ts:3206–3209`).
 

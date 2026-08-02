@@ -528,6 +528,10 @@ export interface ExecuteToolDeps {
   sendSSE?: (event: string, data: any) => void;
   handleChat: (...args: any[]) => Promise<any>;
   runInteractiveTurn?: (...args: any[]) => Promise<any>;
+  /** Used only by the hidden persistent thread-supervision runtime. */
+  threadOpsOwnerSessionId?: string;
+  /** Used only by the hidden persistent thread-supervision runtime. */
+  threadOpsSupervisionId?: string;
   telegramChannel: any;
   dispatchToAgent: (agentId: string, message: string, context: string | undefined, parentSessionId: string) => Promise<{ task_id: string; agent_id: string; status: string }>;
   sanitizeAgentId: (value: any) => string;

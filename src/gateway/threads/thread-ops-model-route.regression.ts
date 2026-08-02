@@ -74,6 +74,33 @@ async function main(): Promise<void> {
       },
     });
     sessionApi.touchSession('thread_route_owner', { channel: 'web', title: 'Owner' });
+    assert.equal(threadOps.normalizeManagedThreadLaunchMode({ launch_mode: 'ping' }), 'ping');
+    assert.equal(threadOps.normalizeManagedThreadLaunchMode({ launch_mode: 'forget' }), 'forget');
+    assert.equal(threadOps.normalizeManagedThreadLaunchMode({ launch_mode: 'supervise' }), 'supervise');
+    assert.equal(threadOps.normalizeManagedThreadLaunchMode({ follow: false }), 'ping', 'legacy follow=false maps to ping');
+    assert.equal(threadOps.normalizeManagedThreadLaunchMode({}), 'supervise', 'legacy omitted follow preserves supervised default');
+    assert.equal(threadOps.normalizeManagedThreadLaunchMode({ follow: true, launch_mode: 'forget' }), 'forget', 'explicit launch_mode wins');
+    const launchModes = [
+      ['ping', 'create_and_ping', false],
+      ['forget', 'create_and_forget', false],
+      ['supervise', 'create_and_supervise', true],
+    ] as const;
+    for (const [mode, route, follow] of launchModes) {
+      const created = await threadOps.executePrometheusThreadOps('thread_route_owner', {
+        action: 'create',
+        title: `Launch ${mode}`,
+        launch_mode: mode,
+      }, {});
+      assert.equal(created.session.mode, mode);
+      assert.equal(created.session.route, route);
+      assert.equal(created.session.follow, follow);
+      assert.equal(created.session.launch.notificationMode, mode);
+    }
+    const aliasCreated = await threadOps.executePrometheusThreadOps('thread_route_owner', {
+      action: 'create_and_forget', title: 'Alias forget',
+    }, {});
+    assert.equal(aliasCreated.session.mode, 'forget');
+
     const explicitCreated = await threadOps.executePrometheusThreadOps('thread_route_owner', {
       action: 'create', title: 'Explicit thread', follow: false, provider_id: 'ollama', model: 'llama3.2',
     }, {});

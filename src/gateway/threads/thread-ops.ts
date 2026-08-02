@@ -27,16 +27,66 @@ import {
   getThreadSupervision,
   isThreadSupervisionFollowUpDuplicate,
   listThreadSupervisions,
+  leaseThreadSupervisionReview,
+  notifyThreadSupervision,
   pauseThreadSupervision,
   resumeThreadSupervision,
   reviseThreadSupervision,
   resolveThreadSupervisionReview,
   updateThreadSupervision,
+  waitForThreadSupervisionUpdate,
+  type ThreadSupervision,
 } from './thread-supervision';
 
 export interface PrometheusThreadOpsDeps {
   runInteractiveTurn?: (...args: any[]) => Promise<any>;
   broadcastWS?: (data: any) => void;
+  /** The real owner session for a hidden persistent supervisor runtime. */
+  ownerSessionIdOverride?: string;
+  /** The one supervision record owned by that hidden runtime. */
+  supervisionIdOverride?: string;
+  abortSignal?: { aborted: boolean; signal?: AbortSignal };
+}
+
+export type ManagedThreadLaunchMode = 'ping' | 'forget' | 'supervise';
+
+const MANAGED_THREAD_LAUNCH_ROUTES: Record<ManagedThreadLaunchMode, string> = {
+  ping: 'create_and_ping',
+  forget: 'create_and_forget',
+  supervise: 'create_and_supervise',
+};
+
+/**
+ * Normalize the three explicit creation routes while retaining the old
+ * follow=true/follow=false contract for callers that have not migrated yet.
+ * Explicit launch_mode always wins over the legacy follow flag.
+ */
+export function normalizeManagedThreadLaunchMode(input: any, defaults: any = {}): ManagedThreadLaunchMode {
+  const requested = requestedRouteString(input, defaults, ['launch_mode', 'launchMode', 'mode']);
+  if (requested.present && requested.value) {
+    const value = requested.value.toLowerCase().replace(/[\s-]+/g, '_');
+    const aliases: Record<string, ManagedThreadLaunchMode> = {
+      ping: 'ping',
+      notify: 'ping',
+      notify_on_complete: 'ping',
+      ping_when_complete: 'ping',
+      create_and_ping: 'ping',
+      forget: 'forget',
+      none: 'forget',
+      fire_and_forget: 'forget',
+      create_and_forget: 'forget',
+      supervise: 'supervise',
+      supervised: 'supervise',
+      follow: 'supervise',
+      goal: 'supervise',
+      create_and_supervise: 'supervise',
+    };
+    const normalized = aliases[value];
+    if (normalized) return normalized;
+    throw new Error('launch_mode must be one of ping, forget, or supervise.');
+  }
+  const legacyFollow = requestedRouteValue(input, defaults, ['follow']);
+  return legacyFollow.present && legacyFollow.value === false ? 'ping' : 'supervise';
 }
 
 type ManagedThreadRoute = {
@@ -132,6 +182,11 @@ function sessionSnapshot(sessionId: string, includeHistory = false, historyLimit
         generatedVideos: message.generatedVideos,
         processEntries: message.processEntries,
         toolLog: message.toolLog,
+        reasoningSummary: message.reasoningSummary,
+        thinking: message.thinking,
+        turnProviderUsage: message.turnProviderUsage,
+        toolResultBudget: message.toolResultBudget,
+        liveTraceEntries: message.liveTraceEntries,
       }))
     : undefined;
   return {
@@ -168,9 +223,16 @@ function runDetached(
   ownerSessionId: string,
   targetSessionId: string,
   prompt: string,
-  supervisionId?: string,
+  options: {
+    supervisionId?: string;
+    notifyOnComplete?: boolean;
+    notifyOnFailure?: boolean;
+  } = {},
 ): void {
   if (!deps.runInteractiveTurn) throw new Error('Interactive turn runtime is unavailable.');
+  const supervisionId = String(options.supervisionId || '').trim() || undefined;
+  const notifyOnComplete = options.notifyOnComplete === true;
+  const notifyOnFailure = options.notifyOnFailure === true;
   const origin = {
     channel: 'system',
     surface: 'automation',
@@ -195,17 +257,16 @@ function runDetached(
   ).then((result: any) => {
     const summary = String(result?.text || '').slice(0, 2000);
     const targetTitle = getSessionDisplayTitle(getSession(targetSessionId)) || 'The thread';
-    deps.broadcastWS?.({
-      type: 'managed_thread_turn_complete',
-      ownerSessionId,
-      targetSessionId,
-      supervisionId,
-      summary,
-    });
-    // Unsupervised threads can report their result immediately. A supervised
-    // thread must instead wait for its owner-side verification turn; that
-    // terminal supervision notification below is the truthful voice result.
-    if (!supervisionId) {
+    if (notifyOnComplete) {
+      deps.broadcastWS?.({
+        type: 'managed_thread_turn_complete',
+        ownerSessionId,
+        targetSessionId,
+        supervisionId,
+        summary,
+      });
+      // Ping mode reports the detached target result immediately. Supervise
+      // mode deliberately waits for the authoritative verification decision.
       deps.broadcastWS?.({
         type: 'voice_worker_update',
         id: `managed_thread_${targetSessionId}_complete_${Date.now()}`,
@@ -225,30 +286,37 @@ function runDetached(
   }).catch((err: any) => {
     const error = String(err?.message || err);
     if (supervisionId) {
-      updateThreadSupervision(supervisionId, {
+      const failed = updateThreadSupervision(supervisionId, {
         status: 'failed',
+        pendingReview: false,
+        reviewInFlight: false,
+        finalVerificationState: 'failed',
+        finalVerificationReason: `Failed to start target thread: ${String(err?.message || err)}`,
         finalSummary: `Failed to start target thread: ${String(err?.message || err)}`,
       });
+      if (failed) notifyThreadSupervision(failed, deps.broadcastWS);
     }
-    deps.broadcastWS?.({
-      type: 'managed_thread_update',
-      ownerSessionId,
-      targetSessionId,
-      supervisionId,
-      error,
-    });
-    deps.broadcastWS?.({
-      type: 'voice_worker_update',
-      id: `managed_thread_${targetSessionId}_failed_${Date.now()}`,
-      sessionId: ownerSessionId,
-      taskId: targetSessionId,
-      title: getSessionDisplayTitle(getSession(targetSessionId)) || 'The thread',
-      kind: 'paused',
-      critical: true,
-      status: 'failed',
-      text: `A thread you started could not complete: ${error}`,
-      timestamp: Date.now(),
-    });
+    if (notifyOnFailure) {
+      deps.broadcastWS?.({
+        type: 'managed_thread_update',
+        ownerSessionId,
+        targetSessionId,
+        supervisionId,
+        error,
+      });
+      deps.broadcastWS?.({
+        type: 'voice_worker_update',
+        id: `managed_thread_${targetSessionId}_failed_${Date.now()}`,
+        sessionId: ownerSessionId,
+        taskId: targetSessionId,
+        title: getSessionDisplayTitle(getSession(targetSessionId)) || 'The thread',
+        kind: 'paused',
+        critical: true,
+        status: 'failed',
+        text: `A thread you started could not complete: ${error}`,
+        timestamp: Date.now(),
+      });
+    }
   });
 }
 
@@ -262,7 +330,8 @@ function createManagedThread(
   const prompt = String(input?.prompt || input?.instruction || defaults?.prompt || '').trim();
   const objective = String(input?.objective || defaults?.objective || prompt).trim();
   const acceptanceCriteria = String(input?.acceptance_criteria || input?.acceptanceCriteria || defaults?.acceptance_criteria || defaults?.acceptanceCriteria || objective).trim();
-  const follow = input?.follow !== undefined ? input.follow !== false : defaults?.follow !== false;
+  const launchMode = normalizeManagedThreadLaunchMode(input, defaults);
+  const follow = launchMode === 'supervise';
   const requestedId = String(input?.session_id || input?.sessionId || '').trim();
   const targetSessionId = requestedId || `prom_${crypto.randomUUID()}`;
   if (targetSessionId === ownerSessionId) throw new Error('Cannot create work in the owner session itself.');
@@ -303,21 +372,32 @@ function createManagedThread(
       })
     : null;
   const turnPrompt = managedPrompt(prompt, objective, follow);
-  if (turnPrompt) runDetached(deps, ownerSessionId, targetSessionId, turnPrompt, supervision?.id);
+  if (turnPrompt) {
+    runDetached(deps, ownerSessionId, targetSessionId, turnPrompt, {
+      supervisionId: supervision?.id,
+      notifyOnComplete: launchMode === 'ping',
+      notifyOnFailure: launchMode === 'ping',
+    });
+  }
 
   return {
     id: session.id,
     title,
     workspace,
     started: !!turnPrompt,
+    mode: launchMode,
+    route: MANAGED_THREAD_LAUNCH_ROUTES[launchMode],
     launch: {
       accepted: true,
       state: turnPrompt ? 'queued' : 'idle',
       responsePending: !!turnPrompt,
       responseReceived: false,
-      // Creation is intentionally detached. A reply is real only after the
-      // managed_thread_turn_complete event or a subsequent read/status shows it.
-      completionEvent: turnPrompt ? 'managed_thread_turn_complete' : null,
+      completionNotification: launchMode === 'ping'
+        ? 'managed_thread_turn_complete'
+        : launchMode === 'supervise'
+          ? 'managed_thread_update:terminal'
+          : null,
+      notificationMode: launchMode === 'ping' ? 'ping' : launchMode === 'supervise' ? 'supervise' : 'forget',
     },
     follow,
     chatModelRoute: chatModelRoute
@@ -331,6 +411,9 @@ const THREAD_LINK_ACTION_LABELS: Record<string, string> = {
   status: 'Thread status',
   create: 'Thread created',
   start: 'Thread created',
+  create_and_ping: 'Thread created',
+  create_and_forget: 'Thread created',
+  create_and_supervise: 'Thread created',
   create_many: 'Thread created',
   start_many: 'Thread created',
   send: 'Thread messaged',
@@ -407,6 +490,14 @@ export async function executePrometheusThreadOps(
 ): Promise<Record<string, any>> {
   const action = String(args?.action || '').trim().toLowerCase();
   if (!action) throw new Error('action is required.');
+  const actorSessionId = String(deps.ownerSessionIdOverride || ownerSessionId || '').trim();
+  const isHiddenSupervisor = !!String(deps.ownerSessionIdOverride || '').trim();
+  const hiddenSupervisionId = String(deps.supervisionIdOverride || '').trim();
+  const hiddenAllowedActions = new Set(['read', 'status', 'send', 'chat', 'steer', 'review_decision', 'supervision_wait']);
+
+  if (isHiddenSupervisor && !hiddenAllowedActions.has(action)) {
+    throw new Error('The hidden supervision runtime may only inspect and manage its existing target workflow.');
+  }
 
   if (action === 'list') {
     const page: any = listSessionSummaries({
@@ -433,21 +524,123 @@ export async function executePrometheusThreadOps(
     };
   }
 
-  if (action === 'create' || action === 'start') {
-    return { session: createManagedThread(ownerSessionId, args, args, deps) };
+  if (action === 'create' || action === 'start' || ['create_and_ping', 'create_and_forget', 'create_and_supervise'].includes(action)) {
+    const launchMode = action === 'create_and_ping'
+      ? 'ping'
+      : action === 'create_and_forget'
+        ? 'forget'
+        : action === 'create_and_supervise'
+          ? 'supervise'
+          : undefined;
+    const createArgs = launchMode ? { ...args, launch_mode: launchMode } : args;
+    return { session: createManagedThread(ownerSessionId, createArgs, createArgs, deps) };
   }
 
-  if (action === 'create_many' || action === 'start_many') {
+  if (action === 'create_many' || action === 'start_many' || ['create_many_and_ping', 'create_many_and_forget', 'create_many_and_supervise'].includes(action)) {
     const inputs = Array.isArray(args?.threads) ? args.threads.slice(0, 24) : [];
     if (!inputs.length) throw new Error('threads must contain at least one thread specification.');
-    const created = inputs.map((input: any) => createManagedThread(ownerSessionId, input, args, deps));
+    const launchMode = action === 'create_many_and_ping'
+      ? 'ping'
+      : action === 'create_many_and_forget'
+        ? 'forget'
+        : action === 'create_many_and_supervise'
+          ? 'supervise'
+          : undefined;
+    const defaults = launchMode ? { ...args, launch_mode: launchMode } : args;
+    const created = inputs.map((input: any) => createManagedThread(ownerSessionId, input, defaults, deps));
     return { created, count: created.length };
+  }
+
+  if (action === 'supervision_wait') {
+    const supervisionId = String(args?.supervision_id || '').trim();
+    if (!supervisionId) throw new Error('supervision_id is required.');
+    if (isHiddenSupervisor && hiddenSupervisionId && supervisionId !== hiddenSupervisionId) {
+      throw new Error('The hidden supervision runtime may only wait on its own supervision.');
+    }
+    const current = getThreadSupervision(supervisionId);
+    if (!current || current.ownerSessionId !== actorSessionId) throw new Error('Supervision not found.');
+    const afterEventId = String(args?.after_event_id || args?.afterEventId || '').trim() || undefined;
+    const waitBudgetMs = Math.max(1_000, Math.min(30 * 60_000, Math.floor(Number(args?.timeout_ms || args?.timeoutMs) || 10 * 60_000)));
+    const waitDeadline = Date.now() + waitBudgetMs;
+    let wait = await waitForThreadSupervisionUpdate({
+      ownerSessionId: actorSessionId,
+      supervisionId,
+      afterEventId,
+      timeoutMs: waitBudgetMs,
+      signal: deps.abortSignal?.signal,
+    });
+    let candidate = wait.supervision;
+    let leased: ThreadSupervision | null = null;
+    // Keep the model inside this blocking tool call while the review throttle
+    // is active. If a newer target event arrives during the throttle, recheck
+    // that event in the same supervisor runtime instead of returning control
+    // to the model for a redundant full generation.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (!wait.ready && !wait.timedOut) break;
+      if (candidate?.status !== 'active' || !candidate.pendingReview || !candidate.pendingEvent) break;
+      leased = leaseThreadSupervisionReview({
+        ownerSessionId: actorSessionId,
+        supervisionId,
+        eventId: candidate.pendingEvent.id,
+        broadcast: deps.broadcastWS,
+      });
+      if (leased) break;
+      // A review interval is a supervisor throttle, not a reason to wake the
+      // model and create another full generation. Keep this tool call blocked
+      // until the interval elapses or a newer target event wakes it.
+      if (candidate.lastReviewAt) {
+        const retryAfterMs = Math.max(1000, candidate.minReviewIntervalMs - (Date.now() - candidate.lastReviewAt));
+        const remainingMs = waitDeadline - Date.now();
+        if (remainingMs <= 0) break;
+        wait = await waitForThreadSupervisionUpdate({
+          ownerSessionId: actorSessionId,
+          supervisionId,
+          afterEventId: candidate.pendingEvent.id,
+          timeoutMs: Math.min(retryAfterMs, remainingMs),
+          signal: deps.abortSignal?.signal,
+        });
+        candidate = wait.supervision;
+        continue;
+      }
+      break;
+    }
+    if (leased) {
+      return {
+        wait: { ready: true, eventId: leased.leasedEventId, status: leased.status },
+        supervision: leased,
+      };
+    }
+    if (!wait.ready || !candidate || candidate.status !== 'active') {
+      return {
+        wait: {
+          ready: false,
+          timedOut: wait.timedOut === true,
+          status: candidate?.status || 'missing',
+        },
+        supervision: candidate,
+      };
+    }
+    const latest = getThreadSupervision(supervisionId);
+    if (!latest || latest.status !== 'active') {
+      return { wait: { ready: false, status: latest?.status || 'missing' }, supervision: latest };
+    }
+    if (!latest.pendingReview || !latest.pendingEvent) {
+      return {
+        wait: {
+          ready: false,
+          timedOut: wait.timedOut === true,
+          status: latest.status,
+        },
+        supervision: latest,
+      };
+    }
+    return { wait: { ready: false, throttled: true, status: latest.status }, supervision: latest };
   }
 
   if (action === 'supervisions' || action === 'followed') {
     return {
       supervisions: listThreadSupervisions({
-        ownerSessionId: args?.all_owners === true ? undefined : ownerSessionId,
+        ownerSessionId: args?.all_owners === true ? undefined : actorSessionId,
         status: args?.status || undefined,
         includeTerminal: args?.include_terminal !== false,
         limit: args?.limit,
@@ -456,10 +649,14 @@ export async function executePrometheusThreadOps(
   }
 
   if (action === 'review_decision') {
+    const supervisionId = String(args?.supervision_id || '').trim();
+    if (isHiddenSupervisor && hiddenSupervisionId && supervisionId !== hiddenSupervisionId) {
+      throw new Error('The hidden supervision runtime may only resolve its own supervision.');
+    }
     return {
       supervision: resolveThreadSupervisionReview({
-        ownerSessionId,
-        supervisionId: String(args?.supervision_id || '').trim(),
+        ownerSessionId: actorSessionId,
+        supervisionId,
         reviewEventId: String(args?.review_event_id || '').trim(),
         decision: args?.decision,
         progressMade: args?.progress_made,
@@ -474,7 +671,7 @@ export async function executePrometheusThreadOps(
     const supervisionId = String(args?.supervision_id || '').trim();
     if (!supervisionId) throw new Error('supervision_id is required.');
     return { supervision: reviseThreadSupervision({
-      ownerSessionId,
+      ownerSessionId: actorSessionId,
       supervisionId,
       objective: args?.objective,
       acceptanceCriteria: args?.acceptance_criteria || args?.acceptanceCriteria,
@@ -484,19 +681,29 @@ export async function executePrometheusThreadOps(
   if (action === 'pause_supervision') {
     const supervisionId = String(args?.supervision_id || '').trim();
     const current = getThreadSupervision(supervisionId);
-    if (!current || current.ownerSessionId !== ownerSessionId) throw new Error('Supervision not found.');
+    if (!current || current.ownerSessionId !== actorSessionId) throw new Error('Supervision not found.');
     return { supervision: pauseThreadSupervision(supervisionId, String(args?.reason || 'Paused by supervising user.')) };
   }
 
   if (action === 'resume_supervision') {
     const supervisionId = String(args?.supervision_id || '').trim();
-    return { supervision: resumeThreadSupervision(supervisionId, ownerSessionId) };
+    return { supervision: resumeThreadSupervision(supervisionId, actorSessionId) };
   }
 
   const targetSessionId = String(args?.session_id || args?.sessionId || args?.target_session_id || '').trim();
   if (!targetSessionId && action !== 'unfollow') throw new Error('session_id is required.');
-  if (targetSessionId === ownerSessionId) throw new Error('Peer-thread operations cannot target the current owner session.');
+  if (targetSessionId === actorSessionId) throw new Error('Peer-thread operations cannot target the current owner session.');
   if (targetSessionId && !sessionExists(targetSessionId)) throw new Error(`Session not found: ${targetSessionId}`);
+  if (isHiddenSupervisor && targetSessionId) {
+    const supervisionId = String(args?.supervision_id || args?.supervisionId || '').trim();
+    if (hiddenSupervisionId && supervisionId !== hiddenSupervisionId) {
+      throw new Error('The hidden supervision runtime may only target its own managed thread.');
+    }
+    const supervised = getThreadSupervision(supervisionId);
+    if (!supervised || supervised.ownerSessionId !== actorSessionId || supervised.targetSessionId !== targetSessionId) {
+      throw new Error('The hidden supervision runtime may only target its own managed thread.');
+    }
+  }
 
   if (action === 'read' || action === 'status') {
     return {
@@ -519,7 +726,7 @@ export async function executePrometheusThreadOps(
     const message = String(args?.message || args?.prompt || '').trim();
     if (!message) throw new Error('message is required.');
     const supervision = assertThreadSupervisionFollowUpAllowed({
-      ownerSessionId,
+      ownerSessionId: actorSessionId,
       targetSessionId,
       supervisionId: args?.supervision_id,
       broadcast: deps.broadcastWS,
@@ -530,7 +737,7 @@ export async function executePrometheusThreadOps(
     }
     const result = addPendingRuntimeSteerForSession(targetSessionId, {
       message,
-      source: `peer_session:${ownerSessionId}`,
+      source: `peer_session:${actorSessionId}`,
       kind: args?.kind || 'correction',
       requiresWorkerResponse: args?.requires_response !== false,
       responseMode: args?.requires_response === false ? 'silent' : 'worker_reply',
@@ -548,7 +755,7 @@ export async function executePrometheusThreadOps(
     }
     if (!deps.runInteractiveTurn) throw new Error('Interactive turn runtime is unavailable.');
     const supervision = assertThreadSupervisionFollowUpAllowed({
-      ownerSessionId,
+      ownerSessionId: actorSessionId,
       targetSessionId,
       supervisionId: args?.supervision_id,
       broadcast: deps.broadcastWS,
@@ -564,18 +771,22 @@ export async function executePrometheusThreadOps(
         () => undefined,
         undefined,
         undefined,
-        `[PEER SESSION CONTEXT]\nMessage sent by Prometheus session ${ownerSessionId}. Reply and act in this target thread.`,
+        `[PEER SESSION CONTEXT]\nMessage sent by Prometheus session ${actorSessionId}. Reply and act in this target thread.`,
         undefined,
         undefined,
         undefined,
         undefined,
         undefined,
-        { channel: 'system', surface: 'automation', device: 'server', source: 'peer_session', chatId: ownerSessionId, label: 'Prometheus peer thread' },
+        { channel: 'system', surface: 'automation', device: 'server', source: 'peer_session', chatId: actorSessionId, label: 'Prometheus peer thread' },
       );
       if (supervision) commitThreadSupervisionFollowUp(supervision.id, fingerprint);
       return { queued: false, completed: true, result };
     }
-    runDetached(deps, ownerSessionId, targetSessionId, message);
+    runDetached(deps, actorSessionId, targetSessionId, message, {
+      supervisionId: supervision?.id,
+      notifyOnComplete: !supervision,
+      notifyOnFailure: !supervision,
+    });
     if (supervision) commitThreadSupervisionFollowUp(supervision.id, fingerprint);
     return { queued: true, sessionId: targetSessionId };
   }
@@ -585,7 +796,7 @@ export async function executePrometheusThreadOps(
     if (!objective) throw new Error('objective is required.');
     const target = getSession(targetSessionId);
     const supervision = createThreadSupervision({
-      ownerSessionId,
+      ownerSessionId: actorSessionId,
       targetSessionId,
       targetTitle: getSessionDisplayTitle(target),
       objective,
@@ -600,14 +811,16 @@ export async function executePrometheusThreadOps(
       if (activeRuntimeForSession(targetSessionId)) {
         const steer = addPendingRuntimeSteerForSession(targetSessionId, {
           message: `After the current turn, continue autonomously until this objective is complete: ${objective}`,
-          source: `peer_session:${ownerSessionId}`,
+          source: `peer_session:${actorSessionId}`,
           kind: 'constraint',
           requiresWorkerResponse: true,
           responseMode: 'worker_reply',
         });
         return { supervision, activation: steer };
       }
-      runDetached(deps, ownerSessionId, targetSessionId, `/goal ${objective}`, supervision.id);
+      runDetached(deps, actorSessionId, targetSessionId, `/goal ${objective}`, {
+        supervisionId: supervision.id,
+      });
     }
     return { supervision, activation: { queued: true } };
   }
@@ -616,13 +829,13 @@ export async function executePrometheusThreadOps(
     const supervisionId = String(args?.supervision_id || '').trim();
     if (supervisionId) {
       const current = getThreadSupervision(supervisionId);
-      if (!current || (current.ownerSessionId !== ownerSessionId && args?.all_owners !== true)) {
+      if (!current || (current.ownerSessionId !== actorSessionId && args?.all_owners !== true)) {
         throw new Error('Supervision not found.');
       }
       return { supervision: cancelThreadSupervision(supervisionId) };
     }
     const target = String(args?.session_id || args?.target_session_id || '').trim();
-    const records = listThreadSupervisions({ ownerSessionId, targetSessionId: target, status: 'active' });
+    const records = listThreadSupervisions({ ownerSessionId: actorSessionId, targetSessionId: target, status: 'active' });
     return { cancelled: records.map((record) => cancelThreadSupervision(record.id)).filter(Boolean) };
   }
 
@@ -630,7 +843,7 @@ export async function executePrometheusThreadOps(
     const runtimes = listLiveRuntimes().filter((runtime) => String(runtime.sessionId || '') === targetSessionId);
     const aborted = runtimes.map((runtime) => abortLiveRuntime(runtime.id));
     const goalResult = handleMainChatGoalCommand(targetSessionId, `/goal pause ${String(args?.reason || 'Paused by supervising Prometheus thread').trim()}`);
-    const supervisions = listThreadSupervisions({ ownerSessionId, targetSessionId, status: 'active' })
+    const supervisions = listThreadSupervisions({ ownerSessionId: actorSessionId, targetSessionId, status: 'active' })
       .map((record) => cancelThreadSupervision(record.id))
       .filter(Boolean);
     return { aborted, goal: goalResult.goal, supervisions };

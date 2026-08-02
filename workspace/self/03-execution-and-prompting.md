@@ -32,6 +32,7 @@ Prometheus currently builds the live prompt from these layers:
 
 - execution-mode system block
 - core system policy block
+- bounded working-context packet window from recent rich turns
 - recent tool observation block, except in creative mode
 - caller context
 - active browser/session context when relevant
@@ -40,6 +41,14 @@ Prometheus currently builds the live prompt from these layers:
 - skills runtime directives
 
 Recent tool context is no longer a raw "last 5 tool logs" dump in the main chat path. `chat.router.ts`, `boot.ts`, `main-chat-goals.ts`, and the Brain runner now prefer structured `[RECENT_TOOL_OBSERVATIONS]` generated from `src/gateway/tool-observations.ts`. The legacy `getRecentToolLog(...)` still exists in `session.ts` as a fallback when no observation records exist, but new tool results are persisted as observations and then budget-formatted for future turns.
+
+### Bounded working context and reasoning continuity (2026-08-01)
+
+`src/gateway/context/turn-context-packet.ts` is the companion lane to tool observations. It retains at most five recent rich-turn packets in `Session.workingContextPackets`. Each packet may carry the request, safe provider reasoning/decision summary, findings, completed actions, compact tool/progress state, uncertainties, pending work, and a continue-from-here instruction. A provider summary by itself does not create a packet for an otherwise simple turn.
+
+The runtime distinguishes provider `reasoning_summary` events from private/raw thinking. The former is bounded and eligible for cross-turn continuity; the latter remains a live/UI-only stream and is not stored in a packet or injected into a later prompt. If a provider supplies no reasoning summary, the packet still carries deterministic tool state and outcome evidence rather than fabricating hidden reasoning.
+
+Cancellation uses the same packet schema. The main-chat live-runtime abort hook flushes an immediate checkpoint packet from the events already recorded. Normal post-turn finalization merges that packet by `turnId` with completed observations when the turn unwinds. Any tool boundary that may have been in flight is marked uncertain and must be verified before retrying.
 
 Gateway prompt assembly uses async memory-index search, async profile/reference reads, and a backward bounded observation-tail reader. Creative reference images are loaded with bounded per-file/aggregate bytes and limited concurrency. Project-learning lookup/write and auto-title generation are post-terminal; they do not gate the final response. Auto-title admission is globally limited to one cancellable background model job, so simultaneous thread completions cannot fill the real-turn model queue.
 
@@ -58,11 +67,14 @@ Important current-turn boundary:
 Rolling and token-aware compaction are owned by `chat.router.ts`:
 
 - `resolveRollingCompactionPolicy()` still reads the rolling compaction settings, but compaction is now also provider/context-budget aware
-- `maybeRunRollingCompaction(...)` handles normal checkpoint compaction after the configured message count
+- the active normal pre-turn path is `runInteractiveTurn(...)` → `addMessage(..., deferOnCompaction: true)` → an isolated internal `handleChat(...)` compaction turn; that path receives the working-context packet block through the normal prompt assembly
+- `maybeRunRollingCompaction(...)` remains the shared rolling-window helper and also receives the packet block when invoked
 - mid-workflow token-budget compaction uses the same compactor prompt path with strategy `mid_workflow_token_budget`
 - compaction emits synthetic `context_compaction` tool-call/tool-result events so the web UI shows the pause/compaction/continue workflow like other tool/approval pauses
 - the compactor prompt is isolated as `ContextCompactor` with no tools/persona chatter and produces a structured resume packet
+- rolling and mid-workflow compaction receive the recent working-context packets plus the active turn's bounded provider reasoning summaries under `[RECENT_REASONING_AND_DECISIONS]`; the old empty rolling reasoning input is no longer used
 - fallback summaries use the same section shape when the LLM compactor fails
+- fallback summaries also carry the bounded decision/tool packet so a provider outage does not erase continuity
 - summaries are bounded by word count after generation through `boundCompactionSummaryWords(...)`
 
 The current context compaction packet should preserve:

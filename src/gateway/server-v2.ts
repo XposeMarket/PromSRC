@@ -684,6 +684,9 @@ const activeThreadSupervisionController = new ActiveThreadSupervisionController(
     runInteractiveTurn(message, sessionId, sendSSE, pinnedMessages, abortSignal, callerContext, reasoningOptions, attachments, attachmentPreviews, modelOverride, flags, turnOriginInput),
   routeOwnerReviewToVoice: (ownerSessionId, prompt) =>
     getCodexRealtimeBridge().appendRealtimeTextForOwner(ownerSessionId, prompt),
+  // Supervision is a hidden persistent checkpoint loop. The owner chat/voice
+  // runtime is reserved for the terminal notification, not review turns.
+  persistentSupervisorLoop: true,
   broadcast: broadcastWS,
 });
 let stopThreadSupervisionRunner: () => void = () => undefined;

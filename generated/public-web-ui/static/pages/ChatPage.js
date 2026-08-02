@@ -17890,7 +17890,7 @@ function ensureDesktopVoiceOrbDock() {
     <div class="desktop-voice-orb-shell">
       <button type="button" class="desktop-voice-orb desktop-voice-orb-trigger pm-voice-orb pm-voice-particle-orb" id="desktop-voice-orb-trigger" aria-label="Choose voice target" aria-expanded="false" title="Choose voice target">
         ${desktopVoiceOrbSvg()}
-        <canvas class="desktop-voice-orb-particles" aria-hidden="true"></canvas>
+        <canvas class="pm-voice-orb-particles desktop-voice-orb-particles" aria-hidden="true"></canvas>
       </button>
     </div>
   `;
@@ -23252,11 +23252,11 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
             title: tasks[0].title || 'Voice task',
             prompt: tasks[0].prompt,
             objective: tasks[0].prompt,
-            follow: true,
+            launch_mode: 'supervise',
           }
         : {
             action: 'create_many',
-            follow: true,
+            launch_mode: 'supervise',
             threads: tasks.map((task) => ({
               title: task.title || 'Voice task',
               prompt: task.prompt,
@@ -42579,7 +42579,7 @@ wsEventBus.on('main_chat_goal_updated', async (msg) => {
   sess.mainChatGoal = msg.goal || null;
   sess.updatedAt = Date.now();
   if (sid === window.activeChatSessionId) {
-    if (['runner_started', 'turn_started'].includes(event)) {
+    if (['runner_started', 'launch_accepted', 'turn_preparing', 'turn_started'].includes(event)) {
       window._sessionThinking[sid] = true;
       getSessionStreamState(sid).turnStartedAt = Date.now();
       syncActiveSessionRunState();

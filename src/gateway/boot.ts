@@ -529,12 +529,14 @@ export async function runBootMd(
 
       if (goalOwnedRestart) {
         const devEdit = target.devEdit;
+        const restartSummary = restartCtx.summary || devEdit?.summary || '';
+        finalText = `Gateway restart completed successfully. ${restartSummary}${/changes are live/i.test(restartSummary) ? '' : ' Approved dev changes are live.'}`;
         if (devEdit) {
           markDevSourceEditContinuationComplete({
             id: devEdit.id,
             sessionId: target.sessionId,
             tag: devEdit.completionNoteTag || 'dev_edit_complete',
-            note: `Gateway restart completed successfully. ${restartCtx.summary || devEdit.summary || 'Approved dev changes are live.'}`,
+            note: finalText,
           });
         }
         finalizeMainChatGoalRestartRecovery(target.sessionId, {
@@ -579,7 +581,11 @@ export async function runBootMd(
       }
 
       console.log(`[boot-md] Hot restart ${suppressTerminalRestartReply ? 'continuation queued' : 'complete'} for ${target.sessionId}: ${finalText.slice(0, 120)}`);
-      if (!suppressTerminalRestartReply) try {
+      // Goal-owned restart recovery still needs one compact durable lifecycle
+      // message. It is not the Goal's final answer and does not enqueue a
+      // duplicate startup notification; the resumed Goal runner owns the next
+      // substantive turn.
+      if (goalOwnedRestart || !suppressTerminalRestartReply) try {
         addMessage(target.sessionId, {
           role: 'assistant',
           messageKind: goalOwnedRestart ? 'restart_status' : undefined,

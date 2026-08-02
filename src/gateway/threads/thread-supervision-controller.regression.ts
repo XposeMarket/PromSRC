@@ -24,8 +24,8 @@ try {
     sessionApi.touchSession(id, { channel: 'web', title });
     sessionApi.flushSession(id);
   };
-  const addAssistant = (id: string, content: string) => {
-    sessionApi.addMessage(id, { role: 'assistant', content, timestamp: Date.now() }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+  const addAssistant = (id: string, content: string, extra: Record<string, any> = {}) => {
+    sessionApi.addMessage(id, { role: 'assistant', content, timestamp: Date.now(), ...extra }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     sessionApi.flushSession(id);
   };
   const observeAndPersist = (record: any, runtimeState: 'running' | 'idle' = 'idle') => {
@@ -68,6 +68,47 @@ try {
   assert.equal(coalesced.pendingReview, true);
   assert.notEqual(coalesced.pendingEvent?.id, firstEventId);
   assert.equal(coalesced.pendingEvent?.messages.length, 2, 'new assistant events should coalesce without duplication');
+
+  // Supervisor evidence must include the target's durable reasoning summary,
+  // tool/process findings, live trace, changed files, and active runtime
+  // checkpoint—not just the final assistant prose.
+  makeSession('owner_context', 'Context owner');
+  makeSession('target_context', 'Context target');
+  const contextRecord = supervisionApi.createThreadSupervision({
+    ownerSessionId: 'owner_context', targetSessionId: 'target_context', objective: 'Verify the implementation with evidence.', minReviewIntervalMs: 1,
+  });
+  const contextRuntimeId = runtimeApi.registerLiveRuntime({
+    kind: 'main_chat', label: 'context target runtime', sessionId: 'target_context',
+  });
+  runtimeApi.updateLiveRuntimeCheckpoint(contextRuntimeId, {
+    event: 'tool_call', phase: 'verification', toolName: 'run_command',
+    thinkingTail: 'I am comparing the focused test output with the acceptance criteria.',
+    processEntries: [{ type: 'tool_result', content: 'focused verification passed' }],
+  });
+  addAssistant('target_context', 'Implementation update with verification evidence.', {
+    reasoningSummary: 'The implementation now covers the requested branch; I checked the focused regression.',
+    toolLog: 'run_command: focused regression passed',
+    processEntries: [{ type: 'tool_result', content: 'focused regression passed' }],
+    liveTraceEntries: [{ event: 'tool_result', toolName: 'run_command', result: 'pass' }],
+    fileChanges: { files: [{ path: 'src/example.ts', status: 'modified' }] },
+    artifacts: [{ title: 'focused regression output' }],
+  });
+  const contextObserved = controllerApi.observeThreadSupervision(
+    supervisionApi.getThreadSupervision(contextRecord.id)!,
+    'running',
+    Date.now(),
+    runtimeApi.listLiveRuntimes().find((runtime: any) => runtime.id === contextRuntimeId),
+  );
+  const contextEvent = contextObserved.pendingEvent!;
+  assert.match(contextEvent.reasoningSummary || '', /implementation now covers/i);
+  assert.match(contextEvent.toolLog || '', /focused regression passed/i);
+  assert.ok(contextEvent.processEntries?.length);
+  assert.ok(contextEvent.liveTraceEntries?.length);
+  assert.ok(contextEvent.runtimeCheckpoint?.thinkingTail);
+  assert.ok(contextEvent.recentMessages?.some((message: any) => message.reasoningSummary));
+  assert.ok(contextEvent.messages.some((message: any) => message.fileChanges));
+  runtimeApi.finishLiveRuntime(contextRuntimeId);
+  supervisionApi.cancelThreadSupervision(contextRecord.id);
 
   const doneTarget = sessionApi.getSession('target_coalesce');
   doneTarget.mainChatGoal = { id: 'goal_done', objective: 'done test', status: 'done', createdAt: Date.now(), updatedAt: Date.now() } as any;
@@ -290,6 +331,53 @@ try {
   assert.ok(cycleCalls.length >= 2, 'the same workflow must survive multiple wait/review cycles');
   assert.ok(cycleCalls.every((call) => call.sessionId === 'owner_cycles'));
   assert.ok(cycleCalls.every((call) => call.prompt.includes(expectedRunId) && call.prompt.includes('SAME durable supervisory workflow')));
+
+  // Production supervision uses a hidden persistent runtime. It must receive
+  // the complete evidence packet and never execute the owner chat/voice turn.
+  makeSession('owner_persistent', 'Persistent owner');
+  makeSession('target_persistent', 'Persistent target');
+  const persistent = supervisionApi.createThreadSupervision({
+    ownerSessionId: 'owner_persistent', targetSessionId: 'target_persistent',
+    objective: 'Verify the persistent supervisor route.', minReviewIntervalMs: 1,
+  });
+  addAssistant('target_persistent', 'The target has completed the requested verification.', {
+    reasoningSummary: 'I compared the changed behavior against the acceptance criteria.',
+    toolLog: 'run_command: regression passed',
+  });
+  let persistentSessionId = '';
+  let persistentFlags: any = null;
+  let ownerChatCalls = 0;
+  const persistentController = new controllerApi.ActiveThreadSupervisionController({
+    persistentSupervisorLoop: true,
+    pollIntervalMs: 60_000,
+    runInteractiveTurn: async (...args: any[]) => {
+      persistentSessionId = String(args[1] || '');
+      persistentFlags = args[10];
+      if (persistentSessionId === 'owner_persistent') ownerChatCalls += 1;
+      const current = supervisionApi.getThreadSupervision(persistent.id)!;
+      if (persistentSessionId.startsWith('prom_supervision_')) {
+        assert.match(String(args[0] || ''), /runtimeCheckpoint|reasoningSummary|toolLog/);
+        supervisionApi.resolveThreadSupervisionReview({
+          ownerSessionId: current.ownerSessionId,
+          supervisionId: current.id,
+          reviewEventId: current.leasedEventId!,
+          decision: 'verified_complete',
+          progressMade: true,
+          reason: 'The hidden supervisor independently verified the target evidence.',
+          evidence: ['Target reasoning summary and focused regression evidence were present.'],
+        });
+      }
+      return { type: 'execute', text: '' };
+    },
+  });
+  await persistentController.tick();
+  const persistentAfter = supervisionApi.getThreadSupervision(persistent.id)!;
+  assert.equal(persistentAfter.status, 'complete');
+  assert.ok(persistentSessionId.startsWith('prom_supervision_'));
+  assert.equal(persistentFlags?.supervisionLoop, true);
+  assert.equal(persistentFlags?.silentSupervisionLoop, true);
+  assert.equal(persistentFlags?.supervisionOwnerSessionId, 'owner_persistent');
+  assert.equal(ownerChatCalls, 0);
 
   // When the owner has an active Voice Agent, the managed-thread event must
   // re-enter AVAS and must never fall through to the owner chat Worker.

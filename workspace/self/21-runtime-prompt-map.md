@@ -188,7 +188,8 @@ Volatile vs stable parts are joined with `PROMPT_CACHE_MARKER` via `assembleCont
 | Onboarding | `onboarding/meet-prompt.ts:8–105` |
 | Boot startup | `boot.ts:100–108` user msg; snapshot via `prompt-context.ts:339–372` |
 | Self-reflection suffix | `config/self-reflection.ts:18–49` (when `write_note` available) |
-| Context compaction (isolated) | `chat.router.ts:1477–1528` — separate `ContextCompactor`, no persona |
+| Working context packets | `session.ts` + `context/turn-context-packet.ts` → `chat.router.ts` — bounded safe handoffs from up to five recent rich turns; private/raw thinking excluded |
+| Context compaction (isolated) | `chat.router.ts` — separate `ContextCompactor`, no persona; receives working-context packets and bounded provider reasoning summaries |
 
 **Main chat gets the fullest stack:** config soul + USER + SOUL + MEMORY + tools + skills + intraday + memory search + all base routing policies.
 

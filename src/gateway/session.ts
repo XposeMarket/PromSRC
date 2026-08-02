@@ -1,8 +1,9 @@
 /**
  * session.ts - Simple session state for Prometheus v2
  * 
- * No plans. No verified facts. No workspace ledger. No self-learning.
- * Just conversation history.
+ * Conversation history plus bounded runtime continuity metadata. Durable
+ * working-context packets are safe handoffs, not raw model thinking or a
+ * replacement for transcript/tool-observation audit data.
  */
 
 import fs from 'fs';
@@ -14,6 +15,14 @@ import { getUsageCalibration } from '../providers/model-usage';
 import { getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
 import { hookBus } from './hooks';
 import { appendContinuityEvent, appendContinuityMessage } from './audit/continuity';
+import {
+  formatTurnContextPacketsForPrompt,
+  mergeTurnContextPackets,
+  normalizeTurnContextPacket,
+  WORKING_CONTEXT_PACKET_LIMIT,
+  type TurnContextPacket,
+  type TurnContextPacketInput,
+} from './context/turn-context-packet';
 import {
   assertSafeStorageId,
   isSafeStorageId,
@@ -47,6 +56,11 @@ export interface ChatMessage {
   fileChanges?: any;
   processEntries?: any[];
   toolLog?: string; // full tool call log for this turn (injected by chat.router after turn completes)
+  /** Bounded provider reasoning summary retained for background supervision. */
+  reasoningSummary?: string;
+  turnProviderUsage?: any;
+  toolResultBudget?: any;
+  liveTraceEntries?: any[];
   productCarousel?: { title: string; source?: string; items: Array<{
     title: string; price?: string; description?: string; rating?: number;
     reviews?: number; reviewCount?: number; tag?: string; badge?: string; imageUrl?: string; imagePath?: string;
@@ -301,6 +315,8 @@ export interface Session {
   /** Stable identity of the first message retained after the rolling summary. */
   contextStartMessageId?: string;
   contextSummaryUpdatedAt?: number;
+  /** Bounded safe handoffs from recent tool-using or interrupted turns. */
+  workingContextPackets?: TurnContextPacket[];
   tags?: string[];
   userTurnCounter?: number;
   activatedToolCategories?: string[];
@@ -395,7 +411,7 @@ const API_HISTORY_PRUNE_THRESHOLD_CHARS = 3000;
 const API_HISTORY_PRUNE_KEEP_CHARS = 2500;
 const SESSION_CLEANUP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const AUTO_SESSION_ID_RE = /^(task_|cron_|brain_|auto_)/i;
-const INTERNAL_SESSION_ID_RE = /^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_)/i;
+const INTERNAL_SESSION_ID_RE = /^(brain_thought_|brain_dream_|brain_dream_cleanup_|subagent_chat_|task_recovery_|task_resume_brief_|prom_supervision_)/i;
 const SESSION_SAVE_DEBOUNCE_MS = 500;
 const sessionSaveTimers = new Map<string, NodeJS.Timeout>();
 const sessionSaveRevisions = new Map<string, number>();
@@ -2123,6 +2139,12 @@ export function getSession(id: string): Session {
         contextSummaryUpdatedAt: Number.isFinite(Number(data.contextSummaryUpdatedAt))
           ? Number(data.contextSummaryUpdatedAt)
           : undefined,
+        workingContextPackets: Array.isArray(data.workingContextPackets)
+          ? data.workingContextPackets
+              .map((packet: any) => normalizeTurnContextPacket(packet))
+              .filter((packet: TurnContextPacket | null): packet is TurnContextPacket => !!packet)
+              .slice(-WORKING_CONTEXT_PACKET_LIMIT)
+          : [],
         userTurnCounter: Number.isFinite(Number(data.userTurnCounter))
           ? Math.max(0, Math.floor(Number(data.userTurnCounter)))
           : Array.isArray(data.history)
@@ -2171,6 +2193,7 @@ export function getSession(id: string): Session {
     latestContextSummary: undefined,
     contextStartIndex: 0,
     contextSummaryUpdatedAt: undefined,
+    workingContextPackets: [],
     userTurnCounter: 0,
     activatedToolCategories: [],
     scopedToolCategoryActivations: [],
@@ -2401,6 +2424,52 @@ export function getHistory(id: string, maxTurns: number = 10): ChatMessage[] {
   return session.history.slice(-maxMessages);
 }
 
+/**
+ * Store or update the bounded, safe handoff for a runtime turn. A later
+ * normal completion replaces the earlier abort snapshot by turnId, so abort
+ * persistence can be immediate without creating duplicate context entries.
+ */
+export function recordWorkingContextPacket(
+  id: string,
+  input: TurnContextPacketInput,
+  options: { flush?: boolean } = {},
+): TurnContextPacket | null {
+  const session = getSession(id);
+  const packet = normalizeTurnContextPacket({ ...input, sessionId: id });
+  if (!packet) return null;
+  const packets = Array.isArray(session.workingContextPackets) ? session.workingContextPackets : [];
+  const existingIndex = packets.findIndex((entry) => entry.turnId === packet.turnId);
+  if (existingIndex >= 0) {
+    packets[existingIndex] = mergeTurnContextPackets(packets[existingIndex], packet);
+  } else {
+    packets.push(packet);
+  }
+  session.workingContextPackets = packets
+    .map(normalizeTurnContextPacket)
+    .filter((entry): entry is TurnContextPacket => !!entry)
+    .slice(-WORKING_CONTEXT_PACKET_LIMIT);
+  session.lastActiveAt = Date.now();
+  saveSession(id);
+  if (options.flush) flushSession(id);
+  return session.workingContextPackets.find((entry) => entry.turnId === packet.turnId) || packet;
+}
+
+export function getWorkingContextPackets(id: string, limit = WORKING_CONTEXT_PACKET_LIMIT): TurnContextPacket[] {
+  const session = getSession(id);
+  const max = Math.max(1, Math.min(WORKING_CONTEXT_PACKET_LIMIT, Math.floor(Number(limit) || WORKING_CONTEXT_PACKET_LIMIT)));
+  return (Array.isArray(session.workingContextPackets) ? session.workingContextPackets : [])
+    .map(normalizeTurnContextPacket)
+    .filter((entry): entry is TurnContextPacket => !!entry)
+    .slice(-max);
+}
+
+export function getWorkingContextForContext(id: string, maxChars?: number): string {
+  return formatTurnContextPacketsForPrompt(
+    getWorkingContextPackets(id),
+    Number.isFinite(Number(maxChars)) && Number(maxChars) > 0 ? Number(maxChars) : undefined,
+  );
+}
+
 function buildActiveGoalSummaryMessage(session: Session): ChatMessage | null {
   const goal = session.mainChatGoal && ['active', 'paused', 'blocked'].includes(session.mainChatGoal.status)
     ? session.mainChatGoal
@@ -2546,6 +2615,7 @@ export function clearHistory(id: string): void {
   session.contextStartIndex = 0;
   session.contextStartMessageId = undefined;
   session.contextSummaryUpdatedAt = undefined;
+  session.workingContextPackets = [];
   session.lastActiveAt = Date.now();
   saveSession(id);
   void hookBus.fire({
@@ -2932,6 +3002,9 @@ function scrubSession(session: Session): Session {
     latestContextSummary: session.latestContextSummary
       ? scrubPersistedText(session.latestContextSummary)
       : session.latestContextSummary,
+    workingContextPackets: Array.isArray(session.workingContextPackets)
+      ? session.workingContextPackets.map((packet) => scrubPersistedData(packet)).slice(-WORKING_CONTEXT_PACKET_LIMIT)
+      : [],
     mainChatGoal: scrubMainChatGoal(session.mainChatGoal),
     mainChatGoalHistory: Array.isArray(session.mainChatGoalHistory)
       ? session.mainChatGoalHistory.map((goal) => scrubMainChatGoal(goal)).filter(Boolean) as MainChatGoalState[]

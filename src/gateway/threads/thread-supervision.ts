@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/config';
 import { addMessage, flushSession, getSession, getSessionDisplayTitle, type MainChatGoalStatus } from '../session';
+import type { LiveRuntimeSnapshot } from '../live-runtime-registry';
 
 export type ThreadSupervisionStatus = 'active' | 'paused' | 'complete' | 'blocked' | 'failed' | 'cancelled';
 
@@ -20,6 +21,12 @@ export interface ThreadSupervisionMessageSummary {
   timestamp: number;
   messageKind?: string;
   excerpt: string;
+  reasoningSummary?: string;
+  toolLog?: string;
+  processEntries?: any[];
+  liveTraceEntries?: any[];
+  fileChanges?: any;
+  artifacts?: Array<{ kind: string; label: string }>;
 }
 
 export interface ThreadSupervisionPendingEvent {
@@ -34,6 +41,17 @@ export interface ThreadSupervisionPendingEvent {
   runtimeState: 'running' | 'idle';
   goalStatus?: MainChatGoalStatus;
   messages: ThreadSupervisionMessageSummary[];
+  /** Recent target transcript, not just the newly-triggering assistant turns. */
+  recentMessages?: ThreadSupervisionMessageSummary[];
+  /** Live worker checkpoint while the target is still running or just went idle. */
+  runtimeCheckpoint?: Record<string, any>;
+  /** Durable target Goal state at observation time. */
+  targetGoal?: Record<string, any>;
+  /** Compact target-side reasoning/tool findings retained for the supervisor. */
+  reasoningSummary?: string;
+  toolLog?: string;
+  processEntries?: any[];
+  liveTraceEntries?: any[];
   changedFiles: string[];
   artifacts: Array<{ kind: string; label: string }>;
 }
@@ -55,9 +73,9 @@ export interface ThreadSupervision {
   /** Explicit acceptance contract retained across review turns and restarts. */
   acceptanceCriteria: string;
   /**
-   * Durable identity for one logical manager workflow. Reviews are separate
-   * model calls so they never hold a gateway request open, but they always
-   * continue this checkpoint in the same owner session.
+   * Durable identity for one logical manager workflow. Production reviews run
+   * in a hidden detached supervisor runtime and continue this checkpoint
+   * without reopening the owner chat/voice turn.
    */
   supervisionRunId: string;
   objectiveRevision: number;
@@ -94,7 +112,9 @@ export interface ThreadSupervision {
   maxConsecutiveNoProgress: number;
   pendingReview: boolean;
   /** Surface currently responsible for the owner-side review turn. */
-  reviewDeliverySurface?: 'voice' | 'chat';
+  reviewDeliverySurface?: 'voice' | 'chat' | 'supervisor';
+  /** Hidden session used by the persistent supervisory runtime. */
+  supervisorSessionId?: string;
   pendingEvent?: ThreadSupervisionPendingEvent;
   reviewInFlight?: boolean;
   leasedEventId?: string;
@@ -117,6 +137,109 @@ interface ThreadSupervisionStore {
   version: 1;
   updatedAt: number;
   records: ThreadSupervision[];
+}
+
+type ThreadSupervisionWaiter = {
+  ownerSessionId: string;
+  afterEventId?: string;
+  resolve: (value: { ready: boolean; timedOut?: boolean; supervision: ThreadSupervision | null }) => void;
+  timer: ReturnType<typeof setTimeout>;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+};
+
+const threadSupervisionWaiters = new Map<string, Set<ThreadSupervisionWaiter>>();
+
+function pendingIdleEvent(record: ThreadSupervision | null, afterEventId = ''): boolean {
+  return !!(
+    record
+    && record.status === 'active'
+    && record.pendingReview
+    && record.pendingEvent
+    && record.pendingEvent.runtimeState === 'idle'
+    && record.pendingEvent.id !== String(afterEventId || '').trim()
+  );
+}
+
+/**
+ * Wait inside the persistent supervisor runtime until the target produces an
+ * idle/material event. This is deliberately not a chat turn or a user-facing
+ * notification; it is the blocking checkpoint between two supervisor tool
+ * passes.
+ */
+export function waitForThreadSupervisionUpdate(input: {
+  ownerSessionId: string;
+  supervisionId: string;
+  afterEventId?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<{ ready: boolean; timedOut?: boolean; supervision: ThreadSupervision | null }> {
+  const supervisionId = String(input.supervisionId || '').trim();
+  const ownerSessionId = String(input.ownerSessionId || '').trim();
+  const afterEventId = String(input.afterEventId || '').trim();
+  const current = getThreadSupervision(supervisionId);
+  if (!current || current.ownerSessionId !== ownerSessionId) {
+    return Promise.resolve({ ready: false, supervision: null });
+  }
+  if (pendingIdleEvent(current, afterEventId) || current.status !== 'active') {
+    return Promise.resolve({ ready: true, supervision: current });
+  }
+
+  const timeoutMs = Math.max(1_000, Math.min(30 * 60_000, Math.floor(Number(input.timeoutMs) || 10 * 60_000)));
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (value: { ready: boolean; timedOut?: boolean; supervision: ThreadSupervision | null }) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const waiter: ThreadSupervisionWaiter = {
+      ownerSessionId,
+      afterEventId,
+      resolve: settle,
+      timer: setTimeout(() => {
+        const bucket = threadSupervisionWaiters.get(supervisionId);
+        bucket?.delete(waiter);
+        if (bucket && bucket.size === 0) threadSupervisionWaiters.delete(supervisionId);
+        if (waiter.onAbort && waiter.signal) waiter.signal.removeEventListener('abort', waiter.onAbort);
+        settle({ ready: false, timedOut: true, supervision: getThreadSupervision(supervisionId) });
+      }, timeoutMs),
+      signal: input.signal,
+    };
+    if (input.signal) {
+      waiter.onAbort = () => {
+        const bucket = threadSupervisionWaiters.get(supervisionId);
+        bucket?.delete(waiter);
+        if (bucket && bucket.size === 0) threadSupervisionWaiters.delete(supervisionId);
+        clearTimeout(waiter.timer);
+        settle({ ready: false, timedOut: false, supervision: getThreadSupervision(supervisionId) });
+      };
+      if (input.signal.aborted) {
+        waiter.onAbort();
+        return;
+      }
+      input.signal.addEventListener('abort', waiter.onAbort, { once: true });
+    }
+    const bucket = threadSupervisionWaiters.get(supervisionId) || new Set<ThreadSupervisionWaiter>();
+    bucket.add(waiter);
+    threadSupervisionWaiters.set(supervisionId, bucket);
+  });
+}
+
+/** Wake hidden supervisor loops after a material idle observation is persisted. */
+export function signalThreadSupervisionUpdate(record: ThreadSupervision): void {
+  const bucket = threadSupervisionWaiters.get(record.id);
+  if (!bucket?.size) return;
+  for (const waiter of [...bucket]) {
+    const shouldWake = record.ownerSessionId === waiter.ownerSessionId
+      && (record.status !== 'active' || pendingIdleEvent(record, waiter.afterEventId));
+    if (!shouldWake) continue;
+    bucket.delete(waiter);
+    clearTimeout(waiter.timer);
+    if (waiter.onAbort && waiter.signal) waiter.signal.removeEventListener('abort', waiter.onAbort);
+    waiter.resolve({ ready: true, supervision: record });
+  }
+  if (bucket.size === 0) threadSupervisionWaiters.delete(record.id);
 }
 
 function storePath(): string {
@@ -181,7 +304,14 @@ function normalizeRecord(input: any): ThreadSupervision | null {
     minReviewIntervalMs: positiveInt(input?.minReviewIntervalMs, DEFAULT_THREAD_SUPERVISION_BUDGETS.minReviewIntervalMs, 60 * 60 * 1000),
     maxConsecutiveNoProgress: positiveInt(input?.maxConsecutiveNoProgress, DEFAULT_THREAD_SUPERVISION_BUDGETS.maxConsecutiveNoProgress, 20),
     pendingReview: input?.pendingReview === true,
-    reviewDeliverySurface: input?.reviewDeliverySurface === 'voice' ? 'voice' : input?.reviewDeliverySurface === 'chat' ? 'chat' : undefined,
+    reviewDeliverySurface: input?.reviewDeliverySurface === 'voice'
+      ? 'voice'
+      : input?.reviewDeliverySurface === 'supervisor'
+        ? 'supervisor'
+        : input?.reviewDeliverySurface === 'chat'
+          ? 'chat'
+          : undefined,
+    supervisorSessionId: typeof input?.supervisorSessionId === 'string' ? input.supervisorSessionId.slice(0, 220) : undefined,
     pendingEvent: input?.pendingEvent && typeof input.pendingEvent === 'object' ? input.pendingEvent : undefined,
     reviewInFlight: input?.reviewInFlight === true,
     leasedEventId: typeof input?.leasedEventId === 'string' ? input.leasedEventId : undefined,
@@ -339,6 +469,84 @@ export function createThreadSupervision(input: {
   return record;
 }
 
+/** Claim the next idle event from inside an already-running supervisor loop. */
+export function leaseThreadSupervisionReview(input: {
+  ownerSessionId: string;
+  supervisionId: string;
+  eventId?: string;
+  now?: number;
+  broadcast?: (data: any) => void;
+}): ThreadSupervision | null {
+  const supervisionId = String(input.supervisionId || '').trim();
+  const ownerSessionId = String(input.ownerSessionId || '').trim();
+  const current = getThreadSupervision(supervisionId);
+  if (!current || current.ownerSessionId !== ownerSessionId || current.status !== 'active') return null;
+  if (current.reviewInFlight && current.leasedEvent) return current;
+  const event = current.pendingEvent;
+  if (!current.pendingReview || !event || event.runtimeState === 'running') return null;
+  const requestedEventId = String(input.eventId || '').trim();
+  if (requestedEventId && requestedEventId !== event.id) return null;
+  const now = Number(input.now) || Date.now();
+  if (now - current.createdAt >= current.maxElapsedMs) {
+    const blocked = updateThreadSupervision(current.id, {
+      status: 'blocked',
+      pendingReview: false,
+      reviewInFlight: false,
+      finalVerificationState: 'budget_exhausted',
+      finalVerificationReason: `Active supervision reached its elapsed-time limit (${current.maxElapsedMs}ms).`,
+      finalSummary: `Active supervision reached its elapsed-time limit (${current.maxElapsedMs}ms).`,
+      lastStatusSummary: `Active supervision reached its elapsed-time limit (${current.maxElapsedMs}ms).`,
+      lastStatusEventAt: now,
+    });
+    if (blocked) notifyThreadSupervision(blocked, input.broadcast);
+    return null;
+  }
+  if (current.reviewCount >= current.maxReviews) {
+    const blocked = updateThreadSupervision(current.id, {
+      status: 'blocked',
+      pendingReview: false,
+      reviewInFlight: false,
+      finalVerificationState: 'budget_exhausted',
+      finalVerificationReason: `Active supervision reached its review limit (${current.reviewCount}/${current.maxReviews}).`,
+      finalSummary: `Active supervision reached its review limit (${current.reviewCount}/${current.maxReviews}).`,
+      lastStatusSummary: `Active supervision reached its review limit (${current.reviewCount}/${current.maxReviews}).`,
+      lastStatusEventAt: now,
+    });
+    if (blocked) notifyThreadSupervision(blocked, input.broadcast);
+    return null;
+  }
+  if (current.consecutiveNoProgressCount >= current.maxConsecutiveNoProgress) {
+    const blocked = updateThreadSupervision(current.id, {
+      status: 'blocked',
+      pendingReview: false,
+      reviewInFlight: false,
+      finalVerificationState: 'budget_exhausted',
+      finalVerificationReason: `Active supervision stopped after ${current.consecutiveNoProgressCount} consecutive no-progress reviews.`,
+      finalSummary: `Active supervision stopped after ${current.consecutiveNoProgressCount} consecutive no-progress reviews.`,
+      lastStatusSummary: `Active supervision stopped after ${current.consecutiveNoProgressCount} consecutive no-progress reviews.`,
+      lastStatusEventAt: now,
+    });
+    if (blocked) notifyThreadSupervision(blocked, input.broadcast);
+    return null;
+  }
+  if (current.lastReviewAt && now - current.lastReviewAt < current.minReviewIntervalMs) return null;
+  return updateThreadSupervision(current.id, {
+    reviewInFlight: true,
+    reviewCount: current.reviewCount + 1,
+    leasedEventId: event.id,
+    leasedEvent: event,
+    pendingReview: false,
+    pendingEvent: undefined,
+    lastReviewAt: now,
+    reviewDeliverySurface: current.reviewDeliverySurface || 'supervisor',
+    lastReviewReason: `Reviewing ${event.types.join(', ')}.`
+      .slice(0, 2000),
+    lastStatusSummary: `Reviewing target event: ${event.types.join(', ')}.`
+      .slice(0, 2000),
+    lastStatusEventAt: now,
+  });
+}
+
 export function updateThreadSupervision(
   id: string,
   patch: Partial<Omit<ThreadSupervision, 'id' | 'ownerSessionId' | 'targetSessionId' | 'createdAt'>>,
@@ -356,6 +564,7 @@ export function updateThreadSupervision(
     updatedAt: Date.now(),
   };
   writeStore(store);
+  signalThreadSupervisionUpdate(store.records[index]);
   return store.records[index];
 }
 
@@ -386,6 +595,7 @@ export function updateThreadSupervisionsBatch(
     changed.push(store.records[index]);
   }
   if (changed.length) writeStore(store);
+  for (const record of changed) signalThreadSupervisionUpdate(record);
   return changed;
 }
 
@@ -561,15 +771,27 @@ export function resolveThreadSupervisionReview(input: {
     throw new Error('progress_made=true requires bounded evidence.');
   }
   const terminal = decision === 'verified_complete' || decision === 'needs_user' || decision === 'failed';
-  const next = updateThreadSupervision(record.id, {
+  // Observation continues while the hidden supervisor is reviewing. Reload
+  // before committing so a target event that arrived during this model pass is
+  // not lost by writing a stale pre-review record over it.
+  const latest = getThreadSupervision(record.id) || record;
+  if (latest.status !== 'active') throw new Error(`Supervision is already ${latest.status}.`);
+  if (!latest.leasedEvent || latest.leasedEventId !== eventId || !latest.reviewInFlight) {
+    throw new Error('Review decision does not match the active in-flight supervision event.');
+  }
+  const newerPendingEvent = latest.pendingEvent && latest.pendingEvent.id !== eventId
+    ? latest.pendingEvent
+    : undefined;
+  const next = updateThreadSupervision(latest.id, {
     status: decision === 'verified_complete' ? 'complete' : decision === 'needs_user' ? 'blocked' : decision === 'failed' ? 'failed' : 'active',
-    pendingReview: terminal ? false : record.pendingReview,
+    pendingReview: terminal ? false : !!newerPendingEvent || latest.pendingReview,
+    pendingEvent: terminal ? undefined : newerPendingEvent,
     reviewInFlight: false,
     leasedEventId: undefined,
     leasedEvent: undefined,
     lastReviewedEventId: eventId,
-    lastReviewedMessageCount: record.leasedEvent.toMessageCount,
-    lastReviewedMessageHash: record.leasedEvent.observedMessageHash,
+    lastReviewedMessageCount: latest.leasedEvent.toMessageCount,
+    lastReviewedMessageHash: latest.leasedEvent.observedMessageHash,
     lastReviewAt: Date.now(),
     lastReviewReason: reason,
     lastDecision: decision,
@@ -577,7 +799,7 @@ export function resolveThreadSupervisionReview(input: {
     lastDecisionEventId: eventId,
     lastDecisionEvidence: evidence,
     lastDecisionProgressMade: input.progressMade === true,
-    consecutiveNoProgressCount: input.progressMade === true ? 0 : record.consecutiveNoProgressCount + 1,
+    consecutiveNoProgressCount: input.progressMade === true ? 0 : latest.consecutiveNoProgressCount + 1,
     finalVerificationState: decision === 'verified_complete'
       ? 'verified'
       : decision === 'needs_user'
@@ -586,7 +808,7 @@ export function resolveThreadSupervisionReview(input: {
           ? 'failed'
           : 'pending',
     finalVerificationReason: terminal ? reason : undefined,
-    finalSummary: terminal ? [reason, ...evidence].filter(Boolean).join('\n') : record.finalSummary,
+    finalSummary: terminal ? [reason, ...evidence].filter(Boolean).join('\n') : latest.finalSummary,
   });
   if (!next) throw new Error('Could not persist supervision decision.');
   if (terminal) notifyThreadSupervision(next, input.broadcast);

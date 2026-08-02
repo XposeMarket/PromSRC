@@ -1,6 +1,6 @@
 ## 39) Runtime Context Build Pipeline
 
-> Re-verified 2026-07-12. Current source map and costs: [26-runtime-instruction-census.md](26-runtime-instruction-census.md). Current Stage 4 routing: [27-stage4-tool-menu-trigger-benchmark.md](27-stage4-tool-menu-trigger-benchmark.md).
+> Re-verified 2026-08-01. Current source map and costs: [26-runtime-instruction-census.md](26-runtime-instruction-census.md). Current Stage 4 routing: [27-stage4-tool-menu-trigger-benchmark.md](27-stage4-tool-menu-trigger-benchmark.md).
 
 The actual assembly sequence for every `handleChat` turn. Not the architecture overview — just the pipeline in order.
 
@@ -34,6 +34,9 @@ provider / model / vision flag
     ▼
 [RECENT_TOOL_OBSERVATIONS] ─────────────── session.ts → chat.router.ts:1894
 prior tool run log (session-scoped, lean by default; per-tool telemetry stored but only injected when explicitly requested)
+
+[WORKING_CONTEXT_PACKETS] ───────────────── session.ts → turn-context-packet.ts → chat.router.ts
+last five rich turns at most: the request, safe provider reasoning/decision summary, findings, completed actions, compact tool/progress state, uncertainties, pending work, and a bounded continue-from-here instruction. Simple turns do not create a packet. Private/raw model thinking is never persisted or injected through this lane.
 
 [CODING_CONTEXT_PACKET_V3] ─────────────── coding-context-packet.ts → chat.router.ts:2599
 only selected coding continuations receive this durable, structured packet: targeted files/evidence, known build-test commands, the last verification, and a bounded recent terminal-command ledger. The ledger preserves safe command text or process reference, action/kind, outcome, exit code, duration, artifacts, and compact failure kind. It never reinjects raw command output, and redacts command secrets before packet persistence/injection.
@@ -142,13 +145,26 @@ These arrive as the user turn, not the system prompt:
 | Scheduled cron | job prompt + schedule memory + self-reflection suffix |
 | Boot | daily startup or hot-restart instructions — boot.ts:100–108 |
 
+## Working context and abort continuity (2026-08-01)
+
+The runtime now has a small continuity lane separate from transcript history:
+
+- `src/gateway/context/turn-context-packet.ts` defines the bounded packet and its prompt formatter.
+- `Session.workingContextPackets` retains at most five recent rich-turn packets. A packet is created for tool-using, artifact/file-change, failed, or aborted turns; an ordinary reasoning summary without durable work does not consume this lane.
+- `chat.router.ts` keeps provider `onReasoningSummary` deltas separate from private `allThinking`. Only the safe reasoning/decision summary may be placed in a packet or supplied to compaction.
+- The main chat abort hook writes an immediate flushed packet from the live runtime checkpoint. The normal post-turn finalizer then merges the richer completed-tool view by `turnId`, so cancellation before model/tool unwinding does not lose the work that preceded it.
+- An interrupted tool boundary is recorded as uncertain rather than completed. The next turn is told to verify that boundary before retrying it. Progress-state events are included in the durable checkpoint summary.
+- `getWorkingContextForContext(...)` injects the packet window into normal Prometheus turns. Rolling and mid-workflow compaction consume the same packet window, so compaction cannot silently discard the decision trail.
+
+This lane is deliberately not a raw chain-of-thought store. It preserves actionable findings, decisions, evidence references, and continuation state while keeping private reasoning private.
+
 ---
 
 ## Isolated paths (do not use this pipeline)
 
 | Path | Entry point |
 |------|-------------|
-| Context compactor | chat.router.ts:1527 — no persona, no memory. Mid-workflow compaction also receives a bounded `[RECENT_REASONING_AND_DECISIONS]` block from the active turn's `allThinking` trail so conclusions, ruled-out files/searches, hypotheses, and next-step reasoning survive message trimming. |
+| Context compactor | chat.router.ts:1527 — no persona, no memory. Rolling and mid-workflow compaction receive the bounded working-context packets plus the active turn's provider reasoning-summary stream under `[RECENT_REASONING_AND_DECISIONS]`; private/raw thinking is excluded. |
 | Brain runner | brain-runner.ts — calls handleChat as `cron` (interactive personality) with a per-job tool allowlist; not a separate pipeline |
 | Realtime voice | realtime.router.ts:166–214 — separate pack |
 | Reactor subagents | reactor.ts:431 — soul-loader.buildSystemPrompt |

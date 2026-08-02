@@ -10371,7 +10371,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
       const event = String(msg?.event || '').trim();
       const status = String(msg?.goal?.status || '').trim();
       const checkpointPhase = String(msg?.goal?.restartCheckpoint?.phase || '').trim();
-      const shouldRecoverGoalStream = /^(runner_started|turn_started|runtime_failure|startup_auto_resume|startup_crash_recovered|crash_recovered|recovery_finalized|recovery_resumed)$/.test(event)
+      const shouldRecoverGoalStream = /^(runner_started|launch_accepted|turn_preparing|turn_started|runtime_failure|startup_auto_resume|startup_crash_recovered|crash_recovered|recovery_finalized|recovery_resumed)$/.test(event)
         || (!event && status === 'active');
       if (shouldRecoverGoalStream) {
         scheduleMobileRunRecovery(120, { force: true, fullRefresh: false });
@@ -11077,6 +11077,9 @@ void main() {
     if (__pmRealtimeAgent?.liveCameraFrameReader === voiceCameraLiveFrameReader) {
       __pmRealtimeAgent.liveCameraFrameReader = null;
     }
+    if (__pmRealtimeAgent?.liveCameraFrameAsyncReader === refreshVoiceCameraFrameCache) {
+      __pmRealtimeAgent.liveCameraFrameAsyncReader = null;
+    }
     voiceCameraLiveFrameReader = null;
     _stopMobileRealtimeLiveCameraVision('camera_closed');
     if (__pmRealtimeAgent?.autoCaptureCameraFrames === autoCaptureVoiceCameraFrames) {
@@ -11162,6 +11165,7 @@ void main() {
       return frame?.dataUrl ? { ...frame } : null;
     };
     __pmRealtimeAgent.liveCameraFrameReader = voiceCameraLiveFrameReader;
+    __pmRealtimeAgent.liveCameraFrameAsyncReader = refreshVoiceCameraFrameCache;
     refreshVoiceCameraFrameCache();
     voiceCameraFrameCacheTimer = setInterval(scheduleVoiceCameraFrameCacheRefresh, 1000);
   }
@@ -18895,6 +18899,9 @@ const __pmRealtimeAgent = {
   // Live camera vision is latest-frame-only. The preview can run continuously,
   // but frames are delivered only while a real voice turn is active.
   liveCameraFrameReader: null,
+  // Refresh immediately before delivery when the camera surface can encode
+  // asynchronously. The sync reader remains the audio-safe cached fallback.
+  liveCameraFrameAsyncReader: null,
   liveCameraVision: {
     active: false,
     timer: null,
@@ -22574,11 +22581,11 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
             title: workerTasks[0].title || 'Voice task',
             prompt: workerTasks[0].prompt,
             objective: workerTasks[0].prompt,
-            follow: true,
+            launch_mode: 'supervise',
           }
         : {
             action: 'create_many',
-            follow: true,
+            launch_mode: 'supervise',
             threads: workerTasks.map((workerTask) => ({
               title: workerTask.title || 'Voice task',
               prompt: workerTask.prompt,
@@ -23475,6 +23482,7 @@ function _queueMobileRealtimeLiveCameraFrame(reason = 'speech_active') {
   const state = _mobileRealtimeLiveVisionState();
   if (!state.active) return false;
   const reader = __pmRealtimeAgent.liveCameraFrameReader;
+  const asyncReader = __pmRealtimeAgent.liveCameraFrameAsyncReader;
   if (typeof reader !== 'function') return false;
   let frame = null;
   try { frame = reader(); } catch {}
@@ -23494,8 +23502,14 @@ function _queueMobileRealtimeLiveCameraFrame(reason = 'speech_active') {
     while (state.active && generation === Number(state.generation || 0) && state.queuedFrame) {
       const current = state.queuedFrame;
       state.queuedFrame = null;
+      let freshest = null;
+      if (typeof asyncReader === 'function') {
+        try { freshest = await asyncReader(); } catch {}
+      }
+      if (!state.active || generation !== Number(state.generation || 0)) break;
+      const selected = String(freshest?.dataUrl || '').startsWith('data:image') ? freshest : current;
       const image = {
-        dataUrl: current.dataUrl,
+        dataUrl: selected.dataUrl,
         name: `Live camera frame ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`,
         mimeType: 'image/jpeg',
         realtimeInjected: false,
@@ -23516,7 +23530,7 @@ function _queueMobileRealtimeLiveCameraFrame(reason = 'speech_active') {
         _voiceDebug('realtime-agent-live-camera-frame', {
           sent: !!sent,
           provider,
-          ageMs: Math.max(0, Date.now() - Number(current.capturedAt || Date.now())),
+          ageMs: Math.max(0, Date.now() - Number(selected.capturedAt || Date.now())),
         });
       } catch (err) {
         _voiceDebug('realtime-agent-live-camera-frame-failed', { message: err?.message || String(err) });
@@ -25298,6 +25312,9 @@ export async function renderVoicePage(page, ctx) {
       __pmRealtimeAgent.liveCameraFrameReader = null;
       _stopMobileRealtimeLiveCameraVision('voice_camera_closed');
     }
+    if (__pmRealtimeAgent?.liveCameraFrameAsyncReader === readVoicePageLiveCameraFrameAsync) {
+      __pmRealtimeAgent.liveCameraFrameAsyncReader = null;
+    }
     voicePageCameraFrameReader = null;
     voicePageCameraOpening = false;
     if (voiceCameraCapture) {
@@ -25333,6 +25350,44 @@ export async function renderVoicePage(page, ctx) {
       height: canvas.height,
       capturedAt: Date.now(),
     };
+  };
+
+  const readVoicePageLiveCameraFrameAsync = () => {
+    if (!voiceCameraVideo || !voicePageCameraStream) return Promise.resolve(null);
+    const width = Number(voiceCameraVideo.videoWidth || 0);
+    const height = Number(voiceCameraVideo.videoHeight || 0);
+    if (!width || !height) return Promise.resolve(null);
+    const zoom = Math.max(1, Number(voiceCameraPinchZoom?.getZoom?.() || 1) || 1);
+    const sourceWidth = width / zoom;
+    const sourceHeight = height / zoom;
+    const sourceX = (width - sourceWidth) / 2;
+    const sourceY = (height - sourceHeight) / 2;
+    const scale = Math.min(1, 1024 / Math.max(sourceWidth, sourceHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const context = canvas.getContext('2d');
+    if (!context) return Promise.resolve(null);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(voiceCameraVideo, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          resolve(null);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve({
+          dataUrl: String(reader.result || ''),
+          width: canvas.width,
+          height: canvas.height,
+          capturedAt: Date.now(),
+        });
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      }, 'image/jpeg', 0.76);
+    });
   };
 
   const openVoicePageCamera = async () => {
@@ -25383,6 +25438,7 @@ export async function renderVoicePage(page, ctx) {
       await voiceCameraVideo.play();
       voicePageCameraFrameReader = readVoicePageLiveCameraFrame;
       __pmRealtimeAgent.liveCameraFrameReader = voicePageCameraFrameReader;
+      __pmRealtimeAgent.liveCameraFrameAsyncReader = readVoicePageLiveCameraFrameAsync;
       setVoicePageCameraStatus('');
     } catch (error) {
       stopVoicePageCamera();

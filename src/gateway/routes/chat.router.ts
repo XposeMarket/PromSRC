@@ -45,7 +45,7 @@ import { readModelUsageEventsForSession, getUsageCalibration } from '../../provi
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
@@ -1142,9 +1142,30 @@ function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: u
 
 function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
   const eventType = String(type || '').trim();
-  if (!eventType || eventType === 'heartbeat' || eventType === 'token' || eventType === 'thinking_delta' || eventType === 'progress_state') return null;
+  if (!eventType || eventType === 'heartbeat' || eventType === 'token' || eventType === 'thinking_delta') return null;
   const ts = new Date().toLocaleTimeString();
   const action = String(data?.action || data?.name || data?.toolName || '').trim();
+  if (eventType === 'progress_state') {
+    const items = Array.isArray(data?.items)
+      ? data.items
+          .map((item: any) => String(item?.label || item?.text || item?.title || '').replace(/\s+/g, ' ').trim())
+          .filter(Boolean)
+          .slice(-8)
+      : [];
+    const activeIndex = Number.isFinite(Number(data?.activeIndex)) ? Number(data.activeIndex) : -1;
+    const content = [
+      String(data?.reason || '').replace(/\s+/g, ' ').trim(),
+      items.length ? `active=${activeIndex}; ${items.join(' | ')}` : '',
+    ].filter(Boolean).join(': ');
+    if (!content) return null;
+    return {
+      ts,
+      type: 'info',
+      actor: 'Prom',
+      content: truncateRuntimeProcessText(`Progress: ${content}`, 2_000),
+      extra: { source: 'runtime_checkpoint', event: eventType, activeIndex, total: items.length },
+    };
+  }
   if (eventType === 'tool_call') {
     return {
       ts,
@@ -1470,6 +1491,7 @@ import { router as connectionsRouter } from './connections.router';
 import { router as canvasRouter, initCanvasRouter } from './canvas.router';
 import { addCanvasFile, getCanvasContextBlock } from './canvas-state';
 import { getMCPManager } from '../mcp-manager';
+import { resumePlannedRestartMainChats } from '../runtime-recovery';
 import {
   // Core exports
   buildTools,
@@ -1567,6 +1589,12 @@ import {
 
 
 import { activeTasks, getMaxToolRounds } from '../chat/chat-state';
+import {
+  buildTurnContextPacket,
+  formatTurnContextPacketsForPrompt,
+  normalizeReasoningSummary,
+  shouldPersistTurnContext,
+} from '../context/turn-context-packet';
 const MAX_TOOL_ROUNDS = getMaxToolRounds();
 
 function resolveEffectiveMaxToolRounds(
@@ -1637,6 +1665,8 @@ export function initChatRouter(deps: ChatRouterDeps): void {
     telegramChannel: _telegramChannel,
     makeBroadcastForTask,
     resumeMainChatGoalsAfterBoot: (sessionIds) => resumeMainChatGoalsInterruptedForRestart(sessionIds),
+    resumePlannedRestartMainChats: (runtimeIds, retrigger) => resumePlannedRestartMainChats(runtimeIds, retrigger),
+    retriggerInterruptedMainChat: (runtime) => retriggerInterruptedMainChat(runtime),
   });
   initTaskRouter({ handleChat, telegramChannel: _telegramChannel, makeBroadcastForTask, cronScheduler: _cronScheduler });
 }
@@ -1713,9 +1743,6 @@ type ReasoningOptions = {
 const ROLLING_COMPACTION_SUMMARY_PREFIX = '[Rolling context summary]';
 const LEGACY_COMPACTION_SUMMARY_PREFIX = '[Compacted context summary]';
 const CONTEXT_COMPACTION_TOOL_NAME = 'context_compaction';
-
-const COMPACTION_REASONING_TRAIL_MAX_CHARS = 10000;
-
 
 function shouldUseSessionWorkspace(
   executionMode: ExecutionMode,
@@ -1836,24 +1863,6 @@ function formatCompactionToolResults(sessionId: string, toolResults: ToolResult[
     includeTelemetry: true,
   });
 }
-
-function formatCompactionReasoningTrail(reasoningTrail: string, maxChars = COMPACTION_REASONING_TRAIL_MAX_CHARS): string {
-  const clean = String(reasoningTrail || '').trim();
-  if (!clean) return '';
-  const limit = Math.max(1000, Math.min(20000, Math.floor(Number(maxChars) || COMPACTION_REASONING_TRAIL_MAX_CHARS)));
-  if (clean.length <= limit) return clean;
-  const headChars = Math.max(500, Math.floor(limit * 0.35));
-  const tailChars = Math.max(500, limit - headChars);
-  const omitted = clean.length - headChars - tailChars;
-  return [
-    clean.slice(0, headChars).trimEnd(),
-    '',
-    `[...${omitted.toLocaleString('en-US')} chars omitted from reasoning/thinking trail; preserve conclusions from visible portions and recover raw details from tool observations if needed...]`,
-    '',
-    clean.slice(-tailChars).trimStart(),
-  ].join('\n');
-}
-
 
 const MODEL_TOOL_RESULT_MAX_CHARS = 12000;
 const MODEL_TOOL_RESULT_HEAD_CHARS = 7000;
@@ -1998,7 +2007,12 @@ function getRollingCompactionProgress(
   };
 }
 
-function buildFallbackCompactionSummary(previousSummary: string, recentWindow: Array<any>, maxWords: number): string {
+function buildFallbackCompactionSummary(
+  previousSummary: string,
+  recentWindow: Array<any>,
+  maxWords: number,
+  reasoningTrailBlock = '',
+): string {
   const lines: string[] = [];
   lines.push('1. Primary Request and Intent:');
   lines.push(previousSummary ? previousSummary.replace(/\s+/g, ' ').trim().slice(0, 2400) : 'Unknown');
@@ -2009,7 +2023,7 @@ function buildFallbackCompactionSummary(previousSummary: string, recentWindow: A
   lines.push('4. Errors, Fixes, and Test Results:');
   lines.push('Unknown');
   lines.push('5. Problem Solving and Decisions:');
-  lines.push('Unknown');
+  lines.push(reasoningTrailBlock ? reasoningTrailBlock.replace(/\s+/g, ' ').trim().slice(0, 3_200) : 'Unknown');
   lines.push('6. Recent User Messages:');
   const newestFirst = [...recentWindow].reverse().slice(0, 10);
   for (const msg of newestFirst) {
@@ -2062,7 +2076,7 @@ function buildContextCompactionPrompt(input: ContextCompactorRunInput): string {
     'This summary will be injected into a future model context so it can continue the same work after older messages are dropped.',
     'Write it like a handoff/resume note, not like a user-facing recap.',
     'Preserve concrete implementation state, decisions, eliminated branches, file paths, function/class names, command/test results, blockers, approvals/pending waits, user preferences, and the newest user request.',
-    'When a reasoning/thinking trail is provided, use it to capture durable analysis: hypotheses tested, files or searches ruled out, planned next steps, and conclusions reached from tool results. Do not copy raw stream-of-consciousness verbatim.',
+    'When the bounded reasoning/decision block is provided, use it to capture durable analysis: hypotheses tested, files or searches ruled out, planned next steps, and conclusions reached from tool results. Do not copy private/raw stream-of-consciousness.',
     'Keep the order below and include every section. Use concise bullets under each section. If a section has no known details, write "Unknown" or "None yet."',
     'Do not invent details. Do not include generic advice. Output plain text only.',
     '',
@@ -2135,7 +2149,12 @@ async function runContextCompactor(input: ContextCompactorRunInput): Promise<{ c
     return { compacted: true, summaryText: boundedSummary, mode: 'llm' };
   } catch (err: any) {
     console.warn(`[v2] Context compaction failed (${input.strategy}):`, err?.message || err);
-    const fallbackSummary = buildFallbackCompactionSummary(input.previousSummary, input.recentWindow, input.maxWords);
+    const fallbackSummary = buildFallbackCompactionSummary(
+      input.previousSummary,
+      input.recentWindow,
+      input.maxWords,
+      input.reasoningTrailBlock,
+    );
     if (!fallbackSummary) return { compacted: false };
     try {
       recordSessionCompaction(input.sessionId, 'rolling', fallbackSummary, session.history.length, {
@@ -2174,7 +2193,9 @@ async function maybeRunRollingCompaction(
     recentMessagesBlock: formatCompactionMessages(recentWindow),
     recentToolLogsBlock: getRecentToolObservationsForContext(sessionId, policy.toolTurns, 12000)
       || formatCompactionToolLogs(recentWindow, policy.toolTurns),
-    reasoningTrailBlock: '',
+    // Rolling compaction used to receive no reasoning input at all. Feed it
+    // the same bounded working-context packets the next turn will receive.
+    reasoningTrailBlock: getWorkingContextForContext(sessionId, 8_000),
     artifactPathsBlock: formatCompactionArtifactPaths(sessionId),
     recentWindow,
     numCtx: resolveCompactionNumCtx(),
@@ -2210,7 +2231,10 @@ async function maybeRunMidWorkflowCompaction(input: {
   const projectedBreakdown = estimateMessageTokenBreakdownForModel(input.messages, profile);
   const projectedTokens = Math.round(projectedBreakdown.totalTokens * calibrationFactor);
   const recentToolText = formatCompactionToolResults(input.sessionId, input.toolResults, 8);
-  const reasoningTrailText = formatCompactionReasoningTrail(input.reasoningTrail || '');
+  const reasoningTrailText = [
+    normalizeReasoningSummary(input.reasoningTrail || '', 6_000),
+    getWorkingContextForContext(input.sessionId, 8_000),
+  ].filter(Boolean).join('\n\n');
   const recentToolTokens = Math.round(estimateTextTokensForModel(recentToolText, profile.tokenizer) * calibrationFactor);
   const shouldCompact = projectedTokens >= budget.compactionTriggerTokens
     || recentToolTokens >= budget.toolContextBudgetTokens;
@@ -2364,7 +2388,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   try {
   const latencyStartAt = Date.now();
@@ -2402,6 +2426,11 @@ async function handleChat(
     : undefined;
   const isDirectSubagentChatTurn = runtimeOptions?.directSubagentChat === true;
   const isSyntheticThreadSupervisionReview = runtimeOptions?.syntheticThreadSupervisionReview === true;
+  const isSupervisionLoop = runtimeOptions?.supervisionLoop === true;
+  const isSilentSupervisionLoop = runtimeOptions?.silentSupervisionLoop === true;
+  let supervisionNoToolNudges = 0;
+  let supervisionExpectedAction: 'review_decision' | 'supervision_wait' = 'review_decision';
+  let supervisionWaitAfterEventId = '';
   let activeInternalWatchContext = runtimeOptions?.internalWatchContext;
   const excludedSkillIds = Array.isArray(runtimeOptions?.excludedSkillIds)
     ? runtimeOptions.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
@@ -2515,6 +2544,8 @@ async function handleChat(
     toolCallId: String(toolCallId || '').trim() || undefined,
     executionPolicy: handleChatGoalExecutionPolicy,
     abortSignal,
+    threadOpsOwnerSessionId: runtimeOptions?.supervisionOwnerSessionId,
+    threadOpsSupervisionId: runtimeOptions?.supervisionId,
     onHardToolDeny: (event: any) => {
       if (!isHandleChatGoalContinuation) return;
       const updated = recordMainChatGoalDeniedAction(sessionId, {
@@ -2568,7 +2599,7 @@ async function handleChat(
     && String(rawHistory[rawHistory.length - 1]?.content || '').replace(/\s+/g, ' ').trim() === normalizedIncomingMessage
       ? rawHistory.slice(0, -1)
       : rawHistory;
-  autoActivateToolCategories(sessionId, message, history.length);
+  if (!isSupervisionLoop) autoActivateToolCategories(sessionId, message, history.length);
   const stage4InstructionIntents = detectStage4InstructionIntents({
     message,
     recentMessages: history
@@ -2593,6 +2624,7 @@ async function handleChat(
   htime('before getRecentToolObservationsForContext');
   const recentToolLog = executionMode === 'cron' ? '' : getRecentToolObservationsForContext(sessionId, 3, recentToolLogMaxChars, true);
   htime('after getRecentToolObservationsForContext');
+  const workingContextBlock = executionMode === 'cron' ? '' : getWorkingContextForContext(sessionId, 9_000);
   const codingContextPacketDecision = selectCodingContextPacket({
     enabled: codingContextPacketEnabled,
     sessionId,
@@ -2835,6 +2867,22 @@ async function handleChat(
     }
     return next;
   };
+  const SUPERVISION_READ_TOOL_NAMES = new Set([
+    'prometheus_thread_ops',
+    'prometheus_request_ops',
+    'prometheus_audit_ops',
+    'read_file', 'read_files_batch', 'list_files', 'list_directory',
+    'grep_file', 'grep_files', 'search_files', 'file_stats', 'path_exists',
+    'validate_file', 'read_source', 'read_dev_sources', 'list_source',
+    'grep_source', 'source_stats', 'src_stats', 'validate_source',
+    'read_webui_source', 'list_webui_source', 'grep_webui_source',
+    'webui_source_stats', 'webui_stats', 'validate_webui_source',
+    'git_status', 'git_diff', 'run_command', 'time_now',
+  ]);
+  const filterToolsForSupervisionLoop = (toolDefs: any[]): any[] => {
+    if (!isSupervisionLoop) return toolDefs;
+    return toolDefs.filter((tool: any) => SUPERVISION_READ_TOOL_NAMES.has(String(tool?.function?.name || '').trim()));
+  };
   const PROPOSAL_CORE_MIN = new Set([
     'run_command',
     'read_file', 'read_files_batch', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'apply_patchset',
@@ -2866,7 +2914,10 @@ async function handleChat(
       })
       : baseTools;
     const scopedTools = maybeAddGoalLifecycleTools(maybeAddLoopGateTool(maybeAddPlanScopedTools(filterToolsForModelCapabilities(currentTools))));
-    return ensurePrometheusThreadOpsForSupervision(scopedTools, isSyntheticThreadSupervisionReview);
+    return ensurePrometheusThreadOpsForSupervision(
+      filterToolsForSupervisionLoop(scopedTools),
+      isSyntheticThreadSupervisionReview || isSupervisionLoop,
+    );
   };
   const buildSwitchModelToolCategories = (): Set<string> => {
     const switchCategories = new Set<string>();
@@ -3000,6 +3051,9 @@ async function handleChat(
     return finalResponse;
   };
   let allThinking = '';
+  // Keep provider reasoning summaries separate from private/raw thinking. Only
+  // this bounded, user-safe stream may enter cross-turn working context.
+  let allReasoningSummary = '';
   let preflightRoute: 'primary_direct' | 'primary_with_plan' | 'secondary_chat' | 'background_task' | null = null;
   let preflightReasonForTurn = '';
   let continuationNudges = 0;
@@ -4432,6 +4486,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
         personalityContext: personalityCtx,
         volatileBeforePersonality: [
           `Current date: ${dateStr}, ${timeStr}.`,
+          workingContextBlock,
           recentToolLog,
           codingContextPacketDecision.block,
         ],
@@ -4447,6 +4502,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       personalityContext: personalityCtx,
       volatileBeforePersonality: [
         `Current date: ${dateStr}, ${timeStr}.`,
+        workingContextBlock,
         recentToolLog,
         codingContextPacketDecision.block,
         callerContext,
@@ -4536,6 +4592,25 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   } else {
     messages.push({ role: 'user', content: message });
   }
+
+  const parseSupervisionControlPayload = (toolResult: any): any | null => {
+    if (!toolResult || toolResult.error) return null;
+    try {
+      const parsed = typeof toolResult.result === 'string' ? JSON.parse(toolResult.result) : toolResult.result;
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const queueSupervisionControl = (content: string): void => {
+    messages.push({ role: 'user', content: `[SUPERVISION CONTROL — INTERNAL]
+${content}
+Do not produce prose. Use the canonical thread tool now.` });
+  };
+  const supervisionTerminalStatus = (payload: any): boolean => {
+    const status = String(payload?.supervision?.status || '').trim().toLowerCase();
+    return ['complete', 'blocked', 'failed', 'cancelled'].includes(status);
+  };
 
   // ── Browser observation policy layer ──────────────────────────────────────────────
   type ObserveMode = BrowserObserveMode;
@@ -5097,6 +5172,7 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   if (
     preflightCfg?.enabled &&
     !isBootStartupTurn &&
+    !isSupervisionLoop &&
     !skipGenericPreflightForFileOp &&
     !isTaskRunnerSession &&
     shouldRunPreflight(message, preflightCfg.preflight.mode) &&
@@ -6185,7 +6261,12 @@ RULES:
         ? `Stopped after ${allToolResults.length} step${allToolResults.length !== 1 ? 's' : ''}.`
         : 'Stopped.';
       const finalPartial = finalizeSkillGardenerForTurn(partial);
-      return { type: 'execute', text: finalPartial, toolResults: allToolResults.length > 0 ? allToolResults : undefined };
+      return {
+        type: 'execute',
+        text: finalPartial,
+        reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+        toolResults: allToolResults.length > 0 ? allToolResults : undefined,
+      };
     }
 
     // ── Synthetic tool calls from browser advisor ─────────────────────────────
@@ -6529,6 +6610,7 @@ RULES:
 	        // them distinct from private/raw thinking so clients never have to infer
 	        // which kind of reasoning they are allowed to render.
 	        if (source === 'reasoning_summary') {
+	          allReasoningSummary = `${allReasoningSummary}${text}`.slice(-8_000);
 	          sendSSE('reasoning_summary_delta', { text, source, visibility: 'user' });
 	        } else {
 	          sendSSE('thinking_delta', { thinking: text, source, visibility: 'private' });
@@ -6832,6 +6914,28 @@ RULES:
     }
 
     if (!toolCalls || toolCalls.length === 0) {
+      if (isSupervisionLoop) {
+        if (abortSignal?.aborted) return { type: 'execute', text: '', reasoningSummary: normalizeReasoningSummary(allReasoningSummary), toolResults: allToolResults };
+        if (supervisionNoToolNudges < 5) {
+          supervisionNoToolNudges += 1;
+          sendSSE('info', { message: 'Active supervision is waiting for an authoritative thread review action.' });
+          const supervisionId = String(runtimeOptions?.supervisionId || '').trim();
+          const expectedAction = supervisionExpectedAction;
+          queueSupervisionControl(expectedAction === 'supervision_wait'
+            ? [
+                `The previous model generation returned prose or no tool call (${supervisionNoToolNudges}/5).`,
+                `Call prometheus_thread_ops action="supervision_wait" with supervision_id="${supervisionId}" and after_event_id="${supervisionWaitAfterEventId}" now.`,
+                'This is an internal blocking wait. Do not produce a user-facing response.',
+              ].join('\n')
+            : [
+                `The previous model generation returned prose or no tool call (${supervisionNoToolNudges}/5).`,
+                `Call prometheus_thread_ops with action="review_decision" now. Use supervision_id="${supervisionId}" when present in the trusted control metadata.`,
+                'Use the exact current review_event_id from the trusted control metadata, choose wait, continue, verified_complete, needs_user, or failed, set progress_made explicitly, provide a reason, and include bounded evidence.',
+              ].join('\n'));
+          continue;
+        }
+        return { type: 'execute', text: '', reasoningSummary: normalizeReasoningSummary(allReasoningSummary), toolResults: allToolResults };
+      }
       const { reply, thinking: inlineThinking } = separateThinkingFromContent(response.content || '');
       if (inlineThinking) {
         console.log(`[v2] INLINE REASONING (${inlineThinking.length} chars): ${inlineThinking.slice(0, 100)}...`);
@@ -7573,6 +7677,7 @@ RULES:
         type: allToolResults.length > 0 ? 'execute' : 'chat',
         text: finalTextWithSkillOffer,
         thinking: allThinking || undefined,
+        reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
         toolResults: allToolResults.length > 0 ? allToolResults : undefined,
         artifacts: finalArtifacts.length > 0 ? finalArtifacts : undefined,
         generatedImages: finalGeneratedImages.length > 0 ? finalGeneratedImages : undefined,
@@ -8383,6 +8488,7 @@ RULES:
           type: 'execute',
           text: `${summary}\n\nRecent steps:\n${journalSummary}`,
           thinking: allThinking || undefined,
+          reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
           toolResults: taskResult.journal.map(j => ({
             name: j.action.split('(')[0],
             args: {},
@@ -8714,6 +8820,66 @@ RULES:
 	        tool_call_id: toolCallId || undefined,
 	        content: toolMessageContent,
 	      });
+      if (isSupervisionLoop && toolName === 'prometheus_thread_ops' && !toolResult.error) {
+        const controlPayload = parseSupervisionControlPayload(toolResult);
+        const controlAction = String(toolArgs?.action || '').trim().toLowerCase();
+        if (controlAction === 'review_decision') {
+          if (supervisionTerminalStatus(controlPayload)) {
+            return {
+              type: 'execute',
+              text: '',
+              thinking: allThinking || undefined,
+              reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+              toolResults: allToolResults,
+            };
+          }
+          const eventId = String(
+            controlPayload?.supervision?.lastDecisionEventId
+            || toolArgs?.review_event_id
+            || '',
+          ).trim();
+          supervisionExpectedAction = 'supervision_wait';
+          supervisionWaitAfterEventId = eventId;
+          queueSupervisionControl([
+            'The non-terminal review decision was recorded.',
+            `Call prometheus_thread_ops action="supervision_wait" with supervision_id="${String(runtimeOptions?.supervisionId || toolArgs?.supervision_id || '').trim()}" and after_event_id="${eventId}".`,
+            'This is an internal blocking wait. Do not answer the owner and do not start a new task. After the wait returns a leased event, inspect it and record the next review_decision.',
+          ].join('\n'));
+          break;
+        }
+        if (controlAction === 'supervision_wait') {
+          supervisionWaitAfterEventId = String(toolArgs?.after_event_id || toolArgs?.afterEventId || supervisionWaitAfterEventId || '').trim();
+          if (supervisionTerminalStatus(controlPayload)) {
+            return {
+              type: 'execute',
+              text: '',
+              thinking: allThinking || undefined,
+              reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+              toolResults: allToolResults,
+            };
+          }
+          if (controlPayload?.wait?.ready !== true) {
+            supervisionExpectedAction = 'supervision_wait';
+            queueSupervisionControl([
+              'The supervision wait returned without a leased target event.',
+              `Call supervision_wait again with supervision_id="${String(runtimeOptions?.supervisionId || toolArgs?.supervision_id || '').trim()}" and the same after_event_id.`,
+              'Do not produce a status message or prose while waiting.',
+            ].join('\n'));
+          } else {
+            supervisionExpectedAction = 'review_decision';
+            const nextEventId = String(
+              controlPayload?.wait?.eventId
+              || controlPayload?.supervision?.leasedEventId
+              || '',
+            ).trim();
+            queueSupervisionControl([
+              `A new idle target event is leased for review${nextEventId ? ` (${nextEventId})` : ''}.`,
+              'Use prometheus_thread_ops action="read" or action="status" for the target with the same supervision_id when additional evidence is needed, then call review_decision before ending this pass.',
+            ].join('\n'));
+          }
+          break;
+        }
+      }
       if ((toolName === 'request_tool_category' || toolName === 'request_dev_source_edit') && !toolResult.error) {
         const previousNames = new Set(
           tools
@@ -8776,7 +8942,9 @@ RULES:
         sessionId,
         messages,
         toolResults: allToolResults,
-        reasoningTrail: allThinking,
+        // Compaction receives only provider-safe reasoning summaries. The
+        // private/raw allThinking stream remains UI-only for this turn.
+        reasoningTrail: allReasoningSummary,
         sendSSE,
         abortSignal,
         routeSnapshot: activeGenerationRouteSnapshot,
@@ -8785,7 +8953,7 @@ RULES:
         midWorkflowCompactionsThisTurn++;
         sendSSE('info', { message: 'Context compacted. Continuing the active workflow...' });
       }
-      if (abortSignal?.aborted) return { type: 'chat', text: '' };
+      if (abortSignal?.aborted) return { type: 'chat', text: '', reasoningSummary: normalizeReasoningSummary(allReasoningSummary) };
     }
 
     // ── Orchestration: auto-trigger check after each round
@@ -8845,7 +9013,12 @@ RULES:
 
   if (isResumableExecutionMode(executionMode)) {
     finalizeSkillGardenerForTurn('Hit max steps - continuing next round.');
-    return { type: 'execute', text: 'Hit max steps - continuing next round.', toolResults: allToolResults };
+    return {
+      type: 'execute',
+      text: 'Hit max steps - continuing next round.',
+      reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+      toolResults: allToolResults,
+    };
   }
 
   const creativeSuffix = creativeMode
@@ -8855,7 +9028,12 @@ RULES:
     ? `I reached the turn safety boundary after ${stepCount} tool step(s), but progress was preserved.${creativeSuffix} Say "continue" and I will pick up from the current state instead of starting over.`
     : 'I reached the turn safety boundary before completing the request. Say "continue" and I will retry from the current state.';
   const finalTextWithSkillOffer = finalizeSkillGardenerForTurn(text);
-  return { type: 'execute', text: finalTextWithSkillOffer, toolResults: allToolResults };
+  return {
+    type: 'execute',
+    text: finalTextWithSkillOffer,
+    reasoningSummary: normalizeReasoningSummary(allReasoningSummary),
+    toolResults: allToolResults,
+  };
   } finally {
     // switch_model overrides are strictly turn-scoped; always clear on turn end.
     // If a turn override was active, notify the UI so it can revert the model badge.
@@ -9055,7 +9233,6 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
 
   void (async () => {
     try {
-      await delayMs(250);
       while (true) {
         const current = snapshotMainChatGoal(sid);
         if (!current || current.status !== 'active') {
@@ -9063,6 +9240,15 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
           return;
         }
 
+        // Admission is visible immediately. Context/model preparation can take
+        // seconds, but it is still part of the active Goal turn rather than a
+        // silent gap after the command acknowledgement.
+        const turnPreparingAt = Date.now();
+        broadcastMainChatGoalState(sid, 'turn_preparing', {
+          source,
+          message: 'Goal accepted. Preparing the first action.',
+          preparingAt: turnPreparingAt,
+        });
         const prompt = buildMainChatGoalContinuationPrompt(current);
         const abortController = new AbortController();
         const abortSignal = { aborted: false, signal: abortController.signal };
@@ -9077,6 +9263,13 @@ function startMainChatGoalRunner(sessionId: string, source = 'goal_command'): vo
         });
         const runtimeGoalTurnNumber = Math.max(1, Number(current.restartCheckpoint?.turnNumber || current.turnsUsed + 1));
         const runtimeGoalIterationNumber = Math.max(1, Number(current.currentIteration || 1));
+        updateLiveRuntimeCheckpoint(runtimeId, {
+          event: 'goal_turn_preparing',
+          at: turnPreparingAt,
+          message: 'Goal accepted. Preparing the first action.',
+          activeRunKind: 'main_chat_goal',
+          goalId: current.id,
+        });
         updateLiveRuntimeCheckpoint(runtimeId, {
           event: 'goal_turn_identity',
           at: Date.now(),
@@ -9364,7 +9557,7 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-	    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease },
+    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -9424,6 +9617,8 @@ async function runInteractiveTurn(
   const isGoalContinuationTurn = flags?.syntheticGoalContinuation === true || isMainChatGoalContinuation(message);
   const isSyntheticSubagentCompletionTurn = flags?.syntheticSubagentCompletion === true;
   const isSyntheticThreadSupervisionReview = flags?.syntheticThreadSupervisionReview === true;
+  const isSupervisionLoop = flags?.supervisionLoop === true;
+  const isSilentSupervisionLoop = flags?.silentSupervisionLoop === true;
   const isSyntheticInternalWatch = flags?.syntheticInternalWatch === true;
   const isSyntheticRestartRecovery = flags?.syntheticRestartRecovery === true;
   const goalTurnSnapshot = isGoalContinuationTurn ? snapshotMainChatGoal(sessionId) : null;
@@ -9453,7 +9648,9 @@ async function runInteractiveTurn(
   turnTiming.mark('turn_origin_persisted');
   const existingMainChatStream = getMainChatStream(sessionId);
   const streamSetupStartedAt = Date.now();
-  const localMainChatStream = existingMainChatStream?.active
+  const localMainChatStream = isSilentSupervisionLoop
+      ? null
+      : existingMainChatStream?.active
       ? null
       : beginMainChatStream(sessionId);
   turnTiming.mark('stream_setup_done', {
@@ -9507,6 +9704,25 @@ async function runInteractiveTurn(
     ...(isGoalContinuationTurn ? { channel: 'system' as const, channelLabel: 'goal' } : {}),
     ...(Array.isArray(attachmentPreviews) && attachmentPreviews.length ? { attachmentPreviews } : {}),
   };
+  const persistEarlyAbortPacket = (reason: string): void => {
+    if (!abortSignal?.aborted) return;
+    try {
+      const packet = buildTurnContextPacket({
+        turnId: String(flags?.runtimeId || `interactive_${Date.now().toString(36)}`),
+        sessionId,
+        status: 'aborted',
+        request: message,
+        progressState: reason,
+        uncertainties: ['The turn was cancelled during pre-turn maintenance; no claim is made about work after this boundary.'],
+        pendingTasks: ['Resume the original request from the latest durable context.'],
+        continueFromHere: 'Resume the original request after checking whether pre-turn maintenance completed.',
+        abortReason: 'User cancelled before normal model-turn finalization.',
+      });
+      recordWorkingContextPacket(sessionId, packet, { flush: true });
+    } catch (err: any) {
+      console.warn('[context] Failed to persist early abort packet:', err?.message || err);
+    }
+  };
   if (!isGoalContinuationTurn && !isSyntheticSubagentCompletionTurn && !isSyntheticThreadSupervisionReview && !isSyntheticInternalWatch && !isSyntheticRestartRecovery) {
     appendMainChatStreamEvent(sessionId, localMainChatStream?.streamId || existingMainChatStream?.streamId || '', 'user_message', {
       message: userMsg,
@@ -9525,7 +9741,13 @@ async function runInteractiveTurn(
     addMessage(sessionId, userMsg, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     addMessage(sessionId, { role: 'assistant', content: reply, timestamp: Date.now(), messageKind: 'goal_command_ack', goalCompletionReport }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
     broadcastMainChatGoalState(sessionId, 'command', { goal: command.goal });
-    if (command.shouldStartRunner) startMainChatGoalRunner(sessionId, 'goal_command');
+    if (command.shouldStartRunner) {
+      broadcastMainChatGoalState(sessionId, 'launch_accepted', {
+        source: 'goal_command',
+        message: 'Goal accepted. Starting now.',
+      });
+      startMainChatGoalRunner(sessionId, 'goal_command');
+    }
     const commandResult = { type: 'chat' as const, text: reply, goalCompletionReport };
     completeLocalMainChatStream(commandResult);
     return commandResult;
@@ -9675,7 +9897,10 @@ async function runInteractiveTurn(
         },
       });
     }
-    if (abortSignal?.aborted) return { type: 'chat', text: '' };
+    if (abortSignal?.aborted) {
+      persistEarlyAbortPacket('Cancelled after pre-turn context compaction maintenance.');
+      return { type: 'chat', text: '' };
+    }
     addMessage(sessionId, userMsg, { disableMemoryFlushCheck: true, disableCompactionCheck: true });
   } else if (addResult.deferredForMemoryFlush && addResult.memoryFlushPrompt) {
     sendSSE('ui_preflight', { message: 'Saving important memory before continuing...' });
@@ -9708,13 +9933,16 @@ async function runInteractiveTurn(
     } catch (flushErr: any) {
       console.warn('[v2] Pre-compaction memory flush failed:', flushErr?.message || flushErr);
     }
-    if (abortSignal?.aborted) return { type: 'chat', text: '' };
+    if (abortSignal?.aborted) {
+      persistEarlyAbortPacket('Cancelled after pre-turn memory maintenance.');
+      return { type: 'chat', text: '' };
+    }
     addMessage(sessionId, userMsg, { disableMemoryFlushCheck: true, disableCompactionCheck: true });
   }
 
   console.log(`\n[v2] USER: ${message.slice(0, 100)}`);
   let followupHandled: string | null = null;
-  if (!isSyntheticInternalWatch && shouldCheckBlockedTaskFollowup(message)) {
+  if (!isSyntheticInternalWatch && !isSupervisionLoop && shouldCheckBlockedTaskFollowup(message)) {
     sendSSE('ui_preflight', { message: 'Checking paused task follow-up...' });
     const blockedFollowupLookupStartedAt = Date.now();
     turnTiming.mark('blocked_recovery_followup_lookup_start');
@@ -9781,6 +10009,10 @@ async function runInteractiveTurn(
       {
         directSubagentChat: isDirectSubagentChatTurn,
         syntheticThreadSupervisionReview: isSyntheticThreadSupervisionReview,
+        supervisionLoop: isSupervisionLoop,
+        silentSupervisionLoop: isSilentSupervisionLoop,
+        supervisionOwnerSessionId: flags?.supervisionOwnerSessionId,
+        supervisionId: flags?.supervisionId,
         internalWatchContext: flags?.internalWatchContext,
         excludedSkillIds: turnExcludedSkillIds,
         forcedSkillIds: turnForcedSkillIds,
@@ -9793,7 +10025,7 @@ async function runInteractiveTurn(
 
   const observationPersistStartedAt = Date.now();
   const turnObservationId = `turn_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
-  const toolObservations: ToolObservation[] = result.toolResults && result.toolResults.length > 0
+  const toolObservations: ToolObservation[] = !isSilentSupervisionLoop && result.toolResults && result.toolResults.length > 0
     ? persistToolResultsAsObservations(sessionId, turnObservationId, result.toolResults)
     : [];
   turnTiming.mark('tool_observations_persisted', { durationMs: Date.now() - observationPersistStartedAt, count: toolObservations.length });
@@ -9850,6 +10082,56 @@ async function runInteractiveTurn(
   if (resultFileChanges && !result.fileChanges) {
     (result as any).fileChanges = resultFileChanges;
   }
+  const packetToolActions = toolObservations.map((observation) => {
+    const paths = Array.isArray(observation.pathsTouched) && observation.pathsTouched.length
+      ? ` (${observation.pathsTouched.slice(0, 2).join(', ')})`
+      : '';
+    return `${observation.toolName}: ${observation.status}${paths}`;
+  });
+  const packetFileCount = Array.isArray((resultFileChanges as any)?.files)
+    ? (resultFileChanges as any).files.length
+    : 0;
+  const packetStatus = abortSignal?.aborted
+    ? 'aborted'
+    : /^\s*error:/i.test(String(result.text || ''))
+      ? 'failed'
+      : 'completed';
+  const packetUncertainties = packetStatus === 'aborted'
+    ? ['The active model/tool boundary was interrupted; verify any in-flight side effect before retrying it.']
+    : [];
+  const packet = shouldPersistTurnContext({
+    status: packetStatus,
+    reasoningSummary: result.reasoningSummary,
+    toolCount: toolObservations.length,
+    hasFileChanges: packetFileCount > 0,
+    hasArtifacts: !!(result.artifacts?.length || result.generatedImages?.length || result.generatedVideos?.length || result.richArtifacts?.length),
+  })
+    ? buildTurnContextPacket({
+        turnId: String(flags?.runtimeId || `interactive_${Date.now().toString(36)}`),
+        sessionId,
+        status: packetStatus,
+        request: message,
+        reasoningSummary: result.reasoningSummary,
+        findings: packetToolActions.length ? [`Completed ${packetToolActions.length} tool step(s).`] : [],
+        decisions: result.reasoningSummary
+          ? []
+          : packetToolActions.length
+            ? ['Continue from the completed tool state and verify any uncertain boundary before repeating work.']
+            : [],
+        completedActions: packetToolActions,
+        toolState: toolLogText,
+        progressState: packetToolActions.slice(-6).join('\n'),
+        uncertainties: packetUncertainties,
+        pendingTasks: packetStatus === 'aborted' ? ['Resume the user request from this packet after verifying the interrupted boundary.'] : [],
+        continueFromHere: packetStatus === 'aborted'
+          ? 'Resume from the completed observations, then verify the interrupted boundary before repeating it.'
+          : 'Use these findings and decisions as the starting state for the next related turn.',
+        abortReason: packetStatus === 'aborted' ? 'User cancelled the active turn.' : undefined,
+      })
+    : null;
+  if (packet) {
+    recordWorkingContextPacket(sessionId, packet, { flush: packet.status === 'aborted' });
+  }
   if (abortSignal?.aborted) {
     if (editRerunAbortResetSessions.has(String(sessionId || ''))) {
       return result;
@@ -9881,6 +10163,7 @@ async function runInteractiveTurn(
       toolLogText
         ? `Compact tool/process state was preserved for continuation:\n${toolLogText}`
         : 'No tool calls had completed yet.',
+      packet ? formatTurnContextPacketsForPrompt([packet], 6_000) : '',
       'When the user asks to continue, resume from this checkpoint instead of restarting from scratch.',
     ].filter(Boolean).join('\n\n');
     const visibleCheckpointText = [
@@ -9890,6 +10173,7 @@ async function runInteractiveTurn(
       stepSummary,
       'Compact tool/process state was preserved for continuation. Full raw observations remain available out-of-band.',
     ].join('\n');
+    if (!isSilentSupervisionLoop) {
     const assistantPersistStartedAt = Date.now();
     addMessage(sessionId, {
       role: 'assistant',
@@ -9898,6 +10182,7 @@ async function runInteractiveTurn(
       content: visibleCheckpointText,
       timestamp: Date.now(),
       toolLog: toolLogText || checkpointPacket,
+      reasoningSummary: result.reasoningSummary || result.thinking || undefined,
       turnProviderUsage,
       toolResultBudget,
       goalCompletionReport: result.goalCompletionReport,
@@ -9924,6 +10209,7 @@ async function runInteractiveTurn(
       persistToolLog(sessionId, toolLogText);
       turnTiming.mark('tool_log_persisted', { durationMs: Date.now() - toolLogPersistStartedAt });
     }
+    }
     if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
       enqueuePostTurnJob({
         sessionId,
@@ -9940,6 +10226,7 @@ async function runInteractiveTurn(
       turnTiming.mark('post_turn_work_enqueued', { kind: 'interrupted_project_learning' });
     }
   } else {
+    if (!isSilentSupervisionLoop) {
     const assistantPersistStartedAt = Date.now();
     addMessage(sessionId, {
       role: 'assistant',
@@ -9955,6 +10242,7 @@ async function runInteractiveTurn(
       productCarousel: result.productCarousel || undefined,
       richArtifacts: Array.isArray(result.richArtifacts) && result.richArtifacts.length ? result.richArtifacts : undefined,
       toolLog: toolLogText || undefined,
+      reasoningSummary: result.reasoningSummary || result.thinking || undefined,
       liveTraceEntries: durableToolStreamTrace,
       turnProviderUsage,
       toolResultBudget,
@@ -9972,6 +10260,7 @@ async function runInteractiveTurn(
       const toolLogPersistStartedAt = Date.now();
       persistToolLog(sessionId, toolLogText);
       turnTiming.mark('tool_log_persisted', { durationMs: Date.now() - toolLogPersistStartedAt });
+    }
     }
     if (!isSubagentChatSession && !isSyntheticThreadSupervisionReview) {
       enqueuePostTurnJob({
@@ -12642,7 +12931,7 @@ function buildVoiceThreadOpsDefinition(): any {
     function: {
       ...canonical.function,
       name: 'voice_thread_ops',
-      description: 'Voice-native control plane for first-class Prometheus chat threads. Find, inspect, create, model-route, message, steer, interrupt, rename, pin, and durably supervise threads. Voice remains the user-facing coordinator; threads perform independent or blocking mechanics. IMPORTANT: create/create_many only confirm that a turn was accepted and queued; they do not mean the target replied, completed, or verified anything. Report a target result only after a later read/status or a managed_thread_turn_complete update. This is the only Voice delegation path: never create a voice worker group or background task group.',
+      description: 'Voice-native control plane for first-class Prometheus chat threads. For creation choose launch_mode ping (notify when the detached turn completes), forget (no completion notification), or supervise (hidden persistent review loop with terminal verification); action aliases create_and_ping/create_and_forget/create_and_supervise are also valid. Voice remains the user-facing coordinator; threads perform independent or blocking mechanics. Creation only confirms acceptance/queueing, never a target reply, completion, or verification. This is the only Voice delegation path: never create a voice worker group or background task group.',
     },
   };
 }
@@ -14090,9 +14379,18 @@ function summarizeVoiceThreadOperation(action: string, output: Record<string, an
   const title = String(session?.title || output?.supervision?.targetTitle || '').trim();
   const count = Number(output?.count || (Array.isArray(output?.created) ? output.created.length : 0));
   const target = title ? ` ${title}` : '';
+  const mode = String(session?.mode || session?.launch?.notificationMode || '').trim().toLowerCase();
   switch (action) {
-    case 'create': case 'start': return `Created and queued thread${target}; its response is still pending.`;
-    case 'create_many': case 'start_many': return `Created and queued ${count || 0} independent threads; their responses are still pending.`;
+    case 'create_and_ping': return `Created and queued thread${target}; I will notify you when its detached turn completes.`;
+    case 'create_and_forget': return `Created and queued thread${target}; I will not send a completion notification.`;
+    case 'create_and_supervise': return `Created and queued thread${target}; hidden supervision will verify it and report the terminal result.`;
+    case 'create': case 'start':
+      return mode === 'ping'
+        ? `Created and queued thread${target}; I will notify you when its detached turn completes.`
+        : mode === 'forget'
+          ? `Created and queued thread${target}; I will not send a completion notification.`
+          : `Created and queued thread${target}; hidden supervision will verify it and report the terminal result.`;
+    case 'create_many': case 'start_many': return `Created and queued ${count || 0} independent threads; each launch route will report according to its explicit mode.`;
     case 'send': case 'chat': return `Sent the thread an update${target}.`;
     case 'steer': return `Steered the active thread${target}.`;
     case 'interrupt': case 'stop': return `Paused the thread${target}.`;
@@ -15533,11 +15831,11 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     'You are the live coordinator for the user\'s work, not a pass-through dispatcher. Speak and act in first person; never mention workers, background tasks, dispatching, tool calls, or backend plumbing unless the user asks.',
     'Choose the lightest mode that moves the user forward: converse and decide here; do a quick bounded check here with a provided voice tool; or create/control a first-class Prometheus thread for independent or blocking mechanics.',
     'Voice owns the relationship, judgment, continuity, user choices, and approvals. Threads perform file, code, shell, long-running, or other broad execution work and return a concise outcome, blocker, and any decision needed from the user.',
-    'Thread-launch truth rule: voice_thread_ops create/create_many succeeds as soon as a target turn is accepted and queued. That tool result is NOT a target reply, completion, progress update, or verification. Never say a thread answered, found something, finished, or is working correctly from creation alone. Say only that it was started/queued and its response is pending. Report a result only after voice_thread_ops read/status shows the target reply or a managed_thread_turn_complete update provides it.',
+    'Thread-launch rule: every create/create_many call must choose one route explicitly: launch_mode ping means notify when the detached turn completes; forget means create and stay silent; supervise means create a Goal target and keep a hidden persistent review loop alive until verified completion, blocker, or failure. The create result only confirms acceptance/queueing, never a reply, progress, completion, or verification. Report a result only after read/status, a ping completion update, or a terminal supervision update provides it.',
     'You are the live voice layer and you MAY call the provided voice_* tools plus canonical read-only skill_* tools directly.',
     'The voice_* tools are safe wrappers around existing Prometheus tools, and skill_* tools are the normal Prometheus skill list/read/resource tools. Those provided tools are the only tools you may use from this layer.',
     'Do not say web search, fetch, notes, memory search, skill list/read, timers, or screenshot capture/delivery are only available to the Worker when a matching voice_* or skill_* tool is provided.',
-    'Use compact voice wrapper tools for fast conversational support and live browser/desktop UI control. Realtime voice may open, observe, click, type, fill, press keys, focus windows, launch apps, scroll, and complete explicit user-authorized social posts/messages through voice_browser and voice_desktop when the content and destination are clear. Use voice_ops for quick search/fetch, notes, memory, timers, runtime voice settings, screenshot delivery, operator status, and simple image/video generation. If the request needs files, shell/run commands, source editing, MCP/connectors, downloads/uploads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, deletes, installs, destructive actions, or durable system changes, use voice_thread_ops action=create or create_many. Default to the current Main Chat route; only set provider_id, model, reasoning_effort, or account_id when the user explicitly requests it.',
+    'Use compact voice wrapper tools for fast conversational support and live browser/desktop UI control. Realtime voice may open, observe, click, type, fill, press keys, focus windows, launch apps, scroll, and complete explicit user-authorized social posts/messages through voice_browser and voice_desktop when the content and destination are clear. Use voice_ops for quick search/fetch, notes, memory, timers, runtime voice settings, screenshot delivery, operator status, and simple image/video generation. If the request needs files, shell/run commands, source editing, MCP/connectors, downloads/uploads, coding, long research, media processing, approvals, credentials, purchases/payments, account settings/security changes, deletes, installs, destructive actions, or durable system changes, use voice_thread_ops with an explicit launch_mode: ping, forget, or supervise. Default to the current Main Chat route; only set provider_id, model, reasoning_effort, or account_id when the user explicitly requests it.',
     '',
     'When the user asks something answerable from your context, answer directly.',
     'When the user asks for current live-run status/progress/context, call voice_ops with action worker_status and answer from the returned live packet; never steer a thread just to ask it for status.',
@@ -17833,7 +18131,7 @@ router.post('/api/_removed/voice-agent-input', async (req, res) => {
           title: compactVoiceText(threadPrompt, 80) || 'Voice task',
           prompt: threadPrompt,
           objective: threadPrompt,
-          follow: true,
+          launch_mode: 'supervise',
           voiceTarget,
         });
         const threadResult = parseVoiceToolResult(threadRaw);
@@ -18381,7 +18679,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
       : '',
     identity.isSubagent
       ? `- voice_ops agent_control is your worker path. For a request that needs ${identity.label}'s full worker capabilities, call voice_ops with action agent_control, agent_action chat, and the complete message. agent_id defaults to your own subagent id. The call waits for your worker's real response and returns it to this same ${identity.label} Voice/Live session; then summarize the result as yourself.`
-      : '- voice_thread_ops: the first-class Prometheus thread control plane. Use it to create, inspect, message, steer, interrupt, model-route, and supervise threads. Default new threads to the current Main Chat route. Only specify provider_id, model, reasoning_effort, or account_id when the user explicitly requests it. Use create_many only for genuinely independent work; there are no Voice worker groups.',
+      : '- voice_thread_ops: the first-class Prometheus thread control plane. For every new thread choose launch_mode ping, forget, or supervise. Use ping for a detached completion notification, forget when no owner update is wanted, and supervise for a hidden review loop that checks reasoning, tool findings, runtime state, and artifacts while the target works. Default new threads to the current Main Chat route. Use create_many only for genuinely independent work; there are no Voice worker groups.',
     '- voice_ops: unified quick voice operations. It also provides task_directory for global task discovery, task_control for existing-task operations, task_watch for explicit opt-in notifications, agent_directory for subagent discovery, and agent_control for standalone-subagent chat/dispatch/run recovery. Controlling an outside task never tracks it automatically.',
     '- Visual cards use the show_ui wrapper (render a card in the app while you speak the gist — keep speech short, the card carries the detail). Actions: weather (forecast), market (crypto/memecoins), stocks (equities/ETFs), prediction_market (Polymarket odds), map (places/locations), sources (news/citations), comparison (side-by-side table), chart (line/bar/area from numbers), product_carousel (products), agent_work (operator snapshot — gather via voice_ops action automation_dashboard first), and run_result (finished-task summary). For sources or product_carousel, pass the user\'s query directly; show_ui searches and assembles the items, so do not call it first with an empty items array and do not separately call voice_ops web_search unless show_ui reports a search failure. If the user asks for unspecified news sources, use query "latest news". All are keyless and read-only; call show_ui directly instead of dispatching the Worker for these.',
     '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
@@ -18405,10 +18703,10 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_ops action agent_memory instead of voice_ops action write_note.',
     identity.isSubagent
       ? `- For work needing files, shell, coding, long research, or a durable artifact, call voice_ops action agent_control with agent_action chat so ${identity.label}'s own worker performs it. Wait for the returned reply and summarize it in this same voice. Use agent_action dispatch only when the user explicitly requests background execution and does not expect an immediate result.`
-      : '- For heavy or durable work outside voice scope, call voice_thread_ops action=create immediately. For several independent work items, call create_many. Keep user choices, approvals, and interactive judgment here in Voice.',
+      : '- For heavy or durable work outside voice scope, call voice_thread_ops action=create immediately with an explicit launch_mode. Use supervise when the user expects ongoing verification/steering, ping for a one-shot completion notification, and forget when they do not want a notification. For several independent work items, call create_many with a route on each item. Keep user choices, approvals, and interactive judgment here in Voice.',
     identity.isSubagent
       ? '- For your existing worker run, use voice_ops agent_control run_status, run_message, run_resume, run_pause, run_rerun, or run_cancel. Do not call Prometheus thread operations.'
-      : '- For existing thread work, call voice_thread_ops find/read/status, then send or steer the exact thread. Use follow when the user asks for ongoing supervision; do not create a duplicate thread.',
+      : '- For existing thread work, call voice_thread_ops find/read/status, then send or steer the exact thread. Use follow only as a legacy compatibility alias; for new threads choose launch_mode supervise when the user asks for ongoing supervision. Do not create a duplicate thread.',
     identity.isSubagent
       ? ''
       : '- For a correction to an active current runtime, steer_active_worker remains available as a compatibility control. Prefer voice_thread_ops steer for an identified first-class thread.',
@@ -20041,6 +20339,7 @@ router.post('/api/chat', async (req, res) => {
 
   const abortController = new AbortController();
   const abortSignal = { aborted: false, signal: abortController.signal };
+  let writeImmediateAbortPacket: (() => void) | undefined;
   const runtimeId = registerLiveRuntime({
     kind: 'main_chat',
     label: 'Main chat',
@@ -20049,7 +20348,14 @@ router.post('/api/chat', async (req, res) => {
     detail: String(message || '').slice(0, 160),
     clientRequestId: clientRequestId || undefined,
     abortSignal,
-    onAbort: () => abortController.abort(),
+    onAbort: () => {
+      abortController.abort();
+      // Persist the same continuity shape immediately when the user presses
+      // stop. The normal turn finalizer may enrich/replace this packet later.
+      try { writeImmediateAbortPacket?.(); } catch (err: any) {
+        console.warn('[context] Failed to persist immediate abort packet:', err?.message || err);
+      }
+    },
     recoveryPolicy: 'mark_interrupted',
     recoveryData: {
       message: String(message || ''),
@@ -20126,6 +20432,41 @@ router.post('/api/chat', async (req, res) => {
     }
     updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
   };
+  writeImmediateAbortPacket = () => {
+    const runtime = getLiveRuntime(runtimeId);
+    const checkpoint = runtime?.checkpoint || {};
+    const entries = Array.isArray(checkpoint.processEntries) ? checkpoint.processEntries : [];
+    const completedActions = entries
+      .filter((entry: any) => entry?.type === 'tool' || entry?.type === 'result' || entry?.type === 'error')
+      .slice(-10)
+      .map((entry: any) => {
+        const toolName = String(entry?.extra?.toolName || '').trim();
+        const content = String(entry?.content || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+        return `${toolName || 'runtime step'}: ${entry?.type === 'error' ? 'error' : 'recorded'}${content ? ` — ${content}` : ''}`;
+      });
+    const activeTool = String(checkpoint.toolName || '').trim();
+    const packet = buildTurnContextPacket({
+      turnId: runtimeId,
+      sessionId: resolvedSessionId,
+      status: 'aborted',
+      request: String(message || ''),
+      findings: completedActions.length ? [`The runtime recorded ${completedActions.length} completed or attempted step(s) before cancellation.`] : [],
+      completedActions,
+      toolState: activeTool ? `Last runtime boundary: ${activeTool}` : '',
+      progressState: String(checkpoint.message || '').slice(0, 700),
+      uncertainties: [
+        activeTool
+          ? `The boundary for ${activeTool} may have been in flight when cancellation arrived; verify its effect before retrying.`
+          : 'The active model turn was cancelled before a final boundary was recorded.',
+      ],
+      pendingTasks: ['Resume the original request from this checkpoint when the user asks to continue.'],
+      continueFromHere: activeTool
+        ? `Verify whether ${activeTool} completed, then continue the original request without repeating confirmed work.`
+        : 'Continue the original request from the recorded completed steps.',
+      abortReason: 'User cancelled the active runtime before normal turn finalization.',
+    });
+    recordWorkingContextPacket(resolvedSessionId, packet, { flush: true });
+  };
   let requestCompleted = false;
   res.on('close', () => {
     if (!requestCompleted && !abortSignal.aborted) {
@@ -20149,7 +20490,7 @@ router.post('/api/chat', async (req, res) => {
 		      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
           Array.isArray(attachmentPreviews) && attachmentPreviews.length > 0 ? attachmentPreviews : undefined,
           undefined,
-          { excludedSkillIds, forcedSkillIds, timingRecorder: turnTiming, preAcquiredTurnLease: admissionLease },
+          { excludedSkillIds, forcedSkillIds, timingRecorder: turnTiming, preAcquiredTurnLease: admissionLease, runtimeId },
           turnOrigin,
           { clientRequestId },
 			    );

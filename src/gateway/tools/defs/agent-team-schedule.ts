@@ -1244,8 +1244,9 @@ export function getAgentTeamScheduleTools(): any[] {
         name: 'prometheus_thread_ops',
         description:
           'Find, inspect, create, rename, pin, message, steer, interrupt, and supervise other Prometheus chat sessions. A created chat inherits its origin chat channel and the current Main Chat route unless provider_id, model, reasoning_effort, or account_id is supplied; any supplied route field creates a sticky route for that chat only. ' +
-          'Use create_many to split a request into separate first-class Prometheus threads. Creation only accepts and queues the target turn: it is not a target reply, completion, or verification. A real target result exists only after a later read/status or managed completion update. follow=true starts Goal mode in each target and reports terminal completion, blocking, or failure back to this owner thread. ' +
-          'For active supervision, work as a manager loop: inspect the target, compare it to the objective and acceptance criteria, decide whether to wait/steer/report, and only accept after independent verification. ' +
+          'Use exactly one of the three creation routes: launch_mode="ping" (create and notify this owner when the detached turn completes), launch_mode="forget" (create and do not notify this owner), or launch_mode="supervise" (create a Goal target and keep a durable hidden supervisor loop running while it works). The action aliases create_and_ping, create_and_forget, and create_and_supervise select those routes directly. Creation only accepts and queues the target turn: it is not a target reply, completion, or verification. ' +
+          'Use create_many to split a request into separate first-class Prometheus threads. A real target result exists only after a later read/status, a ping completion update, or a terminal supervision update. ' +
+          'For active supervision, the hidden manager loop reviews the target evidence, reasoning summary, tool/process findings, runtime checkpoint, changed files, and artifacts; it blocks internally on supervision_wait between idle target events and never turns each checkpoint into a normal owner-chat response. ' +
           'revise_supervision, pause_supervision, and resume_supervision preserve the same owner/target workflow; they never silently replace the target thread. This controls Prometheus sessions, not subagents, background task records, or Codex threads.',
         parameters: {
           type: 'object',
@@ -1253,8 +1254,8 @@ export function getAgentTeamScheduleTools(): any[] {
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'find', 'read', 'status', 'create', 'create_many', 'send', 'steer', 'interrupt', 'rename', 'pin', 'unpin', 'follow', 'unfollow', 'supervisions', 'review_decision', 'revise_supervision', 'pause_supervision', 'resume_supervision'],
-              description: 'Peer-session operation. Use steer instead of send while the target is actively running.',
+              enum: ['list', 'find', 'read', 'status', 'create', 'create_and_ping', 'create_and_forget', 'create_and_supervise', 'create_many', 'send', 'steer', 'interrupt', 'rename', 'pin', 'unpin', 'follow', 'unfollow', 'supervisions', 'review_decision', 'supervision_wait', 'revise_supervision', 'pause_supervision', 'resume_supervision'],
+              description: 'Peer-session operation. Use steer instead of send while the target is actively running. supervision_wait is an internal blocking action used only by the hidden supervisor runtime.',
             },
             session_id: { type: 'string', description: 'Target Prometheus session id.' },
             supervision_id: { type: 'string', description: 'Supervision id for review decisions, supervised send/steer, unfollow, revise, pause, or resume.' },
@@ -1268,12 +1269,16 @@ export function getAgentTeamScheduleTools(): any[] {
             message: { type: 'string', description: 'Message for send or steer.' },
             objective: { type: 'string', description: 'Autonomous completion objective for create/follow. Defaults to prompt.' },
             acceptance_criteria: { type: 'string', description: 'Explicit completion checks for create/follow/revise_supervision. Defaults to objective.' },
+            launch_mode: { type: 'string', enum: ['ping', 'forget', 'supervise'], description: 'For create/create_many: exactly one launch route. ping notifies on detached completion; forget does not notify; supervise starts a hidden persistent review loop and reports only terminal verified/blocker results.' },
+            mode: { type: 'string', enum: ['ping', 'forget', 'supervise'], description: 'Alias for launch_mode.' },
+            after_event_id: { type: 'string', description: 'For supervision_wait: the last event already reviewed; the call blocks until a newer idle target event or terminal state exists.' },
+            timeout_ms: { type: 'number', description: 'For supervision_wait: optional bounded wait timeout.' },
             workspace: { type: 'string', description: 'Optional target workspace. Defaults to the owner thread workspace.' },
             provider_id: { type: 'string', description: 'For create/create_many: stable configured provider id for this new chat (for example openai or xai). Supplying any route field makes this chat use its own sticky route instead of following Main Chat.' },
             model: { type: 'string', description: 'For create/create_many: exact model id for this new chat. Pair with provider_id when selecting a different provider.' },
             reasoning_effort: { type: 'string', enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'For create/create_many: optional reasoning effort for this new chat. If supplied, the chat gets a sticky route.' },
             account_id: { type: 'string', description: 'For create/create_many: optional configured account id for the selected provider. If omitted, that provider\'s saved default account is used.' },
-            follow: { type: 'boolean', description: 'For create/create_many: enter autonomous Goal mode and durably supervise. Default true. Creation returns while the target reply is still pending.' },
+            follow: { type: 'boolean', description: 'Legacy compatibility for create/create_many. false maps to launch_mode="ping"; true or omitted maps to launch_mode="supervise". Prefer launch_mode.' },
             max_reviews: { type: 'number', description: 'Optional active-supervision review budget. Default 12.' },
             max_follow_ups: { type: 'number', description: 'Optional supervised send/steer budget. Default 6.' },
             max_elapsed_ms: { type: 'number', description: 'Optional elapsed-time budget. Default 24 hours.' },
@@ -1307,6 +1312,8 @@ export function getAgentTeamScheduleTools(): any[] {
                   model: { type: 'string' },
                   reasoning_effort: { type: 'string', enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
                   account_id: { type: 'string' },
+                  launch_mode: { type: 'string', enum: ['ping', 'forget', 'supervise'] },
+                  mode: { type: 'string', enum: ['ping', 'forget', 'supervise'] },
                   follow: { type: 'boolean' },
                   session_id: { type: 'string' },
                 },

@@ -907,6 +907,9 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
           const out = await executePrometheusThreadOps(sessionId, args, {
             runInteractiveTurn: deps.runInteractiveTurn,
             broadcastWS: deps.broadcastWS,
+            ownerSessionIdOverride: deps.threadOpsOwnerSessionId,
+            supervisionIdOverride: deps.threadOpsSupervisionId,
+            abortSignal: deps.abortSignal,
           });
           const threadLinks = buildPrometheusThreadLinksArtifact(args, out);
           return {

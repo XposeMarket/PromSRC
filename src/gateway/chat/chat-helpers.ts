@@ -451,17 +451,23 @@ let _handleChat: any;
 let _telegramChannel: any;
 let _makeBroadcastForTask: any;
 let _resumeMainChatGoalsAfterBoot: ((sessionIds?: string[]) => string[]) | undefined;
+let _resumePlannedRestartMainChats: ((runtimeIds: string[], retrigger: (runtime: any) => boolean) => string[]) | undefined;
+let _retriggerInterruptedMainChat: ((runtime: any) => boolean) | undefined;
 
 export function initChatHelpers(deps: {
   handleChat: any;
   telegramChannel: any;
   makeBroadcastForTask: any;
   resumeMainChatGoalsAfterBoot?: (sessionIds?: string[]) => string[];
+  resumePlannedRestartMainChats?: (runtimeIds: string[], retrigger: (runtime: any) => boolean) => string[];
+  retriggerInterruptedMainChat?: (runtime: any) => boolean;
 }): void {
   _handleChat = deps.handleChat;
   _telegramChannel = deps.telegramChannel;
   _makeBroadcastForTask = deps.makeBroadcastForTask;
   _resumeMainChatGoalsAfterBoot = deps.resumeMainChatGoalsAfterBoot;
+  _resumePlannedRestartMainChats = deps.resumePlannedRestartMainChats;
+  _retriggerInterruptedMainChat = deps.retriggerInterruptedMainChat;
 }
 
 // --- Hook: gateway:startup -> run BOOT.md ------------------------------------
@@ -543,11 +549,10 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
       console.log(`[RuntimeRecovery] Auto-resumed ${resumedGoals.length} main-chat goal(s) after startup recovery finalization.`);
     }
     if (plannedForegroundRuntimeIds.length > 0) {
-      const { resumePlannedRestartMainChats } = require('../runtime-recovery') as typeof import('../runtime-recovery');
-      // This hook lives below the router boundary, so resolve the foreground
-      // runner lazily after startup instead of creating a static router cycle.
-      const { retriggerInterruptedMainChat } = require('../routes/chat.router') as typeof import('../routes/chat.router');
-      const resumedForeground = resumePlannedRestartMainChats(plannedForegroundRuntimeIds, retriggerInterruptedMainChat);
+      const resumedForeground = _resumePlannedRestartMainChats?.(
+        plannedForegroundRuntimeIds,
+        (runtime) => _retriggerInterruptedMainChat?.(runtime) === true,
+      ) || [];
       if (resumedForeground.length > 0) {
         broadcastWS({
           type: 'restart_recovery',
@@ -1243,6 +1248,8 @@ export interface HandleChatResult {
   type: 'chat' | 'execute';
   text: string;
   thinking?: string;
+  /** Provider-supplied, presentation-safe reasoning summary only. */
+  reasoningSummary?: string;
   toolResults?: ToolResult[];
   artifacts?: any[];
   generatedImages?: any[];

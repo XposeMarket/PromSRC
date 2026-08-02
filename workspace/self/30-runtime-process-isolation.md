@@ -1,6 +1,6 @@
 # 44) Gateway and Runtime Process Isolation
 
-Last source verification: 2026-07-15.
+Last source verification: 2026-08-01.
 
 ## Why this boundary exists
 
@@ -61,6 +61,13 @@ The worker pools provide process isolation, not workspace isolation. The normal 
 - Runtime process entries are bounded (including encoded/large tool arguments), attached to the assistant message before the authoritative final flush, and therefore included in the committed session that precedes final/done publication.
 - Large prompt/profile reads, memory-index search, recent observation reads, and Creative reference image reads use async/bounded paths. Creative references use bounded aggregate/per-file bytes and limited concurrency rather than synchronous stat/read/base64 work on the gateway.
 - Automatic project learning and model-generated titles are post-terminal maintenance. Project lookup uses async bounded metadata reads; title transcript selection stops after six visible messages, title work is one global/single-flight job, and an abortable eight-second default deadline prevents it from occupying the shared model pool indefinitely. Completion notifications are also scheduled only after final/done publication.
+
+### Turn-context continuity and cancellation
+
+- `src/gateway/context/turn-context-packet.ts` defines the bounded safe handoff retained in `Session.workingContextPackets` (five recent rich turns at most). It carries findings, decisions, completed actions, compact tool/progress state, uncertainties, pending work, and continuation instructions; it does not persist private/raw model thinking.
+- Provider reasoning-summary events are accumulated separately from the private thinking stream. The safe summary is available to the next turn and to both rolling and mid-workflow compaction under `[RECENT_REASONING_AND_DECISIONS]`.
+- The main-chat live-runtime abort hook flushes an immediate packet from the live checkpoint. The normal post-turn finalizer merges that packet by `turnId` with any completed tool observations, so cancellation before regular unwinding still leaves a usable continuation packet.
+- In-flight tool effects remain uncertain in the packet and must be verified before retry. Progress-state events are reduced into the checkpoint so active plan state is retained as well as tool boundaries.
 
 Environment controls added by this layer include `PROMETHEUS_CONTEXT_FOOTPRINT_HEAP_MB`, `PROMETHEUS_CONTEXT_FOOTPRINT_MAX_SNAPSHOT_MB`, `PROMETHEUS_TOOL_OBSERVATION_HEAP_MB`, `PROMETHEUS_TOOL_OBSERVATION_MAX_SNAPSHOT_MB`, `PROMETHEUS_TOOL_OBSERVATION_WORKERS`, `PROMETHEUS_TOOL_OBSERVATION_FAST_PATH_MS`, `PROMETHEUS_TOOL_OBSERVATION_TAIL_MAX_BYTES`, `PROMETHEUS_TOOL_OBSERVATION_LINE_MAX_BYTES`, and `PROMETHEUS_AUTO_TITLE_TIMEOUT_MS`.
 

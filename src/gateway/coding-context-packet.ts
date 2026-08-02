@@ -222,7 +222,7 @@ function appendDiagnostic(entry: Record<string, unknown>): void {
       }
       await fs.promises.appendFile(filePath, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, 'utf8');
     } catch {}
-  });
+  }).catch(() => {});
 }
 
 function cleanScopeId(value: unknown, fallbackSessionId: string): string {
