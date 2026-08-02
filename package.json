@@ -1,6 +1,6 @@
 {
   "name": "prometheus",
-  "version": "1.0.10",
+  "version": "1.0.9",
   "description": "Prometheus — Local AI automation layer. Run and manage entire operations with a single intelligent agent.",
   "main": "electron/main.js",
   "bin": {
@@ -85,8 +85,8 @@
     "lint": "eslint src --ext .ts",
     "start:compiled": "node dist/cli/index.js",
     "electron": "electron .",
-    "build:win": "npm run patch:electron-native && npm run build:desktop-helper:win && electron-builder --win --config electron-builder.yml",
-    "build:mac": "npm run patch:electron-native && npm run build:desktop-helper:mac && electron-builder --mac --config electron-builder.yml",
+    "build:win": "npm run build:backend && npm run patch:electron-native && npm run build:desktop-helper:win && electron-builder --win --config electron-builder.yml",
+    "build:mac": "npm run build:backend && npm run patch:electron-native && npm run build:desktop-helper:mac && electron-builder --mac --config electron-builder.yml",
     "build:mac:tester": "npm run build:mac",
     "verify:public-release": "node scripts/verify-public-release.js",
     "verify:public-release:mac": "node scripts/verify-macos-release.js",
