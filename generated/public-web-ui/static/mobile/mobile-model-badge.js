@@ -456,6 +456,16 @@ export async function refreshMobileModelBadge(force = false, modelChangeDetail =
   if (document.querySelector('.pm-subagent-model-badge') && !modelChangeDetail?.forceSubagent) {
     return window.__pmModelBadgeLabel || 'Online';
   }
+  // A main_model_changed event means the global Settings model changed. A
+  // mobile_default draft route is only a temporary per-chat override; keeping
+  // it here would immediately overwrite the new global model with the old
+  // header label and stale reasoning level.
+  if (String(modelChangeDetail?.sourceEventType || '') === 'main_model_changed') {
+    _mobileDraftModelRoute = null;
+    window.__pmChatModelRoute = null;
+    _llmCache = null;
+    force = true;
+  }
   const eventModel = _modelDetail(modelChangeDetail || {});
   const llm = await _loadLlm(force);
   if (eventModel.model || eventModel.provider) {
@@ -494,6 +504,7 @@ function _closeSheet() {
   sheet?.__pmModelSheetCleanup?.();
   if (scrim) scrim.classList.remove('open');
   if (sheet) sheet.classList.remove('open');
+  document.body.classList.remove('pm-mobile-overlay-open');
   setTimeout(() => {
     if (scrim) scrim.remove();
     if (sheet) sheet.remove();
@@ -519,6 +530,7 @@ function _positionSheetNearBadge(sheet) {
 
 function _openSheet(titleHtml, bodyHtml) {
   _closeSheetImmediate();
+  document.body.classList.add('pm-mobile-overlay-open');
   const scrim = document.createElement('div');
   scrim.id = 'pm-msheet-scrim';
   scrim.className = 'pm-msheet-scrim';
@@ -567,6 +579,7 @@ function _closeSheetImmediate() {
   document.getElementById('pm-msheet')?.__pmModelSheetCleanup?.();
   document.getElementById('pm-msheet-scrim')?.remove();
   document.getElementById('pm-msheet')?.remove();
+  document.body.classList.remove('pm-mobile-overlay-open');
 }
 
 function _setSheetBody(html) {

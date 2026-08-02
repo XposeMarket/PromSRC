@@ -12692,20 +12692,41 @@ void main() {
   }
 
   function _closeChatVoiceMode() {
-    chatVoiceHost?._pmCleanup?.();
-    if (chatVoiceHost) {
-      chatVoiceHost.innerHTML = '';
-      chatVoiceHost.hidden = true;
-      delete chatVoiceHost.dataset.pmVoiceMounted;
+    // Always drop the full-screen voice overlay first. Cleanup can throw while
+    // tearing down mic/audio/listeners; if that aborts before class removal,
+    // the fixed composer keeps covering chat and only the higher-z hamburger
+    // remains tappable until a hard navigation/refresh.
+    const clearChatVoiceUi = () => {
+      try {
+        if (chatVoiceHost) {
+          chatVoiceHost.innerHTML = '';
+          chatVoiceHost.hidden = true;
+          delete chatVoiceHost.dataset.pmVoiceMounted;
+        }
+      } catch {}
+      try { if (chatVoiceShell) chatVoiceShell.hidden = true; } catch {}
+      try { form?.classList.remove('is-voice-active'); } catch {}
+      try { body?.classList.remove('pm-chat-voice-occluded'); } catch {}
+      try {
+        document.body?.classList.remove(
+          'pm-chat-voice-active',
+          'pm-chat-voice-new-chat',
+          'pm-chat-voice-existing-chat',
+          'pm-chat-voice-focus',
+          'pm-chat-voice-docked',
+        );
+      } catch {}
+      try { body?.style?.removeProperty?.('--pm-chat-voice-occlusion-top'); } catch {}
+    };
+    try {
+      chatVoiceHost?._pmCleanup?.('chat_voice_close');
+    } catch (err) {
+      console.warn('[mobile chat] voice cleanup failed during close:', err);
+    } finally {
+      clearChatVoiceUi();
+      try { updateChatComposerSpace(); } catch {}
+      try { updateComposerSubmitState(); } catch {}
     }
-    if (chatVoiceShell) chatVoiceShell.hidden = true;
-    form?.classList.remove('is-voice-active');
-    body?.classList.remove('pm-chat-voice-occluded');
-    document.body?.classList.remove('pm-chat-voice-active');
-    document.body?.classList.remove('pm-chat-voice-new-chat');
-    document.body?.classList.remove('pm-chat-voice-existing-chat');
-    updateChatComposerSpace();
-    updateComposerSubmitState();
   }
 
   function _voiceAttachmentSessionId() {
@@ -14715,11 +14736,24 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     window.removeEventListener('pm-mobile-chat-voice-layout', _chatVoiceLayoutEventHandler);
     chatVoiceClose?.removeEventListener('click', _closeChatVoiceMode);
     chatVoiceCamera?.removeEventListener('click', _openChatVoiceAttachSheet);
-    document.body?.classList.remove('pm-chat-voice-active');
-    document.body?.classList.remove('pm-chat-voice-new-chat');
-    document.body?.classList.remove('pm-chat-voice-existing-chat');
-    chatVoiceHost?._pmCleanup?.();
-    body?.classList.remove('pm-chat-voice-occluded');
+    // Prefer the hardened close path so a cleanup throw cannot leave the
+    // full-screen voice composer covering chat after route teardown.
+    try {
+      _closeChatVoiceMode();
+    } catch (err) {
+      console.warn('[mobile chat] voice close during page cleanup failed:', err);
+      try {
+        document.body?.classList.remove(
+          'pm-chat-voice-active',
+          'pm-chat-voice-new-chat',
+          'pm-chat-voice-existing-chat',
+          'pm-chat-voice-focus',
+          'pm-chat-voice-docked',
+        );
+      } catch {}
+      try { body?.classList.remove('pm-chat-voice-occluded'); } catch {}
+      try { form?.classList.remove('is-voice-active'); } catch {}
+    }
     stopCameraCapture();
     _teardownKeyboardController();
   };
@@ -15292,6 +15326,27 @@ const SERVER_VOICE_FALLBACKS = {
     { id: 'verse', label: 'Verse' },
   ],
   xai: [
+    { id: 'carina', label: 'Carina' },
+    { id: 'zagan', label: 'Zagan' },
+    { id: 'helix', label: 'Helix' },
+    { id: 'orion', label: 'Orion' },
+    { id: 'luna', label: 'Luna' },
+    { id: 'iris', label: 'Iris' },
+    { id: 'altair', label: 'Altair' },
+    { id: 'zenith', label: 'Zenith' },
+    { id: 'perseus', label: 'Perseus' },
+    { id: 'helios', label: 'Helios' },
+    { id: 'lux', label: 'Lux' },
+    { id: 'kepler', label: 'Kepler' },
+    { id: 'rigel', label: 'Rigel' },
+    { id: 'cosmo', label: 'Cosmo' },
+    { id: 'celeste', label: 'Celeste' },
+    { id: 'ursa', label: 'Ursa' },
+    { id: 'sirius', label: 'Sirius' },
+    { id: 'lumen', label: 'Lumen' },
+    { id: 'castor', label: 'Castor' },
+    { id: 'naksh', label: 'Naksh' },
+    { id: 'atlas', label: 'Atlas' },
     { id: 'eve', label: 'Eve' },
     { id: 'ara', label: 'Ara' },
     { id: 'rex', label: 'Rex' },
@@ -17904,7 +17959,14 @@ async function _loadServerVoiceCatalog(provider) {
   const id = String(provider || '').trim();
   if (!id) return [];
   if (__pmVoice.voiceCatalog?.[id]) return __pmVoice.voiceCatalog[id];
-  const voices = _serverVoiceFallback(id);
+  const advertised = __pmVoice.lastVoiceStatus?.voice?.voiceCatalogs?.[id];
+  const voices = Array.isArray(advertised) && advertised.length
+    ? advertised.map((voice) => {
+      if (typeof voice === 'string') return { id: voice, label: voice[0].toUpperCase() + voice.slice(1) };
+      const voiceId = String(voice?.id || voice?.voice_id || '').trim();
+      return voiceId ? { id: voiceId, label: String(voice?.label || voice?.name || voiceId) } : null;
+    }).filter(Boolean)
+    : _serverVoiceFallback(id);
   __pmVoice.voiceCatalog = { ...(__pmVoice.voiceCatalog || {}), [id]: voices };
   return voices;
 }
@@ -26981,30 +27043,50 @@ void main() {
   const previousVoiceCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = (reason = 'page_cleanup') => {
     const wasActiveVoiceRender = __pmVoice.activeVoiceRenderToken === voiceRenderToken;
-    closeVoicePageAttachSheet();
-    stopVoicePageCamera();
-    if (inlineMode) {
-      document.body?.classList.remove('pm-chat-voice-focus', 'pm-chat-voice-docked');
-      mic?.style.removeProperty('--pm-inline-orb-drag-y');
-      inlineOrbLastHapticTick = 0;
+    const safe = (label, fn) => {
+      try { fn(); }
+      catch (err) { console.warn(`[mobile voice] cleanup step failed (${label}):`, err); }
+    };
+    // Drop body/layout locks before heavier teardown so a later throw cannot
+    // leave chat stuck under the full-screen voice surface.
+    safe('layout_classes', () => {
+      if (inlineMode) {
+        document.body?.classList.remove('pm-chat-voice-focus', 'pm-chat-voice-docked');
+        mic?.style.removeProperty('--pm-inline-orb-drag-y');
+        inlineOrbLastHapticTick = 0;
+      } else {
+        document.body?.classList.remove('pm-mobile-voice-snap');
+      }
+    });
+    safe('inline_haptics', () => {
+      if (!inlineMode) return;
       inlineOrbHapticDispose?.();
       inlineOrbHapticDispose = null;
       inlineOrbHapticRefresh = null;
-    }
-    if (!inlineMode) document.body?.classList.remove('pm-mobile-voice-snap');
-    if (voiceSnapTimer) clearTimeout(voiceSnapTimer);
-    if (voiceOrbHoldTimer) clearTimeout(voiceOrbHoldTimer);
-    if (inlineOrbHoldTimer) clearTimeout(inlineOrbHoldTimer);
-    if (voiceModeIntroTimer) clearTimeout(voiceModeIntroTimer);
-    if (voiceToolStatusTimer) clearTimeout(voiceToolStatusTimer);
-    if (voiceToolStatusFadeTimer) clearTimeout(voiceToolStatusFadeTimer);
+    });
+    safe('attach_sheet', () => closeVoicePageAttachSheet());
+    safe('camera', () => stopVoicePageCamera());
+    safe('timers', () => {
+      if (voiceSnapTimer) clearTimeout(voiceSnapTimer);
+      if (voiceOrbHoldTimer) clearTimeout(voiceOrbHoldTimer);
+      if (inlineOrbHoldTimer) clearTimeout(inlineOrbHoldTimer);
+      if (voiceModeIntroTimer) clearTimeout(voiceModeIntroTimer);
+      if (voiceToolStatusTimer) clearTimeout(voiceToolStatusTimer);
+      if (voiceToolStatusFadeTimer) clearTimeout(voiceToolStatusFadeTimer);
+      voiceSnapTimer = 0;
+      voiceOrbHoldTimer = 0;
+      inlineOrbHoldTimer = 0;
+      voiceModeIntroTimer = 0;
+      voiceToolStatusTimer = 0;
+      voiceToolStatusFadeTimer = 0;
+    });
     voiceOrbGestureActive = false;
     voiceOrbGestureHolding = false;
-    snapScroller?.removeEventListener('scroll', _voiceSnapScrollHandler);
+    safe('scroll_listener', () => snapScroller?.removeEventListener('scroll', _voiceSnapScrollHandler));
     if (wasActiveVoiceRender) {
       __pmVoice.activeVoiceRenderToken = null;
       if (__pmVoice.activeVoiceRenderCleanup === page._pmCleanup) __pmVoice.activeVoiceRenderCleanup = null;
-      try { _ttsStop(); } catch {}
+      safe('tts_stop', () => { _ttsStop(); });
     }
     if (__pmRealtimeAgent.submitToWorkerOwner === voiceRenderToken) {
       __pmRealtimeAgent.submitToWorker = null;
@@ -27026,21 +27108,25 @@ void main() {
     }
     if (__pmVoice.statusEl === statusEl) __pmVoice.statusEl = null;
     if (__pmVoice.hintEl === hintEl) __pmVoice.hintEl = null;
-    previousVoiceCleanup?.();
-    if (voiceWaveRaf) {
-      cancelAnimationFrame(voiceWaveRaf);
-      voiceWaveRaf = 0;
-    }
-    if (voiceOrbReactionRaf) {
-      cancelAnimationFrame(voiceOrbReactionRaf);
-      voiceOrbReactionRaf = 0;
-    }
-    window.removeEventListener('resize', _resizeVoiceWaveCanvas);
-    window.removeEventListener('resize', _resizeVoiceOrbParticles);
-    document.removeEventListener('pointerdown', _voiceSettingsOutsideHandler, true);
-    try { voiceWaveSource?.disconnect?.(); } catch {}
-    try { voiceWaveAnalyser?.disconnect?.(); } catch {}
-    try { voiceWaveAudioCtx?.close?.(); } catch {}
+    safe('previous_cleanup', () => { previousVoiceCleanup?.(); });
+    safe('raf', () => {
+      if (voiceWaveRaf) {
+        cancelAnimationFrame(voiceWaveRaf);
+        voiceWaveRaf = 0;
+      }
+      if (voiceOrbReactionRaf) {
+        cancelAnimationFrame(voiceOrbReactionRaf);
+        voiceOrbReactionRaf = 0;
+      }
+    });
+    safe('window_listeners', () => {
+      window.removeEventListener('resize', _resizeVoiceWaveCanvas);
+      window.removeEventListener('resize', _resizeVoiceOrbParticles);
+      document.removeEventListener('pointerdown', _voiceSettingsOutsideHandler, true);
+    });
+    safe('wave_disconnect', () => { voiceWaveSource?.disconnect?.(); });
+    safe('wave_analyser', () => { voiceWaveAnalyser?.disconnect?.(); });
+    safe('wave_audio_ctx', () => { voiceWaveAudioCtx?.close?.(); });
     voiceWaveSource = null;
     voiceWaveAnalyser = null;
     voiceOrbTimeData = null;
@@ -27052,29 +27138,35 @@ void main() {
     voiceOrbParticlePaletteAt = 0;
     voiceWaveAudioCtx = null;
     voiceWaveStream = null;
-    wsEventBus?.off?.('vision_injected', _voiceVisionInjectedHandler);
-    wsEventBus?.off?.('delivery_notification', _voiceDeliveryNotificationHandler);
-    wsEventBus?.off?.('voice_worker_update', _voiceWorkerUpdateHandler);
-    wsEventBus?.off?.('process_run_exited', _voiceProcessExitHandler);
-    wsEventBus?.off?.('timer_done', _voiceTimerDoneHandler);
+    safe('ws_off', () => {
+      wsEventBus?.off?.('vision_injected', _voiceVisionInjectedHandler);
+      wsEventBus?.off?.('delivery_notification', _voiceDeliveryNotificationHandler);
+      wsEventBus?.off?.('voice_worker_update', _voiceWorkerUpdateHandler);
+      wsEventBus?.off?.('process_run_exited', _voiceProcessExitHandler);
+      wsEventBus?.off?.('timer_done', _voiceTimerDoneHandler);
+    });
     if (inlineMode) {
       __pmVoice.resumeAlwaysListeningOnVoicePage = false;
     }
-    if (__pmVoice.listening) {
-      if (_isAlwaysListeningMode() && !inlineMode) __pmVoice.resumeAlwaysListeningOnVoicePage = true;
-      _stopListening(true);
-    }
-    if (inlineMode) {
-      _releaseWarmMic();
-    }
+    safe('stop_listening', () => {
+      if (__pmVoice.listening) {
+        if (_isAlwaysListeningMode() && !inlineMode) __pmVoice.resumeAlwaysListeningOnVoicePage = true;
+        _stopListening(true);
+      }
+    });
+    safe('release_warm_mic', () => {
+      if (inlineMode) _releaseWarmMic();
+    });
     if (__pmVoice.previewTimer) {
       clearTimeout(__pmVoice.previewTimer);
       __pmVoice.previewTimer = null;
     }
     voiceTargetRestore = null;
-    if (inlineMode || __pmVoice?.target?.kind !== 'subagent') {
-      _restoreTemporaryMobileSubagentVoiceProfile();
-    }
+    safe('restore_subagent_profile', () => {
+      if (inlineMode || __pmVoice?.target?.kind !== 'subagent') {
+        _restoreTemporaryMobileSubagentVoiceProfile();
+      }
+    });
     if (window.__pmVoiceTargetPicker === voiceSessionTargetPicker) {
       window.__pmVoiceTargetPicker = null;
     }

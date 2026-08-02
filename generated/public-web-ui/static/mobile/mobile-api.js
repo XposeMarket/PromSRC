@@ -1403,14 +1403,40 @@ export async function runBgTaskAction(taskId, action) {
 }
 
 export async function loadVoiceStatus() {
-  const [realtime, creds] = await Promise.all([
+  const [realtime, xaiRealtime, creds] = await Promise.all([
     mfetch('/api/realtime/status').catch(() => null),
+    mfetch('/api/realtime/xai/status').catch(() => null),
     mfetch('/api/settings/credentialed-model-providers').catch(() => null),
   ]);
+  const configuredProviders = Array.isArray(creds?.providers)
+    ? creds.providers
+    : Array.isArray(creds?.ids)
+      ? creds.ids
+      : [];
+  const xaiConfigured = !!(
+    xaiRealtime?.configured
+    || configuredProviders.some((provider) => {
+      const id = typeof provider === 'string' ? provider : provider?.id || provider?.provider;
+      return String(id || '').trim().toLowerCase() === 'xai' && provider?.configured !== false;
+    })
+  );
+  const openAiConfigured = !!(realtime?.configured && (realtime?.oauthConfigured || realtime?.apiKeyConfigured));
+  const xaiVoices = Array.isArray(xaiRealtime?.voices) ? xaiRealtime.voices : [];
   return {
     realtime: realtime || { configured: false },
-    voice: { sttProviders: [{ id: 'auto', configured: true }], ttsProviders: [] },
-    providers: creds?.providers || creds?.ids || [],
+    voice: {
+      sttProviders: [
+        { id: 'auto', label: 'Transcription', configured: true },
+        { id: 'xai', label: 'xAI / Grok', configured: xaiConfigured },
+      ],
+      ttsProviders: [
+        { id: 'openai_realtime', label: 'OpenAI Realtime', configured: openAiConfigured },
+        { id: 'xai', label: 'xAI / Grok', configured: xaiConfigured },
+      ],
+      voiceCatalogs: { xai: xaiVoices },
+      xaiModel: xaiRealtime?.model || 'grok-voice-latest',
+    },
+    providers: configuredProviders,
   };
 }
 

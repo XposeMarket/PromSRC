@@ -139,6 +139,7 @@ export function mobileNavigate(route) {
 // every desktop settings loader/saver authenticates correctly on a phone.
 // `mobile.css` (scoped to body.pm-mobile-active) presents the modal full-screen.
 function openMobileSettings(tab) {
+  document.body.classList.add('pm-mobile-overlay-open');
   if (typeof window.openSettings === 'function') {
     // The desktop #settings-modal lives inside the .app container, which the
     // mobile shell hides with `display:none`. A position:fixed element nested
@@ -171,6 +172,7 @@ function closeMobileSettings() {
   if (modal && modal.style.display !== 'none' && typeof window.closeSettings === 'function') {
     try { window.closeSettings(); } catch {}
   }
+  document.body.classList.remove('pm-mobile-overlay-open');
 }
 
 const TAB_FOR_PAGE = {
@@ -190,7 +192,7 @@ function render() {
   }
 
   if (!isMobileRoute()) {
-    document.body.classList.remove('pm-mobile-active', 'pm-mobile-document-scroll');
+    document.body.classList.remove('pm-mobile-active', 'pm-mobile-document-scroll', 'pm-mobile-overlay-open');
     const root = document.getElementById('mobile-root');
     if (root) { root.hidden = true; root.innerHTML = ''; }
     return;

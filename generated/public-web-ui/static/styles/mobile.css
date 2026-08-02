@@ -1223,6 +1223,9 @@ body.pm-model-badge-pressing * {
   left: 0 !important;
   right: 0 !important;
   top: auto !important;
+  /* The tab bar yields while this modal is open, so the sheet can stay
+     visually anchored to the viewport edge. Leaving a gap here made the page
+     background look like a black strip beneath the controls. */
   bottom: 0 !important;
   width: 100% !important;
   box-sizing: border-box;
@@ -1234,7 +1237,7 @@ body.pm-model-badge-pressing * {
 
 .pm-msheet.is-reasoning {
   height: 280px;
-  max-height: 38dvh;
+  max-height: calc(100dvh - var(--pm-tabbar-h, 68px) - env(safe-area-inset-bottom, 0px) - 24px);
   padding: 24px 26px calc(28px + env(safe-area-inset-bottom));
   border: 0 !important;
   border-radius: 0 !important;
@@ -14563,6 +14566,8 @@ body.pm-mobile-active #settings-modal > div {
   border-radius: 0 !important;
   display: flex !important;
   flex-direction: column !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
   box-shadow: none !important;
   /* Respect iOS safe areas so the close button + footer stay reachable. */
   padding-top: env(safe-area-inset-top, 0px) !important;
@@ -14588,6 +14593,7 @@ body.pm-mobile-active #settings-tabstrip .sidebar-action {
 body.pm-mobile-active #settings-modal [id^="settings-panel-"] {
   grid-template-columns: 1fr !important; /* collapse 2-col grids to 1 col */
   flex: 1 1 auto !important;
+  min-height: 0 !important;
   overflow-y: auto !important;
   -webkit-overflow-scrolling: touch !important;
 }
@@ -14595,6 +14601,15 @@ body.pm-mobile-active #settings-modal [id^="settings-panel-"] {
 /* Keep the sticky Save/Cancel footer tappable. */
 body.pm-mobile-active #settings-save-btn {
   min-height: 40px !important;
+}
+
+/* The bottom navigation is persistent chrome, but it must yield completely to
+   full-screen mobile overlays. Keeping it mounted is useful for fast route
+   changes; hiding its hit surface prevents a tap near the bottom of a sheet or
+   settings footer from being routed to the page underneath. */
+body.pm-mobile-active.pm-mobile-overlay-open .pm-tabbar {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 
@@ -14726,7 +14741,8 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-track {
   backdrop-filter: none;
 }
 body.pm-mobile-active .pm-msheet.is-model-switch {
-  max-height: min(40dvh, 360px);
+  min-height: min(42dvh, 360px);
+  max-height: min(52dvh, 460px);
   padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
   border: 1px solid var(--pm-border-strong) !important;
   border-bottom: 0 !important;
@@ -14738,7 +14754,7 @@ body.pm-mobile-active .pm-msheet.is-model-switch {
   backdrop-filter: none !important;
 }
 body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-body {
-  max-height: calc(min(40dvh, 360px) - 58px - env(safe-area-inset-bottom));
+  max-height: calc(min(52dvh, 460px) - 58px - env(safe-area-inset-bottom));
   padding-bottom: 2px;
 }
 body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-head {

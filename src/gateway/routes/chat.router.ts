@@ -19069,11 +19069,20 @@ router.post('/api/voice-agent/realtime-call', async (req, res) => {
 // ============================================================================
 
 const XAI_REALTIME_CLIENT_SECRETS_ENDPOINT = `${(process.env.XAI_ENDPOINT || 'https://api.x.ai/v1').replace(/\/+$/, '')}/realtime/client_secrets`;
+const XAI_VOICE_CATALOG_ENDPOINT = `${(process.env.XAI_ENDPOINT || 'https://api.x.ai/v1').replace(/\/+$/, '')}/tts/voices`;
 const XAI_REALTIME_WS_BASE = process.env.XAI_REALTIME_WS_URL || 'wss://api.x.ai/v1/realtime';
 const DEFAULT_XAI_REALTIME_MODEL = process.env.XAI_REALTIME_MODEL || 'grok-voice-latest';
 const DEFAULT_XAI_REALTIME_VOICE = process.env.XAI_REALTIME_VOICE || 'eve';
 const XAI_REALTIME_USER_AGENT = process.env.XAI_TTS_USER_AGENT || 'Hermes-Agent/0.14.0';
-const XAI_REALTIME_VOICE_IDS = ['eve', 'ara', 'rex', 'sal', 'leo'];
+// Built-in xAI voices. The API's /v1/tts/voices endpoint is the source of
+// truth for custom/team voices; keep the current built-in roster here so the
+// picker still works immediately for connected OAuth accounts.
+const XAI_REALTIME_VOICE_IDS = [
+  'carina', 'zagan', 'helix', 'orion', 'luna', 'iris', 'altair', 'zenith',
+  'perseus', 'helios', 'lux', 'kepler', 'rigel', 'cosmo', 'celeste', 'ursa',
+  'sirius', 'lumen', 'castor', 'naksh', 'atlas',
+  'eve', 'ara', 'rex', 'sal', 'leo',
+];
 
 type XaiRealtimeAuthCandidate = { token: string; auth: 'xai_oauth' | 'api_key'; accountId?: string; label: string };
 
@@ -19082,6 +19091,29 @@ type XaiRealtimeAuthCandidate = { token: string; auth: 'xai_oauth' | 'api_key'; 
 // API key cannot silently override it; keep API key as a fallback candidate.
 async function getXaiRealtimeAuthCandidates(): Promise<XaiRealtimeAuthCandidate[]> {
   return getXaiAuthCandidates();
+}
+
+async function getXaiRealtimeVoices(): Promise<string[]> {
+  const fallback = [...XAI_REALTIME_VOICE_IDS];
+  try {
+    const candidates = await getXaiRealtimeAuthCandidates();
+    for (const candidate of candidates) {
+      const response = await fetch(XAI_VOICE_CATALOG_ENDPOINT, {
+        headers: {
+          Authorization: `Bearer ${candidate.token}`,
+          'User-Agent': XAI_REALTIME_USER_AGENT,
+        },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!response.ok) continue;
+      const data: any = await response.json().catch(() => ({}));
+      const live = (Array.isArray(data?.voices) ? data.voices : [])
+        .map((voice: any) => String(voice?.voice_id || voice?.id || voice?.name || voice || '').trim().toLowerCase())
+        .filter(Boolean);
+      if (live.length) return [...new Set([...live, ...fallback])];
+    }
+  } catch {}
+  return fallback;
 }
 
 function sanitizeXaiRealtimeModel(value: unknown): string {
@@ -19100,15 +19132,16 @@ function sanitizeXaiRealtimeSpeed(value: unknown): number {
   return Math.max(0.7, Math.min(1.5, Math.round(speed * 100) / 100));
 }
 
-router.get('/api/realtime/xai/status', (_req, res) => {
+router.get('/api/realtime/xai/status', async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const credentials = getConfiguredXaiCredentialSummary();
+  const voices = credentials.configured ? await getXaiRealtimeVoices() : XAI_REALTIME_VOICE_IDS;
   res.json({
     success: true,
     configured: credentials.configured,
     model: DEFAULT_XAI_REALTIME_MODEL,
     voice: DEFAULT_XAI_REALTIME_VOICE,
-    voices: XAI_REALTIME_VOICE_IDS,
+    voices,
     auth: credentials.oauthConfigured ? 'xai_oauth' : (credentials.apiKeyConfigured ? 'api_key' : 'none'),
     oauthConfigured: credentials.oauthConfigured,
     apiKeyConfigured: credentials.apiKeyConfigured,

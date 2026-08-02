@@ -2630,6 +2630,7 @@ function closeSettings() {
     saveBtn.textContent = 'Save';
   }
   document.getElementById('settings-modal').style.display = 'none';
+  document.body.classList.remove('pm-mobile-overlay-open');
   channelsStatusLoaded = false;
   _settingsAgentsLoadedSelection = '';
 }
