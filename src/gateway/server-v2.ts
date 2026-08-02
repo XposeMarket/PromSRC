@@ -213,7 +213,7 @@ const configManager = getConfig();
 const config = configManager.getConfig();
 const CONFIG_DIR_PATH = configManager.getConfigDir();
 const PORT = config.gateway.port || (process.env.GATEWAY_PORT ? parseInt(process.env.GATEWAY_PORT, 10) : 18789);
-const HOST = config.gateway.host || process.env.GATEWAY_HOST || (process.env.DOCKER_CONTAINER ? '0.0.0.0' : '127.0.0.1');
+const HOST = config.gateway.host || process.env.GATEWAY_HOST || '0.0.0.0';
 
 function resolveConfigPath(value: unknown): string {
   const raw = String(value || '').trim();

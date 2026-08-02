@@ -81,12 +81,13 @@ function _originLooksSafe(origin: string): boolean {
   }
 }
 
-function _resolvePairingOrigin(req: any, overrideOrigin: string): {
+async function _resolvePairingOrigin(req: any, overrideOrigin: string): Promise<{
   origin: string;
   bindHost: string;
   lanOrigins: string[];
   warning?: string;
-} {
+  remoteAccessActive: boolean;
+}> {
   const cfg = getConfig().getConfig() as any;
   const httpsCfg = cfg?.gateway?.https || {};
   const preferHttps = !!httpsCfg?.enabled && Number(httpsCfg?.port || 0) > 0;
@@ -105,7 +106,7 @@ function _resolvePairingOrigin(req: any, overrideOrigin: string): {
   const lanOrigins = _lanIPv4Addresses().map(ip => `${proto}://${ip}:${fallbackPort}`);
 
   if (overrideOrigin && _originLooksSafe(overrideOrigin)) {
-    return { origin: overrideOrigin, bindHost, lanOrigins };
+    return { origin: overrideOrigin, bindHost, lanOrigins, remoteAccessActive: false };
   }
 
   // Remote access: when enabled with a valid public URL (e.g. Tailscale Funnel),
@@ -114,14 +115,21 @@ function _resolvePairingOrigin(req: any, overrideOrigin: string): {
   const ra = cfg?.gateway?.remoteAccess;
   if (ra && ra.enabled && typeof ra.publicUrl === 'string') {
     const publicUrl = ra.publicUrl.trim();
-    if (publicUrl && _originLooksSafe(publicUrl)) {
-      return { origin: publicUrl.replace(/\/+$/, ''), bindHost, lanOrigins };
+    const mode = String(ra.mode || 'tailscale-funnel');
+    // A saved Funnel URL is not proof that Funnel is currently serving. If
+    // Tailscale was turned off, fall back to the LAN origin instead of putting
+    // a dead *.ts.net address in the QR code.
+    const remoteActive = publicUrl && _originLooksSafe(publicUrl)
+      ? mode !== 'tailscale-funnel' || await _isFunnelActiveOnPort(_gatewayPort())
+      : false;
+    if (remoteActive) {
+      return { origin: publicUrl.replace(/\/+$/, ''), bindHost, lanOrigins, remoteAccessActive: true };
     }
   }
 
   const isWildcard = bindHost === '0.0.0.0' || bindHost === '::';
   if (_isLoopbackHost(hostname) && isWildcard && lanOrigins.length) {
-    return { origin: lanOrigins[0], bindHost, lanOrigins };
+    return { origin: lanOrigins[0], bindHost, lanOrigins, remoteAccessActive: false };
   }
 
   const warning = _isLoopbackHost(hostname)
@@ -129,7 +137,7 @@ function _resolvePairingOrigin(req: any, overrideOrigin: string): {
       ? 'No LAN IPv4 address was detected; phone pairing may not be reachable.'
       : 'Gateway is bound to loopback only. Set gateway.host to 0.0.0.0 and restart to pair from a phone.'
     : (preferHttps ? 'Mobile microphone capture requires HTTPS. If Safari warns about the certificate, install and trust the Prometheus local certificate from desktop Settings.' : undefined);
-  return { origin: fallbackOrigin, bindHost, lanOrigins, warning };
+  return { origin: fallbackOrigin, bindHost, lanOrigins, warning, remoteAccessActive: false };
 }
 
 function _ipHintFromReq(req: any): string {
@@ -169,7 +177,7 @@ router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
     // Allow the desktop to override the host (e.g. when pairing across LAN
     // and the gateway is reached via a different hostname than req.host).
     const overrideOrigin = typeof req.body?.origin === 'string' ? String(req.body.origin).trim() : '';
-    const pairingOrigin = _resolvePairingOrigin(req, overrideOrigin);
+    const pairingOrigin = await _resolvePairingOrigin(req, overrideOrigin);
     const origin = pairingOrigin.origin;
 
     const challenge = createPairingChallenge();
@@ -185,7 +193,6 @@ router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
 
     const cfg = getConfig().getConfig() as any;
     const ra = cfg?.gateway?.remoteAccess;
-    const remoteAccessActive = !!(ra && ra.enabled && typeof ra.publicUrl === 'string' && ra.publicUrl.trim() && _originLooksSafe(ra.publicUrl.trim()));
     res.json({
       success: true,
       challengeId: challenge.id,
@@ -194,7 +201,7 @@ router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
       bindHost: pairingOrigin.bindHost,
       lanOrigins: pairingOrigin.lanOrigins,
       warning: pairingOrigin.warning,
-      remoteAccess: remoteAccessActive
+      remoteAccess: pairingOrigin.remoteAccessActive
         ? { active: true, mode: String(ra.mode || 'custom'), publicUrl: String(ra.publicUrl).trim() }
         : { active: false },
       expiresAt: challenge.expiresAt,
@@ -493,6 +500,19 @@ router.post('/api/pairing/tailscale/funnel/enable', requirePairingAdmin, async (
 router.post('/api/pairing/tailscale/funnel/disable', requirePairingAdmin, async (_req, res) => {
   const result = await _runTailscaleCli(['funnel', 'reset'], 8000);
   const ok = result.code === 0;
+  if (ok) {
+    // Disabling Funnel is also an explicit request to use local pairing. Do
+    // not let the startup/watchdog path immediately turn it back on, and do
+    // not leave the old public URL selected for the next QR code.
+    try {
+      const cfgMgr = getConfig();
+      const current = cfgMgr.getConfig() as any;
+      const gateway = { ...(current.gateway || {}) };
+      const remoteAccess = { ...(gateway.remoteAccess || {}) };
+      gateway.remoteAccess = { ...remoteAccess, enabled: false };
+      cfgMgr.updateConfig({ gateway } as any);
+    } catch {}
+  }
   res.json({ success: ok, error: ok ? undefined : (result.stderr || 'Failed to reset funnel').trim() });
 });
 
