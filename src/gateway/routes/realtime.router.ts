@@ -399,6 +399,47 @@ router.post('/api/realtime/codex-bridge/speak', async (req, res) => {
   }
 });
 
+// AVAS v3 owns its thread and does not accept public Realtime
+// conversation.item.create/response.create browser commands.  Mobile Voice
+// Room uses this narrowly-scoped endpoint after it has started a *new* bridge
+// session for the addressed agent, so the spoken turn reaches that agent's
+// own prompt, tools, workspace and durable history.
+router.post('/api/realtime/codex-bridge/append-text', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const sessionId = String(req.body?.sessionId || '').trim();
+  const text = clampText(String(req.body?.text || ''), 16_000);
+  if (!sessionId || !text) {
+    res.status(400).json({ success: false, error: 'sessionId and text are required.' });
+    return;
+  }
+  try {
+    const accepted = await getCodexRealtimeBridge().appendRealtimeText(sessionId, text);
+    if (!accepted) {
+      res.status(404).json({ success: false, error: 'The Codex realtime session is no longer active.' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(502).json({ success: false, error: String(err?.message || err) });
+  }
+});
+
+router.post('/api/realtime/codex-bridge/rebind-owner', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const sessionId = String(req.body?.sessionId || '').trim();
+  const ownerSessionId = String(req.body?.ownerSessionId || '').trim();
+  if (!sessionId || !ownerSessionId) {
+    res.status(400).json({ success: false, error: 'sessionId and ownerSessionId are required.' });
+    return;
+  }
+  const rebound = getCodexRealtimeBridge().rebindRealtimeSessionOwner(sessionId, ownerSessionId);
+  if (!rebound) {
+    res.status(404).json({ success: false, error: 'The Codex realtime session is no longer active.' });
+    return;
+  }
+  res.json({ success: true, rebound: true });
+});
+
 router.post('/api/realtime/codex-bridge/stop', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const sessionId = String(req.body?.sessionId || '').trim();

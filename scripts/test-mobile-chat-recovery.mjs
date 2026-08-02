@@ -8,6 +8,7 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const api = read('web-ui/src/mobile/mobile-api.js');
 const pages = read('web-ui/src/mobile/mobile-pages.js');
+const desktop = read('web-ui/src/pages/ChatPage.js');
 const shell = read('web-ui/src/mobile/mobile-shell.js');
 const ws = read('web-ui/src/ws.js');
 const index = read('web-ui/index.html');
@@ -27,6 +28,13 @@ assert.ok(composerRafDeclaration >= 0, 'mobile chat must declare its composer RA
 assert.ok(composerShiftDeclaration >= 0, 'mobile chat must declare its composer animation state');
 assert.ok(firstComposerSpaceCall >= 0, 'mobile chat must size its composer during startup');
 assert.match(api, /reconcileMobileChatPushNotifications/, 'mobile push must reconcile a stale browser subscription with the gateway');
+assert.match(desktop, /DESKTOP_ACTIVE_CHAT_RUNS_KEY/, 'desktop must persist the active chat run across reloads');
+assert.match(desktop, /recoverDesktopMainChatSession/, 'desktop must have a foreground stream recovery path');
+assert.match(desktop, /const rememberedSessionId = recallActiveChatSessionId\(\)/, 'desktop startup must reconsider the last active session');
+assert.match(desktop, /forgetLocalMainChatRequest\(thisSessionId, clientRequestId, \{ immediate: true \}\)/, 'a dropped desktop SSE request must re-enter replay ownership');
+assert.match(desktop, /addEventListener\('pagehide', \(\) => \{[\s\S]{0,420}rememberDesktopActiveChatRun/, 'desktop must persist an active turn before a page lifecycle disconnect');
+assert.match(desktop, /stream ended before completion/, 'desktop must treat an incomplete SSE body as recoverable');
+assert.doesNotMatch(desktop, /events\.slice\(-MAIN_CHAT_STREAM_CATCHUP_EVENT_CAP\)/, 'desktop replay must not discard the beginning of a retained tool stream');
 assert.match(api, /_sameApplicationServerKey/, 'a VAPID key rotation must replace the old browser subscription');
 assert.match(pages, /wsEventBus\.on\('task_notification'/, 'task completion must surface as a mobile in-app notification');
 assert.match(pages, /wsEventBus\.on\('bg_agent_done'/, 'background agent completion must surface as a mobile in-app notification');
@@ -165,8 +173,8 @@ assert.match(
 );
 assert.match(
   pages,
-  /const completedTraceEntries = \(!m\.streaming \|\| finalFrameReceived\) \? _mobileWorkflowTraceEntriesForMessage\(m\) : \[\]/,
-  'a final response must expose its preserved tool trace in the completed disclosure immediately',
+  /const completedTraceEntries = \(!m\.streaming \|\| finalFrameReceived \|\| traceFrozenForSteer\) \? _mobileWorkflowTraceEntriesForMessage\(m\) : \[\]/,
+  'a final response or frozen pre-steer trace must expose its preserved tool trace immediately',
 );
 assert.match(
   pages,

@@ -317,6 +317,8 @@ type HandleChatFn = (
   modelOverride?: string,
   executionMode?: 'interactive' | 'background_task' | 'heartbeat' | 'cron',
   toolFilter?: string[],
+  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
+  reasoningOptions?: { enabled?: boolean; level?: string },
 ) => Promise<{
   type: string;
   text: string;
@@ -356,6 +358,8 @@ export interface BrainStatus {
   dream: BrainJobStatus;
   thoughtModel: string;
   dreamModel: string;
+  thoughtReasoning: string;
+  dreamReasoning: string;
 }
 
 function getDreamTimeForDate(dateStr: string): Date {
@@ -434,6 +438,8 @@ export class BrainRunner {
     return {
       thoughtModel: state.thoughtModel || '',
       dreamModel: state.dreamModel || '',
+      thoughtReasoning: state.thoughtReasoning || '',
+      dreamReasoning: state.dreamReasoning || '',
       thought: {
         id: 'brain_thought',
         name: '🧠 Brain Thought',
@@ -473,12 +479,16 @@ export class BrainRunner {
     dreamEnabled?: boolean;
     thoughtModel?: string;
     dreamModel?: string;
+    thoughtReasoning?: string;
+    dreamReasoning?: string;
   }): void {
     const state = loadLatestState();
     if (partial.thoughtEnabled !== undefined) state.thoughtEnabled = partial.thoughtEnabled;
     if (partial.dreamEnabled  !== undefined) state.dreamEnabled  = partial.dreamEnabled;
     if (partial.thoughtModel  !== undefined) state.thoughtModel  = normalizeBrainModelRef(partial.thoughtModel, 'thoughtModel');
     if (partial.dreamModel    !== undefined) state.dreamModel    = normalizeBrainModelRef(partial.dreamModel, 'dreamModel');
+    if (partial.thoughtReasoning !== undefined) state.thoughtReasoning = String(partial.thoughtReasoning || '').trim();
+    if (partial.dreamReasoning !== undefined) state.dreamReasoning = String(partial.dreamReasoning || '').trim();
     saveLatestState(state);
   }
 
@@ -862,6 +872,7 @@ export class BrainRunner {
     };
 
 	    const thoughtModelOverride = loadLatestState().thoughtModel?.trim() || undefined;
+      const thoughtReasoning = loadLatestState().thoughtReasoning?.trim() || '';
 	    let resultText = '';
 	    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
       try {
@@ -926,6 +937,8 @@ export class BrainRunner {
           'skill_audit_all',
           'skill_candidate_submit',
         ]),
+        undefined,
+        thoughtReasoning ? { enabled: true, level: thoughtReasoning } : undefined,
       );
       resultText = abortSignal.aborted
         ? 'ABORTED: Brain thought run aborted by operator.'
@@ -1112,6 +1125,7 @@ export class BrainRunner {
 	    saveLatestState(dreamState);
 
 	    const dreamModelOverride = loadLatestState().dreamModel?.trim() || undefined;
+      const dreamReasoning = loadLatestState().dreamReasoning?.trim() || '';
 	    let resultText = '';
 	    let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
 	    try {
@@ -1189,6 +1203,8 @@ export class BrainRunner {
           'skill_candidate_submit',
           'write_proposal',
         ]),
+        undefined,
+        dreamReasoning ? { enabled: true, level: dreamReasoning } : undefined,
       );
       resultText = abortSignal.aborted
         ? 'ABORTED: Brain dream run aborted by operator.'
@@ -1423,6 +1439,7 @@ export class BrainRunner {
     };
 
     const dreamModelOverride = loadLatestState().dreamModel?.trim() || undefined;
+    const dreamReasoning = loadLatestState().dreamReasoning?.trim() || '';
     let resultText = '';
     let toolResults: Array<{ name: string; args: any; result: string; error: boolean }> = [];
     try {
@@ -1470,6 +1487,8 @@ export class BrainRunner {
           'skill_audit_all',
           'skill_candidate_submit',
         ],
+        undefined,
+        dreamReasoning ? { enabled: true, level: dreamReasoning } : undefined,
       );
       resultText = abortSignal.aborted
         ? 'ABORTED: Brain dream cleanup run aborted by operator.'

@@ -1,8 +1,10 @@
 # Voice Tool Capability Index
 
-Generated from the voice tool definitions in `src/gateway/routes/chat.router.ts` on 2026-07-22. These functions are exposed to the dedicated voice/realtime worker, not as a claim that every main-chat tool is voice-safe. Availability depends on supported browser/device permissions and configured voice/realtime providers.
+Generated from the voice tool definitions in `src/gateway/routes/chat.router.ts` on 2026-08-01. These functions are exposed to the dedicated voice/realtime worker, not as a claim that every main-chat tool is voice-safe. Availability depends on supported browser/device permissions and configured voice/realtime providers.
 
-**Total:** 39 voice tool schemas.
+**Total:** 39 static voice tool schemas.
+
+The active mobile or desktop Voice Room can additionally inject a runtime-only `voice_room_handoff` function when a multi-agent roster is enabled. It is a silent host-routing safety fallback for a missed participant address; it is not one of the 39 static schemas and does not expand the general Worker/voice capability boundary. Desktop room state is selected from the realtime orb and restored through the durable `voice_room_*` session contract.
 
 | Tool | Source-derived capability |
 |---|---|

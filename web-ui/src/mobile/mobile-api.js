@@ -1453,6 +1453,13 @@ function _normalizeSessionSummary(s) {
     mobileLastReadAt: Number(s?.mobileLastReadAt || 0) || null,
     mobileUnread: s?.mobileUnread === true,
     activeRun: s?.activeRun === true,
+    lastOrigin: s?.lastOrigin && typeof s.lastOrigin === 'object' ? {
+      channel: String(s.lastOrigin.channel || '').trim(),
+      surface: String(s.lastOrigin.surface || '').trim() || undefined,
+      device: String(s.lastOrigin.device || '').trim() || undefined,
+      label: String(s.lastOrigin.label || '').trim() || undefined,
+    } : null,
+    voiceRoom: s?.voiceRoom && typeof s.voiceRoom === 'object' ? s.voiceRoom : null,
   };
 }
 
@@ -1465,22 +1472,30 @@ export async function createMobileChatSession(sessionId, { title = 'New Chat' } 
   });
 }
 
-const MOBILE_SESSION_PAGE_SIZE = 20;
-const MOBILE_SESSION_CHANNELS = [
-  { key: 'web', label: 'Computer' },
-  { key: 'telegram', label: 'Telegram' },
-  { key: 'discord', label: 'Discord' },
-  { key: 'whatsapp', label: 'WhatsApp' },
-  { key: 'terminal', label: 'CLI' },
-];
+export async function resolveMobileVoiceRoom(participants = []) {
+  return mfetch('/api/voice-rooms/resolve', {
+    method: 'POST',
+    body: JSON.stringify({ participants }),
+  });
+}
 
-function _normalizeSessionPageResponse(r, { channel = '', limit = MOBILE_SESSION_PAGE_SIZE, offset = 0 } = {}) {
+export async function appendMobileVoiceRoomTranscript(sessionId, entry = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) throw new Error('Voice Room session id required');
+  return mfetch(`/api/voice-rooms/${encodeURIComponent(sid)}/transcript`, {
+    method: 'POST',
+    body: JSON.stringify(entry),
+  });
+}
+
+const MOBILE_SESSION_PAGE_SIZE = 20;
+function _normalizeSessionPageResponse(r, { scope = 'all', limit = MOBILE_SESSION_PAGE_SIZE, offset = 0 } = {}) {
   const sessions = Array.isArray(r?.sessions) ? r.sessions.map(_normalizeSessionSummary).filter(s => s.id) : [];
   const safeLimit = Math.max(1, Math.floor(Number(r?.limit || limit) || limit));
   const safeOffset = Math.max(0, Math.floor(Number(r?.offset || offset) || offset));
   const total = Math.max(safeOffset + sessions.length, Math.floor(Number(r?.total || sessions.length) || sessions.length));
   return {
-    channel: String(channel || '').trim(),
+    scope: String(scope || 'all').trim(),
     sessions,
     total,
     limit: safeLimit,
@@ -1489,43 +1504,33 @@ function _normalizeSessionPageResponse(r, { channel = '', limit = MOBILE_SESSION
   };
 }
 
-export async function loadMobileSessionPage({ channel = 'mobile', limit = MOBILE_SESSION_PAGE_SIZE, offset = 0 } = {}) {
-  const requestedChannel = String(channel || 'mobile');
+export async function loadMobileSessionPage({ limit = MOBILE_SESSION_PAGE_SIZE, offset = 0 } = {}) {
   const requestedLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || MOBILE_SESSION_PAGE_SIZE)));
   const requestedOffset = Math.max(0, Math.floor(Number(offset) || 0));
   const params = new URLSearchParams({
-    channel: requestedChannel,
+    scope: 'all',
     limit: String(requestedLimit),
     offset: String(requestedOffset),
+    includeAutomated: '1',
   });
-  // Scheduled-task threads are shared system-owned sessions, but on the mobile
-  // surface they belong in the primary chat list instead of Computer chats.
-  if (requestedChannel === 'mobile') {
-    params.set('includeAutomated', '1');
-  }
   const r = await mfetch(`/api/sessions?${params.toString()}`);
-  return _normalizeSessionPageResponse(r, { channel: requestedChannel, limit: requestedLimit, offset: requestedOffset });
+  return _normalizeSessionPageResponse(r, { scope: 'all', limit: requestedLimit, offset: requestedOffset });
 }
 
 export async function loadMobileSessionGroups(options = {}) {
   const limit = Math.max(1, Math.min(100, Math.floor(Number(options.limit) || MOBILE_SESSION_PAGE_SIZE)));
   const offset = Math.max(0, Math.floor(Number(options.offset) || 0));
-  const channel = String(options.channel || 'mobile');
-  const page = await loadMobileSessionPage({ channel, limit, offset });
+  const page = await loadMobileSessionPage({ limit, offset });
   return {
-    mobile: channel === 'mobile' ? page.sessions : [],
-    mobilePage: channel === 'mobile' ? page : _normalizeSessionPageResponse(null, { channel: 'mobile', limit, offset: 0 }),
-    channels: MOBILE_SESSION_CHANNELS.map((entry) => ({
-      ...entry,
-      sessions: entry.key === channel ? page.sessions : [],
-      total: entry.key === channel ? page.total : 0,
-      hasMore: entry.key === channel ? page.hasMore : false,
-      limit,
-      offset: entry.key === channel ? page.offset : 0,
-    })),
+    sessions: page.sessions,
+    // Retained briefly for callers outside the drawer while they migrate to
+    // the explicit unified `sessions` field.
+    mobile: page.sessions,
+    mobilePage: page,
+    channels: [],
     pageSize: limit,
     activePage: page,
-    activeChannel: channel,
+    activeChannel: 'all',
   };
 }
 loadMobileSessionGroups.loadPage = loadMobileSessionPage;
@@ -1534,7 +1539,7 @@ loadMobileSessionGroups.loadPage = loadMobileSessionPage;
 export async function searchMobileChatSessions(query, { limit = 100, mode = 'content' } = {}) {
   const q = String(query || '').trim();
   if (!q) return [];
-  const params = new URLSearchParams({ q, limit: String(limit), mode: mode === 'title' ? 'title' : 'content' });
+  const params = new URLSearchParams({ q, limit: String(limit), mode: mode === 'title' ? 'title' : 'content', scope: 'all', includeAutomated: '1' });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12000);
   let r;

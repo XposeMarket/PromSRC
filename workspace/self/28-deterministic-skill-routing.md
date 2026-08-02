@@ -34,6 +34,8 @@ The canonical resolver is `src/runtime/skill-routing-resolver.ts`.
 7. No skill instructions are automatically injected by the resolver. Complete instructions enter the reasoning context only through `skill_read` after Prometheus chooses.
 8. After a reusable unmatched workflow, Prometheus may offer a new skill or submit an evidence-backed candidate. It must not mutate the catalog automatically.
 
+Frontend selection contract (2026-08-01): desktop and mobile chat composers use `$` to select a skill from a five-row, non-scrolling suggestion popover. Selection remains explicit skill ID/reference metadata consumed by the existing send and resolver paths; the UI’s plain-name insertion does not bypass relevance checking. `/` slash commands remain separate, including their command-attached selected-skill metadata.
+
 ## Modes and rollback
 
 - `PROMETHEUS_SKILL_ROUTING_MODE=legacy`: exact pre-Stage-5 prompt builder.

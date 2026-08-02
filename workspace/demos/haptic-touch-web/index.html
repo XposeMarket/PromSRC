@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#08090b">
+  <meta name="description" content="An open-source haptics playground for iOS Safari and the modern web.">
+  <title>Tactile Web — Haptics Playground</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <main class="page-shell">
+    <header class="topbar">
+      <a class="wordmark" href="#top" aria-label="Tactile Web home">
+        <span class="wordmark-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>Tactile Web</span>
+      </a>
+      <div class="topbar-meta">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="supportLabel">Detecting haptics</span>
+      </div>
+    </header>
+
+    <section class="hero" id="top">
+      <div class="eyebrow"><span class="eyebrow-line"></span>Web haptics lab <span class="eyebrow-line"></span></div>
+      <h1>Make the web<br><em>feel</em> responsive.</h1>
+      <p class="hero-copy">A small, open-source study in touch feedback. Load the same open-source iOS Safari polyfill used by <a href="https://vibrator.dev" target="_blank" rel="noreferrer">vibrator.dev</a>, then tap or drag slowly to feel the browser’s hidden hardware channel.</p>
+      <div class="hero-badges" aria-label="Features">
+        <span>iOS Safari</span><span>Pointer capture</span><span>Vibrator.dev polyfill</span>
+      </div>
+      <div class="haptics-arm" aria-live="polite">
+        <button type="button" class="arm-button" id="armHaptics">Tap to arm haptics</button>
+        <span id="armStatus">On newer iOS, tap once before dragging a slider.</span>
+      </div>
+    </section>
+
+    <section class="lab-grid" aria-label="Haptic demos">
+      <article class="panel panel-reasoning">
+        <div class="panel-heading">
+          <div>
+            <div class="panel-kicker">01 / stepped feedback</div>
+            <h2>Reasoning level</h2>
+          </div>
+          <span class="panel-icon icon-spark" aria-hidden="true">✦</span>
+        </div>
+        <p class="panel-copy">The Prometheus mobile pattern: a segmented glass track with a soft snap and one tactile tick per step.</p>
+        <div class="readout reasoning-readout">
+          <div><span class="readout-label">Current depth</span><strong id="reasoningValue">Balanced</strong></div>
+          <span class="readout-index" id="reasoningIndex">04 / 07</span>
+        </div>
+        <div class="reasoning-slider" id="reasoningSlider" role="slider" tabindex="0" aria-label="Reasoning level" aria-valuemin="0" aria-valuemax="6" aria-valuenow="3" aria-valuetext="Balanced">
+          <div class="reasoning-track" aria-hidden="true"><div class="reasoning-fill"></div><div class="reasoning-glint"></div></div>
+          <div class="reasoning-steps" aria-hidden="true">
+            <button type="button" data-index="0" aria-label="Quick">Quick</button>
+            <button type="button" data-index="1" aria-label="Light">Light</button>
+            <button type="button" data-index="2" aria-label="Focused">Focused</button>
+            <button type="button" data-index="3" aria-label="Balanced">Balanced</button>
+            <button type="button" data-index="4" aria-label="Deep">Deep</button>
+            <button type="button" data-index="5" aria-label="Thorough">Thorough</button>
+            <button type="button" data-index="6" aria-label="Max">Max</button>
+          </div>
+        </div>
+        <div class="scale-labels" aria-hidden="true"><span>FAST</span><span>DELIBERATE</span></div>
+        <div class="tip"><span class="tip-glyph">⌁</span><span>Drag across the track or tap a step. It should never lose your finger.</span></div>
+      </article>
+
+      <article class="panel panel-flashlight">
+        <div class="panel-heading">
+          <div>
+            <div class="panel-kicker">02 / continuous feedback</div>
+            <h2>Flashlight intensity</h2>
+          </div>
+          <span class="panel-icon flashlight-mini" aria-hidden="true"></span>
+        </div>
+        <p class="panel-copy">A cleaner Control Center-inspired vertical slider. The light swells as your finger climbs, with gentle pulses along the way.</p>
+        <div class="flashlight-stage">
+          <div class="flashlight-control-wrap">
+            <div class="flashlight-slider" id="flashlightSlider" role="slider" tabindex="0" aria-label="Flashlight intensity" aria-valuemin="0" aria-valuemax="100" aria-valuenow="52" aria-valuetext="52 percent">
+                 <div class="flashlight-fill"></div>
+              <div class="flashlight-handle" aria-hidden="true"><span class="flashlight-glyph">☼</span></div>
+            </div>
+          </div>
+          <div class="flashlight-readout"><span id="flashlightValue">52</span><small>%</small><div>intensity</div></div>
+        </div>
+        <div class="vertical-labels" aria-hidden="true"><span>100</span><span>50</span><span>0</span></div>
+        <div class="tip"><span class="tip-glyph">⌁</span><span>Slide up or down. Every few points requests a soft pulse.</span></div>
+      </article>
+    </section>
+
+    <section class="panel button-panel">
+      <div class="panel-heading">
+        <div><div class="panel-kicker">03 / discrete feedback</div><h2>Button sampler</h2></div>
+        <span class="panel-icon icon-grid" aria-hidden="true">⊞</span>
+      </div>
+      <p class="panel-copy">Four ordinary buttons, four tactile patterns. These are intentionally boring under the hood: real buttons with a small haptic helper attached.</p>
+      <div class="button-grid">
+        <button type="button" class="haptic-button" data-pattern="selection"><span class="button-symbol">◌</span><span><b>Selection</b><small>Short tick</small></span></button>
+        <button type="button" class="haptic-button" data-pattern="light"><span class="button-symbol">✦</span><span><b>Light impact</b><small>Soft bump</small></span></button>
+        <button type="button" class="haptic-button" data-pattern="medium"><span class="button-symbol">◉</span><span><b>Medium impact</b><small>Firm bump</small></span></button>
+        <button type="button" class="haptic-button" data-pattern="success"><span class="button-symbol">✓</span><span><b>Success</b><small>Double pulse</small></span></button>
+      </div>
+      <div class="event-console" aria-live="polite"><span class="console-dot"></span><span id="eventStatus">Touch a control to see its event trace.</span><span class="console-time" id="eventTime">--:--:--</span></div>
+    </section>
+
+    <section class="notes-grid">
+      <div class="note-card"><span class="note-number">A</span><div><h3>Why this works</h3><p>This page imports the open-source <code>ios-vibrator-pro-max</code> polyfill from <code>vibrator.dev</code>. It turns trusted button taps and pointer movement into iOS Safari haptics.</p></div></div>
+      <div class="note-card"><span class="note-number">B</span><div><h3>What to expect</h3><p>Haptics require a physical actuator. On iPhone, use Safari with system haptics enabled, tap the arm button first, then drag slowly. Desktop browsers show the trace but cannot physically vibrate.</p></div></div>
+    </section>
+
+    <section class="panel source-panel" id="source">
+      <div class="panel-heading">
+        <div><div class="panel-kicker">04 / inspect and reuse</div><h2>Open source by default</h2></div>
+        <span class="panel-icon" aria-hidden="true">↗</span>
+      </div>
+      <div class="source-layout">
+        <div class="source-copy">
+          <h3>Take the pattern with you.</h3>
+          <p>This demo is plain HTML, CSS, and JavaScript. View the live source, copy the tiny helper, and host your own version on any static host. No framework, build step, account, or tracking required.</p>
+          <div class="source-links" aria-label="Source files">
+            <a class="source-link" href="./index.html" target="_blank" rel="noreferrer">index.html</a>
+            <a class="source-link" href="./styles.css" target="_blank" rel="noreferrer">styles.css</a>
+            <a class="source-link" href="./script.js" target="_blank" rel="noreferrer">script.js</a>
+            <a class="source-link" href="./README.md" target="_blank" rel="noreferrer">README</a>
+            <a class="source-link" href="./LICENSE" target="_blank" rel="noreferrer">MIT license</a>
+          </div>
+        </div>
+        <div class="snippet-card">
+          <div class="snippet-label">Minimal haptic helper</div>
+          <pre><code id="hapticSnippet">function tactileTick(pattern = 8) {
+  navigator.vibrate?.(pattern);
+}</code></pre>
+          <button type="button" class="copy-button" data-copy-target="hapticSnippet">Copy helper</button>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer"><span>Tactile Web / 2026</span><span>Built as a Prometheus Mobile study · MIT licensed</span></footer>
+  </main>
+  <script type="module" src="./script.js"></script>
+</body>
+</html>

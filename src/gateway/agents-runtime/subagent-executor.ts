@@ -16538,11 +16538,12 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             window_handle: args.window_handle == null ? undefined : Number(args.window_handle),
             app_id: args.app_id == null ? undefined : String(args.app_id),
             title: args.title == null ? undefined : String(args.title),
-          }, args.include_screenshot !== false, deps.abortSignal?.signal);
+          }, args.include_screenshot !== false, deps.abortSignal?.signal, { skipOcr: args.skip_ocr !== false && args.skipOcr !== false });
           return { name, args, result, error: result.startsWith('ERROR') };
         }
         const verification = await desktopFocusWindowVerified(sessionId, String(args.name || ''), {
           includeScreenshot: args.include_screenshot !== false,
+          skipOcr: args.skip_ocr !== false && args.skipOcr !== false,
         });
         if (!verification.ok) {
           return { name, args, result: verification.message, error: true };

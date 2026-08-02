@@ -18,7 +18,7 @@ import { readModelUsageEvents } from '../../providers/model-usage.js';
 import { estimateModelUsageCost, resolveModelPricing } from '../../providers/model-pricing.js';
 import { readAllToolObservations } from '../tool-observations';
 import { getAllMainChatGoalRecords } from '../main-chat-goals';
-import { listSessionSummaries, type SessionSummary } from '../session';
+import { getSession, listSessionSummaries, type SessionSummary } from '../session';
 import {
   applySkillCuratorSuggestion,
   listSkillCuratorActivity,
@@ -495,17 +495,52 @@ router.get('/api/hub/skills/usage', (req: Request, res: Response) => {
   }
 });
 
+function curatorFeedTimestamp(value: unknown): number {
+  const timestamp = Date.parse(String(value || ''));
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 router.get('/api/hub/skills/review', (_req: Request, res: Response) => {
   try {
     const workspacePath = getConfig().getWorkspacePath();
     const suggestions = listSkillCuratorSuggestions(workspacePath);
     const activity = _sm ? listSkillCuratorActivity(workspacePath, _sm, { days: 14, limit: 180 }) : [];
+    const requestedLimit = Number(_req.query.limit);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(10, Math.floor(requestedLimit)))
+      : 5;
+    const requestedOffset = Number(_req.query.offset);
+    const offset = Number.isFinite(requestedOffset) ? Math.max(0, Math.floor(requestedOffset)) : 0;
+    const feed: Array<{ kind: 'suggestion' | 'activity'; item: any; timestamp: number }> = [
+      ...suggestions.map((item) => ({
+        kind: 'suggestion' as const,
+        item,
+        timestamp: curatorFeedTimestamp(item.updatedAt || item.createdAt),
+      })),
+      ...activity.map((item) => ({
+        kind: 'activity' as const,
+        item,
+        timestamp: curatorFeedTimestamp(item.timestamp),
+      })),
+    ].sort((a, b) => b.timestamp - a.timestamp);
+    const page = feed.slice(offset, offset + limit);
+    const pageSuggestions = page.filter((entry) => entry.kind === 'suggestion').map((entry) => entry.item);
+    const pageActivity = page.filter((entry) => entry.kind === 'activity').map((entry) => entry.item);
+    const nextOffset = offset + page.length < feed.length ? offset + page.length : null;
     res.json({
       success: true,
-      suggestions,
-      activity,
+      suggestions: pageSuggestions,
+      activity: pageActivity,
+      totalCount: feed.length,
+      offset,
+      limit,
+      nextOffset,
+      hasMore: nextOffset !== null,
       pending: suggestions.filter((s) => s.status === 'pending').length,
       quarantined: suggestions.filter((s) => s.status === 'quarantined').length,
+      lowRisk: suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'low').length,
+      mediumRisk: suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'medium').length,
+      highRisk: suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'high').length,
       appliedActivity: activity.filter((item) => item.status === 'applied').length,
       observedActivity: activity.filter((item) => item.status === 'observed').length,
     });
@@ -978,9 +1013,37 @@ router.get('/api/hub/skills/:id/resources/content', (req: Request, res: Response
   }
 });
 
+function readGoalCompletionMetrics(goal: any, sessionsById: Map<string, any>): Record<string, number> | null {
+  const sessionId = String(goal?.sessionId || '').trim();
+  const goalId = String(goal?.id || '').trim();
+  if (!sessionId || !goalId) return null;
+  let session = sessionsById.get(sessionId);
+  if (session === undefined) {
+    try { session = getSession(sessionId); } catch { session = null; }
+    sessionsById.set(sessionId, session);
+  }
+  const history = Array.isArray(session?.history) ? session.history : [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const report = history[index]?.goalCompletionReport;
+    if (!report || String(report.goalId || '').trim() !== goalId) continue;
+    return {
+      elapsedMs: Math.max(0, Number(report.elapsedMs || 0)),
+      totalTokens: Math.max(0, Number(report.totalTokens || 0)),
+      totalCostMicros: Math.max(0, Number(report.totalCostMicros || 0)),
+      startedAt: Math.max(0, Number(report.startedAt || 0)),
+      completedAt: Math.max(0, Number(report.completedAt || 0)),
+    };
+  }
+  return null;
+}
+
 router.get('/api/hub/goals', (_req: Request, res: Response) => {
   try {
-    const goals = getAllMainChatGoalRecords();
+    const sessionsById = new Map<string, any>();
+    const goals = getAllMainChatGoalRecords().map((goal: any) => ({
+      ...goal,
+      goalMetrics: readGoalCompletionMetrics(goal, sessionsById),
+    }));
     const counts = goals.reduce((acc: Record<string, number>, goal: any) => {
       const key = String(goal.status || 'unknown');
       acc[key] = (acc[key] || 0) + 1;

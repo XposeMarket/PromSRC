@@ -2177,8 +2177,8 @@ router.patch('/api/brain/config', (req: any, res: any) => {
   const runner = getBrainRunnerInstance();
   if (!runner) return res.json({ success: false, error: 'Brain runner not initialized' });
   try {
-    const { thoughtEnabled, dreamEnabled, thoughtModel, dreamModel } = req.body;
-    runner.setConfig({ thoughtEnabled, dreamEnabled, thoughtModel, dreamModel });
+    const { thoughtEnabled, dreamEnabled, thoughtModel, dreamModel, thoughtReasoning, dreamReasoning } = req.body;
+    runner.setConfig({ thoughtEnabled, dreamEnabled, thoughtModel, dreamModel, thoughtReasoning, dreamReasoning });
     res.json({ success: true });
   } catch (err: any) {
     res.status(400).json({ success: false, error: err?.message || 'Invalid brain config' });

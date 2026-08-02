@@ -2,19 +2,19 @@
 // Activates ONLY when location.hash starts with "#mobile" or pathname starts with "/mobile".
 // Otherwise stays out of the way so the desktop UI is untouched.
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=mobile-codex-live-v3-v5';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v240-mobile-splash';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage, renderSubagentChatPage,
-} from './mobile-pages.js?v=mobile-codex-live-v3-v5';
+} from './mobile-pages.js?v=pm-v240-mobile-splash';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
   prefetchMobileSecondaryPages,
   searchMobileChatSessions,
-} from './mobile-api.js?v=mobile-codex-live-v3-v5';
+} from './mobile-api.js?v=pm-v240-mobile-splash';
 import { connectWS, ensureWSConnected } from '../ws.js';
 
 // Once a device has ever entered mobile mode (or completed pairing), this flag
@@ -155,7 +155,7 @@ function openMobileSettings(tab) {
     try { window.openSettings(tab || undefined); } catch (err) { console.warn('[mobile settings] openSettings failed', err); }
     return true;
   }
-  import('../pages/SettingsPage.js?v=settings-boot-recovery-v12')
+  import('../pages/SettingsPage.js?v=pm-v240-mobile-splash')
     .then(() => openMobileSettings(tab))
     .catch((err) => console.warn('[mobile settings] could not lazy-load SettingsPage.js', err));
   console.warn('[mobile settings] desktop Settings modal not available yet');
@@ -264,10 +264,13 @@ function render() {
       invalidateMobileDrawerSessions('mobile');
       mobileNavigate('#mobile/chat');
     },
-    onOpenSession: (sessionId) => {
+    onOpenSession: (sessionId, sessionChannel = '') => {
+      if (String(sessionChannel || '') === 'voice_room' || String(sessionId || '').startsWith('voice_room_')) {
+        mobileNavigate(`#mobile/voice/${encodeURIComponent(sessionId)}`);
+        return;
+      }
       const picker = window.__pmVoiceTargetPicker;
       if (typeof picker === 'function') {
-        window.__pmVoiceTargetPicker = null;
         picker(sessionId);
       } else {
         mobileNavigate(`#mobile/chat/${encodeURIComponent(sessionId)}`);
@@ -303,8 +306,8 @@ function render() {
   switch (page) {
     case 'pair':
       return renderPairPage(slot, { code: pairCode, navigate: mobileNavigate });
-    case 'chat':      return renderChatPage(slot, { navigate: mobileNavigate, sessionId: arg ? decodeURIComponent(arg) : null });
-    case 'voice':     return renderVoicePage(slot, { navigate: mobileNavigate });
+    case 'chat':      return renderChatPage(slot, { navigate: mobileNavigate, sessionId: arg ? decodeURIComponent(arg) : null, voiceRoomTranscript: String(extra?.[0] || '').toLowerCase() === 'voice-room' });
+    case 'voice':     return renderVoicePage(slot, { navigate: mobileNavigate, sessionId: arg ? decodeURIComponent(arg) : null, autoStart: !!arg });
     case 'schedule':  return renderSchedulePage(slot);
     case 'teams':
       if (arg) return renderTeamDetailPage(slot, { teamId: arg, navigate: mobileNavigate, initialTab: extra?.[0] || '' });
@@ -373,10 +376,23 @@ function safeRender() {
       window.__PM_ONE_SPLASH_FALLBACK = null;
     }
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
-    window.setTimeout(() => {
+    const dismiss = () => {
+      if (window.__PM_ONE_SPLASH_DISMISS_TIMER) {
+        window.clearTimeout(window.__PM_ONE_SPLASH_DISMISS_TIMER);
+        window.__PM_ONE_SPLASH_DISMISS_TIMER = null;
+      }
       splash.classList.add('is-leaving');
-      window.setTimeout(() => splash.remove(), reducedMotion ? 220 : 650);
-    }, reducedMotion ? 120 : 3280);
+      window.setTimeout(() => {
+        splash.remove();
+        if (window.__PM_ONE_SPLASH_DISMISS === dismiss) window.__PM_ONE_SPLASH_DISMISS = null;
+      }, reducedMotion ? 120 : 360);
+    };
+    window.__PM_ONE_SPLASH_DISMISS = dismiss;
+    if (splash.dataset.skipRequested === '1') {
+      dismiss();
+    } else {
+      window.__PM_ONE_SPLASH_DISMISS_TIMER = window.setTimeout(dismiss, reducedMotion ? 80 : 1900);
+    }
   };
   try {
     const result = render();

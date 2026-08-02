@@ -69,17 +69,31 @@ A managed command/process can contribute live terminal output and lifecycle stat
 
 When context compaction runs, the activity layer recognizes `context_compaction` as a system/compaction entry rather than showing it as an opaque tool name. Desktop groups it separately in the live turn trace and can display compacting, completed, skipped, or failed state plus a generated summary where available. It must not be confused with a user asking the assistant to summarize a conversation.
 
+### Progress is a live summary; reasoning is durable prose
+
+`progress_state` drives the dedicated declared-plan/progress UI. It is not a generic tool operation and runtime checkpoint copies of `progress_state` must not be serialized or recovered as fake tool rows such as `Plan update: plan_created` or `Plan: Run Browser Session`.
+
+Operational narration from `agent_thought`, complete `thinking`, and action-style reasoning-summary packets is a mutable, single latest status for the active collapsed tool group. Each update replaces that summary. User-facing `reasoning_summary` prose is a different trace entry: once displayed it remains in the visible timeline, apart from normal transport-fragment joining. Both desktop and mobile repair incomplete Markdown only in this trace path; final-answer Markdown retains its original layout.
+
+During a chat steer, each client freezes the actual pre-steer segment, renders the steer message, and starts a new post-steer segment from a fresh process boundary. Incoming tool events must not replay the full earlier stream below the steer. The first segment owns the active-work timer. Once the response finalizes, the temporary steer labels/split collapse back to normal conversation history while the durable response and its retained process/tool records remain available.
+
 ## 4. UI rendering and reconciliation rules
 
 ### Desktop Chat
 
 Desktop Chat renders a live response with the activity trace before/alongside generated answer text. It preserves the user’s focused textbox/caret and scroll behavior across stream re-renders. It supports concurrent independent session stream state, so switching sessions should not merge a tool result into the wrong conversation. Finalization flushes pending render work, reconciles a final response with any accumulated token deltas, saves the session state, and refreshes context-window state.
 
+Desktop transport recovery is part of that reconciliation contract. `ChatPage.js` records the active session's request/stream cursor, treats an incomplete or network-failed SSE response as a disconnect rather than proof that the gateway turn ended, and keeps the live process state available for replay. On reload or foreground return it force-hydrates the remembered session, then replays `/api/mobile/chat/stream/:sessionId?after=<lastSeq>` through a single-flight recovery path. Frames are deduped by session/stream/sequence; a stream-id change or retained-frame gap resets the cursor to `after=0`, and replay bypasses the local-SSE ownership filter so desktop-owned tool frames are not lost. `pagehide`, `pageshow`, focus, `online`, visibility, WebSocket reconnect, and stream-update events are lifecycle triggers. The bounded server retention (12,000 frames and 16 MiB per session) remains the recovery boundary, and explicit user abort/error handling remains distinct from transport loss.
+
+For a live tool trace, the normal update path reconciles stable DOM groups rather than replacing the whole chat body. A user can keep a tool result, terminal disclosure, or compaction card open while later tool events arrive; its disclosure state and inner scroll must survive the update. A full render remains valid only for a first paint or a required structural change.
+
 Pending structured questions are docked in the live response while the turn waits. Approvals, proposal cards, artifacts, media, browser/process state, goals, and Creative controls render through their respective client components and route data; they are not free-form HTML emitted by a tool.
 
 ### Mobile Chat and Voice
 
 Mobile consumes the same main categories—tool call, tool result, tool progress, tokens/final response—with its own router/cached-list/revalidation behavior. The mobile context chip listens for tool activity, visual input, and runtime registration events to refresh estimates. Voice is a separate realtime path with a Worker handoff; see [Voice Agent and Worker](16-voice-agent-and-worker.md) and [mobile page guide](mobile-pages/README.md).
+
+Mobile follows the same trace reconciliation contract: live updates patch the affected message/group and preserve expanded tool/result/compaction disclosures instead of closing them on every event. Stream recovery is incremental by sequence; it appends only retained frames after the last known sequence unless a retention gap requires a cold replay.
 
 ### Other screens
 

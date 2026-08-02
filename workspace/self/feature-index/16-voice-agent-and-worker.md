@@ -62,6 +62,14 @@ Prometheus exposes provider-specific realtime bootstrap paths for OpenAI and xAI
 - TTS/audio delivery, transcriptions, and voice logs are tied to the selected provider/browser and the active target session.
 - Voice-originated screenshots are only delivered when the user asks to share/show/send them; normal origin-aware delivery chooses the originating channel unless explicitly overridden.
 
+### Mobile Voice Room (2026-08-01)
+
+Mobile can opt into a durable multi-agent Voice Room rather than changing the normal Worker boundary. The participant roster resolves to a deterministic `voice_room_*` session with `channel: 'voice_room'`; transcript entries are appended to that session and reloaded when the user explicitly opens the room transcript. The mobile host recognizes clear participant names/aliases, suppresses ambiguous or unknown addresses, tracks a short focus window and per-participant quiet/wake state, and exposes `voice_room_handoff` only as a silent fallback when a clear address reaches the wrong realtime peer.
+
+Codex Voice/Live v3 switches room participants through managed app-server thread/append-text paths. The old peer is muted/parked, the selected peer is promoted from a bounded (maximum four) parallel-prewarmed warm pool, and the shared iOS microphone is cloned/replaced rather than captured again. The bridge owner is rebound to the room session before managed thread operations. This is mobile-specific; desktop voice continues to use the shared canonical desktop runtime without mobile room rebinding.
+
+Standalone mobile Voice displays the 3D-styled SVG orb and canvas particle field; audio level and theme variables drive its motion and palette. Its assistant response uses stable finalized transcript records, while any rolling overlay remains transient. Preview/source/product cards are preloaded and kept mounted in a smooth borderless/headerless wheel.
+
 ## Camera, images, and video inputs
 
 Camera stills, camera-roll video, and sampled video frames are client-side inputs. Mobile stages them in chat/voice state, downscales image payloads for realtime transport limits, and flushes them into a subsequent typed or spoken request. They are not silent continuous surveillance and are not automatically uploaded just because a camera UI exists.

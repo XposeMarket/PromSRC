@@ -58,8 +58,12 @@ export interface BrainLatestState {
   dreamEnabled: boolean;
   /** Model override for thought runs — plain model name e.g. "claude-sonnet-4-6" (empty = use primary) */
   thoughtModel: string;
+  /** Optional selectable reasoning effort for thought runs. */
+  thoughtReasoning: string;
   /** Model override for dream runs (empty = use primary) */
   dreamModel: string;
+  /** Optional selectable reasoning effort for dream and cleanup runs. */
+  dreamReasoning: string;
 }
 
 export interface BrainThoughtEntry {
@@ -144,7 +148,9 @@ function defaultLatestState(): BrainLatestState {
     thoughtEnabled: true,
     dreamEnabled: true,
     thoughtModel: '',
+    thoughtReasoning: '',
     dreamModel: '',
+    dreamReasoning: '',
   };
 }
 

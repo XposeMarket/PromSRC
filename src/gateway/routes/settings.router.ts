@@ -800,6 +800,7 @@ type AgentModelDefaultTemplate = {
   name: string;
   defaults: Record<string, string>;
   reasoning: Record<string, string>;
+  accounts: Record<string, string>;
   created_at: string;
   updated_at: string;
 };
@@ -824,6 +825,25 @@ function normalizeAgentModelReasoning(raw: any, defaults: any): Record<string, s
     if (effort) normalized[key] = effort;
   }
   return normalized;
+}
+
+function normalizeAgentModelAccounts(raw: any, defaults: any): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const models = normalizeAgentModelDefaults(defaults || {});
+  for (const key of AGENT_MODEL_DEFAULT_KEYS) {
+    const value = typeof source[key] === 'string' ? source[key].trim() : '';
+    if (value && models[key] && value.length <= 256) normalized[key] = value;
+  }
+  return normalized;
+}
+
+function normalizeVoiceAgentDefault(raw: any): { provider: string; voice: string } {
+  const provider = String(raw?.provider || '').trim();
+  const voice = String(raw?.voice || '').trim();
+  const allowed = new Set(['openai_codex', 'openai_realtime', 'xai']);
+  if (!allowed.has(provider)) return { provider: '', voice: '' };
+  return { provider, voice: /^[a-zA-Z0-9._:-]{1,80}$/.test(voice) ? voice : '' };
 }
 
 function validateAgentModelReasoning(raw: any, defaults: any): string | null {
@@ -851,7 +871,7 @@ function normalizeAgentModelDefaults(raw: any): Record<string, string> {
   return normalized;
 }
 
-function mainChatRoutePatchForDefaults(config: any, defaults: Record<string, string>, reasoning: Record<string, string>, explicitMainReasoning = false): Record<string, any> {
+function mainChatRoutePatchForDefaults(config: any, defaults: Record<string, string>, reasoning: Record<string, string>, explicitMainReasoning = false, accounts: Record<string, string> = {}): Record<string, any> {
   const parsed = parseMainChatRoute(defaults.main_chat);
   // A template/default without a main_chat slot is allowed; it must not alter
   // the live route. When present, it is the one deliberate route switch.
@@ -860,6 +880,7 @@ function mainChatRoutePatchForDefaults(config: any, defaults: Record<string, str
   return mainChatRoutePatch(config, {
     ...parsed,
     ...(effort || explicitMainReasoning ? { reasoningEffort: effort } : {}),
+    ...(accounts.main_chat ? { accountId: accounts.main_chat } : {}),
   });
 }
 
@@ -890,6 +911,7 @@ function normalizeAgentModelTemplates(raw: any): AgentModelDefaultTemplate[] {
       name,
       defaults: normalizeAgentModelDefaults(item.defaults || {}),
       reasoning: normalizeAgentModelReasoning(item.reasoning || {}, item.defaults || {}),
+      accounts: normalizeAgentModelAccounts(item.accounts || {}, item.defaults || {}),
       created_at: String(item.created_at || now),
       updated_at: String(item.updated_at || item.created_at || now),
     });
@@ -924,6 +946,11 @@ function readTemplateReasoningFromBody(body: any, defaults: any, currentReasonin
   return normalizeAgentModelReasoning(currentReasoning || {}, defaults);
 }
 
+function readTemplateAccountsFromBody(body: any, defaults: any, currentAccounts: any): Record<string, string> {
+  if (body?.accounts && typeof body.accounts === 'object') return normalizeAgentModelAccounts(body.accounts, defaults);
+  return normalizeAgentModelAccounts(currentAccounts || {}, defaults);
+}
+
 // GET /api/settings/agent-model-defaults
 // Returns the stored per-type defaults and the per-agent overrides for reference.
 router.get('/api/settings/agent-model-defaults', (_req, res) => {
@@ -932,6 +959,8 @@ router.get('/api/settings/agent-model-defaults', (_req, res) => {
     success: true,
     defaults: normalizeAgentModelDefaults(cfg.agent_model_defaults || {}),
     reasoning: normalizeAgentModelReasoning(cfg.agent_model_default_reasoning || {}, cfg.agent_model_defaults || {}),
+    accounts: normalizeAgentModelAccounts(cfg.agent_model_default_accounts || {}, cfg.agent_model_defaults || {}),
+    voiceAgent: normalizeVoiceAgentDefault(cfg?.voice?.agent || {}),
     templates: normalizeAgentModelTemplates(cfg.agent_model_default_templates || []),
     activeTemplateId: cfg.active_agent_model_default_template || '',
     defaultTemplateId: cfg.default_agent_model_template || '',
@@ -981,6 +1010,13 @@ router.post('/api/settings/agent-model-defaults', (req, res) => {
     ? { ...(current.agent_model_default_reasoning || {}), ...incoming.reasoning }
     : (current.agent_model_default_reasoning || {});
   const normalizedReasoning = normalizeAgentModelReasoning(reasoningSource, normalizedDefaults);
+  const accountsSource = incoming.accounts && typeof incoming.accounts === 'object'
+    ? incoming.accounts
+    : (current.agent_model_default_accounts || {});
+  const normalizedAccounts = normalizeAgentModelAccounts(accountsSource, normalizedDefaults);
+  const voiceAgent = Object.prototype.hasOwnProperty.call(incoming, 'voiceAgent')
+    ? normalizeVoiceAgentDefault(incoming.voiceAgent)
+    : normalizeVoiceAgentDefault(current?.voice?.agent || {});
   // A pinned startup template is the durable source of truth. Keep it in sync
   // with direct Settings/API/tool edits; otherwise startup would reapply a
   // stale snapshot and silently undo the values that were just saved.
@@ -991,20 +1027,23 @@ router.post('/api/settings/agent-model-defaults', (req, res) => {
       ...templates[defaultTemplateIdx],
       defaults: normalizedDefaults,
       reasoning: normalizedReasoning,
+      accounts: normalizedAccounts,
       updated_at: new Date().toISOString(),
     };
   }
   cm.updateConfig({
     agent_model_defaults: normalizedDefaults,
     agent_model_default_reasoning: normalizedReasoning,
+    agent_model_default_accounts: normalizedAccounts,
+    voice: { ...(current.voice || {}), agent: voiceAgent },
     ...(defaultTemplateIdx >= 0 ? {
       agent_model_default_templates: templates,
       active_agent_model_default_template: templates[defaultTemplateIdx].id,
     } : {}),
-    ...mainChatRoutePatchForDefaults(current, normalizedDefaults, normalizedReasoning, Object.prototype.hasOwnProperty.call(incoming.reasoning || {}, 'main_chat')),
+    ...mainChatRoutePatchForDefaults(current, normalizedDefaults, normalizedReasoning, Object.prototype.hasOwnProperty.call(incoming.reasoning || {}, 'main_chat'), normalizedAccounts),
   } as any);
   if (normalizedDefaults.main_chat) resetProvider();
-  res.json({ success: true, defaults: normalizedDefaults, reasoning: normalizedReasoning });
+  res.json({ success: true, defaults: normalizedDefaults, reasoning: normalizedReasoning, accounts: normalizedAccounts, voiceAgent });
 });
 
 // GET /api/settings/agent-model-default-templates
@@ -1018,6 +1057,7 @@ router.get('/api/settings/agent-model-default-templates', (_req, res) => {
     defaultTemplateId: cfg.default_agent_model_template || '',
     currentDefaults: normalizeAgentModelDefaults(cfg.agent_model_defaults || {}),
     currentReasoning: normalizeAgentModelReasoning(cfg.agent_model_default_reasoning || {}, cfg.agent_model_defaults || {}),
+    currentAccounts: normalizeAgentModelAccounts(cfg.agent_model_default_accounts || {}, cfg.agent_model_defaults || {}),
   });
 });
 
@@ -1039,6 +1079,7 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
   const now = new Date().toISOString();
   const defaults = readTemplateDefaultsFromBody(body, current.agent_model_defaults || {});
   const reasoning = readTemplateReasoningFromBody(body, defaults, current.agent_model_default_reasoning || {});
+  const accounts = readTemplateAccountsFromBody(body, defaults, current.agent_model_default_accounts || {});
   const reasoningError = validateAgentModelReasoning(body.reasoning, defaults);
   if (reasoningError) {
     res.status(400).json({ success: false, error: reasoningError });
@@ -1052,6 +1093,7 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
       name,
       defaults,
       reasoning,
+      accounts,
       updated_at: now,
     };
     templates[idx] = template;
@@ -1061,6 +1103,7 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
       name,
       defaults,
       reasoning,
+      accounts,
       created_at: now,
       updated_at: now,
     };
@@ -1074,9 +1117,10 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
     ...(isStartupDefault ? {
       agent_model_defaults: defaults,
       agent_model_default_reasoning: reasoning,
+      agent_model_default_accounts: accounts,
       active_agent_model_default_template: template.id,
     } : {}),
-    ...(isStartupDefault ? mainChatRoutePatchForDefaults(current, defaults, reasoning) : {}),
+    ...(isStartupDefault ? mainChatRoutePatchForDefaults(current, defaults, reasoning, false, accounts) : {}),
   } as any);
   if (isStartupDefault && defaults.main_chat) resetProvider();
   res.json({ success: true, template, templates });
@@ -1100,6 +1144,7 @@ router.patch('/api/settings/agent-model-default-templates/:id', (req, res) => {
     ? readTemplateDefaultsFromBody(body, templates[idx].defaults)
     : templates[idx].defaults;
   const reasoning = readTemplateReasoningFromBody(body, defaults, templates[idx].reasoning || {});
+  const accounts = readTemplateAccountsFromBody(body, defaults, templates[idx].accounts || {});
   const reasoningError = validateAgentModelReasoning(body.reasoning, defaults);
   if (reasoningError) {
     res.status(400).json({ success: false, error: reasoningError });
@@ -1110,6 +1155,7 @@ router.patch('/api/settings/agent-model-default-templates/:id', (req, res) => {
     name,
     defaults,
     reasoning,
+    accounts,
     updated_at: new Date().toISOString(),
   };
   templates[idx] = template;
@@ -1120,9 +1166,10 @@ router.patch('/api/settings/agent-model-default-templates/:id', (req, res) => {
     ...(isStartupDefault ? {
       agent_model_defaults: defaults,
       agent_model_default_reasoning: reasoning,
+      agent_model_default_accounts: accounts,
       active_agent_model_default_template: template.id,
     } : {}),
-    ...(isStartupDefault ? mainChatRoutePatchForDefaults(current, defaults, reasoning) : {}),
+    ...(isStartupDefault ? mainChatRoutePatchForDefaults(current, defaults, reasoning, false, accounts) : {}),
   } as any);
   if (isStartupDefault && defaults.main_chat) resetProvider();
   res.json({ success: true, template, templates });
@@ -1142,14 +1189,16 @@ router.post('/api/settings/agent-model-default-templates/:id/apply', (req, res) 
   const template = templates[idx];
   const defaults = normalizeAgentModelDefaults(template.defaults);
   const reasoning = normalizeAgentModelReasoning(template.reasoning, template.defaults);
+  const accounts = normalizeAgentModelAccounts(template.accounts, template.defaults);
   cm.updateConfig({
     agent_model_defaults: defaults,
     agent_model_default_reasoning: reasoning,
+    agent_model_default_accounts: accounts,
     active_agent_model_default_template: template.id,
     // Applying/selecting a template is a durable selection. Without updating
     // this pointer, the next gateway start can restore a different old template.
     default_agent_model_template: template.id,
-    ...mainChatRoutePatchForDefaults(current, defaults, reasoning),
+    ...mainChatRoutePatchForDefaults(current, defaults, reasoning, false, accounts),
   } as any);
   if (defaults.main_chat) resetProvider();
   res.json({
@@ -1157,6 +1206,7 @@ router.post('/api/settings/agent-model-default-templates/:id/apply', (req, res) 
     template,
     defaults: (cm.getConfig() as any).agent_model_defaults || {},
     reasoning: (cm.getConfig() as any).agent_model_default_reasoning || {},
+    accounts: (cm.getConfig() as any).agent_model_default_accounts || {},
     activeTemplateId: template.id,
     defaultTemplateId: template.id,
   });
@@ -1177,12 +1227,14 @@ router.post('/api/settings/agent-model-default-templates/:id/set-default', (req,
   const template = templates[idx];
   const defaults = normalizeAgentModelDefaults(template.defaults);
   const reasoning = normalizeAgentModelReasoning(template.reasoning, template.defaults);
+  const accounts = normalizeAgentModelAccounts(template.accounts, template.defaults);
   cm.updateConfig({
     agent_model_defaults: defaults,
     agent_model_default_reasoning: reasoning,
+    agent_model_default_accounts: accounts,
     active_agent_model_default_template: template.id,
     default_agent_model_template: template.id,
-    ...mainChatRoutePatchForDefaults(current, defaults, reasoning),
+    ...mainChatRoutePatchForDefaults(current, defaults, reasoning, false, accounts),
   } as any);
   if (defaults.main_chat) resetProvider();
   res.json({

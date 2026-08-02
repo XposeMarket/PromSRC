@@ -1,6 +1,8 @@
+export const CHAT_SKILL_TRIGGER = '$';
+export const CHAT_COMPOSER_SUGGESTION_LIMIT = 5;
+
 const ALL_CHAT_SLASH_COMMANDS = [
   { command: '/side', label: 'Open a linked side chat', placeholder: 'Optional first side-chat message...', surfaces: ['desktop', 'mobile'] },
-  { command: '/skill', label: 'Insert a skill reference', placeholder: 'Search installed skills...', surfaces: ['desktop', 'mobile'] },
   { command: '/visual', label: 'Turn this request into the best-fit visual', placeholder: 'Describe what Prometheus should help you see or explore...', surfaces: ['desktop', 'mobile'], selectedSkillIds: ['interactive-visuals'] },
   { command: '/goal', label: 'Start goal mode in this chat', placeholder: 'Describe the goal Prometheus should keep working toward...', surfaces: ['desktop', 'mobile'] },
   { command: '/goal status', label: 'Show the active goal state', placeholder: 'Optional note for the status check...', surfaces: ['desktop', 'mobile'] },

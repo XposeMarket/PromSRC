@@ -46,10 +46,12 @@ export function getVoicePreviewDragStyle({
   }
   const rotate = clamp(rawX / 18, -10, 10);
   const distance = Math.hypot(rawX, rawY);
-  const scale = Math.max(.96, 1 - Math.min(distance, 160) / 2200);
+  const scale = distance <= 6 ? 1 : Math.max(.96, 1 - Math.min(distance, 160) / 2200);
 
   return {
-    opacity: String(Math.max(.35, 1 - Math.min(distance, 190) / 260)),
+    // Keep the first few pointer pixels visually locked to the resting card;
+    // opacity/scale changes only begin once a real drag has started.
+    opacity: String(distance <= 6 ? 1 : Math.max(.35, 1 - Math.min(distance, 190) / 260)),
     transform: `translate3d(${x}px, ${y}px, 0) rotate(${rotate}deg) scale(${scale})`,
   };
 }

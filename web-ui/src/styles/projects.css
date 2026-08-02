@@ -356,8 +356,8 @@ body.in-project-session #project-session-section {
 body.in-project-session #rp-project-tab,
 body.in-project-session #rp-context-tab { display: block !important; }
 body.in-project-session #rp-context-tab { border-top: 1px solid var(--line); }
-/* Generic chat integrations/context do not displace the project section. */
-body.in-project-session #connections-section,
+/* Generic chat context stays hidden, but the shared connector catalog remains
+   available directly below the project workspace and editors. */
 body.in-project-session #mcp-servers-section,
 body.in-project-session #agent-context-section,
 body.in-project-session #session-approvals-section { display: none !important; }
@@ -534,11 +534,14 @@ body.in-project-session .project-editors-wrap { display: flex; }
 }
 .project-editor-block:last-child { margin-bottom: 0; }
 .project-editor-label {
+  appearance: none;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 7px 10px;
   background: var(--panel-2);
+  border: 0;
   border-bottom: 1px solid var(--line);
   font-size: 10px;
   font-weight: 800;
@@ -546,7 +549,15 @@ body.in-project-session .project-editors-wrap { display: flex; }
   text-transform: uppercase;
   letter-spacing: 0.05em;
   cursor: pointer;
+  font-family: 'Manrope', sans-serif;
+  text-align: left;
   user-select: none;
+}
+.project-editor-label:focus,
+.project-editor-label:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border-bottom-color: var(--line-strong);
 }
 .project-editor-chevron { transition: transform 0.18s ease; font-size: 10px; }
 .project-editor-block.collapsed .project-editor-chevron { transform: rotate(-90deg); }

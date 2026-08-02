@@ -34,10 +34,6 @@ function normalizeTarget(value: unknown): DeliveryTarget {
 }
 
 function inferOriginChannel(sessionId: string): DeliveryTarget {
-  const hint = getSessionChannelHint(sessionId);
-  if (hint?.channel === 'telegram' || hint?.channel === 'discord' || hint?.channel === 'whatsapp' || hint?.channel === 'terminal') {
-    return hint.channel;
-  }
   const session = getSession(sessionId);
   const latestUserOrigin = [...(session.history || [])]
     .reverse()
@@ -45,6 +41,10 @@ function inferOriginChannel(sessionId: string): DeliveryTarget {
   const channel = String(latestUserOrigin?.origin?.channel || latestUserOrigin?.channel || session.channel || '').toLowerCase();
   if (channel === 'telegram' || channel === 'discord' || channel === 'whatsapp' || channel === 'mobile' || channel === 'web' || channel === 'terminal') {
     return channel as DeliveryTarget;
+  }
+  const hint = getSessionChannelHint(sessionId);
+  if (hint?.channel === 'telegram' || hint?.channel === 'discord' || hint?.channel === 'whatsapp' || hint?.channel === 'terminal') {
+    return hint.channel;
   }
   if (String(sessionId || '').startsWith('telegram_')) return 'telegram';
   if (String(sessionId || '').startsWith('mobile_')) return 'mobile';
@@ -59,6 +59,14 @@ function resolveTargets(target: DeliveryTarget, sessionId: string): DeliveryTarg
 }
 
 function resolveTelegramChatId(sessionId: string): number | null {
+  // The message-level origin is durable across gateway restarts and survives a
+  // session being continued from another surface. The in-memory hint remains a
+  // quick path, but must not be the only way to recover a Telegram target.
+  const session = getSession(sessionId);
+  const latestTelegramOrigin = [...(session.history || [])]
+    .reverse()
+    .find((m: any) => m?.role === 'user' && m?.origin?.channel === 'telegram' && Number.isFinite(Number(m?.origin?.chatId)));
+  if (latestTelegramOrigin?.origin?.chatId) return Number(latestTelegramOrigin.origin.chatId);
   const hint = getSessionChannelHint(sessionId);
   if (hint?.channel === 'telegram' && Number.isFinite(Number(hint.chatId))) return Number(hint.chatId);
   const match = String(sessionId || '').match(/^telegram_(\d+)/);

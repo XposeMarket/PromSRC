@@ -42,6 +42,7 @@ assert.match(bridge, /appendRealtimeSpeech/, 'bridge must append managed-thread 
 assert.match(bridge, /thread\/realtime\/appendSpeech/, 'bridge must use the AVAS speakable-text operation for completion narration');
 assert.match(bridge, /appendRealtimeTextForOwner/, 'bridge must route owner-side managed-thread reviews back into an active AVAS session');
 assert.match(bridge, /thread\/realtime\/appendText/, 'active Voice reviews must wake AVAS through its native text-input operation');
+assert.match(bridge, /rebindRealtimeSessionOwner/, 'bridge must follow mobile Voice sessions when their durable owner chat id changes');
 assert.doesNotMatch(bridge, /OPENAI_(?:REALTIME_)?API_KEY|openai-oauth|getValidToken|loadTokens/, 'OAuth bridge must not read or exchange API-key/OAuth token material itself');
 
 assert.match(router, /\/api\/realtime\/codex-bridge\/call/, 'gateway must expose the local SDP bridge endpoint');
@@ -53,6 +54,7 @@ assert.match(router, /codexBridgeRuntimeVersion: codexBridge\.runtimeVersion/, '
 assert.match(router, /\/api\/realtime\/codex-bridge\/events/, 'gateway must expose Codex app-server transcript events to the UI');
 assert.match(router, /\/api\/realtime\/codex-bridge\/tool-output/, 'gateway must expose the Codex dynamic-tool result bridge');
 assert.match(router, /\/api\/realtime\/codex-bridge\/speak/, 'gateway must expose the Codex active-session speech bridge');
+assert.match(router, /\/api\/realtime\/codex-bridge\/rebind-owner/, 'gateway must expose the mobile AVAS owner-session handoff');
 assert.match(bridge, /captureRealtimeEvent/, 'bridge must retain app-server realtime notifications per session');
 assert.match(bridge, /waitForRealtimeEvents/, 'bridge transcript relay must wake waiting clients as soon as a transcript event arrives');
 assert.match(chatRouter, /body\.contextOnly === true/, 'voice bootstrap must support credential-free context generation');
@@ -86,6 +88,7 @@ assert.match(mobilePages, /codex-v3-skill-context-managed-by-thread/, 'mobile AV
 assert.match(mobilePages, /direct: useCodexOauthBridge/, 'mobile AVAS output must use direct WebRTC playback on iOS');
 assert.match(mobilePages, /tools: Array\.isArray\(bootstrap\.tools\)/, 'mobile must register canonical voice tools on the Codex thread');
 assert.match(mobilePages, /ownerSessionId: sid/, 'mobile must bind the AVAS session to its Prometheus owner chat');
+assert.match(mobilePages, /_rebindMobileCodexBridgeOwnerSession\(sessionId\)/, 'mobile thread operations must refresh AVAS owner routing before supervision starts');
 assert.match(mobilePages, /thread\/realtime\/tool\/call/, 'mobile must execute Codex dynamic-tool requests through the voice executor');
 assert.match(mobilePages, /codex-bridge\/tool-output/, 'mobile must return voice tool results through the app-server bridge');
 assert.match(mobilePages, /_appendMobileCodexBridgeRealtimeSpeech/, 'mobile must speak managed thread completions through the active Codex AVAS session');
@@ -102,8 +105,8 @@ assert.match(mobilePages, /public Realtime v2 fallback is disabled/, 'mobile Cha
 assert.match(mobilePages, /Codex OAuth realtime v3 bridge returned an invalid SDP answer/, 'mobile must fail an invalid v3 bridge response instead of falling through to v2');
 assert.match(mobilePages, /if \(useCodexOauthBridge\)[\s\S]{0,2500}?else \{[\s\S]{0,3000}?mobileGatewayTextFetch/s, 'mobile public Realtime fallbacks must stay outside the selected v3 bridge path');
 assert.match(generatedMobilePages, /Codex OAuth realtime v3 bridge returned an invalid SDP answer/, 'generated mobile UI must keep the v3-only bridge path');
-assert.match(mobileShell, /mobile-codex-live-v3-v5/, 'mobile entrypoint must invalidate the prior mislabeled Realtime router bundle');
-assert.match(mobileRouter, /mobile-codex-live-v3-v5/, 'mobile router must invalidate the prior mislabeled Realtime modules');
+assert.match(mobileShell, /mobile-codex-live-v3-v15-room-context/, 'mobile entrypoint must invalidate the prior natural-address bundle');
+assert.match(mobileRouter, /mobile-codex-live-v3-v15-room-context/, 'mobile router must invalidate the prior natural-address modules');
 assert.match(mobilePages, /Codex Voice \/ Live/, 'mobile must label the OAuth app-server transport as Codex Voice / Live');
 assert.match(mobileServiceWorker, /const VERSION = 'pm-v\d+-2026-07-29-[^']+'/, 'mobile service worker must carry a versioned cache revision that purges pre-v3 bundles');
 assert.doesNotMatch(mobileServiceWorker, /pm-v210-2026-07-29-mobile-realtime-v3/, 'mobile service worker must not retain the pre-v3 cache revision');

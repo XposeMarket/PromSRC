@@ -1503,6 +1503,9 @@ body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recordin
   border-color: rgba(214, 183, 94, .46);
   background: var(--p1-shared-gold-soft);
 }
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-skill-suggestion-token {
+  color: var(--p1-shared-gold-light);
+}
 /* Composer — keep the moving voice glyph itself white; recolor its metal shell. */
 :root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-input-area :is(.chat-attach-btn, .send-btn) {
   color: #fffdf7;
@@ -1627,23 +1630,23 @@ body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recordin
 :root:is([data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .logo img {
   opacity: 0;
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-title {
+:root:is([data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-title {
   font-size: 0;
   font-family: Georgia, 'Times New Roman', serif;
   font-weight: 600;
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-title::before {
+:root:is([data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-title::before {
   content: "PROMETHEUS 1";
   color: var(--sidebar-text);
   font-size: 11px;
   letter-spacing: 2px;
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-sub {
+:root:is([data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-sub {
   font-size: 0;
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-sub::before {
+:root:is([data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .brand-sub::before {
   content: "1 Program. Unlimited abilities.";
-  color: var(--p1-shared-gold);
+  color: var(--p1-shared-gold, #d6b75e);
   font-size: 7px;
   font-weight: 700;
   letter-spacing: .1px;
@@ -1703,4 +1706,907 @@ body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recordin
 :root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel :is(input, select, textarea):is(:hover, :focus) {
   border-color: rgba(214, 183, 94, .52) !important;
   outline-color: rgba(214, 183, 94, .24);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   DESKTOP SKIN PARITY
+
+   Prometheus One keeps the same compact rail geometry as the other desktop
+   skins. Its color treatment is intentionally preserved; only the spacing,
+   icon chrome, and motion surface are shared here.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* The black/gold skin previously added extra rail padding and list width. */
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-fixed {
+  gap: 8px;
+  padding: 10px 8px 6px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-top {
+  min-height: 0;
+  padding: 2px 4px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .brand {
+  gap: 8px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .new-chat {
+  min-height: 0;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-search {
+  min-height: 0;
+  padding: 6px 10px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-scroll {
+  gap: 8px;
+  padding: 8px 8px 10px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .seg-tabs {
+  gap: 2px;
+  padding: 2px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .section-title {
+  min-height: 27px;
+  padding: 8px 6px 4px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .session-list,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #jobs-list,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #skills-list,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #skills-search-results,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #channels-list {
+  gap: 5px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #jobs-list,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #skills-list,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #skills-search-results,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #channels-list {
+  padding: 10px;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar :is(#jobs-list, #skills-list, #skills-search-results) {
+  display: block;
+  gap: normal;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item {
+  margin: 0 0 2px;
+  border-radius: 8px;
+}
+
+/* Use the P1 icon tiles and star action consistently in every desktop skin. */
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item) .nav-icon {
+  width: 22px;
+  height: 22px;
+  padding-right: 0;
+  border: 1px solid rgba(214, 183, 94, .18);
+  border-radius: 6px;
+  background: rgba(214, 183, 94, .055);
+  color: #d6b75e;
+}
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item) .nav-icon svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.7;
+}
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon {
+  width: 24px;
+  height: 20px;
+  padding-right: 8px;
+  border: 0;
+  border-right: 1px solid rgba(214, 183, 94, .24);
+  border-radius: 0;
+  background: transparent;
+  color: #f0d98b;
+}
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon svg {
+  display: none;
+}
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon::before {
+  content: "✦";
+  font: 17px/1 Georgia, 'Times New Roman', serif;
+  text-shadow: 0 0 8px rgba(214, 183, 94, .35);
+}
+
+/* Remove the continuously rotating shell/composer glow. The action buttons
+   keep their own liquid-metal animation, and the ember canvas is untouched. */
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .chat-input-area)::before,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .chat-input-area)::after {
+  content: none !important;
+  display: none !important;
+  animation: none !important;
+}
+
+/* Prometheus One desktop shell: use the same flat black as its mobile shell.
+   Cards and controls keep their own surfaces; only the page-level chrome is
+   flattened so the workspace no longer reads as dark grey. */
+:root[data-skin="light"] body:not(.pm-mobile-active),
+:root[data-skin="light"] body:not(.pm-mobile-active) main.main-shell,
+:root[data-skin="light"] body:not(.pm-mobile-active) .main-shell-wrap,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view,
+:root[data-skin="light"] body:not(.pm-mobile-active) .page-view,
+:root[data-skin="light"] body:not(.pm-mobile-active) #connector-view,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar,
+:root[data-skin="light"] body:not(.pm-mobile-active) .topbar,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar-footer,
+:root[data-skin="light"] body:not(.pm-mobile-active) .right-panel,
+:root[data-skin="light"] body:not(.pm-mobile-active) #right-panel-topbar,
+:root[data-skin="light"] body:not(.pm-mobile-active) .right-panel #right-panel-topbar {
+  background: #000 !important;
+}
+
+/* Desktop composer: keep the input open and move its controls into a compact
+   Codex-style row. The row/agent wrappers stay in the DOM for the existing
+   handlers; display:contents only lets the existing controls share this grid. */
+body:not(.pm-mobile-active) #chat-view > .chat-input-area {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto 32px 32px;
+  grid-template-areas:
+    "staging staging staging staging staging"
+    "input input input input input"
+    "attach hint model voice send";
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 6px;
+  padding: 11px 12px 10px;
+  box-shadow:
+    0 12px 34px rgba(0, 0, 0, .28),
+    inset 0 1px 0 rgba(255, 255, 255, .07);
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area > .chat-composer-attachment-stack {
+  grid-area: staging;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area > .chat-input-row,
+body:not(.pm-mobile-active) #chat-view > .chat-input-area > .agent-toggle {
+  display: contents;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-composer-input-wrap {
+  grid-area: input;
+  width: 100%;
+  min-height: 44px;
+  align-self: stretch;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area #chat-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 2px 10px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area #chat-input:focus {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-composer-rich-preview {
+  min-height: 44px;
+  padding: 8px 2px 10px;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-attach-btn {
+  grid-area: attach;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-hint {
+  grid-area: hint;
+  min-width: 0;
+  width: auto;
+  margin: 0 !important;
+  display: flex;
+  align-items: center;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area .chat-model-switcher-wrap {
+  grid-area: model;
+  gap: 8px;
+}
+
+/* The context gauge is kept in the same functional wrapper, but leads the
+   model/reasoning selector visually. This also keeps its outside-click logic
+   intact. */
+body:not(.pm-mobile-active) #chat-view > .chat-input-area #chat-context-window-btn {
+  order: -1;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area #chat-voice-btn {
+  grid-area: voice;
+  position: relative;
+  top: auto;
+  right: auto;
+  transform: none;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn {
+  grid-area: send;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 8px;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.voice-mode-btn {
+  border-radius: 50%;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.voice-mode-btn .send-voice-icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* No ambient composer halo. A restrained edge response is only present while
+   the composer is actually being used. */
+body:not(.pm-mobile-active) #chat-view > .chat-input-area:hover,
+body:not(.pm-mobile-active) #chat-view > .chat-input-area:focus-within {
+  box-shadow:
+    0 14px 38px rgba(0, 0, 0, .34),
+    0 0 16px color-mix(in srgb, var(--brand, #d6b75e) 14%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .09);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view > .chat-input-area {
+  border-color: rgba(214, 183, 94, .24);
+  background: rgba(5, 5, 5, .86);
+  box-shadow:
+    0 12px 34px rgba(0, 0, 0, .30),
+    inset 0 1px 0 rgba(240, 217, 139, .06);
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view > .chat-input-area:hover,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view > .chat-input-area:focus-within {
+  border-color: rgba(240, 217, 139, .42);
+  box-shadow:
+    0 14px 38px rgba(0, 0, 0, .38),
+    0 0 16px rgba(214, 183, 94, .09),
+    inset 0 1px 0 rgba(240, 217, 139, .09);
+}
+
+/* Desktop Realtime voice: reuse the mobile orb's visual language while the
+   input collapses to a clean control rail. The dock is mounted only while a
+   Realtime session is starting or active. */
+:root[data-skin="light"] {
+  --pm-voice-orb-light: #fff9e8;
+  --pm-voice-orb-hot: #f0d98b;
+  --pm-voice-orb-accent: #d6b75e;
+  --pm-voice-orb-deep: #6d5a2b;
+  --pm-voice-orb-glow: #f0d98b;
+  --pm-voice-orb-grid: rgba(214, 183, 94, .24);
+}
+:root[data-skin="dark"] {
+  --pm-voice-orb-light: #fff6e6;
+  --pm-voice-orb-hot: #ffd9a8;
+  --pm-voice-orb-accent: #ea6a1f;
+  --pm-voice-orb-deep: #7a3008;
+  --pm-voice-orb-glow: #ffb578;
+  --pm-voice-orb-grid: rgba(234, 106, 31, .20);
+}
+:root[data-skin="blue"] {
+  --pm-voice-orb-light: #eef7ff;
+  --pm-voice-orb-hot: #9fd0ff;
+  --pm-voice-orb-accent: #3d8bff;
+  --pm-voice-orb-deep: #12366f;
+  --pm-voice-orb-glow: #65b0ff;
+  --pm-voice-orb-grid: rgba(88, 166, 255, .28);
+}
+:root[data-skin="purple"] {
+  --pm-voice-orb-light: #f7edff;
+  --pm-voice-orb-hot: #c9a7ff;
+  --pm-voice-orb-accent: #8b5cf6;
+  --pm-voice-orb-deep: #3d1d73;
+  --pm-voice-orb-glow: #b278ff;
+  --pm-voice-orb-grid: rgba(187, 128, 255, .28);
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb-dock {
+  position: absolute;
+  z-index: 11;
+  left: 50%;
+  bottom: 84px;
+  width: min(620px, calc(100% - 40px));
+  height: min(260px, calc(100% - 118px));
+  box-sizing: border-box;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode .desktop-voice-orb-dock {
+  display: flex;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb-transcript {
+  width: min(100%, 620px);
+  min-height: 24px;
+  max-height: 72px;
+  box-sizing: border-box;
+  overflow: hidden;
+  margin: 0 0 8px;
+  padding: 0 14px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.42;
+  text-align: center;
+  text-shadow: 0 2px 16px rgba(0, 0, 0, .8);
+  opacity: .82;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 84%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 18%, #000 84%, transparent 100%);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb-transcript.has-text {
+  opacity: .98;
+}
+
+/* The desktop orb doubles as the voice-room control. Keep the room picker in
+   the dock's own flow so chat messages never sit underneath it. */
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-popover {
+  width: min(430px, calc(100% - 24px));
+  max-height: min(220px, calc(100% - 122px));
+  box-sizing: border-box;
+  overflow: auto;
+  margin: 0 0 10px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--pm-voice-orb-accent) 46%, rgba(255, 255, 255, .16));
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface, #14151b) 94%, var(--pm-voice-orb-deep) 6%);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .42), 0 0 32px color-mix(in srgb, var(--pm-voice-orb-glow) 12%, transparent);
+  color: var(--text);
+  pointer-events: auto;
+  transform-origin: bottom center;
+  animation: pm-desktop-voice-popover-in 150ms ease-out;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-popover[hidden] {
+  display: none;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 3px;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: .01em;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-subtitle {
+  margin-bottom: 11px;
+  color: color-mix(in srgb, var(--text) 64%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-close {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface, #14151b) 70%, transparent);
+  color: var(--text);
+  cursor: pointer;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-list {
+  display: grid;
+  gap: 7px;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-option {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface, #14151b) 78%, transparent);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 130ms ease, background 130ms ease, transform 130ms ease;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-option:hover,
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-option:focus-visible {
+  border-color: color-mix(in srgb, var(--pm-voice-orb-accent) 56%, transparent);
+  background: color-mix(in srgb, var(--pm-voice-orb-accent) 12%, var(--surface, #14151b));
+  outline: none;
+  transform: translateY(-1px);
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-option.is-active {
+  border-color: color-mix(in srgb, var(--pm-voice-orb-accent) 64%, transparent);
+  background: color-mix(in srgb, var(--pm-voice-orb-accent) 16%, var(--surface, #14151b));
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--pm-voice-orb-accent) 72%, var(--text));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--pm-voice-orb-glow) 45%, transparent);
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-option.is-active .desktop-voice-target-dot {
+  background: var(--pm-voice-orb-light);
+  box-shadow: 0 0 14px var(--pm-voice-orb-glow);
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-copy {
+  min-width: 0;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-option-copy {
+  min-width: 0;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-name {
+  display: block;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-option-copy strong {
+  display: block;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-meta {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-option-copy small {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-check {
+  color: var(--pm-voice-orb-light);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-room-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-action {
+  min-height: 29px;
+  padding: 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-room-primary,
+body:not(.pm-mobile-active) #chat-view .desktop-voice-room-secondary {
+  min-height: 29px;
+  padding: 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-room-primary {
+  border-color: color-mix(in srgb, var(--pm-voice-orb-accent) 70%, transparent);
+  background: color-mix(in srgb, var(--pm-voice-orb-accent) 18%, transparent);
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-action.primary {
+  border-color: color-mix(in srgb, var(--pm-voice-orb-accent) 70%, transparent);
+  background: color-mix(in srgb, var(--pm-voice-orb-accent) 18%, transparent);
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-action:hover,
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-action:focus-visible {
+  border-color: var(--pm-voice-orb-accent);
+  outline: none;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-room-primary:hover,
+body:not(.pm-mobile-active) #chat-view .desktop-voice-room-primary:focus-visible,
+body:not(.pm-mobile-active) #chat-view .desktop-voice-room-secondary:hover,
+body:not(.pm-mobile-active) #chat-view .desktop-voice-room-secondary:focus-visible {
+  border-color: var(--pm-voice-orb-accent);
+  outline: none;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-target-live {
+  color: var(--pm-voice-orb-light);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+body:not(.pm-mobile-active) #chat-view.desktop-voice-target-open .desktop-voice-orb-dock {
+  height: min(430px, calc(100% - 118px));
+}
+
+@keyframes pm-desktop-voice-popover-in {
+  from { opacity: 0; transform: translateY(8px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb-shell {
+  position: relative;
+  flex: 0 0 auto;
+  width: min(28vw, 176px);
+  height: min(28vw, 176px);
+  min-width: 116px;
+  min-height: 116px;
+  max-width: 176px;
+  max-height: 176px;
+  overflow: visible;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  isolation: isolate;
+  perspective: 760px;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  filter: none;
+  transform: translate3d(0, var(--pm-orb-lift, 0px), 0)
+    scale(calc(1 + var(--pm-orb-audio, 0) * .045));
+  transition: transform 42ms linear, filter 120ms ease;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pm-voice-orb-light) 78%, transparent);
+  outline-offset: 7px;
+  border-radius: 50%;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb::before,
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb::after {
+  content: none !important;
+  display: none !important;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-svg {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: center;
+  transform-style: preserve-3d;
+  transform: scale(calc(1 + var(--pm-orb-audio, 0) * .075));
+  filter:
+    brightness(calc(1 + var(--pm-orb-audio, 0) * .22))
+    saturate(calc(1 + var(--pm-orb-audio, 0) * .18))
+    drop-shadow(0 0 calc(1px + var(--pm-orb-audio, 0) * 5px) color-mix(in srgb, var(--pm-voice-orb-glow) 18%, transparent));
+  transition: transform 42ms linear, filter 42ms linear;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb-particles {
+  position: absolute;
+  z-index: 3;
+  inset: -14%;
+  width: 128%;
+  height: 128%;
+  display: block;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-aura {
+  opacity: calc(.52 + var(--pm-orb-audio, 0) * .32);
+  transition: opacity 80ms linear;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-grid-latitude {
+  animation: pm-desktop-orb-latitude-breathe 4.8s ease-in-out infinite;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-grid-longitude {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scaleX(var(--pm-orb-grid-squash, .88)) rotate(var(--pm-orb-grid-rotation, 0deg));
+  transition: transform 80ms linear;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-flow-a {
+  animation: pm-desktop-orb-flow-drift 7s ease-in-out infinite alternate;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-flow-b {
+  animation: pm-desktop-orb-flow-drift 5.5s ease-in-out infinite alternate-reverse;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-rim-light {
+  opacity: calc(.48 + var(--pm-orb-audio, 0) * .34);
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb.pm-orb-sound-reactive .pm-wave-main,
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb.pm-orb-sound-reactive .pm-wave-halo {
+  stroke-width: calc(2.2px + var(--pm-orb-audio, 0) * 2.4px);
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb.listening {
+  animation: pm-desktop-orb-breathe 1.4s ease-in-out infinite;
+  filter: drop-shadow(0 10px 24px color-mix(in srgb, var(--pm-voice-orb-glow) 12%, transparent));
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb.thinking {
+  animation: pm-desktop-orb-breathe 2.6s ease-in-out infinite;
+  filter: drop-shadow(0 10px 24px color-mix(in srgb, var(--pm-voice-orb-accent) 10%, transparent));
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb.speaking {
+  animation: pm-desktop-orb-breathe 1.6s ease-in-out infinite;
+  filter: drop-shadow(0 12px 28px color-mix(in srgb, var(--pm-voice-orb-glow) 16%, transparent)) saturate(1.12) brightness(1.02);
+}
+
+@keyframes pm-desktop-orb-breathe {
+  0%, 100% { transform: translate3d(0, var(--pm-orb-lift, 0px), 0) scale(calc(1 + var(--pm-orb-audio, 0) * .045)); }
+  50% { transform: translate3d(0, calc(var(--pm-orb-lift, 0px) - 2px), 0) scale(calc(1.025 + var(--pm-orb-audio, 0) * .055)); }
+}
+@keyframes pm-desktop-orb-latitude-breathe {
+  0%, 100% { opacity: .62; }
+  50% { opacity: .94; }
+}
+@keyframes pm-desktop-orb-flow-drift {
+  from { transform: translate3d(-5px, 4px, 0); opacity: .55; }
+  to { transform: translate3d(7px, -5px, 0); opacity: 1; }
+}
+
+/* Leave enough air above the dock for transcript text. The existing bottom
+   mask then lets older messages fade behind the orb as the conversation moves. */
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode #chat-messages {
+  padding-bottom: 260px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 270px), transparent calc(100% - 170px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 270px), transparent calc(100% - 170px), transparent 100%);
+}
+
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode.desktop-voice-target-open #chat-messages {
+  padding-bottom: 430px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 440px), transparent calc(100% - 260px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 440px), transparent calc(100% - 260px), transparent 100%);
+}
+
+body:not(.pm-mobile-active) #chat-view.chat-empty.desktop-voice-mode {
+  justify-content: flex-end;
+  gap: 0;
+  overflow: hidden;
+  padding: 0 20px 82px;
+}
+
+body:not(.pm-mobile-active) #chat-view.chat-empty.desktop-voice-mode .chat-welcome {
+  display: none;
+}
+
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode > .chat-input-area {
+  grid-template-rows: 0 0 32px;
+  grid-template-areas:
+    "staging staging staging staging staging"
+    "input input input input input"
+    "attach hint model voice send";
+  row-gap: 0;
+  min-height: 50px;
+  height: 50px;
+  box-sizing: border-box;
+  padding: 5px 10px;
+}
+
+body:not(.pm-mobile-active) #chat-view.chat-empty.desktop-voice-mode > .chat-input-area {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  width: min(860px, calc(100% - 40px));
+  margin: 0;
+  transform: translateX(-50%);
+}
+
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode > .chat-input-area .chat-composer-input-wrap,
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode > .chat-input-area .chat-composer-rich-preview {
+  min-height: 0 !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode > .chat-input-area #chat-input {
+  min-height: 0 !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  padding: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode > .chat-input-area #send-btn,
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode > .chat-input-area .chat-attach-btn,
+body:not(.pm-mobile-active) #chat-view.desktop-voice-mode > .chat-input-area #chat-voice-btn {
+  align-self: center;
+}
+
+/* Attachment and send/abort are quiet at rest. Their only outer glow is the
+   short hover response, including the abort state. */
+body:not(.pm-mobile-active) #chat-view > .chat-input-area :is(.chat-attach-btn, #send-btn) {
+  animation: none !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28) !important;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area :is(.chat-attach-btn, #send-btn):hover {
+  transform: translateY(-1px) scale(1.025);
+  box-shadow:
+    0 8px 18px color-mix(in srgb, var(--brand, #d6b75e) 26%, transparent),
+    0 0 16px color-mix(in srgb, var(--brand, #d6b75e) 20%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, .34) !important;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voice-stop:not(:hover) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .28) !important;
+}
+
+body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voice-stop:hover {
+  box-shadow:
+    0 8px 18px rgba(216, 71, 58, .24),
+    0 0 16px rgba(216, 71, 58, .20),
+    inset 0 1px 0 rgba(255, 255, 255, .34) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body:not(.pm-mobile-active) #chat-view .desktop-voice-orb,
+  body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-grid,
+  body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-flow-a,
+  body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-flow-b {
+    animation: none !important;
+  }
+  body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-grid-longitude,
+  body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-svg {
+    transition: none;
+  }
+}
+
+/* Project/right-rail skin parity. The base right panel historically forced a
+   gray always-dark palette, so named themes never reached its surface. */
+:root[data-skin="dark"] body:not(.pm-mobile-active) .right-panel,
+:root[data-skin="light"] body:not(.pm-mobile-active) .right-panel,
+:root[data-skin="blue"] body:not(.pm-mobile-active) .right-panel,
+:root[data-skin="purple"] body:not(.pm-mobile-active) .right-panel {
+  border-left-color: var(--line-strong) !important;
+}
+:root[data-skin="dark"] body:not(.pm-mobile-active) .right-panel {
+  --bg: #1a1a1a;
+  --bg-soft: #222222;
+  --panel: #2a2a2a;
+  --panel-2: #313131;
+  --line: rgba(255,255,255,.10);
+  --line-strong: rgba(255,255,255,.16);
+  --text: #e8e6e1;
+  --muted: #9a9890;
+  --brand: #f97316;
+  background: #1a1a1a !important;
+}
+:root[data-skin="light"] body:not(.pm-mobile-active) .right-panel {
+  --bg: #000;
+  --bg-soft: #080808;
+  --panel: #0b0b0a;
+  --panel-2: #151411;
+  --line: rgba(214,183,94,.14);
+  --line-strong: rgba(214,183,94,.28);
+  --text: #f2ebdd;
+  --muted: #aaa294;
+  --brand: #d6b75e;
+  background: #000 !important;
+}
+:root[data-skin="blue"] body:not(.pm-mobile-active) .right-panel {
+  --bg: #07101f;
+  --bg-soft: #0c1730;
+  --panel: #122444;
+  --panel-2: #16294e;
+  --line: rgba(120,170,255,.12);
+  --line-strong: rgba(120,170,255,.22);
+  --text: #dde8ff;
+  --muted: #8da3c9;
+  --brand: #3d8bff;
+  background: #07101f !important;
+}
+:root[data-skin="purple"] body:not(.pm-mobile-active) .right-panel {
+  --bg: #0c0518;
+  --bg-soft: #150a28;
+  --panel: #1e1138;
+  --panel-2: #261545;
+  --line: rgba(170,120,255,.12);
+  --line-strong: rgba(170,120,255,.22);
+  --text: #e8ddff;
+  --muted: #a892cf;
+  --brand: #8b5cf6;
+  background: #0c0518 !important;
+}
+:root:is([data-skin="dark"], [data-skin="light"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel :is(#right-panel-topbar, .right-section, #project-session-section) {
+  color: var(--text);
+  background: var(--bg) !important;
+  border-bottom-color: var(--line) !important;
+}
+:root:is([data-skin="dark"], [data-skin="light"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel #right-panel-topbar {
+  background: var(--panel) !important;
+  border-bottom-color: var(--line) !important;
+}
+:root:is([data-skin="dark"], [data-skin="light"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel :is(.project-editor-block, .project-context-card, .progress-card, .conn-tile, .channel-hub-card) {
+  border-color: var(--line) !important;
+  background: var(--panel-2) !important;
+  color: var(--text);
+}
+:root:is([data-skin="dark"], [data-skin="light"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel .project-editor-label {
+  border: 0 !important;
+  border-bottom: 1px solid var(--line) !important;
+  background: var(--panel-2) !important;
+  color: var(--muted);
+}
+:root:is([data-skin="dark"], [data-skin="light"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel :is(.project-editor-textarea, #connections-search) {
+  border-color: var(--line) !important;
+  background: var(--panel) !important;
+  color: var(--text) !important;
+}
+:root:is([data-skin="dark"], [data-skin="light"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel #process-log {
+  background: var(--bg-soft) !important;
+  border-color: var(--line) !important;
 }

@@ -10,7 +10,7 @@ function escHtml(value) {
   }[c]));
 }
 
-const PROVIDERS = [
+const LEGACY_PROVIDERS = [
   { id: '', label: 'Use global voice default' },
   { id: 'openai_realtime', label: 'OpenAI Realtime' },
   { id: 'xai', label: 'xAI Realtime' },
@@ -18,7 +18,11 @@ const PROVIDERS = [
   { id: 'browser', label: 'Browser' },
 ];
 
+const CODEX_PROVIDER = 'openai_codex';
+const CODEX_VOICES = ['juniper', 'maple', 'spruce', 'ember', 'vale', 'breeze', 'arbor', 'sol', 'cove'];
+
 const FALLBACK_VOICES = {
+  [CODEX_PROVIDER]: CODEX_VOICES,
   openai_realtime: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'],
   openai: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'],
   xai: ['eve', 'ara', 'rex', 'sal', 'leo'],
@@ -55,7 +59,7 @@ export function renderAgentVoicePicker(agent, scope = 'agent-voice') {
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;align-items:end">
         <label style="display:grid;gap:4px;font-size:11px;color:var(--muted);font-weight:700">Provider
           <select id="${escHtml(scope)}-voice-provider" style="border:1px solid var(--line);border-radius:8px;padding:7px 8px;font-size:12px;background:var(--panel);color:var(--text);width:100%">
-            ${PROVIDERS.map((p) => `<option value="${escHtml(p.id)}"${p.id === provider ? ' selected' : ''}>${escHtml(p.label)}</option>`).join('')}
+            <option value="${escHtml(provider)}" selected>Detecting connected voice route...</option>
           </select>
         </label>
         <label style="display:grid;gap:4px;font-size:11px;color:var(--muted);font-weight:700">Voice
@@ -68,8 +72,34 @@ export function renderAgentVoicePicker(agent, scope = 'agent-voice') {
     </div>`;
 }
 
-async function loadVoiceOptions(provider) {
+function isCodexVoiceLiveStatus(status = {}) {
+  return status?.codexBridgeAvailable === true
+    && status?.transport === 'codex_app_server'
+    && status?.auth === 'chatgpt_oauth_app_server';
+}
+
+async function loadVoiceCapability() {
+  try {
+    const status = await api('/api/realtime/status', { timeoutMs: 10000 });
+    if (isCodexVoiceLiveStatus(status)) {
+      const liveVoices = Array.isArray(status?.codexBridgeActiveVoices)
+        ? status.codexBridgeActiveVoices.map((voice) => String(voice || '').trim()).filter(Boolean)
+        : [];
+      const voices = liveVoices.length ? [...new Set(liveVoices)] : [...CODEX_VOICES];
+      const advertisedDefault = String(status?.codexBridgeDefaultVoice || '').trim();
+      return {
+        codex: true,
+        voices,
+        defaultVoice: voices.includes(advertisedDefault) ? advertisedDefault : (voices[0] || ''),
+      };
+    }
+  } catch {}
+  return { codex: false, voices: [], defaultVoice: '' };
+}
+
+async function loadVoiceOptions(provider, capability = null) {
   const key = String(provider || '').trim();
+  if (key === CODEX_PROVIDER && capability?.codex) return capability.voices || CODEX_VOICES;
   return FALLBACK_VOICES[key] || [];
 }
 
@@ -79,6 +109,21 @@ export async function agentVoicePickerHydrate(scope = 'agent-voice', agent = nul
   const saveBtn = document.getElementById(`${scope}-voice-save`);
   const statusEl = document.getElementById(`${scope}-voice-status`);
   if (!providerEl || !voiceEl || !saveBtn) return;
+  const capability = await loadVoiceCapability();
+  const savedProvider = String(agent?.voice?.provider || agent?.voice?.voiceProvider || '').trim();
+  const providers = capability.codex
+    ? [
+        { id: '', label: 'Use global voice default' },
+        { id: CODEX_PROVIDER, label: 'Codex Voice / Live · ChatGPT OAuth' },
+      ]
+    : LEGACY_PROVIDERS;
+  const selectedProvider = capability.codex && savedProvider === 'openai_realtime'
+    ? CODEX_PROVIDER
+    : savedProvider;
+  providerEl.innerHTML = providers
+    .map((provider) => `<option value="${escHtml(provider.id)}"${provider.id === selectedProvider ? ' selected' : ''}>${escHtml(provider.label)}</option>`)
+    .join('');
+  if (!providers.some((provider) => provider.id === providerEl.value)) providerEl.value = '';
 
   const setStatus = (text, color = 'var(--muted)') => {
     if (!statusEl) return;
@@ -95,13 +140,19 @@ export async function agentVoicePickerHydrate(scope = 'agent-voice', agent = nul
       return;
     }
     voiceEl.innerHTML = '<option value="">Loading...</option>';
-    const voices = await loadVoiceOptions(provider);
-    const unique = Array.from(new Set([...(voices || []), current].filter(Boolean)));
+    const voices = await loadVoiceOptions(provider, capability);
+    // Never carry a public Realtime voice (for example `coral`) into AVAS v3.
+    const unique = Array.from(new Set([
+      ...(voices || []),
+      ...(provider === CODEX_PROVIDER ? [] : [current]),
+    ].filter(Boolean)));
     voiceEl.innerHTML = `<option value="">provider default</option>${unique.map((voice) => `<option value="${escHtml(voice)}">${escHtml(voice)}</option>`).join('')}`;
     if (current && unique.includes(current)) voiceEl.value = current;
-    setStatus(provider === 'xai'
-      ? 'xAI voice uses realtime audio; image/video understanding can still fall back through the configured vision summary path.'
-      : '');
+    setStatus(provider === CODEX_PROVIDER
+      ? `Uses Codex Voice/Live AVAS v3 through ChatGPT OAuth${capability.defaultVoice ? ` · default ${capability.defaultVoice}` : ''}. This does not use the public OpenAI Realtime API.`
+      : provider === 'xai'
+        ? 'xAI voice uses realtime audio; image/video understanding can still fall back through the configured vision summary path.'
+        : '');
   };
 
   providerEl.onchange = () => {
@@ -113,6 +164,7 @@ export async function agentVoicePickerHydrate(scope = 'agent-voice', agent = nul
     if (!agentId) return;
     const profile = normalizeAgentVoiceProfile({
       provider: providerEl.value,
+      mode: providerEl.value === CODEX_PROVIDER ? 'codex_voice_live' : '',
       voice: voiceEl.value,
     });
     saveBtn.disabled = true;

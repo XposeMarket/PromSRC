@@ -328,7 +328,7 @@ export function closeMorePopover() {
 
 // ── Sidebar segment tabs ──────────────────────────────────────
 export function setSidebarSegTab(tab) {
-  const tabs = ['chats', 'channels', 'projects', 'skills'];
+  const tabs = ['chats', 'projects', 'skills'];
   tabs.forEach(t => {
     const btn = document.querySelector(`[data-tab="${t}"]`);
     const content = document.getElementById(t === 'chats' ? 'sidebar-jobs' : `sidebar-${t}`);
@@ -361,9 +361,7 @@ export function setSidebarSegTab(tab) {
   window.sidebarTab = tab;
 
   // Load content for the selected tab
-  if (tab === 'channels' && typeof window.renderChannelsList === 'function') {
-    window.renderChannelsList();
-  } else if (tab === 'projects' && typeof window.loadProjects === 'function') {
+  if (tab === 'projects' && typeof window.loadProjects === 'function') {
     window.loadProjects();
   } else if (tab === 'projects' && typeof window.renderProjectsList === 'function') {
     window.renderProjectsList();

@@ -293,7 +293,7 @@
 </head>
 <body class="auth-pending">
 <canvas id="ember-canvas" aria-hidden="true"></canvas>
-<div id="pm-one-splash" class="pm-one-splash" role="status" aria-label="Prometheus One is starting" hidden>
+<div id="pm-one-splash" class="pm-one-splash" role="status" aria-label="Prometheus One is starting — tap to skip" tabindex="0" hidden>
   <div class="pm-one-starfield pm-one-starfield-far" aria-hidden="true"></div>
   <div class="pm-one-starfield pm-one-starfield-near" aria-hidden="true"></div>
   <div class="pm-one-center-blackout" aria-hidden="true"></div>
@@ -323,7 +323,7 @@
   </svg>
   <div class="pm-one-brand">
     <div class="pm-one-mark-wrap" aria-hidden="true">
-      <img class="pm-one-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=3" alt="" decoding="sync" fetchpriority="high" />
+      <img class="pm-one-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v240-mobile-splash" alt="" decoding="sync" fetchpriority="high" />
     </div>
     <div class="pm-one-title" aria-label="Prometheus One">Prometheus One</div>
   </div>
@@ -344,18 +344,31 @@
         document.body.classList.remove('auth-pending');
         const oneSplash = document.getElementById('pm-one-splash');
         if (oneSplash) {
+          const skipSplash = () => {
+            oneSplash.dataset.skipRequested = '1';
+            if (typeof window.__PM_ONE_SPLASH_DISMISS === 'function') {
+              window.__PM_ONE_SPLASH_DISMISS();
+            }
+          };
+          oneSplash.addEventListener('pointerup', skipSplash, { passive: true });
+          oneSplash.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              skipSplash();
+            }
+          });
           oneSplash.hidden = false;
           requestAnimationFrame(() => oneSplash.classList.add('is-running'));
           window.__PM_ONE_SPLASH_FALLBACK = window.setTimeout(() => {
             oneSplash.classList.add('is-leaving');
-            window.setTimeout(() => oneSplash.remove(), 650);
-          }, 4300);
+            window.setTimeout(() => oneSplash.remove(), 360);
+          }, 3000);
         }
         const mobileCssTag = document.querySelector('link[href*="src/styles/mobile.css"]');
         if (!mobileCssTag) {
           const cssTag = document.createElement('link');
           cssTag.rel = 'stylesheet';
-          cssTag.href = 'src/styles/mobile.css?v=video-progress-pill-v14-original-voice-icon';
+          cssTag.href = 'src/styles/mobile.css?v=pm-v240-mobile-splash';
           cssTag.dataset.promMobileStyle = '1';
           document.head.appendChild(cssTag);
         }
@@ -2198,10 +2211,9 @@
     <div class="sidebar-section" id="sidebar-sessions-section">
       <div class="section-title">Sessions</div>
 
-      <!-- Segmented tabs: Chats / Channels / Projects / Skills -->
+      <!-- Segmented tabs: Chats / Projects / Skills -->
       <div class="seg-tabs" id="segTabs">
         <button class="seg-btn active" data-tab="chats" onclick="setSidebarSegTab('chats')">Chats</button>
-        <button class="seg-btn" data-tab="channels" onclick="setSidebarSegTab('channels')">Channels</button>
         <button class="seg-btn" data-tab="projects" onclick="setSidebarSegTab('projects')">Projects</button>
         <button class="seg-btn" data-tab="skills" onclick="setSidebarSegTab('skills')">Skills</button>
       </div>
@@ -2215,14 +2227,6 @@
         <div id="jobs-list">
           <div class="empty-state" style="font-size:11px">No chats yet.<br>Start a new conversation.</div>
         </div>
-      </div>
-
-      <!-- Channels tab -->
-      <div id="sidebar-channels" class="session-list" style="display:none">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 0 6px">
-          <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--sidebar-muted)">Channels</span>
-        </div>
-        <div id="channels-list"></div>
       </div>
 
       <!-- Projects tab -->
@@ -2384,10 +2388,11 @@
 	        </div>
 	        <div class="queued-prompts-list" id="queued-prompts-list"></div>
 	      </div>
-      <!-- Design-mode multi-selection pills (appear above input row) -->
-      <div id="chat-design-selection-pills" class="chat-file-staging" style="display:none"></div>
-      <!-- Staged file pills (appear above input row) -->
-      <div id="chat-file-staging" class="chat-file-staging" style="display:none"></div>
+      <!-- Design selections and staged files share the attachment row above the message input. -->
+      <div id="chat-composer-attachment-stack" class="chat-composer-attachment-stack" style="display:none">
+        <div id="chat-design-selection-pills" class="chat-file-staging" style="display:none"></div>
+        <div id="chat-file-staging" class="chat-file-staging" style="display:none"></div>
+      </div>
       <div id="chat-skill-trigger-pill" class="chat-skill-trigger-pill" style="display:none" aria-live="polite"></div>
       <div id="chat-slash-command-popover" class="chat-slash-command-popover" style="display:none"></div>
       <!-- Hidden file input -->
@@ -2404,7 +2409,7 @@
           <div class="chat-composer-rich-preview" id="chat-composer-rich-preview" aria-hidden="true" hidden></div>
           <textarea
             id="chat-input"
-            placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
+            placeholder="Send Prometheus a message"
             rows="1"
             autocomplete="off"
           ></textarea>
@@ -2432,7 +2437,6 @@
                 <label id="voice-speed-label">Speed <select id="realtime-voice-speed-select" onchange="onRealtimeVoiceSpeedChanged()"><option value="1.1">1.1x</option></select></label>
                 <label id="voice-narration-label">Narration <select id="realtime-narration-mode-select" onchange="onRealtimeNarrationModeChanged()"><option value="quiet">Quiet</option><option value="milestones">Milestones</option></select></label>
                 <label id="realtime-listen-label">Realtime permissions <select id="realtime-listen-mode-select" onchange="onRealtimeListenModeChanged()"><option value="auto_send">Always listening</option><option value="confirm_send">Listen, don't send</option><option value="hold_space">Hold Space to talk</option></select></label>
-                <label id="realtime-agent-toggle-label" hidden><input type="checkbox" id="realtime-agent-toggle" onchange="onRealtimeAgentToggleChanged()" />End-to-end agent</label>
                 <label id="xai-realtime-toggle-label" hidden><input type="checkbox" id="xai-realtime-toggle" onchange="onXaiRealtimeToggleChanged()" />Use xAI Realtime</label>
                 <span class="realtime-wake-gate-status" id="realtime-wake-gate-status" hidden></span>
               </span>
@@ -3586,7 +3590,7 @@
 <!-- PROJECT DIRECTORY SETUP -->
 <div id="project-directory-modal" class="project-setup-modal" aria-modal="true" role="dialog" aria-labelledby="project-directory-title">
   <div class="project-setup-dialog">
-    <div class="project-setup-icon"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=3" alt="Prometheus One" /></div>
+    <div class="project-setup-icon"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v240-mobile-splash" alt="Prometheus One" /></div>
     <h2 id="project-directory-title">Link a project directory?</h2>
     <p>Choose a file or folder in File Explorer, or paste a local path below, so Prometheus can keep this project’s chats, files, and commands scoped to the right place.</p>
     <input id="project-directory-path-input" class="project-setup-path" type="text" autocomplete="off" spellcheck="false" placeholder="Paste a file or folder path" onkeydown="if(event.key==='Enter')usePastedProjectDirectory()" />
@@ -3601,7 +3605,7 @@
 
 <div id="project-directory-permission-modal" class="project-setup-modal" aria-modal="true" role="dialog" aria-labelledby="project-directory-permission-title">
   <div class="project-setup-dialog">
-    <div class="project-setup-icon project-setup-icon-warning"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=3" alt="Prometheus One" /></div>
+    <div class="project-setup-icon project-setup-icon-warning"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v240-mobile-splash" alt="Prometheus One" /></div>
     <h2 id="project-directory-permission-title">Allow this directory?</h2>
     <p>This path is outside Prometheus’s configured workspace. Choose a file or folder in File Explorer, then allow Prometheus to read, write, and modify it for this project.</p>
     <input id="project-directory-permission-path" class="project-setup-path" type="text" autocomplete="off" spellcheck="false" placeholder="Paste a file or folder path" oninput="updatePastedProjectDirectory(this.value)" />
@@ -4356,6 +4360,11 @@
 
         <!-- Right col: Agent Model Defaults -->
         <div id="agent-model-defaults-col" style="border:1px solid var(--line);border-radius:12px;padding:16px;background:linear-gradient(180deg,#fff 0%,#f9fbff 100%);display:flex;flex-direction:column">
+          <style>
+            /* These are actionable labels, not helper copy. Keep them readable in every theme. */
+            #agent-model-defaults-col [data-settings-icon-label],
+            #agent-model-defaults-col .model-default-section-title { color:var(--text) !important; }
+          </style>
           <div class="right-section-title" style="margin:14px 0 4px;padding-top:14px;border-top:1px solid var(--line);order:20">Agent Model Defaults</div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5;order:21">
             Preset which model each agent type uses. Agents without an override fall back to the primary model.
@@ -4393,8 +4402,22 @@
             </select>
           </div>
 
+          <!-- Voice Agent -->
+          <div style="margin-bottom:12px;order:11">
+            <div data-settings-icon-label="volume2" style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">Voice Agent</div>
+            <select id="amd-voice-agent-provider" class="settings-input" style="width:100%;margin-bottom:4px" onchange="loadVoiceAgentDefaultOptions()">
+              <option value="">use current voice provider</option>
+              <option value="openai_codex">Codex Voice / Live</option>
+              <option value="openai_realtime">OpenAI Realtime</option>
+              <option value="xai">xAI Realtime</option>
+            </select>
+            <select id="amd-voice-agent-voice" class="settings-input" style="width:100%">
+              <option value="">use provider default</option>
+            </select>
+          </div>
+
           <!-- Proposal Executors -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px;order:60">Proposal Executors</div>
+          <div class="model-default-section-title" style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px;order:60">Proposal Executors</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;order:61">
             <div>
               <div data-settings-icon-label="alertTriangle" style="font-size:11px;color:var(--muted);margin-bottom:4px">High Risk</div>
@@ -4433,7 +4456,7 @@
           </div>
 
           <!-- Teams & Agents -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px;order:40">Teams &amp; Agents</div>
+          <div class="model-default-section-title" style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 8px;order:40">Teams &amp; Agents</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;order:41">
             <div>
               <div data-settings-icon-label="users" style="font-size:11px;color:var(--muted);margin-bottom:4px">Coordinator</div>
@@ -4491,7 +4514,7 @@
           </div>
 
           <!-- Subagent Role Defaults -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:50">Subagent Role Defaults</div>
+          <div class="model-default-section-title" style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:50">Subagent Role Defaults</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:10px;order:51">Per-role model defaults. Leave blank to inherit from the primary model.</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;order:52">
             <div>
@@ -4532,7 +4555,7 @@
           </div>
 
           <!-- Switch Model Tiers -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:20">Switch Models</div>
+          <div class="model-default-section-title" style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:20">Switch Models</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:10px;order:21">Models used when the AI calls switch_model() to downshift for lighter tasks. Leave blank to disable that tier.</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;order:22">
             <div>
@@ -4572,7 +4595,7 @@
           </div>
 
           <!-- Summary Compactor -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:70">Summary Compactor</div>
+          <div class="model-default-section-title" style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:70">Summary Compactor</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:10px;order:71">Model used to compact autonomous goal progress. Leave blank to use the current main-chat provider and model.</div>
           <div style="margin-bottom:12px;order:72">
             <div>
@@ -4591,7 +4614,7 @@
 
 
           <!-- Brain System Models -->
-          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:80">Brain System</div>
+          <div class="model-default-section-title" style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px;order:80">Brain System</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:10px;order:81">Models used for autonomous Thought and Dream runs. Leave blank to use the primary model.</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;order:82">
             <div>
@@ -4607,9 +4630,10 @@
                 <option value="perplexity">Perplexity AI</option>
                 <option value="gemini">Google Gemini</option>
               </select>
-              <select id="brain-thought-model" class="settings-input" style="width:100%">
+              <select id="brain-thought-model" class="settings-input" style="width:100%;margin-bottom:4px" onchange="syncBrainReasoning('thought')">
                 <option value="">select provider first</option>
               </select>
+              <select id="brain-thought-reasoning" class="settings-input" style="width:100%"><option value="">provider default</option></select>
             </div>
             <div>
               <div data-settings-icon-label="moon" style="font-size:11px;color:var(--muted);margin-bottom:4px">Brain Dream</div>
@@ -4624,9 +4648,10 @@
                 <option value="perplexity">Perplexity AI</option>
                 <option value="gemini">Google Gemini</option>
               </select>
-              <select id="brain-dream-model" class="settings-input" style="width:100%">
+              <select id="brain-dream-model" class="settings-input" style="width:100%;margin-bottom:4px" onchange="syncBrainReasoning('dream')">
                 <option value="">select provider first</option>
               </select>
+              <select id="brain-dream-reasoning" class="settings-input" style="width:100%"><option value="">provider default</option></select>
             </div>
           </div>
           <div id="brain-model-status" style="font-size:11px;min-height:16px;margin-bottom:8px;order:83"></div>
@@ -5457,7 +5482,7 @@ function requestSessionSearch(query) {
   _sessionSearchError = '';
   _sessionSearchTimer = setTimeout(async () => {
     try {
-      const params = new URLSearchParams({ q: rawQuery, limit: '100' });
+      const params = new URLSearchParams({ q: rawQuery, limit: '100', scope: 'all', includeAutomated: '1' });
       const res = await fetch(`/api/sessions/search?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -5479,6 +5504,7 @@ function requestSessionSearch(query) {
 
 // ---- Channel classification ----
 const CHANNEL_ICONS = {
+  voice_room: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12h2l2-5 3 10 3-8 2 5h4"/><circle cx="12" cy="12" r="10"/></svg>`,
   telegram: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`,
   discord:  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><circle cx="9" cy="10" r="1" fill="currentColor"/><circle cx="15" cy="10" r="1" fill="currentColor"/></svg>`,
   whatsapp: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`,
@@ -5486,6 +5512,7 @@ const CHANNEL_ICONS = {
   mobile:   `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>`,
 };
 const CHANNEL_DEFS = [
+  { key: 'voice_room', label: 'Voice Rooms', icon: CHANNEL_ICONS.voice_room, color: '#D6B85A', desc: 'Persistent multi-agent voice conversations' },
   { key: 'mobile',    label: 'Mobile',    icon: CHANNEL_ICONS.mobile,    color: '#EA6A1F', desc: 'Chats from the mobile app' },
   { key: 'telegram',  label: 'Telegram',  icon: CHANNEL_ICONS.telegram,  color: '#229ED9', desc: 'Chats via Telegram bot' },
   { key: 'discord',   label: 'Discord',   icon: CHANNEL_ICONS.discord,   color: '#5865F2', desc: 'Chats via Discord bot' },
@@ -5504,18 +5531,21 @@ function _getSessionChannel(s) {
   if (direct === 'whatsapp') return 'whatsapp';
   if (direct === 'terminal') return 'terminal';
   if (direct === 'mobile')   return 'mobile';
+  if (direct === 'voice_room') return 'voice_room';
   const src = String(s.source || '').toLowerCase();
   if (src === 'telegram') return 'telegram';
   if (src === 'discord')  return 'discord';
   if (src === 'whatsapp') return 'whatsapp';
   if (src === 'terminal') return 'terminal';
   if (src === 'mobile')   return 'mobile';
+  if (src === 'voice_room') return 'voice_room';
   const id = String(s.id || '').toLowerCase();
   if (id.startsWith('telegram_')) return 'telegram';
   if (id.startsWith('discord_')) return 'discord';
   if (id.startsWith('whatsapp_')) return 'whatsapp';
   if (id.startsWith('cli_')) return 'terminal';
   if (id.startsWith('mobile_')) return 'mobile';
+  if (id.startsWith('voice_room_')) return 'voice_room';
   if (s.automated) {
     const ch = String((s.history || [])[0]?.channel || '').toLowerCase();
     if (ch === 'telegram') return 'telegram';
@@ -5599,6 +5629,10 @@ function _renderChannelHub() {
     const alreadyCounted = (window.chatSessions || []).some(s => s.id === ms.id);
     if (!alreadyCounted) counts['mobile']++;
   });
+  ((window.channelSessionsByChannel && window.channelSessionsByChannel.voice_room) || []).forEach(room => {
+    const alreadyCounted = (window.chatSessions || []).some(s => s.id === room.id);
+    if (!alreadyCounted) counts.voice_room++;
+  });
   ['telegram', 'discord', 'whatsapp'].forEach(channelKey => {
     const sourceSessions = (window.channelSessionsByChannel && window.channelSessionsByChannel[channelKey])
       || window[`${channelKey}Sessions`]
@@ -5652,7 +5686,7 @@ function _renderChannelDrill(channelKey) {
 
   // For server-backed channels: include sessions not yet in chatSessions
   let serverOnly = [];
-  if (channelKey === 'terminal' || channelKey === 'mobile' || channelKey === 'telegram' || channelKey === 'discord' || channelKey === 'whatsapp') {
+  if (channelKey === 'terminal' || channelKey === 'mobile' || channelKey === 'voice_room' || channelKey === 'telegram' || channelKey === 'discord' || channelKey === 'whatsapp') {
     const sourceSessions = (window.channelSessionsByChannel && window.channelSessionsByChannel[channelKey])
       || (channelKey === 'mobile' ? (window.mobileSessions || []) : (channelKey === 'terminal' ? (window.terminalSessions || []) : (window[`${channelKey}Sessions`] || [])));
     serverOnly = sourceSessions.filter(
@@ -5714,13 +5748,17 @@ function _renderChannelDrill(channelKey) {
       (window._sessionThinking && window._sessionThinking[s.id])
       || s.activeRun === true
     );
-    const title = escHtml(s.title || s.preview || s.id.slice(0, 20));
+  const title = escHtml(s.title || s.preview || s.id.slice(0, 20));
+    const roster = Array.isArray(s.voiceRoom?.participants)
+      ? s.voiceRoom.participants.map((participant) => participant.label).filter(Boolean).join(' · ')
+      : '';
     return `
 <div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''} session-terminal" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-title="${title}" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="openTerminalSession('${s.id}', '${channelKey}')">
   ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
       <div class="job-item-title">${title}</div>
+      ${roster ? `<div class="job-item-subtitle">${escHtml(roster)}</div>` : ''}
     </div>
   </div>
   <div class="job-item-meta">
@@ -6043,6 +6081,16 @@ function _getSessionChannelLabel(s) {
   return def ? def.label : (ch || '');
 }
 
+function _getSessionOriginLabel(s) {
+  const origin = s?.lastOrigin && typeof s.lastOrigin === 'object' ? s.lastOrigin : null;
+  const raw = String(origin?.label || '').trim();
+  if (raw) return raw;
+  const channel = String(origin?.channel || s?.channel || s?.source || '').trim().toLowerCase();
+  if (channel === 'web') return 'Desktop';
+  if (channel === 'mobile') return 'Mobile';
+  return _getSessionChannelLabel({ ...s, channel }) || '';
+}
+
 function escapeRegExp(text) {
   return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -6163,12 +6211,12 @@ window.scheduleSessionListRefresh = scheduleSessionListRefresh;
 function renderChatSessionCard(s) {
   const isPinned = _pinnedChats.includes(s.id);
   const searchResult = getSessionSearchResult(s.id);
-  const channelLabel = _getSessionChannelLabel(s);
+  const originLabel = _getSessionOriginLabel(s);
   const projectLabel = s.projectName || searchResult?.projectName || '';
   const sourceBadge = projectLabel
     ? `Project: ${projectLabel}`
-    : channelLabel
-      ? `Channel: ${channelLabel}`
+    : originLabel
+      ? `From: ${originLabel}`
       : '';
   const openHandler = s._searchOnly
     ? `openSearchSession('${s.id}')`
@@ -6204,7 +6252,6 @@ function isTopLevelWebChatSession(s) {
   // Project chats live exclusively in their owning project's tree.  This
   // remains true for pinned and server-rehydrated sessions as well.
   if (String(s.projectId || '').trim() || String(s.source || '').toLowerCase() === 'project') return false;
-  if (_isChannelSession(s)) return false;
   if (s.sideChat === true || s.parentSessionId) return false;
   if (/^side_/i.test(String(s.id || ''))) return false;
   return true;
@@ -6213,46 +6260,24 @@ function isTopLevelWebChatSession(s) {
 function renderSessionsList() {
   const el = document.getElementById('jobs-list');
   const allSessions = (window.chatSessions || []);
-  const pinnedChannelSessions = allSessions.filter(s => _isChannelSession(s) && _pinnedChats.includes(s.id));
-  const channelSummaryLists = ['terminal', 'mobile', 'telegram', 'discord', 'whatsapp']
-    .flatMap(channel => ((window.channelSessionsByChannel && window.channelSessionsByChannel[channel]) || window[`${channel}Sessions`] || [])
-      .map(ts => ({ ...ts, source: ts.channel || channel })));
-  const pinnedServerChannelSessions = channelSummaryLists
-    .filter(ts => _pinnedChats.includes(ts.id) && !allSessions.some(s => s.id === ts.id))
-    .map(ts => ({
-      id: ts.id,
-      title: ts.title || ts.preview || ts.id,
-      history: Array.isArray(ts.history) ? ts.history : [],
-      createdAt: ts.createdAt || ts.lastActiveAt || Date.now(),
-      updatedAt: ts.lastActiveAt || ts.createdAt || Date.now(),
-      lastMessageAt: ts.lastMessageAt || 0,
-      source: ts.source || ts.channel || 'terminal',
-      activeRun: ts.activeRun === true,
-      _serverOnlyTerminal: true,
-    }));
-  const webSessions = allSessions.filter(isTopLevelWebChatSession);
+  const chatSessions = allSessions.filter(isTopLevelWebChatSession);
   const indexedMatchIds = new Set((_sessionSearchResults || []).map(r => String(r.id)));
-  const searchedChannelSessions = _sessionSearchQuery
-    ? allSessions.filter(s => _isChannelSession(s) && indexedMatchIds.has(String(s.id)) && !_pinnedChats.includes(s.id))
-    : [];
   const searchOnlySessions = _sessionSearchQuery
     ? (_sessionSearchResults || [])
         .map(sessionFromSearchResult)
         .filter(s => s && isTopLevelWebChatSession(s) && !allSessions.some(existing => String(existing.id) === String(s.id)))
     : [];
 
-  if (!webSessions.length && !pinnedChannelSessions.length && !pinnedServerChannelSessions.length && !searchOnlySessions.length) {
+  if (!chatSessions.length && !searchOnlySessions.length) {
     el.innerHTML = '<div class="empty-state">No chats yet.<br>Start a new conversation.</div>';
     return;
   }
 
-  let sorted = [
-    ...webSessions,
-    ...pinnedChannelSessions,
-    ...searchedChannelSessions,
-    ...pinnedServerChannelSessions,
-    ...searchOnlySessions,
-  ].sort((a, b) => getSessionSortTime(b) - getSessionSortTime(a));
+  const byId = new Map();
+  [...chatSessions, ...searchOnlySessions].forEach((session) => {
+    if (session?.id && !byId.has(String(session.id))) byId.set(String(session.id), session);
+  });
+  let sorted = Array.from(byId.values()).sort((a, b) => getSessionSortTime(b) - getSessionSortTime(a));
   if (_sessionSearchQuery) {
     sorted = sorted.filter(s => {
       const title = (s.title || 'New chat').toLowerCase();
@@ -6319,9 +6344,6 @@ function renderSessionsList() {
 
   el.innerHTML = content;
 
-  // Also refresh channels list if it's open, and update badge
-  if (_channelsViewOpen) renderChannelsList();
-  _updateChannelsBadge();
 }
 
 function _updateChannelsBadge() {
@@ -7908,7 +7930,7 @@ function finishStoppedGenerationUI(sessionId) {
     if (typeof window.syncActiveSessionRunState === 'function') window.syncActiveSessionRunState();
     const input = document.getElementById('chat-input');
     if (input) {
-      input.placeholder = 'Type a message... (Enter to send, Shift+Enter for newline)';
+      input.placeholder = 'Send Prometheus a message';
       input.disabled = false;
     }
     if (typeof window.updateQueuedPromptUI === 'function') window.updateQueuedPromptUI();
@@ -7981,7 +8003,7 @@ function stopGeneration() {
   if (sendBtn) sendBtn.disabled = false;
   const input = document.getElementById('chat-input');
   if (input) {
-    input.placeholder = 'Type a message... (Enter to send, Shift+Enter for newline)';
+    input.placeholder = 'Send Prometheus a message';
     input.disabled = false;
     input.focus();
   }
@@ -8645,7 +8667,7 @@ let _errBackdrop = null;
     ? window.__PROM_SHOULD_BOOT_MOBILE()
     : document.body.classList.contains('pm-mobile-active');
   if (shouldBootMobile) {
-    window.__PROM_MOBILE_ROUTER_READY = import('./src/mobile/mobile-router.js?v=mobile-codex-live-v3-v5')
+    window.__PROM_MOBILE_ROUTER_READY = import('./src/mobile/mobile-router.js?v=pm-v240-mobile-splash')
       .catch((err) => {
         console.error('[mobile] router import failed:', err);
         throw err;
@@ -8675,6 +8697,13 @@ let _errBackdrop = null;
     if (!isSecure) return;
     if (window.navigator.userAgent.includes('Electron')) return;
 
+    // Keep the Home Screen app's registration and module graph ahead of any
+    // browser/iOS HTTP cache. The query is intentionally changed with every
+    // frontend release; updateViaCache prevents a cached SW script from being
+    // treated as the current worker during the update check.
+    const PM_PWA_VERSION = 'pm-v240-2026-08-01-mobile-splash';
+    const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
+
     // Auto-reload once when the SW finishes installing a new version, so a
     // rebuild + gateway restart never leaves the device on stale assets.
     let _swReloadGuard = false;
@@ -8693,7 +8722,7 @@ let _errBackdrop = null;
 
     window.addEventListener('load', () => {
       navigator.serviceWorker
-        .register('/service-worker.js', { scope: '/' })
+        .register(PM_SERVICE_WORKER_URL, { scope: '/', updateViaCache: 'none' })
         .then((reg) => {
           // If a new SW is already waiting (rebuild happened while page was open),
           // tell it to take over immediately. The controllerchange listener above
@@ -8708,6 +8737,11 @@ let _errBackdrop = null;
               }
             });
           });
+          // register() performs an update check, but an explicit check is
+          // needed for installed PWAs whose launch process can be restored
+          // from a long-lived Home Screen session.
+          reg.update().catch(() => {});
+          window.addEventListener('pageshow', () => reg.update().catch(() => {}));
         })
         .catch((err) => console.warn('[pm-pwa] service worker registration failed:', err));
     });

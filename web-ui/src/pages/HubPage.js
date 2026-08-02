@@ -30,10 +30,28 @@ const ACHIEVEMENTS = [
 let _range = 'week';
 let _viewAll = false;
 const _expanded = new Set();
+const _expandedGoals = new Set();
 let _skills = [];
 let _hubSkillSearch = '';
 let _goals = [];
-let _curator = { suggestions: [], activity: [], pending: 0, quarantined: 0, appliedActivity: 0, observedActivity: 0, loading: false, actingId: '' };
+let _curator = {
+  suggestions: [],
+  activity: [],
+  pending: 0,
+  quarantined: 0,
+  appliedActivity: 0,
+  observedActivity: 0,
+  lowRisk: 0,
+  mediumRisk: 0,
+  highRisk: 0,
+  totalCount: 0,
+  offset: 0,
+  nextOffset: null,
+  hasMore: false,
+  loading: false,
+  loadingMore: false,
+  actingId: '',
+};
 const _heatmap = { year: 0, month: 0, counts: {} };
 const _tokenActivity = { daily: [], stats: null };
 const _stats = { mode: 'overview', range: 'all', tools: null, models: null, loading: false };
@@ -336,12 +354,21 @@ function renderGoals() {
   }
   grid.innerHTML = _goals.map(g => {
     const status = String(g.status || 'unknown').trim().toLowerCase() || 'unknown';
+    const goalId = String(g.id || `${g.sessionId || 'goal'}:${g.createdAt || g.updatedAt || ''}`);
+    const expanded = _expandedGoals.has(goalId);
     const summary = String(g.progressSummary || g.lastReason || g.blockedReason || g.pausedReason || g.failureReason || '').trim();
     const deniedActions = Array.isArray(g.deniedActions) ? g.deniedActions : [];
     const latestDenial = deniedActions[deniedActions.length - 1] || null;
     const updatedIso = Number(g.updatedAt || g.createdAt || 0) ? new Date(Number(g.updatedAt || g.createdAt)).toISOString() : '';
+    const metrics = g.goalMetrics && typeof g.goalMetrics === 'object' ? g.goalMetrics : null;
+    const goalTime = metrics && Number.isFinite(Number(metrics.elapsedMs))
+      ? formatGoalDuration(metrics.elapsedMs)
+      : 'Not recorded';
+    const goalTokens = metrics && Number.isFinite(Number(metrics.totalTokens))
+      ? Math.max(0, Number(metrics.totalTokens)).toLocaleString()
+      : 'Not recorded';
     return `
-      <div class="hub-goal-card" data-status="${escHtml(status)}" title="${escHtml(g.goal || '')}">
+      <article class="hub-goal-card${expanded ? ' open' : ''}" data-status="${escHtml(status)}" data-goal-id="${escHtml(goalId)}" title="${escHtml(g.goal || '')}" tabindex="0" role="button" aria-expanded="${expanded ? 'true' : 'false'}">
         <div class="hub-goal-card-head">
           <div class="hub-goal-status">${escHtml(status)}${g.current ? ' · current' : ''}</div>
           <div class="hub-goal-turns">${Number(g.turnsUsed || 0)} turns</div>
@@ -356,9 +383,31 @@ function renderGoals() {
         </div>
         ${latestDenial ? `<div class="hub-goal-denial">${escHtml(`${latestDenial.category || 'policy'}: ${latestDenial.reason || 'Blocked by hard policy.'}`)}</div>` : ''}
         ${summary ? `<div class="hub-goal-summary">${escHtml(summary)}</div>` : ''}
-      </div>
+        <div class="hub-goal-expand-label">${expanded ? 'Hide goal metrics' : 'View goal metrics'} <span aria-hidden="true">${expanded ? '▴' : '▾'}</span></div>
+        ${expanded ? `
+          <div class="hub-goal-details" aria-label="Goal metrics">
+            <div><span>Total goal time</span><strong>${escHtml(goalTime)}</strong></div>
+            <div><span>Tokens used</span><strong>${escHtml(goalTokens)}</strong></div>
+          </div>
+        ` : ''}
+      </article>
     `;
   }).join('');
+  grid.querySelectorAll('[data-goal-id]').forEach((card) => {
+    const toggle = () => {
+      const id = card.getAttribute('data-goal-id');
+      if (!id) return;
+      if (_expandedGoals.has(id)) _expandedGoals.delete(id);
+      else _expandedGoals.add(id);
+      renderGoals();
+    };
+    card.addEventListener('click', toggle);
+    card.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      toggle();
+    });
+  });
 }
 
 function renderHeatmap() {
@@ -367,7 +416,8 @@ function renderHeatmap() {
   if (!grid || !label) return;
   const stats = _tokenActivity.stats || {};
   const daily = Array.isArray(_tokenActivity.daily) ? _tokenActivity.daily : [];
-  label.textContent = `${compactNumber(stats.totalTokens || sumCounts(Object.fromEntries(daily.map((d) => [d.date, d.tokens || d.count || 0]))))} tokens`;
+  const visibleTotal = sumCounts(Object.fromEntries(daily.map((d) => [d.date, d.tokens || d.count || 0])));
+  label.textContent = `Last 6 months · ${compactNumber(visibleTotal)} tokens`;
   if (!daily.length) {
     grid.innerHTML = `<div class="hub-empty">No token activity recorded yet.</div>`;
     return;
@@ -488,6 +538,19 @@ function formatDurationMs(ms) {
   const minutes = Math.floor(value / 60000);
   const seconds = Math.round((value % 60000) / 1000);
   return minutes + 'm' + (seconds ? ' ' + seconds + 's' : '');
+}
+
+function formatGoalDuration(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value < 0) return 'Not recorded';
+  if (value < 1000) return `${Math.round(value)}ms`;
+  if (value < 60000) return `${(value / 1000).toFixed(value < 10000 ? 2 : 1)}s`;
+  const minutes = Math.floor(value / 60000);
+  const seconds = Math.round((value % 60000) / 1000);
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours > 0) return `${hours}h${remainingMinutes ? ` ${remainingMinutes}m` : ''}`;
+  return `${minutes}m${seconds ? ` ${seconds}s` : ''}`;
 }
 
 function renderStatTile(label, value, sub) {
@@ -1059,23 +1122,27 @@ function renderCuratorPanel() {
 
   const suggestions = Array.isArray(_curator.suggestions) ? _curator.suggestions : [];
   const activity = Array.isArray(_curator.activity) ? _curator.activity : [];
+  const visibleCount = suggestions.length + activity.length;
+  const totalCount = Math.max(visibleCount, Number(_curator.totalCount || 0));
   const counts = suggestions.reduce((acc, item) => {
     const s = curatorStatusClass(item.status);
     acc[s] = (acc[s] || 0) + 1;
     return acc;
   }, {});
-  const appliedActivity = activity.filter((item) => String(item?.status || '').toLowerCase() === 'applied').length;
-  const observedActivity = activity.length - appliedActivity;
+  const appliedActivity = Number(_curator.appliedActivity || 0) || activity.filter((item) => String(item?.status || '').toLowerCase() === 'applied').length;
+  const observedActivity = Number(_curator.observedActivity || 0) || Math.max(0, activity.length - appliedActivity);
+  const pending = Number(_curator.pending || 0) || counts.pending || 0;
+  const quarantined = Number(_curator.quarantined || 0) || counts.quarantined || 0;
   if (subtitle) subtitle.textContent = _curator.loading
     ? 'Loading Brain skill suggestions and Thought/Dream activity...'
-    : `${counts.pending || 0} pending, ${counts.quarantined || 0} quarantined, ${appliedActivity} applied updates, ${observedActivity} observed signals`;
+    : `${visibleCount} of ${totalCount} shown · ${pending} pending, ${quarantined} quarantined, ${appliedActivity} applied updates, ${observedActivity} observed signals`;
   if (summary) {
-    const low = suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'low').length;
-    const medium = suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'medium').length;
-    const high = suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'high').length;
+    const low = Number(_curator.lowRisk || 0) || suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'low').length;
+    const medium = Number(_curator.mediumRisk || 0) || suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'medium').length;
+    const high = Number(_curator.highRisk || 0) || suggestions.filter((s) => String(s.risk || '').toLowerCase() === 'high').length;
     summary.innerHTML = [
-      renderStatTile('Pending', compactNumber(counts.pending || 0)),
-      renderStatTile('Quarantined', compactNumber(counts.quarantined || 0)),
+      renderStatTile('Pending', compactNumber(pending)),
+      renderStatTile('Quarantined', compactNumber(quarantined)),
       renderStatTile('Applied Updates', compactNumber(appliedActivity)),
       renderStatTile('Observed Signals', compactNumber(observedActivity)),
       renderStatTile('Low risk', compactNumber(low)),
@@ -1102,6 +1169,7 @@ function renderCuratorPanel() {
   list.innerHTML = [
     sorted.length ? `<div class="hub-curator-group-title">Review Queue</div>${sorted.map(renderCuratorSuggestion).join('')}` : '',
     sortedActivity.length ? `<div class="hub-curator-group-title">Thought and Dream Activity</div>${sortedActivity.map(renderCuratorActivityItem).join('')}` : '',
+    _curator.hasMore ? `<button class="hub-curator-load-more" id="hub-curator-load-more" type="button" ${_curator.loadingMore ? 'disabled' : ''}>${_curator.loadingMore ? 'Loading…' : `Show ${Math.min(5, Math.max(1, totalCount - visibleCount))} more`}</button>` : '',
   ].filter(Boolean).join('');
   list.querySelectorAll('[data-curator-action]').forEach((btn) => {
     btn.addEventListener('click', (event) => {
@@ -1109,24 +1177,74 @@ function renderCuratorPanel() {
       handleCuratorAction(btn.getAttribute('data-id'), btn.getAttribute('data-curator-action'), btn);
     });
   });
+  const loadMore = list.querySelector('#hub-curator-load-more');
+  if (loadMore) loadMore.addEventListener('click', () => loadCuratorSuggestions({ reset: false }));
 }
 
-async function loadCuratorSuggestions() {
-  _curator.loading = true;
+async function loadCuratorSuggestions({ reset = true } = {}) {
+  if (!reset && (_curator.loadingMore || !_curator.hasMore)) return;
+  if (reset) {
+    _curator.loading = true;
+    _curator.loadingMore = false;
+    _curator.suggestions = [];
+    _curator.activity = [];
+    _curator.pending = 0;
+    _curator.quarantined = 0;
+    _curator.appliedActivity = 0;
+    _curator.observedActivity = 0;
+    _curator.lowRisk = 0;
+    _curator.mediumRisk = 0;
+    _curator.highRisk = 0;
+    _curator.totalCount = 0;
+    _curator.offset = 0;
+    _curator.nextOffset = null;
+    _curator.hasMore = false;
+  } else {
+    _curator.loadingMore = true;
+  }
   renderCuratorPanel();
+  const requestedOffset = reset ? 0 : Number(_curator.nextOffset ?? _curator.offset ?? 0);
   try {
-    const r = await api('/api/hub/skills/review', { timeoutMs: 30000 });
-    _curator.suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
-    _curator.activity = Array.isArray(r?.activity) ? r.activity : [];
+    const r = await api(`/api/hub/skills/review?limit=5&offset=${encodeURIComponent(requestedOffset)}`, { timeoutMs: 30000 });
+    const suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
+    const activity = Array.isArray(r?.activity) ? r.activity : [];
+    if (reset) {
+      _curator.suggestions = suggestions;
+      _curator.activity = activity;
+    } else {
+      const existingSuggestionIds = new Set(_curator.suggestions.map((item) => String(item?.id || '')).filter(Boolean));
+      const existingActivityIds = new Set(_curator.activity.map((item) => String(item?.id || '')).filter(Boolean));
+      _curator.suggestions = _curator.suggestions.concat(suggestions.filter((item) => {
+        const id = String(item?.id || '');
+        return !id || !existingSuggestionIds.has(id);
+      }));
+      _curator.activity = _curator.activity.concat(activity.filter((item) => {
+        const id = String(item?.id || '');
+        return !id || !existingActivityIds.has(id);
+      }));
+    }
     _curator.pending = Number(r?.pending || 0);
     _curator.quarantined = Number(r?.quarantined || 0);
     _curator.appliedActivity = Number(r?.appliedActivity || 0);
     _curator.observedActivity = Number(r?.observedActivity || 0);
+    _curator.lowRisk = Number(r?.lowRisk || 0);
+    _curator.mediumRisk = Number(r?.mediumRisk || 0);
+    _curator.highRisk = Number(r?.highRisk || 0);
+    _curator.totalCount = Number(r?.totalCount || _curator.suggestions.length + _curator.activity.length);
+    _curator.offset = Number(r?.offset ?? requestedOffset);
+    _curator.nextOffset = r?.nextOffset == null ? null : Number(r.nextOffset);
+    _curator.hasMore = r?.hasMore === true || _curator.nextOffset !== null;
   } catch {
-    _curator.suggestions = [];
-    _curator.activity = [];
+    if (reset) {
+      _curator.suggestions = [];
+      _curator.activity = [];
+      _curator.totalCount = 0;
+    } else {
+      window.showToast?.('Could not load more curator activity', 'Try again in a moment.', 'error');
+    }
   } finally {
     _curator.loading = false;
+    _curator.loadingMore = false;
     _curator.actingId = '';
     renderCuratorPanel();
   }
@@ -1214,7 +1332,7 @@ async function loadGoals() {
 
 async function loadHeatmap() {
   try {
-    const r = await api('/api/hub/tokens/activity', { timeoutMs: 30000 });
+    const r = await api('/api/hub/tokens/activity?range=6m', { timeoutMs: 30000 });
     _tokenActivity.daily = Array.isArray(r?.daily) ? r.daily : [];
     _tokenActivity.stats = r?.stats || null;
   } catch {

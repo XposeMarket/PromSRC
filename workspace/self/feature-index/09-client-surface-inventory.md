@@ -6,7 +6,7 @@ Last source verification: 2026-07-22. This is the detailed companion to [03-desk
 
 | Desktop surface | Current data/actions exposed |
 |---|---|
-| **Chat** | Session/channel list and search; session creation, title/history/model-route/context-window management; streamed messages/tools/processes; attachments/uploads and file delivery; prompt queue; edit/rerun and variant controls; goal progress; active/pending approval, question, and proposal cards; side chats; browser canvas; projects/canvas files and previews; Creative scene/composition/media/template/HTML-motion/HyperFrames controls; voice STT/TTS/realtime/workgroup controls; Brain pulse cards; open-path/open-file and process output controls |
+| **Chat** | Unified cross-origin session list and search, with latest-origin labels; session creation, title/history/model-route/context-window management; streamed messages/tools/processes; attachments/uploads and file delivery; prompt queue; edit/rerun and variant controls; goal progress; active/pending approval, question, and proposal cards; side chats; browser canvas; projects/canvas files and previews; Creative scene/composition/media/template/HTML-motion/HyperFrames controls; voice STT/TTS/realtime/workgroup controls; Brain pulse cards; open-path/open-file and process output controls |
 | **Tasks** | Background tasks, thread supervisions, task detail/evidence, live state, task-scoped approvals, message, pause, resume, restart, delete/join, and error-response/recovery controls |
 | **Schedule** | Schedule list/create/edit/delete, natural-language parsing, enabled toggle, manual run, owner selection (main/subagent/team), model/skill/context configuration, jobs, and Brain Thought/Dream status/config/run controls |
 | **Teams** | Team and agent inventory; create/update/delete; pause/resume/start/run-all/manager review/dispatch; team chat/history/stream; context references/files; member/manager profiles and heartbeat; workspace browsing/upload/read/write/delete; runs/events; proposed change apply/reject; task/approval visibility |
@@ -24,7 +24,7 @@ Last source verification: 2026-07-22. This is the detailed companion to [03-desk
 | Mobile screen | Current data/actions exposed |
 |---|---|
 | **Pair** | Device pairing claim and paired-client startup; gateway-side pending approval/device management remains an administrative surface |
-| **Chat** | Session drawer/search/new chat, persistent thread/history, attachments, streaming response and tool/progress cards, main-goal pill, pending approvals, stop/interruption/reconciliation behavior, background-spawn dock, voice handoff and typed composer |
+| **Chat** | Unified cross-origin session drawer/search/new chat with latest-origin labels, persistent thread/history, attachments, streaming response and tool/progress cards, main-goal pill, pending approvals, stop/interruption/reconciliation behavior, background-spawn dock, voice handoff and typed composer |
 | **Voice** | Voice target and runtime controls, dictation/realtime lifecycle, interruption, camera/visual context staging, and routing back to chat; actual capabilities are browser/device/provider conditioned |
 | **Schedule** | Cached/revalidated schedule cards, create entry point, enabled/paused toggle, manual run, and per-schedule editor expansion |
 | **Teams overview** | Team count/grid, refresh, featured-team preview (members/workspace/progress), and navigation to team detail |

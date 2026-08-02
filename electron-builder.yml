@@ -73,8 +73,13 @@ win:
         - x64
   icon: assets/Prometheus.ico
 
-# macOS developer build. Production signing/notarization lives in
-# electron-builder-public.yml and is intentionally required there.
+# macOS developer/tester build.
+#
+# This target is intentionally unsigned: it is for trusted testers while the
+# production Developer ID/notarized path remains in electron-builder-public.yml.
+# Keep Hardened Runtime off for an unsigned app; macOS can reject an unsigned
+# bundle that requests hardened-runtime behavior. Testers will need to approve
+# the app in Privacy & Security -> Open Anyway after downloading it.
 mac:
   target:
     - dmg
@@ -83,7 +88,9 @@ mac:
   category: public.app-category.productivity
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
   minimumSystemVersion: "11.0"
-  hardenedRuntime: true
+  identity: null
+  hardenedRuntime: false
+  notarize: false
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist

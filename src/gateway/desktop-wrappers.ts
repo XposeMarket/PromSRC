@@ -149,7 +149,7 @@ export function normalizeDesktopWrapperTool(
   }
   // Model-facing vision screenshots stay on the fast path. Structured text
   // comes from the dedicated text/accessibility actions rather than OCR.
-  if (mappedName === 'desktop_screenshot' || mappedName === 'desktop_window_screenshot') {
+  if (mappedName === 'desktop_screenshot' || mappedName === 'desktop_window_screenshot' || mappedName === 'desktop_focus_window') {
     args.skip_ocr = true;
     delete args.ocr;
   }

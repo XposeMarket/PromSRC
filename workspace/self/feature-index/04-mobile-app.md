@@ -13,8 +13,8 @@ Mobile mode activates on `#mobile/...`, `/mobile/...`, pairing/PWA query routes,
 | Route family | Screen and current capabilities |
 |---|---|
 | `mobile/pair` | Pairing claim/approval flow and device-token establishment |
-| `mobile/chat[/<session>]` | Persistent chat sessions, grouped/session search drawer, attachments and uploads, streamed tool/progress/activity rendering, goal pill, approvals, cancellation/stop actions, reconciliation and recovery after interruption, source/channel context, background-spawn dock and file-change grouping |
-| `mobile/voice` | Voice-first surface with dictation/PTT and realtime routing controls; voice target selection; interruption handling; visual/camera inputs where supported |
+| `mobile/chat[/<session>]` | Persistent chat sessions in one paged, cross-origin drawer and search timeline, attachments and uploads, streamed tool/progress/activity rendering, goal pill, approvals, cancellation/stop actions, reconciliation and recovery after interruption, latest-origin labels, background-spawn dock and file-change grouping |
+| `mobile/voice` | Voice-first surface with dictation/PTT and realtime routing controls; optional durable multi-agent Voice Room roster; voice target/address routing; interruption handling; stable transcript presentation; dimensional orb/particle feedback; visual/camera inputs where supported |
 | `mobile/tasks[/<id>]` | Background task filters/list/detail, progress/status/log/evidence and lifecycle navigation |
 | `mobile/hub` | Hub landing; `creative` currently aliases to this route |
 | `mobile/schedule` | Scheduled job list/detail/control and schedule navigation |
@@ -34,6 +34,7 @@ Mobile supports several related but distinct capabilities:
 
 - typed chat and dictation/STT;
 - a voice-agent/realtime path with target/workgroup, interruption, quiet/wake, and narration controls;
+- a mobile-only durable Voice Room path that resolves a participant roster into a `voice_room_*` session, routes clear spoken addresses, persists a bounded shared transcript, and can hand off Codex Voice/Live v3 peers through the shared warm microphone;
 - OpenAI/xAI realtime bootstrap paths when the applicable provider credentials/configuration are available;
 - camera snapshots/video-frame captures and camera-roll video attachments that can be staged into the next typed or spoken turn;
 - TTS/voice delivery where browser/provider support permits.
@@ -51,6 +52,7 @@ Pairing supports QR/claim, pending-device review, approval/denial, device manage
 - Mobile reuses the gateway and core chat/agent/task/proposal data, but its layout and controls are purpose-built rather than pixel-identical to desktop.
 - Settings shares the desktop modal. A focused mobile Creative renderer exists but is currently not router-exposed; dense creative editing is desktop-led.
 - Browser/desktop automation tool availability is decided by the gateway/native host, not by the phone shell.
+- Mobile Voice Room routing, the orb/particle renderer, and the preloaded preview wheel are intentional mobile presentation/runtime behavior; desktop voice keeps its own controls and does not inherit mobile room rebinding.
 - Browser audio, permissions, iOS PWA behavior, camera/mic entitlement, push support, and realtime provider credentials determine whether voice/realtime features actually activate.
 
 ## Source anchors

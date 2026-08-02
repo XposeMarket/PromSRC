@@ -71,6 +71,15 @@ export function prettifyModelName(model, provider) {
 }
 
 // ── Haptic feedback ──────────────────────────────────────────────────────────
+const _hapticGestureDisposers = new Set();
+
+export function disposeMobileHapticGestureSurfaces() {
+  for (const dispose of Array.from(_hapticGestureDisposers)) {
+    try { dispose(); } catch {}
+  }
+  _hapticGestureDisposers.clear();
+}
+
 function _ensureHapticSwitch() {
   let sw = document.getElementById('pm-haptic-switch');
   if (!sw) {
@@ -118,6 +127,147 @@ export function pmHaptic(strength = 12) {
     sw.click?.();
     sw.checked = !sw.checked;
   } catch {}
+}
+
+// iOS Safari only emits the useful little ticks while the finger is moving
+// over a real `input[switch]`. Calling `.click()` on an off-screen input is not
+// enough on current iOS releases. Keep the workaround scoped to the gesture
+// surface so the rest of the mobile DOM does not need to be wrapped or
+// re-parented. This follows the same moving-switch idea as
+// ios-vibrator-pro-max, while preserving Prometheus' existing pointer math.
+export function attachMobileHapticGestureSurface(surface, handlers = {}) {
+  if (!surface || typeof document === 'undefined') return () => {};
+
+  const proxy = document.createElement('label');
+  const input = document.createElement('input');
+  proxy.className = 'pm-haptic-gesture-surface';
+  proxy.setAttribute('aria-hidden', 'true');
+  proxy.tabIndex = -1;
+  input.type = 'checkbox';
+  input.setAttribute('switch', '');
+  input.setAttribute('aria-hidden', 'true');
+  input.tabIndex = -1;
+  input.className = 'pm-haptic-gesture-input';
+  input.style.cssText = [
+    'all: revert',
+    'position: absolute',
+    'inset: 0',
+    'width: 100%',
+    'height: 100%',
+    'margin: 0',
+    'opacity: 0',
+    'touch-action: none',
+  ].join(';');
+  proxy.appendChild(input);
+  proxy.style.cssText = [
+    'all: unset',
+    'position: fixed',
+    'z-index: 2147483647',
+    'overflow: hidden',
+    'opacity: 0',
+    'pointer-events: auto',
+    'touch-action: none',
+    'border-radius: 999px',
+  ].join(';');
+
+  let pointerId = null;
+  let flippedDirection = false;
+  let disposed = false;
+
+  // iOS only recognizes the switch as a haptic trigger when its direction is
+  // changed *before* it is moved underneath the active finger.
+  const nativeHaptic = (event, compact = true) => {
+    if (disposed || pointerId == null) return;
+    flippedDirection = !flippedDirection;
+    input.style.direction = flippedDirection ? 'rtl' : 'ltr';
+    positionSurface(event, compact);
+  };
+
+  const positionSurface = (event, compact = false) => {
+    const rect = surface.getBoundingClientRect?.();
+    if (!compact && rect && rect.width > 0 && rect.height > 0) {
+      proxy.style.left = `${rect.left}px`;
+      proxy.style.top = `${rect.top}px`;
+      proxy.style.width = `${rect.width}px`;
+      proxy.style.height = `${rect.height}px`;
+      return;
+    }
+    const width = 70;
+    const height = 31;
+    const x = Number(event?.clientX || 0);
+    const y = Number(event?.clientY || 0);
+    proxy.style.left = `${x - width / 2}px`;
+    proxy.style.top = `${y - height / 2}px`;
+    proxy.style.width = `${width}px`;
+    proxy.style.height = `${height}px`;
+    input.style.direction = flippedDirection ? 'rtl' : 'ltr';
+  };
+
+  const releaseCapture = () => {
+    if (pointerId == null) return;
+    try { input.releasePointerCapture?.(pointerId); } catch {}
+  };
+
+  const finish = (event, cancelled = false) => {
+    if (pointerId == null || (event?.pointerId !== undefined && event.pointerId !== pointerId)) return;
+    releaseCapture();
+    try {
+      const callback = cancelled ? handlers.onPointerCancel : handlers.onPointerUp;
+      callback?.(event, { requestNativeHaptic: () => {} });
+    } finally {
+      pointerId = null;
+      flippedDirection = false;
+      input.checked = false;
+      if (!disposed) positionSurface({ clientX: 0, clientY: 0 }, false);
+    }
+  };
+
+  const onPointerDown = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (pointerId !== null) return;
+    pointerId = event.pointerId;
+    flippedDirection = false;
+    positionSurface(event, false);
+    try { input.setPointerCapture?.(pointerId); } catch {}
+    let requestNativeHaptic = false;
+    handlers.onPointerDown?.(event, {
+      requestNativeHaptic: () => { requestNativeHaptic = true; },
+    });
+    if (requestNativeHaptic) nativeHaptic(event, false);
+  };
+
+  const onPointerMove = (event) => {
+    if (pointerId == null || event.pointerId !== pointerId) return;
+    let requestNativeHaptic = false;
+    handlers.onPointerMove?.(event, {
+      requestNativeHaptic: () => { requestNativeHaptic = true; },
+    });
+    if (handlers.nativeHapticsOnMove !== false || requestNativeHaptic) nativeHaptic(event);
+    else positionSurface(event, true);
+  };
+
+  proxy.addEventListener('pointerdown', onPointerDown, true);
+  proxy.addEventListener('pointermove', onPointerMove, true);
+  proxy.addEventListener('pointerup', finish, true);
+  proxy.addEventListener('pointercancel', (event) => finish(event, true), true);
+  // The native input is only a gesture sensor. Keep its real click behavior
+  // intact for iOS haptics, but do not forward it to delegated app handlers.
+  proxy.addEventListener('click', (event) => event.stopPropagation(), true);
+  document.body?.appendChild(proxy);
+  positionSurface({ clientX: 0, clientY: 0 }, false);
+
+  const dispose = () => {
+    disposed = true;
+    releaseCapture();
+    proxy.remove();
+    if (surface.dataset) delete surface.dataset.pmHapticGestureSurface;
+    _hapticGestureDisposers.delete(dispose);
+  };
+  dispose.refresh = () => {
+    if (!disposed) positionSurface({ clientX: 0, clientY: 0 }, false);
+  };
+  _hapticGestureDisposers.add(dispose);
+  return dispose;
 }
 
 // Give an arbitrary button the same real iOS haptic the model badge has: a native
@@ -504,6 +654,7 @@ function _renderReasoningBody(provider, cfg) {
   const control = document.getElementById('pm-reasoning-control');
   if (control && options) {
     let lastIndex = selectedIndex;
+    let requestGestureNativeHaptic = null;
     const indexMax = Math.max(1, options.length - 1);
     const setProgress = (progress) => {
       const safeProgress = Math.max(0, Math.min(1, Number(progress) || 0));
@@ -524,7 +675,14 @@ function _renderReasoningBody(provider, cfg) {
         segment.classList.toggle('is-active', segmentIndex === safeIndex);
         segment.classList.toggle('is-filled', segmentIndex <= safeIndex);
       });
-      if (safeIndex !== lastIndex) { pmHaptic(4); lastIndex = safeIndex; }
+      if (safeIndex !== lastIndex) {
+        const step = safeIndex > lastIndex ? 1 : -1;
+        for (let tick = lastIndex + step; tick !== safeIndex + step; tick += step) {
+          requestGestureNativeHaptic?.();
+          pmHaptic(8);
+        }
+        lastIndex = safeIndex;
+      }
       if (save) _queueReasoningSave(provider, { reasoning_effort: value }, immediate);
     };
     const progressFromEvent = (event) => {
@@ -547,24 +705,41 @@ function _renderReasoningBody(provider, cfg) {
         commitIndex(segment.getAttribute('data-index'), true);
       });
     });
-    control.addEventListener('pointerdown', (event) => {
-      if (event.pointerType === 'mouse' && event.button !== 0) return;
-      control.setPointerCapture?.(event.pointerId);
-      control.classList.add('is-dragging');
-      updateFromPointer(event);
-    });
-    control.addEventListener('pointermove', (event) => {
-      if (!control.classList.contains('is-dragging')) return;
-      updateFromPointer(event);
-    });
-    const finishDrag = (event) => {
-      if (!control.classList.contains('is-dragging')) return;
-      control.classList.remove('is-dragging');
-      control.releasePointerCapture?.(event.pointerId);
-      updateFromPointer(event, true);
+    const pointerHandlers = {
+      onPointerDown: (event, gesture) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        requestGestureNativeHaptic = gesture?.requestNativeHaptic || null;
+        control.classList.add('is-dragging');
+        updateFromPointer(event);
+      },
+      onPointerMove: (event, gesture) => {
+        if (!control.classList.contains('is-dragging')) return;
+        requestGestureNativeHaptic = gesture?.requestNativeHaptic || requestGestureNativeHaptic;
+        updateFromPointer(event);
+      },
+      onPointerUp: (event, gesture) => {
+        if (!control.classList.contains('is-dragging')) return;
+        requestGestureNativeHaptic = gesture?.requestNativeHaptic || requestGestureNativeHaptic;
+        try {
+          control.classList.remove('is-dragging');
+          updateFromPointer(event, true);
+        } finally {
+          requestGestureNativeHaptic = null;
+        }
+      },
+      onPointerCancel: (event, gesture) => {
+        if (!control.classList.contains('is-dragging')) return;
+        requestGestureNativeHaptic = gesture?.requestNativeHaptic || requestGestureNativeHaptic;
+        try {
+          control.classList.remove('is-dragging');
+          updateFromPointer(event, true);
+        } finally {
+          requestGestureNativeHaptic = null;
+        }
+      },
+      nativeHapticsOnMove: false,
     };
-    control.addEventListener('pointerup', finishDrag);
-    control.addEventListener('pointercancel', finishDrag);
+    attachMobileHapticGestureSurface(control, pointerHandlers);
     control.addEventListener('keydown', (event) => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
       event.preventDefault();

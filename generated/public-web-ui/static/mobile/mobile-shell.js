@@ -1,7 +1,7 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { renderMd, timeAgo } from '../utils.js';
-import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, pmHaptic } from './mobile-model-badge.js';
+import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
 import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js';
 
 // ── Pinned sessions ───────────────────────────────────────────────────────────
@@ -44,10 +44,7 @@ function _setLocalPinned(sessionId, pinned) {
 function _findCachedDrawerSession(sessionId) {
   const id = String(sessionId || '');
   if (!id) return null;
-  const states = [
-    _drawerSessionPaging?.mobile,
-    ...Object.values(_drawerSessionPaging?.channels || {}),
-  ];
+  const states = [_drawerSessionPaging?.all];
   for (const state of states) {
     const found = (Array.isArray(state?.sessions) ? state.sessions : []).find((session) => String(session?.id || '') === id);
     if (found) return found;
@@ -58,7 +55,7 @@ function _findCachedDrawerSession(sessionId) {
 function _setCachedSessionPinned(sessionId, pinnedAt) {
   const id = String(sessionId || '');
   if (!id) return;
-  const states = [_drawerSessionPaging?.mobile, ...Object.values(_drawerSessionPaging?.channels || {})];
+  const states = [_drawerSessionPaging?.all];
   for (const state of states) {
     for (const session of Array.isArray(state?.sessions) ? state.sessions : []) {
       if (String(session?.id || '') === id) session.pinnedAt = Number(pinnedAt || 0) || null;
@@ -124,6 +121,31 @@ async function _togglePin(sessionId) {
   }
 }
 
+function _setCachedSessionUnread(sessionId, unread, mobileLastReadAt = null) {
+  const id = String(sessionId || '');
+  if (!id) return;
+  const states = [_drawerSessionPaging?.all];
+  for (const state of states) {
+    for (const session of Array.isArray(state?.sessions) ? state.sessions : []) {
+      if (String(session?.id || '') !== id) continue;
+      session.mobileUnread = unread === true;
+      if (mobileLastReadAt !== null) session.mobileLastReadAt = mobileLastReadAt;
+    }
+  }
+}
+
+async function _markSessionUnread(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) return null;
+  const result = await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(id) + '/mobile-unread', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+  const updated = result?.session || null;
+  if (updated) _setCachedSessionUnread(id, updated.mobileUnread === true, Number(updated.mobileLastReadAt || 0));
+  return updated;
+}
+
 // Small SVG icon set inlined so we don't depend on external icon loaders for this view.
 export const ICONS = {
   menu:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7"  x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>',
@@ -149,6 +171,7 @@ export const ICONS = {
   play:      '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>',
   pause:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>',
   trash:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
+  unread:    '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>',
   clock:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
   paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>',
   send:      '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 11l18-8-8 18-2-8-8-2z"/></svg>',
@@ -198,7 +221,6 @@ let _tabResizeHandlerBound = false;
 let _drawerCallbacks = null;
 let _drawerRefreshing = false;
 let _drawerRenderSeq = 0;
-let _drawerChannelsCache = null;
 let _drawerStateCache = null;
 let _drawerPinnedCollapsed = false;
 let _mobileNoSelectGuardInstalled = false;
@@ -247,20 +269,18 @@ function _installMobileNoSelectGuard() {
   document.addEventListener('selectstart', suppress, true);
   document.addEventListener('contextmenu', suppress, true);
 }
-export async function refreshMobileDrawerSessions({ force = false, channel = '' } = {}) {
+export async function refreshMobileDrawerSessions({ force = false } = {}) {
   if (!_drawerEl || !_drawerCallbacks) return;
   if (_drawerSearch) return;
   if (_drawerRefreshing && !force) return;
   _drawerRefreshing = true;
   try {
-    if (force) _drawerChannelsCache = null;
-    const targetChannel = String(channel || _currentDrawerSessionChannel() || 'mobile').trim() || 'mobile';
-    const state = _drawerPageStateFor(targetChannel);
+    const state = _drawerPageStateFor();
     const freshEnough = state.initialized
       && Number(state.loadedAt || 0) > 0
       && Date.now() - Number(state.loadedAt || 0) < PM_DRAWER_REFRESH_TTL_MS;
     if (!force && freshEnough) return;
-    _resetDrawerPageState(targetChannel);
+    _resetDrawerPageState();
     await _renderDrawerSessions(_drawerCallbacks);
   } catch (err) {
     console.warn('[mobile drawer] refresh failed', err);
@@ -363,44 +383,30 @@ const PM_THEME_KEY = 'prometheus_theme';
 const PM_ACTIVE_TAB_KEY = 'pm_mobile_active_tab';
 const PM_DRAWER_SESSION_PAGE_SIZE = 20;
 const _drawerSessionPaging = {
-  mobile: { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false },
-  channels: {},
+  all: { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false },
 };
 
 function _newDrawerPageState() {
   return { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false, pending: null, loadedAt: 0 };
 }
 
-function _drawerPageStateFor(channel = 'mobile') {
-  const key = String(channel || 'mobile');
-  if (key === 'mobile') return _drawerSessionPaging.mobile;
-  if (!_drawerSessionPaging.channels[key]) _drawerSessionPaging.channels[key] = _newDrawerPageState();
-  return _drawerSessionPaging.channels[key];
+function _drawerPageStateFor() {
+  return _drawerSessionPaging.all;
 }
 
-function _resetDrawerPageState(channel = '') {
-  if (!channel) {
-    _drawerSessionPaging.mobile = _newDrawerPageState();
-    _drawerSessionPaging.channels = {};
-    return;
-  }
-  if (channel === 'mobile') _drawerSessionPaging.mobile = _newDrawerPageState();
-  else delete _drawerSessionPaging.channels[channel];
+function _resetDrawerPageState() {
+  _drawerSessionPaging.all = _newDrawerPageState();
 }
 
-export function invalidateMobileDrawerSessions(channel = '') {
-  _drawerChannelsCache = null;
-  _resetDrawerPageState(channel);
+export function invalidateMobileDrawerSessions() {
+  _resetDrawerPageState();
   if (_drawerEl?.classList?.contains('open')) {
-    refreshMobileDrawerSessions({ force: true, channel: channel || _currentDrawerSessionChannel() }).catch(() => {});
+    refreshMobileDrawerSessions({ force: true }).catch(() => {});
   }
 }
 
-function _currentDrawerSessionChannel() {
-  const state = _loadDrawerState();
-  if (state.view !== 'channelChats') return 'mobile';
-  const channel = String(state.channel || '').trim();
-  return channel || 'mobile';
+function _currentDrawerSessionScope() {
+  return 'all';
 }
 
 function _isDrawerSideChatSession(session) {
@@ -408,8 +414,8 @@ function _isDrawerSideChatSession(session) {
   return /^side_/i.test(id) || session?.sideChat === true || !!String(session?.parentSessionId || '').trim();
 }
 
-async function _loadDrawerSessionPage({ channel = 'mobile', loadSessions, reset = false } = {}) {
-  const state = _drawerPageStateFor(channel);
+async function _loadDrawerSessionPage({ loadSessions, reset = false } = {}) {
+  const state = _drawerPageStateFor();
   if (state.loading) return state.pending || state;
   if (!reset && state.initialized && !state.hasMore) return state;
   state.loading = true;
@@ -422,12 +428,12 @@ async function _loadDrawerSessionPage({ channel = 'mobile', loadSessions, reset 
         : null;
       let page;
       if (loader) {
-        page = await loader({ channel, limit: PM_DRAWER_SESSION_PAGE_SIZE, offset });
+        page = await loader({ limit: PM_DRAWER_SESSION_PAGE_SIZE, offset });
       } else if (typeof loadSessions === 'function') {
-        const data = await loadSessions({ channel, limit: PM_DRAWER_SESSION_PAGE_SIZE, offset });
-        const list = channel === 'mobile'
-          ? (Array.isArray(data?.mobile) ? data.mobile : [])
-          : (Array.isArray(data?.channels) ? (data.channels.find((c) => c.key === channel)?.sessions || []) : []);
+        const data = await loadSessions({ limit: PM_DRAWER_SESSION_PAGE_SIZE, offset });
+        const list = Array.isArray(data?.sessions)
+          ? data.sessions
+          : (Array.isArray(data?.mobile) ? data.mobile : []);
         page = { sessions: list, total: list.length, offset, hasMore: false };
       } else {
         page = { sessions: [], total: 0, offset, hasMore: false };
@@ -450,7 +456,7 @@ async function _loadDrawerSessionPage({ channel = 'mobile', loadSessions, reset 
       state.initialized = true;
       state.loadedAt = Date.now();
     } catch (err) {
-      console.warn('[mobile drawer] Failed to load session page', { channel, offset, err });
+      console.warn('[mobile drawer] Failed to load unified session page', { offset, err });
       state.error = err?.message || 'Could not load sessions.';
       state.initialized = true;
       state.hasMore = false;
@@ -645,9 +651,11 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
   let pointerId = null;
   let startX = 0;
   let lastX = 0;
+  let lastSliderCenterX = 0;
   let velocity = 0;            // px between the last two pointermove samples
   let dragging = false;
   let pendingTab = null;       // currently highlighted tab during the gesture
+  let requestGestureNativeHaptic = null;
   // While pressed/dragging the pill swells past the bar so it reads as a lens
   // lifting off the surface (and the icon underneath magnifies via CSS).
   const PRESS_GROW = 1.18;
@@ -667,6 +675,19 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
       if (d < bestDist) { bestDist = d; best = t; }
     }
     return best;
+  };
+
+  // The glass pill follows the finger but is clamped to the first and last
+  // tab. Use its actual center for haptic timing, not the nearest-tab midpoint.
+  const sliderCenterAtX = (clientX) => {
+    const items = tabs();
+    const first = items[0];
+    const last = items[items.length - 1];
+    const rect = tabbar.getBoundingClientRect();
+    if (!first || !last) return Number(clientX) || 0;
+    const minCenter = rect.left + first.offsetLeft + first.offsetWidth / 2;
+    const maxCenter = rect.left + last.offsetLeft + last.offsetWidth / 2;
+    return Math.max(minCenter, Math.min(maxCenter, Number(clientX) || minCenter));
   };
 
   const setActive = (tabEl) => {
@@ -733,8 +754,31 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     ind.style.transform = '';     // relax to identity via the CSS spring transition
   };
 
-  const finish = (e) => {
+  // Tick only when the center of the glass pill crosses a page icon. This is
+  // deliberately independent from the nearest-tab preview used for the UI.
+  const pulseTab = (tabId, requestNativeHaptic = requestGestureNativeHaptic) => {
+    const id = String(tabId || '');
+    if (!id) return;
+    requestNativeHaptic?.();
+    pmHaptic(8);
+  };
+
+  const pulseIconsCrossed = (fromCenterX, toCenterX) => {
+    if (!Number.isFinite(fromCenterX) || !Number.isFinite(toCenterX) || fromCenterX === toCenterX) return;
+    const movingRight = toCenterX > fromCenterX;
+    const rect = tabbar.getBoundingClientRect();
+    for (const tab of tabs()) {
+      const iconCenterX = rect.left + tab.offsetLeft + tab.offsetWidth / 2;
+      const crossed = movingRight
+        ? iconCenterX > fromCenterX && iconCenterX <= toCenterX
+        : iconCenterX < fromCenterX && iconCenterX >= toCenterX;
+      if (crossed) pulseTab(tab.getAttribute('data-tab'));
+    }
+  };
+
+  const finish = (e, gesture = {}) => {
     if (pointerId === null || (e && e.pointerId !== undefined && e.pointerId !== pointerId)) return;
+    const wasDragging = dragging;
     try { tabbar.releasePointerCapture(pointerId); } catch {}
     tabbar.classList.remove('pm-tabbar-dragging');
     tabbar.classList.remove('pm-tabbar-pressing');
@@ -744,11 +788,13 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     // Use the release coordinate for the final drop. `pendingTab` is only the
     // most recent pointermove sample and can lag behind a fast finger lift.
     const target = e && Number.isFinite(e.clientX) ? tabAtX(e.clientX) : pendingTab;
-    if (!target) return;
-    // Keep taps as tactile as drags. Dragging already ticks when it crosses a
-    // tab boundary; this release tick also covers a plain tap on the current
-    // tab and native shells where the transparent iOS switch is unavailable.
-    pmHaptic(8);
+    if (!target) {
+      requestGestureNativeHaptic = null;
+      return;
+    }
+    // Plain taps use the native switch click (plus the fallback vibration).
+    // Drags already tick once per page tab as the pill crosses it.
+    if (!wasDragging) pmHaptic(8);
     const id = target.getAttribute('data-tab');
     const tabObj = mobileNavTabs.find((x) => x.id === id);
     // During a drag setActive() intentionally moves the visual highlight, so
@@ -764,67 +810,61 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
     if (id !== currentId && tabObj && typeof onNavigate === 'function') {
       window.setTimeout(() => onNavigate(tabObj.route), 90);
     }
+    requestGestureNativeHaptic = null;
   };
 
-  tabbar.addEventListener('pointerdown', (e) => {
-    const t = e.target?.closest?.('.pm-tab');
-    if (!t || !tabbar.contains(t)) return;
-    pointerId = e.pointerId;
-    startX = lastX = e.clientX;
-    velocity = 0;
-    dragging = false;
-    pendingTab = t;
-    // Swell the pill immediately on press (before any drag) so a press-and-hold
-    // already magnifies, then the swell tracks through the drag.
-    tabbar.classList.add('pm-tabbar-pressing');
-    const ind = indicator();
-    if (ind) ind.style.transform = `scaleY(${PRESS_GROW})`;
-    // Set pill bounds immediately on press so the inverse mask hides the icon
-    // right away (before any drag starts).
-    const pillEl = indicator();
-    if (pillEl) {
-      const pl = parseFloat(pillEl.style.getPropertyValue('--pm-ind-x') || t.offsetLeft);
-      const pw = parseFloat(pillEl.style.getPropertyValue('--pm-ind-w') || t.offsetWidth);
-      const barW2 = tabbar.offsetWidth;
-      tabbar.style.setProperty('--pm-pill-left',  `${pl}px`);
-      tabbar.style.setProperty('--pm-pill-right', `${barW2 - (pl + pw)}px`);
-      tabbar.style.setProperty('--pm-pill-span',  `${pw}px`);
-    }
+  attachMobileHapticGestureSurface(tabbar, {
+    onPointerDown: (e, gesture) => {
+      const t = tabAtX(e.clientX);
+      if (!t) return;
+      requestGestureNativeHaptic = gesture?.requestNativeHaptic || null;
+      pointerId = e.pointerId;
+      startX = lastX = e.clientX;
+      lastSliderCenterX = sliderCenterAtX(e.clientX);
+      velocity = 0;
+      dragging = false;
+      pendingTab = t;
+      // Swell the pill immediately on press (before any drag) so a press-and-hold
+      // already magnifies, then the swell tracks through the drag.
+      tabbar.classList.add('pm-tabbar-pressing');
+      const ind = indicator();
+      if (ind) ind.style.transform = `scaleY(${PRESS_GROW})`;
+      // Set pill bounds immediately on press so the inverse mask hides the icon
+      // right away (before any drag starts).
+      const pillEl = indicator();
+      if (pillEl) {
+        const pl = parseFloat(pillEl.style.getPropertyValue('--pm-ind-x') || t.offsetLeft);
+        const pw = parseFloat(pillEl.style.getPropertyValue('--pm-ind-w') || t.offsetWidth);
+        const barW2 = tabbar.offsetWidth;
+        tabbar.style.setProperty('--pm-pill-left',  `${pl}px`);
+        tabbar.style.setProperty('--pm-pill-right', `${barW2 - (pl + pw)}px`);
+        tabbar.style.setProperty('--pm-pill-span',  `${pw}px`);
+      }
+    },
+    onPointerMove: (e, gesture) => {
+      if (pointerId === null || e.pointerId !== pointerId) return;
+      requestGestureNativeHaptic = gesture?.requestNativeHaptic || requestGestureNativeHaptic;
+      const previousSliderCenterX = lastSliderCenterX;
+      velocity = e.clientX - lastX;
+      lastX = e.clientX;
+      lastSliderCenterX = sliderCenterAtX(e.clientX);
+      if (!dragging) {
+        if (Math.abs(e.clientX - startX) < 6) return;   // tap, not a drag (yet)
+        dragging = true;
+        tabbar.classList.add('pm-tabbar-dragging');
+      }
+      pulseIconsCrossed(previousSliderCenterX, lastSliderCenterX);
+      const nearest = tabAtX(e.clientX);
+      if (nearest && nearest !== pendingTab) {
+        pendingTab = nearest;
+        setActive(nearest);
+      }
+      followDrag(e.clientX);
+    },
+    onPointerUp: finish,
+    onPointerCancel: finish,
+    nativeHapticsOnMove: false,
   });
-
-  tabbar.addEventListener('pointermove', (e) => {
-    if (pointerId === null || e.pointerId !== pointerId) return;
-    velocity = e.clientX - lastX;
-    lastX = e.clientX;
-    if (!dragging) {
-      if (Math.abs(e.clientX - startX) < 6) return;   // tap, not a drag (yet)
-      dragging = true;
-      tabbar.classList.add('pm-tabbar-dragging');
-      try { tabbar.setPointerCapture(pointerId); } catch {}
-    }
-    e.preventDefault();
-    const nearest = tabAtX(e.clientX);
-    if (nearest && nearest !== pendingTab) {
-      pendingTab = nearest;
-      setActive(nearest);
-      // Buzz on every tab the pill slides over (not just the page we started on).
-      // On iOS the global pmHaptic switch toggle is programmatic and does NOT
-      // emit a system haptic, so sliding over a tab you never physically pressed
-      // felt dead. Each .pm-tab carries its own native <input switch> overlay —
-      // clicking *that specific* switch is what actually fires an iOS haptic.
-      // Toggle the entered tab's own switch so every tab crossed buzzes, then
-      // keep pmHaptic for Android's navigator.vibrate.
-      try {
-        const sw = nearest.querySelector('.pm-haptic-switch-overlay');
-        if (sw) sw.click();
-      } catch {}
-      pmHaptic(8);
-    }
-    followDrag(e.clientX);
-  });
-
-  tabbar.addEventListener('pointerup', finish);
-  tabbar.addEventListener('pointercancel', finish);
 }
 
 // Inject the SVG filter the glass layers reference (#pm-liquid-glint). It lives
@@ -851,11 +891,9 @@ function _ensureLiquidGlassFilters() {
 }
 
 function _normalizeDrawerState(state) {
-  const view = state?.view === 'channels' || state?.view === 'channelChats' ? state.view : 'mobile';
-  return {
-    view,
-    channel: view === 'channelChats' ? String(state?.channel || '').trim() : '',
-  };
+  // Older installs may have persisted a Channels drill-down. Always return to
+  // the one unified session timeline when the drawer opens.
+  return { view: 'sessions' };
 }
 
 function _loadDrawerState() {
@@ -864,7 +902,7 @@ function _loadDrawerState() {
     const raw = JSON.parse(localStorage.getItem(PM_DRAWER_STATE_KEY) || '{}');
     _drawerStateCache = _normalizeDrawerState(raw);
   } catch {
-    _drawerStateCache = { view: 'mobile', channel: '' };
+    _drawerStateCache = { view: 'sessions' };
   }
   return { ..._drawerStateCache };
 }
@@ -877,6 +915,7 @@ function _saveDrawerState(state) {
 
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
   const root = document.getElementById('mobile-root');
+  disposeMobileHapticGestureSurfaces();
   root.innerHTML = '';
   root.hidden = false;
 
@@ -893,7 +932,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       <div class="pm-drawer-brand">
         <span class="pm-brand-flame">🔥</span>
         <span class="pm-drawer-brand-legacy">Prometheus</span>
-        <img class="pm-brand-p1-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=3" alt="" decoding="async">
+        <img class="pm-brand-p1-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v240-mobile-splash" alt="" decoding="async">
         <span class="pm-drawer-brand-p1"><strong>PROMETHEUS 1</strong><small>1 Program. Unlimited abilities.</small></span>
       </div>
       <button class="pm-theme-toggle" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>
@@ -978,7 +1017,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
     Promise.resolve(typeof onNewChat === 'function' ? onNewChat() : null)
       .then(() => {
         _saveDrawerState({ view: 'mobile', channel: '' });
-        _resetDrawerPageState('mobile');
+        _resetDrawerPageState();
       })
       .catch(() => {});
   });
@@ -1052,8 +1091,8 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   // Tap OR drag the glass pill across the bar to switch pages. Tapping lands on
   // the native switch overlay (iOS haptic) and navigates on release; dragging
   // lets the pill track the finger and snaps to the tab you let go over.
-  _wireTabbarSlider(tabbar, { onNavigate, getActiveTab: () => activeTab });
   app.appendChild(tabbar);
+  _wireTabbarSlider(tabbar, { onNavigate, getActiveTab: () => activeTab });
   _rememberActiveTab(activeTab);
   // Snap the pill onto the active tab once laid out; animate from the previous
   // tab if we just navigated here from another tab.
@@ -1110,164 +1149,21 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
     return;
   }
-  const requestedDrawerState = _loadDrawerState();
-  if (requestedDrawerState.view === 'channels') {
-    const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
-    if (pinnedEl) pinnedEl.innerHTML = '';
-    head.innerHTML = `
-      <button class="pm-drawer-back" type="button" data-drawer-view="mobile">${ICONS.back}<span>Sessions</span></button>
-      <div class="pm-drawer-section-title">Channels</div>
-    `;
-    sessionList.innerHTML = '<div class="pm-session-empty pm-session-loading">Loading channels...</div>';
-  } else if (requestedDrawerState.view === 'channelChats') {
-    const label = _channelLabel(requestedDrawerState.channel) || requestedDrawerState.channel;
-    head.innerHTML = `
-      <button class="pm-drawer-back" type="button" data-drawer-view="channels">${ICONS.back}<span>Channels</span></button>
-      <div class="pm-drawer-section-title">${escapeHtml(label)}</div>
-    `;
-    sessionList.innerHTML = '<div class="pm-session-empty pm-session-loading">Loading chats...</div>';
-  }
-  if (requestedDrawerState.view !== 'mobile') {
-    // The back control is visible before the async fetch finishes, so wire it
-    // now instead of leaving the drawer momentarily unresponsive.
-    _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
-  }
   try {
     await _migrateLegacyPinnedSessionsToServer();
     if (!isCurrent()) return;
-    const drawerState = _loadDrawerState();
-    if (drawerState.view === 'mobile') {
-      const cachedMobilePage = _drawerPageStateFor('mobile');
-      if (cachedMobilePage.initialized) {
-        head.innerHTML = `
-          <div class="pm-drawer-section-title">Sessions</div>
-          <button class="pm-session-row pm-channel-entry" type="button" data-drawer-view="channels">
-            <span class="pm-icon pm-channel-entry-icon">${ICONS.layers || ICONS.chat}</span>
-            <span class="pm-flex">Channels</span>
-            <span class="pm-chev">${ICONS.chev}</span>
-          </button>
-        `;
-        sessionList.innerHTML = _sessionPageHtml(cachedMobilePage, 'No mobile chats yet.');
-        _renderDrawerPinnedSessions(cachedMobilePage);
-        _wireDrawerInfiniteScroll({ channel: 'mobile', loadSessions, onOpenSession, searchSessions, onNewChat });
-        _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
-        return;
-      }
-      await _loadDrawerSessionPage({ channel: 'mobile', loadSessions });
-      if (!isCurrent()) return;
-      const pageState = _drawerPageStateFor('mobile');
-      head.innerHTML = `
-        <div class="pm-drawer-section-title">Sessions</div>
-        <button class="pm-session-row pm-channel-entry" type="button" data-drawer-view="channels">
-          <span class="pm-icon pm-channel-entry-icon">${ICONS.layers || ICONS.chat}</span>
-          <span class="pm-flex">Channels</span>
-          <span class="pm-chev">${ICONS.chev}</span>
-        </button>
-      `;
-      sessionList.innerHTML = _sessionPageHtml(pageState, 'No mobile chats yet.');
-      _renderDrawerPinnedSessions(pageState);
-      _wireDrawerInfiniteScroll({ channel: 'mobile', loadSessions, onOpenSession, searchSessions, onNewChat });
-      _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
-      return;
-    }
-
-    if (drawerState.view === 'channels') {
-      const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
-      if (pinnedEl) pinnedEl.innerHTML = '';
-      head.innerHTML = `
-        <button class="pm-drawer-back" type="button" data-drawer-view="mobile">${ICONS.back}<span>Sessions</span></button>
-        <div class="pm-drawer-section-title">Channels</div>
-      `;
-      // Switch the visible state immediately. Previously the old mobile chats
-      // stayed on screen until two async requests completed, which made the tap
-      // look frozen and allowed late responses to repaint the wrong view.
-      sessionList.innerHTML = '<div class="pm-session-empty pm-session-loading">Loading channels...</div>';
-      _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
-
-      let channels = _drawerChannelsCache;
-      if (!Array.isArray(channels)) {
-        // Only one summary is needed to obtain the static channel catalog and
-        // totals. Do not hydrate a full page of chats just to draw five cards.
-        let data = await loadSessions({ channel: 'mobile', limit: 1, offset: 0 });
-        if (!isCurrent()) return;
-        data = typeof window.enrichMobileSessionGroupsForDrawer === 'function'
-          ? await window.enrichMobileSessionGroupsForDrawer(async () => data)
-          : data;
-        if (!isCurrent()) return;
-        channels = Array.isArray(data?.channels) ? data.channels : [];
-        _drawerChannelsCache = channels;
-      }
-      sessionList.innerHTML = channels.length
-        ? channels.map((c) => _channelButtonHtml(c)).join('')
-        : '<div class="pm-session-empty">No channels yet.</div>';
-    } else if (drawerState.view === 'channelChats') {
-      const cachedChannels = Array.isArray(_drawerChannelsCache) ? _drawerChannelsCache : [];
-      const selectedChannel = cachedChannels.find((c) => c.key === drawerState.channel) || {
-        key: String(drawerState.channel || '').trim(),
-        label: _channelLabel(drawerState.channel) || String(drawerState.channel || '').trim(),
-      };
-      if (!selectedChannel.key) {
-        _saveDrawerState({ view: 'channels', channel: '' });
-        if (isCurrent()) _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat });
-        return;
-      }
-      const channelLabel = selectedChannel.label || selectedChannel.key;
-      head.innerHTML = `
-        <button class="pm-drawer-back" type="button" data-drawer-view="channels">${ICONS.back}<span>Channels</span></button>
-        <div class="pm-drawer-section-title">${escapeHtml(channelLabel)}</div>
-      `;
-      sessionList.innerHTML = '<div class="pm-session-empty pm-session-loading">Loading chats...</div>';
-      _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
-      if (!_drawerPageStateFor(selectedChannel.key).initialized) {
-        await _loadDrawerSessionPage({ channel: selectedChannel.key, loadSessions });
-      }
-      if (!isCurrent()) return;
-      const pageState = _drawerPageStateFor(selectedChannel.key);
-      head.innerHTML = `
-        <button class="pm-drawer-back" type="button" data-drawer-view="channels">${ICONS.back}<span>Channels</span></button>
-        <div class="pm-drawer-section-title">${escapeHtml(channelLabel)}</div>
-      `;
-      sessionList.innerHTML = _sessionPageHtml(pageState, `No ${escapeHtml(channelLabel)} chats yet.`);
-      _renderDrawerPinnedSessions(pageState);
-      _wireDrawerInfiniteScroll({ channel: selectedChannel.key, loadSessions, onOpenSession, searchSessions, onNewChat });
-    } else {
-      if (!_drawerPageStateFor('mobile').initialized) {
-        await _loadDrawerSessionPage({ channel: 'mobile', loadSessions });
-      }
-      if (!isCurrent()) return;
-      const pageState = _drawerPageStateFor('mobile');
-      head.innerHTML = `
-        <div class="pm-drawer-section-title">Sessions</div>
-        <button class="pm-session-row pm-channel-entry" type="button" data-drawer-view="channels">
-          <span class="pm-icon pm-channel-entry-icon">${ICONS.layers || ICONS.chat}</span>
-          <span class="pm-flex">Channels</span>
-          <span class="pm-chev">${ICONS.chev}</span>
-        </button>
-      `;
-      sessionList.innerHTML = _sessionPageHtml(pageState, 'No mobile chats yet.');
-      _renderDrawerPinnedSessions(pageState);
-      _wireDrawerInfiniteScroll({ channel: 'mobile', loadSessions, onOpenSession, searchSessions, onNewChat });
-    }
-
+    if (!_drawerPageStateFor().initialized) await _loadDrawerSessionPage({ loadSessions });
+    if (!isCurrent()) return;
+    const pageState = _drawerPageStateFor();
+    head.innerHTML = '<div class="pm-drawer-section-title">Sessions</div>';
+    sessionList.innerHTML = _sessionPageHtml(pageState, 'No chats yet.');
+    _renderDrawerPinnedSessions(pageState);
+    _wireDrawerInfiniteScroll({ loadSessions, onOpenSession, searchSessions, onNewChat });
     _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
   } catch (err) {
     if (!isCurrent()) return;
     console.warn('[mobile drawer] render failed', err);
-    const drawerState = _loadDrawerState();
-    if (head && drawerState.view === 'channels') {
-      head.innerHTML = `
-        <button class="pm-drawer-back" type="button" data-drawer-view="mobile">${ICONS.back}<span>Sessions</span></button>
-        <div class="pm-drawer-section-title">Channels</div>
-      `;
-    } else if (head && drawerState.view === 'channelChats') {
-      const label = _channelLabel(drawerState.channel) || drawerState.channel;
-      head.innerHTML = `
-        <button class="pm-drawer-back" type="button" data-drawer-view="channels">${ICONS.back}<span>Channels</span></button>
-        <div class="pm-drawer-section-title">${escapeHtml(label)}</div>
-      `;
-    } else if (head) {
-      head.innerHTML = '<div class="pm-drawer-section-title">Sessions</div>';
-    }
+    if (head) head.innerHTML = '<div class="pm-drawer-section-title">Sessions</div>';
     sessionList.innerHTML = '<div class="pm-session-empty">Could not load sessions.</div>';
   } finally {
     restoreScroll();
@@ -1440,23 +1336,6 @@ function _renderDrawerPinnedSessions(pageState) {
 }
 
 function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
-  _drawerEl.querySelectorAll('[data-drawer-view]').forEach((btn) => {
-    btn.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const view = btn.getAttribute('data-drawer-view') || 'mobile';
-      _saveDrawerState({ view, channel: view === 'channelChats' ? _loadDrawerState().channel : '' });
-      _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll: true });
-    });
-  });
-  _drawerEl.querySelectorAll('[data-channel-key]').forEach((btn) => {
-    btn.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      _saveDrawerState({ view: 'channelChats', channel: btn.getAttribute('data-channel-key') || '' });
-      _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll: true });
-    });
-  });
   _drawerEl.querySelector('[data-drawer-pinned-toggle]')?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1471,16 +1350,17 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
     closeDrawer();
     Promise.resolve(typeof onNewChat === 'function' ? onNewChat() : null)
       .then(() => {
-        _saveDrawerState({ view: 'mobile', channel: '' });
-        _resetDrawerPageState('mobile');
+        _saveDrawerState({ view: 'sessions' });
+        _resetDrawerPageState();
       })
       .catch(() => {});
   });
   _drawerEl.querySelectorAll('[data-session-id]').forEach((btn) => {
     const openSession = () => {
       const sessionId = btn.getAttribute('data-session-id');
+      const sessionChannel = btn.getAttribute('data-session-channel') || '';
       closeDrawer();
-      if (typeof onOpenSession === 'function') onOpenSession(sessionId);
+      if (typeof onOpenSession === 'function') onOpenSession(sessionId, sessionChannel);
     };
     // A native switch overlay can turn the end of an iOS scroll into a click.
     // Keep rows native so WebKit suppresses activation after a drag, and only
@@ -1493,29 +1373,26 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
 }
 
 async function _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchSessions, onNewChat } = {}) {
-  const channel = _currentDrawerSessionChannel();
-  const pageState = _drawerPageStateFor(channel);
+  const pageState = _drawerPageStateFor();
   if (pageState.loading || !pageState.hasMore) return;
-  _renderVisibleDrawerSessionPage(channel);
-  await _loadDrawerSessionPage({ channel, loadSessions });
-  _renderVisibleDrawerSessionPage(channel);
+  _renderVisibleDrawerSessionPage();
+  await _loadDrawerSessionPage({ loadSessions });
+  _renderVisibleDrawerSessionPage();
   _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
 }
 
-function _renderVisibleDrawerSessionPage(channel) {
+function _renderVisibleDrawerSessionPage() {
   const sessionList = _drawerEl?.querySelector('#pm-mobile-session-list');
   if (!sessionList) return;
-  const pageState = _drawerPageStateFor(channel);
-  const label = channel === 'mobile' ? 'mobile' : channel;
-  sessionList.innerHTML = _sessionPageHtml(pageState, channel === 'mobile' ? 'No mobile chats yet.' : `No ${escapeHtml(label)} chats yet.`);
+  const pageState = _drawerPageStateFor();
+  sessionList.innerHTML = _sessionPageHtml(pageState, 'No chats yet.');
   _renderDrawerPinnedSessions(pageState);
 }
 
-function _wireDrawerInfiniteScroll({ channel, loadSessions, onOpenSession, searchSessions, onNewChat }) {
+function _wireDrawerInfiniteScroll({ loadSessions, onOpenSession, searchSessions, onNewChat }) {
   if (!_drawerEl) return;
   _drawerEl.onscroll = () => {
     if (_drawerSearch) return;
-    if (_currentDrawerSessionChannel() !== channel) return;
     const nearBottom = _drawerEl.scrollTop + _drawerEl.clientHeight >= _drawerEl.scrollHeight - 96;
     if (nearBottom) _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchSessions, onNewChat });
   };
@@ -1553,8 +1430,9 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
       list.querySelectorAll('[data-session-id]').forEach((btn) => {
         const openSession = () => {
           const sessionId = btn.getAttribute('data-session-id');
+          const sessionChannel = btn.getAttribute('data-session-channel') || '';
           closeDrawer();
-          if (typeof onOpenSession === 'function') onOpenSession(sessionId);
+          if (typeof onOpenSession === 'function') onOpenSession(sessionId, sessionChannel);
         };
         btn.addEventListener('click', () => {
           pmHaptic(10);
@@ -1606,10 +1484,9 @@ async function _localSessionSearchFallback(loadSessions, query) {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return [];
   const data = await loadSessions().catch(() => null);
-  const all = [
-    ...(Array.isArray(data?.mobile) ? data.mobile : []),
-    ...(Array.isArray(data?.channels) ? data.channels.flatMap(c => Array.isArray(c.sessions) ? c.sessions : []) : []),
-  ];
+  const all = Array.isArray(data?.sessions)
+    ? data.sessions
+    : (Array.isArray(data?.mobile) ? data.mobile : []);
   return all.filter((s) => !_isDrawerSideChatSession(s)).filter((s) => {
     const title = String(s?.title || '').toLowerCase();
     const preview = String(s?.preview || '').toLowerCase();
@@ -1629,29 +1506,6 @@ function _sessionStateMeta(session) {
   };
 }
 
-function _channelButtonHtml(channel) {
-  const key = String(channel?.key || '');
-  const label = String(channel?.label || key || 'Channel');
-  const sessions = Array.isArray(channel?.sessions) ? channel.sessions : [];
-  const total = Math.max(sessions.length, Math.floor(Number(channel?.total || 0) || 0));
-  const workingCount = sessions.filter((s) => s?.activeRun === true).length;
-  const unreadCount = sessions.filter((s) => s?.mobileUnread === true && s?.activeRun !== true).length;
-  const channelStateClass = workingCount ? ' is-working' : (unreadCount ? ' is-unread' : '');
-  const channelStateLabel = workingCount
-    ? `<span class="pm-session-state">${workingCount === 1 ? 'Working' : `${workingCount} working`}</span>`
-    : (unreadCount ? `<span class="pm-session-state">${unreadCount === 1 ? 'Unread' : `${unreadCount} unread`}</span>` : '');
-  const iconSvg = key === 'web' ? ICONS.monitor : key === 'terminal' ? ICONS.clipboard : ICONS.chat;
-  const countLabel = total ? `${total} chat${total === 1 ? '' : 's'}` : 'Open chats';
-  return `
-    <button class="pm-channel-card${channelStateClass}" type="button" data-channel-key="${escapeHtml(key)}" data-channel-state="${workingCount ? 'working' : (unreadCount ? 'unread' : 'idle')}">
-      <span class="pm-channel-icon">${iconSvg}</span>
-      <span class="pm-flex"><strong>${escapeHtml(label)}</strong><em>${escapeHtml(countLabel)}</em></span>
-      ${channelStateLabel}
-      <span class="pm-chev">${ICONS.chev}</span>
-    </button>
-  `;
-}
-
 function _sessionButtonHtml(session) {
   const title = String(session?.title || session?.id || 'New chat');
   const preview = String(session?.preview || '').trim();
@@ -1660,17 +1514,21 @@ function _sessionButtonHtml(session) {
   const visiblePreview = normalizedPreview && normalizedPreview !== normalizedTitle
     ? preview
     : (preview ? '' : 'No messages yet');
-  const lastMessageAt = Number(session?.lastMessageAt || session?.lastActiveAt || 0);
   const state = _sessionStateMeta(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
+  const roomRoster = Array.isArray(session?.voiceRoom?.participants)
+    ? session.voiceRoom.participants.map((participant) => String(participant?.label || '').trim()).filter(Boolean).join(' · ')
+    : '';
+  const origin = _sessionOriginLabel(session);
   return `
-    <button class="pm-session-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-state="${state.stateName}"${ariaCurrent}>
+    <button class="pm-session-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-channel="${escapeHtml(session?.channel || '')}" data-session-state="${state.stateName}"${ariaCurrent}>
       <span class="pm-session-row-top"><span class="pm-session-title">${escapeHtml(title)}</span>${state.stateLabel}</span>
       <span class="pm-session-meta-row">
+        ${roomRoster ? `<span class="pm-session-preview">${escapeHtml(roomRoster)}</span>` : ''}
+        ${origin ? `<span class="pm-session-preview">From: ${escapeHtml(origin)}</span>` : ''}
         ${visiblePreview ? `<span class="pm-session-preview">${escapeHtml(visiblePreview)}</span>` : ''}
-        <span class="pm-session-time">${escapeHtml(lastMessageAt ? timeAgo(lastMessageAt) : _formatSessionDate(session.createdAt))}</span>
       </span>
     </button>
   `;
@@ -1678,7 +1536,7 @@ function _sessionButtonHtml(session) {
 
 function _searchResultButtonHtml(session, query) {
   const title = String(session?.title || session?.id || 'New chat');
-  const channel = _channelLabel(session?.channel || session?.source || '');
+  const origin = _sessionOriginLabel(session);
   const role = String(session?.matchedRole || '').toLowerCase();
   const label = role === 'assistant' ? 'Prom' : role === 'user' ? 'You' : 'Match';
   const matched = String(session?.matchedContent || session?.preview || '').trim();
@@ -1689,9 +1547,9 @@ function _searchResultButtonHtml(session, query) {
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
   const projectLabel = session?.projectName ? ' · ' + escapeHtml(session.projectName) : '';
   return `
-    <button class="pm-session-row pm-search-result-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-state="${state.stateName}"${ariaCurrent}>
+    <button class="pm-session-row pm-search-result-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-channel="${escapeHtml(session?.channel || '')}" data-session-state="${state.stateName}"${ariaCurrent}>
       <span class="pm-session-row-top"><span class="pm-session-title">${escapeHtml(title)}</span>${state.stateLabel}</span>
-      <span class="pm-search-meta">${escapeHtml(channel || 'Chat')}${projectLabel}</span>
+      <span class="pm-search-meta">${escapeHtml(origin || 'Chat')}${projectLabel}</span>
       <span class="pm-session-preview"><strong>${escapeHtml(label)}:</strong> ${snippet}</span>
     </button>
   `;
@@ -1706,6 +1564,15 @@ function _channelLabel(channel) {
   if (ch === 'whatsapp') return 'WhatsApp';
   if (ch === 'terminal') return 'CLI';
   return ch ? ch.replace(/[_-]+/g, ' ') : '';
+}
+
+function _sessionOriginLabel(session) {
+  const origin = session?.lastOrigin && typeof session.lastOrigin === 'object' ? session.lastOrigin : null;
+  const label = String(origin?.label || '').trim();
+  if (label) return label;
+  const channel = String(origin?.channel || session?.channel || session?.source || '').trim().toLowerCase();
+  if (channel === 'web') return 'Desktop';
+  return _channelLabel(channel);
 }
 
 function _escapeRegExp(text) {
@@ -1739,17 +1606,17 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
 
   const sheet = document.createElement('div');
   sheet.id = 'pm-sess-sheet';
-  sheet.className = 'pm-msheet';
+  sheet.className = 'pm-msheet pm-msheet-session-context';
   sheet.setAttribute('role', 'dialog');
   sheet.setAttribute('aria-modal', 'true');
   sheet.setAttribute('aria-label', 'Chat options');
 
   const pinLabel = pinned ? 'Unpin from top' : 'Pin to top';
-  const pinCheck = pinned ? '<span class="pm-sess-pinned-check">&#x1F4CC;</span>' : '';
   const titleSafe = escapeHtml(sessionTitle || 'Chat');
   const pinIconSvg = ICONS.pin;
   const trashIconSvg = ICONS.trash;
-  const wandIconSvg = ICONS.wand || ICONS.doc;
+  const renameIconSvg = ICONS.compose;
+  const unreadIconSvg = ICONS.unread;
 
   sheet.innerHTML =
     '<div class="pm-msheet-handle"></div>' +
@@ -1759,14 +1626,17 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
     '</div>' +
     '<div class="pm-msheet-body" id="pm-sess-sheet-body">' +
       '<div class="pm-msheet-rows">' +
-        '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="rename">' +
-          '<span class="pm-sess-action-icon pm-i">' + wandIconSvg + '</span>' +
-          '<span class="pm-msheet-row-label">Rename</span>' +
-        '</button>' +
         '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="pin">' +
           '<span class="pm-sess-action-icon pm-i">' + pinIconSvg + '</span>' +
           '<span class="pm-msheet-row-label">' + pinLabel + '</span>' +
-          pinCheck +
+        '</button>' +
+        '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="rename">' +
+          '<span class="pm-sess-action-icon pm-i">' + renameIconSvg + '</span>' +
+          '<span class="pm-msheet-row-label">Rename</span>' +
+        '</button>' +
+        '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="unread">' +
+          '<span class="pm-sess-action-icon pm-i pm-sess-unread-icon">' + unreadIconSvg + '</span>' +
+          '<span class="pm-msheet-row-label">Mark as unread</span>' +
         '</button>' +
         '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" data-sess-action="delete">' +
           '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
@@ -1778,23 +1648,6 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
   document.body.appendChild(scrim);
   document.body.appendChild(sheet);
   requestAnimationFrame(function() {
-    if (anchorRect) {
-      const margin = 10;
-      const width = Math.min(360, window.innerWidth - (margin * 2));
-      const height = sheet.offsetHeight || 230;
-      const left = Math.max(margin, Math.min(anchorRect.left, window.innerWidth - width - margin));
-      let top = anchorRect.bottom + margin;
-      let origin = 'top left';
-      if (top + height > window.innerHeight - margin) {
-        top = anchorRect.top - height - margin;
-        origin = 'bottom left';
-      }
-      top = Math.max(margin, Math.min(top, window.innerHeight - height - margin));
-      sheet.style.setProperty('--pm-msheet-width', `${width}px`);
-      sheet.style.setProperty('--pm-msheet-left', `${left}px`);
-      sheet.style.setProperty('--pm-msheet-top', `${top}px`);
-      sheet.style.transformOrigin = origin;
-    }
     scrim.classList.add('open');
     sheet.classList.add('open');
   });
@@ -1819,13 +1672,31 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
       var nowPinned = await _togglePin(sessionId);
       close();
       if (_drawerEl && _drawerCallbacks) {
-        _resetDrawerPageState(_currentDrawerSessionChannel());
+        _resetDrawerPageState();
         _renderDrawerSessions(_drawerCallbacks).catch(function() {});
       }
       try { if (window.pmToast) window.pmToast(nowPinned ? 'Chat pinned to top' : 'Chat unpinned', 'success'); } catch(e) {}
     } catch (err) {
       pinBtn.disabled = false;
       try { if (window.pmToast) window.pmToast((err && err.message) || 'Could not update pin', 'error'); } catch(e) {}
+    }
+  });
+
+  var unreadBtn = sheet.querySelector('[data-sess-action="unread"]');
+  if (unreadBtn) unreadBtn.addEventListener('click', async function() {
+    pmHaptic(10);
+    unreadBtn.disabled = true;
+    try {
+      await _markSessionUnread(sessionId);
+      close();
+      if (_drawerEl && _drawerCallbacks) {
+        _resetDrawerPageState();
+        _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+      }
+      try { if (window.pmToast) window.pmToast('Chat marked as unread', 'success'); } catch(e) {}
+    } catch (err) {
+      unreadBtn.disabled = false;
+      try { if (window.pmToast) window.pmToast((err && err.message) || 'Could not mark chat as unread', 'error'); } catch(e) {}
     }
   });
 
@@ -1932,7 +1803,7 @@ function _openSessionRenameSheet(sessionId, currentTitle, callbacks) {
       pmHaptic(10);
       close();
       if (_drawerEl && _drawerCallbacks) {
-        _resetDrawerPageState(_currentDrawerSessionChannel());
+        _resetDrawerPageState();
         _renderDrawerSessions(_drawerCallbacks).catch(function() {});
       }
       try { window.dispatchEvent(new CustomEvent('pm-session-renamed', { detail: { sessionId: sessionId, title: newTitle } })); } catch(e) {}
@@ -2017,7 +1888,7 @@ function _openSessionDeleteConfirmSheet(sessionId, sessionTitle, callbacks) {
       } catch(e) {}
       close();
       if (_drawerEl && _drawerCallbacks) {
-        _resetDrawerPageState(_currentDrawerSessionChannel());
+        _resetDrawerPageState();
         _renderDrawerSessions(_drawerCallbacks).catch(function() {});
       }
       try { window.dispatchEvent(new CustomEvent('pm-session-deleted', { detail: { sessionId: sessionId } })); } catch(e) {}

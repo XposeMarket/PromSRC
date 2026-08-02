@@ -16,7 +16,7 @@ import { api } from '../api.js';
 import { escHtml, renderMd, showToast, timeAgo, buildVisualIframe, buildVisualSrcdoc, bgtToast, showConfirm } from '../utils.js';
 import { wsEventBus, wsSend } from '../ws.js';
 import { formatModelDisplayName } from '../model-display.js';
-import { getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
+import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
 import { CREATIVE_LIBRARY_PACKS, CREATIVE_SIZE_PRESETS, CREATIVE_STYLE_PRESETS, createSceneDocument, applySceneGraphOps, executeSceneGraphOps, buildSceneSelectionContext, parseCreativeOpsFromText, getCreativePatchInstruction, resolveElementAtTime, measureTextBlock, buildTextFontSpec, getCreativeElementLibrary, getCreativeAnimationPresetCatalog, getEnabledCreativeLibraryIds, getCreativeLibraryPackCatalog, setCreativeLibraryRuntimePacks, validateCreativeSceneLayout } from '../components/creative/sceneGraph.js';
 import { normalizeCreativeAudioTrackConfig as normalizeCreativeAudioTrackConfigEngine, hasCreativeAudioTrackConfig as hasCreativeAudioTrackConfigEngine, stopCreativeAudioPreview as stopCreativeAudioPreviewEngine, ensureCreativeAudioPreviewElement as ensureCreativeAudioPreviewElementEngine, syncCreativeAudioPreviewToTimeline as syncCreativeAudioPreviewToTimelineEngine, getCreativeAudioTrackWindow as getCreativeAudioTrackWindowEngine, waitForCreativeMediaReady as waitForCreativeMediaReadyEngine, createCreativeExportAudioSession as createCreativeExportAudioSessionEngine, fetchCreativeAudioAnalysis } from '../components/creative/audioEngine.js';
 import { normalizeCreativeRenderJobStatus as normalizeCreativeRenderJobStatusEngine, isCreativeRenderJobTerminalStatus as isCreativeRenderJobTerminalStatusEngine, sortCreativeRenderJobEntries as sortCreativeRenderJobEntriesEngine, createCreativeRenderJobClient, createCreativeRenderWorkerController } from '../components/creative/renderJobs.js';
@@ -49,6 +49,8 @@ const API = window.API || '';
 const CHAT_SESSIONS_KEY = window.CHAT_SESSIONS_KEY || 'prometheus_chat_sessions_v1';
 const AGENT_SESSION_KEY = window.AGENT_SESSION_KEY || 'prometheus_agent_session_id';
 const ACTIVE_CHAT_SESSION_KEY = window.ACTIVE_CHAT_SESSION_KEY || 'prometheus_active_chat_session_id';
+const DESKTOP_ACTIVE_CHAT_RUNS_KEY = 'prometheus_desktop_active_chat_runs_v1';
+const DESKTOP_ACTIVE_CHAT_RUN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const THEME_KEY = window.THEME_KEY || 'prometheus_theme';
 const SIDE_CHAT_STATE_KEY = 'prometheus_side_chats_v1';
 const MAX_QUEUED_PROMPTS = window.MAX_QUEUED_PROMPTS || 8;
@@ -206,6 +208,9 @@ if (window._sessionStreamState === undefined) window._sessionStreamState = {};
 if (window._sessionQueuedPrompts === undefined) window._sessionQueuedPrompts = {};
 if (window._chatSendLocks === undefined) window._chatSendLocks = {};
 if (window._localMainChatClientRequestIds === undefined) window._localMainChatClientRequestIds = {};
+if (window._mainChatStreamActiveIdBySession === undefined) window._mainChatStreamActiveIdBySession = {};
+if (window._desktopActiveChatRunMemory === undefined) window._desktopActiveChatRunMemory = {};
+if (window._desktopPageLifecycleDisconnectedSessions === undefined) window._desktopPageLifecycleDisconnectedSessions = {};
 if (window._editRerunAbortResetSessions === undefined) window._editRerunAbortResetSessions = new Set();
 if (window._voicePendingTurns === undefined) window._voicePendingTurns = [];
 if (window.sideChatLinks === undefined) window.sideChatLinks = [];
@@ -570,13 +575,20 @@ function rememberLocalMainChatRequest(sessionId, clientRequestId) {
   map[sid] = bySession;
 }
 
-function forgetLocalMainChatRequest(sessionId, clientRequestId) {
+function forgetLocalMainChatRequest(sessionId, clientRequestId, options = {}) {
   const sid = String(sessionId || '').trim();
   const cid = String(clientRequestId || '').trim();
   if (!sid || !cid) return;
-  setTimeout(() => {
+  const remove = () => {
     const bySession = window._localMainChatClientRequestIds?.[sid];
     if (bySession) delete bySession[cid];
+  };
+  if (options.immediate === true) {
+    remove();
+    return;
+  }
+  setTimeout(() => {
+    remove();
   }, 15000);
 }
 
@@ -585,6 +597,71 @@ function isLocalMainChatRequest(sessionId, clientRequestId) {
   const cid = String(clientRequestId || '').trim();
   if (!sid || !cid) return false;
   return !!window._localMainChatClientRequestIds?.[sid]?.[cid];
+}
+
+function readDesktopActiveChatRuns() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DESKTOP_ACTIVE_CHAT_RUNS_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function readDesktopActiveChatRun(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  const memoryRun = window._desktopActiveChatRunMemory?.[sid];
+  if (memoryRun && typeof memoryRun === 'object') return memoryRun;
+  const run = readDesktopActiveChatRuns()[sid];
+  if (run && typeof run === 'object') window._desktopActiveChatRunMemory[sid] = run;
+  return run && typeof run === 'object' ? run : null;
+}
+
+function rememberDesktopActiveChatRun(sessionId, patch = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  const { forcePersist = false, ...runPatch } = patch || {};
+  const previous = readDesktopActiveChatRun(sid) || {};
+  const now = Date.now();
+  const next = {
+    ...previous,
+    ...runPatch,
+    sessionId: sid,
+    updatedAt: now,
+  };
+  const shouldPersist = forcePersist === true
+    || runPatch.disconnected === true
+    || !Number(previous.persistedAt || 0)
+    || now - Number(previous.persistedAt || 0) >= 750;
+  window._desktopActiveChatRunMemory[sid] = next;
+  if (shouldPersist) {
+    const runs = readDesktopActiveChatRuns();
+    const cutoff = now - DESKTOP_ACTIVE_CHAT_RUN_MAX_AGE_MS;
+    Object.keys(runs).forEach((key) => {
+      if (Number(runs[key]?.updatedAt || 0) > 0 && Number(runs[key].updatedAt) < cutoff) delete runs[key];
+    });
+    runs[sid] = next;
+    next.persistedAt = now;
+    try { localStorage.setItem(DESKTOP_ACTIVE_CHAT_RUNS_KEY, JSON.stringify(runs)); } catch {}
+  }
+  return next;
+}
+
+function clearDesktopActiveChatRun(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  delete window._desktopActiveChatRunMemory?.[sid];
+  const runs = readDesktopActiveChatRuns();
+  if (!Object.prototype.hasOwnProperty.call(runs, sid)) return;
+  delete runs[sid];
+  try { localStorage.setItem(DESKTOP_ACTIVE_CHAT_RUNS_KEY, JSON.stringify(runs)); } catch {}
+}
+
+function isDesktopChatTransportDisconnect(error) {
+  if (error?.desktopStreamDisconnected === true) return true;
+  const text = String(error?.message || error || '').trim();
+  return /failed to fetch|load failed|network(?:error| error| request failed)|fetch failed|err_network_changed|connection reset|socket hang up|stream ended before completion|terminated/i.test(text);
 }
 
 async function fetchJsonWithTimeout(url, timeoutMs = 2500) {
@@ -1096,11 +1173,15 @@ if (!window.__promChatContextWindowHandlersInstalled) {
     if (!wrap || !wrap.contains(event.target)) closeChatContextWindowPopover();
     const voiceWrap = document.querySelector('.voice-settings-wrap');
     if (!voiceWrap || !voiceWrap.contains(event.target)) closeVoiceSettingsPopover();
+    if (desktopVoiceRoomPopoverOpen && desktopVoiceOrbDock && !desktopVoiceOrbDock.contains(event.target)) {
+      setDesktopVoiceRoomPopoverOpen(false);
+    }
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       closeChatContextWindowPopover();
       closeVoiceSettingsPopover();
+      setDesktopVoiceRoomPopoverOpen(false);
     }
   });
   setInterval(() => refreshChatContextWindow().catch(() => {}), 15000);
@@ -1135,6 +1216,9 @@ function makeEmptyStreamState() {
     forceAppendAssistantAfterInterruption: false,
     pendingInterruptionWorkflowGroupId: '',
     pendingInterruptionWorkflowLabel: '',
+    pendingInterruptionWorkflowPresentationCleared: false,
+    steerWorkflowGroupIds: [],
+    steerTimerAnchored: false,
   };
 }
 
@@ -5418,6 +5502,64 @@ function editQueuedPrompt(index) {
   }
 }
 
+function _collapseChatSteerWorkflowPresentation(sessionId, workflowGroupId, options = {}) {
+  const sid = String(sessionId || '').trim();
+  const groupId = String(workflowGroupId || '').trim();
+  if (!sid || !/^chat_steer_/i.test(groupId)) return false;
+  const sess = getChatSessionById(sid);
+  if (!sess || !Array.isArray(sess.history)) return false;
+
+  let changed = false;
+  const nextHistory = [];
+  for (const message of sess.history) {
+    if (String(message?.workflowGroupId || '') !== groupId) {
+      nextHistory.push(message);
+      continue;
+    }
+    if (isAssistantLikeMessage(message) && String(message.workflowPart || '') === 'before_interruption') {
+      changed = true;
+      continue;
+    }
+    const nextMessage = { ...message };
+    delete nextMessage.workflowGroupId;
+    delete nextMessage.workflowPart;
+    delete nextMessage.workflowLabel;
+    if (String(nextMessage.channelLabel || '').toLowerCase() === 'steer') delete nextMessage.channelLabel;
+    if (String(nextMessage.messageKind || '') === 'steer_continuation') delete nextMessage.messageKind;
+    changed = true;
+    nextHistory.push(nextMessage);
+  }
+  if (!changed) return false;
+  // Keep the same array object: the in-flight stream holds a reference to it
+  // while its final assistant turn is being appended.
+  sess.history.splice(0, sess.history.length, ...nextHistory);
+  if (window.activeChatSessionId === sid) window.chatHistory = sess.history;
+  if (options.persist !== false) {
+    persistSession(sid);
+    syncSessionHistoryToServerById(sid, sess.history).catch(() => {});
+  }
+  return true;
+}
+
+function _chatSteerWorkflowGroupIds(streamState) {
+  const ids = Array.isArray(streamState?.steerWorkflowGroupIds) ? streamState.steerWorkflowGroupIds : [];
+  const pending = String(streamState?.pendingInterruptionWorkflowGroupId || '').trim();
+  return [...new Set([...ids, pending].map((id) => String(id || '').trim()).filter((id) => /^chat_steer_/i.test(id)))];
+}
+
+function _settlePendingChatSteerPresentation(sessionId, streamState) {
+  const groupIds = _chatSteerWorkflowGroupIds(streamState);
+  if (!groupIds.length) return false;
+  streamState.pendingInterruptionWorkflowPresentationCleared = true;
+  const changed = groupIds.reduce((changed, groupId) => (
+    _collapseChatSteerWorkflowPresentation(sessionId, groupId) || changed
+  ), false);
+  // Final-answer rendering owns the timer again after the temporary split is
+  // gone, so it appears above the final response rather than below a steer.
+  streamState.steerTimerAnchored = false;
+  return changed;
+}
+
 function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
   const sid = String(sessionId || '').trim();
   const sess = getChatSessionById(sid);
@@ -5427,14 +5569,32 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
   const st = getSessionStreamState(sid);
   const startIndex = Number.isFinite(Number(st?.currentTurnStartIndex)) ? Math.max(0, Number(st.currentTurnStartIndex)) : 0;
   const entries = sess.processLog.slice(startIndex);
+  const liveTraceEntries = Array.isArray(st?.liveTraceEntries) ? st.liveTraceEntries.slice() : [];
   const groupId = `chat_steer_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const text = String(steerText || '').trim();
-  if (entries.length) {
+  const workStartedAt = Number(st?.turnStartedAt || Date.now()) || Date.now();
+  const timerAnchor = st?.steerTimerAnchored !== true;
+
+  // Record the steer outside either trace segment, then use the new process
+  // boundary for the continuation. This prevents old tool events from being
+  // replayed below the steered user message.
+  addSessionProcessEntry(sid, 'warn', `Chat steer queued: ${text.slice(0, 180)}`, {
+    actor: 'Chat Steer',
+    eventId: data?.eventId,
+    runtimeId: data?.runtimeId,
+  });
+  const continuationStartIndex = sess.processLog.length;
+
+  if (st || entries.length || liveTraceEntries.length) {
     sess.history.push({
       role: 'assistant',
-      content: 'Tool stream continued below.',
+      content: '',
       timestamp: Date.now(),
+      workStartedAt,
+      liveTraceEntries,
       processEntries: entries,
+      _steerTimerAnchor: timerAnchor,
+      suppressWorkTimer: !timerAnchor,
       workflowGroupId: groupId,
       workflowPart: 'before_interruption',
       workflowLabel: 'Tool stream before steer',
@@ -5455,6 +5615,14 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
     st.forceAppendAssistantAfterInterruption = true;
     st.pendingInterruptionWorkflowGroupId = groupId;
     st.pendingInterruptionWorkflowLabel = 'Response after steer';
+    st.pendingInterruptionWorkflowPresentationCleared = false;
+    st.steerWorkflowGroupIds = _chatSteerWorkflowGroupIds(st).concat(groupId).filter((id, index, all) => all.indexOf(id) === index);
+    st.steerTimerAnchored = true;
+    st.currentTurnStartIndex = continuationStartIndex;
+    st.liveTraceEntries = [];
+    st.currentPreflightStatus = '';
+    st.currentProgressLines = [];
+    st.currentProgressThinkingText = '';
   }
   persistSession(sid);
   syncSessionHistoryToServerById(sid, sess.history).catch(() => {});
@@ -5462,11 +5630,6 @@ function appendChatSteerWorkflowSplit(sessionId, steerText, data = {}) {
     window.chatHistory = sess.history;
     renderChatMessages();
   }
-  addSessionProcessEntry(sid, 'warn', `Chat steer queued: ${text.slice(0, 180)}`, {
-    actor: 'Chat Steer',
-    eventId: data?.eventId,
-    runtimeId: data?.runtimeId,
-  });
   return true;
 }
 
@@ -5570,7 +5733,7 @@ function updateQueuedPromptUI() {
   if (input) {
     input.placeholder = window.isThinking
       ? 'Assistant is responding. Press Enter/Send to queue next prompt.'
-      : 'Type a message... (Enter to send, Shift+Enter for newline)';
+      : 'Send Prometheus a message';
   }
   renderQueuedPromptsPanel();
   updateBackgroundSpawnDockOffset();
@@ -5964,6 +6127,9 @@ function createEmptyChatSession(id = generateSessionId()) {
     id,
     title: 'New chat',
     autoTitleLocked: false,
+    channel: 'web',
+    source: 'web',
+    voiceRoom: null,
     history: [],
     processLog: [],
     creativeMode: null,
@@ -6048,6 +6214,7 @@ function assistantWorkStartedAt(msg) {
 }
 
 function renderAssistantWorkTimer(msg, { active = false, startedAt = 0 } = {}) {
+  if (msg?.suppressWorkTimer === true) return '';
   const start = Number(startedAt || assistantWorkStartedAt(msg) || 0);
   if (!start) return '';
   const endedAt = Number(msg?.workEndedAt || 0);
@@ -6301,6 +6468,7 @@ function appendVoiceInterruptionWorkflowSplit(sessionId, transcript, data) {
     st.forceAppendAssistantAfterInterruption = true;
     st.pendingInterruptionWorkflowGroupId = groupId;
     st.pendingInterruptionWorkflowLabel = asSteer ? 'Response after steer' : 'Interruption response';
+    st.pendingInterruptionWorkflowPresentationCleared = false;
   }
   persistSession(sid);
   if (window.activeChatSessionId === sid) {
@@ -6449,6 +6617,7 @@ function normalizeStoredSession(session) {
     mainChatGoalHistory: Array.isArray(session?.mainChatGoalHistory) ? session.mainChatGoalHistory : [],
     sideChat: session?.sideChat === true,
     parentSessionId: session?.parentSessionId || null,
+    voiceRoom: session?.voiceRoom && typeof session.voiceRoom === 'object' ? session.voiceRoom : null,
   };
 }
 
@@ -6500,6 +6669,9 @@ function sessionStubFromServer(s) {
     createdAt: s.createdAt || Date.now(),
     updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
     lastMessageAt: s.lastMessageAt || s.lastActiveAt || s.createdAt || Date.now(),
+    channel,
+    voiceRoom: s.voiceRoom && typeof s.voiceRoom === 'object' ? s.voiceRoom : null,
+    lastOrigin: s.lastOrigin && typeof s.lastOrigin === 'object' ? s.lastOrigin : undefined,
     projectId: projectId || null,
     projectName: projectId ? (String(s.projectName || '').trim() || null) : null,
     source: projectId ? 'project' : (channel !== 'web' ? channel : undefined),
@@ -6540,6 +6712,9 @@ function mergeServerSessionSummaries(summaries) {
         createdAt: existing.createdAt || serverStub.createdAt,
         updatedAt: Math.max(localUpdatedAt, serverUpdatedAt) || serverStub.updatedAt,
         lastMessageAt: Math.max(localLastMessageAt, serverLastMessageAt) || existing.lastMessageAt || serverStub.lastMessageAt || 0,
+        channel: serverStub.channel || existing.channel,
+        voiceRoom: serverStub.voiceRoom || existing.voiceRoom || null,
+        lastOrigin: serverStub.lastOrigin || existing.lastOrigin,
         source: serverStub.source || existing.source,
         projectId: serverStub.projectId || existing.projectId || null,
         projectName: serverStub.projectName || existing.projectName || null,
@@ -6619,6 +6794,10 @@ async function _loadSessionFromServer(id, options = {}) {
       sess.source = channel;
       sess.automated = true;
     }
+    sess.channel = channel || sess.channel || 'web';
+    sess.voiceRoom = s.voiceRoom && typeof s.voiceRoom === 'object'
+      ? s.voiceRoom
+      : (sess.voiceRoom || null);
     applyAutoSessionTitleOnce(sess, sess.history);
     sess.createdAt = s.createdAt || sess.createdAt;
     sess.updatedAt = s.lastActiveAt || sess.updatedAt;
@@ -6636,7 +6815,7 @@ async function loadChatSessions() {
   setChatSessions(loadStoredSessionStubsForStartup());
   let serverSessions = [];
   try {
-    const data = await fetchJsonWithTimeout('/api/sessions?limit=160&offset=0', 2500);
+    const data = await fetchJsonWithTimeout('/api/sessions?scope=all&includeAutomated=1&limit=160&offset=0', 2500);
     if (data) {
       serverSessions = Array.isArray(data.sessions) ? data.sessions : [];
     }
@@ -6646,26 +6825,37 @@ async function loadChatSessions() {
     mergeServerSessionSummaries(serverSessions);
   }
 
-  const startupSessionId = generateSessionId();
-  setDraftChatSession(startupSessionId);
+  const rememberedSessionId = recallActiveChatSessionId();
+  const rememberedSession = rememberedSessionId ? getChatSessionById(rememberedSessionId) : null;
+  const rememberedRun = rememberedSessionId ? readDesktopActiveChatRun(rememberedSessionId) : null;
+  const shouldRestoreRememberedSession = !!rememberedSessionId && !!rememberedSession && (
+    !!rememberedRun
+    || rememberedSession.activeRun === true
+    || (String(rememberedSession.title || '').trim() && String(rememberedSession.title || '').trim() !== 'New chat')
+  );
+  const startupSessionId = shouldRestoreRememberedSession ? rememberedSessionId : generateSessionId();
+  if (shouldRestoreRememberedSession) {
+    window.activeChatSessionId = startupSessionId;
+    setAgentSessionId(startupSessionId);
+    await _loadSessionFromServer(startupSessionId, { force: true, historyLimit: 300, processLimit: 500 });
+  } else {
+    setDraftChatSession(startupSessionId);
+  }
   if (!window.agentSessionId || window.agentSessionId !== window.activeChatSessionId) setAgentSessionId(window.activeChatSessionId);
   saveChatSessions();
   syncActiveChat();
+  if (isDesktopVoiceRoomSession(window.activeChatSessionId)) {
+    syncDesktopVoiceRoomForSession(window.activeChatSessionId, getChatSessionById(window.activeChatSessionId));
+  } else {
+    resetDesktopVoiceRoomState();
+  }
 
-  // Load terminal sessions from the server
-  loadTerminalSessions();
-
-  // Set up 30-second refresh interval for terminal sessions
-  if (window.terminalSessionRefreshTimer) clearInterval(window.terminalSessionRefreshTimer);
-  window.terminalSessionRefreshTimer = setInterval(() => {
-    loadTerminalSessions();
-  }, 30000);
-
-  // Periodic session list refresh to surface cross-channel sessions missed by WS
+  // Periodically refresh one unified timeline to surface activity from every
+  // connected transport if a websocket frame was missed.
   if (window._sessionListRefreshTimer) clearInterval(window._sessionListRefreshTimer);
   window._sessionListRefreshTimer = setInterval(async () => {
     try {
-      const data = await fetchJsonWithTimeout('/api/sessions?limit=160&offset=0', 2500);
+      const data = await fetchJsonWithTimeout('/api/sessions?scope=all&includeAutomated=1&limit=160&offset=0', 2500);
       if (data) {
         const svr = Array.isArray(data.sessions) ? data.sessions : [];
         if (svr.length > 0) {
@@ -6966,7 +7156,7 @@ function syncActiveChat() {
     const st = getSessionStreamState(sess.id) || resetSessionStreamState(sess.id);
     st.currentTurnStartIndex = inferCurrentTurnProcessStartIndex(sess);
     st.turnStartedAt = Number(st.turnStartedAt || getSessionLastMessageAt(sess) || Date.now());
-    catchUpMainChatStream(sess.id).catch(() => {});
+    recoverDesktopMainChatSession(sess.id, { recovery: true, fullRefresh: false }).catch(() => {});
   }
   if (sess) {
     if (window._sessionThinking && window._sessionThinking[sess.id]) {
@@ -7069,21 +7259,17 @@ function persistActiveChat() {
 
 // Load terminal sessions from the server
 async function loadTerminalSessions() {
-  const channels = ['terminal', 'mobile', 'telegram', 'discord', 'whatsapp'];
   try {
-    const results = await Promise.all(channels.map(async (channel) => {
-      const res = await fetch(`/api/sessions?channel=${encodeURIComponent(channel)}`);
-      const data = await res.json();
-      return [channel, Array.isArray(data.sessions) ? data.sessions : []];
-    }));
-    const byChannel = Object.fromEntries(results);
-    window.channelSessionsByChannel = byChannel;
-    window.terminalSessions = byChannel.terminal || [];
-    window.mobileSessions = byChannel.mobile || [];
-    window.telegramSessions = byChannel.telegram || [];
-    window.discordSessions = byChannel.discord || [];
-    window.whatsappSessions = byChannel.whatsapp || [];
-    mergeServerSessionSummaries(channels.flatMap((channel) => byChannel[channel] || []));
+    const res = await fetch('/api/sessions?scope=all&includeAutomated=1&limit=200&offset=0');
+    const data = await res.json();
+    const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+    window.channelSessionsByChannel = {};
+    window.terminalSessions = [];
+    window.mobileSessions = [];
+    window.telegramSessions = [];
+    window.discordSessions = [];
+    window.whatsappSessions = [];
+    mergeServerSessionSummaries(sessions);
     saveChatSessions();
   } catch {
     window.terminalSessions = [];
@@ -7115,8 +7301,12 @@ async function openTerminalSession(id, source = 'terminal') {
           role: m.role === 'user' ? 'user' : 'assistant',
           content: m.content,
           timestamp: m.timestamp,
-          channel: source,
-          channelLabel: source,
+          channel: m.channel || source,
+          channelLabel: m.channelLabel || source,
+          origin: m.origin && typeof m.origin === 'object' ? m.origin : undefined,
+          source: m.source,
+          voiceSpeaker: m.voiceSpeaker,
+          voiceTargetKey: m.voiceTargetKey,
         })),
         processLog: [],
         creativeMode: normalizeCreativeMode(s.creativeMode),
@@ -7132,14 +7322,17 @@ async function openTerminalSession(id, source = 'terminal') {
         createdAt: s.createdAt,
         updatedAt: s.lastActiveAt,
         lastMessageAt: s.lastMessageAt || getSessionLastMessageAt({ history: (s.history || []), createdAt: s.createdAt, updatedAt: s.lastActiveAt }),
-        automated: false,
+        automated: source !== 'web',
         source,
+        voiceRoom: s.voiceRoom || null,
       };
       window.chatSessions.unshift(existing);
       saveChatSessions();
     } else {
       existing.source = source !== 'web' ? source : existing.source;
+      existing.channel = source || existing.channel || 'web';
       existing.automated = source !== 'web' ? true : existing.automated;
+      existing.voiceRoom = s.voiceRoom && typeof s.voiceRoom === 'object' ? s.voiceRoom : (existing.voiceRoom || null);
       existing._needsServerLoad = true;
       await _loadSessionFromServer(id, { force: true });
     }
@@ -7153,6 +7346,11 @@ async function openTerminalSession(id, source = 'terminal') {
     setAgentSessionId(id);
     syncActiveChat();
     refreshVisibleChannelsList();
+    if (source === 'voice_room') {
+      restoreDesktopVoiceRoomSession(id).catch((error) => showDesktopVoiceStatus('Voice Room needs microphone access', error?.message || 'Enable microphone access to join this room.', 'error'));
+    } else {
+      resetDesktopVoiceRoomState();
+    }
   } catch (e) {
     addProcessEntry('error', `Could not load terminal session: ${e.message}`);
   }
@@ -7160,6 +7358,10 @@ async function openTerminalSession(id, source = 'terminal') {
 
 function newChatSession() {
   const id = generateSessionId();
+  if (realtimeVoiceRepliesEnabled || realtimeVoiceStarting || voiceAgentRealtimeConnection || voiceAgentRealtimeConnecting) {
+    disableRealtimeVoiceMode();
+  }
+  resetDesktopVoiceRoomState({ resetTarget: true });
   if (window.currentMode !== 'chat') {
     if (typeof window.setMode === 'function') window.setMode('chat');
     else setMode('chat');
@@ -7237,7 +7439,13 @@ async function openSession(id) {
     await _loadSessionFromServer(id, { force: true });
   }
   syncActiveChat();
-  catchUpMainChatStream(id).catch(() => {});
+  if (isDesktopVoiceRoomSession(id)) {
+    restoreDesktopVoiceRoomSession(id).catch((error) => showDesktopVoiceStatus('Voice Room needs microphone access', error?.message || 'Enable microphone access to join this room.', 'error'));
+  } else {
+    resetDesktopVoiceRoomState();
+    if (voiceAgentRealtimeConnection?.sessionId && voiceAgentRealtimeConnection.sessionId !== id) disableRealtimeVoiceMode();
+  }
+  recoverDesktopMainChatSession(id, { recovery: true, fullRefresh: false }).catch(() => {});
   refreshVisibleChannelsList();
   // Clear project state if switching to a non-project session
   if (typeof window._maybeClearProjectState === 'function') {
@@ -11076,12 +11284,26 @@ function renderLiveTracePreview(entry) {
 function normalizeLiveTraceProseText(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
-  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (/```/.test(raw)) return raw;
+  const repaired = raw
+    .replace(/[ \t]*\*{3,}[ \t]*/g, '\n\n')
+    .replace(/\*{2}(?=(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring)\b)/g, '\n\n')
+    .replace(
+      /([a-z0-9_),.!?:])(?=(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Focusing|Prioritizing|Evaluating|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring)\b)/g,
+      '$1\n\n',
+    )
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  const plainNarration = repaired
+    .replace(/^\*\*/, '')
+    .replace(/\*\*$/, '')
+    .trim();
+  const lines = plainNarration.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (lines.length >= 5) {
     const shortLines = lines.filter((line) => line.split(/\s+/).filter(Boolean).length <= 2).length;
-    if (shortLines / lines.length >= 0.75) return raw.replace(/\s+/g, ' ').trim();
+    if (shortLines / lines.length >= 0.75) return plainNarration.replace(/\s+/g, ' ').trim();
   }
-  return raw;
+  return plainNarration;
 }
 
 function isDesktopPreparedTraceEntry(entry) {
@@ -11104,6 +11326,15 @@ function isBareThinkingLiveTraceText(text) {
   return /^thinking(?:\.\.\.)?$/i.test(String(text || '').replace(/\s+/g, ' ').trim());
 }
 
+function isDesktopUserVisibleReasoningTraceEntry(entry) {
+  const type = String(entry?.type || '').toLowerCase();
+  if (type === 'preamble' || type === 'assistant') return true;
+  if (type !== 'think') return false;
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  const source = String(extra.source || entry?.source || '').toLowerCase();
+  return source === 'reasoning_summary' || extra.visibility === 'user';
+}
+
 function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
   const trace = String(text || '').replace(/\s+/g, ' ').trim();
   const final = String(finalText || '').replace(/\s+/g, ' ').trim();
@@ -11117,13 +11348,12 @@ function liveTraceTextLooksLikeFinalAnswer(text, finalText) {
 }
 
 function visibleLiveTraceEntries(entries) {
-  return coalesceToolActivityEntries(entries).filter((entry) =>
-    entry
-    && !isDesktopPreparedTraceEntry(entry)
-    && !isVisionInjectionStatusText(entry?.text)
-    && !isBareThinkingLiveTraceText(entry?.text)
-    && (String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl))
-  );
+  return coalesceToolActivityEntries(entries).filter((entry) => {
+    if (!entry || isDesktopPreparedTraceEntry(entry) || isVisionInjectionStatusText(entry?.text) || isBareThinkingLiveTraceText(entry?.text)) return false;
+    const type = String(entry?.type || '').toLowerCase();
+    if ((type === 'preamble' || type === 'think' || type === 'assistant') && !isDesktopUserVisibleReasoningTraceEntry(entry)) return false;
+    return !!(String(entry?.text || '').trim() || isRenderableLiveTraceImageSource(entry?.preview?.dataUrl || entry?.dataUrl));
+  });
 }
 
 function renderLiveTraceEntry(entry) {
@@ -11154,13 +11384,14 @@ function isLiveTraceCompactionEntry(entry) {
 
 function renderLiveTraceCompactionBreak(entry) {
   const status = String(entry?.status || entry?.extra?.status || '').toLowerCase();
+  const entryId = String(entry?.id || `compaction_${entry?.time || entry?.ts || entry?.timestamp || ''}_${status}`).trim();
   const label = String(entry?.text || '').trim()
     || (status === 'compacting' ? 'Compacting Context' : status === 'failed' ? 'Context Compaction Failed' : 'Context Compacted');
   const summary = String(entry?.summary || entry?.extra?.summary || '').trim();
   const body = summary
     ? `<div class="live-turn-compaction-body"><div class="live-turn-md">${renderMd(summary)}</div></div>`
     : (status === 'compacting' ? '<div class="live-turn-compaction-body muted">Compaction summary will appear when complete.</div>' : '');
-  return `<details class="live-turn-compaction" data-status="${escHtml(status || 'done')}">
+  return `<details class="live-turn-compaction" data-status="${escHtml(status || 'done')}"${entryId ? ` data-live-trace-entry-id="${escHtml(entryId)}"` : ''}>
     <summary>
       <span class="live-turn-compaction-line" aria-hidden="true"></span>
       <strong>${escHtml(label)}</strong>
@@ -11469,10 +11700,40 @@ function liveTraceSummaryKey(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+function desktopTraceProgressSummary(entries) {
+  const source = Array.isArray(entries) ? entries : [];
+  for (let index = source.length - 1; index >= 0; index -= 1) {
+    const entry = source[index];
+    const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+    if (String(extra.source || '').toLowerCase() !== 'agent_progress') continue;
+    const text = normalizeLiveTraceProseText(entry?.text || entry?.content || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!text) continue;
+    const normalized = text.toLowerCase();
+    const duplicatesVisibleReasoning = source.some((candidate) => {
+      if (!isDesktopUserVisibleReasoningTraceEntry(candidate)) return false;
+      const candidateText = normalizeLiveTraceProseText(candidate?.text || candidate?.content || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+      return candidateText === normalized
+        || (Math.min(candidateText.length, normalized.length) >= 36
+          && (candidateText.includes(normalized) || normalized.includes(candidateText)));
+    });
+    if (duplicatesVisibleReasoning) return 'Reasoning';
+    return text.slice(0, 220);
+  }
+  return '';
+}
+
 function renderLiveTurnTrace(entries, { streaming = false } = {}) {
   const groups = liveTraceGroups(entries);
   if (!groups.length) return '';
   if (!streaming && !groups.some((group) => (group.kind === 'tools' || group.kind === 'compaction') && group.entries.length > 0)) return '';
+  const latestToolGroupIndex = groups.reduce((latest, group, index) => (
+    group.kind === 'tools' ? index : latest
+  ), -1);
   return `<div class="live-turn-timeline">${groups.map((group, index) => {
     if (group.kind === 'thought') {
       return `<div class="live-turn-thought">${group.entries.map(renderLiveTraceEntry).join('')}</div>`;
@@ -11483,8 +11744,9 @@ function renderLiveTurnTrace(entries, { streaming = false } = {}) {
     if (group.kind === 'vision') {
       return `<div class="live-turn-vision-break" data-live-trace-group="${escHtml(group.id)}">${group.entries.map(renderLiveTracePreview).join('')}</div>`;
     }
-    const isLiveCurrent = streaming && index === groups.length - 1;
-    const summary = isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries);
+    const isLiveCurrent = streaming && index === latestToolGroupIndex;
+    const progressSummary = isLiveCurrent ? desktopTraceProgressSummary(entries) : '';
+    const summary = progressSummary || (isLiveCurrent ? liveTraceCurrentToolLabel(group.entries) : liveTraceToolSummary(group.entries));
     const summaryKey = liveTraceSummaryKey(summary);
     const visibleEntries = visibleLiveTraceEntries(group.entries);
     const callCount = visibleEntries.filter((entry) => entry?.activity?.kind === 'operation').length;
@@ -11511,6 +11773,7 @@ function desktopWorkflowTraceEntriesForMessage(message) {
   const add = (entry, fallbackType = 'info', fromProcess = false) => {
     if (!entry || typeof entry !== 'object') return;
     const normalizedEntry = normalizeProcessEntryForRender(entry) || entry;
+    if (isHiddenRuntimeProcessEntry(normalizedEntry)) return;
     let type = String(normalizedEntry.type || normalizedEntry.kind || fallbackType || 'info').toLowerCase();
     const extra = normalizedEntry.extra && typeof normalizedEntry.extra === 'object' ? normalizedEntry.extra : null;
     const action = String(extra?.action || extra?.toolName || normalizedEntry.action || normalizedEntry.toolName || '').trim();
@@ -11538,6 +11801,8 @@ function desktopWorkflowTraceEntriesForMessage(message) {
         summary: String(extra?.extra?.summary || extra?.summary || normalizedEntry.summary || '').trim(),
       };
     }
+    if ((type === 'preamble' || type === 'think' || type === 'assistant')
+      && !isDesktopUserVisibleReasoningTraceEntry({ ...traceEntry, type, extra })) return;
     const preview = normalizedEntry.preview && typeof normalizedEntry.preview === 'object' ? normalizedEntry.preview : null;
     const previewData = String(preview?.dataUrl || normalizedEntry.dataUrl || '').trim();
     if (!text && !previewData) return;
@@ -11582,6 +11847,12 @@ function renderCompletedAssistantTraceDrawer(msg) {
   </div>`;
 }
 
+function renderCapturedChatSteerTrace(msg) {
+  if (!/^chat_steer_/i.test(String(msg?.workflowGroupId || ''))) return '';
+  if (String(msg?.workflowPart || '') !== 'before_interruption') return '';
+  return renderLiveTurnTrace(desktopWorkflowTraceEntriesForMessage(msg), { streaming: false });
+}
+
 function liveTraceEntriesToProcessEntries(entries, existingEntries = []) {
   const existingKeys = new Set((Array.isArray(existingEntries) ? existingEntries : [])
     .map((entry) => `${String(entry?.type || '').toLowerCase()}|${String(entry?.content || entry?.text || '').replace(/\s+/g, ' ').trim()}`));
@@ -11591,6 +11862,7 @@ function liveTraceEntriesToProcessEntries(entries, existingEntries = []) {
       const text = String(entry?.text || '').trim();
       if (!text) return null;
       if (type !== 'preamble' && type !== 'think') return null;
+      if (!isDesktopUserVisibleReasoningTraceEntry(entry)) return null;
       const key = `${type}|${text.replace(/\s+/g, ' ').trim()}`;
       if (existingKeys.has(key)) return null;
       existingKeys.add(key);
@@ -11903,9 +12175,10 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
         <div class="msg-bubble-stack">
           ${workflowLabel ? `<div class="workflow-transition-label">${escHtml(workflowLabel)}</div>` : ''}
           <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${(msg.approvalRequest || msg.questionRequest) && !msg.content ? ' msg-body-approval-only' : ''}">
-                ${!isUser ? renderAssistantWorkTimer(msg) : ''}
-                ${!isUser ? renderCompletedAssistantTraceDrawer(msg) : ''}
-                ${!isUser && !((msg.approvalRequest || msg.questionRequest) && !msg.content) ? `<div class="msg-role">Prom${channelTag}</div>` : ''}
+                ${!isUser && msg.voiceSpeaker ? `<div class="voice-room-speaker">${escHtml(msg.voiceSpeaker)}</div>` : ''}
+                ${!isUser ? renderAssistantWorkTimer(msg, { active: msg?._steerTimerAnchor === true }) : ''}
+                ${!isUser ? (renderCapturedChatSteerTrace(msg) || renderCompletedAssistantTraceDrawer(msg)) : ''}
+                ${!isUser && !((msg.approvalRequest || msg.questionRequest) && !msg.content) ? `<div class="msg-role">${escHtml(msg.voiceSpeaker || 'Prom')}${channelTag}</div>` : ''}
                 ${assistantContentHtml}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderRichArtifacts(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderProductCarousel(msg) : ''}
@@ -11951,8 +12224,9 @@ function renderSessionThinkingBodyHtml(sessionId) {
   const activeModelBadgeHtml = st.activeModelBadge
     ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(st.activeModelBadge.label)}</span>`
     : '';
+  const timerAnchoredAboveSteer = st.steerTimerAnchored === true;
   return `
-            ${renderAssistantWorkTimer(null, { active: true, startedAt: Number(st.turnStartedAt || 0) })}
+            ${timerAnchoredAboveSteer ? '' : renderAssistantWorkTimer(null, { active: true, startedAt: Number(st.turnStartedAt || 0) })}
             ${!thinkingOnly ? `<div class="msg-role">Prom${activeModelBadgeHtml}</div>` : ''}
             ${showLiveTrace ? liveTraceHtml : (!showAnswerText ? progressHtml : '')}
             ${pendingImageHtml}
@@ -12423,24 +12697,23 @@ function updateChatMessageNavigatorActive(container = document.getElementById('c
   });
 }
 
-function getLiveTraceNodeKey(node) {
+function getLiveTraceNodeKey(node, index = 0) {
   if (!node) return '';
   return String(
-    node.getAttribute?.('data-activity-key')
+    node.getAttribute?.('data-live-trace-group')
+    || node.getAttribute?.('data-live-trace-entry-id')
+    || node.getAttribute?.('data-activity-key')
     || node.getAttribute?.('data-live-entry-id')
-    || ''
+    || `${String(node.tagName || '').toLowerCase()}:${String(node.className || '')}:${index}`
   ).trim();
-}
-
-function getLiveTraceGroupLogicalKey(group) {
-  if (!group) return '';
-  const traceEntry = group.querySelector?.('[data-activity-key], [data-live-entry-id]');
-  return getLiveTraceNodeKey(traceEntry);
 }
 
 function getLiveTraceDisclosureKey(node, index = 0) {
   if (node?.matches?.('details.live-turn-tool-group')) {
     return `trace-group:${String(node.getAttribute('data-live-trace-group') || '')}`;
+  }
+  if (node?.matches?.('details.live-turn-compaction')) {
+    return `trace-compaction:${String(node.getAttribute('data-live-trace-entry-id') || index)}`;
   }
   return String(
     node?.getAttribute?.('data-tool-disclosure-key')
@@ -12472,63 +12745,116 @@ function restoreLiveTraceDisclosureState(root, state) {
   });
 }
 
+function syncLiveTraceNodeAttributes(currentNode, nextNode) {
+  const preserved = new Set(['open']);
+  Array.from(currentNode?.attributes || []).forEach((attribute) => {
+    if (!preserved.has(attribute.name) && !nextNode.hasAttribute(attribute.name)) {
+      currentNode.removeAttribute(attribute.name);
+    }
+  });
+  Array.from(nextNode?.attributes || []).forEach((attribute) => {
+    if (!preserved.has(attribute.name)) currentNode.setAttribute(attribute.name, attribute.value);
+  });
+}
+
+function directLiveTraceChild(parent, predicate) {
+  return Array.from(parent?.children || []).find(predicate) || null;
+}
+
 // Merge a live tool group in place. Existing entries retain their DOM nodes
 // until their own data changes, while newly observed entries are appended.
 // This keeps a user-opened metadata disclosure stable while the stream grows.
-function patchLiveTraceGroup(currentGroup, nextGroup) {
-  const currentSummary = currentGroup.querySelector(':scope > summary');
-  const nextSummary = nextGroup.querySelector(':scope > summary');
-  if (currentSummary && nextSummary) currentSummary.innerHTML = nextSummary.innerHTML;
-  if (nextGroup.hasAttribute('data-live-trace-current')) currentGroup.setAttribute('data-live-trace-current', '1');
-  else currentGroup.removeAttribute('data-live-trace-current');
-
-  const currentTrace = currentGroup.querySelector(':scope > .live-turn-tool-body > .live-turn-trace');
-  const nextTrace = nextGroup.querySelector(':scope > .live-turn-tool-body > .live-turn-trace');
+function patchLiveTraceEntries(currentTrace, nextTrace) {
   if (!currentTrace || !nextTrace) return false;
-
-  const currentEntries = new Map();
-  Array.from(currentTrace.children).forEach((node) => {
-    const key = getLiveTraceNodeKey(node);
-    if (key) currentEntries.set(key, node);
+  const existing = new Map();
+  Array.from(currentTrace.children).forEach((node, index) => {
+    existing.set(getLiveTraceNodeKey(node, index), node);
   });
-  Array.from(nextTrace.children).forEach((nextNode) => {
-    const key = getLiveTraceNodeKey(nextNode);
-    const currentNode = key ? currentEntries.get(key) : null;
-    if (!currentNode) {
-      currentTrace.appendChild(nextNode.cloneNode(true));
+  const ordered = [];
+  Array.from(nextTrace.children).forEach((nextNode, index) => {
+    const key = getLiveTraceNodeKey(nextNode, index);
+    const currentNode = existing.get(key);
+    if (currentNode && currentNode.tagName === nextNode.tagName && currentNode.className === nextNode.className) {
+      if (currentNode.outerHTML !== nextNode.outerHTML) {
+        const disclosures = captureLiveTraceDisclosureState(currentNode);
+        const replacement = nextNode.cloneNode(true);
+        restoreLiveTraceDisclosureState(replacement, disclosures);
+        currentNode.replaceWith(replacement);
+        ordered.push(replacement);
+      } else {
+        ordered.push(currentNode);
+      }
       return;
     }
-    if (currentNode.innerHTML === nextNode.innerHTML) return;
+    ordered.push(nextNode.cloneNode(true));
+  });
+  Array.from(currentTrace.children).forEach((node) => {
+    if (!ordered.includes(node)) node.remove();
+  });
+  ordered.forEach((node) => currentTrace.appendChild(node));
+  return true;
+}
+
+function patchLiveTraceGroup(currentGroup, nextGroup) {
+  const wasOpen = currentGroup.open === true;
+  syncLiveTraceNodeAttributes(currentGroup, nextGroup);
+  const currentSummary = directLiveTraceChild(currentGroup, (node) => node.tagName === 'SUMMARY');
+  const nextSummary = directLiveTraceChild(nextGroup, (node) => node.tagName === 'SUMMARY');
+  if (currentSummary && nextSummary) currentSummary.innerHTML = nextSummary.innerHTML;
+  const currentBody = directLiveTraceChild(currentGroup, (node) => node.classList.contains('live-turn-tool-body'));
+  const nextBody = directLiveTraceChild(nextGroup, (node) => node.classList.contains('live-turn-tool-body'));
+  const currentTrace = directLiveTraceChild(currentBody, (node) => node.classList.contains('live-turn-trace'));
+  const nextTrace = directLiveTraceChild(nextBody, (node) => node.classList.contains('live-turn-trace'));
+  if (currentTrace && nextTrace) {
+    patchLiveTraceEntries(currentTrace, nextTrace);
+  } else if (currentBody && nextBody && currentBody.innerHTML !== nextBody.innerHTML) {
+    const disclosures = captureLiveTraceDisclosureState(currentBody);
+    currentBody.innerHTML = nextBody.innerHTML;
+    restoreLiveTraceDisclosureState(currentBody, disclosures);
+  }
+  currentGroup.open = wasOpen;
+  return true;
+}
+
+function patchLiveTraceTimelineNode(currentNode, nextNode) {
+  if (!currentNode || !nextNode) return false;
+  if (currentNode.matches('details.live-turn-tool-group')) return patchLiveTraceGroup(currentNode, nextNode);
+
+  const wasOpen = currentNode.matches('details') ? currentNode.open === true : false;
+  syncLiveTraceNodeAttributes(currentNode, nextNode);
+  if (currentNode.innerHTML !== nextNode.innerHTML) {
     const disclosures = captureLiveTraceDisclosureState(currentNode);
     currentNode.innerHTML = nextNode.innerHTML;
     restoreLiveTraceDisclosureState(currentNode, disclosures);
-  });
+  }
+  if (currentNode.matches('details')) currentNode.open = wasOpen;
   return true;
 }
 
 function patchLiveTurnTimeline(content, nextContent) {
-  const currentTimeline = content.querySelector(':scope > .live-turn-timeline');
-  const nextTimeline = nextContent.querySelector(':scope > .live-turn-timeline');
+  const currentTimeline = directLiveTraceChild(content, (node) => node.classList.contains('live-turn-timeline'));
+  const nextTimeline = directLiveTraceChild(nextContent, (node) => node.classList.contains('live-turn-timeline'));
   if (!currentTimeline || !nextTimeline) return false;
 
-  const currentGroups = new Map();
-  currentTimeline.querySelectorAll(':scope > details.live-turn-tool-group[data-live-trace-group]').forEach((node) => {
-    const groupKey = String(node.getAttribute('data-live-trace-group') || '');
-    currentGroups.set(groupKey, node);
-    const logicalKey = getLiveTraceGroupLogicalKey(node);
-    if (logicalKey) currentGroups.set(`entry:${logicalKey}`, node);
+  const existing = new Map();
+  Array.from(currentTimeline.children).forEach((node, index) => {
+    existing.set(getLiveTraceNodeKey(node, index), node);
   });
-  nextTimeline.querySelectorAll(':scope > details.live-turn-tool-group[data-live-trace-group]').forEach((nextGroup) => {
-    const key = String(nextGroup.getAttribute('data-live-trace-group') || '');
-    const logicalKey = getLiveTraceGroupLogicalKey(nextGroup);
-    const currentGroup = currentGroups.get(key) || (logicalKey ? currentGroups.get(`entry:${logicalKey}`) : null);
-    if (currentGroup) {
-      currentGroup.setAttribute('data-live-trace-group', key);
-      patchLiveTraceGroup(currentGroup, nextGroup);
-      return;
+  const ordered = [];
+  Array.from(nextTimeline.children).forEach((nextNode, index) => {
+    const key = getLiveTraceNodeKey(nextNode, index);
+    const currentNode = existing.get(key);
+    if (currentNode && currentNode.tagName === nextNode.tagName && currentNode.className === nextNode.className) {
+      patchLiveTraceTimelineNode(currentNode, nextNode);
+      ordered.push(currentNode);
+    } else {
+      ordered.push(nextNode.cloneNode(true));
     }
-    currentTimeline.appendChild(nextGroup.cloneNode(true));
   });
+  Array.from(currentTimeline.children).forEach((node) => {
+    if (!ordered.includes(node)) node.remove();
+  });
+  ordered.forEach((node) => currentTimeline.appendChild(node));
   return true;
 }
 
@@ -12562,8 +12888,8 @@ function patchStreamingChatBubble(sessionId) {
   nextContent.innerHTML = renderSessionThinkingBodyHtml(sid);
 
   const patchedAnswer = patchStreamingAnswerText(content, nextContent);
-  const hasTimeline = !!content.querySelector(':scope > .live-turn-timeline')
-    || !!nextContent.querySelector(':scope > .live-turn-timeline');
+  const hasTimeline = !!directLiveTraceChild(content, (node) => node.classList.contains('live-turn-timeline'))
+    || !!directLiveTraceChild(nextContent, (node) => node.classList.contains('live-turn-timeline'));
   const patchedTimeline = !hasTimeline || patchLiveTurnTimeline(content, nextContent);
   if (!patchedAnswer || !patchedTimeline) {
     const disclosures = captureLiveTraceDisclosureState(content);
@@ -13134,10 +13460,19 @@ function isInternalRestartProcessEntry(entry) {
     || packetType === 'runtime_recovery_context';
 }
 
+function isHiddenRuntimeProcessEntry(entry) {
+  if (isInternalRestartProcessEntry(entry)) return true;
+  const extra = entry?.extra && typeof entry.extra === 'object' ? entry.extra : {};
+  // Plan progress has its own progress UI. Never treat recovered checkpoint
+  // state as an ordinary tool row inside the chat trace.
+  return String(extra.source || '').toLowerCase() === 'runtime_checkpoint'
+    && String(extra.event || '').toLowerCase() === 'progress_state';
+}
+
 function processEntriesForMessage(msg) {
   if (Array.isArray(msg?.processEntries) && msg.processEntries.length) {
     return msg.processEntries
-      .filter((entry) => !isInternalRestartProcessEntry(entry))
+      .filter((entry) => !isHiddenRuntimeProcessEntry(entry))
       .map(normalizeProcessEntryForRender)
       .filter(Boolean);
   }
@@ -13487,6 +13822,7 @@ function buildRestartProcessPacketMessage(sess) {
 function clearLiveTurnStateForSession(sessionId) {
   const sid = String(sessionId || '').trim();
   if (!sid) return;
+  clearDesktopActiveChatRun(sid);
   delete window._sessionThinking?.[sid];
   delete window._sessionAbortControllers?.[sid];
   if (window._mainChatStreamCatchupTimers?.[sid]) {
@@ -14039,7 +14375,7 @@ let skillTriggerCacheLoadPromise = null;
 let skillTriggerExcludedIds = new Set();
 let selectedComposerSkillIds = [];
 let selectedComposerSkillRefs = [];
-let skillCommandSelectionIndex = 0;
+let skillComposerSelectionIndex = 0;
 
 const SKILL_TRIGGER_STOPWORDS = new Set([
   'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'with', 'in', 'on', 'at',
@@ -14256,6 +14592,12 @@ function toggleSkillTriggerPill() {
 function renderSkillTriggerPill(value = '') {
   const pill = document.getElementById('chat-skill-trigger-pill');
   if (!pill) return;
+  // The explicit skill picker owns the composer while its trigger is active.
+  // Do not show the natural-language related-skills pill underneath it.
+  if (getSkillComposerState(document.getElementById('chat-input'))) {
+    hideSkillTriggerPill();
+    return;
+  }
   const matches = getComposerSkillMatches(value);
   if (!matches.length) {
     hideSkillTriggerPill();
@@ -14336,9 +14678,7 @@ function handleSkillTriggerInput(input) {
 }
 
 function getChatInputDefaultPlaceholder() {
-  return window.useAgentMode
-    ? 'Ask agent to do something... (has access to tools)'
-    : 'Type a message... (Enter to send, Shift+Enter for newline)';
+  return 'Send Prometheus a message';
 }
 
 function sortedSlashCommands() {
@@ -14443,25 +14783,27 @@ function getSlashCommandSuggestions(input = document.getElementById('chat-input'
   const state = getSlashCommandState(input);
   if (!state) return [];
   const query = state.query.toLowerCase();
-  return CHAT_SLASH_COMMANDS.filter((item) => item.command.toLowerCase().startsWith(query)).slice(0, 7);
+  return CHAT_SLASH_COMMANDS.filter((item) => item.command.toLowerCase().startsWith(query)).slice(0, CHAT_COMPOSER_SUGGESTION_LIMIT);
 }
 
-function getSkillCommandState(input = document.getElementById('chat-input')) {
+function getSkillComposerState(input = document.getElementById('chat-input')) {
   if (!input) return null;
   const value = String(input.value || '');
   const cursor = Number.isFinite(Number(input.selectionStart)) ? Number(input.selectionStart) : value.length;
   const beforeCursor = value.slice(0, cursor);
-  const slashIndex = beforeCursor.toLowerCase().lastIndexOf('/skill');
-  if (slashIndex < 0) return null;
-  const prefixChar = slashIndex > 0 ? beforeCursor.charAt(slashIndex - 1) : '';
+  const skillIndex = beforeCursor.lastIndexOf(CHAT_SKILL_TRIGGER);
+  if (skillIndex < 0) return null;
+  const prefixChar = skillIndex > 0 ? beforeCursor.charAt(skillIndex - 1) : '';
   if (prefixChar && !/\s/.test(prefixChar)) return null;
-  const afterToken = beforeCursor.slice(slashIndex + '/skill'.length);
-  if (afterToken && !/^\s/.test(afterToken)) return null;
-  if (/[\r\n]/.test(afterToken)) return null;
-  return { start: slashIndex, end: cursor, query: afterToken.replace(/^\s+/, ''), value };
+  const query = beforeCursor.slice(skillIndex + CHAT_SKILL_TRIGGER.length);
+  // Skill references are single composer tokens (for example `$browser`).
+  // Requiring no whitespace keeps ordinary prose and currency values from
+  // hijacking the picker after the token is complete.
+  if (/[\s\r\n]/.test(query)) return null;
+  return { start: skillIndex, end: cursor, query, value };
 }
 
-function skillCommandSearchText(skill) {
+function skillComposerSearchText(skill) {
   return normalizeSkillMatchText([
     skill?.name,
     skill?.id,
@@ -14471,25 +14813,27 @@ function skillCommandSearchText(skill) {
   ].filter(Boolean).join(' '));
 }
 
-function getSkillCommandSuggestions(input = document.getElementById('chat-input')) {
-  const state = getSkillCommandState(input);
+function getSkillComposerSuggestions(input = document.getElementById('chat-input')) {
+  const state = getSkillComposerState(input);
   if (!state) return [];
   ensureSkillTriggerCacheLoaded();
   const query = normalizeSkillMatchText(state.query);
   const skills = getInstalledSkillCache();
-  const matches = query ? skills.filter((skill) => skillCommandSearchText(skill).includes(query)) : skills;
-  return matches.slice(0, 8);
+  const matches = query ? skills.filter((skill) => skillComposerSearchText(skill).includes(query)) : skills;
+  return matches.slice(0, CHAT_COMPOSER_SUGGESTION_LIMIT);
 }
 
-function replaceSkillCommandWithSelection(skill, input = document.getElementById('chat-input')) {
-  const state = getSkillCommandState(input);
+function replaceSkillComposerWithSelection(skill, input = document.getElementById('chat-input')) {
+  const state = getSkillComposerState(input);
   if (!state || !skill || !input) return;
   const name = String(skill.name || skill.id || 'Skill').trim();
-  const replacement = `**${name.replace(/\*/g, '')}**`;
+  const safeName = name.replace(/\*/g, '').trim() || 'Skill';
+  const suffix = String(state.value.slice(state.end) || '');
+  const replacement = `${safeName}${suffix && /^\s/.test(suffix) ? '' : ' '}`;
   input.value = `${state.value.slice(0, state.start)}${replacement}${state.value.slice(state.end)}`;
   const nextCursor = state.start + replacement.length;
   input.setSelectionRange(nextCursor, nextCursor);
-  rememberSelectedComposerSkill(skill.id || skill.name || name, name);
+  rememberSelectedComposerSkill(skill.id || skill.name || safeName, safeName);
   resizeChatInput(input);
   hideSlashCommandPopover();
   handleSkillTriggerInput(input);
@@ -14508,15 +14852,15 @@ function renderSlashCommandPopover(inputValue = '') {
     return;
   }
   const input = document.getElementById('chat-input');
-  const skillSuggestions = getSkillCommandSuggestions(input);
+  const skillSuggestions = getSkillComposerSuggestions(input);
   if (skillSuggestions.length) {
-    skillCommandSelectionIndex = Math.max(0, Math.min(skillCommandSelectionIndex, skillSuggestions.length - 1));
+    skillComposerSelectionIndex = Math.max(0, Math.min(skillComposerSelectionIndex, skillSuggestions.length - 1));
     popover.innerHTML = skillSuggestions.map((skill, idx) => {
       const description = String(skill.description || '').trim();
       const shortDescription = description.length > 96 ? `${description.slice(0, 93).trim()}...` : description;
       return `
-    <button class="chat-slash-command-item ${idx === skillCommandSelectionIndex ? 'active' : ''}" type="button" data-skill-id="${escHtml(skill.id || '')}">
-      <span class="chat-slash-token">${escHtml(skill.name || skill.id || 'Skill')}</span>
+    <button class="chat-slash-command-item ${idx === skillComposerSelectionIndex ? 'active' : ''}" type="button" data-skill-id="${escHtml(skill.id || '')}">
+      <span class="chat-skill-suggestion-token">$${escHtml(skill.name || skill.id || 'Skill')}</span>
       <span class="chat-slash-label">${escHtml(shortDescription || skill.id || 'Skill')}</span>
       <span class="chat-slash-hint">${idx === 0 ? 'Enter' : 'Click'}</span>
     </button>
@@ -14527,7 +14871,7 @@ function renderSlashCommandPopover(inputValue = '') {
         event.preventDefault();
         const id = btn.getAttribute('data-skill-id') || '';
         const skill = skillSuggestions.find((candidate) => String(candidate.id || '') === id) || skillSuggestions[0];
-        replaceSkillCommandWithSelection(skill, input);
+        replaceSkillComposerWithSelection(skill, input);
       });
     });
     popover.style.display = 'block';
@@ -14591,28 +14935,6 @@ function selectSlashCommand(command) {
   if (!item) return;
   const input = document.getElementById('chat-input');
   const slashState = getSlashCommandState(input);
-  if (item.command === '/skill') {
-    if (!input) return;
-    const current = String(input.value || '');
-    const typedMatch = slashState?.start === 0 ? matchSlashCommandValue(current) : null;
-    const remainder = typedMatch?.item.command === item.command ? typedMatch.remainder : '';
-    if (slashState) {
-      const replacement = `/skill${remainder ? ` ${remainder}` : ' '}`;
-      input.value = `${slashState.value.slice(0, slashState.start)}${replacement}${slashState.value.slice(slashState.end)}`;
-      const nextCursor = slashState.start + replacement.length;
-      input.setSelectionRange(nextCursor, nextCursor);
-    } else {
-      input.value = `/skill${remainder ? ` ${remainder}` : ' '}`;
-      input.setSelectionRange(input.value.length, input.value.length);
-    }
-    activeSlashCommand = null;
-    refreshActiveSlashCommandChrome();
-    resizeChatInput(input);
-    updateDesktopComposerRichPreview(input);
-    renderSlashCommandPopover(input.value);
-    input.focus();
-    return;
-  }
   if (!input) return;
   const replacement = `${item.command} `;
   if (slashState) {
@@ -14666,8 +14988,8 @@ function handleImmediateChatSlashCommand(message) {
 function handleSlashCommandInput(input) {
   if (!input) return;
   const value = String(input.value || '');
-  if (getSkillCommandState(input)) {
-    skillCommandSelectionIndex = 0;
+  if (getSkillComposerState(input)) {
+    skillComposerSelectionIndex = 0;
     renderSlashCommandPopover(value);
     updateDesktopComposerRichPreview(input);
     return;
@@ -14760,6 +15082,87 @@ async function sendChat(queuedMessage = null, options = {}) {
   const clientRequestId = String(options.clientRequestId || '').trim() || newChatClientRequestId(thisSessionId);
   rememberLocalMainChatRequest(thisSessionId, clientRequestId);
   const thisSession = getChatSessionById(thisSessionId);
+  const isVoiceRoomComposerTurn = String(thisSession?.source || thisSession?.channel || '') === 'voice_room'
+    || String(thisSessionId).startsWith('voice_room_');
+  if (isVoiceRoomComposerTurn && !queuedTurn && !Number.isInteger(options.reuseExistingUserIndex)) {
+    try {
+      const voiceRoomFiles = pendingChatFiles.length ? pendingChatFiles.slice() : [];
+      const uploadedVoiceRoomFiles = voiceRoomFiles.length
+        ? await uploadStagedFilesToCanvas(voiceRoomFiles)
+        : [];
+      const failedVoiceRoomFiles = uploadedVoiceRoomFiles.filter((file) => !String(file?.workspacePath || '').trim());
+      if (failedVoiceRoomFiles.length) {
+        throw new Error(`Could not upload ${failedVoiceRoomFiles.map((file) => file?.name || 'attachment').join(', ')}.`);
+      }
+      const attachmentLines = uploadedVoiceRoomFiles
+        .map((file) => {
+          const path = String(file?.workspacePath || '').trim();
+          return path ? `- ${String(file?.name || 'attachment')}: ${path}` : '';
+        })
+        .filter(Boolean);
+      const voiceRoomPrompt = attachmentLines.length
+        ? `${message}\n\nAttached files (open these workspace paths when answering):\n${attachmentLines.join('\n')}`
+        : message;
+      const connection = voiceAgentRealtimeConnection?.sessionId === thisSessionId
+        ? voiceAgentRealtimeConnection
+        : await startVoiceAgentRealtimeSession(thisSessionId, { listenMode: 'always_listening' });
+      const bridgeSessionId = String(connection?.codexBridgeSessionId || '').trim();
+      if (!bridgeSessionId) throw new Error('The Voice Room is not connected through Codex Voice / Live.');
+      const response = await fetch('/api/realtime/codex-bridge/append-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: bridgeSessionId, text: voiceRoomPrompt }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result?.success === false) throw new Error(result?.error || 'Voice Room message was not accepted.');
+      const timestamp = Date.now();
+      const attachmentPreviews = uploadResultsToAttachmentPreviews(uploadedVoiceRoomFiles);
+      if (!Array.isArray(thisSession.history)) thisSession.history = [];
+      thisSession.history.push({
+        messageId: clientRequestId,
+        role: 'user',
+        content: message,
+        attachmentPreviews: attachmentPreviews.length ? attachmentPreviews : undefined,
+        timestamp,
+        channel: 'voice_room',
+        channelLabel: 'Voice Room',
+        source: 'voice_room_composer',
+        voiceSpeaker: 'You',
+      });
+      fetch(`/api/voice-rooms/${encodeURIComponent(thisSessionId)}/transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messageId: clientRequestId,
+          role: 'user',
+          speaker: 'You',
+          text: message,
+          timestamp,
+          attachments: uploadedVoiceRoomFiles.map((file) => ({
+            name: file.name,
+            path: file.workspacePath,
+            mimeType: file.mimeType || '',
+          })),
+        }),
+      }).catch(() => {});
+      if (window.activeChatSessionId === thisSessionId) window.chatHistory = thisSession.history;
+      if (voiceRoomFiles.length) {
+        pendingChatFiles = [];
+        renderChatFilePills();
+      }
+      clearChatComposerAfterSend(input);
+      persistSession(thisSessionId);
+      renderChatMessages();
+      releaseChatSendLock(sendLock);
+      forgetLocalMainChatRequest(thisSessionId, clientRequestId);
+      return;
+    } catch (error) {
+      releaseChatSendLock(sendLock);
+      forgetLocalMainChatRequest(thisSessionId, clientRequestId);
+      showDesktopVoiceStatus('Voice Room message failed', error?.message || String(error), 'error');
+      return;
+    }
+  }
   let streamState = getSessionStreamState(thisSessionId) || resetSessionStreamState(thisSessionId);
   const addProcessEntry = (type, content, extra) => addSessionProcessEntry(thisSessionId, type, content, extra);
   const renderIfViewingThisSession = () => {
@@ -14807,13 +15210,19 @@ async function sendChat(queuedMessage = null, options = {}) {
     if (isBareThinkingLiveTraceText(content)) return;
     if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
     const normalizedType = String(type || 'info').toLowerCase();
+    const isThoughtLike = normalizedType === 'preamble' || normalizedType === 'think' || normalizedType === 'assistant';
+    const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
     const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
-    if (append && last && last.type === normalizedType) {
+    if (append && last && last.type === normalizedType
+      && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)) {
       last.text = `${last.text || ''}${content}`;
+      if (extra && typeof extra === 'object') last.extra = { ...(last.extra || {}), ...extra };
     } else {
       const trimmed = content.trim();
       if (!trimmed) return;
-      if (last && last.type === normalizedType && String(last.text || '').trim() === trimmed) return;
+      if (last && last.type === normalizedType
+        && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)
+        && String(last.text || '').trim() === trimmed) return;
       streamState.liveTraceEntries.push({
         id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         type: normalizedType,
@@ -14864,7 +15273,16 @@ async function sendChat(queuedMessage = null, options = {}) {
   const moveVisibleAnswerTextIntoWorkflowTrace = () => {
     const text = String(streamState.streamingAIText || '').trim();
     if (!text) return;
-    appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', text);
+    if (isDesktopProgressNarration(text)) {
+      setDesktopLiveProgressNarration(streamState, text, appendLiveTrace);
+    } else {
+      // A tool may start after an assistant paragraph has already streamed.
+      // Keep that paragraph as visible, immutable reasoning instead of
+      // recategorising it as an internal raw-thought entry.
+      appendLiveTrace(sawToolActivityThisTurn ? 'think' : 'preamble', text, {
+        extra: { visibility: 'user', source: 'reasoning_summary' },
+      });
+    }
     streamState.streamingAIText = '';
     streamState.finalResponseStarted = false;
     if (window.activeChatSessionId === thisSessionId) window.streamingAIText = '';
@@ -14984,6 +15402,8 @@ async function sendChat(queuedMessage = null, options = {}) {
     : Date.now();
   const appendAssistantTurnForUser = (message) => {
     const shouldAppendAfterInterruption = streamState.forceAppendAssistantAfterInterruption === true;
+    const interruptionPresentationCleared = streamState.pendingInterruptionWorkflowPresentationCleared === true;
+    const steerWorkflowGroupIds = shouldAppendAfterInterruption ? _chatSteerWorkflowGroupIds(streamState) : [];
     const workStartedAt = Number(message.workStartedAt || streamState.turnStartedAt || assistantTurnTimestamp || Date.now());
     const workEndedAt = Number(message.workEndedAt || Date.now());
     const assistantMessage = {
@@ -14994,10 +15414,15 @@ async function sendChat(queuedMessage = null, options = {}) {
       workEndedAt,
       workDurationMs: Math.max(0, Number(message.workDurationMs ?? (workEndedAt - workStartedAt)) || 0),
     };
-    if (shouldAppendAfterInterruption) {
+    if (shouldAppendAfterInterruption && !interruptionPresentationCleared) {
       assistantMessage.workflowGroupId = assistantMessage.workflowGroupId || streamState.pendingInterruptionWorkflowGroupId || '';
       assistantMessage.workflowPart = assistantMessage.workflowPart || 'interruption_response';
       assistantMessage.workflowLabel = assistantMessage.workflowLabel || streamState.pendingInterruptionWorkflowLabel || 'Response after steer';
+    } else if (shouldAppendAfterInterruption) {
+      delete assistantMessage.workflowGroupId;
+      delete assistantMessage.workflowPart;
+      delete assistantMessage.workflowLabel;
+      if (String(assistantMessage.messageKind || '') === 'steer_continuation') delete assistantMessage.messageKind;
     }
     const existingIndex = shouldAppendAfterInterruption ? -1 : sessionHistoryRef.findIndex((candidate, idx) => (
       idx > userTurnIndex
@@ -15017,6 +15442,12 @@ async function sendChat(queuedMessage = null, options = {}) {
       streamState.forceAppendAssistantAfterInterruption = false;
       streamState.pendingInterruptionWorkflowGroupId = '';
       streamState.pendingInterruptionWorkflowLabel = '';
+      streamState.pendingInterruptionWorkflowPresentationCleared = false;
+      steerWorkflowGroupIds.forEach((groupId) => {
+        _collapseChatSteerWorkflowPresentation(thisSessionId, groupId, { persist: false });
+      });
+      streamState.steerWorkflowGroupIds = [];
+      streamState.steerTimerAnchored = false;
       syncSessionHistoryToServerById(thisSessionId, sessionHistoryRef).catch(() => {});
     }
     return assistantMessage;
@@ -15261,9 +15692,12 @@ async function sendChat(queuedMessage = null, options = {}) {
 		    return '';
 		  };
 
-		  let partialContent = '';
-		  let turnAbortController = null;
-		  let interruptedTurnSaved = false;
+	  let partialContent = '';
+	  let turnAbortController = null;
+	  let sawTerminalStreamEvent = false;
+	  let sawFinalStreamEvent = false;
+	  let desktopStreamRecoveryPending = false;
+	  let interruptedTurnSaved = false;
 		  const saveInterruptedAssistantTurn = () => {
 		    if (interruptedTurnSaved) return;
 		    interruptedTurnSaved = true;
@@ -15301,6 +15735,16 @@ async function sendChat(queuedMessage = null, options = {}) {
 		      liveTraceEntries: Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries.slice() : undefined,
 		    });
 		  };
+	  if (thisSession) thisSession.activeRun = true;
+	  delete window._desktopPageLifecycleDisconnectedSessions?.[thisSessionId];
+	  rememberDesktopActiveChatRun(thisSessionId, {
+	    clientRequestId,
+	    startedAt: Number(readDesktopActiveChatRun(thisSessionId)?.startedAt || Date.now()),
+	    disconnected: false,
+	    finalReceived: false,
+	    forcePersist: true,
+	  });
+	  persistSession(thisSessionId);
 	  try {
 	    // Use SSE fetch — stream steps live as they arrive
 		    turnAbortController = new AbortController();
@@ -15337,6 +15781,18 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        if (!line.startsWith('data: ')) continue;
 	        let event;
 	        try { event = JSON.parse(line.slice(6)); } catch { continue; }
+	        const eventSeq = Number(event.seq);
+	        const eventStreamId = String(event.streamId || '').trim();
+	        if (Number.isFinite(eventSeq)) {
+	          if (!shouldProcessMainChatStreamEvent({ sessionId: thisSessionId, streamId: eventStreamId, seq: eventSeq })) continue;
+	          const runPatch = { lastSeq: eventSeq, disconnected: false };
+	          if (eventStreamId) runPatch.streamId = eventStreamId;
+	          if (event.runtimeId) runPatch.runtimeId = String(event.runtimeId);
+	          if (event.clientRequestId) runPatch.clientRequestId = String(event.clientRequestId);
+	          rememberDesktopActiveChatRun(thisSessionId, runPatch);
+	        }
+	        if (event.type === 'final') sawFinalStreamEvent = true;
+	        if (event.type === 'done' || event.type === 'error') sawTerminalStreamEvent = true;
 	        const activeBeforeStreamEvent = window.activeChatSessionId;
 	        const isReasoningCompanionEvent =
 	          event.type === 'model_stream_event'
@@ -15346,6 +15802,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        switch (event.type) {
 	          case 'final_response_start':
 	            beginFinalResponse(streamState);
+	            _settlePendingChatSteerPresentation(thisSessionId, streamState);
 	            scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
 	            break;
           case 'agent_mode':
@@ -15394,9 +15851,10 @@ async function sendChat(queuedMessage = null, options = {}) {
               if (voiceLatencyTurnStartedAt && !voiceLatencyFirstTokenLogged) {
                 voiceLatencyFirstTokenLogged = true;
                 logDesktopVoiceLatency(thisSessionId, 'worker first token', voiceLatencyTurnStartedAt, { textLen: chunk.length });
-              }
-              beginFinalResponse(streamState);
-              streamState.streamingAIText = appendFinalResponseDelta(streamState.streamingAIText, chunk);
+	              }
+	              beginFinalResponse(streamState);
+	              _settlePendingChatSteerPresentation(thisSessionId, streamState);
+	              streamState.streamingAIText = appendFinalResponseDelta(streamState.streamingAIText, chunk);
               if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
               scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
             }
@@ -15410,7 +15868,8 @@ async function sendChat(queuedMessage = null, options = {}) {
 	              streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
 	              if (window.activeChatSessionId === thisSessionId) window.streamingThinkingText = streamState.streamingThinkingText;
 	              if (String(event.source || '').toLowerCase() === 'reasoning_summary') {
-	                appendLiveTrace('think', chunk, { append: true });
+	                if (isDesktopProgressNarration(chunk)) setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
+	                else appendDesktopReasoningSummary(streamState, chunk, appendLiveTrace);
 	              }
 	            }
 	            break;
@@ -15420,10 +15879,8 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            const chunk = String(event.text || event.summary || '');
 	            if (chunk) {
 	              collectTurnThinking(chunk);
-	              appendLiveTrace('think', chunk, {
-	                append: true,
-	                extra: { visibility: 'user', source: 'reasoning_summary' },
-	              });
+	              if (isDesktopProgressNarration(chunk)) setDesktopLiveProgressNarration(streamState, chunk, appendLiveTrace);
+	              else appendDesktopReasoningSummary(streamState, chunk, appendLiveTrace);
 	            }
 	            break;
 	          }
@@ -15432,8 +15889,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            const thoughtText = String(event.text || '').trim();
 	            if (thoughtText) {
 	              collectTurnThinking(thoughtText);
-	              logThinkingToProcess(thoughtText);
-	              appendLiveTrace('think', thoughtText);
+	              setDesktopLiveProgressNarration(streamState, thoughtText, appendLiveTrace);
 	            }
 	            break;
 	          }
@@ -15442,8 +15898,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            if (event.thinking && String(event.thinking).trim()) {
 	              const thinkingText = String(event.thinking).trim();
 	              collectTurnThinking(thinkingText);
-	              logThinkingToProcess(thinkingText);
-	              appendLiveTrace('think', thinkingText);
+	              setDesktopLiveProgressNarration(streamState, thinkingText, appendLiveTrace);
 	            }
 	            break;
 
@@ -15982,6 +16437,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            if (finalReply) {
 	              partialContent = finalReply;
 	              beginFinalResponse(streamState);
+	              _settlePendingChatSteerPresentation(thisSessionId, streamState);
 	              streamState.streamingAIText = finalReply;
 	              if (window.activeChatSessionId === thisSessionId) window.streamingAIText = streamState.streamingAIText;
 	              scheduleStreamingRenderFor(thisSessionId, renderIfViewingThisSession);
@@ -15999,6 +16455,13 @@ async function sendChat(queuedMessage = null, options = {}) {
         }
       }
     }
+
+	    if (!streamState.abortRequested && !turnAbortController?.signal?.aborted
+	      && !finalReply && !sawTerminalStreamEvent && !sawFinalStreamEvent) {
+	      const streamEndedError = new Error('stream ended before completion');
+	      streamEndedError.desktopStreamDisconnected = true;
+	      throw streamEndedError;
+	    }
 
 	    if (streamState.abortRequested === true || turnAbortController?.signal?.aborted) {
 	      persistTurnThinkingToProcess();
@@ -16060,12 +16523,43 @@ async function sendChat(queuedMessage = null, options = {}) {
 
   } catch (err) {
     persistTurnThinkingToProcess();
-    const wasAborted = err?.name === 'AbortError'
+    const pageLifecycleDisconnected = window._desktopPageLifecycleDisconnectedSessions?.[thisSessionId] === true;
+    const wasAborted = !pageLifecycleDisconnected && (err?.name === 'AbortError'
       || turnAbortController?.signal?.aborted
       || streamState.abortRequested === true
-      || /abort/i.test(String(err?.message || err || ''));
+      || /abort/i.test(String(err?.message || err || '')));
     if (wasAborted) {
       saveInterruptedAssistantTurn();
+    } else if (pageLifecycleDisconnected || isDesktopChatTransportDisconnect(err)) {
+      desktopStreamRecoveryPending = true;
+      streamState.lastHeartbeat = {
+        ...streamState.lastHeartbeat,
+        state: 'running',
+        level: '',
+        message: 'Connection lost; recovering the live Prometheus stream.',
+        current_step: 'reconnecting',
+      };
+      const alreadyNoted = getTurnEntries().some((entry) => /connection lost; recovering/i.test(String(entry?.content || '')));
+      if (!alreadyNoted) {
+        addProcessEntry('warn', 'Connection lost; Prometheus is still working. Reconnecting to recover this turn.');
+      }
+      if (thisSession) thisSession.activeRun = true;
+      window._sessionThinking[thisSessionId] = true;
+      forgetLocalMainChatRequest(thisSessionId, clientRequestId, { immediate: true });
+      const rememberedRun = readDesktopActiveChatRun(thisSessionId);
+      rememberDesktopActiveChatRun(thisSessionId, {
+        clientRequestId: rememberedRun?.clientRequestId || clientRequestId,
+        streamId: rememberedRun?.streamId || String(window._mainChatStreamActiveIdBySession?.[thisSessionId] || ''),
+        lastSeq: Math.max(Number(rememberedRun?.lastSeq || 0), getMainChatStreamLastSeq(thisSessionId, rememberedRun?.streamId || 'default')),
+        disconnected: true,
+      });
+      if (window.activeChatSessionId === thisSessionId) {
+        window.lastHeartbeat = streamState.lastHeartbeat;
+        applyStreamStateToWindow(thisSessionId);
+        updateHeartbeatUI();
+        renderIfViewingThisSession();
+      }
+      scheduleDesktopMainChatRecovery(thisSessionId, { recovery: true, fullRefresh: false, delayMs: 180 });
     } else {
       const turnEntries = mergeLiveTraceProcessEntries(streamState.liveTraceEntries, getTurnEntries());
       streamState.lastHeartbeat = { ...streamState.lastHeartbeat, state: 'stalled', level: 'hard', message: String(err.message || 'connection_error'), current_step: 'error' };
@@ -16094,7 +16588,29 @@ async function sendChat(queuedMessage = null, options = {}) {
   // Per-session cleanup
   delete window._sessionThinking[thisSessionId];
   delete window._sessionAbortControllers[thisSessionId];
+  if (desktopStreamRecoveryPending) {
+    if (thisSession) thisSession.activeRun = true;
+    window._sessionThinking[thisSessionId] = true;
+    rememberDesktopActiveChatRun(thisSessionId, { disconnected: true, clientRequestId });
+    persistSession(thisSessionId);
+    syncActiveSessionRunState();
+    const isViewingRecoverySession = window.activeChatSessionId === thisSessionId;
+    if (isViewingRecoverySession) {
+      applyStreamStateToWindow(thisSessionId);
+      if (typeof window.setButtonState === 'function') window.setButtonState(true);
+      updateHeartbeatUI();
+      renderChatMessages();
+    }
+    sendBtn.disabled = false;
+    releaseChatSendLock(sendLock);
+    forgetLocalMainChatRequest(thisSessionId, clientRequestId, { immediate: true });
+    scheduleChatContextWindowRefresh(500);
+    updateQueuedPromptUI();
+    return;
+  }
+  delete window._desktopPageLifecycleDisconnectedSessions?.[thisSessionId];
   if (thisSession) thisSession.activeRun = false;
+  clearDesktopActiveChatRun(thisSessionId);
   persistSession(thisSessionId);
   // Do this before the final non-streaming paint. A late render must never
   // reuse the completed turn's state and recreate an empty Working bubble.
@@ -16596,15 +17112,15 @@ function clearChat() {
 // Enter to send, Shift+Enter for newline
 document.getElementById('chat-input').addEventListener('keydown', e => {
   const input = e.currentTarget;
-  const skillSuggestions = getSkillCommandSuggestions(input);
+    const skillSuggestions = getSkillComposerSuggestions(input);
   const suggestions = skillSuggestions.length ? skillSuggestions : getSlashCommandSuggestions(input);
   const popoverVisible = !activeSlashCommand && suggestions.length > 0;
   if (popoverVisible && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
     e.preventDefault();
     if (skillSuggestions.length) {
-      skillCommandSelectionIndex = e.key === 'ArrowDown'
-        ? (skillCommandSelectionIndex + 1) % suggestions.length
-        : (skillCommandSelectionIndex - 1 + suggestions.length) % suggestions.length;
+      skillComposerSelectionIndex = e.key === 'ArrowDown'
+        ? (skillComposerSelectionIndex + 1) % suggestions.length
+        : (skillComposerSelectionIndex - 1 + suggestions.length) % suggestions.length;
     } else {
       slashCommandSelectionIndex = e.key === 'ArrowDown'
         ? (slashCommandSelectionIndex + 1) % suggestions.length
@@ -16616,7 +17132,7 @@ document.getElementById('chat-input').addEventListener('keydown', e => {
   if (popoverVisible && (e.key === 'Enter' || e.key === 'Tab')) {
     e.preventDefault();
     if (skillSuggestions.length) {
-      replaceSkillCommandWithSelection(suggestions[skillCommandSelectionIndex] || suggestions[0], input);
+      replaceSkillComposerWithSelection(suggestions[skillComposerSelectionIndex] || suggestions[0], input);
     } else {
       selectSlashCommand(suggestions[slashCommandSelectionIndex]?.command || suggestions[0]?.command || '');
     }
@@ -16656,7 +17172,7 @@ window.addEventListener('prometheus:skills-cache-updated', () => {
   const input = document.getElementById('chat-input');
   if (input) {
     handleSkillTriggerInput(input);
-    if (getSkillCommandState(input)) renderSlashCommandPopover(input.value);
+    if (getSkillComposerState(input)) renderSlashCommandPopover(input.value);
   }
 });
 
@@ -16847,6 +17363,637 @@ const DESKTOP_VOICE_TOAST_KEY = 'desktop-voice-status';
 function showDesktopVoiceStatus(title, body = '', type = 'info', duration = 5000) {
   showToast(title, body, type, duration, { key: DESKTOP_VOICE_TOAST_KEY });
 }
+
+// Desktop Voice uses the same dimensional orb language as the mobile Voice
+// page. The dock is created only while Realtime voice is starting/active so the
+// normal composer and chat remain unchanged outside voice mode.
+let desktopVoiceOrbDock = null;
+let desktopVoiceOrbAnimationFrame = 0;
+let desktopVoiceOrbAudioContext = null;
+let desktopVoiceOrbAnalyser = null;
+let desktopVoiceOrbSource = null;
+let desktopVoiceOrbStream = null;
+let desktopVoiceOrbTimeData = null;
+let desktopVoiceOrbParticleCtx = null;
+let desktopVoiceOrbParticleDpr = 1;
+let desktopVoiceOrbParticleWidth = 0;
+let desktopVoiceOrbParticleHeight = 0;
+let desktopVoiceOrbParticleLastFrame = 0;
+let desktopVoiceOrbSpin = 0;
+let desktopVoiceOrbAudioLevel = 0;
+let desktopVoiceOrbNoiseFloor = 0.018;
+let desktopVoiceOrbParticlePalette = null;
+let desktopVoiceOrbParticlePaletteAt = 0;
+const desktopVoiceOrbParticles = Array.from({ length: 38 }, (_, index) => {
+  const seed = (value) => {
+    const raw = Math.sin((index + 1) * (value * 12.9898 + 78.233)) * 43758.5453;
+    return raw - Math.floor(raw);
+  };
+  return {
+    angle: seed(1.13) * Math.PI * 2,
+    radius: .28 + seed(2.71) * .34,
+    speed: (.16 + seed(4.19) * .52) * (index % 3 === 0 ? -1 : 1),
+    depth: seed(5.43),
+    size: .65 + seed(7.07) * 1.65,
+    phase: seed(8.31) * Math.PI * 2,
+    twinkle: .55 + seed(9.17) * .75,
+  };
+});
+
+function desktopVoiceOrbSvg() {
+  const id = `pm-desktop-orb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `
+    <svg class="pm-orb-svg" viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      <defs>
+        <radialGradient id="${id}-core" cx="32%" cy="25%" r="78%">
+          <stop offset="0%" stop-color="var(--pm-voice-orb-light, #fff6e6)" stop-opacity=".98"/>
+          <stop offset="24%" stop-color="var(--pm-voice-orb-hot, #ffd9a8)" stop-opacity=".82"/>
+          <stop offset="58%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".66"/>
+          <stop offset="88%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".78"/>
+          <stop offset="100%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".94"/>
+        </radialGradient>
+        <radialGradient id="${id}-aura" cx="50%" cy="48%" r="58%">
+          <stop offset="0%" stop-color="var(--pm-voice-orb-glow, #ffb578)" stop-opacity=".56"/>
+          <stop offset="54%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".18"/>
+          <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="${id}-rim" cx="32%" cy="20%" r="82%">
+          <stop offset="0%" stop-color="#fff" stop-opacity=".23"/>
+          <stop offset="34%" stop-color="#fff" stop-opacity=".03"/>
+          <stop offset="70%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".10"/>
+          <stop offset="100%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".72"/>
+        </radialGradient>
+        <linearGradient id="${id}-wave" x1="0%" y1="50%" x2="100%" y2="50%">
+          <stop offset="0%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
+          <stop offset="17%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".94"/>
+          <stop offset="50%" stop-color="var(--pm-voice-orb-light, #fff3d8)" stop-opacity="1"/>
+          <stop offset="83%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".94"/>
+          <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
+        </linearGradient>
+        <clipPath id="${id}-clip"><circle cx="160" cy="160" r="128"/></clipPath>
+        <filter id="${id}-wave-glow" x="-30%" y="-120%" width="160%" height="340%"><feGaussianBlur stdDeviation="4.8"/></filter>
+        <filter id="${id}-soft-glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="7"/></filter>
+      </defs>
+      <circle class="pm-orb-aura" cx="160" cy="160" r="157" fill="url(#${id}-aura)"/>
+      <circle class="pm-orb-shell" cx="160" cy="160" r="133" fill="var(--pm-voice-orb-deep, #7a3008)" opacity=".58"/>
+      <circle class="pm-orb-core" cx="160" cy="160" r="128" fill="url(#${id}-core)"/>
+      <g class="pm-orb-surface" clip-path="url(#${id}-clip)">
+        <ellipse class="pm-orb-specular" cx="113" cy="92" rx="64" ry="40" fill="#fff" opacity=".12" transform="rotate(-24 113 92)" filter="url(#${id}-soft-glow)"/>
+        <ellipse class="pm-orb-depth" cx="190" cy="224" rx="122" ry="62" fill="var(--pm-voice-orb-deep, #7a3008)" opacity=".20"/>
+        <g class="pm-orb-grid pm-orb-grid-latitude" stroke="var(--pm-voice-orb-grid, rgba(234,106,31,.2))" fill="none" stroke-width=".75">
+          <ellipse cx="160" cy="160" rx="128" ry="38"/>
+          <ellipse cx="160" cy="160" rx="128" ry="76"/>
+          <ellipse cx="160" cy="160" rx="128" ry="108"/>
+        </g>
+        <g class="pm-orb-grid pm-orb-grid-longitude" stroke="var(--pm-voice-orb-grid, rgba(234,106,31,.2))" fill="none" stroke-width=".75">
+          <ellipse cx="160" cy="160" rx="40" ry="128"/>
+          <ellipse cx="160" cy="160" rx="78" ry="128"/>
+          <ellipse cx="160" cy="160" rx="112" ry="128"/>
+          <circle cx="160" cy="160" r="128"/>
+        </g>
+        <path class="pm-orb-flow pm-orb-flow-a" d="M25 115 C74 83 106 103 143 89 S222 58 298 103" fill="none" stroke="var(--pm-voice-orb-light, #fff3d8)" stroke-opacity=".16" stroke-width="2"/>
+        <path class="pm-orb-flow pm-orb-flow-b" d="M13 207 C68 240 99 214 142 232 S224 261 307 210" fill="none" stroke="var(--pm-voice-orb-accent, #ea6a1f)" stroke-opacity=".32" stroke-width="2.4"/>
+      </g>
+      <circle class="pm-orb-rim" cx="160" cy="160" r="128" fill="url(#${id}-rim)"/>
+      <path class="pm-orb-rim-light" d="M72 88 C96 52 140 34 184 37 C224 39 258 61 278 91" fill="none" stroke="var(--pm-voice-orb-light, #fff3d8)" stroke-opacity=".46" stroke-width="2.2" stroke-linecap="round"/>
+      <path class="pm-wave pm-wave-halo" d="M14 160 Q40 160 56 160 T96 138 T120 175 T142 142 T160 160 T178 178 T200 145 T220 175 T246 160 T268 160 T306 160" fill="none" stroke="url(#${id}-wave)" stroke-width="15" stroke-linecap="round" opacity=".54" filter="url(#${id}-wave-glow)"/>
+      <path class="pm-wave pm-wave-main" d="M14 160 Q40 160 56 160 T96 138 T120 175 T142 142 T160 160 T178 178 T200 145 T220 175 T246 160 T268 160 T306 160" fill="none" stroke="url(#${id}-wave)" stroke-width="2.35" stroke-linecap="round"/>
+      <g class="pm-sparkles" fill="var(--pm-voice-orb-light, #fff3d8)">
+        <circle cx="83" cy="102" r="1.7"/><circle cx="220" cy="86" r="1.3"/><circle cx="254" cy="208" r="1.8"/><circle cx="75" cy="219" r="1.3"/>
+        <circle cx="160" cy="72" r="1.6"/><circle cx="52" cy="166" r="1.1"/><circle cx="273" cy="165" r="1.2"/><circle cx="185" cy="246" r="1.7"/>
+      </g>
+    </svg>
+  `;
+}
+
+function getDesktopVoiceOrbStream() {
+  const streams = [
+    voiceAgentRealtimeConnection?.micStream,
+    realtimeDictationConnection?.stream,
+    backendVoiceRecorder?.stream,
+  ];
+  return streams.find((stream) => stream?.getAudioTracks?.().some((track) => track.readyState === 'live')) || null;
+}
+
+function connectDesktopVoiceOrbAnalyser() {
+  const stream = getDesktopVoiceOrbStream();
+  if (!stream) return false;
+  try {
+    if (desktopVoiceOrbStream !== stream || !desktopVoiceOrbAnalyser) {
+      try { desktopVoiceOrbSource?.disconnect?.(); } catch {}
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!desktopVoiceOrbAudioContext && AudioCtx) desktopVoiceOrbAudioContext = new AudioCtx();
+      if (!desktopVoiceOrbAudioContext) return false;
+      desktopVoiceOrbAnalyser = desktopVoiceOrbAudioContext.createAnalyser();
+      desktopVoiceOrbAnalyser.fftSize = 256;
+      desktopVoiceOrbAnalyser.smoothingTimeConstant = .72;
+      desktopVoiceOrbSource = desktopVoiceOrbAudioContext.createMediaStreamSource(stream);
+      desktopVoiceOrbSource.connect(desktopVoiceOrbAnalyser);
+      desktopVoiceOrbTimeData = new Uint8Array(desktopVoiceOrbAnalyser.fftSize);
+      desktopVoiceOrbStream = stream;
+    }
+    if (desktopVoiceOrbAudioContext?.state === 'suspended') desktopVoiceOrbAudioContext.resume?.().catch?.(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sampleDesktopVoiceOrbLevel() {
+  if (!connectDesktopVoiceOrbAnalyser() || !desktopVoiceOrbAnalyser) return 0;
+  if (!desktopVoiceOrbTimeData || desktopVoiceOrbTimeData.length !== desktopVoiceOrbAnalyser.fftSize) {
+    desktopVoiceOrbTimeData = new Uint8Array(desktopVoiceOrbAnalyser.fftSize);
+  }
+  desktopVoiceOrbAnalyser.getByteTimeDomainData(desktopVoiceOrbTimeData);
+  let sumSquares = 0;
+  let peak = 0;
+  for (let index = 0; index < desktopVoiceOrbTimeData.length; index += 1) {
+    const sample = (desktopVoiceOrbTimeData[index] - 128) / 128;
+    const magnitude = Math.abs(sample);
+    sumSquares += sample * sample;
+    if (magnitude > peak) peak = magnitude;
+  }
+  const rms = Math.sqrt(sumSquares / Math.max(1, desktopVoiceOrbTimeData.length));
+  return (rms * .78) + (peak * .22);
+}
+
+function resizeDesktopVoiceOrbParticles(canvas) {
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  const width = Math.max(1, Math.floor(rect.width * dpr));
+  const height = Math.max(1, Math.floor(rect.height * dpr));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  desktopVoiceOrbParticleDpr = dpr;
+  desktopVoiceOrbParticleWidth = rect.width || 1;
+  desktopVoiceOrbParticleHeight = rect.height || 1;
+  desktopVoiceOrbParticleCtx = desktopVoiceOrbParticleCtx || canvas.getContext('2d');
+  desktopVoiceOrbParticleCtx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function desktopVoiceOrbParticleColors(now) {
+  if (desktopVoiceOrbParticlePalette && now - desktopVoiceOrbParticlePaletteAt < 900) return desktopVoiceOrbParticlePalette;
+  const styles = getComputedStyle(document.documentElement);
+  desktopVoiceOrbParticlePalette = {
+    accent: styles.getPropertyValue('--pm-voice-orb-accent').trim() || '#d6b75e',
+    glow: styles.getPropertyValue('--pm-voice-orb-glow').trim() || '#f0d98b',
+    light: styles.getPropertyValue('--pm-voice-orb-light').trim() || '#fff9e8',
+    grid: styles.getPropertyValue('--pm-voice-orb-grid').trim() || 'rgba(214,183,94,.22)',
+  };
+  desktopVoiceOrbParticlePaletteAt = now;
+  return desktopVoiceOrbParticlePalette;
+}
+
+function drawDesktopVoiceOrbParticles(canvas, now, audioLevel = 0, active = false) {
+  if (!canvas) return;
+  resizeDesktopVoiceOrbParticles(canvas);
+  const ctx = desktopVoiceOrbParticleCtx;
+  if (!ctx) return;
+  const width = desktopVoiceOrbParticleWidth || 1;
+  const height = desktopVoiceOrbParticleHeight || 1;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const energy = Math.max(0, Math.min(1, Number(audioLevel) || 0));
+  const time = now / 1000;
+  const palette = desktopVoiceOrbParticleColors(now);
+  ctx.clearRect(0, 0, width, height);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let index = 0; index < 3; index += 1) {
+    const radius = Math.min(width, height) * (.34 + index * .085 + energy * .045);
+    const tilt = .34 + index * .11;
+    ctx.beginPath();
+    ctx.ellipse(centerX, centerY, radius, radius * tilt, desktopVoiceOrbSpin * Math.PI / 180 + index * .72, -1.08, 1.78);
+    ctx.strokeStyle = palette.grid;
+    ctx.globalAlpha = (active ? .22 : .12) + energy * .12;
+    ctx.lineWidth = .55 + energy * .45;
+    ctx.setLineDash([2.5 + index, 7 + index * 2]);
+    ctx.lineDashOffset = -time * (10 + index * 6);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  const sphereRadius = Math.min(width, height) * (.305 + energy * .014);
+  const rotation = desktopVoiceOrbSpin * Math.PI / 180;
+  const tilt = .13 + Math.sin(time * .55) * .025;
+  const projectSpherePoint = (latitude, longitude) => {
+    const cosLat = Math.cos(latitude);
+    const x = cosLat * Math.sin(longitude);
+    const y = Math.sin(latitude);
+    const z = cosLat * Math.cos(longitude);
+    const rotatedX = x * Math.cos(rotation) - z * Math.sin(rotation);
+    const rotatedZ = x * Math.sin(rotation) + z * Math.cos(rotation);
+    const projectedY = y * Math.cos(tilt) - rotatedZ * Math.sin(tilt);
+    const depth = y * Math.sin(tilt) + rotatedZ * Math.cos(tilt);
+    return { x: centerX + rotatedX * sphereRadius, y: centerY + projectedY * sphereRadius, z: depth };
+  };
+  const drawSphereCurve = (points) => {
+    for (let index = 1; index < points.length; index += 1) {
+      const from = points[index - 1];
+      const to = points[index];
+      const depth = (from.z + to.z) * .5;
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.strokeStyle = depth > 0 ? palette.light : palette.accent;
+      ctx.globalAlpha = (depth > 0 ? .19 : .045) + energy * (depth > 0 ? .11 : .025);
+      ctx.lineWidth = (depth > 0 ? .52 : .28) + energy * (depth > 0 ? .45 : .16);
+      ctx.shadowBlur = depth > 0 ? 2 + energy * 4 : 0;
+      ctx.stroke();
+    }
+  };
+  for (let latitude = -75; latitude <= 75; latitude += 30) {
+    const points = [];
+    for (let longitude = 0; longitude <= 360; longitude += 10) points.push(projectSpherePoint(latitude * Math.PI / 180, longitude * Math.PI / 180));
+    drawSphereCurve(points);
+  }
+  for (let longitude = 0; longitude < 360; longitude += 36) {
+    const points = [];
+    for (let latitude = -90; latitude <= 90; latitude += 8) points.push(projectSpherePoint(latitude * Math.PI / 180, longitude * Math.PI / 180));
+    drawSphereCurve(points);
+  }
+  desktopVoiceOrbParticles.forEach((particle) => {
+    const angle = particle.angle + time * particle.speed * (.65 + energy * 2.4) + desktopVoiceOrbSpin * Math.PI / 180;
+    const radius = Math.min(width, height) * (particle.radius + energy * (.028 + particle.depth * .06));
+    const depth = (Math.sin(angle + particle.phase) + 1) / 2;
+    const x = centerX + Math.cos(angle) * radius * (.92 + particle.depth * .14);
+    const y = centerY + Math.sin(angle) * radius * (.46 + particle.depth * .17) + Math.sin(time * (1.2 + particle.twinkle) + particle.phase) * energy * 5;
+    const size = (particle.size * (.62 + depth * .76)) * (1 + energy * .58);
+    const alpha = ((active ? .18 : .10) + depth * .42 + energy * .24) * (.62 + particle.twinkle * .28);
+    ctx.globalAlpha = Math.max(0, Math.min(.92, alpha));
+    ctx.fillStyle = depth > .56 ? palette.light : palette.accent;
+    ctx.shadowColor = palette.glow;
+    ctx.shadowBlur = 3 + size * 3 + energy * 8;
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(.55, size), 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
+}
+
+function updateDesktopVoiceOrbTranscript(text = '', fallback = '') {
+  const target = document.getElementById('desktop-voice-orb-transcript');
+  if (!target) return;
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  target.textContent = value || String(fallback || '').trim();
+  target.classList.toggle('has-text', !!value);
+}
+
+function getDesktopVoiceRoomParticipants() {
+  const main = normalizeDesktopVoiceParticipant({ kind: 'main', label: 'Prometheus' });
+  const agents = (Array.isArray(desktopVoiceRoomAgents) ? desktopVoiceRoomAgents : [])
+    .map((agent) => normalizeDesktopVoiceParticipant({
+      kind: 'subagent',
+      agentId: agent?.id || agent?.agentId,
+      label: agent?.name || agent?.label || agent?.displayName,
+      alias: agent?.alias,
+    }))
+    .filter(Boolean);
+  const byKey = new Map([main, ...agents].filter(Boolean).map((participant) => [participant.key, participant]));
+  if (desktopVoiceRoom.enabled) {
+    desktopVoiceRoom.participants.forEach((participant) => {
+      if (!byKey.has(participant.key)) byKey.set(participant.key, participant);
+    });
+  }
+  return [...byKey.values()];
+}
+
+async function loadDesktopVoiceRoomAgents() {
+  if (desktopVoiceRoomAgentsPromise) return desktopVoiceRoomAgentsPromise;
+  if (Array.isArray(window.subagentsData) && window.subagentsData.length) {
+    desktopVoiceRoomAgents = window.subagentsData.filter((agent) => !agent?.default && !agent?.isSynthetic);
+    return desktopVoiceRoomAgents;
+  }
+  desktopVoiceRoomAgentsPromise = fetch('/api/agents', { cache: 'no-store' })
+    .then((response) => response.ok ? response.json() : { agents: [] })
+    .then((data) => {
+      desktopVoiceRoomAgents = Array.isArray(data?.agents)
+        ? data.agents.filter((agent) => !agent?.default && !agent?.isSynthetic)
+        : [];
+      window.subagentsData = desktopVoiceRoomAgents;
+      return desktopVoiceRoomAgents;
+    })
+    .catch(() => {
+      desktopVoiceRoomAgents = [];
+      return desktopVoiceRoomAgents;
+    })
+    .finally(() => { desktopVoiceRoomAgentsPromise = null; });
+  return desktopVoiceRoomAgentsPromise;
+}
+
+function setDesktopVoiceRoomPopoverOpen(open) {
+  desktopVoiceRoomPopoverOpen = !!open;
+  const dock = desktopVoiceOrbDock;
+  const popover = dock?.querySelector?.('.desktop-voice-target-popover');
+  const orbButton = dock?.querySelector?.('.desktop-voice-orb-trigger');
+  const chatView = document.getElementById('chat-view');
+  if (popover) popover.hidden = !desktopVoiceRoomPopoverOpen;
+  if (orbButton) {
+    orbButton.setAttribute('aria-expanded', desktopVoiceRoomPopoverOpen ? 'true' : 'false');
+    orbButton.setAttribute('aria-label', desktopVoiceRoomPopoverOpen ? 'Close voice target picker' : 'Choose voice target');
+  }
+  chatView?.classList.toggle('desktop-voice-target-open', desktopVoiceRoomPopoverOpen);
+}
+
+function renderDesktopVoiceRoomPopover() {
+  const popover = desktopVoiceOrbDock?.querySelector?.('.desktop-voice-target-popover');
+  if (!popover) return;
+  const participants = getDesktopVoiceRoomParticipants();
+  const selectedKeys = desktopVoiceRoomSelectMode
+    ? desktopVoiceRoomDraftKeys
+    : new Set(desktopVoiceRoom.participants.map((participant) => participant.key));
+  const activeKey = desktopVoiceRoom.enabled ? desktopVoiceRoom.activeKey : desktopVoiceTarget?.key;
+  const roomLabel = desktopVoiceRoom.enabled
+    ? `Room active · ${desktopVoiceRoom.participants.length} agents`
+    : 'Talk to Prometheus or choose a room';
+  popover.innerHTML = `
+    <div class="desktop-voice-target-heading">
+      <span>Voice target</span>
+      <button type="button" class="desktop-voice-target-close" data-desktop-voice-room-close aria-label="Close voice target picker">×</button>
+    </div>
+    <div class="desktop-voice-target-subtitle">${escHtml(roomLabel)}</div>
+    <div class="desktop-voice-target-list">
+      ${participants.map((participant) => {
+        const isMember = selectedKeys.has(participant.key);
+        const isActive = activeKey === participant.key;
+        const classes = [
+          'desktop-voice-target-option',
+          isActive ? 'is-active' : '',
+          desktopVoiceRoomSelectMode && isMember ? 'is-selected' : '',
+        ].filter(Boolean).join(' ');
+        return `<button type="button" class="${classes}" data-desktop-voice-target-key="${escHtml(participant.key)}" aria-pressed="${desktopVoiceRoomSelectMode ? isMember : isActive}">
+          <span class="desktop-voice-target-dot${isActive ? ' is-active' : ''}"></span>
+          <span class="desktop-voice-target-option-copy"><strong>${escHtml(desktopVoiceParticipantLabel(participant))}</strong><small>${participant.kind === 'subagent' ? 'Subagent' : 'Main agent'}</small></span>
+          ${desktopVoiceRoomSelectMode ? `<span class="desktop-voice-target-check">${isMember ? '✓' : ''}</span>` : (isActive ? '<span class="desktop-voice-target-live">Live</span>' : '')}
+        </button>`;
+      }).join('')}
+    </div>
+    <div class="desktop-voice-room-actions">
+      ${desktopVoiceRoomSelectMode
+        ? `<button type="button" class="desktop-voice-room-secondary" data-desktop-voice-room-cancel>Cancel</button><button type="button" class="desktop-voice-room-primary" data-desktop-voice-room-save>Start room</button>`
+        : `<button type="button" class="desktop-voice-room-primary" data-desktop-voice-room-toggle>${desktopVoiceRoom.enabled ? 'Edit room' : 'Create voice room'}</button>${desktopVoiceRoom.enabled ? '<button type="button" class="desktop-voice-room-secondary" data-desktop-voice-room-exit>Exit room</button>' : ''}`}
+    </div>
+  `;
+  setDesktopVoiceRoomPopoverOpen(desktopVoiceRoomPopoverOpen);
+  popover.querySelector('[data-desktop-voice-room-close]')?.addEventListener('click', () => setDesktopVoiceRoomPopoverOpen(false));
+  popover.querySelectorAll('[data-desktop-voice-target-key]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const participant = participants.find((item) => item.key === button.dataset.desktopVoiceTargetKey);
+      if (!participant) return;
+      if (desktopVoiceRoomSelectMode) {
+        if (desktopVoiceRoomDraftKeys.has(participant.key)) {
+          if (desktopVoiceRoomDraftKeys.size > 1) desktopVoiceRoomDraftKeys.delete(participant.key);
+        } else {
+          desktopVoiceRoomDraftKeys.add(participant.key);
+        }
+        renderDesktopVoiceRoomPopover();
+        return;
+      }
+      activateDesktopVoiceParticipant(participant).catch((error) => showDesktopVoiceStatus('Voice target failed', error?.message || String(error), 'error'));
+    });
+  });
+  popover.querySelector('[data-desktop-voice-room-toggle]')?.addEventListener('click', () => {
+    desktopVoiceRoomSelectMode = true;
+    desktopVoiceRoomDraftKeys = new Set(desktopVoiceRoom.enabled
+      ? desktopVoiceRoom.participants.map((participant) => participant.key)
+      : [desktopVoiceTarget?.key || 'main']);
+    renderDesktopVoiceRoomPopover();
+  });
+  popover.querySelector('[data-desktop-voice-room-cancel]')?.addEventListener('click', () => {
+    desktopVoiceRoomSelectMode = false;
+    desktopVoiceRoomDraftKeys = new Set();
+    renderDesktopVoiceRoomPopover();
+  });
+  popover.querySelector('[data-desktop-voice-room-save]')?.addEventListener('click', () => {
+    saveDesktopVoiceRoomFromDraft(participants).catch((error) => showDesktopVoiceStatus('Voice room failed', error?.message || String(error), 'error'));
+  });
+  popover.querySelector('[data-desktop-voice-room-exit]')?.addEventListener('click', () => {
+    exitDesktopVoiceRoom().catch((error) => showDesktopVoiceStatus('Could not exit room', error?.message || String(error), 'error'));
+  });
+}
+
+async function activateDesktopVoiceParticipant(participant) {
+  const normalized = normalizeDesktopVoiceParticipant(participant);
+  if (!normalized) return;
+  const wasRoomMember = desktopVoiceRoom.enabled && desktopVoiceRoom.participants.some((item) => item.key === normalized.key);
+  if (desktopVoiceRoom.enabled && !wasRoomMember) resetDesktopVoiceRoomState();
+  if (desktopVoiceRoom.enabled) {
+    desktopVoiceRoom = saveDesktopVoiceRoomState({ ...desktopVoiceRoom, activeKey: normalized.key, focusUntil: Date.now() + DESKTOP_VOICE_ROOM_FOCUS_MS });
+    desktopVoiceTarget = normalized;
+  } else {
+    saveDesktopVoiceTarget(normalized);
+  }
+  renderDesktopVoiceRoomPopover();
+  await restartDesktopVoiceRealtimeForTarget();
+}
+
+async function restartDesktopVoiceRealtimeForTarget() {
+  const active = realtimeVoiceStarting || realtimeVoiceRepliesEnabled;
+  if (!active) return;
+  const sid = String(window.activeChatSessionId || '').trim() || 'default';
+  const listenMode = voiceAgentRealtimeConnection?.listenMode || (realtimeUsesHoldSpace() ? 'push_to_talk' : 'always_listening');
+  stopVoiceAgentRealtimeSession();
+  await startVoiceAgentRealtimeSession(sid, {
+    listenMode,
+    voiceTarget: desktopVoiceTargetForBootstrap(),
+    voiceRoom: desktopVoiceRoomContextForSession(sid),
+  });
+  if (listenMode === 'always_listening') setVoiceAgentRealtimeMicEnabled(true);
+  setRealtimeVoiceButtonState();
+}
+
+async function saveDesktopVoiceRoomFromDraft(participants) {
+  const selected = participants.filter((participant) => desktopVoiceRoomDraftKeys.has(participant.key));
+  if (selected.length < 2) throw new Error('Choose at least two voice agents.');
+  const response = await fetch('/api/voice-rooms/resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ participants: selected.map(({ key, kind, agentId, label }) => ({ key, kind, agentId, label })) }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.success === false || !data?.session?.id) throw new Error(data?.error || 'Could not resolve Voice Room.');
+  const session = data.session;
+  const sid = String(session.id || '').trim();
+  const existing = getChatSessionById(sid) || createEmptyChatSession(sid);
+  Object.assign(existing, {
+    title: session.title || `Voice Room · ${selected.map(desktopVoiceParticipantLabel).join(' + ')}`,
+    source: 'voice_room',
+    channel: 'voice_room',
+    automated: true,
+    voiceRoom: session.voiceRoom || { participants: selected },
+    _needsServerLoad: true,
+  });
+  if (!window.chatSessions.includes(existing)) window.chatSessions.unshift(existing);
+  saveChatSessions();
+  await _loadSessionFromServer(sid, { force: true, historyLimit: 300, processLimit: 500 });
+  window.activeChatSessionId = sid;
+  setAgentSessionId(sid);
+  syncActiveChat();
+  refreshVisibleChannelsList();
+  syncDesktopVoiceRoomForSession(sid, existing);
+  desktopVoiceRoomSelectMode = false;
+  desktopVoiceRoomDraftKeys = new Set();
+  const wasActive = realtimeVoiceStarting || realtimeVoiceRepliesEnabled;
+  if (wasActive) {
+    stopVoiceAgentRealtimeSession();
+    desktopVoiceRoom = saveDesktopVoiceRoomState({ ...desktopVoiceRoom, sessionId: sid });
+    await startVoiceAgentRealtimeSession(sid, {
+      listenMode: realtimeUsesHoldSpace() ? 'push_to_talk' : 'always_listening',
+      voiceTarget: desktopVoiceTargetForBootstrap(),
+      voiceRoom: desktopVoiceRoomContextForSession(sid),
+    });
+    realtimeVoiceStarting = false;
+    realtimeVoiceRepliesEnabled = true;
+    setRealtimeVoiceButtonState();
+  }
+  renderDesktopVoiceRoomPopover();
+}
+
+async function exitDesktopVoiceRoom() {
+  const sid = String(window.activeChatSessionId || '').trim();
+  resetDesktopVoiceRoomState();
+  if (sid.startsWith('voice_room_')) {
+    newChatSession();
+  } else {
+    await restartDesktopVoiceRealtimeForTarget();
+  }
+}
+
+function toggleDesktopVoiceRoomPopover(event) {
+  event?.stopPropagation?.();
+  if (!desktopVoiceOrbDock) return;
+  if (desktopVoiceRoomPopoverOpen) {
+    setDesktopVoiceRoomPopoverOpen(false);
+    return;
+  }
+  desktopVoiceRoomPopoverOpen = true;
+  renderDesktopVoiceRoomPopover();
+  loadDesktopVoiceRoomAgents().then(() => {
+    if (desktopVoiceRoomPopoverOpen) renderDesktopVoiceRoomPopover();
+  });
+}
+
+function ensureDesktopVoiceOrbDock() {
+  if (desktopVoiceOrbDock?.isConnected) return desktopVoiceOrbDock;
+  const chatView = document.getElementById('chat-view');
+  if (!chatView) return null;
+  const dock = document.createElement('div');
+  dock.id = 'desktop-voice-orb-dock';
+  dock.className = 'desktop-voice-orb-dock';
+  dock.innerHTML = `
+    <div class="desktop-voice-orb-transcript" id="desktop-voice-orb-transcript" aria-live="polite"></div>
+    <div class="desktop-voice-target-popover" role="dialog" aria-label="Voice target picker" hidden></div>
+    <div class="desktop-voice-orb-shell">
+      <button type="button" class="desktop-voice-orb desktop-voice-orb-trigger pm-voice-orb pm-voice-particle-orb" id="desktop-voice-orb-trigger" aria-label="Choose voice target" aria-expanded="false" title="Choose voice target">
+        ${desktopVoiceOrbSvg()}
+        <canvas class="desktop-voice-orb-particles" aria-hidden="true"></canvas>
+      </button>
+    </div>
+  `;
+  const composer = Array.from(chatView.children).find((child) => child?.classList?.contains('chat-input-area'));
+  if (composer) chatView.insertBefore(dock, composer);
+  else chatView.appendChild(dock);
+  desktopVoiceOrbDock = dock;
+  dock.querySelector('.desktop-voice-orb-trigger')?.addEventListener('click', toggleDesktopVoiceRoomPopover);
+  renderDesktopVoiceRoomPopover();
+  return dock;
+}
+
+function cleanupDesktopVoiceOrb() {
+  if (desktopVoiceOrbAnimationFrame) cancelAnimationFrame(desktopVoiceOrbAnimationFrame);
+  desktopVoiceOrbAnimationFrame = 0;
+  try { desktopVoiceOrbSource?.disconnect?.(); } catch {}
+  try { desktopVoiceOrbAnalyser?.disconnect?.(); } catch {}
+  try { desktopVoiceOrbAudioContext?.close?.(); } catch {}
+  desktopVoiceOrbSource = null;
+  desktopVoiceOrbAnalyser = null;
+  desktopVoiceOrbAudioContext = null;
+  desktopVoiceOrbStream = null;
+  desktopVoiceOrbTimeData = null;
+  desktopVoiceOrbParticleCtx = null;
+  desktopVoiceOrbParticleWidth = 0;
+  desktopVoiceOrbParticleHeight = 0;
+  desktopVoiceOrbParticleLastFrame = 0;
+  desktopVoiceOrbParticlePalette = null;
+  desktopVoiceOrbParticlePaletteAt = 0;
+  desktopVoiceOrbAudioLevel = 0;
+  desktopVoiceRoomPopoverOpen = false;
+  desktopVoiceRoomSelectMode = false;
+  desktopVoiceRoomDraftKeys = new Set();
+  document.getElementById('chat-view')?.classList.remove('desktop-voice-target-open');
+  desktopVoiceOrbDock?.remove?.();
+  desktopVoiceOrbDock = null;
+}
+
+function animateDesktopVoiceOrb(now) {
+  if (!desktopVoiceOrbDock || (!realtimeVoiceStarting && !realtimeVoiceRepliesEnabled)) {
+    document.getElementById('chat-view')?.classList.remove('desktop-voice-mode');
+    cleanupDesktopVoiceOrb();
+    return;
+  }
+  const orb = desktopVoiceOrbDock.querySelector('.desktop-voice-orb');
+  const canvas = desktopVoiceOrbDock.querySelector('.desktop-voice-orb-particles');
+  if (!orb || !canvas) return;
+  const micTrack = voiceAgentRealtimeConnection?.micTrack
+    || realtimeDictationConnection?.stream?.getAudioTracks?.()[0]
+    || backendVoiceRecorder?.stream?.getAudioTracks?.()[0];
+  const listening = !!(micTrack?.readyState === 'live' && micTrack.enabled !== false);
+  const speaking = !!(realtimeVoicePlaybackActive || realtimeAssistantSpeaking || voiceAgentRealtimeConnection?.activeResponse);
+  const rawLevel = listening ? sampleDesktopVoiceOrbLevel() : 0;
+  if (listening) {
+    const floorFollow = rawLevel < desktopVoiceOrbNoiseFloor ? .075 : .0025;
+    desktopVoiceOrbNoiseFloor += (rawLevel - desktopVoiceOrbNoiseFloor) * floorFollow;
+    desktopVoiceOrbNoiseFloor = Math.max(.006, Math.min(.09, desktopVoiceOrbNoiseFloor));
+  } else {
+    desktopVoiceOrbNoiseFloor += (.018 - desktopVoiceOrbNoiseFloor) * .025;
+  }
+  const signal = Math.max(0, rawLevel - desktopVoiceOrbNoiseFloor - .004);
+  const inputTarget = listening ? Math.max(0, Math.min(1, Math.pow(signal * 10.5, .72))) : 0;
+  const target = speaking ? Math.max(.14, inputTarget) : inputTarget;
+  const smoothing = target > desktopVoiceOrbAudioLevel ? .2 : .115;
+  desktopVoiceOrbAudioLevel += (target - desktopVoiceOrbAudioLevel) * smoothing;
+  if (desktopVoiceOrbAudioLevel < .004) desktopVoiceOrbAudioLevel = 0;
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const delta = reducedMotion
+    ? 0
+    : desktopVoiceOrbParticleLastFrame ? Math.min(.05, Math.max(.001, (now - desktopVoiceOrbParticleLastFrame) / 1000)) : .016;
+  desktopVoiceOrbParticleLastFrame = now;
+  desktopVoiceOrbSpin = (desktopVoiceOrbSpin + delta * (8 + desktopVoiceOrbAudioLevel * 42)) % 360;
+  const spinRadians = desktopVoiceOrbSpin * Math.PI / 180;
+  const gridSquash = .52 + Math.abs(Math.cos(spinRadians)) * .48;
+  const gridRotation = Math.sin(spinRadians) * 8;
+  orb.style.setProperty('--pm-orb-audio', desktopVoiceOrbAudioLevel.toFixed(3));
+  orb.style.setProperty('--pm-orb-grid-squash', gridSquash.toFixed(3));
+  orb.style.setProperty('--pm-orb-grid-rotation', `${gridRotation.toFixed(2)}deg`);
+  orb.style.setProperty('--pm-orb-lift', `${(-desktopVoiceOrbAudioLevel * 7).toFixed(2)}px`);
+  orb.classList.toggle('pm-orb-sound-reactive', listening || speaking);
+  orb.classList.toggle('listening', listening && !speaking);
+  orb.classList.toggle('speaking', speaking);
+  orb.classList.toggle('thinking', !listening && !speaking && realtimeVoiceStarting);
+  drawDesktopVoiceOrbParticles(canvas, reducedMotion ? 0 : now, desktopVoiceOrbAudioLevel, listening || speaking || realtimeVoiceStarting);
+  const transcript = typeof getRealtimeDictationComposerText === 'function' ? getRealtimeDictationComposerText() : '';
+  if (!realtimeAssistantSpeaking) updateDesktopVoiceOrbTranscript(transcript, realtimeVoiceStarting ? 'Connecting…' : 'Listening…');
+  desktopVoiceOrbAnimationFrame = requestAnimationFrame(animateDesktopVoiceOrb);
+}
+
+function syncDesktopVoiceOrb() {
+  const chatView = document.getElementById('chat-view');
+  const active = !document.body.classList.contains('pm-mobile-active') && (realtimeVoiceStarting || realtimeVoiceRepliesEnabled);
+  chatView?.classList.toggle('desktop-voice-mode', active);
+  if (!active) {
+    cleanupDesktopVoiceOrb();
+    updateDesktopVoiceOrbTranscript('', '');
+    return;
+  }
+  const dock = ensureDesktopVoiceOrbDock();
+  if (!dock) return;
+  if (!desktopVoiceOrbAnimationFrame) desktopVoiceOrbAnimationFrame = requestAnimationFrame(animateDesktopVoiceOrb);
+}
+
 let realtimeVoiceModeEpoch = 0;
 let realtimeListenMode = 'auto_send';
 let realtimeHoldSpaceActive = false;
@@ -16896,9 +18043,20 @@ let realtimeVoicePendingInterruptContext = null;
 const OPENAI_PUBLIC_REALTIME_VOICE_IDS = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'];
 const CODEX_AVAS_REALTIME_VOICE_IDS = ['juniper', 'maple', 'spruce', 'ember', 'vale', 'breeze', 'arbor', 'sol', 'cove'];
 const DESKTOP_VOICE_SETTINGS_KEY = 'pm_voice_settings_v1';
+const DESKTOP_VOICE_ROOM_STATE_KEY = 'pm_desktop_voice_room_state_v1';
+const DESKTOP_VOICE_ROOM_FOCUS_MS = 45_000;
 const DESKTOP_VOICE_MODES = new Set(['openai_realtime', 'xai']);
 let desktopVoiceSettings = loadDesktopVoiceSettings();
 let realtimeVoiceStatus = null;
+let desktopVoiceRoom = loadDesktopVoiceRoomState();
+let desktopVoiceTarget = desktopVoiceRoom.enabled
+  ? (desktopVoiceRoom.participants.find((participant) => participant.key === desktopVoiceRoom.activeKey) || desktopVoiceRoom.participants[0] || null)
+  : loadDesktopVoiceTarget();
+let desktopVoiceRoomAgents = [];
+let desktopVoiceRoomAgentsPromise = null;
+let desktopVoiceRoomPopoverOpen = false;
+let desktopVoiceRoomSelectMode = false;
+let desktopVoiceRoomDraftKeys = new Set();
 
 const CANVAS_LANG_MAP = {
   js:'javascript', ts:'javascript', jsx:'javascript', tsx:'javascript', mjs:'javascript',
@@ -16968,7 +18126,6 @@ function loadDesktopVoiceSettings() {
       dictation: saved.dictation || 'quiet',
       sttProviderLocked: saved.sttProviderLocked === true,
       autoProviderDefault: saved.autoProviderDefault || '',
-      voiceAgentRealtimeAgent: saved.voiceAgentRealtimeAgent !== false,
       voiceAgentXaiRealtime: saved.voiceAgentXaiRealtime === true,
     };
   } catch {
@@ -16983,7 +18140,6 @@ function loadDesktopVoiceSettings() {
       dictation: 'quiet',
       sttProviderLocked: false,
       autoProviderDefault: '',
-      voiceAgentRealtimeAgent: true,
       voiceAgentXaiRealtime: false,
     };
   }
@@ -16997,6 +18153,220 @@ function saveDesktopVoiceSettings(settings = {}) {
   };
   try { localStorage.setItem(DESKTOP_VOICE_SETTINGS_KEY, JSON.stringify(desktopVoiceSettings)); } catch {}
   return desktopVoiceSettings;
+}
+
+function desktopVoiceParticipantKey(participant = {}) {
+  if (String(participant?.kind || '').trim() === 'subagent') {
+    const agentId = String(participant.agentId || participant.id || '').trim();
+    return agentId ? `subagent:${agentId}` : '';
+  }
+  return 'main';
+}
+
+function desktopVoiceParticipantLabel(participant = {}) {
+  if (String(participant?.kind || '').trim() !== 'subagent') return 'Prometheus';
+  return String(participant.label || participant.name || participant.alias || participant.agentId || participant.id || 'Subagent')
+    .replace(/\s+/g, ' ').trim() || 'Subagent';
+}
+
+function normalizeDesktopVoiceParticipant(participant = {}) {
+  const kind = String(participant?.kind || '').trim() === 'subagent' ? 'subagent' : 'main';
+  const agentId = kind === 'subagent' ? String(participant.agentId || participant.id || '').trim() : '';
+  const key = kind === 'subagent' ? (agentId ? `subagent:${agentId}` : '') : 'main';
+  if (!key) return null;
+  return {
+    key,
+    kind,
+    ...(agentId ? { agentId } : {}),
+    label: kind === 'main' ? 'Prometheus' : desktopVoiceParticipantLabel({ ...participant, kind, agentId }),
+    aliases: Array.from(new Set([
+      desktopVoiceParticipantLabel({ ...participant, kind, agentId }),
+      participant.alias,
+      participant.name,
+      agentId,
+      ...(kind === 'main' ? ['Prom', 'main agent', 'main chat'] : []),
+    ].map((value) => String(value || '').replace(/\s+/g, ' ').trim()).filter(Boolean))),
+  };
+}
+
+function normalizeDesktopVoiceRoomState(source = {}) {
+  const rawParticipants = Array.isArray(source?.participants) ? source.participants : [];
+  const seen = new Set();
+  const participants = rawParticipants
+    .map(normalizeDesktopVoiceParticipant)
+    .filter((participant) => participant && !seen.has(participant.key) && seen.add(participant.key))
+    .slice(0, 12);
+  const enabled = source?.enabled === true && participants.length > 1;
+  const activeKey = String(source?.activeKey || '').trim();
+  return {
+    version: 1,
+    enabled,
+    sessionId: enabled && String(source?.sessionId || '').startsWith('voice_room_') ? String(source.sessionId) : '',
+    rosterKey: String(source?.rosterKey || '').trim(),
+    participants,
+    activeKey: enabled && participants.some((participant) => participant.key === activeKey)
+      ? activeKey
+      : (participants[0]?.key || ''),
+    focusUntil: Number(source?.focusUntil || 0) || 0,
+    quiet: source?.quiet && typeof source.quiet === 'object' ? { ...source.quiet } : {},
+  };
+}
+
+function loadDesktopVoiceRoomState() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DESKTOP_VOICE_ROOM_STATE_KEY) || '{}');
+    return normalizeDesktopVoiceRoomState(raw);
+  } catch {
+    return normalizeDesktopVoiceRoomState({});
+  }
+}
+
+function loadDesktopVoiceTarget() {
+  try {
+    return normalizeDesktopVoiceParticipant(JSON.parse(localStorage.getItem('pm_desktop_voice_target_v1') || '{"kind":"main"}'))
+      || { key: 'main', kind: 'main', label: 'Prometheus' };
+  } catch {
+    return { key: 'main', kind: 'main', label: 'Prometheus' };
+  }
+}
+
+function saveDesktopVoiceTarget(participant) {
+  desktopVoiceTarget = normalizeDesktopVoiceParticipant(participant) || { key: 'main', kind: 'main', label: 'Prometheus' };
+  try { localStorage.setItem('pm_desktop_voice_target_v1', JSON.stringify(desktopVoiceTarget)); } catch {}
+  return desktopVoiceTarget;
+}
+
+function saveDesktopVoiceRoomState(next = desktopVoiceRoom) {
+  desktopVoiceRoom = normalizeDesktopVoiceRoomState(next);
+  try { localStorage.setItem(DESKTOP_VOICE_ROOM_STATE_KEY, JSON.stringify(desktopVoiceRoom)); } catch {}
+  return desktopVoiceRoom;
+}
+
+function isDesktopVoiceRoomSession(sessionId = window.activeChatSessionId) {
+  const sid = String(sessionId || '').trim();
+  const session = getChatSessionById(sid);
+  return sid.startsWith('voice_room_') || session?.channel === 'voice_room' || session?.source === 'voice_room' || !!session?.voiceRoom;
+}
+
+function desktopVoiceRoomContextForSession(sessionId = window.activeChatSessionId) {
+  if (!desktopVoiceRoom.enabled) return null;
+  const sid = String(sessionId || window.activeChatSessionId || '').trim();
+  const session = getChatSessionById(sid);
+  const transcript = (Array.isArray(session?.history) ? session.history : [])
+    .filter((message) => ['user', 'assistant', 'ai'].includes(String(message?.role || '').toLowerCase()))
+    .map((message) => ({
+      role: String(message?.role || '').toLowerCase() === 'user' ? 'user' : 'assistant',
+      speaker: String(message?.voiceSpeaker || (String(message?.role || '').toLowerCase() === 'user' ? 'You' : 'Agent')).trim(),
+      targetKey: String(message?.voiceTargetKey || '').trim(),
+      text: String(message?.content || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
+      at: Number(message?.timestamp || 0) || Date.now(),
+    }))
+    .filter((entry) => entry.text)
+    .slice(-24);
+  return {
+    enabled: true,
+    sessionId: sid,
+    rosterKey: desktopVoiceRoom.rosterKey,
+    participants: desktopVoiceRoom.participants,
+    activeKey: desktopVoiceRoom.activeKey,
+    focusUntil: desktopVoiceRoom.focusUntil,
+    quiet: desktopVoiceRoom.quiet,
+    transcript,
+  };
+}
+
+function desktopVoiceTargetForBootstrap() {
+  const target = desktopVoiceRoom.enabled
+    ? (desktopVoiceRoom.participants.find((participant) => participant.key === desktopVoiceRoom.activeKey) || desktopVoiceRoom.participants[0])
+    : desktopVoiceTarget;
+  return target ? {
+    kind: target.kind === 'subagent' ? 'subagent' : 'main',
+    agentId: target.agentId || '',
+    label: desktopVoiceParticipantLabel(target),
+  } : { kind: 'main', label: 'Prometheus' };
+}
+
+function resetDesktopVoiceRoomState(options = {}) {
+  desktopVoiceRoomSelectMode = false;
+  desktopVoiceRoomDraftKeys = new Set();
+  desktopVoiceRoom = saveDesktopVoiceRoomState({});
+  desktopVoiceTarget = options.resetTarget === true
+    ? saveDesktopVoiceTarget({ kind: 'main' })
+    : loadDesktopVoiceTarget();
+  renderDesktopVoiceRoomPopover();
+}
+
+function syncDesktopVoiceRoomForSession(sessionId = window.activeChatSessionId, session = getChatSessionById(sessionId)) {
+  const sid = String(sessionId || '').trim();
+  const room = session?.voiceRoom && typeof session.voiceRoom === 'object' ? session.voiceRoom : null;
+  const participants = Array.isArray(room?.participants) ? room.participants : [];
+  if (!sid.startsWith('voice_room_') && session?.channel !== 'voice_room' && session?.source !== 'voice_room' && participants.length < 2) {
+    resetDesktopVoiceRoomState();
+    return false;
+  }
+  const next = normalizeDesktopVoiceRoomState({
+    ...desktopVoiceRoom,
+    ...(room || {}),
+    enabled: true,
+    sessionId: sid,
+    participants: participants.length > 1 ? participants : desktopVoiceRoom.participants,
+    activeKey: desktopVoiceRoom.activeKey || participants[0]?.key || 'main',
+  });
+  if (next.participants.length < 2) {
+    resetDesktopVoiceRoomState();
+    return false;
+  }
+  desktopVoiceRoom = saveDesktopVoiceRoomState(next);
+  desktopVoiceTarget = desktopVoiceRoom.participants.find((participant) => participant.key === desktopVoiceRoom.activeKey)
+    || desktopVoiceRoom.participants[0];
+  renderDesktopVoiceRoomPopover();
+  return true;
+}
+
+async function restoreDesktopVoiceRoomSession(sessionId = window.activeChatSessionId) {
+  const sid = String(sessionId || '').trim();
+  const session = getChatSessionById(sid);
+  if (!isDesktopVoiceRoomSession(sid)) {
+    resetDesktopVoiceRoomState();
+    return false;
+  }
+  if (!syncDesktopVoiceRoomForSession(sid, session)) return false;
+  const alreadyConnected = voiceAgentRealtimeConnection?.sessionId === sid
+    && voiceAgentRealtimeConnection?.dc?.readyState === 'open';
+  if (alreadyConnected) return true;
+  if (realtimeVoiceStarting && voiceAgentRealtimeConnection?.sessionId === sid) return true;
+  if (realtimeVoiceStarting) {
+    realtimeVoiceModeEpoch += 1;
+    realtimeVoiceStarting = false;
+    stopVoiceAgentRealtimeSession();
+  }
+  if (voiceAgentRealtimeConnection?.sessionId && voiceAgentRealtimeConnection.sessionId !== sid) {
+    stopVoiceAgentRealtimeSession();
+    realtimeVoiceRepliesEnabled = false;
+  }
+  realtimeVoiceStarting = true;
+  setRealtimeVoiceButtonState();
+  try {
+    const listenMode = realtimeUsesHoldSpace() ? 'push_to_talk' : 'always_listening';
+    await startVoiceAgentRealtimeSession(sid, {
+      listenMode,
+      voiceTarget: desktopVoiceTargetForBootstrap(),
+      voiceRoom: desktopVoiceRoomContextForSession(sid),
+    });
+    realtimeVoiceStarting = false;
+    realtimeVoiceRepliesEnabled = true;
+    setRegularVoiceControlsVisible(false);
+    setRealtimeVoiceControlsVisible(true);
+    if (listenMode === 'always_listening') setVoiceAgentRealtimeMicEnabled(true);
+    setRealtimeVoiceButtonState();
+    return true;
+  } catch (error) {
+    realtimeVoiceStarting = false;
+    realtimeVoiceRepliesEnabled = false;
+    stopVoiceAgentRealtimeSession();
+    setRealtimeVoiceButtonState();
+    throw error;
+  }
 }
 
 function getDesktopVoiceDefaultProvider() {
@@ -17139,7 +18509,7 @@ function realtimeAllowsContinuousCapture() {
 
 function wantsVoiceAgentRealtimeMode() {
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
-  if (mode === 'openai_realtime') return desktopVoiceSettings.voiceAgentRealtimeAgent !== false;
+  if (mode === 'openai_realtime') return true;
   if (mode === 'xai') return desktopVoiceSettings.voiceAgentXaiRealtime === true;
   return false;
 }
@@ -17351,6 +18721,7 @@ function setUnifiedVoiceButtonState() {
     btn.title = realtimeVoiceStarting ? 'Cancel realtime voice' : 'Exit realtime voice';
     btn.setAttribute('aria-label', btn.title);
     updateDesktopComposerSendButton();
+    syncDesktopVoiceOrb();
     return;
   }
   // The composer mic remains the lightweight browser transcription control
@@ -17362,6 +18733,7 @@ function setUnifiedVoiceButtonState() {
   btn.title = composerTranscriptionEnabled ? 'Stop dictation' : 'Dictate message';
   btn.setAttribute('aria-label', btn.title);
   updateDesktopComposerSendButton();
+  syncDesktopVoiceOrb();
 }
 
 function writeDictationTranscript(interimText = '') {
@@ -18181,6 +19553,7 @@ function beginRealtimeAssistantSpeakingEchoGuard(text) {
   realtimeAssistantSpeakingUntil = Date.now() + 2500;
   realtimeAssistantEchoText = normalized;
   realtimeAssistantSpokenText = String(text || '').replace(/\s+/g, ' ').trim();
+  updateDesktopVoiceOrbTranscript(realtimeAssistantSpokenText, '');
   if (normalized) {
     cleanupRealtimeAssistantEchoSnippets();
     realtimeAssistantEchoSnippets.push({
@@ -18196,6 +19569,7 @@ function beginRealtimeAssistantSpeakingEchoGuard(text) {
 function finishRealtimeAssistantSpeakingEchoGuard(cooldownMs = 1000) {
   if (realtimeAssistantEchoTimer) clearTimeout(realtimeAssistantEchoTimer);
   realtimeAssistantSpeaking = false;
+  updateDesktopVoiceOrbTranscript(getRealtimeDictationComposerText?.() || '', realtimeVoiceRepliesEnabled ? 'Listening…' : '');
   realtimeAssistantSpeakingUntil = Date.now() + Math.max(0, Number(cooldownMs) || 0);
   realtimeAssistantEchoTimer = setTimeout(() => {
     realtimeAssistantEchoTimer = null;
@@ -18849,6 +20223,7 @@ function resetRealtimeDictationTranscript(options = {}) {
   realtimeDictationSubmitTimer = null;
   if (realtimeDictationFallbackTimer) clearTimeout(realtimeDictationFallbackTimer);
   realtimeDictationFallbackTimer = null;
+  updateDesktopVoiceOrbTranscript('', realtimeVoiceRepliesEnabled ? 'Listening…' : '');
 }
 
 function resetRealtimeDictationEventDedupe() {
@@ -18898,6 +20273,7 @@ function writeRealtimeDictationTranscript() {
     .filter(Boolean);
   input.value = pieces.join(pieces.length > 1 ? ' ' : '');
   resizeChatInput(input);
+  updateDesktopVoiceOrbTranscript(input.value, 'Listening…');
 }
 
 function getRealtimeDictationComposerText() {
@@ -19640,10 +21016,6 @@ function renderVoiceProviderControls() {
   if (speedLabel) speedLabel.hidden = !['openai_realtime', 'xai'].includes(mode);
   if (narrationLabel) narrationLabel.hidden = !['openai_realtime', 'xai'].includes(mode);
   if (listenLabel) listenLabel.hidden = mode !== 'openai_realtime';
-  const realtimeAgentLabel = document.getElementById('realtime-agent-toggle-label');
-  const realtimeAgentToggle = document.getElementById('realtime-agent-toggle');
-  if (realtimeAgentLabel) realtimeAgentLabel.hidden = mode !== 'openai_realtime';
-  if (realtimeAgentToggle) realtimeAgentToggle.checked = desktopVoiceSettings.voiceAgentRealtimeAgent !== false;
   const xaiRealtimeLabel = document.getElementById('xai-realtime-toggle-label');
   const xaiRealtimeToggle = document.getElementById('xai-realtime-toggle');
   if (xaiRealtimeLabel) xaiRealtimeLabel.hidden = mode !== 'xai';
@@ -19658,6 +21030,20 @@ function renderVoiceProviderControls() {
 }
 
 async function refreshVoiceProviderStatus() {
+  // The Models tab owns the durable Voice Agent default. Apply compatible
+  // realtime choices before refreshing the live provider status so the picker,
+  // transport, and saved provider account all describe the same route.
+  try {
+    const defaults = await api('/api/settings/agent-model-defaults', { timeoutMs: 5000 });
+    const voiceAgent = defaults?.voiceAgent || {};
+    const provider = String(voiceAgent.provider || '').trim();
+    const voice = String(voiceAgent.voice || '').trim();
+    if (provider === 'openai_codex' || provider === 'openai_realtime') {
+      saveDesktopVoiceSettings({ voiceMode: 'openai_realtime', realtimeVoice: voice || desktopVoiceSettings.realtimeVoice || 'marin' });
+    } else if (provider === 'xai') {
+      saveDesktopVoiceSettings({ voiceMode: 'xai', serverVoice: voice || desktopVoiceSettings.serverVoice || 'eve' });
+    }
+  } catch {}
   desktopVoiceSettings = loadDesktopVoiceSettings();
   voiceSttProvider = 'auto';
   voiceTtsProvider = 'realtime';
@@ -20803,7 +22189,7 @@ function isVoiceAgentRealtimeMode() {
   // openai_realtime (WebRTC) or xai (WebSocket) qualify as full realtime agent,
   // each gated by its own per-provider realtime opt-in checkbox.
   const mode = normalizeDesktopVoiceMode(desktopVoiceSettings.voiceMode);
-  if (mode === 'openai_realtime') return desktopVoiceSettings.voiceAgentRealtimeAgent !== false;
+  if (mode === 'openai_realtime') return true;
   if (mode === 'xai') return desktopVoiceSettings.voiceAgentXaiRealtime === true;
   return false;
 }
@@ -20879,6 +22265,8 @@ async function startVoiceAgentRealtimeSession(sessionId, options = {}) {
           : undefined,
         deviceTime: desktopVoiceDeviceTimeContext(),
         contextOnly: useCodexOauthBridge,
+        voiceTarget: options.voiceTarget || desktopVoiceTargetForBootstrap(),
+        voiceRoom: options.voiceRoom || desktopVoiceRoomContextForSession(sid) || undefined,
       }),
     });
     const bootstrap = await bootstrapResp.json().catch(() => ({}));
@@ -21207,6 +22595,33 @@ function refreshRealtimeAgentChatSurface(sessionId) {
   }
 }
 
+function persistDesktopVoiceRoomTranscript(sessionId, role, content, turn) {
+  const sid = String(sessionId || '').trim();
+  const text = cleanVoiceSpeechText(content);
+  if (!sid || !text || !isDesktopVoiceRoomSession(sid)) return;
+  const messageId = `desktop-voice-${sid}-${role}-${Number(turn?.timestamp || Date.now()) || Date.now()}`;
+  if (turn?.voiceRoomPersistedMessageId === messageId && turn?.voiceRoomPersistedText === text) return;
+  if (turn) {
+    turn.messageId = messageId;
+    turn.voiceRoomPersistedMessageId = messageId;
+    turn.voiceRoomPersistedText = text;
+  }
+  const target = desktopVoiceTargetForBootstrap();
+  fetch(`/api/voice-rooms/${encodeURIComponent(sid)}/transcript`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messageId,
+      role: role === 'user' ? 'user' : 'assistant',
+      text,
+      timestamp: Number(turn?.timestamp || Date.now()) || Date.now(),
+      speaker: role === 'user' ? 'You' : desktopVoiceParticipantLabel(target),
+      targetKey: desktopVoiceRoom.enabled ? desktopVoiceRoom.activeKey : target.key,
+    }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 // Keep a live streaming bubble in the desktop chat thread while speech is still
 // arriving, then finalize it into a normal message — same behavior as mobile.
 function ensureRealtimeAgentChatTurn(sessionId, role) {
@@ -21222,12 +22637,17 @@ function ensureRealtimeAgentChatTurn(sessionId, role) {
     role: role === 'user' ? 'user' : 'ai',
     content: '',
     timestamp: Date.now(),
-    source: 'voice_agent_realtime',
-    channel: 'voice',
-    channelLabel: 'Realtime voice',
+    source: isDesktopVoiceRoomSession(sid) ? 'voice_room_transcript' : 'voice_agent_realtime',
+    channel: isDesktopVoiceRoomSession(sid) ? 'voice_room' : 'voice',
+    channelLabel: isDesktopVoiceRoomSession(sid) ? 'Voice Room' : 'Realtime voice',
     streaming: true,
     voiceRealtimeActive: role !== 'user',
   };
+  if (isDesktopVoiceRoomSession(sid)) {
+    const target = desktopVoiceTargetForBootstrap();
+    message.voiceSpeaker = role === 'user' ? 'You' : desktopVoiceParticipantLabel(target);
+    message.voiceTargetKey = desktopVoiceRoom.enabled ? desktopVoiceRoom.activeKey : target.key;
+  }
   if (role !== 'user') {
     const pendingEntries = takePendingVoiceAgentProcessEntries(sid);
     if (pendingEntries.length) {
@@ -21292,6 +22712,7 @@ function finalizeRealtimeAgentChatTurn(sessionId, role, text) {
     turn.voiceRealtimeActive = true;
     turn.voiceRealtimeFinalizedAt = Date.now();
   }
+  persistDesktopVoiceRoomTranscript(sid, role, content, turn);
   voiceAgentRealtimeTurn[key] = null;
   refreshRealtimeAgentChatSurface(sid);
   return turn;
@@ -21777,6 +23198,30 @@ async function executeVoiceAgentRealtimeFunctionCall(call, sessionId) {
     }
     if (!started) {
       sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: false, started: false, mode: 'current_chat', error: error || 'A message is required.' }));
+    }
+    return;
+  }
+
+  if (name === 'voice_room_handoff') {
+    const targetKey = String(args.agent_key || args.agentKey || '').trim();
+    const roomParticipant = desktopVoiceRoom.enabled
+      ? desktopVoiceRoom.participants.find((participant) => participant.key === targetKey)
+      : null;
+    if (!roomParticipant) {
+      sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({ ok: false, error: 'That participant is not in the active Voice Room.' }));
+      return;
+    }
+    sendVoiceAgentRealtimeFunctionOutput(callId, JSON.stringify({
+      ok: true,
+      switched: true,
+      participant: desktopVoiceParticipantLabel(roomParticipant),
+      spoken_confirmation_not_needed: true,
+    }), { createResponse: false });
+    try {
+      addSessionProcessEntry(sessionId, 'info', `Voice Room handoff → ${desktopVoiceParticipantLabel(roomParticipant)}`, { actor: 'Voice Agent (Realtime)' });
+      await activateDesktopVoiceParticipant(roomParticipant);
+    } catch (error) {
+      showDesktopVoiceStatus('Voice Room handoff failed', error?.message || String(error), 'error');
     }
     return;
   }
@@ -22359,6 +23804,8 @@ async function startXaiRealtimeSession(sessionId, options = {}) {
           ? { wakePhrase: wakeGate.phrase, wakeGateActive: wakeGate?.suppressVoice === true }
           : undefined,
         deviceTime: desktopVoiceDeviceTimeContext(),
+        voiceTarget: options.voiceTarget || desktopVoiceTargetForBootstrap(),
+        voiceRoom: options.voiceRoom || desktopVoiceRoomContextForSession(sid) || undefined,
       }),
     });
     const bootstrap = await bootstrapResp.json().catch(() => ({}));
@@ -22942,8 +24389,8 @@ async function toggleRealtimeVoiceReplies() {
     if (wantsVoiceAgentRealtimeMode()) {
       const listenMode = !realtimeUsesHoldSpace() ? 'always_listening' : 'push_to_talk';
       const listenMessage = listenMode === 'always_listening'
-        ? 'Realtime end-to-end agent is listening. Speak naturally — Prometheus hears, thinks, and replies in one OpenAI session.'
-        : 'Realtime end-to-end agent is ready. Hold Space to talk.';
+        ? 'Realtime voice is listening. Speak naturally — Prometheus hears, thinks, and replies in one OpenAI session.'
+        : 'Realtime voice is ready. Hold Space to talk.';
       realtimeVoiceStarting = true;
       setRealtimeVoiceButtonState();
       // xAI may fall through to another transport. Keep that route change out
@@ -22953,7 +24400,11 @@ async function toggleRealtimeVoiceReplies() {
       }
       const sid = window.activeChatSessionId || 'default';
       try {
-        await startVoiceAgentRealtimeSession(sid, { listenMode });
+        await startVoiceAgentRealtimeSession(sid, {
+          listenMode,
+          voiceTarget: desktopVoiceTargetForBootstrap(),
+          voiceRoom: desktopVoiceRoomContextForSession(sid),
+        });
         if (realtimeVoiceModeEpoch !== epoch) return;
         realtimeVoiceStarting = false;
         realtimeVoiceRepliesEnabled = true;
@@ -23185,6 +24636,7 @@ function updateDesignSelectionChip() {
       ${truncatedContext ? `<span class="pill-ext" title="${escHtml(contextSummary)}">${escHtml(truncatedContext)}</span>` : `<span class="pill-ext">${escHtml(context.tagName || 'el')}</span>`}
       <button class="pill-remove" onclick="clearDesignSelectionContext()" title="Remove">&times;</button>
     </div>`;
+    syncChatAttachmentStackVisibility();
   };
   const browserState = getBrowserCanvasState();
   if (isBrowserCanvasSurfaceActive() && browserState.selectedElement) {
@@ -37527,6 +38979,7 @@ function renderDesignSelectionPills() {
   if (!designMultiSelectedElements.length) {
     cont.style.display = 'none';
     cont.innerHTML = '';
+    syncChatAttachmentStackVisibility();
     return;
   }
   cont.style.display = 'flex';
@@ -37541,6 +38994,7 @@ function renderDesignSelectionPills() {
       <button class="pill-remove" onclick="removeDesignSelectionPill(${idx})" title="Remove">&times;</button>
     </div>`;
   }).join('');
+  syncChatAttachmentStackVisibility();
 }
 
 function installDesignSelectModeOutsideClick() {
@@ -38702,12 +40156,23 @@ function chatPendingFileKey(fileLike) {
   return `file:${String(file?.name || fileLike?.name || '').trim().toLowerCase()}:${Number(file?.size || fileLike?.size || 0)}:${String(file?.type || fileLike?.type || '').toLowerCase()}`;
 }
 
+function syncChatAttachmentStackVisibility() {
+  const stack = document.getElementById('chat-composer-attachment-stack');
+  if (!stack) return;
+  const hasVisibleContent = Array.from(stack.children).some((child) => {
+    if (child.hidden || child.style.display === 'none') return false;
+    return window.getComputedStyle(child).display !== 'none';
+  });
+  stack.style.display = hasVisibleContent ? 'flex' : 'none';
+}
+
 function renderChatFilePills() {
   const staging = document.getElementById('chat-file-staging');
   if (!staging) return;
   if (!pendingChatFiles.length) {
     staging.style.display = 'none';
     staging.innerHTML = '';
+    syncChatAttachmentStackVisibility();
     updateDesktopComposerSendButton();
     return;
   }
@@ -38715,15 +40180,19 @@ function renderChatFilePills() {
   staging.innerHTML = pendingChatFiles.map((f, idx) => {
     const isImg = IMAGE_EXTENSIONS.has(f.ext);
     const preview = isImg && f.dataUrl
-      ? `<img src="${f.dataUrl}" style="width:28px;height:28px;object-fit:cover;border-radius:4px;flex-shrink:0" alt="">`
-      : `<span class="pill-icon">${getCanvasFileIcon(f.ext)}</span>`;
-    return `<div class="chat-file-pill">
+      ? `<img class="pill-thumb" src="${f.dataUrl}" alt="">`
+      : `<span class="pill-icon" aria-hidden="true">${getCanvasFileIcon(f.ext)}</span>`;
+    const kind = f.ext ? f.ext.toUpperCase() : 'FILE';
+    return `<div class="chat-file-pill" title="${escHtml(f.name)}">
       ${preview}
-      <span class="pill-name" title="${escHtml(f.name)}">${escHtml(f.name)}</span>
-      <span class="pill-ext">${escHtml(f.ext || 'file')}</span>
-      <button class="pill-remove" onclick="removeChatFile(${idx})" title="Remove">&times;</button>
+      <span class="pill-copy">
+        <strong class="pill-name">${escHtml(f.name)}</strong>
+        <em class="pill-ext">${escHtml(kind)}</em>
+      </span>
+      <button class="pill-remove" onclick="removeChatFile(${idx})" title="Remove attachment" aria-label="Remove ${escHtml(f.name)}">&times;</button>
     </div>`;
   }).join('');
+  syncChatAttachmentStackVisibility();
   updateDesktopComposerSendButton();
 }
 
@@ -40881,17 +42350,6 @@ window.onRealtimeVoiceChanged = onRealtimeVoiceChanged;
 window.onRealtimeVoiceSpeedChanged = onRealtimeVoiceSpeedChanged;
 window.onRealtimeNarrationModeChanged = onRealtimeNarrationModeChanged;
 window.onRealtimeListenModeChanged = onRealtimeListenModeChanged;
-window.onRealtimeAgentToggleChanged = function onRealtimeAgentToggleChanged() {
-  const checkbox = document.getElementById('realtime-agent-toggle');
-  const enabled = checkbox?.checked !== false;
-  saveDesktopVoiceSettings({ voiceAgentRealtimeAgent: enabled });
-  // If currently running in legacy mode and user enables the agent (or vice versa),
-  // tear down both pipelines so the next mic engage uses the chosen path.
-  stopVoiceAgentRealtimeSession();
-  try { closeRealtimeDictationConnection?.(); } catch {}
-  try { closeRealtimeVoiceConnection?.(); } catch {}
-  showToast(enabled ? 'Realtime end-to-end agent enabled' : 'End-to-end agent disabled', enabled ? 'Re-engage mic for the new single-session realtime agent.' : 'Falling back to the split flow.', 'info', 2400);
-};
 window.onXaiRealtimeToggleChanged = function onXaiRealtimeToggleChanged() {
   const checkbox = document.getElementById('xai-realtime-toggle');
   const enabled = checkbox?.checked === true;
@@ -41507,25 +42965,77 @@ function inferCurrentTurnProcessStartIndex(sess, userContent = '') {
   return 0;
 }
 
-function appendLiveTraceToStreamState(streamState, type, text, { append = false } = {}) {
+function appendLiveTraceToStreamState(streamState, type, text, { append = false, extra = null } = {}) {
   const content = String(text || '');
   if (!content) return;
   if (isBareThinkingLiveTraceText(content)) return;
   if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
   const normalizedType = String(type || 'info').toLowerCase();
+  const isThoughtLike = normalizedType === 'preamble' || normalizedType === 'think' || normalizedType === 'assistant';
+  const isUserVisibleThought = isThoughtLike && isDesktopUserVisibleReasoningTraceEntry({ type: normalizedType, extra });
   const last = streamState.liveTraceEntries[streamState.liveTraceEntries.length - 1];
-  if (append && last && last.type === normalizedType) {
+  if (append && last && last.type === normalizedType
+    && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)) {
     last.text = `${last.text || ''}${content}`;
+    if (extra && typeof extra === 'object') last.extra = { ...(last.extra || {}), ...extra };
     return;
   }
   const trimmed = content.trim();
   if (!trimmed) return;
-  if (last && last.type === normalizedType && String(last.text || '').trim() === trimmed) return;
+  if (last && last.type === normalizedType
+    && (!isThoughtLike || isDesktopUserVisibleReasoningTraceEntry(last) === isUserVisibleThought)
+    && String(last.text || '').trim() === trimmed) return;
   streamState.liveTraceEntries.push({
     id: `trace_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     type: normalizedType,
     text: trimmed,
     ts: new Date().toLocaleTimeString(),
+    ...(extra && typeof extra === 'object' ? { extra } : {}),
+  });
+}
+
+function isDesktopProgressNarration(value) {
+  const text = normalizeLiveTraceProseText(value).replace(/\s+/g, ' ').trim();
+  return /^(?:Clarifying|Explaining|Confirming|Summarizing|Planning|Deciding|Inspecting|Preparing|Starting|Activating|Focusing|Prioritizing|Assessing|Attempting|Identifying|Verifying|Loading|Running|Capturing|Opening|Closing|Reading|Writing|Checking|Reviewing|Collecting|Invoking|Calling|Using|Searching|Coordinating|Waiting|Listing|Retrieving|Inferring|Implementing|Investigating|Exploring)\b/i.test(text);
+}
+
+function setDesktopLiveProgressNarration(streamState, text, appendTrace) {
+  if (!streamState) return false;
+  const incoming = String(text || '');
+  if (!incoming) return false;
+  if (!Array.isArray(streamState.liveTraceEntries)) streamState.liveTraceEntries = [];
+  const existing = [...streamState.liveTraceEntries].reverse().find((entry) =>
+    String(entry?.extra?.source || '').toLowerCase() === 'agent_progress'
+  );
+  if (!existing) {
+    appendTrace('think', incoming, { extra: { visibility: 'summary', source: 'agent_progress' } });
+    return true;
+  }
+  const merged = normalizeLiveTraceProseText(appendFinalResponseDelta(existing.text || '', incoming));
+  const latest = merged.split(/\n\s*\n/).map((part) => part.trim()).filter(Boolean).pop() || merged;
+  if (!latest || latest === String(existing.text || '').trim()) return false;
+  existing.text = latest;
+  existing.ts = new Date().toLocaleTimeString();
+  return true;
+}
+
+function shouldAppendDesktopReasoningSummary(streamState, chunk) {
+  const incoming = String(chunk || '');
+  if (!streamState || !incoming) return false;
+  const last = [...(Array.isArray(streamState.liveTraceEntries) ? streamState.liveTraceEntries : [])]
+    .reverse()
+    .find((entry) => String(entry?.extra?.source || '').toLowerCase() === 'reasoning_summary');
+  if (!last) return false;
+  const previous = String(last.text || '').trim();
+  const next = incoming.trimStart();
+  if (!previous || !next || /[.!?:]\s*$/.test(previous)) return false;
+  return /^\s/.test(incoming) || /^[a-z0-9,.;:)}\]]/.test(next);
+}
+
+function appendDesktopReasoningSummary(streamState, chunk, appendTrace) {
+  appendTrace('think', chunk, {
+    append: shouldAppendDesktopReasoningSummary(streamState, chunk),
+    extra: { visibility: 'user', source: 'reasoning_summary' },
   });
 }
 
@@ -41618,7 +43128,25 @@ function shouldProcessMainChatStreamEvent(msg = {}) {
   if (seq <= last) return false;
   prev[key] = seq;
   map[sid] = prev;
+  if (key !== 'default') {
+    const activeMap = window._mainChatStreamActiveIdBySession || (window._mainChatStreamActiveIdBySession = {});
+    activeMap[sid] = key;
+  }
   return true;
+}
+
+function resetMainChatStreamCursor(sessionId, streamId = '') {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  const key = String(streamId || '').trim();
+  const map = window._mainChatStreamLastSeqBySession || (window._mainChatStreamLastSeqBySession = {});
+  if (!key) {
+    delete map[sid];
+    delete window._mainChatStreamActiveIdBySession?.[sid];
+    return;
+  }
+  if (map[sid] && typeof map[sid] === 'object') delete map[sid][key];
+  if (window._mainChatStreamActiveIdBySession?.[sid] === key) delete window._mainChatStreamActiveIdBySession[sid];
 }
 
 function getMainChatStreamLastSeq(sessionId, streamId = 'default') {
@@ -41627,19 +43155,20 @@ function getMainChatStreamLastSeq(sessionId, streamId = 'default') {
   const key = String(streamId || 'default');
   const map = window._mainChatStreamLastSeqBySession || {};
   const prev = map[sid] && typeof map[sid] === 'object' ? map[sid] : {};
-  if (key === 'default') {
+  const activeStreamId = String(window._mainChatStreamActiveIdBySession?.[sid] || '').trim();
+  const resolvedKey = key === 'default' && activeStreamId ? activeStreamId : key;
+  if (resolvedKey === 'default') {
     const max = Object.values(prev).reduce((best, item) => {
       const n = Number(item || 0);
       return Number.isFinite(n) && n > best ? n : best;
     }, 0);
     return max;
   }
-  const value = Number(prev[key] || 0);
+  const value = Number(prev[resolvedKey] || 0);
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 const MAIN_CHAT_STREAM_CATCHUP_INTERVAL_MS = 3200;
-const MAIN_CHAT_STREAM_CATCHUP_EVENT_CAP = 120;
 const MAIN_CHAT_STREAM_TOOL_RESULT_SUMMARY_MAX = 420;
 
 function _isMainChatStreamCatchupSessionVisible(sessionId) {
@@ -41662,7 +43191,7 @@ function summarizeToolResultForBackgroundSession(value, action = '') {
   return `${actionPrefix}${raw.slice(0, summaryMax)}… (${raw.length - summaryMax} chars truncated in background stream)`;
 }
 
-function applyMainChatStreamFrame(sessionId, frame) {
+function applyMainChatStreamFrame(sessionId, frame, options = {}) {
   if (!frame || typeof frame !== 'object') return;
   handleMainChatStreamEvent({
     sessionId,
@@ -41671,7 +43200,7 @@ function applyMainChatStreamFrame(sessionId, frame) {
     event: frame.type || frame.event,
     at: frame.at,
     data: frame.data || {},
-  });
+  }, options);
 }
 
 async function catchUpMainChatStream(sessionId, options = {}) {
@@ -41679,17 +43208,76 @@ async function catchUpMainChatStream(sessionId, options = {}) {
   if (!sid) return null;
   if (!_isMainChatStreamCatchupSessionVisible(sid)) return null;
   try {
-    const streamId = String(options.streamId || '').trim();
+    if (options.fullRefresh === true) {
+      await _loadSessionFromServer(sid, { force: true, historyLimit: 300, processLimit: 500 });
+    }
+    const rememberedRun = readDesktopActiveChatRun(sid);
+    const knownStreamId = String(
+      options.streamId
+        || rememberedRun?.streamId
+        || window._mainChatStreamActiveIdBySession?.[sid]
+        || '',
+    ).trim();
     const explicitAfter = Number(options.after);
-    const after = Number.isFinite(explicitAfter)
+    let after = Number.isFinite(explicitAfter)
       ? Math.max(0, Math.floor(explicitAfter))
-      : getMainChatStreamLastSeq(sid, streamId || 'default');
-    const data = await fetchJsonWithTimeout(`/api/mobile/chat/stream/${encodeURIComponent(sid)}?after=${encodeURIComponent(String(after))}`, 2500);
-    const events = Array.isArray(data?.events)
-      ? data.events.slice(-MAIN_CHAT_STREAM_CATCHUP_EVENT_CAP)
-      : [];
-    events.forEach((frame) => applyMainChatStreamFrame(sid, frame));
+      : knownStreamId
+        ? Math.max(getMainChatStreamLastSeq(sid, knownStreamId), Number(rememberedRun?.lastSeq || 0) || 0)
+        : (options.recovery === true ? 0 : getMainChatStreamLastSeq(sid));
+    let data = await fetchJsonWithTimeout(`/api/mobile/chat/stream/${encodeURIComponent(sid)}?after=${encodeURIComponent(String(after))}`, 4000);
+    if (!data) return null;
+
+    let streamId = String(data?.stream?.streamId || data?.events?.[0]?.streamId || '').trim();
+    const firstSeq = Number(data?.stream?.firstSeq || 0) || 0;
+    const streamChanged = !!knownStreamId && !!streamId && streamId !== knownStreamId;
+    const retentionGap = after > 0 && firstSeq > after + 1;
+    if ((streamChanged || retentionGap) && after > 0) {
+      resetMainChatStreamCursor(sid, streamId || knownStreamId);
+      after = 0;
+      data = await fetchJsonWithTimeout(`/api/mobile/chat/stream/${encodeURIComponent(sid)}?after=0`, 4000);
+      if (!data) return null;
+      streamId = String(data?.stream?.streamId || data?.events?.[0]?.streamId || streamId || '').trim();
+    }
+    if (streamId) {
+      window._mainChatStreamActiveIdBySession[sid] = streamId;
+      if (after === 0 && (options.recovery === true || streamChanged || retentionGap)) {
+        resetMainChatStreamCursor(sid, streamId);
+        window._mainChatStreamActiveIdBySession[sid] = streamId;
+      }
+    }
+
+    const sess = getChatSessionById(sid);
+    if (data.active === true) {
+      if (sess) sess.activeRun = true;
+      window._sessionThinking[sid] = true;
+      const streamState = getSessionStreamState(sid) || resetSessionStreamState(sid);
+      streamState.currentTurnStartIndex = Number.isInteger(streamState.currentTurnStartIndex) && streamState.currentTurnStartIndex >= 0
+        ? streamState.currentTurnStartIndex
+        : inferCurrentTurnProcessStartIndex(sess);
+      streamState.turnStartedAt = Number(streamState.turnStartedAt || getSessionLastMessageAt(sess) || Date.now());
+      rememberDesktopActiveChatRun(sid, {
+        streamId: streamId || rememberedRun?.streamId || '',
+        runtimeId: String(data?.run?.id || data?.run?.runtimeId || rememberedRun?.runtimeId || '').trim(),
+        clientRequestId: String(data?.run?.clientRequestId || rememberedRun?.clientRequestId || '').trim(),
+        disconnected: false,
+      });
+    }
+
+    const events = Array.isArray(data?.events) ? data.events : [];
+    events.forEach((frame) => applyMainChatStreamFrame(sid, frame, { recovery: options.recovery === true }));
+    const lastSeq = Number(data?.stream?.lastSeq || 0) || 0;
+    if (streamId && lastSeq > 0) {
+      rememberDesktopActiveChatRun(sid, { streamId, lastSeq });
+    }
+
     if (data?.active && _isMainChatStreamCatchupSessionVisible(sid)) scheduleMainChatStreamCatchup(sid);
+    if (data && data.active === false && (options.recovery === true || options.fullRefresh === true || events.some((frame) => ['done', 'error'].includes(String(frame?.type || frame?.event || ''))))) {
+      if (sess?.activeRun === true || window._sessionThinking?.[sid] || readDesktopActiveChatRun(sid)) {
+        clearLiveTurnStateForSession(sid);
+      } else {
+        clearDesktopActiveChatRun(sid);
+      }
+    }
     return data;
   } catch {
     return null;
@@ -41710,6 +43298,74 @@ function scheduleMainChatStreamCatchup(sessionId) {
   }, MAIN_CHAT_STREAM_CATCHUP_INTERVAL_MS);
 }
 
+async function recoverDesktopMainChatSession(sessionId, options = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || _isMobileShellActive() || !_isMainChatStreamCatchupSessionVisible(sid)) return null;
+  const inFlight = window._desktopMainChatRecoveryInFlight || (window._desktopMainChatRecoveryInFlight = {});
+  if (inFlight[sid]) return inFlight[sid];
+  const promise = catchUpMainChatStream(sid, {
+    ...options,
+    recovery: true,
+  });
+  inFlight[sid] = promise;
+  try {
+    return await promise;
+  } finally {
+    if (inFlight[sid] === promise) delete inFlight[sid];
+  }
+}
+
+function scheduleDesktopMainChatRecovery(sessionId, options = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || _isMobileShellActive() || !_isMainChatStreamCatchupSessionVisible(sid)) return;
+  const timers = window._desktopMainChatRecoveryTimers || (window._desktopMainChatRecoveryTimers = {});
+  const pending = window._desktopMainChatRecoveryPending || (window._desktopMainChatRecoveryPending = {});
+  pending[sid] = { ...(pending[sid] || {}), ...options };
+  const delayMs = Math.max(0, Math.min(5000, Number(options.delayMs ?? 220) || 0));
+  if (timers[sid]) {
+    if (options.force !== true) return;
+    clearTimeout(timers[sid]);
+    delete timers[sid];
+  }
+  timers[sid] = setTimeout(async () => {
+    delete timers[sid];
+    const nextOptions = pending[sid] || {};
+    delete pending[sid];
+    const data = await recoverDesktopMainChatSession(sid, nextOptions).catch(() => null);
+    if (data?.active && _isMainChatStreamCatchupSessionVisible(sid)) scheduleDesktopMainChatRecovery(sid, { recovery: true, delayMs: MAIN_CHAT_STREAM_CATCHUP_INTERVAL_MS });
+  }, delayMs);
+}
+
+function scheduleDesktopMainChatRecoveryOnResume(options = {}) {
+  if (_isMobileShellActive()) return;
+  const sid = String(window.activeChatSessionId || '').trim();
+  if (!sid) return;
+  scheduleDesktopMainChatRecovery(sid, {
+    recovery: true,
+    fullRefresh: options.fullRefresh !== false,
+    force: options.force === true,
+    delayMs: options.delayMs ?? 140,
+  });
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    if (_isMobileShellActive()) return;
+    const sid = String(window.activeChatSessionId || '').trim();
+    if (!sid || !window._sessionThinking?.[sid]) return;
+    window._desktopPageLifecycleDisconnectedSessions[sid] = true;
+    rememberDesktopActiveChatRun(sid, { disconnected: true, forcePersist: true });
+  });
+  window.addEventListener('pageshow', () => scheduleDesktopMainChatRecoveryOnResume({ force: true }));
+  window.addEventListener('focus', () => scheduleDesktopMainChatRecoveryOnResume());
+  window.addEventListener('online', () => scheduleDesktopMainChatRecoveryOnResume({ force: true }));
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) scheduleDesktopMainChatRecoveryOnResume({ force: true });
+    });
+  }
+}
+
 // ─── Cross-channel live update helpers ────────────────────────────────────────
 
 async function _wsReconnectCatchUp() {
@@ -41726,11 +43382,15 @@ async function _wsReconnectCatchUp() {
   } catch {}
   // Catch up on stream events for the active session that arrived while disconnected
   if (window.activeChatSessionId) {
-    try {
-      await _loadSessionFromServer(window.activeChatSessionId, { force: true });
-      syncActiveChat();
-    } catch {}
-    catchUpMainChatStream(window.activeChatSessionId).catch(() => {});
+    if (_isMobileShellActive()) {
+      try {
+        await _loadSessionFromServer(window.activeChatSessionId, { force: true });
+        syncActiveChat();
+      } catch {}
+      catchUpMainChatStream(window.activeChatSessionId).catch(() => {});
+    } else {
+      recoverDesktopMainChatSession(window.activeChatSessionId, { recovery: true, fullRefresh: true, force: true }).catch(() => {});
+    }
   }
 }
 
@@ -41808,24 +43468,25 @@ function _switchToChannelSession(sid) {
   syncActiveChat();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   renderChatMessages();
-  catchUpMainChatStream(sid).catch(() => {});
+  recoverDesktopMainChatSession(sid, { recovery: true, fullRefresh: false }).catch(() => {});
 }
 window._switchToChannelSession = _switchToChannelSession;
 
-function handleMainChatStreamEvent(msg = {}) {
+function handleMainChatStreamEvent(msg = {}, options = {}) {
   const sid = String(msg.sessionId || '').trim();
   if (!sid) return;
-  if (!shouldProcessMainChatStreamEvent(msg)) return;
   const activeBeforeStreamEvent = window.activeChatSessionId;
   // Locally-started desktop turns are already handled by the /api/chat SSE reader.
   // The websocket bridge is for other live surfaces: Telegram, mobile, CLI, and
   // any channel turn this desktop tab is observing rather than owning.
   const clientRequestId = String(msg?.data?.clientRequestId || msg?.clientRequestId || '').trim();
-  if (isLocalMainChatRequest(sid, clientRequestId)) return;
-  if (window._sessionAbortControllers?.[sid]) return;
+  const isRecoveryReplay = options.recovery === true;
+  if (!isRecoveryReplay && (isLocalMainChatRequest(sid, clientRequestId) || window._sessionAbortControllers?.[sid])) return;
+  if (!shouldProcessMainChatStreamEvent(msg)) return;
   const evt = { type: String(msg.event || ''), ...(msg.data || {}) };
   const sess = ensureChannelChatSession(sid, { source: evt?.message?.channel || evt?.origin?.channel });
   if (!sess) return;
+  if (evt.type !== 'done' && evt.type !== 'error') sess.activeRun = true;
   const streamState = getSessionStreamState(sid) || resetSessionStreamState(sid);
   const isViewing = sid === window.activeChatSessionId;
   const renderIfViewing = () => {
@@ -41838,7 +43499,14 @@ function handleMainChatStreamEvent(msg = {}) {
   const moveVisibleAnswerTextIntoWorkflowTrace = () => {
     const text = String(streamState.streamingAIText || '').trim();
     if (!text) return;
-    appendLiveTraceToStreamState(streamState, streamState.toolActivityStarted ? 'think' : 'preamble', text);
+    const appendTrace = (type, content, options) => appendLiveTraceToStreamState(streamState, type, content, options);
+    if (isDesktopProgressNarration(text)) {
+      setDesktopLiveProgressNarration(streamState, text, appendTrace);
+    } else {
+      appendTrace(streamState.toolActivityStarted ? 'think' : 'preamble', text, {
+        extra: { visibility: 'user', source: 'reasoning_summary' },
+      });
+    }
     streamState.streamingAIText = '';
     streamState.finalResponseStarted = false;
   };
@@ -41863,6 +43531,7 @@ function handleMainChatStreamEvent(msg = {}) {
         timestamp: Number(raw.timestamp || Date.now()),
         channel: inferChannelFromSessionId(sid, raw.channel),
         channelLabel,
+        origin: raw.origin && typeof raw.origin === 'object' ? raw.origin : undefined,
         attachmentPreviews: Array.isArray(raw.attachmentPreviews)
           ? raw.attachmentPreviews.map(sanitizeAttachmentPreviewForDurableStorage)
           : undefined,
@@ -41872,6 +43541,15 @@ function handleMainChatStreamEvent(msg = {}) {
       if (!last || String(last.role || '') !== 'user' || String(last.content || '') !== content) {
         sess.history.push(next);
         appended = true;
+      }
+      const origin = next.origin && typeof next.origin === 'object' ? next.origin : null;
+      if (origin?.channel) {
+        sess.lastOrigin = {
+          channel: String(origin.channel),
+          surface: String(origin.surface || '').trim() || undefined,
+          device: String(origin.device || '').trim() || undefined,
+          label: String(origin.label || '').trim() || undefined,
+        };
       }
       applyAutoSessionTitleOnce(sess, sess.history);
       if (appended) addSessionProcessEntry(sid, 'user', content, { actor: next.channelLabel || next.channel || 'Channel' });
@@ -41892,6 +43570,7 @@ function handleMainChatStreamEvent(msg = {}) {
     renderIfViewing();
   } else if (evt.type === 'final_response_start') {
     beginFinalResponse(streamState);
+    _settlePendingChatSteerPresentation(sid, streamState);
     scheduleStreamingRenderFor(sid, renderIfViewing);
   } else if (evt.type === 'token') {
     const chunk = String(evt.text || '');
@@ -41899,6 +43578,7 @@ function handleMainChatStreamEvent(msg = {}) {
       window._sessionThinking[sid] = true;
       streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
       beginFinalResponse(streamState);
+      _settlePendingChatSteerPresentation(sid, streamState);
       streamState.streamingAIText = appendFinalResponseDelta(streamState.streamingAIText, chunk);
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
@@ -41911,10 +43591,9 @@ function handleMainChatStreamEvent(msg = {}) {
     const chunk = String(evt.text || evt.summary || '');
     if (chunk) {
       window._sessionThinking[sid] = true;
-      appendLiveTraceToStreamState(streamState, 'think', chunk, {
-        append: true,
-        extra: { visibility: 'user', source: 'reasoning_summary' },
-      });
+      const appendTrace = (type, text, options) => appendLiveTraceToStreamState(streamState, type, text, options);
+      if (isDesktopProgressNarration(chunk)) setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
+      else appendDesktopReasoningSummary(streamState, chunk, appendTrace);
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'thinking_delta') {
@@ -41924,15 +43603,18 @@ function handleMainChatStreamEvent(msg = {}) {
       streamState.turnStartedAt = Number(streamState.turnStartedAt || Date.now());
       streamState.streamingThinkingText = (streamState.streamingThinkingText || '') + chunk;
       if (String(evt.source || '').toLowerCase() === 'reasoning_summary') {
-        appendLiveTraceToStreamState(streamState, 'think', chunk, { append: true });
+        const appendTrace = (type, text, options) => appendLiveTraceToStreamState(streamState, type, text, options);
+        if (isDesktopProgressNarration(chunk)) setDesktopLiveProgressNarration(streamState, chunk, appendTrace);
+        else appendDesktopReasoningSummary(streamState, chunk, appendTrace);
       }
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
   } else if (evt.type === 'thinking' || evt.type === 'agent_thought') {
     const text = String(evt.thinking || evt.text || '').trim();
     if (text) {
-      addSessionProcessEntry(sid, 'think', text);
-      appendLiveTraceToStreamState(streamState, 'think', text);
+      setDesktopLiveProgressNarration(streamState, text, (type, content, options) =>
+        appendLiveTraceToStreamState(streamState, type, content, options)
+      );
       renderIfViewing();
     }
   } else if (evt.type === 'model_stream_event') {
@@ -42008,6 +43690,7 @@ function handleMainChatStreamEvent(msg = {}) {
     sess.progressState = streamState.runtimeProgressState;
     renderIfViewing();
   } else if (evt.type === 'done') {
+    _settlePendingChatSteerPresentation(sid, streamState);
     const reply = String(evt.reply || '');
     const content = reconcileFinalResponse(streamState.streamingAIText, reply);
     if (content) {
@@ -42046,6 +43729,11 @@ function handleMainChatStreamEvent(msg = {}) {
       applyAutoSessionTitleOnce(sess, sess.history);
     }
     delete window._sessionThinking[sid];
+    sess.activeRun = false;
+    const desktopRun = readDesktopActiveChatRun(sid);
+    if (!desktopRun?.clientRequestId || !clientRequestId || desktopRun.clientRequestId === clientRequestId) {
+      clearDesktopActiveChatRun(sid);
+    }
     window._sessionStreamState[sid] = makeEmptyStreamState();
     if (sid !== window.activeChatSessionId) sess.unread = true;
     if (!isViewing && !_isMobileShellActive()) {
@@ -42060,6 +43748,7 @@ function handleMainChatStreamEvent(msg = {}) {
     const text = String(evt.text || evt.reply || '');
     if (text) {
       beginFinalResponse(streamState);
+      _settlePendingChatSteerPresentation(sid, streamState);
       streamState.streamingAIText = reconcileFinalResponse(streamState.streamingAIText, text);
       scheduleStreamingRenderFor(sid, renderIfViewing);
     }
@@ -42068,6 +43757,10 @@ function handleMainChatStreamEvent(msg = {}) {
     addSessionProcessEntry(sid, 'error', text);
     delete window._sessionThinking[sid];
     sess.activeRun = false;
+    const desktopRun = readDesktopActiveChatRun(sid);
+    if (!desktopRun?.clientRequestId || !clientRequestId || desktopRun.clientRequestId === clientRequestId) {
+      clearDesktopActiveChatRun(sid);
+    }
     if (sid !== window.activeChatSessionId) sess.unread = true;
     if (!isViewing && !_isMobileShellActive()) {
       _showChannelActivityToast(sid, sess.source || inferChannelFromSessionId(sid), text, {
@@ -42109,7 +43802,11 @@ wsEventBus.on('internal_watch_sse', (msg = {}) => {
 wsEventBus.on('main_chat_stream_update', (msg = {}) => {
   const sid = String(msg.sessionId || '').trim();
   if (!sid) return;
-  scheduleMainChatStreamCatchup(sid);
+  if (sid === String(window.activeChatSessionId || '').trim() && !_isMobileShellActive()) {
+    scheduleDesktopMainChatRecovery(sid, { recovery: true, fullRefresh: false, delayMs: 120 });
+  } else {
+    scheduleMainChatStreamCatchup(sid);
+  }
 });
 
 wsEventBus.on('dev_edit_coordination_updated', (msg = {}) => {

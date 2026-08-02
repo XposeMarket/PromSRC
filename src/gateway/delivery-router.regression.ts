@@ -10,6 +10,7 @@ async function main(): Promise<void> {
 
   try {
     const { deliverToTargets } = await import('./delivery-router');
+    const { addMessage, getSession, flushSession, listSessionSummaries } = await import('./session');
     const sessionId = 'mobile_delivery_reconnect_regression';
     const sessionPath = path.join(root, '.prometheus', 'sessions', `${sessionId}.json`);
     const attachmentPath = path.join(root, 'proof.txt');
@@ -80,6 +81,41 @@ async function main(): Promise<void> {
     assert.equal(stored.history[1].files[0].path, frozenPath);
     assert.equal(stored.history[2].deliveryBatchId, batchId);
     assert.deepEqual(stored.history[2].files.map((file: any) => file.fileName), ['one.txt', 'two.txt']);
+
+    const telegramSessionId = 'unified_session_origin_regression';
+    addMessage(telegramSessionId, {
+      role: 'user',
+      content: 'Sent from Telegram before the gateway restarted.',
+      timestamp: Date.now(),
+      channel: 'telegram',
+      origin: {
+        channel: 'telegram',
+        surface: 'bot',
+        device: 'phone',
+        chatId: '424242',
+        label: 'Telegram',
+      },
+    });
+    assert.equal(getSession(telegramSessionId).history.at(-1)?.origin?.chatId, '424242');
+    flushSession(telegramSessionId);
+    const unifiedPage = listSessionSummaries({ scope: 'all', limit: 20, offset: 0, includeAutomated: true });
+    const unifiedSummary = unifiedPage.sessions.find((session) => session.id === telegramSessionId);
+    assert.equal(unifiedSummary?.lastOrigin?.channel, 'telegram');
+    assert.equal(unifiedSummary?.lastOrigin?.label, 'Telegram');
+    const telegramMessages: Array<{ chatId: number; text: string }> = [];
+    const telegramResult = await deliverToTargets({
+      sessionId: telegramSessionId,
+      target: 'telegram',
+      text: 'Durable origin routing works.',
+    }, {
+      telegramChannel: {
+        sendMessage: async (chatId: number, text: string) => {
+          telegramMessages.push({ chatId, text });
+        },
+      },
+    });
+    assert.equal(telegramResult.ok, true, JSON.stringify(telegramResult));
+    assert.deepEqual(telegramMessages, [{ chatId: 424242, text: 'Durable origin routing works.' }]);
     console.log('delivery router reconnect regression passed');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

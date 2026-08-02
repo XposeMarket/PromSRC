@@ -1,16 +1,16 @@
 # Desktop Web UI Reference
 
-Last source verification: 2026-07-22. Routing owner: `web-ui/src/app.js`; page modules: `web-ui/src/pages/`.
+Last source verification: 2026-08-01. Routing owner: `web-ui/src/app.js`; page modules: `web-ui/src/pages/`.
 
 ## Shared application shell
 
-The desktop UI has a collapsible/resizable sidebar, page navigation, a page title/subtitle, a shared right panel, theme selection, session/channel/project side panels, notifications/toasts, a global Settings modal, and WebSocket-driven live updates. Chat is the primary workspace; non-chat page modes replace the main view while retaining the application shell.
+The desktop UI has a collapsible/resizable sidebar, page navigation, a page title/subtitle, a shared right panel, theme selection, unified chat sessions plus project side panels, notifications/toasts, a global Settings modal, and WebSocket-driven live updates. Chat is the primary workspace; non-chat page modes replace the main view while retaining the application shell.
 
 ## Every routed desktop page
 
 | Page mode | Purpose | What is on it |
 |---|---|---|
-| **Chat** | Foreground operational conversation | Persistent sessions and channel labels; message streaming; file/image attachments; prompt queueing; model/context indicators; edit/rerun and variants; side chats; goal strip/checklist; tool/process trace cards; approval cards; artifacts; voice controls; browser/canvas/creative right-panel workspaces; canvas project links; search and session controls |
+| **Chat** | Foreground operational conversation | One persistent top-level session list across desktop, mobile, Telegram, CLI, Discord, WhatsApp, and voice-room origins, with per-session origin labels; message streaming; file/image attachments; prompt queueing; model/context indicators; edit/rerun and variants; side chats; goal strip/checklist; tool/process trace cards; approval cards; artifacts; voice controls; browser/canvas/creative right-panel workspaces; canvas project links; search and session controls |
 | **Tasks** (`bgtasks`) | Background task queue | Background task list/detail, status/progress/evidence/stream/logs, task messaging, pause/resume/restart/delete/join/recovery/error-response controls, and reusable-workflow skill proposal path |
 | **Schedule** | Recurring and one-off automation | Schedule list and editor; natural-language parse; ownership by Prometheus, subagent, or team; run-now, pause/resume/delete; run log/memory/context references; skill attachments and automation state |
 | **Teams** | Managed multi-agent workspaces | Team cards/configuration, member management, manager purpose/context/model/review trigger, dispatch and run-all, team chat and stream, team events/runs, workspace/context files, proposed changes with apply/reject, pause/resume and room state |
@@ -28,7 +28,7 @@ Chat is more than a transcript. Depending on the request, it can expose:
 - a file/canvas project workspace and previews;
 - a Creative editor/workspace with generation, render status, asset and timeline controls;
 - inline approvals, goal/progress, tool logs, process cards, background-lane state, artifact cards, image outputs, data visualizations, and file delivery pills;
-- voice preview/voice-agent integration and mobile-aware session delivery;
+- voice preview/voice-agent integration and mobile-aware session delivery; desktop Voice Room target/roster selection from the realtime orb, durable `voice_room_*` restoration, shared room transcript persistence, and transcript-safe picker layout;
 - linked side chats that preserve a selected parent/project context but explicitly do not inherit active parent execution.
 
 ## Settings and Connections

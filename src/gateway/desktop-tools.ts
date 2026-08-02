@@ -3118,7 +3118,7 @@ function desktopWindowMatchesQuery(windowInfo: DesktopWindowInfo | null | undefi
 export async function desktopFocusWindowVerified(
   sessionId: string,
   name: string,
-  options?: { includeScreenshot?: boolean },
+  options?: { includeScreenshot?: boolean; skipOcr?: boolean },
 ): Promise<{ ok: true; verification: DesktopFocusWindowVerification } | { ok: false; message: string }> {
   ensureWindows();
   const query = String(name || '').trim();
@@ -3153,6 +3153,7 @@ export async function desktopFocusWindowVerified(
       handle: Number(activeWindow?.handle || target.handle),
       focus_first: false,
       padding: 8,
+      skipOcr: options?.skipOcr === true,
     }).catch((e: any) => `ERROR: ${e?.message || e}`);
     const packet = getDesktopAdvisorPacket(sessionId);
     if (packet?.screenshotBase64) {
@@ -6284,6 +6285,7 @@ export async function desktopFocusWindowCanonical(
   selector: DesktopWindowSelector,
   includeScreenshot = true,
   signal?: AbortSignal,
+  options?: { skipOcr?: boolean },
 ): Promise<string> {
   throwIfDesktopCancelled(signal);
   const resolved = await resolveCanonicalWindow(selector);
@@ -6297,6 +6299,7 @@ export async function desktopFocusWindowCanonical(
   const screenshot = await desktopWindowScreenshot(sessionId, {
     window_token: createDesktopWindowToken(resolved.window),
     focus_first: false,
+    skipOcr: options?.skipOcr === true,
     signal,
   });
   return screenshot.startsWith('ERROR')

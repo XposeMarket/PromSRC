@@ -36,7 +36,7 @@ export interface ChatMessage {
   workEndedAt?: number;
   workDurationMs?: number;
   goalCompletionReport?: MainChatGoalCompletionReport;
-  channel?: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system';
+  channel?: 'terminal' | 'telegram' | 'web' | 'mobile' | 'voice_room' | 'discord' | 'whatsapp' | 'system';
   channelLabel?: string;
   origin?: TurnOrigin;
   artifacts?: any[];
@@ -60,6 +60,24 @@ export interface ChatMessage {
   deliveryBatchId?: string;
   deliveryBatchIndex?: number;
   deliveryBatchCount?: number;
+  /** Display identity for durable multi-speaker voice-room transcripts. */
+  voiceSpeaker?: string;
+  voiceTargetKey?: string;
+}
+
+export interface VoiceRoomParticipant {
+  key: string;
+  kind: 'main' | 'subagent';
+  agentId?: string;
+  label: string;
+}
+
+export interface VoiceRoomMetadata {
+  version: 1;
+  rosterKey: string;
+  participants: VoiceRoomParticipant[];
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface MainChatGoalCompletionReport {
@@ -72,13 +90,25 @@ export interface MainChatGoalCompletionReport {
 }
 
 export interface TurnOrigin {
-  channel: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system';
+  channel: 'terminal' | 'telegram' | 'web' | 'mobile' | 'voice_room' | 'discord' | 'whatsapp' | 'system';
   surface?: 'desktop_app' | 'mobile_app' | 'public_web' | 'terminal' | 'bot' | 'automation' | string;
   device?: 'computer' | 'phone' | 'tablet' | 'server' | 'unknown' | string;
   chatId?: string;
   userId?: string;
   label?: string;
   source?: string;
+}
+
+/**
+ * Presentation-safe origin metadata for a chat session. External contact IDs
+ * remain on the durable message-level TurnOrigin and are never copied into a
+ * session list response.
+ */
+export interface SessionOriginSummary {
+  channel: TurnOrigin['channel'];
+  surface?: TurnOrigin['surface'];
+  device?: TurnOrigin['device'];
+  label?: string;
 }
 
 export type MainChatGoalStatus = 'active' | 'restarting' | 'paused' | 'blocked' | 'done' | 'cleared' | 'failed';
@@ -257,7 +287,7 @@ export interface Session {
   workspace: string;
   title?: string;
   autoTitleLocked?: boolean;
-  channel?: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system'; // Inferred from sessionId prefix
+  channel?: 'terminal' | 'telegram' | 'web' | 'mobile' | 'voice_room' | 'discord' | 'whatsapp' | 'system'; // Inferred from sessionId prefix
   createdAt: number;
   lastActiveAt: number;
   lastAssistantAt?: number;
@@ -286,6 +316,7 @@ export interface Session {
   mainChatGoal?: MainChatGoalState | null;
   mainChatGoalHistory?: MainChatGoalState[];
   chatModelRoute?: ChatModelRoute;
+  voiceRoom?: VoiceRoomMetadata | null;
 }
 
 export interface SessionMutationScope {
@@ -295,7 +326,7 @@ export interface SessionMutationScope {
 
 export interface SessionSummary {
   id: string;
-  channel: 'terminal' | 'telegram' | 'web' | 'mobile' | 'discord' | 'whatsapp' | 'system';
+  channel: 'terminal' | 'telegram' | 'web' | 'mobile' | 'voice_room' | 'discord' | 'whatsapp' | 'system';
   createdAt: number;
   lastActiveAt: number;
   lastMessageAt?: number;
@@ -307,12 +338,15 @@ export interface SessionSummary {
   messageCount: number;
   title: string;
   preview: string;
+  /** Origin of the most recent user-facing turn, for inline session lists. */
+  lastOrigin?: SessionOriginSummary;
   creativeMode?: CreativeMode | null;
   canvasProjectRoot?: string | null;
   canvasProjectLabel?: string | null;
   canvasProjectLink?: CanvasProjectLink | null;
   mainChatGoal?: MainChatGoalState | null;
   chatModelRoute?: ChatModelRoute;
+  voiceRoom?: VoiceRoomMetadata | null;
 }
 
 export interface SessionSearchResult extends SessionSummary {
@@ -323,6 +357,8 @@ export interface SessionSearchResult extends SessionSummary {
 
 export interface SessionListOptions {
   channel?: Session['channel'];
+  /** A single user-facing timeline across every interactive transport. */
+  scope?: 'all';
   limit?: number;
   offset?: number;
   // When true and a first-party chat channel is requested, also include
@@ -810,6 +846,42 @@ function defaultSessionIndex(): SessionIndex {
   return { summaries: {}, updatedAt: Date.now() };
 }
 
+function normalizeSessionOriginSummary(input: any, fallbackChannel?: Session['channel']): SessionOriginSummary | undefined {
+  const raw = input && typeof input === 'object' ? input : {};
+  const rawChannel = String(raw.channel || fallbackChannel || '').trim().toLowerCase();
+  const channel = rawChannel === 'terminal' || rawChannel === 'telegram' || rawChannel === 'web'
+    || rawChannel === 'mobile' || rawChannel === 'voice_room' || rawChannel === 'discord'
+    || rawChannel === 'whatsapp' || rawChannel === 'system'
+    ? rawChannel as TurnOrigin['channel']
+    : undefined;
+  if (!channel) return undefined;
+  const optional = (value: unknown, max = 120): string | undefined => {
+    const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+    return text ? text.slice(0, max) : undefined;
+  };
+  return {
+    channel,
+    surface: optional(raw.surface),
+    device: optional(raw.device),
+    label: optional(raw.label),
+  };
+}
+
+function getLatestSessionOrigin(history: any[], fallbackChannel?: Session['channel']): SessionOriginSummary | undefined {
+  const source = Array.isArray(history) ? history : [];
+  // The latest user turn describes the person/surface currently talking to
+  // Prometheus. Fall back to an assistant/delivery turn only for old history.
+  for (const role of ['user', 'assistant']) {
+    for (let i = source.length - 1; i >= 0; i--) {
+      const message = source[i];
+      if (!message || message.role !== role || !isSummaryTimelineMessage(message)) continue;
+      const origin = normalizeSessionOriginSummary(message.origin || { channel: message.channel });
+      if (origin) return origin;
+    }
+  }
+  return normalizeSessionOriginSummary(undefined, fallbackChannel);
+}
+
 function normalizeSessionSummary(input: any): SessionSummary | null {
   const id = String(input?.id || '').trim();
   if (!isSafeStorageId(id)) return null;
@@ -820,6 +892,7 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
   const channel = input?.channel === 'terminal'
     || input?.channel === 'telegram'
     || input?.channel === 'mobile'
+    || input?.channel === 'voice_room'
     || input?.channel === 'discord'
     || input?.channel === 'whatsapp'
     || input?.channel === 'system'
@@ -838,6 +911,9 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
     messageCount: Number.isFinite(messageCount) ? Math.max(0, Math.floor(messageCount)) : 0,
     title: String(input?.title || '(empty)').slice(0, 60) || '(empty)',
     preview: String(input?.preview || input?.title || '(empty)').slice(0, 60) || '(empty)',
+    // Do not invent a value while reading an old index: its absence tells the
+    // index loader to rebuild once from durable message history.
+    lastOrigin: normalizeSessionOriginSummary(input?.lastOrigin),
     creativeMode: normalizeCreativeMode(input?.creativeMode),
     canvasProjectRoot: typeof input?.canvasProjectRoot === 'string' && input.canvasProjectRoot.trim()
       ? input.canvasProjectRoot
@@ -847,6 +923,7 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
       : null,
     canvasProjectLink: normalizeCanvasProjectLink(input?.canvasProjectLink),
     chatModelRoute: normalizeChatModelRoute(input?.chatModelRoute),
+    voiceRoom: input?.voiceRoom && typeof input.voiceRoom === 'object' ? input.voiceRoom as VoiceRoomMetadata : null,
   };
 }
 
@@ -1054,10 +1131,11 @@ function buildSessionSummary(session: Session): SessionSummary {
   const title = getSessionDisplayTitle(session);
   const lastMessageAt = getLastMessageTimestamp(session.history);
   const lastAssistantAt = getLastAssistantTimestamp(session.history);
+  const channel = session.channel || inferChannelFromSessionId(session.id);
   const mobileLastReadAt = Number.isFinite(Number(session.mobileLastReadAt)) ? Number(session.mobileLastReadAt) : undefined;
   return {
     id: session.id,
-    channel: session.channel || inferChannelFromSessionId(session.id),
+    channel,
     createdAt: Number(session.createdAt || Date.now()),
     lastActiveAt: Number(session.lastActiveAt || Date.now()),
     lastMessageAt,
@@ -1069,19 +1147,21 @@ function buildSessionSummary(session: Session): SessionSummary {
     messageCount: Array.isArray(session.history) ? session.history.length : 0,
     title,
     preview: title,
+    lastOrigin: getLatestSessionOrigin(session.history, channel),
     creativeMode: session.creativeMode || null,
     canvasProjectRoot: session.canvasProjectRoot || null,
     canvasProjectLabel: session.canvasProjectLabel || null,
     canvasProjectLink: normalizeCanvasProjectLink(session.canvasProjectLink),
     mainChatGoal: session.mainChatGoal || null,
     chatModelRoute: normalizeChatModelRoute(session.chatModelRoute),
+    voiceRoom: session.voiceRoom || null,
   };
 }
 
 function updateSessionSummaryInMemory(session: Session): SessionIndex {
   const index = loadSessionIndex();
   const summary = buildSessionSummary(session);
-  const shouldIndex = summary.messageCount > 0 || !!summary.pinnedAt;
+  const shouldIndex = summary.messageCount > 0 || !!summary.pinnedAt || !!summary.voiceRoom;
   if (shouldIndex) {
     index.summaries[summary.id] = summary;
   } else {
@@ -1119,6 +1199,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
     const channel = data?.channel === 'terminal'
       || data?.channel === 'telegram'
       || data?.channel === 'mobile'
+      || data?.channel === 'voice_room'
       || data?.channel === 'discord'
       || data?.channel === 'whatsapp'
       || data?.channel === 'system'
@@ -1138,6 +1219,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
       messageCount: history.length,
       title,
       preview: title,
+      lastOrigin: getLatestSessionOrigin(history, channel),
       creativeMode: normalizeCreativeMode(data?.creativeMode),
       canvasProjectRoot: typeof data?.canvasProjectRoot === 'string' && data.canvasProjectRoot.trim()
         ? data.canvasProjectRoot
@@ -1147,6 +1229,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
         : null,
       canvasProjectLink: normalizeCanvasProjectLink(data?.canvasProjectLink),
       mainChatGoal: normalizeMainChatGoal(data?.mainChatGoal, sessionId),
+      voiceRoom: data?.voiceRoom && typeof data.voiceRoom === 'object' ? data.voiceRoom as VoiceRoomMetadata : null,
     };
   } catch {
     return null;
@@ -1161,7 +1244,7 @@ function rebuildSessionIndex(): SessionIndex {
     const sessionId = file.slice(0, -5);
     if (!isSafeStorageId(sessionId)) continue;
     const summary = buildSessionSummaryFromFile(sessionId);
-    if (summary && (summary.messageCount > 0 || !!summary.pinnedAt)) {
+    if (summary && (summary.messageCount > 0 || !!summary.pinnedAt || !!summary.voiceRoom)) {
       index.summaries[summary.id] = summary;
     }
   }
@@ -1172,6 +1255,7 @@ function rebuildSessionIndex(): SessionIndex {
 function getSortedSessionSummaries(
   channel?: Session['channel'],
   includeAutomated?: boolean,
+  scope?: SessionListOptions['scope'],
 ): SessionSummary[] {
   ensureSessionDir();
   let index = loadSessionIndex();
@@ -1185,17 +1269,21 @@ function getSortedSessionSummaries(
     ) {
       sessionIndexCommandTitleRebuildAttempted = true;
       index = rebuildSessionIndex();
-    } else if (Object.values(index.summaries).some((summary) => summary.messageCount > 0 && !summary.lastMessageAt)) {
+    } else if (Object.values(index.summaries).some((summary) => summary.messageCount > 0 && (!summary.lastMessageAt || !summary.lastOrigin))) {
       index = rebuildSessionIndex();
     }
   }
   // Automated sessions remain system-owned on disk. Callers can opt into
   // projecting them into either first-party main-chat list without mutating
   // their durable channel or affecting connector/CLI channel lists.
-  const admitAutomated = includeAutomated === true && (channel === 'web' || channel === 'mobile');
+  const unifiedScope = scope === 'all';
+  const admitAutomated = includeAutomated === true && (unifiedScope || channel === 'web' || channel === 'mobile');
   return Object.values(index.summaries)
     .filter((summary) => !INTERNAL_SESSION_ID_RE.test(summary.id))
     .filter((summary) => {
+      if (unifiedScope) {
+        return summary.channel !== 'system' || (admitAutomated && /^auto_/i.test(summary.id));
+      }
       if (!channel) return true;
       if (summary.channel === channel) return true;
       return admitAutomated && summary.channel === 'system' && /^auto_/i.test(summary.id);
@@ -1215,7 +1303,7 @@ export function listSessionSummaries(channel?: Session['channel']): SessionSumma
 export function listSessionSummaries(options: SessionListOptions): SessionListPage;
 export function listSessionSummaries(input?: Session['channel'] | SessionListOptions): SessionSummary[] | SessionListPage {
   const options = typeof input === 'object' && input !== null ? input : { channel: input };
-  const sorted = getSortedSessionSummaries(options.channel, options.includeAutomated);
+  const sorted = getSortedSessionSummaries(options.channel, options.includeAutomated, options.scope);
   if (typeof input !== 'object' || input === null) return sorted;
 
   const limit = Number.isFinite(Number(options.limit))
@@ -1285,14 +1373,14 @@ function readSessionFileForSearch(sessionId: string): Session | null {
 
 export function searchSessionSummaries(
   query: string,
-  options: { channel?: Session['channel']; limit?: number; includeContent?: boolean } = {},
+  options: { channel?: Session['channel']; scope?: SessionListOptions['scope']; includeAutomated?: boolean; limit?: number; includeContent?: boolean } = {},
 ): SessionSearchResult[] {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return [];
   const limit = Number.isFinite(Number(options.limit))
     ? Math.max(1, Math.min(200, Math.floor(Number(options.limit))))
     : 80;
-  const summaries = listSessionSummaries(options.channel);
+  const summaries = getSortedSessionSummaries(options.channel, options.includeAutomated, options.scope);
   const results: SessionSearchResult[] = [];
   const titleMatchedIds = new Set<string>();
 
@@ -1347,9 +1435,10 @@ export function sessionExists(id: string): boolean {
   return isSafeStorageId(sessionId) && fs.existsSync(getSessionPath(sessionId));
 }
 
-export function touchSession(id: string, options: { channel?: Session['channel']; title?: string } = {}): Session {
+export function touchSession(id: string, options: { channel?: Session['channel']; title?: string; voiceRoom?: VoiceRoomMetadata | null } = {}): Session {
   const session = getSession(id);
   if (options.channel) session.channel = options.channel;
+  if (options.voiceRoom !== undefined) session.voiceRoom = options.voiceRoom;
   session.lastActiveAt = Date.now();
 
   const title = String(options.title || '').trim();
@@ -1366,6 +1455,7 @@ function inferChannelFromSessionId(sessionId: string): NonNullable<Session['chan
   if (sessionId.startsWith('cli_')) return 'terminal';
   if (sessionId.startsWith('telegram_')) return 'telegram';
   if (sessionId.startsWith('mobile_')) return 'mobile';
+  if (sessionId.startsWith('voice_room_')) return 'voice_room';
   if (sessionId.startsWith('discord_')) return 'discord';
   if (sessionId.startsWith('whatsapp_')) return 'whatsapp';
   if (sessionId.startsWith('task_') || sessionId.startsWith('cron_')) return 'system';
@@ -3025,6 +3115,21 @@ export function setSessionPinned(id: string, pinned: boolean): SessionSummary | 
   const session = getSession(sessionId);
   session.pinnedAt = pinned ? (Number(session.pinnedAt) || Date.now()) : undefined;
   flushSession(sessionId);
+  return buildSessionSummary(session);
+}
+
+/**
+ * Explicitly restores the unread state for a chat in the mobile inbox. This is
+ * intentionally separate from `markSessionReadForMobile`: read timestamps are
+ * normally monotonic, while a user action must be able to put a chat back into
+ * the unread state after it has been opened.
+ */
+export function markSessionUnreadForMobile(id: string): SessionSummary | null {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return null;
+  const session = getSession(sessionId);
+  session.mobileLastReadAt = 0;
+  saveSession(sessionId);
   return buildSessionSummary(session);
 }
 

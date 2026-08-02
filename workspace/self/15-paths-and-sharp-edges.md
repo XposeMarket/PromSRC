@@ -87,6 +87,10 @@
 - if `Unauthorized: configure gateway.auth.token to enable remote access` appears during phone pairing, first check router mount order and whether pairing was accidentally placed behind `requireGatewayAuth`
 - if remote access is through Tailscale Funnel or another HTTPS-terminating proxy, preserve the `x-forwarded-proto: https` redirect bypass so the gateway does not redirect public HTTPS traffic to an unreachable local HTTPS port
 - automatic proposal execution for internal code is stricter than the broad source-edit tool surface suggests
+- source/web-ui/workspace line edits (`replace_lines*`, `insert_after*`, `delete_lines*`) and workspace patchset find_replace are EOL-safe: CRLF/LF/mixed files split without trailing `\r`, join with the file's dominant newline, and accept LF payloads into CRLF files without wipe/corruption
+- `find_replace` / `find_replace_source` / `find_replace_webui_source` / workspace patchset find_replace all use line-ending–tolerant matching (`applyLineEndingTolerantFindReplace`); do not double-run the matcher
+- read/grep returned lines strip trailing CR; `grep_source` / `grep_webui_source` / `grep_prom` accept a file path (or `file`/`filename`) and search that single file instead of walking it as a directory (`files_searched: 0` was the old failure mode)
+- search defaults stay literal unless `regex:true`; patterns with `|` / other metacharacters in literal mode get an explicit no-match hint to set `regex:true` rather than silently missing
 - proposal sandboxing is now two-layered: isolated `dev_src_self_edit` workspace plus session-level mutation-scope enforcement
 - sandboxed proposal promotion is build-gated and baseline-checked before live repo writes are allowed
 - dev-src proposal repair is a first-class mode and pauses originals with `blocked_on_repair`

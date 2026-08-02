@@ -11,12 +11,149 @@ const ARGS = new Set(process.argv.slice(2));
 const WEB_ONLY = ARGS.has('--web-only');
 const SKILLS_ONLY = ARGS.has('--skills-only');
 
+const PUBLIC_WEB_VENDOR_FILES = [
+  'vendor/codemirror/codemirror.min.css',
+  'vendor/codemirror/theme/material-darker.min.css',
+  'vendor/codemirror/codemirror.min.js',
+  'vendor/codemirror/mode/javascript/javascript.min.js',
+  'vendor/codemirror/mode/xml/xml.min.js',
+  'vendor/codemirror/mode/css/css.min.js',
+  'vendor/codemirror/mode/htmlmixed/htmlmixed.min.js',
+  'vendor/codemirror/mode/markdown/markdown.min.js',
+  'vendor/codemirror/mode/python/python.min.js',
+  'vendor/marked/marked.min.js',
+  'vendor/dompurify/purify.min.js',
+  'vendor/fabric/fabric.min.js',
+  'vendor/gif/gif.js',
+  'vendor/gif/gif.worker.js',
+  'vendor/iconify/iconify.min.js',
+  'vendor/lottie-player/lottie-player.js',
+  'vendor/chart/chart.umd.js',
+  'vendor/maplibre/maplibre-gl.js',
+  'vendor/maplibre/maplibre-gl.css',
+  'vendor/mermaid/mermaid.min.js',
+  'static/fonts/manrope-400.woff2',
+  'static/fonts/manrope-500.woff2',
+  'static/fonts/manrope-600.woff2',
+  'static/fonts/manrope-700.woff2',
+  'static/fonts/manrope-800.woff2',
+  'static/fonts/ibm-plex-mono-400.woff2',
+  'static/fonts/ibm-plex-mono-500.woff2',
+  'static/fonts/ibm-plex-mono-600.woff2',
+];
+
+let temporaryFileSequence = 0;
+
 function rmrf(target) {
   fs.rmSync(target, { recursive: true, force: true });
 }
 
 function mkdirp(target) {
   fs.mkdirSync(target, { recursive: true });
+}
+
+function isFileLockError(error) {
+  return ['EBUSY', 'EACCES', 'EPERM'].includes(error?.code);
+}
+
+function waitBriefly(milliseconds) {
+  // This build script is intentionally synchronous. Atomics.wait gives us a
+  // bounded retry without introducing an async rewrite to every copy helper.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function relativeDisplayPath(filePath) {
+  return path.relative(ROOT, filePath).replace(/\\/g, '/');
+}
+
+function writeFileIfChanged(destination, data) {
+  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  mkdirp(path.dirname(destination));
+
+  try {
+    if (fs.readFileSync(destination).equals(buffer)) return;
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      if (isFileLockError(error)) {
+        throw new Error(
+          `[prepare-public-build] Cannot read locked generated file ${relativeDisplayPath(destination)}. ` +
+          'Close the app/preview serving the public build and retry.'
+        );
+      }
+      throw error;
+    }
+  }
+
+  const retryDelays = [50, 100, 200, 400];
+  let lastError;
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+    const temporary = `${destination}.prometheus-tmp-${process.pid}-${Date.now()}-${temporaryFileSequence++}`;
+    try {
+      fs.writeFileSync(temporary, buffer);
+      fs.renameSync(temporary, destination);
+      return;
+    } catch (error) {
+      lastError = error;
+      try { fs.rmSync(temporary, { force: true }); } catch {}
+      if (!isFileLockError(error) || attempt === retryDelays.length) break;
+      waitBriefly(retryDelays[attempt]);
+    }
+  }
+
+  if (isFileLockError(lastError)) {
+    throw new Error(
+      `[prepare-public-build] Cannot replace locked generated file ${relativeDisplayPath(destination)}. ` +
+      'Close the app/preview serving the public build and retry.'
+    );
+  }
+  throw lastError;
+}
+
+function listFiles(root) {
+  if (!fs.existsSync(root)) return [];
+  const files = [];
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop();
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) stack.push(fullPath);
+      else if (entry.isFile()) files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function expectedPublicWebUiFiles() {
+  const expected = new Set(['index.html', ...PUBLIC_WEB_VENDOR_FILES]);
+  const sourceRoot = path.join(SRC_WEB_UI, 'src');
+  for (const sourcePath of listFiles(sourceRoot)) {
+    const relative = path.relative(sourceRoot, sourcePath).replace(/\\/g, '/');
+    expected.add(`static/${relative}`);
+  }
+  for (const name of ['manifest.webmanifest', 'service-worker.js']) {
+    if (fs.existsSync(path.join(SRC_WEB_UI, name))) expected.add(name);
+  }
+  return expected;
+}
+
+function removeStalePublicWebUiFiles() {
+  const expected = expectedPublicWebUiFiles();
+  for (const generatedPath of listFiles(OUT_ROOT)) {
+    const relative = path.relative(OUT_ROOT, generatedPath).replace(/\\/g, '/');
+    if (expected.has(relative)) continue;
+    try {
+      fs.rmSync(generatedPath, { force: true });
+    } catch (error) {
+      if (isFileLockError(error)) {
+        throw new Error(
+          `[prepare-public-build] Cannot remove locked stale generated file ${relativeDisplayPath(generatedPath)}. ` +
+          'Close the app/preview serving the public build and retry.'
+        );
+      }
+      throw error;
+    }
+  }
 }
 
 const TEXT_EXTENSIONS = new Set([
@@ -37,12 +174,12 @@ function copyFileForPublicBuild(src, dest, options = {}) {
   mkdirp(path.dirname(dest));
 
   if (!options.normalizeText || !TEXT_EXTENSIONS.has(path.extname(src).toLowerCase())) {
-    fs.copyFileSync(src, dest);
+    writeFileIfChanged(dest, fs.readFileSync(src));
     return;
   }
 
   const text = fs.readFileSync(src, 'utf-8');
-  fs.writeFileSync(dest, text.replace(/[ \t]+$/gm, ''), 'utf-8');
+  writeFileIfChanged(dest, text.replace(/[ \t]+$/gm, ''));
 }
 
 function copyRecursive(src, dest, options = {}) {
@@ -84,12 +221,12 @@ function writeLocalFontCss() {
     if (!fs.existsSync(src)) {
       throw new Error(`[prepare-public-build] Missing font source: node_modules/${srcRel}`);
     }
-    fs.copyFileSync(src, path.join(fontsDir, filename));
+    writeFileIfChanged(path.join(fontsDir, filename), fs.readFileSync(src));
     declarations.push(
       `@font-face{font-family:'${family}';font-style:normal;font-weight:${weight};font-display:swap;src:url('./fonts/${filename}') format('woff2');}`,
     );
   }
-  fs.writeFileSync(path.join(OUT_STATIC, 'styles', 'fonts.css'), `${declarations.join('\n')}\n`, 'utf-8');
+  writeFileIfChanged(path.join(OUT_STATIC, 'styles', 'fonts.css'), `${declarations.join('\n')}\n`);
 }
 
 function copyPublicWebVendorAssets() {
@@ -229,7 +366,9 @@ function bundleSkills() {
 }
 
 function buildPublicWebUi() {
-  rmrf(OUT_ROOT);
+  // Do not remove OUT_ROOT first. On Windows, a browser or preview process
+  // can briefly hold an existing generated asset open; recursive deletion is
+  // incremental and can leave the output tree half-deleted after EBUSY.
   mkdirp(OUT_STATIC);
 
   const indexPath = path.join(SRC_WEB_UI, 'index.html');
@@ -245,7 +384,7 @@ function buildPublicWebUi() {
     '<script>window.PROMETHEUS_PUBLIC_BUILD = true;</script>\n</head>',
   );
 
-  fs.writeFileSync(path.join(OUT_ROOT, 'index.html'), html, 'utf-8');
+  writeFileIfChanged(path.join(OUT_ROOT, 'index.html'), html);
   copyRecursive(path.join(SRC_WEB_UI, 'src'), OUT_STATIC);
   copyPublicWebVendorAssets();
 
@@ -259,6 +398,8 @@ function buildPublicWebUi() {
       copyFileForPublicBuild(srcFile, path.join(OUT_ROOT, name), { normalizeText: true });
     }
   }
+
+  removeStalePublicWebUiFiles();
 }
 
 if (!SKILLS_ONLY) {

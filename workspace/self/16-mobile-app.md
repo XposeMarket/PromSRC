@@ -21,8 +21,15 @@ Mobile canvas/file viewer fullscreen mode: `initMobileCanvasSheet()` in `web-ui/
 
 Mobile reasoning/model control (2026-07-09): `web-ui/src/mobile/mobile-model-badge.js` renders the header-badge tap surface as a compact model-and-effort summary (`Model · Effort ›`) above a segmented range slider. Opening it uses a voice-mode-style bottom takeover that obscures roughly the lower third of the chat and centers the controls; reasoning-specific positioning bypasses the normal header-badge popover coordinates. Tapping the centered summary opens the existing credentialed provider → model picker; changing the range persists `reasoning_effort` through `/api/settings/provider` with haptic step feedback. The takeover variant is styled by `.pm-msheet-scrim.is-reasoning`, `.pm-msheet.is-reasoning`, and `.pm-reasoning-*` in `web-ui/src/styles/mobile.css`. Keep model/provider selection grouped in the dedicated picker rather than reintroducing inline settings selects or permanent Fast/Deep labels.
 
+Mobile haptic sliders (2026-08-01): `mobile-model-badge.js::attachMobileHapticGestureSurface(...)` provides the shared real-input gesture layer used by the reasoning selector and `mobile-shell.js::_wireTabbarSlider(...)`. The reasoning slider haptics only when the snapped effort index changes. The footer slider haptics only as the moving glass pill's actual center crosses one of the four tab-icon centers (Chat, Voice, Tasks, Hub), never on every pointermove or merely because the nearest tab preview changed. Keep its gesture listener scoped to the slider surface and dispose it with `disposeMobileHapticGestureSurfaces()` when rebuilding mobile chrome; do not reintroduce a per-move fallback vibration.
+
+Mobile subagent chat header + context usage (2026-07-27, live after sync:web-ui): `renderSubagentChatPage` no longer hardcodes the Prometheus brand. It uses `renderMobileHeader({ hideBrand: true, leftIcon: 'back' })` and labels the shared model badge as `Name/Model Effort` (e.g. `Nolan/5.6 Terra High`) from the selected subagent's effective model. The same main-chat context ring + popover (`renderMobileContextChip` / `wireMobileContextWindow`) is mounted and scoped to `subagent_chat_${agentId}` with optional `getProvider` / `getAccountId` so plan usage tracks that subagent's provider/account. `mobile-model-badge.js` skips main-chat badge refresh and reasoning-sheet open on `.pm-subagent-model-badge` so the subagent label is not overwritten. [2026-07-27]
+
+
 Mobile canvas live HTML asset linking: workspace HTML files opened in the mobile canvas must iframe through the path-shaped route `/api/canvas/workspace/<workspace-relative-path>` instead of query-style `/api/canvas/inline?path=...`. This preserves the browser URL directory so relative assets like `assets/zombie.png`, local CSS, JS, audio, and images resolve from the HTML file's own subdirectory on mobile. Keep `/api/canvas/inline` for direct media/file previews and downloads. [2026-07-01]
 Mobile background visual rule: `body.pm-mobile-active` and `.pm-app` must use flat theme background colors only. Do not add page-level radial/conic/linear background-image glow layers or pseudo-element glow overlays for any theme/skin; component-local shadows are okay, but the app backdrop itself should have no glow. [2026-06-29]
+
+Mobile model controls (2026-08-01): the reasoning slider remains touch-friendly, while the model summary, Advanced sheet, rows, and related settings popover stay compact with lighter typography and opaque theme-surface backgrounds. Do not add backdrop blur or translucent glass to these controls; mirror changes from `web-ui/src/styles/mobile.css` into `generated/public-web-ui/static/styles/mobile.css`.
 
 Root PWA/static entry files:
 
@@ -55,10 +62,12 @@ The canonical sync path is:
 
 `scripts/check-public-web-ui-sync.js` compares source files against generated public copies, including root-level `manifest.webmanifest` and `service-worker.js`. A stale generated mobile file means the source may be right but public runtime output is not.
 
-Service worker gotcha: `web-ui/service-worker.js` has a `VERSION` constant. Bump it on meaningful frontend/mobile changes or installed PWAs may keep old assets even after build/restart. The service worker intentionally never caches `/api/*`, `/ws`, or `/events`, so stale chat/auth/streaming data usually means app state or generated static files, not cached API responses. Current version: `pm-v69-2026-06-19-mobile-deep-links`. [2026-06-19]
+Service worker gotcha: `web-ui/service-worker.js` has a `VERSION` constant. Bump it on meaningful frontend/mobile changes or installed PWAs may keep old assets even after build/restart. The service worker intentionally never caches `/api/*`, `/ws`, or `/events`, so stale chat/auth/streaming data usually means app state or generated static files, not cached API responses. Current version: `pm-v238-2026-08-01-mobile-session-action-type`. [2026-08-01]
 
 Mobile Prometheus One splash branding (2026-07-17): `web-ui/index.html` owns the cold-load `#pm-one-splash` composition. Its centered logo uses the dedicated generated asset `web-ui/src/assets/prometheus-one/p1-mark-ring.png` (P1 + gold ring + upper-right star only), while `web-ui/src/styles/mobile.css` owns the particle/constellation, mark entrance, Cinzel title fade, and metallic shimmer. Keep the transparent mark inside `.pm-one-mark-wrap`: entrance opacity/transform/filter animation belongs on that isolated compositor wrapper, while the image remains a stable `translateZ(0)` raster layer so iOS does not drop it when the sibling background-clipped title fades or shimmers. Preserve the reusable official lockup at `p1-logo.png`; do not overwrite it for splash-only variants. Bump the service-worker `VERSION` and the mobile CSS query version when changing this installed-PWA launch experience.
 Mobile chat layout motion (2026-07-18): composer focus/expansion, hamburger drawer motion, and composer-adjacent queued/plan/background-agent surfaces share `--pm-motion-*` timing in `web-ui/src/styles/mobile.css`. `updateChatComposerSpace()` in `mobile-pages.js` coalesces `ResizeObserver` measurements and continues any in-flight FLIP translation from its current visual offset, preventing repeated layout updates from restarting the chat movement. Keep `prefers-reduced-motion` at zero duration, and bump `web-ui/service-worker.js` after changing these motions.
+
+Mobile chat-session long-press actions (2026-08-01): `_openSessionContextSheet()` in `web-ui/src/mobile/mobile-shell.js` renders the Pin/Unpin, Rename, Mark as unread, and Delete chat buttons under `.pm-msheet-session-context`. Their labels use 14px regular text (`font-weight: 400`); the session title intentionally remains 15px semibold (`font-weight: 650`). The canonical rule is `.pm-msheet-session-context .pm-sess-action-row` in `web-ui/src/styles/mobile.css`, mirrored at `generated/public-web-ui/static/styles/mobile.css`. This pass uses the cache-bust token `pm-v238-2026-08-01-mobile-session-action-type` across the mobile entry/router/module query strings and service-worker source/generated mirrors.
 
 Session cache: `web-ui/src/mobile/mobile-api.js` caches `loadMobileChatSession` results in-memory for 30s (max 20 entries). Use `invalidateMobileChatSessionCache(sessionId?)` to bust. Cache is automatically busted on `updateMobileChatSessionHistory` writes. This makes revisiting the same chat instant within the TTL window. [2026-06-17]
 
@@ -134,7 +143,7 @@ Mobile auth mechanics:
 - `gateway-auth.ts` verifies paired-device tokens before checking the configured gateway token, so paired phones can work over LAN/remote access even when gateway token auth is enabled.
 - If a token returns 401, `mobile-api.js` clears it and dispatches `pm-device-revoked`, causing the router to return to pairing.
 
-## Chat, Sessions, and Channels
+## Chat Sessions and Origin
 
 Mobile chat source:
 
@@ -170,6 +179,8 @@ Mobile final-answer presentation (2026-07-18):
 
 `chat.router.ts` normalizes turn origin. A session ID beginning `mobile_` or an explicit `origin.channel='mobile'` becomes channel `mobile`, surface `mobile_app`, device `phone`. The injected origin context tells the model that mobile is only the contact channel; local desktop/browser/files/tools can still be available.
 
+The mobile drawer and search use one paged `scope=all` session timeline, not a mobile-only or per-channel drilldown. It includes top-level sessions from every interactive surface and displays the latest sanitized `lastOrigin` as the row's source label. `Session.channel` remains transport metadata for behavior such as voice-room opening and delivery; it does not partition the chat list.
+
 Mobile thinking / live tool-stream policy (desktop parity, 2026-07-08):
 
 - Desktop `ChatPage.js` buffers raw `thinking_delta` (`source: thinking`) and only live-appends when `source === 'reasoning_summary'`; full `thinking` / `agent_thought` become clean think rows; burst flushes into process log on non-thinking events.
@@ -177,6 +188,13 @@ Mobile thinking / live tool-stream policy (desktop parity, 2026-07-08):
 - Live paths: `applyMobileChatStreamEvent`, `applyMobileSideStreamEvent`, voice `onThinking`/`onThought`, and `_applyMobileAgentStreamEvent`.
 - `mobile-api.js` passes `onThinking(text, { source })` and emits `onThought` for complete thought blocks.
 - Do not dump every raw thinking token into `liveTraceEntries`; keep tools + clean thoughts only.
+
+Mobile progress, reasoning, and steer presentation (desktop parity, 2026-08-01):
+
+- Operational narration (`agent_thought`, complete `thinking`, and action-style reasoning summaries) is one mutable `agent_progress` trace entry. Render it as the label of the current collapsed tool group and replace its text as newer progress arrives; it must not turn into repeated ordinary thought rows.
+- User-facing reasoning summaries are separate `reasoning_summary` trace entries. They are immutable once shown, may join only transport-continuation chunks, and must remain visible when later operational progress arrives. `_normalizeMobileTraceProseText(...)` repairs incomplete trace Markdown; never send final-answer Markdown through that trace-only normalizer.
+- `_patchMobileThreadMessage(...)` is the normal live-update path. It patches trace groups and preserves a reader's open tool/result/compaction disclosures and their inner scroll position; `_renderThread(...)` is reserved for structural/session reconciliation and restores those states across its fallback rebuild.
+- A queued chat steer temporarily presents the actual pre-steer trace, then the user steer, then a continuation that receives only post-steer events. The original assistant turn is the single work-timer anchor. On final answer, `_settleMobileChatSteerWorkflow(...)` removes the temporary workflow labels/split so durable history reads as ordinary consecutive user messages followed by the response. Voice-interruption timelines remain separate.
 
 Mobile chat attachment path:
 
@@ -220,6 +238,8 @@ Mobile composer expansion behavior:
 - This keeps typed text above the buttons like modern chat apps while preserving the old compact composer when the field is not active and empty.
 - Service worker version for this change: `pm-v117-2026-06-30-mobile-dictation-composer-wrap`.
 
+Mobile chat skill/slash picker (2026-08-01): `$` opens skill suggestions directly and `/` continues to open slash-command suggestions. The shared popover renders at most five rows and has no internal scroll region, so the first row remains visible above the composer. Skill rows use a plain gold/bold `$<name>` label rather than a pill; slash-command rows keep their existing command token styling. Selecting a skill inserts the plain name while preserving the selected skill metadata used when the message is sent. Mobile drawer session state labels (`Working` and `Unread`) are plain text rather than pills. Keep the canonical implementation in `web-ui/src/mobile/mobile-pages.js`, `web-ui/src/mobile/mobile-shell.js`, and `web-ui/src/styles/mobile.css`, with generated copies under `generated/public-web-ui/static/mobile/` and `generated/public-web-ui/static/styles/mobile.css`.
+
 Mobile drawer behavior:
 
 - The left hamburger drawer is intentionally full-screen on mobile: `.pm-drawer` in `web-ui/src/styles/mobile.css` uses full shell width rather than the old `min(78vw, 320px)` side-panel width. Keep this as a full-screen overlay unless the mobile UX requirement explicitly changes.
@@ -233,8 +253,8 @@ Mobile chat markdown tables and timestamp reveal:
 
 Mobile chat APIs:
 
-- `GET /api/sessions?channel=mobile&limit=...&offset=...`
-- `GET /api/sessions/search?q=...`
+- `GET /api/sessions?scope=all&includeAutomated=1&limit=...&offset=...`
+- `GET /api/sessions/search?scope=all&includeAutomated=1&q=...`
 - `GET /api/sessions/:id`
 - `POST /api/sessions`
 - `POST /api/sessions/:id/history`
@@ -263,6 +283,8 @@ Live stream behavior:
 - Every replay/WebSocket frame is bounded before retention/broadcast. Whole-frame defaults are 96 KiB progress, 384 KiB final, and 256 KiB done; large tool text becomes a referenced preview and large data-URI media becomes a signed same-origin `/api/turn-blobs/:hash` URL. Mobile renderers should preserve those URL fields rather than expecting every artifact inline as base64.
 - Slow SSE consumers cannot retain an unbounded gateway write buffer. When `res.write(...)` backpressures, the live socket drops nonterminal frames (still available from replay) and retains at most the bounded, deduplicated `final`/`done` terminal pair; a later `error` replaces pending `done`. The socket is disconnected after 30 seconds without drain. This disconnect does **not** cancel the Prometheus turn; mobile should reconnect/replay normally.
 - The server flushes session state and persists the durable final blob before publishing terminal `final`/`done` state. This narrows the “final visible but history missing” window, but general post-restart terminal redelivery is not yet driven from the journal outbox.
+
+Desktop recovery parity (2026-08-01): `web-ui/src/pages/ChatPage.js` uses the same retained main-chat stream contract when the desktop `/api/chat` SSE connection disappears. It persists per-session run identity (`clientRequestId`, runtime/stream id, last sequence, start/disconnect state) in a bounded local cache, force-saves it on `pagehide`, restores the remembered session on startup, and retries recovery on `pageshow`, focus, `online`, foreground visibility, WebSocket reconnect, and stream-update events. Network failures and incomplete SSE bodies preserve the active process state; only an explicit user abort is terminal. Desktop recovery is single-flight, replays incrementally from `after=<lastSeq>`, resets to `after=0` for stream rotation or retention gaps, applies replay frames with local-request filtering bypassed, and dedupes by session/stream/sequence. The server's 12,000-frame/16 MiB retention limit remains authoritative for both clients.
 
 - 2026-06-05 desktop-to-mobile live sync fix: the server was already broadcasting every main-chat frame, including `event: 'user_message'`, through `main_chat_stream_event`. The mobile bug was client-side: `web-ui/src/mobile/mobile-pages.js::onMainChatStreamEvent` created/reused an assistant placeholder for every frame before special-casing user frames, so a user message sent from desktop did not appear in the open mobile chat until history reload. Fix: handle `eventType === 'user_message'` first, insert a mobile-format user turn from `msg.data.message`, dedupe the phone's own send via `clientRequestId`, then return before assistant placeholder logic. Keep the generated public copy (`generated/public-web-ui/static/mobile/mobile-pages.js`) in sync or run `npm run sync:web-ui`.
 - Verification for that fix: `node --check web-ui/src/mobile/mobile-pages.js` and `node --check generated/public-web-ui/static/mobile/mobile-pages.js` passed. Manual expected behavior: with the same chat open on desktop and mobile, a desktop user message should appear immediately on mobile, followed by the normal Prometheus streaming/tool/process updates.
@@ -313,12 +335,25 @@ Realtime/mobile audio details:
 - Mobile calls `/api/voice-agent/realtime-bootstrap` with `contextOnly: true` before the Codex bridge exchange. This builds Prometheus instructions/tools without minting a public Realtime session. Public Realtime fallback sanitizes against its own voice IDs so a saved Codex-only voice cannot leak into a v2 call.
 - Codex Voice / Live owns VAD and turn lifecycle. Mobile PTT gates the shared mic track; it must not send public `session.update`, input-buffer commit, or `response.create` commands over the AVAS v3 data channel. Managed Prometheus speech returns through app-server `thread/realtime/appendSpeech`.
 - The mobile voice picker must derive options from `codexBridgeActiveVoices`, label this transport `Codex Voice / Live`, and soft-restart the WebRTC session to change voices after assistant audio exists. The rolling voice-overlay transcript is separate from stable chat-message text; chat messages must use finalized transcript text and sequence-aware ordering.
+- Mobile `show_ui` results are artifact-only assistant turns with `messageKind: voice_show_ui_card` and a stable `messageId`. Server-history reconciliation must preserve these local cards even when they contain no text, and the tool path must await the history snapshot before completing; otherwise the next spoken turn can refresh history and erase the card.
+- A mobile Codex Voice/Live connection must remain bound to the durable Prometheus owner chat used by `voice_thread_ops`. `POST /api/realtime/codex-bridge/rebind-owner` updates the app-server bridge owner when the draft/session id changes and immediately before mobile thread operations. This is what lets managed-thread reviews wake AVAS through `thread/realtime/appendText` instead of falling through to the normal chat Worker. Desktop does not use this mobile rebinding path.
+- Every mobile Voice user/assistant pair carries a shared `voice_exchange_*` workflow group with distinct `voice_user` / `voice_assistant` parts. Reconciliation repairs each group to user-first order, including when the assistant transcript arrives before the final user transcript. `_persistMobileThreadSnapshot` serializes writes per session so a slower stale snapshot cannot overwrite the repaired order.
+- Codex Voice/Live v3 quiet mode cannot use the public Realtime `create_response` gate because AVAS owns VAD. Mobile therefore keeps the AVAS mic live for wake detection but hard-mutes its WebRTC output, hides rolling/final transcripts, and rejects dynamic tool calls while quiet. Each new transcript item remains eligible as a wake attempt. On the configured phrase, output is unmuted and the already-native AVAS turn continues without sending an unsupported public `response.create`.
 - `mobile-pages.js` chooses supported `MediaRecorder` MIME types, preferring iOS-friendly formats where needed.
 - Realtime SDP exchange can go through the gateway `POST /api/realtime/call` or direct client-secret flow through `POST /api/realtime/client-secret`.
 - Server TTS playback uses Web Audio when possible and falls back to an HTML audio element.
 - `service-worker.js` never caches voice/realtime API calls.
 - REALTIME AUTH GOTCHA (bug 1): OpenAI Realtime 500s ("Internal Server Error", no transcription/audio) when minting works but the call fails. Cause: the realtime CALL endpoint rejects the raw Codex OAuth bearer; it needs a real platform api_key minted by exchanging the OAuth id_token, which needs an `organization_id` claim (fresh login only, and `startOAuthFlow` must NOT send `codex_cli_simplified_flow=true`). Working logs show `auth: 'openai_codex_oauth_api_key'`. Full runbook: §12A-CRITICAL of `workspace/self/06-image-voice.md`. xAI realtime is independent and unaffected.
 - REALTIME MIC GOTCHA (bug 2, iOS): after auth is fixed, if the session connects and soundwaves animate but there is still no transcription/audio, the OpenAI WebRTC path is doing its OWN `getUserMedia` — a SECOND concurrent iOS mic capture that comes back live-but-silent, so OpenAI's VAD hears nothing. Fix/rule: mobile realtime mic MUST reuse the shared warm mic (`_ensureMobileXaiRealtimeMic()` / `__pmVoice.warmMicStream`), exactly like xAI; tag the conn `sharedMic: true` and do NOT `.stop()` the shared stream on teardown (only re-enable its track). Never open a second concurrent `getUserMedia` on iOS. Details: §12A-2 of `workspace/self/06-image-voice.md`.
+
+### Mobile Voice Room and standalone Voice presentation (2026-08-01)
+
+- A multi-agent room is resolved by the selected participant roster through `/api/voice-rooms/resolve`, persisted as a deterministic `voice_room_*` session with channel `voice_room`, and restored from its explicit transcript route. Transcript turns append through `/api/voice-rooms/:id/transcript`; the mobile state keeps a bounded shared transcript, deterministic participant aliases, recent-route dedupe, active/focus state, and per-participant quiet/wake state.
+- The host handles spoken participant addressing first. Clear names/aliases route to the selected participant; ambiguous or unknown names are not blindly handed off. A room-only `voice_room_handoff` realtime function is available as a silent safety fallback when the host misses a clear address. It is dynamic room plumbing, not an additional general Worker capability.
+- Codex Voice/Live v3 room switches create/use the participant's app-server thread through managed append-text/speech operations, park the previous peer, and keep a bounded warm pool (maximum four, prewarmed in parallel). The shared warm microphone is cloned/replaced between peers; never open a second iOS `getUserMedia` capture. The Codex bridge owner is rebound to the durable room session before managed thread operations. Desktop does not use this mobile room rebinding path.
+- Stable finalized transcript records are the source of truth for the mobile chat/history view. Rolling transcription may remain a transient overlay, but standalone Voice assistant text uses the same stable message presentation as mobile chat and desktop.
+- Standalone Voice renders a dimensional SVG orb plus a transparent canvas particle field. Audio level drives orb lift/scale/grid motion/brightness and particle depth; gold, blue, and violet CSS variables follow the active mobile theme, with a `prefers-reduced-motion` fallback. Inline chat retains its compact voice waveform. The previous flame-frame assets under `assets/voice-flame/` are preserved as references; they do not replace the official Prometheus logo/base.
+- Artifact/source/product previews stay mounted in a preloaded 3D wheel so swipes animate existing cards instead of recreating them. The Voice surface removes the outer card border and duplicate header, and the preview drag helper has a small dead-zone to avoid tap flicker.
 
 Mobile context-window plan usage is active-main-model scoped. When the main model is `openai_codex/gpt-5.3-codex-spark`, `/api/usage/limits` supplies the separate Spark 5-hour/weekly windows; for every other main model, the mobile context popover continues to show the normal active-provider allowance. Spark usage must not appear merely because Spark is available or assigned to a subagent.
 
@@ -466,7 +501,7 @@ Origin-aware delivery:
 - Delivery to `mobile` sends a `delivery_notification` WebSocket event, optionally with image data or attachment path.
 - `mobile-pages.js` listens for `delivery_notification` targeted to `mobile` or `all`, appends it into the mobile chat thread, and converts delivered media into mobile media previews.
 
-Telegram remains a separate channel. Cross-channel behavior matters because a mobile-origin worker can still deliver to Telegram if the user or tool explicitly targets Telegram. Conversely, Telegram-origin sessions have their own session IDs and live stream events but are visible to desktop/mobile session lists through the shared session/channel model.
+Telegram remains a separate delivery transport. Cross-surface behavior matters because a mobile-origin worker can still deliver to Telegram if the user or tool explicitly targets Telegram. Telegram-origin sessions have their own session IDs and live stream events, but appear inline with all other top-level chat sessions on both desktop and mobile, with their latest origin retained for display and durable delivery recovery.
 
 ## Commands and Workflow
 
@@ -544,6 +579,25 @@ For pairing/remote access:
 For mobile voice:
 
 - Verify `GET /api/voice/status` and `GET /api/realtime/status` from paired mobile.
+- Treat every entry into the standalone `#mobile/voice` route as a fresh
+  `mobile_default` draft. It must not inherit `__pmChat.activeSessionId` or the
+  gateway's latest session.
+- The scrolled Voice target control and the header drawer are the explicit
+  opt-in path for existing context. Selecting a drawer session hydrates its
+  history, pins `__pmVoice.targetSessionId`, prewarms that session, and restarts
+  the live voice bridge against it.
+- The first utterance with no explicit target materializes the draft as a new
+  durable `mobile_*` session. Re-entering Voice starts another fresh draft.
+- Subagent Voice Agent profiles are capability-aware. When `/api/realtime/status`
+  reports `chatgpt_oauth_app_server` plus `codex_app_server`, the shared agent
+  voice picker exposes only the global default and `Codex Voice / Live ·
+  ChatGPT OAuth`, with the bridge-advertised AVAS voices. Saving this route
+  persists `provider: openai_codex` and `mode: codex_voice_live`.
+- `openai_codex` profiles reuse the proven mobile live-voice engine, but require
+  the Codex OAuth app-server transport and fail closed if it is unavailable;
+  they must never fall back to public OpenAI Realtime v2. Legacy
+  `openai_realtime` agent profiles display as Codex Voice/Live while the bridge
+  is active so they can be migrated on the next Save.
 - Test browser/server STT and TTS paths.
 - Test Realtime SDP path if enabled.
 - Test a normal no-active-worker voice turn: expect `voice_agent_turn`.

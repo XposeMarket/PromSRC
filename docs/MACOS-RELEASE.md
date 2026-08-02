@@ -2,6 +2,24 @@
 
 Prometheus ships separate, native macOS builds for Apple Silicon (`arm64`) and Intel (`x64`). Separate builds are intentional: the app bundles architecture-specific Electron, Swift, SQLite, PTY, ONNX Runtime, FFmpeg, ffprobe, and Chromium binaries. This is safer and easier to validate than combining all of those components into one universal bundle.
 
+## Unsigned tester builds
+
+The repository also has an intentionally unsigned tester path for early Mac
+access while Developer ID signing and notarization are pending. Run it on a
+Mac of the target architecture:
+
+```bash
+npm ci
+npm run build:mac:tester
+```
+
+This uses `electron-builder.yml`, builds the native Swift helper and `.icns`
+icon locally, and writes DMG/ZIP artifacts to `release/`. It does not require
+Apple Developer credentials. Upload those artifacts only as tester builds and
+tell testers that Gatekeeper may require **Privacy & Security → Open Anyway**.
+The public signed/notarized workflow below remains separate and is not used by
+this command.
+
 ## One-time Apple setup
 
 1. Enroll the release owner in the Apple Developer Program.

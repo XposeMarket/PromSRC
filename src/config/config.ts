@@ -345,9 +345,11 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   agents: [] as AgentDefinition[],
   agent_model_defaults: {},
   agent_model_default_reasoning: {},
+  agent_model_default_accounts: {},
   agent_model_default_templates: [],
   active_agent_model_default_template: '',
   default_agent_model_template: '',
+  voice: {},
   session: {
     maxMessages: 120,
     compactionThreshold: 0.7,

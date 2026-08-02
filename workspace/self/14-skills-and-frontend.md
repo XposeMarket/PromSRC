@@ -107,6 +107,8 @@ Triggers are normalized, deduplicated, capped at 12 per skill, and generic singl
 
 New-skill routing preflight evaluates positive prompts against the full candidate so the intended workflow must win. Negative prompts evaluate the proposed trigger phrases only: generic domain words in a skill’s name, description, categories, or tool list must not block installation when the negative prompt does not match a trigger.
 
+Chat composer skill selection (2026-08-01): desktop and mobile composers use `$` as the direct skill trigger, while `/` remains the slash-command trigger. Typing `$` or `$<skill-query>` opens the shared skill suggestion surface; it is capped at five rows with no internal popover scrolling. Skill rows display `$<name>` as gold/bold text without a pill, while slash-command rows retain their slash-command styling. Selecting a skill inserts its plain display name, keeps the selected skill ID/reference metadata for the send path, and lets the rich composer preview render the selected name without literal `**` markers. The source of truth is `web-ui/src/chat-slash-commands.js`, `web-ui/src/pages/ChatPage.js`, `web-ui/src/mobile/mobile-pages.js`, and their `web-ui/src/styles/*` files; generated public copies remain under `generated/public-web-ui/`.
+
 
 2026-07-11 catalog migration:
 

@@ -2942,6 +2942,22 @@
   display: block;
 }
 /* ── File upload pill styles ─────────────────────────────────────────── */
+.chat-composer-attachment-stack {
+  display: none;
+  grid-area: staging;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  margin: 0 0 2px;
+  align-self: stretch;
+}
+.chat-composer-attachment-stack > .chat-file-staging {
+  padding: 0;
+  margin: 0;
+  max-width: none;
+  overflow: visible;
+}
 .chat-file-staging {
   display: flex;
   flex-wrap: wrap;
@@ -2954,15 +2970,15 @@
 .chat-file-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   background: var(--panel-2, #f0f0f0);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 5px 8px 5px 10px;
+  border-radius: 10px;
+  padding: 6px 8px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
-  max-width: 220px;
+  max-width: min(260px, 100%);
   min-width: 0;
   overflow: hidden;
   cursor: default;
@@ -2972,12 +2988,42 @@
   font-size: 16px;
   flex-shrink: 0;
 }
+.chat-file-pill .pill-thumb {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: block;
+}
+.chat-file-pill .pill-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
 .chat-file-pill .pill-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+  display: block;
+  font-size: 11px;
+  font-weight: 750;
+}
+.chat-file-pill .pill-copy .pill-ext {
+  padding: 0;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  background: none;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  font-style: normal;
 }
 .chat-file-pill .pill-ext {
   font-size: 9px;
@@ -3246,12 +3292,6 @@
 .voice-settings-popover select {
   width: 150px;
   max-width: 150px;
-}
-#realtime-agent-toggle-label {
-  min-height: 24px;
-}
-#realtime-agent-toggle-label input {
-  margin: 0;
 }
 :root[data-theme="dark"] .voice-settings-btn {
   background: rgba(255,255,255,0.06);

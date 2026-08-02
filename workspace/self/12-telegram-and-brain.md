@@ -61,10 +61,12 @@ Session IDs by channel:
 - CLI: `cli_<id>`
 
 On WS reconnect (`ws:open`), the desktop calls `_wsReconnectCatchUp` which:
-1. Fetches `/api/sessions` and merges any sessions added while disconnected
+1. Fetches the unified `/api/sessions?scope=all&includeAutomated=1` timeline and merges any sessions added while disconnected
 2. Calls `catchUpMainChatStream(activeChatSessionId)` to replay missed stream events from the in-memory ring buffer (up to 800 events, 45-min TTL)
 
 The session list is also refreshed from server every 45 seconds via `window._sessionListRefreshTimer` to surface any sessions missed by WebSocket events.
+
+Session summaries preserve the durable channel classification and a sanitized `lastOrigin` from the latest user turn. Desktop and mobile render those summaries in one inline chat list rather than a Channels UI. Telegram delivery recovery resolves a durable Telegram-origin message and its `chatId` before using any process-local routing hint, so an existing Telegram session remains deliverable after a restart.
 
 Stream event deduplication uses `shouldProcessMainChatStreamEvent` keyed by `sessionId + streamId` — each new AI turn gets a fresh `streamId` UUID so there is no cross-turn sequence collision.
 
@@ -141,6 +143,11 @@ Current source facts:
 - failed Thought and Dream runs back off for six hours, and failed Dream cleanup runs back off for twelve hours, so a missing/stale artifact cannot create a 30-60 minute model retry storm
 - recurring Brain sessions have model/tool-round safety budgets (Thought 32, Dream 48, cleanup 32 by default); these are independently configurable with `PROMETHEUS_BRAIN_THOUGHT_MAX_ROUNDS`, `PROMETHEUS_BRAIN_DREAM_MAX_ROUNDS`, and `PROMETHEUS_BRAIN_CLEANUP_MAX_ROUNDS`
 - brain state, thought, dream, and cleanup artifacts live under `workspace/Brain/`
+- Brain Thought and Dream model overrides each have a persisted optional
+  reasoning effort.  The Settings Models controls save `thoughtReasoning` and
+  `dreamReasoning` through `/api/brain/config`; the runner passes the selected
+  effort to Thought, Dream, and Dream cleanup model calls (cleanup reuses the
+  Dream effort).
 - **the brain runs as `executionMode: 'cron'`, which (post Plan-B/cron rework) takes the interactive personality path — so thought and dream already receive USER.md + SOUL.md + MEMORY.md + intraday notes + config soul.** The prompts now reason proactively from that context ("the user planned X with me — is it actually built yet?") rather than only auditing the activity window.
 - **research tools (2026-06-10):** the Thought toolFilter now includes `web_search`/`web_fetch` (core tools) for light current-state + prior-art lookups, plus private-build-only source/prom read tools (`read_source`, `grep_source`, `read_prom_file`, …) so it can inspect Prometheus's own code/tools for current-state checks and tool-failure diagnosis. The Dream additionally gets `browser_open`/`browser_get_page_text` for deep competitor/OSS research. All Prometheus-source tools are stripped in public builds by `brainDreamToolFilter`.
 - **Current-State Verification gate (the key 2026-06-10 change):** both Thought and Dream must separate ORIGIN evidence (the chat that pinned an item) from CURRENT-STATE evidence (what the live artifact does *now*). Before flagging/seeding/proposing anything, they must open the real file/tool/page/project and confirm the gap still exists — because the user often fixes a bug or finishes a feature via another tool (Claude/Codex) without going through Prometheus. If current state shows it's already handled, mark it resolved and do not propose. This is what kills stale proposals.

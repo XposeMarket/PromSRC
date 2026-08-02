@@ -45,7 +45,7 @@ import { readModelUsageEventsForSession, getUsageCalibration } from '../../provi
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
@@ -164,6 +164,7 @@ import {
   desktopGetMonitorsSummary,
   desktopFindInstalledApp,
   desktopListWindowsCanonical,
+  desktopFocusWindowCanonical,
   desktopWindowClick,
   desktopWindowType,
   desktopWindowPressKey,
@@ -190,8 +191,6 @@ import { TelegramChannel } from '../comms/telegram-channel';
 import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
 import { executeXaiImageVisionSummary } from '../tools/handlers/xai-handlers.js';
 import {
-  enrichProductArtifactItems,
-  enrichSourceArtifactItems,
   executeShoppingSearchProducts,
   executeWebSearch,
   executeWebFetch,
@@ -1143,7 +1142,7 @@ function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: u
 
 function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
   const eventType = String(type || '').trim();
-  if (!eventType || eventType === 'heartbeat' || eventType === 'token' || eventType === 'thinking_delta') return null;
+  if (!eventType || eventType === 'heartbeat' || eventType === 'token' || eventType === 'thinking_delta' || eventType === 'progress_state') return null;
   const ts = new Date().toLocaleTimeString();
   const action = String(data?.action || data?.name || data?.toolName || '').trim();
   if (eventType === 'tool_call') {
@@ -1195,25 +1194,6 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
       actor: 'Prom',
       content: truncateRuntimeProcessText(data?.message || data?.error || data?.result),
       extra: { source: 'runtime_checkpoint', event: eventType, toolName: action },
-    };
-  }
-  if (eventType === 'progress_state') {
-    const items = Array.isArray(data?.items) ? data.items : [];
-    const active = Number.isFinite(Number(data?.activeIndex)) ? items[Number(data.activeIndex)] : null;
-    const reason = String(data?.reason || '').trim();
-    if (!active?.text && (!reason || /^(?:reset|request_start|none|idle|step[_\s-]*done|step[_\s-]*complete|done)$/i.test(reason))) return null;
-    const content = active?.text
-      ? `Plan: ${active.text}`
-      : reason
-        ? `Plan update: ${reason}`
-        : '';
-    if (!content) return null;
-    return {
-      ts,
-      type: 'step',
-      actor: 'Prom',
-      content: truncateRuntimeProcessText(content, 1000),
-      extra: { source: 'runtime_checkpoint', event: eventType, activeIndex: data?.activeIndex, total: data?.total },
     };
   }
   const content = truncateRuntimeProcessText(data?.message || data?.text || data?.result || data?.summary, 2000);
@@ -3038,15 +3018,13 @@ async function handleChat(
   const orchestrationSkillEnabled = isOrchestrationSkillEnabled();
   const greetingLikeTurn = isGreetingLikeMessage(message);
   const progressState: {
-    source: 'none' | 'preflight' | 'tool_sequence' | 'declared';
+    source: 'none' | 'preflight' | 'declared';
     items: RuntimeProgressItem[];
-    toolsSeen: string[];
     activeIndex: number;
     manualStepAdvance: boolean;
   } = {
     source: 'none',
     items: [],
-    toolsSeen: [],
     activeIndex: -1,
     manualStepAdvance: false,
   };
@@ -3211,7 +3189,8 @@ async function handleChat(
       const parsed = parseProviderModelRef(modeRef);
       if (parsed) {
         try {
-          const routeSnapshot = captureTurnRouteSnapshot({ providerId: parsed.providerId, model: parsed.model });
+          const accountId = String(cfg?.agent_model_default_accounts?.[modeKey] || '').trim() || undefined;
+          const routeSnapshot = captureTurnRouteSnapshot({ providerId: parsed.providerId, model: parsed.model, accountId });
           return {
             model: routeSnapshot.model,
             provider: routeSnapshot.provider,
@@ -3281,7 +3260,7 @@ async function handleChat(
 
   const seedProgressFromLines = (
     lines: string[],
-    source: 'preflight' | 'tool_sequence' | 'declared',
+    source: 'preflight' | 'declared',
     opts?: { manualStepAdvance?: boolean },
   ): boolean => {
     const items = buildProgressItems(lines);
@@ -3483,16 +3462,6 @@ async function handleChat(
     progressRoundHadFailure = false;
   };
 
-  const ensureProgressPlanFromObservedTools = (): void => {
-    if (progressState.items.length > 0 || progressState.toolsSeen.length < 2) return;
-    const observedTools = progressState.toolsSeen.map((t) => String(t || '').trim()).filter(Boolean);
-    if (observedTools.length < 2) return;
-    const base = observedTools.slice(0, 4).map((tool) => `Run ${prettifyToolName(tool)}`);
-    if (base.length >= 2) {
-      seedProgressFromLines(base, 'tool_sequence', { manualStepAdvance: false });
-    }
-  };
-
   const advanceProgressStep = (reason: string): void => {
     if (progressState.items.length < 2) return;
     const cursorStep = progressState.items[stepCursor];
@@ -3516,21 +3485,12 @@ async function handleChat(
 
   const markProgressStepStart = (toolName: string): void => {
     const cleanTool = String(toolName || '').trim();
-    if (cleanTool) progressState.toolsSeen.push(cleanTool);
-    ensureProgressPlanFromObservedTools();
     if (progressState.items.length < 2) return;
 
     // Activate the step at the current cursor position if it's still pending.
     const cursorStep = progressState.items[stepCursor];
     if (cursorStep && cursorStep.status === 'pending') {
       cursorStep.status = 'in_progress';
-      progressState.activeIndex = stepCursor;
-      emitProgressState('step_started');
-    } else if (!cursorStep) {
-      // Cursor past end — append a dynamic step for unexpected extra tool calls
-      const text = `Run ${prettifyToolName(cleanTool || 'tool')}`;
-      progressState.items.push({ id: `p${progressState.items.length + 1}`, text, status: 'in_progress' });
-      stepCursor = progressState.items.length - 1;
       progressState.activeIndex = stepCursor;
       emitProgressState('step_started');
     }
@@ -10841,6 +10801,42 @@ function normalizeVoiceAgentTarget(raw: any): VoiceAgentTargetContext {
   return { kind: 'main', label: 'Prometheus' };
 }
 
+function normalizeVoiceRoomContext(raw: any): Record<string, any> | null {
+  const source = raw?.voiceRoomContext || raw?.voice_room_context || raw?.voiceRoom || raw?.voice_room || null;
+  if (!source || typeof source !== 'object' || source.enabled !== true) return null;
+  const participants = (Array.isArray(source.participants) ? source.participants : [])
+    .map((participant: any) => ({
+      key: compactVoiceText(participant?.key || '', 180),
+      kind: String(participant?.kind || '').trim() === 'subagent' ? 'subagent' : 'main',
+      agentId: compactVoiceText(participant?.agentId || participant?.agent_id || '', 120),
+      label: compactVoiceText(participant?.label || participant?.name || '', 120),
+    }))
+    .filter((participant: any) => participant.key && participant.label)
+    .slice(0, 12);
+  const transcript = (Array.isArray(source.transcript) ? source.transcript : [])
+    .map((entry: any) => ({
+      role: String(entry?.role || '').trim() === 'assistant' ? 'assistant' : 'user',
+      speaker: compactVoiceText(entry?.speaker || '', 120),
+      targetKey: compactVoiceText(entry?.targetKey || entry?.target_key || '', 180),
+      text: compactVoiceText(entry?.text || entry?.content || '', 1200),
+      at: Number(entry?.at || entry?.timestamp || 0) || null,
+    }))
+    .filter((entry: any) => entry.text)
+    .slice(-48);
+  return {
+    enabled: participants.length > 1,
+    activeKey: compactVoiceText(source.activeKey || source.active_key || '', 180),
+    participants,
+    transcript,
+    transcriptText: transcript
+      .slice(-32)
+      .map((entry: any) => `${entry.speaker || (entry.role === 'assistant' ? 'Agent' : 'User')}: ${entry.text}`)
+      .join('\n')
+      .slice(-7000),
+    updatedAt: Number(source.updatedAt || source.updated_at || transcript[transcript.length - 1]?.at || Date.now()) || Date.now(),
+  };
+}
+
 function voiceAgentTargetIdentity(target?: VoiceAgentTargetContext) {
   const normalized = normalizeVoiceAgentTarget(target || {});
   const isSubagent = normalized.kind === 'subagent';
@@ -11269,6 +11265,7 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
   const voiceTarget = normalizeVoiceAgentTarget(options?.voiceTarget || options?.voice_target || options?.target || options || {});
   const subagentId = subagentVoiceTargetId(voiceTarget);
   const subagentLabel = subagentVoiceTargetLabel(voiceTarget);
+  const voiceRoom = normalizeVoiceRoomContext(options);
   const activeRuntime = findActiveMainChatRuntimeForSession(sid, String(options.expectedRuntimeId || options.runtimeId || ''));
   const currentTime = buildVoiceTimeContext(voiceRequestTimeInput(options));
   const checkpoint = activeRuntime?.checkpoint && typeof activeRuntime.checkpoint === 'object' ? activeRuntime.checkpoint : {};
@@ -11478,6 +11475,7 @@ function buildVoiceWorkerContextPacket(sessionId: string, options: Record<string
       compactionSummary: buildVoiceCompactionSummaryBlock(sid, 1200, voiceTarget),
       recentTranscript: buildVoiceConversationTranscript(sid, 8, 360, voiceTarget),
     } : undefined,
+    voiceRoom: voiceRoom || undefined,
     time: currentTime,
     currentTime,
     processEntries,
@@ -11516,6 +11514,8 @@ function getReusableVoiceContextPacket(sessionId: string, body: Record<string, a
         provided.currentTime = freshTime;
         provided.time = freshTime;
       }
+      const voiceRoom = normalizeVoiceRoomContext(body);
+      if (voiceRoom) provided.voiceRoom = voiceRoom;
       return provided;
     }
   }
@@ -11848,6 +11848,29 @@ function emitLastVoiceScreenshotPreview(sessionId: string, tool: string): void {
   });
 }
 
+/**
+ * Realtime voice is vision-first, just like the canonical desktop wrappers.
+ * OCR is an explicit opt-in because the OCR child process has a 15s timeout and
+ * a screenshot already arrives as an image for the realtime model.
+ */
+function voiceDesktopSkipOcr(args: Record<string, any> = {}): boolean {
+  return !(
+    args.ocr === true
+    || args.include_ocr === true
+    || args.includeOcr === true
+    || args.skip_ocr === false
+    || args.skipOcr === false
+  );
+}
+
+/** Match the worker wrapper contract: post-action captures are opt-in. */
+function voiceDesktopCaptureAfter(args: Record<string, any> = {}): boolean {
+  return args.capture_after === true
+    || args.captureAfter === true
+    || args.include_screenshot === true
+    || args.includeScreenshot === true;
+}
+
 async function executeVoiceAgentToolWithTrace(sessionId: string, name: string, args: Record<string, any>, trace?: VoiceAgentProcessEntry[]): Promise<string> {
   const requestedAction = String(name || '').trim();
   const requestedArgs = args && typeof args === 'object' ? args : {};
@@ -11856,19 +11879,22 @@ async function executeVoiceAgentToolWithTrace(sessionId: string, name: string, a
   const cleanArgs = normalized.args && typeof normalized.args === 'object' ? normalized.args : {};
   broadcastVoiceAgentToolEvent(sessionId, 'tool_call', { action, args: cleanArgs });
   pushVoiceAgentProcessEntry(trace, action.startsWith('voice_skill_') || action.startsWith('skill_') ? 'skill' : 'tool', `Using ${friendlyVoiceToolName(action)}...`, { action, args: cleanArgs });
+  const startedAt = Date.now();
   const raw = await executeVoiceAgentTool(sessionId, action, cleanArgs);
+  const elapsedMs = Math.max(0, Date.now() - startedAt);
   const summary = voiceAgentToolResultSummary(raw);
   broadcastVoiceAgentToolEvent(sessionId, 'tool_result', {
     action,
     result: summary.summary,
     error: !summary.ok,
+    elapsedMs,
   });
   // Captures are staged while the tool runs, then emitted only after its result
   // so every client receives tool -> result -> screenshot in the tool stream.
   emitLastVoiceScreenshotPreview(sessionId, action);
   const parsedResult = parseVoiceToolResult(raw);
   const runtimeDirective = voiceRuntimeDirectiveFromToolResult(parsedResult);
-  pushVoiceAgentProcessEntry(trace, summary.ok ? 'result' : 'error', `${friendlyVoiceToolName(action)} ${summary.ok ? 'complete' : 'failed'}${summary.summary ? ` => ${summary.summary}` : ''}`, { action, result: summary.summary, error: !summary.ok, ...(runtimeDirective ? { runtimeDirective } : {}) });
+  pushVoiceAgentProcessEntry(trace, summary.ok ? 'result' : 'error', `${friendlyVoiceToolName(action)} ${summary.ok ? 'complete' : 'failed'}${summary.summary ? ` => ${summary.summary}` : ''}`, { action, result: summary.summary, error: !summary.ok, elapsedMs, ...(runtimeDirective ? { runtimeDirective } : {}) });
   return raw;
 }
 
@@ -11953,9 +11979,11 @@ async function buildVoiceShowArtifact(name: string, args: Record<string, any>): 
           query,
           merchant: String(args.merchant || '').trim() || undefined,
           max_results: Math.max(2, Math.min(10, Number(args.limit || args.max_results || 6) || 6)),
-          provider: 'multi',
-          include_metadata: true,
-          include_images: true,
+          // Match the worker's preferred-provider default. Multi-provider
+          // shopping is still available when the caller explicitly asks for it.
+          provider: args.provider ? String(args.provider).toLowerCase() as any : undefined,
+          include_metadata: false,
+          include_images: false,
         });
         normalized = normalizeProductArtifactItems(Array.isArray(search?.data?.products) ? search.data.products : []);
         searchSource = searchSource || 'shopping_search_products';
@@ -11963,7 +11991,13 @@ async function buildVoiceShowArtifact(name: string, args: Record<string, any>): 
           return { ok: false, summary: String(search?.error || `No carousel-ready products found for "${query}".`), artifact: null };
         }
       }
-      const items = await enrichProductArtifactItems(normalized.map((item, index) => ({ id: `voice_product_${index + 1}`, ...item })));
+      // Search results already contain the title, URL, price, and thumbnail
+      // fields needed by the card. Do not synchronously revisit every merchant
+      // URL from realtime voice; the worker can perform the richer metadata pass
+      // when the user asks for deeper product research.
+      const items = normalized
+        .slice(0, 8)
+        .map((item, index) => ({ id: `voice_product_${index + 1}`, ...item }));
       const artifact = productCarouselToArtifact({ title: args.title || query, source: searchSource, items });
       return { ok: !!artifact, summary: artifact ? `Showing ${artifact.items.length} product(s)${query ? ` for "${query}"` : ''}.` : (query ? `No products found for "${query}".` : 'A product query or product items are required.'), artifact };
     }
@@ -11973,8 +12007,10 @@ async function buildVoiceShowArtifact(name: string, args: Record<string, any>): 
       if (!normalized.length) {
         const search = await executeWebSearch({
           query,
-          max_results: Math.max(2, Math.min(10, Number(args.limit || args.max_results || 6) || 6)),
-          provider: 'multi',
+          max_results: Math.max(1, Math.min(10, Number(args.limit || args.max_results || 5) || 5)),
+          ...(args.provider ? { provider: String(args.provider).toLowerCase() as any } : {}),
+          ...(args.multi_engine === true ? { multi_engine: true } : {}),
+          ...(args.provider_timeout_ms != null ? { provider_timeout_ms: Number(args.provider_timeout_ms) } : {}),
         });
         const rows = Array.isArray(search?.data?.results) ? search.data.results
           : Array.isArray(search?.data?.items) ? search.data.items
@@ -11984,7 +12020,10 @@ async function buildVoiceShowArtifact(name: string, args: Record<string, any>): 
           return { ok: false, summary: String(search?.error || `No sources found for "${query}".`), artifact: null };
         }
       }
-      const items = await enrichSourceArtifactItems(normalized);
+      // Search results already contain the title, URL, and snippet needed by
+      // the card. Do not synchronously revisit every source URL from realtime
+      // voice; the worker can perform the full metadata/image-cache pass.
+      const items = normalized.slice(0, 8);
       if (!items.length) return { ok: false, summary: `No sources found for "${query}".`, artifact: null };
       return { ok: true, summary: `Showing ${items.length} source(s) for "${query}".`, artifact: { id: `sources-${Date.now()}`, type: 'sources', title: args.title || query, layout: args.layout === 'list' ? 'list' : 'cards', items } };
     }
@@ -12176,8 +12215,9 @@ async function broadcastVoiceBrowserStatus(sessionId: string, tool: string, shot
   }
 }
 
-function voiceDesktopWindowSelector(args: Record<string, any>): { window_id?: string; window_handle?: number; app_id?: string; title?: string } {
+function voiceDesktopWindowSelector(args: Record<string, any>): { window_token?: string; window_id?: string; window_handle?: number; app_id?: string; title?: string } {
   return {
+    window_token: args?.window_token == null && args?.windowToken == null ? undefined : String(args.window_token ?? args.windowToken),
     window_id: args?.window_id == null ? undefined : String(args.window_id),
     window_handle: args?.window_handle == null && args?.handle == null ? undefined : Number(args.window_handle ?? args.handle),
     app_id: args?.app_id == null && args?.appId == null ? undefined : String(args.app_id ?? args.appId),
@@ -12197,11 +12237,16 @@ async function captureVoiceDesktopWindowObservation(
   const title = String(selector.title || '').trim();
   const appId = String(selector.app_id || '').trim();
   await desktopWindowScreenshot(sessionId, {
+    ...(selector.window_token ? { window_token: selector.window_token } : {}),
+    ...(selector.window_id ? { window_id: selector.window_id } : {}),
     ...(Number.isFinite(handle) && handle > 0 ? { handle } : {}),
+    ...(Number.isFinite(handle) && handle > 0 ? { window_handle: handle } : {}),
+    ...(appId ? { app_id: appId } : {}),
     ...(title ? { name: title } : {}),
     ...(!title && !(Number.isFinite(handle) && handle > 0) && appId ? { name: appId } : {}),
     active: !title && !(Number.isFinite(handle) && handle > 0) && !appId,
     focus_first: false,
+    skipOcr: true,
   }).catch(() => '');
   const packet = getDesktopAdvisorPacket(sessionId);
   if (packet?.screenshotBase64) {
@@ -12231,7 +12276,7 @@ async function captureVoiceDesktopObservation(
   includeScreenshot: boolean = true,
 ): Promise<Record<string, any>> {
   if (includeScreenshot === false) return {};
-  const result = await desktopScreenshotWithHistory(sessionId, { capture: 'all' }).catch(() => '');
+  const result = await desktopScreenshotWithHistory(sessionId, { capture: 'all', skipOcr: true }).catch(() => '');
   const packet = getDesktopAdvisorPacket(sessionId);
   if (packet?.screenshotBase64) {
     broadcastVoiceScreenshotPreview(sessionId, 'desktop', tool, {
@@ -12663,10 +12708,18 @@ function buildVoiceToolDefinitions(): any[] {
             monitor_index: { type: 'number' },
             name: { type: 'string' },
             handle: { type: 'number' },
+            window_token: { type: 'string', description: 'Strong window identity token from desktop_list_windows.' },
             active: { type: 'boolean' },
             focus_first: { type: 'boolean' },
             padding: { type: 'number' },
+            skip_ocr: { type: 'boolean', description: 'Vision-first default is true; set false only when OCR text is explicitly needed.' },
+            ocr: { type: 'boolean', description: 'Opt in to OCR for this screenshot; slower than the image-only path.' },
+            include_ocr: { type: 'boolean', description: 'Alias for ocr=true.' },
             provider: { type: 'string' },
+            multi_engine: { type: 'boolean', description: 'Match the worker web_search option. Set true only when wide multi-provider search is wanted.' },
+            fetch_top_k: { type: 'number', description: 'Optional number of top result pages to fetch for preview metadata.' },
+            fetch_max_chars: { type: 'number', description: 'Optional max characters per fetched preview page.' },
+            provider_timeout_ms: { type: 'number', description: 'Optional per-provider timeout in milliseconds.' },
             model: { type: 'string' },
             output_dir: { type: 'string' },
             save_to_workspace: { type: 'boolean' },
@@ -12676,7 +12729,7 @@ function buildVoiceToolDefinitions(): any[] {
             include_recent_events: { type: 'boolean' },
             include_done: { type: 'boolean' },
             include: { type: 'array', items: { type: 'string' } },
-            agent_id: { type: 'string' },
+            agent_id: { type: 'string', description: 'Standalone subagent id. In a selected subagent Voice/Live session this defaults to that same subagent, so "your agent" routes to its own worker.' },
           },
           additionalProperties: false,
         },
@@ -12735,12 +12788,16 @@ function buildVoiceToolDefinitions(): any[] {
             monitor_index: { type: 'number' },
             mode: { type: 'string', enum: ['normal', 'som'] },
             som: { type: 'boolean' },
-            name: { type: 'string' },
-            title: { type: 'string' },
-            handle: { type: 'number' },
-            active: { type: 'boolean' },
-            focus_first: { type: 'boolean' },
-            padding: { type: 'number' },
+             name: { type: 'string' },
+             title: { type: 'string' },
+             handle: { type: 'number' },
+             window_token: { type: 'string', description: 'Strong window identity token from desktop_list_windows.' },
+             active: { type: 'boolean' },
+             focus_first: { type: 'boolean' },
+             padding: { type: 'number' },
+             skip_ocr: { type: 'boolean', description: 'Vision-first default is true; set false only when OCR text is explicitly needed.' },
+             ocr: { type: 'boolean', description: 'Opt in to OCR for a screenshot; slower than the image-only path.' },
+             include_ocr: { type: 'boolean', description: 'Alias for ocr=true.' },
             x: { type: 'number' },
             y: { type: 'number' },
             from_x: { type: 'number' },
@@ -12756,7 +12813,8 @@ function buildVoiceToolDefinitions(): any[] {
             window_name: { type: 'string' },
             app_id: { type: 'string' },
             app: { type: 'string' },
-            process_name: { type: 'string' },
+             process_name: { type: 'string' },
+             filter: { type: 'string' },
             query: { type: 'string' },
             text: { type: 'string' },
             raw: { type: 'boolean' },
@@ -12768,6 +12826,7 @@ function buildVoiceToolDefinitions(): any[] {
             modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
             verify: { type: 'string' },
             include_screenshot: { type: 'boolean' },
+            capture_after: { type: 'boolean', description: 'Capture a follow-up desktop screenshot after an input action. Default false to match Worker.' },
             include_summary: { type: 'boolean' },
             wait_ms: { type: 'number' },
             ms: { type: 'number' },
@@ -12783,14 +12842,19 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_web_search',
-        description: 'Fast voice wrapper around Prometheus web_search/web_search_single/web_search_multi. Use for quick current/factual lookup. Use multi for latest/current/news/compare/sensitive/current-event questions. Escalate deep research to handoff_new_work.',
+        description: 'Fast voice wrapper around the canonical Prometheus web_search path. Uses the configured preferred provider by default; pass mode="multi" or provider="multi" only when wide multi-provider search is explicitly wanted. Escalate deep research to handoff_new_work.',
         parameters: {
           type: 'object',
           required: ['query'],
           properties: {
             query: { type: 'string' },
-            mode: { type: 'string', enum: ['auto', 'single', 'multi'], description: 'auto chooses single for simple questions and multi for latest/current/news/compare.' },
+            mode: { type: 'string', enum: ['auto', 'single', 'multi'], description: 'auto/single use the configured preferred provider; use multi only when wide multi-provider search is explicitly wanted.' },
             max_results: { type: 'number', description: 'Small number, usually 3-5.' },
+            provider: { type: 'string', enum: ['tinyfish', 'tavily', 'google', 'brave', 'ddg', 'xai', 'multi'], description: 'Optional canonical web_search provider override.' },
+            multi_engine: { type: 'boolean', description: 'Optional canonical web_search multi_engine flag.' },
+            fetch_top_k: { type: 'number', description: 'Optional canonical web_search preview-fetch count.' },
+            fetch_max_chars: { type: 'number', description: 'Optional canonical web_search preview-fetch character limit.' },
+            provider_timeout_ms: { type: 'number', description: 'Optional canonical per-provider timeout in milliseconds.' },
           },
           additionalProperties: false,
         },
@@ -13188,11 +13252,19 @@ function buildVoiceToolDefinitions(): any[] {
             monitor_index: { type: 'number', description: 'Optional monitor index; overrides capture when provided.' },
             name: { type: 'string', description: 'Optional app/window title or process name to capture as a single-window screenshot.' },
             handle: { type: 'number', description: 'Optional exact window handle to capture.' },
+            window_token: { type: 'string', description: 'Optional strong window identity token from voice_desktop_list_windows.' },
+            window_id: { type: 'string', description: 'Optional canonical window_id from voice_desktop_list_windows.' },
+            window_handle: { type: 'number', description: 'Optional canonical window handle.' },
+            app_id: { type: 'string', description: 'Optional canonical app selector.' },
+            title: { type: 'string', description: 'Optional exact/partial window title selector.' },
             active: { type: 'boolean', description: 'Capture the current active window.' },
             focus_first: { type: 'boolean', description: 'Focus the target window before capture. Default true for window screenshots.' },
             padding: { type: 'number', description: 'Extra pixels around a window screenshot. Default 8.' },
             mode: { type: 'string', enum: ['normal', 'som'], description: 'Use som to overlay numbered clickable UI elements when preparing to click.' },
             som: { type: 'boolean', description: 'Shortcut for mode="som".' },
+            skip_ocr: { type: 'boolean', description: 'Vision-first default is true; set false only when OCR text is explicitly needed.' },
+            ocr: { type: 'boolean', description: 'Opt in to OCR for this screenshot; slower than the image-only path.' },
+            include_ocr: { type: 'boolean', description: 'Alias for ocr=true.' },
             include_summary: { type: 'boolean', description: 'Whether to include brief screenshot metadata in the spoken reply.' },
           },
           additionalProperties: false,
@@ -13219,7 +13291,8 @@ function buildVoiceToolDefinitions(): any[] {
             double_click: { type: 'boolean', description: 'Double click instead of single click. Default false.' },
             modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
             verify: { type: 'string', description: 'Optional desktop verification mode supported by the underlying tool.' },
-            include_screenshot: { type: 'boolean', description: 'Capture a fresh desktop screenshot preview after clicking. Default true.' },
+            include_screenshot: { type: 'boolean', description: 'Compatibility alias for capture_after. Default false.' },
+            capture_after: { type: 'boolean', description: 'Capture a fresh desktop screenshot preview after clicking. Default false.' },
           },
           additionalProperties: false,
         },
@@ -13238,7 +13311,8 @@ function buildVoiceToolDefinitions(): any[] {
             name: { type: 'string', description: 'Optional app/window title or process name. If omitted, active window is used.' },
             handle: { type: 'number', description: 'Optional exact window handle.' },
             active: { type: 'boolean', description: 'Use the current active window. Default true when name/handle are omitted.' },
-            include_screenshot: { type: 'boolean', description: 'Capture a fresh window screenshot preview after maximize/restore. Default true. Minimize/close do not capture by default.' },
+            include_screenshot: { type: 'boolean', description: 'Compatibility alias for capture_after. Default false. Minimize/close do not capture.' },
+            capture_after: { type: 'boolean', description: 'Capture a fresh window screenshot preview after maximize/restore. Default false.' },
           },
           additionalProperties: false,
         },
@@ -13251,10 +13325,15 @@ function buildVoiceToolDefinitions(): any[] {
         description: 'Focus one desktop app/window by partial title or process name, then verify the active title/process/monitor and capture a screenshot preview by default. Use for live desktop UI control setup. Do not use for files, shell commands, installs, or durable system changes; hand those to Worker.',
         parameters: {
           type: 'object',
-          required: ['name'],
           properties: {
             name: { type: 'string', description: 'Partial window title or process name to focus.' },
+            title: { type: 'string', description: 'Window title selector.' },
+            window_token: { type: 'string', description: 'Strong window identity token from voice_desktop_list_windows.' },
+            window_id: { type: 'string', description: 'Canonical window_id from voice_desktop_list_windows.' },
+            window_handle: { type: 'number', description: 'Exact window handle.' },
+            app_id: { type: 'string', description: 'Canonical app selector.' },
             include_screenshot: { type: 'boolean', description: 'Capture a verification screenshot after focus. Default true.' },
+            skip_ocr: { type: 'boolean', description: 'Vision-first default is true; set false only when OCR text is explicitly needed.' },
           },
           additionalProperties: false,
         },
@@ -13303,7 +13382,8 @@ function buildVoiceToolDefinitions(): any[] {
           properties: {
             app_id: { type: 'string', description: 'Optional app_id filter.' },
             process_name: { type: 'string', description: 'Optional process name filter.' },
-            title: { type: 'string', description: 'Optional window title filter.' },
+             title: { type: 'string', description: 'Optional window title filter.' },
+             filter: { type: 'string', description: 'Optional title/process/app filter.' },
           },
           additionalProperties: false,
         },
@@ -13313,11 +13393,12 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_desktop_window_click',
-        description: 'Click inside a specific desktop window using window/screenshot coordinates, then capture a fresh window screenshot. If the user asks to click inside an identified app/window, call this tool immediately instead of saying you will. Explicit user-authorized social posts/messages are allowed when the target and content are clear. For file operations, installs, destructive confirmations, purchases/payments, or account settings/security changes, hand off to Worker.',
+         description: 'Click inside a specific desktop window using window/screenshot coordinates. A follow-up screenshot is opt-in with capture_after=true. If the user asks to click inside an identified app/window, call this tool immediately instead of saying you will. Explicit user-authorized social posts/messages are allowed when the target and content are clear. For file operations, installs, destructive confirmations, purchases/payments, or account settings/security changes, hand off to Worker.',
         parameters: {
           type: 'object',
           properties: {
             window_id: { type: 'string', description: 'Preferred canonical window_id from voice_desktop_list_windows.' },
+            window_token: { type: 'string', description: 'Strong window identity token from voice_desktop_list_windows.' },
             window_handle: { type: 'number', description: 'Optional exact window handle from a window screenshot/list.' },
             app_id: { type: 'string', description: 'Optional app_id selector.' },
             title: { type: 'string', description: 'Optional window title selector.' },
@@ -13329,7 +13410,8 @@ function buildVoiceToolDefinitions(): any[] {
             double_click: { type: 'boolean', description: 'Double click instead of single click. Default false.' },
             modifier: { type: 'string', enum: ['none', 'shift', 'ctrl', 'alt'], default: 'none', description: 'Default none. Only use shift/ctrl/alt when explicitly requested.' },
             verify: { type: 'string', description: 'Optional desktop verification mode supported by the underlying tool.' },
-            include_screenshot: { type: 'boolean', description: 'Capture a window screenshot preview after clicking. Default true.' },
+             include_screenshot: { type: 'boolean', description: 'Compatibility alias for capture_after. Default false.' },
+             capture_after: { type: 'boolean', description: 'Capture a window screenshot preview after clicking. Default false.' },
           },
           required: ['x', 'y'],
           additionalProperties: false,
@@ -13340,17 +13422,19 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_desktop_window_type',
-        description: 'Type text into a specific focused desktop window, then capture a fresh window screenshot. Use for live app UI input only, including explicitly requested social posts/messages. Do not use for passwords/payment data, file editing, shell commands, destructive submits, or account settings/security changes; hand those to Worker.',
+         description: 'Type text into a specific focused desktop window. A follow-up screenshot is opt-in with capture_after=true. Use for live app UI input only, including explicitly requested social posts/messages. Do not use for passwords/payment data, file editing, shell commands, destructive submits, or account settings/security changes; hand those to Worker.',
         parameters: {
           type: 'object',
           properties: {
             window_id: { type: 'string' },
+            window_token: { type: 'string' },
             window_handle: { type: 'number' },
             app_id: { type: 'string' },
             title: { type: 'string' },
             text: { type: 'string', description: 'Text to type into the target window.' },
             raw: { type: 'boolean', description: 'Use raw typing instead of clipboard paste. Default false.' },
-            include_screenshot: { type: 'boolean', description: 'Capture a window screenshot preview after typing. Default true.' },
+             include_screenshot: { type: 'boolean', description: 'Compatibility alias for capture_after. Default false.' },
+             capture_after: { type: 'boolean', description: 'Capture a window screenshot preview after typing. Default false.' },
           },
           required: ['text'],
           additionalProperties: false,
@@ -13361,16 +13445,18 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_desktop_window_press_key',
-        description: 'Press a key in a specific focused desktop window, then capture a fresh window screenshot. If the user asks to press a key in an app/window, call this tool immediately instead of saying you will. Explicit user-authorized social posts/messages are allowed when pressing the key is the requested submit/send action. For destructive confirmations, installs, file operations, purchases/payments, or account settings/security changes, hand off to Worker.',
+         description: 'Press a key in a specific focused desktop window. A follow-up screenshot is opt-in with capture_after=true. If the user asks to press a key in an app/window, call this tool immediately instead of saying you will. Explicit user-authorized social posts/messages are allowed when pressing the key is the requested submit/send action. For destructive confirmations, installs, file operations, purchases/payments, or account settings/security changes, hand off to Worker.',
         parameters: {
           type: 'object',
           properties: {
             window_id: { type: 'string' },
+            window_token: { type: 'string' },
             window_handle: { type: 'number' },
             app_id: { type: 'string' },
             title: { type: 'string' },
             key: { type: 'string', description: 'Key to press, e.g. Enter, Escape, Tab, ArrowDown, PageDown, Backspace.' },
-            include_screenshot: { type: 'boolean', description: 'Capture a window screenshot preview after pressing the key. Default true.' },
+             include_screenshot: { type: 'boolean', description: 'Compatibility alias for capture_after. Default false.' },
+             capture_after: { type: 'boolean', description: 'Capture a window screenshot preview after pressing the key. Default false.' },
           },
           required: ['key'],
           additionalProperties: false,
@@ -13381,11 +13467,12 @@ function buildVoiceToolDefinitions(): any[] {
       type: 'function',
       function: {
         name: 'voice_desktop_window_scroll',
-        description: 'Scroll inside a specific desktop window, then capture a fresh window screenshot. If the user asks to scroll an app/window, call this tool immediately instead of saying you will.',
+         description: 'Scroll inside a specific desktop window. A follow-up screenshot is opt-in with capture_after=true. If the user asks to scroll an app/window, call this tool immediately instead of saying you will.',
         parameters: {
           type: 'object',
           properties: {
             window_id: { type: 'string' },
+            window_token: { type: 'string' },
             window_handle: { type: 'number' },
             app_id: { type: 'string' },
             title: { type: 'string' },
@@ -13395,7 +13482,8 @@ function buildVoiceToolDefinitions(): any[] {
             y: { type: 'number', description: 'Optional y coordinate to move over before scrolling.' },
             coordinate_space: { type: 'string', enum: ['window', 'capture', 'monitor', 'virtual'], description: 'Coordinate space for x/y. Default window.' },
             screenshot_id: { type: 'string', description: 'Optional screenshot_id anchoring x/y.' },
-            include_screenshot: { type: 'boolean', description: 'Capture a window screenshot preview after scrolling. Default true.' },
+             include_screenshot: { type: 'boolean', description: 'Compatibility alias for capture_after. Default false.' },
+             capture_after: { type: 'boolean', description: 'Capture a window screenshot preview after scrolling. Default false.' },
           },
           additionalProperties: false,
         },
@@ -13937,7 +14025,9 @@ function standaloneVoiceAgents(): any[] {
 
 async function executeVoiceAgentControl(sessionId: string, args: Record<string, any>): Promise<string> {
   const action = String(args?.action || args?.agent_action || '').trim().toLowerCase();
-  const agentId = String(args?.agent_id || args?.agentId || '').trim();
+  const ownerTarget = normalizeVoiceAgentTarget(args?.voiceTarget || {});
+  const ownerAgentId = ownerTarget.kind === 'subagent' ? String(ownerTarget.agentId || '').trim() : '';
+  const agentId = String(args?.agent_id || args?.agentId || ownerAgentId).trim();
   const taskId = String(args?.task_id || args?.taskId || '').trim();
   const message = String(args?.message || args?.prompt || args?.instruction || '').trim();
   const agents = standaloneVoiceAgents();
@@ -13948,8 +14038,29 @@ async function executeVoiceAgentControl(sessionId: string, args: Record<string, 
   if (action === 'chat') {
     if (!agent || !message) return voiceToolResult(false, 'agent_control chat requires agent_id and message.');
     const { runSubagentChatTurnFromChannel } = require('./channels.router') as typeof import('./channels.router');
-    const result = await runSubagentChatTurnFromChannel({ agentId, message, source: 'voice_agent_chat', accountId: 'prometheus', peerId: sessionId, userLabel: 'Prometheus Voice Agent', timeoutMs: 120_000, sessionId: `subagent_chat_${agentId}`, seedFromSharedChatStore: true });
-    return voiceToolResult(true, `${agent.name} replied.`, { agentId, reply: compactVoiceText(result?.result?.text || '', 2400), threadId: `subagent_chat_${agentId}` });
+    const ownerLabel = ownerTarget.kind === 'subagent'
+      ? compactVoiceText(ownerTarget.label || agent.name || agentId, 120)
+      : 'Prometheus';
+    const result = await runSubagentChatTurnFromChannel({
+      agentId,
+      message,
+      source: ownerAgentId === agentId ? 'subagent_voice_worker_chat' : 'voice_agent_chat',
+      accountId: 'prometheus',
+      peerId: sessionId,
+      userLabel: `${ownerLabel} Voice`,
+      timeoutMs: 180_000,
+      sessionId: `subagent_chat_${agentId}`,
+      seedFromSharedChatStore: true,
+    });
+    return voiceToolResult(true, `${agent.name} replied.`, {
+      agentId,
+      reply: compactVoiceText(result?.result?.text || '', 5000),
+      threadId: `subagent_chat_${agentId}`,
+      resumedVoiceTarget: ownerTarget.kind === 'subagent' ? ownerTarget : undefined,
+      voiceContinuation: ownerAgentId === agentId
+        ? 'The result returned to the same subagent Voice/Live tool call. Summarize it as yourself.'
+        : undefined,
+    });
   }
   if (action === 'dispatch') {
     if (!agent || !message) return voiceToolResult(false, 'agent_control dispatch requires agent_id and a task message.');
@@ -14052,11 +14163,22 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       const query = String(args.query || '').trim();
       if (!query) return voiceToolResult(false, 'Search query is required.');
       const mode = String(args.mode || 'auto').toLowerCase();
-      const wantsMulti = mode === 'multi' || (mode === 'auto' && /\b(latest|current|today|news|compare|versus|vs|recent|breaking|price|stock|election|weather|recall|safety|law|legal|medical|financial)\b/i.test(query));
+      // Keep the canonical worker default (configured preferred provider) for
+      // auto/single. Multi-provider search remains an explicit voice choice,
+      // so a current-news lookup does not silently fan out to every provider.
+      const wantsMulti = mode === 'multi';
+      const maxResults = Math.min(10, Math.max(1, Number(args.max_results ?? 5) || 5));
       const result = await executeWebSearch({
         query,
-        max_results: Math.min(6, Math.max(2, Number(args.max_results || 4) || 4)),
-        ...(wantsMulti ? { provider: 'multi' as const } : { multi_engine: false }),
+        max_results: maxResults,
+        ...(wantsMulti
+          ? { provider: 'multi' as const }
+          : (mode === 'single' ? { multi_engine: false } : {})),
+        ...(args.provider ? { provider: String(args.provider).toLowerCase() as any } : {}),
+        ...(args.multi_engine === true ? { multi_engine: true } : {}),
+        ...(args.fetch_top_k != null ? { fetch_top_k: Number(args.fetch_top_k) } : {}),
+        ...(args.fetch_max_chars != null ? { fetch_max_chars: Number(args.fetch_max_chars) } : {}),
+        ...(args.provider_timeout_ms != null ? { provider_timeout_ms: Number(args.provider_timeout_ms) } : {}),
       });
       return voiceToolResult(result.success !== false, result.success === false ? (result.error || 'Search failed.') : 'Search complete.', summarizeVoiceSearchResult(result));
     }
@@ -14582,22 +14704,35 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       return voiceToolResult(ok, ok ? 'Browser closed.' : result);
     }
     if (name === 'voice_desktop_screenshot') {
+      const selector = voiceDesktopWindowSelector(args);
       const hasWindowTarget = !!(
-        String(args?.name || '').trim()
-        || (Number.isFinite(Number(args?.handle)) && Number(args?.handle) > 0)
+        selector.window_token
+        || selector.window_id
+        || selector.app_id
+        || String(selector.title || '').trim()
+        || (Number.isFinite(Number(selector.window_handle)) && Number(selector.window_handle) > 0)
         || args?.active === true
       );
       const result = hasWindowTarget
         ? await desktopWindowScreenshot(sessionId, {
-          name: args?.name == null ? undefined : String(args.name),
-          handle: args?.handle == null ? undefined : Number(args.handle),
+          window_token: selector.window_token,
+          window_id: selector.window_id,
+          window_handle: selector.window_handle,
+          app_id: selector.app_id,
+          title: selector.title,
+          name: selector.title,
+          handle: selector.window_handle,
           active: args?.active === true,
           focus_first: args?.focus_first == null ? undefined : args.focus_first !== false,
           padding: args?.padding == null ? undefined : Number(args.padding),
           mode: String(args?.mode || '').toLowerCase() === 'som' || args?.som === true ? 'som' : 'normal',
           som: args?.som === true || String(args?.mode || '').toLowerCase() === 'som',
+          skipOcr: voiceDesktopSkipOcr(args),
         })
-        : await desktopScreenshotWithHistory(sessionId, parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined));
+        : await desktopScreenshotWithHistory(sessionId, {
+          ...(parseDesktopScreenshotToolArgs((args && typeof args === 'object') ? args as any : undefined) || {}),
+          skipOcr: voiceDesktopSkipOcr(args),
+        });
       const ok = !String(result || '').startsWith('ERROR');
       const packet = getDesktopAdvisorPacket(sessionId);
       if (ok && packet?.screenshotBase64) {
@@ -14643,13 +14778,14 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
           || /is \d+s old/.test(msg);
         if (isStale) {
           const oldPacket = getDesktopAdvisorPacketById(sessionId, clickTarget.screenshot_id);
-          const freshCapture = oldPacket?.targetWindow
-            ? await desktopWindowScreenshot(sessionId, {
-              handle: oldPacket.targetWindow.handle,
-              name: oldPacket.targetWindow.title,
-              focus_first: true,
-            }).catch(() => null)
-            : await desktopScreenshotWithHistory(sessionId).catch(() => null);
+            const freshCapture = oldPacket?.targetWindow
+              ? await desktopWindowScreenshot(sessionId, {
+                handle: oldPacket.targetWindow.handle,
+                name: oldPacket.targetWindow.title,
+                focus_first: true,
+                skipOcr: voiceDesktopSkipOcr(args),
+              }).catch(() => null)
+            : await desktopScreenshotWithHistory(sessionId, { skipOcr: voiceDesktopSkipOcr(args) }).catch(() => null);
           const freshIdMatch = String(freshCapture || '').match(/Screenshot ID:\s*(ds_[^\s.]+)/);
           const freshId = freshIdMatch ? freshIdMatch[1] : null;
           if (freshId) {
@@ -14681,7 +14817,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
           },
         );
       const ok = !/^ERROR:/i.test(String(result || ''));
-      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, args.include_screenshot !== false) : {};
+      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, voiceDesktopCaptureAfter(args)) : {};
       return voiceToolResult(ok, ok ? 'Desktop click complete.' : result, {
         observation: compactVoiceText(result, 3000),
         ...shotMeta,
@@ -14693,7 +14829,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       const pointerArgs = parseDesktopPointerMonitorArgs(args);
       const result = await desktopDrag(coords[0], coords[1], coords[2], coords[3], Number(args.steps || 20), pointerArgs);
       const ok = !/^ERROR:/i.test(String(result || ''));
-      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, args.include_screenshot !== false) : {};
+      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, voiceDesktopCaptureAfter(args)) : {};
       return voiceToolResult(ok, ok ? 'Desktop drag complete.' : result, { observation: compactVoiceText(result, 3000), ...shotMeta });
     }
     if (name === 'voice_desktop_scroll') {
@@ -14702,7 +14838,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         : 'down';
       const result = await desktopScroll(direction, Number(args.amount || 3), args.x == null ? undefined : Number(args.x), args.y == null ? undefined : Number(args.y), direction === 'left' || direction === 'right', parseDesktopPointerMonitorArgs(args));
       const ok = !/^ERROR:/i.test(String(result || ''));
-      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, args.include_screenshot !== false) : {};
+      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, voiceDesktopCaptureAfter(args)) : {};
       return voiceToolResult(ok, ok ? `Desktop scrolled ${direction}.` : result, { observation: compactVoiceText(result, 3000), ...shotMeta });
     }
     if (name === 'voice_desktop_type' || name === 'voice_desktop_type_raw') {
@@ -14710,7 +14846,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       if (!text) return voiceToolResult(false, 'Text is required.');
       const result = name === 'voice_desktop_type_raw' ? await desktopTypeRaw(text) : await desktopType(text);
       const ok = !/^ERROR:/i.test(String(result || ''));
-      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, args.include_screenshot !== false) : {};
+      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, voiceDesktopCaptureAfter(args)) : {};
       return voiceToolResult(ok, ok ? 'Desktop typing complete.' : result, { observation: compactVoiceText(result, 3000), ...shotMeta });
     }
     if (name === 'voice_desktop_press_key') {
@@ -14718,7 +14854,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       if (!key) return voiceToolResult(false, 'Key is required.');
       const result = await desktopPressKey(key);
       const ok = !/^ERROR:/i.test(String(result || ''));
-      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, args.include_screenshot !== false) : {};
+      const shotMeta = ok ? await captureVoiceDesktopObservation(sessionId, name, voiceDesktopCaptureAfter(args)) : {};
       return voiceToolResult(ok, ok ? `Pressed ${key}.` : result, { observation: compactVoiceText(result, 3000), ...shotMeta });
     }
     if (name === 'voice_desktop_wait') {
@@ -14744,13 +14880,18 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         ? actionRaw
         : 'restore';
       const result = await desktopWindowControl(action, {
+        window_token: args.window_token == null && args.windowToken == null ? undefined : String(args.window_token ?? args.windowToken),
+        window_id: args.window_id == null ? undefined : String(args.window_id),
+        window_handle: args.window_handle == null && args.windowHandle == null ? undefined : Number(args.window_handle ?? args.windowHandle),
+        app_id: args.app_id == null && args.appId == null ? undefined : String(args.app_id ?? args.appId),
+        title: args.title == null ? undefined : String(args.title),
         name: args.name == null && args.title == null ? undefined : String(args.name ?? args.title),
         handle: args.handle == null && args.window_handle == null && args.windowHandle == null ? undefined : Number(args.handle ?? args.window_handle ?? args.windowHandle),
         active: args.active === true,
       });
       const ok = !/^ERROR:/i.test(String(result || ''));
       const shouldCapture = ok
-        && args.include_screenshot !== false
+        && voiceDesktopCaptureAfter(args)
         && (action === 'maximize' || action === 'restore');
       const shotMeta = shouldCapture
         ? await captureVoiceDesktopWindowObservation(sessionId, name, {
@@ -14765,12 +14906,48 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       });
     }
     if (name === 'voice_desktop_focus_window') {
-      const windowName = String(args.name || '').trim();
-      if (!windowName) return voiceToolResult(false, 'Window name is required.');
+      const selector = voiceDesktopWindowSelector(args);
+      const windowName = String(selector.title || '').trim();
+      const hasCanonicalSelector = !!(selector.window_token || selector.window_id || selector.window_handle || selector.app_id);
+      if (!windowName && !hasCanonicalSelector) return voiceToolResult(false, 'Window name or canonical window selector is required.');
+      const includeScreenshot = args.include_screenshot !== false;
+      if (hasCanonicalSelector) {
+        const result = await desktopFocusWindowCanonical(
+          sessionId,
+          selector,
+          includeScreenshot,
+          undefined,
+          { skipOcr: voiceDesktopSkipOcr(args) },
+        );
+        const ok = !/^ERROR:/i.test(String(result || ''));
+        const packet = getDesktopAdvisorPacket(sessionId);
+        if (ok && includeScreenshot && packet?.screenshotBase64) {
+          broadcastVoiceScreenshotPreview(sessionId, 'desktop', name, {
+            base64: packet.screenshotBase64,
+            mimeType: packet.screenshotMime || 'image/png',
+            width: packet.width,
+            height: packet.height,
+          });
+        }
+        return voiceToolResult(ok, ok ? compactVoiceText(result, 3000) : result, {
+          ...selector,
+          ...(packet ? { screenshotId: packet.screenshotId, width: packet.width, height: packet.height } : {}),
+        });
+      }
       const verification = await desktopFocusWindowVerified(sessionId, windowName, {
-        includeScreenshot: args.include_screenshot !== false,
+        includeScreenshot,
+        skipOcr: voiceDesktopSkipOcr(args),
       });
       if (!verification.ok) return voiceToolResult(false, verification.message, { name: windowName });
+      const packet = getDesktopAdvisorPacket(sessionId);
+      if (includeScreenshot && packet?.screenshotBase64) {
+        broadcastVoiceScreenshotPreview(sessionId, 'desktop', name, {
+          base64: packet.screenshotBase64,
+          mimeType: packet.screenshotMime || 'image/png',
+          width: packet.width,
+          height: packet.height,
+        });
+      }
       return voiceToolResult(true, verification.verification.summary, {
         name: windowName,
         verification: verification.verification,
@@ -14816,6 +14993,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         app_id: args.app_id == null && args.appId == null ? undefined : String(args.app_id ?? args.appId),
         process_name: args.process_name == null && args.processName == null ? undefined : String(args.process_name ?? args.processName),
         title: args.title == null ? undefined : String(args.title),
+        filter: args.filter == null ? undefined : String(args.filter),
       });
       const ok = !/^ERROR:/i.test(String(result || ''));
       return voiceToolResult(ok, ok ? 'Desktop windows listed.' : result, {
@@ -14846,7 +15024,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         sessionId,
       );
       const ok = !/^ERROR:/i.test(String(result || ''));
-      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, args.include_screenshot !== false) : {};
+      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, voiceDesktopCaptureAfter(args)) : {};
       return voiceToolResult(ok, ok ? 'Desktop window click complete.' : result, {
         observation: compactVoiceText(result, 3000),
         ...shotMeta,
@@ -14857,7 +15035,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       if (!text) return voiceToolResult(false, 'Text is required.');
       const result = await desktopWindowType(voiceDesktopWindowSelector(args), text, args.raw === true);
       const ok = !/^ERROR:/i.test(String(result || ''));
-      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, args.include_screenshot !== false) : {};
+      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, voiceDesktopCaptureAfter(args)) : {};
       return voiceToolResult(ok, ok ? 'Desktop window typing complete.' : result, {
         observation: compactVoiceText(result, 3000),
         ...shotMeta,
@@ -14868,7 +15046,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
       if (!key) return voiceToolResult(false, 'Key is required.');
       const result = await desktopWindowPressKey(voiceDesktopWindowSelector(args), key);
       const ok = !/^ERROR:/i.test(String(result || ''));
-      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, args.include_screenshot !== false) : {};
+      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, voiceDesktopCaptureAfter(args)) : {};
       return voiceToolResult(ok, ok ? `Pressed ${key} in desktop window.` : result, {
         key,
         observation: compactVoiceText(result, 3000),
@@ -14887,7 +15065,7 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         screenshot_id: args.screenshot_id == null && args.screenshotId == null ? undefined : String(args.screenshot_id ?? args.screenshotId),
       } as any, sessionId);
       const ok = !/^ERROR:/i.test(String(result || ''));
-      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, args.include_screenshot !== false) : {};
+      const shotMeta = ok ? await captureVoiceDesktopWindowObservation(sessionId, name, args, voiceDesktopCaptureAfter(args)) : {};
       return voiceToolResult(ok, ok ? `Scrolled ${direction} in desktop window.` : result, {
         direction,
         observation: compactVoiceText(result, 3000),
@@ -18030,9 +18208,11 @@ function clampRealtimeInstructions(value: string, max = REALTIME_AGENT_INSTRUCTI
 // canonical voice_thread_ops tool is intentionally included in this set so the
 // realtime coordinator creates first-class Prometheus threads directly rather
 // than delegating through a separate worker-group transport.
-function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext): any[] {
+function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext, voiceRoom?: Record<string, any> | null): any[] {
   const identity = voiceAgentTargetIdentity(voiceTarget);
-  const chatTools = buildVoiceToolDefinitions();
+  const chatTools = buildVoiceToolDefinitions().filter((tool: any) => (
+    !identity.isSubagent || String(tool?.function?.name || tool?.name || '') !== 'voice_thread_ops'
+  ));
   const realtimeTools: any[] = chatTools.map((tool: any) => ({
     type: 'function',
     name: tool.function?.name || tool.name,
@@ -18052,32 +18232,64 @@ function buildRealtimeVoiceAgentTools(voiceTarget?: VoiceAgentTargetContext): an
         additionalProperties: false,
       },
     });
+    realtimeTools.push({
+      type: 'function',
+      name: 'steer_active_worker',
+      description: 'Steer an active Prometheus worker run mid-execution. Use ONLY when the worker context shows a worker is currently active and the user is clearly correcting, adjusting, pausing, or changing the active work. Do NOT use for normal conversation, status/progress/update questions, or "what are you doing"; use voice_worker_status for those. For abort intent, use interrupt_active_worker instead.',
+      parameters: {
+        type: 'object',
+        required: ['message'],
+        properties: {
+          message: { type: 'string', description: 'The steering message for the worker — the user\'s correction or new direction.' },
+        },
+        additionalProperties: false,
+      },
+    });
+    realtimeTools.push({
+      type: 'function',
+      name: 'interrupt_active_worker',
+      description: 'Abort the currently active Prometheus worker run. Use ONLY for explicit cancel/stop/abort intent from the user. Call this function immediately; do not wait for a separate acknowledgement path. After the function output returns, speak one very short confirmation.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'Brief reason for the abort.' },
+        },
+        additionalProperties: false,
+      },
+    });
   }
-  realtimeTools.push({
-    type: 'function',
-    name: 'steer_active_worker',
-    description: 'Steer an active Prometheus worker run mid-execution. Use ONLY when the worker context shows a worker is currently active and the user is clearly correcting, adjusting, pausing, or changing the active work. Do NOT use for normal conversation, status/progress/update questions, or "what are you doing"; use voice_worker_status for those. For abort intent, use interrupt_active_worker instead.',
-    parameters: {
-      type: 'object',
-      required: ['message'],
-      properties: {
-        message: { type: 'string', description: 'The steering message for the worker — the user\'s correction or new direction.' },
+  const roomParticipants = voiceRoom?.enabled === true && Array.isArray(voiceRoom?.participants)
+    ? voiceRoom.participants
+      .map((participant: any) => ({
+        key: compactVoiceText(participant?.key || '', 180),
+        label: compactVoiceText(participant?.label || participant?.name || '', 120),
+      }))
+      .filter((participant: any) => participant.key && participant.label)
+    : [];
+  if (roomParticipants.length > 1) {
+    const roster = roomParticipants.map((participant: any) => `${participant.label} (${participant.key})`).join(', ');
+    realtimeTools.push({
+      type: 'function',
+      name: 'voice_room_handoff',
+      description: `Safety fallback for a host-routed Voice Room. Use ONLY when the user is clearly addressing another listed participant and you are still receiving the turn instead of the host switching first. Call it immediately and remain silent; never merely say that the turn is for someone else. Valid room participants: ${roster}.`,
+      parameters: {
+        type: 'object',
+        required: ['agent_key', 'user_request'],
+        properties: {
+          agent_key: {
+            type: 'string',
+            enum: roomParticipants.map((participant: any) => participant.key),
+            description: 'Exact Voice Room participant key to activate.',
+          },
+          user_request: {
+            type: 'string',
+            description: 'The user\'s complete original spoken request, preserving enough wording for the newly active participant to answer.',
+          },
+        },
+        additionalProperties: false,
       },
-      additionalProperties: false,
-    },
-  });
-  realtimeTools.push({
-    type: 'function',
-    name: 'interrupt_active_worker',
-    description: 'Abort the currently active Prometheus worker run. Use ONLY for explicit cancel/stop/abort intent from the user. Call this function immediately; do not wait for a separate acknowledgement path. After the function output returns, speak one very short confirmation.',
-    parameters: {
-      type: 'object',
-      properties: {
-        reason: { type: 'string', description: 'Brief reason for the abort.' },
-      },
-      additionalProperties: false,
-    },
-  });
+    });
+  }
   return realtimeTools;
 }
 
@@ -18100,6 +18312,15 @@ function buildRealtimeVoiceAgentInstructions(args: {
   // context. This is what makes voice pick up mid-conversation instead of acting
   // like a fresh chat.
   const continuityLines: string[] = [];
+  const voiceRoomTranscript = compactVoiceText(args.contextPacket?.voiceRoom?.transcriptText || '', 7000);
+  if (voiceRoomTranscript) {
+    continuityLines.push(
+      '## Shared Voice Room transcript',
+      'These are recent turns from the current multi-agent Voice Room, including turns spoken to other participants. Treat them as discussion you witnessed. Use them to resolve references such as "that", "what they said", and "what do you think about that"; do not claim every line was addressed to you.',
+      voiceRoomTranscript,
+      '',
+    );
+  }
   if (args.conversationSummary || args.conversationTranscript || args.recentToolLog) {
     continuityLines.push(
       '## This conversation so far (you are joining a chat already in progress — continue from here, do NOT restart or re-introduce yourself)',
@@ -18155,13 +18376,20 @@ function buildRealtimeVoiceAgentInstructions(args: {
     args.voiceAgentMemory ? args.voiceAgentMemory : '',
     args.voiceAgentMemory ? '' : '',
     '## When to call which tool',
-    '- voice_thread_ops: the first-class Prometheus thread control plane. Use it to create, inspect, message, steer, interrupt, model-route, and supervise threads. Default new threads to the current Main Chat route. Only specify provider_id, model, reasoning_effort, or account_id when the user explicitly requests it. Use create_many only for genuinely independent work; there are no Voice worker groups.',
+    args.contextPacket?.voiceRoom?.enabled === true
+      ? '- voice_room_handoff: Voice Room safety fallback. The host normally switches participants from the transcript before you receive a turn. If you still receive a turn that clearly addresses another named room participant, call voice_room_handoff immediately with that participant\'s exact agent_key and the user\'s complete request. Stay silent; do not merely say "that\'s for Victor" or announce a handoff. Do not use it for third-person mentions, ordinary discussion about another agent, or a participant who is already active.'
+      : '',
+    identity.isSubagent
+      ? `- voice_ops agent_control is your worker path. For a request that needs ${identity.label}'s full worker capabilities, call voice_ops with action agent_control, agent_action chat, and the complete message. agent_id defaults to your own subagent id. The call waits for your worker's real response and returns it to this same ${identity.label} Voice/Live session; then summarize the result as yourself.`
+      : '- voice_thread_ops: the first-class Prometheus thread control plane. Use it to create, inspect, message, steer, interrupt, model-route, and supervise threads. Default new threads to the current Main Chat route. Only specify provider_id, model, reasoning_effort, or account_id when the user explicitly requests it. Use create_many only for genuinely independent work; there are no Voice worker groups.',
     '- voice_ops: unified quick voice operations. It also provides task_directory for global task discovery, task_control for existing-task operations, task_watch for explicit opt-in notifications, agent_directory for subagent discovery, and agent_control for standalone-subagent chat/dispatch/run recovery. Controlling an outside task never tracks it automatically.',
     '- Visual cards use the show_ui wrapper (render a card in the app while you speak the gist — keep speech short, the card carries the detail). Actions: weather (forecast), market (crypto/memecoins), stocks (equities/ETFs), prediction_market (Polymarket odds), map (places/locations), sources (news/citations), comparison (side-by-side table), chart (line/bar/area from numbers), product_carousel (products), agent_work (operator snapshot — gather via voice_ops action automation_dashboard first), and run_result (finished-task summary). For sources or product_carousel, pass the user\'s query directly; show_ui searches and assembles the items, so do not call it first with an empty items array and do not separately call voice_ops web_search unless show_ui reports a search failure. If the user asks for unspecified news sources, use query "latest news". All are keyless and read-only; call show_ui directly instead of dispatching the Worker for these.',
     '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
     '- skill_read / skill_resource_list / skill_resource_read: canonical skill tools. Load relevant workflow instructions before browser/desktop/tool actions when skill trigger context points to them. Follow skill instructions only through voice_* tools; explicit user-authorized social posts/messages are allowed when content and destination are clear. Hand off to Worker if they require files, shell, uploads/downloads, credentials, purchases/payments, account settings/security changes, destructive submits, or durable changes.',
     '- voice_browser uses the same Prometheus browser runtime as regular chat. Use action open, snapshot, screenshot, page_text, focused_item, click, vision_click, fill, type, vision_type, press_key, scroll, drag, wait, or close for live browser work. Hand off only for file transfer, credentials, purchases/payments, destructive actions, account settings/security changes, or durable work.',
     '- voice_desktop uses the same Prometheus desktop runtime as regular chat. Use action screenshot, monitors, list_windows, focus_window, window_control, find_app, launch_app, click, drag, scroll, type, type_raw, press_key, wait, get_clipboard, set_clipboard, window_click, window_type, window_press_key, or window_scroll. For window_control include window_action minimize/maximize/restore/close. Use fresh screenshots and the same coordinate/SOM targeting rules as regular Prometheus.',
+    '- Desktop screenshots are vision-first and skip OCR by default. Input actions do not take a second screenshot unless capture_after=true (include_screenshot=true is the compatibility alias); ask for OCR explicitly only when text extraction is needed. Focus may return one verification image.',
+    '- voice_ops web_search and show_ui sources/products use the configured preferred provider and compact result set by default for realtime latency. Use mode="multi", provider="multi", or multi_engine=true only when wide provider fan-out is explicitly wanted; deeper URL metadata/image enrichment belongs to Worker.',
     '- Screenshot ownership: screenshot capture and screenshot sending stay in the voice layer. Do not create a thread for ordinary browser, desktop, app, window, or active-window screenshots; call voice_browser action screenshot, voice_desktop action screenshot, or voice_ops action send_screenshot.',
     '- steer_active_worker / interrupt_active_worker: ONLY when a live foreground worker runtime is currently active (check the worker context below) AND the user is correcting, changing, pausing, or cancelling that active runtime. If the worker status says tasks are paused, stalled, awaiting input, failed, or paused after gateway restart, use voice_ops action task_control instead.',
     '',
@@ -18176,10 +18404,14 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '- If the user wants quick voice-scope work — call voice_ops, voice_browser, voice_desktop, or skill_* as appropriate, then narrate the result. For automation/operator status snapshots, call voice_ops action automation_dashboard.',
     '- If the user asks you to remember a rule specifically for the live voice agent, update VOICEAGENT.md with voice_ops action agent_memory instead of voice_ops action write_note.',
     identity.isSubagent
-      ? '- For durable work outside this subagent voice scope, report the need to the main Prometheus coordinator; do not create a worker group.'
+      ? `- For work needing files, shell, coding, long research, or a durable artifact, call voice_ops action agent_control with agent_action chat so ${identity.label}'s own worker performs it. Wait for the returned reply and summarize it in this same voice. Use agent_action dispatch only when the user explicitly requests background execution and does not expect an immediate result.`
       : '- For heavy or durable work outside voice scope, call voice_thread_ops action=create immediately. For several independent work items, call create_many. Keep user choices, approvals, and interactive judgment here in Voice.',
-    '- For existing thread work, call voice_thread_ops find/read/status, then send or steer the exact thread. Use follow when the user asks for ongoing supervision; do not create a duplicate thread.',
-    '- For a correction to an active current runtime, steer_active_worker remains available as a compatibility control. Prefer voice_thread_ops steer for an identified first-class thread.',
+    identity.isSubagent
+      ? '- For your existing worker run, use voice_ops agent_control run_status, run_message, run_resume, run_pause, run_rerun, or run_cancel. Do not call Prometheus thread operations.'
+      : '- For existing thread work, call voice_thread_ops find/read/status, then send or steer the exact thread. Use follow when the user asks for ongoing supervision; do not create a duplicate thread.',
+    identity.isSubagent
+      ? ''
+      : '- For a correction to an active current runtime, steer_active_worker remains available as a compatibility control. Prefer voice_thread_ops steer for an identified first-class thread.',
     '- Use agent_directory before agent_control when a standalone subagent id is unknown. agent_control chat is persistent conversation, dispatch starts new background work, and run_* operates an existing agent-owned task. Managed-team members are intentionally excluded from this standalone tool.',
     '- If the user interrupts an active live runtime with an actual correction, new constraint, pause, or direction change — call steer_active_worker. Do not use steer_active_worker for paused background tasks.',
     '- If the user explicitly cancels/stops/aborts — call interrupt_active_worker.',
@@ -18187,11 +18419,15 @@ function buildRealtimeVoiceAgentInstructions(args: {
     '## Tool calls are REAL actions — never fake them',
     '- Tool authority: the provided voice_* tools, canonical read-only skill_* tools, and explicit realtime control tools are your entire action surface. Never call native Codex shell, filesystem, browser, desktop, or worker tools from Voice. Use the matching voice_* tool, and use voice_thread_ops only when the request genuinely needs a first-class Prometheus thread.',
     '- A tool only runs if you actually emit the function call. Saying "on it", "handing that off", "I started the worker", or "let me search" does NOT run anything by itself.',
-    '- CRITICAL for hand-offs: when the user wants durable or blocking work, emit voice_thread_ops action=create (or create_many only for genuinely independent work) in the same turn. Speaking an acknowledgement WITHOUT creating or steering the thread is a failure because the work never starts.',
+    identity.isSubagent
+      ? `- CRITICAL for subagent work: when the user asks ${identity.label} to have "your agent", "the agent", or "your worker" investigate, plan, create a file, or perform substantial work, call voice_ops action agent_control with agent_action chat in the same turn. Its returned reply belongs to this same ${identity.label} voice session.`
+      : '- CRITICAL for hand-offs: when the user wants durable or blocking work, emit voice_thread_ops action=create (or create_many only for genuinely independent work) in the same turn. Speaking an acknowledgement WITHOUT creating or steering the thread is a failure because the work never starts.',
     '- CRITICAL for live UI control: when the user asks you to click, scroll, press a key, type, fill, focus, maximize, minimize, restore, close, open, or screenshot the current browser/desktop, your next action must be voice_browser or voice_desktop with the matching action. Do not say you will do it without the function call.',
     '- CRITICAL for screenshot delivery: when the user asks to send/share/show/deliver a screenshot, call voice_ops action send_screenshot. Do not create a thread for ordinary screenshot delivery while this tool exists.',
     '- If a browser/desktop target is ambiguous, first call voice_browser action snapshot or voice_desktop action screenshot with mode som, then call the action tool from the returned refs/coordinates.',
-    '- CRITICAL for status: never say you messaged, asked, notified, or sent something to a thread when the user only asked a status/update question. Call voice_thread_ops action=status or read and answer from the returned context instead.',
+    identity.isSubagent
+      ? '- CRITICAL for status: use voice_ops agent_control run_status for your worker status. Do not message or restart the worker merely to ask its status.'
+      : '- CRITICAL for status: never say you messaged, asked, notified, or sent something to a thread when the user only asked a status/update question. Call voice_thread_ops action=status or read and answer from the returned context instead.',
     '- Likewise, never claim a search/note/screenshot/timer happened unless you actually called the matching voice_* tool and received its result; never claim skill counts or skill instructions unless skill_list, skill_read, skill_resource_list, or skill_resource_read returned them.',
     '- After you say you are doing something, the corresponding function call MUST be in your output.',
     '',
@@ -18252,7 +18488,7 @@ router.post('/api/voice-agent/realtime-bootstrap', async (req, res) => {
       currentTime,
       voiceTarget,
     });
-    const tools = buildRealtimeVoiceAgentTools(voiceTarget);
+    const tools = buildRealtimeVoiceAgentTools(voiceTarget, contextPacket.voiceRoom || null);
 
     const model = sanitizeRealtimeAgentModel(body.model);
     // AVAS voices (for example `juniper`) are valid only when this route is
@@ -19058,10 +19294,14 @@ router.post('/api/voice-agent/dispatch-workers', async (req, res) => {
 });
 
 router.post('/api/voice-agent/realtime-tool', async (req, res) => {
+  const routeStartedAt = Date.now();
+  let timingRecorder: TurnTimingRecorder | null = null;
   try {
     const body = req.body || {};
     const sessionId = assertSafeStorageId(String(body.sessionId || 'default').trim() || 'default', 'session ID');
     const toolName = String(body.toolName || body.name || '').trim();
+    timingRecorder = createTurnTimingRecorder(sessionId, { phase: 'voice_realtime_tool' });
+    timingRecorder.mark('request_received', { toolName });
     const parsedToolArgs = body.toolArgs && typeof body.toolArgs === 'object'
       ? body.toolArgs
       : parseVoiceToolArgs(body.arguments || body.args);
@@ -19075,11 +19315,16 @@ router.post('/api/voice-agent/realtime-tool', async (req, res) => {
         : {}),
     };
     if (!toolName) {
+      timingRecorder.mark('request_rejected', { reason: 'toolName_required', elapsedMs: Date.now() - routeStartedAt });
+      void timingRecorder.flush();
       res.status(400).json({ ok: false, success: false, error: 'toolName is required' });
       return;
     }
     const trace: VoiceAgentProcessEntry[] = [];
+    timingRecorder.mark('tool_executor_start', { toolName });
     const raw = await executeVoiceAgentToolWithTrace(sessionId, toolName, toolArgs, trace);
+    const elapsedMs = Math.max(0, Date.now() - routeStartedAt);
+    timingRecorder.mark('tool_executor_done', { toolName, elapsedMs });
     const parsed = parseVoiceToolResult(raw);
     const runtimeDirective = voiceRuntimeDirectiveFromToolResult(parsed);
     // If this tool captured a screenshot, hand the preview back so the client can
@@ -19094,8 +19339,13 @@ router.post('/api/voice-agent/realtime-tool', async (req, res) => {
       runtimeDirective,
       preview,
       processEntries: trace,
+      timing: { elapsedMs },
     });
+    void timingRecorder.flush();
   } catch (err: any) {
+    const elapsedMs = Math.max(0, Date.now() - routeStartedAt);
+    timingRecorder?.mark('tool_error', { elapsedMs, error: String(err?.message || err) });
+    void timingRecorder?.flush();
     res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
   }
 });
@@ -20043,8 +20293,17 @@ function attachProjectMembershipToSessionList<T extends any>(input: T): T {
 router.get('/api/sessions', async (req, res) => {
   try {
     const channel = req.query.channel as string | undefined;
+    const scope = String(req.query.scope || '').trim().toLowerCase();
+    if (scope && scope !== 'all') {
+      res.status(400).json({ error: 'Invalid scope. Valid values: all' });
+      return;
+    }
+    if (scope === 'all' && channel) {
+      res.status(400).json({ error: 'Use either scope=all or channel, not both.' });
+      return;
+    }
     if (channel) {
-      const validChannels = ['terminal', 'telegram', 'web', 'mobile', 'discord', 'whatsapp', 'system'];
+      const validChannels = ['terminal', 'telegram', 'web', 'mobile', 'voice_room', 'discord', 'whatsapp', 'system'];
       if (!validChannels.includes(channel)) {
         res.status(400).json({ error: 'Invalid channel. Valid values: ' + validChannels.join(', ') });
         return;
@@ -20054,10 +20313,11 @@ router.get('/api/sessions', async (req, res) => {
     const includeAutomated = req.query.includeAutomated === '1'
       || req.query.includeAutomated === 'true';
 
-    const hasPaging = req.query.limit != null || req.query.offset != null;
+    const hasPaging = req.query.limit != null || req.query.offset != null || scope === 'all';
     if (hasPaging) {
       const page = listSessionSummaries({
         channel: channel as any,
+        scope: scope === 'all' ? 'all' : undefined,
         limit: Number(req.query.limit),
         offset: Number(req.query.offset),
         includeAutomated,
@@ -20078,7 +20338,7 @@ router.post('/api/sessions', (req, res) => {
     const id = String(req.body?.id || req.body?.sessionId || '').trim() || `prom_${crypto.randomUUID()}`;
 
     const requestedChannel = String(req.body?.channel || '').trim();
-    const validChannels = ['terminal', 'telegram', 'web', 'mobile', 'discord', 'whatsapp', 'system'];
+    const validChannels = ['terminal', 'telegram', 'web', 'mobile', 'voice_room', 'discord', 'whatsapp', 'system'];
     if (requestedChannel && !validChannels.includes(requestedChannel)) {
       res.status(400).json({ error: 'Invalid channel. Valid values: ' + validChannels.join(', ') });
       return;
@@ -20089,6 +20349,9 @@ router.post('/api/sessions', (req, res) => {
     const session = touchSession(id, {
       channel,
       title: typeof req.body?.title === 'string' ? req.body.title : undefined,
+      voiceRoom: req.body?.voiceRoom && typeof req.body.voiceRoom === 'object'
+        ? req.body.voiceRoom as VoiceRoomMetadata
+        : undefined,
     });
     flushSession(id);
     res.json({ success: true, session: { id: session.id, channel: session.channel, title: getSessionDisplayTitle(session), createdAt: session.createdAt, lastActiveAt: session.lastActiveAt, pinnedAt: session.pinnedAt || null } });
@@ -20098,17 +20361,136 @@ router.post('/api/sessions', (req, res) => {
   }
 });
 
+function normalizeVoiceRoomParticipants(raw: any): VoiceRoomParticipant[] {
+  const seen = new Set<string>();
+  return (Array.isArray(raw) ? raw : [])
+    .map((item: any) => {
+      const kind = String(item?.kind || '') === 'subagent' ? 'subagent' : 'main';
+      const agentId = kind === 'subagent' ? String(item?.agentId || item?.id || '').trim() : '';
+      const key = kind === 'subagent' ? (agentId ? `subagent:${agentId}` : '') : 'main';
+      const label = String(item?.label || item?.name || (kind === 'main' ? 'Prometheus' : agentId))
+        .replace(/\s+/g, ' ').trim().slice(0, 80);
+      return key && label
+        ? { key, kind, ...(agentId ? { agentId } : {}), label } as VoiceRoomParticipant
+        : null;
+    })
+    .filter((item: VoiceRoomParticipant | null): item is VoiceRoomParticipant => {
+      if (!item || seen.has(item.key)) return false;
+      seen.add(item.key);
+      return true;
+    })
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
+router.post('/api/voice-rooms/resolve', (req, res) => {
+  try {
+    const participants = normalizeVoiceRoomParticipants(req.body?.participants);
+    if (participants.length < 2) {
+      res.status(400).json({ success: false, error: 'A Voice Room requires at least two agents.' });
+      return;
+    }
+    const rosterKey = participants.map((participant) => participant.key).join('|');
+    const id = `voice_room_${crypto.createHash('sha256').update(rosterKey).digest('hex').slice(0, 20)}`;
+    const existing = getSession(id);
+    const created = !existing.voiceRoom;
+    const now = Date.now();
+    const voiceRoom: VoiceRoomMetadata = {
+      version: 1,
+      rosterKey,
+      participants,
+      createdAt: Number(existing.voiceRoom?.createdAt || existing.createdAt || now),
+      updatedAt: now,
+    };
+    const title = `Voice Room · ${participants.map((participant) => participant.label).join(' + ')}`.slice(0, 80);
+    const session = touchSession(id, { channel: 'voice_room', title, voiceRoom });
+    session.autoTitleLocked = true;
+    flushSession(id);
+    res.json({
+      success: true,
+      created,
+      session: {
+        id: session.id,
+        channel: session.channel,
+        title: getSessionDisplayTitle(session),
+        createdAt: session.createdAt,
+        lastActiveAt: session.lastActiveAt,
+        voiceRoom: session.voiceRoom,
+      },
+    });
+  } catch (error: any) {
+    console.error('[/api/voice-rooms/resolve] Error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to resolve Voice Room' });
+  }
+});
+
+router.post('/api/voice-rooms/:id/transcript', requireSafeSessionParam, (req, res) => {
+  try {
+    const sessionId = String(req.params.id || '').trim();
+    const session = getSession(sessionId);
+    if (session.channel !== 'voice_room' || !session.voiceRoom) {
+      res.status(409).json({ success: false, error: 'Session is not a Voice Room.' });
+      return;
+    }
+    const role = String(req.body?.role || '') === 'assistant' ? 'assistant' : 'user';
+    const content = String(req.body?.text || req.body?.content || '').replace(/\s+/g, ' ').trim().slice(0, 20_000);
+    const voiceSpeaker = String(req.body?.speaker || (role === 'user' ? 'You' : 'Agent'))
+      .replace(/\s+/g, ' ').trim().slice(0, 120);
+    const voiceTargetKey = String(req.body?.targetKey || '').trim().slice(0, 180);
+    const messageId = String(req.body?.messageId || '').trim().slice(0, 180)
+      || `voice-room-${crypto.randomUUID()}`;
+    if (!content) {
+      res.status(400).json({ success: false, error: 'Transcript text is required.' });
+      return;
+    }
+    const duplicate = session.history.slice(-24).some((message) => String(message.messageId || '') === messageId);
+    if (!duplicate) {
+      const timestamp = Number(req.body?.timestamp || Date.now()) || Date.now();
+      addMessage(sessionId, {
+        messageId,
+        role,
+        content,
+        timestamp,
+        ...(role === 'assistant' ? {
+          workStartedAt: timestamp,
+          workEndedAt: timestamp,
+          workDurationMs: 0,
+        } : {}),
+        channel: 'voice_room',
+        channelLabel: 'Voice Room',
+        source: 'voice_room_transcript',
+        voiceSpeaker,
+        voiceTargetKey,
+      }, { disableCompactionCheck: true, disableMemoryFlushCheck: true });
+      session.voiceRoom.updatedAt = Date.now();
+      flushSession(sessionId);
+    }
+    res.json({ success: true, duplicate, messageId });
+  } catch (error: any) {
+    console.error('[/api/voice-rooms/:id/transcript] Error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to append Voice Room transcript' });
+  }
+});
+
 
 // ── Get single session by ID ──────────────────────────────────────────────────
 router.get('/api/sessions/search', (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     const channel = String(req.query.channel || '').trim();
+    const scope = String(req.query.scope || '').trim().toLowerCase();
     const mode = String(req.query.mode || 'content').trim().toLowerCase();
     const limit = Number(req.query.limit || 80);
-    const validChannels = ['', 'terminal', 'telegram', 'web', 'mobile', 'discord', 'whatsapp', 'system'];
+    const validChannels = ['', 'terminal', 'telegram', 'web', 'mobile', 'voice_room', 'discord', 'whatsapp', 'system'];
     if (!validChannels.includes(channel)) {
       res.status(400).json({ error: 'Invalid channel. Valid values: terminal, telegram, web, system' });
+      return;
+    }
+    if (scope && scope !== 'all') {
+      res.status(400).json({ error: 'Invalid scope. Valid values: all' });
+      return;
+    }
+    if (scope === 'all' && channel) {
+      res.status(400).json({ error: 'Use either scope=all or channel, not both.' });
       return;
     }
     if (!['title', 'content'].includes(mode)) {
@@ -20117,6 +20499,8 @@ router.get('/api/sessions/search', (req, res) => {
     }
     const sessions = searchSessionSummaries(q, {
       channel: channel ? channel as any : undefined,
+      scope: scope === 'all' ? 'all' : undefined,
+      includeAutomated: req.query.includeAutomated === '1' || req.query.includeAutomated === 'true',
       limit,
       includeContent: mode !== 'title',
     }).map((session) => {
@@ -20189,6 +20573,21 @@ router.post('/api/sessions/:id/mobile-read', requireSafeSessionParam, (req, res)
   } catch (e: any) {
     console.error('[/api/sessions/:id/mobile-read POST] Error:', e);
     res.status(500).json({ error: e.message || 'Failed to mark session read' });
+  }
+});
+
+router.post('/api/sessions/:id/mobile-unread', requireSafeSessionParam, (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) {
+      res.status(400).json({ error: 'Session id required' });
+      return;
+    }
+    const summary = markSessionUnreadForMobile(id);
+    res.json({ success: true, session: summary });
+  } catch (e: any) {
+    console.error('[/api/sessions/:id/mobile-unread POST] Error:', e);
+    res.status(500).json({ error: e.message || 'Failed to mark session unread' });
   }
 });
 
@@ -20406,6 +20805,7 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
         })(),
         title: getSessionDisplayTitle(session),
         autoTitleLocked: session.autoTitleLocked === true,
+        voiceRoom: session.voiceRoom || null,
       }
     });
   } catch (e: any) {

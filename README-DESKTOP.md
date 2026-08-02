@@ -44,6 +44,27 @@ Output goes to `D:\Prometheus\release\`:
 - Creates Desktop + Start Menu shortcuts
 - Adds an uninstaller via Control Panel
 
+## Build an unsigned macOS tester build
+
+Run this on a Mac, not Windows:
+
+```bash
+npm ci
+npm run build:mac:tester
+```
+
+The command builds the native Swift desktop helper, creates the macOS icon,
+and produces unsigned DMG/ZIP artifacts in `release/`. Build on the matching
+Mac architecture and distribute the resulting artifact only to testers. macOS
+will show a Gatekeeper warning; testers must use **Privacy & Security → Open
+Anyway** after the first launch. Prometheus will also request the normal
+Microphone, Camera, Screen Recording, and Accessibility permissions when those
+features are used.
+
+For Apple Silicon and Intel testers, build separately on each architecture.
+The signed/notarized production path is documented in
+[`docs/MACOS-RELEASE.md`](docs/MACOS-RELEASE.md).
+
 ---
 
 ## File Structure

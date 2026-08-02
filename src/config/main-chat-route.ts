@@ -9,6 +9,7 @@ export type MainChatRoute = {
   provider: string;
   model: string;
   reasoningEffort?: string;
+  accountId?: string;
 };
 
 export function readLiveMainChatRoute(config: any): MainChatRoute | null {
@@ -41,7 +42,7 @@ export function mainChatRoutePatch(config: any, route: MainChatRoute): Record<st
   const currentProviders = currentLlm.providers || {};
   const currentProvider = currentProviders[route.provider] || {};
   const nextProvider = { ...currentProvider, model: route.model };
-  const targetAccountId = String(nextProvider.defaultAccountId || '').trim();
+  const targetAccountId = String(route.accountId || nextProvider.defaultAccountId || '').trim();
   const retainCurrentAccountId = route.provider === String(currentLlm.provider || '').trim();
   const accountId = targetAccountId || (retainCurrentAccountId ? String(currentLlm.accountId || '').trim() : '');
   const effectiveReasoning = route.reasoningEffort !== undefined

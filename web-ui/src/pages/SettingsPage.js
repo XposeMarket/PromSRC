@@ -4788,6 +4788,82 @@ let amdTemplatesCache = [];
 let amdActiveTemplateId = '';
 let amdDefaultTemplateId = '';
 
+function providerAccountsForDefault(providerId) {
+  const accounts = normalizeProviderAccountsForUI(providerId, getProviderConfigFromCache(providerId));
+  return accounts.filter((account) => account?.id && account.status !== 'disconnected');
+}
+
+function ensureAmdAccountControls() {
+  for (const slotId of Object.keys(AMD_SLOTS)) {
+    const providerSelect = document.getElementById(`amd-${slotId}-prov`);
+    if (!providerSelect || document.getElementById(`amd-${slotId}-account`)) continue;
+    const wrapper = document.createElement('div');
+    wrapper.id = `amd-${slotId}-account-wrap`;
+    wrapper.style.marginBottom = '4px';
+    wrapper.style.display = 'none';
+    wrapper.innerHTML = `<select id="amd-${escHtml(slotId)}-account" class="settings-input" style="width:100%" aria-label="Provider account"></select>`;
+    providerSelect.insertAdjacentElement('beforebegin', wrapper);
+  }
+}
+
+function syncAmdAccount(slotId, selectedValue) {
+  ensureAmdAccountControls();
+  const provider = String(document.getElementById(`amd-${slotId}-prov`)?.value || '').trim();
+  const wrapper = document.getElementById(`amd-${slotId}-account-wrap`);
+  const select = document.getElementById(`amd-${slotId}-account`);
+  if (!wrapper || !select) return;
+  const accounts = provider ? providerAccountsForDefault(provider) : [];
+  wrapper.style.display = accounts.length > 1 ? '' : 'none';
+  if (accounts.length <= 1) {
+    select.innerHTML = '';
+    select.value = '';
+    return;
+  }
+  const current = String(selectedValue !== undefined ? selectedValue : select.value || '').trim();
+  select.innerHTML = accounts.map((account) => `<option value="${escHtml(account.id)}">${escHtml(account.label || account.id)}</option>`).join('');
+  select.value = accounts.some((account) => account.id === current)
+    ? current
+    : String(getProviderConfigFromCache(provider)?.defaultAccountId || accounts[0].id);
+}
+
+function getVoiceAgentDefaultFromForm() {
+  return {
+    provider: String(document.getElementById('amd-voice-agent-provider')?.value || '').trim(),
+    voice: String(document.getElementById('amd-voice-agent-voice')?.value || '').trim(),
+  };
+}
+
+async function loadVoiceAgentDefaultOptions(preserveSelected = false) {
+  const providerEl = document.getElementById('amd-voice-agent-provider');
+  const voiceEl = document.getElementById('amd-voice-agent-voice');
+  if (!providerEl || !voiceEl) return;
+  const provider = String(providerEl.value || '').trim();
+  const selected = preserveSelected ? String(voiceEl.value || voiceEl.dataset.current || '').trim() : '';
+  let voices = {
+    openai_realtime: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'],
+    xai: ['eve', 'ara', 'rex', 'sal', 'leo'],
+  }[provider] || [];
+  if (provider === 'openai_codex') {
+    // Codex Voice/Live advertises the available AVAS voices at runtime. Keep a
+    // safe fallback so the saved default remains editable while offline.
+    voices = ['juniper', 'maple', 'spruce', 'ember', 'vale', 'breeze', 'arbor', 'sol', 'cove'];
+    try {
+      const status = await api('/api/realtime/status', { timeoutMs: 5000 });
+      const liveVoices = Array.isArray(status?.codexBridgeActiveVoices)
+        ? status.codexBridgeActiveVoices.map((voice) => String(voice || '').trim()).filter(Boolean)
+        : [];
+      if (status?.codexBridgeAvailable === true
+        && status?.transport === 'codex_app_server'
+        && liveVoices.length) {
+        voices = Array.from(new Set(liveVoices));
+      }
+    } catch {}
+  }
+  voiceEl.disabled = !provider;
+  voiceEl.innerHTML = `<option value="">use provider default</option>${Array.from(new Set([...voices, selected].filter(Boolean))).map((voice) => `<option value="${escHtml(voice)}">${escHtml(voice)}</option>`).join('')}`;
+  voiceEl.value = selected && Array.from(voiceEl.options).some((option) => option.value === selected) ? selected : '';
+}
+
 function ensureAmdReasoningControls() {
   for (const slotId of Object.keys(AMD_SLOTS)) {
     const modelSel = document.getElementById('amd-' + slotId + '-model');
@@ -4824,10 +4900,12 @@ function syncAmdReasoning(slotId, selectedValue) {
 
 async function amdProviderChange(slotId) {
   ensureAmdReasoningControls();
+  ensureAmdAccountControls();
   const provSel  = document.getElementById('amd-' + slotId + '-prov');
   const modelSel = document.getElementById('amd-' + slotId + '-model');
   if (!provSel || !modelSel) return;
   const prov = provSel.value;
+  syncAmdAccount(slotId);
   if (typeof renderModelsUsage === 'function') renderModelsUsage();
   if (!prov) {
     modelSel.innerHTML = '<option value="">— same as main agent —</option>';
@@ -4863,6 +4941,17 @@ function getAgentModelDefaultsFromForm() {
   return payload;
 }
 
+function getAgentAccountDefaultsFromForm() {
+  const payload = {};
+  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+    const provider = String(document.getElementById(`amd-${slotId}-prov`)?.value || '').trim();
+    const accounts = provider ? providerAccountsForDefault(provider) : [];
+    const accountId = String(document.getElementById(`amd-${slotId}-account`)?.value || '').trim();
+    if (accounts.length > 1 && accountId) payload[field] = accountId;
+  }
+  return payload;
+}
+
 function getAgentReasoningDefaultsFromForm() {
   const payload = {};
   for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
@@ -4872,8 +4961,9 @@ function getAgentReasoningDefaultsFromForm() {
   return payload;
 }
 
-async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}) {
+async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}, accounts = {}, voiceAgent = {}) {
   ensureAmdReasoningControls();
+  ensureAmdAccountControls();
   await ensureProviderCatalogUIReady();
   await fetchCredentialedModelProviderIds();
   renderProviderSelectors();
@@ -4884,6 +4974,7 @@ async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}) {
     if (provSel) provSel.value = '';
     if (modelSel) modelSel.innerHTML = '<option value="">select provider first</option>';
     syncAmdReasoning(slotId);
+    syncAmdAccount(slotId);
   }
   for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
     const val = d[field] || '';
@@ -4906,6 +4997,7 @@ async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}) {
       }
       provSel.value = prov;
     }
+    syncAmdAccount(slotId, accounts?.[field] || '');
     if (prov && modelSel) {
       await amdProviderChange(slotId);
     }
@@ -4917,6 +5009,11 @@ async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}) {
     }
     syncAmdReasoning(slotId, reasoning?.[field] || '');
   }
+  const voiceProvider = document.getElementById('amd-voice-agent-provider');
+  const voiceVoice = document.getElementById('amd-voice-agent-voice');
+  if (voiceProvider) voiceProvider.value = String(voiceAgent?.provider || '').trim();
+  if (voiceVoice) voiceVoice.dataset.current = String(voiceAgent?.voice || '').trim();
+  await loadVoiceAgentDefaultOptions(true);
 }
 
 function renderAgentModelDefaultTemplates() {
@@ -4985,7 +5082,7 @@ function onAgentModelTemplateSelect() {
 async function loadAgentModelDefaults() {
   try {
     const data = await api('/api/settings/agent-model-defaults');
-    await applyAgentModelDefaultsToForm(data?.defaults || {}, data?.reasoning || {});
+    await applyAgentModelDefaultsToForm(data?.defaults || {}, data?.reasoning || {}, data?.accounts || {}, data?.voiceAgent || {});
     if (data?.defaultTemplateId !== undefined) amdDefaultTemplateId = String(data.defaultTemplateId || '');
     updateAgentModelTemplateCache(data);
     window._agentModelDefaultsLoadedToUI = true;
@@ -4995,9 +5092,11 @@ async function loadAgentModelDefaults() {
 async function persistAgentModelDefaultsFromForm({ showStatus = true } = {}) {
   const payload = getAgentModelDefaultsFromForm();
   const reasoning = getAgentReasoningDefaultsFromForm();
+  const accounts = getAgentAccountDefaultsFromForm();
+  const voiceAgent = getVoiceAgentDefaultFromForm();
   const status = document.getElementById('amd-status');
   try {
-    const data = await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify({ ...payload, reasoning }) });
+    const data = await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify({ ...payload, reasoning, accounts, voiceAgent }) });
     if (showStatus && status) {
       status.style.color = 'var(--ok)';
       setSettingsStatus(status, 'success', 'Saved');
@@ -5041,6 +5140,7 @@ async function saveAgentModelDefaultTemplate() {
         name,
         defaults: getAgentModelDefaultsFromForm(),
         reasoning: getAgentReasoningDefaultsFromForm(),
+        accounts: getAgentAccountDefaultsFromForm(),
       }),
     });
     updateAgentModelTemplateCache(data);
@@ -5080,7 +5180,7 @@ async function applyAgentModelDefaultTemplate() {
     const data = await api(`/api/settings/agent-model-default-templates/${encodeURIComponent(id)}/apply`, {
       method: 'POST',
     });
-    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {}, data?.reasoning || data?.template?.reasoning || {});
+    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {}, data?.reasoning || data?.template?.reasoning || {}, data?.accounts || data?.template?.accounts || {}, data?.voiceAgent || {});
     await loadAgentModelDefaultTemplates();
     setAgentModelTemplateStatus('success', `Applied "${data?.template?.name || id}".`);
     showToast('Model template applied', data?.template?.name || id, 'success', 4000);
@@ -5120,7 +5220,7 @@ async function applyAsDefaultTemplate() {
       method: 'POST',
     });
     amdDefaultTemplateId = String(data?.defaultTemplateId || data?.template?.id || id);
-    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {}, data?.reasoning || data?.template?.reasoning || {});
+    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {}, data?.reasoning || data?.template?.reasoning || {}, data?.accounts || data?.template?.accounts || {}, data?.voiceAgent || {});
     await loadAgentModelDefaultTemplates();
     updateApplyAsDefaultButtonState(id);
     setAgentModelTemplateStatus('success', `"${data?.template?.name || id}" set as startup default.`);
@@ -5237,7 +5337,11 @@ async function brainProviderChange(type) {
   const modelSel = document.getElementById(`brain-${type}-model`);
   if (!provSel || !modelSel) return;
   const prov = provSel.value;
-  if (!prov) { modelSel.innerHTML = '<option value="">— use primary model —</option>'; return; }
+  if (!prov) {
+    modelSel.innerHTML = '<option value="">— use primary model —</option>';
+    syncBrainReasoning(type);
+    return;
+  }
   modelSel.innerHTML = '<option value="">Loading…</option>';
   try {
     await ensureProviderCatalogUIReady();
@@ -5245,11 +5349,25 @@ async function brainProviderChange(type) {
       refreshOpenAI: prov === 'openai',
       includeLive: prov !== 'openai_codex',
     });
-    if (!models.length) { modelSel.innerHTML = '<option value="">— no models found —</option>'; return; }
+    if (!models.length) { modelSel.innerHTML = '<option value="">— no models found —</option>'; syncBrainReasoning(type); return; }
     modelSel.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
   } catch (e) {
     modelSel.innerHTML = '<option value="">— fetch failed —</option>';
   }
+  syncBrainReasoning(type);
+}
+
+function syncBrainReasoning(type, selectedValue) {
+  const provider = String(document.getElementById(`brain-${type}-prov`)?.value || '').trim();
+  const model = String(document.getElementById(`brain-${type}-model`)?.value || '').trim();
+  const select = document.getElementById(`brain-${type}-reasoning`);
+  if (!select) return;
+  const current = selectedValue !== undefined ? String(selectedValue || '') : String(select.value || '');
+  const options = provider && model ? effortOptions(provider, model, true) : [''];
+  select.innerHTML = options.map((effort) => `<option value="${escHtml(effort)}">${escHtml(effort || 'provider default')}</option>`).join('');
+  select.disabled = !provider || !model || options.length <= 1;
+  select.value = current && validEffort(provider, model, current) ? current : '';
+  select.title = select.disabled ? 'This provider/model does not expose selectable reasoning effort.' : 'Reasoning effort for this Brain run.';
 }
 
 async function loadBrainModelConfig() {
@@ -5272,6 +5390,10 @@ async function loadBrainModelConfig() {
         }
         modelSel.value = model;
       }
+      const reasoning = type === 'thought'
+        ? (data?.thoughtReasoning || data?.thought?.reasoning || '')
+        : (data?.dreamReasoning || data?.dream?.reasoning || '');
+      syncBrainReasoning(type, reasoning);
     }
     window._brainModelConfigLoadedToUI = true;
   } catch (e) { console.warn('loadBrainModelConfig error:', e); }
@@ -5282,8 +5404,11 @@ function getBrainModelConfigFromForm() {
   for (const type of ['thought', 'dream']) {
     const prov  = document.getElementById(`brain-${type}-prov`)?.value?.trim()  || '';
     const model = document.getElementById(`brain-${type}-model`)?.value?.trim() || '';
+    const reasoning = document.getElementById(`brain-${type}-reasoning`)?.value?.trim() || '';
     if (type === 'thought') payload.thoughtModel = prov && model ? `${prov}/${model}` : '';
     else payload.dreamModel = prov && model ? `${prov}/${model}` : '';
+    if (type === 'thought') payload.thoughtReasoning = reasoning;
+    else payload.dreamReasoning = reasoning;
   }
   return payload;
 }
@@ -5321,6 +5446,7 @@ async function saveModelTabLiveSettings({ showStatus = false } = {}) {
 window.amdProviderChange = amdProviderChange;
 window.loadAgentModelDefaults = loadAgentModelDefaults;
 window.brainProviderChange = brainProviderChange;
+window.syncBrainReasoning = syncBrainReasoning;
 window.goalRoutingProviderChange = goalRoutingProviderChange;
 window.syncGoalRoutingReasoning = syncGoalRoutingReasoning;
 window.loadBrainModelConfig = loadBrainModelConfig;
@@ -5329,6 +5455,7 @@ window.loadAgentHeartbeat = loadAgentHeartbeat;
 window.loadAgentModelDefaultTemplates = loadAgentModelDefaultTemplates;
 window.loadAgentModelOptions = loadAgentModelOptions;
 window.loadAgentVoiceOptions = loadAgentVoiceOptions;
+window.loadVoiceAgentDefaultOptions = loadVoiceAgentDefaultOptions;
 window.loadAgentRunHistory = loadAgentRunHistory;
 window.loadAgentsTab = loadAgentsTab;
 window.loadChannelsStatus = loadChannelsStatus;

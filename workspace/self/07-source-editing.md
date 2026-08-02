@@ -363,7 +363,7 @@ The important source areas are:
 - `src/gateway/session.ts` for persisted chat messages, tool logs, process entries, and channel/session metadata
 - `src/gateway/routes/settings.router.ts` plus `web-ui/src/mobile/*` for mobile-origin restart/session id propagation
 - `web-ui/src/pages/ChatPage.js` for desktop session hydration, process-log rendering, websocket stream handling, creative canvas focus behavior, and restart notifications
-- `web-ui/index.html` for the desktop Channels sidebar hub/drilldown rendering and channel classification helpers
+- `web-ui/index.html` for the desktop unified-session sidebar rendering and origin-label helpers
 - `generated/public-web-ui/static/pages/ChatPage.js`, which must be regenerated from `web-ui/src/pages/ChatPage.js`
 - `generated/public-web-ui/index.html`, which must be regenerated from `web-ui/index.html`
 
@@ -392,18 +392,18 @@ Current parallel desktop/mobile stream behavior:
 - `tool_call`, `tool_result`, `tool_progress`, `ui_preflight`, `info`, `thinking`, `thinking_delta`, `progress_state`, `token`, `done`, and `error` frames are all relevant to the desktop process/chat stream.
 - Creative mode commonly emits canvas/project state through separate events while the chat/tool stream is carried by main-chat stream frames. Debug both paths when mobile Creative work appears visually active but has no process log.
 
-Cross-channel live chat/session consistency rule from 2026-05-20:
+Cross-surface live chat/session consistency rule:
 
 - Desktop, mobile, Telegram, CLI, Discord, and WhatsApp must all treat `src/gateway/session.ts` summaries and `/api/sessions` as the canonical session index, not browser `localStorage`.
 - Channel classification must never rely only on a transient frontend `source` field. Backend summaries should normalize missing/stale channels by session id prefix: `telegram_` -> `telegram`, `mobile_` -> `mobile`, `cli_` -> `terminal`, `discord_` -> `discord`, `whatsapp_` -> `whatsapp`, task/brain/auto ids -> `system`.
-- `normalizeSessionSummary(...)`, `buildSessionSummary(...)`, and `buildSessionSummaryFromFile(...)` in `src/gateway/session.ts` should preserve valid channel values and infer from `sessionId` instead of falling back blindly to `web`.
-- The desktop Channels sidebar must load all channel summaries, not only mobile and CLI. `web-ui/src/pages/ChatPage.js` should fetch/merge `terminal`, `mobile`, `telegram`, `discord`, and `whatsapp` summaries, maintain `window.channelSessionsByChannel`, and keep `window.terminalSessions`, `window.mobileSessions`, `window.telegramSessions`, `window.discordSessions`, and `window.whatsappSessions` in sync for older rendering helpers.
-- `web-ui/index.html` channel hub/drilldown counting must include server-only Telegram/Discord/WhatsApp sessions as well as mobile/CLI. `_getSessionChannel(...)` should consider `channel`, `source`, and known id prefixes.
+- `normalizeSessionSummary(...)`, `buildSessionSummary(...)`, and `buildSessionSummaryFromFile(...)` in `src/gateway/session.ts` preserve durable channel classification, infer it from `sessionId` when needed, and expose a sanitized `lastOrigin` summary from the latest user turn.
+- The desktop and mobile chat pickers use the unified `GET /api/sessions?scope=all&includeAutomated=1` timeline rather than channel-specific lists. They render all top-level interactive sessions together, keep projects and side chats out of the ordinary list, and label each row from `lastOrigin`.
+- `Session.channel` remains durable transport metadata, not a UI partition. Delivery recovery must prefer the latest durable user-message origin (for example a Telegram `chatId`) before falling back to an in-memory delivery hint.
 - When opening a chat on desktop, force-refresh the full session from `/api/sessions/:id` so stale local browser state cannot disagree with mobile/Telegram. Local history/process logs may still need careful merge behavior for in-flight streams, but old `localStorage` must not be allowed to hide newer server messages.
-- `openTerminalSession(...)` is historically named, but it is the generic server-backed channel opener. It should use the returned session's real `s.channel` instead of assuming `terminal`.
-- `deleteChatSession(...)` must remove the session from all channel summary arrays and `window.channelSessionsByChannel`, not only `terminalSessions` and `mobileSessions`.
+- `openTerminalSession(...)` is historically named, but it is the generic server-backed session opener. It should preserve the returned session's real `channel`, `origin`, and `lastOrigin` metadata rather than assuming `terminal`.
+- `deleteChatSession(...)` must remove the session from the unified local list and any remaining compatibility caches.
 - `runInteractiveTurn(...)` in `src/gateway/routes/chat.router.ts` must bridge non-desktop channel turns into retained main-chat stream/websocket events. If a channel turn is not already owned by a local `/api/chat` SSE stream, it should call `beginMainChatStream(...)`, append `user_message`, `token`, `thinking_delta`, `tool_call`, `tool_result`, `progress_state`, `done`, and `error` frames through `appendMainChatStreamEvent(...)`, and finish with `finishMainChatStream(...)`.
-- Desktop's `main_chat_stream_event` handler in `web-ui/src/pages/ChatPage.js` is for observing other surfaces live. It must avoid double-applying events for locally-owned desktop `/api/chat` turns, but it must create/update the relevant channel session, append live tokens/thinking/tool/progress state, mark unread when not active, save local state, and refresh the visible channel list.
+- Desktop's `main_chat_stream_event` handler in `web-ui/src/pages/ChatPage.js` is for observing other surfaces live. It must avoid double-applying events for locally-owned desktop `/api/chat` turns, but it must create/update the relevant session, append live tokens/thinking/tool/progress state, retain origin metadata, mark unread when not active, save local state, and refresh the visible unified list.
 - Telegram/mobile live bugs are usually two-path bugs: one path is the live stream bridge (`main_chat_stream_event` and retained stream catch-up), and the other is canonical session indexing/hydration (`/api/sessions`, `/api/sessions/:id`, local cache merge). Check both before blaming the model loop or websocket transport.
 - After backend channel-normalization changes, the running gateway must be rebuilt and restarted if it is serving `dist/gateway/server-v2.js`; changing TypeScript source alone is not enough for the live app.
 

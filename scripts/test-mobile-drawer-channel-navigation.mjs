@@ -1,26 +1,20 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const source = fs.readFileSync('web-ui/src/mobile/mobile-shell.js', 'utf8');
+const shell = fs.readFileSync('web-ui/src/mobile/mobile-shell.js', 'utf8');
+const api = fs.readFileSync('web-ui/src/mobile/mobile-api.js', 'utf8');
 
-assert.match(source, /let _drawerStateCache = null;/, 'drawer navigation should keep an in-memory view state');
-assert.match(source, /if \(_drawerStateCache\) return \{ \.\.\._drawerStateCache \};/, 'drawer state should not depend on a storage round-trip while open');
-assert.match(source, /_drawerStateCache = _normalizeDrawerState\(state\);/, 'navigation must update the in-memory drawer state first');
+assert.match(shell, /all:\s*\{ sessions:/, 'drawer paging should own one unified session page');
+assert.doesNotMatch(shell, /data-drawer-view=|data-channel-key=|Loading channels\.\.\./, 'drawer should not render channel navigation');
+assert.match(shell, /head\.innerHTML = '<div class="pm-drawer-section-title">Sessions<\/div>';/, 'drawer should render one Sessions heading');
+assert.match(shell, /_wireDrawerInfiniteScroll\(\{ loadSessions, onOpenSession, searchSessions, onNewChat \}\)/, 'infinite scroll should run against the unified page');
+assert.match(shell, /From: \$\{escapeHtml\(origin\)\}/, 'session rows should retain an origin hint without grouping');
+assert.match(shell, /data-session-channel="\$\{escapeHtml\(session\?\.channel \|\| ''\)\}"/, 'voice-room rows should retain their special open route metadata');
+assert.match(shell, /data-drawer-pinned-toggle/, 'Pinned should remain a drawer control');
+assert.match(shell, /_drawerPinnedCollapsed = !_drawerPinnedCollapsed;/, 'Pinned control should still collapse without redrawing the drawer');
 
-const renderStart = source.indexOf('async function _renderDrawerSessions');
-const migration = source.indexOf('await _migrateLegacyPinnedSessionsToServer();', renderStart);
-const channelsLoading = source.indexOf("Loading channels...", renderStart);
-assert.ok(channelsLoading > renderStart && channelsLoading < migration, 'Channels should replace mobile chats before asynchronous drawer work starts');
-assert.match(source, /preserveScroll = false/, 'drawer redraws should support preserving scroll position');
-assert.match(source, /const preservedScrollTop = preserveScroll/, 'drawer redraw should capture its current scroll position');
-assert.match(source, /finally \{\s*restoreScroll\(\);\s*\}/, 'drawer redraw should restore scroll after rendering');
+assert.match(api, /scope: 'all'/, 'mobile session loading should request the unified server scope');
+assert.match(api, /lastOrigin:/, 'mobile summaries should retain presentation-safe origin metadata');
+assert.doesNotMatch(api, /MOBILE_SESSION_CHANNELS/, 'mobile API should not create channel groups for the drawer');
 
-const controlsStart = source.indexOf('function _wireDrawerSessionControls');
-const controls = source.slice(controlsStart, source.indexOf('\nfunction ', controlsStart + 1));
-assert.match(controls, /event\.preventDefault\(\);\s*event\.stopPropagation\(\);/, 'drawer view taps must not bubble into drawer gestures');
-assert.match(controls, /preserveScroll: true/, 'drawer navigation must preserve the current drawer scroll position');
-assert.match(source, /data-drawer-pinned-toggle/, 'Pinned should be rendered as a drawer control');
-assert.match(source, /_drawerPinnedCollapsed = !_drawerPinnedCollapsed;/, 'Pinned control should toggle its collapsed state');
-assert.match(source, /content\.hidden = _drawerPinnedCollapsed/, 'Pinned content should collapse without redrawing the drawer');
-
-console.log('mobile drawer channel navigation regression checks passed');
+console.log('mobile unified session drawer regression checks passed');

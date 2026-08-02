@@ -86,6 +86,7 @@
     "electron": "electron .",
     "build:win": "npm run patch:electron-native && npm run build:desktop-helper:win && electron-builder --win --config electron-builder.yml",
     "build:mac": "npm run patch:electron-native && npm run build:desktop-helper:mac && electron-builder --mac --config electron-builder.yml",
+    "build:mac:tester": "npm run build:mac",
     "verify:public-release": "node scripts/verify-public-release.js",
     "verify:public-release:mac": "node scripts/verify-macos-release.js",
     "prepare:public:desktop": "npm run build:backend && node scripts/copy-extension-descriptors.js && npm run prepare:public-web && npm run check:web-ui && npm run patch:electron-native",

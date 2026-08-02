@@ -1,6 +1,6 @@
 # 33) Desktop Web UI Maintenance Reference
 
-Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, `src/gateway/core/app.ts`, subagent Home chat/Runs recovery routes, and package scripts on: 2026-06-30
+Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, `src/gateway/core/app.ts`, subagent Home chat/Runs recovery routes, Voice Room routes, and package scripts on: 2026-08-01
 
 This section is for the desktop web UI only: the browser/Electron operator surface served from `web-ui/` and mirrored into `generated/public-web-ui/`. Do not use this section as the mobile app reference. Mobile/PWA code lives under `web-ui/src/mobile/*` and is covered separately in `16-mobile-app.md`.
 
@@ -20,7 +20,7 @@ Canonical desktop source:
 
 Desktop page modules:
 
-- `web-ui/src/pages/ChatPage.js` - main desktop chat workspace, sessions/channels sidebar data, SSE chat streaming, retained stream catch-up, process log, approvals, voice/dictation/realtime voice controls, browser canvas controls, right-panel canvas/editor workspace, creative editor integration, generated media rendering, queued prompts, context-window indicator, and most chat/canvas globals.
+- `web-ui/src/pages/ChatPage.js` - main desktop chat workspace, unified-session sidebar data and server hydration, SSE chat streaming, retained stream catch-up, process log, approvals, voice/dictation/realtime voice controls, browser canvas controls, right-panel canvas/editor workspace, creative editor integration, generated media rendering, queued prompts, context-window indicator, and most chat/canvas globals.
 - `web-ui/src/pages/TasksPage.js` - background task board, task detail panel, task chat/replies, task approvals, task state changes, evidence bus, coding workspace/command run panels, manager status, and error response panel.
 - `web-ui/src/pages/SchedulePage.js` - schedules/automations list, Brain schedule cards, create/edit modal, RRULE parsing helpers, run-now/delete/enable controls, schedule reference chips, and schedule websocket refresh behavior.
 - `web-ui/src/pages/TeamsPage.js` - teams canvas/board, team chat, team tabs, manager review/run-all/pause/resume/delete flows, context refs/files, memory, runs, workspace tree/editor, team subagent detail drawers, and team websocket handling.
@@ -35,7 +35,7 @@ Desktop page modules:
 - `web-ui/src/pages/MemoryPage.js` - memory graph canvas, force/layout modes, controls drawer, detail drawer, add-memory composer, attachment handling, graph refresh/indexing, shape/image layout, tooltips, and selection.
 - `web-ui/src/pages/HubPage.js` - skill usage, tool/model overview cards, skill preview modal, skill resources, curator suggestions, achievements scaffold, and Hub activation.
 - `web-ui/src/pages/ConnectionsPage.js` - connector catalog/grid, connector detail view, OAuth/manual credential flows, browser login verification, disconnect, activity, X/xAI flows, and Obsidian vault connect/sync/remove.
-- `web-ui/src/pages/SettingsPage.js` - settings modal tabs: system, heartbeat, search, credentials, security, models, channels, agents, integrations, shortcuts, pairing, migration, OAuth/provider state, MCP/webhooks, channel tests, agent config, and pairing/remote access UI.
+- `web-ui/src/pages/SettingsPage.js` - settings modal tabs: system, heartbeat, search, credentials, security, models, channels, agents, integrations, shortcuts, pairing, migration, OAuth/provider state, MCP/webhooks, channel tests, agent config, and pairing/remote access UI.  Its Models tab owns agent-model defaults/templates, provider-aware account selection for multi-account defaults, Brain Thought/Dream reasoning controls, and the persisted Voice Agent provider/voice default below Main Chat.
 - `web-ui/src/pages/ProjectsPage.js` - sidebar projects list, project cards, project sessions, new/delete project flows, project files, project instructions/memory snapshot, and project-to-chat/canvas handoff.
 
 Desktop shared components:
@@ -104,7 +104,11 @@ Current desktop modes in `app.js`:
 - `memory` -> `#memory-view`
 - `hub` -> `#hub-view`
 
-The left sidebar lives in `#sidebar`. Its nav items call `setMode(...)` directly from inline `onclick` attributes. Sidebar segment tabs are handled by `setSidebarSegTab(...)` and swap among `#sidebar-jobs`, `#sidebar-channels`, `#sidebar-projects`, and `#sidebar-skills`.
+The left sidebar lives in `#sidebar`. Its nav items call `setMode(...)` directly from inline `onclick` attributes. Sidebar segment tabs are handled by `setSidebarSegTab(...)` and swap among `#sidebar-jobs`, `#sidebar-projects`, and `#sidebar-skills`; the former Channels segment is not a desktop chat UI.
+
+## Unified Session Sidebar
+
+Desktop loads `GET /api/sessions?scope=all&includeAutomated=1` into one inline chat timeline. Pinned and ordinary top-level sessions share this list regardless of whether they originated on desktop, mobile, Telegram, CLI, Discord, WhatsApp, or a voice room. Project and side chats remain in their dedicated contexts. Each summary carries durable `channel` metadata plus a sanitized `lastOrigin` from the latest user turn; the sidebar presents that origin as a source label without recreating channel partitions.
 
 The chat mode owns the central `main.main-shell` and the right panel. Non-chat modes hide the main shell and close the right panel. The right panel `#right-panel` contains the canvas/editor/browser/agent execution surfaces; `toggleRightPanel(...)`, `toggleCanvas(...)`, `setCanvasMode(...)`, and related globals mostly live in `ChatPage.js`.
 
@@ -173,6 +177,25 @@ Important backend route groups consumed by the desktop UI:
 
 WebSocket events enter through `web-ui/src/ws.js` and are consumed by page modules through `window.wsEventBus.addEventListener('message', ...)`. Chat streaming also uses `/api/chat` SSE directly in `ChatPage.js`; retained and cross-surface stream events are also mirrored through websocket/main-chat stream handlers.
 
+### Desktop chat recovery contract (2026-08-01)
+
+### Desktop model controls and voice orb (2026-08-01)
+
+- The desktop model/reasoning switcher is intentionally compact: the quick effort slider and advanced rows use reduced type, spacing, and control heights so the popover stays subordinate to the composer.
+- Model/reasoning popover surfaces must be opaque theme surfaces with no backdrop blur or translucent glass layer. Keep the control styling in `web-ui/src/styles/components.css` and mirror it into `generated/public-web-ui/static/styles/components.css`.
+- The desktop voice orb keeps its motion/audio reactivity, but its idle state has no halo. Listening/thinking/speaking states may use only a restrained accent shadow; do not reintroduce the large ambient glow treatment.
+- Desktop Voice Room controls live on the voice orb itself. Clicking the orb opens a target/room popover inside the desktop voice dock; the dock keeps the live transcript above the picker and expands the chat message reserve while the picker is open so transcript bubbles never sit underneath it.
+- Desktop Voice Room state uses the same durable `voice_room_*` session contract as mobile. `/api/voice-rooms/resolve` supplies the deterministic roster and `/api/voice-rooms/:id/transcript` receives finalized realtime turns. Opening a saved `voice_room` session restores its roster and starts realtime voice; switching to a normal session or creating a new chat clears the room binding and resets the target to Prometheus.
+- The desktop realtime bootstrap sends `voiceTarget` and an enabled `voiceRoom` context to both OpenAI and xAI transports. The host-side `voice_room_handoff` fallback can switch the active participant without changing the room session, while the room transcript remains shared and bounded in the bootstrap context.
+
+`web-ui/src/pages/ChatPage.js` now treats a desktop `/api/chat` transport loss as a recoverable client disconnect, matching the mobile app's retained-stream behavior:
+
+- Active desktop turns persist a bounded run record under `prometheus_desktop_active_chat_runs_v1`. The record carries the session id, `clientRequestId`, runtime/stream identity, last sequence, start time, and disconnect state. Writes are throttled during streaming, pruned after seven days, and force-persisted on `pagehide`.
+- An incomplete SSE body (`stream ended before completion`) and recognized network/transport failures preserve the live `activeRun`, process/thinking state, and recovery metadata. The local-request ownership marker is released immediately so replayed frames are not filtered as duplicates. A real user abort remains terminal and is kept distinct from a page-lifecycle disconnect.
+- Startup reconsiders the remembered active session and force-hydrates it from `/api/sessions/:id`; the existing local history/process timeline is merged with the server snapshot so a richer in-flight browser trace is not discarded.
+- `recoverDesktopMainChatSession(...)` is single-flight per session and runs after `pageshow`, focus, `online`, foreground visibility, WebSocket reconnect, and active stream-update notifications. It reads `/api/mobile/chat/stream/:sessionId?after=...`, dedupes by session/stream/sequence, detects stream rotation or retention gaps, and replays from `after=0` when necessary. It applies recovery frames even when the original desktop SSE request is no longer local-owned, while the server's 12,000-frame/16 MiB retention bounds remain authoritative.
+- Terminal replay clears the persisted run and live state only after the matching session has completed or errored. The generated public copy must be regenerated from this source after every change.
+
 Paused task recovery is backend-synchronized, but standalone subagent Home chat is intentionally split from task recovery. `TasksPage.js` posts to the task message APIs. `SubagentsPage.js` Home chat posts to normal subagent chat routes, while the Runs tab posts recovery guidance to `POST /api/agents/:id/runs/:taskId/recovery`. Standalone subagent recovery turns should not be mirrored into Home chat history or rendered as normal Home messages. Team surfaces can still route team room/member/manager blocked-task turns through team recovery when that is the intended owner surface.
 
 ## Desktop Globals and Public Function Map
@@ -193,7 +216,7 @@ Chat/session/canvas globals from `ChatPage.js` include the highest-risk compatib
 - chat send/render: `sendChat`, `renderChatMessages`, `renderAssistantContent`, `renderAssistantGeneratedImages`, `renderArtifacts`, `renderFilePills`, `copyChatMessage`, `forkConversationFromAssistantMessage`, edit/rerun helpers, queued prompt helpers, slash-command helpers, and token/context-window helpers
 - process/progress: `addProcessEntry`, `renderProcessLog`, `clearProcessLog`, `toggleCurrentProcess`, `renderProcessPill`, `renderProgressPanel`, `toggleProgressPanel`, `requestGatewayMainChatAbort`, `spawnAgentExecution`
 - approvals: `loadApprovals`, `loadSessionApprovals`, `resolveSessionApproval`, `resolveInlineApproval`, `loadApprovalProcessRun`
-- voice: `toggleVoiceDictation`, realtime voice toggles/settings handlers, Voice Agent realtime start/stop/PTT/always-listening helpers, and pending voice turn helpers
+- voice: `toggleVoiceDictation`, realtime voice toggles/settings handlers, Voice Agent realtime start/stop/PTT/always-listening helpers, and pending voice turn helpers.  During provider-status refresh, the desktop applies the Models tab Voice Agent default for Codex Voice/Live/OpenAI Realtime or xAI before rendering the live voice controls.
 - canvas/browser: `toggleCanvas`, `toggleCanvasFullscreen`, `setCanvasMode`, `canvasSave`, `canvasOpenTab`, `canvasCloseTab`, file browser/project-root helpers, browser canvas navigation/control/teach/name helpers, preview/frame-load/inspect helpers
 - creative: creative mode setters, scene/project state, asset import/refresh/generation/layer extraction, creative editor selection/properties/timeline/keyframes/layers/playback/export/render jobs, HTML Motion block/template/icon/search/lint/QA/export helpers, HyperFrames catalog/studio/edit/patch/lint/QA/export helpers, and composition timeline/render helpers
 
@@ -262,6 +285,8 @@ For inline-script changes in `web-ui/index.html`, use a browser smoke test or a 
 
 If the app is running and generated sync fails with `EBUSY` on Windows, stop the gateway/Electron process that is serving generated files, then rerun `npm run sync:web-ui`.
 
+Desktop chat skill/slash picker (2026-08-01): `$` opens the skill suggestion surface directly and `/` remains the slash-command trigger. Both suggestion lists are limited to five rows without an internal popover scroll. Skill rows show `$<name>` as gold/bold text without a pill; slash-command rows retain their command styling. Selecting a skill inserts its plain display name and preserves selected skill metadata, allowing the rich composer preview to color the name without exposing literal `**` markers. The canonical implementation is in `web-ui/src/chat-slash-commands.js`, `web-ui/src/pages/ChatPage.js`, and `web-ui/src/styles/components.css`/`themes.css`; the served mirror is under `generated/public-web-ui/static/`.
+
 For desktop visual/interaction changes, verify the actual browser/Electron surface when practical. The highest-risk areas are:
 
 - `ChatPage.js` streaming/session/channel behavior
@@ -269,6 +294,13 @@ For desktop visual/interaction changes, verify the actual browser/Electron surfa
 - Settings modal tab interactions
 - cross-page globals used by inline `onclick` markup
 - generated public sync after source edits
+
+Desktop Chat stream, progress, and steer rules (2026-08-01):
+
+- `renderStreamingChatUpdate(...)` uses `patchStreamingChatBubble(...)` once the live bubble exists. The patcher updates only changed trace groups/entries and restores `<details>` open state plus inner result/terminal scroll; full message rendering is only the safe fallback for a structural transition or first paint.
+- Operational narration is one mutable `agent_progress` summary in the current collapsed tool group. Visible `reasoning_summary` prose is a separate immutable trace row, except for transport-continuation chunks. Do not reclassify visible reasoning as progress or append every planning update as a new reasoning paragraph.
+- `appendChatSteerWorkflowSplit(...)` captures the real pre-steer process/trace segment, creates the user steer, advances `currentTurnStartIndex`, and clears the continuation live trace. The continuation must therefore contain only tool events after the steer. The first segment owns the one live work timer; `_settlePendingChatSteerPresentation(...)` collapses the temporary workflow presentation when the final response begins or completes.
+- `isHiddenRuntimeProcessEntry(...)` filters recovered `runtime_checkpoint/progress_state` records from ordinary tool drawers. Runtime plan state belongs in the dedicated plan/progress UI, not in rows such as `Plan: Run Browser Session`.
 
 Do not mix mobile changes into a desktop web UI fix unless the shared file truly requires it. If a change touches `web-ui/src/mobile/*`, `web-ui/src/styles/mobile.css`, `web-ui/manifest.webmanifest`, or `web-ui/service-worker.js`, also consult `16-mobile-app.md`.
 

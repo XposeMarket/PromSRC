@@ -637,12 +637,44 @@ class CodexAppServerBridge {
       .reverse()
       .find((candidate) => candidate.ownerSessionId === owner);
     if (!session) return false;
+    return this.appendRealtimeTextForSession(session, input);
+  }
+
+  /**
+   * Append a user turn to one specific live AVAS bridge session.  This is the
+   * server-side equivalent of a public Realtime conversation-item/create, but
+   * is intentionally scoped to an app-server session because AVAS v3 does not
+   * accept that public protocol over its browser data channel.
+   */
+  async appendRealtimeText(sessionId: string, text: string): Promise<boolean> {
+    const session = this.sessions.get(String(sessionId || '').trim());
+    const input = String(text || '').trim();
+    if (!session || !input) return false;
+    return this.appendRealtimeTextForSession(session, input);
+  }
+
+  private async appendRealtimeTextForSession(session: BridgeSessionState, input: string): Promise<boolean> {
     await this.ensureStarted();
     await this.request('thread/realtime/appendText', {
       threadId: session.threadId,
       text: input.slice(0, 16_000),
       role: 'user',
     });
+    return true;
+  }
+
+  /**
+   * Keep an already-running AVAS session attached to the durable Prometheus
+   * mobile thread that owns it. Mobile can begin Voice/Live from a temporary
+   * draft and materialize or rotate the chat id without restarting WebRTC.
+   */
+  rebindRealtimeSessionOwner(sessionId: string, ownerSessionId: string): boolean {
+    const sessionKey = String(sessionId || '').trim();
+    const owner = String(ownerSessionId || '').trim();
+    if (!sessionKey || !owner) return false;
+    const session = this.sessions.get(sessionKey);
+    if (!session) return false;
+    session.ownerSessionId = owner;
     return true;
   }
 

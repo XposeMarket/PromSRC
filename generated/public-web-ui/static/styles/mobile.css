@@ -34,7 +34,7 @@ body.pm-mobile-active .pm-one-splash {
   isolation: isolate;
   background: #000;
   opacity: 1;
-  transition: opacity 620ms cubic-bezier(.4, 0, .2, 1), visibility 620ms;
+  transition: opacity 360ms cubic-bezier(.4, 0, .2, 1), visibility 360ms;
 }
 
 body.pm-mobile-active .pm-one-splash[hidden] { display: none; }
@@ -169,19 +169,19 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
 }
 
 .pm-one-splash.is-running .pm-one-starfield-far {
-  animation: pm-one-particles-in 760ms ease-out 90ms both, pm-one-particle-drift 5s ease-in-out 900ms infinite alternate;
+  animation: pm-one-particles-in 520ms ease-out 40ms both, pm-one-particle-drift 3.6s ease-in-out 600ms infinite alternate;
 }
 .pm-one-splash.is-running .pm-one-starfield-near {
-  animation: pm-one-particles-in 680ms ease-out 220ms both, pm-one-particle-drift-near 4.2s ease-in-out 920ms infinite alternate;
+  animation: pm-one-particles-in 460ms ease-out 100ms both, pm-one-particle-drift-near 3.2s ease-in-out 620ms infinite alternate;
 }
 .pm-one-splash.is-running .pm-one-constellations {
-  animation: pm-one-constellations-in 820ms ease-out 160ms both;
+  animation: pm-one-constellations-in 560ms ease-out 80ms both;
 }
 .pm-one-splash.is-running .pm-one-mark-wrap {
-  animation: pm-one-mark-in 720ms cubic-bezier(.16, 1, .3, 1) 860ms both;
+  animation: pm-one-mark-in 520ms cubic-bezier(.16, 1, .3, 1) 520ms both;
 }
 .pm-one-splash.is-running .pm-one-title {
-  animation: pm-one-title-in 560ms cubic-bezier(.22, 1, .36, 1) 1640ms both, pm-one-title-shimmer 820ms cubic-bezier(.4, 0, .2, 1) 2280ms 1 both;
+  animation: pm-one-title-in 420ms cubic-bezier(.22, 1, .36, 1) 980ms both, pm-one-title-shimmer 620ms cubic-bezier(.4, 0, .2, 1) 1360ms 1 both;
 }
 
 @keyframes pm-one-particles-in {
@@ -320,10 +320,11 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
 }
 
 :root[data-skin="blue"] {
-  --pm-bg:            #07101f;
-  --pm-bg-soft:       #0c1730;
-  --pm-surface:       #122444;
-  --pm-surface-strong:#16294e;
+  /* Lift the flat mobile surfaces to match desktop's brighter ambient navy. */
+  --pm-bg:            #0b1a31;
+  --pm-bg-soft:       #102443;
+  --pm-surface:       #19345e;
+  --pm-surface-strong:#20406f;
   --pm-border:        rgba(120, 170, 255, 0.12);
   --pm-border-strong: rgba(120, 170, 255, 0.22);
   --pm-text:          #dde8ff;
@@ -341,10 +342,11 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
   --pm-lg-lens-opacity: .48;
 }
 :root[data-skin="purple"] {
-  --pm-bg:            #0c0518;
-  --pm-bg-soft:       #150a28;
-  --pm-surface:       #1e1138;
-  --pm-surface-strong:#261545;
+  /* Lift the flat mobile surfaces to match desktop's brighter ambient violet. */
+  --pm-bg:            #150b28;
+  --pm-bg-soft:       #21103d;
+  --pm-surface:       #2b1950;
+  --pm-surface-strong:#372263;
   --pm-border:        rgba(170, 120, 255, 0.12);
   --pm-border-strong: rgba(170, 120, 255, 0.22);
   --pm-text:          #e8ddff;
@@ -460,6 +462,7 @@ body.pm-mobile-active :where(input, textarea, select, [contenteditable=""], [con
 :root[data-skin="purple"] body.pm-mobile-active .side-chat-main-pane,
 :root[data-skin="purple"] body.pm-mobile-active .side-chat-pane,
 :root[data-skin="purple"] body.pm-mobile-active .page-view {
+  background-color: var(--pm-bg) !important;
   background-image: none !important;
 }
 
@@ -1001,6 +1004,73 @@ body.pm-model-badge-pressing * {
   -webkit-touch-callout: none;
 }
 .pm-msheet.open { opacity: 1; transform: translateY(0) scale(1); }
+
+/* Long-press chat options: a compact, borderless action popover above the
+   bottom chrome. Individual actions deliberately share one glass surface. */
+.pm-msheet.pm-msheet-session-context {
+  left: 50% !important;
+  top: auto !important;
+  bottom: calc(var(--pm-tabbar-h, 68px) + env(safe-area-inset-bottom, 0px) + 16px) !important;
+  width: min(296px, calc(100vw - 48px)) !important;
+  max-height: min(58dvh, 320px);
+  padding: 13px 8px 10px;
+  border-radius: 14px;
+  transform: translate(-50%, 16px) scale(.98);
+  transform-origin: bottom center;
+  background: rgba(255,255,255,.04);
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .22));
+  box-shadow: 0 1px 0 rgba(255,255,255,.4) inset, 0 12px 30px rgba(0,0,0,.2);
+  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(2) brightness(1.05);
+  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(2) brightness(1.05);
+}
+.pm-msheet.pm-msheet-session-context.open { transform: translate(-50%, 0) scale(1); }
+.pm-msheet-session-context::before,
+.pm-msheet-session-context::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  border-radius: inherit;
+}
+.pm-msheet-session-context::before {
+  inset: 0;
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-border-alpha, .11));
+  mix-blend-mode: soft-light;
+  opacity: var(--pm-lg-border-opacity, .25);
+}
+.pm-msheet-session-context::after {
+  content: none;
+}
+.pm-msheet-session-context .pm-msheet-head { margin: 0 4px 7px; }
+.pm-msheet-session-context .pm-msheet-title { font-size: 15px; font-weight: 650; color: var(--pm-text-soft, var(--pm-text)); }
+.pm-msheet-session-context .pm-msheet-close { display: none; }
+.pm-msheet-session-context .pm-msheet-body { overflow: visible; padding: 0; }
+.pm-msheet-session-context .pm-msheet-rows { gap: 0; }
+.pm-msheet-session-context .pm-sess-action-row {
+  min-height: 43px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 0;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  font-size: 14px;
+  font-weight: 400;
+}
+.pm-msheet-session-context .pm-sess-action-row::before { content: none; }
+.pm-msheet-session-context .pm-sess-action-row:active { background: rgba(255,255,255,.045); }
+.pm-msheet-session-context .pm-sess-action-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--pm-text);
+}
+.pm-msheet-session-context .pm-sess-action-icon svg { width: 21px; height: 21px; }
+.pm-msheet-session-context .pm-sess-unread-icon svg { width: 18px; height: 18px; }
+.pm-msheet-session-context .pm-sess-action-delete,
+.pm-msheet-session-context .pm-sess-action-delete .pm-sess-action-icon,
+.pm-msheet-session-context .pm-sess-action-delete .pm-msheet-row-label { color: #ff6371; }
 /* Rename sheet follows the keyboard up — bottom is set dynamically via JS */
 .pm-msheet-rename { transition: transform .26s cubic-bezier(.22,.61,.36,1), bottom .18s ease, max-height .18s ease; }
 .pm-sess-rename-wrap {
@@ -1036,6 +1106,11 @@ body.pm-model-badge-pressing * {
     inset 0 -1px 0 rgba(255,255,255,.06),
     0 20px 64px rgba(0,0,0,.46),
     0 2px 10px rgba(0,0,0,.22);
+}
+:root[data-theme="dark"] .pm-msheet.pm-msheet-session-context {
+  background: rgba(255,255,255,.04);
+  border-color: rgba(255,255,255,var(--pm-lg-header-border-alpha, .22));
+  box-shadow: 0 1px 0 rgba(255,255,255,.4) inset, 0 12px 30px rgba(0,0,0,.2);
 }
 
 .pm-msheet-handle {
@@ -1098,6 +1173,7 @@ body.pm-model-badge-pressing * {
 }
 .pm-msheet-row:active { background: rgba(255,255,255,.14); }
 :root[data-theme="dark"] .pm-msheet-row { background: rgba(255,255,255,.055); }
+:root[data-theme="dark"] .pm-msheet-session-context .pm-sess-action-row { background: transparent; }
 .pm-msheet-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-msheet-row-raw {
   font-size: 11px; font-weight: 500; color: var(--pm-muted);
@@ -2436,25 +2512,11 @@ html.pm-session-context-open * {
   background: color-mix(in srgb, var(--pm-text), transparent 92%);
 }
 .pm-session-row.is-active-session:not(.pm-session-new):not(.pm-channel-entry) {
-  border-color: color-mix(in srgb, var(--pm-orange), transparent 24%);
-  background:
-    linear-gradient(135deg,
-      color-mix(in srgb, var(--pm-orange), transparent 86%),
-      color-mix(in srgb, var(--pm-gold), transparent 94%));
-  box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--pm-orange), transparent 44%),
-    0 0 0 5px color-mix(in srgb, var(--pm-orange), transparent 88%),
-    0 12px 28px color-mix(in srgb, var(--pm-orange), transparent 82%),
-    inset 0 1px 0 rgba(255,255,255,.24);
+  background: color-mix(in srgb, var(--pm-orange), transparent 91%);
+  box-shadow: none;
 }
 .pm-session-row.is-active-session:not(.pm-session-new):not(.pm-channel-entry)::after {
-  content: "";
-  position: absolute;
-  inset: 4px;
-  border-radius: calc(var(--pm-radius-sm) - 3px);
-  border: 1px solid color-mix(in srgb, var(--pm-gold), transparent 48%);
-  pointer-events: none;
-  z-index: -1;
+  display: none;
 }
 .pm-session-row.is-active-session .pm-session-title {
   color: var(--pm-orange);
@@ -2475,33 +2537,12 @@ html.pm-session-context-open * {
   background: rgba(255, 255, 255, .075);
 }
 :root[data-theme="dark"] .pm-session-row.is-active-session:not(.pm-session-new):not(.pm-channel-entry) {
-  background:
-    linear-gradient(135deg,
-      color-mix(in srgb, var(--pm-orange), transparent 84%),
-      rgba(255,255,255,.065));
-  box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--pm-orange), transparent 36%),
-    0 0 0 5px color-mix(in srgb, var(--pm-orange), transparent 82%),
-    0 14px 34px color-mix(in srgb, var(--pm-orange), transparent 78%),
-    inset 0 1px 0 rgba(255,255,255,.12);
+  background: color-mix(in srgb, var(--pm-orange), transparent 87%);
+  box-shadow: none;
 }
 .pm-session-row.is-working::before,
 .pm-session-row.is-unread::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  padding: 1px;
-  border-radius: inherit;
-  z-index: -1;
-  pointer-events: none;
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
+  display: none;
 }
 .pm-session-row.is-working::before {
   background:
@@ -2538,11 +2579,8 @@ html.pm-session-context-open * {
   animation: prometheus-liquid-spin 16s linear infinite;
 }
 .pm-session-row.is-unread {
-  border-color: color-mix(in srgb, var(--pm-orange), transparent 42%);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--pm-orange), transparent 78%),
-    0 0 24px color-mix(in srgb, var(--pm-orange), transparent 72%),
-    inset 0 1px 0 rgba(255,255,255,.10);
+  border-color: transparent;
+  box-shadow: none;
 }
 .pm-session-row.is-unread:not(.pm-session-new):not(.pm-channel-entry) {
   border-color: transparent;
@@ -2580,21 +2618,14 @@ html.pm-session-context-open * {
 .pm-session-row-top .pm-session-title { flex: 1; }
 .pm-session-state {
   flex: 0 0 auto;
-  border-radius: 999px;
-  padding: 2px 7px;
   font-size: 9px;
   font-weight: 900;
   letter-spacing: .45px;
-  text-transform: uppercase;
+  text-transform: none;
   color: var(--pm-orange);
-  background: color-mix(in srgb, var(--pm-orange), transparent 88%);
-  border: 1px solid color-mix(in srgb, var(--pm-orange), transparent 72%);
 }
 .pm-session-row.is-working .pm-session-state {
   color: #fff7ed;
-  background: color-mix(in srgb, var(--pm-orange), transparent 34%);
-  border-color: color-mix(in srgb, var(--pm-gold), transparent 42%);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--pm-orange), transparent 62%);
 }
 :root[data-theme="dark"] .pm-session-row.is-working,
 :root[data-theme="dark"] .pm-session-row.is-unread {
@@ -4138,6 +4169,14 @@ html.pm-session-context-open * {
   font-weight: 500;
   line-height: 1.36;
   letter-spacing: 0;
+}
+.pm-voice-chat-transcript {
+  max-width: min(100%, 640px);
+  color: rgba(255,255,255,.82);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.42;
+  white-space: normal;
 }
 .pm-voice-lyric-line {
   transition: opacity .22s ease, transform .22s ease, filter .22s ease;
@@ -5694,6 +5733,153 @@ html.pm-session-context-open * {
   .pm-trace-summary-swap {
     animation: none !important;
   }
+}
+
+.pm-voice-room-speaker {
+  margin: 0 0 4px;
+  color: var(--pm-orange);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: .02em;
+}
+
+.pm-voice-room-attach-btn {
+  position: absolute;
+  z-index: 151;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 999px;
+  background: rgba(20,20,24,.9);
+  color: var(--pm-text);
+  box-shadow: 0 12px 32px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.1);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transform: translateX(-50%) scale(.9);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .16s ease, transform .18s ease, border-color .16s ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.pm-voice-room-attach-btn.open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) scale(1);
+}
+
+.pm-voice-room-attach-btn[hidden],
+.pm-voice-room-file-input {
+  display: none !important;
+}
+
+.pm-voice-room-transcript-composer {
+  display: none !important;
+}
+
+.pm-voice-room-transcript-toolbar {
+  position: fixed;
+  z-index: 20;
+  left: 16px;
+  right: 16px;
+  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 12px);
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  box-sizing: border-box;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 16px;
+  background: rgba(24,24,28,.9);
+  color: var(--pm-text);
+  box-shadow: 0 14px 34px rgba(0,0,0,.3);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.pm-voice-room-transcript-toolbar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.pm-voice-room-transcript-toolbar svg {
+  width: 16px;
+  height: 16px;
+  color: var(--pm-orange);
+}
+
+.pm-voice-room-transcript-toolbar button,
+.pm-voice-transcript-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid rgba(232,177,77,.45);
+  border-radius: 999px;
+  background: rgba(232,177,77,.13);
+  color: var(--pm-text);
+  font: inherit;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pm-voice-room-transcript-toolbar button {
+  padding: 7px 10px;
+}
+
+.pm-voice-transcript-btn {
+  min-width: 132px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+}
+
+.pm-voice-transcript-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.pm-voice-room-attach-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* Chat history stays scan-friendly: use soft state fills instead of card outlines. */
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-session-new):not(.pm-channel-entry),
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry),
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread:not(.pm-session-new):not(.pm-channel-entry) {
+  min-height: 0;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-active-session:not(.pm-session-new):not(.pm-channel-entry) {
+  border: 0;
+  background: rgba(214, 183, 94, .08);
+  box-shadow: none;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread:not(.pm-session-new):not(.pm-channel-entry) {
+  background: rgba(214, 183, 94, .05);
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before,
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working::after,
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::after {
+  display: none;
 }
 .pm-process-stream {
   display: inline-block;
@@ -8452,14 +8638,12 @@ html.pm-session-context-open * {
   position: relative;
   overflow: hidden;
 }
-.pm-attach-native-btn .pm-native-file-input {
+.pm-native-file-input {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 1px;
+  height: 1px;
   opacity: 0;
-  cursor: pointer;
-  font-size: 0;
+  pointer-events: none;
 }
 .pm-skill-ref-popover {
   position: fixed;
@@ -8561,15 +8745,7 @@ html.pm-session-context-open * {
   bottom: calc(100% + 8px);
   display: flex;
   flex-direction: column;
-  max-height: min(46dvh, 380px);
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--pm-orange) 68%, transparent) transparent;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
+  overflow: visible;
   gap: 6px;
   padding: 8px;
   background: var(--pm-surface-strong);
@@ -8577,14 +8753,6 @@ html.pm-session-context-open * {
   border-radius: 16px;
   box-shadow: var(--pm-shadow-md);
   z-index: 8;
-}
-.pm-chat-slash-popover::-webkit-scrollbar { width: 6px; }
-.pm-chat-slash-popover::-webkit-scrollbar-track { background: transparent; }
-.pm-chat-slash-popover::-webkit-scrollbar-thumb {
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--pm-orange) 68%, transparent);
-  background-clip: padding-box;
 }
 .pm-chat-slash-popover[hidden] { display: none; }
 .pm-composer .pm-skill-trigger-pill {
@@ -8833,6 +9001,17 @@ html.pm-session-context-open * {
   color: var(--pm-orange);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+.pm-skill-suggestion-token {
+  min-width: 0;
+  max-width: 176px;
+  overflow: hidden;
+  color: var(--pm-gold, var(--pm-orange));
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .pm-chat-slash-label {
   min-width: 0;
   overflow: hidden;
@@ -8964,7 +9143,7 @@ html.pm-session-context-open * {
 .pm-attach-sheet {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 10060;
   pointer-events: none;
 }
 .pm-attach-sheet.voice {
@@ -8976,7 +9155,9 @@ html.pm-session-context-open * {
 .pm-attach-sheet-scrim {
   position: absolute;
   inset: 0;
-  background: transparent;
+  background: rgba(7, 10, 14, 0.14);
+  -webkit-backdrop-filter: blur(3px) brightness(.95);
+  backdrop-filter: blur(3px) brightness(.95);
   opacity: 0;
   transition: opacity .18s ease;
 }
@@ -8986,48 +9167,45 @@ html.pm-session-context-open * {
 .pm-attach-sheet-panel {
   position: absolute;
   left: 20px;
-  width: min(304px, calc(100vw - 40px));
-  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 98px);
+  width: min(248px, calc(100vw - 32px));
+  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 92px);
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 16px 12px;
+  gap: 0;
+  padding: 8px;
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
-  border-radius: 30px;
+  border-radius: 14px;
   background:
-    linear-gradient(to bottom,
-      rgba(255,255,255,.14) 0%, rgba(255,255,255,.025) 18%,
-      transparent 42%, transparent 72%,
-      rgba(255,255,255,.045) 90%, rgba(255,255,255,.10) 100%),
     rgba(255,255,255,.04);
   box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.30),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.14),
-    0 18px 60px rgba(0,0,0,.32),
-    0 1px 4px rgba(0,0,0,.16);
-  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
-  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
-  transform: translateY(12px) scale(.98);
+    0 1px 0 rgba(255,255,255,.4) inset,
+    0 12px 30px rgba(0,0,0,.2);
+  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(2) brightness(1.05);
+  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(2) brightness(1.05);
+  transform: translateY(6px) scale(.98);
   transform-origin: bottom left;
   opacity: 0;
   transition: transform .18s ease, opacity .18s ease;
 }
 .pm-attach-sheet.voice .pm-attach-sheet-panel {
-  bottom: calc(env(safe-area-inset-bottom) + 112px);
+  bottom: calc(env(safe-area-inset-bottom) + 92px);
 }
 :root[data-theme="dark"] .pm-attach-sheet-panel {
   border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
-  background:
-    linear-gradient(to bottom,
-      rgba(255,255,255,.10) 0%, rgba(255,255,255,.013) 18%,
-      transparent 42%, transparent 72%,
-      rgba(255,255,255,.025) 90%, rgba(255,255,255,.08) 100%),
-    rgba(255,255,255,.03);
+  background: rgba(255,255,255,.04);
   box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.18),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.09),
-    0 18px 60px rgba(0,0,0,.38),
-    0 1px 4px rgba(0,0,0,.16);
+    0 1px 0 rgba(255,255,255,.4) inset,
+    0 12px 30px rgba(0,0,0,.2);
+}
+.pm-attach-sheet-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-border-alpha, .11));
+  mix-blend-mode: soft-light;
+  opacity: var(--pm-lg-border-opacity, .25);
 }
 .pm-attach-sheet.open .pm-attach-sheet-panel {
   transform: translateY(0) scale(1);
@@ -9038,60 +9216,69 @@ html.pm-session-context-open * {
 }
 .pm-attach-sheet-action {
   min-width: 0;
-  min-height: 68px;
+  min-height: 42px;
   border: 0;
-  border-radius: 22px;
+  border-radius: 0;
   background: transparent;
   color: var(--pm-text);
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
-  padding: 10px 14px;
+  gap: 8px;
+  padding: 8px 10px;
   text-align: left;
   font: inherit;
+  font-size: 14px;
+  font-weight: 700;
   -webkit-tap-highlight-color: transparent;
 }
 .pm-attach-sheet-action:active {
   background: rgba(255,255,255,.10);
 }
 .pm-attach-sheet-action span {
-  width: 42px;
-  height: 42px;
-  border-radius: 999px;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255,255,255,.12);
+  background: rgba(255,255,255,.08);
   color: var(--pm-text);
-  box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.18),
-    0 8px 24px rgba(0,0,0,.12);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,.18);
 }
 .pm-attach-sheet-action svg {
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 16px;
 }
 .pm-attach-sheet-action strong {
   min-width: 0;
-  font-size: 20px;
-  font-weight: 650;
+  font-size: 14px;
+  font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .pm-camera-capture {
   position: fixed;
-  inset: 0;
+  right: 16px;
+  bottom: calc(var(--pm-tabbar-h, 68px) + env(safe-area-inset-bottom) + 16px);
+  width: min(92vw, 480px);
+  height: min(68svh, 620px);
+  min-height: 360px;
   z-index: 10070;
   background: #050505;
   color: #fff;
+  border: 1px solid rgba(255,255,255,.20);
+  border-radius: 28px;
+  box-shadow: 0 24px 70px rgba(0,0,0,.46), 0 2px 12px rgba(0,0,0,.22);
   opacity: 0;
+  pointer-events: none;
   transition: opacity .18s ease;
   overflow: hidden;
 }
 .pm-camera-capture.open {
   opacity: 1;
+  pointer-events: all;
 }
 .pm-camera-video {
   position: absolute;
@@ -9122,7 +9309,7 @@ html.pm-session-context-open * {
 .pm-camera-topbar {
   position: absolute;
   z-index: 2;
-  top: calc(env(safe-area-inset-top) + 14px);
+  top: 14px;
   left: 14px;
   right: 14px;
   display: flex;
@@ -9153,7 +9340,7 @@ html.pm-session-context-open * {
   z-index: 2;
   left: 0;
   right: 0;
-  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 30px);
+  bottom: calc(env(safe-area-inset-bottom) + 22px);
   display: flex;
   justify-content: center;
   pointer-events: none;
@@ -9165,7 +9352,7 @@ html.pm-session-context-open * {
 .pm-camera-record-timer {
   position: absolute;
   z-index: 3;
-  top: calc(max(env(safe-area-inset-top), 12px) + 14px);
+  top: 14px;
   left: 50%;
   transform: translateX(-50%);
   padding: 7px 12px;
@@ -9215,6 +9402,8 @@ html.pm-session-context-open * {
 .pm-camera-wave-line,
 .pm-camera-strands-orb-canvas,
 .pm-camera-glass-glint,
+.pm-camera-shutter-icon,
+.pm-camera-voice-fallback,
 .pm-camera-record-core {
   position: absolute;
   inset: 0;
@@ -9261,8 +9450,59 @@ html.pm-session-context-open * {
   transition: opacity .16s ease, transform .16s ease;
 }
 .pm-camera-strands-orb-canvas,
-.pm-camera-glass-glint {
+.pm-camera-glass-glint,
+.pm-camera-shutter-icon,
+.pm-camera-voice-fallback {
   display: none;
+}
+.pm-camera-shutter-icon {
+  inset: auto;
+  width: 26px;
+  height: 20px;
+  border: 2px solid rgba(18,20,24,.88);
+  border-radius: 5px;
+  background: rgba(255,255,255,.72);
+  transform: translate(-50%, -50%);
+  left: 50%;
+  top: 50%;
+}
+.pm-camera-shutter-icon::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border: 2px solid rgba(18,20,24,.88);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+.pm-camera-shutter-icon::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: -5px;
+  width: 9px;
+  height: 5px;
+  border: 2px solid rgba(18,20,24,.88);
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
+}
+.pm-camera-capture:not(.voice-realtime) .pm-camera-shutter {
+  width: 76px;
+  height: 76px;
+  border: 4px solid rgba(255,255,255,.96);
+  background: rgba(255,255,255,.92);
+  box-shadow:
+    0 8px 30px rgba(0,0,0,.32),
+    inset 0 0 0 5px rgba(255,255,255,.92);
+}
+.pm-camera-capture:not(.voice-realtime) .pm-camera-wave-ambient,
+.pm-camera-capture:not(.voice-realtime) .pm-camera-wave-line {
+  display: none;
+}
+.pm-camera-capture:not(.voice-realtime) .pm-camera-shutter-icon {
+  display: block;
 }
 .pm-camera-strands-orb-canvas {
   width: 100%;
@@ -9304,6 +9544,28 @@ html.pm-session-context-open * {
 }
 .pm-camera-capture.voice-realtime .pm-camera-strands-orb-canvas,
 .pm-camera-capture.voice-realtime .pm-camera-glass-glint {
+  display: block;
+}
+.pm-camera-voice-fallback {
+  inset: 14px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255,255,255,.42), transparent 30%),
+    conic-gradient(from 80deg, rgba(255,255,255,.15), rgba(255,122,24,.62), rgba(255,255,255,.14), rgba(244,63,94,.54), rgba(255,255,255,.15));
+  opacity: .78;
+  animation: pm-camera-voice-fallback-pulse 1.4s ease-in-out infinite;
+}
+.pm-camera-voice-fallback::before {
+  content: '';
+  position: absolute;
+  inset: 17px 10px;
+  border-radius: 50%;
+  background: repeating-linear-gradient(90deg, rgba(255,255,255,.95) 0 3px, transparent 3px 7px);
+  -webkit-mask: radial-gradient(ellipse at center, #000 0 60%, transparent 72%);
+  mask: radial-gradient(ellipse at center, #000 0 60%, transparent 72%);
+  opacity: .88;
+}
+.pm-camera-capture.voice-realtime .pm-camera-voice-fallback {
   display: block;
 }
 .pm-camera-shutter:active,
@@ -9349,6 +9611,10 @@ html.pm-session-context-open * {
 @keyframes pm-camera-wave-pulse {
   0%, 100% { transform: scaleX(.9) scaleY(.84); opacity: .70; }
   50% { transform: scaleX(1.08) scaleY(1); opacity: 1; }
+}
+@keyframes pm-camera-voice-fallback-pulse {
+  0%, 100% { transform: scale(.92); filter: saturate(1); opacity: .70; }
+  50% { transform: scale(1.04); filter: saturate(1.35); opacity: 1; }
 }
 .pm-composer-input {
   flex: 1;
@@ -9527,6 +9793,36 @@ html.pm-session-context-open * {
   --pm-voice-orb-deep: #6d5a2b;
   --pm-voice-orb-glow: #f0d98b;
   --pm-voice-orb-grid: rgba(214, 183, 94, .22);
+}
+
+/* Voice keeps the active skin's color identity: P1 gold, Olympian blue, or
+   Aether violet. These tokens feed both the SVG sphere and its canvas dust. */
+:root[data-skin="dark"] {
+  --pm-voice-control-accent: #d6b75e;
+  --pm-voice-orb-light: #fff9e8;
+  --pm-voice-orb-hot: #f0d98b;
+  --pm-voice-orb-accent: #d6b75e;
+  --pm-voice-orb-deep: #6d5a2b;
+  --pm-voice-orb-glow: #f0d98b;
+  --pm-voice-orb-grid: rgba(214, 183, 94, .24);
+}
+:root[data-skin="blue"] {
+  --pm-voice-control-accent: #3d8bff;
+  --pm-voice-orb-light: #eef7ff;
+  --pm-voice-orb-hot: #9fd0ff;
+  --pm-voice-orb-accent: #3d8bff;
+  --pm-voice-orb-deep: #12366f;
+  --pm-voice-orb-glow: #65b0ff;
+  --pm-voice-orb-grid: rgba(88, 166, 255, .28);
+}
+:root[data-skin="purple"] {
+  --pm-voice-control-accent: #8b5cf6;
+  --pm-voice-orb-light: #f7edff;
+  --pm-voice-orb-hot: #c9a7ff;
+  --pm-voice-orb-accent: #8b5cf6;
+  --pm-voice-orb-deep: #3d1d73;
+  --pm-voice-orb-glow: #b278ff;
+  --pm-voice-orb-grid: rgba(187, 128, 255, .28);
 }
 
 /* Outside Chat and Voice, every retained mobile skin uses P1 gold chrome while
@@ -9930,8 +10226,6 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 }
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-state {
   color: var(--p1-gold-light);
-  border-color: rgba(214, 183, 94, .34);
-  background: rgba(214, 183, 94, .08);
 }
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.pm-channel-entry {
   border: 1px solid rgba(109, 90, 43, .24);
@@ -10509,7 +10803,9 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-voice-preview-host {
   position: absolute;
   left: 50%;
-  top: clamp(42px, 7vh, 72px);
+  /* Keep the wheel clear of the header while giving the live transcript and
+     orb more breathing room below it. */
+  top: clamp(14px, 2.4vh, 26px);
   transform: translateX(-50%);
   width: min(92vw, 380px);
   --pm-voice-preview-card-height: 292px;
@@ -10518,7 +10814,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   pointer-events: none;
   z-index: 125;
   isolation: isolate;
-  overflow: visible;
+  overflow: clip;
   border-radius: 20px;
 }
 .pm-voice-preview-host.has-preview {
@@ -10589,7 +10885,7 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   padding-bottom: 0;
 }
 .pm-voice-body--page .pm-voice-overlay-anchor {
-  width: min(78vw, 320px);
+  width: min(58vw, 216px);
   aspect-ratio: 1;
   flex: 0 0 auto;
   pointer-events: none;
@@ -10742,6 +11038,93 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   opacity: .28;
   z-index: 0;
 }
+
+/* Stable, preloaded preview wheel. Every card stays mounted while the active
+   item rolls forward, so a swipe never flashes a newly-created card. */
+.pm-voice-preview-wheel {
+  position: relative;
+  width: 100%;
+  height: var(--pm-voice-preview-card-height);
+  perspective: 1200px;
+  transform-style: preserve-3d;
+  pointer-events: none;
+  overflow: visible;
+}
+.pm-voice-preview-host { overflow: visible; }
+.pm-voice-preview-wheel.is-dragging { cursor: grabbing; }
+.pm-voice-preview-wheel .pm-voice-preview-card {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  box-sizing: border-box;
+  border: 0 !important;
+  border-radius: 18px;
+  background: transparent !important;
+  box-shadow: none !important;
+  pointer-events: none;
+  touch-action: none;
+  cursor: grab;
+  will-change: transform, opacity, filter;
+  transform-origin: 50% 24%;
+  transform-style: preserve-3d;
+  animation: none !important;
+  transition: transform .38s cubic-bezier(.22,.8,.2,1), opacity .32s ease, filter .38s ease;
+}
+.pm-voice-preview-wheel .pm-voice-preview-card.is-active {
+  pointer-events: auto;
+  cursor: grab;
+}
+.pm-voice-preview-wheel.is-dragging .pm-voice-preview-card { cursor: grabbing; }
+.pm-voice-preview-wheel .pm-voice-preview-card .pm-voice-preview-close {
+  top: 7px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: rgba(255,255,255,.78);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  font-size: 22px;
+  line-height: 26px;
+  opacity: .76;
+}
+.pm-voice-preview-wheel .pm-voice-preview-card:not(.is-active) .pm-voice-preview-close {
+  visibility: hidden;
+  pointer-events: none;
+}
+.pm-voice-preview-wheel .pm-voice-preview-artifact,
+.pm-voice-preview-wheel .pm-media-card,
+.pm-voice-preview-wheel .pm-generated-file,
+.pm-voice-preview-wheel .pm-product-card,
+.pm-voice-preview-wheel .pm-src-card {
+  border: 0 !important;
+  box-shadow: none !important;
+}
+.pm-voice-preview-wheel .pm-voice-preview-artifact {
+  background: color-mix(in srgb, var(--pm-surface-strong) 95%, transparent);
+}
+.pm-voice-preview-wheel .pm-product-heading,
+.pm-voice-preview-wheel .pm-src-heading,
+.pm-voice-preview-wheel .pm-pmkt-heading,
+.pm-voice-preview-wheel .pm-cmp-heading,
+.pm-voice-preview-wheel .pm-chart-heading,
+.pm-voice-preview-wheel .pm-map-heading,
+.pm-voice-preview-wheel .pm-mk-heading {
+  display: none !important;
+}
+.pm-voice-preview-wheel .pm-media-card,
+.pm-voice-preview-wheel .pm-generated-file {
+  background: color-mix(in srgb, var(--pm-surface-strong) 94%, transparent);
+  border-radius: 18px;
+}
+.pm-voice-preview-wheel .pm-voice-preview-card .pm-media-gallery { margin-top: 0; }
+.pm-voice-preview-wheel .pm-voice-preview-card .pm-media-card img,
+.pm-voice-preview-wheel .pm-voice-preview-card .pm-media-card video { aspect-ratio: 16 / 9; }
 :root[data-theme="dark"] .pm-voice-preview-card .pm-media-card,
 :root[data-theme="dark"] .pm-voice-preview-card .pm-generated-file {
   background: rgba(37,41,49,.9);
@@ -10756,6 +11139,12 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 :root[data-theme="dark"] .pm-voice-preview-ghost {
   background: rgba(37,41,49,.68);
   border-color: color-mix(in srgb, var(--pm-orange) 24%, transparent);
+}
+:root[data-theme="dark"] .pm-voice-preview-wheel .pm-voice-preview-artifact,
+:root[data-theme="dark"] .pm-voice-preview-wheel .pm-media-card,
+:root[data-theme="dark"] .pm-voice-preview-wheel .pm-generated-file {
+  background: rgba(37,41,49,.94);
+  border: 0 !important;
 }
 @keyframes pm-voice-preview-pop {
   0% { opacity: 0; transform: translateY(18px) scale(.96); }
@@ -10850,6 +11239,11 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   border-color: rgba(79, 214, 158, .78);
   background: rgba(42, 174, 118, .14);
   box-shadow: 0 0 0 4px rgba(42, 174, 118, .12), 0 14px 34px rgba(42, 174, 118, .14);
+}
+.pm-voice-target-character.room-member:not(.room-selected) {
+  border-color: rgba(79, 214, 158, .42);
+  background: rgba(42, 174, 118, .07);
+  box-shadow: inset 0 0 0 1px rgba(79, 214, 158, .10);
 }
 .pm-voice-target-avatar {
   display: grid;
@@ -10952,21 +11346,28 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   position: absolute;
   z-index: 18;
   left: 50%;
-  bottom: 166px;
+  /* Keep live transcription above the orb instead of letting it sit on the
+     sphere when the response text becomes two lines. */
+  /* A little lower, so the response sits closer to the orb without touching
+     the sphere when it wraps to two lines. */
+  bottom: clamp(208px, 25vh, 252px);
   width: min(88vw, 460px);
-  min-height: 92px;
-  max-height: 122px;
+  min-height: 72px;
+  max-height: min(24vh, 180px);
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
   pointer-events: none;
   text-align: center;
   opacity: 1;
   transition: opacity .24s ease, transform .24s ease;
 }
+.pm-voice-body--page .pm-voice-status-region::-webkit-scrollbar { display: none; }
 .pm-voice-body--page .pm-voice-stage.pm-voice-tool-active .pm-voice-status-region {
   animation: pm-voice-tool-in .22s ease-out both;
 }
@@ -11232,23 +11633,25 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   margin: 0 auto;
 }
 .pm-voice-body--page .pm-voice-orb-mic .pm-orb-svg {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   height: 100%;
-  transform: scale(calc(1 + var(--pm-orb-audio, 0) * .055));
+  /* The sphere stays face-on; only its longitude field and dust orbit move.
+     Rotating the whole SVG makes the control read as a flat card. */
+  transform: scale(calc(1 + var(--pm-orb-audio, 0) * .075));
   filter:
     brightness(calc(1 + var(--pm-orb-audio, 0) * .22))
     saturate(calc(1 + var(--pm-orb-audio, 0) * .18))
-    drop-shadow(0 0 calc(2px + var(--pm-orb-audio, 0) * 18px) rgba(255,145,69,.48));
+    drop-shadow(0 0 calc(4px + var(--pm-orb-audio, 0) * 20px) color-mix(in srgb, var(--pm-voice-orb-glow) 60%, transparent));
   transition: transform 42ms linear, filter 42ms linear;
   transform-origin: center;
+  transform-style: preserve-3d;
 }
 .pm-voice-body--page .pm-voice-orb-mic.pm-orb-sound-reactive .pm-wave-main,
 .pm-voice-body--page .pm-voice-orb-mic.pm-orb-sound-reactive .pm-wave-bright {
   stroke-width: calc(2.2px + var(--pm-orb-audio, 0) * 2.4px);
-}
-.pm-voice-body--page .pm-voice-orb-mic .pm-orb-grid > circle {
-  display: none;
 }
 .pm-voice-body--page .pm-voice-mic.pm-voice-page-mic.pm-voice-orb-mic::before {
   display: none;
@@ -11260,7 +11663,152 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   background: transparent;
   box-shadow: none;
 }
+
+/* Standalone mobile Voice: dimensional particle orb. The sphere remains the
+   tap target; particles live on a transparent canvas layered above it. */
+.pm-voice-body--page .pm-voice-orb.pm-voice-particle-orb,
+.pm-voice-body--page .pm-voice-orb.pm-voice-particle-orb:is(.listening, .thinking, .speaking, .confirmed),
+:root[data-theme="dark"] body.pm-mobile-active .pm-voice-orb.pm-voice-particle-orb,
+:root[data-theme="dark"] body.pm-mobile-active .pm-voice-orb.pm-voice-particle-orb:is(.listening, .thinking, .speaking, .confirmed) {
+  width: min(52vw, 176px);
+  height: min(52vw, 176px);
+  aspect-ratio: 1;
+  margin: 0 auto 8px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  filter: drop-shadow(0 24px 54px color-mix(in srgb, var(--pm-voice-orb-glow) 34%, transparent)) !important;
+  animation: none !important;
+  transform: translate3d(0, var(--pm-orb-lift, 0px), 0)
+    scale(calc(1 + var(--pm-orb-audio, 0) * .045)) !important;
+  transition: transform 42ms linear, filter 120ms ease;
+  overflow: visible;
+  isolation: isolate;
+  perspective: 760px;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+.pm-voice-body--page .pm-voice-orb.pm-voice-particle-orb::before,
+.pm-voice-body--page .pm-voice-orb.pm-voice-particle-orb::after {
+  content: none !important;
+  display: none !important;
+}
+.pm-voice-body--page .pm-voice-particle-orb .pm-orb-svg {
+  transform-origin: center;
+  transform-style: preserve-3d;
+}
+.pm-voice-body--page .pm-voice-orb-particles {
+  position: absolute;
+  z-index: 3;
+  inset: -14%;
+  width: 128%;
+  height: 128%;
+  display: block;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+.pm-voice-body--page .pm-voice-particle-orb .pm-orb-aura {
+  opacity: calc(.52 + var(--pm-orb-audio, 0) * .32);
+  transition: opacity 80ms linear;
+}
+.pm-voice-body--page .pm-voice-particle-orb .pm-orb-grid-latitude {
+  animation: pm-orb-latitude-breathe 4.8s ease-in-out infinite;
+}
+.pm-voice-body--page .pm-voice-particle-orb .pm-orb-grid-longitude {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scaleX(var(--pm-orb-grid-squash, .88)) rotate(var(--pm-orb-grid-rotation, 0deg));
+  transition: transform 80ms linear;
+}
+.pm-voice-body--page .pm-voice-particle-orb .pm-orb-flow-a {
+  animation: pm-orb-flow-drift 7s ease-in-out infinite alternate;
+}
+.pm-voice-body--page .pm-voice-particle-orb .pm-orb-flow-b {
+  animation: pm-orb-flow-drift 5.5s ease-in-out infinite alternate-reverse;
+}
+.pm-voice-body--page .pm-voice-particle-orb .pm-orb-rim-light {
+  opacity: calc(.48 + var(--pm-orb-audio, 0) * .34);
+}
+
+/* Inline chat mounts the same particle orb inside a fixed draggable shell.
+   Keep the shell's position transform independent, and put the audio
+   reaction on the shared SVG/canvas layers so dragging never disables it. */
+.pm-chat-voice-inline .pm-voice-particle-orb {
+  animation: none !important;
+  overflow: visible !important;
+  isolation: isolate;
+  perspective: 760px;
+}
+.pm-chat-voice-inline .pm-voice-particle-orb::before,
+.pm-chat-voice-inline .pm-voice-particle-orb::after {
+  content: none !important;
+  display: none !important;
+}
+.pm-chat-voice-inline .pm-voice-particle-orb .pm-orb-svg {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scale(calc(1 + var(--pm-orb-audio, 0) * .075));
+  filter:
+    brightness(calc(1 + var(--pm-orb-audio, 0) * .22))
+    saturate(calc(1 + var(--pm-orb-audio, 0) * .18))
+    drop-shadow(0 0 calc(4px + var(--pm-orb-audio, 0) * 20px) color-mix(in srgb, var(--pm-voice-orb-glow) 60%, transparent));
+  transition: transform 42ms linear, filter 42ms linear;
+  transform-origin: center;
+  transform-style: preserve-3d;
+}
+.pm-chat-voice-inline .pm-voice-particle-orb.pm-orb-sound-reactive .pm-wave-main,
+.pm-chat-voice-inline .pm-voice-particle-orb.pm-orb-sound-reactive .pm-wave-bright {
+  stroke-width: calc(2.2px + var(--pm-orb-audio, 0) * 2.4px);
+}
+.pm-chat-voice-inline .pm-voice-particle-orb .pm-orb-aura {
+  opacity: calc(.52 + var(--pm-orb-audio, 0) * .32);
+  transition: opacity 80ms linear;
+}
+.pm-chat-voice-inline .pm-voice-particle-orb .pm-orb-grid-latitude {
+  animation: pm-orb-latitude-breathe 4.8s ease-in-out infinite;
+}
+.pm-chat-voice-inline .pm-voice-particle-orb .pm-orb-grid-longitude {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scaleX(var(--pm-orb-grid-squash, .88)) rotate(var(--pm-orb-grid-rotation, 0deg));
+  transition: transform 80ms linear;
+}
+.pm-chat-voice-inline .pm-voice-particle-orb .pm-orb-flow-a {
+  animation: pm-orb-flow-drift 7s ease-in-out infinite alternate;
+}
+.pm-chat-voice-inline .pm-voice-particle-orb .pm-orb-flow-b {
+  animation: pm-orb-flow-drift 5.5s ease-in-out infinite alternate-reverse;
+}
+.pm-chat-voice-inline .pm-voice-particle-orb .pm-orb-rim-light {
+  opacity: calc(.48 + var(--pm-orb-audio, 0) * .34);
+}
+
 @keyframes pm-mic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+@keyframes pm-orb-latitude-breathe {
+  0%, 100% { opacity: .62; }
+  50% { opacity: .94; }
+}
+@keyframes pm-orb-flow-drift {
+  from { transform: translate3d(-5px, 4px, 0); opacity: .55; }
+  to { transform: translate3d(7px, -5px, 0); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-voice-body--page .pm-voice-particle-orb .pm-orb-grid,
+  .pm-voice-body--page .pm-voice-particle-orb .pm-orb-flow-a,
+  .pm-voice-body--page .pm-voice-particle-orb .pm-orb-flow-b {
+    animation: none !important;
+  }
+  .pm-voice-body--page .pm-voice-particle-orb .pm-orb-grid-longitude {
+    transition: none;
+  }
+  .pm-voice-body--page .pm-voice-particle-orb .pm-orb-svg {
+    transition: none;
+  }
+}
 @keyframes pm-voice-ambient-float {
   from { transform: translate3d(-2%, 4%, 0) scale(1); }
   to { transform: translate3d(2%, -3%, 0) scale(1.05); }
@@ -14137,6 +14685,131 @@ body.pm-mobile-active #settings-save-btn {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* Compact, opaque model/reasoning controls. The slider stays touch-friendly;
+   the surrounding labels, rows, and sheets carry the visual weight instead. */
+body.pm-mobile-active .pm-model-badge {
+  font-size: 11px;
+  font-weight: 600;
+}
+body.pm-mobile-active .pm-model-badge .pm-model-badge-label { font-weight: 600; }
+body.pm-mobile-active .pm-msheet.is-reasoning {
+  height: 224px;
+  max-height: 32dvh;
+  padding: 14px 18px calc(16px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--pm-border-strong) !important;
+  border-radius: 18px 18px 0 0 !important;
+  background: var(--pm-bg) !important;
+  background-image: none !important;
+  box-shadow: 0 -14px 36px rgba(0,0,0,.26) !important;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-summary {
+  min-height: 32px;
+  margin-bottom: 12px;
+  gap: 5px;
+  padding: 0 4px;
+  font-size: 16px;
+  line-height: 1.15;
+  font-weight: 600;
+  text-shadow: none;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-summary strong,
+body.pm-mobile-active .pm-msheet.is-reasoning #pm-reasoning-live-label {
+  font-weight: 600;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-summary-chev {
+  font-size: 22px;
+  transform: translateY(-1px);
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-track {
+  box-shadow: inset 0 1px 2px rgba(255,255,255,.12), 0 8px 20px rgba(0,0,0,.22);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+body.pm-mobile-active .pm-msheet.is-model-switch {
+  max-height: min(40dvh, 360px);
+  padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
+  border: 1px solid var(--pm-border-strong) !important;
+  border-bottom: 0 !important;
+  border-radius: 18px 18px 0 0 !important;
+  background: var(--pm-surface) !important;
+  background-image: none !important;
+  box-shadow: 0 -16px 42px rgba(0,0,0,.34) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-body {
+  max-height: calc(min(40dvh, 360px) - 58px - env(safe-area-inset-bottom));
+  padding-bottom: 2px;
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-head {
+  min-height: 30px;
+  margin-bottom: 4px;
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-handle {
+  width: 48px;
+  height: 4px;
+  margin-bottom: 6px;
+  background: color-mix(in srgb, var(--pm-text) 38%, transparent);
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-title {
+  font-size: 14px;
+  font-weight: 650;
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-back {
+  font-size: 22px;
+  padding: 4px 8px 4px 0;
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-advanced-panel {
+  border-radius: 12px;
+  background: var(--pm-surface-strong) !important;
+  background-image: none !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-advanced-row {
+  grid-template-columns: minmax(76px, 1fr) minmax(0, auto) 14px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-bottom-color: var(--pm-border);
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-advanced-row-label {
+  font-size: 12px;
+  font-weight: 550;
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-advanced-row-value {
+  max-width: 48vw;
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--pm-text-soft);
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-advanced-row-chev { font-size: 15px; }
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row {
+  min-height: 38px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--pm-surface-strong) !important;
+  font-size: 12px;
+  font-weight: 550;
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-rows { gap: 3px; }
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row-raw { font-size: 9px; }
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-chev { font-size: 15px; }
+body.pm-mobile-active .pm-chat-settings-popover {
+  width: min(248px, calc(100vw - 28px));
+  max-width: 248px;
+  padding: 5px;
+  border-radius: 12px;
+  background: var(--pm-surface) !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+body.pm-mobile-active .pm-chat-settings-menu-item {
+  min-height: 32px;
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 550;
+}
+
 /* ---------------- Mobile context-window chip + popover ---------------- */
 /* Free-floating ring under the header (below the settings button). Tapping it
    opens a popover sliding in from the right over the chat. */
@@ -14965,4 +15638,391 @@ body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-mode-
     right: calc(env(safe-area-inset-right) + 22px) !important;
     font-size: 19px !important;
   }
+}
+
+/* Final mobile drawer treatment: chats are rows, never bordered cards. */
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-session-new):not(.pm-channel-entry),
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry),
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread:not(.pm-session-new):not(.pm-channel-entry),
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-active-session:not(.pm-session-new):not(.pm-channel-entry) {
+  min-height: 0 !important;
+  padding: 8px !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before,
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working::after,
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::after {
+  display: none !important;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-drawer-session-list,
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-drawer-pinned-content {
+  gap: 10px;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-title {
+  font-weight: 620;
+}
+
+/* Preserve the borderless list rhythm while giving active work and unread
+   chats their original panel treatment. Outline shadows do not alter layout. */
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry),
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread:not(.pm-session-new):not(.pm-channel-entry) {
+  background: linear-gradient(180deg, rgba(17, 17, 16, .96), rgba(9, 9, 9, .96)) !important;
+  box-shadow: 0 0 0 1px rgba(109, 90, 43, .34), inset 0 1px 0 rgba(255, 255, 255, .02), 0 7px 18px rgba(0, 0, 0, .15) !important;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry) {
+  box-shadow: 0 0 0 1px rgba(214, 183, 94, .66), inset 0 1px 0 rgba(255, 255, 255, .08), 0 7px 18px rgba(0, 0, 0, .18) !important;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {
+  display: block !important;
+  content: "";
+  position: absolute;
+  inset: 7px auto 7px 0;
+  width: 2px;
+  padding: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--p1-gold-light), var(--p1-gold-muted));
+  z-index: 1;
+  pointer-events: none;
+  opacity: 1;
+  animation: none;
+  mask: none;
+  -webkit-mask: none;
+}
+
+/* Final Prometheus One mobile surfaces: the app/page backdrop should match
+   the drawer's true black instead of inheriting the shared graphite dark. */
+:root[data-skin="dark"] {
+  --pm-bg: #000;
+  --pm-bg-soft: #000;
+}
+:root[data-skin="dark"]:has(body.pm-mobile-active),
+:root[data-skin="dark"] body.pm-mobile-active,
+:root[data-skin="dark"] body.pm-mobile-active::before,
+:root[data-skin="dark"] body.pm-mobile-active #mobile-root,
+:root[data-skin="dark"] body.pm-mobile-active .pm-app,
+:root[data-skin="dark"] body.pm-mobile-active .pm-page,
+:root[data-skin="dark"] body.pm-mobile-active .pm-body {
+  background-color: #000 !important;
+  background-image: none !important;
+}
+:root[data-skin="dark"] body.pm-mobile-active .pm-drawer {
+  background-color: #000 !important;
+  background-image: none !important;
+}
+
+/* Drawer navigation is a borderless list. New chat is intentionally excluded
+   so it keeps its distinct Prometheus One button treatment. */
+body.pm-mobile-active .pm-drawer-item {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Keep message actions easy to scan without letting the copy, voice, and
+   fork buttons spread across the full width of the message row. */
+body.pm-mobile-active .pm-msg-actions {
+  gap: 0;
+}
+body.pm-mobile-active .pm-msg-action {
+  width: 30px;
+  min-height: 30px;
+  padding: 4px;
+}
+body.pm-mobile-active .pm-msg-action svg {
+  width: 17px;
+  height: 17px;
+}
+body.pm-mobile-active .pm-drawer-item:active {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Keep the hamburger drawer flat across every mobile skin. The drawer is a
+   theme surface, so directional lighting here only makes its edges look
+   darker than the active theme color. */
+body.pm-mobile-active .pm-drawer {
+  background: var(--pm-bg) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+body.pm-mobile-active .pm-theme-toggle,
+body.pm-mobile-active .pm-drawer-close {
+  background: var(--pm-bg) !important;
+  background-image: none !important;
+}
+body.pm-mobile-active .pm-drawer-search,
+body.pm-mobile-active .pm-drawer-new-chat,
+body.pm-mobile-active .pm-drawer-item,
+body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-session-new):not(.pm-channel-entry),
+body.pm-mobile-active .pm-drawer .pm-session-row.pm-channel-entry {
+  background-image: none !important;
+}
+body.pm-mobile-active .pm-drawer-search,
+body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-session-new):not(.pm-channel-entry),
+body.pm-mobile-active .pm-drawer .pm-session-row.pm-channel-entry {
+  background-color: var(--pm-bg) !important;
+}
+body.pm-mobile-active .pm-drawer-new-chat {
+  background: color-mix(in srgb, var(--pm-accent) 14%, var(--pm-bg)) !important;
+}
+body.pm-mobile-active .pm-drawer-item:active,
+body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-session-new):not(.pm-channel-entry):active,
+body.pm-mobile-active .pm-drawer .pm-session-row.is-active-session:not(.pm-session-new):not(.pm-channel-entry) {
+  background: color-mix(in srgb, var(--pm-accent) 10%, var(--pm-bg)) !important;
+}
+body.pm-mobile-active .pm-drawer .pm-drawer-section-title::after {
+  background: none !important;
+}
+body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
+body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {
+  background: var(--p1-gold, var(--pm-accent)) !important;
+  background-image: none !important;
+}
+
+/* Inline chat voice: keep the chat surface visible and reserve only a compact
+   bottom dock for the orb and voice controls. */
+body.pm-mobile-active.pm-chat-voice-active .pm-body.pm-chat-body.pm-chat-voice-occluded {
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+  padding-bottom: calc(min(34vh, 330px) + env(safe-area-inset-bottom) + 22px) !important;
+  scroll-padding-bottom: calc(min(34vh, 330px) + env(safe-area-inset-bottom) + 22px) !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-composer.is-voice-active {
+  position: fixed !important;
+  inset: auto 0 0 0 !important;
+  width: 100% !important;
+  height: min(34vh, 330px) !important;
+  min-height: 260px !important;
+  max-height: 330px !important;
+  padding: 0 0 env(safe-area-inset-bottom) !important;
+  overflow: visible !important;
+  pointer-events: none !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-composer.is-voice-active::before,
+body.pm-mobile-active.pm-chat-voice-active .pm-composer.is-voice-active::after,
+body.pm-mobile-active.pm-chat-voice-active .pm-composer.is-voice-active > .pm-glass-lens,
+body.pm-mobile-active.pm-chat-voice-active .pm-composer.is-voice-active > .pm-glass-border {
+  display: none !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-shell,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-body,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-stage {
+  position: relative !important;
+  inset: auto !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  pointer-events: none !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-stage {
+  display: block !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-stage::after,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-wave-ambient,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-wave-line,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-wave-canvas {
+  display: none !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb {
+  position: absolute !important;
+  left: 50% !important;
+  bottom: calc(env(safe-area-inset-bottom) + 82px) !important;
+  width: min(42vw, 176px) !important;
+  height: min(42vw, 176px) !important;
+  margin: 0 !important;
+  transform: translateX(-50%) !important;
+  z-index: 3 !important;
+  pointer-events: auto !important;
+  display: block !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb svg {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-orb-particles {
+  position: absolute !important;
+  inset: -14% !important;
+  width: 128% !important;
+  height: 128% !important;
+  display: block !important;
+  pointer-events: none !important;
+  mix-blend-mode: screen;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-status:not(.pm-voice-live-text):not(.pm-voice-agent-text),
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-hint:not(.pm-voice-live-text):not(.pm-voice-agent-text) {
+  display: none !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-controls {
+  position: absolute !important;
+  left: calc(env(safe-area-inset-left) + 78px) !important;
+  right: calc(env(safe-area-inset-right) + 78px) !important;
+  bottom: calc(env(safe-area-inset-bottom) + 10px) !important;
+  z-index: 6 !important;
+  display: grid !important;
+  grid-template-columns: 42px minmax(150px, 1fr) !important;
+  gap: 10px !important;
+  align-items: center !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  pointer-events: auto !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-repeat-btn {
+  display: none !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-settings-icon {
+  display: inline-flex !important;
+  justify-self: start !important;
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 50% !important;
+  pointer-events: auto !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-mode-toggle {
+  display: flex !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  justify-self: stretch !important;
+  pointer-events: auto !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-inline .pm-voice-mode-toggle button {
+  flex: 1 1 0 !important;
+  min-width: 0 !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-camera,
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-close {
+  top: auto !important;
+  bottom: calc(env(safe-area-inset-bottom) + 8px) !important;
+  z-index: 8 !important;
+  pointer-events: auto !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-camera {
+  left: calc(env(safe-area-inset-left) + 16px) !important;
+}
+body.pm-mobile-active.pm-chat-voice-active .pm-chat-voice-close {
+  right: calc(env(safe-area-inset-right) + 16px) !important;
+}
+
+/* Chat intentionally uses one native combined Files / Photos action. */
+body.pm-mobile-active .pm-attach-sheet-panel .pm-attach-sheet-action[data-pm-attach-action="files-photos"] {
+  min-width: 190px;
+}
+
+/* Pinch zoom needs the gesture to stay inside the camera preview. */
+.pm-camera-capture,
+.pm-camera-video {
+  touch-action: none;
+}
+
+/* Inline chat voice focus/dock states. Focus starts centered with the
+   transcript hidden; dragging the orb down switches to the live transcript
+   dock above the controls. */
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-body.pm-chat-body {
+  padding-bottom: 0 !important;
+  scroll-padding-bottom: 0 !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus #pm-chat-thread {
+  visibility: hidden !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-composer.is-voice-active {
+  inset: 0 !important;
+  height: 100dvh !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0 !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-shell,
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-inline,
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-inline .pm-body,
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-inline .pm-voice-stage {
+  height: 100% !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb {
+  top: 50% !important;
+  bottom: auto !important;
+  transform: translate(-50%, calc(-50% + var(--pm-inline-orb-drag-y, 0px))) !important;
+  transition: transform .24s cubic-bezier(.22,.74,.22,1) !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb.dragging {
+  transition: none !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-inline .pm-voice-controls {
+  bottom: calc(env(safe-area-inset-bottom) + 10px) !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-camera,
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-close {
+  bottom: calc(env(safe-area-inset-bottom) + 8px) !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked #pm-chat-thread {
+  visibility: visible !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb {
+  --pm-inline-orb-drag-y: 0px;
+  position: fixed !important;
+  top: auto !important;
+  left: 50% !important;
+  bottom: calc(env(safe-area-inset-bottom) + 104px) !important;
+  width: min(36vw, 148px) !important;
+  height: min(36vw, 148px) !important;
+  transform: translate(-50%, var(--pm-inline-orb-drag-y, 0px)) !important;
+  transition: width .24s cubic-bezier(.22,.74,.22,1), height .24s cubic-bezier(.22,.74,.22,1), transform .24s cubic-bezier(.22,.74,.22,1) !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb.dragging {
+  transition: none !important;
+}
+
+/* Final viewport anchoring prevents the orb from inheriting the inline voice
+   stage's flex/scroll geometry while the transcript is being revealed. */
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb,
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb {
+  z-index: 12 !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-inline .pm-voice-mic.pm-voice-page-mic.pm-voice-particle-orb {
+  position: fixed !important;
+  top: 50% !important;
+  left: 50% !important;
+  bottom: auto !important;
+  width: min(42vw, 176px) !important;
+  height: min(42vw, 176px) !important;
+  transform: translate(-50%, calc(-50% + var(--pm-inline-orb-drag-y, 0px))) !important;
+  transition: width .24s cubic-bezier(.22,.74,.22,1), height .24s cubic-bezier(.22,.74,.22,1), transform .24s cubic-bezier(.22,.74,.22,1) !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-inline .pm-voice-controls,
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-chat-voice-inline .pm-voice-controls {
+  position: fixed !important;
+  left: calc(env(safe-area-inset-left) + 78px) !important;
+  right: calc(env(safe-area-inset-right) + 78px) !important;
+  bottom: calc(env(safe-area-inset-bottom) + 10px) !important;
+}
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-camera,
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-focus .pm-chat-voice-close,
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-chat-voice-camera,
+body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-chat-voice-close {
+  position: fixed !important;
+  top: auto !important;
+  bottom: calc(env(safe-area-inset-bottom) + 8px) !important;
 }

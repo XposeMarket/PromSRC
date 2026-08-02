@@ -370,6 +370,8 @@ export interface AgentModelDefaultTemplate {
   defaults: AgentModelDefaults;
   /** Per-slot reasoning efforts, keyed the same way as defaults. */
   reasoning?: Partial<Record<keyof AgentModelDefaults, ReasoningEffort>>;
+  /** Per-slot credential account selections, keyed the same way as defaults. */
+  accounts?: Partial<Record<keyof AgentModelDefaults, string>>;
   created_at: string;
   updated_at: string;
 }
@@ -440,6 +442,8 @@ export interface PrometheusConfig {
   agent_model_defaults?: AgentModelDefaults;
   /** Provider/model-aware reasoning effort for each agent-model default slot. */
   agent_model_default_reasoning?: Partial<Record<keyof AgentModelDefaults, ReasoningEffort>>;
+  /** Selected credential account for each routed provider/model default. */
+  agent_model_default_accounts?: Partial<Record<keyof AgentModelDefaults, string>>;
   /**
    * Named snapshots of agent_model_defaults. The gateway and AI tools use
    * these to swap full routing presets without manually changing each slot.
@@ -447,6 +451,12 @@ export interface PrometheusConfig {
   agent_model_default_templates?: AgentModelDefaultTemplate[];
   active_agent_model_default_template?: string;
   default_agent_model_template?: string;
+  voice?: {
+    agent?: {
+      provider?: 'openai_codex' | 'openai_realtime' | 'xai';
+      voice?: string;
+    };
+  };
   tools: {
     enabled: string[];
     permissions: ToolPermissions;

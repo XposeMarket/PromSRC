@@ -99,8 +99,8 @@ export function showToast(title, body, type = 'info', duration = 5000, options =
     document.head.appendChild(s);
   }
   document.body.appendChild(toast);
-  const timer = setTimeout(() => { toast.style.transition = 'opacity 0.3s'; toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, duration);
-  toast.addEventListener('mouseenter', () => clearTimeout(timer));
+  const toastDuration = Math.max(0, Math.min(5000, Number.isFinite(Number(duration)) ? Number(duration) : 5000));
+  setTimeout(() => { toast.style.transition = 'opacity 0.3s'; toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, toastDuration);
   toast.querySelector('.__sc-toast-close')?.addEventListener('click', () => toast.remove());
 }
 

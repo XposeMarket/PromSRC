@@ -64,7 +64,7 @@ The desktop Settings modal selects among these tabs:
 | **Credentials** | Provider authentication and credentialed-model routing status, including the supported OAuth/manual connection paths. |
 | **Security** | Gateway security and approval-related settings exposed through the authenticated settings routes. |
 | **Migration** | Discovery, preview, import, conflict handling, and reports for supported legacy/user-data sources. |
-| **Models** | Primary/provider model settings, provider model discovery/testing, agent-model defaults, and reusable default templates. |
+| **Models** | Primary/provider model settings, provider model discovery/testing, agent-model defaults with per-default reasoning and multi-account routing, the Voice Agent provider/voice default, and reusable default templates. |
 | **Agents** | Agent definitions, their model assignments, prompts, workspaces, and per-agent heartbeat-related configuration. |
 | **Channels** | Delivery/channel status and its saved configuration. |
 | **Integrations** | Webhooks and manually configured MCP servers.  It is distinct from the Connections panel. |
@@ -84,6 +84,12 @@ agent-model-default templates.  OpenAI/Codex, xAI, Anthropic, and X API
 controls have separate status/start/poll/manual/disconnect endpoints where
 their authentication systems differ.  In particular, X API user-context OAuth
 is separate from xAI/Grok model OAuth.
+
+For each agent-model default, the API persists provider/model, provider-aware
+reasoning, and an optional selected credential account.  The UI offers that
+account picker only when the selected provider has multiple connected accounts.
+The same Models payload exposes the separate Voice Agent default for the
+supported realtime routes (Codex Voice/Live, OpenAI Realtime, and xAI).
 
 The session controls are also the settings surface for context management:
 

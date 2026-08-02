@@ -323,6 +323,7 @@ export const PrometheusConfigSchema = z.object({
   }).optional(),
 
   agent_model_default_reasoning: z.record(z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).optional(),
+  agent_model_default_accounts: z.record(z.string()).optional(),
 
   agent_model_default_templates: z.array(z.object({
     id: z.string(),
@@ -348,6 +349,7 @@ export const PrometheusConfigSchema = z.object({
       coordinator:                   z.string().optional(),
     }).optional().default({}),
     reasoning: z.record(z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).optional().default({}),
+    accounts: z.record(z.string()).optional().default({}),
     created_at: z.string().optional(),
     updated_at: z.string().optional(),
   })).optional(),
@@ -446,6 +448,12 @@ export const PrometheusConfigSchema = z.object({
   }).optional(),
 
   llm: LLMConfigSchema.optional(),
+  voice: z.object({
+    agent: z.object({
+      provider: z.enum(['openai_codex', 'openai_realtime', 'xai']).optional(),
+      voice: z.string().max(80).optional(),
+    }).optional(),
+  }).optional(),
   image_generation: ImageGenerationConfigSchema.optional(),
   video_generation: VideoGenerationConfigSchema.optional(),
 

@@ -68,6 +68,15 @@ Provider/model settings surfaces:
 - `GET/POST /api/settings/agent-model-defaults`
 - `POST /api/models/test`
 
+`/api/settings/agent-model-defaults` also carries the provider-aware routing
+metadata for those defaults: `reasoning`, selected credential `accounts`, and
+the main Voice Agent default (`voiceAgent`).  An account is persisted only for
+a default that has a provider/model route; runtime selection captures that
+account with the route instead of mutating the global provider configuration.
+The Voice Agent default is `{ provider, voice }` under `voice.agent`; its
+supported realtime routes are `openai_codex` (Codex Voice/Live),
+`openai_realtime`, and `xai`.
+
 Agent/model default keys currently supported:
 
 - `main_chat`
@@ -97,6 +106,14 @@ Other current model facts:
 - OpenAI, OpenAI Codex, and Perplexity provider config support `reasoning_effort`
 - validated reasoning efforts include `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; GPT-5.6 introduces `max` reasoning effort, while older providers/models may normalize or ignore unsupported values.
 - Anthropic provider config supports `extended_thinking` and `thinking_budget`
+- In the Models tab, an agent-default provider with more than one connected
+  credential account displays an account selector immediately above its
+  provider selector.  The selection is saved in
+  `agent_model_default_accounts` and follows the selected default route.
+- The Models tab also stores a Voice Agent provider and voice beneath Main Chat.
+  Codex Voice/Live reads its active AVAS voice list from `/api/realtime/status`
+  when that bridge is available, with a fixed offline fallback list so an
+  existing default remains editable.
 
 Provider-aware context budgeting lives in `src/gateway/context/model-context.ts`.
 
