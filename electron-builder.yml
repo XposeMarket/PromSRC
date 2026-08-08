@@ -9,6 +9,7 @@ icon: assets/Prometheus.ico
 files:
   - electron/**/*
   - src/**/*
+  - dist/**/*
   - web-ui/**/*
   - assets/**/*
   - extensions/prometheus-personal-chrome/**/*
@@ -57,7 +58,6 @@ files:
   # Exclude heavy/unnecessary stuff
   - "!node_modules/.cache/**/*"
   - "!**/*.map"
-  - "!dist/**/*"
   - "!.git/**/*"
   - "!**/*.log"
 

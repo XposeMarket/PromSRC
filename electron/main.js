@@ -58,7 +58,12 @@ const IS_PUBLIC_BUILD = String(process.env.PROMETHEUS_PUBLIC_BUILD || PACKAGE_JS
 const IS_PACKAGED_RUNTIME = app.isPackaged;
 
 function getPackagedAppRoot() {
-  return path.join(process.resourcesPath, 'app.asar');
+  // Public builds use app.asar, while the unsigned tester build intentionally
+  // uses an unpacked Resources/app directory. Resolve the actual layout so
+  // both distribution paths start the same compiled gateway entrypoint.
+  const asarRoot = path.join(process.resourcesPath, 'app.asar');
+  const unpackedRoot = path.join(process.resourcesPath, 'app');
+  return fs.existsSync(asarRoot) ? asarRoot : unpackedRoot;
 }
 
 function getGatewayEntryPath() {
