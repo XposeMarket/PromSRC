@@ -690,6 +690,8 @@ const chatContextWindowState = {
   data: null,
   planFetchAt: 0,
   planData: null,
+  planProviderId: '',
+  planAccountId: '',
 };
 
 function resetChatContextWindowLiveTurn(sessionId) {
@@ -907,6 +909,15 @@ function applyChatContextWindowLiveOverlay(data) {
   const rows = Array.isArray(currentState.rows)
     ? currentState.rows.map((row) => ({ ...row, children: Array.isArray(row.children) ? row.children.map((child) => ({ ...child })) : row.children }))
     : [];
+  // Shrink free-space so the ring/total climb during the live turn instead of
+  // waiting for the next server snapshot (matches mobile behavior).
+  const freeIndex = rows.findIndex((row) => row?.id === 'free_space');
+  if (freeIndex >= 0) {
+    rows[freeIndex] = {
+      ...rows[freeIndex],
+      tokens: Math.max(0, Number(rows[freeIndex].tokens || 0) - liveTokens),
+    };
+  }
   const toolChildren = Array.from(live.tools?.values?.() || [])
     .sort((a, b) => Number(b.resultTokens || 0) - Number(a.resultTokens || 0))
     .slice(0, 12)
@@ -915,28 +926,32 @@ function applyChatContextWindowLiveOverlay(data) {
       label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}${formatContextToolDurationSuffix(tool)}`,
       tokens: Math.max(0, Number(tool.resultTokens || 0)),
       active: true,
-      includedInContext: false,
-      outOfBand: true,
-      percentLabel: 'pending',
-      estimated: false,
+      includedInContext: true,
+      percentBasis: 'window',
+      estimated: true,
     }));
   const liveRow = {
     id: 'live_tool_results',
-    label: `Live tool output (awaiting refresh)${live.toolDurationMsTotal ? ` · ${formatContextDurationLabel(live.toolDurationMsTotal)} total` : ''}`,
+    label: `Live tool results${live.toolDurationMsTotal ? ` · ${formatContextDurationLabel(live.toolDurationMsTotal)} total` : ''}`,
     tokens: liveTokens,
     active: true,
-    includedInContext: false,
-    outOfBand: true,
-    percentLabel: 'pending',
-    estimated: false,
+    includedInContext: true,
+    percentBasis: 'window',
+    estimated: true,
     children: toolChildren,
   };
   const insertAt = rows.findIndex((row) => row?.id === 'mcp_tools');
   if (insertAt >= 0) rows.splice(insertAt, 0, liveRow);
   else rows.push(liveRow);
+  const overlaidState = {
+    ...currentState,
+    currentStateTokens: Math.max(0, Number(currentState.currentStateTokens || data.currentStateTokens || 0)) + liveTokens,
+    rows,
+  };
   return {
     ...data,
-    currentState: { ...currentState, rows },
+    currentState: overlaidState,
+    currentStateTokens: overlaidState.currentStateTokens,
   };
 }
 
@@ -1086,15 +1101,42 @@ function ccwFmtReset(iso) {
   return `resets in ${days}d`;
 }
 
+function getChatContextPlanProviderId() {
+  const route = (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
+    ? window._activeChatModelRoute?.effective
+    : null;
+  const fromRoute = String(route?.providerId || route?.provider || '').trim().toLowerCase();
+  if (fromRoute) return fromRoute;
+  const modelRef = String(route?.modelRef || window._activeModel || '').trim();
+  const slash = modelRef.indexOf('/');
+  if (slash > 0) return modelRef.slice(0, slash).toLowerCase();
+  return String(window._activeProvider || '').trim().toLowerCase();
+}
+
+function getChatContextPlanAccountId() {
+  const route = (String(window._activeChatModelRouteSessionId || '') === String(window.activeChatSessionId || ''))
+    ? window._activeChatModelRoute?.effective
+    : null;
+  return String(route?.accountId || route?.account_id || window._activeAccountId || '').trim();
+}
+
 function renderChatContextPlanUsage() {
   const wrap = document.getElementById('chat-context-window-plan');
   const body = document.getElementById('chat-context-window-plan-body');
   if (!wrap || !body) return;
   const result = chatContextWindowState.planData;
-  const providerId = String(window._activeProvider || '').toLowerCase();
+  const providerId = getChatContextPlanProviderId();
+  const accountId = getChatContextPlanAccountId();
   const providers = (result && Array.isArray(result.providers)) ? result.providers : [];
-  // Show the plan usage for the provider backing the current chat model.
-  const prov = providers.find((p) => String(p.provider).toLowerCase() === providerId);
+  // Prefer the provider/account backing the active chat model route, not a
+  // stale global status provider (that was why Grok still showed OpenAI weekly).
+  const matches = providers.filter((p) => String(p.provider || '').toLowerCase() === providerId);
+  const prov = (accountId
+    ? matches.find((p) => String(p.account_id || p.accountId || '') === accountId)
+    : null)
+    || matches.find((p) => Array.isArray(p.windows) && p.windows.length)
+    || matches[0]
+    || null;
 
   if (!prov) { wrap.hidden = true; body.innerHTML = ''; return; }
 
@@ -1112,7 +1154,6 @@ function renderChatContextPlanUsage() {
             <span class="ccw-plan-gauge-pct">${left}% left</span>
           </div>
           <div class="ccw-plan-gauge-track"><div class="ccw-plan-gauge-fill ${ccwUsageGaugeClass(pct)}" style="width:${pct}%"></div></div>
-          ${w.detail ? `<div class="ccw-plan-gauge-reset">${escHtml(w.detail)}</div>` : ''}
         </div>`;
     }).join('');
   }
@@ -1132,7 +1173,11 @@ function renderChatContextPlanUsage() {
 
 async function refreshChatContextPlanUsage(force = false) {
   const now = Date.now();
-  if (!force && chatContextWindowState.planData && now - chatContextWindowState.planFetchAt < 60000) {
+  const providerId = getChatContextPlanProviderId();
+  const accountId = getChatContextPlanAccountId();
+  const providerChanged = providerId && providerId !== String(chatContextWindowState.planProviderId || '');
+  const accountChanged = accountId && accountId !== String(chatContextWindowState.planAccountId || '');
+  if (!force && !providerChanged && !accountChanged && chatContextWindowState.planData && now - chatContextWindowState.planFetchAt < 60000) {
     renderChatContextPlanUsage();
     return;
   }
@@ -1141,6 +1186,8 @@ async function refreshChatContextPlanUsage(force = false) {
     if (data && data.success !== false) {
       chatContextWindowState.planData = data;
       chatContextWindowState.planFetchAt = Date.now();
+      chatContextWindowState.planProviderId = providerId;
+      chatContextWindowState.planAccountId = accountId;
     }
   } catch { /* leave previous planData */ }
   renderChatContextPlanUsage();
@@ -1184,7 +1231,17 @@ if (!window.__promChatContextWindowHandlersInstalled) {
       setDesktopVoiceRoomPopoverOpen(false);
     }
   });
-  setInterval(() => refreshChatContextWindow().catch(() => {}), 15000);
+  window.addEventListener('pm-model-changed', () => {
+    scheduleChatContextWindowRefresh(150);
+    refreshChatContextPlanUsage(true).catch(() => {});
+  });
+  setInterval(() => {
+    refreshChatContextWindow().catch(() => {});
+    if (chatContextWindowState.open) refreshChatContextPlanUsage().catch(() => {});
+  }, 15000);
+  // Expose for status/model route refresh paths in index.html.
+  window.refreshChatContextWindow = refreshChatContextWindow;
+  window.refreshChatContextPlanUsage = refreshChatContextPlanUsage;
 }
 
 function makeEmptyStreamState() {
@@ -15080,6 +15137,15 @@ async function sendChat(queuedMessage = null, options = {}) {
     : { key: '', at: Date.now() };
   if (!sendLock) return;
   const clientRequestId = String(options.clientRequestId || '').trim() || newChatClientRequestId(thisSessionId);
+  const markChatPerformance = (name, details = {}) => {
+    try {
+      window.__PROM_PERF_MARK?.(name, {
+        clientRequestId,
+        ...details,
+      });
+    } catch {}
+  };
+  markChatPerformance('chat_submit');
   rememberLocalMainChatRequest(thisSessionId, clientRequestId);
   const thisSession = getChatSessionById(thisSessionId);
   const isVoiceRoomComposerTurn = String(thisSession?.source || thisSession?.channel || '') === 'voice_room'
@@ -15164,12 +15230,21 @@ async function sendChat(queuedMessage = null, options = {}) {
     }
   }
   let streamState = getSessionStreamState(thisSessionId) || resetSessionStreamState(thisSessionId);
+  let streamTraceId = '';
+  let firstSseByteMarked = false;
+  let firstTokenReceivedMarked = false;
+  let firstVisibleTokenMarked = false;
   const addProcessEntry = (type, content, extra) => addSessionProcessEntry(thisSessionId, type, content, extra);
   const renderIfViewingThisSession = () => {
     if (!isSessionVisibleInChatSurface(thisSessionId)) return;
     const beforeTextLen = String(document.getElementById('streaming-text-content')?.textContent || '').length;
     if (window.activeChatSessionId === thisSessionId) applyStreamStateToWindow(thisSessionId);
     renderStreamingChatUpdate(thisSessionId);
+    const afterTextLen = String(document.getElementById('streaming-text-content')?.textContent || '').length;
+    if (!firstVisibleTokenMarked && afterTextLen > beforeTextLen && afterTextLen > 0) {
+      firstVisibleTokenMarked = true;
+      markChatPerformance('chat_first_visible_token', { traceId: streamTraceId, size: afterTextLen });
+    }
     markLiveStreamMotionAfterRender(thisSessionId, beforeTextLen);
   };
   const pushProgressLine = (line) => {
@@ -15765,6 +15840,9 @@ async function sendChat(queuedMessage = null, options = {}) {
       throw new Error(`HTTP ${res.status}`);
     }
 
+    streamTraceId = String(res.headers.get('x-prometheus-trace-id') || '').trim().slice(0, 160);
+    markChatPerformance('chat_request_accepted', { traceId: streamTraceId });
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -15772,6 +15850,11 @@ async function sendChat(queuedMessage = null, options = {}) {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+
+      if (!firstSseByteMarked && value?.byteLength) {
+        firstSseByteMarked = true;
+        markChatPerformance('chat_sse_first_byte', { traceId: streamTraceId, bytes: value.byteLength });
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
@@ -15781,6 +15864,13 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        if (!line.startsWith('data: ')) continue;
 	        let event;
 	        try { event = JSON.parse(line.slice(6)); } catch { continue; }
+	        if (!streamTraceId && event.traceId) streamTraceId = String(event.traceId).trim().slice(0, 160);
+	        if (event.type === 'latency_mark' && event.stage) {
+	          markChatPerformance(`chat_latency_${event.stage}`, {
+	            traceId: streamTraceId,
+	            elapsedMs: event.elapsedMs,
+	          });
+	        }
 	        const eventSeq = Number(event.seq);
 	        const eventStreamId = String(event.streamId || '').trim();
 	        if (Number.isFinite(eventSeq)) {
@@ -15793,6 +15883,9 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        }
 	        if (event.type === 'final') sawFinalStreamEvent = true;
 	        if (event.type === 'done' || event.type === 'error') sawTerminalStreamEvent = true;
+	        if (event.type === 'done' || event.type === 'error') {
+	          markChatPerformance(`chat_${event.type}`, { traceId: streamTraceId });
+	        }
 	        const activeBeforeStreamEvent = window.activeChatSessionId;
 	        const isReasoningCompanionEvent =
 	          event.type === 'model_stream_event'
@@ -15848,6 +15941,10 @@ async function sendChat(queuedMessage = null, options = {}) {
           case 'token': {
             const chunk = String(event.text || '');
             if (chunk) {
+              if (!firstTokenReceivedMarked) {
+                firstTokenReceivedMarked = true;
+                markChatPerformance('chat_first_token_received', { traceId: streamTraceId, size: chunk.length });
+              }
               if (voiceLatencyTurnStartedAt && !voiceLatencyFirstTokenLogged) {
                 voiceLatencyFirstTokenLogged = true;
                 logDesktopVoiceLatency(thisSessionId, 'worker first token', voiceLatencyTurnStartedAt, { textLen: chunk.length });
@@ -40153,7 +40250,15 @@ function chatPendingFileKey(fileLike) {
   const file = fileLike?.file || fileLike || {};
   const path = String(file?.path || fileLike?.path || '').trim().toLowerCase();
   if (path) return `path:${path}`;
-  return `file:${String(file?.name || fileLike?.name || '').trim().toLowerCase()}:${Number(file?.size || fileLike?.size || 0)}:${String(file?.type || fileLike?.type || '').toLowerCase()}`;
+  const size = Number(file?.size || fileLike?.size || 0);
+  const type = String(file?.type || fileLike?.type || '').toLowerCase();
+  const name = String(file?.name || fileLike?.name || '').trim().toLowerCase();
+  // Pasted screenshots often get unique generated names a few ms apart; size+type
+  // is the stable identity for clipboard blobs.
+  if (size > 0 && (/^image\//.test(type) || /^video\//.test(type) || /^pasted-/.test(name))) {
+    return `blob:${size}:${type || 'application/octet-stream'}`;
+  }
+  return `file:${name}:${size}:${type}`;
 }
 
 function syncChatAttachmentStackVisibility() {
@@ -40377,16 +40482,35 @@ function getClipboardAttachmentFiles(clipboardData) {
   if (!clipboardData) return [];
   const files = [];
   const seen = new Set();
+  // Prefer size+type for clipboard images: Chromium often exposes the same
+  // screenshot via both .files and .items, and generated names differ by ms.
+  const clipboardKey = (file) => {
+    const size = Number(file?.size || 0);
+    const type = String(file?.type || '').toLowerCase();
+    const name = String(file?.name || '').trim().toLowerCase();
+    if (size > 0) return `blob:${size}:${type || 'application/octet-stream'}`;
+    return `name:${name}:${type}`;
+  };
   const addFile = (file) => {
+    if (!file) return;
+    const key = clipboardKey(file);
+    if (seen.has(key)) return;
     const normalized = normalizePastedAttachmentFile(file, files.length);
     if (!normalized) return;
-    const key = `${normalized.name}:${normalized.size}:${normalized.type}`;
-    if (seen.has(key)) return;
     seen.add(key);
+    // Also mark the normalized name key so stageFiles can't re-add a twin.
+    seen.add(clipboardKey(normalized));
     files.push(normalized);
   };
 
-  Array.from(clipboardData.files || []).forEach(addFile);
+  const fileList = Array.from(clipboardData.files || []).filter(Boolean);
+  if (fileList.length) {
+    // When FileList is populated it is authoritative. Reading items too is what
+    // double-staged the same screenshot on desktop paste.
+    fileList.forEach(addFile);
+    return files;
+  }
+
   Array.from(clipboardData.items || []).forEach((item) => {
     if (!item || item.kind !== 'file') return;
     try { addFile(item.getAsFile()); } catch {}
@@ -40447,6 +40571,8 @@ function isNonChatEditableTarget(target) {
 
 function handleChatPaste(event) {
   if (!isChatPasteTarget(event.target) || isNonChatEditableTarget(event.target)) return;
+  // Guard against duplicate capture/bubble listeners or Electron double-dispatch.
+  if (event.__promChatPasteHandled) return;
   const files = getClipboardAttachmentFiles(event.clipboardData);
   const pastedText = event.clipboardData?.getData?.('text/plain') || '';
   const stageClipboardFiles = (incoming) => {
@@ -40465,6 +40591,7 @@ function handleChatPaste(event) {
   if (files.length) {
     // Once a file is present, it is the user's attachment intent even if a
     // browser also supplies a text/html representation of that screenshot.
+    event.__promChatPasteHandled = true;
     event.preventDefault();
     event.stopImmediatePropagation();
     stageClipboardFiles(files);
@@ -40475,6 +40602,7 @@ function handleChatPaste(event) {
   // no text to paste, claim the paste and ask the secure async Clipboard API
   // for an image before the browser silently discards it.
   if (pastedText.trim()) return;
+  event.__promChatPasteHandled = true;
   event.preventDefault();
   event.stopImmediatePropagation();
   getBrowserClipboardImageFiles().then((fallbackFiles) => {

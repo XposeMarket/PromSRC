@@ -1,5 +1,7 @@
+import './performance.js';
+
 /**
- * app.js - F1 Scaffold
+ * app.js — F1 Scaffold
  *
  * Application init: theme, boot sequence, setMode page switching.
  *
@@ -361,10 +363,23 @@ export function setSidebarSegTab(tab) {
   window.sidebarTab = tab;
 
   // Load content for the selected tab
-  if (tab === 'projects' && typeof window.loadProjects === 'function') {
-    window.loadProjects();
-  } else if (tab === 'projects' && typeof window.renderProjectsList === 'function') {
-    window.renderProjectsList();
+  if (tab === 'projects') {
+    // Projects are not part of the critical chat boot path. Load the controller
+    // only when the user opens the tab, then fetch once the module has exported
+    // its loader. This keeps project work out of every desktop startup.
+    const loadProjectsPage = async () => {
+      if (typeof window.loadProjects !== 'function') {
+        await import('./pages/ProjectsPage.js');
+      }
+      if (typeof window.loadProjects === 'function') {
+        await window.loadProjects();
+      } else if (typeof window.renderProjectsList === 'function') {
+        window.renderProjectsList();
+      }
+    };
+    loadProjectsPage().catch((error) => {
+      console.warn('[projects] Failed to load projects page:', error);
+    });
   } else if (tab === 'skills' && typeof window.loadInstalledSkills === 'function') {
     window.loadInstalledSkills();
   }

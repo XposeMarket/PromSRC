@@ -6211,13 +6211,10 @@ window.scheduleSessionListRefresh = scheduleSessionListRefresh;
 function renderChatSessionCard(s) {
   const isPinned = _pinnedChats.includes(s.id);
   const searchResult = getSessionSearchResult(s.id);
-  const originLabel = _getSessionOriginLabel(s);
   const projectLabel = s.projectName || searchResult?.projectName || '';
-  const sourceBadge = projectLabel
-    ? `Project: ${projectLabel}`
-    : originLabel
-      ? `From: ${originLabel}`
-      : '';
+  // Origin channel (Desktop app / Telegram / Mobile) is intentionally not shown
+  // in the sessions list — keep Project badges only.
+  const sourceBadge = projectLabel ? `Project: ${projectLabel}` : '';
   const openHandler = s._searchOnly
     ? `openSearchSession('${s.id}')`
     : s._serverOnlyTerminal
@@ -8454,7 +8451,6 @@ let _errBackdrop = null;
     './src/api.js',
     './src/utils.js',
     './src/ws.js',
-    './src/pages/ProjectsPage.js',
     './src/app.js?v=desktop-chat-welcome-cinzel-v4',
   ];
   const mobileSurface = document.body.classList.contains('pm-mobile-active')
@@ -8584,9 +8580,6 @@ let _errBackdrop = null;
       if (el && data.email) el.textContent = data.email;
     }).catch(() => {});
   };
-
-  // Refresh account display once gateway is ready
-  setTimeout(() => window.refreshAccountDisplay?.(), 2000);
 
   // Right panel resize handler (drag left edge to widen)
   (function() {

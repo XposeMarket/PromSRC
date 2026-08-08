@@ -12,6 +12,9 @@ oss-agents/
 workspace/oss agents/
 workspace/oss-agents/
 workspace/audit/
+workspace/Brain/
+workspace/memory/
+workspace/workspace/memory/
 workspace/downloads/
 workspace/uploads/
 workspace/video-debug/

@@ -27,7 +27,7 @@ import {
 } from '../config/config';
 import { getVault } from '../security/vault';
 import { getOllamaClient } from '../agents/ollama-client';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, flushAllSessions, flushPendingChatAuditWrites, getChatAuditPersistenceStatus, getSessionPersistenceStatus } from './session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, flushAllSessions, flushPendingChatAuditWrites, getChatAuditPersistenceStatus, getSessionPersistenceStatus, getSessionCacheStatus } from './session';
 import { compactRuntimeStateOnStartup, flushLiveRuntimePersistence, getLiveRuntimePersistenceStatus, warmLiveRuntimePersistence } from './live-runtime-registry';
 import { hookBus } from './hooks';
 import { loadWorkspaceHooks } from './hook-loader';
@@ -769,6 +769,7 @@ app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => 
       modelCallWorkers: getModelCallWorkerPoolStatus(),
       postTurn: getPostTurnQueueStatus(),
       sessionPersistence: getSessionPersistenceStatus(),
+      sessionCache: getSessionCacheStatus(),
       chatAuditPersistence: getChatAuditPersistenceStatus(),
       runtimePersistence: getLiveRuntimePersistenceStatus(),
     },
@@ -860,6 +861,7 @@ const getGatewayQueueStatus = () => ({
   modelCallWorkers: getModelCallWorkerPoolStatus(),
   postTurn: getPostTurnQueueStatus(),
   sessionPersistence: getSessionPersistenceStatus(),
+  sessionCache: getSessionCacheStatus(),
   chatAuditPersistence: getChatAuditPersistenceStatus(),
   runtimePersistence: getLiveRuntimePersistenceStatus(),
 });

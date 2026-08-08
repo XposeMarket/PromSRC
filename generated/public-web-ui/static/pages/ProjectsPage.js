@@ -54,9 +54,6 @@ function initialiseProjectSidebar() {
       else if (action === 'delete-session' && sessionId) void window.confirmDeleteProjectSession(projectId, sessionId, String(target.dataset.sessionTitle || ''));
     });
   }
-  setTimeout(() => {
-    loadProjects();
-  }, 400);
 }
 
 if (document.readyState === 'loading') {

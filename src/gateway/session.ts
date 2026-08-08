@@ -15,6 +15,7 @@ import { getUsageCalibration } from '../providers/model-usage';
 import { getRecentToolStateSummaryForContext as readRecentToolStateSummaryForContext } from './tool-observations';
 import { hookBus } from './hooks';
 import { appendContinuityEvent, appendContinuityMessage } from './audit/continuity';
+import { listLiveRuntimes } from './live-runtime-registry';
 import {
   formatTurnContextPacketsForPrompt,
   mergeTurnContextPackets,
@@ -397,6 +398,13 @@ interface SessionIndex {
 }
 
 const sessions = new Map<string, Session>();
+// Session histories are durable on disk, but the old cache retained every
+// session ever touched by the process. Long-lived gateways can therefore grow
+// toward the full on-disk transcript corpus. Keep a bounded hot cache and
+// protect sessions that are actively running or awaiting persistence.
+const SESSION_CACHE_MAX_ENTRIES = 256;
+const SESSION_CACHE_IDLE_MS = 30 * 60 * 1000;
+const sessionCacheAccessAt = new Map<string, number>();
 export const PRE_COMPACTION_MEMORY_FLUSH_PROMPT = [
   'SYSTEM: Context is getting long. Before we continue, do this NOW (be quick):',
   '1. memory_write — save new facts/preferences/rules to the correct file: user, soul, or memory',
@@ -423,6 +431,51 @@ let sessionIndexRevision = 0;
 const sessionMutationScopes = new Map<string, SessionMutationScope>();
 let sessionIndexCache: SessionIndex | null = null;
 let sessionIndexCommandTitleRebuildAttempted = false;
+
+function touchSessionCache(sessionId: string): void {
+  sessionCacheAccessAt.set(sessionId, Date.now());
+}
+
+function deleteCachedSession(sessionId: string): void {
+  sessions.delete(sessionId);
+  sessionCacheAccessAt.delete(sessionId);
+}
+
+function pruneSessionCache(): void {
+  if (sessions.size <= SESSION_CACHE_MAX_ENTRIES) return;
+  const now = Date.now();
+  const liveSessionIds = new Set(
+    listLiveRuntimes()
+      .map((runtime) => String(runtime.sessionId || '').trim())
+      .filter(Boolean),
+  );
+  const candidates = [...sessions.entries()]
+    .filter(([id, session]) => (
+      !liveSessionIds.has(id)
+      && !sessionSaveTimers.has(id)
+      && !pendingSessionSnapshots.has(id)
+      && !sessionMutationScopes.has(id)
+      && now - Number(session.lastActiveAt || 0) >= SESSION_CACHE_IDLE_MS
+    ))
+    .sort((a, b) => Number(sessionCacheAccessAt.get(a[0]) || 0) - Number(sessionCacheAccessAt.get(b[0]) || 0));
+  const target = Math.floor(SESSION_CACHE_MAX_ENTRIES * 0.9);
+  for (const [id] of candidates) {
+    if (sessions.size <= target) break;
+    deleteCachedSession(id);
+  }
+}
+
+export function getSessionCacheStatus(): {
+  loaded: number;
+  maxEntries: number;
+  idleMs: number;
+} {
+  return {
+    loaded: sessions.size,
+    maxEntries: SESSION_CACHE_MAX_ENTRIES,
+    idleMs: SESSION_CACHE_IDLE_MS,
+  };
+}
 
 const SESSION_DIR = (() => {
   try {
@@ -2103,7 +2156,10 @@ export interface AddMessageResult {
 export function getSession(id: string): Session {
   const sessionId = assertSafeStorageId(id, 'session id');
   if (sessions.has(sessionId)) {
-    return sessions.get(sessionId)!;
+    const cached = sessions.get(sessionId)!;
+    touchSessionCache(sessionId);
+    pruneSessionCache();
+    return cached;
   }
 
   ensureSessionDir();
@@ -2169,6 +2225,8 @@ export function getSession(id: string): Session {
         chatModelRoute: normalizeChatModelRoute(data.chatModelRoute),
       };
       sessions.set(sessionId, session);
+      touchSessionCache(sessionId);
+      pruneSessionCache();
       return session;
     } catch {
       // Corrupted file, create new session
@@ -2209,6 +2267,8 @@ export function getSession(id: string): Session {
     mainChatGoalHistory: [],
   };
   sessions.set(sessionId, session);
+  touchSessionCache(sessionId);
+  pruneSessionCache();
   saveSession(sessionId);
   return session;
 }
@@ -2836,7 +2896,7 @@ export function markSessionReadForMobile(id: string, readAt: number = Date.now()
 
 export function deleteSession(id: string): boolean {
   const sessionId = assertSafeStorageId(id, 'session id');
-  sessions.delete(sessionId);
+  deleteCachedSession(sessionId);
   const existing = sessionSaveTimers.get(sessionId);
   if (existing) {
     clearTimeout(existing);
@@ -2983,7 +3043,7 @@ export function cleanupSessions(nowMs: number = Date.now()): { deleted: number; 
       if (ageMs < SESSION_CLEANUP_MAX_AGE_MS) continue;
       try {
         fs.unlinkSync(filePath);
-        sessions.delete(id);
+        deleteCachedSession(id);
         removeSessionSummary(id);
         deleted++;
       } catch {

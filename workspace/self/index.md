@@ -57,6 +57,7 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 42 | Stage 5 Deterministic Skill Routing (inventory, relevance decisions, discovery, rollback, benchmark) | [28-deterministic-skill-routing.md](28-deterministic-skill-routing.md) |
 | 43 | Canonical Agent Identity and Memory Runtime (main, manager, standalone/team agents, compatibility) | [29-agent-identity-and-memory-runtime.md](29-agent-identity-and-memory-runtime.md) |
 | 44 | Gateway and Runtime Process Isolation (maintenance/model/retention workers, durable journal, bounded delivery, exact remaining full-turn gap) | [30-runtime-process-isolation.md](30-runtime-process-isolation.md) |
+| 45 | Brain Thought Six-Hour Activity Package (canonical stores, direct prompt contract, provenance, redaction, continuations, measurements) | [31-thought-activity-package.md](31-thought-activity-package.md) |
 | Feature Index | Product/feature catalog for copy, launch posts, onboarding, and capability lookup | [feature-index/README.md](feature-index/README.md) |
 
 Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realtime voice-agent context for routing and spoken behavior notes without loading those notes into the main worker prompt.

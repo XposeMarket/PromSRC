@@ -28,6 +28,7 @@ Use it to create product documents, onboarding, launch material, comparison copy
 | [20-operational-systems.md](20-operational-systems.md) | Governed source edits and proposals, evidence/diagnostics, delivery/artifacts, Browser Teach/composites/Brain, repo/deployment/update, and media flows |
 | [21-every-system-map.md](21-every-system-map.md) | Start-here map of all Prometheus subsystems, system boundaries, ownership, and links to the exact page/tool/system reference |
 | [22-gateway-streams-audit-and-context.md](22-gateway-streams-audit-and-context.md) | Gateway turn flow, tool stream event types and UI rendering, audit mirror, recovery discipline, context-window calculations, and compaction UI |
+| [../31-thought-activity-package.md](../31-thought-activity-package.md) | Brain Thought’s canonical six-hour activity package, direct prompt contract, event coverage, redaction, continuations, and local measurements |
 | [pages/](pages/README.md) | Individual page references with state, controls, data flow, process logs, approvals, and recovery behavior |
 | [mobile-pages/](mobile-pages/README.md) | Individual paired-mobile route references, including voice, recovery, team/agent tabs, settings reuse, and Creative routing status |
 

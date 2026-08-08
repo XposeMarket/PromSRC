@@ -42,6 +42,12 @@ Prometheus currently builds the live prompt from these layers:
 
 Recent tool context is no longer a raw "last 5 tool logs" dump in the main chat path. `chat.router.ts`, `boot.ts`, `main-chat-goals.ts`, and the Brain runner now prefer structured `[RECENT_TOOL_OBSERVATIONS]` generated from `src/gateway/tool-observations.ts`. The legacy `getRecentToolLog(...)` still exists in `session.ts` as a fallback when no observation records exist, but new tool results are persisted as observations and then budget-formatted for future turns.
 
+### Brain Thought activity context (2026-08-08)
+
+Brain Thought has a dedicated pre-model context lane. `src/gateway/brain/activity-package.ts` reads canonical session/task/run/tool/browser/file/agent/runtime/event stores for the exact UTC half-open six-hour window and produces a redacted structured package with stable IDs, provenance, source coverage, unresolved work, and measured size. `brain-runner.ts` injects that package directly into `_buildThoughtPromptV2` before `handleChat(...)` runs.
+
+The Thought prompt treats the package as authoritative for covered activity and does not reconstruct it through `workspace/audit` or search/list tools. If the package is larger than the inline budget, it includes direct continuation file refs and an explicit manifest; source errors, mtime shortcuts, pagination caps, and unresolved-work caps are visible in `completeness` and `sourceCoverage`. This lane is limited to Brain Thought and does not change normal interactive prompt assembly. Raw credentials, tokens, cookies, provider payloads, binary/screenshot data, and private reasoning remain excluded.
+
 ### Bounded working context and reasoning continuity (2026-08-01)
 
 `src/gateway/context/turn-context-packet.ts` is the companion lane to tool observations. It retains at most five recent rich-turn packets in `Session.workingContextPackets`. Each packet may carry the request, safe provider reasoning/decision summary, findings, completed actions, compact tool/progress state, uncertainties, pending work, and a continue-from-here instruction. A provider summary by itself does not create a packet for an otherwise simple turn.

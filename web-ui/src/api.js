@@ -50,15 +50,23 @@ function shouldRetryApiRequest(err) {
   );
 }
 
-/**
- * Fetch wrapper with JSON content-type and error handling.
- * Returns parsed JSON response.
- */
-export async function api(path, opts = {}) {
+// Coalesce identical in-flight GETs.  The desktop shell has several legacy
+// loaders that can legitimately ask for the same read while a page module is
+// still booting.  Sharing only the in-flight promise avoids stale caching and
+// leaves mutations and explicit no-store reads untouched.
+const inFlightGetRequests = new Map();
+
+function getDedupeKey(path, opts) {
+  const method = String(opts?.method || 'GET').toUpperCase();
+  if (method !== 'GET' || opts?.signal || opts?.cache === 'no-store' || opts?.dedupe === false) return '';
+  return String(path || '');
+}
+
+async function apiRequest(path, opts = {}) {
   const candidates = buildApiCandidateUrls(path);
   let lastError = null;
   const timeoutMs = Number(opts.timeoutMs || 10000);
-  const { timeoutMs: _timeoutMs, ...fetchOpts } = opts;
+  const { timeoutMs: _timeoutMs, dedupe: _dedupe, ...fetchOpts } = opts;
   const body = fetchOpts.body;
   const shouldStringifyBody = body
     && typeof body === 'object'
@@ -99,6 +107,22 @@ export async function api(path, opts = {}) {
   }
 
   throw lastError || new Error('Request failed');
+}
+
+/**
+ * Fetch wrapper with JSON content-type and error handling.
+ * Returns parsed JSON response.
+ */
+export function api(path, opts = {}) {
+  const key = getDedupeKey(path, opts);
+  if (!key) return apiRequest(path, opts);
+  const existing = inFlightGetRequests.get(key);
+  if (existing) return existing;
+  const request = apiRequest(path, opts).finally(() => {
+    if (inFlightGetRequests.get(key) === request) inFlightGetRequests.delete(key);
+  });
+  inFlightGetRequests.set(key, request);
+  return request;
 }
 
 // Expose on window

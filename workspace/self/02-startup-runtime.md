@@ -212,3 +212,11 @@ Self-edit verification checklist for pairing/remote access:
 - Verify protected LAN APIs still return 401 without `X-Pairing-Token`.
 - Verify an approved mobile token reaches protected APIs through `X-Pairing-Token`.
 - Verify old QR pages are not reused after challenge expiration or gateway restart.
+## P0-1 performance record — 2026-08-08
+
+- The local gateway was observed after roughly 25 hours at about 10 GB resident memory while the host was around 92–93% used. This remains measured evidence, but it is not proof that the session cache alone caused all of the RSS.
+- session.ts now maintains a bounded hot transcript cache of 256 entries and protects live-runtime, pending-persistence, and mutation-scoped sessions from eviction. The cache status is exposed numerically through gateway status.
+- The raw health fast path now includes process rss, heap, external, and ArrayBuffer byte counts. These are numeric only.
+- The gateway was subsequently restarted through the managed quick-restart path on 2026-08-08. Replacement PID 20108 first reported about 269 MB RSS; after the live Luna telemetry follow-up, PID 23796 reported about 257 MB RSS and remained healthy. This verifies the new code is live; the next evidence gate is still a 24-hour session-churn/RSS-slope comparison.
+- Controlled Luna-only chat checks used `openai_codex/gpt-5.6-luna` at low and medium reasoning. Short medium turns reached first visible token in roughly 2.6–4.4 seconds post-fix, while a bounded desktop/browser smoke task took about 76 seconds across multiple provider/tool rounds; these are local observations, not production percentiles.
+- Desktop startup request audits must block service workers to exclude the first PWA controller-takeover reload. The observed two strict account checks in ordinary fresh Chromium were two document boot cycles, not two approval/proposal loaders; with service workers blocked, account verification, approvals, and proposals each loaded once.

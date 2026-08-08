@@ -1521,13 +1521,13 @@ function _sessionButtonHtml(session) {
   const roomRoster = Array.isArray(session?.voiceRoom?.participants)
     ? session.voiceRoom.participants.map((participant) => String(participant?.label || '').trim()).filter(Boolean).join(' · ')
     : '';
-  const origin = _sessionOriginLabel(session);
+  // Origin channel (Desktop / Telegram / Mobile) is intentionally not shown
+  // in the sessions list — keep title, state, roster, and preview only.
   return `
     <button class="pm-session-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-channel="${escapeHtml(session?.channel || '')}" data-session-state="${state.stateName}"${ariaCurrent}>
       <span class="pm-session-row-top"><span class="pm-session-title">${escapeHtml(title)}</span>${state.stateLabel}</span>
       <span class="pm-session-meta-row">
         ${roomRoster ? `<span class="pm-session-preview">${escapeHtml(roomRoster)}</span>` : ''}
-        ${origin ? `<span class="pm-session-preview">From: ${escapeHtml(origin)}</span>` : ''}
         ${visiblePreview ? `<span class="pm-session-preview">${escapeHtml(visiblePreview)}</span>` : ''}
       </span>
     </button>
@@ -1536,7 +1536,6 @@ function _sessionButtonHtml(session) {
 
 function _searchResultButtonHtml(session, query) {
   const title = String(session?.title || session?.id || 'New chat');
-  const origin = _sessionOriginLabel(session);
   const role = String(session?.matchedRole || '').toLowerCase();
   const label = role === 'assistant' ? 'Prom' : role === 'user' ? 'You' : 'Match';
   const matched = String(session?.matchedContent || session?.preview || '').trim();
@@ -1545,35 +1544,17 @@ function _searchResultButtonHtml(session, query) {
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
-  const projectLabel = session?.projectName ? ' · ' + escapeHtml(session.projectName) : '';
+  const projectLabel = session?.projectName ? escapeHtml(session.projectName) : '';
+  // Origin channel is intentionally not shown in search results either.
   return `
     <button class="pm-session-row pm-search-result-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-channel="${escapeHtml(session?.channel || '')}" data-session-state="${state.stateName}"${ariaCurrent}>
       <span class="pm-session-row-top"><span class="pm-session-title">${escapeHtml(title)}</span>${state.stateLabel}</span>
-      <span class="pm-search-meta">${escapeHtml(origin || 'Chat')}${projectLabel}</span>
+      ${projectLabel ? `<span class="pm-search-meta">${projectLabel}</span>` : ''}
       <span class="pm-session-preview"><strong>${escapeHtml(label)}:</strong> ${snippet}</span>
     </button>
   `;
 }
 
-function _channelLabel(channel) {
-  const ch = String(channel || '').toLowerCase();
-  if (ch === 'web') return 'Computer';
-  if (ch === 'mobile') return 'Mobile';
-  if (ch === 'telegram') return 'Telegram';
-  if (ch === 'discord') return 'Discord';
-  if (ch === 'whatsapp') return 'WhatsApp';
-  if (ch === 'terminal') return 'CLI';
-  return ch ? ch.replace(/[_-]+/g, ' ') : '';
-}
-
-function _sessionOriginLabel(session) {
-  const origin = session?.lastOrigin && typeof session.lastOrigin === 'object' ? session.lastOrigin : null;
-  const label = String(origin?.label || '').trim();
-  if (label) return label;
-  const channel = String(origin?.channel || session?.channel || session?.source || '').trim().toLowerCase();
-  if (channel === 'web') return 'Desktop';
-  return _channelLabel(channel);
-}
 
 function _escapeRegExp(text) {
   return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

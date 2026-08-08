@@ -165,7 +165,7 @@ This lane is deliberately not a raw chain-of-thought store. It preserves actiona
 | Path | Entry point |
 |------|-------------|
 | Context compactor | chat.router.ts:1527 — no persona, no memory. Rolling and mid-workflow compaction receive the bounded working-context packets plus the active turn's provider reasoning-summary stream under `[RECENT_REASONING_AND_DECISIONS]`; private/raw thinking is excluded. |
-| Brain runner | brain-runner.ts — calls handleChat as `cron` (interactive personality) with a per-job tool allowlist; not a separate pipeline |
+| Brain runner | `brain-runner.ts` first builds the canonical redacted six-hour activity package (`activity-package.ts`), injects it directly into the Thought prompt, then calls `handleChat` as `cron` (interactive personality) with a per-job allowlist. It shares turn execution with chat, but activity assembly is a separate pre-model context lane. |
 | Realtime voice | realtime.router.ts:166–214 — separate pack |
 | Reactor subagents | reactor.ts:431 — soul-loader.buildSystemPrompt |
 

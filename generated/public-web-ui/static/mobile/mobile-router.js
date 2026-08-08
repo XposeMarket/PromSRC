@@ -2,6 +2,8 @@
 // Activates ONLY when location.hash starts with "#mobile" or pathname starts with "/mobile".
 // Otherwise stays out of the way so the desktop UI is untouched.
 
+import { markClientPerformance } from '../performance.js';
+
 import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v240-mobile-splash';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage,
@@ -23,6 +25,7 @@ import { connectWS, ensureWSConnected } from '../ws.js';
 // the PWA install snapshot all do at various points. Without this flag the
 // "I refreshed and now I see the desktop UI on my phone" bug returns.
 const PM_FORCE_MOBILE_KEY = 'pm_force_mobile';
+markClientPerformance('mobile_router_loaded', { surface: 'mobile' });
 
 function _readForceMobile() {
   try { return localStorage.getItem(PM_FORCE_MOBILE_KEY) === '1'; } catch { return false; }

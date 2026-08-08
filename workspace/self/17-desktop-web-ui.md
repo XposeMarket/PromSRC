@@ -325,3 +325,11 @@ Do not mix mobile changes into a desktop web UI fix unless the shared file truly
 - Data must not be interpolated into inline event-handler JavaScript. Use `data-*` attributes plus delegated `addEventListener` handlers, as `ProjectsPage.js` does for arbitrary project/file names.
 - Run `npm run test:untrusted-content-boundary` after changing Markdown, preview iframes, creative render authentication, or dynamic event binding.
 - Mobile router and mobile CSS are present in the same bundle. Desktop fixes should not rely on `body.pm-mobile-active`; that class means the mobile shell has taken over.
+## P0-1 performance record — 2026-08-08
+
+- Desktop source of truth remains web-ui; generated/public-web-ui must be regenerated with npm run sync:web-ui after source edits.
+- ProjectsPage.js is now lazy: it is no longer in the desktop boot module preload and loads only when the Projects sidebar tab opens. Its old 400 ms self-fetch was removed.
+- api.js coalesces identical in-flight GET promises only. Mutations, no-store reads, AbortSignal reads, and dedupe=false reads retain independent behavior.
+- app.js loads the bounded client performance ring. ChatPage records privacy-conscious submit, accepted, first SSE byte, first token, first visible token, server latency marks, done, and error milestones. The server exposes an opaque X-Prometheus-Trace-Id; do not add message text, token text, or credentials to these marks.
+- Equivalent local browser measurements showed cold DCL p50 156.5 ms on HEAD versus 102.5 ms on the working tree, FCP 124 versus 80 ms, and decoded startup bytes 5.585 MB versus 5.363 MB across three samples. Thread-open and route timings did not materially change.
+- The committed repeatable harness is scripts/benchmark-performance.mjs. It can serve HEAD web sources in browser memory for before measurements, so dirty workspace changes do not need to be reverted.

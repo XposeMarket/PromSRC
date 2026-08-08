@@ -168,3 +168,12 @@ Do not fork `chat.router.ts` wholesale into every child. It still depends on gat
 - `src/gateway/turn-workers/turn-file-change-worker.regression.ts` verifies distinct/reusable child identity, exact shared-collector output, bounded reference-only terminal IPC, and the explicit diagnostic direct mode.
 - `npm run test:turn-safety`, `npm run test:mobile-recovery`, and `npm run test:automations` cover admission/replay/mobile/scheduler contracts around this boundary.
 - `npx tsc --noEmit --pretty false` covers the TypeScript source boundary.
+## P0-1 performance record — 2026-08-08
+
+- The full gateway remains the owner of request ingress, prompt/context assembly, session mutation, tool orchestration, approvals, and channel delivery. The performance pass did not move the complete turn loop into a child process.
+- Existing worker isolation and bounded stream delivery remain relevant to tail latency, but the current investigation found a separate gateway-owned risk: the session transcript cache was process-long and unbounded. The new 256-entry hot-cache bound is conservative and protects active/pending sessions.
+- The managed gateway restarts on 2026-08-08 replaced PID 21480 with PID 20108 and later PID 20108 with PID 23796; the replacement exposed memory byte fields and reported a clean bounded cache. Treat this as live-code/clean-start verification, not a completed leak soak.
+- Model/tool latency must be analyzed by unique turn and provider attempt. The local timing log has provider-request-start marks in the thousands because retries/attempts can occur inside fewer turns; do not report those marks as unique user requests.
+- `chat.router.ts` now keeps per-provider-round first-event and first-visible timestamps as well as turn-level marks. This prevents a later tool-round `providerWaitMs` or `provider_done` delta from subtracting the current round's start from an earlier round's event.
+- The local Luna-medium surface smoke confirmed the correction: the pre-fix multi-pass trace emitted an impossible negative provider wait, while the post-fix trace reported a positive per-round wait. The remaining user-visible wall time is still dominated by provider/tool round trips, so complete-turn worker extraction and per-round queue/tool spans remain follow-up work.
+- Future memory profiling should use the health byte fields, sessionCache status, worker RSS, and retained stream counts together. Do not attribute all gateway RSS to model workers or durable raw-observation disk usage.

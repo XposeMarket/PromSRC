@@ -146,6 +146,10 @@ The mirror has scope and retention protections: it is bounded/redacted; it inten
 
 When work is interrupted, inspect evidence and then verify live Goal/request/task state. Use the existing recovery mechanism; do not infer that a started tool completed or automatically duplicate a consequential action. See [Audit and memory](pages/07-audit-and-memory.md), [Tasks](pages/02-tasks.md), and [Operational systems](20-operational-systems.md).
 
+### Thought package boundary
+
+Brain Thought has a separate direct-context assembly step before its normal `handleChat(..., executionMode: 'cron')` turn. The activity package reads canonical stores for the exact six-hour UTC window and hands the model a redacted event ledger, source manifest, unresolved-work list, and direct continuation refs. Thought must not use the audit mirror or search/list calls to rediscover activity already covered by that package. The package records stable IDs/provenance, deduplication, source failures, mtime/pagination caps, continuation hashes, and estimated prompt cost. This direct lane is Brain-specific; normal chat still uses its ordinary bounded observations and working-context packets.
+
 ## 7. Where to find every exact element
 
 | Need | Reference |

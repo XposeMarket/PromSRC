@@ -75,6 +75,10 @@ export interface BrainThoughtEntry {
   completedAt: string;
   /** Unique run ID for this thought */
   runId: string;
+  /** Deterministic activity package ID handed to the Thought model */
+  activityPackageId?: string;
+  /** Workspace-relative activity package artifact, when persisted */
+  activityPackageFile?: string;
 }
 
 export interface BrainDailyStatus {

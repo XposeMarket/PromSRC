@@ -80,7 +80,7 @@ Prometheus source edits have a separate read/evidence/approval path from normal 
 
 Browser Teach records a user-demonstrated browser workflow, requests explicit verification boundaries, runs detached replay verification, then may recommend a composite tool, a skill, both or neither. It must not silently create either reusable asset. Composites save multi-step tool behavior; skills are maintained playbooks with resources, version/ledger history and governance.
 
-Brain Thought/Dream, Skill Gardener and Curator are the self-improvement side: they gather evidence, verify current state before proposing anything, store continuity context, generate low-risk typed lessons where allowed, and proposal-gate higher-risk changes/new skills. They do not treat an old chat observation as proof that a problem still exists.
+Brain Thought/Dream, Skill Gardener and Curator are the self-improvement side: they gather evidence, verify current state before proposing anything, store continuity context, generate low-risk typed lessons where allowed, and proposal-gate higher-risk changes/new skills. Thought receives a canonical redacted six-hour activity package directly, with stable event provenance and explicit continuations for oversized windows; it does not search the audit mirror to reconstruct covered activity. They do not treat an old chat observation as proof that a problem still exists.
 
 ## Connections, MCP, and dynamic tools
 

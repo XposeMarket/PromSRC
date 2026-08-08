@@ -46,6 +46,14 @@ import {
 } from './brain-state';
 import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
 import type { SkillsManager } from '../skills-runtime/skills-manager';
+import { getConfig } from '../../config/config';
+import { listBrowserSessions } from '../browser-tools';
+import {
+  buildThoughtActivityPackage,
+  recordThoughtSearchCalls,
+  type BuiltActivityPackage,
+  type ActivityPackage,
+} from './activity-package.js';
 import { runSkillCurator } from '../skills-runtime/skill-curator';
 import {
   applyCarryForwardToIntradayFile,
@@ -855,14 +863,56 @@ export class BrainRunner {
 	      { disableCompactionCheck: true, disableMemoryFlushCheck: true },
 	    );
 
-	    const outFile = `thoughts/${dateStr}/${windowLabel}-thought.md`;
-	    const absOutFile = path.join(getBrainDir(), outFile);
-	    const workspaceOutFile = path.join('Brain', outFile).replace(/\\/g, '/');
+    const outFile = `thoughts/${dateStr}/${windowLabel}-thought.md`;
+    const absOutFile = path.join(getBrainDir(), outFile);
+    const workspaceOutFile = path.join('Brain', outFile).replace(/\\/g, '/');
       const capsuleFile = path.posix.join('Brain', 'context-capsules', dateStr, `${windowLabel}-capsules.json`);
       const absCapsuleFile = path.join(this.deps.workspacePath, capsuleFile);
+
+    // Assemble the authoritative activity context before the model call. This
+    // reads canonical runtime stores, not the lagging workspace/audit mirror.
+    // The package itself records source failures and continuation refs so a
+    // partial store outage is visible to Thought rather than silently omitted.
+    let builtActivityPackage: BuiltActivityPackage;
+    try {
+      const packageDir = path.join(this.deps.workspacePath, 'Brain', 'activity-packages', dateStr, windowLabel);
+      builtActivityPackage = await buildThoughtActivityPackage({
+        configDir: getConfig().getConfigDir(),
+        workspacePath: this.deps.workspacePath,
+        repoRoot: process.cwd(),
+        start: windowStart,
+        end: windowEnd,
+        correlationId: runId,
+        outputDir: packageDir,
+        metricsPath: path.join(getBrainDir(), 'state', 'activity-package-metrics.jsonl'),
+        browserSessions: listBrowserSessions(),
+      });
+      console.log(`[BrainRunner] Activity package ${builtActivityPackage.package.packageId}: ${builtActivityPackage.package.metrics.eventsIncluded} events, ${builtActivityPackage.package.metrics.packageChars} chars, ${builtActivityPackage.package.metrics.assemblyLatencyMs}ms`);
+    } catch (err: any) {
+      // An unexpected assembler failure must not make the Thought fall back to
+      // searching. Keep the model call explicit about the unavailable package.
+      console.error('[BrainRunner] Activity package assembly failed:', err?.message || err);
+      const failedPackage: ActivityPackage = {
+        schemaVersion: 'prometheus.thoughts.activity-package.v1',
+        packageId: `ap_failed_${runId}`,
+        correlationId: runId,
+        window: { start: windowStart.toISOString(), end: windowEnd.toISOString(), startMs: windowStart.getTime(), endMs: windowEnd.getTime(), durationMs: windowEnd.getTime() - windowStart.getTime(), timezone: 'UTC', boundary: '[start,end)' },
+        authority: 'canonical_runtime_stores',
+        eventLedger: { complete: false, inline: [], inlineSelection: 'all', totalEvents: 0, omittedFromInline: 0, continuations: [] },
+        counts: {},
+        sourceCoverage: [],
+        unresolvedWork: [],
+        redaction: { applied: true, policy: 'secret-key-and-payload-redaction-v1', rawPayloadsIncluded: false, rawPayloadRefsIncluded: false, note: 'No activity records were made available because package assembly failed.' },
+        completeness: { status: 'failed', omissions: [`assembler failure: ${String(err?.message || err)}`], continuationRequired: false, directContextRule: 'do_not_search_covered_activity' },
+        observability: { searchCallsAtAssembly: 0 },
+        metrics: { assemblyStartedAt: new Date().toISOString(), assemblyCompletedAt: new Date().toISOString(), assemblyLatencyMs: 0, filesVisited: 0, filesParsed: 0, recordsScanned: 0, eventsDiscovered: 0, eventsIncluded: 0, duplicateEvents: 0, inlineEventCount: 0, continuationEventCount: 0, inlineChars: 2, fullLedgerChars: 2, packageChars: 0, estimatedPackageTokens: 0, continuationWriteFailures: 0, sourceFailures: 1, sourcePartial: 0 },
+      };
+      builtActivityPackage = { package: failedPackage, continuationPaths: [] };
+    }
 	    const prompt = this._buildThoughtPromptV2({
 	      windowStart, windowEnd, dateStr, windowLabel,
 	      thoughtNumber, outFile: absOutFile, capsuleFile,
+      activityPackage: builtActivityPackage.package,
 	    });
 
     const sendSSE = (event: string, data: any) => {
@@ -900,14 +950,9 @@ export class BrainRunner {
         brainDreamToolFilter([
           'workspace_read',
           'workspace_edit',
-          'list_directory',
-          'list_files',
           'read_file',
           'read_files_batch',
 	          'file_stats',
-	          'grep_file',
-	          'grep_files',
-          'search_files',
           'mkdir',
           'create_file',
           'write_file',
@@ -944,7 +989,17 @@ export class BrainRunner {
         ? 'ABORTED: Brain thought run aborted by operator.'
         : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
+
+      const searchToolNames = new Set(['search_files', 'grep_file', 'grep_files', 'prometheus_audit_ops', 'audit_ops', 'web_search', 'web_search_multi', 'web_search_single']);
+      const coveredActivitySearchNames = new Set(['search_files', 'grep_file', 'grep_files', 'prometheus_audit_ops', 'audit_ops']);
+      const searchCalls = toolResults.filter((tool) => searchToolNames.has(String(tool.name || ''))).length;
+      const coveredActivitySearchCalls = toolResults.filter((tool) => coveredActivitySearchNames.has(String(tool.name || ''))).length;
+      recordThoughtSearchCalls(builtActivityPackage, searchCalls, coveredActivitySearchCalls);
+	      if (coveredActivitySearchCalls > 0) {
+	        console.warn(`[BrainRunner] Thought ${thoughtNumber} searched covered activity ${coveredActivitySearchCalls} time(s); package contract was violated.`);
+	      }
 	    } catch (err: any) {
+	      recordThoughtSearchCalls(builtActivityPackage, 0, 0);
 	      resultText = `Error: ${err?.message || String(err)}`;
 	      console.error(`[BrainRunner] Thought ${thoughtNumber} failed:`, err?.message);
 	    } finally {
@@ -1037,7 +1092,14 @@ export class BrainRunner {
     if (success) {
       // Update daily status on verified success only
       const daily = loadDailyStatus(dateStr);
-      daily.thoughts.push({ window: windowLabel, file: outFile, completedAt: new Date().toISOString(), runId });
+      daily.thoughts.push({
+        window: windowLabel,
+        file: outFile,
+        completedAt: new Date().toISOString(),
+        runId,
+        activityPackageId: builtActivityPackage.package.packageId,
+        activityPackageFile: builtActivityPackage.package.observability.packagePath,
+      });
       saveDailyStatus(daily);
     }
 
@@ -1048,6 +1110,8 @@ export class BrainRunner {
       date: dateStr,
       window: windowLabel,
       file: outFile,
+      activityPackageId: builtActivityPackage.package.packageId,
+      activityPackageFile: builtActivityPackage.package.observability.packagePath,
       summary: resultText.slice(0, 400),
       success,
       error: success ? undefined : (loadLatestState().lastThoughtError || 'Unknown thought run failure'),
@@ -1063,6 +1127,8 @@ export class BrainRunner {
         date: dateStr,
         window: windowLabel,
         file: outFile,
+        activityPackageId: builtActivityPackage.package.packageId,
+        activityPackageFile: builtActivityPackage.package.observability.packagePath,
         error: loadLatestState().lastThoughtError || 'Unknown thought run failure',
       });
     }
@@ -1582,8 +1648,6 @@ export class BrainRunner {
     // Do NOT use absolute Windows paths here — the agent strips the drive prefix and creates doubled dirs.
     const thoughtsDirRel  = path.join('Brain', 'thoughts', dateStr);
     const businessCandidatesDirRel = path.join('Brain', 'business-candidates', dateStr);
-    const memNotesFileRel = path.join('memory', `${dateStr}-intraday-notes.md`);
-    const auditDirRel     = 'audit';
     // outFile received here is already absolute — derive the workspace-relative version for the prompt
     const outFileRel = path.relative(this.deps.workspacePath, outFile);
 
@@ -1611,26 +1675,15 @@ STRICT RULES — do not violate under any circumstances:
 • Skill candidates must be scoped, evidence-backed, and candidate-only. Curator is the sole autonomous skill writer.
 
 ════════════════════════════════════════════════════════════
-STEP 1 — SCAN AUDIT WINDOW
+STEP 1 — USE THE DIRECT ACTIVITY PACKAGE
 ════════════════════════════════════════════════════════════
 
-Scan the audit directory for activity between ${wsStart} and ${wsEnd}.
-Audit root: ${auditDirRel}
-
-Priority scan order (read in this order, respect the caps):
-  1. ${memNotesFileRel}  — today's intraday notes (if file exists)
-  2. ${auditDirRel}/chats/sessions/     — chat session snapshots (max 8 most recent)
-  3. ${auditDirRel}/tasks/              — task state snapshots (max 15 files)
-  4. ${auditDirRel}/cron/runs/          — JSONL run history files (filter by timestamp)
-  5. ${auditDirRel}/teams/              — team activity logs (if present)
-  6. ${auditDirRel}/proposals/          — proposal state changes (if present)
-
-Selective reading strategy:
-  • List each directory first, identify files by modification time if available
-  • For JSONL files: read and extract entries whose timestamp falls in the window
-  • Read file content selectively — you do not need to read every character
-  • If a directory is empty or no files fall in the window, note "no activity" and continue
-  • Cap total files read: 8 chat sessions, 15 task files, all cron JSONL entries in window
+This legacy prompt builder is retained only for source compatibility; the live
+runner uses _buildThoughtPromptV2. In the live path, the canonical redacted
+six-hour activity package is already supplied before this analysis begins.
+Do not search or list audit directories to reconstruct covered activity. Use
+only the package event ledger, its sourceCoverage/completeness manifest, and
+the exact continuation refs it supplies.
 
 ════════════════════════════════════════════════════════════
 STEP 2 — ANALYZE USING THE RUBRIC
@@ -1938,8 +1991,9 @@ After all writes: print a plain-text summary of what was done tonight (memory up
     thoughtNumber: number;
     outFile: string;
     capsuleFile: string;
+    activityPackage: ActivityPackage;
   }): string {
-    const { windowStart, windowEnd, dateStr, thoughtNumber, outFile, capsuleFile } = opts;
+    const { windowStart, windowEnd, dateStr, thoughtNumber, outFile, capsuleFile, activityPackage } = opts;
     const wsStart = fmtUtc(windowStart);
     const wsEnd = fmtUtc(windowEnd);
     const nowStr = fmtLocal(new Date());
@@ -1948,8 +2002,6 @@ After all writes: print a plain-text summary of what was done tonight (memory up
     const businessCandidatesFileRel = path.join(businessCandidatesDirRel, 'candidates.jsonl');
     const skillEpisodesDirRel = path.join('Brain', 'skill-episodes', dateStr);
     const skillGardenerDirRel = path.join('Brain', 'skill-gardener', dateStr);
-    const memNotesFileRel = path.join('memory', `${dateStr}-intraday-notes.md`);
-    const auditDirRel = 'audit';
     const outFileRel = path.relative(this.deps.workspacePath, outFile);
 
     return `You are Prometheus, running an automated Brain Thought analysis.
@@ -1972,12 +2024,25 @@ STRICT RULES:
 - Do not call write_proposal or create any proposals
 - Do not create new skills directly
 - Do not update cron jobs, configs, or team state
+- Do not search for or reconstruct activity covered by the Activity Package below. It is authoritative for this window.
+- If the inline ledger says continuationRequired=true, read only the exact continuation paths listed in the package using direct file reads; do not list/search audit directories.
 - Your direct file writes are limited to the thought output file, ${capsuleFile}, ${businessCandidatesFileRel} when business candidates exist, and the Active Work Ledger (Brain/active-work.jsonl)
 - Do not mutate an existing skill. Read/inspect it, then use skill_candidate_submit for any proposed trigger, metadata, instruction, resource, or new-skill change
 - You may call skill_audit_all for a light read-only fleet metadata scan
 - Candidate submissions must be evidence-backed and scoped to one exact skill gap or repeated workflow
 - Curator clusters and reviews candidates; Thought never applies them
 - You MAY read freely and do LIGHT research: read any workspace/project file, ${isPublicBrainProfile() ? 'and use web_search/web_fetch' : 'use read_source/grep_source/read_prom_file to inspect Prometheus\'s own code and tools, and use web_search/web_fetch'} to confirm the current state of an idea and scan for prior art. Keep research light (a couple of lookups); the Dream does the deep dive.
+
+DIRECT ACTIVITY PACKAGE (AUTHORITATIVE; assembled before this model call):
+${JSON.stringify(activityPackage, null, 2)}
+
+Activity-package rules:
+- The window is UTC and half-open: [${wsStart}, ${wsEnd}). Events at the exact start are included; events at the exact end belong to the next window.
+- Use event IDs and provenance refs from this package when citing what happened. Do not infer missing activity from silence.
+- The package includes chats/messages, tasks/journals/evidence, runs/schedules/heartbeats, managed threads/teams, tool calls/results/errors, browser metadata/observations, file/workspace changes, agents/subagents, runtime/config changes, important events, and unresolved work where the stores make them available.
+- sourceCoverage, completeness.omissions, and continuation entries are part of the answer. Report partial or unavailable sources instead of silently treating them as empty.
+- Raw credentials, tokens, cookies, raw tool payloads, binary/screenshot payloads, and private chain-of-thought are intentionally redacted. Do not attempt to recover them.
+- The package is direct context, not a search hint. Covered-activity search calls are a contract violation and are not needed for the activity summary.
 
 WHO YOU ARE THIS RUN:
 You have the user's USER.md, SOUL.md, MEMORY.md, and today's notes in your system context. Use them. Reason like a second brain that already knows what this user is building and cares about: "they planned X with me — let me check whether it actually exists yet", "they added project Y to the workspace — let me look through it for bugs or half-finished work", "this tool keeps failing them — let me see what's actually wrong with it." Proactivity is the point: you do not need an explicit task to investigate something the user clearly cares about.
@@ -2005,29 +2070,6 @@ This is the standing, memory-grounded list of things the user is actively workin
   {"id":"slug","title":"...","origin":"chat/transcript/note ref or 'memory'","diskPath":"workspace-relative or absolute allowed path, if it is a real project","status":"idea|drafted|in_progress|stalled|resolved","lastVerified":"${dateStr}","currentState":"what you actually observed in the artifact tonight","research":["url or finding"],"evidence":["path:line or ref"]}
 - Update status to "resolved" (and say how you verified) when current-state shows it is already done/fixed.
 - Keep entries concrete and grounded in current state; this ledger is what the Dream investigates and hardens into proposals.
-
-STEP 1 - SCAN AUDIT WINDOW
-
-Scan the audit directory for activity between ${wsStart} and ${wsEnd}.
-Audit root: ${auditDirRel}
-
-Priority scan order:
-1. ${memNotesFileRel} - today's intraday notes if the file exists
-2. ${auditDirRel}/chats/sessions/ - chat session snapshots
-3. ${auditDirRel}/chats/transcripts/ - inspect transcripts for sessions that look feature-oriented, planning-heavy, or unfinished
-4. ${auditDirRel}/tasks/ - task state snapshots
-5. ${auditDirRel}/cron/runs/ - JSONL run history files filtered by timestamp
-6. ${auditDirRel}/teams/ - team activity logs, new subagents, and manager outputs if present
-7. ${auditDirRel}/proposals/ - proposal state changes if present
-8. ${skillEpisodesDirRel}/episodes.jsonl - structured skill-use episodes if present
-9. ${skillGardenerDirRel}/live-candidates.jsonl and workflow-episodes.jsonl - live skill gardener candidates captured during chat, if present
-
-Selective reading strategy:
-- List each directory first and identify the files that matter
-- For JSONL files, extract only entries whose timestamps fall in the window
-- Read selectively; you do not need every character
-- When a session snapshot hints at a half-finished idea, planning discussion, new subagent, new website effort, or "we should build X", read the matching transcript before judging it
-- If a directory is empty or no files fall in the window, note "no activity" and continue
 
 STEP 2 - ANALYZE USING THE RUBRIC
 

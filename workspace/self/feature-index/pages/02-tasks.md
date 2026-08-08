@@ -33,6 +33,8 @@ These are intentionally different streams:
 - The **process log is synced through the managed-process supervisor and gateway process routes**, then displayed inside the task only when linked/recent for that task. It is not a generic terminal transcript copied into every task.
 - **Evidence** is a third lane: a bounded, task-associated evidence record. It can outlive a transient process and is not equivalent to either a command log or an assistant final answer.
 
+Brain Thought consumes timestamped task snapshots, journal entries, evidence-bus events, and linked tool/run provenance through its canonical six-hour activity package. The package is a read-only reflection input; it does not replace the task’s authoritative journal or imply that a task state changed.
+
 ## Controls and exact effects
 
 | Control | Gateway action | Meaning |

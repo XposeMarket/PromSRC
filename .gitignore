@@ -252,3 +252,11 @@ workspace/**/*.pyc
 workspace/repos/
 workspace/scratch/
 workspace/games/prometheus-vita/vendor/
+
+# Personal runtime records stay local. They are not part of PromSRC source
+# synchronization or public releases.
+workspace/Brain/**
+workspace/memory/**
+workspace/audit/**
+workspace/workspace/memory/**
+workspace/workspace/videos/**

@@ -86,11 +86,18 @@ export function evaluatePairingAdminRequestWithPolicy(
     return { ok: false, status: 403, message: 'Trusted desktop pairing authority required.' };
   }
 
-  // Standalone development remains usable only when the gateway itself is
-  // loopback-bound and the request is either a non-browser local client or an
-  // exact same-origin browser request. Origin:null and alternate localhost
-  // ports are deliberately rejected.
-  if (!isLoopbackHost(policy.gatewayHost) || !isLoopbackAddress(getGatewayRequestIp(req))) {
+  // Standalone / browser-dev gateway pairing admin:
+  // - Request IP must be loopback (the Settings UI talking to its local gateway).
+  // - gateway.host may be loopback OR a wildcard bind (0.0.0.0 / ::). Dev gateways
+  //   intentionally bind 0.0.0.0 so phones can reach LAN pairing endpoints; that
+  //   must not disable the local browser Settings → Pairing panel.
+  // - Browser requests must be exact same-origin on the gateway port. Origin:null
+  //   and alternate localhost ports are deliberately rejected.
+  // - Non-browser local clients (no Origin / Sec-Fetch-Site:none) remain allowed
+  //   from loopback only.
+  const gatewayHost = String(policy.gatewayHost || '').trim();
+  const wildcardBind = gatewayHost === '0.0.0.0' || gatewayHost === '::';
+  if ((!isLoopbackHost(gatewayHost) && !wildcardBind) || !isLoopbackAddress(getGatewayRequestIp(req))) {
     return { ok: false, status: 403, message: 'Trusted desktop pairing authority required.' };
   }
 

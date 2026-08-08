@@ -616,3 +616,9 @@ For mobile voice:
 - `web-ui/src/mobile/mobile-router.js` schedules dismissal after a successful mobile render and after the complete brand sequence; the early bootstrap retains a bounded timeout fallback so the splash cannot trap the user.
 
 Keep the sequence mobile-scoped under `body.pm-mobile-active`. After edits, run the web UI sync check and visually smoke-test a cold load of `#mobile/chat` (or `/mobile`) at the black, constellation, mark, title, and dismissed phases.
+## P0-1 performance record — 2026-08-08
+
+- Prometheus mobile is a shared PWA/mobile-web surface; no native Capacitor app, physical phone, emulator, or paired token was available for this investigation.
+- mobile-router.js now emits one bounded mobile_router_loaded client mark through the shared privacy-conscious performance ring. It records no route content or credentials.
+- The repeatable harness probes 390×844 mobile startup and explicitly reports pairedJourney=false when no token is supplied. In this host state, the unpaired pair route reproduced a Chromium renderer crash after navigation while the machine was already above 92% memory use. This is a limitation/reproduction signal, not proof of a mobile source leak.
+- A paired-device run remains required for chat-list/thread load, composer input, SSE token cadence, offline/network-change recovery, and reconnect timing. Run it only after a clean local gateway state and retain the mobile recovery contract test as the source-level gate.

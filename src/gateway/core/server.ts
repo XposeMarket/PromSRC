@@ -265,11 +265,19 @@ function tryRawGatewayFastPath(
   }
 
   if (pathname === '/api/health') {
+    const memory = process.memoryUsage();
     sendRawJson(res, {
       ok: true,
       pid: process.pid,
       timestamp: Date.now(),
       fastPath: true,
+      memory: {
+        rssBytes: memory.rss,
+        heapUsedBytes: memory.heapUsed,
+        heapTotalBytes: memory.heapTotal,
+        externalBytes: memory.external,
+        arrayBuffersBytes: memory.arrayBuffers,
+      },
     });
     return true;
   }

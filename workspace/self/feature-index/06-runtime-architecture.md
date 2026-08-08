@@ -49,7 +49,7 @@ The exact prompt/injection map is deliberately detailed in `../21-runtime-prompt
 - **Memory** is file-backed and indexed, with graph/timeline/related-record/search and claim-review layers.
 - **Audit/evidence/journal** record tool/agent/background activity, supporting inspection and recovery rather than opaque execution.
 - **Configuration and credential systems** determine providers, models, tools, integrations, security, pairing, paths, feature flags and lifecycle defaults.
-- **Brain artifacts** live under `workspace/Brain/` for Thought/Dream/pulse/curator state.
+- **Brain artifacts** live under `workspace/Brain/` for Thought/Dream/pulse/curator state. Thought additionally writes a direct six-hour activity package under `Brain/activity-packages/` and assembly metrics under `Brain/state/activity-package-metrics.jsonl`; the package is built from canonical stores, redacted, provenance-bearing, and continuation-aware before the model call.
 
 ## Process isolation and reliability
 

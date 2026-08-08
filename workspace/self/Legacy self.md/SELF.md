@@ -2686,7 +2686,8 @@ Current source facts:
 - thoughts are observation, seed capture, and low-risk existing-skill maintenance; they write dated thought markdown and may update existing skills only through `skill_manifest_write` or `skill_resource_write`
 - thoughts must not mutate memory, prompts, proposals, configs, cron jobs, team state, or create new skills
 - thought-applied skill updates must be small, evidence-backed, ledgered with `appliedBy="brain_thought"`, verified with `skill_read` or `skill_inspect`, and explained in the Thought file for Dream review
-- thoughts scan chats, sessions, transcripts, tasks, cron/team/proposal evidence, memory notes, `Brain/skill-episodes/`, and `Brain/skill-gardener/`
+- before the Thought model call, `src/gateway/brain/activity-package.ts` builds the canonical redacted six-hour `prometheus.thoughts.activity-package.v1` from runtime stores using UTC `[start,end)` boundaries, stable IDs, merged provenance, source coverage, and unresolved-work records; the package is injected directly, with direct continuation JSONL for oversized windows, instead of having Thought search the audit mirror
+- package metrics live at `workspace/Brain/state/activity-package-metrics.jsonl`; package artifacts live under `workspace/Brain/activity-packages/<date>/<window>/`. Credentials, tokens, cookies, raw payloads, binary/screenshot data, and private reasoning are excluded, while source failures and caps are explicit
 - dreams read the thought queue, memory roots, proposals, pending proposals, skill episodes, and live skill/workflow candidates before acting
 - dreams run a Skill Gardener Review phase that compares actual session behavior against current skill docs
 - dreams audit Thought-applied skill updates and may accept, modify, remove/supersede, or defer them to prevent skill bloat
@@ -3085,6 +3086,8 @@ Migration options currently support:
 - Obsidian indexed note mirrors: `workspace/audit/obsidian/vaults/<vaultId>/notes/`
 - Daily memory notes: `workspace/memory/`
 - Brain state/thought/dream artifacts: `workspace/Brain/`
+- Brain Thought activity packages: `workspace/Brain/activity-packages/<date>/<window>/`
+- Brain activity-package metrics: `workspace/Brain/state/activity-package-metrics.jsonl`
 - Brain skill episodes: `workspace/Brain/skill-episodes/<date>/episodes.jsonl`
 - Brain skill gardener candidates/workflows: `workspace/Brain/skill-gardener/<date>/`
 - Brain skill curator queue: `workspace/Brain/skill-curator/suggestions.json`

@@ -4,6 +4,8 @@
 
 Owner: `web-ui/src/pages/AuditPage.js`. The Audit page is a paginated/filterable view of non-main-agent and operational activity. It helps inspect provenance—agent/run/event details and related proposal context—without re-running the work. It is not a replacement for a task’s live journal or a process’s stdout/stderr log; use the originating Task or process card for those.
 
+Brain Thought does not use this audit mirror to reconstruct its six-hour window. Its pre-model activity package reads canonical stores directly, includes a redacted event manifest with stable provenance, and reports mirror/store gaps as explicit source coverage or omission records. Audit remains the operator recovery/debug view; the package is the Thought context authority.
+
 ## Memory Graph
 
 Owner: `web-ui/src/pages/MemoryPage.js`; memory runtime details: `../13-memory.md`.

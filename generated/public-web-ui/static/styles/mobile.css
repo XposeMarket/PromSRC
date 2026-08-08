@@ -2543,43 +2543,74 @@ html.pm-session-context-open * {
   background: color-mix(in srgb, var(--pm-orange), transparent 87%);
   box-shadow: none;
 }
-.pm-session-row.is-working::before,
-.pm-session-row.is-unread::before {
-  display: none;
+/* Working sessions get a rotating liquid border so they don't look like unread. */
+.pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry) {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--pm-bg, #0b0b0c), var(--pm-bg, #0b0b0c)) padding-box,
+    conic-gradient(
+      from var(--pm-angle, 0deg),
+      rgba(255,255,255,0.28),
+      color-mix(in srgb, var(--pm-orange), transparent 18%),
+      rgba(255,255,255,0.08),
+      color-mix(in srgb, var(--pm-gold), transparent 40%),
+      color-mix(in srgb, var(--pm-ember, var(--pm-orange)), transparent 34%),
+      rgba(255,255,255,0.24)
+    ) border-box;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-orange), transparent 78%),
+    0 0 18px color-mix(in srgb, var(--pm-orange), transparent 72%);
+  animation: prometheus-liquid-spin 3.6s linear infinite;
 }
 .pm-session-row.is-working::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  z-index: 1;
+  pointer-events: none;
   background:
     conic-gradient(
       from var(--pm-angle, 0deg),
-      rgba(255,255,255,0.24),
-      color-mix(in srgb, var(--pm-orange), transparent 30%),
-      rgba(255,255,255,0.06),
-      color-mix(in srgb, var(--pm-gold), transparent 54%),
-      color-mix(in srgb, var(--pm-ember), transparent 44%),
-      rgba(255,255,255,0.20)
+      rgba(255,255,255,0.34),
+      color-mix(in srgb, var(--pm-orange), transparent 12%),
+      rgba(255,255,255,0.08),
+      color-mix(in srgb, var(--pm-gold), transparent 36%),
+      color-mix(in srgb, var(--pm-ember, var(--pm-orange)), transparent 28%),
+      rgba(255,255,255,0.30)
     );
-  opacity: .86;
-  animation: prometheus-liquid-spin 13s linear infinite;
+  opacity: .95;
+  animation: prometheus-liquid-spin 2.8s linear infinite;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
 }
 .pm-session-row.is-working::after {
   content: "";
   position: absolute;
-  inset: -18px;
-  z-index: -2;
+  inset: -10px;
+  border-radius: inherit;
+  z-index: -1;
   pointer-events: none;
   background:
     conic-gradient(
       from var(--pm-angle, 0deg),
       transparent 0deg,
-      color-mix(in srgb, var(--pm-orange), transparent 84%) 58deg,
-      color-mix(in srgb, var(--pm-gold), transparent 90%) 118deg,
-      transparent 190deg,
-      color-mix(in srgb, var(--pm-ember), transparent 86%) 310deg,
+      color-mix(in srgb, var(--pm-orange), transparent 72%) 70deg,
+      color-mix(in srgb, var(--pm-gold), transparent 82%) 140deg,
+      transparent 210deg,
+      color-mix(in srgb, var(--pm-ember, var(--pm-orange)), transparent 76%) 300deg,
       transparent 360deg
     );
-  filter: blur(18px);
-  opacity: .58;
-  animation: prometheus-liquid-spin 16s linear infinite;
+  filter: blur(14px);
+  opacity: .72;
+  animation: prometheus-liquid-spin 4.2s linear infinite reverse;
 }
 .pm-session-row.is-unread {
   border-color: transparent;
@@ -2593,23 +2624,9 @@ html.pm-session-context-open * {
 :root[data-theme="dark"] .pm-session-row.is-unread:not(.pm-session-new):not(.pm-channel-entry) {
   background: color-mix(in srgb, var(--pm-orange) 10%, transparent);
 }
-.pm-session-row.is-unread::before {
-  background: linear-gradient(135deg,
-    color-mix(in srgb, var(--pm-orange), transparent 38%),
-    color-mix(in srgb, var(--pm-gold), transparent 70%),
-    color-mix(in srgb, var(--pm-orange), transparent 50%)
-  );
-  opacity: .72;
-}
+.pm-session-row.is-unread::before,
 .pm-session-row.is-unread::after {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  z-index: -2;
-  pointer-events: none;
-  background: radial-gradient(70% 130% at 100% 0%, color-mix(in srgb, var(--pm-orange), transparent 78%), transparent 64%);
-  opacity: .78;
+  display: none;
 }
 .pm-session-row-top {
   display: flex;
@@ -5861,7 +5878,6 @@ html.pm-session-context-open * {
 
 /* Chat history stays scan-friendly: use soft state fills instead of card outlines. */
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row:not(.pm-session-new):not(.pm-channel-entry),
-:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry),
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread:not(.pm-session-new):not(.pm-channel-entry) {
   min-height: 0;
   padding: 8px;
@@ -5869,6 +5885,27 @@ html.pm-session-context-open * {
   border-radius: 8px;
   background: transparent;
   box-shadow: none;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working:not(.pm-session-new):not(.pm-channel-entry) {
+  min-height: 0;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background:
+    linear-gradient(rgba(12,12,14,0.96), rgba(12,12,14,0.96)) padding-box,
+    conic-gradient(
+      from var(--pm-angle, 0deg),
+      rgba(255,255,255,0.30),
+      color-mix(in srgb, var(--pm-orange), transparent 14%),
+      rgba(255,255,255,0.08),
+      color-mix(in srgb, var(--pm-gold), transparent 34%),
+      color-mix(in srgb, var(--pm-ember, var(--pm-orange)), transparent 26%),
+      rgba(255,255,255,0.26)
+    ) border-box;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-orange), transparent 76%),
+    0 0 16px color-mix(in srgb, var(--pm-orange), transparent 70%);
+  animation: prometheus-liquid-spin 3.6s linear infinite;
 }
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-active-session:not(.pm-session-new):not(.pm-channel-entry) {
   border: 0;
@@ -5879,8 +5916,10 @@ html.pm-session-context-open * {
   background: rgba(214, 183, 94, .05);
 }
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
+:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working::after {
+  display: block;
+}
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before,
-:root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-working::after,
 :root[data-theme="dark"] body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::after {
   display: none;
 }

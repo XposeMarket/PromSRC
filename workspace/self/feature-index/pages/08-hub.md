@@ -15,4 +15,6 @@ Hub is the summary/observability page. It is not another chat thread or a genera
 | Tool overview/heatmap | Tool activity over a chosen range/month; an observability view, not a permissions screen |
 | Brain activity | Thought/Dream/pulse-card suggestions and recent self-improvement signals where the Brain runner is configured |
 
+Thought activity-package observability is persisted with Brain state: source coverage, event/duplicate counts, assembly latency, inline/continuation size, estimated tokens, and post-run search-call counts. Hub activity is a summary surface; the package and metrics artifacts are the detailed provenance contract.
+
 Hub is the right place to explain “what the system has been doing and what it is learning from,” while Tasks/Teams/Subagents remain the right places to operate a specific run or agent.

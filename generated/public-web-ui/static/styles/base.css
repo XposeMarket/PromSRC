@@ -1113,8 +1113,8 @@ main,
 }
 :root[data-theme="dark"] .chat-input-area {
   background: #272f3d;
-  border-color: #3a4455;
-  box-shadow: 0 4px 28px rgba(0,0,0,0.35), 0 1px 4px rgba(0,0,0,0.2);
+  border: none;
+  box-shadow: none;
 }
 :root[data-theme="dark"] .queued-prompts-panel {
   background: linear-gradient(180deg, #2c3442, #272f3a);

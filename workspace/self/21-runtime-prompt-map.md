@@ -325,11 +325,11 @@ Boot turns get full interactive memory even when the user message says "do not c
 
 ### 5L) Brain runner
 
-**File:** `src/gateway/brain/brain-runner.ts` — calls `deps.handleChat(..., 'cron', toolFilter)` with a tight per-job tool allowlist and mutation scope. Because `cron` takes the interactive personality path, the brain receives the full USER/SOUL/MEMORY/intraday stack; the live V2 prompt builders are `_buildThoughtPromptV2` / `_buildDreamPromptV2` / `_buildDreamCleanupPromptV2` (the V1 builders are dead code).
+**File:** `src/gateway/brain/brain-runner.ts` — first calls `src/gateway/brain/activity-package.ts` to build the canonical redacted six-hour package, then calls `deps.handleChat(..., 'cron', toolFilter)` with a tight per-job tool allowlist and mutation scope. Because `cron` takes the interactive personality path, the brain receives the full USER/SOUL/MEMORY/intraday stack plus the direct package; the live V2 prompt builders are `_buildThoughtPromptV2` / `_buildDreamPromptV2` / `_buildDreamCleanupPromptV2` (the V1 builders are dead code).
 
 | Job | Notes |
 |-----|-------|
-| Brain Thought | Observation + seed capture + Active Work Ledger upkeep + light research (`web_search`/`web_fetch`, private-only source read). **Mandatory current-state verification** before seeding. Forbids USER/SOUL/MEMORY/proposal writes; may do low-risk existing-skill maintenance. |
+| Brain Thought | Receives `prometheus.thoughts.activity-package.v1` directly for the exact UTC `[start,end)` six-hour window, including stable event IDs/provenance, source coverage, unresolved work, and direct continuations. It performs observation + seed capture + Active Work Ledger upkeep + light research (`web_search`/`web_fetch`, private-only source read). **Mandatory current-state verification** before seeding. It must not search/list covered activity, and forbids USER/SOUL/MEMORY/proposal writes; it may do low-risk existing-skill maintenance. |
 | Brain Dream | Drives off the Active Work Ledger + thoughts; **re-verifies current state** (catches anything fixed since the Thought); deep research (`web_*` + `browser_*`); files hardened `action` proposals + auto-applies existing-skill evolution. |
 | Cleanup | Memory solidifier + skill-curator critic; subtractive only. |
 | Skill curator | Skill maintenance only. |
@@ -451,7 +451,7 @@ flowchart TB
 | Schedule memory / self-reflection | `cron-scheduler.ts:1101–1114`, `self-reflection.ts:18–49` |
 | Onboarding first-run rules | `onboarding/meet-prompt.ts:8–105` |
 | Realtime voice context | `realtime.router.ts:166–214` |
-| Brain automated analysis prompts | `brain-runner.ts` (per job section) |
+| Brain automated analysis prompts | `brain-runner.ts` (per job section); Thought package contract: `brain/activity-package.ts` |
 
 ---
 

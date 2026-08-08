@@ -423,6 +423,7 @@ function _providerFromModelChange(detail = {}) {
   const slashIdx = modelRef.indexOf('/');
   const provider = String(detail?.provider || detail?.providerId || (slashIdx > 0 ? modelRef.slice(0, slashIdx) : '') || '').trim().toLowerCase();
   const accountId = String(detail?.accountId || detail?.account_id || '').trim();
+  if (provider) _activeProvider = provider;
   if (accountId) _activeAccountId = accountId;
   return provider;
 }
@@ -513,8 +514,10 @@ export function wireMobileContextWindow(page, { getSessionId, getProvider, getAc
   }
 
   // Pre-load so the ring shows the real fill as soon as the chat opens,
-  // not just after the popover is first tapped.
+  // not just after the popover is first tapped. Force plan-provider resolve so
+  // model switches don't leave a stale OpenAI weekly window on xAI/Grok.
   _refresh(typeof getSessionId === 'function' ? getSessionId() : '', {
+    force: true,
     provider: typeof getProvider === 'function' ? getProvider() : '',
     accountId: typeof getAccountId === 'function' ? getAccountId() : '',
   });

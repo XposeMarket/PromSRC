@@ -657,7 +657,7 @@ Plus: VOICEAGENT.md, `soul-loader.buildSystemPrompt` (AGENTS.md + TOOLS.md + sou
 | Path | System opener | Source |
 |------|---------------|--------|
 | Context compactor | `You are ContextCompactor. You only produce a faithful rolling summary for context retention. No tools, no chatter.` | `chat.router.ts:1527` |
-| Brain thought | `You are Prometheus, running an automated Brain Thought analysis.` + STRICT RULES | `brain-runner.ts:1410+` |
+| Brain thought | `You are Prometheus, running an automated Brain Thought analysis.` + direct canonical `ACTIVITY PACKAGE` + STRICT RULES; covered-activity search/list tools are not exposed | `brain-runner.ts:_buildThoughtPromptV2` (current source around 1991+) and `brain/activity-package.ts` |
 | Reactor | `You are in EXECUTE mode. Today is {date}. Workspace: {path}` + node_call rules | `reactor.ts:443+` |
 | Internal HTTP agent | `[SUBAGENT: {name}]` + system_prompt.md + task | `internal-agent-task.ts:225+` |
 

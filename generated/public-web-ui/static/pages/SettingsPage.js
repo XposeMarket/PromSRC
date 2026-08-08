@@ -5534,17 +5534,38 @@ let _pairingCurrentChallenge = null;
 
 async function pairingAdminApi(path, opts = {}) {
   const bridge = window.prometheusPairingAdmin;
-  if (!bridge || typeof bridge.request !== 'function') return api(path, opts);
-  let body = opts.body;
-  if (typeof body === 'string' && body.trim()) {
-    try { body = JSON.parse(body); }
-    catch { throw new Error('Invalid pairing administration request body.'); }
+  // Electron desktop app: trusted IPC bridge injects the pairing-admin token.
+  // Browser / dev gateway UI: fall through to same-origin api() — the gateway
+  // must accept local-standalone loopback admin (including host 0.0.0.0 binds).
+  if (bridge && typeof bridge.request === 'function') {
+    let body = opts.body;
+    if (typeof body === 'string' && body.trim()) {
+      try { body = JSON.parse(body); }
+      catch { throw new Error('Invalid pairing administration request body.'); }
+    }
+    return bridge.request({
+      path,
+      method: String(opts.method || 'GET').toUpperCase(),
+      body,
+    });
   }
-  return bridge.request({
-    path,
-    method: String(opts.method || 'GET').toUpperCase(),
-    body,
-  });
+
+  try {
+    return await api(path, opts);
+  } catch (err) {
+    const raw = String(err?.message || err || '');
+    if (/API 403|Trusted desktop pairing authority required/i.test(raw)) {
+      throw new Error(
+        'Pairing admin blocked on this browser session. Use the local gateway origin (127.0.0.1/localhost), or open the desktop app. If gateway.auth.token / Electron pairing authority is configured, browser Settings cannot manage pairing without that authority.'
+      );
+    }
+    if (/API 404|Cannot GET|Cannot POST|<!DOCTYPE html>/i.test(raw)) {
+      throw new Error(
+        'Pairing API route missing or returned HTML instead of JSON. Confirm the running gateway includes pairing routes and you are on the local Settings UI, not a stale bundle.'
+      );
+    }
+    throw err;
+  }
 }
 
 async function loadPairingPanel() {

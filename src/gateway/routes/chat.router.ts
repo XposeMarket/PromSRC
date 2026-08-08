@@ -2412,6 +2412,7 @@ async function handleChat(
       sendSSE('latency_mark', {
         stage,
         elapsedMs,
+        traceId: turnTiming.turnId,
         message: `Latency: ${stage} at ${elapsedMs}ms`,
         ...extra,
       });
@@ -6510,25 +6511,36 @@ RULES:
         let streamedVisibleText = '';
         let suppressRunawayStream = false;
         let providerRequestStartedAt = 0;
-	      const emitStreamToken = (chunk: string) => {
-	        if (abortSignal?.aborted) return;
-	        const text = String(chunk || '');
-	        if (!text || suppressRunawayStream) return;
+        let providerPassFirstEventAt = 0;
+        let providerPassFirstVisibleTokenAt = 0;
+
+        const noteProviderPassEvent = (eventKind: string) => {
+          if (!providerPassFirstEventAt) providerPassFirstEventAt = Date.now();
           if (!firstProviderEventAt) {
             firstProviderEventAt = markLatency('first_provider_event', {
               provider: generationOverride.providerId,
               model: generationOverride.model,
-              eventKind: 'assistant_delta',
+              eventKind,
             });
           }
+        };
+
+	      const emitStreamToken = (chunk: string) => {
+	        if (abortSignal?.aborted) return;
+	        const text = String(chunk || '');
+	        if (!text || suppressRunawayStream) return;
+          noteProviderPassEvent('assistant_delta');
+          if (!providerPassFirstVisibleTokenAt) providerPassFirstVisibleTokenAt = Date.now();
           if (!firstVisibleTokenAt) {
-            const providerTtftMs = providerRequestStartedAt
-              ? Math.max(0, Date.now() - providerRequestStartedAt)
+            const providerTtftMs = providerRequestStartedAt && providerPassFirstVisibleTokenAt
+              ? Math.max(0, providerPassFirstVisibleTokenAt - providerRequestStartedAt)
               : undefined;
             firstVisibleTokenAt = markLatency('first_visible_token', {
               provider: generationOverride.providerId,
               model: generationOverride.model,
-              providerWaitMs: firstProviderEventAt ? firstProviderEventAt - providerRequestStartedAt : undefined,
+              providerWaitMs: providerPassFirstEventAt && providerRequestStartedAt
+                ? Math.max(0, providerPassFirstEventAt - providerRequestStartedAt)
+                : undefined,
               providerTtftMs,
             });
           }
@@ -6591,13 +6603,7 @@ RULES:
 	        if (abortSignal?.aborted) return;
 	        const text = String(chunk || '');
 	        if (!text) return;
-          if (!firstProviderEventAt) {
-            firstProviderEventAt = markLatency('first_provider_event', {
-              provider: generationOverride.providerId,
-              model: generationOverride.model,
-              eventKind: source,
-            });
-          }
+          noteProviderPassEvent(source);
           if (!firstReasoningAt) {
             firstReasoningAt = markLatency('first_reasoning_delta', {
               provider: generationOverride.providerId,
@@ -6620,13 +6626,7 @@ RULES:
 	        if (abortSignal?.aborted || !event || typeof event !== 'object') return;
 	        const type = String(event.type || '').trim();
 	        if (!type) return;
-          if (!firstProviderEventAt) {
-            firstProviderEventAt = markLatency('first_provider_event', {
-              provider: generationOverride.providerId,
-              model: generationOverride.model,
-              eventKind: type,
-            });
-          }
+          noteProviderPassEvent(type);
 	        sendSSE('model_stream_event', { event });
 	      };
       currentModelCapabilities = resolveCapabilitiesForGenerationOverride(generationOverride);
@@ -6659,6 +6659,8 @@ RULES:
       } else {
         if (messages[0]?.role === 'system') messages[0].content = buildSystemPrompt('full');
       }
+      providerPassFirstEventAt = 0;
+      providerPassFirstVisibleTokenAt = 0;
       providerRequestStartedAt = markLatency('provider_request_start', {
         provider: generationOverride.providerId,
         model: generationOverride.model,
@@ -6846,8 +6848,8 @@ RULES:
             provider: generationOverride.providerId,
             model: generationOverride.model,
             stageDurationMs: Date.now() - providerRequestStartedAt,
-            firstProviderEventMs: firstProviderEventAt ? firstProviderEventAt - providerRequestStartedAt : undefined,
-            firstVisibleTokenMs: firstVisibleTokenAt ? firstVisibleTokenAt - providerRequestStartedAt : undefined,
+            firstProviderEventMs: providerPassFirstEventAt ? providerPassFirstEventAt - providerRequestStartedAt : undefined,
+            firstVisibleTokenMs: providerPassFirstVisibleTokenAt ? providerPassFirstVisibleTokenAt - providerRequestStartedAt : undefined,
           });
 	        response = result.message;
 	        if (result.thinking) {
@@ -6864,8 +6866,8 @@ RULES:
           provider: generationOverride.providerId,
           model: generationOverride.model,
           stageDurationMs: Date.now() - providerRequestStartedAt,
-          firstProviderEventMs: firstProviderEventAt ? firstProviderEventAt - providerRequestStartedAt : undefined,
-          firstVisibleTokenMs: firstVisibleTokenAt ? firstVisibleTokenAt - providerRequestStartedAt : undefined,
+          firstProviderEventMs: providerPassFirstEventAt ? providerPassFirstEventAt - providerRequestStartedAt : undefined,
+          firstVisibleTokenMs: providerPassFirstVisibleTokenAt ? providerPassFirstVisibleTokenAt - providerRequestStartedAt : undefined,
         });
 	        response = result.message;
 	        if (result.thinking) {
@@ -20125,6 +20127,11 @@ router.post('/api/chat', async (req, res) => {
     startedAt: Date.now(),
     phase: 'http_admission',
   });
+  const traceId = turnTiming.turnId;
+  // Expose only the opaque turn correlation ID. It lets the browser join
+  // response/SSE marks to the bounded server timing log without logging
+  // prompts, tokens, credentials, or request bodies.
+  res.setHeader('X-Prometheus-Trace-Id', traceId);
   turnTiming.mark('request_received');
   const excludedSkillIds = normalizeExcludedSkillIdsInput(req.body?.excludedSkillIds || req.body?.excludedMatchingSkillIds);
   const forcedSkillIds = normalizeForcedSkillIdsInput(req.body?.selectedSkillIds || req.body?.forcedSkillIds || req.body?.matchedSkillIds);
@@ -20339,7 +20346,20 @@ router.post('/api/chat', async (req, res) => {
 
   const httpSendSSE = createSSESender(res);
   let sendSSE = (event: string, data: any) => {
-    const eventData = clientRequestId ? { ...(data || {}), clientRequestId } : data;
+    const attachTrace = event === 'latency_mark'
+      || event === 'runtime_registered'
+      || event === 'ui_preflight'
+      || event === 'progress_state'
+      || event === 'final'
+      || event === 'done'
+      || event === 'error';
+    const eventData = (clientRequestId || attachTrace)
+      ? {
+          ...(data || {}),
+          ...(clientRequestId ? { clientRequestId } : {}),
+          ...(attachTrace ? { traceId } : {}),
+        }
+      : data;
     const frame = appendMainChatStreamEvent(resolvedSessionId, chatStream.streamId, event, eventData);
     const payload = frame
       ? { ...(eventData || {}), seq: frame.seq, streamId: chatStream.streamId }

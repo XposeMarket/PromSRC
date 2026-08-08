@@ -55,6 +55,12 @@ The audit mirror has several related artifacts under the workspace `audit/chats/
 
 The immediate continuity journal is append-only and synchronous, but intentionally bounded and best-effort. It scrubs secret-looking fields, caps strings/objects/arrays, never carries raw tool output, and cannot fail a user turn. The broader transcript/audit materialization is asynchronous and bounded; if overloaded it can drop mirror records while canonical session state continues to exist. Therefore audit data is evidence and recovery support—not a license to infer an action happened when its current live state says otherwise.
 
+### D. Brain Thought activity package
+
+The six-hour Brain Thought context is not assembled from the audit mirror. `src/gateway/brain/activity-package.ts` reads canonical runtime stores and emits `prometheus.thoughts.activity-package.v1` with UTC `[start,end)` semantics, stable event IDs, merged provenance, source-coverage status, unresolved-work records, and redaction metadata. It covers timestamped chats/messages, tasks/journals/evidence, runs/schedules/heartbeats, managed threads/teams, tool calls/results/errors, browser metadata/observations, file/workspace changes, agents/subagents, runtime/config changes, important events, and direct continuation refs for oversized ledgers.
+
+The package is injected into the Thought prompt before the model call, so Thought does not search/reconstruct covered activity. The audit mirror remains a user-facing recovery/debug surface and can lag or omit lanes; it is not the package authority. When inline context is insufficient, every omitted event is represented by a direct continuation JSONL part or an explicit omission/error in the package manifest. Credentials, tokens, cookies, raw payloads, binary/screenshot data, and private reasoning are excluded.
+
 ## 2. Main-chat Goals
 
 ### What a Goal is

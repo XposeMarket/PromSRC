@@ -108,7 +108,7 @@ Read [Operational systems](20-operational-systems.md), [Proposals](pages/06-prop
 
 ### 10. Learning, skills, Brain, and Browser Teach
 
-Skills are versioned instruction/resource packages with routing, lifecycle, provenance, snapshots, and a change ledger. They are not executable plugins. Browser Teach records a demonstrated browser workflow and requires explicit verification before it can recommend reusable assets. Brain/Skill Curator turns evidence into typed review candidates; higher-risk or behavioral changes are proposal/review-gated rather than silently applied.
+Skills are versioned instruction/resource packages with routing, lifecycle, provenance, snapshots, and a change ledger. They are not executable plugins. Browser Teach records a demonstrated browser workflow and requires explicit verification before it can recommend reusable assets. Brain Thought first receives the direct canonical six-hour activity package (with redacted stable event provenance and continuations); Brain/Skill Curator turns that evidence into typed review candidates. Higher-risk or behavioral changes are proposal/review-gated rather than silently applied.
 
 See [Settings, plugins, and connectors](18-settings-plugins-connectors.md), [Operational systems](20-operational-systems.md), [Hub](pages/08-hub.md), and [skills source reference](../14-skills-and-frontend.md).
 
