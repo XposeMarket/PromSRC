@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import type { ModelStreamEvent } from '../../providers/LLMProvider.js';
+import { getInjectedMasterKey } from '../../security/vault-key-bootstrap.js';
 import {
   DEFAULT_MODEL_CALL_MAX_MESSAGE_BYTES,
   MODEL_CALL_WORKER_PROTOCOL_VERSION,
@@ -415,6 +416,13 @@ function spawnSlot(slot: WorkerSlot): void {
     return;
   }
   try {
+    // Electron hands the OS-unsealed vault key to the gateway over stdin. The
+    // model worker is another Node process, so it must receive the same key
+    // before importing any provider/vault code. Passing it over the private
+    // child stdin pipe keeps the key out of the process environment and disk.
+    const managedVaultKey = process.env.PROMETHEUS_ELECTRON_MANAGED === '1'
+      ? (getInjectedMasterKey()?.toString('hex') || '')
+      : null;
     const child = fork(entry, [], {
       cwd: process.cwd(),
       env: {
@@ -424,8 +432,9 @@ function spawnSlot(slot: WorkerSlot): void {
       },
       execArgv: process.execArgv,
       serialization: 'json',
-      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      stdio: [managedVaultKey !== null ? 'pipe' : 'ignore', 'pipe', 'pipe', 'ipc'],
     });
+    if (managedVaultKey !== null) child.stdin?.write(`${managedVaultKey}\n`);
     slot.child = child;
     child.stdout?.resume();
     child.stderr?.on('data', (chunk) => {
