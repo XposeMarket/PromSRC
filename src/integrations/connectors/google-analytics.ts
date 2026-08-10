@@ -25,8 +25,10 @@ export class GoogleAnalyticsConnector extends OAuthConnector {
         'openid',
       ],
       usePkce: false,
+      useNonce: true,
       callbackPort: 19429,
       callbackPath: '/auth/callback/ga4',
+      revokeUrl: 'https://oauth2.googleapis.com/revoke',
     };
     super(cfg, configDir);
   }

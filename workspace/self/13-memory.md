@@ -58,6 +58,16 @@ Memory search performance telemetry:
 
 `memory_read_record` resolves full records from either layer.
 
+### Atomic MEMORY prompt projection (2026-08-09)
+
+`workspace/MEMORY.md` remains the canonical durable file. Prometheus still reads and writes that file through `memory_read`, `memory_write`, `memory_browse`, and the compact `memory(action=...)` compatibility wrapper. A successful `memory_write(file="memory", ...)` invalidates the in-process atom snapshot so the next prompt turn sees the new source text.
+
+The default main-Prometheus prompt no longer injects the raw file. `src/gateway/memory-index/memory-atoms.ts` parses each markdown bullet (including continuation lines) as an atom and preserves exact source text plus a `workspace/MEMORY.md:<start>-<end>` citation. `prompt-context.ts` emits `[MEMORY_REFERENCE]` containing every qualifying, deduplicated direct and related atom for the current turn. The normal main path has no arbitrary top-N atom/related-hit cap; it uses a source-relative character safety ceiling so a normal-sized MEMORY.md can project all matching durable facts. Voice has a smaller latency/voice-prompt budget.
+
+`USER.md`, the configured soul, and the active workspace `SOUL.md` remain full prompt layers on main Prometheus paths. Brain/Thought turns are a compatibility exception and retain the full raw `MEMORY.md` alongside the separate short-lived Thought activity context. Standalone, background, team, and manager actors retain their memory-isolation boundary and do not inherit main MEMORY atoms.
+
+The indexed `memory_search` system remains a separate evidence/episodic layer for decisions, transcripts, project history, and exact citations. Automatic broad search is best-effort and never awaited solely for first-token generation; it is included only if it completes during existing prompt work, and its automatic compiler filters canonical `workspace/MEMORY.md` hits because atoms already own that source. Explicit `memory_search`, `memory_read_record`, related-memory, timeline, and `memory_read` calls remain the deep/evidence path when the user asks for history or the complete source.
+
 ## 27) Memory Index Layers
 
 Evidence index:

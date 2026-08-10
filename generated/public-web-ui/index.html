@@ -136,36 +136,52 @@
     window.__PROM_LOAD_SETTINGS = makeModuleLoader(() => import('./static/pages/SettingsPage.js?v=settings-boot-recovery-v12'));
     window.__PROM_LOAD_CONNECTIONS = makeModuleLoader(() => import('./static/pages/ConnectionsPage.js'));
 
-    const SETTINGS_TABS = ['system', 'heartbeat', 'search', 'credentials', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
+    const SETTINGS_TABS = ['system', 'appearance', 'heartbeat', 'search', 'credentials', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
 
     // Keep the settings shell interactive while the full controller is loading.
     // This is also a graceful fallback if one of the controller's dependencies
     // fails to load: users can still switch panels and close the modal.
     const applySettingsTabFallback = function applySettingsTabFallback(tab) {
-      const activeTab = SETTINGS_TABS.includes(tab) ? tab : 'system';
+      const activeTab = SETTINGS_TABS.includes(tab) ? (tab === 'migration' ? 'system' : tab) : 'system';
+      if (tab === 'migration') window.settingsLegacyMigrationNotice = true;
       window.settingsTab = activeTab;
       SETTINGS_TABS.forEach((candidate) => {
         const btn = document.getElementById(`settings-tab-${candidate}`);
         const panel = document.getElementById(`settings-panel-${candidate}`);
-        if (btn) {
-          btn.style.background = candidate === activeTab ? '#eaf2ff' : '#fff';
-          btn.style.borderColor = candidate === activeTab ? '#bdd3f6' : 'var(--line)';
-          btn.style.color = candidate === activeTab ? '#0d4faf' : 'var(--muted)';
-        }
+        if (btn) btn.classList.toggle('active', candidate === activeTab);
         if (panel) panel.style.display = candidate === activeTab ? 'block' : 'none';
       });
       return activeTab;
     };
 
+    window.filterSettingsTabs = function filterSettingsTabs(value) {
+      const query = String(value || '').trim().toLowerCase();
+      document.querySelectorAll('#settings-tabstrip .settings-tab-item').forEach((btn) => {
+        const haystack = `${btn.textContent || ''} ${btn.getAttribute('data-settings-search') || ''}`.toLowerCase();
+        btn.hidden = !!query && !haystack.includes(query);
+      });
+      document.querySelectorAll('#settings-tabstrip .settings-nav-group-label').forEach((label) => {
+        let next = label.nextElementSibling;
+        let hasVisible = false;
+        while (next && !next.classList.contains('settings-nav-group-label')) {
+          if (!next.hidden) hasVisible = true;
+          next = next.nextElementSibling;
+        }
+        label.hidden = !!query && !hasVisible;
+      });
+    };
+
     const closeSettingsShim = function closeSettingsShim() {
       const modal = document.getElementById('settings-modal');
       if (modal) modal.style.display = 'none';
+      document.body.classList.remove('settings-page-open');
     };
     window.closeSettings = closeSettingsShim;
 
     const openSettingsShim = async function openSettingsShim(tab) {
       const modal = document.getElementById('settings-modal');
       if (modal) modal.style.display = 'flex';
+      document.body.classList.add('settings-page-open');
       const activeTab = applySettingsTabFallback(tab || window.settingsTab || 'system');
       try {
         await window.__PROM_LOAD_SETTINGS();
@@ -236,6 +252,7 @@
     // dark/light CSS untouched, plus an `id` exposed as data-skin for overrides.
     window.PROM_THEMES = [
       { id: 'light', label: 'Prometheus One', base: 'dark'  },
+      { id: 'gray',  label: 'Ash & Ember',    base: 'dark'  },
       { id: 'dark',  label: 'Default Dark',  base: 'dark'  },
       { id: 'blue',  label: 'Olympian Blue', base: 'dark'  },
       { id: 'purple', label: 'Aether Violet', base: 'dark' },
@@ -244,12 +261,20 @@
       window.PROM_THEMES.find((t) => t.id === id) || window.PROM_THEMES[0];
     try {
       const saved = localStorage.getItem('prometheus_theme');
-      const theme = window.PROM_RESOLVE_THEME(saved);
+      const theme = saved === 'custom'
+        ? { id: 'custom', label: 'Custom theme', base: 'dark' }
+        : window.PROM_RESOLVE_THEME(saved);
       document.documentElement.setAttribute('data-theme', theme.base);
       document.documentElement.setAttribute('data-skin', theme.id);
+      const appearance = JSON.parse(localStorage.getItem('prometheus_appearance_v1') || '{}');
+      const opacity = Number(appearance.backgroundOpacity);
+      document.documentElement.setAttribute('data-background-visuals', appearance.backgroundEffects === true ? 'on' : 'off');
+      document.documentElement.style.setProperty('--pm-background-opacity', Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : '0.82');
     } catch {
       document.documentElement.setAttribute('data-theme', 'dark');
       document.documentElement.setAttribute('data-skin', 'light');
+      document.documentElement.setAttribute('data-background-visuals', 'off');
+      document.documentElement.style.setProperty('--pm-background-opacity', '0.82');
     }
   })();
 </script>
@@ -260,7 +285,8 @@
 <link rel="stylesheet" href="static/styles/pages.css?v=generated-image-modal-v3">
 <link rel="stylesheet" href="static/styles/projects.css">
 <link rel="stylesheet" href="static/styles/hub.css?v=skill-hover-actions">
-<link rel="stylesheet" href="static/styles/themes.css?v=named-themes-gold-v9">
+<link rel="stylesheet" href="static/styles/themes.css?v=desktop-themed-canvas-v2">
+<link rel="stylesheet" href="static/styles/settings.css?v=full-page-settings-v2">
 
 <!-- ── Prometheus Mobile PWA ─────────────────────────────────────── -->
 <meta name="application-name" content="Prometheus">
@@ -297,7 +323,6 @@
 <div id="pm-one-splash" class="pm-one-splash" role="status" aria-label="Prometheus One is starting — tap to skip" tabindex="0" hidden>
   <div class="pm-one-starfield pm-one-starfield-far" aria-hidden="true"></div>
   <div class="pm-one-starfield pm-one-starfield-near" aria-hidden="true"></div>
-  <div class="pm-one-center-blackout" aria-hidden="true"></div>
   <svg class="pm-one-constellations" viewBox="0 0 390 844" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
     <defs>
       <filter id="pm-one-star-glow" x="-250%" y="-250%" width="600%" height="600%"><feGaussianBlur stdDeviation="1.8" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
@@ -324,7 +349,7 @@
   </svg>
   <div class="pm-one-brand">
     <div class="pm-one-mark-wrap" aria-hidden="true">
-      <img class="pm-one-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v240-mobile-splash" alt="" decoding="sync" fetchpriority="high" />
+      <img class="pm-one-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="sync" fetchpriority="high" />
     </div>
     <div class="pm-one-title" aria-label="Prometheus One">Prometheus One</div>
   </div>
@@ -369,7 +394,7 @@
         if (!mobileCssTag) {
           const cssTag = document.createElement('link');
           cssTag.rel = 'stylesheet';
-          cssTag.href = 'static/styles/mobile.css?v=pm-v240-mobile-splash';
+      cssTag.href = 'static/styles/mobile.css?v=pm-v260-2026-08-09-mobile-theme-palette';
           cssTag.dataset.promMobileStyle = '1';
           document.head.appendChild(cssTag);
         }
@@ -2171,7 +2196,7 @@
         <span id="proposals-badge" style="display:none;position:absolute;top:0px;right:2px;min-width:16px;height:16px;border-radius:8px;background:#e05c5c;color:#fff;font-size:9px;font-weight:700;line-height:16px;text-align:center;padding:0 3px"></span>
       </div>
 
-      <!-- More popover: Audit + Memory + Connections -->
+      <!-- More popover: Hub + Audit + Memory + Plugins -->
       <div class="nav-more-wrap">
         <div class="nav-item" id="moreNavBtn" onclick="toggleMorePopover(event)">
           <div class="nav-icon">
@@ -2185,6 +2210,12 @@
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
             </div>
             <span>Hub</span>
+          </div>
+          <div class="more-popover-item" id="nav-plugins" onclick="setMode('plugins');closeMorePopover()">
+            <div class="nav-icon">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="13" height="13"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><path d="M4.5 9v4M11.5 9v4M2.5 11h4M9.5 11h4"/></svg>
+            </div>
+            <span>Plugins</span>
           </div>
           <div class="more-popover-item" id="nav-audit" onclick="setMode('audit');closeMorePopover()">
             <div class="nav-icon">
@@ -2212,32 +2243,16 @@
     <div class="sidebar-section" id="sidebar-sessions-section">
       <div class="section-title">Sessions</div>
 
-      <!-- Segmented tabs: Chats / Projects / Skills -->
+      <!-- Segmented tabs: Chats / Skills. Projects live inline in Chats. -->
       <div class="seg-tabs" id="segTabs">
         <button class="seg-btn active" data-tab="chats" onclick="setSidebarSegTab('chats')">Chats</button>
-        <button class="seg-btn" data-tab="projects" onclick="setSidebarSegTab('projects')">Projects</button>
         <button class="seg-btn" data-tab="skills" onclick="setSidebarSegTab('skills')">Skills</button>
       </div>
 
       <!-- Chats tab -->
       <div id="sidebar-jobs" class="session-list">
-        <!-- Edit mode header (hidden until edit mode) -->
-        <div id="sessions-edit-bar" style="display:flex;justify-content:space-between;align-items:center;padding:2px 0 6px">
-          <button class="sidebar-action" id="sessions-edit-btn" onclick="toggleSessionsEditMode()">Edit</button>
-        </div>
         <div id="jobs-list">
           <div class="empty-state" style="font-size:11px">No chats yet.<br>Start a new conversation.</div>
-        </div>
-      </div>
-
-      <!-- Projects tab -->
-      <div id="sidebar-projects" class="session-list" style="display:none">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 0 6px">
-          <button class="sidebar-action" onclick="newProject()">+ New</button>
-          <button class="sidebar-action" id="projects-edit-btn" onclick="toggleProjectsEditMode()">Edit</button>
-        </div>
-        <div id="projects-list">
-          <div class="empty-state" style="font-size:11px">No projects yet.</div>
         </div>
       </div>
 
@@ -2277,7 +2292,7 @@
 <header class="topbar">
   <div class="topbar-left">
     <div class="page-title">
-      <strong id="page-title-text">Chat</strong>
+      <strong id="page-title-text">New chat</strong>
       <span id="page-title-sub">Prometheus operator workspace</span>
     </div>
   </div>
@@ -2331,13 +2346,17 @@
       </div>
     </div>
 
-    <div class="status-pill">
+    <button
+      type="button"
+      class="status-pill gateway-status-pill"
+      id="gateway-status-pill"
+      onclick="openSettings('system')"
+      title="Open Settings · General"
+      aria-label="Open Settings · General"
+    >
       <div class="dot" id="ollama-dot"></div>
       <span id="ollama-status">Checking...</span>
-    </div>
-    <div class="status-pill" id="model-pill" onclick="openSettings('models')" title="Click to change model" style="cursor:pointer">
-      <span id="current-provider-badge" style="font-size:10px;font-weight:700;color:var(--muted);margin-right:4px"></span><span id="header-model-speed-icon" class="model-speed-icon" title="Fast mode" aria-label="Fast mode" hidden>⚡</span><span id="current-model">-</span>
-    </div>
+    </button>
     <div class="status-pill stat-compact" id="system-pill">
       <span id="quick-system-stats">CPU --% • RAM --% • GPU --%</span>
     </div>
@@ -2396,6 +2415,7 @@
       </div>
       <div id="chat-skill-trigger-pill" class="chat-skill-trigger-pill" style="display:none" aria-live="polite"></div>
       <div id="chat-slash-command-popover" class="chat-slash-command-popover" style="display:none"></div>
+      <div id="chat-skill-command-popover" class="chat-slash-command-popover chat-skill-command-popover" style="display:none"></div>
       <!-- Hidden file input -->
       <input type="file" id="chat-file-input" multiple style="display:none" onchange="onChatFileInputChange(event)">
       <!-- Input row -->
@@ -2473,36 +2493,16 @@
             </button>
             <div class="chat-context-window-metrics" id="chat-context-window-breakdown" hidden>
               <div class="chat-context-window-row">
-                <span>Messages</span>
-                <span id="chat-context-window-messages">-</span>
-              </div>
-              <div class="chat-context-window-row">
-                <span>Tool observations</span>
-                <span id="chat-context-window-tools">-</span>
-              </div>
-              <div class="chat-context-window-row">
                 <span>Compaction trigger</span>
                 <span id="chat-context-window-trigger">-</span>
               </div>
               <div class="chat-context-window-row">
-                <span>Full stored thread</span>
-                <span id="chat-context-window-stored">-</span>
+                <span>Cached</span>
+                <span id="chat-context-window-cached">-</span>
               </div>
               <div class="chat-context-window-row">
-                <span>Stored process logs</span>
-                <span id="chat-context-window-process">-</span>
-              </div>
-              <div class="chat-context-window-row">
-                <span>Raw tool storage</span>
-                <span id="chat-context-window-raw-tools">-</span>
-              </div>
-              <div class="chat-context-window-row">
-                <span>Logged provider usage</span>
-                <span id="chat-context-window-usage">-</span>
-              </div>
-              <div class="chat-context-window-row">
-                <span>Tool schema estimate</span>
-                <span id="chat-context-window-tool-schema">-</span>
+                <span>Total thread tokens</span>
+                <span id="chat-context-window-thread-total">-</span>
               </div>
             </div>
             <div class="chat-context-window-plan" id="chat-context-window-plan" hidden>
@@ -2745,8 +2745,12 @@
 
     <div class="hub-split">
       <div class="hub-split-pane hub-pane-achievements">
-        <div class="hub-section-title">Goals</div>
-        <div class="hub-achievements-grid" id="hub-achievements-grid"></div>
+        <div class="hub-goals-header">
+          <div class="hub-section-title">Goals</div>
+          <button class="hub-goals-refresh" id="hub-goals-refresh" type="button" title="Refresh goals" aria-label="Refresh goals">↻</button>
+        </div>
+        <div class="hub-goals-status" id="hub-goals-status" role="status" aria-live="polite" hidden></div>
+        <div class="hub-achievements-grid" id="hub-achievements-grid" role="region" aria-label="Goals" aria-busy="false"></div>
       </div>
       <div class="hub-split-divider"></div>
       <div class="hub-split-pane hub-pane-heatmap">
@@ -2829,6 +2833,48 @@
   </div>
 </div>
 
+<!-- PLUGINS VIEW (connector/integration catalog) -->
+<div id="plugins-view" class="page-view plugins-page-view" style="display:none;flex-direction:column;gap:0;padding:0;">
+  <div class="plugins-page-shell">
+    <div class="plugins-page-header">
+      <div>
+        <div class="plugins-page-kicker">Prometheus integrations</div>
+        <div class="plugins-page-title">Plugins</div>
+        <div class="plugins-page-subtitle">Connect services, local resources, and MCP integrations. Model providers stay in Settings.</div>
+      </div>
+      <div class="plugins-page-actions">
+        <span id="plugins-connections-count" class="plugins-count" aria-live="polite"></span>
+        <button type="button" class="plugins-page-btn" onclick="loadConnectionsState()" title="Refresh plugin catalog">Refresh</button>
+        <button type="button" class="plugins-page-btn plugins-page-btn--primary" onclick="openAddPluginModal()" title="Add a connector, MCP server, or plugin">+ Add plugin</button>
+      </div>
+    </div>
+
+    <div class="plugins-page-toolbar">
+      <label class="plugins-search-label" for="plugins-search">Search</label>
+      <div class="plugins-search-wrap">
+        <svg class="plugins-search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 5 5"></path></svg>
+        <input id="plugins-search" class="plugins-search-input" type="search" autocomplete="off" placeholder="Search plugins, categories, tools, or auth methods" aria-label="Search plugins, categories, tools, or auth methods" oninput="filterConnectors(this.value)" />
+        <button id="plugins-search-clear" class="plugins-search-clear" type="button" aria-label="Clear plugin search" onclick="document.getElementById('plugins-search').value='';filterConnectors('')">×</button>
+      </div>
+      <span id="plugins-search-results" class="plugins-search-results" aria-live="polite"></span>
+    </div>
+
+    <div id="plugins-catalog-state" class="plugins-catalog-state" role="status" aria-live="polite"></div>
+    <div id="plugins-grid" class="plugins-grid" aria-live="polite"></div>
+
+    <div id="plugins-mcp-section" class="plugins-mcp-section" style="display:none">
+      <div class="plugins-section-heading">
+        <div>
+          <div class="plugins-section-title">Configured MCP servers</div>
+          <div class="plugins-section-subtitle">Local and remote MCP connections are managed separately from bundled connector manifests.</div>
+        </div>
+        <span id="plugins-mcp-count" class="plugins-count"></span>
+      </div>
+      <div id="plugins-mcp-servers-list" class="plugins-mcp-list"></div>
+    </div>
+  </div>
+</div>
+
 <div id="bgtasks-view" class="page-view" style="display:none;flex-direction:column;gap:0;padding:16px;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-shrink:0">
     <div style="display:flex;align-items:center;gap:12px">
@@ -2847,15 +2893,13 @@
     </div>
   </div>
 
-  <div id="managed-threads-section" style="display:none;flex-direction:column;gap:8px;margin-bottom:16px;flex-shrink:0">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-      <div style="display:flex;align-items:center;gap:8px">
-        <span style="font-size:12px;font-weight:800;letter-spacing:0.01em">Managed Threads</span>
-        <span id="managed-threads-count" style="font-size:10px;background:#f1edff;color:#6240a8;border-radius:999px;padding:2px 8px;font-weight:700">0 active</span>
-      </div>
-      <span style="font-size:10px;color:var(--muted)">Prometheus sessions being followed by another thread</span>
+  <div id="bgt-search-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-shrink:0">
+    <label for="bgt-search" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted)">Search</label>
+    <div style="position:relative;display:flex;align-items:center;flex:1;max-width:520px">
+      <input id="bgt-search" type="search" autocomplete="off" placeholder="Search tasks and managed threads" aria-label="Search tasks and managed threads" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:8px 34px 8px 11px;font-size:12px;font-family:inherit;background:var(--panel);color:var(--text);outline:none">
+      <button id="bgt-search-clear" type="button" aria-label="Clear task search" style="position:absolute;right:6px;border:0;background:none;color:var(--muted);font-size:16px;line-height:1;cursor:pointer;padding:2px 4px;visibility:hidden">×</button>
     </div>
-    <div id="managed-threads-list" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:2px"></div>
+    <span id="bgt-search-results" aria-live="polite" style="font-size:11px;color:var(--muted)"></span>
   </div>
 
   <!-- Kanban columns -->
@@ -2909,54 +2953,52 @@
 <!-- Schedule Create/Edit Modal -->
 <style>
   #schedule-modal .schedule-modal-dialog {
-    width: min(980px, 96vw);
+    width: min(620px, 96vw);
   }
   #schedule-modal .schedule-modal-form {
-    display: grid !important;
-    grid-template-columns: minmax(250px, 0.8fr) minmax(420px, 1.45fr);
-    align-items: start;
-    gap: 18px 22px !important;
-  }
-  #schedule-modal .schedule-basic-field,
-  #schedule-modal .schedule-agent-field,
-  #schedule-modal .schedule-channel-field {
-    grid-column: 1;
-  }
-  #schedule-modal .schedule-prompt-field {
-    grid-column: 2;
-    grid-row: 1 / span 5;
+    display: flex !important;
+    flex-direction: column;
+    gap: 14px !important;
   }
   #schedule-modal #schedule-prompt {
-    min-height: 360px !important;
+    min-height: 180px !important;
     line-height: 1.5;
   }
-  #schedule-modal .schedule-skills-field {
-    grid-column: 2;
+  #schedule-modal .schedule-modal-form > div > label,
+  #schedule-modal .schedule-repeat-field > label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  #schedule-modal .schedule-modal-form input,
+  #schedule-modal .schedule-modal-form select,
+  #schedule-modal .schedule-modal-form textarea {
+    box-sizing: border-box;
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: var(--text);
+    background: var(--panel-2);
+    font-size: 13px;
   }
   #schedule-modal .schedule-skills-picker {
     display: grid !important;
     grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
   }
-  #schedule-modal #schedule-skill-select {
-    min-width: 0;
+  #schedule-modal .schedule-repeat-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
   }
-  #schedule-modal .schedule-context-field {
-    grid-column: 1 / -1;
-  }
-  @media (max-width: 760px) {
-    #schedule-modal .schedule-modal-dialog { width: min(620px, 96vw); }
-    #schedule-modal .schedule-modal-form { grid-template-columns: 1fr; }
-    #schedule-modal .schedule-basic-field,
-    #schedule-modal .schedule-agent-field,
-    #schedule-modal .schedule-channel-field,
-    #schedule-modal .schedule-prompt-field,
-    #schedule-modal .schedule-skills-field,
-    #schedule-modal .schedule-context-field {
-      grid-column: auto;
-      grid-row: auto;
-    }
-    #schedule-modal #schedule-prompt { min-height: 260px !important; }
-  }
+  #schedule-modal .schedule-basic-field { order: 1; }
+  #schedule-modal .schedule-prompt-field { order: 2; }
+  #schedule-modal .schedule-skills-field { order: 3; }
+  #schedule-modal .schedule-agent-field { order: 4; }
+  #schedule-modal .schedule-repeat-field { order: 5; }
 </style>
 <div id="schedule-modal" style="display:none;position:fixed;inset:0;background:rgba(10,20,40,0.35);z-index:9999;align-items:center;justify-content:center;padding:18px">
   <div class="schedule-modal-dialog" style="max-height:92vh;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-md)">
@@ -2965,88 +3007,56 @@
       <button onclick="closeScheduleModal()" style="border:0;background:none;font-size:18px;cursor:pointer;color:var(--muted);line-height:1">&#x2715;</button>
     </div>
     <div class="schedule-modal-form" style="padding:18px 20px;display:flex;flex-direction:column;gap:14px">
-      <!-- Name -->
+      <!-- Title -->
       <div class="schedule-basic-field">
-        <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Name</label>
+        <label>Title</label>
         <input id="schedule-name" type="text" placeholder="e.g., Daily standup" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)" />
       </div>
 
-      <!-- Occurrence picker (Piece 6) -->
-      <div class="schedule-basic-field">
-        <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Frequency</label>
+      <!-- Repeat -->
+      <div class="schedule-repeat-field">
+        <label>Repeat</label>
         <select id="schedule-occurrence" onchange="onScheduleOccurrenceChange()" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
           <option value="manual">Never (manual only)</option>
           <option value="0 * * * *">Every hour</option>
           <option value="0 */3 * * *">Every 3 hours</option>
           <option value="0 */6 * * *">Every 6 hours</option>
-	          <option value="0 */8 * * *">Every 8 hours</option>
-	          <option value="0 */12 * * *">Every 12 hours</option>
-	          <option value="daily">Daily (at a specific time)</option>
-	          <option value="weekday">Weekdays (at a specific time)</option>
-	          <option value="every48">Every 48 hours (at a specific time)</option>
+          <option value="0 */8 * * *">Every 8 hours</option>
+          <option value="0 */12 * * *">Every 12 hours</option>
+          <option value="daily">Daily (at a specific time)</option>
+          <option value="weekday">Weekdays (at a specific time)</option>
+          <option value="every48">Every 48 hours (at a specific time)</option>
           <option value="custom">Custom cron expression</option>
         </select>
-      </div>
-
-      <!-- Time picker (shown for daily/every48) -->
-      <div id="schedule-time-row" class="schedule-basic-field" style="display:none">
-        <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Time</label>
-        <input id="schedule-time" type="time" value="09:00" style="width:160px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)" />
-      </div>
-
-      <!-- Custom cron input (shown for custom) -->
-      <div id="schedule-custom-cron-row" class="schedule-basic-field" style="display:none">
-        <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Cron Expression</label>
-        <div style="display:flex;gap:8px">
-          <input id="schedule-pattern" type="text" placeholder="0 9 * * *" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2);font-family:'IBM Plex Mono',monospace" />
-          <button onclick="parseSchedulePattern()" style="border:1px solid var(--brand);background:var(--brand);color:white;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Parse</button>
+        <div id="schedule-time-row" class="schedule-repeat-time" style="display:none;margin-top:8px">
+          <input id="schedule-time" type="time" value="09:00" style="width:160px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)" />
         </div>
-        <div id="schedule-pattern-preview" style="font-size:11px;color:var(--muted);padding:6px 8px;background:var(--panel-2);border-radius:6px;margin-top:6px;display:none"></div>
-      </div>
-
-      <!-- Timezone -->
-      <div class="schedule-basic-field">
-        <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Timezone</label>
-        <select id="schedule-timezone" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
-          <option value="UTC">UTC</option>
-          <option value="America/New_York">America/New_York</option>
-          <option value="America/Chicago">America/Chicago</option>
-          <option value="America/Denver">America/Denver</option>
-          <option value="America/Los_Angeles">America/Los_Angeles</option>
-          <option value="Europe/London">Europe/London</option>
-          <option value="Europe/Paris">Europe/Paris</option>
-          <option value="Asia/Tokyo">Asia/Tokyo</option>
-        </select>
+        <div id="schedule-custom-cron-row" class="schedule-repeat-custom" style="display:none;margin-top:8px">
+          <div style="display:flex;gap:8px">
+            <input id="schedule-pattern" type="text" placeholder="0 9 * * *" style="flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2);font-family:'IBM Plex Mono',monospace" />
+            <button onclick="parseSchedulePattern()" style="border:1px solid var(--brand);background:var(--brand);color:white;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">Parse</button>
+          </div>
+          <div id="schedule-pattern-preview" style="font-size:11px;color:var(--muted);padding:6px 8px;background:var(--panel-2);border-radius:6px;margin-top:6px;display:none"></div>
+        </div>
       </div>
 
       <!-- Prompt -->
       <div class="schedule-prompt-field">
-        <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Prompt / Action</label>
+        <label>Prompt</label>
         <textarea id="schedule-prompt" placeholder="What should happen when this schedule runs?" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2);resize:vertical;min-height:80px;font-family:'IBM Plex Mono',monospace"></textarea>
       </div>
 
-      <!-- Subagent picker (Piece 6) -->
+      <!-- Assigned agent -->
       <div class="schedule-agent-field">
-        <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Run As Agent</label>
-        <select id="schedule-subagent" onchange="_updateHeartbeatMdPreview(this.value)" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
-          <option value="">Main agent (default)</option>
+        <label>Assigned agent</label>
+        <select id="schedule-subagent" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
+          <option value="__main__">Main agent (Prometheus)</option>
         </select>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Select a configured agent to run this scheduled task as a specialized subagent.</div>
-        <div id="schedule-heartbeat-preview" style="display:none;margin-top:10px;border:1px solid var(--line);border-radius:8px;overflow:hidden">
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:var(--panel-2);border-bottom:1px solid var(--line)">
-            <span style="font-size:11px;font-weight:700;color:var(--muted);font-family:monospace">Agent instructions preview</span>
-            <button onclick="openAgentSettings(document.getElementById('schedule-subagent').value)" style="font-size:10px;padding:2px 8px;border:1px solid var(--line);border-radius:5px;background:var(--bg);color:var(--muted);cursor:pointer">Open Agent Settings →</button>
-          </div>
-          <pre id="schedule-heartbeat-content" style="margin:0;padding:10px;font-size:11px;color:var(--fg);white-space:pre-wrap;max-height:180px;overflow-y:auto;background:var(--bg);font-family:'IBM Plex Mono',monospace;line-height:1.5"></pre>
-        </div>
       </div>
 
-      <!-- Attached skills -->
+      <!-- Attached skill -->
       <div id="schedule-skills-row" class="schedule-skills-field">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <label style="display:block;font-size:12px;font-weight:700;color:var(--text)">Attached Skills</label>
-          <button type="button" onclick="reloadScheduleSkills()" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:4px 9px;font-size:11px;font-weight:600;cursor:pointer">Refresh</button>
-        </div>
+        <label>Attached skill</label>
         <div id="schedule-skill-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
           <span style="font-size:11px;color:var(--muted)">No skills attached.</span>
         </div>
@@ -3056,46 +3066,6 @@
           </select>
           <button type="button" onclick="addScheduleSkill()" style="border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">Attach</button>
         </div>
-      </div>
-
-      <!-- Context References -->
-      <div id="schedule-context-row" class="schedule-context-field">
-        <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Context &amp; Reference</label>
-        <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:8px">
-          <input id="schedule-ctx-title" type="text" placeholder="Reference title..." style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2);color:var(--text)" />
-          <textarea id="schedule-ctx-content" rows="3" placeholder="Reference content..." style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;background:var(--panel-2);color:var(--text);resize:vertical"></textarea>
-          <button type="button" onclick="saveScheduleCtxRef()" style="border:1px solid var(--brand);background:transparent;color:var(--brand);border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer;justify-self:end">Save Reference</button>
-        </div>
-        <div id="schedule-context-ref-list" style="display:grid;grid-template-columns:1fr;gap:6px"></div>
-
-        <div id="schedule-ctx-modal" style="display:none;position:fixed;inset:0;background:rgba(10,20,40,0.42);z-index:10000;align-items:center;justify-content:center;padding:16px">
-          <div style="width:min(580px,96vw);max-height:88vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-md);padding:14px">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-              <div style="font-size:13px;font-weight:800">Edit Context Reference</div>
-              <button onclick="closeScheduleCtxRefModal()" style="border:0;background:none;font-size:18px;cursor:pointer;color:var(--muted)">&#x2715;</button>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:8px">
-              <input id="schedule-ctx-modal-title" type="text" style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;background:var(--panel-2);color:var(--text)" />
-              <textarea id="schedule-ctx-modal-content" rows="10" style="border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:12px;font-family:inherit;background:var(--panel-2);color:var(--text);resize:vertical;line-height:1.5"></textarea>
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-                <button onclick="deleteScheduleCtxRef()" style="border:1px solid #f2c5c5;background:#fff5f5;color:#b42323;border-radius:7px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">Delete</button>
-                <div style="display:flex;gap:6px">
-                  <button onclick="closeScheduleCtxRefModal()" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:7px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">Close</button>
-                  <button onclick="updateScheduleCtxRef()" style="border:1px solid var(--brand);background:var(--brand);color:#fff;border-radius:7px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">Save Changes</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Delivery Channel -->
-      <div class="schedule-channel-field">
-        <label style="display:block;font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px">Delivery Channel</label>
-        <select id="schedule-channel" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:var(--panel-2)">
-          <option value="web">Web (notification)</option>
-          <option value="telegram">Telegram</option>
-        </select>
       </div>
     </div>
     <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line);flex-shrink:0;position:sticky;bottom:0;background:var(--panel)">
@@ -3129,9 +3099,10 @@
           <button data-creative-mode-exit="true" onclick="exitCreativeModeFromUI()" title="Exit creative mode" style="display:none;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#e8e6e1;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif"><iconify-icon icon="solar:logout-2-bold-duotone" width="14" height="14"></iconify-icon>Exit</button>
         </div>
         <div id="canvas-browser-mode-rail" style="display:none;align-items:center;gap:4px;padding-right:6px;margin-right:2px;border-right:1px solid rgba(255,255,255,0.09)">
-          <button data-browser-mode-btn="agent" onclick="setBrowserInteractionMode('agent')" title="Agent mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">Agent</button>
-          <button data-browser-mode-btn="copilot" onclick="setBrowserInteractionMode('copilot')" title="Co-pilot mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">Co-pilot</button>
-          <button data-browser-mode-btn="teach" onclick="setBrowserInteractionMode('teach')" title="Teach mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">Teach</button>
+           <button data-browser-mode-btn="agent" onclick="setBrowserInteractionMode('agent')" title="Agent mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">Agent</button>
+           <button data-browser-mode-btn="copilot" onclick="setBrowserInteractionMode('copilot')" title="Co-pilot mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">Co-pilot</button>
+           <button data-browser-mode-btn="teach" onclick="setBrowserInteractionMode('teach')" title="Teach mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">Teach</button>
+           <button data-browser-design-btn="true" onclick="toggleBrowserDesignMode()" title="Design mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(56,189,248,0.22);background:rgba(56,189,248,0.08);color:#bae6fd;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif"><iconify-icon icon="solar:magic-stick-3-bold-duotone" width="14" height="14"></iconify-icon>Design</button>
         </div>
         <div id="canvas-browser-status-pill" style="display:none;align-items:center;gap:6px;border:1px solid rgba(56,189,248,0.26);background:rgba(56,189,248,0.12);color:#bae6fd;border-radius:999px;padding:4px 10px;font-size:10px;font-weight:800;font-family:'Manrope',sans-serif;letter-spacing:0.04em;text-transform:uppercase">
           <span id="canvas-browser-status-dot" style="width:7px;height:7px;border-radius:999px;background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,0.14)"></span>
@@ -3498,38 +3469,6 @@
     </div>
   </div>
 
-  <!-- CONNECTIONS PANEL (replaces system stats) -->
-  <div class="right-section" id="connections-section" style="padding:0;border-bottom:1px solid var(--line)">
-    <div style="padding:12px 16px 6px;display:flex;align-items:center;justify-content:space-between">
-      <div class="right-section-title" style="margin:0">Connections</div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <span id="connections-count-badge" style="font-size:10px;color:var(--muted);font-weight:700"></span>
-        <button onclick="openAddPluginModal()" title="Add a connector, MCP server, or plugin" style="display:inline-flex;align-items:center;gap:4px;background:var(--brand);color:#fff;border:none;border-radius:7px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Add
-        </button>
-      </div>
-    </div>
-    <div style="padding:0 12px 8px">
-      <input
-        id="connections-search"
-        type="text"
-        placeholder="Search connectors..."
-        oninput="filterConnectors(this.value)"
-        style="width:100%;box-sizing:border-box;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--text);font-family:inherit;outline:none;transition:border-color 0.15s"
-        onfocus="this.style.borderColor='var(--brand)'"
-        onblur="this.style.borderColor='var(--line)'"
-      />
-    </div>
-    <div id="connections-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:0 12px 12px;max-height:220px;overflow-y:auto"></div>
-  </div>
-  <div class="right-section" id="mcp-servers-section" style="padding:0;border-bottom:1px solid var(--line);display:none">
-    <div style="padding:12px 16px 6px;display:flex;align-items:center;justify-content:space-between">
-      <div class="right-section-title" style="margin:0">MCP Servers</div>
-      <span id="mcp-servers-count" style="font-size:10px;color:var(--muted);font-weight:700"></span>
-    </div>
-    <div id="mcp-servers-list" style="padding:0 12px 12px;max-height:240px;overflow-y:auto"></div>
-  </div>
   <div class="right-section" id="agent-context-section">
     <div class="right-section-title">Agent Context</div>
     <div class="progress-card" id="progress-card">
@@ -3542,6 +3481,14 @@
         <div id="progress-list" class="progress-list" style="display:none"></div>
       </div>
     </div>
+  </div>
+
+  <div class="right-section chat-resources-section" id="chat-resources-section" style="display:block;padding:0;border-bottom:1px solid var(--line);flex-shrink:0">
+    <div class="chat-resources-header">
+      <div class="right-section-title">Sources</div>
+      <button id="chat-resources-expanded-close" class="chat-resources-close" type="button" aria-label="Close expanded sources" title="Close" onclick="setChatResourcesExpanded(false)" style="display:none">×</button>
+    </div>
+    <div id="chat-resources-list" class="chat-resources-list"><div class="chat-resources-empty">No sources yet.</div></div>
   </div>
 
 
@@ -3591,7 +3538,7 @@
 <!-- PROJECT DIRECTORY SETUP -->
 <div id="project-directory-modal" class="project-setup-modal" aria-modal="true" role="dialog" aria-labelledby="project-directory-title">
   <div class="project-setup-dialog">
-    <div class="project-setup-icon"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v240-mobile-splash" alt="Prometheus One" /></div>
+    <div class="project-setup-icon"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="Prometheus One" /></div>
     <h2 id="project-directory-title">Link a project directory?</h2>
     <p>Choose a file or folder in File Explorer, or paste a local path below, so Prometheus can keep this project’s chats, files, and commands scoped to the right place.</p>
     <input id="project-directory-path-input" class="project-setup-path" type="text" autocomplete="off" spellcheck="false" placeholder="Paste a file or folder path" onkeydown="if(event.key==='Enter')usePastedProjectDirectory()" />
@@ -3606,7 +3553,7 @@
 
 <div id="project-directory-permission-modal" class="project-setup-modal" aria-modal="true" role="dialog" aria-labelledby="project-directory-permission-title">
   <div class="project-setup-dialog">
-    <div class="project-setup-icon project-setup-icon-warning"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v240-mobile-splash" alt="Prometheus One" /></div>
+    <div class="project-setup-icon project-setup-icon-warning"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="Prometheus One" /></div>
     <h2 id="project-directory-permission-title">Allow this directory?</h2>
     <p>This path is outside Prometheus’s configured workspace. Choose a file or folder in File Explorer, then allow Prometheus to read, write, and modify it for this project.</p>
     <input id="project-directory-permission-path" class="project-setup-path" type="text" autocomplete="off" spellcheck="false" placeholder="Paste a file or folder path" oninput="updatePastedProjectDirectory(this.value)" />
@@ -3648,8 +3595,9 @@
 <!-- CONNECTOR DETAIL VIEW -->
 <div id="connector-view" class="connector-view" style="display:none">
   <div style="padding:18px 24px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-shrink:0">
-    <button onclick="closeConnectorView()" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;display:flex;align-items:center" title="Back to chat">
+    <button id="cv-back-btn" onclick="closeConnectorView()" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;display:flex;align-items:center;gap:5px" title="Back to plugins" aria-label="Back to plugins">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      <span id="cv-back-label" style="font-size:11px;font-weight:700">Back</span>
     </button>
     <div id="cv-logo" style="width:40px;height:40px;flex-shrink:0;display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--panel-2)"></div>
     <div>
@@ -3663,6 +3611,7 @@
   <div style="flex:1;overflow-y:auto;padding:24px 28px;display:flex;flex-direction:column;gap:20px">
     <div>
       <div id="cv-desc" style="font-size:14px;color:var(--text);line-height:1.7;margin-bottom:16px"></div>
+      <div id="cv-connection-state" class="cv-connection-state" aria-live="polite"></div>
       <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">What Prom can access</div>
       <div id="cv-permissions" style="display:flex;flex-direction:column;gap:6px"></div>
     </div>
@@ -3739,91 +3688,339 @@
   </div>
 </div>
 
-<!-- SETTINGS MODAL -->
-<div id="settings-modal" style="display:none;position:fixed;inset:0;background:rgba(10,20,40,0.35);z-index:9999;align-items:center;justify-content:center;padding:18px" onclick="if(event.target===this){event.stopPropagation();closeSettings()}">
-  <div style="width:min(980px,96vw);max-height:90vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow-md)">
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)">
-      <div style="font-weight:800">Settings</div>
-      <button class="btn btn-sm" style="background:var(--panel-2);color:var(--muted);border:1px solid var(--line)" onclick="closeSettings()">Close</button>
-    </div>
-
-	    <div id="settings-tabstrip" style="padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:8px">
-	      <button id="settings-tab-system" class="sidebar-action" onclick="setSettingsTab('system')">System</button>
-	      <button id="settings-tab-heartbeat" class="sidebar-action" onclick="setSettingsTab('heartbeat')">Heartbeat</button>
-      <button id="settings-tab-search" class="sidebar-action" onclick="setSettingsTab('search')">Search</button>
-      <button id="settings-tab-credentials" class="sidebar-action" onclick="setSettingsTab('credentials')">Credentials</button>
-      <button id="settings-tab-security" class="sidebar-action" onclick="setSettingsTab('security')">Security</button>
-      <button id="settings-tab-models" class="sidebar-action" onclick="setSettingsTab('models')">Models</button>
-      <button id="settings-tab-agents" class="sidebar-action" onclick="setSettingsTab('agents')">Agents</button>
-      <button id="settings-tab-channels" class="sidebar-action" onclick="setSettingsTab('channels')">Channels</button>
-	      <button id="settings-tab-integrations" class="sidebar-action" onclick="setSettingsTab('integrations')">Integrations</button>
-	      <button id="settings-tab-shortcuts" class="sidebar-action" onclick="setSettingsTab('shortcuts')" style="display:flex;align-items:center;gap:6px">
-	        <span id="settings-shortcuts-tab-icon" style="display:inline-flex" aria-hidden="true"></span>
-	        <span>Shortcuts</span>
-	      </button>
-	      <button id="settings-tab-pairing" class="sidebar-action" onclick="setSettingsTab('pairing')" style="display:flex;align-items:center;gap:6px">
-	        <span>Pairing</span>
-	        <span id="settings-pairing-pending-badge" style="display:none;margin-left:auto;background:#ea6a1f;color:#fff;font-size:10px;font-weight:800;padding:2px 8px;border-radius:999px;">0</span>
-	      </button>
-    </div>
-
-	    <div id="settings-panel-system" style="padding:14px 16px;display:grid;grid-template-columns:1fr 1fr;gap:14px">
-	      <!-- Appearance / Themes -->
-	      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel);grid-column:1/-1">
-	        <div class="right-section-title" style="margin-bottom:6px">Appearance</div>
-	        <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:12px">
-	          Pick a theme for the whole workspace. The theme toggle in the top bar also rotates through these in order.
-	        </div>
-	        <div id="theme-picker-grid"></div>
-	      </div>
-	      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
-	        <div class="right-section-title" style="margin-bottom:8px">Runtime</div>
-	        <div class="info-row"><span class="info-key">Model</span><span class="info-val" id="settings-runtime-model">-</span></div>
-        <div class="info-row"><span class="info-key">Gateway</span><span class="info-val" id="settings-runtime-gateway">-</span></div>
-        <div class="info-row"><span class="info-key">Provider</span><span class="info-val" id="settings-runtime-ollama">-</span></div>
+<!-- SETTINGS PAGE -->
+<div id="settings-modal" class="settings-surface" style="display:none" role="dialog" aria-label="Settings" onclick="if(event.target===this){event.stopPropagation();closeSettings()}">
+  <div class="settings-page-card">
+    <aside class="settings-page-sidebar" aria-label="Settings navigation">
+      <div class="settings-sidebar-top">
+        <button class="settings-back-btn" type="button" onclick="closeSettings()" aria-label="Back to app">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14" aria-hidden="true"><path d="M10.5 3 5.5 8l5 5"/><path d="M6 8h7"/></svg>
+          <span>Back to app</span>
+        </button>
       </div>
-      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
-        <div class="right-section-title" style="margin-bottom:8px">Notes</div>
-        <div style="font-size:12px;color:var(--muted);line-height:1.7">
-          These settings apply instantly to this gateway process.
-          For small models, keep tool routing strict and memory scoped.
+      <label class="settings-sidebar-search" for="settings-search-input">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4"/><path d="m10 10 4 4"/></svg>
+        <input id="settings-search-input" type="search" placeholder="Search settings..." autocomplete="off" oninput="filterSettingsTabs(this.value)">
+      </label>
+      <div id="settings-tabstrip" class="settings-tabstrip">
+        <div class="settings-nav-group-label">Personal</div>
+        <button id="settings-tab-system" class="settings-tab-item" data-settings-search="general system appearance" onclick="setSettingsTab('system')"><span class="settings-nav-icon" data-settings-nav-icon="sliders" aria-hidden="true"></span><span>General</span></button>
+        <button id="settings-tab-appearance" class="settings-tab-item" data-settings-search="appearance themes theme colors background embers opacity customize" onclick="setSettingsTab('appearance')"><span class="settings-nav-icon" data-settings-nav-icon="palette" aria-hidden="true"></span><span>Appearance</span></button>
+        <button id="settings-tab-models" class="settings-tab-item" data-settings-search="models ai providers" onclick="setSettingsTab('models')"><span class="settings-nav-icon" data-settings-nav-icon="grid" aria-hidden="true"></span><span>Models</span></button>
+        <button id="settings-tab-search" class="settings-tab-item" data-settings-search="search web research credentials keys api tokens" onclick="setSettingsTab('search')"><span class="settings-nav-icon" data-settings-nav-icon="search" aria-hidden="true"></span><span>Search</span></button>
+        <button id="settings-tab-security" class="settings-tab-item" data-settings-search="security permissions paths" onclick="setSettingsTab('security')"><span class="settings-nav-icon" data-settings-nav-icon="shieldCheck" aria-hidden="true"></span><span>Security</span></button>
+        <button id="settings-tab-agents" class="settings-tab-item" data-settings-search="agents subagents" onclick="setSettingsTab('agents')"><span class="settings-nav-icon" data-settings-nav-icon="users" aria-hidden="true"></span><span>Agents</span></button>
+        <button id="settings-tab-heartbeat" class="settings-tab-item" data-settings-search="heartbeat automation" onclick="setSettingsTab('heartbeat')"><span class="settings-nav-icon" data-settings-nav-icon="activity" aria-hidden="true"></span><span>Heartbeat</span></button>
+        <button id="settings-tab-channels" class="settings-tab-item" data-settings-search="channels notifications telegram discord whatsapp" onclick="setSettingsTab('channels')"><span class="settings-nav-icon" data-settings-nav-icon="send" aria-hidden="true"></span><span>Channels</span></button>
+
+        <div class="settings-nav-group-label">Integrations</div>
+        <button id="settings-tab-integrations" class="settings-tab-item" data-settings-search="integrations webhooks mcp" onclick="setSettingsTab('integrations')"><span class="settings-nav-icon" data-settings-nav-icon="grid" aria-hidden="true"></span><span>Integrations</span></button>
+        <button id="settings-tab-pairing" class="settings-tab-item" data-settings-search="pairing mobile devices remote access" onclick="setSettingsTab('pairing')"><span class="settings-nav-icon" data-settings-nav-icon="key" aria-hidden="true"></span><span>Pairing</span><span id="settings-pairing-pending-badge" style="display:none">0</span></button>
+
+        <div class="settings-nav-group-label">Coding</div>
+        <button id="settings-tab-migration" class="settings-tab-item" data-settings-search="migration import export" onclick="setSettingsTab('migration')"><span class="settings-nav-icon" data-settings-nav-icon="clipboard" aria-hidden="true"></span><span>Migration</span></button>
+        <button id="settings-tab-shortcuts" class="settings-tab-item" data-settings-search="shortcuts keyboard hotkeys" onclick="setSettingsTab('shortcuts')"><span class="settings-nav-icon" data-settings-nav-icon="keyboard" aria-hidden="true"></span><span>Keyboard shortcuts</span></button>
+      </div>
+    </aside>
+    <main class="settings-page-main">
+      <div class="settings-page-toolbar">
+        <div>
+          <div class="settings-page-kicker">Settings</div>
+          <h1 id="settings-page-title">General</h1>
         </div>
-	      </div>
-      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff;grid-column:1/-1">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
-          <div style="min-width:260px;flex:1">
-            <div class="right-section-title" style="margin-bottom:6px">Onboarding</div>
-            <div style="font-size:12px;color:var(--muted);line-height:1.6">
-              Replay the clean tutorial, run the no-write dev test flow, or reset onboarding intentionally.
+        <button class="settings-close-btn" type="button" onclick="closeSettings()" aria-label="Close settings">Esc</button>
+      </div>
+
+      <div id="settings-panel-system" class="settings-system-panel">
+        <section class="settings-section">
+          <div class="settings-section-heading">
+            <h2>Account</h2>
+            <span class="settings-help" tabindex="0" aria-label="Account technical details" data-settings-help="Account identity is supplied by the authenticated session. Dashboard opens the hosted account surface in a new browser context.">?</span>
+          </div>
+          <div class="settings-section-panel">
+            <div class="settings-row settings-account-row">
+              <div class="settings-row-copy">
+                <div class="settings-row-label">Signed in as</div>
+                <div id="account-email-display" class="settings-row-value">—</div>
+              </div>
+              <div class="settings-row-actions">
+                <a class="settings-inline-link" href="https://prometheusaiagent.vercel.app/dashboard" target="_blank">Open dashboard <span aria-hidden="true">↗</span></a>
+                <button class="settings-danger-button" onclick="window.prometheusLogout && window.prometheusLogout()">Sign out</button>
+              </div>
             </div>
-            <div id="settings-onboarding-status" style="font-size:11px;color:var(--muted);margin-top:8px;min-height:18px"></div>
           </div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <button class="btn btn-sm" onclick="replayOnboardingTutorial()" style="background:var(--brand);color:#fff;border:none">Replay tutorial</button>
-            <button class="btn btn-sm" onclick="runOnboardingDevTest()" style="background:#fff;color:var(--text);border:1px solid var(--line)">Dev test</button>
-            <button class="btn btn-sm" onclick="redoOnboardingFromSettings()" style="background:#fff;color:#b91c1c;border:1px solid #fecaca">Redo onboarding...</button>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-heading">
+            <h2>Runtime</h2>
+            <span class="settings-help" tabindex="0" aria-label="Runtime technical details" data-settings-help="Read-only values returned by /api/status. Provider reports local Ollama availability; model and gateway are the active process values.">?</span>
           </div>
-        </div>
+          <div class="settings-section-panel settings-runtime-panel">
+            <div class="settings-info-row"><span class="settings-row-label">Model</span><span class="settings-row-value" id="settings-runtime-model">-</span></div>
+            <div class="settings-info-row"><span class="settings-row-label">Gateway</span><span class="settings-row-value" id="settings-runtime-gateway">-</span></div>
+            <div class="settings-info-row"><span class="settings-row-label">Provider</span><span class="settings-row-value" id="settings-runtime-ollama">-</span></div>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-heading">
+            <h2>Onboarding</h2>
+            <span class="settings-help" tabindex="0" aria-label="Onboarding technical details" data-settings-help="Replay opens the tutorial, Dev test runs the onboarding flow without writes, and Redo clears onboarding state before starting again.">?</span>
+          </div>
+          <div class="settings-section-panel settings-onboarding-panel">
+            <div class="settings-onboarding-copy">
+              <div class="settings-section-description">
+                Replay the clean tutorial, run the no-write dev test flow, or reset onboarding intentionally.
+              </div>
+              <div id="settings-onboarding-status" class="settings-row-status"></div>
+            </div>
+            <div class="settings-row-actions">
+              <button class="btn btn-sm" onclick="replayOnboardingTutorial()" style="background:var(--brand);color:#fff;border:none">Replay tutorial</button>
+              <button class="btn btn-sm" onclick="runOnboardingDevTest()" style="background:#fff;color:var(--text);border:1px solid var(--line)">Dev test</button>
+              <button class="btn btn-sm" onclick="redoOnboardingFromSettings()" style="background:#fff;color:#b91c1c;border:1px solid #fecaca">Redo onboarding...</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section settings-updates-section">
+          <div class="settings-section-heading">
+            <h2>Updates</h2>
+            <span class="settings-help" tabindex="0" aria-label="Update technical details" data-settings-help="Installed public builds check the Prometheus release feed. Automatic updates download in the background and install the next time Prometheus quits.">?</span>
+          </div>
+          <div class="settings-section-panel settings-updates-panel">
+            <div class="settings-row settings-update-preference-row">
+              <div class="settings-row-copy">
+                <div class="settings-row-label">Automatically update Prometheus</div>
+                <div class="settings-row-description">Check for new releases, download them in the background, and install them when the app quits.</div>
+              </div>
+              <button id="settings-auto-update-toggle" class="appearance-switch" type="button" role="switch" aria-checked="true" aria-label="Automatically update Prometheus" onclick="toggleDesktopAutoUpdate()"><span class="appearance-switch-thumb"></span></button>
+            </div>
+            <div class="settings-update-status-row">
+              <div class="settings-row-copy">
+                <div id="settings-update-status" class="settings-row-label" role="status" aria-live="polite">Checking update support…</div>
+                <div id="settings-update-version" class="settings-row-description">Installed version —</div>
+              </div>
+              <div class="settings-row-actions settings-update-actions">
+                <button id="settings-update-check" class="btn btn-sm" type="button" onclick="checkDesktopForUpdates()">Check for updates</button>
+                <button id="settings-update-download" class="btn btn-sm" type="button" onclick="downloadDesktopUpdate()" hidden>Download update</button>
+                <button id="settings-update-install" class="btn btn-sm" type="button" onclick="installDesktopUpdate()" hidden>Restart &amp; install</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+
+        <section id="settings-external-import" class="settings-section settings-external-import-section">
+          <div class="settings-section-heading">
+            <h2>Import chats &amp; setup</h2>
+            <span class="settings-help" tabindex="0" aria-label="External import safety details" data-settings-help="Imports are staged and previewed before commit. Historical tool calls never execute. Credentials and OAuth tokens are redacted and must be authorized again.">?</span>
+          </div>
+          <div class="settings-section-description settings-external-import-intro">Bring supported local conversation exports into normal Prometheus threads, or review MCP and agent setup separately. Imported chats can continue with Prometheus models; resuming a source provider session is not claimed.</div>
+          <div class="settings-import-discovery" aria-labelledby="settings-import-discovery-title">
+            <div class="settings-import-discovery-heading">
+              <div>
+                <h3 id="settings-import-discovery-title">Found on this computer</h3>
+                <p>Prometheus checks known local agent folders only. Nothing is imported during detection; every item gets a quarantine preview and explicit confirmation.</p>
+              </div>
+              <button class="settings-inline-link" type="button" onclick="loadExternalImportDiscovery()">Scan again</button>
+            </div>
+            <div id="settings-import-discovery" class="settings-import-discovery-list" role="status" aria-live="polite">Scanning known local agent folders…</div>
+          </div>
+          <div class="settings-import-grid">
+            <article class="settings-import-card">
+              <div class="settings-import-card-heading">
+                <div>
+                  <h3>Import another conversation source</h3>
+                  <p>ChatGPT export first, plus safe local Codex, Claude Code, Cursor, Hermes, OpenClaw/LocalClaw, JSON/JSONL, and Markdown adapters.</p>
+                </div>
+                <span class="settings-import-safety-badge">Preview first</span>
+              </div>
+              <label class="settings-import-field" for="settings-import-conversation-path">
+                <span>Local export or folder path</span>
+                <input id="settings-import-conversation-path" class="settings-row-input settings-import-path-input" type="text" autocomplete="off" placeholder="C:\\Exports\\conversations.zip or ~/.claude/projects" />
+              </label>
+              <div class="settings-import-field-grid">
+                <label class="settings-import-field" for="settings-import-conversation-adapter">
+                  <span>Format / source (optional)</span>
+                  <select id="settings-import-conversation-adapter" class="settings-row-select">
+                    <option value="">Detect safely</option>
+                    <option value="chatgpt-export">ChatGPT official export</option>
+                    <option value="codex-local">Codex local/app-server artifacts</option>
+                    <option value="claude-code-local">Claude Code local artifacts</option>
+                    <option value="cursor-local">Cursor local database/artifacts</option>
+                    <option value="hermes-local">Hermes local transcripts</option>
+                    <option value="openclaw-local">OpenClaw local transcripts</option>
+                    <option value="localclaw-local">LocalClaw local transcripts</option>
+                    <option value="generic-json">Generic JSON</option>
+                    <option value="generic-jsonl">Generic JSONL</option>
+                    <option value="generic-markdown">Generic Markdown</option>
+                  </select>
+                </label>
+                <label class="settings-import-field" for="settings-import-conversation-account">
+                  <span>Source account label (optional)</span>
+                  <input id="settings-import-conversation-account" class="settings-row-input" type="text" autocomplete="off" placeholder="personal / work" />
+                </label>
+              </div>
+              <label class="settings-import-field" for="settings-import-conversation-mode" style="margin-top:9px">
+                <span>Import scope</span>
+                <select id="settings-import-conversation-mode" class="settings-row-select">
+                  <option value="sessions">Chats only — keep regular threads</option>
+                  <option value="projects">Projects + chats — create Prometheus projects</option>
+                </select>
+              </label>
+              <div class="settings-import-card-actions">
+                <button class="btn btn-sm" type="button" onclick="previewExternalImportJob('conversation')">Build preview</button>
+                <span class="settings-import-inline-note">Nothing is committed yet.</span>
+              </div>
+              <div id="settings-import-conversation-status" class="settings-row-status" role="status" aria-live="polite"></div>
+              <div id="settings-import-conversation-job" class="settings-import-job" aria-live="polite"><div class="settings-import-empty">No staged import. Choose a local export or conversation folder and build a preview.</div></div>
+              <div id="settings-import-conversation-batches" class="settings-import-job settings-import-batches" aria-live="polite"></div>
+            </article>
+
+            <article class="settings-import-card">
+              <div class="settings-import-card-heading">
+                <div>
+                  <h3>Import another MCP &amp; agent setup</h3>
+                  <p>Import non-secret MCP definitions, memory/skills metadata, permissions, and connector configuration as an inactive review snapshot.</p>
+                </div>
+                <span class="settings-import-safety-badge settings-import-safety-badge--secure">Reauthorize secrets</span>
+              </div>
+              <label class="settings-import-field" for="settings-import-setup-path">
+                <span>Local setup or configuration folder</span>
+                <input id="settings-import-setup-path" class="settings-row-input settings-import-path-input" type="text" autocomplete="off" placeholder="C:\\Users\\you\\.config\\agent" />
+              </label>
+              <div class="settings-import-field-grid">
+                <label class="settings-import-field" for="settings-import-setup-label">
+                  <span>Setup label (optional)</span>
+                  <input id="settings-import-setup-label" class="settings-row-input" type="text" autocomplete="off" placeholder="Hermes setup" />
+                </label>
+                <label class="settings-import-checkbox" for="settings-import-setup-overwrite">
+                  <input id="settings-import-setup-overwrite" type="checkbox" />
+                  <span>Replace conflicting MCP definitions after preview</span>
+                </label>
+              </div>
+              <div class="settings-import-card-actions">
+                <button class="btn btn-sm" type="button" onclick="previewExternalImportJob('setup')">Build setup preview</button>
+                <span class="settings-import-inline-note">Tokens and keys are never silently copied.</span>
+              </div>
+              <div id="settings-import-setup-status" class="settings-row-status" role="status" aria-live="polite"></div>
+              <div id="settings-import-setup-job" class="settings-import-job" aria-live="polite"><div class="settings-import-empty">No staged setup import. Configuration stays inactive until you confirm it.</div></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="settings-section settings-auto-settle-section">
+          <div class="settings-section-heading">
+            <h2>Auto-settle</h2>
+            <span class="settings-help" tabindex="0" aria-label="Auto-settle technical details" data-settings-help="Saved through /api/settings/bulk as session.autoSettle. Protected chats—pinned, active, task-owned, scheduled, supervised, project, approval-sensitive, and automated—are skipped.">?</span>
+          </div>
+          <div class="settings-section-panel">
+            <div class="settings-row settings-auto-settle-row">
+              <div class="settings-row-copy">
+                <div class="settings-row-label">Move untouched chats to Settled Chats</div>
+                <div class="settings-row-description">Choose when inactivity should qualify a chat.</div>
+              </div>
+              <select id="settings-auto-settle-after" class="settings-row-select" aria-label="Auto-settle inactivity period">
+                <option value="0">Never</option>
+                <option value="7">After 7 days</option>
+                <option value="14">After 14 days</option>
+                <option value="30">After 30 days</option>
+                <option value="90">After 90 days</option>
+                <option value="custom">Custom date…</option>
+              </select>
+            </div>
+            <div id="settings-auto-settle-extra" class="settings-auto-settle-extra">
+              <div id="settings-auto-settle-custom-wrap" class="settings-auto-settle-date-row">
+                <label class="settings-row-label" for="settings-auto-settle-custom-date">Custom cutoff date</label>
+                <input id="settings-auto-settle-custom-date" type="date" class="settings-row-input" />
+              </div>
+              <div class="settings-auto-settle-preview-row">
+                <button id="settings-auto-settle-preview" type="button" class="btn btn-sm">Preview eligible chats</button>
+              </div>
+              <div id="settings-auto-settle-status" class="settings-row-status"></div>
+            </div>
+          </div>
+        </section>
       </div>
-      <!-- Account section -->
-      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel);grid-column:1/-1">
-        <div class="right-section-title" style="margin-bottom:10px">Account</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-          <div>
-            <div style="font-size:12px;color:var(--muted);margin-bottom:3px">Signed in as</div>
-            <div id="account-email-display" style="font-size:13px;font-weight:600;color:var(--text)">—</div>
+
+      <div id="settings-panel-appearance" class="settings-appearance-page" style="display:none">
+        <section class="settings-section appearance-theme-section">
+          <div class="settings-section-heading">
+            <h2>Theme</h2>
+            <span class="settings-help" tabindex="0" aria-label="Theme technical details" data-settings-help="Choose a preset or build a custom Prometheus theme. Presets remain available from the top-bar theme button.">?</span>
           </div>
-          <button onclick="window.prometheusLogout && window.prometheusLogout()" style="display:flex;align-items:center;gap:6px;padding:7px 14px;border:1px solid var(--err);border-radius:8px;background:transparent;color:var(--err);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit" onmouseover="this.style.background='rgba(209,75,75,0.08)'" onmouseout="this.style.background='transparent'">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-            Sign out
-          </button>
-        </div>
-        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between">
-          <div style="font-size:11px;color:var(--muted)">Manage subscription, billing, and account settings</div>
-          <a href="https://prometheusaiagent.vercel.app/dashboard" target="_blank" style="font-size:11px;color:var(--brand);text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">Open dashboard →</a>
-        </div>
+          <div class="settings-section-description appearance-theme-intro">Choose a starting point for the workspace. Your custom colors and typography stay on this device until you switch back to a preset.</div>
+          <div id="theme-picker-grid" class="appearance-theme-grid"></div>
+        </section>
+
+        <section class="settings-section appearance-custom-section">
+          <div class="settings-section-heading">
+            <h2>Customize</h2>
+            <span class="settings-help" tabindex="0" aria-label="Custom theme technical details" data-settings-help="Custom theme controls update live and are stored locally in your browser. Choose Custom theme above to make the editor the active theme.">?</span>
+          </div>
+          <div class="settings-section-panel appearance-custom-panel">
+            <div class="appearance-panel-toolbar">
+              <div>
+                <div class="appearance-panel-title">Custom theme</div>
+                <div class="settings-section-description">Tune the accent, surfaces, type, and contrast to make Prometheus feel like yours.</div>
+              </div>
+              <button id="appearance-reset-custom" class="appearance-secondary-button" type="button" onclick="resetAppearanceCustomTheme()">Reset</button>
+            </div>
+            <div class="appearance-control-list">
+              <div class="appearance-control-row">
+                <div class="appearance-control-copy"><label for="appearance-accent-color">Accent</label><span>Primary action and highlight color</span></div>
+                <div class="appearance-color-control"><input id="appearance-accent-color" type="color" aria-label="Accent color" onchange="updateAppearanceCustomField('accent', this.value)"><input id="appearance-accent-text" class="appearance-hex-input" type="text" inputmode="text" maxlength="7" aria-label="Accent hex value" onchange="updateAppearanceCustomField('accent', this.value)"></div>
+              </div>
+              <div class="appearance-control-row">
+                <div class="appearance-control-copy"><label for="appearance-background-color">Background</label><span>Main workspace surface</span></div>
+                <div class="appearance-color-control"><input id="appearance-background-color" type="color" aria-label="Background color" onchange="updateAppearanceCustomField('background', this.value)"><input id="appearance-background-text" class="appearance-hex-input" type="text" inputmode="text" maxlength="7" aria-label="Background hex value" onchange="updateAppearanceCustomField('background', this.value)"></div>
+              </div>
+              <div class="appearance-control-row">
+                <div class="appearance-control-copy"><label for="appearance-foreground-color">Foreground</label><span>Primary text and readable contrast</span></div>
+                <div class="appearance-color-control"><input id="appearance-foreground-color" type="color" aria-label="Foreground color" onchange="updateAppearanceCustomField('foreground', this.value)"><input id="appearance-foreground-text" class="appearance-hex-input" type="text" inputmode="text" maxlength="7" aria-label="Foreground hex value" onchange="updateAppearanceCustomField('foreground', this.value)"></div>
+              </div>
+              <div class="appearance-control-row">
+                <div class="appearance-control-copy"><label for="appearance-font">UI font</label><span>Typography used across the desktop workspace</span></div>
+                <select id="appearance-font" class="appearance-select" onchange="updateAppearanceCustomField('font', this.value)" aria-label="UI font">
+                  <option value="Manrope">Manrope</option>
+                  <option value="Inter">Inter</option>
+                  <option value="IBM Plex Sans">IBM Plex Sans</option>
+                  <option value="system-ui">System UI</option>
+                  <option value="Georgia">Georgia</option>
+                </select>
+              </div>
+              <div class="appearance-control-row">
+                <div class="appearance-control-copy"><label for="appearance-sidebar-translucent">Translucent sidebar</label><span>Let the workspace atmosphere show through the left rail</span></div>
+                <button id="appearance-sidebar-translucent" class="appearance-switch" type="button" role="switch" aria-checked="true" onclick="toggleAppearanceCustomSwitch('translucentSidebar')"><span class="appearance-switch-thumb"></span></button>
+              </div>
+              <div class="appearance-control-row appearance-range-row">
+                <div class="appearance-control-copy"><label for="appearance-contrast">Contrast</label><span>Separate surfaces and borders more clearly</span></div>
+                <div class="appearance-range-control"><input id="appearance-contrast" type="range" min="0" max="100" step="1" oninput="updateAppearanceCustomField('contrast', this.value)" aria-label="Custom theme contrast"><output id="appearance-contrast-value" for="appearance-contrast">60</output></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section appearance-background-section">
+          <div class="settings-section-heading">
+            <h2>Background atmosphere</h2>
+            <span class="settings-help" tabindex="0" aria-label="Background atmosphere technical details" data-settings-help="Background images and ember particles are off by default. When enabled, the blue, purple, and dark gray desktop themes use their atmospheric artwork and matching embers.">?</span>
+          </div>
+          <div class="settings-section-panel appearance-preferences-panel">
+            <div class="appearance-control-list">
+              <div class="appearance-control-row">
+                <div class="appearance-control-copy"><label for="appearance-background-effects">Background images &amp; embers</label><span>Bring back the atmospheric art and matching ember particles</span></div>
+                <button id="appearance-background-effects" class="appearance-switch" type="button" role="switch" aria-checked="false" onclick="toggleAppearanceBackgrounds()"><span class="appearance-switch-thumb"></span></button>
+              </div>
+              <div class="appearance-control-row appearance-range-row">
+                <div class="appearance-control-copy"><label for="appearance-background-opacity">Background image opacity</label><span id="appearance-background-opacity-help">Higher values make the artwork more visible behind the interface</span></div>
+                <div class="appearance-range-control"><input id="appearance-background-opacity" type="range" min="0" max="100" step="1" oninput="updateAppearanceBackgroundOpacity(this.value)" aria-label="Background image opacity"><output id="appearance-background-opacity-value" for="appearance-background-opacity">82%</output></div>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
-    </div>
 
 	    <div id="settings-panel-heartbeat" style="display:none;padding:14px 16px">
 	      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
@@ -3874,103 +4071,69 @@
 	      </div>
 	    </div>
 
-	    <div id="settings-panel-search" style="display:none;padding:14px 16px;grid-template-columns:1fr 1fr;gap:14px">
-	        <div id="provider-fields-container" style="border:1px solid var(--line);border-radius:12px;padding:12px">
-        <div class="right-section-title" style="margin-bottom:8px">Web Search</div>
-        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Preferred Provider</label>
-        <select id="settings-provider" style="width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:13px">
-          <option value="tinyfish">TinyFish</option>
-          <option value="tavily">Tavily</option>
-          <option value="google">Google CSE</option>
-          <option value="brave">Brave</option>
-          <option value="ddg">DuckDuckGo</option>
-        </select>
-        <div style="margin-top:12px;padding:8px 10px;background:#f0f6ff;border:1px solid #bdd3f6;border-radius:8px;font-size:11px;color:#1e40af;display:flex;align-items:center;gap:8px">
-          <span id="settings-search-callout-icon" style="display:inline-flex;flex-shrink:0" aria-hidden="true"></span>
-          <span>API keys are managed in the <strong>Credentials</strong> tab and stored encrypted.</span>
+    <div id="settings-panel-search" class="settings-search-page" style="display:none;padding:14px 16px">
+      <section class="settings-section settings-search-provider-section">
+        <div class="settings-section-heading">
+          <h2>Preferred provider</h2>
+          <span class="settings-help" tabindex="0" aria-label="Preferred provider technical details" data-settings-help="This provider is used for web-search requests when a task does not specify a provider. Credential rows below are sent with the selected provider's request path.">?</span>
         </div>
-      </div>
+        <div class="settings-section-panel settings-search-provider-panel">
+          <div class="settings-search-row">
+            <label for="settings-provider" class="settings-search-row-label">Search provider</label>
+            <select id="settings-provider" class="settings-row-select">
+              <option value="tinyfish">TinyFish</option>
+              <option value="tavily">Tavily</option>
+              <option value="google">Google CSE</option>
+              <option value="brave">Brave</option>
+              <option value="ddg">DuckDuckGo</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section settings-search-credentials-section">
+        <div class="settings-section-heading">
+          <h2>Search provider keys</h2>
+          <span class="settings-help" tabindex="0" aria-label="Search provider keys technical details" data-settings-help="Values are loaded from the existing search settings endpoint. Stored key values remain masked; enter a new value only when replacing one.">?</span>
+        </div>
+        <div class="settings-section-panel settings-credentials-panel">
+          <div class="settings-credential-row">
+            <label for="cred-tinyfish-key" class="settings-credential-label"><span>TinyFish API key</span><span class="settings-help" tabindex="0" aria-label="TinyFish API key technical details" data-settings-help="Encrypted TinyFish credential used by the TinyFish search provider.">?</span></label>
+            <div class="settings-credential-control">
+              <input id="cred-tinyfish-key" type="password" placeholder="tf-..." data-placeholder="tf-..." autocomplete="new-password" />
+              <button id="cred-tinyfish-visibility-toggle" onclick="toggleCredVis('cred-tinyfish-key',this)" title="Show value" aria-label="Show value"></button>
+            </div>
+          </div>
+          <div class="settings-credential-row">
+            <label for="cred-tavily-key" class="settings-credential-label"><span>Tavily API key</span><span class="settings-help" tabindex="0" aria-label="Tavily API key technical details" data-settings-help="Encrypted Tavily credential used by the Tavily search provider.">?</span></label>
+            <div class="settings-credential-control">
+              <input id="cred-tavily-key" type="password" placeholder="tvLy-…" data-placeholder="tvLy-…" autocomplete="new-password" />
+              <button id="cred-tavily-visibility-toggle" onclick="toggleCredVis('cred-tavily-key',this)" title="Show value" aria-label="Show value"></button>
+            </div>
+          </div>
+          <div class="settings-credential-row">
+            <label for="cred-google-key" class="settings-credential-label"><span>Google API key</span><span class="settings-help" tabindex="0" aria-label="Google API key technical details" data-settings-help="Encrypted Google API credential used with the Google Custom Search JSON API.">?</span></label>
+            <div class="settings-credential-control">
+              <input id="cred-google-key" type="password" placeholder="AIzaSy…" data-placeholder="AIzaSy…" autocomplete="new-password" />
+              <button id="cred-google-visibility-toggle" onclick="toggleCredVis('cred-google-key',this)" title="Show value" aria-label="Show value"></button>
+            </div>
+          </div>
+          <div class="settings-credential-row">
+            <label for="cred-google-cx" class="settings-credential-label"><span>Google CSE ID</span><span class="settings-help" tabindex="0" aria-label="Google CSE ID technical details" data-settings-help="The Custom Search Engine identifier paired with the Google API key. It is not a secret, but is persisted with search settings.">?</span></label>
+            <div class="settings-credential-control">
+              <input id="cred-google-cx" type="text" placeholder="c3222d…" data-placeholder="c3222d…" />
+            </div>
+          </div>
+          <div class="settings-credential-row">
+            <label for="cred-brave-key" class="settings-credential-label"><span>Brave API key</span><span class="settings-help" tabindex="0" aria-label="Brave API key technical details" data-settings-help="Encrypted Brave Search credential used by the Brave search provider.">?</span></label>
+            <div class="settings-credential-control">
+              <input id="cred-brave-key" type="password" placeholder="BSA…" data-placeholder="BSA…" autocomplete="new-password" />
+              <button id="cred-brave-visibility-toggle" onclick="toggleCredVis('cred-brave-key',this)" title="Show value" aria-label="Show value"></button>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
-
-    <div id="settings-panel-credentials" style="display:none;padding:14px 16px">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-
-        <!-- Search Provider Keys -->
-        <div style="border:1px solid var(--line);border-radius:12px;padding:14px">
-          <div class="right-section-title" style="margin-bottom:4px">Search Provider Keys</div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Stored encrypted in vault — never written to config.json in plain text.</div>
-
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">TinyFish API Key</label>
-          <div style="display:flex;gap:6px;margin-bottom:10px">
-            <input id="cred-tinyfish-key" type="password" placeholder="tf-..." autocomplete="new-password"
-              style="flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12px;font-family:var(--font-mono, monospace)" />
-            <button id="cred-tinyfish-visibility-toggle" onclick="toggleCredVis('cred-tinyfish-key',this)" title="Show value" aria-label="Show value"
-              style="padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);font-size:13px;cursor:pointer;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-width:38px"></button>
-          </div>
-
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">Tavily API Key</label>
-          <div style="display:flex;gap:6px;margin-bottom:10px">
-            <input id="cred-tavily-key" type="password" placeholder="tvLy-…" autocomplete="new-password"
-              style="flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12px;font-family:var(--font-mono, monospace)" />
-            <button id="cred-tavily-visibility-toggle" onclick="toggleCredVis('cred-tavily-key',this)" title="Show value" aria-label="Show value"
-              style="padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);font-size:13px;cursor:pointer;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-width:38px"></button>
-          </div>
-
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">Google API Key</label>
-          <div style="display:flex;gap:6px;margin-bottom:10px">
-            <input id="cred-google-key" type="password" placeholder="AIzaSy…" autocomplete="new-password"
-              style="flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12px;font-family:var(--font-mono, monospace)" />
-            <button id="cred-google-visibility-toggle" onclick="toggleCredVis('cred-google-key',this)" title="Show value" aria-label="Show value"
-              style="padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);font-size:13px;cursor:pointer;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-width:38px"></button>
-          </div>
-
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">Google CSE ID <span style="font-weight:400;color:var(--muted)">(not a secret — stored in config)</span></label>
-          <input id="cred-google-cx" type="text" placeholder="c3222d…"
-            style="width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12px;margin-bottom:10px;box-sizing:border-box" />
-
-          <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:5px">Brave API Key</label>
-          <div style="display:flex;gap:6px">
-            <input id="cred-brave-key" type="password" placeholder="BSA…" autocomplete="new-password"
-              style="flex:1;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12px;font-family:var(--font-mono, monospace)" />
-            <button id="cred-brave-visibility-toggle" onclick="toggleCredVis('cred-brave-key',this)" title="Show value" aria-label="Show value"
-              style="padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel-2);font-size:13px;cursor:pointer;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-width:38px"></button>
-          </div>
-        </div>
-
-        <!-- Right column: status + info -->
-        <div style="display:flex;flex-direction:column;gap:12px">
-
-          <!-- Vault status card -->
-          <div style="border:1px solid var(--line);border-radius:12px;padding:14px">
-            <div class="right-section-title" style="margin-bottom:8px">Vault Status</div>
-            <div id="cred-vault-status" style="font-size:12px;color:var(--muted)">Loading…</div>
-          </div>
-
-          <!-- How it works -->
-          <div style="border:1px solid #bdd3f6;border-radius:12px;padding:14px;background:#f0f6ff">
-            <div style="font-size:12px;font-weight:700;color:#1e40af;margin-bottom:6px;display:flex;align-items:center;gap:6px">
-              <span id="settings-cred-info-icon" style="display:inline-flex" aria-hidden="true"></span>
-              <span>How Credentials Work</span>
-            </div>
-            <div style="font-size:11.5px;color:#1e40af;line-height:1.65">
-              When you hit <strong>Save Settings</strong>, any key you've entered is encrypted with AES-256-GCM and stored in <code style="background:#dbeafe;padding:1px 4px;border-radius:4px">vault.enc</code>.<br><br>
-              Config files only ever contain a <code style="background:#dbeafe;padding:1px 4px;border-radius:4px">vault:…</code> reference — never the actual key.<br><br>
-              If a field shows <strong>••••••••</strong>, a key is already stored. Leave it as-is to keep the existing key, or type a new one to replace it.
-            </div>
-          </div>
-
-          <!-- Audit log preview -->
-          <div style="border:1px solid var(--line);border-radius:12px;padding:14px">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <div class="right-section-title">Recent Vault Access</div>
-              <button onclick="loadCredVaultLog()" style="font-size:10px;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);cursor:pointer;color:var(--muted)">Refresh</button>
-            </div>
-            <div id="cred-vault-log" style="font-size:10.5px;color:var(--muted);font-family:monospace;max-height:110px;overflow-y:auto;line-height:1.6">Loading…</div>
-            </div>
-
-            </div>
-            </div>
-            </div>
 
     <div id="settings-panel-security" style="display:none;padding:14px 16px">
       <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
@@ -3999,15 +4162,20 @@
         <div style="font-size:11px;color:var(--muted);margin-top:9px;overflow-wrap:anywhere">Hard-blocked patterns: <span id="settings-hard-blocked-patterns">Loading...</span></div>
         <div id="settings-security-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
       </div>
-      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
+      <div class="settings-command-permissions-panel" style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
           <div>
             <div class="right-section-title" style="margin-bottom:4px">Always-Allowed Commands</div>
             <div style="font-size:12px;color:var(--muted);line-height:1.45">Exact command and working-directory grants created from the Always Allow button.</div>
           </div>
-          <button class="btn btn-sm" onclick="loadSecuritySettings()" style="background:#fff;border:1px solid var(--line);color:var(--text);flex-shrink:0">Refresh</button>
+          <div class="settings-command-permissions-actions">
+            <button id="settings-command-permissions-toggle" type="button" class="btn btn-sm settings-command-permissions-toggle" aria-expanded="false" aria-controls="settings-command-permissions-details" onclick="toggleCommandPermissionList()">View commands</button>
+            <button class="btn btn-sm" onclick="loadSecuritySettings()" style="background:#fff;border:1px solid var(--line);color:var(--text);flex-shrink:0">Refresh</button>
+          </div>
         </div>
-        <div id="settings-command-permissions-list" style="display:flex;flex-direction:column;gap:8px"></div>
+        <div id="settings-command-permissions-details" class="settings-command-permissions-details" hidden>
+          <div id="settings-command-permissions-list" class="settings-command-permissions-list"></div>
+        </div>
       </div>
       <div style="border:1px solid var(--line);border-radius:12px;padding:12px">
         <div class="right-section-title" style="margin-bottom:8px">File Access</div>
@@ -4020,7 +4188,7 @@
       </div>
     </div>
 
-    <div id="settings-panel-models" style="display:none;padding:14px 16px">
+    <div id="settings-panel-models" class="settings-models-page" style="display:none;padding:14px 16px">
 
       <div class="settings-models-usage" id="settings-models-usage" style="display:none">
         <div class="settings-models-usage-title">Usage &amp; Limits</div>
@@ -4029,10 +4197,12 @@
       </div>
 
       <!-- Provider selector -->
-      <div style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
-        <div class="right-section-title" style="margin-bottom:8px">Connect Provider</div>
-        <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">Backend</label>
-        <select id="settings-llm-provider" class="settings-input" onchange="onProviderChange()" style="font-size:13px">
+      <div class="settings-models-provider-bar">
+        <div class="settings-models-provider-copy">
+          <div class="settings-section-heading">Connect Provider <span class="settings-help" tabindex="0" data-settings-help="Manage provider credentials and connection status. Routing choices live in the panels on the right." aria-label="About provider connections">?</span></div>
+          <div class="settings-section-subtitle">Choose which provider connection to manage. Routing defaults are set in the panels on the right.</div>
+        </div>
+        <select id="settings-llm-provider" class="settings-input settings-models-provider-select" onchange="onProviderChange()" aria-label="Provider connection">
           <option value="ollama">Ollama (local)</option>
           <option value="llama_cpp">llama.cpp (local)</option>
           <option value="lm_studio">LM Studio (local)</option>
@@ -4044,10 +4214,10 @@
         </select>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="settings-models-layout">
 
         <!-- Left col: provider-specific connection fields -->
-        <div style="border:1px solid var(--line);border-radius:12px;padding:12px">
+        <div class="settings-models-connection-panel settings-section-panel">
 
           <!-- Ollama -->
           <div id="prov-fields-ollama">
@@ -4137,8 +4307,8 @@
             </div>
             <label style="display:block;font-size:12px;color:var(--muted);margin:10px 0 6px">Tool Choice <span style="color:var(--muted);font-weight:400">(when to force tool use)</span></label>
             <select id="settings-openai-tool-choice" class="settings-input" style="font-size:13px">
+              <option value="auto" selected>auto — let model decide (enables preamble)</option>
               <option value="required">required — force tool call on first turn</option>
-              <option value="auto">auto — let model decide (enables preamble)</option>
             </select>
             <div style="display:flex;gap:8px;margin-top:8px">
               <button class="btn btn-sm" onclick="refreshOpenAIModels()" style="background:#fff;border:1px solid var(--line);color:var(--text)">Refresh Models</button>
@@ -4337,7 +4507,16 @@
 
 	          <div id="prov-fields-dynamic"></div>
 
-            <div style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff">
+            <div id="settings-provider-state-summary" class="settings-provider-state-summary">
+              <div class="settings-provider-state-title">Current provider state</div>
+              <div class="settings-provider-state-grid">
+                <div><span>Model</span><strong id="settings-provider-state-model">Provider default</strong></div>
+                <div><span>Reasoning</span><strong id="settings-provider-state-reasoning">Provider default</strong></div>
+                <div><span>Speed</span><strong id="settings-provider-state-speed">Standard</strong></div>
+              </div>
+              <div class="settings-provider-state-note">Choose the active model and per-agent behavior in the routing panels.</div>
+            </div>
+            <div id="settings-context-compaction" style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--panel-2)">
               <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">
                 <div>
                   <div style="font-size:12px;font-weight:800;color:var(--text)">Context & Summary Compaction</div>
@@ -4360,19 +4539,20 @@
 	        </div>
 
         <!-- Right col: Agent Model Defaults -->
-        <div id="agent-model-defaults-col" style="border:1px solid var(--line);border-radius:12px;padding:16px;background:linear-gradient(180deg,#fff 0%,#f9fbff 100%);display:flex;flex-direction:column">
+        <div id="agent-model-defaults-col" class="settings-model-defaults-column">
           <style>
             /* These are actionable labels, not helper copy. Keep them readable in every theme. */
             #agent-model-defaults-col [data-settings-icon-label],
             #agent-model-defaults-col .model-default-section-title { color:var(--text) !important; }
           </style>
-          <div class="right-section-title" style="margin:14px 0 4px;padding-top:14px;border-top:1px solid var(--line);order:20">Agent Model Defaults</div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5;order:21">
-            Preset which model each agent type uses. Agents without an override fall back to the primary model.
+          <div class="settings-model-defaults-intro">
+            <div class="settings-section-heading">Agent Model Defaults <span class="settings-help" tabindex="0" data-settings-help="Choose the provider and model used by each agent slot. Blank rows inherit the primary route." aria-label="About agent model defaults">?</span></div>
+            <div class="settings-section-subtitle">Set the model used by each agent type. Blank rows inherit from the primary route.</div>
           </div>
 
-          <div style="border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff;margin-bottom:14px">
-            <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">Templates</div>
+          <div class="settings-models-subsection settings-models-template-section" style="order:20">
+            <div class="settings-section-heading">Template UI <span class="settings-help" tabindex="0" data-settings-help="Save and apply reusable combinations of model and reasoning defaults." aria-label="About model templates">?</span></div>
+            <div class="settings-section-panel settings-models-template-panel">
             <select id="amd-template-select" class="settings-input" style="width:100%;margin-bottom:8px" onchange="onAgentModelTemplateSelect()">
               <option value="">Select template...</option>
             </select>
@@ -4384,10 +4564,14 @@
             </div>
             <button id="amd-set-default-btn" onclick="applyAsDefaultTemplate()" class="btn btn-sm" style="width:100%;margin-bottom:8px;background:#fff;border:1px solid var(--line);color:var(--text)">Apply as Default</button>
             <div id="amd-template-status" style="font-size:11px;min-height:16px"></div>
+            </div>
           </div>
 
           <!-- Main Chat -->
-          <div style="margin-bottom:12px;order:10">
+          <div class="settings-models-subsection settings-models-main-section" style="order:10">
+            <div class="settings-section-heading">Main &amp; Voice Agents <span class="settings-help" tabindex="0" data-settings-help="Set the main chat route and the default voice provider/voice." aria-label="About main and voice agent defaults">?</span></div>
+            <div class="settings-section-panel settings-models-main-panel">
+            <div class="settings-model-row">
             <div data-settings-icon-label="messageSquare" style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">Main Chat Agent</div>
             <select id="amd-main-chat-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('main-chat')">
               <option value="">use primary</option>
@@ -4401,10 +4585,10 @@
             <select id="amd-main-chat-model" class="settings-input" style="width:100%">
               <option value="">select provider first</option>
             </select>
-          </div>
+            </div>
 
           <!-- Voice Agent -->
-          <div style="margin-bottom:12px;order:11">
+          <div class="settings-model-row">
             <div data-settings-icon-label="volume2" style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">Voice Agent</div>
             <select id="amd-voice-agent-provider" class="settings-input" style="width:100%;margin-bottom:4px" onchange="loadVoiceAgentDefaultOptions()">
               <option value="">use current voice provider</option>
@@ -4415,6 +4599,8 @@
             <select id="amd-voice-agent-voice" class="settings-input" style="width:100%">
               <option value="">use provider default</option>
             </select>
+          </div>
+            </div>
           </div>
 
           <!-- Proposal Executors -->
@@ -4497,7 +4683,7 @@
 
 	          <!-- Background Spawn -->
           <div style="margin-bottom:4px;padding-bottom:16px;border-bottom:1px solid var(--line);order:30">
-            <div data-settings-icon-label="bolt" style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">Background Spawn</div>
+            <div class="settings-models-inner-label" data-settings-icon-label="bolt" style="font-size:11px;font-weight:600;color:var(--text);margin-bottom:4px">Background Spawn</div>
             <select id="amd-background-spawn-prov" class="settings-input" style="width:100%;margin-bottom:4px" onchange="amdProviderChange('background-spawn')">
               <option value="">use primary</option>
                 <option value="ollama">Ollama (local)</option>
@@ -4803,150 +4989,199 @@
       </div>
     </div>
 
-    <div id="settings-panel-agents" style="display:none;padding:14px 16px">
-      <div style="display:grid;grid-template-columns:0.9fr 1.1fr;gap:14px">
-        <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-            <div class="right-section-title">Configured Agents</div>
-            <button class="btn btn-sm" style="padding:4px 8px" onclick="agentFormNew()">+ New</button>
-          </div>
-          <div id="settings-agents-list" style="display:flex;flex-direction:column;gap:8px;max-height:520px;overflow:auto;font-size:12px;color:var(--muted)">Loading agents...</div>
+    <div id="settings-panel-agents" class="settings-agents-page" style="display:none;padding:14px 16px">
+      <section class="settings-section settings-agents-directory-section">
+        <div class="settings-section-heading">
+          <h2>Subagents</h2>
+          <span class="settings-help" tabindex="0" aria-label="Subagents technical details" data-settings-help="Only configurable subagents appear here. The main chat agent is managed from Models and is intentionally excluded from this page.">?</span>
+          <button class="btn btn-sm settings-agents-new-btn" onclick="agentFormNew()">+ New</button>
         </div>
-        <div style="display:flex;flex-direction:column;gap:12px">
-          <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
-            <div class="right-section-title" style="margin-bottom:8px">Agent Details</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <div>
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">ID</label>
-                <input id="agent-edit-id" type="text" placeholder="researcher" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
+        <div class="settings-section-panel settings-agents-directory-panel">
+          <div id="settings-agents-list" class="settings-agents-list">Loading subagents...</div>
+        </div>
+      </section>
+
+      <div class="settings-agents-detail-grid">
+        <section class="settings-section">
+          <div class="settings-section-heading">
+            <h2>Agent profile</h2>
+            <span class="settings-help" tabindex="0" aria-label="Agent profile technical details" data-settings-help="Identity and workspace values are saved to the selected subagent configuration. Team-managed agents may receive their workspace and identity from the team definition.">?</span>
+          </div>
+          <div class="settings-section-panel settings-agent-profile-panel">
+            <div class="settings-agent-identity-grid">
+              <div class="settings-agent-field">
+                <label for="agent-edit-id">ID</label>
+                <input id="agent-edit-id" type="text" placeholder="researcher" />
               </div>
-              <div>
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Name</label>
-                <input id="agent-edit-name" type="text" placeholder="Scout" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;box-sizing:border-box" />
-              </div>
-            </div>
-            <label style="display:block;font-size:11px;color:var(--muted);margin:8px 0 4px">Description</label>
-            <textarea id="agent-edit-description" rows="3" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;box-sizing:border-box;resize:vertical"></textarea>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-              <div>
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Workspace</label>
-                <input id="agent-edit-workspace" type="text" placeholder="%APPDATA%\Prometheus\workspace\agents\researcher" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box" />
-              </div>
-              <div style="grid-column:1/-1">
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Model <span style="color:var(--muted);font-weight:400">(provider / model)</span></label>
-                <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:center">
-                  <select id="agent-edit-provider" onchange="onAgentProviderChange()" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
-                    <option value="">use effective default</option>
-                    <option value="ollama">ollama</option>
-                    <option value="openai_codex">openai_codex (OAuth)</option>
-                    <option value="openai">openai (API key)</option>
-                    <option value="llama_cpp">llama_cpp</option>
-                    <option value="lm_studio">lm_studio</option>
-                    <option value="anthropic">anthropic (Claude)</option>
-                    <option value="perplexity">perplexity</option>
-                    <option value="gemini">gemini</option>
-                  </select>
-                  <select id="agent-edit-model-select" onchange="syncAgentReasoningControl()" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
-                    <option value="">select provider first</option>
-                  </select>
-                  <button onclick="loadAgentModelOptions()" title="Refresh models for selected provider" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:11px;background:#fff;color:var(--text);cursor:pointer;white-space:nowrap">&#8635;</button>
-                </div>
-                <label style="display:block;font-size:10px;color:var(--muted);margin:5px 0 3px">Reasoning</label>
-                <select id="agent-edit-reasoning" class="settings-input" style="width:100%"><option value="">provider default</option></select>
-                <div id="agent-model-status" style="font-size:10px;color:var(--muted);margin-top:3px"></div>
-              </div>
-              <div style="grid-column:1/-1">
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Voice Agent <span style="color:var(--muted);font-weight:400">(provider / voice)</span></label>
-                <div style="display:grid;grid-template-columns:1fr 1fr .55fr auto;gap:6px;align-items:center">
-                  <select id="agent-edit-voice-provider" onchange="loadAgentVoiceOptions()" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
-                    <option value="">use global voice default</option>
-                    <option value="openai_realtime">OpenAI Realtime</option>
-                    <option value="xai">xAI Realtime</option>
-                    <option value="openai">OpenAI TTS</option>
-                    <option value="browser">Browser</option>
-                  </select>
-                  <select id="agent-edit-voice-voice" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;font-family:'IBM Plex Mono',monospace;background:var(--panel);color:var(--text);width:100%">
-                    <option value="">use provider default</option>
-                  </select>
-                  <input id="agent-edit-voice-speed" type="number" min="0.25" max="2" step="0.05" value="1" title="Voice speed" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;background:var(--panel);color:var(--text);width:100%;box-sizing:border-box" />
-                  <button onclick="loadAgentVoiceOptions(true)" title="Refresh voices for selected provider" style="border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:11px;background:#fff;color:var(--text);cursor:pointer;white-space:nowrap">&#8635;</button>
-                </div>
-                <div id="agent-voice-status" style="font-size:10px;color:var(--muted);margin-top:3px"></div>
-              </div>
-              <div>
-                <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Max Steps</label>
-                <input id="agent-edit-max-steps" type="number" min="1" step="1" placeholder="8" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;box-sizing:border-box" />
+              <div class="settings-agent-field">
+                <label for="agent-edit-name">Name</label>
+                <input id="agent-edit-name" type="text" placeholder="Scout" />
               </div>
             </div>
-            <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;font-size:12px">
-              <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="agent-edit-default" /> default</label>
+            <div class="settings-agent-row">
+              <label for="agent-edit-description">Description</label>
+              <textarea id="agent-edit-description" rows="3"></textarea>
             </div>
-            <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:12px;padding:6px 8px;background:#f8faff;border:1px solid #dbeafe;border-radius:8px">
-              <span style="font-size:10px;color:var(--muted);align-self:center;font-weight:600;letter-spacing:.04em">TEAM&nbsp;PERMISSIONS</span>
-              <label style="display:flex;align-items:center;gap:6px" title="Allow this agent to read Prometheus source files via read_source / list_source"><input type="checkbox" id="agent-edit-src-read-access" /> src_read_access</label>
-              <label style="display:flex;align-items:center;gap:6px" title="Allow this agent to submit proposals directly (managers only — others must use talk_to_manager)"><input type="checkbox" id="agent-edit-can-propose" /> can_propose</label>
+            <div class="settings-agent-row">
+              <label for="agent-edit-workspace">Workspace</label>
+              <input id="agent-edit-workspace" type="text" placeholder="%APPDATA%\Prometheus\workspace\agents\researcher" />
             </div>
-            <div style="display:flex;gap:8px;margin-top:10px">
+            <div class="settings-agent-actions">
               <button class="btn btn-sm" onclick="saveAgentFromForm()">Save Agent</button>
-              <button class="btn btn-sm" id="agent-delete-btn" style="background:#fff;border:1px solid var(--line);color:var(--text)" onclick="deleteSelectedAgent()">Delete</button>
+              <button class="btn btn-sm" id="agent-delete-btn" onclick="deleteSelectedAgent()">Delete</button>
             </div>
           </div>
-          <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <div class="right-section-title" id="agent-md-editor-title">AGENT.md (CodeMirror)</div>
-              <span id="agent-md-team-badge" style="display:none;font-size:10px;padding:2px 8px;border-radius:999px;background:#fdf4ff;color:#6b21a8;border:1px solid #e9d5ff;align-items:center;gap:4px">
-                <span id="agent-md-team-badge-icon" style="display:inline-flex" aria-hidden="true"></span>
-                <span>Team Subagent</span>
-              </span>
-            </div>
-            <div id="agent-md-team-note" style="display:none;font-size:11px;color:var(--muted);background:#fdf4ff;border:1px solid #e9d5ff;border-radius:6px;padding:6px 10px;margin-bottom:8px">This agent is managed by a team. Its identity and operating instructions come from <strong>AGENT.md</strong>.</div>
-            <div id="agent-md-editor-wrap" style="border:1px solid var(--line);border-radius:8px;overflow:hidden"></div>
-            <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)" onclick="loadSelectedAgentMd()">Reload File</button>
-              <button class="btn btn-sm" id="agent-md-save-btn" onclick="saveSelectedAgentMd()">Save AGENT.md</button>
-            </div>
-            <div id="agent-md-path" style="margin-top:6px;font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace"></div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-heading">
+            <h2>Model routing</h2>
+            <span class="settings-help" tabindex="0" aria-label="Model routing technical details" data-settings-help="A blank provider or model inherits the effective subagent default. Reasoning options depend on the selected provider and model.">?</span>
           </div>
-		          <div id="agent-heartbeat-card" style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <div class="right-section-title" style="display:flex;align-items:center;gap:6px">
-                <span id="agent-hb-title-icon" style="display:inline-flex" aria-hidden="true"></span>
-                <span>Heartbeat</span>
+          <div class="settings-section-panel settings-agent-routing-panel">
+            <div class="settings-agent-row">
+              <label>Model <span class="settings-agent-label-note">provider / model</span></label>
+              <div class="settings-agent-control settings-agent-model-control">
+                <select id="agent-edit-provider" onchange="onAgentProviderChange()">
+                  <option value="">use effective default</option>
+                  <option value="ollama">ollama</option>
+                  <option value="openai_codex">openai_codex (OAuth)</option>
+                  <option value="openai">openai (API key)</option>
+                  <option value="llama_cpp">llama_cpp</option>
+                  <option value="lm_studio">lm_studio</option>
+                  <option value="anthropic">anthropic (Claude)</option>
+                  <option value="perplexity">perplexity</option>
+                  <option value="gemini">gemini</option>
+                </select>
+                <select id="agent-edit-model-select" onchange="syncAgentReasoningControl()">
+                  <option value="">select provider first</option>
+                </select>
+                <button class="settings-agent-icon-button" onclick="loadAgentModelOptions()" title="Refresh models for selected provider" aria-label="Refresh models for selected provider">&#8635;</button>
               </div>
-              <div style="display:flex;align-items:center;gap:8px">
-                <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
-                  <input type="checkbox" id="agent-hb-enabled" onchange="saveAgentHeartbeatConfig()" />
-                  Enabled
-                </label>
-                <div style="display:flex;align-items:center;gap:4px">
-                  <label style="font-size:11px;color:var(--muted)">Every</label>
-                  <input id="agent-hb-interval" type="number" min="1" max="1440" value="30" onchange="saveAgentHeartbeatConfig()" style="width:56px;border:1px solid var(--line);border-radius:6px;padding:3px 6px;font-size:12px;text-align:center" />
-                  <label style="font-size:11px;color:var(--muted)">min</label>
-                </div>
-                <button class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text);font-size:11px;padding:3px 8px" onclick="tickAgentHeartbeat()">▶ Run Now</button>
+              <div id="agent-model-status" class="settings-agent-status"></div>
+            </div>
+            <div class="settings-agent-row">
+              <label for="agent-edit-reasoning">Reasoning</label>
+              <select id="agent-edit-reasoning" class="settings-input"><option value="">provider default</option></select>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-heading">
+            <h2>Voice agent</h2>
+            <span class="settings-help" tabindex="0" aria-label="Voice agent technical details" data-settings-help="Voice settings override the global voice route only when a provider or voice is selected for this subagent. Speed is clamped to the supported 0.25–2 range.">?</span>
+          </div>
+          <div class="settings-section-panel settings-agent-routing-panel">
+            <div class="settings-agent-row">
+              <label>Voice <span class="settings-agent-label-note">provider / voice</span></label>
+              <div class="settings-agent-control settings-agent-voice-control">
+                <select id="agent-edit-voice-provider" onchange="loadAgentVoiceOptions()">
+                  <option value="">use global voice default</option>
+                  <option value="openai_realtime">OpenAI Realtime</option>
+                  <option value="xai">xAI Realtime</option>
+                  <option value="openai">OpenAI TTS</option>
+                  <option value="browser">Browser</option>
+                </select>
+                <select id="agent-edit-voice-voice">
+                  <option value="">use provider default</option>
+                </select>
+                <input id="agent-edit-voice-speed" type="number" min="0.25" max="2" step="0.05" value="1" title="Voice speed" />
+                <button class="settings-agent-icon-button" onclick="loadAgentVoiceOptions(true)" title="Refresh voices for selected provider" aria-label="Refresh voices for selected provider">&#8635;</button>
               </div>
+              <div id="agent-voice-status" class="settings-agent-status"></div>
             </div>
-            <div style="font-size:11px;color:var(--muted);margin-bottom:8px">HEARTBEAT.md — what this agent does when woken. Saved automatically when you click outside the editor or use Save.</div>
-            <div id="agent-hb-editor-wrap" style="border:1px solid var(--line);border-radius:8px;overflow:hidden"></div>
-            <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn btn-sm" onclick="saveAgentHeartbeatMd()">Save HEARTBEAT.md</button>
-              <button class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)" onclick="loadAgentHeartbeat()">Reload</button>
-            </div>
-            <div id="agent-hb-status" style="margin-top:5px;font-size:11px;color:var(--muted)"></div>
           </div>
-          <div style="border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff">
-            <div class="right-section-title" style="margin-bottom:8px">Manual Spawn + Run History</div>
-            <label style="display:block;font-size:11px;color:var(--muted);margin-bottom:4px">Task</label>
-            <textarea id="agent-spawn-task" rows="3" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;box-sizing:border-box;resize:vertical" placeholder="Run a one-off task for this agent..."></textarea>
-            <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn btn-sm" onclick="runSelectedAgentOnce()">Run Once</button>
-              <button class="btn btn-sm" style="background:#fff;border:1px solid var(--line);color:var(--text)" onclick="loadAgentRunHistory()">Refresh History</button>
-            </div>
-            <div id="agent-spawn-result" style="margin-top:8px;font-size:12px;color:var(--muted);white-space:pre-wrap;max-height:120px;overflow:auto"></div>
-            <div id="agent-run-history" style="margin-top:8px;display:flex;flex-direction:column;gap:6px;max-height:170px;overflow:auto;font-size:12px"></div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-heading">
+            <h2>Limits &amp; permissions</h2>
+            <span class="settings-help" tabindex="0" aria-label="Limits and permissions technical details" data-settings-help="Max Steps limits the agent loop. Team permissions control whether the subagent can read Prometheus source files or submit proposals directly.">?</span>
           </div>
-        </div>
+          <div class="settings-section-panel settings-agent-permissions-panel">
+            <div class="settings-agent-row">
+              <label for="agent-edit-max-steps">Max steps</label>
+              <input id="agent-edit-max-steps" type="number" min="1" step="1" placeholder="8" />
+            </div>
+            <input type="checkbox" id="agent-edit-default" hidden />
+            <div class="settings-agent-permission-row">
+              <div class="settings-agent-permission-title">Team permissions</div>
+              <label title="Allow this agent to read Prometheus source files via read_source / list_source"><input type="checkbox" id="agent-edit-src-read-access" /> <span>Source read access</span></label>
+              <label title="Allow this agent to submit proposals directly (managers only — others must use talk_to_manager)"><input type="checkbox" id="agent-edit-can-propose" /> <span>Can propose</span></label>
+            </div>
+          </div>
+        </section>
       </div>
+
+      <section class="settings-section settings-agent-wide-section">
+        <div class="settings-section-heading">
+          <h2 id="agent-md-editor-heading">Agent instructions</h2>
+          <span class="settings-help" tabindex="0" aria-label="Agent instructions technical details" data-settings-help="AGENT.md is the selected subagent's operating prompt. Team-managed agents may receive this file from their team definition.">?</span>
+        </div>
+        <div class="settings-section-panel settings-agent-document-panel">
+          <div class="settings-agent-panel-toolbar">
+            <div class="right-section-title" id="agent-md-editor-title">AGENT.md (CodeMirror)</div>
+            <span id="agent-md-team-badge" style="display:none;font-size:10px;padding:2px 8px;border-radius:999px;background:#fdf4ff;color:#6b21a8;border:1px solid #e9d5ff;align-items:center;gap:4px">
+              <span id="agent-md-team-badge-icon" style="display:inline-flex" aria-hidden="true"></span>
+              <span>Team Subagent</span>
+            </span>
+          </div>
+          <div id="agent-md-team-note" style="display:none;font-size:11px;color:var(--muted);background:#fdf4ff;border:1px solid #e9d5ff;border-radius:6px;padding:6px 10px;margin-bottom:8px">This agent is managed by a team. Its identity and operating instructions come from <strong>AGENT.md</strong>.</div>
+          <div id="agent-md-editor-wrap" class="settings-agent-editor"></div>
+          <div class="settings-agent-actions">
+            <button class="btn btn-sm" onclick="loadSelectedAgentMd()">Reload File</button>
+            <button class="btn btn-sm" id="agent-md-save-btn" onclick="saveSelectedAgentMd()">Save AGENT.md</button>
+          </div>
+          <div id="agent-md-path" class="settings-agent-path"></div>
+        </div>
+      </section>
+
+      <section id="agent-heartbeat-card" class="settings-section settings-agent-wide-section">
+        <div class="settings-section-heading">
+          <h2>Heartbeat</h2>
+          <span class="settings-help" tabindex="0" aria-label="Heartbeat technical details" data-settings-help="Heartbeat instructions are stored in HEARTBEAT.md and run on this subagent's configured schedule.">?</span>
+        </div>
+        <div class="settings-section-panel settings-agent-heartbeat-panel">
+          <div class="settings-agent-panel-toolbar">
+            <div class="right-section-title" style="display:flex;align-items:center;gap:6px">
+              <span id="agent-hb-title-icon" style="display:inline-flex" aria-hidden="true"></span>
+              <span>Heartbeat schedule</span>
+            </div>
+            <div class="settings-agent-heartbeat-controls">
+              <label><input type="checkbox" id="agent-hb-enabled" onchange="saveAgentHeartbeatConfig()" /> Enabled</label>
+              <label>Every <input id="agent-hb-interval" type="number" min="1" max="1440" value="30" onchange="saveAgentHeartbeatConfig()" /> min</label>
+              <button class="btn btn-sm" onclick="tickAgentHeartbeat()">▶ Run Now</button>
+            </div>
+          </div>
+          <div class="settings-section-description">HEARTBEAT.md — what this agent does when woken. Saved automatically when you click outside the editor or use Save.</div>
+          <div id="agent-hb-editor-wrap" class="settings-agent-editor"></div>
+          <div class="settings-agent-actions">
+            <button class="btn btn-sm" onclick="saveAgentHeartbeatMd()">Save HEARTBEAT.md</button>
+            <button class="btn btn-sm" onclick="loadAgentHeartbeat()">Reload</button>
+          </div>
+          <div id="agent-hb-status" class="settings-agent-status"></div>
+        </div>
+      </section>
+
+      <section class="settings-section settings-agent-wide-section">
+        <div class="settings-section-heading">
+          <h2>Manual spawn &amp; run history</h2>
+          <span class="settings-help" tabindex="0" aria-label="Manual spawn technical details" data-settings-help="Manual runs call the selected subagent directly and append the result to its run history.">?</span>
+        </div>
+        <div class="settings-section-panel settings-agent-run-panel">
+          <div class="settings-agent-row settings-agent-task-row">
+            <label for="agent-spawn-task">Task</label>
+            <textarea id="agent-spawn-task" rows="3" placeholder="Run a one-off task for this agent..."></textarea>
+          </div>
+          <div class="settings-agent-actions">
+            <button class="btn btn-sm" onclick="runSelectedAgentOnce()">Run Once</button>
+            <button class="btn btn-sm" onclick="loadAgentRunHistory()">Refresh History</button>
+          </div>
+          <div id="agent-spawn-result" class="settings-agent-run-result"></div>
+          <div id="agent-run-history" class="settings-agent-run-history"></div>
+        </div>
+      </section>
     </div>
 
     <div id="settings-panel-integrations" style="display:none;padding:14px 16px">
@@ -5155,6 +5390,18 @@
     <!-- Pairing Panel -->
     <div id="settings-panel-pairing" style="display:none;padding:14px 16px">
 
+      <div id="pairing-browser-admin" style="border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--panel-2);margin-bottom:14px">
+        <div style="font-size:13px;font-weight:800;color:var(--text);margin-bottom:4px">Browser pairing authority</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:9px">
+          This is required when a manually launched gateway is bound to the LAN. Paste the configured <code>PROMETHEUS_PAIRING_ADMIN_TOKEN</code>; it is kept in memory for this tab only and is never placed in a QR code or URL.
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="pairing-browser-admin-token" type="password" autocomplete="off" spellcheck="false" placeholder="Pairing admin credential" style="flex:1;min-width:220px;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--panel);color:var(--text)" />
+          <button id="pairing-browser-admin-apply" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none">Use for this tab</button>
+        </div>
+        <div id="pairing-browser-admin-status" style="margin-top:7px;font-size:11px;color:var(--muted)">Electron desktop uses its protected authority automatically.</div>
+      </div>
+
       <!-- Remote Access (Tailscale Funnel) -->
       <div style="border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff;margin-bottom:14px">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
@@ -5213,7 +5460,7 @@
 
         <!-- LEFT: QR + status -->
         <div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:#fff;text-align:center">
-          <div class="right-section-title" style="margin-bottom:10px;text-align:left">Pair a phone</div>
+          <div class="right-section-title" style="margin-bottom:10px;text-align:left">Gateway Connections · Pair a phone</div>
           <div id="pairing-qr-wrap" style="display:flex;align-items:center;justify-content:center;background:#f7f1e6;border-radius:12px;padding:14px;min-height:280px">
             <div style="color:var(--muted);font-size:12px">Loading QR…</div>
           </div>
@@ -5223,7 +5470,7 @@
             <button id="pairing-copy-link-btn" class="btn btn-sm" style="background:var(--panel-2);border:1px solid var(--line);color:var(--muted)">Copy link</button>
           </div>
           <div style="margin-top:12px;font-size:11px;color:var(--muted);line-height:1.55;text-align:left;border-top:1px solid var(--line);padding-top:10px">
-            Scan this QR with your phone's camera. After it opens, you'll see an approval prompt below.
+            Scan this one-time QR with your phone's Gateway Connections camera action. It contains only a short-lived pairing challenge; after it opens, you'll see an approval prompt below.
             <br><strong>QR codes expire in 5 minutes.</strong> Generate a new one anytime.
           </div>
         </div>
@@ -5257,10 +5504,12 @@
       </div>
     </div>
 
-    <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line);position:sticky;bottom:0;background:#fff;z-index:2">
-      <button class="btn btn-sm" style="background:var(--panel-2);color:var(--muted);border:1px solid var(--line)" onclick="closeSettings()">Cancel</button>
-      <button id="settings-save-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none;min-width:80px" onclick="saveSettings()">Save</button>
-    </div>
+      <div class="settings-page-footer">
+        <span id="settings-save-status" class="settings-save-status" role="status" aria-live="polite"></span>
+        <button class="btn btn-sm" style="background:var(--panel-2);color:var(--muted);border:1px solid var(--line)" onclick="closeSettings()">Cancel</button>
+        <button id="settings-save-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none;min-width:80px" onclick="saveSettings()">Save</button>
+      </div>
+    </main>
   </div>
 </div>
 
@@ -5451,6 +5700,11 @@ let _sessionSearchError = '';
 let _sessionSearchTimer = null;
 let _sessionSearchSeq = 0;
 let _sessionShowCount = 20; // limit displayed chats to 20, then show "More"
+let _settledSessions = [];
+let _settledSessionsOffset = 0;
+let _settledSessionsHasMore = false;
+let _settledSessionsLoading = false;
+let _settledViewOpen = false;
 let _channelsViewOpen = false;
 let _activeChannelDrill = null; // null = hub view, 'telegram'|'discord'|'whatsapp'|'terminal' = drilled in
 let _channelsEditMode = false;
@@ -5483,7 +5737,7 @@ function requestSessionSearch(query) {
   _sessionSearchError = '';
   _sessionSearchTimer = setTimeout(async () => {
     try {
-      const params = new URLSearchParams({ q: rawQuery, limit: '100', scope: 'all', includeAutomated: '1' });
+      const params = new URLSearchParams({ q: rawQuery, limit: '100', scope: 'all', includeAutomated: '1', state: _settledViewOpen ? 'settled' : 'active' });
       const res = await fetch(`/api/sessions/search?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -5727,17 +5981,18 @@ function _renderChannelDrill(channelKey) {
       || s.activeRun === true
     );
     return `
-<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-title="${escHtml(s.title || 'Untitled')}" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="openSession('${s.id}')">
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${escHtml(s.title || 'Untitled')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openSession('${s.id}')">
   ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
+      ${renderImportedSourceLogo(s)}
       <div class="job-item-title">${escHtml(s.title || 'Untitled')}</div>
     </div>
   </div>
   <div class="job-item-meta">
     ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
     ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
-    <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.createdAt)}</span>
+    ${renderImportedSourceMeta(s, getSessionLastMessageAt(s) || s.createdAt)}
   </div>
 </div>`;
   }).join('');
@@ -5754,10 +6009,11 @@ function _renderChannelDrill(channelKey) {
       ? s.voiceRoom.participants.map((participant) => participant.label).filter(Boolean).join(' · ')
       : '';
     return `
-<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''} session-terminal" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-title="${title}" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="openTerminalSession('${s.id}', '${channelKey}')">
+<div class="job-item chat-session-item channel-chat-item${isActive ? ' active' : ''}${isWorking ? ' is-working' : ''}${isPinned ? ' pinned-chat' : ''}${_channelsEditMode ? ' is-editing' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''} session-terminal" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(channelKey)}" data-session-title="${title}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; openTerminalSession('${s.id}', '${channelKey}')">
   ${_channelsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
   <div class="job-item-head job-item-head--pinned">
     <div class="job-item-title-wrap">
+      ${renderImportedSourceLogo(s)}
       <div class="job-item-title">${title}</div>
       ${roster ? `<div class="job-item-subtitle">${escHtml(roster)}</div>` : ''}
     </div>
@@ -5765,7 +6021,7 @@ function _renderChannelDrill(channelKey) {
   <div class="job-item-meta">
     ${isPinned ? `<span class="badge badge-queued">Channel: ${escHtml(def.label)}</span>` : ''}
     ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
-    <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.lastActiveAt || s.createdAt)}</span>
+    ${renderImportedSourceMeta(s, getSessionLastMessageAt(s) || s.lastActiveAt || s.createdAt)}
   </div>
 </div>`;
   }).join('');
@@ -5792,6 +6048,7 @@ function _sessionById(id) {
     window.telegramSessions,
     window.discordSessions,
     window.whatsappSessions,
+    _settledSessions,
     ...(window.channelSessionsByChannel ? Object.values(window.channelSessionsByChannel) : []),
   ];
   return collections.flat().find((session) => session && String(session.id) === String(id)) || null;
@@ -5848,6 +6105,8 @@ function hideSessionHoverPreview() {
 function _renderSessionHoverPreviewTitle(popover, id, title) {
   popover.dataset.sessionId = id;
   popover.dataset.sessionTitle = title;
+  const session = _sessionById(id);
+  const isSettled = session?.settled === true || Number(session?.settledAt || 0) > 0;
   popover.innerHTML = '';
   const row = document.createElement('div');
   row.className = 'session-hover-preview-row';
@@ -5861,15 +6120,46 @@ function _renderSessionHoverPreviewTitle(popover, id, title) {
     event.stopPropagation();
     beginSessionHoverRename(popover);
   });
+  const optionsButton = document.createElement('button');
+  optionsButton.type = 'button';
+  optionsButton.className = 'session-hover-preview-options-trigger';
+  optionsButton.title = 'Chat options';
+  optionsButton.setAttribute('aria-label', 'Chat options');
+  optionsButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>';
+  const options = document.createElement('div');
+  options.className = 'session-hover-preview-options';
+  options.hidden = true;
+  options.setAttribute('role', 'menu');
+  const settleButton = document.createElement('button');
+  settleButton.type = 'button';
+  settleButton.className = 'session-hover-preview-option';
+  settleButton.textContent = isSettled ? 'Unsettle chat' : 'Settle chat';
+  settleButton.setAttribute('role', 'menuitem');
+  settleButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isSettled) confirmSessionHoverUnsettle(id, title);
+    else confirmSessionHoverSettle(id, title);
+  });
   const deleteButton = document.createElement('button');
   deleteButton.type = 'button';
-  deleteButton.className = 'session-hover-preview-delete';
-  deleteButton.title = 'Delete chat';
-  deleteButton.setAttribute('aria-label', 'Delete chat');
-  deleteButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>';
-  deleteButton.addEventListener('click', () => confirmSessionHoverDelete(id, title));
-  row.append(titleButton, deleteButton);
-  popover.appendChild(row);
+  deleteButton.className = 'session-hover-preview-option danger';
+  deleteButton.textContent = 'Delete permanently';
+  deleteButton.setAttribute('role', 'menuitem');
+  deleteButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    confirmSessionHoverDelete(id, title);
+  });
+  options.append(settleButton, deleteButton);
+  optionsButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    options.hidden = !options.hidden;
+    optionsButton.setAttribute('aria-expanded', String(!options.hidden));
+  });
+  row.append(titleButton, optionsButton);
+  popover.append(row, options);
 }
 
 function confirmSessionHoverDelete(id, title) {
@@ -5894,6 +6184,75 @@ function confirmSessionHoverDelete(id, title) {
     return;
   }
   if (window.confirm(message)) remove();
+}
+
+function confirmSessionHoverSettle(id, title) {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return;
+  const session = _sessionById(sessionId);
+  const submit = async (confirmPinned = false) => {
+    hideSessionHoverPreview();
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmPinned }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const blockers = Array.isArray(data?.blockers) ? data.blockers.map(item => item?.message).filter(Boolean).join(' ') : '';
+        throw new Error(blockers || data?.error || `HTTP ${response.status}`);
+      }
+      if (session) {
+        session.settledAt = data?.session?.settledAt || Date.now();
+        session.settled = true;
+      }
+      renderSessionsList();
+      if (typeof showToast === 'function') showToast('Chat settled', 'It is still saved and available below Show More.', 'success');
+    } catch (error) {
+      if (typeof showToast === 'function') showToast('Could not settle chat', error?.message || 'The chat is still active.', 'error');
+    }
+  };
+  const pinned = !!(session?.pinnedAt || _pinnedChats.includes(sessionId));
+  if (!pinned) {
+    submit(false);
+    return;
+  }
+  const message = `Settle “${title || 'this chat'}”? It is pinned and will move out of the normal sidebar. Its history will be kept.`;
+  if (typeof window.showConfirm === 'function') {
+    window.showConfirm(message, () => submit(true), null, {
+      title: 'Settle pinned chat?',
+      confirmText: 'Settle chat',
+      cancelText: 'Keep chat',
+    });
+    return;
+  }
+  if (window.confirm(message)) submit(true);
+}
+
+async function confirmSessionHoverUnsettle(id) {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return;
+  hideSessionHoverPreview();
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/unsettle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+    const session = _sessionById(sessionId);
+    if (session) {
+      session.settledAt = null;
+      session.settled = false;
+    }
+    _settledSessions = (_settledSessions || []).filter(item => String(item.id) !== sessionId);
+    renderSessionsList();
+    if (typeof showToast === 'function') showToast('Chat reopened', 'It is back in the normal sidebar.', 'success');
+  } catch (error) {
+    if (typeof showToast === 'function') showToast('Could not reopen chat', error?.message || 'Please try again.', 'error');
+  }
 }
 
 function showSessionHoverPreview(source) {
@@ -6092,6 +6451,62 @@ function _getSessionOriginLabel(s) {
   return _getSessionChannelLabel({ ...s, channel }) || '';
 }
 
+const IMPORTED_SOURCE_BRANDS = Object.freeze({
+  chatgpt: { key: 'chatgpt', label: 'ChatGPT', asset: '/static/assets/import-sources/chatgpt.svg' },
+  'chatgpt-export': { key: 'chatgpt', label: 'ChatGPT', asset: '/static/assets/import-sources/chatgpt.svg' },
+  openai: { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
+  openai_codex: { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
+  codex: { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
+  'codex-local': { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
+  claude: { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
+  anthropic: { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
+  'claude-code': { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
+  'claude-code-local': { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
+  cursor: { key: 'cursor', label: 'Cursor', asset: '/static/assets/import-sources/cursor.svg' },
+  'cursor-local': { key: 'cursor', label: 'Cursor', asset: '/static/assets/import-sources/cursor.svg' },
+  hermes: { key: 'hermes', label: 'Hermes', asset: '/static/assets/import-sources/nous-research.png' },
+  'hermes-local': { key: 'hermes', label: 'Hermes', asset: '/static/assets/import-sources/nous-research.png' },
+  openclaw: { key: 'openclaw', label: 'OpenClaw', asset: '/static/assets/import-sources/openclaw.svg' },
+  'openclaw-local': { key: 'openclaw', label: 'OpenClaw', asset: '/static/assets/import-sources/openclaw.svg' },
+  localclaw: { key: 'localclaw', label: 'LocalClaw', asset: '/static/assets/import-sources/localclaw.webp' },
+  'localclaw-local': { key: 'localclaw', label: 'LocalClaw', asset: '/static/assets/import-sources/localclaw.webp' },
+});
+
+function _getImportedSourceBrand(session) {
+  const imported = session?.externalImport;
+  if (!imported || typeof imported !== 'object') return null;
+  const source = imported.source && typeof imported.source === 'object' ? imported.source : {};
+  const candidates = [source.provider, source.adapter, source.sourceLabel]
+    .map(value => String(value || '').trim().toLowerCase())
+    .flatMap(value => [value, value.replace(/\s+/g, '-'), value.replace(/[^a-z0-9]+/g, '-')])
+    .filter(Boolean);
+  for (const candidate of candidates) {
+    if (IMPORTED_SOURCE_BRANDS[candidate]) return IMPORTED_SOURCE_BRANDS[candidate];
+  }
+  return null;
+}
+
+function _isImportedSession(session) {
+  return !!(session?.externalImport && typeof session.externalImport === 'object');
+}
+
+function renderImportedSourceLogo(session) {
+  const imported = session?.externalImport;
+  if (!imported || typeof imported !== 'object') return '';
+  const brand = _getImportedSourceBrand(session);
+  const source = imported.source && typeof imported.source === 'object' ? imported.source : {};
+  const sourceLabel = brand?.label || String(source.sourceLabel || source.provider || source.adapter || 'source').trim().slice(0, 80) || 'source';
+  const ariaLabel = `Imported from ${sourceLabel}`;
+  if (!brand) {
+    return `<span class="imported-source-logo imported-source-logo--fallback" title="${escHtml(ariaLabel)}" aria-label="${escHtml(ariaLabel)}" role="img"></span>`;
+  }
+  return `<img class="imported-source-logo imported-source-logo--${brand.key}" data-imported-source="${brand.key}" src="${brand.asset}" alt="${escHtml(ariaLabel)}" width="26" height="26" decoding="async" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="imported-source-logo-fallback" hidden title="${escHtml(ariaLabel)}" aria-label="${escHtml(ariaLabel)}" role="img"></span>`;
+}
+
+function renderImportedSourceMeta(session, normalTimestamp) {
+  return `<span class="job-item-time">${timeAgo(normalTimestamp ?? (getSessionLastMessageAt(session) || session?.createdAt))}</span>`;
+}
+
 function escapeRegExp(text) {
   return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -6116,6 +6531,8 @@ function sessionFromSearchResult(result) {
     channel: existing?.channel || result.channel || '',
     projectId: result.projectId || existing?.projectId || '',
     projectName: result.projectName || existing?.projectName || '',
+    settledAt: result.settledAt || existing?.settledAt || null,
+    settled: result.settled === true || existing?.settled === true || Number(result.settledAt || existing?.settledAt || 0) > 0,
     activeRun: result.activeRun === true || existing?.activeRun === true,
     _searchOnly: !existing,
     _needsServerLoad: !existing,
@@ -6192,6 +6609,8 @@ function getSessionLastMessageAt(s) {
 }
 
 function getSessionSortTime(s) {
+  const sidebarOrder = Number(s?.sidebarOrder);
+  if (Number.isFinite(sidebarOrder)) return sidebarOrder;
   return getSessionLastMessageAt(s) || Number(s?.createdAt || 0) || 0;
 }
 
@@ -6209,28 +6628,122 @@ function scheduleSessionListRefresh() {
 }
 window.scheduleSessionListRefresh = scheduleSessionListRefresh;
 
-function renderChatSessionCard(s) {
+async function loadSettledSessions({ reset = false } = {}) {
+  if (_settledSessionsLoading) return;
+  if (reset) {
+    _settledSessions = [];
+    _settledSessionsOffset = 0;
+    _settledSessionsHasMore = false;
+  }
+  if (!reset && !_settledSessionsHasMore && _settledSessions.length) return;
+  _settledSessionsLoading = true;
+  renderSessionsList();
+  try {
+    const params = new URLSearchParams({
+      state: 'settled',
+      scope: 'all',
+      includeAutomated: '0',
+      limit: '20',
+      offset: String(_settledSessionsOffset),
+    });
+    const response = await fetch(`/api/sessions?${params.toString()}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const page = await response.json();
+    const incoming = Array.isArray(page?.sessions) ? page.sessions : [];
+    const byId = new Map((_settledSessions || []).map(item => [String(item.id), item]));
+    incoming.forEach(item => byId.set(String(item.id), item));
+    _settledSessions = Array.from(byId.values());
+    _settledSessionsOffset = Number(page?.offset || _settledSessionsOffset) + incoming.length;
+    _settledSessionsHasMore = page?.hasMore === true;
+  } catch (error) {
+    if (typeof showToast === 'function') showToast('Could not load settled chats', error?.message || 'Please try again.', 'error');
+  } finally {
+    _settledSessionsLoading = false;
+    renderSessionsList();
+  }
+}
+
+function toggleSettledSessionsView() {
+  _settledViewOpen = true;
+  _sessionSearchQuery = '';
+  _sessionSearchResults = [];
+  _sessionSearchError = '';
+  _settledSessionsOffset = 0;
+  _settledSessionsHasMore = false;
+  renderSessionsList();
+  loadSettledSessions({ reset: true });
+}
+
+function closeSettledSessionsView() {
+  _settledViewOpen = false;
+  _sessionSearchQuery = '';
+  _sessionSearchResults = [];
+  _sessionSearchError = '';
+  renderSessionsList();
+}
+
+function _renderSettledSessionsList(el) {
+  const pinnedSection = document.getElementById('sidebar-pinned-section');
+  if (pinnedSection) pinnedSection.style.display = 'none';
+  const sessions = _sessionSearchQuery
+    ? (_sessionSearchResults || []).map(sessionFromSearchResult).filter(Boolean)
+    : (_settledSessions || []);
+  const cards = sessions
+    .filter(isTopLevelWebChatSession)
+    .map(session => renderChatSessionCard(session, { settled: true }))
+    .join('');
+  let content = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:0 0 8px">
+      <button class="sidebar-action" onclick="closeSettledSessionsView()" aria-label="Back to chats">← Chats</button>
+      <span style="font-size:11px;color:var(--sidebar-muted, var(--muted));font-weight:700">Settled</span>
+    </div>
+  `;
+  content += cards || (_settledSessionsLoading
+    ? '<div class="empty-state">Loading settled chats...</div>'
+    : _sessionSearchLoading
+      ? '<div class="empty-state">Searching settled chats...</div>'
+      : `<div class="empty-state">${_sessionSearchQuery ? `No settled chats match "${escHtml(_sessionSearchQuery)}".` : 'No settled chats yet.'}</div>`);
+  if (_sessionSearchError) content += `<div class="session-search-error">${escHtml(_sessionSearchError)}</div>`;
+  if (!_sessionSearchQuery && _settledSessionsHasMore) {
+    content += `<button class="sessions-show-more-btn" onclick="loadSettledSessions()" style="width:100%;margin-top:8px;padding:8px 12px;background:color-mix(in srgb, var(--pm-gold, var(--brand)) 12%, transparent);border:1px solid color-mix(in srgb, var(--pm-gold, var(--brand)) 30%, transparent);color:var(--text);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif">Load more settled chats</button>`;
+  }
+  el.innerHTML = content;
+}
+
+function renderChatSessionCard(s, options = {}) {
   const isPinned = _pinnedChats.includes(s.id);
+  const isSettled = options.settled === true || s.settled === true || Number(s.settledAt || 0) > 0;
   const searchResult = getSessionSearchResult(s.id);
-  const projectLabel = s.projectName || searchResult?.projectName || '';
+  const projectId = String(options.projectId || '').trim();
+  const projectLabel = options.projectNested ? '' : (s.projectName || searchResult?.projectName || '');
   // Origin channel (Desktop app / Telegram / Mobile) is intentionally not shown
   // in the sessions list — keep Project badges only.
   const sourceBadge = projectLabel ? `Project: ${projectLabel}` : '';
-  const openHandler = s._searchOnly
-    ? `openSearchSession('${s.id}')`
+  const openHandler = projectId
+    ? `openProjectSession('${projectId}','${s.id}')`
+    : s._searchOnly
+      ? `openSearchSession('${s.id}')`
     : s._serverOnlyTerminal
       ? `openTerminalSession('${s.id}')`
+    : isSettled
+      ? `openSettledSession('${s.id}')`
       : `openSession('${s.id}')`;
   const searchPreview = renderSessionSearchPreview(s);
   const isWorking = !!(
     (window._sessionThinking && window._sessionThinking[s.id])
     || s.activeRun === true
   );
+  const nestedClass = options.projectNested ? ' project-chat-session-card' : '';
+  const projectDeleteAction = projectId && options.projectDelete
+    ? `<button class="chat-session-action-btn project-chat-delete-btn" onclick="event.stopPropagation();confirmDeleteProjectSession('${projectId}','${s.id}','${escHtml(s.title || 'New chat')}')" title="Delete chat" aria-label="Delete chat"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>`
+    : '';
   return `
-    <div class="job-item chat-session-item ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${window.sessionsEditMode ? ' is-editing' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-title="${escHtml(s.title || 'New chat')}" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="${openHandler}">
-      ${window.sessionsEditMode ? renderSessionEditActions(s.id, isPinned) : `<button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>`}
+    <div class="job-item chat-session-item${nestedClass} ${s.id === window.activeChatSessionId ? 'active' : ''}${isWorking ? ' is-working' : ''}${s.unread && !isWorking ? ' unread' : ''}${isPinned ? ' pinned-chat' : ''}${isSettled ? ' settled-chat' : ''}${_isImportedSession(s) ? ' imported-session-card' : ''}" data-session-hover-preview data-session-id="${escHtml(s.id)}" data-session-channel="${escHtml(String(s.channel || 'web'))}" data-session-title="${escHtml(s.title || 'New chat')}" draggable="true" ondragstart="beginSidebarSessionDrag(event)" ondragover="allowSidebarSessionDrop(event)" ondragleave="leaveSidebarSessionDrop(event)" ondrop="dropSidebarSession(event)" ondragend="endSidebarSessionDrag()" onpointerenter="queueSessionHoverPreview(this)" onpointerleave="scheduleSessionHoverPreviewClose()" onclick="if (consumeSidebarClick(event)) return; ${openHandler}">
+      <button class="chat-session-action-btn chat-pin-btn${isPinned ? ' active' : ''}" onclick="toggleChatPin('${s.id}', event)" title="${isPinned ? 'Unpin' : 'Pin'} chat" aria-label="${isPinned ? 'Unpin' : 'Pin'} chat">${SKILL_STAR_ICON(isPinned)}</button>
+      ${projectDeleteAction}
       <div class="job-item-head job-item-head--pinned">
         <div class="job-item-title-wrap">
+          ${renderImportedSourceLogo(s)}
           <div class="job-item-title">${escHtml(s.title || 'New chat')}</div>
         </div>
       </div>
@@ -6238,12 +6751,13 @@ function renderChatSessionCard(s) {
         ${s.isProposal ? '<span class="session-auto-badge" style="background:var(--brand)">Proposal</span>' : ''}
         ${sourceBadge ? `<span class="badge badge-queued">${escHtml(sourceBadge)}</span>` : ''}
         ${isWorking ? '<span class="session-working-badge">Working</span>' : (s.unread ? '<span class="session-unread-badge">Unread</span>' : '')}
-        <span class="job-item-time">${timeAgo(getSessionLastMessageAt(s) || s.createdAt)}</span>
+        ${renderImportedSourceMeta(s, getSessionLastMessageAt(s) || s.createdAt)}
       </div>
       ${searchPreview}
     </div>
   `;
 }
+window.renderChatSessionCard = renderChatSessionCard;
 
 function isTopLevelWebChatSession(s) {
   if (!s || typeof s !== 'object') return false;
@@ -6255,21 +6769,174 @@ function isTopLevelWebChatSession(s) {
   return true;
 }
 
+function openSettledSession(id) {
+  const sid = String(id || '').trim();
+  if (!sid) return;
+  let sess = (window.chatSessions || []).find(s => String(s.id) === sid);
+  if (!sess) sess = (_settledSessions || []).find(s => String(s.id) === sid);
+  if (sess) {
+    window.chatSessions = Array.isArray(window.chatSessions) ? window.chatSessions : [];
+    if (!window.chatSessions.some(s => String(s.id) === sid)) window.chatSessions.unshift(sess);
+  }
+  openSession(sid);
+}
+
+let _sidebarDraggedSessionId = '';
+let _sidebarDraggedCard = null;
+let _sidebarDragSuppressClickUntil = 0;
+
+function consumeSidebarClick(event) {
+  if (Date.now() >= _sidebarDragSuppressClickUntil) return false;
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  return true;
+}
+
+function beginSidebarSessionDrag(event) {
+  const card = event.currentTarget;
+  if (event.target?.closest?.('button, input, a')) {
+    event.preventDefault();
+    return;
+  }
+  _sidebarDraggedSessionId = String(card?.dataset?.sessionId || '').trim();
+  _sidebarDraggedCard = card;
+  if (!_sidebarDraggedSessionId) {
+    event.preventDefault();
+    return;
+  }
+  card.classList.add('is-dragging');
+  event.dataTransfer?.setData('text/plain', _sidebarDraggedSessionId);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+}
+
+function allowSidebarSessionDrop(event) {
+  const card = event.currentTarget;
+  const targetId = String(card?.dataset?.sessionId || '').trim();
+  if (!_sidebarDraggedSessionId || !_sidebarDraggedCard || targetId === _sidebarDraggedSessionId) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  card.classList.add('drag-over');
+}
+
+function leaveSidebarSessionDrop(event) {
+  event.currentTarget?.classList?.remove('drag-over');
+}
+
+function endSidebarSessionDrag() {
+  _sidebarDraggedCard?.classList?.remove('is-dragging');
+  document.querySelectorAll('.chat-session-item.drag-over').forEach((card) => card.classList.remove('drag-over'));
+  _sidebarDraggedCard = null;
+  _sidebarDraggedSessionId = '';
+}
+
+function sidebarSessionIdsInList(list) {
+  return Array.from(list?.querySelectorAll?.('[data-session-id]') || [])
+    .map((card) => String(card.dataset.sessionId || '').trim())
+    .filter(Boolean);
+}
+
+function setLocalSidebarOrder(sessionIds) {
+  const ids = [...new Set(sessionIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  const orderBase = Date.now() * 1000 + ids.length + 1;
+  const ranks = new Map(ids.map((id, index) => [id, orderBase + ids.length - index]));
+  (window.chatSessions || []).forEach((session) => {
+    const rank = ranks.get(String(session?.id || ''));
+    if (rank !== undefined) session.sidebarOrder = rank;
+  });
+  (_settledSessions || []).forEach((session) => {
+    const rank = ranks.get(String(session?.id || ''));
+    if (rank !== undefined) session.sidebarOrder = rank;
+  });
+}
+
+async function persistSidebarOrder(sessionIds, channel = 'web') {
+  const ids = [...new Set(sessionIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (!ids.length) return;
+  const response = await fetch('/api/sessions/reorder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionIds: ids, channel, state: _settledViewOpen ? 'settled' : 'all' }),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  setLocalSidebarOrder(ids);
+  saveChatSessions();
+}
+
+async function dropSidebarSession(event) {
+  event.preventDefault();
+  const target = event.currentTarget;
+  const draggedId = _sidebarDraggedSessionId;
+  const draggedCard = _sidebarDraggedCard;
+  const targetId = String(target?.dataset?.sessionId || '').trim();
+  const sourceList = draggedCard?.parentElement;
+  const targetList = target?.parentElement;
+  if (!draggedId || !draggedCard || !targetId || draggedId === targetId || !sourceList || !targetList) {
+    endSidebarSessionDrag();
+    return;
+  }
+
+  const mainLists = new Set(['jobs-list', 'pinned-chats-list']);
+  const isMainSidebarMove = mainLists.has(String(sourceList.id || '')) && mainLists.has(String(targetList.id || ''));
+  try {
+    if (isMainSidebarMove && sourceList !== targetList) {
+      const shouldPin = targetList.id === 'pinned-chats-list';
+      const isPinned = _pinnedChats.includes(draggedId);
+      if (shouldPin !== isPinned) {
+        const pinResponse = await fetch(`/api/sessions/${encodeURIComponent(draggedId)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinned: shouldPin }),
+        });
+        if (!pinResponse.ok) throw new Error(`HTTP ${pinResponse.status}`);
+        if (shouldPin) _pinnedChats.push(draggedId);
+        else _pinnedChats.splice(_pinnedChats.indexOf(draggedId), 1);
+        localStorage.setItem('prometheus_pinned_chats', JSON.stringify(_pinnedChats));
+      }
+    }
+
+    const targetIds = sidebarSessionIdsInList(targetList).filter((id) => id !== draggedId);
+    const targetRect = target.getBoundingClientRect?.();
+    let insertionIndex = targetIds.indexOf(targetId);
+    if (insertionIndex < 0) insertionIndex = targetIds.length;
+    if (targetRect && event.clientY > targetRect.top + targetRect.height / 2) insertionIndex += 1;
+    targetIds.splice(insertionIndex, 0, draggedId);
+
+    let orderedIds = targetIds;
+    if (isMainSidebarMove) {
+      const pinnedList = document.getElementById('pinned-chats-list');
+      const jobsList = document.getElementById('jobs-list');
+      const pinnedIds = sidebarSessionIdsInList(pinnedList).filter((id) => id !== draggedId);
+      const normalIds = sidebarSessionIdsInList(jobsList).filter((id) => id !== draggedId);
+      if (targetList.id === 'pinned-chats-list') pinnedIds.splice(insertionIndex, 0, draggedId);
+      else normalIds.splice(insertionIndex, 0, draggedId);
+      orderedIds = [...pinnedIds, ...normalIds];
+    }
+    await persistSidebarOrder(orderedIds, String(target.dataset.sessionChannel || 'web'));
+    _sidebarDragSuppressClickUntil = Date.now() + 400;
+    renderSessionsList();
+    if (_channelsViewOpen) renderChannelsList();
+  } catch (error) {
+    if (typeof showToast === 'function') showToast('Could not reorder this thread', 'error');
+  } finally {
+    endSidebarSessionDrag();
+  }
+}
+
 function renderSessionsList() {
   const el = document.getElementById('jobs-list');
+  if (!el) return;
+  if (_settledViewOpen) {
+    _renderSettledSessionsList(el);
+    return;
+  }
   const allSessions = (window.chatSessions || []);
-  const chatSessions = allSessions.filter(isTopLevelWebChatSession);
+  const chatSessions = allSessions.filter(s => isTopLevelWebChatSession(s) && s.settled !== true && Number(s.settledAt || 0) <= 0);
   const indexedMatchIds = new Set((_sessionSearchResults || []).map(r => String(r.id)));
   const searchOnlySessions = _sessionSearchQuery
     ? (_sessionSearchResults || [])
         .map(sessionFromSearchResult)
         .filter(s => s && isTopLevelWebChatSession(s) && !allSessions.some(existing => String(existing.id) === String(s.id)))
     : [];
-
-  if (!chatSessions.length && !searchOnlySessions.length) {
-    el.innerHTML = '<div class="empty-state">No chats yet.<br>Start a new conversation.</div>';
-    return;
-  }
 
   const byId = new Map();
   [...chatSessions, ...searchOnlySessions].forEach((session) => {
@@ -6303,12 +6970,19 @@ function renderSessionsList() {
     }
   }
 
-  const html = displayedUnpinned.map(renderChatSessionCard).join('');
+  const projectRows = typeof window.renderProjectChatRows === 'function'
+    ? window.renderProjectChatRows({ query: _sessionSearchQuery })
+    : '';
+  // Projects are ordinary rows in the Chats stream. There is deliberately no
+  // separate desktop Projects heading or tab anymore.
+  const html = projectRows + displayedUnpinned.map(renderChatSessionCard).join('');
 
   let content = html || (
     _sessionSearchLoading
       ? `<div class="empty-state">Searching full chat history...</div>`
-      : `<div class="empty-state">No sessions match "${escHtml(_sessionSearchQuery)}".</div>`
+      : (_sessionSearchQuery
+        ? `<div class="empty-state">No sessions match "${escHtml(_sessionSearchQuery)}".</div>`
+        : '<div class="empty-state">No chats yet.<br>Start a new conversation.</div>')
   );
   if (_sessionSearchError) {
     content += `<div class="session-search-error">${escHtml(_sessionSearchError)}</div>`;
@@ -6320,6 +6994,10 @@ function renderSessionsList() {
       + Show more (${unpinned.length - _sessionShowCount} more)
     </button>`;
   }
+
+  content += `<button class="sessions-show-more-btn settled-entry-btn" onclick="toggleSettledSessionsView()" style="width:100%;margin-top:8px;padding:8px 12px;background:transparent;border:1px solid var(--line);color:var(--sidebar-muted, var(--muted));border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease" onmouseover="this.style.background='color-mix(in srgb, var(--pm-gold, var(--brand)) 10%, transparent)'" onmouseout="this.style.background='transparent'">
+    Settled
+  </button>`;
 
   // When searching, append matching skills inline below sessions
   if (_sessionSearchQuery && typeof skillsCache !== 'undefined' && skillsCache.length) {
@@ -7557,8 +8235,8 @@ async function refreshAll() {
 
 // ---- Sidebar tab switching ----
 function setSidebarTab(tab) {
-  const panels = { jobs: 'sidebar-jobs', skills: 'sidebar-skills', projects: 'sidebar-projects' };
-  const tabBtns = { jobs: 'tab-jobs', skills: 'tab-skills', projects: 'sidebar-projects-btn' };
+  const panels = { jobs: 'sidebar-jobs', skills: 'sidebar-skills' };
+  const tabBtns = { jobs: 'tab-jobs', skills: 'tab-skills' };
   Object.entries(panels).forEach(([key, id]) => {
     const el = document.getElementById(id);
     if (el) el.style.display = key === tab ? '' : 'none';
@@ -8043,15 +8721,24 @@ function nextThemeId(currentId) {
 function getInitialTheme() {
   try {
     const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'custom') return saved;
     if (saved && getThemeList().some((t) => t.id === saved)) return saved;
   } catch {}
   return 'light';
 }
 
 function applyTheme(themeId) {
-  const theme = resolveTheme(themeId);
+  const theme = themeId === 'custom'
+    ? { id: 'custom', label: 'Custom theme', base: 'dark' }
+    : resolveTheme(themeId);
   document.documentElement.setAttribute('data-theme', theme.base);
   document.documentElement.setAttribute('data-skin', theme.id);
+  try {
+    const appearance = JSON.parse(localStorage.getItem('prometheus_appearance_v1') || '{}');
+    const opacity = Number(appearance.backgroundOpacity);
+    document.documentElement.setAttribute('data-background-visuals', appearance.backgroundEffects === true ? 'on' : 'off');
+    document.documentElement.style.setProperty('--pm-background-opacity', Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : '0.82');
+  } catch {}
   const toggle = document.getElementById('theme-toggle');
   if (toggle) {
     toggle.setAttribute('data-theme-state', theme.base);
@@ -8129,17 +8816,7 @@ window.addEventListener('DOMContentLoaded', () => {
           window.__chatSessionsBootstrapped = true;
           window.loadChatSessions().catch(() => {});
         }
-        if (typeof window.__PROM_LOAD_CONNECTIONS === 'function') {
-          window.__PROM_LOAD_CONNECTIONS().then(() => {
-            if (window.__connectionsBootstrapped) return;
-            window.__connectionsBootstrapped = true;
-            if (typeof window.loadConnectionsState === 'function') {
-              window.loadConnectionsState().catch(() => {});
-            }
-          }).catch((err) => {
-            console.warn('[boot] connections bootstrap failed:', err);
-          });
-        }
+        if (typeof window.loadProjectSidebar === 'function') window.loadProjectSidebar();
       });
     }
     if (!isRenderWorker) window.useAgentMode = true;
@@ -8253,6 +8930,10 @@ let _errBackdrop = null;
         await window.prometheusUpdater.installUpdate();
         return;
       }
+      if (status === 'available' && typeof window.prometheusUpdater.downloadUpdate === 'function') {
+        await window.prometheusUpdater.downloadUpdate();
+        return;
+      }
       if (status === 'checking' || status === 'downloading' || status === 'installing') return;
       await window.prometheusUpdater.checkForUpdates();
     } catch (err) {
@@ -8265,7 +8946,7 @@ let _errBackdrop = null;
   };
 
   function shouldShowPill(state) {
-    return ['checking', 'downloading', 'ready', 'error', 'installing'].includes(String(state.status || ''));
+    return ['available', 'checking', 'downloading', 'ready', 'error', 'installing'].includes(String(state.status || ''));
   }
 
   function applyUpdateState(state) {
@@ -8296,6 +8977,7 @@ let _errBackdrop = null;
     if (els.status) {
       els.status.textContent = message || (
         status === 'ready' ? 'Downloaded and ready to install.' :
+        status === 'available' ? 'A new release is available to download.' :
         status === 'downloading' ? 'Downloading the latest Prometheus release...' :
         status === 'checking' ? 'Checking the release feed now...' :
         status === 'installing' ? 'Prometheus is closing to apply the update...' :
@@ -8312,6 +8994,7 @@ let _errBackdrop = null;
       els.btn.style.cursor = busy ? 'wait' : 'pointer';
       els.btn.textContent =
         status === 'ready' ? 'Relaunch to Update' :
+        status === 'available' ? 'Download Update' :
         status === 'error' ? 'Try Again' :
         status === 'checking' ? 'Checking...' :
         status === 'downloading' ? 'Downloading ' + progress + '%' :
@@ -8321,6 +9004,8 @@ let _errBackdrop = null;
     if (els.footnote) {
       els.footnote.textContent = status === 'ready'
         ? 'Prometheus will close, install, and reopen'
+        : status === 'available' && _updaterState.autoUpdateEnabled === false
+          ? 'Automatic updates are off'
         : 'Prometheus will restart after install';
     }
     if (_dropdownOpen) placeUpdateDropdown();
@@ -8452,7 +9137,7 @@ let _errBackdrop = null;
     './static/api.js',
     './static/utils.js',
     './static/ws.js',
-    './static/app.js?v=desktop-chat-welcome-cinzel-v4',
+    './static/app.js?v=desktop-chat-welcome-cinzel-v7',
   ];
   const mobileSurface = document.body.classList.contains('pm-mobile-active')
     && !window.__PROM_CREATIVE_RENDER_CONTEXT?.enabled;
@@ -8661,7 +9346,7 @@ let _errBackdrop = null;
     ? window.__PROM_SHOULD_BOOT_MOBILE()
     : document.body.classList.contains('pm-mobile-active');
   if (shouldBootMobile) {
-    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=pm-v240-mobile-splash')
+    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=pm-v263-2026-08-09-directed-chat-shield')
       .catch((err) => {
         console.error('[mobile] router import failed:', err);
         throw err;
@@ -8695,7 +9380,7 @@ let _errBackdrop = null;
     // browser/iOS HTTP cache. The query is intentionally changed with every
     // frontend release; updateViaCache prevents a cached SW script from being
     // treated as the current worker during the update check.
-    const PM_PWA_VERSION = 'pm-v240-2026-08-01-mobile-splash';
+    const PM_PWA_VERSION = 'pm-v260-2026-08-09-mobile-theme-palette';
     const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
     // Auto-reload once when the SW finishes installing a new version, so a
@@ -8754,7 +9439,7 @@ let _errBackdrop = null;
 </script>
 
 <script>
-/* ── Ember particle effect (Default Dark/orange skin only) ─────────────── */
+/* ── Ember particle effect (Appearance-controlled desktop atmosphere) ──── */
 (() => {
   const canvas = document.getElementById('ember-canvas');
   if (!canvas) return;
@@ -8808,7 +9493,8 @@ let _errBackdrop = null;
   }
 
   function embersEnabled() {
-    return currentSkin() === 'dark';
+    return document.documentElement.getAttribute('data-background-visuals') === 'on'
+      && ['dark', 'blue', 'purple', 'custom'].includes(currentSkin());
   }
 
   function isOnChatPage() {
@@ -8943,10 +9629,12 @@ let _errBackdrop = null;
   });
 
   // Recolor embers instantly when the theme changes.
-  document.addEventListener('prom-theme-change', () => {
+  const refreshEmbers = () => {
     const colRect = getColRect();
     if (colRect && colRect.width >= 10) initEmbers(colRect);
-  });
+  };
+  document.addEventListener('prom-theme-change', refreshEmbers);
+  document.addEventListener('prom-appearance-change', refreshEmbers);
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start);

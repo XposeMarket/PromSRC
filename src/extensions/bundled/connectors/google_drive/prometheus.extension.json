@@ -55,7 +55,7 @@
     "docsHint": "Google Cloud Console -> Enable Drive API -> Use the same desktop OAuth credentials as Gmail if desired.",
     "callback": {
       "port": 19425,
-      "path": "/auth/callback/google_drive"
+        "path": "/auth/callback/google-drive"
     },
     "fields": [
       {
@@ -74,5 +74,44 @@
         "placeholder": "GOCSPX-..."
       }
     ]
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["GDrive", "Google Drive OAuth"],
+    "domains": ["drive.googleapis.com", "googleapis.com", "accounts.google.com"],
+    "providerApp": {
+      "provider": "google",
+      "appType": "confidential-client",
+      "clientIdEnv": "GDRIVE_CLIENT_ID",
+      "clientSecretEnv": "GDRIVE_CLIENT_SECRET",
+      "externalSetupRequired": true
+    },
+    "strategies": [{
+      "id": "google-drive-oauth",
+      "adapter": "connector-oauth",
+      "priority": 110,
+      "capabilities": ["files.read", "search.read"],
+      "readOnlyDefault": true,
+      "authentication": {
+        "type": "oauth2",
+        "scopes": ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/userinfo.email", "openid"],
+        "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+        "tokenUrl": "https://oauth2.googleapis.com/token",
+        "pkceRequired": false,
+        "nonceRequired": true,
+        "callback": { "host": "localhost", "port": 19425, "path": "/auth/callback/google-drive" },
+        "clientIdEnv": "GDRIVE_CLIENT_ID",
+        "clientSecretEnv": "GDRIVE_CLIENT_SECRET"
+      },
+      "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+      "config": { "provider": "google", "connectorId": "google_drive", "resourceScope": "Google account and accessible files" }
+    }],
+    "requestedCapabilities": [
+      { "id": "files.read", "label": "Read files and documents", "description": "Read file metadata and text content.", "risk": "read" },
+      { "id": "search.read", "label": "Search Drive", "description": "Search files and folders in the connected account.", "risk": "read" },
+      { "id": "files.write", "label": "Create or update files", "description": "File mutations require explicit approval and a separate scope grant.", "risk": "write" }
+    ],
+    "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+    "toolPolicy": { "defaultExposure": "read-only", "unknownTools": "blocked" }
   }
 }

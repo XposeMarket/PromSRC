@@ -192,6 +192,7 @@ export class SecretVault {
   private masterKey: Buffer | null = null;
   private data: VaultMetadata = { version: 1, entries: {} };
   private derivedKeyCache = new Map<string, { at: number; key: Buffer }>();
+  private derivedKeyAsyncInflight = new Map<string, Promise<Buffer>>();
   private lastAuditSizeCheckAt = 0;
 
   constructor(configDir: string) {
@@ -229,6 +230,16 @@ export class SecretVault {
     return key;
   }
 
+  private cacheDerivedKey(cacheKey: string, derived: Buffer): Buffer {
+    this.derivedKeyCache.set(cacheKey, { at: Date.now(), key: derived });
+    while (this.derivedKeyCache.size > DERIVED_KEY_CACHE_MAX_ENTRIES) {
+      const oldest = this.derivedKeyCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.derivedKeyCache.delete(oldest);
+    }
+    return derived;
+  }
+
   private deriveKey(salt: Buffer): Buffer {
     const cacheKey = salt.toString('hex');
     const cached = this.derivedKeyCache.get(cacheKey);
@@ -239,13 +250,35 @@ export class SecretVault {
       return cached.key;
     }
     const derived = crypto.pbkdf2Sync(this.masterKey!, salt, KEY_ITERS, KEY_BYTES, KEY_DIGEST);
-    this.derivedKeyCache.set(cacheKey, { at: Date.now(), key: derived });
-    while (this.derivedKeyCache.size > DERIVED_KEY_CACHE_MAX_ENTRIES) {
-      const oldest = this.derivedKeyCache.keys().next().value;
-      if (!oldest) break;
-      this.derivedKeyCache.delete(oldest);
+    return this.cacheDerivedKey(cacheKey, derived);
+  }
+
+  private deriveKeyAsync(salt: Buffer): Promise<Buffer> {
+    const cacheKey = salt.toString('hex');
+    const cached = this.derivedKeyCache.get(cacheKey);
+    if (cached) {
+      this.derivedKeyCache.delete(cacheKey);
+      this.derivedKeyCache.set(cacheKey, cached);
+      return Promise.resolve(cached.key);
     }
-    return derived;
+    const inFlight = this.derivedKeyAsyncInflight.get(cacheKey);
+    if (inFlight) return inFlight;
+
+    const promise = new Promise<Buffer>((resolve, reject) => {
+      crypto.pbkdf2(this.masterKey!, salt, KEY_ITERS, KEY_BYTES, KEY_DIGEST, (error, derived) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(this.cacheDerivedKey(cacheKey, derived));
+      });
+    });
+    this.derivedKeyAsyncInflight.set(cacheKey, promise);
+    promise.then(
+      () => { if (this.derivedKeyAsyncInflight.get(cacheKey) === promise) this.derivedKeyAsyncInflight.delete(cacheKey); },
+      () => { if (this.derivedKeyAsyncInflight.get(cacheKey) === promise) this.derivedKeyAsyncInflight.delete(cacheKey); },
+    );
+    return promise;
   }
 
   /**
@@ -265,6 +298,35 @@ export class SecretVault {
     }
     return {
       entries,
+      warmed: Math.max(0, this.derivedKeyCache.size - before),
+      durationMs: Date.now() - startedAt,
+    };
+  }
+
+  /**
+   * Non-blocking equivalent of prewarmDerivedKeys. PBKDF2 is dispatched to
+   * libuv's crypto pool with bounded concurrency so readiness is not held
+   * hostage by the number of encrypted vault entries.
+   */
+  async prewarmDerivedKeysAsync(concurrency = 1): Promise<{ entries: number; warmed: number; durationMs: number }> {
+    const startedAt = Date.now();
+    this.refreshFromDisk();
+    const before = this.derivedKeyCache.size;
+    const salts = Object.values(this.data.entries)
+      .filter((entry) => entry?.iv && !(entry.expiresAt > 0 && Date.now() > entry.expiresAt))
+      .map((entry) => Buffer.from(entry.iv, 'hex'));
+    const workerCount = Math.max(1, Math.min(Math.floor(Number(concurrency) || 1), salts.length || 1));
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const index = cursor++;
+        if (index >= salts.length) return;
+        await this.deriveKeyAsync(salts[index]);
+      }
+    };
+    await Promise.allSettled(Array.from({ length: workerCount }, () => worker()));
+    return {
+      entries: salts.length,
       warmed: Math.max(0, this.derivedKeyCache.size - before),
       durationMs: Date.now() - startedAt,
     };

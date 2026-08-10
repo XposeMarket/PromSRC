@@ -19,6 +19,7 @@ import { registerBrowserSessionMetadata } from '../browser-tools';
 import { addPendingRuntimeSteerForBackgroundAgent, addPendingRuntimeSteerForSession, finishLiveRuntime, registerLiveRuntime } from '../live-runtime-registry';
 import { getWorkspace, setActivatedToolCategories, setWorkspace } from '../session';
 import { updateVoiceWorkgroupWorkerStatus } from '../voice/voice-workgroup-store';
+import { getResourceStore, redactResourceText } from '../resources/resource-store';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -75,6 +76,7 @@ export interface EphemeralBackgroundStatus {
   timeoutMs: number;
   tags?: string[];
   spawnerSessionId?: string;
+  resourceIds?: string[];
   prompt?: string;
   promptPreview?: string;
   fileChanges?: any;
@@ -392,6 +394,7 @@ export interface EphemeralBackgroundSpawnInput {
   tags?: string[];
   tools?: TaskTool[];  // Optional full tool set (same as main agent)
   spawnerSessionId?: string;  // Session ID of the main chat that spawned this — for SSE forwarding
+  resourceIds?: string[];     // Explicit resource links inherited only by this background_spawn worker
   modelOverride?: string;
   providerOverride?: string;
   reasoningEffort?: string;
@@ -432,6 +435,7 @@ interface EphemeralBackgroundRecord extends EphemeralBackgroundStatus {
   abortController?: AbortController;
   promptPreview?: string;
   fileChanges?: any;
+  resourceIds?: string[];
 }
 
 const BACKGROUND_WAIT_ALL_CAP_MS = 120_000;
@@ -660,6 +664,19 @@ function startBackgroundExecution(record: EphemeralBackgroundRecord, prompt: str
         if (spawnerSessionId) {
           const parentWorkspace = getWorkspace(spawnerSessionId);
           if (parentWorkspace) setWorkspace(sessionId, parentWorkspace);
+          try {
+            getResourceStore(parentWorkspace || getConfig().getWorkspacePath()).copyThreadResources(
+              spawnerSessionId,
+              sessionId,
+              {
+                resourceIds: record.resourceIds,
+                inheritedBy: 'background_spawn',
+                actor: 'background_spawn',
+              },
+            );
+          } catch (error: any) {
+            console.warn(`[Background Agent] ${record.id} could not inherit chat resources: ${redactResourceText(error?.message || error)}`);
+          }
         }
       } catch (err: any) {
         console.warn(`[Background Agent] ${record.id} could not inherit session tool context: ${err?.message || err}`);
@@ -852,6 +869,9 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
   };
 
   record.spawnerSessionId = String(input?.spawnerSessionId || '').trim() || undefined;
+  record.resourceIds = Array.isArray(input?.resourceIds)
+    ? input.resourceIds.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 100)
+    : undefined;
   record.promise = startBackgroundExecution(record, prompt);
   _ephemeralBackgroundRuns.set(id, record);
   console.log(`[Background Agent] spawned ${id} (policy=${joinPolicy}, timeoutMs=${timeoutMs})`);
@@ -863,6 +883,7 @@ export function backgroundSpawn(input: EphemeralBackgroundSpawnInput): Ephemeral
     timeoutMs: record.timeoutMs,
     tags: record.tags,
     spawnerSessionId: record.spawnerSessionId,
+    resourceIds: record.resourceIds,
     prompt,
     promptPreview: record.promptPreview,
     fileChanges: record.fileChanges,
@@ -885,6 +906,7 @@ export function backgroundStatus(backgroundId: string): EphemeralBackgroundStatu
     timeoutMs: rec.timeoutMs,
     tags: rec.tags,
     spawnerSessionId: rec.spawnerSessionId,
+    resourceIds: rec.resourceIds,
     prompt: rec.prompt,
     promptPreview: rec.promptPreview,
     fileChanges: rec.fileChanges,

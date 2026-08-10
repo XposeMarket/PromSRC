@@ -1243,7 +1243,7 @@ export function getAgentTeamScheduleTools(): any[] {
       function: {
         name: 'prometheus_thread_ops',
         description:
-          'Find, inspect, create, rename, pin, message, steer, interrupt, and supervise other Prometheus chat sessions. A created chat inherits its origin chat channel and the current Main Chat route unless provider_id, model, reasoning_effort, or account_id is supplied; any supplied route field creates a sticky route for that chat only. ' +
+          'Find, inspect, create, rename, pin, reopen, message, steer, interrupt, and supervise other Prometheus chat sessions. Settled chats remain discoverable in list/find/search and are marked with settled state; use state="active" or state="settled" to narrow results. Use action="reopen" (open/unsettle are aliases) to manually return a settled chat to the active view without changing its history. A created chat inherits its origin chat channel and the current Main Chat route unless provider_id, model, reasoning_effort, or account_id is supplied; any supplied route field creates a sticky route for that chat only. ' +
           'Use exactly one of the three creation routes: launch_mode="ping" (create and notify this owner when the detached turn completes), launch_mode="forget" (create and do not notify this owner), or launch_mode="supervise" (create a Goal target and keep a durable hidden supervisor loop running while it works). The action aliases create_and_ping, create_and_forget, and create_and_supervise select those routes directly. Creation only accepts and queues the target turn: it is not a target reply, completion, or verification. ' +
           'Use create_many to split a request into separate first-class Prometheus threads. A real target result exists only after a later read/status, a ping completion update, or a terminal supervision update. ' +
           'For active supervision, the hidden manager loop reviews the target evidence, reasoning summary, tool/process findings, runtime checkpoint, changed files, and artifacts; it blocks internally on supervision_wait between idle target events and never turns each checkpoint into a normal owner-chat response. ' +
@@ -1254,8 +1254,8 @@ export function getAgentTeamScheduleTools(): any[] {
           properties: {
             action: {
               type: 'string',
-              enum: ['list', 'find', 'read', 'status', 'create', 'create_and_ping', 'create_and_forget', 'create_and_supervise', 'create_many', 'send', 'steer', 'interrupt', 'rename', 'pin', 'unpin', 'follow', 'unfollow', 'supervisions', 'review_decision', 'supervision_wait', 'revise_supervision', 'pause_supervision', 'resume_supervision'],
-              description: 'Peer-session operation. Use steer instead of send while the target is actively running. supervision_wait is an internal blocking action used only by the hidden supervisor runtime.',
+              enum: ['list', 'find', 'search', 'read', 'status', 'create', 'create_and_ping', 'create_and_forget', 'create_and_supervise', 'create_many', 'send', 'steer', 'interrupt', 'rename', 'pin', 'unpin', 'reopen', 'open', 'unsettle', 'follow', 'unfollow', 'supervisions', 'review_decision', 'supervision_wait', 'revise_supervision', 'pause_supervision', 'resume_supervision'],
+              description: 'Peer-session operation. list/find/search include active and settled chats by default; pass state to narrow them. Use reopen to clear settled visibility state before sending or steering when needed. Use steer instead of send while the target is actively running. supervision_wait is an internal blocking action used only by the hidden supervisor runtime.',
             },
             session_id: { type: 'string', description: 'Target Prometheus session id.' },
             supervision_id: { type: 'string', description: 'Supervision id for review decisions, supervised send/steer, unfollow, revise, pause, or resume.' },
@@ -1290,6 +1290,8 @@ export function getAgentTeamScheduleTools(): any[] {
             include_history: { type: 'boolean', description: 'For status: include recent messages.' },
             include_terminal: { type: 'boolean', description: 'For supervisions: include completed/blocked/failed/cancelled records. Default true.' },
             include_automated: { type: 'boolean', description: 'For list: include scheduled automation sessions.' },
+            include_settled: { type: 'boolean', description: 'Legacy/convenience filter for list/find/search. false means active only; settled chats are included by default.' },
+            state: { type: 'string', enum: ['active', 'settled', 'all'], description: 'For list/find/search: session visibility state. Defaults to all so settled chats remain discoverable.' },
             all_owners: { type: 'boolean', description: 'For supervisions/unfollow: operate across owner sessions. Use only when the user asks.' },
             reason: { type: 'string', description: 'Reason for interrupting/pausing a target.' },
             status: { type: 'string', enum: ['active', 'paused', 'complete', 'blocked', 'failed', 'cancelled'], description: 'Filter supervision status.' },
@@ -1483,6 +1485,7 @@ export function getAgentTeamScheduleTools(): any[] {
             },
             timeout_ms: { type: 'number', description: 'Optional wait cap used by timeout-based policies. Default 120000.' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags for tracking/grouping.' },
+            resource_ids: { type: 'array', items: { type: 'string' }, description: 'Optional explicit resource IDs to authorize for this worker. If omitted, no thread resources are inherited.' },
             model: { type: 'string', description: 'Optional model override.' },
             provider: { type: 'string', description: 'Optional provider override.' },
             reasoning_effort: { type: 'string', enum: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], description: 'Optional reasoning override.' },

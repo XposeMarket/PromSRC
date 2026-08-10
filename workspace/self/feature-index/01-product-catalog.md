@@ -12,7 +12,7 @@ The useful document-level framing is: **one durable operational workspace, many 
 
 | Family | What a person can do | Primary surfaces | Availability |
 |---|---|---|---|
-| Conversational work | Start, search, fork, rename, edit/rerun, and stream persistent work threads; attach files; receive artifacts, progress, goals, approvals, and agent traces | Desktop Chat, Mobile Chat, channels, CLI | Built in |
+| Conversational work | Start, search, fork, rename, edit/rerun, and stream persistent work threads; attach files and persistent Sources; receive artifacts, progress, goals, approvals, and agent traces | Desktop Chat, Mobile Chat, channels, CLI | Built in |
 | Plans and goals | Maintain a visible main goal, steps, status, and continuity across a working thread | Chat, background work, agents | Built in |
 | Files and coding | Read, search, create, patch, validate, test, format, run, inspect Git, and present workspace files; use an approval-aware Prometheus-source edit lane | Chat tools, Projects, proposals | Built in; writes/publishing can be approval-gated |
 | Web research and browser work | Search/fetch the web, operate a browser, inspect page text/DOM/screenshots, download, fill forms, run controlled JS, and teach reusable workflows | Chat browser canvas, tool menu | Browser host/session required; risky actions are conditional |
@@ -83,3 +83,4 @@ Avoid: “works with every app,” “fully autonomous,” “all tools are alwa
 - Agents/source/memory: `../07-source-editing.md`, `../08-tasks-and-agents.md`, `../13-memory.md`
 - Providers/connections/runtime: `../09-providers-and-models.md`, `../10-mcp-and-connections.md`, `../11-run-and-supervisor.md`
 - Product clients: `../16-mobile-app.md`, `../17-desktop-web-ui.md`, `../20-rich-artifacts.md`
+- Persistent Chat Sources / Context: `../32-persistent-chat-sources.md`

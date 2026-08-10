@@ -3,6 +3,7 @@ import { ConnectionAdapterRegistry } from './adapter-registry';
 import { ConnectionActivityStore } from './activity-store';
 import { ConnectionAttemptStore } from './attempt-store';
 import { ConnectionStore } from './connection-store';
+import { accountIdentitiesMatch } from './connector-contract';
 import type {
   ConnectionAdapterResult, ConnectionAttempt, ConnectionPlan, ConnectionRecord,
   ConnectionDiscoveryResult, ConnectionStrategy, ConnectionVerificationResult,
@@ -105,7 +106,8 @@ export class ConnectionOrchestrator {
       ? await adapter.verify(this.context(attempt), connection)
       : [{ id: randomUUID(), check: 'adapter', passed: connection.authenticated && connection.registered, message: 'Adapter state verification.', verifiedAt: new Date().toISOString() }];
     const passed = checks.length > 0 && checks.every((check) => check.passed);
-    this.options.connections.update(connection.id, { verified: passed, health: passed ? 'healthy' : 'degraded', verification: checks, lastVerifiedAt: new Date().toISOString() });
+    const verifiedAt = new Date().toISOString();
+    this.options.connections.update(connection.id, { verified: passed, health: passed ? 'healthy' : 'degraded', verification: checks, lastVerifiedAt: verifiedAt, lastHealthCheckAt: verifiedAt });
     return this.transition(attempt, passed ? 'connected' : 'degraded', passed ? 'Connection verified and ready.' : 'Connection is available but verification is incomplete.');
   }
 
@@ -144,6 +146,12 @@ export class ConnectionOrchestrator {
     let connectionId = attempt.connectionId;
     if (result.connection && attempt.plan) {
       const now = new Date().toISOString();
+      const incomingAccount = result.connection.account;
+      const existingAccountRecord = this.options.connections.findByService(attempt.serviceId)
+        .find((item) => item.enabled && item.account && incomingAccount);
+      if (existingAccountRecord && !accountIdentitiesMatch(existingAccountRecord.account, incomingAccount)) {
+        return this.fail(attempt, 'ACCOUNT_MISMATCH', 'The provider returned a different account than the existing connection. Disconnect the existing account before connecting another one.', true);
+      }
       const record = this.options.connections.upsert({
         pluginId: attempt.plan.pluginId || attempt.pluginId || 'core', serviceId: attempt.serviceId, serviceName: attempt.serviceName,
         strategyId: attempt.plan.strategy.id, adapterId, installed: true, enabled: true, configured: true,

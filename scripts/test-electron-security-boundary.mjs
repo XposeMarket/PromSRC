@@ -7,9 +7,11 @@ import { createRequire } from 'node:module';
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/(?:[A-Za-z]:)/, (value) => value.slice(1))), '..');
 const require = createRequire(import.meta.url);
 const {
+  isLocalGatewayUrl,
   isTrustedRendererUrl,
   normalizeEmbeddedBrowserUrl,
   normalizeExternalUrl,
+  normalizePassthroughExternalUrl,
   parseWindowsListeningPids,
 } = require(path.join(root, 'electron', 'security.js'));
 
@@ -26,10 +28,16 @@ for (const candidate of [
   'not a url',
 ]) assert.equal(isTrustedRendererUrl(candidate, gateway), false, candidate);
 
+assert.equal(isLocalGatewayUrl('http://localhost:18789/chat', gateway), true);
+assert.equal(isLocalGatewayUrl('http://127.0.0.1:18790/chat', gateway), false);
 assert.equal(normalizeExternalUrl('https://example.com/docs?q=1'), 'https://example.com/docs?q=1');
-for (const candidate of ['http://example.com', 'file:///tmp/a', 'javascript:alert(1)', 'mailto:test@example.com', 'https://u:p@example.com/']) {
+assert.equal(normalizeExternalUrl('http://example.com/docs?q=1'), 'http://example.com/docs?q=1');
+for (const candidate of ['file:///tmp/a', 'javascript:alert(1)', 'mailto:test@example.com', 'https://u:p@example.com/']) {
   assert.equal(normalizeExternalUrl(candidate), null, candidate);
 }
+assert.equal(normalizePassthroughExternalUrl('mailto:test@example.com'), 'mailto:test@example.com');
+assert.equal(normalizePassthroughExternalUrl('tel:+15551212'), 'tel:+15551212');
+assert.equal(normalizePassthroughExternalUrl('javascript:alert(1)'), null);
 
 assert.equal(normalizeEmbeddedBrowserUrl('example.com'), 'https://example.com/');
 assert.equal(normalizeEmbeddedBrowserUrl('http://example.com/a'), 'http://example.com/a');
@@ -47,16 +55,42 @@ const netstat = [
 assert.deepEqual(parseWindowsListeningPids(netstat, 18789), [4242]);
 
 const mainSource = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
+const desktopPreloadSource = fs.readFileSync(path.join(root, 'electron', 'preload.js'), 'utf8');
+const settingsPageSource = fs.readFileSync(path.join(root, 'web-ui', 'src', 'pages', 'SettingsPage.js'), 'utf8');
+const settingsHtml = fs.readFileSync(path.join(root, 'web-ui', 'index.html'), 'utf8');
+const chatSource = fs.readFileSync(path.join(root, 'web-ui', 'src', 'pages', 'ChatPage.js'), 'utf8');
 assert.doesNotMatch(mainSource, /url\.startsWith\(GATEWAY_URL\)/);
 assert.doesNotMatch(mainSource, /killPortIfInUse/);
 assert.match(mainSource, /assertGatewayPortAvailable\(18789\)/);
 assert.equal((mainSource.match(/ipcMain\.handle\(/g) || []).length, 1, 'all privileged invoke handlers must register through handleTrustedMain');
-for (const channel of ['get-app-version', 'select-canvas-paths', 'native-browser:navigate', 'native-browser:teach-capture', 'updater:install']) {
+for (const channel of ['get-app-version', 'external-link:open', 'select-canvas-paths', 'native-browser:navigate', 'native-browser:teach-capture', 'updater:check', 'updater:download', 'updater:set-auto-update', 'updater:install']) {
   assert.match(mainSource, new RegExp(`handleTrustedMain\\('${channel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
 }
+assert.match(mainSource, /autoUpdater\.autoDownload\s*=\s*autoUpdateEnabled/);
+assert.match(mainSource, /autoUpdater\.autoInstallOnAppQuit\s*=\s*autoUpdateEnabled/);
+assert.match(mainSource, /UPDATER_SETTINGS_FILE/);
+assert.match(desktopPreloadSource, /downloadUpdate: \(\) => ipcRenderer\.invoke\('updater:download'\)/);
+assert.match(desktopPreloadSource, /setAutoUpdateEnabled: \(enabled\) => ipcRenderer\.invoke\('updater:set-auto-update'/);
+assert.match(settingsHtml, /settings-auto-update-toggle/);
+assert.match(settingsHtml, /settings-update-download/);
+const generalPanelStart = settingsHtml.indexOf('id="settings-panel-system"');
+const agentsPanelStart = settingsHtml.indexOf('id="settings-panel-agents"');
+const updatePanelStart = settingsHtml.indexOf('settings-updates-section');
+assert.ok(generalPanelStart >= 0 && updatePanelStart > generalPanelStart && updatePanelStart < agentsPanelStart, 'update settings must live inside General, not Agents');
+assert.match(settingsPageSource, /function loadDesktopUpdateSettings\(\)/);
+assert.match(settingsPageSource, /function toggleDesktopAutoUpdate\(\)/);
 assert.match(mainSource, /event\.sender !== mainWindow\.webContents/);
 assert.match(mainSource, /event\.senderFrame !== event\.sender\.mainFrame/);
 assert.match(mainSource, /view\.webContents !== event\.sender/);
+assert.match(mainSource, /normalizeEmbeddedBrowserUrl\(url\)/, 'native browser loads must use the embedded URL boundary');
+assert.match(mainSource, /requestPrometheusBrowserNavigation\(url\)/, 'desktop external navigation must dispatch to the Prometheus Browser');
+assert.match(mainSource, /isLocalGatewayUrl\(url, GATEWAY_URL\)/, 'local gateway links must remain internal');
+assert.match(mainSource, /presentNativeView\(partition\)/, 'native browser navigation must present the session-keyed view');
+assert.match(chatSource, /async function openDirectNativeBrowserSurface\(options = \{\}\)/, 'Browser surface must support direct Electron open');
+assert.match(chatSource, /url: requestedUrl/, 'direct Electron open must start with a usable new-tab URL');
+assert.match(chatSource, /function normalizeBrowserAddressInput\(value\)/, 'address entry must normalize and validate URLs');
+assert.match(chatSource, /async function sendNativeBrowserNavigation\(action, url = ''\)/, 'native browser controls must remain on the embedded surface');
+assert.match(chatSource, /state\.lastError = nextError/, 'native browser load errors must reach browser UI state');
 
 const sent = [];
 const ipcListeners = new Map();
@@ -67,6 +101,7 @@ const ipcRenderer = {
 };
 const fakeWindow = {
   CSS: { escape: (value) => String(value) },
+  location: { href: 'https://example.test/' },
   innerWidth: 1280,
   innerHeight: 720,
   addEventListener(type, fn) { domListeners.set(type, fn); },
@@ -75,6 +110,7 @@ const preloadSource = fs.readFileSync(path.join(root, 'electron', 'inhouse-brows
 const context = vm.createContext({
   console: { log() {} },
   window: fakeWindow,
+  document: { title: '' },
   setTimeout,
   clearTimeout,
 });

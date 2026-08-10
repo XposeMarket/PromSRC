@@ -87,7 +87,9 @@ function hydrateProjectSessions(project: any): any {
         if (!sessionExists(sessionId)) return stored;
         const session = getSession(sessionId);
         const firstUserMsg = session.history?.find((m: any) => m.role === 'user');
-        const title = firstUserMsg?.content
+        const title = session.externalImport?.source
+          ? (session.title || firstUserMsg?.content || stored.title || 'New chat')
+          : firstUserMsg?.content
           ? String(firstUserMsg.content).slice(0, 60)
           : (stored.title || 'New chat');
         return {
@@ -140,6 +142,7 @@ router.patch('/api/projects/:id', (req: Request, res: Response) => {
     if (req.body?.workspacePath !== undefined) updates.workspacePath = resolveAllowedProjectDirectory(req.body.workspacePath);
     if (req.body?.instructions !== undefined) updates.instructions = String(req.body.instructions);
     if (req.body?.memorySnapshot !== undefined) updates.memorySnapshot = String(req.body.memorySnapshot);
+    if (req.body?.pinned !== undefined) updates.pinnedAt = req.body.pinned === true ? Date.now() : undefined;
     const project = updateProject(req.params.id, updates);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     res.json(project);

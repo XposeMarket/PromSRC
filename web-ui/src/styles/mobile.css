@@ -1,25 +1,5 @@
 
 
-/* Keep the brand stage genuinely black: this sits above every particle and
-   constellation layer, then feathers cleanly back into the surrounding sky. */
-.pm-one-center-blackout {
-  position: absolute;
-  z-index: 1;
-  left: 50%;
-  top: 50%;
-  width: min(94vw, 390px);
-  height: min(53vh, 450px);
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  background: radial-gradient(ellipse at center,
-    #000 0%,
-    #000 60%,
-    rgba(0, 0, 0, .995) 70%,
-    rgba(0, 0, 0, .9) 80%,
-    rgba(0, 0, 0, 0) 100%);
-}
-
-
 /* --------------------------------------------------------------------------
    Prometheus One mobile launch sequence
    Black first frame -> constellations -> P1 mark -> Cinzel title -> app.
@@ -230,6 +210,7 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
   --pm-bg-soft:       #f3ead9;
   --pm-surface:       #fffaf1;
   --pm-surface-strong:#ffffff;
+  --pm-ios-popover-base: #d8d4dc;
   --pm-border:        rgba(60, 40, 20, 0.10);
   --pm-border-strong: rgba(60, 40, 20, 0.18);
   --pm-text:          #221a14;
@@ -304,6 +285,7 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
   --pm-bg-soft:       #111113;
   --pm-surface:       #1c1c1f;
   --pm-surface-strong:#242427;
+  --pm-ios-popover-base: #46464b;
   --pm-border:        rgba(255, 255, 255, 0.10);
   --pm-border-strong: rgba(255, 255, 255, 0.16);
   --pm-text:          #f4f4f5;
@@ -320,11 +302,12 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
 }
 
 :root[data-skin="blue"] {
-  /* Lift the flat mobile surfaces to match desktop's brighter ambient navy. */
-  --pm-bg:            #0b1a31;
-  --pm-bg-soft:       #102443;
-  --pm-surface:       #19345e;
-  --pm-surface-strong:#20406f;
+  /* Use the brighter desktop panel family for the mobile app backdrop. */
+  --pm-bg:            #122444;
+  --pm-bg-soft:       #16294e;
+  --pm-surface:       #1b3765;
+  --pm-surface-strong:#254a7d;
+  --pm-ios-popover-base: #2b4d7a;
   --pm-border:        rgba(120, 170, 255, 0.12);
   --pm-border-strong: rgba(120, 170, 255, 0.22);
   --pm-text:          #dde8ff;
@@ -342,11 +325,12 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
   --pm-lg-lens-opacity: .48;
 }
 :root[data-skin="purple"] {
-  /* Lift the flat mobile surfaces to match desktop's brighter ambient violet. */
-  --pm-bg:            #150b28;
-  --pm-bg-soft:       #21103d;
-  --pm-surface:       #2b1950;
-  --pm-surface-strong:#372263;
+  /* Use the brighter desktop panel family for the mobile app backdrop. */
+  --pm-bg:            #1e1138;
+  --pm-bg-soft:       #261545;
+  --pm-surface:       #33205b;
+  --pm-surface-strong:#432d73;
+  --pm-ios-popover-base: #4c3472;
   --pm-border:        rgba(170, 120, 255, 0.12);
   --pm-border-strong: rgba(170, 120, 255, 0.22);
   --pm-text:          #e8ddff;
@@ -361,6 +345,32 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
   --pm-shadow-sm:     0 1px 2px rgba(0, 0, 0, .28), 0 1px 1px rgba(0, 0, 0, .18);
   --pm-shadow-md:     0 8px 22px rgba(0, 0, 0, .28);
   --pm-shadow-lg:     0 18px 48px rgba(0, 0, 0, .42);
+  --pm-lg-lens-opacity: .48;
+}
+:root[data-skin="gray"] {
+  /* Ash & Ember: the restored gray/orange mobile skin. */
+  --pm-bg:            #2e2e2e;
+  --pm-bg-soft:       #363636;
+  --pm-surface:       #3d3d3d;
+  --pm-surface-strong:#484848;
+  --pm-ios-popover-base: #555555;
+  --pm-border:        rgba(255, 255, 255, .14);
+  --pm-border-strong: rgba(255, 255, 255, .23);
+  --pm-text:          #f1eee8;
+  --pm-text-soft:     #ddd8cf;
+  --pm-muted:         #aaa49a;
+  --pm-accent:        #f97316;
+  --pm-accent-soft:   rgba(249, 115, 22, .15);
+  --pm-accent-dark:   #c2410c;
+  --pm-orange:        var(--pm-accent);
+  --pm-orange-soft:   var(--pm-accent-soft);
+  --pm-orange-dark:   var(--pm-accent-dark);
+  --sidebar-bg:       #171717;
+  --sidebar-text:     #f1eee8;
+  --sidebar-muted:    #aaa49a;
+  --pm-shadow-sm:     0 1px 2px rgba(0, 0, 0, .30), 0 1px 1px rgba(0, 0, 0, .20);
+  --pm-shadow-md:     0 8px 22px rgba(0, 0, 0, .32);
+  --pm-shadow-lg:     0 18px 48px rgba(0, 0, 0, .46);
   --pm-lg-lens-opacity: .48;
 }
 
@@ -379,6 +389,16 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
 :root[data-skin="purple"] .pm-app {
   background: var(--pm-bg);
 }
+:root[data-skin="gray"] .pm-app {
+  background: var(--pm-bg);
+}
+:root[data-skin="gray"] .pm-app::before,
+:root[data-skin="gray"] .pm-app::after {
+  background: none;
+  background-image: none;
+  mix-blend-mode: normal;
+  opacity: 0;
+}
 
 
 /* Mobile motion language: one calm, responsive curve for layout-bearing UI.
@@ -388,6 +408,7 @@ body.pm-mobile-active {
   --pm-motion-layout-duration: 300ms;
   --pm-motion-layout-ease: cubic-bezier(.22, .74, .22, 1);
   --pm-motion-fade-duration: 220ms;
+  --pm-drawer-width: min(76vw, 350px);
 }
 
 body.pm-mobile-active :where(
@@ -458,6 +479,10 @@ body.pm-mobile-active :where(input, textarea, select, [contenteditable=""], [con
 :root[data-skin="blue"] body.pm-mobile-active .side-chat-main-pane,
 :root[data-skin="blue"] body.pm-mobile-active .side-chat-pane,
 :root[data-skin="blue"] body.pm-mobile-active .page-view,
+:root[data-skin="gray"] body.pm-mobile-active #chat-view,
+:root[data-skin="gray"] body.pm-mobile-active .side-chat-main-pane,
+:root[data-skin="gray"] body.pm-mobile-active .side-chat-pane,
+:root[data-skin="gray"] body.pm-mobile-active .page-view,
 :root[data-skin="purple"] body.pm-mobile-active #chat-view,
 :root[data-skin="purple"] body.pm-mobile-active .side-chat-main-pane,
 :root[data-skin="purple"] body.pm-mobile-active .side-chat-pane,
@@ -495,6 +520,7 @@ body.pm-mobile-active::before {
 }
 :root[data-theme="dark"] body.pm-mobile-active,
 :root[data-skin="blue"] body.pm-mobile-active,
+:root[data-skin="gray"] body.pm-mobile-active,
 :root[data-skin="purple"] body.pm-mobile-active {
   background-image: none;
 }
@@ -586,7 +612,7 @@ body.pm-mobile-active.pm-mobile-document-scroll .pm-ctx-popover {
   position: fixed;
 }
 body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-drawer-open .pm-app {
-  transform: translate3d(min(72vw, 330px), 0, 0) scale(.986);
+  transform: translate3d(var(--pm-drawer-width), 0, 0);
   will-change: transform, border-radius;
 }
 
@@ -624,10 +650,12 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-drawer-open .pm-app {
 }
 
 body.pm-mobile-drawer-open .pm-app {
-  transform: translate3d(min(72vw, 330px), 0, 0) scale(.986);
-  border-radius: 34px 0 0 34px;
+  /* The drawer sits directly behind this edge. Avoid scaling or rounding the
+     edge: both expose the document background as a visible gap. */
+  transform: translate3d(var(--pm-drawer-width), 0, 0);
+  border-radius: 0;
   box-shadow:
-    -22px 0 54px rgba(0,0,0,.42),
+    -14px 0 32px rgba(0,0,0,.28),
     -1px 0 0 rgba(255,255,255,.10);
 }
 
@@ -689,6 +717,7 @@ body.pm-mobile-drawer-open .pm-app {
 }
 .pm-header .pm-icon-btn::after,
 .pm-header .pm-online::after,
+.pm-completion-toast::after,
 .pm-tabbar .pm-glass-border,
 .pm-composer .pm-glass-border,
 .pm-glass-lens,
@@ -714,8 +743,8 @@ body.pm-mobile-drawer-open .pm-app {
 }
 
 /* Completion notices live directly under body, above every mobile sheet, drawer,
-   composer, and tab bar. Their glass is deliberately the same optical family as
-   the floating header controls, just stretched into a readable notification. */
+   composer, and tab bar. Their material is the same liquid glass as the
+   floating header controls; only the readable notification shape differs. */
 #pm-completion-toast-host {
   position: fixed;
   top: max(12px, calc(env(safe-area-inset-top) + 8px));
@@ -745,40 +774,17 @@ body.pm-mobile-drawer-open .pm-app {
   font: inherit;
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .22));
   border-radius: 22px;
-  background:
-    linear-gradient(125deg, rgba(255,255,255,.15), rgba(255,255,255,.025) 42%, rgba(255,255,255,.09)),
-    rgba(21,20,19,.44);
+  background: rgba(255,255,255,.025);
   box-shadow:
-    inset 0 1.5px 1px rgba(255,255,255,.48),
-    inset 0 -1.5px 1.5px rgba(255,255,255,.16),
-    0 16px 42px rgba(0,0,0,.38),
-    0 3px 10px rgba(0,0,0,.22);
-  backdrop-filter: blur(var(--pm-lg-header-blur, 18px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.08));
-  -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 18px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.08));
+    inset 0 1.5px 1px rgba(255,255,255,.6),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.32),
+    0 6px 16px rgba(0,0,0,.16),
+    0 1px 4px rgba(0,0,0,.08);
+  backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
+  -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
   -webkit-tap-highlight-color: transparent;
-  transition: transform .16s ease, background .2s ease, border-color .2s ease;
-}
-.pm-completion-toast::before {
-  content: '';
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  background:
-    radial-gradient(85% 90% at 0% 0%, color-mix(in srgb, var(--pm-gold) 22%, transparent), transparent 66%),
-    linear-gradient(to bottom, rgba(255,255,255,.18), transparent 34%);
-  opacity: .82;
-}
-.pm-completion-toast::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border: 1px solid rgba(255,255,255,.24);
-  border-radius: inherit;
-  mix-blend-mode: soft-light;
-  opacity: .72;
+  touch-action: none;
+  transition: transform .16s ease, background .2s ease, opacity .16s ease;
 }
 .pm-completion-toast-copy {
   position: relative;
@@ -826,20 +832,22 @@ body.pm-mobile-drawer-open .pm-app {
   transform: scale(.985);
   background: rgba(255,255,255,.11);
 }
+.pm-completion-toast.is-dismissing-up {
+  opacity: 0;
+  transform: translate3d(0, calc(-100% - 20px), 0);
+  pointer-events: none;
+}
 :root[data-theme="dark"] .pm-completion-toast {
-  border-color: rgba(255,255,255,var(--pm-lg-header-border-alpha, .14));
-  background:
-    linear-gradient(125deg, rgba(255,255,255,.11), rgba(255,255,255,.018) 42%, rgba(255,255,255,.065)),
-    rgba(13,13,13,.54);
+  background: rgba(255,255,255,.04);
+  border-color: rgba(255,255,255,var(--pm-lg-header-border-alpha, .12));
   box-shadow:
-    inset 0 1px 1px rgba(255,255,255,.3),
-    inset 0 -1px 1px rgba(255,255,255,.10),
-    0 16px 42px rgba(0,0,0,.54),
-    0 3px 10px rgba(0,0,0,.36);
+    inset 0 1px 1px rgba(255,255,255,.24),
+    0 6px 16px rgba(0,0,0,.34),
+    0 1px 4px rgba(0,0,0,.22);
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .pm-completion-toast { background: rgba(247,247,247,.96); }
-  :root[data-theme="dark"] .pm-completion-toast { background: rgba(29,29,29,.97); }
+  .pm-completion-toast { background: rgba(255,255,255,.9); }
+  :root[data-theme="dark"] .pm-completion-toast { background: rgba(29,29,29,.9); }
 }
 
 :root[data-theme="dark"] .pm-header .pm-icon-btn {
@@ -2227,7 +2235,7 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 .pm-drawer {
   position: fixed;
   top: 0; bottom: 0; left: 0;
-  width: min(72vw, 330px);
+  width: var(--pm-drawer-width);
   max-width: 330px;
   background: #050506;
   border-right: 0;
@@ -2261,6 +2269,41 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   font-size: 18px; font-weight: 800; letter-spacing: 0;
 }
 .pm-drawer-brand .pm-brand-flame { font-size: 22px; width: 26px; height: 26px; }
+.pm-drawer-gateway-filter {
+  margin: -8px 0 10px;
+  padding: 0;
+  color: var(--pm-text, #f6f4f0);
+}
+.pm-drawer-gateway-pills { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--pm-text-soft, #f6f4f0) 38%, transparent) transparent; -webkit-overflow-scrolling: touch; }
+.pm-drawer-gateway-pills::-webkit-scrollbar { height: 4px; }
+.pm-drawer-gateway-pills::-webkit-scrollbar-track { background: transparent; }
+.pm-drawer-gateway-pills::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--pm-text-soft, #f6f4f0) 38%, transparent); border-radius: 999px; }
+.pm-drawer-gateway-pill {
+  appearance: none;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  max-width: min(176px, 54vw);
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--pm-border, rgba(255,255,255,.18)) 90%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--pm-text-soft, #f6f4f0);
+  font: 700 11px/1 var(--pm-font);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-drawer-gateway-pill.is-active { border-color: rgba(255,255,255,.72); background: #fff; color: #111; }
+.pm-drawer-gateway-pill-icon { display: inline-flex; flex: 0 0 15px; width: 15px; height: 15px; }
+.pm-drawer-gateway-pill-icon svg { width: 15px; height: 15px; }
+.pm-drawer-gateway-pill-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--pm-muted, #89909d); }
+.pm-drawer-gateway-pill-dot.is-online { background: #2fae66; }
+.pm-drawer-gateway-pill-dot.is-suspect { background: #d58a16; }
+.pm-drawer-gateway-pill-dot.is-offline { background: #d8473a; }
+.pm-drawer-gateway-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pm-theme-toggle,
 .pm-drawer-close {
   appearance: none;
@@ -2444,6 +2487,33 @@ html.pm-session-context-open * {
   gap: 4px;
 }
 .pm-drawer-pinned-content[hidden] { display: none; }
+.pm-drawer-project-section { display: flex; flex-direction: column; gap: 4px; margin-bottom: 2px; }
+.pm-drawer-project-section .pm-drawer-section-title { color: var(--pm-orange); }
+.pm-drawer-project-toggle {
+  appearance: none;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.pm-drawer-project-toggle:focus-visible { outline: 2px solid var(--pm-orange); outline-offset: 2px; border-radius: 4px; }
+.pm-drawer-project-toggle[aria-expanded="false"] .pm-drawer-pinned-chevron { transform: rotate(-90deg); }
+.pm-drawer-project-content { display: flex; flex-direction: column; gap: 4px; }
+.pm-drawer-project-content[hidden] { display: none; }
+.pm-project-group { display: flex; flex-direction: column; gap: 0; }
+.pm-project-row { cursor: pointer; }
+.pm-project-row .pm-session-row-top { align-items: center; }
+.pm-project-folder-icon { display: inline-flex; width: 15px; height: 15px; margin-right: 5px; color: var(--pm-p1-gold, var(--pm-gold, #d6b75e)); flex: 0 0 auto; }
+.pm-project-folder-icon svg { width: 100%; height: 100%; }
+.pm-project-pin { appearance: none; border: 0; background: transparent; color: var(--pm-p1-gold, var(--pm-gold, #d6b75e)); opacity: .76; display: inline-flex; width: 18px; height: 18px; padding: 1px; margin-left: 6px; flex: 0 0 auto; }
+.pm-project-pin svg { width: 100%; height: 100%; }
+.pm-project-pin:active { transform: scale(.9); }
+.pm-project-chat-list { margin: 0 0 3px 15px; padding-left: 10px; border-left: 1px solid color-mix(in srgb, var(--pm-p1-gold, var(--pm-border-strong)) 48%, transparent); display: flex; flex-direction: column; gap: 1px; }
+.pm-project-chat-row { border-radius: 0 !important; padding-left: 9px !important; }
 .pm-drawer-search-results {
   margin-top: 4px;
   display: flex;
@@ -3868,14 +3938,16 @@ html.pm-session-context-open * {
   background: var(--pm-orange-soft);
   font-size: 20px;
 }
-.pm-proposal-step strong,
+.pm-proposal-step-title,
 .pm-proposal-step em {
   display: block;
 }
-.pm-proposal-step strong {
+.pm-proposal-step-title {
   font-size: 14px;
+  font-weight: 500;
   line-height: 1.25;
 }
+.pm-proposal-step.is-approved .pm-proposal-step-title { font-weight: 800; }
 .pm-proposal-step em {
   margin-top: 5px;
   color: var(--pm-muted);
@@ -3967,22 +4039,24 @@ html.pm-session-context-open * {
   align-items: flex-start;
   justify-content: center;
   gap: 6px;
-  border: 1px solid color-mix(in srgb, var(--pm-orange) 32%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pm-muted) 32%, transparent);
   border-radius: 16px;
   padding: 14px 15px;
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.78), rgba(255,250,242,0.62));
+  background: transparent;
   color: var(--pm-text);
-  box-shadow: 0 14px 34px rgba(30, 18, 10, 0.08);
+  box-shadow: none;
   text-align: left;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 .pm-mobile-empty-chat-card:active {
   transform: translateY(1px);
-  border-color: color-mix(in srgb, var(--pm-orange) 58%, transparent);
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.9), rgba(255,245,232,0.74));
+  border-color: color-mix(in srgb, var(--pm-muted) 52%, transparent);
+  background: transparent;
+}
+.pm-mobile-empty-chat-card:focus-visible {
+  outline: 2px solid var(--pm-accent);
+  outline-offset: 2px;
 }
 .pm-mobile-empty-chat-card-title {
   display: block;
@@ -3998,15 +4072,13 @@ html.pm-session-context-open * {
   line-height: 1.42;
 }
 :root[data-theme="dark"] .pm-mobile-empty-chat-card {
-  background:
-    linear-gradient(180deg, rgba(42, 38, 34, 0.78), rgba(30, 27, 24, 0.62));
-  border-color: color-mix(in srgb, var(--pm-orange) 38%, transparent);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.26);
+  border-color: color-mix(in srgb, var(--pm-muted) 36%, transparent);
+  background: transparent;
+  box-shadow: none;
 }
 :root[data-theme="dark"] .pm-mobile-empty-chat-card:active {
-  border-color: color-mix(in srgb, var(--pm-orange) 68%, transparent);
-  background:
-    linear-gradient(180deg, rgba(52, 45, 38, 0.86), rgba(36, 31, 27, 0.72));
+  border-color: color-mix(in srgb, var(--pm-muted) 58%, transparent);
+  background: transparent;
 }
 .pm-msg {
   position: relative;
@@ -7244,7 +7316,10 @@ html.pm-session-context-open * {
   /* Light transparent rim to match the tab bar below (codex had dropped this to
      border:0, which made the composer read flat against the page). */
   border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
-  border-radius: var(--pm-lg-radius, 22px);
+  /* Resting state matches the floating tab bar below: a true liquid-glass
+     pill. The expanded state below intentionally switches back to the
+     existing card-like radius. */
+  border-radius: 999px;
   padding: 5px 9px;
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.32),     /* top rim light — same as tabbar */
@@ -7297,6 +7372,14 @@ html.pm-session-context-open * {
    offset is measured from window.visualViewport (see mobile-pages.js). */
 .pm-keyboard-open .pm-composer {
   bottom: calc(var(--pm-keyboard-offset, 0px) + 8px);
+  transform: translate3d(0, var(--pm-keyboard-composer-shift, 0px), 0);
+  will-change: bottom, transform;
+  /* The keyboard controller measures immediately after changing the offset.
+     Do not let the normal 300ms bottom transition feed it stale geometry. */
+  transition:
+    padding var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    border-radius var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    min-height var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1));
 }
 /* iOS re-anchors every fixed element to the shrunken visual viewport when the
    keyboard opens. Remove the covered navigation until the keyboard closes so
@@ -8524,6 +8607,7 @@ html.pm-session-context-open * {
   align-items: center;
   gap: 8px;
   transform: translateY(-3px);
+  transition: transform var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1));
 }
 .pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row {
   display: grid;
@@ -8568,6 +8652,11 @@ html.pm-session-context-open * {
   grid-column: 1;
   grid-row: 2;
   margin-left: 0;
+  justify-self: start;
+}
+#pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-chat-target-chip {
+  grid-column: 2;
+  grid-row: 2;
   justify-self: start;
 }
 #pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-send-btn,
@@ -9302,16 +9391,17 @@ html.pm-session-context-open * {
 }
 .pm-camera-capture {
   position: fixed;
+  left: 16px;
   right: 16px;
-  bottom: calc(var(--pm-tabbar-h, 68px) + env(safe-area-inset-bottom) + 16px);
-  width: min(92vw, 480px);
-  height: min(68svh, 620px);
+  bottom: calc(env(safe-area-inset-bottom) + 10px);
+  width: auto;
+  height: min(60svh, 620px);
   min-height: 360px;
   z-index: 10070;
   background: #050505;
   color: #fff;
   border: 1px solid rgba(255,255,255,.20);
-  border-radius: 28px;
+  border-radius: 36px;
   box-shadow: 0 24px 70px rgba(0,0,0,.46), 0 2px 12px rgba(0,0,0,.22);
   opacity: 0;
   pointer-events: none;
@@ -9372,6 +9462,7 @@ html.pm-session-context-open * {
   font-weight: 500;
   backdrop-filter: blur(14px) saturate(1.3);
   -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  pointer-events: all;
 }
 .pm-camera-icon svg {
   width: 20px;
@@ -9380,11 +9471,13 @@ html.pm-session-context-open * {
 .pm-camera-controls {
   position: absolute;
   z-index: 2;
-  left: 0;
-  right: 0;
-  bottom: calc(env(safe-area-inset-bottom) + 22px);
-  display: flex;
-  justify-content: center;
+  left: 18px;
+  right: 18px;
+  bottom: calc(env(safe-area-inset-bottom) + 18px);
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: end;
+  justify-items: center;
   pointer-events: none;
   -webkit-user-select: none;
   user-select: none;
@@ -11856,6 +11949,153 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   to { transform: translate3d(2%, -3%, 0) scale(1.05); }
 }
 
+/* The voice surfaces use the published thinking-orbs canvas directly. Two
+   canvas layers overlap briefly so a state change fades between the actual
+   shipped animations instead of flashing a replacement frame. */
+.pm-thinking-orb-host {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  overflow: visible;
+}
+.pm-thinking-orb-transition {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scale(calc(1 + var(--pm-thinking-orb-audio, 0) * .05));
+  transform-origin: center;
+  transition: transform 48ms linear;
+}
+.pm-thinking-orb-layer {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  display: block !important;
+  opacity: 0;
+  transform: scale(.94);
+  transform-origin: center;
+  mix-blend-mode: screen;
+  filter:
+    brightness(calc(1.04 + var(--pm-thinking-orb-audio, 0) * 2.15))
+    saturate(calc(1 + var(--pm-thinking-orb-audio, 0) * .52))
+    drop-shadow(0 0 calc(1px + var(--pm-thinking-orb-audio, 0) * 8px) color-mix(in srgb, var(--pm-voice-orb-light) 62%, transparent))
+    drop-shadow(0 0 calc(4px + var(--pm-thinking-orb-audio, 0) * 18px) color-mix(in srgb, var(--pm-voice-orb-glow) 34%, transparent));
+  transition: opacity 180ms ease, transform 180ms ease, filter 42ms linear;
+}
+.pm-thinking-orb-layer.is-current {
+  opacity: 1;
+  transform: scale(1);
+}
+.pm-thinking-orb-layer.is-leaving {
+  opacity: 0;
+  transform: scale(1.04);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-thinking-orb-transition,
+  .pm-thinking-orb-layer {
+    transition: none !important;
+  }
+}
+
+/* Connection feedback belongs to the orb itself on mobile. Reuse the same
+   glass-pill language as the chat reconnecting status, but anchor it to the
+   button so it follows the draggable inline orb as well as the Voice page. */
+.pm-voice-connection-pill {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  z-index: 8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(88vw, 320px);
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
+  border-radius: 999px;
+  background:
+    linear-gradient(to bottom,
+      rgba(255,255,255,.13) 0%, rgba(255,255,255,.02) 16%,
+      transparent 34%, transparent 72%,
+      rgba(255,255,255,.04) 90%, rgba(255,255,255,.09) 100%),
+    rgba(255,255,255,.035);
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.32),
+    inset 0 -1.5px 1.5px rgba(255,255,255,.16),
+    0 8px 18px rgba(0,0,0,.16),
+    0 1px 4px rgba(0,0,0,.08);
+  color: var(--pm-text);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, 6px);
+  transition: opacity .16s ease, transform .16s ease, visibility 0s linear .16s;
+  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
+  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(var(--pm-lg-panel-saturate, 2)) brightness(var(--pm-lg-panel-brightness, 1.05));
+}
+.pm-voice-connection-pill[hidden] { display: none !important; }
+.pm-voice-connection-pill.visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+  transition-delay: 0s;
+}
+.pm-voice-connection-spinner {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--pm-orange) 22%, transparent);
+  border-top-color: var(--pm-orange);
+  animation: pm-spin .85s linear infinite;
+}
+.pm-voice-connection-pill.success {
+  color: var(--pm-green);
+  border-color: rgba(47,174,102,.28);
+}
+.pm-voice-connection-pill.success .pm-voice-connection-spinner {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  background: rgba(47,174,102,.18);
+  animation: none;
+  position: relative;
+}
+.pm-voice-connection-pill.success .pm-voice-connection-spinner::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--pm-green);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.pm-voice-connection-pill.error {
+  color: var(--pm-red, #f87171);
+  border-color: color-mix(in srgb, var(--pm-red, #f87171) 32%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-voice-connection-pill,
+  .pm-voice-connection-spinner {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
 .pm-voice-controls {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 36px auto;
@@ -12033,38 +12273,80 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 
 /* ---------- schedule cards ---------- */
 .pm-schedule-card {
-  background: var(--pm-surface);
-  border: 1px solid var(--pm-border);
-  border-left: 4px solid var(--pm-orange);
-  border-radius: var(--pm-radius-lg);
-  padding: 16px 18px;
+  position: relative;
+  background: color-mix(in srgb, var(--pm-surface) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pm-border) 88%, transparent);
+  border-radius: 24px;
+  padding: 16px 16px 14px;
   margin: 12px 0;
-  box-shadow: var(--pm-shadow-sm);
+  box-shadow: 0 12px 26px color-mix(in srgb, var(--pm-bg) 34%, transparent);
   cursor: pointer;
+  touch-action: pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
 }
-.pm-schedule-card.open { border-color: color-mix(in srgb, var(--pm-orange) 50%, transparent); box-shadow: var(--pm-shadow-md); }
-.pm-schedule-card.color-purple { border-left-color: var(--pm-purple); }
-.pm-schedule-card.color-green  { border-left-color: var(--pm-green); }
-.pm-schedule-card.color-blue   { border-left-color: var(--pm-blue); }
-.pm-schedule-head { display: flex; gap: 10px; align-items: flex-start; }
-.pm-schedule-head .pm-emoji { font-size: 22px; line-height: 1; }
-.pm-schedule-head h3 { flex: 1; margin: 0; font-size: 16px; font-weight: 700; line-height: 1.25; }
+.pm-schedule-card:active { transform: scale(.995); }
+.pm-schedule-card.open,
+.pm-schedule-card.pm-schedule-long-pressed {
+  border-color: var(--pm-border-strong);
+  box-shadow: 0 15px 32px color-mix(in srgb, var(--pm-bg) 44%, transparent);
+}
+.pm-schedule-card-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 14px;
+  margin: 0 0 8px;
+  color: var(--pm-muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.pm-schedule-state.active { color: var(--pm-accent); }
+.pm-schedule-state.running { color: var(--pm-purple); }
+.pm-schedule-state.paused { color: var(--pm-muted); }
+.pm-schedule-kind { opacity: .72; }
+.pm-schedule-linked-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  color: var(--pm-text-soft);
+  font-size: 9px;
+  letter-spacing: .06em;
+}
+.pm-schedule-linked-label svg { width: 12px; height: 12px; }
+.pm-schedule-no-chat-label {
+  margin-left: auto;
+  color: var(--pm-muted);
+  font-size: 9px;
+  letter-spacing: .055em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pm-schedule-head { display: flex; gap: 10px; align-items: center; }
+.pm-schedule-head .pm-emoji { font-size: 21px; line-height: 1; }
+.pm-schedule-head h3 { flex: 1; min-width: 0; margin: 0; font-size: 17px; font-weight: 700; line-height: 1.22; }
 .pm-toggle {
-  width: 46px; height: 28px; border-radius: 999px;
+  width: 42px; height: 25px; border-radius: 999px;
   background: #d8cfbf; position: relative;
   border: none; cursor: pointer; flex-shrink: 0;
   transition: background .15s ease;
 }
 .pm-toggle::after {
   content: '';
-  width: 22px; height: 22px; border-radius: 50%;
+  width: 19px; height: 19px; border-radius: 50%;
   background: #fff;
   position: absolute; top: 3px; left: 3px;
   transition: transform .18s ease;
   box-shadow: 0 1px 3px rgba(0,0,0,.18);
 }
 .pm-toggle.on { background: var(--pm-green); }
-.pm-toggle.on::after { transform: translateX(18px); }
+.pm-toggle.on::after { transform: translateX(17px); }
 .pm-pill {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 11px; font-weight: 700;
@@ -12078,7 +12360,27 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-pill.gray     { background: rgba(80,60,40,.08); color: var(--pm-text-soft); }
 .pm-pill.orange   { background: var(--pm-orange-soft); color: var(--pm-orange); }
 .pm-tag-row { display: flex; gap: 6px; align-items: center; margin: 4px 0 6px; flex-wrap: wrap; }
-.pm-schedule-desc { font-size: 13px; color: var(--pm-text-soft); margin: 4px 0 12px; line-height: 1.4; }
+.pm-schedule-desc { font-size: 14px; color: var(--pm-text-soft); margin: 10px 0 12px; line-height: 1.45; }
+.pm-schedule-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid color-mix(in srgb, var(--pm-border) 84%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--pm-border) 84%, transparent);
+}
+.pm-schedule-meta-item {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--pm-muted);
+  font-size: 11px;
+}
+.pm-schedule-meta-item > svg { width: 13px; height: 13px; margin-top: 1px; flex: 0 0 auto; opacity: .82; }
+.pm-schedule-meta-item > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.pm-schedule-meta-item small { color: var(--pm-muted); font-size: 10px; line-height: 1; }
+.pm-schedule-meta-item b { overflow: hidden; color: var(--pm-text); font-size: 11px; font-weight: 700; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .pm-kv-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; font-size: 13px;
   margin-bottom: 10px;
@@ -12088,10 +12390,13 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
 .pm-kv-grid .pm-kv b { font-weight: 700; color: var(--pm-text); }
 .pm-schedule-foot {
   display: flex; align-items: center; justify-content: space-between;
-  padding-top: 10px;
-  border-top: 1px solid var(--pm-border);
+  gap: 12px;
+  padding-top: 12px;
   font-size: 13px; color: var(--pm-text-soft);
 }
+.pm-schedule-foot-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.pm-schedule-foot-copy strong { overflow: hidden; color: var(--pm-text-soft); font-size: 12px; font-weight: 700; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.pm-schedule-foot-copy small { overflow: hidden; color: var(--pm-muted); font-size: 11px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 .pm-assign-chip {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--pm-orange-soft); color: var(--pm-orange);
@@ -12111,11 +12416,11 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin: -4px 0 14px;
-  padding: 14px;
-  background: var(--pm-surface);
-  border: 1px solid color-mix(in srgb, var(--pm-orange) 35%, transparent);
-  border-radius: var(--pm-radius-lg);
+  margin: -2px 0 14px;
+  padding: 16px;
+  background: color-mix(in srgb, var(--pm-surface) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pm-border-strong) 80%, transparent);
+  border-radius: 24px;
   box-shadow: var(--pm-shadow-sm);
 }
 .pm-schedule-editor label {
@@ -12143,11 +12448,80 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 .pm-schedule-editor textarea { resize: vertical; }
+.pm-schedule-repeat-field [data-repeat-time-wrap],
+.pm-schedule-repeat-field [data-repeat-custom-wrap] { display: block; margin-top: 6px; }
+.pm-schedule-repeat-field [data-repeat-time-wrap] input,
+.pm-schedule-repeat-field [data-repeat-custom-wrap] input { width: 100%; }
+.pm-schedule-editor-page {
+  padding-bottom: calc(var(--pm-tabbar-h, 72px) + env(safe-area-inset-bottom) + 28px);
+}
+.pm-schedule-editor-page .pm-schedule-editor {
+  max-width: 760px;
+  margin: 4px auto 24px;
+  padding: clamp(18px, 3vw, 28px);
+}
+.pm-schedule-editor-page .pm-schedule-prompt-field textarea {
+  min-height: min(70vh, 760px);
+  height: min(70vh, 760px);
+  line-height: 1.5;
+}
 .pm-schedule-editor-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   padding-top: 2px;
+}
+
+/* ChatGPT-like compact action menu opened by holding a schedule card. */
+.pm-schedule-action-popover-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  border: 0;
+  padding: 0;
+  background: rgba(7, 10, 14, .14);
+  -webkit-backdrop-filter: blur(3px) saturate(1.02) brightness(.94);
+  backdrop-filter: blur(3px) saturate(1.02) brightness(.94);
+}
+.pm-schedule-action-popover {
+  position: fixed;
+  z-index: 41;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid var(--pm-ios-popover-border, var(--pm-border-strong));
+  border-radius: 23px;
+  background: var(--pm-ios-popover-fill, var(--pm-surface)) !important;
+  color: var(--pm-text);
+  box-shadow: var(--pm-ios-popover-shadow, 0 18px 44px rgba(0,0,0,.34));
+  -webkit-backdrop-filter: blur(18px) saturate(1.08) brightness(1.03);
+  backdrop-filter: blur(18px) saturate(1.08) brightness(1.03);
+  animation: pm-schedule-action-popover-in 140ms ease;
+}
+.pm-schedule-action-row {
+  display: flex;
+  width: 100%;
+  min-height: 46px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 15px;
+  background: transparent;
+  color: var(--pm-text);
+  font: 500 16px/1.2 var(--pm-font);
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-schedule-action-row:active { background: var(--pm-ios-popover-active, rgba(255,255,255,.08)); }
+.pm-schedule-action-row.danger { color: #ff6675; }
+.pm-schedule-action-icon { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; }
+.pm-schedule-action-icon svg { width: 21px; height: 21px; }
+html.pm-schedule-long-press-pending,
+html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: none; user-select: none; }
+@keyframes pm-schedule-action-popover-in {
+  from { opacity: 0; transform: scale(.97) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 /* ---------- teams overview ---------- */
@@ -14547,12 +14921,37 @@ body.pm-mobile-active.pm-keyboard-open .pm-subagent-chat-body .pm-sa-chat-shell 
   padding-left: 0;
   padding-right: 0;
 }
+.pm-sa-run-recovery-composer {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
 .pm-sa-run-recovery-composer .pm-agent-chat-composer.pm-composer {
   margin: 4px 0 0 !important;
   border-radius: 22px !important;
   box-shadow: none !important;
   border: 1px solid var(--pm-border) !important;
   background: var(--pm-surface) !important;
+}
+.pm-sa-run-recovery-composer .pm-agent-chat-composer.is-busy {
+  border-color: color-mix(in srgb, var(--pm-orange) 54%, var(--pm-border)) !important;
+}
+.pm-sa-run-composer-status {
+  min-width: 0;
+  padding: 0 4px;
+  color: var(--pm-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.pm-sa-run-composer-status[data-tone="busy"],
+.pm-sa-run-composer-status[data-tone="queued"] { color: var(--pm-orange); }
+.pm-sa-run-composer-status[data-tone="success"] { color: var(--pm-green); }
+.pm-sa-run-composer-status[data-tone="error"] { color: var(--pm-red); }
+.pm-sa-run-composer-status[data-tone="stopped"] { color: var(--pm-muted); }
+.pm-sa-run-recovery-composer .pm-composer-input {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .pm-tool-chip {
   display: inline-block; padding: 3px 8px; margin: 2px 4px 2px 0;
@@ -14649,6 +15048,16 @@ body.pm-mobile-active #settings-save-btn {
 body.pm-mobile-active.pm-mobile-overlay-open .pm-tabbar {
   visibility: hidden;
   pointer-events: none;
+}
+/* The haptic slider sensor is a fixed sibling of the tabbar, not a descendant,
+   so disabling the visible bar alone does not remove its hit target. Keep the
+   sensor above ordinary chrome for native haptics, but below sheets/modals and
+   explicitly inert it while a mobile overlay owns the viewport. */
+.pm-tabbar-haptic-gesture-surface {
+  z-index: 6 !important;
+}
+body.pm-mobile-active.pm-mobile-overlay-open .pm-tabbar-haptic-gesture-surface {
+  pointer-events: none !important;
 }
 
 
@@ -14750,17 +15159,32 @@ body.pm-mobile-active .pm-msheet.is-reasoning {
   height: 224px;
   max-height: 32dvh;
   padding: 14px 18px calc(16px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--pm-border-strong) !important;
-  border-radius: 18px 18px 0 0 !important;
-  background: var(--pm-bg) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
   background-image: none !important;
-  box-shadow: 0 -14px 36px rgba(0,0,0,.26) !important;
+  box-shadow: none !important;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-selector {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 8px;
+  margin-bottom: 12px;
 }
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-summary {
   min-height: 32px;
-  margin-bottom: 12px;
+  grid-column: 1;
+  grid-row: 1;
+  flex: none;
+  width: auto;
+  min-width: 0;
+  margin-bottom: 0;
   gap: 5px;
   padding: 0 4px;
+  justify-content: flex-start;
   font-size: 16px;
   line-height: 1.15;
   font-weight: 600;
@@ -14770,9 +15194,42 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-summary strong,
 body.pm-mobile-active .pm-msheet.is-reasoning #pm-reasoning-live-label {
   font-weight: 600;
 }
-body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-summary-chev {
-  font-size: 22px;
-  transform: translateY(-1px);
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-advanced {
+  grid-column: 2;
+  grid-row: 1;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 32px;
+  padding: 4px 2px 4px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--pm-text-soft);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-advanced:hover {
+  color: var(--pm-text);
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-advanced:focus-visible,
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control:focus-visible {
+  outline: 2px solid var(--pm-accent);
+  outline-offset: 3px;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-advanced > span:last-child {
+  font-size: 18px;
+  line-height: 1;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  width: 100%;
 }
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-track {
   box-shadow: inset 0 1px 2px rgba(255,255,255,.12), 0 8px 20px rgba(0,0,0,.22);
@@ -14852,11 +15309,20 @@ body.pm-mobile-active .pm-chat-settings-popover {
   width: min(248px, calc(100vw - 28px));
   max-width: 248px;
   padding: 5px;
-  border-radius: 12px;
-  background: var(--pm-surface) !important;
+  /* Match the composer attachment sheet: translucent material, specular rim,
+     and a real backdrop blur instead of a theme-colored solid panel. */
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-composer-border-alpha, .10));
+  border-radius: 14px;
+  background: rgba(255,255,255,.04) !important;
   background-image: none !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,.4) inset,
+    0 12px 30px rgba(0,0,0,.2);
+  -webkit-backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(2) brightness(1.05) !important;
+  backdrop-filter: blur(var(--pm-lg-panel-blur, 3px)) saturate(2) brightness(1.05) !important;
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-chat-settings-popover {
+  border-color: rgba(255,255,255,var(--pm-lg-composer-border-alpha, .08));
 }
 body.pm-mobile-active .pm-chat-settings-menu-item {
   min-height: 32px;
@@ -15779,6 +16245,22 @@ body.pm-mobile-active .pm-drawer-item {
   box-shadow: none !important;
 }
 
+/* Keep the drawer navigation only a touch taller than the session rows. The
+   navigation should remain easy to tap, but it should not dominate the chat
+   list beneath it. */
+body.pm-mobile-active .pm-drawer-list {
+  gap: 5px;
+}
+body.pm-mobile-active .pm-drawer-item {
+  min-height: 50px !important;
+  padding: 8px 13px !important;
+  gap: 11px !important;
+}
+body.pm-mobile-active .pm-drawer-item .pm-icon {
+  width: 28px !important;
+  height: 28px !important;
+}
+
 /* Keep message actions easy to scan without letting the copy, voice, and
    fork buttons spread across the full width of the message row. */
 body.pm-mobile-active .pm-msg-actions {
@@ -15803,7 +16285,9 @@ body.pm-mobile-active .pm-drawer-item:active {
    theme surface, so directional lighting here only makes its edges look
    darker than the active theme color. */
 body.pm-mobile-active .pm-drawer {
-  background: var(--pm-bg) !important;
+  /* Match the desktop left rail while leaving .pm-app on its own mobile
+     surface. The app moves over this panel instead of revealing a gap. */
+  background: var(--sidebar-bg, #050506) !important;
   background-image: none !important;
   box-shadow: none !important;
 }
@@ -15839,6 +16323,69 @@ body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
 body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {
   background: var(--p1-gold, var(--pm-accent)) !important;
   background-image: none !important;
+}
+
+/* Imported source artwork is a title-line affordance on mobile. It must not
+   change the drawer or row width: only the title's inline content gets the
+   small, packaged mark. The last-message time stays on the existing metadata
+   line and is pinned to its lower-right edge. */
+body.pm-mobile-active .pm-drawer .pm-session-row .pm-session-row-top {
+  gap: 8px;
+}
+body.pm-mobile-active .pm-drawer .pm-session-title-line {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+body.pm-mobile-active .pm-drawer .pm-session-title-line .pm-session-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+body.pm-mobile-active .pm-drawer .pm-session-import-logo,
+body.pm-mobile-active .pm-drawer .pm-session-import-logo-fallback {
+  display: inline-block;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  object-fit: contain;
+  object-position: center;
+}
+body.pm-mobile-active .pm-drawer .pm-session-import-logo--openclaw {
+  object-fit: cover;
+  object-position: left center;
+}
+body.pm-mobile-active .pm-drawer .pm-session-subline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 13px;
+}
+body.pm-mobile-active .pm-drawer .pm-session-subline .pm-session-gateway,
+body.pm-mobile-active .pm-drawer .pm-session-subline .pm-session-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-top: 0;
+}
+body.pm-mobile-active .pm-drawer .pm-session-subline .pm-session-time {
+  margin-left: auto;
+}
+body.pm-mobile-active .pm-drawer .pm-session-meta-row {
+  min-height: 14px;
+}
+body.pm-mobile-active .pm-drawer .pm-session-meta-row .pm-session-time {
+  margin-left: auto;
+  flex: 0 0 auto;
+  align-self: flex-end;
 }
 
 /* Inline chat voice: keep the chat surface visible and reserve only a compact
@@ -15992,6 +16539,55 @@ body.pm-mobile-active .pm-attach-sheet-panel .pm-attach-sheet-action[data-pm-att
 .pm-camera-video {
   touch-action: none;
 }
+.pm-camera-close {
+  justify-self: start;
+}
+.pm-camera-shutter {
+  justify-self: center;
+}
+.pm-camera-more-wrap {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  justify-self: end;
+  pointer-events: all;
+}
+.pm-camera-more-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 12px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: all;
+}
+.pm-camera-more-menu[hidden] { display: none !important; }
+.pm-camera-more-action.is-active {
+  color: #ffd45a;
+  border-color: rgba(255,212,90,.62);
+  box-shadow: 0 0 0 3px rgba(255,212,90,.14), 0 10px 26px rgba(0,0,0,.34);
+}
+.pm-camera-more-close { display: none; }
+.pm-camera-more.is-open .pm-camera-more-dots { display: none; }
+.pm-camera-more.is-open .pm-camera-more-close { display: inline-flex; }
+.pm-camera-more-dots,
+.pm-camera-more-close {
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+}
+.pm-camera-more-dots svg,
+.pm-camera-more-close svg { width: 20px; height: 20px; }
+body.pm-mobile-active.pm-camera-open {
+  overflow: hidden;
+}
+body.pm-mobile-active.pm-camera-open .pm-composer,
+body.pm-mobile-active.pm-camera-open .pm-tabbar {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
 
 /* Inline chat voice focus/dock states. Focus starts centered with the
    transcript hidden; dragging the orb down switches to the live transcript
@@ -16080,4 +16676,661 @@ body.pm-mobile-active.pm-chat-voice-active.pm-chat-voice-docked .pm-chat-voice-c
   position: fixed !important;
   top: auto !important;
   bottom: calc(env(safe-area-inset-bottom) + 8px) !important;
+}
+.pm-mobile-sources-popover[hidden] { display: none !important; }
+.pm-mobile-sources-popover {
+  position: fixed;
+  inset: 0;
+  z-index: 42;
+  pointer-events: none;
+}
+.pm-mobile-sources-popover-scrim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: rgba(7, 10, 14, .14);
+  backdrop-filter: blur(3px) brightness(.95);
+  -webkit-backdrop-filter: blur(3px) brightness(.95);
+  pointer-events: auto;
+}
+.pm-mobile-sources-panel {
+  position: absolute;
+  top: calc(max(env(safe-area-inset-top), 12px) + 52px);
+  right: 14px;
+  width: min(360px, calc(100vw - 28px));
+  max-height: min(72vh, 560px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow: hidden;
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .22));
+  border-radius: 14px;
+  background: var(--pm-surface, #17191d);
+  box-shadow: 0 1px 0 rgba(255,255,255,.34) inset, 0 12px 30px rgba(0,0,0,.35);
+  color: var(--pm-text, #f2f4f7);
+  animation: pm-chat-settings-popover 140ms ease;
+  pointer-events: auto;
+}
+.pm-mobile-sources-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.pm-mobile-sources-header strong { font-size: 15px; }
+.pm-mobile-sources-header span { font-size: 11px; color: var(--pm-muted, #89909d); }
+#pm-mobile-sources-mode { margin-top: 2px; font-size: 11px; color: var(--pm-muted, #89909d); }
+.pm-mobile-sources-close { border: 0; background: transparent; color: var(--pm-muted, #89909d); font: inherit; font-size: 24px; line-height: 1; padding: 0 2px; cursor: pointer; }
+.pm-mobile-sources-toolbar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 1px; }
+.pm-mobile-sources-search { width: 100%; box-sizing: border-box; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--pm-line, #30343c); background: var(--pm-surface-2, #20242b); color: var(--pm-text, #f2f4f7); font: inherit; outline: none; }
+.pm-mobile-sources-list { min-height: 80px; overflow: auto; overscroll-behavior: contain; }
+.pm-mobile-sources-empty { padding: 20px 8px; text-align: center; color: var(--pm-muted, #89909d); font-size: 12px; }
+.pm-mobile-source-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 2px; border-top: 1px solid var(--pm-line, #30343c); }
+.pm-mobile-source-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.pm-mobile-source-copy strong { color: var(--pm-text, #f2f4f7); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-mobile-source-copy small { color: var(--pm-muted, #89909d); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-mobile-source-action, .pm-mobile-source-toolbar-btn { border: 1px solid var(--pm-line, #30343c); background: var(--pm-surface-2, #20242b); color: var(--pm-text, #f2f4f7); border-radius: 8px; padding: 6px 9px; font: inherit; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.pm-mobile-source-muted { color: var(--pm-muted, #89909d); }
+
+/* Shared glass finish: keep the existing blur, make the resting material just
+   slightly denser, and let the edge rim carry the visible outline. */
+.pm-header .pm-icon-btn,
+.pm-header .pm-online,
+.pm-header-action-cluster,
+.pm-completion-toast,
+body.pm-mobile-active .pm-composer,
+body.pm-mobile-active .pm-tabbar {
+  background: rgba(255,255,255,.04);
+  background-image: none;
+  backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
+  -webkit-backdrop-filter: blur(var(--pm-lg-header-blur, 6px)) saturate(var(--pm-lg-header-saturate, 1.7)) brightness(var(--pm-lg-header-brightness, 1.04));
+  border: var(--pm-lg-border-width, 1px) solid rgba(255,255,255,var(--pm-lg-header-border-alpha, .22));
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.38),
+    inset 0 -1px 1px rgba(255,255,255,.18),
+    0 6px 16px rgba(0,0,0,.16),
+    0 1px 4px rgba(0,0,0,.08);
+}
+
+/* Keep the cluster as the containing block for its single shared rim. The
+   composer and tabbar retain their own absolute/fixed positioning modes. */
+.pm-header-action-cluster { position: relative; }
+:root[data-theme="dark"] .pm-header .pm-icon-btn,
+:root[data-theme="dark"] .pm-header .pm-online,
+:root[data-theme="dark"] .pm-header-action-cluster,
+:root[data-theme="dark"] .pm-completion-toast,
+:root[data-theme="dark"] body.pm-mobile-active .pm-composer,
+:root[data-theme="dark"] body.pm-mobile-active .pm-tabbar {
+  background: rgba(255,255,255,.055);
+  background-image: none;
+  border-color: rgba(255,255,255,var(--pm-lg-header-border-alpha, .12));
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.16),
+    inset 0 -1px 1px rgba(255,255,255,.07),
+    0 6px 16px rgba(0,0,0,.34),
+    0 1px 4px rgba(0,0,0,.22);
+}
+/* Use the existing border layers as a vertical gradient rim. The middle of
+   each side fades almost completely away while the top and bottom stay crisp. */
+@supports ((-webkit-mask-composite: xor) or (mask-composite: exclude)) {
+  .pm-header .pm-icon-btn,
+  .pm-header .pm-online,
+  .pm-header-action-cluster,
+  .pm-completion-toast,
+  body.pm-mobile-active .pm-composer,
+  body.pm-mobile-active .pm-tabbar {
+    border-color: transparent !important;
+  }
+  .pm-header .pm-icon-btn::after,
+  .pm-header .pm-online::after,
+  .pm-header-action-cluster::after,
+  .pm-completion-toast::after,
+  body.pm-mobile-active .pm-composer > .pm-glass-border,
+  body.pm-mobile-active .pm-tabbar > .pm-glass-border {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    box-sizing: border-box;
+    border: 0;
+    padding: var(--pm-lg-border-width, 1px);
+    background:
+      linear-gradient(to bottom,
+        rgba(255,255,255,.26) 0%,
+        rgba(255,255,255,.12) 20%,
+        rgba(255,255,255,.008) 46%,
+        rgba(255,255,255,.008) 54%,
+        rgba(255,255,255,.12) 80%,
+        rgba(255,255,255,.22) 100%) border-box;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    mix-blend-mode: normal;
+    opacity: .72;
+  }
+}
+/* These layers were specific to the old panel treatment. Removing them stops
+   the composer halo and the tabbar sheen/lens from adding a second material
+   behind the shared header-style glass. */
+body.pm-mobile-active .pm-composer > .pm-glass-lens,
+body.pm-mobile-active .pm-tabbar > .pm-glass-lens,
+body.pm-mobile-active .pm-tabbar > .pm-tabbar-sheen,
+body.pm-mobile-active .pm-tabbar::before,
+body.pm-mobile-active .pm-tabbar::after {
+  display: none !important;
+}
+
+/* The action cluster is one glass panel. Its New Chat and menu controls are
+   transparent icon slots, so the panel does not read as two nested buttons. */
+body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn,
+body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn:hover {
+  background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn::after {
+  display: none !important;
+}
+body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn:active {
+  background: rgba(255,255,255,.055) !important;
+  transform: scale(.96);
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-header-action-cluster .pm-icon-btn:active {
+  background: rgba(255,255,255,.075) !important;
+}
+
+/* The send control keeps its animated color treatment, but its surrounding
+   glow is intentionally quieter in every state. */
+body.pm-mobile-active .pm-composer .pm-send {
+  box-shadow:
+    0 8px 18px color-mix(in srgb, var(--pm-orange) 20%, transparent),
+    inset 0 1px 0 rgba(255,255,255,.22);
+}
+body.pm-mobile-active .pm-composer .pm-send.is-abort {
+  box-shadow:
+    0 8px 18px color-mix(in srgb, var(--pm-red) 18%, transparent),
+    inset 0 1px 0 rgba(255,255,255,.20);
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-composer .pm-send,
+:root[data-theme="dark"] body.pm-mobile-active .pm-composer .pm-send.is-voice,
+:root[data-theme="dark"] body.pm-mobile-active .pm-composer .pm-send.is-abort {
+  box-shadow:
+    0 8px 18px rgba(214,183,94,.18),
+    0 0 12px rgba(214,183,94,.07),
+    inset 0 1px 0 rgba(255,255,255,.26);
+}
+:root[data-theme="dark"] body.pm-mobile-active .pm-composer .pm-send:is(:hover, :active) {
+  box-shadow:
+    0 11px 24px rgba(214,183,94,.24),
+    0 0 16px rgba(214,183,94,.12),
+    inset 0 1px 0 rgba(255,255,255,.30);
+}
+
+/* iOS-style transient popovers ------------------------------------------------
+   These are short-lived controls (attachments, settings, long-press actions,
+   context details), not the app's persistent liquid-glass chrome. Use the
+   thicker, calmer standard-material look from iOS: a denser surface, subtle
+   edge definition, continuous corners, SF-style text, and flat touch rows. */
+body.pm-mobile-active {
+  /* Keep the material lifted from the active skin without flattening its hue. */
+  --pm-ios-popover-fill: color-mix(in srgb, var(--pm-ios-popover-base) 84%, transparent);
+  --pm-ios-popover-border: color-mix(in srgb, var(--pm-border-strong) 82%, transparent);
+  --pm-ios-popover-shadow:
+    0 18px 44px rgba(0,0,0,.34),
+    0 3px 10px rgba(0,0,0,.16),
+    inset 0 1px 0 rgba(255,255,255,.08),
+    inset 0 -1px 0 rgba(0,0,0,.14);
+  --pm-ios-popover-active: color-mix(in srgb, var(--pm-ios-popover-base) 24%, white 10%, transparent);
+}
+
+/* One material recipe for compact transient surfaces. */
+body.pm-mobile-active :is(
+  .pm-msheet:not(.is-reasoning):not(.is-model-switch),
+  .pm-attach-sheet-panel,
+  .pm-chat-settings-popover,
+  .pm-msg-lp-popover,
+  .pm-mobile-queued-popover,
+  .pm-mobile-sources-panel
+) {
+  box-sizing: border-box;
+  font-family: var(--pm-font);
+  color: var(--pm-text);
+  background: var(--pm-ios-popover-fill) !important;
+  background-image: none !important;
+  border: 1px solid var(--pm-ios-popover-border) !important;
+  box-shadow: var(--pm-ios-popover-shadow) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.08) brightness(1.03) !important;
+  backdrop-filter: blur(18px) saturate(1.08) brightness(1.03) !important;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The scrim should separate the popover from the chat without turning the
+   whole screen into a heavy frosted blur. */
+body.pm-mobile-active :is(
+  .pm-msheet-scrim:not(.is-reasoning):not(.is-model-switch),
+  .pm-attach-sheet-scrim,
+  .pm-chat-settings-popover-overlay,
+  .pm-msg-lp-backdrop,
+  .pm-skill-ref-scrim,
+  .pm-mobile-sources-popover-scrim
+) {
+  background: rgba(7,10,14,.14) !important;
+  -webkit-backdrop-filter: blur(2px) saturate(1.02) brightness(.94) !important;
+  backdrop-filter: blur(2px) saturate(1.02) brightness(.94) !important;
+}
+
+/* Remove the old bright inset rings; iOS popovers rely on material separation,
+   not a glowing white outline. */
+body.pm-mobile-active :is(
+  .pm-msheet-session-context::before,
+  .pm-attach-sheet-panel::before,
+  .pm-chat-settings-popover::before
+) {
+  display: none !important;
+}
+
+/* Session long-press menu. */
+body.pm-mobile-active .pm-msheet.pm-msheet-session-context {
+  width: min(280px, calc(100vw - 40px)) !important;
+  padding: 7px !important;
+  border-radius: 24px !important;
+  transform-origin: bottom center;
+}
+body.pm-mobile-active .pm-msheet-session-context .pm-msheet-head {
+  margin: 5px 9px 9px 18px;
+  padding-left: 4px;
+}
+body.pm-mobile-active .pm-msheet-session-context .pm-msheet-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+body.pm-mobile-active .pm-msheet-session-context .pm-sess-action-row {
+  min-height: 46px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -.01em;
+}
+body.pm-mobile-active .pm-msheet-session-context .pm-sess-action-row:active {
+  background: var(--pm-ios-popover-active) !important;
+}
+body.pm-mobile-active .pm-msheet-session-context .pm-sess-action-icon {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  box-shadow: none;
+}
+body.pm-mobile-active .pm-msheet-session-context .pm-sess-action-icon svg {
+  width: 23px;
+  height: 23px;
+}
+
+/* Attachments / Files / Photos menu. */
+body.pm-mobile-active .pm-attach-sheet-panel {
+  left: 26px;
+  width: min(248px, calc(100vw - 52px));
+  padding: 8px;
+  border-radius: 27px !important;
+}
+body.pm-mobile-active .pm-attach-sheet-action {
+  min-height: 54px;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 9px;
+  padding: 7px 10px;
+  border-radius: 15px;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -.01em;
+}
+body.pm-mobile-active .pm-attach-sheet-action:active {
+  background: var(--pm-ios-popover-active) !important;
+}
+body.pm-mobile-active .pm-attach-sheet-action span {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: transparent;
+  box-shadow: none;
+}
+body.pm-mobile-active .pm-attach-sheet-action svg {
+  width: 24px;
+  height: 24px;
+}
+body.pm-mobile-active .pm-attach-sheet-action strong {
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -.01em;
+}
+
+/* Triple-dot/settings menu. */
+body.pm-mobile-active .pm-chat-settings-popover {
+  width: min(220px, calc(100vw - 28px));
+  max-width: 220px;
+  padding: 6px;
+  border-radius: 24px !important;
+}
+body.pm-mobile-active .pm-chat-settings-menu-item {
+  min-height: 45px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 14px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -.01em;
+}
+body.pm-mobile-active .pm-chat-settings-menu-item:not(:last-child) { margin-bottom: 1px; }
+body.pm-mobile-active .pm-chat-settings-menu-item:is(:active, :hover) {
+  background: var(--pm-ios-popover-active) !important;
+}
+body.pm-mobile-active .pm-chat-settings-menu-icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--pm-text-soft);
+  opacity: .92;
+}
+body.pm-mobile-active .pm-chat-settings-menu-icon svg {
+  width: 20px;
+  height: 20px;
+}
+body.pm-mobile-active .pm-chat-settings-menu-item.is-enabled .pm-chat-settings-menu-icon,
+body.pm-mobile-active .pm-chat-settings-menu-item.is-enabled .pm-chat-settings-menu-label {
+  color: var(--pm-green);
+}
+body.pm-mobile-active .pm-chat-settings-menu-status {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--pm-green);
+}
+body.pm-mobile-active .pm-chat-settings-menu-status[hidden] { display: none !important; }
+body.pm-mobile-active .pm-chat-settings-menu-status svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.4;
+}
+
+/* Generic model/action rows used by compact sheets. */
+body.pm-mobile-active .pm-msheet:not(.is-reasoning):not(.is-model-switch) .pm-msheet-row {
+  min-height: 46px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: transparent !important;
+  font-family: var(--pm-font);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -.01em;
+}
+body.pm-mobile-active .pm-msheet:not(.is-reasoning):not(.is-model-switch) .pm-msheet-row:active {
+  background: var(--pm-ios-popover-active) !important;
+}
+
+/* Long-press message actions. */
+body.pm-mobile-active .pm-msg-lp-popover {
+  width: min(300px, calc(100vw - 24px));
+  min-width: min(248px, calc(100vw - 24px));
+  padding: 5px;
+  border-radius: 24px !important;
+}
+body.pm-mobile-active .pm-msg-lp-actions { padding: 5px; gap: 3px; }
+body.pm-mobile-active .pm-msg-lp-btn {
+  min-height: 45px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  font-family: var(--pm-font);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -.01em;
+}
+body.pm-mobile-active .pm-msg-lp-btn:active {
+  background: var(--pm-ios-popover-active) !important;
+}
+body.pm-mobile-active .pm-msg-lp-btn svg {
+  width: 22px;
+  height: 22px;
+  color: var(--pm-text-soft);
+}
+body.pm-mobile-active .pm-msg-lp-divider {
+  height: 28px;
+  background: color-mix(in srgb, var(--pm-text) 12%, transparent);
+}
+
+/* Small action menus attached to queued prompts. */
+body.pm-mobile-active .pm-mobile-queued-popover {
+  width: 136px;
+  padding: 5px;
+  border-radius: 20px !important;
+}
+body.pm-mobile-active .pm-mobile-queued-menu-item {
+  min-height: 40px;
+  padding: 7px 9px;
+  border-radius: 12px;
+  font-family: var(--pm-font);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -.005em;
+}
+body.pm-mobile-active .pm-mobile-queued-menu-item:active {
+  background: var(--pm-ios-popover-active) !important;
+}
+
+/* Sources use the same material but retain their own content layout/scroll
+   behavior. The context-window popover intentionally keeps its original
+   usage-panel treatment above. */
+body.pm-mobile-active .pm-mobile-sources-panel {
+  width: min(320px, calc(100vw - 28px));
+  padding: 12px;
+  border-radius: 24px !important;
+}
+body.pm-mobile-active .pm-mobile-sources-header strong { font-size: 16px; font-weight: 600; }
+
+/* Detail popovers/sheets get the same iOS material without being forced into
+   the compact menu geometry. */
+body.pm-mobile-active .pm-skill-ref-panel {
+  background: var(--pm-ios-popover-fill) !important;
+  background-image: none !important;
+  border: 1px solid var(--pm-ios-popover-border) !important;
+  border-bottom: 0 !important;
+  border-radius: 26px 26px 0 0 !important;
+  box-shadow: var(--pm-ios-popover-shadow) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.08) brightness(1.03) !important;
+  backdrop-filter: blur(18px) saturate(1.08) brightness(1.03) !important;
+}
+
+/* The model switch is a full-width iOS sheet, so keep its bottom anchoring but
+   give it the same denser material and flat system rows. */
+body.pm-mobile-active .pm-msheet.is-model-switch {
+  background: var(--pm-ios-popover-fill) !important;
+  background-image: none !important;
+  border-color: var(--pm-ios-popover-border) !important;
+  border-radius: 26px 26px 0 0 !important;
+  box-shadow: 0 -18px 44px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.12) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.08) brightness(1.03) !important;
+  backdrop-filter: blur(18px) saturate(1.08) brightness(1.03) !important;
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row {
+  min-height: 45px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: transparent !important;
+  font-family: var(--pm-font);
+  font-size: 16px;
+  font-weight: 500;
+}
+body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row:active {
+  background: var(--pm-ios-popover-active) !important;
+}
+
+/* P10-36 independent gateway catalog */
+.pm-gateways-page {
+  padding: 14px 14px calc(28px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.pm-gateways-intro,
+.pm-gateway-scan-fallback,
+.pm-gateway-filter,
+.pm-gateway-card {
+  border: 1px solid var(--pm-border);
+  border-radius: 16px;
+  background: var(--pm-panel, var(--pm-bg-soft));
+  box-shadow: 0 8px 22px rgba(0,0,0,.08);
+}
+.pm-gateways-intro,
+.pm-gateway-scan-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.pm-gateways-intro strong,
+.pm-gateway-scan-fallback strong { font-size: 14px; }
+.pm-gateways-intro p,
+.pm-gateway-scan-fallback p { margin: 4px 0 0; color: var(--pm-muted); font-size: 12px; line-height: 1.4; }
+.pm-gateways-intro .pm-btn,
+.pm-gateway-scan-fallback .pm-btn { flex: 0 0 auto; white-space: nowrap; }
+.pm-gateway-filter { padding: 12px 14px; margin-bottom: 16px; }
+.pm-gateway-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.pm-gateway-section-head h2 { margin: 0; font-size: 15px; }
+.pm-gateway-section-head > span { color: var(--pm-muted); font-size: 11px; }
+.pm-gateway-filter-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pm-gateway-filter-options { display: flex; flex-wrap: wrap; gap: 7px; }
+.pm-gateway-filter-option { display: inline-flex; gap: 6px; align-items: center; min-height: 32px; padding: 5px 9px; border: 1px solid var(--pm-border); border-radius: 999px; color: var(--pm-text); font-size: 12px; }
+.pm-gateway-filter-option input { accent-color: var(--pm-orange); }
+.pm-gateway-list { display: grid; gap: 12px; }
+.pm-gateway-card { padding: 14px; }
+.pm-gateway-card-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.pm-gateway-card-title-wrap { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.pm-gateway-card-title-wrap h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.pm-gateway-card-title-wrap p { margin: 3px 0 0; color: var(--pm-muted); font-size: 12px; }
+.pm-gateway-status-dot { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; background: var(--pm-muted); box-shadow: 0 0 0 4px color-mix(in srgb, var(--pm-muted) 13%, transparent); }
+.pm-gateway-card.is-online .pm-gateway-status-dot { background: #1f9d55; box-shadow: 0 0 0 4px rgba(31,157,85,.14); }
+.pm-gateway-card.is-suspect .pm-gateway-status-dot { background: #d58a16; box-shadow: 0 0 0 4px rgba(213,138,22,.14); }
+.pm-gateway-card.is-offline .pm-gateway-status-dot,
+.pm-gateway-card.is-revoked .pm-gateway-status-dot { background: #c94a42; box-shadow: 0 0 0 4px rgba(201,74,66,.14); }
+.pm-gateway-status-label { flex: 0 0 auto; color: var(--pm-muted); font-size: 11px; font-weight: 800; }
+.pm-gateway-meta { display: grid; gap: 7px; margin: 13px 0; }
+.pm-gateway-meta div { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid color-mix(in srgb, var(--pm-border) 68%, transparent); padding-top: 7px; }
+.pm-gateway-meta dt { color: var(--pm-muted); font-size: 11px; }
+.pm-gateway-meta dd { margin: 0; max-width: 64%; text-align: right; overflow-wrap: anywhere; font-size: 11px; }
+.pm-gateway-meta code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; }
+.pm-gateway-error { margin: 0 0 10px; color: var(--pm-red, #c94a42); font-size: 11px; line-height: 1.35; }
+.pm-gateway-card-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.pm-gateway-card-actions .pm-btn { min-height: 32px; padding: 6px 9px; font-size: 11px; }
+.pm-gateway-card-actions .danger { color: var(--pm-red, #c94a42); }
+.pm-gateway-empty { padding: 12px 4px; color: var(--pm-muted); font-size: 12px; }
+.pm-session-gateway { display: block; margin-top: 2px; color: var(--pm-orange); font-size: 10px; font-weight: 800; }
+
+.pm-chat-target-chip {
+  appearance: none;
+  display: none;
+  min-width: 0;
+  max-width: 132px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--pm-muted);
+  text-align: left;
+  font: 700 10px/1.15 var(--pm-font);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-chat-target-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-direction: row;
+  justify-content: center;
+  gap: 4px;
+}
+.pm-composer.pm-target-popover-open { z-index: 2601; }
+.pm-chat-target-chip strong { display: block; color: var(--pm-text-soft, var(--pm-text)); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
+.pm-chat-target-chip:disabled { cursor: default; opacity: .86; }
+.pm-chat-target-popover { position: absolute; z-index: 2600; left: 8px; right: 8px; bottom: calc(100% + 8px); max-height: min(60dvh, 420px); overflow: auto; overscroll-behavior: contain; padding: 10px; border: 1px solid var(--pm-border); border-radius: 16px; background: var(--pm-panel, var(--pm-bg-soft)); box-shadow: 0 18px 48px rgba(0,0,0,.28); }
+.pm-chat-target-popover-scrim { appearance: none; position: fixed; inset: 0; z-index: 10039; width: 100%; height: 100%; padding: 0; border: 0; background: rgba(0,0,0,.18); pointer-events: auto; }
+.pm-chat-target-popover h3 { margin: 0 0 8px; font-size: 13px; }
+.pm-chat-target-popover p { margin: 0 0 9px; color: var(--pm-muted); font-size: 11px; line-height: 1.35; }
+.pm-chat-target-option { width: 100%; display: flex; justify-content: space-between; gap: 8px; padding: 9px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--pm-text); text-align: left; }
+.pm-chat-target-option[aria-selected="true"] { border-color: color-mix(in srgb, var(--pm-orange) 55%, transparent); background: color-mix(in srgb, var(--pm-orange) 10%, transparent); }
+.pm-chat-target-option small { display: block; color: var(--pm-muted); font-size: 10px; }
+.pm-camera-more-pair-action { min-height: 34px; padding: 7px 9px; border: 1px solid var(--pm-border); border-radius: 9px; background: var(--pm-bg-soft); color: var(--pm-text); font: 700 11px/1.1 var(--pm-font); white-space: nowrap; }
+
+/* New-chat routing lives above the composer on the brain-card page. These
+   selectors intentionally reuse the same glass/popover treatment as the
+   header settings menu. */
+.pm-new-chat-context-dock { position: fixed; left: 10px; right: 10px; bottom: var(--pm-context-dock-bottom, calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom, 0px) + 30px + var(--pm-composer-live-height, 86px))); display: grid; gap: 2px; margin: 0; z-index: 10021; isolation: isolate; pointer-events: none; }
+.pm-new-chat-context-row { appearance: none; width: 100%; display: grid; grid-template-columns: 24px minmax(0, 1fr) 18px; align-items: center; gap: 10px; min-height: 42px; padding: 5px 8px; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--pm-text); text-align: left; font: inherit; cursor: pointer; pointer-events: auto; }
+.pm-new-chat-context-row:active { background: transparent; }
+.pm-new-chat-context-icon { width: 22px; height: 22px; display: grid; place-items: center; color: var(--pm-text-soft); }
+.pm-new-chat-context-icon svg { width: 20px; height: 20px; }
+.pm-new-chat-context-value { min-width: 0; display: grid; gap: 2px; }
+.pm-new-chat-context-value strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
+.pm-new-chat-context-value small { color: var(--pm-muted); font-size: 10px; }
+.pm-new-chat-context-chevron { display: grid; place-items: center; color: var(--pm-muted); }
+.pm-new-chat-context-chevron svg { width: 15px; height: 15px; }
+.pm-new-chat-context-popover { position: absolute; top: auto; right: 0; bottom: calc(100% + 6px); left: 0; z-index: 10041; width: auto; max-width: none; max-height: min(56dvh, 420px); overflow: auto; isolation: isolate; pointer-events: auto !important; touch-action: manipulation; }
+.pm-new-chat-context-popover-title { padding: 5px 10px 2px; color: var(--pm-text); font-size: 15px; font-weight: 700; }
+.pm-new-chat-context-popover-subtitle { padding: 0 10px 7px; color: var(--pm-muted); font-size: 11px; line-height: 1.35; }
+.pm-new-chat-context-option { grid-template-columns: 22px minmax(0, 1fr) 20px; min-height: 48px; }
+.pm-new-chat-context-option-icon { display: grid; place-items: center; color: var(--pm-text-soft); }
+.pm-new-chat-context-option-icon svg { width: 21px; height: 21px; }
+.pm-new-chat-context-option-copy { min-width: 0; display: grid; gap: 2px; }
+.pm-new-chat-context-option-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.pm-new-chat-context-option-copy small { color: var(--pm-muted); font-size: 10px; }
+.pm-new-chat-context-option-check { display: grid; place-items: center; color: var(--pm-green, #42d392); }
+.pm-new-chat-context-option-check svg { width: 18px; height: 18px; }
+.pm-new-chat-context-loading { padding: 10px; color: var(--pm-muted); font-size: 12px; }
+.pm-new-chat-context-dock.pm-context-popover-open { z-index: 10040; }
+.pm-new-chat-context-dock.pm-context-popover-open .pm-new-chat-context-popover,
+.pm-new-chat-context-dock.pm-context-popover-open .pm-new-chat-context-popover * { pointer-events: auto !important; }
+
+/* Shared mobile hierarchy: page headings and chat titles stay crisp white on
+   every skin, while the drawer's gateway label remains the single source for
+   the pinned/session/unread accent color. */
+body.pm-mobile-active .pm-page .pm-title,
+body.pm-mobile-active .pm-page .pm-detail-head h1 {
+  color: #fff !important;
+  font-weight: 800;
+}
+body.pm-mobile-active .pm-drawer .pm-session-title {
+  color: #fff !important;
+  font-weight: 800;
+}
+body.pm-mobile-active .pm-drawer :is(.pm-drawer-section-title, .pm-session-gateway, .pm-session-state) {
+  color: var(--pm-p1-gold, #d6b75e) !important;
+}
+body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
+body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {
+  background: var(--pm-p1-gold, #d6b75e) !important;
+}
+
+@media (max-width: 420px) {
+  .pm-gateways-intro,
+  .pm-gateway-scan-fallback { align-items: stretch; flex-direction: column; }
+  .pm-gateways-intro .pm-btn,
+  .pm-gateway-scan-fallback .pm-btn { width: 100%; }
+  .pm-gateway-card-actions .pm-btn { flex: 1 1 calc(50% - 7px); }
 }

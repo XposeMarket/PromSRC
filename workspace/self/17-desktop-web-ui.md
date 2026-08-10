@@ -1,6 +1,6 @@
 # 33) Desktop Web UI Maintenance Reference
 
-Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, `src/gateway/core/app.ts`, subagent Home chat/Runs recovery routes, Voice Room routes, and package scripts on: 2026-08-01
+Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, `src/gateway/core/app.ts`, subagent Home chat/Runs recovery routes, Voice Room routes, auto-settle lifecycle, and package scripts on: 2026-08-09
 
 This section is for the desktop web UI only: the browser/Electron operator surface served from `web-ui/` and mirrored into `generated/public-web-ui/`. Do not use this section as the mobile app reference. Mobile/PWA code lives under `web-ui/src/mobile/*` and is covered separately in `16-mobile-app.md`.
 
@@ -34,8 +34,8 @@ Desktop page modules:
 - `web-ui/src/pages/AuditPage.js` - non-main run audit log, run grouping/status classification, pagination, row expansion, and stats rendering.
 - `web-ui/src/pages/MemoryPage.js` - memory graph canvas, force/layout modes, controls drawer, detail drawer, add-memory composer, attachment handling, graph refresh/indexing, shape/image layout, tooltips, and selection.
 - `web-ui/src/pages/HubPage.js` - skill usage, tool/model overview cards, skill preview modal, skill resources, curator suggestions, achievements scaffold, and Hub activation.
-- `web-ui/src/pages/ConnectionsPage.js` - connector catalog/grid, connector detail view, OAuth/manual credential flows, browser login verification, disconnect, activity, X/xAI flows, and Obsidian vault connect/sync/remove.
-- `web-ui/src/pages/SettingsPage.js` - settings modal tabs: system, heartbeat, search, credentials, security, models, channels, agents, integrations, shortcuts, pairing, migration, OAuth/provider state, MCP/webhooks, channel tests, agent config, and pairing/remote access UI.  Its Models tab owns agent-model defaults/templates, provider-aware account selection for multi-account defaults, Brain Thought/Dream reasoning controls, and the persisted Voice Agent provider/voice default below Main Chat.
+- `web-ui/src/pages/ConnectionsPage.js` - the lazy-loaded More → Plugins connector catalog, deterministic search/sort adapter, connector detail view, OAuth/manual credential flows, browser login verification, disconnect/verify/repair actions, activity, X/xAI flows, Obsidian vault connect/sync/remove, and configured MCP server detail.
+- `web-ui/src/pages/SettingsPage.js` - settings modal tabs: system, heartbeat, search, credentials, security, models, channels, agents, integrations, shortcuts, pairing, migration, OAuth/provider state, MCP/webhooks, channel tests, agent config, and pairing/remote access UI. Its Systems tab also owns the themed auto-settle policy control and the explicit custom-date activation choice. Its Models tab owns agent-model defaults/templates, provider-aware account selection for multi-account defaults, Brain Thought/Dream reasoning controls, and the persisted Voice Agent provider/voice default below Main Chat.
 - `web-ui/src/pages/ProjectsPage.js` - sidebar projects list, project cards, project sessions, new/delete project flows, project files, project instructions/memory snapshot, and project-to-chat/canvas handoff.
 
 Desktop shared components:
@@ -103,18 +103,25 @@ Current desktop modes in `app.js`:
 - `audit` -> `#audit-view`
 - `memory` -> `#memory-view`
 - `hub` -> `#hub-view`
+- `plugins` -> `#plugins-view` (lazy-loaded from More → Plugins)
 
 The left sidebar lives in `#sidebar`. Its nav items call `setMode(...)` directly from inline `onclick` attributes. Sidebar segment tabs are handled by `setSidebarSegTab(...)` and swap among `#sidebar-jobs`, `#sidebar-projects`, and `#sidebar-skills`; the former Channels segment is not a desktop chat UI.
 
 ## Unified Session Sidebar
 
-Desktop loads `GET /api/sessions?scope=all&includeAutomated=1` into one inline chat timeline. Pinned and ordinary top-level sessions share this list regardless of whether they originated on desktop, mobile, Telegram, CLI, Discord, WhatsApp, or a voice room. Project and side chats remain in their dedicated contexts. Each summary carries durable `channel` metadata plus a sanitized `lastOrigin` from the latest user turn; the sidebar presents that origin as a source label without recreating channel partitions.
+Desktop loads `GET /api/sessions?scope=all&includeAutomated=1` into one inline chat timeline. Pinned and ordinary top-level sessions share this list regardless of whether they originated on desktop, mobile, Telegram, CLI, Discord, WhatsApp, or a voice room. Project and side chats remain in their dedicated contexts. Each summary carries durable `channel` metadata plus a sanitized `lastOrigin` from the latest user turn; the sidebar presents that origin as a source label without recreating channel partitions. Active-list loading uses `state=active`; settled chats are reached through the Settled entry below Show More and use the same list/search pagination with `state=settled`.
 
-The chat mode owns the central `main.main-shell` and the right panel. Non-chat modes hide the main shell and close the right panel. The right panel `#right-panel` contains the canvas/editor/browser/agent execution surfaces; `toggleRightPanel(...)`, `toggleCanvas(...)`, `setCanvasMode(...)`, and related globals mostly live in `ChatPage.js`.
+### Settled chats and auto-settle
+
+Manual Settle/Unsettle and automatic settling share the durable `session.settledAt` state transition. Settling changes visibility only: it does not delete session files, transcript history, resources, memory, task content, unread state, or scheduled work. WebSocket `session_state_changed` events update the desktop sidebar projection so an automatically settled chat leaves the active list without navigating away from an open chat; Unsettle returns it to the active list.
+
+The Systems tab's auto-settle card is Never by default and offers 7, 14, 30, 90 days, or Custom. A past Custom date save asks whether to apply it to currently eligible existing chats or start aging from now. The backend uses durable `lastActiveAt`, bounded batches, an auditable `<configDir>/auto-settle/last-run.json` summary, and authoritative runtime/task/approval/schedule/supervision/project protections. The control is intentionally separate from manual settling and from any future auto-compaction/cleanup feature.
+
+The chat mode owns the central `main.main-shell` and the right panel. Non-chat modes hide the main shell and close the right panel. The right panel `#right-panel` contains the canvas/editor/browser/agent execution surfaces; connector discovery is no longer a right-panel responsibility. `toggleRightPanel(...)`, `toggleCanvas(...)`, `setCanvasMode(...)`, and related globals mostly live in `ChatPage.js`.
 
 Settings is modal, not a page mode. `openSettings(tab)` and `closeSettings()` live in `SettingsPage.js`; the modal markup lives in `index.html`.
 
-Connections detail uses a fixed overlay `#connector-view`. `ConnectionsPage.js` owns `openConnectorView(...)`, `closeConnectorView(...)`, credential/OAuth flows, and Obsidian-specific actions.
+The More popover exposes a dedicated `plugins` mode. `#plugins-view` owns the lightweight catalog shell and search UI; `ConnectionsPage.js` is loaded on first entry, fetches only `GET /api/extensions/catalog?kind=connector` plus connection attempts/configured MCP state, and owns the connector/MCP detail overlay `#connector-view`. The overlay is positioned against the active page or chat surface, so the same connection contracts remain usable from both compatibility paths. Model/provider settings remain in Settings.
 
 Projects are split: sidebar/list behavior lives in `ProjectsPage.js`, while project sessions ultimately route back into Chat/canvas through `ChatPage.js` globals.
 
@@ -122,27 +129,17 @@ The desktop still has a legacy inline script in `index.html`. Many inline handle
 
 ## Module Imports and Boot Sequence
 
-Desktop module order in `web-ui/index.html` is currently:
+Desktop bootstrap modules in `web-ui/index.html` currently load the shared
+runtime (`state.js`, `api.js`, `utils.js`, `ws.js`, and `app.js`), the account /
+onboarding inline module, and the mobile router. `app.js` owns the page-module
+map and dynamically imports page modules as their modes are entered; Settings
+has a separate loader because it is a modal. The page-module map includes
+Chat, Tasks, Schedule, Teams, Subagents, Proposals, Audit, Memory, Hub, and the
+lazy Plugins route backed by `ConnectionsPage.js`.
 
-1. `src/state.js`
-2. `src/api.js`
-3. `src/utils.js`
-4. `src/ws.js`
-5. `src/app.js`
-6. `src/pages/ChatPage.js`
-7. `src/pages/AuditPage.js`
-8. `src/pages/HubPage.js`
-9. `src/pages/MemoryPage.js`
-10. `src/pages/ProposalsPage.js`
-11. `src/pages/SchedulePage.js`
-12. `src/pages/TasksPage.js`
-13. `src/pages/TeamsPage.js`
-14. `src/pages/SubagentsPage.js`
-15. `src/pages/ConnectionsPage.js`
-16. `src/pages/SettingsPage.js`
-17. `src/pages/ProjectsPage.js`
-18. an inline module that imports auth/onboarding helpers
-19. `src/mobile/mobile-router.js`
+`ConnectionsPage.js` is intentionally not part of the chat boot request. The
+`plugins` route imports it when More → Plugins is opened; the legacy loader shim
+remains only for inline compatibility callers such as the add-plugin modal.
 
 `state.js`, `api.js`, `utils.js`, `ws.js`, and `app.js` load before page modules because page modules use their globals/imports. `ChatPage.js` is loaded before most other page modules because other surfaces call chat/session/canvas helpers through `window.*`.
 
@@ -333,3 +330,41 @@ Do not mix mobile changes into a desktop web UI fix unless the shared file truly
 - app.js loads the bounded client performance ring. ChatPage records privacy-conscious submit, accepted, first SSE byte, first token, first visible token, server latency marks, done, and error milestones. The server exposes an opaque X-Prometheus-Trace-Id; do not add message text, token text, or credentials to these marks.
 - Equivalent local browser measurements showed cold DCL p50 156.5 ms on HEAD versus 102.5 ms on the working tree, FCP 124 versus 80 ms, and decoded startup bytes 5.585 MB versus 5.363 MB across three samples. Thread-open and route timings did not materially change.
 - The committed repeatable harness is scripts/benchmark-performance.mjs. It can serve HEAD web sources in browser memory for before measurements, so dirty workspace changes do not need to be reverted.
+
+## Persistent Chat Sources integration — 2026-08-08
+
+Desktop Sources is a normal right-rail section, not a topbar popup. `web-ui/index.html` places it directly below Agent Context/Progress and directly above Process Log. `web-ui/src/pages/ChatPage.js` loads attached-resource metadata for the active session and provides search, save current Browser page, Browser history, attach, detach, pin/unpin, and refresh controls.
+
+When changing the section, preserve the existing right-rail order and regenerate `generated/public-web-ui` with `npm run sync:web-ui`. Keep content previews bounded; the desktop panel is a resource-management surface, not a full-content viewer.
+
+## P1-7 link routing — 2026-08-09
+
+`web-ui/src/link-router.js` installs once from `app.js` and delegates external anchor decisions for the entire desktop document. This keeps assistant/user Markdown, sources/references, search and tool results, documentation, artifact/generated-page, map/site, and static Settings links on one policy path without broad ChatPage refactoring. The normalized decision policy is `web-ui/src/link-routing-policy.mjs`; the generated public mirror must contain both modules.
+
+Normal unmodified HTTP/HTTPS clicks go to the Prometheus Browser. Same-origin and loopback gateway links remain normal app navigation, downloads and file paths retain their existing flow, `mailto:`/`tel:` remain passthrough, and modifier clicks retain native target behavior. Right-click, `ContextMenu`/`Apps`, or Shift+F10 presents accessible `Open in Prometheus Browser` and `Open externally` actions. `Shift+Enter` is the keyboard external action. OAuth/system-auth controls are marked `data-prometheus-link-mode="external"` or call `window.openPrometheusExternalLink(...)` explicitly.
+
+Electron’s `prometheusExternalLinks` bridge is restricted to explicit external actions. The main-process boundary keeps trusted/local gateway routes internal, dispatches ordinary external navigation to the renderer’s Browser router, and rejects unsafe schemes/embedded credentials. The gateway’s `browser:link_open` handler serializes per-session link opens and uses a non-persisted Prometheus alias when the selected agent target is personal Chrome, so the user Chrome lane is never silently used.
+
+Focused checks:
+
+```powershell
+npm run test:link-routing
+npm run test:electron-security-boundary
+npm run check:web-ui
+```
+
+## P9 OAuth-first Plugins connection surface — 2026-08-09
+
+`web-ui/src/pages/ConnectionsPage.js` is the single connector discovery and
+connection surface. Its managed action now delegates all native OAuth connector
+cards to the host-owned connection-v2 orchestrator; it does not duplicate
+credential, callback, refresh, revoke, or capability logic. The generated
+mirror under `generated/public-web-ui/static/pages/ConnectionsPage.js` must be
+updated with `npm run sync:web-ui` and checked with `npm run check:web-ui`.
+
+Managed cards show provider-app prerequisites, account/resource scope,
+read-only defaults, exposed tools, verification/repair/reauthorization,
+disconnect, and explicit Advanced alternatives for own OAuth apps, API keys,
+setup tokens, browser sessions, local vaults, and custom MCP. Model-provider and
+voice/realtime credentials remain in Settings and must not be moved into this
+page.

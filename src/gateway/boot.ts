@@ -111,7 +111,7 @@ function buildDailyBootPrompt(): string {
     'All relevant startup data has already been pre-fetched for you.',
     'Write a brief 2-3 sentence startup message.',
     'Focus only on what carried over from yesterday\'s intraday notes, whether any compaction summaries suggest something worth resuming, and any recent brain/dream activity worth surfacing from overnight.',
-    'You may call write_note once if something from startup is genuinely worth preserving for later (e.g. an unfinished thread to resume); otherwise skip it. Do not call other tools for this startup message.',
+    'Do not call tools for this startup message; the pre-fetched snapshot is the complete source of truth for this turn.',
     'If there is no meaningful carryover, say so plainly.',
   ].join('\n').trim();
 }
@@ -497,21 +497,36 @@ export async function runBootMd(
     }
 
     const sessionMeta = buildAutoSessionMeta('restart', restartCtx);
+    const quickBootProfileStartedAt = Date.now();
+    const quickBootMark = (label: string): void => {
+      if (process.env.PROMETHEUS_STARTUP_PROFILE !== '1') return;
+      console.log(`[boot-profile] +${Date.now() - quickBootProfileStartedAt}ms ${label}`);
+    };
+    quickBootMark('session metadata built');
     const targets = buildHotRestartTargets(restartCtx);
+    quickBootMark(`restart targets built (${targets.length})`);
     const results = await Promise.all(targets.map(async (target, index) => {
-      const { excerpt, lastUserRequest, lastAssistantResponse, recentToolLog } = getRecentConversationForRestart(target.sessionId);
+      const explicitQuickRestart = restartCtx.quickRestart === true;
+      const { excerpt, lastUserRequest, lastAssistantResponse, recentToolLog } = explicitQuickRestart
+        ? { excerpt: '', lastUserRequest: '', lastAssistantResponse: '', recentToolLog: '' }
+        : getRecentConversationForRestart(target.sessionId);
       const internalSessionId = `${sessionMeta.id}_${sanitizeIdPart(target.sessionId)}_${index}`;
-      const hotRestartContextPacket = buildHotRestartCallerContext(
-        restartCtx,
-        excerpt,
-        lastUserRequest,
-        lastAssistantResponse,
-        recentToolLog,
-        target.recoverySummary,
-        target.devEdit,
-      );
+      const hotRestartContextPacket = explicitQuickRestart
+        ? 'Explicit quick gateway restart; deterministic acknowledgement path.'
+        : buildHotRestartCallerContext(
+          restartCtx,
+          excerpt,
+          lastUserRequest,
+          lastAssistantResponse,
+          recentToolLog,
+          target.recoverySummary,
+          target.devEdit,
+        );
       let finalText = '';
+      quickBootMark(`target ${target.sessionId} conversation branch prepared`);
+      quickBootMark(`target ${target.sessionId} goal lookup start`);
       const targetGoal = getMainChatGoal(target.sessionId);
+      quickBootMark(`target ${target.sessionId} goal lookup complete`);
       const targetRestartCheckpoint = targetGoal?.restartCheckpoint;
       const goalOwnedRestart = !!targetGoal
         && ['restarting', 'paused'].includes(String(targetGoal.status || ''))
@@ -523,7 +538,7 @@ export async function runBootMd(
       // boot pass has reconciled any dev-edit continuation.
       const foregroundPlannedRestart = !goalOwnedRestart && !!target.plannedRestartTool;
       const suppressTerminalRestartReply = goalOwnedRestart || foregroundPlannedRestart;
-      const plainManualGatewayRestart = isPlainManualGatewayRestartRequest(lastUserRequest)
+      const plainManualGatewayRestart = (explicitQuickRestart || isPlainManualGatewayRestartRequest(lastUserRequest))
         && !target.devEdit
         && (!Array.isArray(restartCtx.affectedFiles) || restartCtx.affectedFiles.length === 0);
 
@@ -585,6 +600,7 @@ export async function runBootMd(
       // message. It is not the Goal's final answer and does not enqueue a
       // duplicate startup notification; the resumed Goal runner owns the next
       // substantive turn.
+      quickBootMark(`target ${target.sessionId} session message append start`);
       if (goalOwnedRestart || !suppressTerminalRestartReply) try {
         addMessage(target.sessionId, {
           role: 'assistant',
@@ -608,7 +624,9 @@ export async function runBootMd(
       } catch (e: any) {
         console.warn(`[boot-md] Failed to persist hot restart message for ${target.sessionId}: ${e?.message}`);
       }
+      quickBootMark(`target ${target.sessionId} session message append complete`);
 
+      quickBootMark(`target ${target.sessionId} startup notification queue start`);
       const notification = suppressTerminalRestartReply ? undefined : queueStartupNotification({
         sessionId: target.sessionId,
         title: sessionMeta.title,
@@ -619,6 +637,7 @@ export async function runBootMd(
         telegram: target.telegram,
         devReload: restartCtx.devReload,
       });
+      quickBootMark(`target ${target.sessionId} startup notification queue complete`);
 
       return {
         finalText,

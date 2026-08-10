@@ -238,12 +238,27 @@ body {
   align-items: center;
   gap: 7px;
 }
+.gateway-status-pill {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  font-size: 10px;
+  height: 26px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.gateway-status-pill:hover,
+.gateway-status-pill:focus-visible {
+  color: var(--text);
+  border-color: var(--line-strong);
+  outline: none;
+}
 .status-pill.stat-compact {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 10px;
 }
 
-body.right-canvas-open #model-pill,
 body.right-canvas-open #system-pill {
   display: none !important;
 }

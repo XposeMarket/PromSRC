@@ -217,7 +217,7 @@ export function buildGatewayCorsOptions(): CorsOptions {
       callback(null, isTrustedGatewayOrigin(origin));
     },
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Gateway-Token', 'X-Pairing-Token', 'X-Prometheus-Render-Token'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Gateway-Token', 'X-Pairing-Token', 'X-Pairing-Device-Fingerprint', 'X-Prometheus-Render-Token'],
     optionsSuccessStatus: 204,
   };
 }

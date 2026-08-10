@@ -1,8 +1,21 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { renderMd, timeAgo } from '../utils.js';
-import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js';
-import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js';
+import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js?v=pm-v263-2026-08-09-directed-chat-shield';
+import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js?v=pm-v263-2026-08-09-directed-chat-shield';
+import {
+  getGateway,
+  getGatewayFilter,
+  setGatewayFilter,
+  loadGatewayCatalog,
+  gatewayStatusLabel,
+  isMobileGatewayCatalogEnabled,
+  isCurrentGateway,
+  loadMobileGatewayPinnedSessions,
+  onGatewayCatalogChanged,
+  parseTargetNamespacedId,
+  targetNamespacedId,
+} from './mobile-gateway-catalog.js';
 
 // ── Pinned sessions ───────────────────────────────────────────────────────────
 // The gateway's session.pinnedAt field is the durable source of truth. The
@@ -10,7 +23,11 @@ import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js';
 // clients that pinned chats before server-backed pinning was wired up.
 const PM_PINNED_SESSIONS_KEY = 'pm_mobile_pinned_sessions';
 const PM_PINNED_SESSIONS_MIGRATED_KEY = 'pm_mobile_pinned_sessions_server_migrated_v1';
+const PM_PINNED_PROJECTS_KEY = 'pm_mobile_pinned_projects';
 let _pinnedSessionMigrationPromise = null;
+let _drawerPinnedSessions = null;
+let _drawerProjects = [];
+const _drawerExpandedProjectIds = new Set();
 
 function _getPinnedSessionIds() {
   try {
@@ -22,6 +39,64 @@ function _getPinnedSessionIds() {
 
 function _savePinnedSessionIds(ids) {
   try { localStorage.setItem(PM_PINNED_SESSIONS_KEY, JSON.stringify(ids)); } catch {}
+}
+
+function _getPinnedProjectIds() {
+  try {
+    const raw = localStorage.getItem(PM_PINNED_PROJECTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch { return []; }
+}
+
+function _isProjectPinned(project) {
+  const id = String(project?.id || project || '');
+  return !!id && (Number(project?.pinnedAt || 0) > 0 || _getPinnedProjectIds().includes(id));
+}
+
+function _setLocalProjectPinned(projectId, pinned) {
+  const id = String(projectId || '');
+  if (!id) return;
+  const ids = _getPinnedProjectIds();
+  const index = ids.indexOf(id);
+  if (pinned && index < 0) ids.unshift(id);
+  if (!pinned && index >= 0) ids.splice(index, 1);
+  try { localStorage.setItem(PM_PINNED_PROJECTS_KEY, JSON.stringify(ids)); } catch {}
+}
+
+async function _toggleProjectPin(project) {
+  const id = String(project?.id || '');
+  if (!id) return false;
+  const wasPinned = _isProjectPinned(project);
+  const nextPinned = !wasPinned;
+  _setLocalProjectPinned(id, nextPinned);
+  project.pinnedAt = nextPinned ? Date.now() : null;
+  try {
+    const result = await mobileGatewayFetch('/api/projects/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      body: JSON.stringify({ pinned: nextPinned }),
+    });
+    const updated = result?.project || result;
+    project.pinnedAt = Number(updated?.pinnedAt || 0) || null;
+    _setLocalProjectPinned(id, !!project.pinnedAt);
+    return !!project.pinnedAt;
+  } catch (err) {
+    project.pinnedAt = wasPinned ? Date.now() : null;
+    _setLocalProjectPinned(id, wasPinned);
+    throw err;
+  }
+}
+
+async function _loadDrawerProjects() {
+  try {
+    const data = await mobileGatewayFetch('/api/projects');
+    const rows = Array.isArray(data) ? data : (Array.isArray(data?.projects) ? data.projects : []);
+    _drawerProjects = rows.filter((project) => project && project.id);
+  } catch (err) {
+    console.warn('[mobile drawer] Failed to load projects', err);
+    _drawerProjects = [];
+  }
+  return _drawerProjects;
 }
 
 function _isPinned(sessionId) {
@@ -44,7 +119,7 @@ function _setLocalPinned(sessionId, pinned) {
 function _findCachedDrawerSession(sessionId) {
   const id = String(sessionId || '');
   if (!id) return null;
-  const states = [_drawerSessionPaging?.all];
+  const states = [_drawerSessionPaging?.all, _drawerSessionPaging?.settled, { sessions: _drawerPinnedSessions }];
   for (const state of states) {
     const found = (Array.isArray(state?.sessions) ? state.sessions : []).find((session) => String(session?.id || '') === id);
     if (found) return found;
@@ -55,7 +130,7 @@ function _findCachedDrawerSession(sessionId) {
 function _setCachedSessionPinned(sessionId, pinnedAt) {
   const id = String(sessionId || '');
   if (!id) return;
-  const states = [_drawerSessionPaging?.all];
+  const states = [_drawerSessionPaging?.all, _drawerSessionPaging?.settled, { sessions: _drawerPinnedSessions }];
   for (const state of states) {
     for (const session of Array.isArray(state?.sessions) ? state.sessions : []) {
       if (String(session?.id || '') === id) session.pinnedAt = Number(pinnedAt || 0) || null;
@@ -101,12 +176,18 @@ function _syncPinnedCacheFromSessions(sessions) {
 async function _togglePin(sessionId) {
   const id = String(sessionId || '');
   if (!id) return false;
+  const parsed = parseTargetNamespacedId(id);
+  const target = parsed ? getGateway(parsed.gatewayId) : null;
+  if (parsed && (!target || !isCurrentGateway(target))) {
+    throw new Error('Pinning a remote chat is disabled in the first read-only multi-gateway slice.');
+  }
+  const gatewaySessionId = parsed?.targetId || id;
   const wasPinned = _isPinned(id);
   const nextPinned = !wasPinned;
   _setLocalPinned(id, nextPinned);
   _setCachedSessionPinned(id, nextPinned ? Date.now() : null);
   try {
-    const result = await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(id), {
+    const result = await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(gatewaySessionId), {
       method: 'PATCH',
       body: JSON.stringify({ pinned: nextPinned }),
     });
@@ -124,7 +205,7 @@ async function _togglePin(sessionId) {
 function _setCachedSessionUnread(sessionId, unread, mobileLastReadAt = null) {
   const id = String(sessionId || '');
   if (!id) return;
-  const states = [_drawerSessionPaging?.all];
+  const states = [_drawerSessionPaging?.all, _drawerSessionPaging?.settled];
   for (const state of states) {
     for (const session of Array.isArray(state?.sessions) ? state.sessions : []) {
       if (String(session?.id || '') !== id) continue;
@@ -137,7 +218,11 @@ function _setCachedSessionUnread(sessionId, unread, mobileLastReadAt = null) {
 async function _markSessionUnread(sessionId) {
   const id = String(sessionId || '').trim();
   if (!id) return null;
-  const result = await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(id) + '/mobile-unread', {
+  const parsed = parseTargetNamespacedId(id);
+  const target = parsed ? getGateway(parsed.gatewayId) : null;
+  if (parsed && (!target || !isCurrentGateway(target))) throw new Error('This remote chat is read-only in the first slice.');
+  const gatewaySessionId = parsed?.targetId || id;
+  const result = await mobileGatewayFetch('/api/sessions/' + encodeURIComponent(gatewaySessionId) + '/mobile-unread', {
     method: 'POST',
     body: JSON.stringify({}),
   });
@@ -151,6 +236,7 @@ export const ICONS = {
   menu:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7"  x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="14" y2="17"/></svg>',
   gear:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   bell:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
+  shield:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 20 6v5c0 5-3.4 8.7-8 10-4.6-1.3-8-5-8-10V6z"/><path d="m9 12 2 2 4-4"/></svg>',
   back:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>',
   chat:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
   mic:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>',
@@ -166,7 +252,9 @@ export const ICONS = {
   chev:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>',
   fork:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M6 8v2a4 4 0 0 0 4 4h2"/><path d="M18 8v2a4 4 0 0 1-4 4h-2"/><path d="M12 14v2"/></svg>',
   refresh:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.5 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.65 4.36A9 9 0 0 0 20.5 15"/></svg>',
+  flash:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>',
   plus:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+  folder:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5a2 2 0 0 1 2-2h4l1.7 2H19a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 9.5h18"/></svg>',
   x:         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   play:      '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>',
   pause:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>',
@@ -223,7 +311,9 @@ let _drawerRefreshing = false;
 let _drawerRenderSeq = 0;
 let _drawerStateCache = null;
 let _drawerPinnedCollapsed = false;
+let _drawerProjectsCollapsed = false;
 let _mobileNoSelectGuardInstalled = false;
+let _drawerGatewayFilterCleanup = null;
 const PM_DRAWER_REFRESH_TTL_MS = 30_000;
 const PM_NO_SELECT_INTERACTIVE_SELECTOR = [
   'button',
@@ -382,20 +472,24 @@ const PM_DRAWER_STATE_KEY = 'pm_mobile_drawer_sessions_view';
 const PM_THEME_KEY = 'prometheus_theme';
 const PM_ACTIVE_TAB_KEY = 'pm_mobile_active_tab';
 const PM_DRAWER_SESSION_PAGE_SIZE = 20;
+let _drawerSessionView = 'active';
 const _drawerSessionPaging = {
   all: { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false },
+  settled: { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false },
 };
 
 function _newDrawerPageState() {
-  return { sessions: [], total: 0, offset: 0, hasMore: false, loading: false, initialized: false, pending: null, loadedAt: 0 };
+  return { sessions: [], total: 0, offset: 0, hasMore: false, lastPageSize: 0, loading: false, initialized: false, pending: null, loadedAt: 0 };
 }
 
 function _drawerPageStateFor() {
-  return _drawerSessionPaging.all;
+  return _drawerSessionPaging[_drawerSessionView === 'settled' ? 'settled' : 'all'];
 }
 
 function _resetDrawerPageState() {
   _drawerSessionPaging.all = _newDrawerPageState();
+  _drawerSessionPaging.settled = _newDrawerPageState();
+  _drawerPinnedSessions = null;
 }
 
 export function invalidateMobileDrawerSessions() {
@@ -428,9 +522,9 @@ async function _loadDrawerSessionPage({ loadSessions, reset = false } = {}) {
         : null;
       let page;
       if (loader) {
-        page = await loader({ limit: PM_DRAWER_SESSION_PAGE_SIZE, offset });
+        page = await loader({ limit: PM_DRAWER_SESSION_PAGE_SIZE, offset, state: _drawerSessionView === 'settled' ? 'settled' : 'active' });
       } else if (typeof loadSessions === 'function') {
-        const data = await loadSessions({ limit: PM_DRAWER_SESSION_PAGE_SIZE, offset });
+        const data = await loadSessions({ limit: PM_DRAWER_SESSION_PAGE_SIZE, offset, state: _drawerSessionView === 'settled' ? 'settled' : 'active' });
         const list = Array.isArray(data?.sessions)
           ? data.sessions
           : (Array.isArray(data?.mobile) ? data.mobile : []);
@@ -450,9 +544,12 @@ async function _loadDrawerSessionPage({ loadSessions, reset = false } = {}) {
         merged.push(session);
       }
       state.sessions = merged;
+      state.lastPageSize = incoming.length;
       state.total = Math.max(merged.length, Math.floor(Number(page?.total || merged.length) || merged.length));
       state.offset = Math.max(0, Math.floor(Number(page?.offset || offset) || offset)) + incoming.length;
-      state.hasMore = page?.hasMore === true || state.offset < state.total;
+      state.hasMore = page?.hasMore === true
+        || state.offset < state.total
+        || incoming.length >= PM_DRAWER_SESSION_PAGE_SIZE;
       state.initialized = true;
       state.loadedAt = Date.now();
     } catch (err) {
@@ -479,12 +576,22 @@ function _getThemeList() {
       { id: 'purple', label: 'Aether Violet', base: 'dark' },
     ];
 
-  // Light remains available to the desktop UI, but the mobile app now cycles
-  // only through its three dark visual systems. Clone the entries so the
-  // shared desktop registry is never mutated.
-  return themes
-    .filter((theme) => theme?.id !== 'light')
-    .map((theme) => theme?.id === 'dark' ? { ...theme, label: 'Prometheus One' } : { ...theme });
+  // Mobile keeps the P1 skin as its first entry, restores the ash-gray/ember
+  // skin in the middle, then follows the blue and purple systems. The desktop
+  // registry uses `light` for P1, while older mobile builds persisted `dark`
+  // for that same visual system, so keep the compatibility mapping here.
+  const p1 = themes.find((theme) => theme?.id === 'light')
+    || themes.find((theme) => theme?.id === 'dark')
+    || { id: 'dark', label: 'Prometheus One', base: 'dark' };
+  const gray = themes.find((theme) => theme?.id === 'gray')
+    || themes.find((theme) => theme?.id === 'dark')
+    || { id: 'gray', label: 'Ash & Ember', base: 'dark' };
+  const themed = themes.filter((theme) => ['blue', 'purple'].includes(theme?.id));
+  return [
+    { ...p1, id: 'dark', label: 'Prometheus One' },
+    { ...gray, id: 'gray', label: 'Ash & Ember' },
+    ...themed.map((theme) => ({ ...theme })),
+  ];
 }
 
 function _resolveTheme(themeId) {
@@ -913,6 +1020,69 @@ function _saveDrawerState(state) {
   return { ..._drawerStateCache };
 }
 
+function _drawerGatewayStatusTone(status) {
+  const value = String(status || '').toLowerCase();
+  if (value === 'online') return 'online';
+  if (value === 'suspect') return 'suspect';
+  if (value === 'offline' || value === 'revoked') return 'offline';
+  return 'unknown';
+}
+
+function _renderDrawerGatewayFilterPanel() {
+  const panel = _drawerEl?.querySelector?.('#pm-drawer-gateway-filter');
+  if (!panel) return;
+  if (!isMobileGatewayCatalogEnabled()) {
+    panel.hidden = true;
+    panel.innerHTML = '';
+    return;
+  }
+  const entries = loadGatewayCatalog();
+  if (!entries.length) {
+    panel.hidden = true;
+    panel.innerHTML = '';
+    return;
+  }
+  const filter = getGatewayFilter();
+  const selected = new Set(filter.mode === 'selected' ? filter.gatewayIds : []);
+  const pill = (id, label, active, extra = '') => `<button type="button" class="pm-drawer-gateway-pill${active ? ' is-active' : ''}" data-drawer-gateway-filter="${escapeHtml(id)}" aria-pressed="${String(active)}"${extra}>${label}</button>`;
+  panel.hidden = false;
+  panel.innerHTML = `<div class="pm-drawer-gateway-pills" role="group" aria-label="Gateway view filter">${pill('all', 'All', filter.mode === 'all')}${entries.map((entry) => {
+    const tone = _drawerGatewayStatusTone(entry.status);
+    const label = `<span class="pm-drawer-gateway-pill-icon" aria-hidden="true">${ICONS.monitor}</span><span class="pm-drawer-gateway-pill-dot is-${tone}" aria-hidden="true"></span><span class="pm-drawer-gateway-pill-label">${escapeHtml(entry.name)}</span>`;
+    return pill(entry.gatewayId, label, filter.mode === 'selected' && selected.has(entry.gatewayId), ` title="${escapeHtml(`${entry.name} · ${gatewayStatusLabel(entry.status)}`)}"`);
+  }).join('')}</div>`;
+  panel.querySelectorAll('[data-drawer-gateway-filter]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = String(button.getAttribute('data-drawer-gateway-filter') || '').trim();
+      const current = getGatewayFilter();
+      const currentEntries = loadGatewayCatalog();
+      const currentSelected = new Set(current.mode === 'all' ? currentEntries.map((entry) => entry.gatewayId) : current.gatewayIds);
+      if (id === 'all') {
+        setGatewayFilter(currentEntries.map((entry) => entry.gatewayId));
+      } else if (current.mode === 'all') {
+        setGatewayFilter([id]);
+      } else if (currentSelected.has(id)) {
+        currentSelected.delete(id);
+        setGatewayFilter([...currentSelected]);
+      } else {
+        currentSelected.add(id);
+        setGatewayFilter([...currentSelected]);
+      }
+      invalidateMobileDrawerSessions('gateway-filter');
+    });
+  });
+}
+
+function _mountDrawerGatewayFilterPanel() {
+  _drawerGatewayFilterCleanup?.();
+  _drawerGatewayFilterCleanup = onGatewayCatalogChanged((detail) => {
+    if (!detail || ['filter_changed', 'gateway_upserted', 'gateway_forgotten', 'status_changed'].includes(String(detail.type || ''))) {
+      _renderDrawerGatewayFilterPanel();
+    }
+  });
+  _renderDrawerGatewayFilterPanel();
+}
+
 export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSession, loadSessions, searchSessions }) {
   const root = document.getElementById('mobile-root');
   disposeMobileHapticGestureSurfaces();
@@ -927,16 +1097,19 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
 
   // Drawer lives behind the app panel; opening the menu slides the app right.
   _scrimEl = el(`<div class="pm-drawer-scrim" aria-hidden="true"></div>`);
+  _drawerGatewayFilterCleanup?.();
+  _drawerGatewayFilterCleanup = null;
   _drawerEl = el(`
     <aside class="pm-drawer" role="dialog" aria-label="Menu" aria-modal="true">
       <div class="pm-drawer-brand">
         <span class="pm-brand-flame">🔥</span>
         <span class="pm-drawer-brand-legacy">Prometheus</span>
-        <img class="pm-brand-p1-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v240-mobile-splash" alt="" decoding="async">
-        <span class="pm-drawer-brand-p1"><strong>PROMETHEUS 1</strong><small>1 Program. Unlimited abilities.</small></span>
+        <img class="pm-brand-p1-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="async">
+        <span class="pm-drawer-brand-p1" aria-hidden="true"></span>
       </div>
       <button class="pm-theme-toggle" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>
       <button class="pm-drawer-close" type="button" data-mobile-drawer-close aria-label="Close menu">${ICONS.x}</button>
+      <div class="pm-drawer-gateway-filter" id="pm-drawer-gateway-filter" hidden></div>
       <label class="pm-drawer-search" aria-label="Search chats">
         ${_searchIcon()}
         <input id="pm-drawer-search-input" type="search" autocomplete="off" spellcheck="false" placeholder="Search chats..." value="">
@@ -960,6 +1133,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       <section class="pm-drawer-sessions" id="pm-drawer-sessions" aria-label="Sessions">
         <div class="pm-drawer-divider"></div>
         <div class="pm-drawer-pinned-list" id="pm-drawer-pinned-list"></div>
+        <div class="pm-drawer-project-list" id="pm-drawer-project-list"></div>
         <div class="pm-drawer-session-head" id="pm-drawer-session-head"></div>
         <div class="pm-drawer-session-list" id="pm-mobile-session-list"><div class="pm-session-empty">Loading...</div></div>
       </section>
@@ -972,6 +1146,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   `);
   root.insertBefore(_drawerEl, app);
   root.insertBefore(_scrimEl, app);
+  _mountDrawerGatewayFilterPanel();
 
   // Shell-level delegated fallback for the hamburger. Per-page code also wires
   // this via wireHeaderActions(), but if a page's render throws before that
@@ -1006,6 +1181,11 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       closeDrawer();
       if (typeof onNavigate === 'function') onNavigate(route);
     });
+  });
+  _drawerEl.querySelector('[data-route="#mobile/gateways"]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    closeDrawer();
+    if (typeof onNavigate === 'function') onNavigate('#mobile/gateways');
   });
   const _drawerNewChatBtn = _drawerEl.querySelector('[data-mobile-new-chat]');
   // Haptic feedback on the drawer's New Chat button
@@ -1146,24 +1326,40 @@ async function _renderDrawerSessions({ onOpenSession, loadSessions, searchSessio
   if (_drawerSearch) {
     const pinnedEl = renderDrawer.querySelector('#pm-drawer-pinned-list');
     if (pinnedEl) pinnedEl.innerHTML = '';
+    const projectsEl = renderDrawer.querySelector('#pm-drawer-project-list');
+    if (projectsEl) projectsEl.innerHTML = '';
     _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat });
     return;
   }
   try {
     await _migrateLegacyPinnedSessionsToServer();
     if (!isCurrent()) return;
+    await _loadDrawerProjects();
+    if (!isCurrent()) return;
     if (!_drawerPageStateFor().initialized) await _loadDrawerSessionPage({ loadSessions });
+    if (_drawerSessionView !== 'settled') {
+      try {
+        const remotePinned = await loadMobileGatewayPinnedSessions({ state: 'active' });
+        if (Array.isArray(remotePinned)) {
+          _drawerPinnedSessions = remotePinned;
+          _syncPinnedCacheFromSessions(remotePinned);
+        }
+      } catch (err) {
+        console.warn('[mobile drawer] Failed to load pinned sessions', err);
+      }
+    }
     if (!isCurrent()) return;
     const pageState = _drawerPageStateFor();
-    head.innerHTML = '<div class="pm-drawer-section-title">Sessions</div>';
+    head.innerHTML = '<div class="pm-drawer-section-title">' + (_drawerSessionView === 'settled' ? 'Settled' : 'Sessions') + '</div>';
+    _renderDrawerProjects();
     sessionList.innerHTML = _sessionPageHtml(pageState, 'No chats yet.');
-    _renderDrawerPinnedSessions(pageState);
+    _renderDrawerPinnedSessions(_drawerSessionView === 'settled' ? null : pageState, _drawerPinnedSessions);
     _wireDrawerInfiniteScroll({ loadSessions, onOpenSession, searchSessions, onNewChat });
     _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSessions, onNewChat });
   } catch (err) {
     if (!isCurrent()) return;
     console.warn('[mobile drawer] render failed', err);
-    if (head) head.innerHTML = '<div class="pm-drawer-section-title">Sessions</div>';
+    if (head) head.innerHTML = '<div class="pm-drawer-section-title">' + (_drawerSessionView === 'settled' ? 'Settled' : 'Sessions') + '</div>';
     sessionList.innerHTML = '<div class="pm-session-empty">Could not load sessions.</div>';
   } finally {
     restoreScroll();
@@ -1176,7 +1372,7 @@ function _activeDrawerSessionId() {
     return sid && sid !== 'mobile_default' ? sid : '';
   };
   const liveSid = normalize(window.__pmChat?.activeSessionId);
-  if (liveSid) return liveSid;
+  if (liveSid) return targetNamespacedId(window.__pmMobileActiveGatewayId, liveSid) || liveSid;
   const hash = String(window.location?.hash || '');
   const match = hash.match(/^#mobile\/chat\/([^/?#]+)/);
   if (match) {
@@ -1198,13 +1394,27 @@ function _sessionPageHtml(pageState, emptyText) {
   if (!sessions.length && pageState?.loading) return '<div class="pm-session-empty">Loading...</div>';
   if (!sessions.length && pageState?.error) return '<div class="pm-session-empty">Could not load sessions.</div>';
   // Filter out pinned sessions — they appear in the dedicated pinned section above
-  const unpinned = sessions.filter((session) => !_isPinned(session?.id));
-  if (!unpinned.length && !pageState?.hasMore && !pageState?.loading) return `<div class="pm-session-empty">${emptyText}</div>`;
+  const projectSessionIds = new Set(_drawerProjects.flatMap((project) => (project.sessions || []).map((session) => String(session?.id || ''))));
+  const unpinned = _drawerSessionView === 'settled'
+    ? sessions.filter((session) => !projectSessionIds.has(String(session?.id || '')) && !session?.projectId && session?.source !== 'project')
+    : sessions.filter((session) => !_isPinned(session?.id) && !projectSessionIds.has(String(session?.id || '')) && !session?.projectId && session?.source !== 'project');
+  // Some gateway versions omit total/hasMore even when they return a full
+  // page. Keep the explicit Load more affordance visible in that case; one
+  // final click simply confirms there is no additional page.
+  const showLoadMore = pageState?.hasMore === true || Number(pageState?.lastPageSize || 0) >= PM_DRAWER_SESSION_PAGE_SIZE;
+  if (!unpinned.length && !showLoadMore && !pageState?.loading) {
+    return `<div class="pm-session-empty">${emptyText}</div>` + (_drawerSessionView === 'settled'
+      ? '<button class="pm-session-load-more pm-settled-back" type="button" data-active-session-view>Back to chats</button>'
+      : '<button class="pm-session-load-more pm-settled-entry" type="button" data-settled-session-view>Settled</button>');
+  }
   return [
     unpinned.map((s) => _sessionButtonHtml(s)).join(''),
     pageState?.error ? '<div class="pm-session-empty">Could not load more chats.</div>' : '',
-    pageState?.hasMore ? '<button class="pm-session-load-more" type="button" data-session-load-more>Load more chats</button>' : '',
+    showLoadMore ? `<button class="pm-session-load-more" type="button" data-session-load-more>${_drawerSessionView === 'settled' ? 'Load more settled chats' : 'Load more chats'}</button>` : '',
     pageState?.loading ? '<div class="pm-session-empty pm-session-loading">Loading more...</div>' : '',
+    _drawerSessionView === 'settled'
+      ? '<button class="pm-session-load-more pm-settled-back" type="button" data-active-session-view>Back to chats</button>'
+      : '<button class="pm-session-load-more pm-settled-entry" type="button" data-settled-session-view>Settled</button>',
   ].filter(Boolean).join('');
 }
 
@@ -1312,10 +1522,12 @@ function _wireDrawerLongPress(callbacks) {
 }
 
 
-function _renderDrawerPinnedSessions(pageState) {
+function _renderDrawerPinnedSessions(pageState, pinnedOverride = null) {
   var pinnedEl = _drawerEl && _drawerEl.querySelector('#pm-drawer-pinned-list');
   if (!pinnedEl) return;
-  var sessions = Array.isArray(pageState && pageState.sessions) ? pageState.sessions : [];
+  var sessions = Array.isArray(pinnedOverride)
+    ? pinnedOverride
+    : (Array.isArray(pageState && pageState.sessions) ? pageState.sessions : []);
   var localOrder = _getPinnedSessionIds();
   var pinnedSessions = sessions.filter(function(session) { return _isPinned(session && session.id); });
   pinnedSessions.sort(function(a, b) {
@@ -1345,7 +1557,24 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
     toggle.setAttribute('aria-expanded', String(!_drawerPinnedCollapsed));
     if (content) content.hidden = _drawerPinnedCollapsed;
   });
+  _drawerEl.querySelector('[data-drawer-project-toggle]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    _drawerProjectsCollapsed = !_drawerProjectsCollapsed;
+    const toggle = event.currentTarget;
+    const content = _drawerEl.querySelector('#pm-drawer-project-content');
+    toggle.setAttribute('aria-expanded', String(!_drawerProjectsCollapsed));
+    if (content) content.hidden = _drawerProjectsCollapsed;
+  });
   _drawerEl.querySelector('[data-session-load-more]')?.addEventListener('click', () => _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchSessions, onNewChat }));
+  _drawerEl.querySelector('[data-settled-session-view]')?.addEventListener('click', () => {
+    _drawerSessionView = 'settled';
+    _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat }).catch(() => {});
+  });
+  _drawerEl.querySelector('[data-active-session-view]')?.addEventListener('click', () => {
+    _drawerSessionView = 'active';
+    _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat }).catch(() => {});
+  });
   _drawerEl.querySelector('[data-mobile-new-chat]')?.addEventListener('click', () => {
     closeDrawer();
     Promise.resolve(typeof onNewChat === 'function' ? onNewChat() : null)
@@ -1354,6 +1583,34 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
         _resetDrawerPageState();
       })
       .catch(() => {});
+  });
+  _drawerEl.querySelectorAll('[data-project-toggle]').forEach((row) => {
+    row.addEventListener('click', (event) => {
+      if (event.target?.closest?.('[data-project-pin]')) return;
+      const id = String(row.getAttribute('data-project-toggle') || '');
+      if (!id) return;
+      if (_drawerExpandedProjectIds.has(id)) _drawerExpandedProjectIds.delete(id);
+      else _drawerExpandedProjectIds.add(id);
+      _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll: true }).catch(() => {});
+    });
+  });
+  _drawerEl.querySelectorAll('[data-project-pin]').forEach((button) => {
+    button.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const project = _drawerProjects.find((item) => String(item?.id || '') === String(button.dataset.projectPin || ''));
+      if (!project) return;
+      button.disabled = true;
+      try {
+        const pinned = await _toggleProjectPin(project);
+        _resetDrawerPageState();
+        await _renderDrawerSessions({ onOpenSession, loadSessions, searchSessions, onNewChat, preserveScroll: true });
+        try { window.pmToast?.(pinned ? 'Project pinned to top' : 'Project unpinned', 'success'); } catch {}
+      } catch (err) {
+        button.disabled = false;
+        try { window.pmToast?.(err?.message || 'Could not update project pin', 'error'); } catch {}
+      }
+    });
   });
   _drawerEl.querySelectorAll('[data-session-id]').forEach((btn) => {
     const openSession = () => {
@@ -1374,7 +1631,8 @@ function _wireDrawerSessionControls({ onOpenSession, loadSessions, searchSession
 
 async function _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchSessions, onNewChat } = {}) {
   const pageState = _drawerPageStateFor();
-  if (pageState.loading || !pageState.hasMore) return;
+  const showLoadMore = pageState.hasMore === true || Number(pageState.lastPageSize || 0) >= PM_DRAWER_SESSION_PAGE_SIZE;
+  if (pageState.loading || !showLoadMore) return;
   _renderVisibleDrawerSessionPage();
   await _loadDrawerSessionPage({ loadSessions });
   _renderVisibleDrawerSessionPage();
@@ -1385,17 +1643,17 @@ function _renderVisibleDrawerSessionPage() {
   const sessionList = _drawerEl?.querySelector('#pm-mobile-session-list');
   if (!sessionList) return;
   const pageState = _drawerPageStateFor();
+  _renderDrawerProjects();
   sessionList.innerHTML = _sessionPageHtml(pageState, 'No chats yet.');
-  _renderDrawerPinnedSessions(pageState);
+  _renderDrawerPinnedSessions(_drawerSessionView === 'settled' ? null : pageState, _drawerPinnedSessions);
 }
 
 function _wireDrawerInfiniteScroll({ loadSessions, onOpenSession, searchSessions, onNewChat }) {
   if (!_drawerEl) return;
-  _drawerEl.onscroll = () => {
-    if (_drawerSearch) return;
-    const nearBottom = _drawerEl.scrollTop + _drawerEl.clientHeight >= _drawerEl.scrollHeight - 96;
-    if (nearBottom) _loadNextDrawerSessionPage({ loadSessions, onOpenSession, searchSessions, onNewChat });
-  };
+  // Pagination is intentionally explicit on mobile. Scrolling to the bottom
+  // must leave the Load more and Settled controls available instead of
+  // fetching another page and moving the target out from under the user.
+  _drawerEl.onscroll = null;
 }
 
 function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions, onNewChat }) {
@@ -1447,7 +1705,7 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
     try {
       // Session titles are in the compact index, so show those immediately.
       // A second request fills in message-body matches without blocking typing.
-      if (typeof searchSessions === 'function') titleMatches = await searchSessions(query, { limit: 30, mode: 'title' });
+      if (typeof searchSessions === 'function') titleMatches = await searchSessions(query, { limit: 30, mode: 'title', state: _drawerSessionView === 'settled' ? 'settled' : 'active' });
     } catch {
       failed = true;
       titleMatches = [];
@@ -1457,7 +1715,7 @@ function _renderDrawerSearchState({ onOpenSession, loadSessions, searchSessions,
     if (titleMatches.length) renderMatches(titleMatches);
 
     try {
-      if (typeof searchSessions === 'function') matches = await searchSessions(query, { limit: 100, mode: 'content' });
+      if (typeof searchSessions === 'function') matches = await searchSessions(query, { limit: 100, mode: 'content', state: _drawerSessionView === 'settled' ? 'settled' : 'active' });
     } catch {
       failed = true;
       matches = titleMatches;
@@ -1483,7 +1741,7 @@ async function _localSessionSearchFallback(loadSessions, query) {
   if (typeof loadSessions !== 'function') return [];
   const q = String(query || '').trim().toLowerCase();
   if (!q) return [];
-  const data = await loadSessions().catch(() => null);
+  const data = await loadSessions({ state: _drawerSessionView === 'settled' ? 'settled' : 'active' }).catch(() => null);
   const all = Array.isArray(data?.sessions)
     ? data.sessions
     : (Array.isArray(data?.mobile) ? data.mobile : []);
@@ -1497,39 +1755,138 @@ async function _localSessionSearchFallback(loadSessions, query) {
 function _sessionStateMeta(session) {
   const activeRun = session?.activeRun === true;
   const unread = session?.mobileUnread === true && !activeRun;
+  const settled = session?.settled === true || Number(session?.settledAt || 0) > 0;
   return {
     activeRun,
     unread,
     stateClass: activeRun ? ' is-working' : (unread ? ' is-unread' : ''),
-    stateName: activeRun ? 'working' : (unread ? 'unread' : 'idle'),
-    stateLabel: activeRun ? '<span class="pm-session-state">Working</span>' : (unread ? '<span class="pm-session-state">Unread</span>' : ''),
+    stateName: activeRun ? 'working' : (unread ? 'unread' : (settled ? 'settled' : 'idle')),
+    stateLabel: activeRun ? '<span class="pm-session-state">Working</span>' : (unread ? '<span class="pm-session-state">Unread</span>' : (settled ? '<span class="pm-session-state">Settled</span>' : '')),
   };
 }
 
-function _sessionButtonHtml(session) {
+function _renderDrawerProjects() {
+  const projectsEl = _drawerEl?.querySelector('#pm-drawer-project-list');
+  if (!projectsEl) return;
+  if (_drawerSessionView === 'settled') { projectsEl.innerHTML = ''; return; }
+  const projects = _drawerProjects;
+  projectsEl.innerHTML = projects.length
+    ? '<div class="pm-drawer-project-section">' +
+      '<button class="pm-drawer-section-title pm-drawer-project-toggle" type="button" data-drawer-project-toggle aria-expanded="' + String(!_drawerProjectsCollapsed) + '" aria-controls="pm-drawer-project-content"><span>Projects</span><span class="pm-drawer-pinned-chevron" aria-hidden="true">' + ICONS.chev + '</span></button>' +
+      '<div class="pm-drawer-project-content" id="pm-drawer-project-content"' + (_drawerProjectsCollapsed ? ' hidden' : '') + '>' + projects.map(_projectButtonHtml).join('') + '</div>' +
+      '</div>'
+    : '';
+}
+
+// Keep the mobile drawer on the same approved local source artwork as the
+// desktop sidebar. These are intentionally data-driven from import
+// provenance; unknown providers get an accessible no-art fallback rather than
+// a fabricated or remote image.
+const MOBILE_IMPORTED_SOURCE_BRANDS = Object.freeze({
+  chatgpt: { key: 'chatgpt', label: 'ChatGPT', asset: '/static/assets/import-sources/chatgpt.svg' },
+  'chatgpt-export': { key: 'chatgpt', label: 'ChatGPT', asset: '/static/assets/import-sources/chatgpt.svg' },
+  openai: { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
+  openai_codex: { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
+  codex: { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
+  'codex-local': { key: 'openai', label: 'OpenAI', asset: '/static/assets/import-sources/openai.svg' },
+  claude: { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
+  anthropic: { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
+  'claude-code': { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
+  'claude-code-local': { key: 'claude', label: 'Claude', asset: '/static/assets/import-sources/claude.svg' },
+  cursor: { key: 'cursor', label: 'Cursor', asset: '/static/assets/import-sources/cursor.svg' },
+  'cursor-local': { key: 'cursor', label: 'Cursor', asset: '/static/assets/import-sources/cursor.svg' },
+  hermes: { key: 'hermes', label: 'Hermes', asset: '/static/assets/import-sources/nous-research.png' },
+  'hermes-local': { key: 'hermes', label: 'Hermes', asset: '/static/assets/import-sources/nous-research.png' },
+  openclaw: { key: 'openclaw', label: 'OpenClaw', asset: '/static/assets/import-sources/openclaw.svg' },
+  'openclaw-local': { key: 'openclaw', label: 'OpenClaw', asset: '/static/assets/import-sources/openclaw.svg' },
+  localclaw: { key: 'localclaw', label: 'LocalClaw', asset: '/static/assets/import-sources/localclaw.webp' },
+  'localclaw-local': { key: 'localclaw', label: 'LocalClaw', asset: '/static/assets/import-sources/localclaw.webp' },
+});
+
+function _mobileImportedSourceBrand(session) {
+  const imported = session?.externalImport;
+  if (!imported || typeof imported !== 'object') return null;
+  const source = imported.source && typeof imported.source === 'object' ? imported.source : imported;
+  const candidates = [source.provider, source.adapter, source.sourceLabel]
+    .map(value => String(value || '').trim().toLowerCase())
+    .flatMap(value => [value, value.replace(/\s+/g, '-'), value.replace(/[^a-z0-9]+/g, '-')])
+    .filter(Boolean);
+  const exact = candidates.map(candidate => MOBILE_IMPORTED_SOURCE_BRANDS[candidate]).find(Boolean);
+  if (exact) return exact;
+  if (candidates.some((candidate) => /openai|chatgpt/.test(candidate))) return MOBILE_IMPORTED_SOURCE_BRANDS.openai;
+  return null;
+}
+
+function _mobileImportedSourceLogo(session) {
+  const imported = session?.externalImport;
+  if (!imported || typeof imported !== 'object') return '';
+  const source = imported.source && typeof imported.source === 'object' ? imported.source : imported;
+  const brand = _mobileImportedSourceBrand(session);
+  const label = brand?.label || String(source.sourceLabel || source.provider || source.adapter || 'source').trim().slice(0, 80) || 'source';
+  const ariaLabel = `Imported from ${label}`;
+  if (!brand) {
+    return `<span class="pm-session-import-logo pm-session-import-logo--fallback" title="${escapeHtml(ariaLabel)}" aria-label="${escapeHtml(ariaLabel)}" role="img"></span>`;
+  }
+  return `<img class="pm-session-import-logo pm-session-import-logo--${brand.key}" data-imported-source="${brand.key}" src="${brand.asset}" alt="${escapeHtml(ariaLabel)}" width="14" height="14" decoding="async" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="pm-session-import-logo-fallback" hidden title="${escapeHtml(ariaLabel)}" aria-label="${escapeHtml(ariaLabel)}" role="img"></span>`;
+}
+
+function _mobileSessionTimeLabel(session) {
+  const timestamp = Number(session?.lastMessageAt || session?.lastActiveAt || session?.createdAt || 0);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timeAgo(timestamp) : '';
+}
+
+function _projectSessionRows(project) {
+  const sessions = Array.isArray(project?.sessions) ? project.sessions : [];
+  if (!_drawerExpandedProjectIds.has(String(project?.id || ''))) return '';
+  return '<div class="pm-project-chat-list">' + sessions.map((session) => {
+    const row = { ...session, projectId: project.id, projectName: project.name };
+    return _sessionButtonHtml(row, { projectChild: true });
+  }).join('') + '</div>';
+}
+
+function _projectButtonHtml(project) {
+  const id = String(project?.id || '');
+  const title = String(project?.name || 'Project');
+  const isOpen = _drawerExpandedProjectIds.has(id);
+  const isPinned = _isProjectPinned(project);
+  const logo = project?.externalImport ? _mobileImportedSourceLogo({ externalImport: project.externalImport }) : '';
+  const activity = Number(project?.updatedAt || project?.createdAt || 0);
+  return `<div class="pm-project-group${isOpen ? ' is-open' : ''}${isPinned ? ' is-pinned-project' : ''}" data-project-id="${escapeHtml(id)}">
+    <div class="pm-session-row pm-project-row" data-project-toggle="${escapeHtml(id)}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}">
+      <span class="pm-session-row-top"><span class="pm-session-title-line"><span class="pm-project-folder-icon pm-i" aria-hidden="true">${ICONS.folder}</span>${logo}<span class="pm-session-title">${escapeHtml(title)}</span></span><button class="pm-project-pin" type="button" data-project-pin="${escapeHtml(id)}" aria-label="${isPinned ? 'Unpin' : 'Pin'} project">${ICONS.pin}</button></span>
+      ${activity > 0 ? `<span class="pm-session-subline"><span class="pm-session-gateway">${escapeHtml(`${Array.isArray(project.sessions) ? project.sessions.length : 0} chats`)}</span><time class="pm-session-time">${escapeHtml(timeAgo(activity))}</time></span>` : ''}
+    </div>
+    ${_projectSessionRows(project)}
+  </div>`;
+}
+
+function _sessionButtonHtml(session, options = {}) {
   const title = String(session?.title || session?.id || 'New chat');
   const preview = String(session?.preview || '').trim();
   const normalizedTitle = title.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
   const normalizedPreview = preview.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
   const visiblePreview = normalizedPreview && normalizedPreview !== normalizedTitle
     ? preview
-    : (preview ? '' : 'No messages yet');
+    : '';
   const state = _sessionStateMeta(session);
+  const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
+  const importedClass = imported ? ' is-imported-session' : '';
+  const sourceLogo = _mobileImportedSourceLogo(session);
+  const timestamp = _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
   const roomRoster = Array.isArray(session?.voiceRoom?.participants)
     ? session.voiceRoom.participants.map((participant) => String(participant?.label || '').trim()).filter(Boolean).join(' · ')
     : '';
+  const secondaryText = String(session?.gatewayName || roomRoster || visiblePreview || '').trim();
+  const secondaryClass = session?.gatewayName || roomRoster ? 'pm-session-gateway' : 'pm-session-preview';
   // Origin channel (Desktop / Telegram / Mobile) is intentionally not shown
   // in the sessions list — keep title, state, roster, and preview only.
   return `
-    <button class="pm-session-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-channel="${escapeHtml(session?.channel || '')}" data-session-state="${state.stateName}"${ariaCurrent}>
-      <span class="pm-session-row-top"><span class="pm-session-title">${escapeHtml(title)}</span>${state.stateLabel}</span>
-      <span class="pm-session-meta-row">
-        ${roomRoster ? `<span class="pm-session-preview">${escapeHtml(roomRoster)}</span>` : ''}
-        ${visiblePreview ? `<span class="pm-session-preview">${escapeHtml(visiblePreview)}</span>` : ''}
-      </span>
+    <button class="pm-session-row${state.stateClass}${activeClass}${importedClass}${options.projectChild ? ' pm-project-chat-row' : ''}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-channel="${escapeHtml(session?.channel || '')}" data-session-state="${state.stateName}"${ariaCurrent}>
+      <span class="pm-session-row-top"><span class="pm-session-title-line">${sourceLogo}<span class="pm-session-title">${escapeHtml(title)}</span></span>${state.stateLabel}</span>
+      ${(secondaryText || timestamp) ? `<span class="pm-session-subline">${secondaryText ? `<span class="${secondaryClass}">${escapeHtml(secondaryText)}</span>` : ''}${timestamp ? `<time class="pm-session-time" datetime="${new Date(Number(session.lastMessageAt || session.lastActiveAt || session.createdAt)).toISOString()}">${escapeHtml(timestamp)}</time>` : ''}</span>` : ''}
     </button>
   `;
 }
@@ -1541,16 +1898,22 @@ function _searchResultButtonHtml(session, query) {
   const matched = String(session?.matchedContent || session?.preview || '').trim();
   const snippet = matched ? _highlightSnippet(matched, session?.matchedIndex, query) : escapeHtml(session?.preview || _formatSessionDate(session.lastActiveAt));
   const state = _sessionStateMeta(session);
+  const imported = !!(session?.externalImport && typeof session.externalImport === 'object');
+  const importedClass = imported ? ' is-imported-session' : '';
+  const sourceLogo = _mobileImportedSourceLogo(session);
+  const timestamp = _mobileSessionTimeLabel(session);
   const isActive = _isActiveDrawerSession(session?.id);
   const activeClass = isActive ? ' is-active-session' : '';
   const ariaCurrent = isActive ? ' aria-current="page"' : '';
   const projectLabel = session?.projectName ? escapeHtml(session.projectName) : '';
   // Origin channel is intentionally not shown in search results either.
   return `
-    <button class="pm-session-row pm-search-result-row${state.stateClass}${activeClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-channel="${escapeHtml(session?.channel || '')}" data-session-state="${state.stateName}"${ariaCurrent}>
-      <span class="pm-session-row-top"><span class="pm-session-title">${escapeHtml(title)}</span>${state.stateLabel}</span>
+    <button class="pm-session-row pm-search-result-row${state.stateClass}${activeClass}${importedClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-channel="${escapeHtml(session?.channel || '')}" data-session-state="${state.stateName}"${ariaCurrent}>
+      <span class="pm-session-row-top"><span class="pm-session-title-line">${sourceLogo}<span class="pm-session-title">${escapeHtml(title)}</span></span>${state.stateLabel}</span>
+      ${session?.gatewayName ? `<span class="pm-session-gateway">${escapeHtml(session.gatewayName)}</span>` : ''}
       ${projectLabel ? `<span class="pm-search-meta">${projectLabel}</span>` : ''}
       <span class="pm-session-preview"><strong>${escapeHtml(label)}:</strong> ${snippet}</span>
+      ${timestamp ? `<time class="pm-session-time" datetime="${new Date(Number(session.lastMessageAt || session.lastActiveAt || session.createdAt)).toISOString()}">${escapeHtml(timestamp)}</time>` : ''}
     </button>
   `;
 }
@@ -1579,6 +1942,8 @@ function _closeSessionSheetImmediate() {
 function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect = null) {
   _closeSessionSheetImmediate();
   const pinned = _isPinned(sessionId);
+  const cachedSession = _findCachedDrawerSession(sessionId);
+  const settled = _drawerSessionView === 'settled' || cachedSession?.settled === true || Number(cachedSession?.settledAt || 0) > 0;
   const cb = callbacks || {};
 
   const scrim = document.createElement('div');
@@ -1598,6 +1963,7 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
   const trashIconSvg = ICONS.trash;
   const renameIconSvg = ICONS.compose;
   const unreadIconSvg = ICONS.unread;
+  const settleIconSvg = ICONS.clock;
 
   sheet.innerHTML =
     '<div class="pm-msheet-handle"></div>' +
@@ -1618,6 +1984,10 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
         '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="unread">' +
           '<span class="pm-sess-action-icon pm-i pm-sess-unread-icon">' + unreadIconSvg + '</span>' +
           '<span class="pm-msheet-row-label">Mark as unread</span>' +
+        '</button>' +
+        '<button type="button" class="pm-msheet-row pm-sess-action-row" data-sess-action="settle">' +
+          '<span class="pm-sess-action-icon pm-i">' + settleIconSvg + '</span>' +
+          '<span class="pm-msheet-row-label">' + (settled ? 'Unsettle chat' : 'Settle chat') + '</span>' +
         '</button>' +
         '<button type="button" class="pm-msheet-row pm-sess-action-row pm-sess-action-delete" data-sess-action="delete">' +
           '<span class="pm-sess-action-icon pm-i">' + trashIconSvg + '</span>' +
@@ -1678,6 +2048,48 @@ function _openSessionContextSheet(sessionId, sessionTitle, callbacks, anchorRect
     } catch (err) {
       unreadBtn.disabled = false;
       try { if (window.pmToast) window.pmToast((err && err.message) || 'Could not mark chat as unread', 'error'); } catch(e) {}
+    }
+  });
+
+  var settleBtn = sheet.querySelector('[data-sess-action="settle"]');
+  if (settleBtn) settleBtn.addEventListener('click', async function() {
+    pmHaptic(10);
+    settleBtn.disabled = true;
+    var run = function(confirmPinned) {
+      return mobileGatewayFetch('/api/sessions/' + encodeURIComponent(sessionId) + (settled ? '/unsettle' : '/settle'), {
+        method: 'POST',
+        body: JSON.stringify(settled ? {} : { confirmPinned: confirmPinned === true }),
+      });
+    };
+    try {
+      await run(false);
+      if (settled) _drawerSessionView = 'active';
+      close();
+      if (_drawerEl && _drawerCallbacks) {
+        _resetDrawerPageState();
+        _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+      }
+      try { if (window.pmToast) window.pmToast(settled ? 'Chat reopened' : 'Chat settled', 'success'); } catch(e) {}
+    } catch (err) {
+      var body = err && err.body;
+      var needsPinnedConfirmation = !settled && body && body.code === 'pinned_confirmation_required';
+      if (needsPinnedConfirmation && window.confirm('This chat is pinned. Settle it anyway? Its history will be kept.')) {
+        try {
+          await run(true);
+          close();
+          if (_drawerEl && _drawerCallbacks) {
+            _resetDrawerPageState();
+            _renderDrawerSessions(_drawerCallbacks).catch(function() {});
+          }
+          try { if (window.pmToast) window.pmToast('Chat settled', 'success'); } catch(e) {}
+          return;
+        } catch (retryErr) { err = retryErr; }
+      }
+      settleBtn.disabled = false;
+      var blockerMessage = Array.isArray(err && err.body && err.body.blockers)
+        ? err.body.blockers.map(function(item) { return item && item.message; }).filter(Boolean).join(' ')
+        : '';
+      try { if (window.pmToast) window.pmToast(blockerMessage || (err && err.message) || 'Could not update chat state', 'error'); } catch(e) {}
     }
   });
 

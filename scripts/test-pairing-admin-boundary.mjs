@@ -79,6 +79,17 @@ assert.equal(evaluatePairingAdminRequestWithPolicy({
   ip: '127.0.0.1',
 }, { ...standalonePolicy, gatewayHost: '0.0.0.0' }).ok, false,
   'LAN-bound gateways must require an explicit credential');
+assert.equal(evaluatePairingAdminRequestWithPolicy({
+  headers: {},
+  ip: '127.0.0.1',
+}, { ...standalonePolicy, gatewayHost: '0.0.0.0' }).ok, false,
+  'LAN-bound gateways must not allow tokenless non-browser loopback administration');
+assert.deepEqual(evaluatePairingAdminRequestWithPolicy({
+  headers: { 'x-prometheus-pairing-admin': 'desktop-secret' },
+  ip: '127.0.0.1',
+}, { ...standalonePolicy, gatewayHost: '0.0.0.0', desktopToken: 'desktop-secret' }),
+{ ok: true, authority: 'electron' },
+  'LAN-bound gateways must accept a valid explicit desktop credential');
 
 const { router } = require('../dist/gateway/routes/pairing.router.js');
 const routeMiddleware = new Map();

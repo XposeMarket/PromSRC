@@ -24,6 +24,47 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
+function isSafeIdentity(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  return Object.entries(value).every(([key, item]) =>
+    ['provider', 'providerAccountId', 'displayName', 'username', 'email'].includes(key)
+      ? typeof item === 'string' && item.length <= 256
+      : false,
+  );
+}
+
+function isResourceIdentity(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  return typeof value.kind === 'string' && typeof value.id === 'string'
+    && value.kind.length <= 256 && value.id.length <= 256
+    && (value.displayName === undefined || typeof value.displayName === 'string')
+    && (value.parentId === undefined || typeof value.parentId === 'string')
+    && (value.scope === undefined || typeof value.scope === 'string');
+}
+
+function isCapabilityGrant(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  return typeof value.id === 'string'
+    && ['read', 'write', 'high_impact'].includes(String(value.risk))
+    && typeof value.granted === 'boolean'
+    && typeof value.approvalRequired === 'boolean'
+    && ['manifest', 'user', 'legacy'].includes(String(value.source));
+}
+
+function isProviderAppMetadata(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const allowed = ['provider', 'appType', 'clientIdConfigured', 'clientSecretConfigured', 'pkceRequired', 'nonceRequired', 'redirectUri', 'externalSetupRequired'];
+  if (Object.keys(value).some((key) => !allowed.includes(key))) return false;
+  return typeof value.provider === 'string'
+    && ['oauth-app', 'github-app', 'public-client', 'confidential-client', 'unknown'].includes(String(value.appType))
+    && typeof value.clientIdConfigured === 'boolean'
+    && typeof value.clientSecretConfigured === 'boolean'
+    && typeof value.pkceRequired === 'boolean'
+    && (value.nonceRequired === undefined || typeof value.nonceRequired === 'boolean')
+    && (value.redirectUri === undefined || typeof value.redirectUri === 'string')
+    && (value.externalSetupRequired === undefined || typeof value.externalSetupRequired === 'boolean');
+}
+
 export function isConnectionAttemptState(value: unknown): value is ConnectionAttemptState {
   return typeof value === 'string' && CONNECTION_ATTEMPT_STATES.includes(value as ConnectionAttemptState);
 }
@@ -54,6 +95,11 @@ export function isConnectionRecord(value: unknown): value is ConnectionRecord {
     && isStringArray(value.exposedTools)
     && typeof value.authState === 'string'
     && typeof value.health === 'string'
+    && (value.contractVersion === undefined || value.contractVersion === 1 || value.contractVersion === 2)
+    && (value.account === undefined || isSafeIdentity(value.account))
+    && (value.resources === undefined || (Array.isArray(value.resources) && value.resources.every(isResourceIdentity)))
+    && (value.capabilityGrants === undefined || (Array.isArray(value.capabilityGrants) && value.capabilityGrants.every(isCapabilityGrant)))
+    && (value.providerApp === undefined || isProviderAppMetadata(value.providerApp))
     && typeof value.createdAt === 'string'
     && typeof value.updatedAt === 'string';
 }

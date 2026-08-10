@@ -17,7 +17,7 @@ import { normalizeAgentVoiceProfile } from '../components/agent-voice-picker.js'
 import { startRedoOnboardingFlow } from '../onboarding/redo-onboarding.js';
 import { showTutorial } from '../onboarding/tutorial-overlay.js';
 import { renderProviderUsageCard } from './HubPage.js';
-import { effortOptions, validEffort } from '../reasoning-capabilities.js';
+import { effortOptions, validEffort, supportsFastSpeed } from '../reasoning-capabilities.js';
 import { formatModelDisplayName, relabelModelSelect } from '../model-display.js';
 
 const SETTINGS_ICON_PATHS = {
@@ -46,6 +46,7 @@ const SETTINGS_ICON_PATHS = {
   zap: '<path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z"></path>',
   send: '<path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4 20-7Z"></path>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"></path>',
+  palette: '<path d="M12 3a9 9 0 1 0 0 18h1.2a1.8 1.8 0 0 0 1.3-3.05 1.8 1.8 0 0 1 1.28-3.07H18A3 3 0 0 0 21 12C21 7.03 16.97 3 12 3Z"></path><circle cx="7.5" cy="10" r=".8" fill="currentColor" stroke="none"></circle><circle cx="10" cy="7" r=".8" fill="currentColor" stroke="none"></circle><circle cx="14" cy="7" r=".8" fill="currentColor" stroke="none"></circle><circle cx="16.5" cy="10" r=".8" fill="currentColor" stroke="none"></circle>',
 };
 
 function renderSettingsIcon(name, size = 14) {
@@ -101,6 +102,10 @@ function initSettingsStaticIcons() {
   applySettingsIcon('settings-cred-info-icon', 'lock', 14);
   applySettingsIcon('agent-md-team-badge-icon', 'home', 12);
   applySettingsIcon('agent-hb-title-icon', 'activity', 14);
+  document.querySelectorAll('[data-settings-nav-icon]').forEach((el) => {
+    const iconName = el.getAttribute('data-settings-nav-icon');
+    if (iconName) el.innerHTML = renderSettingsIcon(iconName, 15);
+  });
   initSettingsIconLabels();
   setCredentialToggleIcon(document.getElementById('cred-tavily-visibility-toggle'), false);
   setCredentialToggleIcon(document.getElementById('cred-tinyfish-visibility-toggle'), false);
@@ -214,9 +219,9 @@ function _scheduleSettingsVisibilityRefresh() {
         const cache = _settingsDataCache.get('settings-agents');
         if (_isCacheEntryStale(cache)) maybeRefresh.push(loadAgentsTab());
       }
-      if (activeTab === 'credentials') {
+      if (activeTab === 'search') {
         const cache = _settingsDataCache.get('settings-credentials-fields');
-        if (_isCacheEntryStale(cache)) maybeRefresh.push(loadCredentialsTab());
+        if (_isCacheEntryStale(cache)) maybeRefresh.push(loadCredFields());
       }
       if (activeTab === 'channels') {
         const cache = _settingsDataCache.get('settings-channels');
@@ -241,6 +246,10 @@ let quickThinkingEffort = 'standard';
 function applySearchSettingsSummary(s) {
   const el = document.getElementById('r-failed');
   if (el) el.textContent = s.preferred_provider || 'tavily';
+  const providerEl = document.getElementById('settings-provider');
+  if (providerEl) providerEl.value = s.preferred_provider || 'tavily';
+  const rigorEl = document.getElementById('settings-search-rigor');
+  if (rigorEl) rigorEl.value = s.search_rigor || 'verified';
   quickSearchRigor = s.search_rigor || 'verified';
   updateQuickModeUI();
 }
@@ -333,24 +342,186 @@ function setQuickThinkingEffort(level) {
   addProcessEntry('info', `Thinking effort set to ${quickThinkingEffort} (UI preference).`);
 }
 
+let _desktopUpdaterState = { supported: false, autoUpdateEnabled: true, status: 'unsupported' };
+let _desktopUpdaterEventsBound = false;
+
+function desktopUpdaterElements() {
+  return {
+    toggle: document.getElementById('settings-auto-update-toggle'),
+    status: document.getElementById('settings-update-status'),
+    version: document.getElementById('settings-update-version'),
+    check: document.getElementById('settings-update-check'),
+    download: document.getElementById('settings-update-download'),
+    install: document.getElementById('settings-update-install'),
+  };
+}
+
+function applyDesktopUpdateState(nextState = {}) {
+  _desktopUpdaterState = { ..._desktopUpdaterState, ...nextState };
+  window._prometheusUpdaterSettingsState = _desktopUpdaterState;
+  const els = desktopUpdaterElements();
+  if (!els.toggle && !els.status) return;
+
+  const supported = _desktopUpdaterState.supported === true;
+  const enabled = _desktopUpdaterState.autoUpdateEnabled !== false;
+  const status = String(_desktopUpdaterState.status || (supported ? 'idle' : 'unsupported'));
+  const version = String(_desktopUpdaterState.version || '').trim();
+  const currentVersion = String(_desktopUpdaterState.currentVersion || '').trim();
+  const busy = ['checking', 'downloading', 'installing'].includes(status);
+
+  if (els.toggle) {
+    els.toggle.disabled = !supported;
+    els.toggle.classList.toggle('is-on', enabled);
+    els.toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
+  }
+  if (els.version) {
+    els.version.textContent = currentVersion
+      ? `Installed version ${currentVersion}${version ? ` · release ${version}` : ''}`
+      : 'Installed version —';
+  }
+  if (els.status) {
+    els.status.textContent = !supported
+      ? 'Updates are available in installed public builds.'
+      : String(_desktopUpdaterState.message || (
+        status === 'ready' ? 'Update downloaded and ready to install.' :
+        status === 'available' ? `Prometheus ${version || 'update'} is available.` :
+        status === 'checking' ? 'Checking for updates…' :
+        status === 'downloading' ? 'Downloading update…' :
+        status === 'installing' ? 'Installing update…' :
+        enabled ? 'Prometheus is up to date.' : 'Automatic updates are off.'
+      ));
+  }
+  if (els.check) {
+    els.check.disabled = !supported || busy;
+    els.check.textContent = status === 'checking' ? 'Checking…' : 'Check for updates';
+  }
+  if (els.download) {
+    els.download.hidden = !supported || status !== 'available';
+    els.download.disabled = busy;
+  }
+  if (els.install) {
+    els.install.hidden = !supported || status !== 'ready';
+    els.install.disabled = busy;
+  }
+}
+
+function bindDesktopUpdaterEvents() {
+  const bridge = window.prometheusUpdater;
+  if (!bridge || _desktopUpdaterEventsBound) return;
+  _desktopUpdaterEventsBound = true;
+  if (typeof bridge.onState === 'function') bridge.onState(applyDesktopUpdateState);
+}
+
+async function loadDesktopUpdateSettings() {
+  const bridge = window.prometheusUpdater;
+  if (!bridge || typeof bridge.getState !== 'function') {
+    applyDesktopUpdateState({ supported: false, status: 'unsupported' });
+    return;
+  }
+  bindDesktopUpdaterEvents();
+  try {
+    applyDesktopUpdateState(await bridge.getState());
+  } catch (error) {
+    applyDesktopUpdateState({ supported: false, status: 'error', message: error?.message || 'Could not read update settings.' });
+  }
+}
+
+async function setDesktopAutoUpdate(enabled) {
+  const bridge = window.prometheusUpdater;
+  if (!bridge || typeof bridge.setAutoUpdateEnabled !== 'function') return;
+  const toggle = desktopUpdaterElements().toggle;
+  if (toggle) toggle.disabled = true;
+  try {
+    applyDesktopUpdateState(await bridge.setAutoUpdateEnabled(enabled === true));
+  } catch (error) {
+    applyDesktopUpdateState({ status: 'error', message: error?.message || 'Could not save automatic update preference.' });
+  }
+}
+
+function toggleDesktopAutoUpdate() {
+  return setDesktopAutoUpdate(_desktopUpdaterState.autoUpdateEnabled === false);
+}
+
+async function checkDesktopForUpdates() {
+  const bridge = window.prometheusUpdater;
+  if (!bridge || typeof bridge.checkForUpdates !== 'function') return;
+  try {
+    applyDesktopUpdateState({ status: 'checking', message: 'Checking for updates…' });
+    applyDesktopUpdateState(await bridge.checkForUpdates());
+  } catch (error) {
+    applyDesktopUpdateState({ status: 'error', message: error?.message || 'Update check failed.' });
+  }
+}
+
+async function downloadDesktopUpdate() {
+  const bridge = window.prometheusUpdater;
+  if (!bridge || typeof bridge.downloadUpdate !== 'function') return;
+  try {
+    applyDesktopUpdateState({ status: 'downloading', message: 'Downloading update…' });
+    applyDesktopUpdateState(await bridge.downloadUpdate());
+  } catch (error) {
+    applyDesktopUpdateState({ status: 'error', message: error?.message || 'Update download failed.' });
+  }
+}
+
+async function installDesktopUpdate() {
+  const bridge = window.prometheusUpdater;
+  if (!bridge || typeof bridge.installUpdate !== 'function') return;
+  try {
+    applyDesktopUpdateState({ status: 'installing', message: 'Closing Prometheus to install the update…' });
+    applyDesktopUpdateState(await bridge.installUpdate());
+  } catch (error) {
+    applyDesktopUpdateState({ status: 'error', message: error?.message || 'Update installation failed.' });
+  }
+}
+
 function setSettingsTab(tab) {
+  if (tab === 'credentials') tab = 'search';
+  if (tab === 'migration') {
+    // Keep the old navigation target working while the durable P11-37 flow
+    // lives in General. The legacy migration service remains available to
+    // existing callers, but users land on the reviewed import controls.
+    window.settingsLegacyMigrationNotice = true;
+    tab = 'system';
+  }
   window.settingsTab = tab;
-  const tabs = ['system', 'heartbeat', 'search', 'credentials', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
+  const tabs = ['system', 'appearance', 'heartbeat', 'search', 'security', 'migration', 'models', 'agents', 'channels', 'integrations', 'shortcuts', 'pairing'];
+  const titles = {
+    system: 'General',
+    appearance: 'Appearance',
+    heartbeat: 'Heartbeat',
+    search: 'Search',
+    security: 'Security',
+    migration: 'Migration',
+    models: 'Models',
+    agents: 'Agents',
+    channels: 'Channels',
+    integrations: 'Integrations',
+    shortcuts: 'Keyboard shortcuts',
+    pairing: 'Pairing',
+  };
+  const pageTitle = document.getElementById('settings-page-title');
+  if (pageTitle) pageTitle.textContent = titles[tab] || 'General';
   const pendingLoads = [];
 
   tabs.forEach(t => {
     const btn = document.getElementById(`settings-tab-${t}`);
     const panel = document.getElementById(`settings-panel-${t}`);
     if (btn) {
-      btn.style.background = (t === tab) ? '#eaf2ff' : '#fff';
-      btn.style.borderColor = (t === tab) ? '#bdd3f6' : 'var(--line)';
-      btn.style.color = (t === tab) ? '#0d4faf' : 'var(--muted)';
+      btn.classList.toggle('active', t === tab);
     }
     if (panel) {
-      if (t === tab) {
-        const gridTabs = ['system', 'search', 'models'];
+        if (t === tab) {
+        const gridTabs = ['system', 'appearance', 'search', 'models'];
         panel.style.display = gridTabs.includes(t) ? 'block' : 'block';
-        if (t === 'system' && typeof window.renderThemePicker === 'function') window.renderThemePicker();
+        if (t === 'appearance' && typeof window.renderAppearanceSettings === 'function') window.renderAppearanceSettings();
+        if (t === 'system') {
+          pendingLoads.push(loadDesktopUpdateSettings());
+          wireAutoSettleControls();
+          pendingLoads.push(loadAutoSettleSettings());
+          pendingLoads.push(loadExternalImportJobs());
+          pendingLoads.push(loadExternalImportDiscovery());
+        }
         if (t === 'heartbeat') {
           if (!window.heartbeatSettingsLoaded) pendingLoads.push(loadHeartbeatSettings());
           else if (window.heartbeatEditor) window.heartbeatEditor.refresh();
@@ -359,7 +530,13 @@ function setSettingsTab(tab) {
         if (t === 'models') pendingLoads.push(loadModelSettings());
         if (t === 'agents') pendingLoads.push(loadAgentsTab());
         if (t === 'integrations') pendingLoads.push(loadIntegrationsTab());
-        if (t === 'credentials') pendingLoads.push(loadCredentialsTab());
+        if (t === 'search') {
+          pendingLoads.push(Promise.all([loadSearchSettingsSummary(), loadCredFields()]).then(() => {
+            window._settingsSearchLoadedToUI = true;
+          }).catch(() => {
+            window._settingsSearchLoadedToUI = false;
+          }));
+        }
         if (t === 'security') pendingLoads.push(loadSecuritySettings());
         if (t === 'migration') pendingLoads.push(loadMigrationPanel());
         if (t === 'shortcuts') pendingLoads.push(loadShortcutsPanel());
@@ -372,6 +549,14 @@ function setSettingsTab(tab) {
 
   if (pendingLoads.length) {
     Promise.allSettled(pendingLoads).catch(() => {});
+  }
+  if (tab === 'system' && window.settingsLegacyMigrationNotice) {
+    window.settingsLegacyMigrationNotice = false;
+    setTimeout(() => {
+      const target = document.getElementById('settings-external-import');
+      if (target) target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      externalImportStatus('conversation', 'info', 'Migration now lives here. The older migration entry point remains compatible.');
+    }, 0);
   }
 }
 
@@ -697,9 +882,10 @@ function applyCredentialFields(s = {}) {
   const cxEl = document.getElementById('cred-google-cx');
   if (cxEl) {
     cxEl.value = s.google_cx || '';
-    const labelEl = cxEl.previousElementSibling;
+    const labelEl = document.querySelector('label[for="cred-google-cx"]') || cxEl.previousElementSibling;
     if (labelEl?.tagName === 'LABEL') {
-      labelEl.innerHTML = 'Google CSE ID <span style="font-weight:400;color:var(--muted)">(stored in vault for persistence)</span>';
+      const labelText = labelEl.querySelector('span:first-child');
+      if (labelText) labelText.textContent = 'Google CSE ID';
     }
   }
 }
@@ -749,8 +935,6 @@ function applyCredentialVaultLog(data = {}) {
 
 function loadCredentialsTab() {
   loadCredFields().catch(() => {});
-  loadCredVaultStatus().catch(() => {});
-  loadCredVaultLog().catch(() => {});
 }
 
 async function loadCredFields() {
@@ -1415,6 +1599,37 @@ function setVisibleProviderPanel(providerId) {
   });
 }
 
+function syncProviderStateSummary(providerOverride) {
+  const provider = String(providerOverride || document.getElementById('settings-llm-provider')?.value || '').trim();
+  const modelIds = {
+    ollama: 'settings-primary-model',
+    llama_cpp: 'settings-llamacpp-model',
+    lm_studio: 'settings-lmstudio-model',
+    openai: 'settings-openai-model',
+    openai_codex: 'settings-codex-model',
+    anthropic: 'settings-anthropic-model',
+    perplexity: 'settings-perplexity-model',
+    gemini: 'settings-gemini-model',
+  };
+  const effortIds = {
+    openai: 'settings-openai-effort',
+    openai_codex: 'settings-codex-effort',
+    anthropic: 'settings-anthropic-effort',
+    perplexity: 'settings-perplexity-effort',
+  };
+  const model = String(document.getElementById(modelIds[provider])?.value || '').trim();
+  const effort = String(document.getElementById(effortIds[provider])?.value || '').trim();
+  const speed = String(document.getElementById(
+    provider === 'openai_codex' ? 'settings-codex-speed' : 'settings-' + provider + '-speed'
+  )?.value || 'standard').trim();
+  const modelEl = document.getElementById('settings-provider-state-model');
+  const reasoningEl = document.getElementById('settings-provider-state-reasoning');
+  const speedEl = document.getElementById('settings-provider-state-speed');
+  if (modelEl) modelEl.textContent = model ? formatModelDisplayName(model, provider) : 'Provider default';
+  if (reasoningEl) reasoningEl.textContent = effort || 'Provider default';
+  if (speedEl) speedEl.textContent = speed === 'fast' && supportsFastSpeed(provider, model) ? 'Fast' : 'Standard';
+}
+
 function hydrateBuiltInProviderAccountControls() {
   for (const providerId of ['openai', 'openai_codex', 'anthropic']) {
     const panel = document.getElementById(getProviderPanelId(providerId));
@@ -1466,6 +1681,7 @@ async function ensureProviderCatalogUIReady() {
 function onProviderChange() {
   const provider = document.getElementById('settings-llm-provider').value;
   setVisibleProviderPanel(provider);
+  syncProviderStateSummary(provider);
   if (provider === 'openai') {
     refreshOpenAIModels(true).catch(() => {});
   } else if (provider === 'anthropic') {
@@ -1497,6 +1713,7 @@ function scheduleModelStatusRefresh(prov) {
 }
 
 async function loadModelSettings() {
+  ensureModelsSections();
   window._llmSettingsLoadedToUI = false;
   const providerBoot = ensureProviderCatalogUIReady()
     .then(() => fetchCredentialedModelProviderIds(true))
@@ -1547,7 +1764,7 @@ async function loadModelSettings() {
       if (pc.openai?.model) { const s = document.getElementById('settings-openai-model'); if (s) s.value = pc.openai.model; }
       { const s = document.getElementById('settings-openai-effort'); if (s) s.value = pc.openai?.reasoning_effort || ''; }
       { const s = document.getElementById('settings-openai-speed'); if (s) s.value = pc.openai?.speed || 'standard'; }
-      { const s = document.getElementById('settings-openai-tool-choice'); if (s) s.value = pc.openai?.tool_choice || 'required'; }
+      { const s = document.getElementById('settings-openai-tool-choice'); if (s) s.value = 'auto'; }
       if (pc.openai_codex?.model) { const s = document.getElementById('settings-codex-model'); if (s) s.value = pc.openai_codex.model; }
       { const s = document.getElementById('settings-codex-effort'); if (s) s.value = pc.openai_codex?.reasoning_effort || ''; }
       { const s = document.getElementById('settings-codex-speed'); if (s) s.value = pc.openai_codex?.speed || 'standard'; }
@@ -1588,6 +1805,7 @@ async function loadModelSettings() {
       window.syncProviderReasoningControls?.('openai');
       window.syncProviderReasoningControls?.('openai_codex');
       window.syncProviderReasoningControls?.('anthropic');
+      syncProviderStateSummary(prov);
 
       Promise.allSettled([
         loadAgentModelDefaults(),
@@ -1801,6 +2019,25 @@ function renderCommandPermissionGrants(grants) {
   }).join('');
 }
 
+function toggleCommandPermissionList() {
+  const details = document.getElementById('settings-command-permissions-details');
+  const toggle = document.getElementById('settings-command-permissions-toggle');
+  if (!details || !toggle) return;
+  const isOpen = !details.hidden;
+  details.hidden = isOpen;
+  toggle.setAttribute('aria-expanded', String(!isOpen));
+  toggle.textContent = isOpen ? 'View commands' : 'Hide commands';
+}
+
+function resetCommandPermissionListVisibility() {
+  const details = document.getElementById('settings-command-permissions-details');
+  const toggle = document.getElementById('settings-command-permissions-toggle');
+  if (!details || !toggle) return;
+  details.hidden = true;
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.textContent = 'View commands';
+}
+
 async function loadSecuritySettings() {
   const statusEl = document.getElementById('settings-security-status');
   window._settingsSecurityLoadedToUI = false;
@@ -1978,7 +2215,7 @@ function buildProviderPayload(providerOverride) {
   providers.llama_cpp = { endpoint: document.getElementById('settings-llamacpp-endpoint')?.value || 'http://localhost:8080',  model: document.getElementById('settings-llamacpp-model')?.value  || '' };
   providers.lm_studio = { endpoint: document.getElementById('settings-lmstudio-endpoint')?.value || 'http://localhost:1234',  model: document.getElementById('settings-lmstudio-model')?.value   || '' };
   const openaiEffort = document.getElementById('settings-openai-effort')?.value || '';
-  const openaiToolChoice = document.getElementById('settings-openai-tool-choice')?.value || 'required';
+  const openaiToolChoice = 'auto';
   providers.openai    = { api_key:  document.getElementById('settings-openai-key')?.value         || '',                       model: document.getElementById('settings-openai-model')?.value      || 'gpt-4o' };
   if (openaiEffort) providers.openai.reasoning_effort = openaiEffort;
   providers.openai.speed = document.getElementById('settings-openai-speed')?.value === 'fast' ? 'fast' : 'standard';
@@ -2092,8 +2329,9 @@ async function startCodexOAuth() {
       return;
     }
     if (data?.authUrl) {
-      // Open in system browser — Electron routes window.open via shell.openExternal
-      window.open(data.authUrl, '_blank');
+      // OAuth must stay in the system browser; this is an intentional external flow.
+      if (typeof window.openPrometheusExternalLink === 'function') window.openPrometheusExternalLink(data.authUrl, { target: '_blank' });
+      else window.open(data.authUrl, '_blank');
       setSettingsStatus(statusEl, 'info', 'Waiting for browser authorization…');
       _codexPollTimer = setTimeout(_pollCodexOAuth, 2000);
     } else {
@@ -2192,7 +2430,8 @@ async function startXaiOAuth() {
       return;
     }
     if (data?.authUrl) {
-      window.open(data.authUrl, '_blank');
+      if (typeof window.openPrometheusExternalLink === 'function') window.openPrometheusExternalLink(data.authUrl, { target: '_blank' });
+      else window.open(data.authUrl, '_blank');
       setSettingsStatus(statusEl, 'info', 'Waiting for xAI browser authorization. If xAI shows a code, paste it below.');
       _xaiPollTimer = setTimeout(_pollXaiOAuth, 2000);
     } else {
@@ -2320,7 +2559,8 @@ async function startXApiOAuth() {
       return;
     }
     if (data?.authUrl) {
-      window.open(data.authUrl, '_blank');
+      if (typeof window.openPrometheusExternalLink === 'function') window.openPrometheusExternalLink(data.authUrl, { target: '_blank' });
+      else window.open(data.authUrl, '_blank');
       setSettingsStatus(statusEl, 'info', 'Waiting for X browser authorization...');
       _xApiPollTimer = setTimeout(_pollXApiOAuth, 2000);
     } else {
@@ -2433,7 +2673,8 @@ async function onAnthropicUsageTrackingToggle(checked) {
   try {
     const data = await api('/api/settings/anthropic/usage-tracking/start', { method: 'POST', body: '{}' });
     if (data?.authorizeUrl) {
-      window.open(data.authorizeUrl, '_blank', 'noopener');
+      if (typeof window.openPrometheusExternalLink === 'function') window.openPrometheusExternalLink(data.authorizeUrl, { target: '_blank', features: 'noopener' });
+      else window.open(data.authorizeUrl, '_blank', 'noopener');
       if (flow) flow.style.display = 'block';
       if (statusEl) statusEl.textContent = 'Approve in the browser, then paste the code below.';
     } else {
@@ -2576,13 +2817,17 @@ async function refreshOllamaModels() { await refreshProviderModels(); }
 async function openSettings(tab) {
   _scheduleSettingsVisibilityRefresh();
   document.getElementById('settings-modal').style.display = 'flex';
+  document.body.classList.add('settings-page-open');
+  const settingsSearch = document.getElementById('settings-search-input');
+  if (settingsSearch) {
+    settingsSearch.value = '';
+    if (typeof window.filterSettingsTabs === 'function') window.filterSettingsTabs('');
+  }
   window._settingsPathsLoadedToUI = false;
   window._settingsSearchLoadedToUI = false;
-  const saveBtn = document.getElementById('settings-save-btn');
-  if (saveBtn) {
-    saveBtn.disabled = false;
-    saveBtn.textContent = 'Save';
-  }
+  window._settingsCredentialsLoadedToUI = false;
+  resetCommandPermissionListVisibility();
+  setSettingsSaveFeedback();
   const targetTab = tab || window.settingsTab || 'system';
   setSettingsTab(targetTab);
   const bootJobs = [
@@ -2619,23 +2864,610 @@ async function openSettings(tab) {
       window._settingsSearchLoadedToUI = false;
     }),
     loadSessionCompactionSettings().catch(() => {}),
+    loadAutoSettleSettings().catch(() => {}),
   ];
   Promise.allSettled(bootJobs).catch(() => {});
 }
 
 function closeSettings() {
-  const saveBtn = document.getElementById('settings-save-btn');
-  if (saveBtn) {
-    saveBtn.disabled = false;
-    saveBtn.textContent = 'Save';
-  }
+  setSettingsSaveFeedback();
   document.getElementById('settings-modal').style.display = 'none';
+  document.body.classList.remove('settings-page-open');
   document.body.classList.remove('pm-mobile-overlay-open');
   channelsStatusLoaded = false;
   _settingsAgentsLoadedSelection = '';
 }
 
-// -- Migration panel -------------------------------------------------------------------------------------------------------------
+// -- P11-37 external import panel -----------------------------------------------------------------------------------------------
+let externalImportJobs = [];
+const selectedExternalImportJobs = { conversation: null, setup: null };
+let externalImportDiscoverySources = [];
+let externalImportDiscoveryLoading = false;
+let externalImportDiscoveryError = '';
+let externalImportBatchState = null;
+const externalImportConversationSelections = new Map();
+
+function formatExternalImportBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 100 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function externalImportDiscoverySourceTitle(source) {
+  const label = String(source?.label || source?.provider || 'Source').trim();
+  return label.replace(/\s+setup$/i, '');
+}
+
+function externalImportDiscoverySourceDetail(source) {
+  const kind = source?.kind === 'setup' ? 'setup' : 'conversation';
+  const count = kind === 'setup' ? Number(source?.setupFileCount || 0) : Number(source?.transcriptCount || 0);
+  const unit = kind === 'setup' ? (count === 1 ? 'setup file' : 'setup files') : (count === 1 ? 'transcript' : 'transcripts');
+  const size = formatExternalImportBytes(source?.bytes);
+  const batches = Number(source?.batches?.length || 0);
+  return `${count} ${unit} found${size ? ` · ${size}` : ''}${batches > 1 ? ` · ${batches} safe batches` : ''}`;
+}
+
+function renderExternalImportDiscovery() {
+  const el = document.getElementById('settings-import-discovery');
+  if (!el) return;
+  if (externalImportDiscoveryLoading) {
+    el.innerHTML = '<div class="settings-import-discovery-empty">Scanning known local agent folders…</div>';
+    return;
+  }
+  if (externalImportDiscoveryError) {
+    el.innerHTML = `<div class="settings-import-discovery-empty settings-import-discovery-empty--error">${escHtml(externalImportDiscoveryError)} <button class="settings-inline-link" type="button" onclick="loadExternalImportDiscovery()">Try again</button></div>`;
+    return;
+  }
+  if (!externalImportDiscoverySources.length) {
+    el.innerHTML = '<div class="settings-import-discovery-empty">No supported local transcripts or setup files were found. You can still choose an export or folder below.</div>';
+    return;
+  }
+  el.innerHTML = externalImportDiscoverySources.map((source) => {
+    const sourceId = String(source?.id || '');
+    const kind = source?.kind === 'setup' ? 'setup' : 'conversation';
+    const previewable = source?.previewable !== false;
+    const batchable = kind === 'conversation' && source?.batchable === true && Array.isArray(source?.batches) && source.batches.length > 0;
+    const action = previewable ? (kind === 'setup' ? 'Preview setup' : 'Preview chats') : batchable ? 'Preview projects + chats' : 'Choose smaller folder';
+    const notes = Array.isArray(source?.notes) ? source.notes.slice(0, 2) : [];
+    const noteHtml = notes.length ? `<div class="settings-import-discovery-notes">${notes.map((note) => `<span>${escHtml(note)}</span>`).join('')}</div>` : '';
+    const capped = source?.capped ? '<span class="settings-import-discovery-warning">bounded scan</span>' : '';
+    const buttonAttrs = previewable
+      ? `onclick="previewDiscoveredExternalImport('${escHtml(sourceId)}')"`
+      : batchable
+        ? `onclick="previewDiscoveredExternalImportBatches('${escHtml(sourceId)}','projects')"`
+        : `disabled title="${escHtml(String(source?.previewBlockReason || 'Choose a smaller source folder for preview.'))}"`;
+    const projectButton = kind === 'conversation' && source?.supportsProjects && !previewable && batchable
+      ? ''
+      : kind === 'conversation' && source?.supportsProjects
+        ? `<button class="settings-inline-link" type="button" onclick="previewDiscoveredExternalImport('${escHtml(sourceId)}','projects')">Preview projects + chats</button>`
+      : '';
+    const batchButton = batchable
+      ? `<button class="settings-inline-link" type="button" onclick="previewDiscoveredExternalImportBatches('${escHtml(sourceId)}','${previewable ? 'projects' : 'sessions'}')">${previewable ? 'Preview all chats in safe batches' : 'Preview chats only in safe batches'}</button>`
+      : '';
+    return `
+      <article class="settings-import-discovery-source">
+        <div class="settings-import-discovery-source-copy">
+          <div class="settings-import-discovery-source-title"><strong>${escHtml(externalImportDiscoverySourceTitle(source))}</strong>${capped}</div>
+          <div class="settings-import-discovery-source-detail">${escHtml(externalImportDiscoverySourceDetail(source))}</div>
+          ${noteHtml}
+        </div>
+        <div class="settings-import-discovery-actions">
+          <button class="btn btn-sm" type="button" ${buttonAttrs}>${action}</button>
+          ${projectButton}
+          ${batchButton}
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+async function loadExternalImportDiscovery() {
+  externalImportDiscoveryLoading = true;
+  externalImportDiscoveryError = '';
+  renderExternalImportDiscovery();
+  try {
+    const data = await api('/api/imports/discover', { timeoutMs: 30000 });
+    externalImportDiscoverySources = Array.isArray(data?.sources) ? data.sources : [];
+  } catch (error) {
+    externalImportDiscoverySources = [];
+    externalImportDiscoveryError = `Could not scan local agent folders: ${error.message}`;
+  } finally {
+    externalImportDiscoveryLoading = false;
+    renderExternalImportDiscovery();
+  }
+}
+
+function externalImportStatus(kind, type, message) {
+  const el = document.getElementById(`settings-import-${kind}-status`);
+  if (!el) return;
+  setSettingsStatus(el, type, message);
+}
+
+function externalImportJobLabel(job) {
+  const status = String(job?.status || '').replace(/_/g, ' ');
+  const phase = String(job?.progress?.phase || '').replace(/_/g, ' ');
+  const completed = Number(job?.progress?.completed || 0);
+  const total = Number(job?.progress?.total || 0);
+  if (status === 'preview ready') return 'Preview ready — nothing committed yet.';
+  if (status === 'completed') return job?.conversationMode === 'projects'
+    ? 'Imported as Prometheus projects with linked threads.'
+    : 'Imported and available as Prometheus threads.';
+  if (status === 'partial') return `Partially imported — ${completed}/${total || completed} items processed.`;
+  if (status === 'failed') return `Import failed${job?.error ? `: ${job.error}` : '.'}`;
+  if (status === 'rolled back') return 'Rolled back; imported active state was removed.';
+  if (status === 'deleted') return 'Import record deleted.';
+  return `${phase || status || 'working'}${total ? ` — ${completed}/${total}` : ''}`;
+}
+
+function renderExternalImportJob(kind, job) {
+  const el = document.getElementById(`settings-import-${kind}-job`);
+  if (!el) return;
+  if (!job) {
+    el.innerHTML = '<div class="settings-import-empty">No staged import. Choose a local export or configuration folder and build a preview.</div>';
+    return;
+  }
+  const preview = job.preview || {};
+  const result = job.result || {};
+  const warnings = Array.isArray(preview.warnings) ? preview.warnings : [];
+  const projectSummaries = Array.isArray(preview.projectSummaries) ? preview.projectSummaries : [];
+  const status = String(job.status || '');
+  const jobId = String(job.id || '');
+  const canConfirm = status === 'preview_ready';
+  const selectedCount = kind === 'conversation' ? externalImportSelectedConversationIds(job).size : 0;
+  const canRetry = status === 'failed' || status === 'partial';
+  const canRollback = status === 'completed' || status === 'partial';
+  const canDelete = status === 'rolled_back' || status === 'failed' || status === 'deleted';
+  const counts = kind === 'conversation'
+    ? `${Number(preview.conversations || 0)} conversations · ${Number(preview.projects || 0)} projects · ${Number(preview.messages || 0)} messages · ${Number(preview.historicalEvents || 0)} historical events · ${Number(preview.resources || 0)} resources`
+    : `${Number(preview.mcpServers || 0)} MCP servers · ${Number(preview.setupFiles || 0)} setup files · ${Number(preview.secretsRedacted || 0)} secrets held for reauthorization · ${Number(preview.conflicts || 0)} conflicts`;
+  const summaryHtml = kind === 'conversation' ? renderExternalImportConversationSelection(job) : '';
+  const projectSummaryHtml = kind === 'conversation' && projectSummaries.length
+    ? `<div class="settings-import-preview-list settings-import-project-preview-list">${projectSummaries.map((item) => `<div><span>${escHtml(item.name || item.id || 'Project')}</span><small>${Number(item.conversations || 0)} chats${Number(item.messages || 0) ? ` · ${Number(item.messages)} messages` : ''}${item.sourcePath ? ` · ${escHtml(item.sourcePath)}` : ''}</small></div>`).join('')}</div>`
+    : '';
+  const setupFiles = Array.isArray(job.setup?.files) ? job.setup.files.slice(0, 6) : [];
+  const setupSummaryHtml = kind === 'setup' && setupFiles.length
+    ? `<div class="settings-import-preview-list">${setupFiles.map((item) => `<div><span>${escHtml(item.relativePath || 'setup file')}</span><small>${escHtml(String(item.category || 'unknown').replace(/_/g, ' '))}</small></div>`).join('')}</div>`
+    : '';
+  const warningHtml = warnings.length
+    ? `<div class="settings-import-warning"><strong>Review warnings</strong><ul>${warnings.slice(0, 6).map((warning) => `<li>${escHtml(warning)}</li>`).join('')}</ul></div>`
+    : '';
+  const resultHtml = (result.sessionIds?.length || result.projectIds?.length || result.mcpServerIds?.length || result.failures?.length)
+    ? `<div class="settings-import-result">${kind === 'conversation' ? `${Number(result.sessionIds?.length || 0)} Prometheus threads${result.projectIds?.length ? ` · ${Number(result.projectIds.length)} projects` : ''}` : `${Number(result.mcpServerIds?.length || 0)} MCP configurations`} · ${Number(result.skipped || 0)} skipped${result.failures?.length ? ` · ${Number(result.failures.length)} failures` : ''}</div>`
+    : '';
+  el.innerHTML = `
+    <div class="settings-import-job-head"><span class="settings-import-job-status settings-import-job-status--${escHtml(status)}">${escHtml(status.replace(/_/g, ' ') || 'staged')}</span><span>${escHtml(externalImportJobLabel(job))}</span></div>
+    <div class="settings-import-counts">${escHtml(counts)}</div>
+    ${summaryHtml}
+    ${projectSummaryHtml}
+    ${setupSummaryHtml}
+    ${warningHtml}
+    ${resultHtml}
+    <div class="settings-import-actions">
+      ${canConfirm && kind === 'conversation' ? `<button class="btn btn-sm" onclick="confirmExternalImportJob('${escHtml(jobId)}','${kind}')" ${selectedCount ? '' : 'disabled'}>Import selected chats${selectedCount ? ` (${selectedCount})` : ''}</button>` : ''}
+      ${canConfirm && kind !== 'conversation' ? `<button class="btn btn-sm" onclick="confirmExternalImportJob('${escHtml(jobId)}','${kind}')">Confirm import</button>` : ''}
+      ${canRetry ? `<button class="btn btn-sm" onclick="retryExternalImportJob('${escHtml(jobId)}','${kind}')">Retry</button>` : ''}
+      ${canRollback ? `<button class="settings-inline-link" onclick="rollbackExternalImportJob('${escHtml(jobId)}','${kind}')">Roll back</button>` : ''}
+      ${canDelete ? `<button class="settings-danger-button" onclick="deleteExternalImportJob('${escHtml(jobId)}','${kind}')">Delete record</button>` : ''}
+    </div>
+  `;
+}
+
+async function loadExternalImportJobs() {
+  try {
+    const data = await api('/api/imports/jobs');
+    externalImportJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+    for (const kind of ['conversation', 'setup']) {
+      const latest = externalImportJobs.find((job) => job.kind === kind && job.status !== 'deleted') || null;
+      selectedExternalImportJobs[kind] = latest;
+      renderExternalImportJob(kind, latest);
+    }
+  } catch (error) {
+    externalImportStatus('conversation', 'error', `Could not load import history: ${error.message}`);
+    externalImportStatus('setup', 'error', `Could not load import history: ${error.message}`);
+  }
+}
+
+function externalImportForm(kind, discoveredSource = null, requestedConversationMode = '') {
+  const path = String(discoveredSource?.sourcePath || document.getElementById(`settings-import-${kind}-path`)?.value || '').trim();
+  const sourceLabel = String(document.getElementById(`settings-import-${kind}-label`)?.value || '').trim();
+  const sourceAccountId = String(document.getElementById(`settings-import-${kind}-account`)?.value || '').trim();
+  const adapter = kind === 'setup'
+    ? 'setup-config'
+    : String(discoveredSource?.adapter || document.getElementById('settings-import-conversation-adapter')?.value || '').trim();
+  const sourceFiles = Array.isArray(discoveredSource?.sourceFiles)
+    ? discoveredSource.sourceFiles.filter((value) => typeof value === 'string' && value.trim()).slice(0, 8000)
+    : [];
+  return {
+    kind,
+    sourcePath: path,
+    sourceLabel: sourceLabel || String(discoveredSource?.label || '').trim() || undefined,
+    sourceAccountId: sourceAccountId || undefined,
+    adapter: adapter || undefined,
+    conversationMode: kind === 'conversation'
+      ? (requestedConversationMode || String(discoveredSource?.supportsProjects ? 'projects' : document.getElementById('settings-import-conversation-mode')?.value || 'sessions'))
+      : undefined,
+    overwrite: kind === 'setup' && document.getElementById('settings-import-setup-overwrite')?.checked === true,
+    ...(sourceFiles.length ? { sourceFiles } : {}),
+  };
+}
+
+async function previewExternalImportJob(kind, discoveredSource = null, requestedConversationMode = '') {
+  const body = externalImportForm(kind, discoveredSource, requestedConversationMode);
+  if (!body.sourcePath) {
+    externalImportStatus(kind, 'error', 'Choose a detected source or enter a local export, session folder, or setup folder path first.');
+    return;
+  }
+  externalImportStatus(kind, 'info', 'Staging and parsing. No Prometheus state changes until you confirm.');
+  try {
+    const data = await api('/api/imports/jobs', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      timeoutMs: 120000,
+    });
+    selectedExternalImportJobs[kind] = data.job;
+    renderExternalImportJob(kind, data.job);
+    externalImportStatus(kind, 'success', data.idempotent ? 'Existing matching preview reused.' : 'Preview ready. Review it, then confirm explicitly.');
+  } catch (error) {
+    externalImportStatus(kind, 'error', `Preview failed: ${error.message}`);
+  }
+}
+
+async function previewDiscoveredExternalImport(sourceId, mode = 'sessions') {
+  const source = externalImportDiscoverySources.find((item) => String(item?.id || '') === String(sourceId || ''));
+  if (!source) {
+    externalImportDiscoveryError = 'That detected source is no longer available. Scan again to refresh the list.';
+    renderExternalImportDiscovery();
+    return;
+  }
+  await previewExternalImportJob(source.kind === 'setup' ? 'setup' : 'conversation', source, mode);
+}
+
+function externalImportConversationSummaries(job) {
+  const summaries = Array.isArray(job?.preview?.conversationSummaries) ? [...job.preview.conversationSummaries] : [];
+  return summaries.sort((a, b) => {
+    const updatedDelta = (Number(b?.updatedAt) || 0) - (Number(a?.updatedAt) || 0);
+    return updatedDelta || String(a?.id || '').localeCompare(String(b?.id || ''));
+  });
+}
+
+function externalImportSelectedConversationIds(job) {
+  const jobId = String(job?.id || '');
+  const available = new Set(externalImportConversationSummaries(job).map((item) => String(item?.id || '')).filter(Boolean));
+  const existing = externalImportConversationSelections.get(jobId);
+  if (existing) return new Set([...existing].filter((id) => available.has(id)));
+  const persisted = Array.isArray(job?.selectedConversationIds) ? job.selectedConversationIds : [];
+  const selected = new Set(persisted.map((value) => String(value || '')).filter((id) => available.has(id)));
+  externalImportConversationSelections.set(jobId, selected);
+  return new Set(selected);
+}
+
+function externalImportPreviewTimestamp(value) {
+  const timestamp = Number(value || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return 'date unavailable';
+  return new Date(timestamp).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function externalImportPreviewDatetime(value) {
+  const timestamp = Number(value || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+  return new Date(timestamp).toISOString();
+}
+
+function renderExternalImportConversationSelection(job, compact = false) {
+  if (!job || job.kind !== 'conversation') return '';
+  const summaries = externalImportConversationSummaries(job);
+  if (!summaries.length) return '';
+  const selected = externalImportSelectedConversationIds(job);
+  const preview = job.preview || {};
+  const total = Number(preview.conversationSummariesTotal || preview.conversations || summaries.length);
+  const canSelect = job.status === 'preview_ready';
+  const truncated = preview.conversationSummariesTruncated === true || total > summaries.length;
+  const rows = summaries.map((item) => {
+    const id = String(item?.id || '');
+    const title = String(item?.title || id || 'Untitled chat');
+    const project = String(item?.projectName || '').trim();
+    const detail = `${Number(item?.messages || 0)} messages${Number(item?.events || 0) ? ` · ${Number(item.events)} historical events` : ''}${project ? ` · ${project}` : ''}`;
+    return `
+      <label class="settings-import-selection-row">
+        <input type="checkbox" data-import-job-id="${escHtml(job.id)}" data-conversation-id="${escHtml(id)}" ${selected.has(id) ? 'checked' : ''} ${canSelect ? '' : 'disabled'} onchange="toggleExternalImportConversation(this)" />
+        <span class="settings-import-selection-copy"><strong>${escHtml(title)}</strong><small>${escHtml(detail)}</small></span>
+        <time datetime="${escHtml(externalImportPreviewDatetime(item?.updatedAt || item?.createdAt))}">${escHtml(externalImportPreviewTimestamp(item?.updatedAt || item?.createdAt))}</time>
+      </label>`;
+  }).join('');
+  return `
+    <section class="settings-import-selection${compact ? ' settings-import-selection--compact' : ''}">
+      <div class="settings-import-selection-head">
+        <div><strong>Select chats to import</strong><small>${selected.size}/${total} selected · newest first</small></div>
+        <div class="settings-import-selection-actions">
+          <button class="settings-inline-link" type="button" data-import-job-id="${escHtml(job.id)}" onclick="setExternalImportConversationSelection(this,true)" ${canSelect ? '' : 'disabled'}>Select all</button>
+          <button class="settings-inline-link" type="button" data-import-job-id="${escHtml(job.id)}" onclick="setExternalImportConversationSelection(this,false)" ${canSelect ? '' : 'disabled'}>Clear</button>
+        </div>
+      </div>
+      ${canSelect ? '<div class="settings-import-inline-note">Nothing imports until you select chats and confirm.</div>' : ''}
+      ${truncated ? `<div class="settings-import-inline-note">Showing ${summaries.length} of ${total} chats in this preview. Narrow the source if you need a smaller review set.</div>` : ''}
+      <div class="settings-import-selection-list">${rows}</div>
+    </section>`;
+}
+
+function externalImportJobForSelection(jobId) {
+  const id = String(jobId || '');
+  const batchJob = externalImportBatchState?.jobs.find((job) => String(job.id || '') === id);
+  if (batchJob) return batchJob;
+  if (String(selectedExternalImportJobs.conversation?.id || '') === id) return selectedExternalImportJobs.conversation;
+  return null;
+}
+
+function refreshExternalImportSelection(job) {
+  if (!job) return;
+  const isBatchJob = externalImportBatchState?.jobs.some((item) => String(item.id || '') === String(job.id || ''));
+  if (isBatchJob) {
+    renderExternalImportBatchJobs();
+  } else {
+    renderExternalImportJob('conversation', job);
+  }
+}
+
+function toggleExternalImportConversation(input) {
+  const job = externalImportJobForSelection(input?.dataset?.importJobId);
+  if (!job || job.status !== 'preview_ready') return;
+  const id = String(input?.dataset?.conversationId || '');
+  const selected = externalImportSelectedConversationIds(job);
+  if (input.checked) selected.add(id); else selected.delete(id);
+  externalImportConversationSelections.set(String(job.id), selected);
+  refreshExternalImportSelection(job);
+}
+
+function setExternalImportConversationSelection(button, shouldSelect) {
+  const job = externalImportJobForSelection(button?.dataset?.importJobId);
+  if (!job || job.status !== 'preview_ready') return;
+  const ids = externalImportConversationSummaries(job).map((item) => String(item?.id || '')).filter(Boolean);
+  externalImportConversationSelections.set(String(job.id), shouldSelect ? new Set(ids) : new Set());
+  refreshExternalImportSelection(job);
+}
+
+function renderExternalImportBatchJobs() {
+  const el = document.getElementById('settings-import-conversation-batches');
+  if (!el) return;
+  const state = externalImportBatchState;
+  if (!state || (!state.jobs.length && !state.running && !state.errors.length)) {
+    el.innerHTML = '';
+    return;
+  }
+  const jobs = state.jobs;
+  const ready = jobs.filter((job) => job.status === 'preview_ready');
+  const completed = jobs.filter((job) => job.status === 'completed');
+  const failed = jobs.filter((job) => ['failed', 'partial'].includes(job.status));
+  const totalConversations = jobs.reduce((sum, job) => sum + Number(job.preview?.conversations || 0), 0);
+  const totalMessages = jobs.reduce((sum, job) => sum + Number(job.preview?.messages || 0), 0);
+  const selectedReady = ready.filter((job) => externalImportSelectedConversationIds(job).size > 0);
+  const canConfirmAll = !state.running && selectedReady.length > 0 && failed.length === 0;
+  const rows = jobs.map((job) => {
+    const label = String(job.sourceLabel || job.id || 'Codex batch').replace(/^Codex\s*·\s*/i, '');
+    const preview = job.preview || {};
+    const selectedCount = externalImportSelectedConversationIds(job).size;
+    const action = job.status === 'preview_ready'
+      ? `<button class="settings-inline-link" type="button" onclick="confirmExternalImportBatchJob('${escHtml(job.id)}')" ${selectedCount ? '' : 'disabled'}>Import selected${selectedCount ? ` (${selectedCount})` : ''}</button>`
+      : job.status === 'completed'
+        ? `<button class="settings-inline-link" type="button" onclick="rollbackExternalImportBatchJob('${escHtml(job.id)}')">Roll back</button>`
+        : ['failed', 'partial'].includes(job.status)
+          ? `<button class="settings-inline-link" type="button" onclick="retryExternalImportBatchJob('${escHtml(job.id)}')">Retry</button>`
+        : '';
+    return `<div class="settings-import-batch-row"><div class="settings-import-batch-row-head"><strong>${escHtml(label)}</strong><small>${Number(preview.conversations || 0)} chats · ${Number(preview.messages || 0)} messages</small></div><span class="settings-import-batch-row-actions"><em>${escHtml(String(job.status || 'staged').replace(/_/g, ' '))}</em>${action}</span>${renderExternalImportConversationSelection(job, true)}</div>`;
+  }).join('');
+  const errors = state.errors.length
+    ? `<div class="settings-import-warning"><strong>Some batches could not be staged</strong><ul>${state.errors.slice(0, 8).map((error) => `<li>${escHtml(error)}</li>`).join('')}</ul></div>`
+    : '';
+  el.innerHTML = `
+    <div class="settings-import-batch-head"><strong>Codex batch plan</strong><span>${completed.length}/${jobs.length} imported</span></div>
+    <div class="settings-import-counts">${totalConversations} chats · ${totalMessages} messages · each batch has its own durable preview, retry, and rollback record.</div>
+    ${state.running ? `<div class="settings-import-inline-note">Building preview ${jobs.length + 1}… no Prometheus state has been committed.</div>` : ''}
+    ${errors}
+    <div class="settings-import-batch-list">${rows}</div>
+    ${canConfirmAll ? `<button class="btn btn-sm" type="button" onclick="confirmExternalImportBatches()">Confirm selected chats (${selectedReady.reduce((sum, job) => sum + externalImportSelectedConversationIds(job).size, 0)})</button>` : ''}
+  `;
+}
+
+async function previewDiscoveredExternalImportBatches(sourceId, mode = 'projects') {
+  const source = externalImportDiscoverySources.find((item) => String(item?.id || '') === String(sourceId || ''));
+  const batches = Array.isArray(source?.batches) ? source.batches : [];
+  if (!source || !batches.length) {
+    externalImportStatus('conversation', 'error', 'No safe Codex batches are available. Scan again or choose a smaller source folder.');
+    return;
+  }
+  externalImportBatchState = { source, mode, jobs: [], errors: [], running: true };
+  renderExternalImportBatchJobs();
+  externalImportStatus('conversation', 'info', `Building ${batches.length} bounded Codex previews. Nothing is committed yet.`);
+  for (const batch of batches) {
+    try {
+      const batchSource = {
+        ...source,
+        label: `${source.label} · ${batch.label}`,
+        sourceFiles: batch.sourceFiles,
+      };
+      const body = externalImportForm('conversation', batchSource, mode);
+      const data = await api('/api/imports/jobs', { method: 'POST', body: JSON.stringify(body), timeoutMs: 120000 });
+      externalImportBatchState.jobs.push(data.job);
+      selectedExternalImportJobs.conversation = data.job;
+    } catch (error) {
+      externalImportBatchState.errors.push(`${batch.label}: ${error.message}`);
+    }
+    renderExternalImportBatchJobs();
+  }
+  externalImportBatchState.running = false;
+  renderExternalImportBatchJobs();
+  const state = externalImportBatchState;
+  externalImportStatus('conversation', state.errors.length ? 'error' : 'success', state.errors.length ? 'Some Codex batches need attention.' : 'All Codex batches are previewed. Confirm when ready.');
+}
+
+function replaceExternalImportBatchJob(nextJob) {
+  if (!externalImportBatchState) return;
+  externalImportBatchState.jobs = externalImportBatchState.jobs.map((job) => String(job.id) === String(nextJob.id) ? nextJob : job);
+  selectedExternalImportJobs.conversation = nextJob;
+  renderExternalImportBatchJobs();
+}
+
+async function confirmExternalImportBatchJob(jobId, skipPrompt = false) {
+  const job = externalImportBatchState?.jobs.find((item) => String(item.id) === String(jobId));
+  if (!job || job.status !== 'preview_ready') return;
+  const conversationIds = [...externalImportSelectedConversationIds(job)];
+  if (!conversationIds.length) {
+    externalImportStatus('conversation', 'error', 'Select at least one chat in this batch before importing.');
+    return;
+  }
+  if (!skipPrompt) {
+    const ok = await new Promise((resolve) => showConfirm(`Import ${conversationIds.length} selected chat${conversationIds.length === 1 ? '' : 's'}?`, () => resolve(true), () => resolve(false), {
+      title: 'Confirm Codex batch import',
+      confirmText: 'Import selected',
+      details: 'Only the chats you selected will be committed. Historical tool activity remains historical-only and the batch can be rolled back independently.',
+    }));
+    if (!ok) return;
+  }
+  try {
+    const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/confirm`, { method: 'POST', body: JSON.stringify({ confirm: true, conversationIds }), timeoutMs: 120000 });
+    replaceExternalImportBatchJob(data.job);
+  } catch (error) {
+    externalImportStatus('conversation', 'error', `Codex batch import failed: ${error.message}`);
+  }
+}
+
+async function retryExternalImportBatchJob(jobId) {
+  const job = externalImportBatchState?.jobs.find((item) => String(item.id) === String(jobId));
+  if (!job || !['failed', 'partial'].includes(job.status)) return;
+  try {
+    const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST', timeoutMs: 120000 });
+    replaceExternalImportBatchJob(data.job);
+    externalImportStatus('conversation', data.job?.status === 'failed' ? 'error' : 'success', data.job?.status === 'preview_ready' ? 'Codex batch preview rebuilt.' : externalImportJobLabel(data.job));
+  } catch (error) {
+    externalImportStatus('conversation', 'error', `Codex batch retry failed: ${error.message}`);
+  }
+}
+
+async function confirmExternalImportBatches() {
+  const state = externalImportBatchState;
+  if (!state || state.running) return;
+  const ready = state.jobs.filter((job) => job.status === 'preview_ready' && externalImportSelectedConversationIds(job).size > 0);
+  if (!ready.length) return;
+  const totalMessages = ready.reduce((sum, job) => sum + Number(job.preview?.messages || 0), 0);
+  const totalSelected = ready.reduce((sum, job) => sum + externalImportSelectedConversationIds(job).size, 0);
+  const ok = await new Promise((resolve) => showConfirm(
+    `Import ${totalSelected} selected Codex chats?`,
+    () => resolve(true),
+    () => resolve(false),
+    { title: 'Confirm selected Codex chats', confirmText: 'Import selected chats', details: `${totalMessages} historical messages across ${ready.length} independently staged batches. Unselected chats remain in their previews.` },
+  ));
+  if (!ok) return;
+  state.running = true;
+  renderExternalImportBatchJobs();
+  for (const job of ready) await confirmExternalImportBatchJob(job.id, true);
+  state.running = false;
+  renderExternalImportBatchJobs();
+  externalImportStatus('conversation', 'success', 'Codex batch import finished. Review any remaining batch previews above.');
+  if (typeof window.loadChatSessions === 'function') await window.loadChatSessions();
+}
+
+async function rollbackExternalImportBatchJob(jobId) {
+  const job = externalImportBatchState?.jobs.find((item) => String(item.id) === String(jobId));
+  if (!job) return;
+  const ok = await new Promise((resolve) => showConfirm('Roll back this Codex batch?', () => resolve(true), () => resolve(false), { title: 'Roll back Codex batch', confirmText: 'Roll back' }));
+  if (!ok) return;
+  try {
+    const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/rollback`, { method: 'POST', body: JSON.stringify({ confirm: true }) });
+    replaceExternalImportBatchJob(data.job);
+    if (typeof window.loadChatSessions === 'function') await window.loadChatSessions();
+  } catch (error) {
+    externalImportStatus('conversation', 'error', `Codex batch rollback failed: ${error.message}`);
+  }
+}
+
+async function confirmExternalImportJob(jobId, kind) {
+  const job = selectedExternalImportJobs[kind];
+  if (!job || String(job.id) !== String(jobId)) return;
+  const conversationIds = kind === 'conversation' ? [...externalImportSelectedConversationIds(job)] : undefined;
+  if (kind === 'conversation' && !conversationIds.length) {
+    externalImportStatus(kind, 'error', 'Select at least one chat before importing.');
+    return;
+  }
+  const ok = await new Promise((resolve) => showConfirm(
+    kind === 'conversation' ? 'Import these conversations into Prometheus?' : 'Import this MCP/setup configuration?',
+    () => resolve(true),
+    () => resolve(false),
+    {
+      title: 'Confirm external import',
+      confirmText: 'Import',
+      details: kind === 'conversation'
+        ? (job.conversationMode === 'projects'
+          ? 'Detected source projects become normal Prometheus projects, with imported chats linked inside each project. Historical tool calls and reasoning are records only and will never execute. Source-session resume is not claimed.'
+          : 'Imported messages become normal Prometheus threads. Historical tool calls and reasoning are preserved as records only and will never execute. Source-session resume is not claimed.')
+        : 'Non-secret setup is staged with a backup. Credentials, OAuth tokens, and API keys are not copied; affected connectors must be authorized again.',
+    },
+  ));
+  if (!ok) return;
+  externalImportStatus(kind, 'info', 'Committing with checkpoints.');
+  try {
+    const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true, ...(conversationIds ? { conversationIds } : {}) }),
+      timeoutMs: 120000,
+    });
+    selectedExternalImportJobs[kind] = data.job;
+    renderExternalImportJob(kind, data.job);
+    externalImportStatus(kind, data.job?.status === 'partial' ? 'error' : 'success', externalImportJobLabel(data.job));
+    if (kind === 'conversation' && typeof window.loadChatSessions === 'function') await window.loadChatSessions();
+  } catch (error) {
+    externalImportStatus(kind, 'error', `Import failed: ${error.message}`);
+  }
+}
+
+async function retryExternalImportJob(jobId, kind) {
+  externalImportStatus(kind, 'info', 'Retrying from the last durable checkpoint.');
+  try {
+    const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST', timeoutMs: 120000 });
+    selectedExternalImportJobs[kind] = data.job;
+    renderExternalImportJob(kind, data.job);
+    externalImportStatus(kind, data.job?.status === 'failed' ? 'error' : 'success', externalImportJobLabel(data.job));
+  } catch (error) {
+    externalImportStatus(kind, 'error', `Retry failed: ${error.message}`);
+  }
+}
+
+async function rollbackExternalImportJob(jobId, kind) {
+  const ok = await new Promise((resolve) => showConfirm(
+    'Roll back this import?',
+    () => resolve(true),
+    () => resolve(false),
+    { title: 'Roll back external import', confirmText: 'Roll back', details: 'Prometheus will remove only state associated with this import and restore the setup backup when available.' },
+  ));
+  if (!ok) return;
+  try {
+    const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/rollback`, { method: 'POST', body: JSON.stringify({ confirm: true }) });
+    selectedExternalImportJobs[kind] = data.job;
+    renderExternalImportJob(kind, data.job);
+    externalImportStatus(kind, 'success', 'Import rolled back.');
+    if (kind === 'conversation' && typeof window.loadChatSessions === 'function') await window.loadChatSessions();
+  } catch (error) {
+    externalImportStatus(kind, 'error', `Rollback failed: ${error.message}`);
+  }
+}
+
+async function deleteExternalImportJob(jobId, kind) {
+  try {
+    await api(`/api/imports/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+    selectedExternalImportJobs[kind] = null;
+    renderExternalImportJob(kind, null);
+    externalImportStatus(kind, 'success', 'Import record deleted.');
+  } catch (error) {
+    externalImportStatus(kind, 'error', `Delete failed: ${error.message}`);
+  }
+}
+
+// -- Existing setup migration panel ------------------------------------------------------------------------------------------------
 let migrationSources = [];
 let selectedMigrationSourceId = '';
 let selectedMigrationSourcePath = '';
@@ -3128,13 +3960,14 @@ function setAgentForm(agent) {
 function renderAgentsList() {
   const el = document.getElementById('settings-agents-list');
   if (!el) return;
-  if (!window.agentsConfigList.length) {
-    el.innerHTML = '<div style="color:var(--muted)">No agents found.</div>';
+  const visibleAgents = window.agentsConfigList.filter(a => a.id !== 'main');
+  if (!visibleAgents.length) {
+    el.innerHTML = '<div style="color:var(--muted)">No subagents found.</div>';
     return;
   }
 
   // -- Categorise agents ------------------------------------------------------
-  const mainAgent = window.agentsConfigList.find(a => a.id === 'main') || window.agentsConfigList[0];
+  const mainAgent = window.agentsConfigList.find(a => a.id === 'main') || null;
 
   // Build agent lookup by id
   const agentById = {};
@@ -3162,13 +3995,14 @@ function renderAgentsList() {
     //   3. Agent with isTeamManager=true whose id ends in '_manager' and name/id loosely matches team
     //   4. Fallback: any agent whose id is exactly '<keyword>_manager' for a keyword in team name/id
     const teamKeyword = t.id.replace(/^team_/, '').replace(/_[a-z0-9]{4,}$/, '').split('_')[0];
-    const managerId = t.managerAgentId || t.managerId ||
+    const detectedManagerId = t.managerAgentId || t.managerId ||
       window.agentsConfigList.find(a => a.isTeamManager && a.teamId === t.id)?.id ||
       window.agentsConfigList.find(a => a.isTeamManager && a.id.endsWith('_manager') && a.id.includes(teamKeyword))?.id ||
       window.agentsConfigList.find(a => a.id === `${teamKeyword}_manager`)?.id ||
       null;
+    const managerId = detectedManagerId === 'main' ? null : detectedManagerId;
 
-    const allIds = [...memberIds];
+    const allIds = memberIds.filter(id => id !== 'main');
     if (managerId && !allIds.includes(managerId)) allIds.unshift(managerId);
     allIds.forEach(id => agentIdsInTeams.add(id));
 
@@ -3253,13 +4087,7 @@ function renderAgentsList() {
 
   let html = '';
 
-  // 1. Main agent — always pinned at top
-  if (mainAgent) {
-    html += sectionLabel('Main');
-    html += renderCard(mainAgent);
-  }
-
-  // 2. Team sections — one block per team
+  // 1. Team sections — one block per team
   for (const [, g] of teamGroups) {
     const count = g.members.length;
     if (count === 0) continue;
@@ -3267,7 +4095,7 @@ function renderAgentsList() {
     html += g.members.map(a => renderCard(a)).join('');
   }
 
-  // 3. Solo agents — any agent not main and not in a team
+  // 2. Solo agents — any agent not main and not in a team
   if (soloAgents.length > 0) {
     html += sectionLabel(`Other Agents (${soloAgents.length})`);
     html += soloAgents.map(a => renderCard(a)).join('');
@@ -3304,6 +4132,14 @@ function agentFormNew() {
 }
 
 async function selectAgent(id) {
+  if (String(id || '') === 'main') {
+    id = window.agentsConfigList.find(a => a.id !== 'main')?.id || '';
+    if (!id) {
+      window.selectedAgentId = '';
+      agentFormNew();
+      return;
+    }
+  }
   const previous = window.selectedAgentId;
   window.selectedAgentId = id;
   const selected = findSelectedAgent();
@@ -3544,11 +4380,14 @@ async function loadAgentsTab() {
 
   const applyAgentsPayload = (data = {}) => {
     window.agentsConfigList = Array.isArray(data?.agents) ? data.agents : [];
-    const defaultAgentId = window.agentsConfigList.find(a => a.id === 'main')?.id
-      || data?.defaultAgentId
-      || window.agentsConfigList.find(a => a.default === true)?.id
-      || window.agentsConfigList[0]?.id || '';
-    if (!window.selectedAgentId || !window.agentsConfigList.some(a => a.id === window.selectedAgentId)) {
+    const visibleDefaultAgent = window.agentsConfigList.find(a => a.id !== 'main' && a.default === true)?.id;
+    const requestedDefaultAgent = data?.defaultAgentId && data.defaultAgentId !== 'main'
+      ? data.defaultAgentId
+      : '';
+    const defaultAgentId = requestedDefaultAgent
+      || visibleDefaultAgent
+      || window.agentsConfigList.find(a => a.id !== 'main')?.id || '';
+    if (!window.selectedAgentId || window.selectedAgentId === 'main' || !window.agentsConfigList.some(a => a.id === window.selectedAgentId)) {
       window.selectedAgentId = defaultAgentId;
     }
     renderAgentsList();
@@ -3881,6 +4720,34 @@ function setButtonBusy(id, busy, busyLabel, normalLabel) {
   btn.textContent = busy ? busyLabel : normalLabel;
 }
 
+function setSettingsSaveFeedback(state = 'idle', label = 'Save') {
+  const btn = document.getElementById('settings-save-btn');
+  const status = document.getElementById('settings-save-status');
+  if (btn) {
+    btn.disabled = state === 'saving' || state === 'saved';
+    btn.textContent = label;
+    btn.dataset.saveState = state;
+    btn.setAttribute('aria-busy', state === 'saving' ? 'true' : 'false');
+    btn.classList.toggle('is-saving', state === 'saving');
+    btn.classList.toggle('is-saved', state === 'saved');
+    btn.classList.toggle('is-save-error', state === 'error');
+  }
+  if (status) {
+    status.textContent = state === 'saving'
+      ? 'Saving settings…'
+      : state === 'saved'
+        ? 'Saved'
+        : state === 'error'
+          ? 'Save failed'
+          : '';
+    status.dataset.saveState = state;
+  }
+}
+
+function waitForSettingsSaveFeedback() {
+  return new Promise((resolve) => setTimeout(resolve, 650));
+}
+
 function getSelectedChannelType() {
   return String(document.getElementById('settings-channel-select')?.value || 'telegram');
 }
@@ -4060,10 +4927,11 @@ async function sendChannelTest(channel) {
 
 function getActiveSettingsTab() {
   const fromWindow = String(window.settingsTab || '').trim();
-  if (fromWindow) return fromWindow;
+  if (fromWindow) return fromWindow === 'credentials' ? 'search' : fromWindow;
   const activePanel = Array.from(document.querySelectorAll('[id^="settings-panel-"]'))
     .find((panel) => panel && panel.style.display !== 'none');
-  return activePanel?.id?.replace(/^settings-panel-/, '') || 'system';
+  const activeTab = activePanel?.id?.replace(/^settings-panel-/, '') || 'system';
+  return activeTab === 'credentials' ? 'search' : activeTab;
 }
 
 function getSettingsValue(id, fallback = '') {
@@ -4143,9 +5011,12 @@ function buildSessionSettingsPayload() {
 
 function buildSettingsBulkPayloadForTab(tab) {
   const activeTab = String(tab || '').trim();
+  if (activeTab === 'system') {
+    return { session: { autoSettle: buildAutoSettlePayloadFromUI() } };
+  }
   if (activeTab === 'search') {
-    if (!window._settingsSearchLoadedToUI) throw new Error('Search settings are still loading.');
-    const search = buildSearchTabPayload();
+    if (!window._settingsSearchLoadedToUI || !window._settingsCredentialsLoadedToUI) throw new Error('Search settings are still loading.');
+    const search = { ...buildSearchTabPayload(), ...buildCredentialTabPayload() };
     return Object.keys(search).length ? { search } : {};
   }
   if (activeTab === 'credentials') {
@@ -4183,17 +5054,26 @@ function settingsTabLabel(tab) {
 async function saveSettings() {
   const btn = document.getElementById('settings-save-btn');
   if (btn?.disabled) return; // prevent double-submit
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  setSettingsSaveFeedback('saving', 'Saving…');
 
-  const resetBtn = () => { if (btn) { btn.disabled = false; btn.textContent = 'Save'; } };
+  const resetBtn = () => setSettingsSaveFeedback();
   // Safety valve — re-enable button after 15s no matter what
   const safetyTimer = setTimeout(resetBtn, 15000);
   try {
     const activeTab = getActiveSettingsTab();
     const bulkPayload = buildSettingsBulkPayloadForTab(activeTab);
+    if (activeTab === 'system' && bulkPayload.session?.autoSettle?.afterDays === 'custom') {
+      const activationMode = await askAutoSettleActivationMode();
+      if (!activationMode) {
+        resetBtn();
+        return;
+      }
+      bulkPayload.session.autoSettle.activationMode = activationMode;
+    }
     let savedAnything = false;
+    let saveResponse = null;
     if (Object.keys(bulkPayload).length) {
-      await api('/api/settings/bulk', {
+      saveResponse = await api('/api/settings/bulk', {
         method: 'POST',
         body: JSON.stringify(bulkPayload),
       });
@@ -4219,20 +5099,26 @@ async function saveSettings() {
       await _saveRemoteAccess();
       savedAnything = true;
     }
+    if (activeTab === 'system') {
+      _markSettingsCacheBusted('settings-system');
+      await loadAutoSettleSettings().catch(() => {});
+      if (saveResponse?.autoSettleRun) {
+        const run = saveResponse.autoSettleRun;
+        showToast('Auto-settle completed', `${Number(run.settled || 0)} eligible chat(s) moved to Settled Chats. Protected conversations were skipped.`, 'success', 5000);
+      }
+    }
     if (!savedAnything) {
       addProcessEntry('info', `${settingsTabLabel(activeTab)} has no footer-saved settings.`);
+      setSettingsSaveFeedback('saved', 'Saved ✓');
+      await waitForSettingsSaveFeedback();
       resetBtn();
       return;
     }
-    if (activeTab === 'search' || activeTab === 'credentials') {
+    if (activeTab === 'search') {
       _markSettingsCacheBusted('settings-search-summary');
+      _markSettingsCacheBusted('settings-credentials-fields');
       loadSearchSettingsSummary().catch(() => {});
-      if (activeTab === 'credentials') {
-        _markSettingsCacheBusted('settings-credentials-fields');
-        _markSettingsCacheBusted('settings-credentials-vault-status');
-        _markSettingsCacheBusted('settings-credentials-vault-log');
-        loadCredFields().catch(() => {});
-      }
+      loadCredFields().catch(() => {});
       if (bulkPayload.search?.search_rigor) quickSearchRigor = bulkPayload.search.search_rigor;
     }
     if (activeTab === 'models') {
@@ -4249,11 +5135,13 @@ async function saveSettings() {
     if (activeTab === 'security' && securityStatus) setSettingsStatus(securityStatus, 'success', 'Saved');
     updateQuickModeUI();
     addProcessEntry('final', `${settingsTabLabel(activeTab)} settings saved.`);
-    resetBtn();
+    setSettingsSaveFeedback('saved', 'Saved ✓');
+    await waitForSettingsSaveFeedback();
     closeSettings();
   } catch (err) {
     addProcessEntry('error', `Failed to save settings: ${err.message}`);
-    resetBtn();
+    setSettingsSaveFeedback('error', 'Try again');
+    setTimeout(resetBtn, 1800);
   } finally {
     clearTimeout(safetyTimer);
   }
@@ -4794,6 +5682,183 @@ function providerAccountsForDefault(providerId) {
   return accounts.filter((account) => account?.id && account.status !== 'disconnected');
 }
 
+function syncAutoSettleDateVisibility() {
+  const select = document.getElementById('settings-auto-settle-after');
+  const wrap = document.getElementById('settings-auto-settle-custom-wrap');
+  const extra = document.getElementById('settings-auto-settle-extra');
+  const date = document.getElementById('settings-auto-settle-custom-date');
+  const custom = select?.value === 'custom';
+  if (extra) extra.style.display = custom ? 'block' : 'none';
+  if (wrap) wrap.style.display = custom ? 'grid' : 'none';
+  if (date) {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    date.max = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+  }
+}
+
+function renderAutoSettleLastRun(lastRun) {
+  const status = document.getElementById('settings-auto-settle-status');
+  if (!status) return;
+  if (!lastRun) {
+    status.textContent = 'Automatic settling is off until you choose a period and save.';
+    return;
+  }
+  const when = Number(lastRun.completedAt) > 0 ? new Date(Number(lastRun.completedAt)).toLocaleString() : 'not yet';
+  const action = lastRun.dryRun ? `${Number(lastRun.wouldSettle || 0)} eligible in preview` : `${Number(lastRun.settled || 0)} settled`;
+  status.textContent = `Last check: ${when} · ${action} · ${Number(lastRun.scanned || 0)} scanned${lastRun.truncated ? ' · more remain for the next bounded batch' : ''}.`;
+}
+
+async function loadAutoSettleSettings() {
+  try {
+    const data = await api('/api/settings/session');
+    const settings = data?.session?.autoSettle || {};
+    const select = document.getElementById('settings-auto-settle-after');
+    const date = document.getElementById('settings-auto-settle-custom-date');
+    if (select) {
+      const value = settings.mode === 'custom' ? 'custom' : String(Number(settings.afterDays) || 0);
+      select.value = ['0', '7', '14', '30', '90', 'custom'].includes(value) ? value : '0';
+    }
+    if (date) date.value = String(settings.customDate || '');
+    syncAutoSettleDateVisibility();
+    renderAutoSettleLastRun(data?.session?.autoSettleLastRun || data?.autoSettleLastRun || null);
+  } catch (error) {
+    const status = document.getElementById('settings-auto-settle-status');
+    if (status) status.textContent = `Could not load auto-settle settings: ${error.message}`;
+  }
+}
+
+function buildAutoSettlePayloadFromUI() {
+  const selected = document.getElementById('settings-auto-settle-after')?.value || '0';
+  if (selected !== 'custom') return { afterDays: Number(selected) || 0, activationMode: 'start_now' };
+  const customDate = String(document.getElementById('settings-auto-settle-custom-date')?.value || '').trim();
+  if (!customDate) throw new Error('Choose a Custom cutoff date first.');
+  const localDate = new Date(`${customDate}T00:00:00`);
+  return {
+    afterDays: 'custom',
+    customDate,
+    customDateOffsetMinutes: Number.isFinite(localDate.getTime()) ? localDate.getTimezoneOffset() : new Date().getTimezoneOffset(),
+    activationMode: 'start_now',
+  };
+}
+
+function askAutoSettleActivationMode() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;padding:18px';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:560px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,0.18);font-family:var(--font);color:var(--text)';
+    box.innerHTML = `
+      <div style="font-size:15px;font-weight:800;margin-bottom:9px">When should auto-settle begin?</div>
+      <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:17px">You chose a past date. Include chats that are already older than that date, or start the inactivity clock from now for existing chats.</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+        <button data-auto-settle-choice="cancel" type="button" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:8px 13px;font:inherit;font-size:12px;font-weight:700;cursor:pointer">Cancel</button>
+        <button data-auto-settle-choice="start_now" type="button" style="border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:8px;padding:8px 13px;font:inherit;font-size:12px;font-weight:700;cursor:pointer">Start from now</button>
+        <button data-auto-settle-choice="apply_existing" type="button" style="border:none;background:var(--brand);color:#fff;border-radius:8px;padding:8px 13px;font:inherit;font-size:12px;font-weight:700;cursor:pointer">Apply to eligible chats</button>
+      </div>`;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const finish = (value) => { overlay.remove(); resolve(value); };
+    box.querySelectorAll('[data-auto-settle-choice]').forEach((button) => {
+      button.addEventListener('click', () => finish(button.getAttribute('data-auto-settle-choice') === 'cancel' ? null : button.getAttribute('data-auto-settle-choice')));
+    });
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) finish(null); });
+  });
+}
+
+async function previewAutoSettleSettings() {
+  const status = document.getElementById('settings-auto-settle-status');
+  const button = document.getElementById('settings-auto-settle-preview');
+  if (button) button.disabled = true;
+  if (status) status.textContent = 'Previewing protected-state checks…';
+  try {
+    const data = await api('/api/settings/auto-settle/preview', { method: 'POST', body: JSON.stringify({}) });
+    const summary = data?.summary || {};
+    if (status) status.textContent = `${Number(summary.wouldSettle || 0)} eligible · ${Number(summary.scanned || 0)} scanned · ${Object.keys(summary.skipped || {}).length} protected reason(s).`;
+    renderAutoSettleLastRun(summary);
+  } catch (error) {
+    if (status) status.textContent = `Preview failed: ${error.message}`;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function wireAutoSettleControls() {
+  const select = document.getElementById('settings-auto-settle-after');
+  if (!select || select.dataset.autoSettleWired === 'true') return;
+  select.dataset.autoSettleWired = 'true';
+  select.addEventListener('change', syncAutoSettleDateVisibility);
+  document.getElementById('settings-auto-settle-preview')?.addEventListener('click', previewAutoSettleSettings);
+  syncAutoSettleDateVisibility();
+}
+
+function ensureModelsSections() {
+  const column = document.getElementById('agent-model-defaults-col');
+  if (!column || column.dataset.modelsSectionsReady === 'true') return;
+
+  const sectionOrder = {
+    'Switch Models': 30,
+    'Teams & Agents': 40,
+    'Subagent Role Defaults': 50,
+    'Proposal Executors': 60,
+    'Summary Compactor': 70,
+    'Brain System': 80,
+  };
+  const sectionHelp = {
+    'Switch Models': 'Models used when a turn needs a faster or more deliberate route.',
+    'Teams & Agents': 'Defaults for the coordinator and manager roles used by team runs.',
+    'Subagent Role Defaults': 'Per-role defaults for planner, research, build, and verification work.',
+    'Proposal Executors': 'Defaults for high-risk and low-risk proposal execution.',
+    'Summary Compactor': 'The route used to compact autonomous goal progress.',
+    'Brain System': 'Routes used by autonomous Thought and Dream runs.',
+  };
+  const directChildren = Array.from(column.children);
+  const legacyTitles = directChildren.filter((node) => node.classList.contains('model-default-section-title'));
+  const sectionByLabel = new Map();
+
+  for (const title of legacyTitles) {
+    const label = String(title.textContent || '').trim();
+    const section = document.createElement('section');
+    section.className = 'settings-models-subsection settings-models-legacy-section';
+    section.dataset.modelsSection = label;
+    section.style.order = String(sectionOrder[label] || 60);
+
+    const heading = document.createElement('div');
+    heading.className = 'settings-section-heading';
+    heading.innerHTML = escHtml(label === 'Switch Models' ? 'Switch Model' : label)
+      + ' <span class="settings-help" tabindex="0" data-settings-help="'
+      + escHtml(sectionHelp[label] || ('About ' + label))
+      + '" aria-label="About ' + escHtml(label) + '">?</span>';
+    section.appendChild(heading);
+
+    const panel = document.createElement('div');
+    panel.className = 'settings-section-panel';
+    section.appendChild(panel);
+    title.parentElement.insertBefore(section, title);
+
+    let cursor = title.nextElementSibling;
+    while (cursor && !cursor.classList.contains('model-default-section-title') && cursor.id !== 'amd-status' && cursor.id !== 'brain-model-status') {
+      const next = cursor.nextElementSibling;
+      panel.appendChild(cursor);
+      cursor = next;
+    }
+    title.remove();
+    sectionByLabel.set(label, { section, panel });
+  }
+
+  const background = column.querySelector('#amd-background-spawn-prov')?.closest('div[style*="order:30"]');
+  const switchSection = sectionByLabel.get('Switch Models');
+  if (background && switchSection?.panel) {
+    background.classList.add('settings-models-background-row');
+    switchSection.panel.appendChild(background);
+  }
+
+  column.querySelector('.settings-model-defaults-intro')?.style?.setProperty('order', '0');
+  column.querySelector('.settings-models-main-section')?.style?.setProperty('order', '10');
+  column.querySelector('.settings-models-template-section')?.style?.setProperty('order', '20');
+  column.dataset.modelsSectionsReady = 'true';
+}
+
 function ensureAmdAccountControls() {
   for (const slotId of Object.keys(AMD_SLOTS)) {
     const providerSelect = document.getElementById(`amd-${slotId}-prov`);
@@ -4805,6 +5870,19 @@ function ensureAmdAccountControls() {
     wrapper.innerHTML = `<select id="amd-${escHtml(slotId)}-account" class="settings-input" style="width:100%" aria-label="Provider account"></select>`;
     providerSelect.insertAdjacentElement('beforebegin', wrapper);
   }
+  decorateModelRoutingRows();
+}
+
+function decorateModelRoutingRows() {
+  const column = document.getElementById('agent-model-defaults-col');
+  if (!column) return;
+  for (const slotId of Object.keys(AMD_SLOTS)) {
+    const providerSelect = document.getElementById('amd-' + slotId + '-prov');
+    const row = providerSelect?.closest('div');
+    if (row && row !== column) row.classList.add('settings-model-slot-row');
+  }
+  const background = column.querySelector('.settings-models-background-row');
+  if (background) background.classList.add('settings-model-slot-row');
 }
 
 function syncAmdAccount(slotId, selectedValue) {
@@ -4882,6 +5960,24 @@ function ensureAmdReasoningControls() {
       modelSel.dataset.reasoningBound = '1';
     }
   }
+  ensureAmdSpeedControls();
+}
+
+function ensureAmdSpeedControls() {
+  for (const slotId of Object.keys(AMD_SLOTS)) {
+    const modelSel = document.getElementById('amd-' + slotId + '-model');
+    const reasoningSel = document.getElementById('amd-' + slotId + '-reasoning');
+    if (!modelSel || !reasoningSel || document.getElementById('amd-' + slotId + '-speed')) continue;
+    const anchor = reasoningSel.closest('div') || reasoningSel;
+    const wrapper = document.createElement('div');
+    wrapper.id = 'amd-' + slotId + '-speed-wrap';
+    wrapper.className = 'settings-model-speed-wrap';
+    wrapper.innerHTML = '<div class="settings-model-inline-label">Speed</div>'
+      + '<select id="amd-' + escHtml(slotId) + '-speed" class="settings-input" style="width:100%">'
+      + '<option value="standard">Standard</option><option value="fast">Fast</option></select>';
+    wrapper.style.display = 'none';
+    anchor.insertAdjacentElement('afterend', wrapper);
+  }
 }
 
 function syncAmdReasoning(slotId, selectedValue) {
@@ -4897,6 +5993,27 @@ function syncAmdReasoning(slotId, selectedValue) {
   if (current && validEffort(prov, model, current)) select.value = current;
   else select.value = '';
   select.title = select.disabled ? 'This provider/model does not expose selectable reasoning effort.' : 'Reasoning effort for this agent default.';
+  syncAmdSpeed(slotId);
+}
+
+function syncAmdSpeed(slotId, selectedValue) {
+  ensureAmdSpeedControls();
+  const provider = String(document.getElementById('amd-' + slotId + '-prov')?.value || '').trim();
+  const model = String(document.getElementById('amd-' + slotId + '-model')?.value || '').trim();
+  const wrapper = document.getElementById('amd-' + slotId + '-speed-wrap');
+  const select = document.getElementById('amd-' + slotId + '-speed');
+  if (!wrapper || !select) return;
+  const providerSupportsSpeed = ['openai', 'openai_codex', 'anthropic'].includes(provider) && !!model;
+  const supportsFast = providerSupportsSpeed && supportsFastSpeed(provider, model);
+  wrapper.style.display = providerSupportsSpeed ? '' : 'none';
+  const fastOption = select.querySelector('option[value="fast"]');
+  if (fastOption) {
+    fastOption.disabled = !supportsFast;
+    fastOption.hidden = !supportsFast;
+  }
+  const current = selectedValue !== undefined ? String(selectedValue || '') : String(select.value || 'standard');
+  select.value = supportsFast && current === 'fast' ? 'fast' : 'standard';
+  select.disabled = !providerSupportsSpeed;
 }
 
 async function amdProviderChange(slotId) {
@@ -4919,10 +6036,15 @@ async function amdProviderChange(slotId) {
     await fetchCredentialedModelProviderIds();
     if (!isCredentialedModelProviderId(prov)) {
       modelSel.innerHTML = '<option value="">— provider not connected —</option>';
+      syncAmdSpeed(slotId);
       return;
     }
     const models = await fetchProviderModelsForPicker(prov, { refreshOpenAI: prov === 'openai', includeLive: prov !== 'openai_codex' });
-    if (!models.length) { modelSel.innerHTML = '<option value="">— no models found —</option>'; return; }
+    if (!models.length) {
+      modelSel.innerHTML = '<option value="">— no models found —</option>';
+      syncAmdSpeed(slotId);
+      return;
+    }
     modelSel.innerHTML = models.map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('');
     syncAmdReasoning(slotId);
   } catch (e) {
@@ -4962,9 +6084,19 @@ function getAgentReasoningDefaultsFromForm() {
   return payload;
 }
 
-async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}, accounts = {}, voiceAgent = {}) {
+function getAgentSpeedDefaultsFromForm() {
+  const payload = {};
+  for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
+    const value = document.getElementById('amd-' + slotId + '-speed')?.value?.trim() || '';
+    payload[field] = value === 'fast' ? 'fast' : '';
+  }
+  return payload;
+}
+
+async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}, accounts = {}, speed = {}, voiceAgent = {}) {
   ensureAmdReasoningControls();
   ensureAmdAccountControls();
+  ensureAmdSpeedControls();
   await ensureProviderCatalogUIReady();
   await fetchCredentialedModelProviderIds();
   renderProviderSelectors();
@@ -4975,6 +6107,7 @@ async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}, acco
     if (provSel) provSel.value = '';
     if (modelSel) modelSel.innerHTML = '<option value="">select provider first</option>';
     syncAmdReasoning(slotId);
+    syncAmdSpeed(slotId);
     syncAmdAccount(slotId);
   }
   for (const [slotId, field] of Object.entries(AMD_SLOTS)) {
@@ -5009,6 +6142,7 @@ async function applyAgentModelDefaultsToForm(defaults = {}, reasoning = {}, acco
       modelSel.value = model;
     }
     syncAmdReasoning(slotId, reasoning?.[field] || '');
+    syncAmdSpeed(slotId, speed?.[field] || 'standard');
   }
   const voiceProvider = document.getElementById('amd-voice-agent-provider');
   const voiceVoice = document.getElementById('amd-voice-agent-voice');
@@ -5083,7 +6217,7 @@ function onAgentModelTemplateSelect() {
 async function loadAgentModelDefaults() {
   try {
     const data = await api('/api/settings/agent-model-defaults');
-    await applyAgentModelDefaultsToForm(data?.defaults || {}, data?.reasoning || {}, data?.accounts || {}, data?.voiceAgent || {});
+    await applyAgentModelDefaultsToForm(data?.defaults || {}, data?.reasoning || {}, data?.accounts || {}, data?.speed || {}, data?.voiceAgent || {});
     if (data?.defaultTemplateId !== undefined) amdDefaultTemplateId = String(data.defaultTemplateId || '');
     updateAgentModelTemplateCache(data);
     window._agentModelDefaultsLoadedToUI = true;
@@ -5094,10 +6228,11 @@ async function persistAgentModelDefaultsFromForm({ showStatus = true } = {}) {
   const payload = getAgentModelDefaultsFromForm();
   const reasoning = getAgentReasoningDefaultsFromForm();
   const accounts = getAgentAccountDefaultsFromForm();
+  const speed = getAgentSpeedDefaultsFromForm();
   const voiceAgent = getVoiceAgentDefaultFromForm();
   const status = document.getElementById('amd-status');
   try {
-    const data = await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify({ ...payload, reasoning, accounts, voiceAgent }) });
+    const data = await api('/api/settings/agent-model-defaults', { method: 'POST', body: JSON.stringify({ ...payload, reasoning, accounts, speed, voiceAgent }) });
     if (showStatus && status) {
       status.style.color = 'var(--ok)';
       setSettingsStatus(status, 'success', 'Saved');
@@ -5142,6 +6277,7 @@ async function saveAgentModelDefaultTemplate() {
         defaults: getAgentModelDefaultsFromForm(),
         reasoning: getAgentReasoningDefaultsFromForm(),
         accounts: getAgentAccountDefaultsFromForm(),
+        speed: getAgentSpeedDefaultsFromForm(),
       }),
     });
     updateAgentModelTemplateCache(data);
@@ -5181,7 +6317,7 @@ async function applyAgentModelDefaultTemplate() {
     const data = await api(`/api/settings/agent-model-default-templates/${encodeURIComponent(id)}/apply`, {
       method: 'POST',
     });
-    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {}, data?.reasoning || data?.template?.reasoning || {}, data?.accounts || data?.template?.accounts || {}, data?.voiceAgent || {});
+    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {}, data?.reasoning || data?.template?.reasoning || {}, data?.accounts || data?.template?.accounts || {}, data?.speed || data?.template?.speed || {}, data?.voiceAgent || {});
     await loadAgentModelDefaultTemplates();
     setAgentModelTemplateStatus('success', `Applied "${data?.template?.name || id}".`);
     showToast('Model template applied', data?.template?.name || id, 'success', 4000);
@@ -5221,7 +6357,7 @@ async function applyAsDefaultTemplate() {
       method: 'POST',
     });
     amdDefaultTemplateId = String(data?.defaultTemplateId || data?.template?.id || id);
-    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {}, data?.reasoning || data?.template?.reasoning || {}, data?.accounts || data?.template?.accounts || {}, data?.voiceAgent || {});
+    await applyAgentModelDefaultsToForm(data?.defaults || data?.template?.defaults || {}, data?.reasoning || data?.template?.reasoning || {}, data?.accounts || data?.template?.accounts || {}, data?.speed || data?.template?.speed || {}, data?.voiceAgent || {});
     await loadAgentModelDefaultTemplates();
     updateApplyAsDefaultButtonState(id);
     setAgentModelTemplateStatus('success', `"${data?.template?.name || id}" set as startup default.`);
@@ -5466,12 +6602,16 @@ window.loadCredVaultStatus = loadCredVaultStatus;
 window.loadCredentialsTab = loadCredentialsTab;
 window.loadHeartbeatSettings = loadHeartbeatSettings;
 window.loadIntegrationsTab = loadIntegrationsTab;
+window.loadExternalImportJobs = loadExternalImportJobs;
+window.loadExternalImportDiscovery = loadExternalImportDiscovery;
 window.loadMigrationPanel = loadMigrationPanel;
 window.loadMCPServers = loadMCPServers;
 window.loadModelSettings = loadModelSettings;
 window.loadSearchSettingsSummary = loadSearchSettingsSummary;
 window.loadSelectedAgentMd = loadSelectedAgentMd;
 window.loadSessionCompactionSettings = loadSessionCompactionSettings;
+window.loadAutoSettleSettings = loadAutoSettleSettings;
+window.loadDesktopUpdateSettings = loadDesktopUpdateSettings;
 window.loadShortcutsPanel = loadShortcutsPanel;
 window.loadSubagentHeartbeatList = loadSubagentHeartbeatList;
 window.loadWebhookSettings = loadWebhookSettings;
@@ -5483,6 +6623,19 @@ window.openAgentSettings = openAgentSettings;
 window.openSettings = openSettings;
 window.previewCustomMigration = previewCustomMigration;
 window.previewSelectedMigration = previewSelectedMigration;
+window.previewExternalImportJob = previewExternalImportJob;
+window.previewDiscoveredExternalImport = previewDiscoveredExternalImport;
+window.previewDiscoveredExternalImportBatches = previewDiscoveredExternalImportBatches;
+window.toggleExternalImportConversation = toggleExternalImportConversation;
+window.setExternalImportConversationSelection = setExternalImportConversationSelection;
+window.confirmExternalImportJob = confirmExternalImportJob;
+window.confirmExternalImportBatchJob = confirmExternalImportBatchJob;
+window.retryExternalImportBatchJob = retryExternalImportBatchJob;
+window.confirmExternalImportBatches = confirmExternalImportBatches;
+window.retryExternalImportJob = retryExternalImportJob;
+window.rollbackExternalImportJob = rollbackExternalImportJob;
+window.rollbackExternalImportBatchJob = rollbackExternalImportBatchJob;
+window.deleteExternalImportJob = deleteExternalImportJob;
 window.prefillMCPServer = prefillMCPServer;
 window.readChannelPayload = readChannelPayload;
 window.refreshAnthropicStatus = refreshAnthropicStatus;
@@ -5519,6 +6672,10 @@ window.sendChannelTest = sendChannelTest;
 window.sendSelectedChannelTest = sendSelectedChannelTest;
 window.setAgentForm = setAgentForm;
 window.setButtonBusy = setButtonBusy;
+window.toggleDesktopAutoUpdate = toggleDesktopAutoUpdate;
+window.checkDesktopForUpdates = checkDesktopForUpdates;
+window.downloadDesktopUpdate = downloadDesktopUpdate;
+window.installDesktopUpdate = installDesktopUpdate;
 window.setChannelStatus = setChannelStatus;
 window.setIntegTab = setIntegTab;
 window.setQuickSearchRigor = setQuickSearchRigor;
@@ -5531,12 +6688,14 @@ window.setQuickThinkingEffort = setQuickThinkingEffort;
 
 let _pairingPollTimer = null;
 let _pairingCurrentChallenge = null;
+let _pairingBrowserAdminToken = '';
 
 async function pairingAdminApi(path, opts = {}) {
   const bridge = window.prometheusPairingAdmin;
   // Electron desktop app: trusted IPC bridge injects the pairing-admin token.
-  // Browser / dev gateway UI: fall through to same-origin api() — the gateway
-  // must accept local-standalone loopback admin (including host 0.0.0.0 binds).
+  // Browser / dev gateway UI: fall through to same-origin api(). This works
+  // without a credential only for loopback-bound gateways; LAN/wildcard binds
+  // require PROMETHEUS_PAIRING_ADMIN_TOKEN or another explicit authority.
   if (bridge && typeof bridge.request === 'function') {
     let body = opts.body;
     if (typeof body === 'string' && body.trim()) {
@@ -5551,12 +6710,18 @@ async function pairingAdminApi(path, opts = {}) {
   }
 
   try {
-    return await api(path, opts);
+    const browserHeaders = _pairingBrowserAdminToken
+      ? { 'X-Prometheus-Pairing-Admin': _pairingBrowserAdminToken }
+      : {};
+    return await api(path, {
+      ...opts,
+      headers: { ...(opts.headers || {}), ...browserHeaders },
+    });
   } catch (err) {
     const raw = String(err?.message || err || '');
     if (/API 403|Trusted desktop pairing authority required/i.test(raw)) {
       throw new Error(
-        'Pairing admin blocked on this browser session. Use the local gateway origin (127.0.0.1/localhost), or open the desktop app. If gateway.auth.token / Electron pairing authority is configured, browser Settings cannot manage pairing without that authority.'
+        'Pairing admin blocked on this browser session. A standalone browser may manage pairing without a credential only on a loopback-bound gateway. For a LAN/wildcard gateway, enter the configured PROMETHEUS_PAIRING_ADMIN_TOKEN in the Pairing panel or open the desktop app.'
       );
     }
     if (/API 404|Cannot GET|Cannot POST|<!DOCTYPE html>/i.test(raw)) {
@@ -5569,6 +6734,39 @@ async function pairingAdminApi(path, opts = {}) {
 }
 
 async function loadPairingPanel() {
+  const browserAdminPanel = document.getElementById('pairing-browser-admin');
+  const browserAdminInput = document.getElementById('pairing-browser-admin-token');
+  const browserAdminApply = document.getElementById('pairing-browser-admin-apply');
+  const browserAdminStatus = document.getElementById('pairing-browser-admin-status');
+  const electronBridge = window.prometheusPairingAdmin;
+  if (browserAdminPanel) browserAdminPanel.style.display = electronBridge ? 'none' : '';
+  if (browserAdminInput) browserAdminInput.value = '';
+  if (browserAdminStatus && _pairingBrowserAdminToken) browserAdminStatus.textContent = 'Credential active for this tab only.';
+  if (browserAdminApply && !browserAdminApply.__wired) {
+    browserAdminApply.__wired = true;
+    browserAdminApply.addEventListener('click', async () => {
+      const enteredToken = String(browserAdminInput?.value || '').trim();
+      if (enteredToken) _pairingBrowserAdminToken = enteredToken;
+      if (!_pairingBrowserAdminToken) {
+        if (browserAdminStatus) browserAdminStatus.textContent = 'Enter the configured credential to continue.';
+        return;
+      }
+      if (browserAdminInput) browserAdminInput.value = '';
+      browserAdminApply.disabled = true;
+      if (browserAdminStatus) browserAdminStatus.textContent = 'Applying for this tab…';
+      try {
+        await Promise.all([
+          loadRemoteAccessSettings(),
+          refreshPairingQR(),
+          refreshPairingPending(),
+          refreshPairedDevices(),
+        ]);
+        if (browserAdminStatus) browserAdminStatus.textContent = 'Credential active for this tab only.';
+      } finally {
+        browserAdminApply.disabled = false;
+      }
+    });
+  }
   await loadRemoteAccessSettings();
   await refreshPairingQR();
   await refreshPairingPending();
@@ -6026,13 +7224,15 @@ function _bumpPairingBadge() {
 }
 
 window.loadPairingPanel = loadPairingPanel;
-window.loadSecuritySettings = loadSecuritySettings;
+  window.loadSecuritySettings = loadSecuritySettings;
+window.toggleCommandPermissionList = toggleCommandPermissionList;
 window.revokeCommandPermission = revokeCommandPermission;
 window.redoOnboardingFromSettings = redoOnboardingFromSettings;
 window.replayOnboardingTutorial = replayOnboardingTutorial;
 window.runOnboardingDevTest = runOnboardingDevTest;
 window.saveSecuritySettings = saveSecuritySettings;
 window.setSettingsTab = setSettingsTab;
+window.previewAutoSettleSettings = previewAutoSettleSettings;
 window.showIntegMsg = showIntegMsg;
 window.showMCPAddForm = showMCPAddForm;
 window.startCodexOAuth = startCodexOAuth;

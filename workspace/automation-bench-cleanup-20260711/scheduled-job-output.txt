@@ -1,2 +1,0 @@
-AUTOMATION_BENCH=PASS
-SOURCE=scheduled_job

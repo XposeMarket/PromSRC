@@ -289,7 +289,7 @@ export function mountLoginScreen(onSuccess) {
       <div id="pls-error" class="pls-error" style="display:none"></div>
       <div id="pls-sub-warn" class="pls-sub-warn" style="display:none">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        No Prometheus purchase found. <a href="https://prometheusaiagent.vercel.app/pricing" target="_blank" class="pls-link">Buy access at prometheusaiagent.vercel.app</a>
+        No Prometheus purchase found. <a data-prometheus-link-mode="external" href="https://prometheusaiagent.vercel.app/pricing" target="_blank" class="pls-link">Buy access at prometheusaiagent.vercel.app</a>
       </div>
 
       <form id="pls-form" class="pls-form" autocomplete="on">
@@ -310,7 +310,7 @@ export function mountLoginScreen(onSuccess) {
         </button>
       </form>
 
-      <a href="https://prometheusaiagent.vercel.app/signup" target="_blank" class="pls-signup-link">
+      <a data-prometheus-link-mode="external" href="https://prometheusaiagent.vercel.app/signup" target="_blank" class="pls-signup-link">
         Don't have an account? Create one
       </a>
     </div>

@@ -16,6 +16,18 @@ Current MCP features:
 - rejects shell metacharacters in stdio command strings
 - injects connected tools as `mcp__<serverId>__<toolName>`
 
+### P11-37 setup import boundary
+
+Settings → General exposes a separate MCP/setup import job. It stages and
+previews local JSON configuration and setup metadata before commit, preserves
+memory/skill/instruction files as inactive review snapshots, imports MCP
+definitions disabled, and creates a versioned `mcp-servers.json` backup. API
+keys, OAuth tokens, cookies, bearer values, and other secret-like fields are
+redacted to pending reauthorization markers; the importer never connects or
+spawns an imported server. Conflicts are previewed and skipped by default,
+with explicit opt-in replacement and rollback. See
+[36-external-imports.md](36-external-imports.md).
+
 MCP presets are now registry-backed runtime objects (Phase 5). Each
 `mcp_preset` manifest's `mcpPreset` block (transport/command/args/env/url) is
 registered into the extension runtime registry at load by `runtime-loader.ts`.
@@ -199,13 +211,13 @@ Canonical files for this surface:
 - `src/auth/x-api-oauth.ts` resolves X API OAuth user-context credentials. It must not fall back to xAI OAuth, xAI API keys, `XAI_API_KEY`, or app-only bearer tokens for user-context X API endpoints.
 - `src/auth/xai-oauth.ts` owns xAI/Grok OAuth token storage, refresh, and runtime credential generation.
 - `src/gateway/routes/settings.router.ts` owns xAI/Grok model auth and the separate Settings-side X API OAuth controls.
-- `src/gateway/routes/connections.router.ts` owns the right-side Connections panel `x` connector credential save, OAuth start/poll, and disconnect flow.
+- `src/gateway/routes/connections.router.ts` owns the desktop Plugins detail surface's `x` connector credential save, OAuth start/poll, and disconnect flow.
 - `src/extensions/catalog-service.ts` reports X connected only when X API OAuth user-context tokens exist. Saved app credentials mean `hasCredentials`, not connected.
 - `src/extensions/xai-extension-adapter.ts` registers xAI-backed tools; `x_search` and `xai_live_search` remain connector/provider id `xai`, while tool names beginning with `x_api_` are connector id `x`.
 - `src/gateway/tools/defs/xai-tools.ts` defines both xAI search tools and official X API tool schemas.
 - `src/gateway/tools/handlers/xai-handlers.ts` executes `x_search`, `xai_live_search`, and all `x_api_*` tools.
 - `src/extensions/bundled/connectors/x/prometheus.extension.json` declares X connector metadata, Social category, ownership tools, OAuth/API-key setup, and browser-session fallback.
-- `web-ui/src/pages/SettingsPage.js` and `web-ui/src/pages/ConnectionsPage.js` plus generated public copies must stay in sync when the auth UX changes.
+- `web-ui/src/pages/SettingsPage.js` and the lazy-loaded `web-ui/src/pages/ConnectionsPage.js` plus generated public copies must stay in sync when the auth UX changes. Desktop navigation reaches the connector catalog through More → Plugins; model-provider settings remain in Settings.
 
 Important behavior:
 
@@ -267,3 +279,44 @@ Note:
 ### Agent operating rule (from SOUL 2026-07-07)
 
 Before claiming you can read email, pull CRM/social data, or use an external platform API, call **`connector_list`** (core) and use connected tools only. Browser-auth connectors (Instagram, TikTok, X, LinkedIn) use the live Chrome session via browser tools when connectors are not wired. Full panel list and routes: §23 above; MEMORY `operational_rules` → Connections.
+
+## Persistent Chat Sources boundary — 2026-08-08
+
+MCP, connector, and account-backed resources are intentionally excluded from the first Persistent Chat Sources release. The resource registry already has origin/locator fields and a future adapter boundary, but a connector must not become a thread resource until its account/workspace permissions, refresh behavior, revocation, and audit events are specified. Continue using `connector_list` and the existing connector authorization contract for live connector reads.
+
+### 23C) OAuth-first connector-v2 migration — 2026-08-09
+
+The native OAuth connector family now uses the shared host contract in
+`src/connections/adapters/connector-oauth.ts` and
+`src/connections/connector-oauth-bridges.ts`: GitHub, Gmail, Google Drive, GA4,
+Notion, Slack, HubSpot, Salesforce, and Reddit. The manifest is the source of
+truth for provider-app requirements, exact loopback callback, read-only scopes,
+PKCE/state/nonce requirements where the provider supports them, capability
+contracts, verification checks, and fail-closed unknown-tool policy.
+The connection record carries account identity, resource scope, token/health
+metadata, granted capabilities, and exposed tool counts without copying raw
+tokens out of the vault.
+
+Legacy reads and existing OAuth sessions remain compatible. A connection-v2
+marker is additive and rollback-capable; migration alone does not force
+reauthorization. The Plugins page uses the orchestrator and shared adapter for
+managed connect, verify, repair, reauthorize, revoke/clear, and disconnect. Own
+OAuth app, API key, setup-token, browser-session, local, and custom MCP paths
+remain explicit Advanced alternatives.
+
+X remains a separate X API user-context/xurl OAuth implementation until its
+app/tier/callback/resource contract is migrated; do not conflate it with xAI
+model OAuth. Instagram, TikTok, and LinkedIn remain browser-session/provider
+review paths. Vercel and Stripe remain API-key/provider-specific, and Obsidian
+remains local.
+
+Remote MCP OAuth is a separate standards-based adapter. The gateway now matches
+the callback path exactly, redacts provider/token errors, supports optional
+RFC 7009 revocation before local clear, and retains metadata discovery,
+dynamic-registration, PKCE/state, loopback, refresh, and conservative tool
+classification. A remote MCP server without trustworthy OAuth metadata is
+manual configuration, not a guessed OAuth connection.
+
+See `docs/P9-OAUTH-FIRST-PLUGIN-PLATFORM-IMPLEMENTATION-2026-08-08.md` for the
+connector matrix, callback/client configuration, provider prerequisites,
+scope decisions, risks, and test evidence.

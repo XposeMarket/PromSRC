@@ -54,6 +54,20 @@ export interface ProjectKnowledgeFile {
   addedAt: number;
 }
 
+export interface ProjectExternalImportBinding {
+  version: 1;
+  jobId: string;
+  dedupeKey: string;
+  provider: string;
+  adapter: string;
+  sourceLabel: string;
+  sourceProjectId: string;
+  sourcePath?: string;
+  importedAt: string;
+  /** A source path is informational until it passes Prometheus path policy. */
+  linkState: 'linked' | 'permission_required' | 'unavailable';
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -63,6 +77,9 @@ export interface Project {
   memorySnapshot: string;
   sessions: ProjectSession[];
   knowledge: ProjectKnowledgeFile[];
+  externalImport?: ProjectExternalImportBinding;
+  /** Durable sidebar pin timestamp, shared by desktop and mobile clients. */
+  pinnedAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -237,9 +254,28 @@ export function createProject(name: string, workspacePath = ''): Project {
   return project;
 }
 
+/** Create a normal Prometheus project while retaining source provenance. */
+export function createImportedProject(
+  name: string,
+  workspacePath: string,
+  externalImport: ProjectExternalImportBinding,
+): Project {
+  const project = createProject(name, workspacePath);
+  project.externalImport = externalImport;
+  project.updatedAt = Date.now();
+  saveProject(project);
+  return project;
+}
+
+export function findProjectByExternalImportDedupeKey(dedupeKey: string): Project | null {
+  const key = String(dedupeKey || '').trim();
+  if (!key) return null;
+  return listProjects().find((project) => project.externalImport?.dedupeKey === key) || null;
+}
+
 export function updateProject(
   id: string,
-  updates: Partial<Pick<Project, 'name' | 'workspacePath' | 'instructions' | 'memorySnapshot'>>
+  updates: Partial<Pick<Project, 'name' | 'workspacePath' | 'instructions' | 'memorySnapshot' | 'pinnedAt'>>
 ): Project | null {
   const project = loadProjectFromDisk(id);
   if (!project) return null;
@@ -248,6 +284,7 @@ export function updateProject(
   if (updates.workspacePath !== undefined) project.workspacePath = updates.workspacePath ? path.resolve(updates.workspacePath) : undefined;
   if (updates.instructions !== undefined) project.instructions = updates.instructions;
   if (updates.memorySnapshot !== undefined) project.memorySnapshot = updates.memorySnapshot;
+  if (updates.pinnedAt !== undefined) project.pinnedAt = updates.pinnedAt ? Number(updates.pinnedAt) : undefined;
   if (updates.instructions !== undefined || updates.memorySnapshot !== undefined) {
     try {
       const contextPath = ensureProjectContextFile(project);

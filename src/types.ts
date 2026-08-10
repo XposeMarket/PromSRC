@@ -370,6 +370,8 @@ export interface AgentModelDefaultTemplate {
   defaults: AgentModelDefaults;
   /** Per-slot reasoning efforts, keyed the same way as defaults. */
   reasoning?: Partial<Record<keyof AgentModelDefaults, ReasoningEffort>>;
+  /** Per-slot response speed, keyed the same way as defaults. */
+  speed?: Partial<Record<keyof AgentModelDefaults, 'standard' | 'fast'>>;
   /** Per-slot credential account selections, keyed the same way as defaults. */
   accounts?: Partial<Record<keyof AgentModelDefaults, string>>;
   created_at: string;
@@ -442,6 +444,8 @@ export interface PrometheusConfig {
   agent_model_defaults?: AgentModelDefaults;
   /** Provider/model-aware reasoning effort for each agent-model default slot. */
   agent_model_default_reasoning?: Partial<Record<keyof AgentModelDefaults, ReasoningEffort>>;
+  /** Provider/model-aware response speed for each agent-model default slot. */
+  agent_model_default_speed?: Partial<Record<keyof AgentModelDefaults, 'standard' | 'fast'>>;
   /** Selected credential account for each routed provider/model default. */
   agent_model_default_accounts?: Partial<Record<keyof AgentModelDefaults, string>>;
   /**
@@ -518,6 +522,16 @@ export interface PrometheusConfig {
     rollingCompactionNumCtx?: number;
     /** Optional model override for compaction (active provider model namespace). */
     rollingCompactionModel?: string;
+    /** Automatic settling is disabled when this is zero or absent. */
+    autoSettleAfterDays?: number;
+    /** Exact inactivity duration used by custom calendar-date policies. */
+    autoSettleAfterMs?: number;
+    /** User-selected custom cutoff date in YYYY-MM-DD form. */
+    autoSettleCustomDate?: string;
+    /** UTC timestamp for the selected custom calendar-day boundary. */
+    autoSettleCustomCutoffAt?: number;
+    /** When set, pre-existing chats age from this timestamp instead of history activity. */
+    autoSettleActivationAt?: number;
     mainChatGoals?: {
       enabled?: boolean;
       autoResumeOnRestart?: boolean;

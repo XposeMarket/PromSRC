@@ -31,9 +31,11 @@ const http       = require('http');
 const fs         = require('fs');
 const crypto     = require('crypto');
 const {
+  isLocalGatewayUrl,
   isTrustedRendererUrl,
   normalizeEmbeddedBrowserUrl,
   normalizeExternalUrl,
+  normalizePassthroughExternalUrl,
   parseWindowsListeningPids,
 } = require('./security');
 
@@ -92,6 +94,34 @@ if (!fs.existsSync(USER_DATA_DIR)) {
 // If the version changes (app update), re-runs the check automatically.
 const SETUP_STAMP_FILE = path.join(USER_DATA_DIR, '.setup-complete');
 const CURRENT_VERSION  = require('../package.json').version;
+const UPDATER_SETTINGS_FILE = path.join(USER_DATA_DIR, 'updater-settings.json');
+
+function readUpdaterSettings() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(UPDATER_SETTINGS_FILE, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return { autoUpdateEnabled: true };
+    return {
+      // Automatic updates are opt-out. Treat malformed/old settings as the
+      // default so an interrupted write cannot silently disable updates.
+      autoUpdateEnabled: parsed.autoUpdateEnabled !== false,
+    };
+  } catch {
+    return { autoUpdateEnabled: true };
+  }
+}
+
+function persistUpdaterSettings() {
+  const tempPath = `${UPDATER_SETTINGS_FILE}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify({ autoUpdateEnabled }, null, 2), 'utf8');
+    fs.renameSync(tempPath, UPDATER_SETTINGS_FILE);
+  } catch (error) {
+    try { fs.rmSync(tempPath, { force: true }); } catch {}
+    console.error('[Updater] Could not persist settings:', error.message);
+  }
+}
+
+let autoUpdateEnabled = readUpdaterSettings().autoUpdateEnabled;
 
 function needsDependencySetup() {
   if (IS_PACKAGED_RUNTIME) return false;
@@ -130,8 +160,10 @@ let autoUpdater = null;
 if (IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD) {
   try {
     autoUpdater = require('electron-updater').autoUpdater;
-    autoUpdater.autoDownload    = true;   // download silently in background
-    autoUpdater.autoInstallOnAppQuit = false; // we control install via the UI button
+    autoUpdater.autoDownload    = autoUpdateEnabled;
+    // Enabled updates are installed on the next normal app quit. The General
+    // settings panel also exposes an explicit "Restart & install" action.
+    autoUpdater.autoInstallOnAppQuit = autoUpdateEnabled;
     autoUpdater.logger          = null;   // suppress console noise; surface via events only
   } catch (e) {
     console.error('[Updater] electron-updater not available:', e.message);
@@ -145,6 +177,7 @@ let nativeBrowserRpcServer = null;
 let nativeBrowserRpcPort = 0;
 let isQuitting          = false;
 let gatewayShuttingDown = false;
+let availableUpdate     = null;  // holds UpdateInfo before a download begins
 let pendingUpdate       = null;  // holds UpdateInfo once a release is downloaded
 let updaterStatus       = autoUpdater ? 'idle' : 'unsupported';
 let updaterMessage      = autoUpdater ? '' : 'Updates are available only in packaged public builds.';
@@ -163,12 +196,16 @@ const NATIVE_BROWSER_EMPTY_BOUNDS = { x: 0, y: 0, width: 0, height: 0 };
 function getUpdaterState(extra = {}) {
   return {
     supported: !!autoUpdater,
+    autoUpdateEnabled,
+    currentVersion: CURRENT_VERSION,
     status: updaterStatus,
     message: updaterMessage,
     progress: updaterProgress,
-    version: pendingUpdate && pendingUpdate.version ? pendingUpdate.version : '',
-    releaseName: pendingUpdate && pendingUpdate.releaseName ? pendingUpdate.releaseName : '',
-    releaseNotes: pendingUpdate && typeof pendingUpdate.releaseNotes === 'string' ? pendingUpdate.releaseNotes : '',
+    version: (pendingUpdate || availableUpdate)?.version || '',
+    releaseName: (pendingUpdate || availableUpdate)?.releaseName || '',
+    releaseNotes: typeof (pendingUpdate || availableUpdate)?.releaseNotes === 'string'
+      ? (pendingUpdate || availableUpdate).releaseNotes
+      : '',
     ...extra,
   };
 }
@@ -181,6 +218,64 @@ function sendUpdaterState(extra = {}) {
   return state;
 }
 
+function applyUpdaterPreferences() {
+  if (!autoUpdater) return;
+  autoUpdater.autoDownload = autoUpdateEnabled;
+  autoUpdater.autoInstallOnAppQuit = autoUpdateEnabled;
+}
+
+async function downloadPrometheusUpdate(source = 'manual') {
+  if (!autoUpdater) {
+    updaterStatus = 'unsupported';
+    updaterMessage = 'Updates are available only in packaged public builds.';
+    return sendUpdaterState({ source });
+  }
+  if (updaterInstalling) return sendUpdaterState({ source });
+  if (pendingUpdate) {
+    updaterStatus = 'ready';
+    updaterMessage = autoUpdateEnabled
+      ? 'Update downloaded. It will install when Prometheus quits.'
+      : 'Update downloaded and ready to install.';
+    return sendUpdaterState({ source });
+  }
+  if (!availableUpdate) return checkForPrometheusUpdates(source);
+
+  updaterStatus = 'downloading';
+  updaterMessage = `Downloading Prometheus ${availableUpdate.version || 'update'}...`;
+  updaterProgress = 0;
+  sendUpdaterState({ source });
+  try {
+    await autoUpdater.downloadUpdate();
+    return sendUpdaterState({ source });
+  } catch (error) {
+    updaterStatus = 'error';
+    updaterMessage = error && error.message ? error.message : 'Update download failed.';
+    console.error('[Updater] downloadUpdate failed:', updaterMessage);
+    return sendUpdaterState({ source });
+  }
+}
+
+async function setAutoUpdateEnabled(enabled) {
+  autoUpdateEnabled = enabled === true;
+  persistUpdaterSettings();
+  applyUpdaterPreferences();
+
+  if (!autoUpdater) {
+    updaterStatus = 'unsupported';
+    updaterMessage = 'Updates are available only in packaged public builds.';
+    return sendUpdaterState({ source: 'settings' });
+  }
+
+  if (!autoUpdateEnabled && !pendingUpdate && !availableUpdate && updaterStatus === 'idle') {
+    updaterMessage = 'Automatic updates are off. Use Check for updates when you want to look.';
+  }
+  if (autoUpdateEnabled && !pendingUpdate) {
+    if (availableUpdate) return downloadPrometheusUpdate('settings');
+    return checkForPrometheusUpdates('settings');
+  }
+  return sendUpdaterState({ source: 'settings' });
+}
+
 async function checkForPrometheusUpdates(source = 'manual') {
   if (!autoUpdater) {
     updaterStatus = 'unsupported';
@@ -190,7 +285,9 @@ async function checkForPrometheusUpdates(source = 'manual') {
   if (updaterInstalling) return sendUpdaterState({ source });
   if (pendingUpdate) {
     updaterStatus = 'ready';
-    updaterMessage = 'Update downloaded and ready to install.';
+    updaterMessage = autoUpdateEnabled
+      ? 'Update downloaded. It will install when Prometheus quits.'
+      : 'Update downloaded and ready to install.';
     return sendUpdaterState({ source });
   }
   if (updaterChecking) return sendUpdaterState({ source });
@@ -203,6 +300,9 @@ async function checkForPrometheusUpdates(source = 'manual') {
 
   try {
     const result = await autoUpdater.checkForUpdates();
+    // electron-updater emits update-not-available/update-available for the
+    // authoritative result. Only use the return value as a fallback when no
+    // event changed the state (some provider versions return null in dev QA).
     if (!result || !result.updateInfo) {
       updaterStatus = 'idle';
       updaterMessage = 'Prometheus is up to date.';
@@ -445,6 +545,48 @@ function writeGatewayLog(data) {
 
 function getLastGatewayOutput(maxLines = 30) {
   return gatewayLogLines.slice(-maxLines).join('\n');
+}
+
+async function openExternalSafely(rawUrl) {
+  const externalUrl = normalizeExternalUrl(rawUrl);
+  if (!externalUrl) {
+    writeGatewayLog(`[main] Blocked unsafe external URL: ${String(rawUrl || '').slice(0, 300)}\n`);
+    throw new Error('Only credential-free HTTP and HTTPS URLs may open externally.');
+  }
+  await shell.openExternal(externalUrl);
+  return { ok: true, url: externalUrl };
+}
+
+async function openPassthroughExternalSafely(rawUrl) {
+  const passthroughUrl = normalizePassthroughExternalUrl(rawUrl);
+  if (!passthroughUrl) {
+    writeGatewayLog(`[main] Blocked unsafe passthrough URL: ${String(rawUrl || '').slice(0, 300)}\n`);
+    throw new Error('This URL scheme is not allowed from the Prometheus window.');
+  }
+  await shell.openExternal(passthroughUrl);
+  return { ok: true, url: passthroughUrl };
+}
+
+function requestPrometheusBrowserNavigation(rawUrl) {
+  let browserUrl;
+  try {
+    browserUrl = normalizeEmbeddedBrowserUrl(rawUrl);
+  } catch (error) {
+    writeGatewayLog(`[main] Blocked in-app browser URL: ${error && error.message ? error.message : error}\n`);
+    return false;
+  }
+  if (!browserUrl || browserUrl === 'about:blank' || !mainWindow || mainWindow.isDestroyed()) return false;
+  try {
+    mainWindow.webContents.send('prometheus-browser-navigation', {
+      url: browserUrl,
+      source: 'electron-main-window',
+      timestamp: Date.now(),
+    });
+    return true;
+  } catch (error) {
+    writeGatewayLog(`[main] Could not dispatch in-app browser navigation: ${error && error.message ? error.message : error}\n`);
+    return false;
+  }
 }
 
 // ─── Vault master key ────────────────────────────────────────────────────────
@@ -846,7 +988,7 @@ function resolveNativePartition(sessionId, profileId) {
 }
 
 function nativeViewMeta(view) {
-  if (!view.__promMeta) view.__promMeta = { url: 'about:blank', title: '', loading: false, lastError: '' };
+  if (!view.__promMeta) view.__promMeta = { url: 'about:blank', title: '', loading: false, lastError: '', designMode: false };
   return view.__promMeta;
 }
 
@@ -951,8 +1093,13 @@ function wireNativeViewEvents(view, partition) {
   });
   wc.on('did-start-loading', () => { meta.loading = true; onUpdate(); });
   wc.on('did-stop-loading', () => { meta.loading = false; onUpdate(); });
-  wc.on('did-navigate', (_event, url) => { meta.url = url || wc.getURL() || meta.url; meta.title = wc.getTitle() || meta.title || ''; onUpdate(); });
-  wc.on('did-navigate-in-page', (_event, url) => { meta.url = url || wc.getURL() || meta.url; meta.title = wc.getTitle() || meta.title || ''; onUpdate(); });
+  wc.on('did-finish-load', () => {
+    if (meta.designMode === true) {
+      try { wc.send('prometheus-design-mode', { enabled: true }); } catch {}
+    }
+  });
+  wc.on('did-navigate', (_event, url) => { meta.lastError = ''; meta.url = url || wc.getURL() || meta.url; meta.title = wc.getTitle() || meta.title || ''; onUpdate(); });
+  wc.on('did-navigate-in-page', (_event, url) => { meta.lastError = ''; meta.url = url || wc.getURL() || meta.url; meta.title = wc.getTitle() || meta.title || ''; onUpdate(); });
   wc.on('page-title-updated', (_event, title) => { meta.title = title || wc.getTitle() || ''; onUpdate(); });
   wc.on('did-fail-load', (_event, _code, description, validatedURL) => { meta.lastError = description || 'Native browser load failed.'; meta.url = validatedURL || wc.getURL() || meta.url; onUpdate(); });
 }
@@ -1041,6 +1188,7 @@ function hideNativeBrowserSurface(reason = '') {
 
 async function openNativeBrowserSurface({ sessionId = '', url = '', profile = '' } = {}) {
   const { view, wc, partition } = requireNativeViewForSession(sessionId, profile);
+  presentNativeView(partition);
   nativeBrowserState.attached = true;
   if (sessionId) nativeBrowserState.sessionId = String(sessionId);
   const meta = nativeViewMeta(view);
@@ -1076,7 +1224,9 @@ async function attachNativeBrowserSurface({ sessionId = '', url = '', profile = 
 
 async function navigateNativeBrowserSurface({ action = '', url = '', sessionId = '' } = {}) {
   const { view, wc, partition } = requireNativeViewForSession(sessionId);
+  presentNativeView(partition);
   const normalized = String(action || '').trim().toLowerCase();
+  nativeViewMeta(view).lastError = '';
   if (normalized === 'back') {
     if (wc.canGoBack()) wc.goBack();
   } else if (normalized === 'forward') {
@@ -1098,6 +1248,14 @@ function setNativeBrowserTeachCapture({ sessionId = '', enabled = false } = {}) 
   const { wc } = requireNativeViewForSession(sessionId);
   wc.send('prometheus-teach-capture', !!enabled);
   writeGatewayLog(`[main] teach-capture set enabled=${!!enabled} sessionId=${sessionId}\n`);
+  return { ok: true, enabled: !!enabled };
+}
+
+function setNativeBrowserDesignMode({ sessionId = '', enabled = false } = {}) {
+  const { view, wc } = requireNativeViewForSession(sessionId);
+  nativeViewMeta(view).designMode = enabled === true;
+  wc.send('prometheus-design-mode', { enabled: !!enabled });
+  writeGatewayLog(`[main] design-mode set enabled=${!!enabled} sessionId=${sessionId}\n`);
   return { ok: true, enabled: !!enabled };
 }
 
@@ -1536,6 +1694,10 @@ handleTrustedMain('pairing-admin:request', async (_event, payload = {}) => {
 
 handleTrustedMain('get-app-version', () => CURRENT_VERSION);
 
+handleTrustedMain('external-link:open', async (_event, payload = {}) => {
+  return openExternalSafely(String(payload?.url || '').trim());
+});
+
 handleTrustedMain('select-canvas-paths', async (_event, options = {}) => {
   const mode = options && options.mode === 'folder'
     ? 'folder'
@@ -1567,6 +1729,7 @@ handleTrustedMain('native-browser:focus', async () => {
 });
 handleTrustedMain('native-browser:state', async () => broadcastNativeBrowserState());
 handleTrustedMain('native-browser:teach-capture', async (_event, options = {}) => setNativeBrowserTeachCapture(options));
+handleTrustedMain('native-browser:design-mode', async (_event, options = {}) => setNativeBrowserDesignMode(options));
 
 // Relay Teach capture events from the in-house view's preload to the Prometheus
 // renderer, tagged with the presented session so the right Teach session records.
@@ -1585,10 +1748,28 @@ ipcMain.on('prometheus-teach-key', (event, payload = {}) => {
 ipcMain.on('prometheus-teach-scroll', (event, payload = {}) => {
   relayTeachEvent(event, 'native-browser-teach-scroll', payload);
 });
+ipcMain.on('prometheus-design-hover', (event, payload = {}) => {
+  relayTeachEvent(event, 'native-browser-design-hover', payload);
+});
+ipcMain.on('prometheus-design-select', (event, payload = {}) => {
+  relayTeachEvent(event, 'native-browser-design-select', payload);
+});
+ipcMain.on('prometheus-design-action', (event, payload = {}) => {
+  relayTeachEvent(event, 'native-browser-design-action', payload);
+});
+ipcMain.on('prometheus-design-chat', (event, payload = {}) => {
+  relayTeachEvent(event, 'native-browser-design-chat', payload);
+});
 
 handleTrustedMain('updater:get-state', () => getUpdaterState());
 
 handleTrustedMain('updater:check', async () => checkForPrometheusUpdates('manual'));
+
+handleTrustedMain('updater:download', async () => downloadPrometheusUpdate('manual'));
+
+handleTrustedMain('updater:set-auto-update', async (_event, payload = {}) => (
+  setAutoUpdateEnabled(payload?.enabled === true)
+));
 
 handleTrustedMain('updater:install', async () => {
   if (!autoUpdater) {
@@ -1639,30 +1820,39 @@ function createWindow() {
     mainWindow.focus();
   });
 
-  const openExternalSafely = (url) => {
-    const externalUrl = normalizeExternalUrl(url);
-    if (!externalUrl) {
-      writeGatewayLog(`[main] Blocked unsafe external URL: ${String(url || '').slice(0, 300)}\n`);
-      return;
-    }
-    shell.openExternal(externalUrl).catch((error) => {
-      writeGatewayLog(`[main] Failed to open external URL: ${error && error.message ? error.message : error}\n`);
-    });
-  };
-
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isTrustedRendererUrl(url, GATEWAY_URL)) {
+    if (isTrustedRendererUrl(url, GATEWAY_URL) || isLocalGatewayUrl(url, GATEWAY_URL)) {
       mainWindow.loadURL(url);
-    } else {
-      openExternalSafely(url);
+    } else if (!requestPrometheusBrowserNavigation(url)) {
+      const passthrough = normalizePassthroughExternalUrl(url);
+      if (passthrough) {
+        openPassthroughExternalSafely(passthrough).catch((error) => {
+          writeGatewayLog(`[main] Failed to open passthrough URL: ${error && error.message ? error.message : error}\n`);
+        });
+      } else {
+        openExternalSafely(url).catch((error) => {
+          writeGatewayLog(`[main] Failed to open external URL: ${error && error.message ? error.message : error}\n`);
+        });
+      }
     }
     return { action: 'deny' };
   });
 
   const guardMainNavigation = (event, url) => {
-    if (isTrustedRendererUrl(url, GATEWAY_URL)) return;
+    if (isTrustedRendererUrl(url, GATEWAY_URL) || isLocalGatewayUrl(url, GATEWAY_URL)) return;
     event.preventDefault();
-    openExternalSafely(url);
+    if (!requestPrometheusBrowserNavigation(url)) {
+      const passthrough = normalizePassthroughExternalUrl(url);
+      if (passthrough) {
+        openPassthroughExternalSafely(passthrough).catch((error) => {
+          writeGatewayLog(`[main] Failed to open passthrough URL: ${error && error.message ? error.message : error}\n`);
+        });
+      } else {
+        openExternalSafely(url).catch((error) => {
+          writeGatewayLog(`[main] Failed to open external URL: ${error && error.message ? error.message : error}\n`);
+        });
+      }
+    }
   };
   mainWindow.webContents.on('will-navigate', guardMainNavigation);
   mainWindow.webContents.on('will-redirect', guardMainNavigation);
@@ -1684,18 +1874,23 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-available', (info) => {
     console.log(`[Updater] Update available: v${info.version}`);
-    updaterStatus = 'downloading';
-    updaterMessage = `Downloading Prometheus ${info.version || 'update'}...`;
+    availableUpdate = info;
+    updaterStatus = autoUpdateEnabled ? 'downloading' : 'available';
+    updaterMessage = autoUpdateEnabled
+      ? `Downloading Prometheus ${info.version || 'update'}...`
+      : `Prometheus ${info.version || 'update'} is available.`;
     updaterProgress = 0;
     sendUpdaterState({
       version: info.version || '',
       releaseName: info.releaseName || (info.version ? `v${info.version}` : ''),
       releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
     });
-    // Start download automatically (autoDownload=true handles this).
+    // autoDownload=true handles this in the enabled path. Manual downloads
+    // call updater:download after a disabled user's explicit action.
   });
 
   autoUpdater.on('update-not-available', () => {
+    availableUpdate = null;
     pendingUpdate = null;
     updaterStatus = 'idle';
     updaterMessage = 'Prometheus is up to date.';
@@ -1715,9 +1910,12 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-downloaded', (info) => {
     console.log(`[Updater] Update downloaded: v${info.version} — ready to install`);
+    availableUpdate = info;
     pendingUpdate = info;
     updaterStatus = 'ready';
-    updaterMessage = 'Update downloaded and ready to install.';
+    updaterMessage = autoUpdateEnabled
+      ? 'Update downloaded. It will install when Prometheus quits.'
+      : 'Update downloaded and ready to install.';
     updaterProgress = 100;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-ready', {

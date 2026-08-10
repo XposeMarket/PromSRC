@@ -126,15 +126,17 @@ export function classifyGatewaySupervisorObservation(
     && (!statusIsRelevant || statusPidMatches)
     && (!leaseIsRelevant || leasePidMatches);
 
-  if (childExited || !childPid) {
-    return { state: 'exited', action: 'relaunch', reasonCode: 'child_exited', resetFailures: true,
-      heartbeatAgeMs, progressAgeMs, checkpointAgeMs, leaseExpiresInMs, pidAgreement };
-  }
-
   // A successful application probe needs no recovery action. Expensive PID
   // ownership inspection is deliberately reserved for failed probes.
   if (observation.healthOk) {
     return { state: 'healthy', action: 'none', reasonCode: 'health_probe_ok', resetFailures: true,
+      heartbeatAgeMs, progressAgeMs, checkpointAgeMs, leaseExpiresInMs, pidAgreement };
+  }
+
+  // If the supervised child exited but another gateway is already healthy,
+  // yield to that instance instead of creating a port-conflict restart loop.
+  if (childExited || !childPid) {
+    return { state: 'exited', action: 'relaunch', reasonCode: 'child_exited', resetFailures: true,
       heartbeatAgeMs, progressAgeMs, checkpointAgeMs, leaseExpiresInMs, pidAgreement };
   }
 

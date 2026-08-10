@@ -58,6 +58,13 @@ This directory is a split copy of root `SELF.md` — the same source-verified ar
 | 43 | Canonical Agent Identity and Memory Runtime (main, manager, standalone/team agents, compatibility) | [29-agent-identity-and-memory-runtime.md](29-agent-identity-and-memory-runtime.md) |
 | 44 | Gateway and Runtime Process Isolation (maintenance/model/retention workers, durable journal, bounded delivery, exact remaining full-turn gap) | [30-runtime-process-isolation.md](30-runtime-process-isolation.md) |
 | 45 | Brain Thought Six-Hour Activity Package (canonical stores, direct prompt contract, provenance, redaction, continuations, measurements) | [31-thought-activity-package.md](31-thought-activity-package.md) |
+| 46 | Persistent Chat Sources / Context (registry, immutable versions, Browser history/save, retrieval budget, UI, security, migration) | [32-persistent-chat-sources.md](32-persistent-chat-sources.md) |
+| 47 | P0-4 Process Hygiene Observer and Dry-Run Boundary (ownership/lease-aware report-only classification, protection, redaction, and Thought handoff) | [37-process-hygiene.md](37-process-hygiene.md) |
+| 48 | P10-36 Mobile Gateway Connections (independent computer targets, pairing/catalog/status, immutable target selection, read-only first slice) | [38-mobile-gateway-connections.md](38-mobile-gateway-connections.md) |
+| — | Workspace-first operating mode and reversible hiding of direct Prometheus dev/source/repo-sync tools | [33-workspace-first-dev-tools.md](33-workspace-first-dev-tools.md) |
+| — | Tool-category workflow packs, tightened activation benchmark, schema/prose measurements, and skill-routing audit | [34-tool-category-routing-and-skill-audit.md](34-tool-category-routing-and-skill-audit.md) |
+| — | Tool latency benchmark, prompt payload A/B, executor/provider timing, and MEMORY.md findings | [35-tool-latency-benchmark-2026-08-09.md](35-tool-latency-benchmark-2026-08-09.md) |
+| — | P11-37 external conversation sessions, MCP/setup imports, provenance, rollback, and imported-source sidebar marks | [36-external-imports.md](36-external-imports.md) |
 | Feature Index | Product/feature catalog for copy, launch posts, onboarding, and capability lookup | [feature-index/README.md](feature-index/README.md) |
 
 Voice-only memory lives at `workspace/VOICEAGENT.md`. It is injected into Realtime voice-agent context for routing and spoken behavior notes without loading those notes into the main worker prompt.

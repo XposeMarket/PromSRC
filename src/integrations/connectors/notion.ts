@@ -19,6 +19,8 @@ export class NotionConnector extends OAuthConnector {
       clientSecret: process.env.NOTION_CLIENT_SECRET || '',
       scopes: [], // Notion doesn't use scope param
       usePkce: false,
+      useOfflineAccess: false,
+      tokenAuthMethod: 'basic',
       callbackPort: 19423,
       callbackPath: '/auth/callback/notion',
     };
@@ -28,15 +30,22 @@ export class NotionConnector extends OAuthConnector {
   protected async buildTokens(data: Record<string, any>): Promise<ConnectorTokens> {
     return {
       access_token: data.access_token,
-      expires_at: Date.now() + 365 * 24 * 60 * 60 * 1000, // Notion tokens don't expire
+      expires_at: Number.MAX_SAFE_INTEGER, // Notion public-connection tokens do not expose a refresh expiry.
       account_email: data.owner?.user?.person?.email,
       account_id: data.owner?.user?.id,
+      resource_id: data.workspace_id,
+      resource_name: data.workspace_name,
+      resource_kind: 'workspace',
     };
   }
 
   // Notion token exchange requires Basic auth with client_id:client_secret
   protected callbackUrl(): string {
     return `http://localhost:${this.cfg.callbackPort}${this.cfg.callbackPath}`;
+  }
+
+  async getCurrentUser(): Promise<any> {
+    return this.notionGet('/users/me');
   }
 
   private async notionGet(path: string): Promise<any> {

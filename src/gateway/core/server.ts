@@ -32,6 +32,7 @@ import {
   clearBrowserTeachSessionSnapshot,
   browserReopenSession,
   browserNavigateControl,
+  browserOpenUiLink,
   startBrowserLiveStream,
   stopBrowserLiveStream,
   setBrowserControlCaptureState,
@@ -759,6 +760,31 @@ export function createServer(
                 type: 'browser:input:error',
                 sessionId,
                 error: String(err?.message || err || 'Browser navigation failed.'),
+                timestamp: Date.now(),
+              }));
+            } catch {}
+          });
+          return;
+        }
+        if (msg?.type === 'browser:link_open' && msg?.sessionId) {
+          const requestedSessionId = String(msg.sessionId || '');
+          browserOpenUiLink(requestedSessionId, String(msg.url || '').trim()).then((status) => {
+            broadcastPayload({
+              type: 'browser:status',
+              ...status,
+              requestedSessionId,
+              linkNavigation: true,
+              source: 'system',
+              tool: 'browser_link',
+            });
+          }).catch((err: any) => {
+            try {
+              ws.send(JSON.stringify({
+                type: 'browser:input:error',
+                sessionId: requestedSessionId,
+                requestedSessionId,
+                linkNavigation: true,
+                error: String(err?.message || err || 'Browser link navigation failed.'),
                 timestamp: Date.now(),
               }));
             } catch {}

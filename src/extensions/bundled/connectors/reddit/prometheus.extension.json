@@ -74,5 +74,45 @@
         "placeholder": "abc123..."
       }
     ]
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["Reddit OAuth", "Reddit account"],
+    "domains": ["reddit.com", "oauth.reddit.com"],
+    "providerApp": {
+      "provider": "reddit",
+      "appType": "confidential-client",
+      "clientIdEnv": "REDDIT_CLIENT_ID",
+      "clientSecretEnv": "REDDIT_CLIENT_SECRET",
+      "externalSetupRequired": true
+    },
+    "strategies": [{
+      "id": "reddit-oauth",
+      "adapter": "connector-oauth",
+      "priority": 100,
+      "capabilities": ["posts.read", "comments.read", "search.read", "history.read"],
+      "readOnlyDefault": true,
+      "authentication": {
+        "type": "oauth2",
+        "scopes": ["identity", "read", "history"],
+        "authorizationUrl": "https://www.reddit.com/api/v1/authorize",
+        "tokenUrl": "https://www.reddit.com/api/v1/access_token",
+        "pkceRequired": false,
+        "callback": { "host": "localhost", "port": 19424, "path": "/auth/callback/reddit" },
+        "clientIdEnv": "REDDIT_CLIENT_ID",
+        "clientSecretEnv": "REDDIT_CLIENT_SECRET"
+      },
+      "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+      "config": { "provider": "reddit", "connectorId": "reddit", "resourceScope": "authenticated Reddit account" }
+    }],
+    "requestedCapabilities": [
+      { "id": "posts.read", "label": "Read posts", "description": "Read posts from selected subreddits.", "risk": "read" },
+      { "id": "comments.read", "label": "Read comments", "description": "Read comments on accessible posts.", "risk": "read" },
+      { "id": "search.read", "label": "Search Reddit", "description": "Search posts and communities.", "risk": "read" },
+      { "id": "history.read", "label": "Read account history", "description": "Read the connected account's submitted history.", "risk": "read" },
+      { "id": "posts.submit", "label": "Submit posts", "description": "Posting is an explicit external write.", "risk": "write" }
+    ],
+    "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+    "toolPolicy": { "defaultExposure": "read-only", "unknownTools": "blocked" }
   }
 }

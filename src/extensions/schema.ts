@@ -145,10 +145,23 @@ export const ExtensionDescriptorSchema = z.object({
     schemaVersion: z.literal(1),
     aliases: z.array(z.string().min(1)).optional(),
     domains: z.array(z.string().min(1)).optional(),
+    providerApp: z.object({
+      provider: z.string().min(1).optional(),
+      appType: z.enum(['oauth-app', 'github-app', 'public-client', 'confidential-client', 'unknown']).optional(),
+      clientIdEnv: z.string().min(1).optional(),
+      clientSecretEnv: z.string().min(1).optional(),
+      externalSetupRequired: z.boolean().optional(),
+    }).optional(),
     strategies: z.array(z.object({
       id: z.string().min(1), adapter: z.string().min(1), priority: z.number().optional(),
       capabilities: z.array(z.string()).optional(), readOnlyDefault: z.boolean().optional(),
-      authentication: z.object({ type: z.string().min(1), scopes: z.array(z.string()).optional(), audience: z.string().optional() }).optional(),
+      authentication: z.object({
+        type: z.string().min(1), scopes: z.array(z.string()).optional(), audience: z.string().optional(),
+        authorizationUrl: z.string().url().optional(), tokenUrl: z.string().url().optional(), revokeUrl: z.string().url().optional(),
+        pkceRequired: z.boolean().optional(), nonceRequired: z.boolean().optional(),
+        callback: z.object({ host: z.string().optional(), port: z.number().int().positive().optional(), path: z.string().optional() }).optional(),
+        clientIdEnv: z.string().min(1).optional(), clientSecretEnv: z.string().min(1).optional(),
+      }).optional(),
       verification: z.array(z.string()).optional(), config: z.record(z.unknown()).optional(),
     })).min(1),
     requestedCapabilities: z.array(z.object({

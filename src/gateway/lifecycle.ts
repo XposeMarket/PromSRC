@@ -21,10 +21,10 @@ import fs from 'fs';
 import path from 'path';
 import { spawn, execFileSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
-import { flushSession } from './session';
 import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
 import { recordActiveMainChatGoalsInterruptedForRestart } from './main-chat-goals';
 import { getLastMainSessionId } from './comms/broadcaster';
+import { desktopBackgroundShutdown } from './desktop-background';
 import type { DevSourceEditContinuation } from './dev-source-approvals';
 import { listCoordinatedRestartBlockers } from './dev-edit-coordinator';
 import {
@@ -52,6 +52,8 @@ export interface RestartContext {
   taskId?: string;
   taskOriginatingSessionId?: string;
   taskInitiatedTool?: 'gateway_restart' | 'prom_apply_dev_changes';
+  /** Explicit no-build/manual restart. This bypasses stale-session model continuation. */
+  quickRestart?: boolean;
   suppressStandaloneRestartMessage?: boolean;
   originChannel?: 'web' | 'mobile' | 'telegram' | 'discord' | 'whatsapp' | 'unknown';
   respondToTelegram?: boolean;
@@ -114,6 +116,49 @@ export function shouldClosePreviousTerminalAfterRestart(ctx: RestartContext): bo
     || process.env.PROMETHEUS_SUPERVISED_GATEWAY_CHILD === '1'
   ) return false;
   return true;
+}
+
+function isSourceTreeNewerThanCompiled(root: string, compiledMtimeMs: number): boolean {
+  const sourceRoot = path.join(root, 'src');
+  const pending: string[] = [sourceRoot];
+  while (pending.length) {
+    const current = pending.pop()!;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name === '.git') continue;
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(fullPath);
+        continue;
+      }
+      if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
+      try {
+        if (fs.statSync(fullPath).mtimeMs > compiledMtimeMs) return true;
+      } catch {}
+    }
+  }
+  return false;
+}
+
+function resolveDirectGatewayLaunch(root: string): { entry: string; args: string[] } | null {
+  const sourceEntry = path.join(root, 'src', 'gateway', 'server-v2.ts');
+  const compiledEntry = path.join(root, 'dist', 'gateway', 'server-v2.js');
+  const sourceExists = fs.existsSync(sourceEntry);
+  const compiledExists = fs.existsSync(compiledEntry);
+  const preferSource = process.env.PROMETHEUS_GATEWAY_USE_SOURCE === '1';
+  const preferCompiled = process.env.PROMETHEUS_GATEWAY_USE_COMPILED === '1';
+  if (compiledExists && !preferSource) {
+    try {
+      const compiledMtimeMs = fs.statSync(compiledEntry).mtimeMs;
+      if (preferCompiled || !isSourceTreeNewerThanCompiled(root, compiledMtimeMs)) {
+        return { entry: compiledEntry, args: [compiledEntry] };
+      }
+    } catch {}
+  }
+  if (sourceExists) return { entry: sourceEntry, args: [...process.execArgv, sourceEntry] };
+  if (compiledExists) return { entry: compiledEntry, args: [compiledEntry] };
+  return null;
 }
 
 function findWindowsShellLauncherPid(gatewayPid: number, launcherPid: number): number | undefined {
@@ -390,6 +435,7 @@ export function runBuild(): Promise<BuildResult> {
 interface ShutdownHooks {
   stopTelegram?: () => void;
   stopCron?: () => void;
+  stopAutoSettle?: () => void;
   stopTimers?: () => void;
   stopInternalWatches?: () => void;
   stopHeartbeat?: () => void;
@@ -501,7 +547,19 @@ export function markStartupNotificationDelivered(
  * Does NOT exit the process — caller decides what to do next.
  */
 async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void> {
+  const shutdownStartedAt = Date.now();
+  let shutdownPhaseStartedAt = shutdownStartedAt;
+  const shutdownMark = (phase: string): void => {
+    if (process.env.PROMETHEUS_LIFECYCLE_PROFILE !== '1' && process.env.PROMETHEUS_STARTUP_PROFILE !== '1') return;
+    const now = Date.now();
+    console.error(
+      `[lifecycle-profile] +${String(now - shutdownStartedAt).padStart(5)}ms ` +
+      `Δ${String(now - shutdownPhaseStartedAt).padStart(5)}ms ${phase}`,
+    );
+    shutdownPhaseStartedAt = now;
+  };
   console.log('[lifecycle] Shutting down gateway subsystems...');
+  shutdownMark('shutdown entered');
 
   // 1. Stop accepting new work
   try {
@@ -523,8 +581,13 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
   } catch (e: any) {
     console.warn('[lifecycle] Runtime recovery snapshot error:', e.message);
   }
+  shutdownMark('main-chat goal checkpoints captured');
+  shutdownMark('runtime checkpoints captured');
   try { _shutdownHooks.stopCron?.(); } catch (e: any) {
     console.warn('[lifecycle] Cron stop error:', e.message);
+  }
+  try { _shutdownHooks.stopAutoSettle?.(); } catch (e: any) {
+    console.warn('[lifecycle] Auto-settle stop error:', e.message);
   }
   try { _shutdownHooks.stopTimers?.(); } catch (e: any) {
     console.warn('[lifecycle] Timer stop error:', e.message);
@@ -544,21 +607,30 @@ async function shutdownGateway(restartTrigger = 'gateway_restart'): Promise<void
   try { await _shutdownHooks.stopRuntimeWorkers?.(); } catch (e: any) {
     console.warn('[lifecycle] Runtime worker stop error:', e.message);
   }
+  shutdownMark('runtime workers stopped');
+  try { await desktopBackgroundShutdown(); } catch (e: any) {
+    console.warn('[lifecycle] Desktop target stop error:', e.message);
+  }
+  shutdownMark('desktop background stopped');
 
   // 2. Flush sessions to disk
   try { await _shutdownHooks.flushSessions?.(); } catch (e: any) {
     console.warn('[lifecycle] Session flush error:', e.message);
   }
+  shutdownMark('sessions flushed');
 
   // 3. Close network listeners
   try { _shutdownHooks.closeWebSocket?.(); } catch (e: any) {
     console.warn('[lifecycle] WebSocket close error:', e.message);
   }
+  shutdownMark('websocket listeners closed');
   try { await _shutdownHooks.closeHttpServer?.(); } catch (e: any) {
     console.warn('[lifecycle] HTTP server close error:', e.message);
   }
+  shutdownMark('http listeners closed');
 
   console.log('[lifecycle] Gateway shutdown complete.');
+  shutdownMark('shutdown complete');
 }
 
 // ─── Graceful Restart ─────────────────────────────────────────────────────────
@@ -599,14 +671,9 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   console.log(`[lifecycle] ═══ Graceful restart initiated: ${ctx.reason} ═══`);
   console.log(`[lifecycle] Title: ${ctx.title || '(none)'}`);
 
-  // Step 1: Write context for the next boot
-  if (restartCtx.previousSessionId) {
-    try {
-      flushSession(restartCtx.previousSessionId);
-    } catch (err: any) {
-      console.warn(`[lifecycle] Could not flush previous session before restart: ${String(err?.message || err)}`);
-    }
-  }
+  // Step 1: Write context for the next boot. Session persistence is flushed by
+  // shutdownGateway below; flushing the previous session here duplicated the
+  // same synchronous writes on every restart.
   writeRestartContext(restartCtx);
   if (externallySupervised && restartCtx.restartScope === 'supervisor') {
     const supervisorStateDir = process.env.PROMETHEUS_SUPERVISOR_STATE_DIR
@@ -659,26 +726,31 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
     return;
   }
 
-  // Step 3: Spawn new gateway process.
-  //
-  // Use `prom gateway start` via shell so the global prom command is resolved
-  // from PATH — same as a user would run it manually. This is the most reliable
-  // cross-platform approach and reuses the exact same boot path.
-  //
-  // detached: true + stdio: 'ignore' + unref() = fully independent child that
-  // survives the parent exiting on both Windows and Unix.
+  // Step 3: Spawn a detached gateway process directly. The previous shell ->
+  // global `prom` -> CLI -> gateway chain paid several process handoffs and
+  // could re-enter the supervisor. Prefer a compiled entry when it is newer
+  // than the source tree; otherwise preserve source-mode TSX execution.
   try {
     const replacementEnv = { ...process.env, PROMETHEUS_HOT_RESTART: '1' } as NodeJS.ProcessEnv;
     delete replacementEnv.PROMETHEUS_SUPERVISED_GATEWAY_CHILD;
-    const child = spawn('prom', ['gateway', 'start'], {
-      cwd: root,
-      detached: true,
-      stdio: 'ignore',
-      shell: true,
-      env: replacementEnv,
-    });
+    const launch = resolveDirectGatewayLaunch(root);
+    const child = launch
+      ? spawn(process.execPath, launch.args, {
+        cwd: root,
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        env: replacementEnv,
+      })
+      : spawn('prom', ['gateway', 'start'], {
+        cwd: root,
+        detached: true,
+        stdio: 'ignore',
+        shell: true,
+        env: replacementEnv,
+      });
     child.unref();
-    console.log('[lifecycle] New gateway process spawned. Exiting old process...');
+    console.log(`[lifecycle] New gateway process spawned${launch ? ` (${launch.entry})` : ''}. Exiting old process...`);
   } catch (err: any) {
     console.error(`[lifecycle] Failed to spawn new process: ${err.message}`);
     console.error('[lifecycle] The gateway will NOT restart automatically. Manual restart required.');
@@ -686,10 +758,10 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   }
 
   // Step 4: Exit current process.
-  // 1s is enough — child is fully detached and doesn't depend on parent.
+  // The child is fully detached and does not depend on the old process.
   setTimeout(() => {
     process.exit(0);
-  }, 1000);
+  }, Math.max(100, Number(process.env.PROMETHEUS_RESTART_EXIT_DELAY_MS || 250)));
 }
 
 // ─── Build + Restart Combo ────────────────────────────────────────────────────

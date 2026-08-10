@@ -81,6 +81,13 @@ async function main(): Promise<void> {
     assert.equal(pkg.completeness.directContextRule, 'do_not_search_covered_activity');
     assert(pkg.unresolvedWork.some((item) => item.id === 'id:task-1'), 'running task should be listed as unresolved');
     assert(pkg.sourceCoverage.some((source) => source.source === 'tasks' && source.status === 'partial'), 'invalid source data should be visible as partial');
+    const dateInput = await buildThoughtActivityPackage({
+      ...options,
+      start: new Date(start),
+      end: new Date(end),
+      outputDir: path.join(workspacePath, 'Brain', 'activity-packages', 'date-input'),
+    });
+    assert.equal(dateInput.package.packageId, pkg.packageId, 'Date inputs must normalize identically to epoch inputs');
     const toolEvent = [...pkg.eventLedger.inline, ...pkg.eventLedger.continuations.flatMap(() => [])].find((event) => event.entity?.sessionId === 'chat-1' && event.type.startsWith('tool_calls.'));
     if (toolEvent) {
       const text = JSON.stringify(toolEvent);

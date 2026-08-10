@@ -14,7 +14,7 @@ const READ_ONLY_TOOLS = new Set([
   'file_tree', 'validate_file', 'validate_file_syntax', 'show_diff', 'preview_patch',
   'git_status', 'git_diff', 'git_log', 'git_branch', 'code_outline', 'get_symbols',
   'go_to_definition', 'find_references', 'time_now', 'agent_list', 'agent_info',
-  'memory_browse', 'memory_read', 'memory_read_record', 'memory_search',
+  'memory', 'memory_browse', 'memory_read', 'memory_read_record', 'memory_search',
   'memory_search_project', 'memory_search_timeline', 'memory_get_related',
   'memory_graph_snapshot', 'memory_provider_status', 'memory_embedding_status',
   'web_search', 'web_search_single', 'web_search_multi', 'web_fetch', 'web_fetch_batch',
@@ -49,6 +49,7 @@ const READ_ONLY_TOOLS = new Set([
   'connector_vercel_status', 'connector_vercel_list_teams', 'connector_vercel_list_projects',
   'connector_vercel_list_deployments', 'connector_vercel_get_deployment',
   'connector_obsidian_status',
+  'connector_list', 'automation_dashboard', 'diagnostic_packet', 'system_diagnostics',
 ]);
 
 const CREDENTIAL_READ_ONLY_TOOLS = new Set([
@@ -85,7 +86,7 @@ const LOCAL_WRITE_TOOLS = new Set([
   'apply_workspace_patchset', 'write_note', 'memory_write', 'memory_index_refresh',
   'memory_embedding_backfill', 'persona_update', 'schedule_memory',
   'snapshot_workspace', 'format_changed_files', 'clone_repo', 'download_url',
-  'download_media', 'generate_image', 'generate_video', 'upload_image',
+  'download_media', 'generate_image', 'generate_video', 'media_generate', 'video_compose', 'write_proposal', 'memory', 'upload_image',
   'skill_import_bundle', 'skill_manifest_write', 'skill_update_metadata',
   'skill_create_bundle', 'skill_resource_write', 'skill_export_bundle',
   'skill_update_from_source', 'skill_curator', 'skill_create',
@@ -99,7 +100,7 @@ const LOCAL_WRITE_TOOLS = new Set([
 const DESTRUCTIVE_TOOLS = new Set([
   'delete', 'delete_file', 'delete_lines', 'restore_snapshot', 'revert_last_tool_change',
   'revert_own_patch', 'process_kill', 'stop_process', 'self_update',
-  'skill_resource_delete', 'deploy_analysis_team', 'schedule_job',
+  'skill_resource_delete', 'deploy_analysis_team', 'schedule_job', 'gateway_restart',
 ]);
 
 const COMMAND_TOOLS = new Set([
@@ -171,6 +172,9 @@ export function resolveToolCapabilityMetadata(
 ): ToolCapabilityMetadata {
   if (declared) return { ...declared, known: declared.known !== false };
   const name = String(toolName || '').trim();
+  if (name === 'memory') {
+    return String(args?.action || '').trim().toLowerCase() === 'write' ? LOCAL_WRITE : READ_ONLY;
+  }
   if (name === 'x_api_request') {
     const method = String(args?.method || '').trim().toUpperCase();
     if (method === 'GET' || method === 'HEAD') return CREDENTIAL_READ_ONLY;

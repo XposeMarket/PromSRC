@@ -67,7 +67,7 @@ The desktop Settings modal selects among these tabs:
 | **Models** | Primary/provider model settings, provider model discovery/testing, agent-model defaults with per-default reasoning and multi-account routing, the Voice Agent provider/voice default, and reusable default templates. |
 | **Agents** | Agent definitions, their model assignments, prompts, workspaces, and per-agent heartbeat-related configuration. |
 | **Channels** | Delivery/channel status and its saved configuration. |
-| **Integrations** | Webhooks and manually configured MCP servers.  It is distinct from the Connections panel. |
+| **Integrations** | Webhooks and manually configured MCP servers. It is distinct from the More → Plugins page, while remaining the detailed manual MCP configuration surface. |
 | **Shortcuts** | Saved site/application shortcuts used by the UI. |
 | **Pairing** | Paired-device/pairing approval state and refreshes. |
 
@@ -100,12 +100,29 @@ The session controls are also the settings surface for context management:
   word budget, and optional compaction model;
 - optional model and reasoning selection for main-chat goal compaction.
 
+The same session settings surface includes the auto-settle policy. It is Never
+by default, or one of the 7/14/30/90-day presets, or a past Custom calendar
+date. A Custom save explicitly chooses whether existing eligible chats should
+be processed immediately or whether aging starts now. The setting only drives
+the existing `session.settledAt` visibility state; it never deletes, compacts,
+summarizes, detaches resources, marks read, changes memory, or cancels work.
+Automatic runs use durable `lastActiveAt`, authoritative protected-state
+checks, bounded batches, and `<configDir>/auto-settle/last-run.json` for an
+auditable summary.
+
 Values are bounded on save.  For example, the route constrains context
 thresholds and compaction counts rather than trusting a malformed browser
 request.  These controls steer continuity/summary behavior; they do not delete
 the underlying audit artifacts.  Chat compaction artifacts are separately kept
 under `workspace/audit/chats/compactions/` and can inform continuity and memory
 indexing.
+
+Auto-settle settings are returned by `GET /api/settings/session`, persisted by
+`POST /api/settings/session` or `POST /api/settings/bulk`, and can be inspected
+through `GET /api/settings/auto-settle/status`. The dry-run endpoint
+`POST /api/settings/auto-settle/preview` reports eligible/skipped work without
+changing a session. Manual `/api/sessions/:id/settle` and `/unsettle` remain
+independent reversible actions.
 
 ### Search settings
 
@@ -143,13 +160,41 @@ The Settings **Integrations** tab has two subviews:
   extension-registered preset.  Manual server forms support `stdio`, `sse`,
   and HTTP/streamable-HTTP configuration shapes.
 
-## 3. Connections page: the user-facing connector setup surface
+## 3. Plugins page: the user-facing connector setup surface
 
-The Connections panel is built from the extension catalog (`GET
-`/api/extensions/catalog?kind=connector`).  A connector card can show its
-description, category, declared permissions/capabilities, available AI tools,
-auth type, whether credentials exist, and connection state.  User plugins are
-marked as custom and can be removed from that panel.
+Desktop navigation exposes **More → Plugins** as a dedicated page. The page is
+connector-only: it is built from the extension catalog
+(`GET /api/extensions/catalog?kind=connector`) and does not enumerate model
+providers, model credentials, reasoning defaults, or voice providers. It sorts
+the user-facing connector names deterministically and searches the name,
+description, category, tags, setup/auth metadata, declared capabilities, tool
+names, and connection strategy metadata. User plugins are marked as custom and
+can be removed from their detail surface.
+
+The catalog is a page-owned adapter over the extension descriptor/state
+contract; it does not copy a second connector registry into the browser. The
+initial page load is lightweight: `ConnectionsPage.js` is imported when the
+Plugins mode is entered, then the catalog, connection-attempt state, and
+configured MCP servers are loaded. Loading, empty, error, stale-catalog, and
+no-search-match states are rendered in the page itself.
+
+Bundled connector cards use the real brand SVG marks in
+`web-ui/src/assets/connectors/` (Simple Icons v16.28.0, copied into the
+generated public mirror), not generated monograms. Custom or unknown
+connector-style plugins retain a text fallback when no bundled mark exists.
+
+Clicking a catalog item opens the shared `#connector-view` detail surface.
+Legacy OAuth/API-key/browser/local flows and the newer connection-attempt
+continue/secure-input/verify/repair flows remain in `ConnectionsPage.js`, so
+the page does not duplicate credential or OAuth logic. The detail surface keeps
+install/discovery, connection/authentication, and tool exposure as separate
+pieces when the underlying contract provides those states.
+
+Configured MCP servers are shown in their own alphabetical section below the
+connector catalog and reuse the same detail surface for connect, disconnect,
+OAuth, token/header, local-stdio, and remove actions. The Add plugin surface
+continues to own custom REST/MCP/URL installation. Model providers remain in
+Settings.
 
 The page chooses a setup flow based on the connector's declared auth type:
 
@@ -159,7 +204,51 @@ The page chooses a setup flow based on the connector's declared auth type:
 | **API key** | Enter/update the connector credential fields. |
 | **Browser session** | Open the Prometheus browser window, sign in there, close/finish the site flow, then use Verify. |
 | **Local bridge** | Provide a local target such as an Obsidian vault and select its access mode. |
-| **MCP** | Configure the remote/local MCP server and authorize it when its strategy requires OAuth. |
+| **MCP** | Configure the remote/local MCP server and authorize it when its strategy requires OAuth; configured servers are also visible in the Plugins page. |
+
+### Managed connection-v2 pilot: GitHub
+
+GitHub is the first bundled connector migrated end-to-end to the host-owned
+managed connection contract. Its descriptor declares a `connector-oauth`
+strategy, provider-app boundary, PKCE requirement, exact loopback callback,
+scopes, capability contracts, verification checks, and a read-only/unknown-tool
+policy. The Plugins detail surface starts the durable attempt and then reuses
+the shared approve → OAuth → verify → repair/disconnect lifecycle; it does not
+implement a second OAuth client in the browser.
+
+The canonical record is additive. Existing legacy OAuth vault tokens and
+connected sessions remain readable, and legacy migration records carry a
+version/rollback marker. A user is not forced to reauthorize merely because a
+record was projected into connection-v2. When a user explicitly starts the
+managed GitHub flow, the selected existing provider account id is carried into
+the OAuth state and is checked before new tokens are saved, preventing an
+accidental account switch from replacing the old session.
+
+Managed GitHub records display the provider account, account resource scope,
+granted scopes, capability grants, exposed/approval-gated tool counts, PKCE/app
+readiness, and verification/health state. Read-only capabilities and tools are
+the default. Issue creation and repository creation remain explicit
+write/high-impact grants and are not exposed by the pilot's default read-only
+connection.
+
+The current GitHub OAuth App compatibility path requests the provider's
+existing `repo` scope when private-repository coverage is needed; that scope is
+broader than Prometheus's read-only tool exposure and can include provider-side
+write authority. This is a documented provider limitation of the OAuth App
+path, not a claim that the token itself is least-privilege. A fine-grained
+GitHub App with read-only repository permissions is the next GitHub hardening
+slice before broad deployment.
+
+The managed flow requires a deployment-owned GitHub OAuth App configuration;
+Prometheus does not bundle a client secret. The loopback callback is exactly
+`http://localhost:19422/auth/callback/github`. The detail surface keeps
+**Advanced: Use your own OAuth App** (vault-backed client fields) for local or
+developer setups, while API-key, setup-token, browser-session, local Obsidian,
+custom MCP, and manual configuration paths remain explicit alternatives.
+Disconnect attempts provider-side revocation when the provider app supports
+it, then clears the local vault session even if remote revocation cannot be
+confirmed. The result records the remote-revocation outcome in lifecycle
+progress without logging tokens or secrets.
 
 Browser-session verification currently uses URL-based logged-in/login-page
 signals for Instagram, TikTok, X, and LinkedIn.  It is a pragmatic session
@@ -419,3 +508,41 @@ Related reference: [MCP and connections](../10-mcp-and-connections.md),
 [tool architecture](../05-tools.md),
 [special Prometheus tools and flows](17-special-prometheus-tools-and-flows.md),
 and [the runtime architecture](06-runtime-architecture.md).
+
+## P9 OAuth-first connector migration update — 2026-08-09
+
+The shared host-owned connection-v2 path now covers the native OAuth family:
+GitHub, Gmail, Google Drive, GA4, Notion, Slack, HubSpot, Salesforce, and
+Reddit. The source of truth is `src/connections/adapters/connector-oauth.ts`
+plus `src/connections/connector-oauth-bridges.ts`; the Plugins page consumes the
+same orchestrator state rather than implementing a second credential or OAuth
+store. These connectors build additive, rollback-marked records with account
+identity, resource/workspace/org/property scope, granted capabilities, exposed
+tool counts, provider-app metadata, and verification health. Read-only scopes
+and tools are the default; unknown tools and write/high-impact capabilities are
+blocked or approval-gated.
+
+The migration preserves legacy vault keys and existing connected sessions. No
+user is forced to reauthorize only because the record gains `contractVersion: 2`.
+Provider apps remain an explicit prerequisite in each manifest: the managed
+flow is intentionally unavailable until the deployment supplies the provider's
+client configuration and exact loopback callback. “Use your own app,” API key,
+setup-token, browser-session, local, and custom MCP options remain under
+Advanced setup.
+
+Connector status at this slice:
+
+| Status | Connectors |
+| --- | --- |
+| Migrated and locally contract-verified; provider app still external | GitHub, Gmail, Google Drive, GA4, Notion, Slack, HubSpot, Salesforce, Reddit |
+| OAuth-supported but shared migration remains | X; keep X API user-context/xurl OAuth separate from xAI/Grok model OAuth |
+| Browser-session or provider-review path | Instagram, TikTok, LinkedIn |
+| API-key/manual or provider-specific platform semantics | Vercel, Stripe |
+| Local by nature | Obsidian |
+| Standards-based conditional OAuth | Remote MCP servers that advertise protected-resource/auth-server metadata; otherwise manual configuration |
+
+Native callback and client env details, scope decisions, revocation behavior,
+external prerequisites, risks, and exact verification results are maintained in
+`docs/P9-OAUTH-FIRST-PLUGIN-PLATFORM-IMPLEMENTATION-2026-08-08.md` under the
+2026-08-09 follow-up section. Keep model-provider and voice/realtime credentials
+in Settings; do not add them to this connector surface.

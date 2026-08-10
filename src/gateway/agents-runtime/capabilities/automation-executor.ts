@@ -38,6 +38,7 @@ import { createDiagnosticPacket, getDiagnosticPacket, listDiagnosticPackets, upd
 import { buildPrometheusThreadLinksArtifact, executePrometheusThreadOps } from '../../threads/thread-ops';
 import { executePrometheusRequestOps } from '../../requests/request-ops';
 import { executePrometheusAuditOps } from '../../audit/audit-ops';
+import { getResourceStore } from '../../resources/resource-store';
 
 const AUTOMATION_TOOL_NAMES = new Set([
   'background_spawn',
@@ -79,9 +80,16 @@ export const automationCapabilityExecutor: CapabilityExecutor = {
         try {
           const prompt = String(args.task_prompt || args.prompt || '').trim();
           if (!prompt) return { name, args, result: 'background_spawn requires task_prompt', error: true };
+          const requestedResourceIds = Array.isArray(args.resource_ids || args.resourceIds)
+            ? (args.resource_ids || args.resourceIds).map((value: unknown) => String(value || '').trim()).filter(Boolean).slice(0, 100)
+            : [];
+          const resourceIds = getResourceStore(workspacePath)
+            .listThreadResources(sessionId, { limit: 100, resourceIds: requestedResourceIds })
+            .map((resource) => resource.id);
           const status = backgroundSpawn({
             prompt,
             spawnerSessionId: sessionId,
+            resourceIds,
             joinPolicy: args.join_policy || 'wait_all',
             timeoutMs: args.timeout_ms,
             tags: args.tags,

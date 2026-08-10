@@ -21,6 +21,8 @@ export interface ModelCallCallbacks {
   onThinking?: (value: string) => void;
   onReasoningSummary?: (value: string) => void;
   onModelEvent?: (value: ModelStreamEvent) => void;
+  /** Numeric/category-only lifecycle telemetry; never receives model payloads. */
+  onWorkerStage?: (stage: string, fields?: Record<string, number | string | boolean>) => void;
   signal?: AbortSignal;
 }
 
@@ -73,6 +75,10 @@ interface Task {
   timer?: NodeJS.Timeout;
   cancelTimer?: NodeJS.Timeout;
   abortListener?: () => void;
+  requestBytes: number;
+  eventCount: number;
+  eventBatches: number;
+  eventBytes: number;
 }
 
 interface WorkerSlot {
@@ -204,6 +210,10 @@ function cleanupTask(task: Task): void {
   }
 }
 
+function noteWorkerStage(task: Task | undefined, stage: string, fields: Record<string, number | string | boolean> = {}): void {
+  try { task?.callbacks.onWorkerStage?.(stage, fields); } catch {}
+}
+
 function settle(task: Task, value: { result: ModelCallWorkerResult } | { error: Error }): void {
   if (task.settled) return;
   task.settled = true;
@@ -280,17 +290,36 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
   if (!task || ('requestId' in message && message.requestId !== task.id)) return;
   if (message.type === 'started') {
     slot.lastHeartbeatAt = message.at;
+    noteWorkerStage(task, 'worker_started', {
+      pid: message.pid,
+      queueWaitMs: Math.max(0, message.at - task.enqueuedAt),
+      requestBytes: task.requestBytes,
+    });
     return;
   }
   if (message.type === 'provider_started') {
     task.providerStarted = true;
     providerStartedCount += 1;
+    noteWorkerStage(task, 'provider_started', {
+      queueWaitMs: Math.max(0, message.at - task.enqueuedAt),
+      requestBytes: task.requestBytes,
+    });
     return;
   }
   if (message.type === 'events') {
     if (task.settled) return;
     eventBatches += 1;
     streamEvents += message.events.length;
+    task.eventBatches += 1;
+    task.eventCount += message.events.length;
+    task.eventBytes += bytes;
+    noteWorkerStage(task, 'event_batch', {
+      eventCount: message.events.length,
+      eventBatches: task.eventBatches,
+      eventBytes: bytes,
+      totalEventCount: task.eventCount,
+      totalEventBytes: task.eventBytes,
+    });
     handleEvents(task, message.events);
     if (task.callbackError) cancelActive(slot, task, 'Stream callback failed.');
     return;
@@ -302,6 +331,14 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
   if (message.type === 'result') {
     slot.completedJobs += 1;
     slot.rssBytes = message.rssBytes;
+    noteWorkerStage(task, 'worker_completed', {
+      rssBytes: message.rssBytes,
+      resultBytes: modelCallMessageBytes(message.result),
+      eventCount: task.eventCount,
+      eventBatches: task.eventBatches,
+      eventBytes: task.eventBytes,
+      durationMs: Math.max(0, message.completedAt - task.enqueuedAt),
+    });
     if (task.callbackError) {
       failed += 1;
       settle(task, { error: task.callbackError });
@@ -324,8 +361,15 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
           boundedModelCallError(message.message),
           message.code,
           !task.dispatched && !message.providerStarted,
-          Boolean(message.providerStarted || task.providerStarted),
-        );
+        Boolean(message.providerStarted || task.providerStarted),
+      );
+    noteWorkerStage(task, 'worker_error', {
+      code: message.code,
+      eventCount: task.eventCount,
+      eventBatches: task.eventBatches,
+      eventBytes: task.eventBytes,
+      cancelled: Boolean(wasCancelled),
+    });
     lastError = error.message;
     slot.lastError = error.message;
     settle(task, { error });
@@ -577,6 +621,10 @@ export async function dispatchModelCallWorker(
       settled: false,
       dispatched: false,
       providerStarted: false,
+      requestBytes: bytes,
+      eventCount: 0,
+      eventBatches: 0,
+      eventBytes: 0,
     };
     task.deadlineAt = Date.now() + task.timeoutMs;
     task.timer = setTimeout(() => {
@@ -618,6 +666,7 @@ export async function dispatchModelCallWorker(
       callbacks.signal.addEventListener('abort', onAbort, { once: true });
     }
     queue.push(task);
+    noteWorkerStage(task, 'queue_enter', { requestBytes: bytes, queued: queue.length });
     scheduleDrain();
   });
 }

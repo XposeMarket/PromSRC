@@ -56,10 +56,17 @@ const COMPLETED_CALLBACK_TTL_MS = 10 * 60 * 1000;
  * Opens a local callback server in the background, then returns the auth URL.
  * The caller should open the auth URL in a browser.
  */
-export function startOAuthFlowForConnector(id: string): OAuthStartResult | { success: false; error: string } {
+export function startOAuthFlowForConnector(id: string, expectedAccountId?: string, requestedScopes?: string[]): OAuthStartResult | { success: false; error: string } {
   const connector = connectors.get(id);
   if (!connector) return { success: false, error: `Unknown connector: ${id}` };
+  if (pendingCallbacks.has(id)) return { success: false, error: `${id} authorization is already in progress.` };
   completedCallbacks.delete(id);
+
+  // Generate and validate the provider URL before binding a local callback
+  // listener. This avoids leaving a port listener behind when an app is not
+  // configured, and startFlow never returns a blank-client authorization URL.
+  const started = connector.startFlow(expectedAccountId, requestedScopes);
+  if (started.error || !started.authUrl) return started;
 
   // Start the local callback listener (non-blocking)
   const callbackPromise = connector.listenForCallback();
@@ -82,7 +89,7 @@ export function startOAuthFlowForConnector(id: string): OAuthStartResult | { suc
       });
     });
 
-  return connector.startFlow();
+  return started;
 }
 
 /**
@@ -125,6 +132,21 @@ export function disconnectConnector(id: string): void {
   connectors.get(id)?.clearTokens();
 }
 
+/** Provider-side revoke is optional; local clearing remains the compatibility
+ * fallback for providers without a revocation endpoint. */
+export async function revokeConnectorAccess(id: string): Promise<{ supported: boolean }> {
+  const connector = connectors.get(id) as (OAuthConnector & { revokeAccess?: () => Promise<void> }) | undefined;
+  if (!connector?.revokeAccess) return { supported: false };
+  await connector.revokeAccess();
+  return { supported: true };
+}
+
+export function getConnectorOAuthMetadata(id: string): ReturnType<OAuthConnector['getOAuthMetadata']> | undefined {
+  const connector = connectors.get(id);
+  if (!connector) return undefined;
+  try { return connector.getOAuthMetadata(); } catch { return undefined; }
+}
+
 /**
  * Get a valid access token for a connected connector.
  * Throws if not connected or if refresh fails.
@@ -148,13 +170,34 @@ export function saveConnectorCredentials(id: string, clientId: string, clientSec
 /**
  * Return credential and connection status for all connectors — used by the UI.
  */
-export function getConnectorStatuses(): Record<string, { connected: boolean; hasCredentials: boolean; authType: string }> {
-  const result: Record<string, { connected: boolean; hasCredentials: boolean; authType: string }> = {};
+export function getConnectorStatuses(): Record<string, {
+  connected: boolean;
+  hasCredentials: boolean;
+  authType: string;
+  account?: ReturnType<OAuthConnector['getOAuthMetadata']>['account'];
+  grantedScopes?: string[];
+  expiresAt?: number;
+  refreshAvailable?: boolean;
+}> {
+  const result: Record<string, {
+    connected: boolean;
+    hasCredentials: boolean;
+    authType: string;
+    account?: ReturnType<OAuthConnector['getOAuthMetadata']>['account'];
+    grantedScopes?: string[];
+    expiresAt?: number;
+    refreshAvailable?: boolean;
+  }> = {};
   for (const [id, c] of connectors.entries()) {
+    const metadata = c.getOAuthMetadata();
     result[id] = {
       connected: c.isConnected(),
       hasCredentials: c.hasCredentials(),
       authType: 'oauth',
+      account: metadata.account,
+      grantedScopes: metadata.grantedScopes,
+      expiresAt: metadata.expiresAt,
+      refreshAvailable: metadata.refreshAvailable,
     };
   }
   return result;

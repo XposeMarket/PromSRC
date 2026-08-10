@@ -348,6 +348,7 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   agents: [] as AgentDefinition[],
   agent_model_defaults: {},
   agent_model_default_reasoning: {},
+  agent_model_default_speed: {},
   agent_model_default_accounts: {},
   agent_model_default_templates: [],
   active_agent_model_default_template: '',
@@ -363,6 +364,8 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
     rollingCompactionToolTurns: 5,
     rollingCompactionSummaryMaxWords: 900,
     rollingCompactionModel: '',
+    autoSettleAfterDays: 0,
+    autoSettleAfterMs: 0,
     mainChatGoals: {
       enabled: true,
       autoResumeOnRestart: true,
@@ -903,6 +906,21 @@ export class ConfigManager {
             }
           : DEFAULT_CONFIG.tools;
 
+        const mergedSession = loaded.session
+          ? {
+              ...(DEFAULT_CONFIG.session || {}),
+              ...loaded.session,
+              mainChatGoals: {
+                ...((DEFAULT_CONFIG.session as any)?.mainChatGoals || {}),
+                ...((loaded.session as any)?.mainChatGoals || {}),
+                permissions: {
+                  ...((DEFAULT_CONFIG.session as any)?.mainChatGoals?.permissions || {}),
+                  ...((loaded.session as any)?.mainChatGoals?.permissions || {}),
+                },
+              },
+            }
+          : DEFAULT_CONFIG.session;
+
         const merged: PrometheusConfig = {
           ...DEFAULT_CONFIG,
           ...loaded,
@@ -912,6 +930,7 @@ export class ConfigManager {
           channels: mergedChannels as any,
           telegram: (mergedChannels as any).telegram,
           tools: mergedTools,
+          session: mergedSession as any,
         };
 
         const normalized = normalizeRuntimePathsInConfig(merged);

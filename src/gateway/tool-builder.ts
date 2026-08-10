@@ -15,15 +15,22 @@ import { getCreativeToolDefs } from './tools/defs/creative-tools';
 import { getCompositeDefs, getCompositeManagementTools, loadComposites } from './tools/composite-tools';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
 import { getExtensionRuntimeRegistry } from '../extensions/runtime-registry';
-import { getPublicBuildAllowedCategories, isToolHiddenInPublicBuild } from '../runtime/distribution.js';
+import {
+  arePrometheusDevToolsVisible,
+  getPublicBuildAllowedCategories,
+  isPrometheusDevToolHidden,
+  isToolHiddenInPublicBuild,
+} from '../runtime/distribution.js';
 import {
   TOOL_CATEGORY_IDS,
+  AUTOMATION_WORKFLOW_PACK_IDS,
   type ToolCategoryId,
   auditToolCategoryParity,
   classifyToolFromManifest,
   getRuntimeToolCategoryIds,
   isToolAvailableForManifestCategory,
   normalizeManifestToolCategory,
+  getAutomationWorkflowPackForTool,
 } from '../runtime/tool-category-manifest';
 
 export interface BuildToolsDeps {
@@ -72,9 +79,26 @@ const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
   advanced_memory: 'advanced_memory',
   media: 'media_assets',
   media_assets: 'media_assets',
+  media_gen: 'media_generation',
+  media_generation: 'media_generation',
   schedule: 'automations',
   scheduling: 'automations',
   automations: 'automations',
+  automation_scheduling: 'automation_scheduling',
+  automation_tasks: 'automation_tasks',
+  automation_recovery: 'automation_recovery',
+  automation_sessions: 'automation_sessions',
+  scheduling_pack: 'automation_scheduling',
+  schedule_pack: 'automation_scheduling',
+  task_pack: 'automation_tasks',
+  automation_task_pack: 'automation_tasks',
+  recovery_pack: 'automation_recovery',
+  automation_recovery_pack: 'automation_recovery',
+  session_pack: 'automation_sessions',
+  thread_pack: 'automation_sessions',
+  runtime: 'runtime_admin',
+  diagnostics: 'runtime_admin',
+  runtime_admin: 'runtime_admin',
   connectors: 'external_apps',
   external_apps: 'external_apps',
   integrations: 'integration_admin',
@@ -107,7 +131,8 @@ const TOOL_CATEGORY_ALIASES: Record<string, ToolCategory> = {
 };
 
 export function normalizeToolCategory(raw: unknown): ToolCategory | null {
-  return normalizeManifestToolCategory(raw);
+  const normalized = normalizeManifestToolCategory(raw);
+  return normalized && getRuntimeToolCategoryIds().includes(normalized) ? normalized : null;
 }
 
 // Explicit name lists for non-prefix categories
@@ -126,14 +151,12 @@ const TEAM_OPS_TOOL_NAMES = new Set([
   'dispatch_to_agent', 'dispatch_team_agent', 'request_team_member_turn', 'get_agent_result',
   'post_to_team_chat', 'message_main_agent', 'reply_to_team',
   'manage_team_goal', 'manage_team_context_ref',
-  // ask_team_coordinator intentionally excluded — it's a core tool (always available)
+  'ask_team_coordinator', 'chat_with_subagent', 'agent_run_ops',
   'deploy_analysis_team',
 ]);
 
-// schedule_job is core so cron/heartbeat/subagent sessions can reschedule and
-// manage jobs without needing category activation. Natural-language/friendly
-// schedule parsing is handled inside schedule_job; parse_schedule_pattern is
-// intentionally not exposed as a model-facing helper.
+// Natural-language/friendly schedule parsing is handled inside schedule_job;
+// parse_schedule_pattern is intentionally not exposed as a model-facing helper.
 // background_ops is core. Legacy background_* leaves remain executable but are
 // hidden from the normal model-facing schema surface.
 
@@ -273,6 +296,8 @@ const MEDIA_TOOL_NAMES = new Set([
   'analyze_video',
 ]);
 
+const MEDIA_GENERATION_TOOL_NAMES = new Set(['media_generate']);
+
 const MEDIA_QUALITY_TOOL_NAMES = new Set([
   'image_check_contrast',
   'image_check_text_overflow',
@@ -311,17 +336,18 @@ const HYPERFRAMES_TOOL_NAMES = new Set([
 ]);
 
 const AUTOMATION_TOOL_NAMES = new Set([
+  'schedule_job',
   'schedule_job_detail',
   'schedule_job_history',
   'schedule_job_log_search',
   'schedule_job_outputs',
   'schedule_job_patch',
   'schedule_job_stuck_control',
+  'automation_dashboard',
   'prometheus_thread_ops',
   'prometheus_request_ops',
   'prometheus_audit_ops',
-  // Advanced automation management/diagnostics (schedule_job, automation_dashboard,
-  // and timer remain core; only execution-level scheduling stays always-on).
+  // Advanced automation management/diagnostics and managed Prometheus sessions.
   'task_control',
   'run_task_now',
   'internal_watch',
@@ -344,6 +370,12 @@ const SKILL_AUTHORING_TOOL_NAMES = new Set([
   'skill_audit_all',
   'skill_repair_metadata',
   'skill_update_metadata',
+]);
+
+const RUNTIME_ADMIN_TOOL_NAMES = new Set([
+  'diagnostic_packet',
+  'system_diagnostics',
+  'gateway_restart',
 ]);
 
 // Agent fleet / model template administration — switch_model and
@@ -951,7 +983,7 @@ const INTEGRATION_ADMIN_TOOL_NAMES = new Set([
 
 const SOCIAL_INTELLIGENCE_TOOL_NAMES = new Set(['social_intel']);
 
-const PROPOSAL_ADMIN_TOOL_NAMES = new Set(['edit_proposal']);
+const PROPOSAL_ADMIN_TOOL_NAMES = new Set(['edit_proposal', 'write_proposal']);
 
 const COMPOSITE_MANAGEMENT_TOOL_NAMES = new Set([
   'create_composite',
@@ -981,10 +1013,7 @@ export function getLegacyToolCategory(name: string): InternalToolCategory | null
   // Keep these always available as core runtime tools.
   if (name === 'browser_send_to_telegram') return null;
   if (name === 'delivery_send' || name === 'delivery_send_screenshot') return null;
-  if (name === 'connector_list') return null; // core tool — always available
   if (name === 'generate_image' || name === 'generate_video') return null;
-  if (name === 'chat_with_subagent') return null; // core direct-chat tool for standalone subagents
-  if (name === 'agent_run_ops') return null; // core run/recovery bridge for subagent autopilot
   if (CORE_CREATIVE_CONTROL_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
   if (name === 'save_site_shortcut') return 'browser_automation';
   if (name === 'inspect_console' || name === 'run_accessibility_check' || name === 'browser_smoke_test') return 'browser_automation';
@@ -1003,15 +1032,20 @@ export function getLegacyToolCategory(name: string): InternalToolCategory | null
   if (FILE_OPS_TOOL_NAMES.has(name)) return 'workspace_write';
   if (MEMORY_TOOL_NAMES.has(name)) return 'advanced_memory';
   if (MEDIA_TOOL_NAMES.has(name)) return 'media_assets';
+  if (MEDIA_GENERATION_TOOL_NAMES.has(name)) return 'media_generation';
   if (CREATIVE_VIDEO_QA_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
   if (HYPERFRAMES_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
   if (MEDIA_QUALITY_TOOL_NAMES.has(name)) return getCreativeToolCategory(name);
+  const automationPack = getAutomationWorkflowPackForTool(name);
+  if (automationPack) return automationPack;
   if (AUTOMATION_TOOL_NAMES.has(name)) return 'automations';
+  if (RUNTIME_ADMIN_TOOL_NAMES.has(name)) return 'runtime_admin';
   if (name.startsWith('skill_') && name !== 'skill_list' && name !== 'skill_read') return 'skills';
   if (SKILL_AUTHORING_TOOL_NAMES.has(name)) return 'skills';
   if (MODEL_MANAGEMENT_TOOL_NAMES.has(name)) return 'model_management';
   if (BUSINESS_TOOL_NAMES.has(name)) return 'business';
   if (name.startsWith('creative_')) return getCreativeToolCategory(name);
+  if (name === 'video_compose') return 'creative_video';
   if (INTEGRATION_ADMIN_TOOL_NAMES.has(name)) return 'integration_admin';
   if (SOCIAL_INTELLIGENCE_TOOL_NAMES.has(name)) return 'social_intelligence';
   if (PROPOSAL_ADMIN_TOOL_NAMES.has(name)) return 'proposal_admin';
@@ -1053,11 +1087,17 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   const { getMCPManager } = deps;
   const configSnapshot = getConfig().getConfig() as any;
   const isPublicBuild = getPublicBuildAllowedCategories(['prometheus_source_write'] as const).length === 0;
+  const devToolsVisible = arePrometheusDevToolsVisible();
   const normalizedActiveCategories = new Set<string>();
   if (activatedCategories !== undefined) {
     for (const category of activatedCategories) {
       const normalized = normalizeToolCategory(category);
       if (normalized) normalizedActiveCategories.add(normalized);
+    }
+    // Preserve the broad legacy automations request while allowing callers to
+    // activate only one workflow pack when they know the narrower intent.
+    if (normalizedActiveCategories.has('automations')) {
+      for (const pack of AUTOMATION_WORKFLOW_PACK_IDS) normalizedActiveCategories.add(pack);
     }
   }
   const categoryIsActive = (category: ToolCategory): boolean => (
@@ -1089,6 +1129,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   const cacheKey = cacheable
     ? [
       `public:${isPublicBuild ? '1' : '0'}`,
+      `devTools:${devToolsVisible ? '1' : '0'}`,
       `subagent:${subagentMode ? '1' : '0'}`,
       `agentBuilder:${agentBuilderEnabled ? '1' : '0'}`,
       `extensions:${extensionRevision}`,
@@ -1555,7 +1596,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
 
   // Connector, MCP, and composite tools can require status probes or filesystem
   // scans. Avoid touching those dynamic systems unless their category is in the
-  // current tool surface; connector_list remains core for discovery.
+  // current tool surface.
   if (categoryIsActive('external_apps') && !deps.skipDynamicExtensionTools) {
     try {
       dynamicToolDefs.push(...extensionRegistry.listConnectedConnectorToolDefinitions());
@@ -1599,9 +1640,12 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
   // (isToolHiddenInPublicBuild in subagent-executor) — not just the source-read
   // names. Otherwise the model is shown source-write / self-update / restart tool
   // defs it can never execute, wasting context and inviting failed calls.
-  const runtimeToolDefs = isPublicBuild
-    ? toolDefs.filter((t: any) => !isToolHiddenInPublicBuild(String(t?.function?.name || '')))
-    : toolDefs;
+  const runtimeToolDefs = toolDefs.filter((t: any) => {
+    const name = String(t?.function?.name || '');
+    if (isToolHiddenInPublicBuild(name)) return false;
+    if (!devToolsVisible && isPrometheusDevToolHidden(name)) return false;
+    return true;
+  });
   const visibleToolDefs = runtimeToolDefs.filter((t: any) => !SCHEMA_HIDDEN_COMPAT_TOOL_NAMES.has(String(t?.function?.name || '')));
 
   // Canonical classification is authoritative by default. Keep the legacy
@@ -1736,7 +1780,7 @@ export function normalizeToolArgsForTool(toolName: string, rawArgs: any): any {
     if (!raw) return '';
     const direct = normalizeToolCategory(raw);
     if (direct && categories.includes(direct)) return direct;
-    const match = raw.match(/\b(browser_automation|desktop_automation|agents_and_teams|prometheus_source_read|prometheus_source_write|workspace_write|advanced_memory|media_assets|creative_quality|media_quality|automations|external_apps|integration_admin|social_intelligence|proposal_admin|mcp_server_tools|composite_tools|creative_basic|creative_image|creative_video|creative_hyperframes|creative_mode|browser|desktop|team_ops|source_read|source_write|file_ops|memory|media|integrations|connectors|mcp|composites|creative|image_mode|video_mode|hyperframes|creative_qa)\b/);
+    const match = raw.match(/\b(browser_automation|desktop_automation|agents_and_teams|prometheus_source_read|prometheus_source_write|workspace_write|advanced_memory|media_assets|media_generation|automations|automation_scheduling|automation_tasks|automation_recovery|automation_sessions|scheduling_pack|schedule_pack|task_pack|recovery_pack|session_pack|creative_quality|media_quality|runtime_admin|external_apps|integration_admin|social_intelligence|proposal_admin|mcp_server_tools|composite_tools|creative_basic|creative_image|creative_video|creative_hyperframes|creative_mode|browser|desktop|team_ops|source_read|source_write|file_ops|memory|media|media_gen|integrations|connectors|mcp|composites|creative|image_mode|video_mode|hyperframes|creative_qa|runtime|diagnostics)\b/);
     const matched = match ? normalizeToolCategory(match[1]) : null;
     return matched && categories.includes(matched) ? matched : '';
   };

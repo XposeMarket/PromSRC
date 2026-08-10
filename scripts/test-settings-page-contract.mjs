@@ -27,7 +27,7 @@ assert.match(index, /SettingsPage\.js\?v=settings-boot-recovery-v12/, 'desktop m
 assert.match(mobileRouter, /SettingsPage\.js\?v=settings-boot-recovery-v12/, 'mobile must load the repaired settings module version');
 assert.match(mobileRouter, /document\.body\.appendChild\(modal\)/, 'mobile must lift the shared modal out of the hidden desktop app shell');
 assert.match(mobileRouter, /window\.openSettings\(tab \|\| undefined\)/, 'mobile must open the shared desktop settings controller');
-assert.match(serviceWorker, /pm-v157-2026-07-14-settings-boot-recovery/, 'PWA cache must roll forward for the settings repair');
+assert.match(serviceWorker, /pm-v242-2026-08-08-mobile-overlay-hit-target-fix/, 'PWA cache must roll forward for the mobile overlay hit-target fix');
 
 const showModalAt = index.indexOf("modal.style.display = 'flex'", index.indexOf('const openSettingsShim'));
 const awaitControllerAt = index.indexOf('await window.__PROM_LOAD_SETTINGS()', index.indexOf('const openSettingsShim'));

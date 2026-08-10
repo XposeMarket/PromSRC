@@ -79,6 +79,7 @@ import { executeAgentBuilderTool } from './agent-builder-integration';
 import { SubagentManager, validateDirectSubagentAssignment } from './subagent-manager';
 import { appendSubagentChatMessage, getSubagentChatHistory } from './subagent-chat-store';
 import { formatIntradayNoteSourceLine, inferIntradayNoteSource } from '../intraday-note-source';
+import { getResourceStore, redactResourceText } from '../resources/resource-store';
 import {
   creativeAnalyzeGeneratedVideo,
   creativeAddAudioTrack,
@@ -322,6 +323,7 @@ import { isDesktopCancellationError } from '../desktop-cancellation';
 import { deliverToTargets, readAttachmentBuffer } from '../delivery-router';
 import { executeDeliverySendScreenshot } from '../delivery-screenshot.js';
 import {
+  compactMemorySearchResult,
   refreshMemoryIndexInWorker,
   readMemoryRecord,
   getMemoryGraphSnapshot,
@@ -568,6 +570,11 @@ export interface ExecuteToolDeps {
   /** Cooperative interruption for long-running desktop waits, macros, capture,
    * and background-worker commands. */
   abortSignal?: { aborted: boolean; signal?: AbortSignal };
+  /** Numeric/category-only runtime timing hook owned by the enclosing turn. */
+  onPerformanceStage?: (
+    stage: string,
+    fields?: Record<string, number | string | boolean>,
+  ) => void;
 }
 
 
@@ -3114,6 +3121,32 @@ function devEditMutationFiles(name: string, args: any, projectRoot: string): Arr
   return Array.from(new Map(result.map(item => [item.file, item])).values());
 }
 
+function persistSearchResultSources(workspacePath: string, sessionId: string, result: string): void {
+  const items: Array<Record<string, unknown>> = [];
+  const labeled = /\[\d+\]\s+([^\r\n]+)\r?\n\s*(https?:\/\/[^\s<>'"\)\]]+)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = labeled.exec(String(result || ''))) !== null) {
+    items.push({ title: match[1], url: match[2].replace(/[.,;:!?]+$/, '') });
+  }
+  if (items.length === 0) {
+    const urls = String(result || '').match(/https?:\/\/[^\s<>'"\)\]]+/gi) || [];
+    for (const url of urls) items.push({ url: url.replace(/[.,;:!?]+$/, '') });
+  }
+  if (items.length > 0) {
+    try { getResourceStore(workspacePath).registerSourceItems(sessionId, items, { actor: 'web_search', origin: 'tool_observation' }); } catch (error: any) {
+      console.warn('[Resources] Search source registration skipped:', redactResourceText(error?.message || error));
+    }
+  }
+}
+
+function persistFetchedSource(workspacePath: string, sessionId: string, item: Record<string, unknown>): void {
+  try {
+    getResourceStore(workspacePath).registerSourceItems(sessionId, [item], { actor: 'web_fetch', fetched: true });
+  } catch (error: any) {
+    console.warn('[Resources] Fetched source registration skipped:', redactResourceText(error?.message || error));
+  }
+}
+
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
   const executionStartedAt = Date.now();
   const grant = getDevSourceEditGrant(sessionId);
@@ -5155,6 +5188,14 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     const items = await enrichSourceArtifactItems(normalizedItems);
     if (!items.length) return { name, args, result: 'show_sources requires at least one item with a title or url.', error: true };
     args = { ...args, items };
+    try {
+      getResourceStore(workspacePath).registerSourceItems(sessionId, items as Array<Record<string, unknown>>, {
+        actor: 'show_sources',
+        origin: 'tool_observation',
+      });
+    } catch (error: any) {
+      console.warn('[Resources] Source-card registration skipped:', redactResourceText(error?.message || error));
+    }
     const artifact = {
       id: `sources-${Date.now()}`,
       type: 'sources' as const,
@@ -13411,6 +13452,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           fetch_max_chars: args.fetch_max_chars != null ? Number(args.fetch_max_chars) : undefined,
           provider_timeout_ms: args.provider_timeout_ms != null ? Number(args.provider_timeout_ms) : undefined,
         });
+        persistSearchResultSources(workspacePath, sessionId, result);
         return { name, args, result, error: false };
       }
 
@@ -13423,6 +13465,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           fetch_max_chars: args.fetch_max_chars != null ? Number(args.fetch_max_chars) : undefined,
           provider_timeout_ms: args.provider_timeout_ms != null ? Number(args.provider_timeout_ms) : undefined,
         });
+        persistSearchResultSources(workspacePath, sessionId, result);
         return { name, args, result, error: false };
       }
 
@@ -13434,6 +13477,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           fetch_max_chars: args.fetch_max_chars != null ? Number(args.fetch_max_chars) : undefined,
           provider_timeout_ms: args.provider_timeout_ms != null ? Number(args.provider_timeout_ms) : undefined,
         });
+        persistSearchResultSources(workspacePath, sessionId, result);
         return { name, args, result, error: false };
       }
 
@@ -13461,12 +13505,24 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 		      case 'web_fetch': {
 		        const batchUrls = Array.isArray(args.urls) ? args.urls.map((item: any) => String(item || '').trim()).filter(Boolean) : [];
 		        if (batchUrls.length > 0) {
-		          const batchResult = await executeWebFetchBatch({
-		            urls: batchUrls,
-		            max_chars: args.max_chars != null ? Number(args.max_chars) : undefined,
-		            concurrency: args.concurrency != null ? Number(args.concurrency) : undefined,
-		          });
-		          return {
+	          const batchResult = await executeWebFetchBatch({
+	            urls: batchUrls,
+	            max_chars: args.max_chars != null ? Number(args.max_chars) : undefined,
+	            concurrency: args.concurrency != null ? Number(args.concurrency) : undefined,
+	          });
+	          const fetchedRows = Array.isArray(batchResult.data?.results) ? batchResult.data.results : [];
+	          for (const row of fetchedRows) {
+	            if (!row || typeof row !== 'object') continue;
+	            persistFetchedSource(workspacePath, sessionId, {
+	              url: row.url,
+	              title: row.data?.title || row.url,
+	              text: row.text,
+	              mimeType: row.data?.content_type || 'text/html',
+
+              fetched: row.status === 'ok',
+            });
+          }
+	          return {
 		            name,
 		            args,
 		            result: batchResult.stdout || batchResult.error || 'Batch fetch completed without output.',
@@ -13535,12 +13591,21 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 		          const addedReferenceCount = webFetchResult.success
 		            ? registerCreativeReferencesFromXPayload(sessionId, webFetchResult.data)
 		            : 0;
-		          if (addedReferenceCount > 0) {
-		            const referenceSummary = `Added ${addedReferenceCount} media item${addedReferenceCount === 1 ? '' : 's'} to this session's Creative References bucket.`;
-		            deps.sendSSE?.('info', { message: referenceSummary });
-		            result = `${result}\n\n${referenceSummary}`;
-		          }
-		          const looksLikeFailure = result.startsWith('Fetch failed')
+	          if (addedReferenceCount > 0) {
+	            const referenceSummary = `Added ${addedReferenceCount} media item${addedReferenceCount === 1 ? '' : 's'} to this session's Creative References bucket.`;
+	            deps.sendSSE?.('info', { message: referenceSummary });
+	            result = `${result}\n\n${referenceSummary}`;
+	          }
+	          if (webFetchResult.success) {
+	            persistFetchedSource(workspacePath, sessionId, {
+	              url: webFetchResult.data?.final_url || webFetchResult.data?.url || url,
+	              title: webFetchResult.data?.title || url,
+              text: webFetchResult.stdout || '',
+              mimeType: webFetchResult.data?.content_type || 'text/html',
+              fetched: true,
+            });
+          }
+	          const looksLikeFailure = result.startsWith('Fetch failed')
 		            || result.startsWith('Fetch error')
 		            || result.startsWith('Fetch timed')
 		            || /"success"\s*:\s*false/.test(result);
@@ -14488,9 +14553,15 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         try {
           const prompt = String(args.task_prompt || args.prompt || '').trim();
           if (!prompt) return { name, args, result: 'background_spawn requires task_prompt', error: true };
+          const requestedResourceIds = Array.isArray(args.resource_ids || args.resourceIds)
+            ? (args.resource_ids || args.resourceIds).map((value: unknown) => String(value || '').trim()).filter(Boolean).slice(0, 100)
+            : [];
           const status = backgroundSpawn({
             prompt,
             spawnerSessionId: sessionId,
+            resourceIds: getResourceStore(workspacePath)
+              .listThreadResources(sessionId, { limit: 100, resourceIds: requestedResourceIds })
+              .map((resource) => resource.id),
             joinPolicy: args.join_policy || 'wait_all',
             timeoutMs: args.timeout_ms,
             tags: args.tags,
@@ -15921,7 +15992,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             rolesBlock,
             ``,
             `YOUR WORKFLOW (execute immediately, no clarifying questions):`,
-            `0. Run memory_search for the goal and additional context before creating anything. Use relevant business/user/project memory to enrich the team purpose, role specializations, and context references.`,
+            `0. Run memory(action="search", query=goal) for the goal and additional context before creating anything. Use relevant business/user/project memory to enrich the team purpose, role specializations, and context references.`,
             `1. Analyze the purpose — pick 2-4 roles that cover the ongoing work`,
             `2. For each role, call spawn_subagent with:`,
             `   - subagent_id: "<role>_<shortname>_v1" (e.g. "researcher_growth_v1")`,
@@ -15943,7 +16014,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             `- Maximum 5 agents`,
             `- Do NOT ask questions — make decisions and act`,
             `- Do NOT use browser, desktop, scheduling, or memory tools`,
-            `- Exception: do use memory_search before creating agents or the team`,
+            `- Exception: do use memory(action="search", query=goal) before creating agents or the team`,
             `- Do NOT create nested teams`,
             `- NEVER start the team from this meta-coordinator flow. "Create now" means create the team now, not run it. The main chat agent or user must explicitly call team_manage(action="start") later with a first task.`,
             `- Do NOT call team_manage(action="start"), team_manage(action="dispatch"), dispatch_team_agent, schedule_job(action="run_now"), or kickoff_initial_review:true in this flow.`,
@@ -16121,6 +16192,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             target: args.target != null ? String(args.target) : (args.profile != null ? String(args.profile) : undefined),
             inhouseProfile: args.inhouse_profile ?? args.inhouseProfile,
             profileDirectory: args.profile_directory ?? args.profileDirectory,
+            onPerformanceStage: deps.onPerformanceStage,
           }), timeoutMs, 'browser_open');
         } catch (err: any) {
           result = `ERROR: browser_open did not finish in time: ${err?.message || err}`;
@@ -16131,7 +16203,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         return { name, args, result, error: result.startsWith('ERROR') };
       }
       case 'browser_snapshot': {
-        const result = await browserSnapshot(sessionId);
+        const result = await browserSnapshot(sessionId, { onPerformanceStage: deps.onPerformanceStage });
         await broadcastBrowserStatus('browser_snapshot');
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -16494,7 +16566,11 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 
       // Desktop automation tools
       case 'desktop_doctor': {
-        const result = await desktopDoctor(sessionId, { deep: args.deep === true });
+        const result = await desktopDoctor(sessionId, {
+          deep: args.deep === true,
+          signal: deps.abortSignal?.signal,
+          onPerformanceStage: deps.onPerformanceStage,
+        });
         return { name, args, result, error: /\bFAIL\b/.test(result) };
       }
       case 'desktop_screenshot': {
@@ -17065,6 +17141,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           networking: args.networking,
           vgpu: args.vgpu,
           memory_mb: args.memory_mb == null ? undefined : Number(args.memory_mb),
+          session_id: sessionId,
         });
         return { name, args, result, error: result.startsWith('ERROR') };
       }
@@ -17084,6 +17161,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           include_text: args.include_text === true,
           max_depth: args.max_depth == null ? undefined : Number(args.max_depth),
           max_nodes: args.max_nodes == null ? undefined : Number(args.max_nodes),
+          session_id: sessionId,
           signal: deps.abortSignal?.signal,
         } as any);
         return { name, args, result, error: result.startsWith('ERROR') };
@@ -17318,17 +17396,17 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           const mbMatches = mbContent.match(/^## (.+)/gm) || [];
           const mbCategories = mbMatches.map((m: string) => m.replace(/^## /, '').trim());
           if (mbCategories.length === 0) {
-            return { name, args, result: `${mbFilename} has no categories yet. Use memory_write to create the first one.`, error: false };
+            return { name, args, result: `${mbFilename} has no categories yet. Use memory(action="write") to create the first one.`, error: false };
           }
-          return { name, args, result: `${mbFilename} categories:\n${mbCategories.map((c: string) => `- ${c}`).join('\n')}\n\nUse memory_write(file="${mbFile}", category="<name>", content="...") to add a fact.`, error: false };
+          return { name, args, result: `${mbFilename} categories:\n${mbCategories.map((c: string) => `- ${c}`).join('\n')}\n\nUse memory(action="write", file="${mbFile}", category="<name>", content="...") to add a fact.`, error: false };
         }
         const mbContent = fs.readFileSync(mbPath, 'utf-8');
         const mbMatches = mbContent.match(/^## (.+)/gm) || [];
         const mbCategories = mbMatches.map((m: string) => m.replace(/^## /, '').trim());
         if (mbCategories.length === 0) {
-          return { name, args, result: `${mbFilename} has no categories yet. Use memory_write to create the first one.`, error: false };
+          return { name, args, result: `${mbFilename} has no categories yet. Use memory(action="write") to create the first one.`, error: false };
         }
-        return { name, args, result: `${mbFilename} categories:\n${mbCategories.map((c: string) => `- ${c}`).join('\n')}\n\nUse memory_write(file="${mbFile}", category="<name>", content="...") to add a fact.`, error: false };
+        return { name, args, result: `${mbFilename} categories:\n${mbCategories.map((c: string) => `- ${c}`).join('\n')}\n\nUse memory(action="write", file="${mbFile}", category="<name>", content="...") to add a fact.`, error: false };
       }
 
       case 'memory_write': {
@@ -17410,10 +17488,11 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             dateTo: args.date_to ? String(args.date_to) : undefined,
             sourceTypes: sourceTypes as any,
             minDurability: args.min_durability !== undefined ? Number(args.min_durability) : undefined,
+            debug: args.debug === true,
             queryRoute: 'legacy_executor',
             },
           }, { signal: deps.abortSignal?.signal });
-          return { name, args, result, error: false };
+          return { name, args, result: compactMemorySearchResult(result, { debug: args.debug === true }), error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search failed: ${String(err?.message || err)}`, error: true };
         }
@@ -17443,7 +17522,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             query,
             limit: Number(args.limit || 10),
           }, { signal: deps.abortSignal?.signal });
-          return { name, args, result, error: false };
+          return { name, args, result: compactMemorySearchResult(result), error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search_project failed: ${String(err?.message || err)}`, error: true };
         }
@@ -17460,7 +17539,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             dateTo: args.date_to ? String(args.date_to) : undefined,
             limit: Number(args.limit || 20),
           }, { signal: deps.abortSignal?.signal });
-          return { name, args, result, error: false };
+          return { name, args, result: compactMemorySearchResult(result), error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search_timeline failed: ${String(err?.message || err)}`, error: true };
         }
@@ -19581,6 +19660,12 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               taskId: restartTask?.id,
               taskOriginatingSessionId: restartTask?.originatingSessionId,
               taskInitiatedTool: restartTask ? 'gateway_restart' : undefined,
+              quickRestart: !restartTask
+                && !args.proposal_id
+                && !args.repair_id
+                && (!Array.isArray(args.affected_files) || args.affected_files.length === 0)
+                && String(args.restart_scope || '').trim().toLowerCase() !== 'supervisor'
+                && args.full_supervisor !== true,
               suppressStandaloneRestartMessage: !!restartTask,
               originChannel: isTelegramSession ? 'telegram' : undefined,
               respondToTelegram: isTelegramSession ? true : undefined,

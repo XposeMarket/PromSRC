@@ -31,13 +31,34 @@ let _currentProjectSessionId = null; // session currently open in chat
 let _pendingProjectName = '';
 let _pendingProjectWorkspacePath = '';
 
+function projectPinned(project) {
+  return Number(project?.pinnedAt || 0) > 0 || localProjectPins().includes(String(project?.id || ''));
+}
+
+function localProjectPins() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('prometheus_pinned_projects') || '[]');
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch { return []; }
+}
+
+function setLocalProjectPin(projectId, pinned) {
+  const ids = localProjectPins();
+  const id = String(projectId || '');
+  const index = ids.indexOf(id);
+  if (pinned && index < 0) ids.unshift(id);
+  if (!pinned && index >= 0) ids.splice(index, 1);
+  localStorage.setItem('prometheus_pinned_projects', JSON.stringify(ids));
+}
+
 // ─── Init ───────────────────────────────────────────────────────────────────
 // This page is dynamically imported by the desktop shell.  Dynamic imports can
 // resolve after DOMContentLoaded, so listening only for that event leaves the
 // project tree visible but inert on some app starts.
 function initialiseProjectSidebar() {
-  const list = document.getElementById('projects-list');
-  if (list && list.dataset.delegatedActions !== 'true') {
+  ['projects-list'].forEach((listId) => {
+    const list = document.getElementById(listId);
+    if (!list || list.dataset.delegatedActions === 'true') return;
     list.dataset.delegatedActions = 'true';
     list.addEventListener('click', (event) => {
       const target = event.target?.closest?.('[data-project-action]');
@@ -53,7 +74,7 @@ function initialiseProjectSidebar() {
       else if (action === 'open-session' && sessionId) void window.openProjectSession(projectId, sessionId);
       else if (action === 'delete-session' && sessionId) void window.confirmDeleteProjectSession(projectId, sessionId, String(target.dataset.sessionTitle || ''));
     });
-  }
+  });
 }
 
 if (document.readyState === 'loading') {
@@ -61,6 +82,9 @@ if (document.readyState === 'loading') {
 } else {
   initialiseProjectSidebar();
 }
+// Projects are also part of the regular Chats stream, so hydrate them even
+// when the user never opens the dedicated Projects tab.
+setTimeout(() => { void loadProjects(); }, 0);
 
 // ─── API calls ──────────────────────────────────────────────────────────────
 
@@ -90,6 +114,7 @@ async function loadProjects() {
       window.saveChatSessions?.();
       window.renderSessionsList?.();
     }
+    window.renderSessionsList?.();
     renderProjectsList();
   } catch (e) {
     // API not wired yet — silently show empty state
@@ -97,6 +122,45 @@ async function loadProjects() {
     renderProjectsList();
   }
 }
+
+function projectImportedLogo(project) {
+  const binding = project?.externalImport;
+  if (!binding) return '';
+  const sessionLike = { externalImport: { source: binding } };
+  return typeof window.renderImportedSourceLogo === 'function' ? window.renderImportedSourceLogo(sessionLike) : '';
+}
+
+function renderProjectChatRow(project) {
+  const id = escHtmlLocal(project.id);
+  const isOpen = _expandedProjectIds.has(String(project.id));
+  const pinned = projectPinned(project);
+  const children = (project.sessions || []).slice().sort((a, b) => projectSessionLastActivity(b) - projectSessionLastActivity(a)).map((session) => {
+    const cached = Array.isArray(window.chatSessions) ? window.chatSessions.find((item) => String(item?.id || '') === String(session?.id || '')) : null;
+    const nested = { ...(cached || {}), ...session, projectId: project.id, projectName: project.name };
+    return typeof window.renderChatSessionCard === 'function'
+      ? window.renderChatSessionCard(nested, { projectId: project.id, projectNested: true, projectDelete: false })
+      : '';
+  }).join('');
+  const folder = '<span class="project-chat-folder" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></span>';
+  return `<div class="project-chat-group${isOpen ? ' open' : ''}${pinned ? ' pinned-project' : ''}" data-project-chat-group="${id}">
+    <div class="job-item chat-session-item project-chat-row" data-project-action="toggle-chat" data-project-id="${id}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}" onclick="window.toggleProjectChatRow && window.toggleProjectChatRow('${id}')">
+      <button class="chat-session-action-btn chat-pin-btn project-chat-pin-btn${pinned ? ' active' : ''}" type="button" onclick="window.toggleProjectPin && window.toggleProjectPin('${id}', event)" title="${pinned ? 'Unpin' : 'Pin'} project" aria-label="${pinned ? 'Unpin' : 'Pin'} project">${typeof window.SKILL_STAR_ICON === 'function' ? window.SKILL_STAR_ICON(pinned) : '☆'}</button>
+      <div class="job-item-head job-item-head--pinned"><div class="job-item-title-wrap"><div class="job-item-title"><span class="project-chat-icon-line">${folder}${projectImportedLogo(project)}</span>${escHtmlLocal(project.name)}</div></div></div>
+      <div class="job-item-meta"><span class="job-item-time">${timeAgo(projectLastActivity(project))}</span></div>
+    </div>
+    <div class="project-chat-children"${isOpen ? '' : ' hidden'}>${children || '<div class="project-empty-session">No chats yet.</div>'}</div>
+  </div>`;
+}
+
+window.renderProjectChatRows = function({ pinned = false, query = '' } = {}) {
+  const q = String(query || '').trim().toLowerCase();
+  return _projects
+    .filter((project) => pinned ? projectPinned(project) : true)
+    .filter((project) => !q || projectMatchesFilter(project, q))
+    .sort((a, b) => (projectPinned(b) ? Number(b.pinnedAt || 0) : projectLastActivity(b)) - (projectPinned(a) ? Number(a.pinnedAt || 0) : projectLastActivity(a)))
+    .map(renderProjectChatRow)
+    .join('');
+};
 
 async function createProjectApi(name, workspacePath = '') {
   return await api('/api/projects', {
@@ -221,7 +285,7 @@ function renderProjectsList(filter = '') {
 
   const q = filter.toLowerCase();
   const filtered = q
-    ? _projects.filter(p => p.name.toLowerCase().includes(q))
+    ? _projects.filter((project) => projectMatchesFilter(project, q))
     : _projects;
 
   if (!filtered.length) {
@@ -229,41 +293,88 @@ function renderProjectsList(filter = '') {
     return;
   }
 
-  list.innerHTML = filtered.map(p => renderProjectCard(p)).join('');
+  list.innerHTML = filtered.map(p => renderProjectCard(p, { sidebar: true })).join('');
+  list.style.display = 'flex';
 }
 
-function renderProjectCard(p) {
+function projectLastActivity(project) {
+  return (project?.sessions || []).reduce((latest, session) => {
+    const value = Number(session?.lastMessageAt || session?.updatedAt || session?.createdAt || 0);
+    return Math.max(latest, Number.isFinite(value) ? value : 0);
+  }, Number(project?.updatedAt || project?.createdAt || 0) || 0);
+}
+
+function projectSessionLastActivity(session) {
+  const explicit = Number(session?.lastMessageAt || session?.updatedAt || session?.createdAt || 0);
+  return Number.isFinite(explicit) ? explicit : 0;
+}
+
+function projectMatchesFilter(project, query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return true;
+  return String(project?.name || '').toLowerCase().includes(q)
+    || (project?.sessions || []).some((session) => String(session?.title || '').toLowerCase().includes(q));
+}
+
+function renderProjectCard(p, options = {}) {
   const isOpen = _expandedProjectIds.has(p.id);
-  const sessionRows = (p.sessions || []).map(s => renderProjectSessionItem(p.id, s)).join('');
+  const sessionRows = (p.sessions || [])
+    .slice()
+    .sort((a, b) => projectSessionLastActivity(b) - projectSessionLastActivity(a))
+    .map(s => renderProjectSessionItem(p.id, s, options)).join('');
+  const isActiveProject = Boolean(_currentProjectSessionId && (p.sessions || []).find(s => s.id === _currentProjectSessionId));
+  const projectClass = options.sidebar ? ' project-sidebar-group' : '';
+  const projectRowState = isActiveProject ? ' active' : '';
 
   return `
-<div class="project-card${isOpen ? ' open' : ''}${_currentProjectSessionId && (p.sessions||[]).find(s=>s.id===_currentProjectSessionId) ? ' active-project' : ''}"
+<div class="project-card${projectClass}${isOpen ? ' open' : ''}${isActiveProject ? ' active-project' : ''}"
      id="proj-card-${p.id}">
-  <div class="project-card-header" data-project-action="toggle" data-project-id="${escHtmlLocal(p.id)}" title="${escHtmlLocal(p.workspacePath || p.name)}">
+  <div class="project-card-header${options.sidebar ? ` job-item chat-session-item project-sidebar-row${projectRowState}` : ''}" data-project-action="toggle" data-project-id="${escHtmlLocal(p.id)}" title="${escHtmlLocal(p.workspacePath || p.externalImport?.sourcePath || p.name)}" role="button" tabindex="0" aria-expanded="${isOpen ? 'true' : 'false'}">
     <div class="project-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l1.7 2h7.3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.5 9.5h17"/></svg></div>
-    <div class="project-card-name">${escHtmlLocal(p.name)}</div>
+    <div class="job-item-head job-item-head--pinned project-row-content"><div class="job-item-title-wrap"><div class="job-item-title">${escHtmlLocal(p.name)}</div></div></div>
+    <div class="job-item-meta project-row-meta"><span class="job-item-time">${timeAgo(projectLastActivity(p))}</span></div>
     <button class="project-card-add-btn" title="New chat in project" data-project-action="new-session" data-project-id="${escHtmlLocal(p.id)}">+</button>
     <button class="project-card-delete-btn" title="Delete project" data-project-action="delete-project" data-project-id="${escHtmlLocal(p.id)}" data-project-name="${escHtmlLocal(p.name)}">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
     </button>
-    <span class="project-card-chevron">&#9660;</span>
   </div>
   <div class="project-sessions-list">
-    ${sessionRows || `<div style="padding:10px 20px;font-size:11px;color:var(--muted)">No sessions yet — click + to start one.</div>`}
+    ${sessionRows || '<div class="project-empty-session">No chats yet — click + to start one.</div>'}
   </div>
 </div>`;
 }
 
-function renderProjectSessionItem(projectId, s) {
+function renderProjectSessionItem(projectId, s, options = {}) {
   const isActive = s.id === _currentProjectSessionId;
   const title = s.title || s.id?.slice(0, 12) || 'Untitled';
+  const activity = projectSessionLastActivity(s);
+  if (options.sidebar) {
+    const cachedSession = Array.isArray(window.chatSessions)
+      ? window.chatSessions.find((session) => String(session?.id || '') === String(s?.id || ''))
+      : null;
+    const nestedSession = {
+      ...(cachedSession || {}),
+      ...s,
+      title,
+      updatedAt: cachedSession?.updatedAt || s.updatedAt || activity,
+      lastMessageAt: cachedSession?.lastMessageAt || s.lastMessageAt || activity,
+    };
+    if (typeof window.renderChatSessionCard === 'function') {
+      return window.renderChatSessionCard(nestedSession, { projectId, projectNested: true, projectDelete: true });
+    }
+  }
   return `
 <div class="project-session-item${isActive ? ' active-session' : ''}"
      data-project-action="open-session" data-project-id="${escHtmlLocal(projectId)}" data-session-id="${escHtmlLocal(s.id)}">
   <span class="project-session-dot"></span>
   <span class="project-session-name">${escHtmlLocal(title)}</span>
+  <span class="project-session-time">${timeAgo(activity)}</span>
   <button class="project-session-delete-btn" title="Delete session" data-project-action="delete-session" data-project-id="${escHtmlLocal(projectId)}" data-session-id="${escHtmlLocal(s.id)}" data-session-title="${escHtmlLocal(title)}">✕</button>
 </div>`;
+}
+
+function renderProjectSidebarTree(filter = '') {
+  renderProjectsList(filter);
 }
 
 function escHtmlLocal(str) {
@@ -276,6 +387,40 @@ window.toggleProjectCard = function(projectId) {
   if (_expandedProjectIds.has(projectId)) _expandedProjectIds.delete(projectId);
   else _expandedProjectIds.add(projectId);
   renderProjectsList(document.getElementById('project-search')?.value || '');
+};
+
+window.toggleProjectChatRow = function(projectId) {
+  const id = String(projectId || '');
+  if (_expandedProjectIds.has(id)) _expandedProjectIds.delete(id);
+  else _expandedProjectIds.add(id);
+  window.renderSessionsList?.();
+};
+
+window.toggleProjectPin = async function(projectId, event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  const project = _projects.find((item) => String(item?.id || '') === String(projectId || ''));
+  if (!project) return;
+  const wasPinned = projectPinned(project);
+  const nextPinned = !wasPinned;
+  setLocalProjectPin(project.id, nextPinned);
+  project.pinnedAt = nextPinned ? Date.now() : undefined;
+  window.renderSessionsList?.();
+  try {
+    const updated = await api(`/api/projects/${encodeURIComponent(project.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned: nextPinned }),
+    });
+    project.pinnedAt = Number(updated?.pinnedAt || 0) || undefined;
+    setLocalProjectPin(project.id, !!project.pinnedAt);
+    window.renderSessionsList?.();
+  } catch (error) {
+    project.pinnedAt = wasPinned ? Date.now() : undefined;
+    setLocalProjectPin(project.id, wasPinned);
+    window.renderSessionsList?.();
+    showToast(error?.message || 'Could not update project pin', 'error');
+  }
 };
 
 // ─── Edit mode ───────────────────────────────────────────────────────────────
@@ -292,6 +437,10 @@ window.toggleProjectsEditMode = function() {
 
 window.filterProjects = function(q) {
   renderProjectsList(q);
+};
+
+window.filterProjectSidebar = function(q) {
+  renderProjectSidebarTree(q);
 };
 
 // ─── New Project modal ───────────────────────────────────────────────────────
@@ -511,6 +660,7 @@ window.openProjectSession = async function(projectId, sessionId) {
   // Mark body as in-project-session — triggers CSS changes for right panel
   document.body.classList.add('in-project-session');
   document.body.dataset.projectId = projectId;
+  document.body.dataset.projectName = project?.name || '';
 
   // Fetch session history from server, then upsert into chatSessions before switching.
   if (Array.isArray(window.chatSessions)) {
@@ -538,6 +688,7 @@ window.openProjectSession = async function(projectId, sessionId) {
         processLog: [],
         source: 'project',
         projectId,
+        projectName: project?.name || null,
         canvasProjectRoot: project?.workspacePath || null,
         canvasProjectLabel: project?.name || null,
         automated: false,
@@ -548,6 +699,7 @@ window.openProjectSession = async function(projectId, sessionId) {
     } else {
       existing.source = existing.source || 'project';
       existing.projectId = existing.projectId || projectId;
+      existing.projectName = project?.name || existing.projectName || null;
       existing.canvasProjectRoot = project?.workspacePath || existing.canvasProjectRoot || null;
       existing.canvasProjectLabel = project?.name || existing.canvasProjectLabel || null;
       existing.automated = false;
@@ -590,6 +742,7 @@ window.confirmDeleteProject = async function(projectId, projectName) {
             _currentProjectSessionId = null;
             document.body.classList.remove('in-project-session');
             delete document.body.dataset.projectId;
+            delete document.body.dataset.projectName;
           }
         }
         await loadProjects();
@@ -613,6 +766,8 @@ window.confirmDeleteProjectSession = async function(projectId, sessionId, sessio
         if (_currentProjectSessionId === sessionId) {
           _currentProjectSessionId = null;
           document.body.classList.remove('in-project-session');
+          delete document.body.dataset.projectId;
+          delete document.body.dataset.projectName;
         }
         await loadProjects();
       } catch (e) {
@@ -675,7 +830,8 @@ async function loadProjectEditors(projectId) {
   if (instrTA) instrTA.value = project.instructions || '';
   if (memTA) memTA.value = project.memorySnapshot || '';
   if (workspaceName) workspaceName.textContent = project.name || 'Project';
-  if (workspacePath) workspacePath.textContent = project.workspacePath || 'No linked path — project context is stored in Prometheus.';
+  if (workspacePath) workspacePath.textContent = project.workspacePath
+    || (project.externalImport?.sourcePath ? `Source path detected (permission required to link): ${project.externalImport.sourcePath}` : 'No linked path — project context is stored in Prometheus.');
 }
 
 window.saveProjectInstructions = async function() {
@@ -720,6 +876,7 @@ function _maybeClearProjectState(sessionId) {
     _expandedProjectIds.add(cachedSession.projectId);
     document.body.classList.add('in-project-session');
     document.body.dataset.projectId = cachedSession.projectId;
+    document.body.dataset.projectName = cachedSession.projectName || cachedSession.canvasProjectLabel || '';
     void loadProjectEditors(cachedSession.projectId);
     window.setRightPanelTab?.(_currentRpTab === 'canvas' ? 'project' : _currentRpTab);
     return;
@@ -734,6 +891,7 @@ function _maybeClearProjectState(sessionId) {
     _expandedProjectIds.add(ownerProject.id);
     document.body.classList.add('in-project-session');
     document.body.dataset.projectId = ownerProject.id;
+    document.body.dataset.projectName = ownerProject.name || '';
     void loadProjectEditors(ownerProject.id);
     window.setRightPanelTab?.(_currentRpTab === 'canvas' ? 'project' : _currentRpTab);
     return;
@@ -744,6 +902,8 @@ function _maybeClearProjectState(sessionId) {
     _currentRpTab = 'project';
     document.body.classList.remove('in-project-session');
     delete document.body.dataset.projectId;
+    delete document.body.dataset.projectName;
+    window.syncChatTopbarTitle?.();
 
     // Restore the normal right panel topbar
     const topbar = document.getElementById('right-panel-topbar');
@@ -777,3 +937,4 @@ window._maybeClearProjectState = _maybeClearProjectState;
 // ─── Expose for external use ─────────────────────────────────────────────────
 window.loadProjects = loadProjects;
 window.renderProjectsList = renderProjectsList;
+window.renderProjectSidebarTree = renderProjectSidebarTree;

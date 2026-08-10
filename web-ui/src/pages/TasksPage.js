@@ -85,6 +85,7 @@ let bgtDraggedTaskId = null;
 let bgtDragClickSuppressUntil = 0;
 let bgtRecentProcessRuns = [];
 let bgtCodingWorkspace = null;
+let bgtSearchQuery = '';
 
 const BGT_HIDDEN_KEY = 'prom_hidden_tasks';
 
@@ -94,6 +95,63 @@ function bgtGetHidden() {
 
 function bgtSaveHidden(set) {
   localStorage.setItem(BGT_HIDDEN_KEY, JSON.stringify([...set]));
+}
+
+function bgtSearchMatches(query, ...values) {
+  const normalizedQuery = String(query || '').trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return values.some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+}
+
+function bgtTaskMatchesSearch(task, query) {
+  const planText = Array.isArray(task?.plan)
+    ? task.plan.map((step) => step?.description || '').join(' ')
+    : '';
+  return bgtSearchMatches(query, task?.title, task?.description, task?.channel, planText);
+}
+
+function bgtManagedThreadMatchesSearch(record, query) {
+  return bgtSearchMatches(
+    query,
+    record?.targetTitle,
+    record?.targetSessionId,
+    record?.objective,
+    record?.finalSummary,
+    record?.lastStatusSummary,
+  );
+}
+
+function updateBgtSearchUI(matchCount = null) {
+  const input = document.getElementById('bgt-search');
+  const clear = document.getElementById('bgt-search-clear');
+  const results = document.getElementById('bgt-search-results');
+  if (input && input.value !== bgtSearchQuery) input.value = bgtSearchQuery;
+  if (clear) clear.style.visibility = bgtSearchQuery ? 'visible' : 'hidden';
+  if (results) results.textContent = bgtSearchQuery && matchCount !== null ? `${matchCount} match${matchCount === 1 ? '' : 'es'}` : '';
+}
+
+function bgtHandleSearchInput(value) {
+  bgtSearchQuery = String(value || '');
+  renderBgTasks();
+}
+
+function bgtClearSearch() {
+  bgtSearchQuery = '';
+  updateBgtSearchUI();
+  renderBgTasks();
+}
+
+function installBgtSearch() {
+  const input = document.getElementById('bgt-search');
+  const clear = document.getElementById('bgt-search-clear');
+  if (!input || input.dataset.bgtSearchBound === 'true') return;
+  input.dataset.bgtSearchBound = 'true';
+  input.addEventListener('input', () => bgtHandleSearchInput(input.value));
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && input.value) bgtClearSearch();
+  });
+  if (clear) clear.addEventListener('click', bgtClearSearch);
+  updateBgtSearchUI();
 }
 
 function updateBgtHeartbeatLabel() {
@@ -134,6 +192,7 @@ const BGT_COLUMNS = [
   { key: 'needs_assistance', label: '⚠️ Needs You',  color: '#6d2d9e', bg: '#f5eeff' },
   { key: 'complete',         label: '✓ Complete',    color: '#1a6e35', bg: '#efffea' },
   { key: 'failed',           label: '✕ Failed',      color: '#9c1a1a', bg: '#fff0f0' },
+  { key: 'cancelled',        label: '⊘ Stopped',     color: '#555',    bg: '#f5f5f5' },
 ];
 
 const STATUS_ICON = {
@@ -156,6 +215,17 @@ function bgtNormalizeStatus(rawStatus) {
   if (status === 'waiting_subagent' || status === 'in_progress') return 'running';
   if (status === 'completed' || status === 'done') return 'complete';
   return status;
+}
+
+function bgtNormalizeManagedThreadStatus(rawStatus) {
+  const status = String(rawStatus || '').trim().toLowerCase();
+  if (status === 'active') return 'running';
+  if (status === 'paused') return 'paused';
+  if (status === 'complete') return 'complete';
+  if (status === 'blocked') return 'stalled';
+  if (status === 'failed') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
+  return 'stalled';
 }
 
 function bgtGetTask(taskId) {
@@ -304,43 +374,18 @@ async function refreshBgTasks() {
   }
   if (typeof window.refreshHeartbeatSummary === 'function') window.refreshHeartbeatSummary().catch(() => {});
   renderBgTasks();
-  renderManagedThreads();
 }
 
 function managedThreadStatusStyle(status) {
   const styles = {
     active: ['#eaf2ff', '#0d4faf', 'Working'],
+    paused: ['#f5f5f5', '#555', 'Paused'],
     complete: ['#efffea', '#1a6e35', 'Complete'],
     blocked: ['#fff8e1', '#7c4d00', 'Blocked'],
     failed: ['#fff0f0', '#9c1a1a', 'Failed'],
     cancelled: ['#f5f5f5', '#555', 'Stopped'],
   };
   return styles[String(status || '').toLowerCase()] || styles.cancelled;
-}
-
-function renderManagedThreads() {
-  const section = document.getElementById('managed-threads-section');
-  const list = document.getElementById('managed-threads-list');
-  const count = document.getElementById('managed-threads-count');
-  if (!section || !list || !count) return;
-  section.style.display = bgtManagedThreads.length ? 'flex' : 'none';
-  const activeCount = bgtManagedThreads.filter(record => record.status === 'active').length;
-  count.textContent = `${activeCount} active`;
-  list.innerHTML = bgtManagedThreads.map((record) => {
-    const [bg, color, label] = managedThreadStatusStyle(record.status);
-    const objective = String(record.objective || record.finalSummary || '').trim();
-    return `<div style="min-width:250px;max-width:330px;flex:0 0 auto;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:10px 12px;cursor:pointer" onclick="openManagedThread('${escHtml(record.targetSessionId)}')">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:5px">
-        <span style="font-size:12px;font-weight:750;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(record.targetTitle || record.targetSessionId)}</span>
-        <span style="font-size:9px;background:${bg};color:${color};border-radius:999px;padding:2px 7px;font-weight:800;flex-shrink:0">${label}</span>
-      </div>
-      <div style="font-size:10px;color:var(--muted);line-height:1.4;min-height:28px">${escHtml(objective.slice(0, 120) || 'Managed Prometheus thread')}${objective.length > 120 ? '…' : ''}</div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
-        <span style="font-size:10px;color:var(--brand);font-weight:700">Open thread</span>
-        ${record.status === 'active' ? `<button onclick="event.stopPropagation();cancelManagedThread('${escHtml(record.id)}')" style="border:0;background:none;color:var(--muted);font-size:10px;cursor:pointer;padding:2px">Stop following</button>` : ''}
-      </div>
-    </div>`;
-  }).join('');
 }
 
 async function openManagedThread(sessionId) {
@@ -450,64 +495,112 @@ function renderBgTasks() {
   const board = document.getElementById('bgt-board');
   if (!board) return;
 
+  installBgtSearch();
+  const hidden = bgtGetHidden();
+  const searchQuery = bgtSearchQuery.trim().toLowerCase();
+  const visibleTasks = bgtTasks.filter(t => !hidden.has(t.id) && bgtTaskMatchesSearch(t, searchQuery));
+  const visibleManagedThreads = bgtManagedThreads.filter(record => bgtManagedThreadMatchesSearch(record, searchQuery));
+
   // Update count badge
   const countEl = document.getElementById('bgt-count');
   if (countEl) {
-    const _hidden = bgtGetHidden();
-    const active = bgtTasks.filter(t => {
-      if (_hidden.has(t.id)) return false;
+    const activeTasks = visibleTasks.filter(t => {
       const status = bgtNormalizeStatus(t.status);
       return status !== 'complete' && status !== 'failed';
     }).length;
-    countEl.textContent = `${active} active`;
+    const activeManagedThreads = visibleManagedThreads.filter(record => String(record.status || '').toLowerCase() === 'active').length;
+    countEl.textContent = `${activeTasks + activeManagedThreads} active`;
   }
 
   updateBgtHeartbeatLabel();
+  updateBgtSearchUI(visibleTasks.length + visibleManagedThreads.length);
 
   // Only render non-empty columns
-  const hidden = bgtGetHidden();
-  const visibleTasks = bgtTasks.filter(t => !hidden.has(t.id));
   const byStatus = {};
   for (const col of BGT_COLUMNS) byStatus[col.key] = [];
   for (const t of visibleTasks) {
     const normalizedStatus = bgtNormalizeStatus(t.status);
-    if (byStatus[normalizedStatus]) byStatus[normalizedStatus].push(t);
-    else if (byStatus['stalled']) byStatus['stalled'].push(t);
+    if (byStatus[normalizedStatus]) byStatus[normalizedStatus].push({ type: 'task', task: t });
+    else if (byStatus['stalled']) byStatus['stalled'].push({ type: 'task', task: t });
+  }
+  for (const record of visibleManagedThreads) {
+    const normalizedStatus = bgtNormalizeManagedThreadStatus(record.status);
+    if (byStatus[normalizedStatus]) byStatus[normalizedStatus].push({ type: 'managed_thread', record });
+    else if (byStatus['stalled']) byStatus['stalled'].push({ type: 'managed_thread', record });
   }
 
   board.innerHTML = '';
   for (const col of BGT_COLUMNS) {
-    const tasks = byStatus[col.key];
-    if (tasks.length === 0 && (col.key === 'complete' || col.key === 'failed' || col.key === 'stalled' || col.key === 'needs_assistance')) continue;
+    const items = byStatus[col.key];
+    if (items.length === 0 && (col.key === 'complete' || col.key === 'failed' || col.key === 'stalled' || col.key === 'needs_assistance' || col.key === 'cancelled')) continue;
     const colEl = document.createElement('div');
     colEl.style.cssText = 'min-width:240px;max-width:280px;flex:0 0 auto;display:flex;flex-direction:column;gap:0;';
     colEl.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:${col.color}">${col.label}</span>
-        <span style="font-size:10px;background:${col.bg};color:${col.color};border-radius:999px;padding:1px 8px;font-weight:700">${tasks.length}</span>
+        <span style="font-size:10px;background:${col.bg};color:${col.color};border-radius:999px;padding:1px 8px;font-weight:700">${items.length}</span>
       </div>
       <div class="bgt-col-cards" data-bgt-drop-status="${col.key}" ondragover="bgtHandleColumnDragOver(event,'${col.key}')" ondragenter="bgtHandleColumnDragEnter(event,'${col.key}')" ondragleave="bgtHandleColumnDragLeave(event,'${col.key}')" ondrop="bgtHandleColumnDrop(event,'${col.key}')" style="display:flex;flex-direction:column;gap:8px;min-height:60px;border-radius:12px;transition:outline 0.15s,background 0.15s">
-        ${tasks.slice(0,5).map(t => bgtCardHTML(t, col)).join('')}
-        ${tasks.length > 5 ? `
-        <div id="bgt-more-${col.key}" style="display:none;">${tasks.slice(5).map(t => bgtCardHTML(t, col)).join('')}</div>
-        <button onclick="event.stopPropagation();const m=document.getElementById('bgt-more-${col.key}');const show=m.style.display==='none';m.style.display=show?'flex':'none';m.style.flexDirection='column';m.style.gap='8px';this.textContent=show?'▲ show less':'▼ +${tasks.length - 5} more'" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:5px;font-size:11px;font-weight:600;cursor:pointer;text-align:center">▼ +${tasks.length - 5} more</button>` : ''}
+        ${items.slice(0,5).map(item => item.type === 'managed_thread' ? bgtManagedThreadCardHTML(item.record, col) : bgtCardHTML(item.task, col)).join('')}
+        ${items.length > 5 ? `
+        <div id="bgt-more-${col.key}" style="display:none;">${items.slice(5).map(item => item.type === 'managed_thread' ? bgtManagedThreadCardHTML(item.record, col) : bgtCardHTML(item.task, col)).join('')}</div>
+        <button onclick="event.stopPropagation();const m=document.getElementById('bgt-more-${col.key}');const show=m.style.display==='none';m.style.display=show?'flex':'none';m.style.flexDirection='column';m.style.gap='8px';this.textContent=show?'▲ show less':'▼ +${items.length - 5} more'" style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:5px;font-size:11px;font-weight:600;cursor:pointer;text-align:center">▼ +${items.length - 5} more</button>` : ''}
       </div>
     `;
     board.appendChild(colEl);
-    if (tasks.length === 0) {
+    if (items.length === 0) {
       // Empty placeholder
       colEl.querySelector('.bgt-col-cards').innerHTML = `<div style="text-align:center;padding:20px 8px;color:var(--muted);font-size:11px;border:1.5px dashed var(--line);border-radius:10px">No ${col.label.split(' ').slice(1).join(' ').toLowerCase()} tasks</div>`;
     }
   }
 
   // If no tasks at all
-  if (visibleTasks.length === 0) {
+  const visibleItemCount = visibleTasks.length + visibleManagedThreads.length;
+  if (visibleItemCount === 0) {
+    if (searchQuery) {
+      board.innerHTML = `<div style="text-align:center;padding:60px 24px;color:var(--muted);font-size:13px;flex:1">
+        <div style="font-size:28px;margin-bottom:12px">No matches</div>
+        <div style="font-weight:700;margin-bottom:4px">Nothing matches “${escHtml(bgtSearchQuery.trim())}”</div>
+        <div style="font-size:12px">Try a different search term.</div>
+      </div>`;
+      return;
+    }
     board.innerHTML = `<div style="text-align:center;padding:60px 24px;color:var(--muted);font-size:13px;flex:1">
       <div style="font-size:36px;margin-bottom:12px">Tasks</div>
       <div style="font-weight:700;margin-bottom:4px">No background tasks yet</div>
       <div style="font-size:12px">Ask Prom to do something in the background and it'll appear here.</div>
     </div>`;
   }
+}
+
+function bgtManagedThreadCardHTML(record, col) {
+  const [bg, color, label] = managedThreadStatusStyle(record.status);
+  const targetSessionId = String(record.targetSessionId || '').trim();
+  const title = String(record.targetTitle || targetSessionId || 'Managed thread').trim();
+  const objective = String(record.objective || record.finalSummary || record.lastStatusSummary || '').trim();
+  const updatedAt = Number(record.updatedAt || record.lastStatusEventAt || record.createdAt || 0);
+  const mins = updatedAt > 0 ? Math.round((Date.now() - updatedAt) / 60000) : 0;
+  const timeAgo = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
+  const rawStatus = String(record.status || '').trim().toLowerCase();
+
+  return `
+  <div role="button" tabindex="0" onclick="openManagedThread('${escHtml(targetSessionId)}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openManagedThread('${escHtml(targetSessionId)}')}" data-bgt-managed-thread-id="${escHtml(record.id)}" style="
+    background:var(--panel);border:1.5px solid var(--line);border-radius:12px;padding:12px 14px;
+    cursor:pointer;transition:border-color 0.15s,box-shadow 0.15s;
+  " onmouseover="this.style.borderColor='var(--brand)'" onmouseout="this.style.borderColor='var(--line)'">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
+      <div style="min-width:0;flex:1">
+        <div style="font-size:10px;color:var(--brand);font-weight:800;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px">Managed thread</div>
+        <div style="font-size:13px;font-weight:700;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(title)}</div>
+      </div>
+      <span style="font-size:9px;background:${bg};color:${color};border-radius:999px;padding:2px 7px;font-weight:800;flex-shrink:0">${label}</span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);line-height:1.4;min-height:28px">${escHtml(objective.slice(0, 120) || 'Prometheus is following this chat thread.')}${objective.length > 120 ? '…' : ''}</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+      <span style="font-size:10px;color:var(--muted)">Chat thread · ${timeAgo}</span>
+      ${rawStatus === 'active' ? `<button onclick="event.stopPropagation();cancelManagedThread('${escHtml(record.id)}')" style="border:0;background:none;color:var(--muted);font-size:10px;cursor:pointer;padding:2px">Stop following</button>` : `<span style="font-size:10px;color:var(--brand);font-weight:700">Open thread</span>`}
+    </div>
+  </div>`;
 }
 
 function bgtCardHTML(t, col) {

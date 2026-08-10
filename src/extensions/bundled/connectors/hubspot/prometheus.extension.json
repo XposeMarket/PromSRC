@@ -79,5 +79,44 @@
         "placeholder": "abc123..."
       }
     ]
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["HubSpot OAuth", "HubSpot CRM"],
+    "domains": ["app.hubspot.com", "api.hubapi.com"],
+    "providerApp": {
+      "provider": "hubspot",
+      "appType": "confidential-client",
+      "clientIdEnv": "HUBSPOT_CLIENT_ID",
+      "clientSecretEnv": "HUBSPOT_CLIENT_SECRET",
+      "externalSetupRequired": true
+    },
+    "strategies": [{
+      "id": "hubspot-oauth",
+      "adapter": "connector-oauth",
+      "priority": 110,
+      "capabilities": ["contacts.read", "companies.read", "deals.read"],
+      "readOnlyDefault": true,
+      "authentication": {
+        "type": "oauth2",
+        "scopes": ["crm.objects.contacts.read", "crm.objects.companies.read", "crm.objects.deals.read"],
+        "authorizationUrl": "https://app.hubspot.com/oauth/authorize",
+        "tokenUrl": "https://api.hubapi.com/oauth/v1/token",
+        "pkceRequired": false,
+        "callback": { "host": "localhost", "port": 19426, "path": "/auth/callback/hubspot" },
+        "clientIdEnv": "HUBSPOT_CLIENT_ID",
+        "clientSecretEnv": "HUBSPOT_CLIENT_SECRET"
+      },
+      "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+      "config": { "provider": "hubspot", "connectorId": "hubspot", "resourceScope": "selected HubSpot portal" }
+    }],
+    "requestedCapabilities": [
+      { "id": "contacts.read", "label": "Read contacts", "description": "Read contact records in the selected portal.", "risk": "read" },
+      { "id": "companies.read", "label": "Read companies", "description": "Read company records in the selected portal.", "risk": "read" },
+      { "id": "deals.read", "label": "Read deals", "description": "Read deal and pipeline records.", "risk": "read" },
+      { "id": "contacts.write", "label": "Create or update contacts", "description": "CRM mutations are explicit external writes.", "risk": "write" }
+    ],
+    "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+    "toolPolicy": { "defaultExposure": "read-only", "unknownTools": "blocked" }
   }
 }

@@ -99,6 +99,7 @@ export class OllamaClient {
       onThinking?: (chunk: string) => void;
       onReasoningSummary?: (chunk: string) => void;
       onModelEvent?: (event: ModelStreamEvent) => void;
+      onWorkerStage?: (stage: string, fields?: Record<string, number | string | boolean>) => void;
       abortSignal?: AbortSignal;
       omitIntradayNotes?: boolean;
     },
@@ -144,6 +145,7 @@ export class OllamaClient {
         onThinking: options?.onThinking,
         onReasoningSummary: options?.onReasoningSummary,
         onModelEvent: options?.onModelEvent,
+        onWorkerStage: options?.onWorkerStage,
         signal: options?.abortSignal,
       });
     } catch (error: any) {
@@ -232,12 +234,13 @@ export class OllamaClient {
       onThinking?: (chunk: string) => void;
       onReasoningSummary?: (chunk: string) => void;
       onModelEvent?: (event: ModelStreamEvent) => void;
+      onWorkerStage?: (stage: string, fields?: Record<string, number | string | boolean>) => void;
       abortSignal?: AbortSignal;
       /** Per-call provider override — used by switch_model tool for turn-scoped routing. Does NOT mutate global config. */
       provider?: LLMProvider;
       /** Strip [TODAY_NOTES] from system prompt — set when switch_model is active to reduce context bloat. */
       omitIntradayNotes?: boolean;
-      usageContext?: { sessionId?: string; agentId?: string; promptManifest?: RuntimePromptManifestContext };
+      usageContext?: { sessionId?: string; agentId?: string; traceId?: string; promptManifest?: RuntimePromptManifestContext };
     }
   ): Promise<ChatOutput> {
     const model = String(options?.model || '').trim() || getModelForRole(role);
@@ -270,6 +273,7 @@ export class OllamaClient {
       callType: 'chat',
       sessionId: options?.usageContext?.sessionId,
       agentId: options?.usageContext?.agentId,
+      traceId: options?.usageContext?.traceId,
       ...usage,
       estimatedMessageInputTokens,
       estimatedSystemPromptTokens,
@@ -303,7 +307,7 @@ export class OllamaClient {
       model?: string;
       provider?: LLMProvider;
       abortSignal?: AbortSignal;
-      usageContext?: { sessionId?: string; agentId?: string; promptManifest?: RuntimePromptManifestContext };
+      usageContext?: { sessionId?: string; agentId?: string; traceId?: string; promptManifest?: RuntimePromptManifestContext };
     }
   ): Promise<GenerateOutput> {
     const model = String(options?.model || '').trim() || getModelForRole(role);
@@ -331,6 +335,7 @@ export class OllamaClient {
       callType: 'generate',
       sessionId: options?.usageContext?.sessionId,
       agentId: options?.usageContext?.agentId,
+      traceId: options?.usageContext?.traceId,
       ...usage,
       promptManifestId: promptManifest.id,
       promptManifestHash: promptManifest.hash,

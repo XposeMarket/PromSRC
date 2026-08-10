@@ -4,7 +4,7 @@ import {
 } from './mobile-data.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
-} from './mobile-shell.js?v=pm-v240-mobile-splash';
+} from './mobile-shell.js?v=pm-v263-2026-08-09-directed-chat-shield';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import {
   applyMobileDraftModelRouteToSession,
@@ -12,26 +12,27 @@ import {
   attachMobileHapticGestureSurface,
   pmHaptic,
   resetMobileDraftModelRoute,
-} from './mobile-model-badge.js';
-import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js';
+  setMobileSubagentReasoningContext,
+} from './mobile-model-badge.js?v=pm-v263-2026-08-09-directed-chat-shield';
+import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js?v=pm-v260-2026-08-09-mobile-theme-palette';
 import { formatModelWithReasoning } from '../model-display.js';
 
 import {
-  loadMobileSchedules, toggleSchedule, runScheduleNow, updateMobileSchedule,
+  loadMobileSchedules, toggleSchedule, runScheduleNow, updateMobileSchedule, deleteMobileSchedule,
   getCachedMobilePageData,
   loadMobileTeams, loadMobileTeamDetail,
   startTeamRun, pauseTeam, resumeTeam, triggerTeamReview, deleteTeam,
   saveTeamContextReference, invalidateTeamsCache,
-  streamChat, MOBILE_CHAT_SESSION_ID, createMobileChatSessionId, createMobileChatSession,
+  streamChat, MOBILE_CHAT_SESSION_ID, createMobileChatSessionId, createMobileChatSession, createMobileProjectChatSession,
   resolveMobileVoiceRoom, appendMobileVoiceRoomTranscript,
   loadGatewayStatus, loadMobileChatSession, invalidateMobileChatSessionCache, loadMobileChatRunStatus, loadMobileChatRunStatuses, loadMobileChatStreamReplay, reconcileMobileChatTurn,
   loadMobileBackgroundStatuses, loadMobileBackgroundStatus,
   updateMobileChatSessionHistory, markMobileEditRerunReset, markMobileChatSessionRead,
   loadTeamRuns, loadTeamChat, postTeamChat, loadTeamRoomState, streamTeamChat, loadTeamChatStreamReplay,
-  claimPairing, pollPairing, verifyPairingMe,
   createVoiceInterruptionEvent, streamVoiceAgentInputMobile,
   getDeviceToken, setDeviceToken, clearDeviceToken,
   mobileGatewayFetch, mobileGatewayTextFetch, buildMobileGatewayWsUrl,
+  loadMobileChatResources, loadMobileBrowserHistory, saveMobileCurrentBrowserPage, attachMobileResource, detachMobileResource,
   loadTeamWorkspace, loadTeamWorkspaceFile, loadMemoryGraph,
   loadBgTasks, loadBgTaskDetail, loadBgTaskEvidence, sendBgTaskMessage, runBgTaskAction, loadVoiceStatus,
   transcribeVoiceAudio,
@@ -47,9 +48,24 @@ import {
   loadMobileSubagents, loadMobileSubagentDetail, loadSubagentSystemPrompt, loadSubagentMemory, loadSubagentHeartbeat,
   tickSubagentHeartbeat, loadSubagentRuns, loadSubagentRunDetail, sendSubagentRunRecovery, loadSubagentChat, loadSubagentContextRefs,
   spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
-  getMobilePushStatus, enableMobileChatPushNotifications, disableMobileChatPushNotifications, reconcileMobileChatPushNotifications,
-} from './mobile-api.js';
-import { checkSessionDetailed, getAccount, mountLoginScreen } from '../auth/account.js';
+ getMobilePushStatus, enableMobileChatPushNotifications, disableMobileChatPushNotifications, reconcileMobileChatPushNotifications,
+ } from './mobile-api.js?v=pm-v263-2026-08-09-directed-chat-shield';
+import {
+  getGateway,
+  loadGatewayCatalog,
+  gatewayStatusLabel,
+  getActiveGatewayId,
+  getMobileSessionTarget,
+  resolveMobileSessionGateway,
+  setMobileActiveGatewayTarget,
+  setActiveGatewayId,
+  bindMobileSessionTarget,
+  parseTargetNamespacedId,
+  targetNamespacedId,
+  onGatewayCatalogChanged,
+  getPairingPayload,
+} from './mobile-gateway-catalog.js';
+import { getAccount } from '../auth/account.js';
 import { renderMd } from '../utils.js';
 import { presentChatError, presentGoalAction } from '../chat-error-presentation.js';
 import { wsEventBus, wsSend } from '../ws.js';
@@ -81,6 +97,7 @@ import {
   getVoicePreviewDragStyle,
   getVoicePreviewGestureOutcome,
 } from './voice-preview-deck.mjs';
+import { mountThinkingOrb } from '../vendor/thinking-orb.js';
 
 // ---------- tiny toast ----------
 const PM_MOBILE_BROWSE_CACHE_TTL_MS = 45_000;
@@ -186,11 +203,48 @@ function _showMobileCompletionToast({ key, title, summary, route } = {}) {
     clearTimeout(Number(button.dataset.pmCompletionTimer || 0));
     button.remove();
   };
-  button.addEventListener('click', () => {
+  let pointerStartX = 0;
+  let pointerStartY = 0;
+  let pointerId = null;
+  let swipedUp = false;
+  button.addEventListener('click', (event) => {
+    if (swipedUp) {
+      swipedUp = false;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     dismiss();
     if (target) window.location.hash = target.startsWith('#') ? target : `#${target}`;
   });
-  button.addEventListener('pointerdown', () => { try { pmHaptic(8); } catch {} });
+  button.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    pointerId = event.pointerId;
+    pointerStartX = event.clientX;
+    pointerStartY = event.clientY;
+    swipedUp = false;
+    try { button.setPointerCapture?.(event.pointerId); } catch {}
+    try { pmHaptic(8); } catch {}
+  });
+  button.addEventListener('pointerup', (event) => {
+    if (pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - pointerStartX;
+    const deltaY = event.clientY - pointerStartY;
+    pointerId = null;
+    try { button.releasePointerCapture?.(event.pointerId); } catch {}
+    if (deltaY <= -36 && Math.abs(deltaY) > Math.abs(deltaX)) {
+      swipedUp = true;
+      event.preventDefault();
+      clearTimeout(Number(button.dataset.pmCompletionTimer || 0));
+      button.classList.add('is-dismissing-up');
+      setTimeout(() => button.remove(), 180);
+    }
+  });
+  button.addEventListener('pointercancel', (event) => {
+    if (pointerId !== event.pointerId) return;
+    pointerId = null;
+    try { button.releasePointerCapture?.(event.pointerId); } catch {}
+  });
   host.appendChild(button);
   button.dataset.pmCompletionTimer = String(setTimeout(dismiss, 8000));
 }
@@ -340,25 +394,68 @@ function _notifyMobileChatVoiceUpdate(sessionId, detail = {}) {
   } catch {}
 }
 
+function _notifyMobileVoiceAgentConnection(stage, detail = {}) {
+  try {
+    window.dispatchEvent(new CustomEvent('pm-mobile-voice-agent-connection', {
+      detail: { stage: String(stage || '').trim(), ...(detail || {}) },
+    }));
+  } catch {}
+}
+
+function _markMobileRealtimeAgentBackendReady(conn, detail = {}) {
+  if (!conn) return false;
+  conn.backendReady = true;
+  conn.backendReadyAt = Number(conn.backendReadyAt || 0) || Date.now();
+  if (__pmRealtimeAgent?.conn !== conn) return false;
+  const ptt = __pmRealtimeAgent.ptt || {};
+  const shouldEnableMic = __pmVoice?.listening === true
+    && (String(conn.listenMode || '') === 'always_listening'
+      || (ptt.held === true && String(ptt.sessionId || '') === String(conn.sessionId || '')));
+  if (shouldEnableMic) _setMobileRealtimeAgentMicEnabled(true);
+  if (conn.backendReadyNotified === true) return false;
+  conn.backendReadyNotified = true;
+  _voiceDebug?.('realtime-agent-backend-ready', {
+    sessionId: String(conn.sessionId || ''),
+    provider: String(conn.provider || ''),
+    transport: String(conn.transport || ''),
+    ...detail,
+  });
+  _notifyMobileVoiceAgentConnection('connected', {
+    sessionId: String(conn.sessionId || ''),
+    ...detail,
+  });
+  return true;
+}
+
 /* ---------------- CHAT ---------------- */
 
 async function _refreshMobileChatPushButton() {
   const btn = document.getElementById('pm-chat-push-btn');
-  if (!btn) return;
   try {
     const status = await getMobilePushStatus();
     const on = status.browserSupported && status.permission === 'granted' && status.subscribed && status.registered !== false && !status.lastError;
-    btn.classList.toggle('active', on);
-    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    btn.setAttribute('title', on ? 'Notifications on' : 'Enable notifications');
-    btn.setAttribute('aria-label', on ? 'Disable notifications' : 'Enable notifications');
-    btn.style.color = on ? 'var(--pm-orange)' : '';
-    btn.dataset.pushState = on ? 'on' : (status.lastError ? 'error' : status.permission || 'off');
-    btn.title = status.lastError
-      ? `Notifications need repair: ${status.lastError}`
-      : (on ? 'Notifications on' : 'Enable notifications');
+    if (btn) {
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.setAttribute('title', on ? 'Notifications on' : 'Enable notifications');
+      btn.setAttribute('aria-label', on ? 'Disable notifications' : 'Enable notifications');
+      btn.style.color = on ? 'var(--pm-orange)' : '';
+      btn.dataset.pushState = on ? 'on' : (status.lastError ? 'error' : status.permission || 'off');
+      btn.title = status.lastError
+        ? `Notifications need repair: ${status.lastError}`
+        : (on ? 'Notifications on' : 'Enable notifications');
+    }
+    const menuItem = document.getElementById('pm-chat-settings-notifications');
+    const menuStatus = document.getElementById('pm-chat-settings-notifications-status');
+    if (menuItem) {
+      menuItem.classList.toggle('is-enabled', on);
+      menuItem.setAttribute('aria-pressed', on ? 'true' : 'false');
+      menuItem.setAttribute('aria-label', on ? 'Notifications enabled' : 'Enable notifications');
+      menuItem.dataset.pushState = on ? 'on' : (status.lastError ? 'error' : status.permission || 'off');
+    }
+    if (menuStatus) menuStatus.hidden = !on;
   } catch {
-    btn.dataset.pushState = 'unknown';
+    if (btn) btn.dataset.pushState = 'unknown';
   }
 }
 
@@ -5158,6 +5255,22 @@ if (typeof window !== 'undefined' && !window.__pmMobileSessionHistoryBridgeInsta
   });
 }
 
+if (typeof window !== 'undefined' && !window.__pmMobileSessionStateBridgeInstalled) {
+  window.__pmMobileSessionStateBridgeInstalled = true;
+  wsEventBus.on('session_state_changed', (msg = {}) => {
+    const sid = String(msg.sessionId || msg.session?.id || '').trim();
+    if (!sid) return;
+    invalidateMobileDrawerSessions();
+    invalidateMobileChatSessionCache(sid);
+  });
+  wsEventBus.on('auto_settle_run', (summary = {}) => {
+    if (summary?.dryRun === true || summary?.reason !== 'scheduled') return;
+    const settled = Number(summary?.settled || 0);
+    if (settled <= 0) return;
+    pmToast(`${settled} untouched chat${settled === 1 ? '' : 's'} moved to Settled Chats. You can reopen them there.`, 'info');
+  });
+}
+
 if (!window.__pmMobileGoalBridgeInstalled) {
   window.__pmMobileGoalBridgeInstalled = true;
   wsEventBus.on('main_chat_goal_updated', (msg = {}) => {
@@ -7621,15 +7734,20 @@ function _readMobileFileBase64(file) {
   });
 }
 
-async function _uploadMobileChatAttachments(files = []) {
+async function _uploadMobileChatAttachments(files = [], options = {}) {
   const list = Array.isArray(files) ? files : [];
   const results = [];
   for (const f of list) {
     const filename = f.name || 'attachment';
     const ext = _mobileFileExt(filename);
     try {
+      if (options.signal?.aborted) {
+        const abortError = new Error('Request stopped');
+        abortError.name = 'AbortError';
+        throw abortError;
+      }
       if (f.kind === 'text' && f.text != null) {
-        const r = await uploadMobileTextFile({ filename, content: String(f.text || '') });
+        const r = await uploadMobileTextFile({ filename, content: String(f.text || ''), signal: options.signal });
         const workspacePath = r?.absPath || r?.path || '';
         f.workspacePath = workspacePath;
         f.uploadState = 'uploaded';
@@ -7638,7 +7756,7 @@ async function _uploadMobileChatAttachments(files = []) {
       } else {
         const base64 = f.base64 || await _readMobileFileBase64(f.file);
         const mimeType = f.mimeType || 'application/octet-stream';
-        const r = await uploadMobileBinaryFile({ filename, base64, mimeType });
+        const r = await uploadMobileBinaryFile({ filename, base64, mimeType, signal: options.signal });
         const workspacePath = r?.absPath || r?.path || '';
         f.workspacePath = workspacePath;
         f.uploadState = 'uploaded';
@@ -7656,6 +7774,7 @@ async function _uploadMobileChatAttachments(files = []) {
         });
       }
     } catch (err) {
+      if (options.signal?.aborted) throw err;
       f.uploadState = f.kind === 'image' ? 'vision_only' : 'failed';
       f.uploadError = err?.message || String(err || 'Upload failed');
       results.push({
@@ -9060,6 +9179,76 @@ function _renderMobileChatSessionNow(sessionId) {
   if (threadEl) _flushThreadRender(threadEl, bodyEl, sid || __pmChat.activeSessionId || 'chat');
 }
 
+const mobileSourceState = {
+  sessionId: '',
+  history: false,
+  resources: [],
+  loading: false,
+};
+
+function _mobileSourceLocator(resource) {
+  const locator = resource?.locator || {};
+  return String(locator.url || locator.path || locator.artifactId || locator.taskId || '').trim();
+}
+
+function _renderMobileSourceList(root = document) {
+  const list = root?.querySelector?.('#pm-mobile-sources-list');
+  const count = root?.querySelector?.('#pm-mobile-sources-count');
+  const mode = root?.querySelector?.('#pm-mobile-sources-mode');
+  if (!list) return;
+  const resources = Array.isArray(mobileSourceState.resources) ? mobileSourceState.resources : [];
+  if (count) count.textContent = resources.length ? String(resources.length) : '';
+  if (mode) mode.textContent = mobileSourceState.history ? 'Browser history' : 'Attached to this chat';
+  if (!resources.length) {
+    list.innerHTML = `<div style="padding:20px 8px;text-align:center;color:var(--pm-muted,#89909d);font-size:12px">${mobileSourceState.history ? 'No Browser history yet.' : 'No Sources attached yet.'}</div>`;
+    return;
+  }
+  list.innerHTML = resources.map((resource) => {
+    const id = String(resource?.id || '');
+    const locator = _mobileSourceLocator(resource);
+    const action = mobileSourceState.history
+      ? `<button type="button" data-mobile-source-attach="${escapeHtml(id)}" class="pm-mobile-source-action">Attach</button>`
+      : `<button type="button" data-mobile-source-detach="${escapeHtml(id)}" class="pm-mobile-source-action pm-mobile-source-muted">Detach</button>`;
+    return `<div class="pm-mobile-source-row"><div class="pm-mobile-source-copy"><strong>${escapeHtml(resource?.title || resource?.kind || 'Source')}</strong><small>${escapeHtml([resource?.kind, resource?.hasContent ? 'saved' : 'metadata', locator].filter(Boolean).join(' · '))}</small></div>${action}</div>`;
+  }).join('');
+}
+
+async function _loadMobileSources(root = document, options = {}) {
+  const sid = String(options.sessionId || __pmChat.activeSessionId || '').trim();
+  if (!sid) return;
+  mobileSourceState.sessionId = sid;
+  mobileSourceState.history = options.history === true;
+  mobileSourceState.loading = true;
+  const list = root?.querySelector?.('#pm-mobile-sources-list');
+  if (list && !mobileSourceState.resources.length) list.innerHTML = '<div style="padding:20px 8px;text-align:center;color:var(--pm-muted,#89909d);font-size:12px">Loading Sources…</div>';
+  try {
+    const data = mobileSourceState.history
+      ? await loadMobileBrowserHistory(options.query || '', sid)
+      : await loadMobileChatResources(sid, options.query || '');
+    mobileSourceState.resources = Array.isArray(data?.resources) ? data.resources : [];
+    _renderMobileSourceList(root);
+  } catch (error) {
+    mobileSourceState.resources = [];
+    if (list) list.innerHTML = `<div style="padding:20px 8px;text-align:center;color:var(--pm-muted,#89909d);font-size:12px">Sources unavailable: ${escapeHtml(error?.message || 'request failed')}</div>`;
+  } finally {
+    mobileSourceState.loading = false;
+  }
+}
+
+function _closeMobileSources(root = document) {
+  const popover = root?.querySelector?.('#pm-mobile-sources-popover');
+  if (popover) popover.hidden = true;
+}
+
+function _openMobileSources(root = document, options = {}) {
+  document.getElementById('pm-chat-settings-popover')?.remove();
+  document.getElementById('pm-chat-settings-popover-overlay')?.remove();
+  const popover = root?.querySelector?.('#pm-mobile-sources-popover');
+  if (!popover) return;
+  popover.hidden = false;
+  _loadMobileSources(root, { sessionId: __pmChat.activeSessionId, history: options.history === true });
+}
+
 function _scrollChat(bodyEl) {
   if (!bodyEl) return;
   _restoreMobileChatScroll(bodyEl, null, { forceBottom: true });
@@ -10062,13 +10251,46 @@ function _wireMobileFileChangeRows(root = document) {
   });
 }
 
+const PM_MOBILE_LAST_CHAT_CONTEXT_KEY = 'pm_mobile_last_chat_context';
+
+function _readMobileLastChatContext() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PM_MOBILE_LAST_CHAT_CONTEXT_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch { return {}; }
+}
+
+function _saveMobileLastChatContext(context = {}) {
+  try {
+    localStorage.setItem(PM_MOBILE_LAST_CHAT_CONTEXT_KEY, JSON.stringify({
+      gatewayId: String(context.gatewayId || '').trim(),
+      gatewayName: String(context.gatewayName || '').trim(),
+      projectId: String(context.projectId || '').trim(),
+      projectName: String(context.projectName || '').trim(),
+      updatedAt: Date.now(),
+    }));
+  } catch {}
+}
+
 export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
   _installMobileApprovalBridge();
   // A bare mobile chat route reopens the last explicitly opened chat. The New
   // Chat button clears that remembered id, so only that action lands on the
   // unsaved mobile_default draft with starter cards.
   const rememberedSession = sessionId ? '' : _readMobileLastChatSession();
-  let requestedSession = String(sessionId || rememberedSession || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  const rememberedChatContext = _readMobileLastChatContext();
+  const routedSession = String(sessionId || rememberedSession || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+  const routedTarget = parseTargetNamespacedId(routedSession);
+  let requestedSession = String(routedTarget?.targetId || routedSession).trim() || MOBILE_CHAT_SESSION_ID;
+  const boundTarget = getMobileSessionTarget(requestedSession);
+  const gatewayTarget = resolveMobileSessionGateway(requestedSession, { pendingGatewayId: routedTarget?.gatewayId || boundTarget?.gatewayId || rememberedChatContext.gatewayId || getActiveGatewayId() });
+  if (routedTarget?.gatewayId && requestedSession !== MOBILE_CHAT_SESSION_ID) {
+    bindMobileSessionTarget(requestedSession, routedTarget.gatewayId, { started: true });
+  } else if (requestedSession !== MOBILE_CHAT_SESSION_ID && gatewayTarget?.gatewayId && !boundTarget?.gatewayId) {
+    bindMobileSessionTarget(requestedSession, gatewayTarget.gatewayId, { started: true });
+  }
+  setMobileActiveGatewayTarget(gatewayTarget);
+  try { window.__pmMobileActiveSessionGateway = gatewayTarget?.gatewayId || ''; } catch {}
   const isVoiceRoomTranscript = voiceRoomTranscript === true && requestedSession.startsWith('voice_room_');
   if (requestedSession !== MOBILE_CHAT_SESSION_ID) _rememberMobileLastChatSession(requestedSession);
   __pmChat.activeSessionId = requestedSession;
@@ -10077,6 +10299,27 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   }
   if (!__pmChat.activeRuns || typeof __pmChat.activeRuns !== 'object') __pmChat.activeRuns = {};
   _activeMobileThread();
+
+  // These values are used by the initial new-chat template below. Keep their
+  // declarations before page.innerHTML is evaluated; otherwise the template
+  // touches targetProjectLabel while its let binding is still in the TDZ.
+  let pendingGatewayId = gatewayTarget?.gatewayId || getActiveGatewayId();
+  let targetProjectId = String(rememberedChatContext.projectId || '').trim();
+  let targetProjectLabel = String(rememberedChatContext.projectName || '').trim();
+  let targetWorkspaceLabel = gatewayTarget?.workspaceName || '';
+  let targetPopover = null;
+  let closeTargetPopover = () => {};
+
+  function syncContextDockToComposer() {
+    if (!contextDock || !form) return;
+    const rect = form.getBoundingClientRect?.();
+    if (!rect || !rect.height) return;
+    const viewportHeight = Number(window.visualViewport?.height || window.innerHeight || 0);
+    if (!viewportHeight) return;
+    const bottom = Math.max(8, Math.round(viewportHeight - Number(rect.top || 0) + 8));
+    contextDock.style.setProperty('--pm-context-dock-bottom', `${bottom}px`);
+  }
+
   const closeMenu = () => {
     const pop = document.getElementById('pm-chat-settings-popover');
     const overlay = document.getElementById('pm-chat-settings-popover-overlay');
@@ -10102,10 +10345,12 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     pop.className = 'pm-chat-settings-popover';
     pop.setAttribute('aria-label', 'Chat settings menu');
     pop.innerHTML = `
-      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-notifications" type="button" data-action="notifications">Notifications</button>
-      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-files" type="button" data-action="files">Files</button>
-      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-permissions" type="button" data-action="permissions">Permissions</button>
-      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-open" type="button" data-action="settings">Settings</button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-notifications" type="button" data-action="notifications" aria-pressed="false"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.bell}</span><span class="pm-chat-settings-menu-label">Notifications</span><span class="pm-chat-settings-menu-status" id="pm-chat-settings-notifications-status" aria-hidden="true" hidden>${ICONS.check}</span></button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-files" type="button" data-action="files"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.doc}</span><span class="pm-chat-settings-menu-label">Files</span></button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-resources" type="button" data-action="resources"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.layers}</span><span class="pm-chat-settings-menu-label">Resources</span></button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-permissions" type="button" data-action="permissions"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.shield}</span><span class="pm-chat-settings-menu-label">Permissions</span></button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-connections" type="button" data-action="connections"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.monitor}</span><span class="pm-chat-settings-menu-label">Connections</span></button>
+      <button class="pm-chat-settings-menu-item" id="pm-chat-settings-open" type="button" data-action="settings"><span class="pm-chat-settings-menu-icon" aria-hidden="true">${ICONS.gear}</span><span class="pm-chat-settings-menu-label">Settings</span></button>
     `;
 
     const openSettings = (tab = '') => {
@@ -10130,6 +10375,11 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
       requestAnimationFrame(() => openSettings());
     }, { passive: true });
 
+    pop.querySelector('#pm-chat-settings-connections')?.addEventListener('click', () => {
+      closeMenu();
+      requestAnimationFrame(() => navigate?.('#mobile/gateways'));
+    }, { passive: true });
+
     pop.querySelector('#pm-chat-settings-notifications')?.addEventListener('click', () => {
       closeMenu();
       requestAnimationFrame(() => {
@@ -10142,6 +10392,11 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
       requestAnimationFrame(() => {
         handleBrowseCommand('').catch((err) => pmToast(err?.message || String(err || 'Could not open files'), 'error'));
       });
+    }, { passive: true });
+
+    pop.querySelector('#pm-chat-settings-resources')?.addEventListener('click', () => {
+      closeMenu();
+      requestAnimationFrame(() => _openMobileSources(page, { history: false }));
     }, { passive: true });
 
     document.body.appendChild(overlay);
@@ -10170,7 +10425,30 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     <div class="pm-tool-progress-dock" id="pm-tool-progress-dock" hidden aria-live="polite"></div>
     <div class="pm-main-plan-dock" id="pm-main-plan-dock" hidden></div>
     <div class="pm-background-spawn-dock" id="pm-background-spawn-dock" hidden></div>
+    <div id="pm-mobile-sources-popover" class="pm-mobile-sources-popover" hidden role="dialog" aria-modal="true" aria-label="Chat Sources">
+      <button type="button" id="pm-mobile-sources-scrim" class="pm-mobile-sources-popover-scrim" aria-label="Close Sources"></button>
+      <section class="pm-mobile-sources-panel">
+        <div class="pm-mobile-sources-header"><div><strong>Sources <span id="pm-mobile-sources-count"></span></strong><div id="pm-mobile-sources-mode">Attached to this chat</div></div><button type="button" id="pm-mobile-sources-close" class="pm-mobile-sources-close" aria-label="Close Sources">×</button></div>
+        <div class="pm-mobile-sources-toolbar"><button type="button" id="pm-mobile-sources-save" class="pm-mobile-source-toolbar-btn">Save current page</button><button type="button" id="pm-mobile-sources-history" class="pm-mobile-source-toolbar-btn">Browser history</button><button type="button" id="pm-mobile-sources-attached" class="pm-mobile-source-toolbar-btn">Attached</button></div>
+        <input id="pm-mobile-sources-search" class="pm-mobile-sources-search" type="search" placeholder="Search Sources" aria-label="Search Sources">
+        <div id="pm-mobile-sources-list" class="pm-mobile-sources-list"><div class="pm-mobile-sources-empty">Sources stay online and load selectively when needed.</div></div>
+      </section>
+    </div>
     <div class="pm-mobile-goal-strip" id="pm-mobile-goal-strip" hidden></div>
+    ${requestedSession === MOBILE_CHAT_SESSION_ID ? `
+      <div class="pm-new-chat-context-dock" id="pm-new-chat-context-dock" aria-label="New chat direction">
+        <button type="button" class="pm-new-chat-context-row" id="pm-chat-target-chip" aria-label="Current gateway target" aria-expanded="false">
+          <span class="pm-new-chat-context-icon" aria-hidden="true">${ICONS.monitor}</span>
+          <span class="pm-new-chat-context-value"><strong>${escapeHtml(gatewayTarget?.name || 'Gateway unavailable')}</strong><small>Connected computer</small></span>
+          <span class="pm-new-chat-context-chevron" aria-hidden="true">${ICONS.chev}</span>
+        </button>
+        <button type="button" class="pm-new-chat-context-row" id="pm-new-chat-project" aria-label="Current directed chat" aria-expanded="false">
+          <span class="pm-new-chat-context-icon" aria-hidden="true">${ICONS.folder}</span>
+          <span class="pm-new-chat-context-value"><strong>${escapeHtml(targetProjectLabel || 'Chat')}</strong><small>Directed chat</small></span>
+          <span class="pm-new-chat-context-chevron" aria-hidden="true">${ICONS.chev}</span>
+        </button>
+      </div>
+    ` : ''}
     <div class="pm-chat-connection-status" id="pm-chat-connection-status" hidden aria-live="polite">
       <span class="pm-chat-connection-spinner" aria-hidden="true"></span>
       <span class="pm-chat-connection-text">Reconnecting to Prometheus</span>
@@ -10227,11 +10505,8 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
       <video class="pm-camera-video" id="pm-camera-video" autoplay muted playsinline></video>
       <div class="pm-camera-status" id="pm-camera-status">Opening camera...</div>
       <div class="pm-camera-record-timer" id="pm-camera-record-timer" hidden>0.0s</div>
-      <div class="pm-camera-topbar">
-        <button type="button" class="pm-camera-icon" id="pm-camera-close" aria-label="Close camera">&times;</button>
-        <button type="button" class="pm-camera-icon" id="pm-camera-flip" aria-label="Flip camera">${ICONS.refresh}</button>
-      </div>
       <div class="pm-camera-controls">
+        <button type="button" class="pm-camera-icon pm-camera-close" id="pm-camera-close" aria-label="Close camera">${ICONS.x}</button>
         <button type="button" class="pm-camera-shutter pm-camera-wave-shutter" id="pm-camera-shutter" aria-label="Capture image">
           <span class="pm-camera-wave-ambient" aria-hidden="true"></span>
           <span class="pm-camera-wave-line" aria-hidden="true"></span>
@@ -10241,6 +10516,17 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
           <span class="pm-camera-voice-fallback" aria-hidden="true"></span>
           <span class="pm-camera-record-core" aria-hidden="true"></span>
         </button>
+        <div class="pm-camera-more-wrap">
+          <div class="pm-camera-more-menu" id="pm-camera-more-menu" role="group" aria-label="Camera options" hidden>
+            <button type="button" class="pm-camera-icon pm-camera-more-action" id="pm-camera-flash" aria-label="Toggle flash" aria-pressed="false">${ICONS.flash}</button>
+            <button type="button" class="pm-camera-icon pm-camera-more-action" id="pm-camera-flip" aria-label="Flip camera">${ICONS.refresh}</button>
+            <button type="button" class="pm-camera-more-pair-action" id="pm-camera-pair-scan">Scan pairing QR</button>
+          </div>
+          <button type="button" class="pm-camera-icon pm-camera-more" id="pm-camera-more" aria-label="Camera options" aria-expanded="false">
+            <span class="pm-camera-more-dots" aria-hidden="true">${ICONS.dots}</span>
+            <span class="pm-camera-more-close" aria-hidden="true">${ICONS.x}</span>
+          </button>
+        </div>
       </div>
     </div>
     <div class="pm-mobile-side-sheet" id="pm-mobile-side-sheet" role="dialog" aria-modal="true" aria-label="Side chat" aria-hidden="true" inert>
@@ -10271,6 +10557,46 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     onSettings: openSettingsMenu,
     onNewChat: () => _startMobileNewChat(navigate),
   });
+  const sourcesSearch = page.querySelector('#pm-mobile-sources-search');
+  page.querySelector('#pm-mobile-sources-close')?.addEventListener('click', () => _closeMobileSources(page));
+  page.querySelector('#pm-mobile-sources-scrim')?.addEventListener('click', () => _closeMobileSources(page));
+  page.querySelector('#pm-mobile-sources-save')?.addEventListener('click', async () => {
+    try {
+      await saveMobileCurrentBrowserPage(requestedSession, requestedSession);
+      pmToast('Saved current Browser page to Sources', 'success');
+      await _loadMobileSources(page, { sessionId: requestedSession, history: false });
+    } catch (error) {
+      pmToast(error?.message || 'Could not save current Browser page', 'error');
+    }
+  });
+  page.querySelector('#pm-mobile-sources-history')?.addEventListener('click', () => _loadMobileSources(page, { sessionId: requestedSession, history: true }));
+  page.querySelector('#pm-mobile-sources-attached')?.addEventListener('click', () => _loadMobileSources(page, { sessionId: requestedSession, history: false }));
+  sourcesSearch?.addEventListener('input', () => {
+    const timer = Number(sourcesSearch.dataset.searchTimer || 0);
+    if (timer) clearTimeout(timer);
+    sourcesSearch.dataset.searchTimer = String(setTimeout(() => {
+      _loadMobileSources(page, { sessionId: requestedSession, history: mobileSourceState.history, query: sourcesSearch.value });
+    }, 250));
+  });
+  page.querySelector('#pm-mobile-sources-list')?.addEventListener('click', async (event) => {
+    const attachButton = event.target?.closest?.('[data-mobile-source-attach]');
+    const detachButton = event.target?.closest?.('[data-mobile-source-detach]');
+    try {
+      if (attachButton) {
+        const id = attachButton.getAttribute('data-mobile-source-attach') || '';
+        const source = mobileSourceState.resources.find((resource) => resource.id === id);
+        const url = String(source?.locator?.url || '').trim();
+        if (!url) return;
+        await attachMobileResource(requestedSession, { url, title: source.title, origin: 'browser_save', pinned: true });
+        await _loadMobileSources(page, { sessionId: requestedSession, history: false });
+      } else if (detachButton) {
+        await detachMobileResource(requestedSession, detachButton.getAttribute('data-mobile-source-detach') || '');
+        await _loadMobileSources(page, { sessionId: requestedSession, history: false });
+      }
+    } catch (error) {
+      pmToast(error?.message || 'Source operation failed', 'error');
+    }
+  });
   wireMobileContextWindow(page, { getSessionId: () => __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID });
   setTimeout(() => { _prefetchBrowseRoot().catch(() => {}); }, 300);
 
@@ -10286,6 +10612,9 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   const input    = page.querySelector('#pm-composer-input');
   const sendBtn  = page.querySelector('#pm-send-btn');
   const attachBtn = page.querySelector('#pm-attach-btn');
+  const targetChip = page.querySelector('#pm-chat-target-chip');
+  const projectChip = page.querySelector('#pm-new-chat-project');
+  const contextDock = page.querySelector('#pm-new-chat-context-dock');
   const micBtn = page.querySelector('#pm-chat-mic-btn');
   const chatVoiceShell = page.querySelector('#pm-chat-voice-shell');
   const chatVoiceClose = page.querySelector('#pm-chat-voice-close');
@@ -10302,6 +10631,10 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   const cameraRecordTimer = page.querySelector('#pm-camera-record-timer');
   const cameraClose = page.querySelector('#pm-camera-close');
   const cameraFlip = page.querySelector('#pm-camera-flip');
+  const cameraMore = page.querySelector('#pm-camera-more');
+  const cameraMoreMenu = page.querySelector('#pm-camera-more-menu');
+  const cameraFlash = page.querySelector('#pm-camera-flash');
+  const cameraPairScan = page.querySelector('#pm-camera-pair-scan');
   const cameraShutter = page.querySelector('#pm-camera-shutter');
   const cameraOrbCanvas = page.querySelector('#pm-camera-strands-orb-canvas');
   const cameraPinchZoom = _installMobileCameraPinchZoom(cameraCapture, cameraVideo, () => cameraStream?.getVideoTracks?.()[0]);
@@ -10332,6 +10665,244 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   // animation state initialized before any of those callbacks can run.
   let chatComposerSpaceRaf = 0;
   let chatComposerShiftAnimation = null;
+
+  function currentChatGateway() {
+    const bound = getMobileSessionTarget(requestedSession);
+    return resolveMobileSessionGateway(requestedSession, { pendingGatewayId: bound?.gatewayId || pendingGatewayId });
+  }
+
+  function renderChatTargetChip() {
+    const target = currentChatGateway();
+    if (!targetChip) return target;
+    const value = targetChip.querySelector('.pm-new-chat-context-value');
+    if (value) value.querySelector('strong').textContent = target?.name || 'Gateway unavailable';
+    else targetChip.innerHTML = `<strong>${escapeHtml(target?.name || 'Gateway unavailable')}</strong>`;
+    targetChip.disabled = false;
+    targetChip.setAttribute('aria-expanded', String(!!targetPopover));
+    targetChip.setAttribute('aria-label', target ? `Current gateway: ${target.name}` : 'Gateway target unavailable');
+    return target;
+  }
+
+  function renderChatProjectChip() {
+    if (!projectChip) return;
+    const value = projectChip.querySelector('.pm-new-chat-context-value');
+    if (value) value.querySelector('strong').textContent = targetProjectLabel || 'Chat';
+    else projectChip.innerHTML = `<strong>${escapeHtml(targetProjectLabel || 'Chat')}</strong>`;
+    projectChip.setAttribute('aria-expanded', String(!!targetPopover && targetPopover.dataset?.popoverType === 'project'));
+    projectChip.setAttribute('aria-label', targetProjectLabel ? `Directed chat: ${targetProjectLabel}` : 'Directed chat: Chat');
+  }
+
+  function rememberChatContext() {
+    const target = currentChatGateway();
+    _saveMobileLastChatContext({
+      gatewayId: target?.gatewayId || pendingGatewayId,
+      gatewayName: target?.name || '',
+      projectId: targetProjectId,
+      projectName: targetProjectLabel,
+    });
+  }
+
+  function openChatTargetPopover() {
+    if (requestedSession !== MOBILE_CHAT_SESSION_ID || !targetChip) return;
+    closeTargetPopover();
+    const target = currentChatGateway();
+    const immutable = requestedSession !== MOBILE_CHAT_SESSION_ID;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'pm-chat-settings-popover pm-new-chat-context-popover';
+    wrapper.dataset.popoverType = 'target';
+    wrapper.setAttribute('role', 'dialog');
+    wrapper.setAttribute('aria-modal', 'true');
+    wrapper.setAttribute('aria-label', 'Gateway target');
+    const entries = loadGatewayCatalog();
+    wrapper.innerHTML = `<div class="pm-new-chat-context-popover-title">${immutable ? 'Chat target' : 'Connected computer'}</div><div class="pm-new-chat-context-popover-subtitle">${immutable ? 'This thread is permanently bound to its original gateway.' : 'Choose where this new chat should run.'}</div>${entries.map((entry) => `<button type="button" class="pm-chat-settings-menu-item pm-new-chat-context-option" data-chat-target-id="${escapeHtml(entry.gatewayId)}" aria-selected="${String(entry.gatewayId === target?.gatewayId)}" ${immutable ? 'disabled' : ''}><span class="pm-new-chat-context-option-icon" aria-hidden="true">${ICONS.monitor}</span><span class="pm-new-chat-context-option-copy"><strong>${escapeHtml(entry.name)}</strong><small>${escapeHtml(`${entry.platform || 'unknown'} · ${gatewayStatusLabel(entry.status)}`)}${entry.workspaceName ? ` · ${escapeHtml(entry.workspaceName)}` : ''}</small></span><span class="pm-new-chat-context-option-check" aria-hidden="true">${entry.gatewayId === target?.gatewayId ? ICONS.check : ''}</span></button>`).join('')}`;
+    const scrim = document.createElement('button');
+    scrim.type = 'button';
+    scrim.className = 'pm-chat-target-popover-scrim';
+    scrim.setAttribute('aria-label', 'Close gateway target');
+    scrim.addEventListener('click', closeTargetPopover);
+    const onEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeTargetPopover();
+    };
+    const shieldUnderlyingClick = () => {
+      let armed = true;
+      const cleanup = () => {
+        if (!armed) return;
+        armed = false;
+        document.removeEventListener('click', shield, true);
+      };
+      const shield = (clickEvent) => {
+        // The option.click() call below creates an untrusted synthetic click;
+        // let that one reach the option handler, but consume iOS's subsequent
+        // trusted click that would otherwise land on a brain card underneath.
+        if (clickEvent.isTrusted === false) return;
+        cleanup();
+        clickEvent.preventDefault();
+        clickEvent.stopImmediatePropagation();
+      };
+      document.addEventListener('click', shield, true);
+      window.setTimeout(cleanup, 900);
+    };
+    const onPointerDownOutside = (event) => {
+      const node = event.target;
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+      if (path.includes(wrapper) || wrapper.contains(node) || targetChip?.contains(node)) return;
+      const x = Number(event.clientX);
+      const y = Number(event.clientY);
+      const option = Number.isFinite(x) && Number.isFinite(y)
+        ? [...wrapper.querySelectorAll('[data-chat-target-id]')].find((button) => {
+          const rect = button.getBoundingClientRect();
+          return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+        })
+        : null;
+      if (option) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        shieldUnderlyingClick();
+        option.click();
+        return;
+      }
+      closeTargetPopover();
+    };
+    document.body.append(scrim);
+    (contextDock || form || document.body).append(wrapper);
+    contextDock?.classList.add('pm-context-popover-open');
+    form?.classList.add('pm-target-popover-open');
+    document.addEventListener('keydown', onEscape, true);
+    document.addEventListener('pointerdown', onPointerDownOutside, true);
+    targetPopover = wrapper;
+    targetChip?.setAttribute('aria-expanded', 'true');
+    closeTargetPopover = () => {
+      scrim.remove();
+      wrapper.remove();
+      contextDock?.classList.remove('pm-context-popover-open');
+      form?.classList.remove('pm-target-popover-open');
+      document.removeEventListener('keydown', onEscape, true);
+      document.removeEventListener('pointerdown', onPointerDownOutside, true);
+      targetPopover = null;
+      targetChip?.setAttribute('aria-expanded', 'false');
+      closeTargetPopover = () => {};
+    };
+    wrapper.addEventListener('pointerdown', (event) => event.stopPropagation());
+    wrapper.addEventListener('click', (event) => event.stopPropagation());
+    wrapper.querySelectorAll('[data-chat-target-id]').forEach((button) => button.addEventListener('click', () => {
+      pendingGatewayId = button.getAttribute('data-chat-target-id') || pendingGatewayId;
+      setActiveGatewayId(pendingGatewayId);
+      setMobileActiveGatewayTarget(pendingGatewayId);
+      rememberChatContext();
+      renderChatTargetChip();
+      renderChatProjectChip();
+      closeTargetPopover();
+      input?.focus?.({ preventScroll: true });
+    }));
+    wrapper.querySelector('[data-chat-target-id]:not([disabled])')?.focus?.();
+  }
+
+  targetChip?.addEventListener('click', openChatTargetPopover);
+  renderChatTargetChip();
+  renderChatProjectChip();
+  const stopGatewayTargetUpdates = onGatewayCatalogChanged(() => renderChatTargetChip());
+
+  async function openChatProjectPopover() {
+    if (requestedSession !== MOBILE_CHAT_SESSION_ID || !projectChip || !contextDock) return;
+    closeTargetPopover();
+    const wrapper = document.createElement('div');
+    wrapper.className = 'pm-chat-settings-popover pm-new-chat-context-popover';
+    wrapper.dataset.popoverType = 'project';
+    wrapper.setAttribute('role', 'dialog');
+    wrapper.setAttribute('aria-label', 'Directed chat');
+    wrapper.innerHTML = '<div class="pm-new-chat-context-popover-title">Directed chat</div><div class="pm-new-chat-context-popover-subtitle">Choose Chat or a project for this new conversation.</div><div class="pm-new-chat-context-loading">Loading projects…</div>';
+    const scrim = document.createElement('button');
+    scrim.type = 'button';
+    scrim.className = 'pm-chat-target-popover-scrim';
+    scrim.setAttribute('aria-label', 'Close directed chat picker');
+    scrim.addEventListener('click', closeTargetPopover);
+    const onEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeTargetPopover();
+    };
+    const shieldUnderlyingClick = () => {
+      let armed = true;
+      const cleanup = () => {
+        if (!armed) return;
+        armed = false;
+        document.removeEventListener('click', shield, true);
+      };
+      const shield = (clickEvent) => {
+        if (clickEvent.isTrusted === false) return;
+        cleanup();
+        clickEvent.preventDefault();
+        clickEvent.stopImmediatePropagation();
+      };
+      document.addEventListener('click', shield, true);
+      window.setTimeout(cleanup, 900);
+    };
+    const onPointerDownOutside = (event) => {
+      const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+      if (path.includes(wrapper) || wrapper.contains(event.target) || projectChip.contains(event.target)) return;
+      const x = Number(event.clientX);
+      const y = Number(event.clientY);
+      const option = Number.isFinite(x) && Number.isFinite(y)
+        ? [...wrapper.querySelectorAll('[data-project-id]')].find((button) => {
+          const rect = button.getBoundingClientRect();
+          return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+        })
+        : null;
+      if (option) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        shieldUnderlyingClick();
+        option.click();
+        return;
+      }
+      closeTargetPopover();
+    };
+    document.body.append(scrim);
+    contextDock.append(wrapper);
+    contextDock.classList.add('pm-context-popover-open');
+    document.addEventListener('keydown', onEscape, true);
+    document.addEventListener('pointerdown', onPointerDownOutside, true);
+    targetPopover = wrapper;
+    projectChip.setAttribute('aria-expanded', 'true');
+    closeTargetPopover = () => {
+      scrim.remove();
+      wrapper.remove();
+      contextDock.classList.remove('pm-context-popover-open');
+      document.removeEventListener('keydown', onEscape, true);
+      document.removeEventListener('pointerdown', onPointerDownOutside, true);
+      targetPopover = null;
+      targetChip?.setAttribute('aria-expanded', 'false');
+      projectChip?.setAttribute('aria-expanded', 'false');
+      closeTargetPopover = () => {};
+    };
+    wrapper.addEventListener('pointerdown', (event) => event.stopPropagation());
+    wrapper.addEventListener('click', (event) => event.stopPropagation());
+    try {
+      const data = await mobileGatewayFetch('/api/projects');
+      const projects = (Array.isArray(data) ? data : data?.projects || []).filter((project) => project?.id);
+      const options = [{ id: '', name: 'Chat' }, ...projects];
+      wrapper.querySelector('.pm-new-chat-context-loading').outerHTML = options.map((project) => {
+        const selected = String(project.id || '') === targetProjectId;
+        return `<button type="button" class="pm-chat-settings-menu-item pm-new-chat-context-option" data-project-id="${escapeHtml(project.id || '')}" aria-selected="${String(selected)}"><span class="pm-new-chat-context-option-icon" aria-hidden="true">${project.id ? ICONS.folder : ICONS.chat}</span><span class="pm-new-chat-context-option-copy"><strong>${escapeHtml(project.name)}</strong><small>${project.id ? 'Project chat' : 'Regular chat'}</small></span><span class="pm-new-chat-context-option-check" aria-hidden="true">${selected ? ICONS.check : ''}</span></button>`;
+      }).join('');
+      wrapper.querySelectorAll('[data-project-id]').forEach((button) => button.addEventListener('click', () => {
+        targetProjectId = String(button.dataset.projectId || '').trim();
+        targetProjectLabel = String(button.querySelector('strong')?.textContent || '').trim();
+        if (!targetProjectId) targetProjectLabel = '';
+        rememberChatContext();
+        renderChatProjectChip();
+        closeTargetPopover();
+        input?.focus?.({ preventScroll: true });
+      }));
+      wrapper.querySelector('[data-project-id][aria-selected="true"]')?.focus?.();
+    } catch {
+      wrapper.querySelector('.pm-new-chat-context-loading').textContent = 'Projects are unavailable right now.';
+    }
+  }
+
+  projectChip?.addEventListener('click', openChatProjectPopover);
 
   _pmRefreshSlashChrome(page, input);
   _installMobileTimestampReveal(threadEl, handleMobileMessageAction);
@@ -10505,6 +11076,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
 
   let cameraStream = null;
   let cameraFacingMode = 'environment';
+  let cameraTorchEnabled = false;
   let cameraOpening = false;
   let cameraCaptureOptions = { target: 'chat', onCapture: null, onVideoCapture: null };
   let cameraRecorder = null;
@@ -10517,6 +11089,9 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   let cameraSuppressClick = false;
   let cameraOrbRaf = 0;
   let cameraOrbGl = null;
+  let cameraPairScanTimer = null;
+  let cameraPairScanDetector = null;
+  let cameraPairScanBusy = false;
   let voiceCameraFrameCacheTimer = null;
   let voiceCameraFrameCache = null;
   let voiceCameraFrameCacheRefreshPending = false;
@@ -10529,6 +11104,36 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
 
   function setCameraStatus(text = '') {
     if (cameraStatus) cameraStatus.textContent = text;
+  }
+
+  function setCameraMoreMenuOpen(open = false) {
+    const isOpen = open === true;
+    cameraMoreMenu?.toggleAttribute('hidden', !isOpen);
+    cameraMore?.classList.toggle('is-open', isOpen);
+    cameraMore?.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  }
+
+  function setCameraTorchUi(enabled = false) {
+    cameraTorchEnabled = enabled === true;
+    cameraFlash?.setAttribute('aria-pressed', cameraTorchEnabled ? 'true' : 'false');
+    cameraFlash?.classList.toggle('is-active', cameraTorchEnabled);
+  }
+
+  async function toggleCameraTorch() {
+    const track = cameraStream?.getVideoTracks?.()[0];
+    const capabilities = track?.getCapabilities?.();
+    if (!track?.applyConstraints || !capabilities?.torch) {
+      pmToast('Flash is not available on this camera.', 'info');
+      return;
+    }
+    const next = !cameraTorchEnabled;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: next }] });
+      setCameraTorchUi(next);
+    } catch (err) {
+      setCameraTorchUi(false);
+      pmToast(err?.message || 'Could not change the flash.', 'error');
+    }
   }
 
   function _isCameraVoiceRealtimeTarget() {
@@ -10934,6 +11539,10 @@ void main() {
   }
 
   function stopCameraCapture() {
+    if (cameraPairScanTimer) cancelAnimationFrame(cameraPairScanTimer);
+    cameraPairScanTimer = null;
+    cameraPairScanDetector = null;
+    cameraPairScanBusy = false;
     if (cameraHoldTimer) clearTimeout(cameraHoldTimer);
     cameraHoldTimer = null;
     if (cameraRecorder && cameraRecorder.state !== 'inactive') {
@@ -10944,6 +11553,8 @@ void main() {
     cameraRecordingStartedAt = 0;
     clearCameraRecordingTimers();
     setCameraRecordingUi(false);
+    setCameraMoreMenuOpen(false);
+    setCameraTorchUi(false);
     if (cameraStream) {
       cameraStream.getTracks().forEach((track) => {
         try { track.stop(); } catch {}
@@ -10955,11 +11566,15 @@ void main() {
     if (cameraCapture) {
       cameraCapture.classList.remove('open');
       setTimeout(() => {
-        if (!cameraCapture.classList.contains('open')) cameraCapture.hidden = true;
+        if (!cameraCapture.classList.contains('open')) {
+          cameraCapture.hidden = true;
+          document.body.classList.remove('pm-camera-open');
+        }
       }, 180);
-    }
+    } else document.body.classList.remove('pm-camera-open');
     cameraOpening = false;
     cameraCaptureOptions = { target: 'chat', onCapture: null, onVideoCapture: null };
+    cameraShutter?.removeAttribute('disabled');
     stopCameraRealtimeOrb();
     stopVoiceCameraFrameCache();
   }
@@ -10979,6 +11594,9 @@ void main() {
       onVideoCapture: typeof options.onVideoCapture === 'function' ? options.onVideoCapture : null,
     };
     cameraOpening = true;
+    document.body.classList.add('pm-camera-open');
+    setCameraMoreMenuOpen(false);
+    setCameraTorchUi(false);
     cameraCapture.hidden = false;
     const voiceTarget = target === 'voice';
     cameraCapture.classList.toggle('voice-realtime', voiceTarget);
@@ -11001,6 +11619,8 @@ void main() {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       cameraStream = stream;
       const track = stream.getVideoTracks?.()[0];
+      const capabilities = track?.getCapabilities?.() || {};
+      cameraFlash?.toggleAttribute('disabled', !capabilities.torch);
       cameraPinchZoom?.setTrack(track);
       if (track?.applyConstraints && track.getCapabilities) {
         try {
@@ -11038,6 +11658,66 @@ void main() {
     cameraFacingMode = cameraFacingMode === 'environment' ? 'user' : 'environment';
     await openCameraCapture(options);
   }
+
+  async function startPairingQrScan() {
+    if (typeof window.BarcodeDetector !== 'function') {
+      pmToast('QR scanning is unavailable in this browser. Use Gateway Connections → Add gateway and enter the short-lived pair code.', 'info');
+      return false;
+    }
+    try {
+      cameraPairScanDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+    } catch {
+      cameraPairScanDetector = null;
+      pmToast('This camera does not expose a safe QR decoder. Use the pair-code fallback.', 'info');
+      return false;
+    }
+    await openCameraCapture({ target: 'pairing' });
+    if (!cameraStream || !cameraVideo || !cameraPairScanDetector) return false;
+    cameraPairScanBusy = false;
+    cameraShutter?.setAttribute('disabled', 'disabled');
+    cameraShutter?.setAttribute('aria-label', 'QR scanner active');
+    setCameraStatus('Point the camera at a Prometheus pairing QR');
+    const scan = async () => {
+      if (!cameraStream || cameraCapture?.hidden || cameraCaptureOptions?.target !== 'pairing') return;
+      if (!cameraPairScanBusy) {
+        cameraPairScanBusy = true;
+        try {
+          const codes = await cameraPairScanDetector.detect(cameraVideo);
+          const raw = String(codes?.[0]?.rawValue || '').trim();
+          if (raw) {
+            let parsedUrl = null;
+            try { parsedUrl = new URL(raw); } catch {}
+            const pairValue = parsedUrl && ['http:', 'https:'].includes(parsedUrl.protocol)
+              ? parsedUrl.searchParams.get('pair')
+              : '';
+            const payload = getPairingPayload(pairValue || '');
+            if (payload && payload.origin === parsedUrl.origin) {
+              stopCameraCapture();
+              // Rebuild a minimal safe deep link from the validated payload;
+              // arbitrary QR URLs and any unrelated query data are discarded.
+              window.location.href = `${payload.origin}/?pair=${encodeURIComponent(pairValue)}#mobile/pair`;
+              return;
+            }
+            setCameraStatus('That is not a valid Prometheus pairing QR');
+          }
+        } catch {}
+        cameraPairScanBusy = false;
+      }
+      cameraPairScanTimer = requestAnimationFrame(scan);
+    };
+    cameraPairScanTimer = requestAnimationFrame(scan);
+    return true;
+  }
+
+  const previousPairingScanner = window.__pmMobilePairingScanner;
+  const pairingScannerBridge = () => { startPairingQrScan().catch(() => {}); };
+  window.__pmMobilePairingScanner = pairingScannerBridge;
+  try {
+    if (sessionStorage.getItem('pm_open_pairing_scanner') === '1') {
+      sessionStorage.removeItem('pm_open_pairing_scanner');
+      setTimeout(() => startPairingQrScan().catch(() => {}), 120);
+    }
+  } catch {}
 
   function canvasToBlob(canvas, type = 'image/jpeg', quality = 0.96) {
     return new Promise((resolve, reject) => {
@@ -11450,6 +12130,20 @@ void main() {
         if (__pmChat.activeSessionId !== requestedSession) return;
         clearChatLoadRetryTimer();
         hideReconnectingStatus();
+        targetProjectId = String(session?.projectId || session?.project?.id || '').trim();
+        targetProjectLabel = String(session?.projectName || session?.project?.name || '').trim();
+        targetWorkspaceLabel = String(session?.workspaceName || session?.workspace?.name || gatewayTarget?.workspaceName || '').trim();
+        if (requestedSession !== MOBILE_CHAT_SESSION_ID) {
+          const sessionGateway = currentChatGateway();
+          _saveMobileLastChatContext({
+            gatewayId: sessionGateway?.gatewayId || pendingGatewayId,
+            gatewayName: sessionGateway?.name || '',
+            projectId: targetProjectId,
+            projectName: targetProjectLabel,
+          });
+        }
+        renderChatTargetChip();
+        renderChatProjectChip();
         _rememberMobileSessionGoal(session, requestedSession);
         _renderMobileGoalPill(goalStrip, requestedSession);
         updateChatComposerSpace();
@@ -11996,6 +12690,7 @@ void main() {
         ? Math.ceil(toolProgressDock.getBoundingClientRect?.().height || 0)
         : 0;
       page?.style?.setProperty?.('--pm-composer-live-height', `${height}px`);
+      syncContextDockToComposer();
       page?.style?.setProperty?.('--pm-queued-live-height', `${queuedHeight}px`);
       page?.style?.setProperty?.('--pm-goal-live-height', `${goalHeight}px`);
       page?.style?.setProperty?.('--pm-connection-live-height', `${connectionHeight}px`);
@@ -12030,7 +12725,15 @@ void main() {
       // bottom anchor. This avoids restoring against the old padding and leaving
       // the newest chat line underneath an opening card.
       void body.scrollHeight;
-      _restoreMobileChatScroll(body, scrollSnapshot);
+      // Focusing the composer is a special case on iOS.  The document can
+      // still report the old bottom anchor while Safari is opening the
+      // keyboard; restoring that anchor here makes the fixed composer get
+      // covered until the user manually scrolls.  Leave the current document
+      // position alone while the composer owns the keyboard transition.
+      const composerOwnsKeyboard = document.body?.classList?.contains('pm-keyboard-open')
+        || document.activeElement === input
+        || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
+      if (!composerOwnsKeyboard) _restoreMobileChatScroll(body, scrollSnapshot);
       const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
       const shift = Math.max(-64, Math.min(64, space - previousSpace));
       if (!reduceMotion && Math.abs(shift) >= 2 && typeof threadEl?.animate === 'function') {
@@ -12558,12 +13261,59 @@ void main() {
     Number(window.visualViewport?.height || 0),
   );
   let _pmKbRaf = 0;
-  let _pmKbWasOpen = false;
   let _pmKbPinRaf = 0;
   let _pmKbPinUntil = 0;
+  let _pmKbFocusActive = false;
   let _pmKbViewportMode = '';
+  const _pmKbComposerShiftProperty = '--pm-keyboard-composer-shift';
+  const _pmKbComposerViewportProperties = ['position', 'left', 'right', 'bottom', 'z-index'];
+  function _pmKbComposerNodes() {
+    const nodes = [form];
+    if (sideSheet) nodes.push(...sideSheet.querySelectorAll('.pm-composer'));
+    return nodes.filter((node, index, list) => node && list.indexOf(node) === index);
+  }
+  function _pmKbClearComposerShift() {
+    _pmKbComposerNodes().forEach((node) => node.style.removeProperty(_pmKbComposerShiftProperty));
+  }
+  function _pmKbClearComposerViewportStyles() {
+    _pmKbComposerNodes().forEach((node) => {
+      _pmKbComposerViewportProperties.forEach((property) => node.style.removeProperty(property));
+    });
+  }
+  function _pmKbSetComposerViewportStyles(bottomPx) {
+    const composer = _pmKbActiveComposer();
+    if (!composer) return;
+    composer.style.setProperty('position', 'fixed', 'important');
+    composer.style.setProperty('left', '10px', 'important');
+    composer.style.setProperty('right', '10px', 'important');
+    composer.style.setProperty('bottom', `${Math.max(8, Math.round(Number(bottomPx) || 8))}px`, 'important');
+    composer.style.setProperty('z-index', '10020', 'important');
+  }
+  function _pmKbActiveComposer() {
+    const sideFocused = sideSheet?.classList?.contains('open') && document.activeElement === sideInput;
+    return sideFocused ? (sideInput?.closest?.('.pm-composer') || form) : form;
+  }
+  function _pmKbAnchorComposer(visualBottom) {
+    const composer = _pmKbActiveComposer();
+    if (!composer) return;
+    const rect = composer.getBoundingClientRect?.();
+    if (!rect || !rect.width || !rect.height) return;
+    const desiredBottom = Math.max(0, Number(visualBottom || 0) - 8);
+    const rawShift = desiredBottom - Number(rect.bottom || 0);
+    const limit = Math.max(Number(window.innerHeight || 0), Number(visualBottom || 0), Number(rect.height || 0)) + 80;
+    const shift = Math.max(-limit, Math.min(limit, rawShift));
+    if (Math.abs(shift) < 0.5) {
+      composer.style.removeProperty(_pmKbComposerShiftProperty);
+      return;
+    }
+    composer.style.setProperty(_pmKbComposerShiftProperty, `${Math.round(shift)}px`);
+  }
   function _pmKbPinScroll() {
+    // The document-scroll PWA path must remain fully user-scrollable. Its
+    // fixed composer is handled by viewport sizing below; never write to the
+    // document scroll position from this controller.
     if (document.body?.classList?.contains('pm-mobile-document-scroll')) return;
+    if (performance.now() >= _pmKbPinUntil) return;
     try {
       if (window.pageYOffset) window.scrollTo(0, 0);
       const de = document.scrollingElement || document.documentElement;
@@ -12574,35 +13324,62 @@ void main() {
   function _applyKeyboardOffset() {
     _pmKbRaf = 0;
     const vv = window.visualViewport;
-    if (!vv || !_pmKbApp) return;
+    if (!_pmKbApp) return;
+    const layoutHeight = Math.max(
+      Number(window.innerHeight || 0),
+      Number(document.documentElement?.clientHeight || 0),
+    );
+    const visualHeight = Math.max(0, Number(vv?.height || layoutHeight || 0));
+    const visualTop = Math.max(0, Number(vv?.offsetTop || 0));
     // Keyboard height = layout viewport height minus the visible (visual)
     // viewport height. The shell stays anchored to the layout viewport, so the
     // composer only needs to float up by this amount.
-    const visualBottom = Math.round((Number(vv.offsetTop || 0) || 0) + Number(vv.height || 0));
-    const layoutOffset = Math.max(0, Math.round(window.innerHeight - visualBottom));
-    const baselineOffset = Math.max(0, Math.round(_pmKbBaselineHeight - vv.height));
+    const visualBottom = Math.round(visualTop + visualHeight);
+    const layoutOffset = vv
+      ? Math.max(0, Math.round(layoutHeight - visualBottom))
+      : 0;
+    const baselineOffset = Math.max(0, Math.round(_pmKbBaselineHeight - (vv ? visualHeight : layoutHeight)));
     const composerFocused = document.activeElement === input
       || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
     // Ignore small deltas from Safari's collapsing URL bar; only treat a
     // sizeable gap as a real keyboard. Some installed iOS PWAs shrink both
     // innerHeight and visualViewport.height, so their difference stays zero;
     // the pre-focus baseline catches that mode.
-    const open = layoutOffset > 90 || (composerFocused && baselineOffset > 90);
+    // Treat a focused composer as keyboard-active during the opening
+    // transition.  On iOS, the resize/visualViewport event can arrive after
+    // the focus frame, especially when the document is already at its bottom;
+    // waiting for a measurable delta leaves the composer behind the keyboard
+    // until a manual scroll produces the next viewport event.
+    const open = layoutOffset > 90
+      || (composerFocused && (_pmKbFocusActive || baselineOffset > 90));
     // iOS has two incompatible fixed-position behaviors: some webviews anchor
     // fixed children to the layout viewport, while others already anchor them
-    // to the visual viewport. Measuring the composer before we apply a lift
-    // selects the right behavior and prevents the double-lift shown in the
-    // report, where the composer jumps to the top of the screen.
+    // to the visual viewport. Reset the small visual correction before each
+    // measurement so a scroll-up or viewport-pan cannot leave a stale mode or
+    // stale lift attached to the composer.
     if (!open) {
       _pmKbViewportMode = '';
-    } else if (!_pmKbViewportMode) {
+      _pmKbApp.classList.remove('pm-keyboard-open');
+      _pmKbClearComposerShift();
+      _pmKbClearComposerViewportStyles();
+    } else {
       _pmKbApp.style.setProperty('--pm-keyboard-offset', '0px');
-      const composerBottom = Number(form?.getBoundingClientRect?.().bottom || 0);
+      _pmKbApp.classList.add('pm-keyboard-open');
+      _pmKbClearComposerShift();
+      const composerBottom = Number(_pmKbActiveComposer()?.getBoundingClientRect?.().bottom || 0);
       _pmKbViewportMode = composerBottom > 0 && composerBottom <= visualBottom + 44 ? 'visual' : 'layout';
+      _pmKbSetComposerViewportStyles(_pmKbViewportMode === 'layout' ? layoutOffset + 8 : 8);
     }
     const keyboardOffset = open && _pmKbViewportMode === 'layout' ? layoutOffset : 0;
     _pmKbApp.style.setProperty('--pm-keyboard-offset', `${keyboardOffset}px`);
     _pmKbApp.classList.toggle('pm-keyboard-open', open);
+    if (open && !document.body?.classList?.contains('pm-mobile-document-scroll')) {
+      // A document-scrolled iOS PWA can pan the visual viewport while the
+      // fixed composer remains tied to the layout viewport. Correct the final
+      // measured edge instead of guessing from the page's scroll position.
+      _pmKbClearComposerShift();
+      _pmKbAnchorComposer(visualBottom);
+    }
     // Do this on the actual nav node instead of depending on ancestor CSS.
     // Installed iOS PWAs may retain an older mobile stylesheet for one launch,
     // while this controller still has the authoritative keyboard state.
@@ -12610,19 +13387,13 @@ void main() {
       if (open) _pmKbTabbar.style.setProperty('display', 'none', 'important');
       else _pmKbTabbar.style.removeProperty('display');
     }
+    syncContextDockToComposer();
     // While the keyboard is open, keep the document pinned to the top so iOS
     // can't leave the fixed shell lifted above the keyboard.
     if (open) _pmKbPinScroll();
-    // When the keyboard first opens, keep the newest message visible above the
-    // composer if the user was already pinned near the bottom.
-    if (open && !_pmKbWasOpen) {
-      const snap = _mobileChatScrollSnapshot(body);
-      if (snap.nearBottom) requestAnimationFrame(() => _scrollChat(body));
-    }
     if (!open && !composerFocused) {
-      _pmKbBaselineHeight = Math.max(_pmKbBaselineHeight, Number(window.innerHeight || 0), Number(vv.height || 0));
+      _pmKbBaselineHeight = Math.max(_pmKbBaselineHeight, Number(window.innerHeight || 0), Number(vv?.height || 0));
     }
-    _pmKbWasOpen = open;
   }
   function _scheduleKeyboardOffset() {
     if (_pmKbRaf) return;
@@ -12642,16 +13413,22 @@ void main() {
     if (!_pmKbPinRaf) _pmKbPinRaf = requestAnimationFrame(_pmKbPinLoop);
   }
   const _onVvResize = () => { _scheduleKeyboardOffset(); _startKbPinLoop(400); };
-  const _onVvScroll = () => { _scheduleKeyboardOffset(); };
   const _onWindowKeyboardResize = () => { _scheduleKeyboardOffset(); };
   const _pmVisualViewport = window.visualViewport || null;
   if (_pmVisualViewport) {
     _pmVisualViewport.addEventListener('resize', _onVvResize);
-    _pmVisualViewport.addEventListener('scroll', _onVvScroll);
   }
   window.addEventListener('resize', _onWindowKeyboardResize, { passive: true });
   const _onComposerFocusKb = () => {
+    _pmKbFocusActive = true;
     _pmKbBaselineHeight = Math.max(_pmKbBaselineHeight, Number(window.innerHeight || 0), Number(window.visualViewport?.height || 0));
+    // Move the real composer before Safari finishes presenting the keyboard;
+    // the later viewport pass replaces the provisional 8px bottom edge with
+    // the measured visual-viewport edge.
+    _pmKbApp.style.setProperty('--pm-keyboard-offset', '0px');
+    _pmKbApp.classList.add('pm-keyboard-open');
+    _pmKbTabbar?.style.setProperty('display', 'none', 'important');
+    _pmKbSetComposerViewportStyles(8);
     // Pin aggressively through the keyboard's open animation so the shell never
     // ends up stuck above the keyboard waiting for a manual scroll.
     _pmKbViewportMode = '';
@@ -12663,31 +13440,39 @@ void main() {
     [120, 320, 700].forEach((delay) => setTimeout(_scheduleKeyboardOffset, delay));
   };
   const _onComposerBlurKb = () => {
+    _pmKbFocusActive = false;
     _pmKbPinUntil = 0;
     _pmKbViewportMode = '';
     setTimeout(_scheduleKeyboardOffset, 60);
   };
-    input?.addEventListener('focus', _onComposerFocusKb);
-    input?.addEventListener('blur', _onComposerBlurKb);
-    sideInput?.addEventListener('focus', _onComposerFocusKb);
-    sideInput?.addEventListener('blur', _onComposerBlurKb);
+  const _isKeyboardComposerTarget = (target) => target === input
+    || target === sideInput
+    || target?.matches?.('#pm-composer-input, #pm-mobile-side-input');
+  const _onComposerFocusInKb = (event) => {
+    if (_isKeyboardComposerTarget(event.target)) _onComposerFocusKb();
+  };
+  const _onComposerFocusOutKb = (event) => {
+    if (_isKeyboardComposerTarget(event.target)) _onComposerBlurKb();
+  };
+  page.addEventListener('focusin', _onComposerFocusInKb);
+  page.addEventListener('focusout', _onComposerFocusOutKb);
   function _teardownKeyboardController() {
     if (_pmKbRaf) { cancelAnimationFrame(_pmKbRaf); _pmKbRaf = 0; }
     if (_pmKbPinRaf) { cancelAnimationFrame(_pmKbPinRaf); _pmKbPinRaf = 0; }
     _pmKbPinUntil = 0;
     if (_pmVisualViewport) {
       _pmVisualViewport.removeEventListener('resize', _onVvResize);
-      _pmVisualViewport.removeEventListener('scroll', _onVvScroll);
     }
     window.removeEventListener('resize', _onWindowKeyboardResize);
-    input?.removeEventListener('focus', _onComposerFocusKb);
-    input?.removeEventListener('blur', _onComposerBlurKb);
-    sideInput?.removeEventListener('focus', _onComposerFocusKb);
-    sideInput?.removeEventListener('blur', _onComposerBlurKb);
+    page.removeEventListener('focusin', _onComposerFocusInKb);
+    page.removeEventListener('focusout', _onComposerFocusOutKb);
+    _pmKbFocusActive = false;
     if (_pmKbApp) {
       _pmKbApp.classList.remove('pm-keyboard-open');
       _pmKbApp.style.removeProperty('--pm-keyboard-offset');
     }
+    _pmKbClearComposerShift();
+    _pmKbClearComposerViewportStyles();
     _pmKbTabbar?.style.removeProperty('display');
   }
 
@@ -13012,6 +13797,7 @@ void main() {
 
   async function forkMobileConversationFromMessage(index) {
     const thread = _activeMobileThread();
+    const sourceSessionId = String(__pmChat.activeSessionId || '').trim();
     const msg = thread[index];
     if (!_isMobileAssistantMessage(msg)) return;
     const forkedThread = thread.slice(0, index + 1).map(_cloneMobileMessageForBranch).filter(Boolean);
@@ -13021,6 +13807,13 @@ void main() {
     try {
       await createMobileChatSession(sid, { title });
       await updateMobileChatSessionHistory(sid, _mobileHistoryForServer(forkedThread));
+      if (sourceSessionId) {
+        await mobileGatewayFetch(`/api/sessions/${encodeURIComponent(sid)}/resources/copy-from`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceSessionId }),
+        });
+      }
       __pmChat.threads[sid] = forkedThread;
       __pmChat.attachments[sid] = [];
       __pmChat.activeSessionId = sid;
@@ -13459,7 +14252,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
       case 'model_reverted': {
         // switch_model is turn-scoped; gateway emits this at turn end to revert the badge.
-        import('./mobile-model-badge.js').then(({ refreshMobileModelBadge }) => {
+        import('./mobile-model-badge.js?v=pm-v263-2026-08-09-directed-chat-shield').then(({ refreshMobileModelBadge }) => {
           refreshMobileModelBadge(true, null).catch(() => {});
         }).catch(() => {});
         return 'streaming';
@@ -13964,6 +14757,15 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       ? options.attachments.slice()
       : getPendingAttachments().slice().concat(stagedVoiceImages);
     if (!msg && files.length === 0) return;
+    const selectedGateway = currentChatGateway();
+    if (!selectedGateway) {
+      pmToast('No known gateway target. Pair or select a gateway before sending.', 'error');
+      return;
+    }
+    if (selectedGateway.status === 'offline' || selectedGateway.status === 'revoked') {
+      pmToast(`${selectedGateway.name} is ${selectedGateway.status}. Sending is blocked until it reconnects or is repaired.`, 'error');
+      return;
+    }
     const fromQueue = options.fromQueue === true;
     const excludedSkillIds = fromQueue && Array.isArray(options.excludedSkillIds)
       ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
@@ -14011,7 +14813,27 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
     const liveActiveSessionId = String(__pmChat.activeSessionId || '').trim();
     const isUnsavedDraftSession = requestedSession === MOBILE_CHAT_SESSION_ID || liveActiveSessionId === MOBILE_CHAT_SESSION_ID;
-    const actualSessionId = isUnsavedDraftSession ? createMobileChatSessionId() : requestedSession;
+    let actualSessionId = isUnsavedDraftSession ? createMobileChatSessionId() : requestedSession;
+    let projectSessionCreated = false;
+    if (isUnsavedDraftSession && targetProjectId) {
+      try {
+        const projectSession = await createMobileProjectChatSession(targetProjectId, { title: 'New Chat' });
+        actualSessionId = String(projectSession?.sessionId || projectSession?.session?.id || '').trim();
+        if (!actualSessionId) throw new Error('Project did not return a chat session.');
+        projectSessionCreated = true;
+      } catch (error) {
+        pmToast(`Could not open that project: ${String(error?.message || error)}`, 'error');
+        return;
+      }
+    }
+    if (selectedGateway?.gatewayId && actualSessionId !== MOBILE_CHAT_SESSION_ID) {
+      bindMobileSessionTarget(actualSessionId, selectedGateway.gatewayId, {
+        started: true,
+        project: targetProjectLabel,
+        workspace: targetWorkspaceLabel,
+      });
+      setMobileActiveGatewayTarget(selectedGateway);
+    }
     if (isUnsavedDraftSession) {
       __pmChat.threads[actualSessionId] = [];
       __pmChat.attachments[actualSessionId] = files.slice();
@@ -14029,7 +14851,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       __pmVoice.activeVoiceRuntime = null;
       invalidateMobileDrawerSessions('mobile');
       try {
-        await createMobileChatSession(actualSessionId, { title: 'New Chat' });
+        if (!projectSessionCreated) await createMobileChatSession(actualSessionId, { title: 'New Chat' });
         await applyMobileDraftModelRouteToSession(actualSessionId);
       } catch (err) {
         pmToast(`Could not start chat with the selected model: ${String(err?.message || err)}`, 'error');
@@ -14668,6 +15490,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   const previousCleanup = typeof page._pmCleanup === 'function' ? page._pmCleanup : null;
   page._pmCleanup = () => {
     previousCleanup?.();
+    stopGatewayTargetUpdates?.();
+    closeTargetPopover?.();
+    if (window.__pmMobilePairingScanner === pairingScannerBridge) window.__pmMobilePairingScanner = previousPairingScanner;
     chatSurfaceResizeObserver?.disconnect();
     body?.removeEventListener('scroll', updateScrollLatestButton);
     document.removeEventListener('scroll', updateScrollLatestButton);
@@ -14760,6 +15585,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();
+    // The send control is a submit button behind the mobile haptic proxy.
+    // Explicitly blur the composer first so iOS/Android dismiss the virtual
+    // keyboard before the send/queue/abort/voice branch updates the layout.
+    try { input?.blur?.(); } catch {}
     const text = _pmGetComposerValue(input);
     if (/^\/side(\s|$)/i.test(text.trim())) {
       const initial = text.trim().slice('/side'.length).trim();
@@ -15082,7 +15911,28 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     });
   });
   cameraClose?.addEventListener('click', stopCameraCapture);
-  cameraFlip?.addEventListener('click', () => { flipCameraCapture().catch(() => {}); });
+  cameraMore?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setCameraMoreMenuOpen(!cameraMore.classList.contains('is-open'));
+  });
+  cameraFlash?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleCameraTorch().catch(() => {});
+  });
+  cameraPairScan?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setCameraMoreMenuOpen(false);
+    startPairingQrScan().catch(() => {});
+  });
+  cameraFlip?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setCameraMoreMenuOpen(false);
+    flipCameraCapture().catch(() => {});
+  });
   function clearCameraHoldTimer() {
     if (cameraHoldTimer) clearTimeout(cameraHoldTimer);
     cameraHoldTimer = null;
@@ -15976,8 +16826,12 @@ const __pmVoice = (window.__pmVoice = window.__pmVoice || {
   previewTimer: null,
   previewTransitionTimer: null,
   previewTransitionToken: 0,
+  activeVoiceToolCalls: new Set(),
+  thinkingOrbAudioPulse: 0,
 });
 __pmVoice.settings = { ..._loadVoiceSettings(), ...(__pmVoice.settings || {}) };
+if (!(__pmVoice.activeVoiceToolCalls instanceof Set)) __pmVoice.activeVoiceToolCalls = new Set();
+if (!Number.isFinite(Number(__pmVoice.thinkingOrbAudioPulse))) __pmVoice.thinkingOrbAudioPulse = 0;
 if (!['openai_realtime', 'xai'].includes(__pmVoice.settings.voiceMode)) __pmVoice.settings.voiceMode = 'openai_realtime';
 __pmVoice.settings.sttProvider = 'auto';
 __pmVoice.settings.ttsProvider = 'realtime';
@@ -17592,6 +18446,12 @@ function _renderMobileRealtimeUserTranscriptInChat(text) {
 function _voiceShowRealtimeUserTranscript(text, hint = 'Realtime transcript') {
   const isChatVoice = document.body?.classList.contains('pm-chat-voice-active');
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (clean) {
+    // A transcript delta is still useful feedback when iOS has not exposed a
+    // readable MediaStream to the analyser yet. Let the published orb answer
+    // the same event immediately, then let the audio meter take over.
+    _pulseMobileVoiceOrb(Math.min(1, .42 + Math.min(.58, clean.length / 92)));
+  }
   if (isChatVoice) {
     _renderMobileRealtimeUserTranscriptInChat(clean);
     return;
@@ -17713,11 +18573,63 @@ function _setMobileVoicePlaybackLyricProgress(localProgress) {
   if (text) _setMobileVoiceLyricProgress(text, local);
 }
 
+function _mobileVoiceToolKey(payload = {}, fallback = '') {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const candidates = [
+    source.call_id,
+    source.callId,
+    source.tool_call_id,
+    source.toolCallId,
+    source.tool_call?.id,
+    source.name,
+    source.tool,
+    source.action,
+    source.id,
+    fallback,
+  ];
+  return String(candidates.find((value) => value != null && String(value).trim()) || '').trim();
+}
+
+function _mobileVoiceToolsAreActive() {
+  return __pmVoice?.activeVoiceToolCalls instanceof Set && __pmVoice.activeVoiceToolCalls.size > 0;
+}
+
+function _setMobileVoiceToolActive(active, key = '', payload = {}) {
+  const calls = __pmVoice.activeVoiceToolCalls instanceof Set
+    ? __pmVoice.activeVoiceToolCalls
+    : (__pmVoice.activeVoiceToolCalls = new Set());
+  const normalized = _mobileVoiceToolKey(payload, key);
+  if (active) {
+    calls.add(normalized || `voice_tool_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+  } else if (normalized) {
+    calls.delete(normalized);
+  } else {
+    calls.clear();
+  }
+  if (_mobileVoiceToolsAreActive()) _setOrbState('solving');
+  else if (__pmVoice?.listening) _setOrbState('listening');
+  else _setOrbState(null);
+  return calls.size;
+}
+
+function _pulseMobileVoiceOrb(level = 0.8) {
+  const next = Math.max(0, Math.min(1, Number(level) || 0));
+  if (!next) return;
+  __pmVoice.thinkingOrbAudioPulse = Math.max(
+    Number(__pmVoice.thinkingOrbAudioPulse || 0) || 0,
+    next,
+  );
+}
+
 function _setOrbState(state) {
+  const orbController = __pmVoice?.thinkingOrbController;
+  const requestedState = _mobileVoiceToolsAreActive() ? 'solving' : state;
+  const visualState = requestedState === 'listening' ? 'listening' : requestedState === 'solving' ? 'solving' : 'thinking';
+  orbController?.setState(visualState);
   const orbEl = document.getElementById('pm-voice-orb');
   if (!orbEl) return;
   orbEl.classList.remove('listening', 'thinking', 'speaking', 'confirmed');
-  if (state) orbEl.classList.add(state);
+  if (requestedState) orbEl.classList.add(requestedState);
 }
 
 function _mobileMediaKey(media) {
@@ -17843,72 +18755,6 @@ function _installMobileCameraPinchZoom(root, video, getTrack) {
       video.style.transform = '';
     },
   };
-}
-
-function _voiceOrbSvg() {
-  const id = `pm-orb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  return `
-    <svg class="pm-orb-svg" viewBox="0 0 320 320" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-      <defs>
-        <radialGradient id="${id}-core" cx="32%" cy="25%" r="78%">
-          <stop offset="0%" stop-color="var(--pm-voice-orb-light, #fff6e6)" stop-opacity=".98"/>
-          <stop offset="24%" stop-color="var(--pm-voice-orb-hot, #ffd9a8)" stop-opacity=".82"/>
-          <stop offset="58%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".66"/>
-          <stop offset="88%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".78"/>
-          <stop offset="100%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".94"/>
-        </radialGradient>
-        <radialGradient id="${id}-aura" cx="50%" cy="48%" r="58%">
-          <stop offset="0%" stop-color="var(--pm-voice-orb-glow, #ffb578)" stop-opacity=".56"/>
-          <stop offset="54%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".18"/>
-          <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
-        </radialGradient>
-        <radialGradient id="${id}-rim" cx="32%" cy="20%" r="82%">
-          <stop offset="0%" stop-color="#fff" stop-opacity=".23"/>
-          <stop offset="34%" stop-color="#fff" stop-opacity=".03"/>
-          <stop offset="70%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".10"/>
-          <stop offset="100%" stop-color="var(--pm-voice-orb-deep, #7a3008)" stop-opacity=".72"/>
-        </radialGradient>
-        <linearGradient id="${id}-wave" x1="0%" y1="50%" x2="100%" y2="50%">
-          <stop offset="0%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
-          <stop offset="17%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".94"/>
-          <stop offset="50%" stop-color="var(--pm-voice-orb-light, #fff3d8)" stop-opacity="1"/>
-          <stop offset="83%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity=".94"/>
-          <stop offset="100%" stop-color="var(--pm-voice-orb-accent, #ea6a1f)" stop-opacity="0"/>
-        </linearGradient>
-        <clipPath id="${id}-clip"><circle cx="160" cy="160" r="128"/></clipPath>
-        <filter id="${id}-wave-glow" x="-30%" y="-120%" width="160%" height="340%"><feGaussianBlur stdDeviation="4.8"/></filter>
-        <filter id="${id}-soft-glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="7"/></filter>
-      </defs>
-      <circle class="pm-orb-aura" cx="160" cy="160" r="157" fill="url(#${id}-aura)"/>
-      <circle class="pm-orb-shell" cx="160" cy="160" r="133" fill="var(--pm-voice-orb-deep, #7a3008)" opacity=".58"/>
-      <circle class="pm-orb-core" cx="160" cy="160" r="128" fill="url(#${id}-core)"/>
-      <g class="pm-orb-surface" clip-path="url(#${id}-clip)">
-        <ellipse class="pm-orb-specular" cx="113" cy="92" rx="64" ry="40" fill="#fff" opacity=".12" transform="rotate(-24 113 92)" filter="url(#${id}-soft-glow)"/>
-        <ellipse class="pm-orb-depth" cx="190" cy="224" rx="122" ry="62" fill="var(--pm-voice-orb-deep, #7a3008)" opacity=".20"/>
-        <g class="pm-orb-grid pm-orb-grid-latitude" stroke="var(--pm-voice-orb-grid, rgba(234,106,31,.2))" fill="none" stroke-width=".75">
-          <ellipse cx="160" cy="160" rx="128" ry="38"/>
-          <ellipse cx="160" cy="160" rx="128" ry="76"/>
-          <ellipse cx="160" cy="160" rx="128" ry="108"/>
-        </g>
-        <g class="pm-orb-grid pm-orb-grid-longitude" stroke="var(--pm-voice-orb-grid, rgba(234,106,31,.2))" fill="none" stroke-width=".75">
-          <ellipse cx="160" cy="160" rx="40" ry="128"/>
-          <ellipse cx="160" cy="160" rx="78" ry="128"/>
-          <ellipse cx="160" cy="160" rx="112" ry="128"/>
-          <circle cx="160" cy="160" r="128"/>
-        </g>
-        <path class="pm-orb-flow pm-orb-flow-a" d="M25 115 C74 83 106 103 143 89 S222 58 298 103" fill="none" stroke="var(--pm-voice-orb-light, #fff3d8)" stroke-opacity=".16" stroke-width="2"/>
-        <path class="pm-orb-flow pm-orb-flow-b" d="M13 207 C68 240 99 214 142 232 S224 261 307 210" fill="none" stroke="var(--pm-voice-orb-accent, #ea6a1f)" stroke-opacity=".32" stroke-width="2.4"/>
-      </g>
-      <circle class="pm-orb-rim" cx="160" cy="160" r="128" fill="url(#${id}-rim)"/>
-      <path class="pm-orb-rim-light" d="M72 88 C96 52 140 34 184 37 C224 39 258 61 278 91" fill="none" stroke="var(--pm-voice-orb-light, #fff3d8)" stroke-opacity=".46" stroke-width="2.2" stroke-linecap="round"/>
-      <path class="pm-wave pm-wave-halo" d="M14 160 Q40 160 56 160 T96 138 T120 175 T142 142 T160 160 T178 178 T200 145 T220 175 T246 160 T268 160 T306 160" fill="none" stroke="url(#${id}-wave)" stroke-width="15" stroke-linecap="round" opacity=".54" filter="url(#${id}-wave-glow)"/>
-      <path class="pm-wave pm-wave-main" d="M14 160 Q40 160 56 160 T96 138 T120 175 T142 142 T160 160 T178 178 T200 145 T220 175 T246 160 T268 160 T306 160" fill="none" stroke="url(#${id}-wave)" stroke-width="2.35" stroke-linecap="round"/>
-      <g class="pm-sparkles" fill="var(--pm-voice-orb-light, #fff3d8)">
-        <circle cx="83" cy="102" r="1.7"/><circle cx="220" cy="86" r="1.3"/><circle cx="254" cy="208" r="1.8"/><circle cx="75" cy="219" r="1.3"/>
-        <circle cx="160" cy="72" r="1.6"/><circle cx="52" cy="166" r="1.1"/><circle cx="273" cy="165" r="1.2"/><circle cx="185" cy="246" r="1.7"/>
-      </g>
-    </svg>
-  `;
 }
 
 function _detectProvider(status) {
@@ -19977,6 +20823,8 @@ async function _startMobileCodexVoiceRoomStandbyConnection(participant = {}) {
       });
       if (!bridgeResult?.success) throw new Error(bridgeResult?.error || 'Voice Room standby bridge failed.');
       bridgeSessionId = String(bridgeResult.sessionId || '').trim();
+      const bridgeRealtimeSessionId = String(bridgeResult.realtimeSessionId || '').trim();
+      const bridgeRealtimeReady = bridgeResult.realtimeReady === true || !!bridgeRealtimeSessionId;
       let answerSdp = String(bridgeResult.sdp || '');
       answerSdp = `${answerSdp.replace(/\r\n|\r|\n/g, '\n').replace(/\s+$/g, '').replace(/\n/g, '\r\n')}\r\n`;
       if (!_isUsableRealtimeOfferSdp(answerSdp)) throw new Error('Voice Room standby returned an invalid SDP answer.');
@@ -19999,6 +20847,9 @@ async function _startMobileCodexVoiceRoomStandbyConnection(participant = {}) {
         transport: 'codex_app_server',
         auth: 'chatgpt_oauth_app_server',
         codexBridgeSessionId: bridgeSessionId,
+        realtimeSessionId: bridgeRealtimeSessionId,
+        backendReady: bridgeRealtimeReady,
+        backendReadyNotified: false,
         roomParticipantKey: key,
         roomActive: false,
       };
@@ -20030,6 +20881,12 @@ async function _startMobileCodexVoiceRoomStandbyConnection(participant = {}) {
 }
 
 async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
+  const requestedSessionId = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim();
+  const currentConnectionIsOpen = __pmRealtimeAgent?.conn?.dc?.readyState === 'open'
+    && (!requestedSessionId
+      || requestedSessionId === MOBILE_CHAT_SESSION_ID
+      || String(__pmRealtimeAgent.conn.sessionId || '').trim() === requestedSessionId);
+  if (!currentConnectionIsOpen) _notifyMobileVoiceAgentConnection('starting', { sessionId: requestedSessionId });
   if (_wantsMobileXaiRealtime()) return _startMobileXaiRealtimeSession(sessionId, options);
   let sid = String(sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
   if (sid === MOBILE_CHAT_SESSION_ID) {
@@ -20044,6 +20901,10 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     __pmRealtimeAgent.listenMode = listenMode;
     _sendMobileRealtimeAgentSessionUpdateFromSettings('realtime_agent_reuse');
     if (listenMode === 'always_listening') _setMobileRealtimeAgentMicEnabled(true);
+    _notifyMobileVoiceAgentConnection(
+      __pmRealtimeAgent.conn.backendReady === true ? 'connected' : 'starting',
+      { sessionId: sid, reused: true },
+    );
     _voiceDebug('realtime-agent-reuse', {
       sessionId: sid,
       listenMode,
@@ -20177,7 +21038,10 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     // shares this mic via _ensureMobileXaiRealtimeMic().
     const micStream = await _ensureMobileXaiRealtimeMic();
     const micTrack = micStream.getAudioTracks()[0];
-    micTrack.enabled = listenMode === 'always_listening';
+    // The WebRTC transport can open before the realtime backend has accepted
+    // the session. Hold the track until the backend readiness acknowledgement
+    // so the first spoken turn cannot disappear into startup.
+    micTrack.enabled = false;
     _voiceDebug('realtime-agent-mic-ready', {
       sessionId: sid,
       listenMode,
@@ -20190,6 +21054,12 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch {}
 
     const dc = pc.createDataChannel('oai-events');
+    let realtimeBackendReady = false;
+    const markRealtimeBackendReady = (detail = {}) => {
+      realtimeBackendReady = true;
+      const active = __pmRealtimeAgent?.conn;
+      if (active?.pc === pc) _markMobileRealtimeAgentBackendReady(active, detail);
+    };
     dc.addEventListener('message', (msgEvent) => {
       // Ignore buffered messages from a room participant that has already
       // been superseded by another AVAS connection.
@@ -20197,6 +21067,9 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       if (__pmRealtimeAgent?.conn && __pmRealtimeAgent.conn.dc !== dc) return;
       let event = null;
       try { event = JSON.parse(msgEvent.data); } catch { return; }
+      if (!useCodexOauthBridge && String(event?.type || '') === 'session.updated') {
+        markRealtimeBackendReady({ source: 'session.updated' });
+      }
       _handleMobileRealtimeAgentEvent(event, sid).catch(() => {});
     });
 
@@ -20232,6 +21105,8 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     });
     let answerSdp = '';
     let codexBridgeSessionId = '';
+    let codexRealtimeSessionId = '';
+    let codexBridgeRealtimeReady = false;
     const model = String(bootstrap.model || _realtimeSpeechModel || 'gpt-realtime-2').trim();
     const clientSecret = String(bootstrap.clientSecret || '').trim();
     if (useCodexOauthBridge) {
@@ -20248,6 +21123,8 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       if (!bridgeResult?.success) throw new Error(bridgeResult?.error || 'Codex OAuth realtime bridge failed');
       answerSdp = String(bridgeResult.sdp || '');
       codexBridgeSessionId = String(bridgeResult.sessionId || '');
+      codexRealtimeSessionId = String(bridgeResult.realtimeSessionId || '').trim();
+      codexBridgeRealtimeReady = bridgeResult.realtimeReady === true || !!codexRealtimeSessionId;
       if (!_isUsableRealtimeOfferSdp(answerSdp)) {
         throw new Error('Codex OAuth realtime v3 bridge returned an invalid SDP answer.');
       }
@@ -20378,9 +21255,15 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
       transport: useCodexOauthBridge ? 'codex_app_server' : 'openai_public_realtime',
       auth: useCodexOauthBridge ? 'chatgpt_oauth_app_server' : (bootstrap.auth || 'api_key'),
       codexBridgeSessionId,
+      realtimeSessionId: codexRealtimeSessionId,
+      backendReady: useCodexOauthBridge ? codexBridgeRealtimeReady : realtimeBackendReady,
+      backendReadyNotified: false,
     };
     _startMobileRealtimeAudioQualityMonitor(__pmRealtimeAgent.conn);
     _startMobileCodexBridgeRealtimeEventPoll(__pmRealtimeAgent.conn);
+    if (!useCodexOauthBridge && realtimeBackendReady) {
+      _markMobileRealtimeAgentBackendReady(__pmRealtimeAgent.conn, { source: 'session.updated' });
+    }
     if (__pmRealtimeAgent.quiet.active) _activateMobileRealtimeAgentQuietMode({ skipCancel: true });
     const logState = (reason) => _voiceDebug('realtime-agent-pc-state', {
       sessionId: sid,
@@ -20399,16 +21282,30 @@ async function _startMobileRealtimeAgentSession(sessionId, options = {}) {
     pc.addEventListener('signalingstatechange', () => logState('signalingstatechange'));
     pc.addEventListener('connectionstatechange', () => {
       if (['closed', 'failed', 'disconnected'].includes(pc.connectionState) && __pmRealtimeAgent.conn?.pc === pc) {
+        _notifyMobileVoiceAgentConnection('reconnecting', { sessionId: sid, reason: pc.connectionState });
         _stopMobileRealtimeAgentSession();
       }
     });
     logState('ready');
-    _voiceDebug('realtime-agent-ready', { sessionId: sid, listenMode });
+    _voiceDebug('realtime-agent-transport-ready', {
+      sessionId: sid,
+      listenMode,
+      backendReady: __pmRealtimeAgent.conn.backendReady === true,
+      transport: __pmRealtimeAgent.conn.transport,
+    });
+    if (__pmRealtimeAgent.conn.backendReady === true) {
+      _markMobileRealtimeAgentBackendReady(__pmRealtimeAgent.conn, {
+        source: useCodexOauthBridge ? 'bridge_session_result' : 'session.updated',
+      });
+    }
     if (_isVoiceRoomEnabled() && useCodexOauthBridge) {
       _scheduleMobileCodexVoiceRoomPrewarm('active_session_ready');
     }
     return __pmRealtimeAgent.conn;
-  })().finally(() => {
+  })().catch((error) => {
+    _notifyMobileVoiceAgentConnection('error', { sessionId: sid, message: error?.message || String(error) });
+    throw error;
+  }).finally(() => {
     if (__pmRealtimeAgent.connectingStartId === startId) {
       __pmRealtimeAgent.connecting = null;
       __pmRealtimeAgent.connectingSessionId = '';
@@ -20489,6 +21386,13 @@ function _setMobileRealtimeAgentMicEnabled(enabled) {
   }
   const track = conn?.micTrack;
   if (!track) return;
+  if (enabled && conn?.backendReady !== true && conn?.pc && conn?.dc) {
+    // WebRTC can report an open data channel before the realtime backend has
+    // accepted its session. Keep the track quiet until the backend ack arrives
+    // so the first spoken turn is not sent into a half-started session.
+    track.enabled = false;
+    return;
+  }
   track.enabled = !!enabled;
 }
 
@@ -21122,12 +22026,21 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
     send: (payload) => { try { if (ws.readyState === WebSocket.OPEN) ws.send(payload); } catch {} },
     close: () => { try { ws.close(); } catch {} },
   };
+  let realtimeBackendReady = false;
+  const markRealtimeBackendReady = (detail = {}) => {
+    realtimeBackendReady = true;
+    openAiCapture.ready = true;
+    flushPendingOpenAiRealtimeAudio();
+    const active = __pmRealtimeAgent?.conn;
+    if (active?.ws === ws) _markMobileRealtimeAgentBackendReady(active, detail);
+  };
 
   ws.addEventListener('message', (msgEvent) => {
     let event = null;
     try { event = JSON.parse(typeof msgEvent.data === 'string' ? msgEvent.data : ''); } catch { return; }
     if (!event) return;
     const type = String(event.type || '');
+    if (type === 'session.updated') markRealtimeBackendReady({ source: 'session.updated' });
     if (type === 'response.output_audio.delta' || type === 'response.audio.delta') {
       if (__pmRealtimeAgent) __pmRealtimeAgent.activeResponse = true;
       _suspendMobileRealtimeInputForOutput('openai_ws_audio_delta');
@@ -21183,12 +22096,12 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
         },
       },
     }));
-    openAiCapture.ready = true;
-    flushPendingOpenAiRealtimeAudio();
   } catch {}
 
   __pmRealtimeAgent.conn = {
     provider: 'openai_ws', ws, dc: dcShim, pc: null, audio: null, micStream, micTrack, sessionId: sid, listenMode, playback, xaiCapture: openAiCapture,
+    backendReady: realtimeBackendReady,
+    backendReadyNotified: false,
     cleanup: () => {
       try { processor.disconnect(); } catch {}
       try { source.disconnect(); } catch {}
@@ -21198,8 +22111,15 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
       try { ws.close(); } catch {}
     },
   };
-  ws.addEventListener('close', () => { if (__pmRealtimeAgent.conn?.ws === ws) __pmRealtimeAgent.conn = null; });
+  ws.addEventListener('close', () => {
+    if (__pmRealtimeAgent.conn?.ws !== ws) return;
+    __pmRealtimeAgent.conn = null;
+    _notifyMobileVoiceAgentConnection('reconnecting', { sessionId: sid, reason: 'socket_closed' });
+  });
   _voiceDebug('openai-realtime-ws-ready', { sessionId: sid, listenMode, model });
+  if (realtimeBackendReady) {
+    _markMobileRealtimeAgentBackendReady(__pmRealtimeAgent.conn, { source: 'session.updated' });
+  }
   return __pmRealtimeAgent.conn;
 }
 
@@ -21214,6 +22134,10 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     __pmRealtimeAgent.listenMode = listenMode;
     _sendMobileRealtimeAgentSessionUpdateFromSettings('xai_realtime_agent_reuse');
     if (listenMode === 'always_listening') _setMobileRealtimeAgentMicEnabled(true);
+    _notifyMobileVoiceAgentConnection(
+      __pmRealtimeAgent.conn.backendReady === true ? 'connected' : 'starting',
+      { sessionId: sid, reused: true },
+    );
     return __pmRealtimeAgent.conn;
   }
   if (__pmRealtimeAgent.conn && String(__pmRealtimeAgent.conn.sessionId || '').trim() !== sid) {
@@ -21262,6 +22186,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       appends: 0,
       nonSilent: 0,
       peakMax: 0,
+      audioLevel: 0,
       sampleRate: MOBILE_XAI_REALTIME_INPUT_SAMPLE_RATE,
       pending: [],
       ws: null,
@@ -21280,10 +22205,16 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       if (!xaiCapture.sending) return;
       const input = event.inputBuffer.getChannelData(0);
       let peak = 0;
+      let sumSquares = 0;
       for (let i = 0; i < input.length; i += 64) {
-        const a = Math.abs(input[i] || 0);
+        const sample = input[i] || 0;
+        const a = Math.abs(sample);
+        sumSquares += sample * sample;
         if (a > peak) peak = a;
       }
+      const sampledCount = Math.max(1, Math.ceil(input.length / 64));
+      const rms = Math.sqrt(sumSquares / sampledCount);
+      xaiCapture.audioLevel = Math.max(0, Math.min(1, (rms * .78) + (peak * .22)));
       if (peak > xaiCapture.peakMax) xaiCapture.peakMax = peak;
       if (peak > 0.003) xaiCapture.nonSilent += 1;
       const rate = xaiCapture.sampleRate || MOBILE_XAI_REALTIME_INPUT_SAMPLE_RATE;
@@ -21344,12 +22275,21 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
       send: (payload) => { try { if (ws.readyState === WebSocket.OPEN) ws.send(payload); } catch {} },
       close: () => { try { ws.close(); } catch {} },
     };
+    let realtimeBackendReady = false;
+    const markRealtimeBackendReady = (detail = {}) => {
+      realtimeBackendReady = true;
+      xaiCapture.ready = true;
+      flushPendingXaiRealtimeAudio();
+      const active = __pmRealtimeAgent?.conn;
+      if (active?.ws === ws) _markMobileRealtimeAgentBackendReady(active, detail);
+    };
 
     ws.addEventListener('message', (msgEvent) => {
       let event = null;
       try { event = JSON.parse(typeof msgEvent.data === 'string' ? msgEvent.data : ''); } catch { return; }
       if (!event) return;
       const type = String(event.type || '');
+      if (type === 'session.updated') markRealtimeBackendReady({ source: 'session.updated' });
       if (type === 'response.output_audio.delta' || type === 'response.audio.delta') {
         if (__pmRealtimeAgent) __pmRealtimeAgent.activeResponse = true;
         _suspendMobileRealtimeInputForOutput('xai_audio_delta');
@@ -21403,8 +22343,6 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
           turn_detection: turnDetection,
         },
       }));
-      xaiCapture.ready = true;
-      flushPendingXaiRealtimeAudio();
       if (Array.isArray(bootstrap.tools) && bootstrap.tools.length) {
         try { ws.send(JSON.stringify({ type: 'session.update', session: { tools: bootstrap.tools, tool_choice: 'auto' } })); } catch {}
       }
@@ -21427,6 +22365,8 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     }
     __pmRealtimeAgent.conn = {
       provider: 'xai', ws, dc: dcShim, pc: null, audio: null, micStream, micTrack, sessionId: sid, listenMode, playback, xaiCapture,
+      backendReady: realtimeBackendReady,
+      backendReadyNotified: false,
       cleanup: () => {
         try { processor.disconnect(); } catch {}
         try { source.disconnect(); } catch {}
@@ -21436,11 +22376,19 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
         try { ws.close(); } catch {}
       },
     };
-    ws.addEventListener('close', () => { if (__pmRealtimeAgent.conn?.ws === ws) __pmRealtimeAgent.conn = null; });
+    ws.addEventListener('close', () => {
+      if (__pmRealtimeAgent.conn?.ws !== ws) return;
+      __pmRealtimeAgent.conn = null;
+      _notifyMobileVoiceAgentConnection('reconnecting', { sessionId: sid, reason: 'socket_closed' });
+    });
     _voiceDebug('xai-realtime-ready', { sessionId: sid, listenMode });
+    if (realtimeBackendReady) {
+      _markMobileRealtimeAgentBackendReady(__pmRealtimeAgent.conn, { source: 'session.updated' });
+    }
     return __pmRealtimeAgent.conn;
   })().catch((err) => {
     try { xaiRealtimeStartCleanup?.(); } catch {}
+    _notifyMobileVoiceAgentConnection('error', { sessionId: sid, message: err?.message || String(err) });
     throw err;
   }).finally(() => {
     if (__pmRealtimeAgent.connectingStartId === startId) {
@@ -21910,6 +22858,32 @@ function _startMobileCodexBridgeRealtimeEventPoll(conn) {
     fetching: false,
     timer: null,
   };
+  const handleBridgeNotification = (notification) => {
+    const method = String(notification?.method || '').trim();
+    const params = notification?.params || {};
+    if (method === 'thread/realtime/started') {
+      const realtimeSessionId = String(params?.realtimeSessionId || '').trim();
+      if (realtimeSessionId) conn.realtimeSessionId = realtimeSessionId;
+      _markMobileRealtimeAgentBackendReady(conn, {
+        source: method,
+        ...(realtimeSessionId ? { realtimeSessionId } : {}),
+      });
+      return;
+    }
+    if (method === 'thread/realtime/error' && conn.backendReady !== true) {
+      const message = String(params?.message || params?.error?.message || 'Realtime voice session failed.').trim();
+      _voiceDebug('codex-bridge-realtime-error-before-ready', {
+        sessionId: String(conn.sessionId || ''),
+        message,
+      });
+      if (__pmRealtimeAgent?.conn === conn) {
+        _notifyMobileVoiceAgentConnection('error', {
+          sessionId: String(conn.sessionId || ''),
+          message,
+        });
+      }
+    }
+  };
   const run = async () => {
     if (poll.fetching || __pmRealtimeAgent?.conn !== conn) return;
     poll.fetching = true;
@@ -21918,6 +22892,7 @@ function _startMobileCodexBridgeRealtimeEventPoll(conn) {
       if (!data?.success) return;
       for (const notification of (Array.isArray(data?.events) ? data.events : [])) {
         poll.afterId = Math.max(poll.afterId, Number(notification?.id || 0) || 0);
+        handleBridgeNotification(notification);
         const event = _normalizeMobileCodexBridgeRealtimeTranscript(notification);
         if (event && _shouldApplyMobileCodexBridgeTranscriptFallback(event)) await _handleMobileRealtimeAgentEvent(event, conn.sessionId);
       }
@@ -21931,6 +22906,7 @@ function _startMobileCodexBridgeRealtimeEventPoll(conn) {
   };
   poll.timer = setInterval(run, 350);
   __pmRealtimeAgent.codexBridgeEventPoll = poll;
+  if (conn.backendReady === true) _markMobileRealtimeAgentBackendReady(conn, { source: 'bridge_session_result' });
   run();
 }
 
@@ -22039,9 +23015,15 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
   if (type === 'response.output_item.added' && event.item?.type === 'function_call') {
     __pmRealtimeAgent.turn.hadFunctionCall = true;
     const callId = String(event.item.call_id || '').trim();
+    const name = String(event.item.name || '').trim();
+    const toolKey = _mobileVoiceToolKey({ call_id: callId, name }, name);
     const toolLabel = _mobileToolLabel({ name: event.item.name });
-    if (!__pmRealtimeAgent.quiet.active) __pmVoice.showToolStatus?.(toolLabel, 'Using tool');
-    if (callId) __pmRealtimeAgent.functionCallBuffers.set(callId, { name: String(event.item.name || ''), argsStr: '' });
+    if (!__pmRealtimeAgent.quiet.active) {
+      _setMobileVoiceToolActive(true, toolKey, { call_id: callId, name });
+      _startMobileRealtimeAgentToolTrace(sessionId, name, {}, { callId, source: 'realtime_agent_output_item' });
+      __pmVoice.showToolStatus?.(toolLabel, 'Using tool');
+    }
+    if (callId) __pmRealtimeAgent.functionCallBuffers.set(callId, { name, argsStr: '' });
     return;
   }
   if (type === 'response.function_call_arguments.delta') {
@@ -22059,7 +23041,9 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     __pmRealtimeAgent.functionCallBuffers.delete(callId);
     let args = {};
     try { args = argsStr ? JSON.parse(argsStr) : {}; } catch {}
+    const toolKey = _mobileVoiceToolKey({ call_id: callId, name }, name);
     if (__pmRealtimeAgent.quiet.active) {
+      _setMobileVoiceToolActive(false, toolKey, { call_id: callId, name });
       _voiceDebug('realtime-agent-quiet-tool-call-suppressed', { name });
       _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({
         ok: false,
@@ -22068,8 +23052,20 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       }), { createResponse: false });
       return;
     }
-    await _executeMobileRealtimeAgentFunctionCall({ call_id: callId, name, args }, sessionId);
-    __pmVoice.showToolStatus?.(`${_mobileToolLabel({ name })} complete`, 'Tool finished');
+    _setMobileVoiceToolActive(true, toolKey, { call_id: callId, name });
+    _startMobileRealtimeAgentToolTrace(sessionId, name, args, { callId, source: 'realtime_agent_arguments_done' });
+    let toolError = null;
+    try {
+      await _executeMobileRealtimeAgentFunctionCall({ call_id: callId, name, args }, sessionId);
+    } catch (error) {
+      toolError = error;
+      _voiceDebug('realtime-agent-tool-execution-failed', { name, message: error?.message || String(error) });
+    }
+    _setMobileVoiceToolActive(false, toolKey, { call_id: callId, name });
+    __pmVoice.showToolStatus?.(
+      `${_mobileToolLabel({ name })} ${toolError ? 'failed' : 'complete'}`,
+      toolError ? 'Tool failed' : 'Tool finished',
+    );
     return;
   }
   if (type === 'conversation.item.input_audio_transcription.delta' || type === 'conversation.item.input_audio_transcription.updated') {
@@ -22501,12 +23497,30 @@ function _startMobileRealtimeAgentToolTrace(sessionId, name, args, extra = {}) {
   turn.source = turn.source || 'voice_agent_realtime';
   turn.channel = turn.channel || 'voice';
   turn.streaming = true;
+  const label = _realtimeAgentToolLabel(name, args);
+  const traceExtra = { type: 'tool_call', toolName: name, args, source: 'realtime_agent_tool_start', ...(extra || {}) };
+  const callId = _mobileVoiceToolKey(traceExtra);
+  if (callId) {
+    const matchingEntries = [
+      ...(Array.isArray(turn.processEntries) ? turn.processEntries : []),
+      ...(Array.isArray(turn.liveTraceEntries) ? turn.liveTraceEntries : []),
+    ].filter((entry, index, entries) => entries.indexOf(entry) === index)
+      .filter((entry) => _mobileVoiceToolKey(entry?.extra || {}) === callId);
+    if (matchingEntries.length) {
+      matchingEntries.forEach((entry) => {
+        entry.text = label;
+        entry.extra = { ...(entry.extra || {}), ...traceExtra };
+      });
+      _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_voice_tool_start', force: true });
+      return turn;
+    }
+  }
   _appendVoiceAgentProcessEntriesToTurn(turn, [{
     type: 'tool',
-    text: _realtimeAgentToolLabel(name, args),
-    extra: { type: 'tool_call', toolName: name, args, source: 'realtime_agent_tool_start', ...(extra || {}) },
+    text: label,
+    extra: traceExtra,
   }]);
-  _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_voice_tool_start' });
+  _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_voice_tool_start', force: true });
   return turn;
 }
 
@@ -22523,7 +23537,7 @@ function _finishMobileRealtimeAgentToolTrace(sessionId, turn, name, args, ok, su
     text,
     extra: { type: 'tool_result', toolName: name, args, source: 'realtime_agent_tool_result', ...(extra || {}) },
   }]);
-  _notifyMobileChatVoiceUpdate(sessionId, { reason: ok ? 'realtime_voice_tool_result' : 'realtime_voice_tool_error' });
+  _notifyMobileChatVoiceUpdate(sessionId, { reason: ok ? 'realtime_voice_tool_result' : 'realtime_voice_tool_error', force: true });
   return changed;
 }
 
@@ -22825,7 +23839,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
     const message = String(args.message || '').trim();
     let ok = false;
     let error = '';
-    const steerToolTurn = _startMobileRealtimeAgentToolTrace(sessionId, name, args);
+    const steerToolTurn = _startMobileRealtimeAgentToolTrace(sessionId, name, args, { callId });
     if (_isMobileVoiceStatusQuestion(message)) {
       try {
         const status = await mobileGatewayFetch('/api/voice-agent/realtime-tool', {
@@ -22851,11 +23865,13 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
           : null, sessionId, 'blocked_status_as_steer');
         if (packet) _sendMobileRealtimeAgentContextUpdate(packet, { reason: 'blocked_status_as_steer' });
         _finishMobileRealtimeAgentToolTrace(sessionId, steerToolTurn, name, args, true, 'worker status checked', {
+          callId,
           result: status?.result || status?.raw || '',
         });
         _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: true, steered: false, statusQuestion: true, workerStatus: _overlayPendingMobileRealtimeAgentWorkerPacket(status?.result || null, sessionId, 'blocked_status_as_steer_output') || null }));
       } catch (err) {
         _finishMobileRealtimeAgentToolTrace(sessionId, steerToolTurn, name, args, false, String(err?.message || err), {
+          callId,
           error: String(err?.message || err),
         });
         _sendMobileRealtimeAgentFunctionOutput(callId, JSON.stringify({ ok: false, steered: false, statusQuestion: true, error: String(err?.message || err) }));
@@ -22875,6 +23891,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
       }
     }
     _finishMobileRealtimeAgentToolTrace(sessionId, steerToolTurn, name, args, ok, ok ? 'steer sent' : (error || 'steer failed'), {
+      callId,
       result: { steered: ok, message },
       error,
     });
@@ -22882,7 +23899,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
     return;
   }
   if (name === 'interrupt_active_worker') {
-    const interruptToolTurn = _startMobileRealtimeAgentToolTrace(sessionId, name, args);
+    const interruptToolTurn = _startMobileRealtimeAgentToolTrace(sessionId, name, args, { callId });
     let interrupted = true;
     let interruptError = '';
     try { await _abortMobileActiveWorkerFromRealtime(sessionId, 'realtime_agent_interrupt'); } catch (err) {
@@ -22890,6 +23907,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
       interruptError = String(err?.message || err);
     }
     _finishMobileRealtimeAgentToolTrace(sessionId, interruptToolTurn, name, args, interrupted, interrupted ? 'interrupt sent' : interruptError, {
+      callId,
       result: { interrupted, reason: String(args.reason || '') },
       error: interruptError,
     });
@@ -22899,7 +23917,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
 
   const recentCmd = _addRealtimeAgentRecentCommand(name, args);
   try {
-    const realtimeToolTurn = _startMobileRealtimeAgentToolTrace(sessionId, name, args);
+    const realtimeToolTurn = _startMobileRealtimeAgentToolTrace(sessionId, name, args, { callId });
     const contextPacket = name === 'voice_worker_status'
       ? _overlayPendingMobileRealtimeAgentWorkerPacket(
         _getCachedMobileVoiceWorkerContextPacket(sessionId),
@@ -22983,7 +24001,7 @@ async function _executeMobileRealtimeAgentFunctionCall(call, sessionId) {
       : [];
     if (realtimeToolEntries.length) {
       if (_attachVoiceAgentProcessEntriesToMobileTurn(sessionId, realtimeToolEntries)) {
-        _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_voice_tool_result' });
+        _notifyMobileChatVoiceUpdate(sessionId, { reason: 'realtime_voice_tool_result', force: true });
       }
     } else {
       _finishMobileRealtimeAgentToolTrace(sessionId, realtimeToolTurn, name, args, true, '', {
@@ -25039,6 +26057,16 @@ function _renderVoiceAgentTargetPickerHtml() {
           <span class="pm-camera-voice-fallback" aria-hidden="true"></span>
           <span class="pm-camera-record-core" aria-hidden="true"></span>
         </button>
+        <div class="pm-camera-more-wrap">
+          <div class="pm-camera-more-menu" id="pm-camera-more-menu" role="group" aria-label="Camera options" hidden>
+            <button type="button" class="pm-camera-icon pm-camera-more-action" id="pm-camera-flash" aria-label="Toggle flash" aria-pressed="false">${ICONS.flash}</button>
+            <button type="button" class="pm-camera-icon pm-camera-more-action" id="pm-camera-flip" aria-label="Flip camera">${ICONS.refresh}</button>
+          </div>
+          <button type="button" class="pm-camera-icon pm-camera-more" id="pm-camera-more" aria-label="Camera options" aria-expanded="false">
+            <span class="pm-camera-more-dots" aria-hidden="true">${ICONS.dots}</span>
+            <span class="pm-camera-more-close" aria-hidden="true">${ICONS.x}</span>
+          </button>
+        </div>
       </div>
     </div>
   `;
@@ -25098,7 +26126,7 @@ export async function renderVoicePage(page, ctx) {
       <div class="pm-voice-stage">
         <div id="pm-voice-preview-host" class="pm-voice-preview-host" aria-live="polite"></div>
         ${inlineMode
-          ? `<button type="button" class="pm-voice-orb" id="pm-voice-orb" aria-label="Choose voice target">${_voiceOrbSvg()}</button>`
+          ? '<button type="button" class="pm-voice-orb" id="pm-voice-orb" aria-label="Choose voice target"></button>'
           : '<div class="pm-voice-overlay-anchor" aria-hidden="true"></div>'}
         ${_renderVoiceAgentTargetPickerHtml()}
         <div class="pm-voice-status-region" aria-live="polite">
@@ -25161,15 +26189,20 @@ export async function renderVoicePage(page, ctx) {
         </div>
         ${inlineMode ? `
         <button type="button" class="pm-voice-orb pm-voice-mic pm-voice-page-mic pm-voice-orb-mic pm-voice-particle-orb" id="pm-voice-mic" aria-label="Hold to talk">
-          ${_voiceOrbSvg()}
-          <canvas class="pm-voice-orb-particles" id="pm-voice-orb-particles" aria-hidden="true"></canvas>
-          <canvas class="pm-voice-wave-canvas" id="pm-voice-wave-canvas"></canvas>
+          <span class="pm-thinking-orb-host" id="pm-thinking-orb-host" aria-hidden="true"></span>
+          <span class="pm-voice-connection-pill" id="pm-voice-connection-pill" hidden aria-live="polite">
+            <span class="pm-voice-connection-spinner" aria-hidden="true"></span>
+            <span class="pm-voice-connection-text" id="pm-voice-connection-text">Voice agent is starting</span>
+          </span>
         </button>
         ` : `
         <div class="pm-voice-orb-dock">
           <button type="button" class="pm-voice-orb pm-voice-mic pm-voice-page-mic pm-voice-orb-mic pm-voice-particle-orb" id="pm-voice-orb" aria-label="Hold to talk">
-            ${_voiceOrbSvg()}
-            <canvas class="pm-voice-orb-particles" id="pm-voice-orb-particles" aria-hidden="true"></canvas>
+            <span class="pm-thinking-orb-host" id="pm-thinking-orb-host" aria-hidden="true"></span>
+            <span class="pm-voice-connection-pill" id="pm-voice-connection-pill" hidden aria-live="polite">
+              <span class="pm-voice-connection-spinner" aria-hidden="true"></span>
+              <span class="pm-voice-connection-text" id="pm-voice-connection-text">Voice agent is starting</span>
+            </span>
           </button>
           <button type="button" class="pm-voice-snap-arrow pm-voice-snap-arrow-down" id="pm-voice-snap-down" aria-label="Swipe down to voice controls">
             <span aria-hidden="true">&#8595;</span>
@@ -25604,6 +26637,90 @@ export async function renderVoicePage(page, ctx) {
   const previewHost = page.querySelector('#pm-voice-preview-host');
   const waveCanvas = page.querySelector('#pm-voice-wave-canvas');
   const orbParticleCanvas = page.querySelector('#pm-voice-orb-particles');
+  const thinkingOrbHost = page.querySelector('#pm-thinking-orb-host');
+  let mobileThinkingOrb = null;
+  try {
+    mobileThinkingOrb = thinkingOrbHost
+      ? mountThinkingOrb(thinkingOrbHost, { state: 'thinking', size: 64, theme: 'auto' })
+      : null;
+  } catch (error) {
+    console.warn('[mobile voice] thinking orb failed to mount:', error);
+  }
+  __pmVoice.thinkingOrbController = mobileThinkingOrb;
+  __pmVoice.thinkingOrbControllerOwner = voiceRenderToken;
+  const voiceConnectionPill = page.querySelector('#pm-voice-connection-pill');
+  const voiceConnectionText = page.querySelector('#pm-voice-connection-text');
+  let voiceConnectionHideTimer = 0;
+  let voiceConnectionPollTimer = 0;
+  let voiceConnectionStage = '';
+  const _hideVoiceConnectionPill = ({ preserveStage = false } = {}) => {
+    if (voiceConnectionHideTimer) clearTimeout(voiceConnectionHideTimer);
+    voiceConnectionHideTimer = 0;
+    if (!preserveStage) voiceConnectionStage = '';
+    voiceConnectionPill?.classList.remove('visible', 'success', 'error', 'reconnecting');
+    if (voiceConnectionPill) voiceConnectionPill.hidden = true;
+  };
+  const _setVoiceConnectionPill = (stage = 'starting', message = '') => {
+    if (!voiceConnectionPill || !_isActiveVoiceRender()) return;
+    const normalized = String(stage || '').trim().toLowerCase();
+    if (voiceConnectionHideTimer) clearTimeout(voiceConnectionHideTimer);
+    voiceConnectionHideTimer = 0;
+    if (normalized === 'disconnected' || normalized === 'idle') {
+      _hideVoiceConnectionPill();
+      return;
+    }
+    const isConnected = normalized === 'connected' || normalized === 'ready';
+    const isError = normalized === 'error' || normalized === 'failed';
+    const isReconnecting = normalized === 'reconnecting' || normalized === 'retrying';
+    if (isConnected && voiceConnectionStage === 'connected') return;
+    const label = isConnected
+      ? 'Voice agent connected'
+      : isError
+        ? 'Voice agent could not connect'
+        : String(message || '').trim() || (isReconnecting ? 'Voice agent is reconnecting' : 'Voice agent is starting');
+    voiceConnectionStage = isConnected ? 'connected' : normalized || 'starting';
+    voiceConnectionText && (voiceConnectionText.textContent = label);
+    voiceConnectionPill.hidden = false;
+    voiceConnectionPill.classList.toggle('success', isConnected);
+    voiceConnectionPill.classList.toggle('error', isError);
+    voiceConnectionPill.classList.toggle('reconnecting', isReconnecting);
+    voiceConnectionPill.classList.add('visible');
+    if (isConnected) {
+      voiceConnectionHideTimer = setTimeout(() => {
+        if (voiceConnectionStage === 'connected') _hideVoiceConnectionPill({ preserveStage: true });
+      }, 920);
+    }
+  };
+  const _voiceAgentConnectionEventHandler = (event) => {
+    const detail = event?.detail || {};
+    if (!_isMobileRealtimeAgentMode() && String(detail.stage || '').toLowerCase() !== 'disconnected') return;
+    _setVoiceConnectionPill(detail.stage, detail.message);
+  };
+  window.addEventListener('pm-mobile-voice-agent-connection', _voiceAgentConnectionEventHandler);
+  if (_isMobileRealtimeAgentMode() && ctx?.autoStart === true && !__pmRealtimeAgent?.conn?.dc) {
+    _setVoiceConnectionPill('starting');
+  }
+  if (_isMobileRealtimeAgentMode()) {
+    const syncVoiceConnectionPill = () => {
+      if (!_isActiveVoiceRender()) return;
+      if (!_isMobileRealtimeAgentMode()) {
+        _hideVoiceConnectionPill();
+        return;
+      }
+      const conn = __pmRealtimeAgent?.conn;
+      if (conn?.backendReady === true) {
+        if (voiceConnectionStage !== 'connected') _setVoiceConnectionPill('connected');
+      } else if (__pmRealtimeAgent?.connecting || conn?.dc?.readyState === 'open') {
+        // A live data channel/socket only proves the browser transport is up.
+        // Keep the pill in startup until the realtime session itself confirms
+        // that its backend configuration and voice runtime are ready.
+        if (voiceConnectionStage === 'error') return;
+        if (voiceConnectionStage !== 'starting' && voiceConnectionStage !== 'reconnecting') _setVoiceConnectionPill('starting');
+      }
+    };
+    syncVoiceConnectionPill();
+    voiceConnectionPollTimer = window.setInterval(syncVoiceConnectionPill, 260);
+  }
   viewTranscriptBtn?.addEventListener('click', () => {
     const sid = String(__pmVoice?.room?.sessionId || __pmVoice?.targetSessionId || '').trim();
     if (sid.startsWith('voice_room_')) navigate?.(`#mobile/chat/${encodeURIComponent(sid)}/voice-room`);
@@ -25883,20 +27000,30 @@ export async function renderVoicePage(page, ctx) {
     if (voiceWaveCtx) voiceWaveCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function _connectVoiceWaveAnalyser() {
-    if (!__pmVoice.listening) return false;
-    const stream = __pmVoice.warmMicStream;
+  function _connectVoiceWaveAnalyser(streamOverride = null) {
+    if (!__pmVoice.listening && !streamOverride) return false;
+    const candidates = [
+      streamOverride,
+      __pmVoice.warmMicStream,
+      realtimeTranscription?.stream,
+      xaiStreamingStt?.stream,
+      __pmRealtimeAgent?.conn?.micStream,
+      __pmRealtimeAgent?.conn?.xaiCapture?.stream,
+    ];
+    const stream = candidates.find((candidate) => candidate?.getAudioTracks?.().some((track) => track.readyState === 'live')) || null;
     const live = stream?.getAudioTracks?.().some(track => track.readyState === 'live');
     if (!live) return false;
     try {
       if (voiceWaveStream !== stream || !voiceWaveAnalyser) {
         try { voiceWaveSource?.disconnect?.(); } catch {}
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        voiceWaveAudioCtx = voiceWaveAudioCtx || (AudioCtx ? new AudioCtx() : null);
+        voiceWaveAudioCtx = voiceWaveAudioCtx || __pmVoice.audioCtx || (AudioCtx ? new AudioCtx() : null);
         if (!voiceWaveAudioCtx) return false;
         voiceWaveAnalyser = voiceWaveAudioCtx.createAnalyser();
         voiceWaveAnalyser.fftSize = 256;
-        voiceWaveAnalyser.smoothingTimeConstant = 0.72;
+        // Keep the analyser itself responsive; the orb applies its own attack
+        // and release smoothing after this sample is read.
+        voiceWaveAnalyser.smoothingTimeConstant = 0.38;
         voiceWaveSource = voiceWaveAudioCtx.createMediaStreamSource(stream);
         voiceWaveSource.connect(voiceWaveAnalyser);
         voiceWaveBins = new Uint8Array(voiceWaveAnalyser.frequencyBinCount);
@@ -26204,9 +27331,7 @@ void main() {
     voiceWaveRaf = requestAnimationFrame(_drawVoiceWave);
     window.addEventListener('resize', _resizeVoiceWaveCanvas);
   }
-  if (orbParticleCanvas) {
-    _resizeVoiceOrbParticles();
-    window.addEventListener('resize', _resizeVoiceOrbParticles);
+  if (mobileThinkingOrb) {
     voiceOrbReactionRaf = requestAnimationFrame(_drawStandaloneOrbReaction);
   }
 
@@ -26560,7 +27685,8 @@ void main() {
   }
 
   function _sampleVoiceInputLevel() {
-    if (!_connectVoiceWaveAnalyser() || !voiceWaveAnalyser) return 0;
+    const processorLevel = Math.max(0, Math.min(1, Number(xaiStreamingStt?.audioLevel || 0) || 0));
+    if (!_connectVoiceWaveAnalyser() || !voiceWaveAnalyser) return processorLevel;
     if (!voiceOrbTimeData || voiceOrbTimeData.length !== voiceWaveAnalyser.fftSize) {
       voiceOrbTimeData = new Uint8Array(voiceWaveAnalyser.fftSize);
     }
@@ -26574,13 +27700,13 @@ void main() {
       if (magnitude > peak) peak = magnitude;
     }
     const rms = Math.sqrt(sumSquares / Math.max(1, voiceOrbTimeData.length));
-    return (rms * .78) + (peak * .22);
+    return Math.max(processorLevel, (rms * .78) + (peak * .22));
   }
 
   function _drawStandaloneOrbReaction() {
     if (!mic) return;
     // Both the standalone Voice page and inline chat use the same live
-    // microphone meter. The particle field and sphere share one smoothed
+    // microphone meter. The published ThinkingOrb receives one smoothed
     // level, so the orb remains visually identical across surfaces.
     const reactive = !!__pmVoice.listening;
     const rawLevel = reactive ? _sampleVoiceInputLevel() : 0;
@@ -26591,27 +27717,18 @@ void main() {
     } else {
       voiceOrbNoiseFloor += (.018 - voiceOrbNoiseFloor) * .025;
     }
-    const signal = Math.max(0, rawLevel - voiceOrbNoiseFloor - .004);
-    const target = reactive ? Math.max(0, Math.min(1, Math.pow(signal * 10.5, .72))) : 0;
-    const smoothing = target > voiceOrbAudioLevel ? .2 : .115;
+    const signal = Math.max(0, rawLevel - voiceOrbNoiseFloor - .003);
+    const audioTarget = reactive ? Math.max(0, Math.min(1, Math.pow(signal * 16, .62))) : 0;
+    const transcriptPulse = Math.max(0, Number(__pmVoice.thinkingOrbAudioPulse || 0) || 0);
+    __pmVoice.thinkingOrbAudioPulse = Math.max(0, transcriptPulse * .86 - .006);
+    const target = Math.max(audioTarget, transcriptPulse);
+    const smoothing = target > voiceOrbAudioLevel ? .42 : .16;
     voiceOrbAudioLevel += (target - voiceOrbAudioLevel) * smoothing;
     if (voiceOrbAudioLevel < .004) voiceOrbAudioLevel = 0;
-    const now = performance.now();
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const delta = reducedMotion
-      ? 0
-      : voiceOrbParticleLastFrame ? Math.min(.05, Math.max(.001, (now - voiceOrbParticleLastFrame) / 1000)) : .016;
-    voiceOrbParticleLastFrame = now;
-    voiceOrbSpin = (voiceOrbSpin + delta * (8 + voiceOrbAudioLevel * 42)) % 360;
-    const spinRadians = voiceOrbSpin * Math.PI / 180;
-    const gridSquash = .52 + Math.abs(Math.cos(spinRadians)) * .48;
-    const gridRotation = Math.sin(spinRadians) * 8;
     mic.style.setProperty('--pm-orb-audio', voiceOrbAudioLevel.toFixed(3));
-    mic.style.setProperty('--pm-orb-grid-squash', gridSquash.toFixed(3));
-    mic.style.setProperty('--pm-orb-grid-rotation', `${gridRotation.toFixed(2)}deg`);
     mic.style.setProperty('--pm-orb-lift', `${(-voiceOrbAudioLevel * 7).toFixed(2)}px`);
-    mic.classList.toggle('pm-orb-sound-reactive', reactive);
-    _drawOrbParticles(reducedMotion ? 0 : now, voiceOrbAudioLevel, reactive || !!(__pmVoice.speaking || __pmVoice.realtimeSpeechActiveResponse));
+    mobileThinkingOrb?.setAudioLevel(voiceOrbAudioLevel);
+    mic.classList.toggle('pm-orb-sound-reactive', reactive || transcriptPulse > .02);
     voiceOrbReactionRaf = requestAnimationFrame(_drawStandaloneOrbReaction);
   }
 
@@ -27073,12 +28190,18 @@ void main() {
       if (voiceModeIntroTimer) clearTimeout(voiceModeIntroTimer);
       if (voiceToolStatusTimer) clearTimeout(voiceToolStatusTimer);
       if (voiceToolStatusFadeTimer) clearTimeout(voiceToolStatusFadeTimer);
+      if (voiceConnectionHideTimer) clearTimeout(voiceConnectionHideTimer);
+      if (voiceConnectionPollTimer) clearInterval(voiceConnectionPollTimer);
       voiceSnapTimer = 0;
       voiceOrbHoldTimer = 0;
       inlineOrbHoldTimer = 0;
       voiceModeIntroTimer = 0;
       voiceToolStatusTimer = 0;
       voiceToolStatusFadeTimer = 0;
+      voiceConnectionHideTimer = 0;
+      voiceConnectionPollTimer = 0;
+      voiceConnectionPill?.classList.remove('visible', 'success', 'error', 'reconnecting');
+      if (voiceConnectionPill) voiceConnectionPill.hidden = true;
     });
     voiceOrbGestureActive = false;
     voiceOrbGestureHolding = false;
@@ -27106,6 +28229,14 @@ void main() {
       __pmVoice.clearToolStatus = null;
       __pmVoice.toolStatusOwner = null;
     }
+    if (__pmVoice.thinkingOrbControllerOwner === voiceRenderToken) {
+      safe('thinking_orb', () => mobileThinkingOrb?.destroy?.());
+      __pmVoice.thinkingOrbController = null;
+      __pmVoice.thinkingOrbControllerOwner = null;
+    }
+    if (wasActiveVoiceRender && __pmVoice.activeVoiceToolCalls instanceof Set) {
+      __pmVoice.activeVoiceToolCalls.clear();
+    }
     if (__pmVoice.statusEl === statusEl) __pmVoice.statusEl = null;
     if (__pmVoice.hintEl === hintEl) __pmVoice.hintEl = null;
     safe('previous_cleanup', () => { previousVoiceCleanup?.(); });
@@ -27122,6 +28253,7 @@ void main() {
     safe('window_listeners', () => {
       window.removeEventListener('resize', _resizeVoiceWaveCanvas);
       window.removeEventListener('resize', _resizeVoiceOrbParticles);
+      window.removeEventListener('pm-mobile-voice-agent-connection', _voiceAgentConnectionEventHandler);
       document.removeEventListener('pointerdown', _voiceSettingsOutsideHandler, true);
     });
     safe('wave_disconnect', () => { voiceWaveSource?.disconnect?.(); });
@@ -28118,14 +29250,17 @@ void main() {
   // ── Orb state ─────────────────────────────────────────────────────
   function _setOrbState(state) {
     const target = orbEl || document.getElementById('pm-voice-orb');
+    const requestedState = _mobileVoiceToolsAreActive() ? 'solving' : state;
+    const visualState = requestedState === 'listening' ? 'listening' : requestedState === 'solving' ? 'solving' : 'thinking';
+    mobileThinkingOrb?.setState(visualState);
     if (target) {
       target.classList.remove('listening', 'thinking', 'speaking', 'confirmed');
-      if (state) target.classList.add(state);
+      if (requestedState) target.classList.add(requestedState);
     }
-    mic?.classList.toggle('recording', state === 'listening');
-    mic?.classList.toggle('thinking', state === 'thinking');
-    mic?.classList.toggle('confirmed', state === 'confirmed');
-    mic?.classList.toggle('speaking', state === 'speaking' || !!__pmVoice.speaking || !!__pmVoice.realtimeSpeechActiveResponse);
+    mic?.classList.toggle('recording', requestedState === 'listening');
+    mic?.classList.toggle('thinking', requestedState === 'thinking');
+    mic?.classList.toggle('confirmed', requestedState === 'confirmed');
+    mic?.classList.toggle('speaking', requestedState === 'speaking' || !!__pmVoice.speaking || !!__pmVoice.realtimeSpeechActiveResponse);
     _updateVoiceVisualState();
   }
 
@@ -28182,9 +29317,12 @@ void main() {
   }
 
   function _showVoiceToolStatus(text, hint = 'Working') {
-    if (inlineMode) return;
     const clean = _voiceStatusPreviewText(text, '').trim();
     if (!clean) return;
+    const toolStatus = `${clean} ${String(hint || '')}`.toLowerCase();
+    const isUsingTool = /\busing tool\b|\btool (?:progress|finished|failed|complete|completed)\b/.test(toolStatus);
+    _setOrbState(_mobileVoiceToolsAreActive() || (isUsingTool && !/\b(?:finished|failed|complete|completed)\b/.test(toolStatus)) ? 'solving' : 'thinking');
+    if (inlineMode) return;
     _clearVoiceToolStatus({ preserveDisplay: true });
     const sequence = ++voiceToolStatusSequence;
     voiceStage?.classList.remove('pm-voice-mode-intro');
@@ -28689,6 +29827,8 @@ void main() {
       ws.binaryType = 'arraybuffer';
       xaiStreamingStt = { ws, stream, audioContext, source, processor, mutedGain, stopping: false };
       __pmVoice.listening = true;
+      _unlockVoiceAudio();
+      _connectVoiceWaveAnalyser(stream);
       mic.classList.add('recording');
       let ready = false;
       let fellBack = false;
@@ -29013,6 +30153,8 @@ void main() {
 
       dictFallback.style.display = 'none';
       __pmVoice.listening = true;
+      _unlockVoiceAudio();
+      _connectVoiceWaveAnalyser();
       _setOrbState('listening');
       _setStatus('Realtime listening', 'OpenAI Realtime is receiving microphone audio. Release to send.');
       _voiceDebug('realtime-stt-ready', { elapsedMs: Date.now() - realtimeStartedAt });
@@ -29749,13 +30891,15 @@ void main() {
         _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
         chatAiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
+        const toolKey = _mobileVoiceToolKey(evt, label);
         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
         const text = `${label}${args ? `: ${args}` : ''}`;
+        _setMobileVoiceToolActive(true, toolKey, evt);
         _showVoiceToolStatus(label, 'Using tool');
         _appendMobileProcess(chatAiTurn, 'tool', text, evt);
         _appendMobilePrimaryWorkerProcess(chatAiTurn.voicePrimaryLink, 'tool_call', text, evt);
         _applyMobileToolActivity(chatAiTurn, 'call', evt);
-        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_call' });
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_call', force: true });
         if (!realtimeAgentDispatch) {
           _speakVoiceLiveStatus(_voiceLiveToolStatus(evt, 'start'), { minGapMs: 650, staleMs: 3200 });
         }
@@ -29770,6 +30914,7 @@ void main() {
         _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
         chatAiTurn.toolActivityStarted = true;
         const label = _mobileToolLabel(evt);
+        const toolKey = _mobileVoiceToolKey(evt, label);
         const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
         const beforeMedia = _collectMessageMedia(chatAiTurn);
         _collectMediaFromToolEvent(chatAiTurn, evt);
@@ -29777,11 +30922,12 @@ void main() {
         const newMedia = _diffMobileMedia(beforeMedia, _collectMessageMedia(chatAiTurn));
         if (newMedia.length) _enqueueVoicePreviews(newMedia, { transient: false });
         const resultText = `${label}${result ? ` → ${result}` : ' complete'}`;
+        _setMobileVoiceToolActive(false, toolKey, evt);
         _showVoiceToolStatus(`${label} complete`, evt.error ? 'Tool failed' : 'Tool finished');
         _appendMobileProcess(chatAiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
         _appendMobilePrimaryWorkerProcess(chatAiTurn.voicePrimaryLink, evt.error ? 'error' : 'tool_result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
         _applyMobileToolActivity(chatAiTurn, 'result', evt);
-        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_result' });
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_result', force: true });
         cmd.toolStream.push(`${evt.error ? '✗' : '✓'} ${resultText}`);
         if (cmd.expanded) _renderRecent();
       },
@@ -29791,12 +30937,14 @@ void main() {
         moveVoiceWorkerDraftFinalIntoTrace();
         _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
         chatAiTurn.toolActivityStarted = true;
+        const toolKey = _mobileVoiceToolKey(evt, _mobileToolLabel(evt));
+        _setMobileVoiceToolActive(true, toolKey, evt);
         const progressText = `${_mobileToolLabel(evt)}: ${String(evt.message || '').trim()}`;
         _showVoiceToolStatus(progressText, 'Tool progress');
         _appendMobileProcess(chatAiTurn, 'info', progressText, evt);
         _appendMobilePrimaryWorkerProcess(chatAiTurn.voicePrimaryLink, 'status_push', progressText, evt);
         _applyMobileToolActivity(chatAiTurn, 'progress', evt);
-        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_progress' });
+        _notifyMobileChatVoiceUpdate(targetSessionId, { reason: 'voice_tool_progress', force: true });
         if (!realtimeAgentDispatch) {
           _speakVoiceLiveStatus(_voiceLiveToolStatus(evt, 'progress'), { minGapMs: 1200, staleMs: 2600 });
         }
@@ -29870,6 +31018,7 @@ void main() {
       onError: (err) => {
         stopVoiceAgentNarration();
         clearVoiceActiveRun();
+        _setMobileVoiceToolActive(false);
         if (__pmVoice.activeVoiceRuntime?.activeRequestId === cmd.id) __pmVoice.activeVoiceRuntime.isStreamActive = false;
         window.wsEventBus?.off('approval_created', _wsApprovalHandler);
         if (!_activeVoiceCommandApprovalId) _hideVoiceApproval();
@@ -29891,6 +31040,7 @@ void main() {
       onDone: () => {
         stopVoiceAgentNarration();
         clearVoiceActiveRun();
+        _setMobileVoiceToolActive(false);
         if (__pmVoice.activeVoiceRuntime?.activeRequestId === cmd.id) {
           __pmVoice.activeVoiceRuntime.assistantTextSoFar = aiBuf;
           __pmVoice.activeVoiceRuntime.isStreamActive = false;
@@ -29974,6 +31124,7 @@ void main() {
     // + TTS in a single session. No transcript posting, no gateway voice agent
     // decision call. Bypasses the entire split flow when active.
     if (_isMobileRealtimeAgentMode()) {
+      _setVoiceConnectionPill?.('starting');
       let sid = String(__pmVoice.targetSessionId || __pmChat.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
       if (sid === MOBILE_CHAT_SESSION_ID) {
         sid = await _ensureDurableMobileVoiceSession({ title: 'Mobile voice', source: 'realtime_voice_session_created' });
@@ -29983,6 +31134,8 @@ void main() {
       const wakePhrase = _cleanMobileWakePhrase(__pmVoice?.settings?.wakePhrase || '');
       const quietActive = listenMode === 'always_listening' && __pmVoice?.settings?.wakeGateActive === true && !!wakePhrase;
       __pmVoice.listening = true;
+      _unlockVoiceAudio();
+      _connectVoiceWaveAnalyser();
       _setOrbState('listening');
       _setStatus(
         quietActive ? 'Quiet mode' : 'Listening...',
@@ -30183,6 +31336,8 @@ void main() {
       __pmVoice.listening = true;
       _captureVoicePlaybackInterrupt('barge_in');
       _ttsStop();
+      _unlockVoiceAudio();
+      _connectVoiceWaveAnalyser(stream);
       _setOrbState('listening');
       _setVoiceTranscriptStatus('', `Release to transcribe with ${provider}`);
       mic.classList.add('recording');
@@ -30538,65 +31693,126 @@ void main() {
 }
 
 /* ---------------- SCHEDULE ---------------- */
+function _mobileScheduleStatusLabel(s) {
+  const status = String(s?.status || '').toLowerCase();
+  if (status === 'running') return 'RUNNING';
+  if (status === 'paused' || status === 'disabled' || s?.enabled === false) return 'PAUSED';
+  return 'ACTIVE';
+}
+
 function scheduleCardHtml(s) {
-  const next = s.next ? `<div class="pm-kv">${ICONS.clock} Next: <b>${escapeHtml(s.next)}</b></div>` : '';
-  const last = s.last ? `<div class="pm-kv">${ICONS.clock} Last: <b>${escapeHtml(s.last)}</b></div>` : '';
-  const foot = s.assignedTo
-    ? `<span style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--pm-text-soft);">Assigned to: <span class="pm-assign-chip">🤖 ${escapeHtml(s.assignedTo)}</span></span>`
-    : `<span><span style="display:block;font-weight:600;color:var(--pm-text-soft)">${escapeHtml(s.footLeft || '')}</span><span style="display:block;font-size:12px;color:var(--pm-muted)">${escapeHtml(s.footRight || '')}</span></span>`;
+  const statusLabel = _mobileScheduleStatusLabel(s);
+  const statusClass = statusLabel.toLowerCase();
+  const sessionId = String(s.sessionId || '').trim();
+  const next = s.next && s.next !== '—'
+    ? `<div class="pm-schedule-meta-item">${ICONS.clock}<span><small>Next</small><b>${escapeHtml(s.next)}</b></span></div>`
+    : '';
+  const last = s.last && s.last !== '—'
+    ? `<div class="pm-schedule-meta-item">${ICONS.clock}<span><small>Last</small><b>${escapeHtml(s.last)}</b></span></div>`
+    : '';
+  const footLeft = s.assignedTo ? `Assigned to ${s.assignedTo}` : (s.footLeft || '');
+  const footRight = s.footRight || '';
   return `
-    <article class="pm-schedule-card color-${s.color}" data-id="${s.id}" role="button" tabindex="0">
-      <div class="pm-schedule-head">
-        <span class="pm-emoji">${s.emoji}</span>
-        <h3>${escapeHtml(s.name)}</h3>
-        <button class="pm-toggle ${s.enabled ? 'on' : ''}" data-toggle aria-label="Enable schedule"></button>
+    <article class="pm-schedule-card ${sessionId ? 'pm-schedule-card-linked' : ''}" data-id="${escapeHtml(s.id)}" data-session-id="${escapeHtml(sessionId)}" data-linked-chat="${sessionId ? 'true' : 'false'}" role="button" tabindex="0" aria-label="${escapeHtml(s.name || 'Schedule')}${sessionId ? ': open scheduled task chat' : ': no chat session available'}">
+      <div class="pm-schedule-card-kicker">
+        <span class="pm-schedule-state ${statusClass}">${statusLabel}</span>
+        ${s.builtin ? '<span class="pm-schedule-kind">BUILT-IN</span>' : ''}
+        ${sessionId ? `<span class="pm-schedule-linked-label">${ICONS.chat} CHAT</span>` : '<span class="pm-schedule-no-chat-label">NO CHAT SESSION AVAILABLE</span>'}
       </div>
-      <div class="pm-tag-row">
-        <span class="pm-pill ${s.status}">${escapeHtml(s.status)}</span>
-        ${s.builtin ? '<span class="pm-pill builtin">Built-in</span>' : ''}
+      <div class="pm-schedule-head">
+        <span class="pm-emoji" aria-hidden="true">${escapeHtml(s.emoji || '⏰')}</span>
+        <h3>${escapeHtml(s.name)}</h3>
+        <button class="pm-toggle ${s.enabled ? 'on' : ''}" data-toggle aria-label="${s.enabled ? 'Pause' : 'Resume'} schedule"></button>
       </div>
       <p class="pm-schedule-desc">${escapeHtml(s.description)}</p>
-      <div class="pm-kv-grid">${next}${last}</div>
+      ${next || last ? `<div class="pm-schedule-meta">${next}${last}</div>` : ''}
       <div class="pm-schedule-foot">
-        ${foot}
+        <span class="pm-schedule-foot-copy">
+          ${footLeft ? `<strong>${escapeHtml(footLeft)}</strong>` : ''}
+          ${footRight ? `<small>${escapeHtml(footRight)}</small>` : ''}
+        </span>
         <button class="pm-run-btn" data-run>Run Now</button>
       </div>
     </article>
   `;
 }
 
+const MOBILE_SCHEDULE_REPEAT_OPTIONS = [
+  ['manual', 'Never (manual only)'],
+  ['0 * * * *', 'Every hour'],
+  ['0 */3 * * *', 'Every 3 hours'],
+  ['0 */6 * * *', 'Every 6 hours'],
+  ['0 */8 * * *', 'Every 8 hours'],
+  ['0 */12 * * *', 'Every 12 hours'],
+  ['daily', 'Daily (at a specific time)'],
+  ['weekday', 'Weekdays (at a specific time)'],
+  ['every48', 'Every 48 hours (at a specific time)'],
+  ['custom', 'Custom cron expression'],
+];
+
+function _mobileScheduleLocalTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+function _mobileScheduleRepeatState(s) {
+  const cron = String(s?.cron || '').trim();
+  const state = { repeat: cron || '0 * * * *', time: '09:00', pattern: cron };
+  if (!cron) return state;
+  const fixed = new Set(MOBILE_SCHEDULE_REPEAT_OPTIONS.map(([value]) => value));
+  if (fixed.has(cron)) return state;
+  const every48 = cron.match(/^(\d{1,2})\s+(\d{1,2})\s+\*\/2\s+\*\s+\*$/);
+  if (every48) {
+    state.repeat = 'every48';
+    state.time = `${String(every48[2]).padStart(2, '0')}:${String(every48[1]).padStart(2, '0')}`;
+    return state;
+  }
+  const timed = cron.match(/^(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+(1-5|\*)$/);
+  if (timed) {
+    state.repeat = timed[3] === '1-5' ? 'weekday' : 'daily';
+    state.time = `${String(timed[2]).padStart(2, '0')}:${String(timed[1]).padStart(2, '0')}`;
+    return state;
+  }
+  state.repeat = 'custom';
+  return state;
+}
+
+function _mobileSchedulePatternFromEditor(editor, item) {
+  const field = name => String(editor.querySelector(`[data-field="${name}"]`)?.value || '').trim();
+  const repeat = field('repeat');
+  const time = field('time') || '09:00';
+  const [hour, minute] = time.split(':').map(value => Number(value));
+  const safeHour = Number.isFinite(hour) ? Math.max(0, Math.min(23, hour)) : 9;
+  const safeMinute = Number.isFinite(minute) ? Math.max(0, Math.min(59, minute)) : 0;
+  const daily = `${safeMinute} ${safeHour} * * *`;
+  if (repeat === 'daily') return daily;
+  if (repeat === 'weekday') return `${safeMinute} ${safeHour} * * 1-5`;
+  if (repeat === 'every48') return `${safeMinute} ${safeHour} */2 * *`;
+  if (repeat === 'custom') return field('pattern');
+  if (repeat === 'manual') return String(item?.cron || '').trim() || daily;
+  return repeat || daily;
+}
+
 function _mobileScheduleEditorHtml(s) {
   const raw = s.raw || {};
   const skillIds = Array.isArray(s.skillIds) ? s.skillIds.join(', ') : '';
-  const contextRefs = _formatMobileScheduleContextRefs(s.contextRefs || raw.context_refs || raw.contextReferences);
   const ownerValue = String(s.assignedTo || raw.subagent_id || raw.subagentId || raw.team_id || '').trim();
-  const channel = String(s.deliveryChannel || raw.delivery_channel || 'web').trim() || 'web';
-  const timezone = String(s.timezone || raw.timezone || 'UTC').trim() || 'UTC';
-  const tzOptions = ['UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London'];
-  const channelOptions = [
-    ['web', 'Web (notification)'],
-    ['telegram', 'Telegram'],
-    ['discord', 'Discord'],
-    ['whatsapp', 'WhatsApp'],
-    ['email', 'Email'],
-  ];
-  const optionHtml = (value, label, selected) => `<option value="${escapeHtml(value)}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+  const repeatState = _mobileScheduleRepeatState(s);
+  const optionHtml = ([value, label]) => `<option value="${escapeHtml(value)}"${value === repeatState.repeat ? ' selected' : ''}>${escapeHtml(label)}</option>`;
   return `
     <section class="pm-schedule-editor" data-schedule-editor="${escapeHtml(s.id)}">
-      <label>Name<input type="text" data-field="name" value="${escapeHtml(s.name || '')}"></label>
-      <label>Cron Expression<input type="text" data-field="pattern" value="${escapeHtml(s.cron || '')}" placeholder="0 9 * * *"></label>
-      <label>Timezone<select data-field="timezone">
-        ${tzOptions.map(tz => optionHtml(tz, tz, tz === timezone)).join('')}
-        ${tzOptions.includes(timezone) ? '' : optionHtml(timezone, timezone, true)}
-      </select></label>
-      <label>Prompt / Action<textarea data-field="prompt" rows="7">${escapeHtml(s.prompt || s.description || '')}</textarea></label>
-      <label>Run As Agent<input type="text" data-field="subagent" value="${escapeHtml(ownerValue)}" placeholder="Main agent"></label>
-      <label>Attached Skills<input type="text" data-field="skills" value="${escapeHtml(skillIds)}" placeholder="skill-a, skill-b"></label>
-      <label>Context References<textarea data-field="contextRefs" rows="5" placeholder="Title: reference content">${escapeHtml(contextRefs)}</textarea></label>
-      <label>Delivery Channel<select data-field="channel">
-        ${channelOptions.map(([value, label]) => optionHtml(value, label, value === channel)).join('')}
-        ${channelOptions.some(([value]) => value === channel) ? '' : optionHtml(channel, channel, true)}
-      </select></label>
+      <label class="pm-schedule-title-field">Title<input type="text" data-field="name" value="${escapeHtml(s.name || '')}"></label>
+      <label class="pm-schedule-prompt-field">Prompt<textarea data-field="prompt" rows="22" placeholder="What should happen when this schedule runs?">${escapeHtml(s.prompt || s.description || '')}</textarea></label>
+      <label class="pm-schedule-skills-field">Attached skill<input type="text" data-field="skills" value="${escapeHtml(skillIds)}" placeholder="skill-id, skill-id"></label>
+      <label class="pm-schedule-agent-field">Assigned agent<input type="text" data-field="subagent" value="${escapeHtml(ownerValue)}" placeholder="Main agent"></label>
+      <label class="pm-schedule-repeat-field">Repeat
+        <select data-field="repeat">${MOBILE_SCHEDULE_REPEAT_OPTIONS.map(optionHtml).join('')}</select>
+        <span data-repeat-time-wrap><input type="time" data-field="time" value="${escapeHtml(repeatState.time)}"></span>
+        <span data-repeat-custom-wrap><input type="text" data-field="pattern" value="${escapeHtml(repeatState.pattern)}" placeholder="0 9 * * *"></span>
+      </label>
       <div class="pm-schedule-editor-actions">
         <button type="button" class="pm-run-btn" data-schedule-close>Cancel</button>
         <button type="button" class="pm-run-btn primary" data-schedule-save>Save Changes</button>
@@ -30651,11 +31867,10 @@ function _collectMobileSchedulePayload(editor, item) {
   const field = name => String(editor.querySelector(`[data-field="${name}"]`)?.value || '').trim();
   const raw = item.raw || {};
   const name = field('name');
-  const pattern = field('pattern');
+  const pattern = _mobileSchedulePatternFromEditor(editor, item);
   const prompt = field('prompt');
   const subagentId = field('subagent');
   const skillIds = _splitMobileScheduleList(field('skills'));
-  const contextRefs = _parseMobileScheduleContextRefs(field('contextRefs'), item);
   if (!name) throw new Error('Name required');
   if (!pattern) throw new Error('Cron expression required');
   if (!prompt) throw new Error('Prompt/action required');
@@ -30663,17 +31878,16 @@ function _collectMobileSchedulePayload(editor, item) {
     name,
     pattern,
     prompt,
-    timezone: field('timezone') || 'UTC',
-    delivery_channel: field('channel') || 'web',
+    timezone: _mobileScheduleLocalTimezone(),
+    delivery_channel: 'web',
     confirm: true,
     ...(String(raw.team_id || '').trim() && !subagentId ? { team_id: String(raw.team_id).trim() } : {}),
     ...(!String(raw.team_id || '').trim() || subagentId ? { subagent_id: subagentId } : {}),
     skillIds,
-    context_refs: contextRefs,
   };
 }
 
-function _toggleMobileScheduleEditor({ body, card, item, page }) {
+function _toggleMobileScheduleEditor({ body, card, item, page, navigate }) {
   if (!body || !card || !item) return;
   const open = card.nextElementSibling?.matches?.('.pm-schedule-editor');
   body.querySelectorAll('.pm-schedule-editor').forEach(el => el.remove());
@@ -30686,6 +31900,16 @@ function _toggleMobileScheduleEditor({ body, card, item, page }) {
   card.classList.add('open');
   card.insertAdjacentHTML('afterend', _mobileScheduleEditorHtml(item));
   const editor = card.nextElementSibling;
+  const repeat = editor.querySelector('[data-field="repeat"]');
+  const timeWrap = editor.querySelector('[data-repeat-time-wrap]');
+  const customWrap = editor.querySelector('[data-repeat-custom-wrap]');
+  const syncRepeatFields = () => {
+    const value = repeat?.value || '';
+    if (timeWrap) timeWrap.style.display = ['daily', 'weekday', 'every48'].includes(value) ? '' : 'none';
+    if (customWrap) customWrap.style.display = value === 'custom' ? '' : 'none';
+  };
+  repeat?.addEventListener('change', syncRepeatFields);
+  syncRepeatFields();
   editor.querySelector('[data-schedule-close]')?.addEventListener('click', () => {
     editor.remove();
     card.classList.remove('open');
@@ -30700,12 +31924,191 @@ function _toggleMobileScheduleEditor({ body, card, item, page }) {
       const result = await updateMobileSchedule(item, payload);
       if (!result || result.success === false) throw new Error(result?.error || 'Save failed');
       pmToast('Schedule saved', 'success');
-      await renderSchedulePage(page);
+      await renderSchedulePage(page, { navigate });
     } catch (err) {
       pmToast(err.message || 'Save failed', 'error');
       btn.disabled = false;
       btn.textContent = prev;
     }
+  });
+}
+
+function _wireMobileScheduleEditor(editor, { item, navigate, onCancel } = {}) {
+  if (!editor || !item) return;
+  const repeat = editor.querySelector('[data-field="repeat"]');
+  const timeWrap = editor.querySelector('[data-repeat-time-wrap]');
+  const customWrap = editor.querySelector('[data-repeat-custom-wrap]');
+  const syncRepeatFields = () => {
+    const value = repeat?.value || '';
+    if (timeWrap) timeWrap.style.display = ['daily', 'weekday', 'every48'].includes(value) ? '' : 'none';
+    if (customWrap) customWrap.style.display = value === 'custom' ? '' : 'none';
+  };
+  repeat?.addEventListener('change', syncRepeatFields);
+  syncRepeatFields();
+  editor.querySelector('[data-schedule-close]')?.addEventListener('click', () => {
+    if (typeof onCancel === 'function') onCancel();
+    else navigate?.('#mobile/schedule');
+  });
+  editor.querySelector('[data-schedule-save]')?.addEventListener('click', async (event) => {
+    const btn = event.currentTarget;
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    try {
+      const payload = _collectMobileSchedulePayload(editor, item);
+      const result = await updateMobileSchedule(item, payload);
+      if (!result || result.success === false) throw new Error(result?.error || 'Save failed');
+      pmToast('Schedule saved', 'success');
+      navigate?.('#mobile/schedule');
+    } catch (err) {
+      pmToast(err.message || 'Save failed', 'error');
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+  });
+}
+
+export async function renderScheduleEditorPage(page, { scheduleId, navigate } = {}) {
+  try { page.__pmScheduleCleanup?.(); } catch {}
+  _closeMobileScheduleActionPopover();
+  const header = renderMobileHeader({ title: 'Edit Schedule', online: true, leftIcon: 'back' });
+  page.innerHTML = `
+    ${header}
+    <div class="pm-body pm-schedule-editor-page" id="pm-schedule-editor-body">
+      <div class="pm-card" style="text-align:center;color:var(--pm-muted);">Loading schedule…</div>
+    </div>
+  `;
+  wireHeaderActions(page, { onBack: () => navigate?.('#mobile/schedule') });
+
+  const body = page.querySelector('#pm-schedule-editor-body');
+  let items = [];
+  try {
+    items = await loadMobileSchedules({ force: true });
+  } catch (err) {
+    body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.calendar}</div><h2>Couldn’t load schedule</h2><p>${escapeHtml(err.message || 'Network error')}</p></div>`;
+    return;
+  }
+  const item = items.find((candidate) => String(candidate?.id || '') === String(scheduleId || ''));
+  if (!item) {
+    body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.calendar}</div><h2>Schedule not found</h2><p>This schedule isn’t available right now.</p></div>`;
+    return;
+  }
+  if (item.kind !== 'cron') {
+    body.innerHTML = `<div class="pm-empty"><div class="pm-empty-icon">${ICONS.calendar}</div><h2>This schedule cannot be edited</h2><p>Built-in schedules can be toggled or run from the schedule card.</p></div>`;
+    return;
+  }
+  body.innerHTML = _mobileScheduleEditorHtml(item);
+  _wireMobileScheduleEditor(body.querySelector('[data-schedule-editor]'), {
+    item,
+    navigate,
+    onCancel: () => navigate?.('#mobile/schedule'),
+  });
+}
+
+function _closeMobileScheduleActionPopover() {
+  const popover = document.getElementById('pm-schedule-action-popover');
+  try { popover?._pmScheduleCleanup?.(); } catch {}
+  document.getElementById('pm-schedule-action-popover-overlay')?.remove();
+  popover?.remove();
+  document.body?.classList.remove('pm-mobile-overlay-open');
+  document.documentElement?.classList.remove('pm-schedule-context-open');
+}
+
+function _openMobileScheduleActionPopover({ item, card, body, page, navigate }) {
+  if (!item || !card) return;
+  _closeMobileScheduleActionPopover();
+
+  const overlay = document.createElement('button');
+  overlay.type = 'button';
+  overlay.id = 'pm-schedule-action-popover-overlay';
+  overlay.className = 'pm-schedule-action-popover-overlay';
+  overlay.setAttribute('aria-label', 'Close schedule actions');
+
+  const popover = document.createElement('div');
+  popover.id = 'pm-schedule-action-popover';
+  popover.className = 'pm-schedule-action-popover';
+  popover.setAttribute('role', 'menu');
+  popover.setAttribute('aria-label', `${item.name || 'Schedule'} actions`);
+  const isPaused = item.enabled === false || item.status === 'paused' || item.status === 'disabled';
+  const actions = [
+    item.kind === 'cron' ? { action: 'edit', label: 'Edit', icon: ICONS.compose } : null,
+    { action: 'toggle', label: isPaused ? 'Resume' : 'Pause', icon: isPaused ? ICONS.play : ICONS.pause },
+    item.kind === 'cron' ? { action: 'delete', label: 'Delete', icon: ICONS.trash, danger: true } : null,
+  ].filter(Boolean);
+  popover.innerHTML = actions.map((action) => `
+    <button type="button" class="pm-schedule-action-row${action.danger ? ' danger' : ''}" data-schedule-action="${action.action}" role="menuitem">
+      <span class="pm-schedule-action-icon">${action.icon}</span><span>${action.label}</span>
+    </button>
+  `).join('');
+
+  overlay.addEventListener('click', () => _closeMobileScheduleActionPopover());
+  document.body.append(overlay, popover);
+  document.body.classList.add('pm-mobile-overlay-open');
+  document.documentElement.classList.add('pm-schedule-context-open');
+
+  const rect = card.getBoundingClientRect();
+  const viewportWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+  const viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+  const width = Math.min(236, Math.max(0, viewportWidth - 32));
+  const height = 12 + actions.length * 48;
+  const left = Math.max(16, Math.min(viewportWidth - width - 16, rect.left + (rect.width - width) / 2));
+  const top = Math.max(14, Math.min(viewportHeight - height - 14, rect.top + (rect.height - height) / 2));
+  popover.style.width = `${width}px`;
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+
+  const closeOnEscape = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      _closeMobileScheduleActionPopover();
+    }
+  };
+  const closeOnScroll = () => _closeMobileScheduleActionPopover();
+  window.addEventListener('keydown', closeOnEscape, true);
+  window.addEventListener('scroll', closeOnScroll, true);
+  popover._pmScheduleCleanup = () => {
+    window.removeEventListener('keydown', closeOnEscape, true);
+    window.removeEventListener('scroll', closeOnScroll, true);
+  };
+
+  popover.querySelectorAll('[data-schedule-action]').forEach((button) => {
+    button.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const action = button.getAttribute('data-schedule-action');
+      pmHaptic?.(10);
+      if (action === 'edit') {
+        _closeMobileScheduleActionPopover();
+        navigate?.(`#mobile/schedule/edit/${encodeURIComponent(item.id)}`);
+        return;
+      }
+      if (action === 'toggle') {
+        button.disabled = true;
+        _closeMobileScheduleActionPopover();
+        try {
+          const next = isPaused;
+          const result = await toggleSchedule(item, next);
+          if (!result || result.success === false) throw new Error(result?.error || 'Update failed');
+          pmToast(`${item.name}: ${next ? 'resumed' : 'paused'}`, 'success');
+          await renderSchedulePage(page, { revalidate: false, navigate });
+        } catch (err) {
+          pmToast(err.message || 'Update failed', 'error');
+        }
+        return;
+      }
+      if (action === 'delete') {
+        _closeMobileScheduleActionPopover();
+        if (!window.confirm(`Delete “${item.name || 'this schedule'}”?`)) return;
+        try {
+          const result = await deleteMobileSchedule(item);
+          if (!result || result.success === false) throw new Error(result?.error || 'Delete failed');
+          pmToast('Schedule deleted', 'success');
+          await renderSchedulePage(page, { revalidate: false, navigate });
+        } catch (err) {
+          pmToast(err.message || 'Delete failed', 'error');
+        }
+      }
+    });
   });
 }
 
@@ -30723,7 +32126,9 @@ function scheduleSkeletonHtml() {
   return block.repeat(3);
 }
 
-export async function renderSchedulePage(page, { revalidate = true } = {}) {
+export async function renderSchedulePage(page, { revalidate = true, navigate } = {}) {
+  try { page.__pmScheduleCleanup?.(); } catch {}
+  _closeMobileScheduleActionPopover();
   const initialExtras = `
     <span class="pm-spacer"></span>
     <span class="pm-count-pill" id="pm-sched-count">…</span>
@@ -30738,6 +32143,106 @@ export async function renderSchedulePage(page, { revalidate = true } = {}) {
 
   const body = page.querySelector('#pm-sched-body');
   const count = page.querySelector('#pm-sched-count');
+  let byId = new Map();
+
+  let longPressTimer = null;
+  let longPressCard = null;
+  let longPressItem = null;
+  let longPressStartX = 0;
+  let longPressStartY = 0;
+  let longPressFired = false;
+  const clearLongPress = () => {
+    if (longPressTimer) clearTimeout(longPressTimer);
+    longPressTimer = null;
+    document.documentElement.classList.remove('pm-schedule-long-press-pending');
+  };
+  const itemForCard = (card) => byId?.get(card?.getAttribute('data-id')) || null;
+  const openScheduleChat = (item) => {
+    const sessionId = String(item?.sessionId || '').trim();
+    if (!sessionId) {
+      pmToast('No chat session available for this schedule.', 'info');
+      return;
+    }
+    navigate?.(`#mobile/chat/${encodeURIComponent(sessionId)}`);
+  };
+  const onSchedulePointerDown = (event) => {
+    const card = event.target?.closest?.('.pm-schedule-card');
+    if (!card || !body.contains(card) || event.target?.closest?.('button, input, select, textarea')) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    clearLongPress();
+    longPressCard = card;
+    longPressItem = itemForCard(card);
+    if (!longPressItem) {
+      longPressCard = null;
+      return;
+    }
+    longPressStartX = Number(event.clientX || 0);
+    longPressStartY = Number(event.clientY || 0);
+    longPressFired = false;
+    document.documentElement.classList.add('pm-schedule-long-press-pending');
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      if (!longPressCard || !longPressItem) return;
+      longPressFired = true;
+      pmHaptic?.(18);
+      try { navigator.vibrate?.(12); } catch {}
+      try { window.getSelection?.()?.removeAllRanges(); } catch {}
+      document.documentElement.classList.remove('pm-schedule-long-press-pending');
+      longPressCard.classList.add('pm-schedule-long-pressed');
+      setTimeout(() => longPressCard?.classList.remove('pm-schedule-long-pressed'), 260);
+      _openMobileScheduleActionPopover({ item: longPressItem, card: longPressCard, body, page, navigate });
+    }, 480);
+  };
+  const onSchedulePointerMove = (event) => {
+    if (!longPressTimer) return;
+    if (Math.abs(Number(event.clientX || 0) - longPressStartX) > 10 || Math.abs(Number(event.clientY || 0) - longPressStartY) > 10) {
+      clearLongPress();
+      longPressCard = null;
+      longPressItem = null;
+    }
+  };
+  const onSchedulePointerUp = () => {
+    clearLongPress();
+  };
+  const onScheduleContextMenu = (event) => {
+    if (event.target?.closest?.('.pm-schedule-card')) event.preventDefault();
+  };
+  const onScheduleClick = (event) => {
+    const card = event.target?.closest?.('.pm-schedule-card');
+    if (!card || !body.contains(card)) return;
+    if (event.target?.closest?.('button, input, select, textarea')) return;
+    if (longPressFired && longPressCard === card) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      longPressFired = false;
+      longPressCard = null;
+      longPressItem = null;
+      return;
+    }
+    openScheduleChat(itemForCard(card));
+  };
+  const cleanup = () => {
+    clearLongPress();
+    longPressCard = null;
+    longPressItem = null;
+    _closeMobileScheduleActionPopover();
+    body.removeEventListener('pointerdown', onSchedulePointerDown);
+    body.removeEventListener('pointermove', onSchedulePointerMove);
+    body.removeEventListener('pointerup', onSchedulePointerUp);
+    body.removeEventListener('pointercancel', onSchedulePointerUp);
+    body.removeEventListener('contextmenu', onScheduleContextMenu, true);
+    body.removeEventListener('click', onScheduleClick, true);
+    if (page.__pmScheduleCleanup === cleanup) page.__pmScheduleCleanup = null;
+    if (window.__pmMobileCleanup === cleanup) window.__pmMobileCleanup = null;
+  };
+  page.__pmScheduleCleanup = cleanup;
+  window.__pmMobileCleanup = cleanup;
+  body.addEventListener('pointerdown', onSchedulePointerDown);
+  body.addEventListener('pointermove', onSchedulePointerMove);
+  body.addEventListener('pointerup', onSchedulePointerUp);
+  body.addEventListener('pointercancel', onSchedulePointerUp);
+  body.addEventListener('contextmenu', onScheduleContextMenu, true);
+  body.addEventListener('click', onScheduleClick, true);
 
   const cachedSchedules = getCachedMobilePageData('schedules', 21_600_000);
   let items = [];
@@ -30753,7 +32258,7 @@ export async function renderSchedulePage(page, { revalidate = true } = {}) {
   if (revalidate && Array.isArray(cachedSchedules)) {
     loadMobileSchedules({ force: true }).then((fresh) => {
       if (!page?.isConnected || JSON.stringify(fresh) === JSON.stringify(items)) return;
-      renderSchedulePage(page, { revalidate: false });
+      renderSchedulePage(page, { revalidate: false, navigate });
     }).catch(() => {});
   }
 
@@ -30767,7 +32272,7 @@ export async function renderSchedulePage(page, { revalidate = true } = {}) {
   body.innerHTML = items.map(scheduleCardHtml).join('');
 
   // Wire toggles + run buttons. Map by id back to the item.
-  const byId = new Map(items.map(it => [it.id, it]));
+  byId = new Map(items.map(it => [it.id, it]));
   body.querySelectorAll('.pm-schedule-card').forEach(card => {
     const id = card.getAttribute('data-id');
     const item = byId.get(id);
@@ -30784,6 +32289,7 @@ export async function renderSchedulePage(page, { revalidate = true } = {}) {
           const r = await toggleSchedule(item, next);
           if (!r || r.success === false) throw new Error(r?.error || 'Update failed');
           item.enabled = next;
+          toggle.setAttribute('aria-label', `${next ? 'Pause' : 'Resume'} schedule`);
           pmToast(`${item.name}: ${next ? 'enabled' : 'paused'}`, 'success');
         } catch (err) {
           toggle.classList.toggle('on', !next);
@@ -30814,11 +32320,11 @@ export async function renderSchedulePage(page, { revalidate = true } = {}) {
       });
     }
 
-    card.addEventListener('click', () => _toggleMobileScheduleEditor({ body, card, item, page }));
     card.addEventListener('keydown', (event) => {
+      if (event.target?.closest?.('button, input, select, textarea')) return;
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        _toggleMobileScheduleEditor({ body, card, item, page });
+        openScheduleChat(item);
       }
     });
   });
@@ -31732,6 +33238,11 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
   const update = () => {
     const busy = !!isBusy?.();
     const abortMode = busy && !hasOutbound();
+    if (form) {
+      form.classList.toggle('is-busy', busy);
+      form.setAttribute('aria-busy', busy ? 'true' : 'false');
+      form.dataset.composerState = busy ? (abortMode ? 'stopping' : 'busy') : 'idle';
+    }
     if (input) input.placeholder = busy ? `Queue a message...` : placeholder;
     if (sendBtn) {
       sendBtn.disabled = false;
@@ -31739,6 +33250,7 @@ function _installMobileAgentComposer(slot, prefix, { placeholder, isBusy, onSubm
       sendBtn.classList.toggle('is-voice', !busy && !hasOutbound() && hasVoiceTarget());
       sendBtn.title = abortMode ? 'Stop' : (!busy && !hasOutbound() && hasVoiceTarget()) ? 'Start voice mode' : busy ? 'Queue message' : 'Send';
       sendBtn.setAttribute('aria-label', abortMode ? 'Stop' : (!busy && !hasOutbound() && hasVoiceTarget()) ? 'Start voice mode' : busy ? 'Queue message' : 'Send');
+      sendBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
       sendBtn.innerHTML = abortMode
         ? `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>`
         : (!busy && !hasOutbound() && hasVoiceTarget())
@@ -33487,270 +34999,6 @@ async function _renderMemoryTab(slot, teamId, team) {
   `;
 }
 
-/* ---------------- PAIRING ---------------- */
-
-function _deviceFingerprint() {
-  try {
-    let fp = localStorage.getItem('pm_device_fp');
-    if (!fp) {
-      fp = (crypto?.randomUUID?.() || (Date.now().toString(36) + Math.random().toString(36).slice(2)));
-      localStorage.setItem('pm_device_fp', fp);
-    }
-    return fp;
-  } catch { return 'unknown'; }
-}
-
-function _pairRequestCacheKey(code) {
-  return `pm_pair_request_${encodeURIComponent(String(code || '').trim()).slice(0, 180)}`;
-}
-
-function _loadPairRequestCache(code) {
-  try {
-    const key = _pairRequestCacheKey(code);
-    const raw = sessionStorage.getItem(key);
-    if (!raw) return null;
-    const cached = JSON.parse(raw);
-    if (!cached?.requestId) return null;
-    const expiresAt = Number(cached.expiresAt || 0);
-    if (expiresAt && expiresAt < Date.now() - 30_000) {
-      sessionStorage.removeItem(key);
-      return null;
-    }
-    return cached;
-  } catch { return null; }
-}
-
-function _storePairRequestCache(code, request) {
-  try {
-    if (!request?.requestId) return;
-    sessionStorage.setItem(_pairRequestCacheKey(code), JSON.stringify({
-      requestId: request.requestId,
-      expiresAt: request.expiresAt || (Date.now() + 10 * 60 * 1000),
-    }));
-  } catch {}
-}
-
-function _clearPairRequestCache(code) {
-  try { sessionStorage.removeItem(_pairRequestCacheKey(code)); } catch {}
-}
-
-function _suggestedDeviceName() {
-  const ua = navigator.userAgent || '';
-  if (/iPhone/i.test(ua))  return 'iPhone';
-  if (/iPad/i.test(ua))    return 'iPad';
-  if (/Android/i.test(ua)) return /Mobile/i.test(ua) ? 'Android phone' : 'Android tablet';
-  if (/Macintosh/i.test(ua)) return 'Mac';
-  if (/Windows/i.test(ua))   return 'Windows';
-  return 'Mobile device';
-}
-
-async function _ensureAccountBeforePairing(setStage) {
-  const current = getAccount();
-  if (current?.accessActive || current?.purchaseActive || current?.subscriptionActive || current?.isAdmin) return true;
-  const result = await checkSessionDetailed({ timeoutMs: 3000 }).catch(() => null);
-  const account = result?.account || getAccount();
-  if (result?.authenticated && (account?.accessActive || account?.purchaseActive || account?.subscriptionActive || account?.isAdmin)) return true;
-
-  setStage({
-    title: 'Sign in to pair',
-    sub: 'Use your Prometheus account first. After login, this phone will ask the desktop for approval.',
-    status: '',
-    actions: '',
-  });
-
-  await new Promise((resolve) => {
-    mountLoginScreen(() => resolve(true));
-  });
-  return true;
-}
-
-export async function renderPairPage(page, { code, navigate }) {
-  page.innerHTML = `
-    ${renderMobileHeader({ title: 'Pair phone', online: false, leftIcon: 'menu' })}
-    <div class="pm-body" style="display:flex;flex-direction:column;align-items:center;text-align:center;padding-top:8px;">
-      <div id="pm-pair-stage" style="max-width:360px;width:100%;">
-        <div class="pm-voice-orb" style="width:min(60vw,200px);margin:14px auto 24px;" aria-hidden="true">
-          <svg viewBox="0 0 200 200" style="width:100%;height:100%;">
-            <defs>
-              <radialGradient id="pm-pair-core" cx="35%" cy="32%" r="70%">
-                <stop offset="0%" stop-color="#fff6e6" stop-opacity="0.95"/>
-                <stop offset="40%" stop-color="#ffd9a8" stop-opacity="0.55"/>
-                <stop offset="100%" stop-color="var(--pm-orange)" stop-opacity="0.25"/>
-              </radialGradient>
-            </defs>
-            <circle cx="100" cy="100" r="92" fill="url(#pm-pair-core)"/>
-            <text x="100" y="118" text-anchor="middle" font-size="64" font-family="system-ui">🔗</text>
-          </svg>
-        </div>
-        <h2 id="pm-pair-title" style="margin:0 0 6px;font-size:22px;font-weight:800;letter-spacing:-.3px;">Connecting to Prometheus…</h2>
-        <p id="pm-pair-sub" style="margin:0 0 18px;color:var(--pm-muted);font-size:14px;line-height:1.5;">Waiting for approval on your desktop.</p>
-        <div id="pm-pair-status" style="font-size:13px;color:var(--pm-text-soft);"></div>
-        <div id="pm-pair-actions" style="margin-top:24px;display:flex;flex-direction:column;gap:8px;"></div>
-      </div>
-    </div>
-  `;
-  wireHeaderActions(page, {});
-
-  const titleEl  = page.querySelector('#pm-pair-title');
-  const subEl    = page.querySelector('#pm-pair-sub');
-  const statusEl = page.querySelector('#pm-pair-status');
-  const actions  = page.querySelector('#pm-pair-actions');
-
-  function setStage({ title, sub, status, actions: acts }) {
-    if (title != null)  titleEl.textContent = title;
-    if (sub != null)    subEl.textContent   = sub;
-    if (status != null) statusEl.innerHTML  = status;
-    if (acts != null)   actions.innerHTML   = acts;
-  }
-
-  if (code) {
-    await _ensureAccountBeforePairing(setStage);
-  }
-
-  // 0. Already paired? Skip the dance and just go home.
-  if (getDeviceToken()) {
-    const me = await verifyPairingMe();
-    if (me?.success) {
-      setStage({ title: 'Already paired', sub: `Welcome back, ${me.device?.name || 'device'}.`, status: '', actions: `<button class="pm-btn primary" id="pm-pair-go">Continue</button>` });
-      page.querySelector('#pm-pair-go').addEventListener('click', () => navigate('#mobile/chat'));
-      setTimeout(() => navigate('#mobile/chat'), 800);
-      return;
-    }
-    clearDeviceToken();
-  }
-
-  if (!code) {
-    setStage({
-      title: 'Pair this phone',
-      sub: 'Open Prometheus on your desktop, go to Settings > Pairing. Scan the QR, or enter the pair code here from the Home Screen app.',
-      status: '',
-      actions: `
-        <form id="pm-pair-code-form" style="display:flex;flex-direction:column;gap:10px;">
-          <input id="pm-pair-code-input" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="PAIR-ABCD-1234" style="width:100%;box-sizing:border-box;border:1px solid var(--pm-border);border-radius:12px;background:var(--pm-bg-soft);color:var(--pm-text);padding:14px 16px;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:18px;font-weight:800;letter-spacing:.08em;" />
-          <button class="pm-btn primary" type="submit">Pair with code</button>
-          <button class="pm-btn ghost" type="button" id="pm-pair-retry">I scanned the QR</button>
-        </form>`,
-    });
-    const form = page.querySelector('#pm-pair-code-form');
-    const input = page.querySelector('#pm-pair-code-input');
-    input?.focus?.();
-    input?.addEventListener('input', () => { input.value = String(input.value || '').toUpperCase(); });
-    form?.addEventListener('submit', (ev) => {
-      ev.preventDefault();
-      const typedCode = String(input?.value || '').trim();
-      if (!typedCode) {
-        statusEl.innerHTML = '<span style="color:var(--pm-red);">Enter the pair code from desktop Settings.</span>';
-        return;
-      }
-      window.location.href = `${window.location.origin}/?pair=${encodeURIComponent(typedCode)}#mobile/pair`;
-    });
-    page.querySelector('#pm-pair-retry')?.addEventListener('click', () => location.reload());
-    return;
-  }
-
-  if (!code) {
-    setStage({
-      title: 'Pair this phone',
-      sub: 'Open Prometheus on your desktop, go to Settings → Pairing, and scan the QR code that appears.',
-      status: '',
-      actions: `<button class="pm-btn ghost" id="pm-pair-retry">I’ve already scanned</button>`,
-    });
-    page.querySelector('#pm-pair-retry').addEventListener('click', () => location.reload());
-    return;
-  }
-
-  // 1. Claim the QR challenge.
-  let requestId;
-  try {
-    const cachedRequest = _loadPairRequestCache(code);
-    if (cachedRequest?.requestId) {
-      requestId = cachedRequest.requestId;
-      setStage({ status: 'Rejoining pairing request…' });
-    } else {
-      setStage({ status: 'Sending pairing request…' });
-      const r = await claimPairing({
-        code,
-        deviceName: _suggestedDeviceName(),
-        deviceFingerprint: _deviceFingerprint(),
-      });
-      if (!r?.success || !r.requestId) throw new Error(r?.error || 'Failed to claim');
-      requestId = r.requestId;
-      _storePairRequestCache(code, r);
-    }
-  } catch (err) {
-    setStage({
-      title: 'Couldn’t reach Prometheus',
-      sub: err?.body?.error || err.message || 'Failed to claim QR code. It may have expired.',
-      status: '',
-      actions: `<button class="pm-btn primary" id="pm-pair-newqr">Try a new QR</button>`,
-    });
-    page.querySelector('#pm-pair-newqr').addEventListener('click', () => {
-      window.location.href = window.location.origin + '/#mobile/pair';
-    });
-    return;
-  }
-
-  // 2. Poll for approval.
-  setStage({
-    title: 'Waiting for approval',
-    sub: 'Tap Allow on your desktop to finish pairing.',
-    status: '<span style="display:inline-flex;align-items:center;gap:8px;"><span class="pm-pair-spinner" style="display:inline-block;width:14px;height:14px;border:2px solid var(--pm-orange);border-right-color:transparent;border-radius:50%;animation:pm-spin 1s linear infinite;"></span> Listening…</span>',
-    actions: `<button class="pm-btn ghost" id="pm-pair-cancel">Cancel</button>`,
-  });
-
-  // Inject keyframes for the spinner if not present.
-  if (!document.getElementById('pm-pair-anim')) {
-    const s = document.createElement('style');
-    s.id = 'pm-pair-anim';
-    s.textContent = '@keyframes pm-spin{to{transform:rotate(360deg)}}';
-    document.head.appendChild(s);
-  }
-
-  let cancelled = false;
-  page.querySelector('#pm-pair-cancel').addEventListener('click', () => { cancelled = true; navigate('#mobile/chat'); });
-
-  const startedAt = Date.now();
-  const POLL_MS = 1500;
-  while (!cancelled) {
-    if (Date.now() - startedAt > 10 * 60 * 1000) {
-      _clearPairRequestCache(code);
-      setStage({ title: 'Pairing timed out', sub: 'The request expired. Please ask the desktop for a new QR.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Try again</button>` });
-      page.querySelector('#pm-pair-newqr').addEventListener('click', () => { window.location.href = window.location.origin + '/#mobile/pair'; });
-      return;
-    }
-    try {
-      const r = await pollPairing(requestId);
-      if (r.status === 'approved' && r.deviceToken) {
-        _clearPairRequestCache(code);
-        setDeviceToken(r.deviceToken, r.deviceId);
-        // Belt-and-suspenders: write the sticky mobile-mode flag the instant a
-        // device token lands. If localStorage later partially loses the token,
-        // this flag still keeps the phone in mobile mode (it would just send
-        // the user back to the pair screen instead of dropping to desktop UI).
-        try { localStorage.setItem('pm_force_mobile', '1'); } catch {}
-        setStage({ title: 'Paired!', sub: 'Welcome to Prometheus.', status: '✅', actions: '' });
-        setTimeout(() => { window.location.href = window.location.origin + '/#mobile/chat'; }, 900);
-        return;
-      }
-      if (r.status === 'denied') {
-        _clearPairRequestCache(code);
-        setStage({ title: 'Pairing denied', sub: 'Your desktop user denied this request. You can try again with a new QR.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Try again</button>` });
-        page.querySelector('#pm-pair-newqr').addEventListener('click', () => { window.location.href = window.location.origin + '/#mobile/pair'; });
-        return;
-      }
-      if (r.status === 'expired' || r.status === 'not_found') {
-        _clearPairRequestCache(code);
-        setStage({ title: 'QR expired', sub: 'Please generate a fresh QR on your desktop and scan again.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Reload</button>` });
-        page.querySelector('#pm-pair-newqr').addEventListener('click', () => location.reload());
-        return;
-      }
-    } catch (err) {
-      // Network blip — keep trying.
-    }
-    await new Promise(res => setTimeout(res, POLL_MS));
-  }
-}
-
 /* ---------------- MORE / HUB / AUDIT / MEMORY ---------------- */
 
 function _pmCompactNumber(value, suffix = '') {
@@ -33846,6 +35094,17 @@ function _pmProposalFiles(proposal, limit = 2) {
   return chips.length ? `<div class="pm-proposal-files">${chips.join('')}</div>` : '';
 }
 
+function _pmProposalExecutionStepStatus(proposal, step) {
+  const explicit = String(step?.status || step?.state || '').trim().toLowerCase();
+  if (explicit) return explicit.replace(/\s+/g, '_');
+  const proposalStatus = String(proposal?.status || '').trim().toLowerCase();
+  return ['approved', 'executing', 'repairing', 'executed'].includes(proposalStatus) ? 'approved' : 'pending';
+}
+
+function _pmIsApprovedExecutionStep(proposal, step) {
+  return step?.approved === true || step?.isApproved === true || _pmProposalExecutionStepStatus(proposal, step) === 'approved';
+}
+
 function _pmProposalSteps(proposal) {
   const steps = Array.isArray(proposal?.executionSteps) ? proposal.executionSteps : [];
   if (!steps.length) return '';
@@ -33853,9 +35112,12 @@ function _pmProposalSteps(proposal) {
     const title = String(step?.title || step?.description || `Step ${idx + 1}`);
     const kind = String(step?.kind || '').trim();
     const success = String(step?.successCriteria || step?.success_criteria || '').trim();
-    return `<div class="pm-proposal-step">
+    const status = _pmProposalExecutionStepStatus(proposal, step);
+    const approved = _pmIsApprovedExecutionStep(proposal, step);
+    const safeStatus = status.replace(/[^a-z0-9_-]/g, '_');
+    return `<div class="pm-proposal-step ${approved ? 'is-approved' : ''} is-${safeStatus}" data-step-status="${escapeHtml(status)}">
       <b>${idx + 1}</b>
-      <span><strong>${escapeHtml(title)}</strong>${success ? `<em>Success: ${escapeHtml(success)}</em>` : ''}</span>
+      <span><span class="pm-proposal-step-title">${escapeHtml(title)}</span>${success ? `<em>Success: ${escapeHtml(success)}</em>` : ''}</span>
       ${kind ? `<small>${escapeHtml(kind.toUpperCase())}</small>` : ''}
     </div>`;
   }).join('')}</div></section>`;
@@ -36746,6 +38008,7 @@ export async function renderSubagentChatPage(page, { agentId, navigate }) {
   // This route owns a nested message scroller. Ordinary mobile pages use the
   // document scroller, so opt out before the async history renders.
   document.body.classList.add('pm-mobile-subagent-chat-locked');
+  setMobileSubagentReasoningContext(null);
   const sessionId = `subagent_chat_${agentId}`;
   let agentRef = null;
   const header = renderMobileHeader({
@@ -36786,8 +38049,33 @@ export async function renderSubagentChatPage(page, { agentId, navigate }) {
     if (badgeLabel) badgeLabel.textContent = label;
     if (badgeBtn) {
       badgeBtn.title = label;
-      badgeBtn.setAttribute('aria-label', label);
+      badgeBtn.setAttribute('aria-label', `${label} — tap to choose reasoning level`);
     }
+    const modelParts = _mobileSubagentModelParts(agent);
+    setMobileSubagentReasoningContext({
+      agentId: agent.id,
+      provider: modelParts.provider,
+      model: modelParts.model,
+      effort: modelParts.effort,
+      onSaved: ({ effort, agent: savedAgent } = {}) => {
+        if (savedAgent && typeof savedAgent === 'object') {
+          agentRef = { ...agentRef, ...savedAgent, raw: { ...(agentRef?.raw || {}), ...savedAgent } };
+        } else if (agentRef) {
+          agentRef = {
+            ...agentRef,
+            reasoningEffort: String(effort || ''),
+            reasoning_effort: String(effort || ''),
+            raw: { ...(agentRef.raw || {}), reasoning_effort: String(effort || '') },
+          };
+        }
+        const nextLabel = _mobileSubagentHeaderLabel(agentRef || agent);
+        if (badgeLabel) badgeLabel.textContent = nextLabel;
+        if (badgeBtn) {
+          badgeBtn.title = nextLabel;
+          badgeBtn.setAttribute('aria-label', `${nextLabel} — tap to choose reasoning level`);
+        }
+      },
+    });
     // Re-scope plan usage now that we know the agent provider/account.
     window.__pmMobileRefreshContextWindow?.({
       sessionId,
@@ -36801,6 +38089,7 @@ export async function renderSubagentChatPage(page, { agentId, navigate }) {
   page._pmCleanup = () => {
     try { body?._pmCleanup?.(); } catch {}
     try { activeStream?.abort?.(); } catch {}
+    setMobileSubagentReasoningContext(null);
     document.body.classList.remove('pm-mobile-subagent-chat-locked');
   };
 }
@@ -36940,6 +38229,40 @@ async function _renderSubagentRunsTab(slot, agentId) {
   let runs = await loadSubagentRuns(agentId, 50);
   let expandedId = '';
   const details = {};
+  const recoveryComposerStates = new Map();
+  const recoveryComposerRefs = new Map();
+
+  const getRecoveryComposerState = (id) => {
+    const key = String(id || '').trim();
+    if (!recoveryComposerStates.has(key)) {
+      recoveryComposerStates.set(key, {
+        busy: false,
+        queue: [],
+        controller: null,
+        status: '',
+        tone: '',
+      });
+    }
+    return recoveryComposerStates.get(key);
+  };
+
+  const updateRecoveryComposerStatus = (id, message = '', tone = '') => {
+    const key = String(id || '').trim();
+    const state = getRecoveryComposerState(key);
+    state.status = String(message || '').trim();
+    state.tone = String(tone || '').trim();
+    slot.querySelectorAll('[data-sa-run-composer-status]').forEach((statusNode) => {
+      if (String(statusNode.getAttribute('data-sa-run-composer-status') || '') !== key) return;
+      statusNode.textContent = state.status;
+      statusNode.hidden = !state.status;
+      if (state.tone) statusNode.dataset.tone = state.tone;
+      else delete statusNode.dataset.tone;
+    });
+  };
+
+  const refreshRecoveryComposer = (id) => {
+    recoveryComposerRefs.get(String(id || '').trim())?.update?.();
+  };
 
   const render = () => {
   if (!runs.length) {
@@ -37003,12 +38326,16 @@ async function _renderSubagentRunsTab(slot, agentId) {
       ? messages.map((message) => _renderMobileAgentChatBubble(message, { sender: 'Recovery' })).join('')
       : `<div style="font-size:12px;color:var(--pm-muted);padding:8px 2px;">No recovery messages yet.</div>`;
     const prefix = `pm-sa-run-${String(id || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+    const composerState = getRecoveryComposerState(id);
     return `<section class="pm-sa-run-recovery-panel">
       <div class="pm-card-head" style="color:var(--pm-orange);">Recovery Chat</div>
       ${task?.pendingClarificationQuestion ? `<div class="pm-card-body"><strong>Pending question:</strong> ${escapeHtml(String(task.pendingClarificationQuestion))}</div>` : ''}
       ${task?.pauseAnalysis?.message ? `<div class="pm-card-body" style="white-space:pre-wrap;"><strong>Pause analysis:</strong><br>${escapeHtml(String(task.pauseAnalysis.message).slice(0, 1200))}</div>` : ''}
       <div class="pm-sa-run-recovery-thread">${threadHtml}</div>
-      ${canRecover ? `<div class="pm-sa-run-recovery-composer" data-sa-run-composer="${escapeHtml(id)}">${_renderMobileAgentComposerHtml(prefix, 'Reply to this run...')}</div>` : ''}
+      ${canRecover ? `<div class="pm-sa-run-recovery-composer" data-sa-run-composer="${escapeHtml(id)}">
+        ${_renderMobileAgentComposerHtml(prefix, 'Reply to this run...')}
+        <div class="pm-sa-run-composer-status" data-sa-run-composer-status="${escapeHtml(id)}" role="status" aria-live="polite"${composerState.status ? '' : ' hidden'} data-tone="${escapeHtml(composerState.tone)}">${escapeHtml(composerState.status)}</div>
+      </div>` : ''}
     </section>`;
   };
 
@@ -37088,17 +38415,37 @@ async function _renderSubagentRunsTab(slot, agentId) {
       const id = String(host.getAttribute('data-sa-run-composer') || '').trim();
       if (!id) return;
       const prefix = `pm-sa-run-${id.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-      _installMobileAgentComposer(host, prefix, {
-        placeholder: 'Reply to this run...',
-        draftKey: `subagent_run:${agentId}:${id}`,
-        isBusy: () => false,
-        onSubmit: async ({ text, files }) => {
-          const rawText = String(text || '').trim();
-          const rawFiles = Array.isArray(files) ? files : [];
-          if (!rawText && !rawFiles.length) return;
+      const state = getRecoveryComposerState(id);
+      const submitRecoveryPayload = async (payload, { queued = false } = {}) => {
+        const rawText = String(payload?.text || '').trim();
+        const rawFiles = Array.isArray(payload?.files) ? payload.files : [];
+        if (!rawText && !rawFiles.length) return;
+        if (state.busy) {
+          if (state.queue.length >= 8) {
+            updateRecoveryComposerStatus(id, 'Queue is full. Wait for the current reply to finish.', 'error');
+            pmToast('Recovery queue is full.', 'error');
+            return;
+          }
+          state.queue.push({ text: rawText, files: rawFiles });
+          updateRecoveryComposerStatus(id, `Queued reply ${state.queue.length}/8.`, 'queued');
+          pmToast('Recovery reply queued.', 'info');
+          refreshRecoveryComposer(id);
+          return;
+        }
+
+        state.busy = true;
+        state.controller = new AbortController();
+        state.status = '';
+        state.tone = '';
+        refreshRecoveryComposer(id);
+        updateRecoveryComposerStatus(id, queued ? 'Sending queued reply…' : 'Sending recovery reply…', 'busy');
+
+        let completed = false;
+        try {
           let attachmentPreviews = rawFiles;
           if (rawFiles.length) {
-            const uploadResults = await _uploadMobileChatAttachments(rawFiles);
+            updateRecoveryComposerStatus(id, `Uploading ${rawFiles.length === 1 ? 'attachment' : 'attachments'}…`, 'busy');
+            const uploadResults = await _uploadMobileChatAttachments(rawFiles, { signal: state.controller.signal });
             attachmentPreviews = uploadResults.map((r, idx) => ({
               ...(rawFiles[idx] || {}),
               name: r.name || rawFiles[idx]?.name || 'attachment',
@@ -37115,13 +38462,45 @@ async function _renderSubagentRunsTab(slot, agentId) {
             id,
             rawText || (attachmentPreviews.length ? 'Please review the attached file(s).' : ''),
             attachmentPreviews,
+            { signal: state.controller.signal },
           );
           if (data?.task) details[id] = { task: data.task, run: data.run || null, evidenceBus: data.evidenceBus || null };
           runs = await loadSubagentRuns(agentId, 50);
+          completed = true;
+          updateRecoveryComposerStatus(id, data?.resumed ? 'Run resumed.' : 'Reply sent.', 'success');
           pmToast(data?.resumed ? 'Run resumed' : 'Reply sent', 'success');
+        } catch (err) {
+          const stopped = state.controller?.signal?.aborted || err?.name === 'AbortError';
+          if (stopped) {
+            updateRecoveryComposerStatus(id, 'Stopped. The run was not changed.', 'stopped');
+            pmToast('Recovery reply stopped.', 'info');
+          } else {
+            const message = err?.message || 'Recovery reply failed.';
+            updateRecoveryComposerStatus(id, message, 'error');
+            pmToast(message, 'error');
+          }
+        } finally {
+          const next = completed && state.queue.length ? state.queue.shift() : null;
+          state.busy = false;
+          state.controller = null;
           render();
+          if (next) {
+            void submitRecoveryPayload(next, { queued: true });
+          }
+        }
+      };
+      const composer = _installMobileAgentComposer(host, prefix, {
+        placeholder: 'Reply to this run...',
+        draftKey: `subagent_run:${agentId}:${id}`,
+        isBusy: () => state.busy,
+        onAbort: () => {
+          if (!state.busy) return;
+          state.controller?.abort?.();
+          refreshRecoveryComposer(id);
         },
+        onSubmit: (payload) => submitRecoveryPayload(payload),
       });
+      recoveryComposerRefs.set(id, composer);
     });
   }
 

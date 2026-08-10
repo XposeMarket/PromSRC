@@ -146,6 +146,18 @@ function observation(overrides: Partial<GatewaySupervisorObservation> = {}): Gat
 }
 
 {
+  const decision = classifyGatewaySupervisorObservation(observation({
+    healthOk: true,
+    childPid: undefined,
+    childExited: true,
+    portOwnerPids: [],
+    runtimeStatus: null,
+  }));
+  assert.equal(decision.state, 'healthy', 'an existing healthy gateway must win over a dead child');
+  assert.equal(decision.action, 'none');
+}
+
+{
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'prom-supervisor-policy-'));
   try {
     const decision = classifyGatewaySupervisorObservation(observation({

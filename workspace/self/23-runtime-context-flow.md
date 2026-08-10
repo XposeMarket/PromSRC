@@ -65,7 +65,9 @@ buildPersonalityContext() ──────────────── promp
     ├─ [PROMETHEUS_SOUL]  config soul.md      loadSoul()
     ├─ [USER]             workspace/USER.md
     ├─ [SOUL]             workspace/SOUL.md
-    ├─ [MEMORY]           workspace/MEMORY.md  (8k char cap, interactive)
+    ├─ [MEMORY_REFERENCE] local atom compiler over workspace/MEMORY.md (default main path; exact source citations)
+    │    raw [MEMORY] remains for Brain/Thought compatibility turns, explicit full-mode rollback/tests,
+    │    and direct memory_read; it is not the normal main-chat projection
     ├─ [BUSINESS]         workspace/BUSINESS.md  (if enabled)
     ├─ [TODAY_NOTES]      intraday notes       (interactive + team_manager only)
     ├─ [PROJECT_CONTEXT]  project store        (if session is project-bound)
@@ -92,7 +94,7 @@ buildPersonalityContext() ──────────────── promp
     ├─ [CIS_CONTEXT] ─────────────────────── cis-context-builder.ts:104–108
     │    entity-aware business profile
     │
-    ├─ memory_search results ─────────────── interactive + background_agent only
+    ├─ memory_search results ─────────────── bounded best-effort evidence sidecar; never awaited solely for first token
     │
     └─ [REFERENCE_FILES] hint ────────────── prompt-context.ts:1295
          "read self/index.md for architecture"
@@ -109,6 +111,10 @@ Onboarding block (if onboarding_* session) ── meet-prompt.ts:8–105
     ▼
 Final System Prompt → model
 ```
+
+### Durable MEMORY projection note (2026-08-09)
+
+The atom compiler runs locally during gateway-owned snapshot capture. It preserves each selected bullet's exact source text and line range, and the main path intentionally admits all qualifying direct/related atoms subject only to a source-relative context safety ceiling. This is a recall preference: the system does not reintroduce the old arbitrary eight-hit/short-block truncation merely to save prompt tokens. The broad indexed `memory_search` path is secondary evidence retrieval; its automatic compiler excludes canonical `workspace/MEMORY.md` hits to prevent duplicate durable facts, and it may supplement a turn only when it finishes within work already happening. Otherwise generation proceeds with atom context and the user can request explicit search/read.
 
 ---
 
@@ -210,3 +216,9 @@ UI renderers:
 - [21-runtime-prompt-map.md](21-runtime-prompt-map.md) — who gets what, overlap matrix
 - [22-runtime-prompt-verbatim.md](22-runtime-prompt-verbatim.md) — literal strings per block
 - [03-execution-and-prompting.md](03-execution-and-prompting.md) — execution modes overview
+
+## Persistent Chat Sources / Context — 2026-08-08
+
+`src/gateway/routes/chat.router.ts` calls `ResourceStore.getContext(...)` for the active thread after history and Browser state are known. The resulting `<persistent_chat_resources>` block is included in the same first/subsequent-turn prompt assembly path and in the prompt-cache identity. Attached metadata is bounded to a manifest; source text is loaded selectively for pinned, explicit, or query-relevant resources. The initial total resource block cap is 32,000 characters (approximately 8,000 tokens), with per-resource and manifest caps inside `src/gateway/resources/resource-store.ts`.
+
+This layer is deliberately separate from message history, memory, runtime instruction blocks, and process logs. Resource contents are external/untrusted text. A safety event is emitted only when selected content matches the narrow prompt-injection detector; there is no generic “resource warning” on ordinary turns. See [32-persistent-chat-sources.md](32-persistent-chat-sources.md) for entity, lifecycle, Browser, task, artifact, migration, and security details.

@@ -17,10 +17,29 @@ function isTrustedRendererUrl(rawUrl, gatewayUrl) {
   return candidate.origin === gateway.origin;
 }
 
+function isLocalGatewayUrl(rawUrl, gatewayUrl) {
+  const candidate = parseUrl(rawUrl);
+  const gateway = parseUrl(gatewayUrl);
+  if (!candidate || !gateway) return false;
+  if (candidate.username || candidate.password) return false;
+  if (candidate.protocol !== gateway.protocol) return false;
+  const candidatePort = candidate.port || (candidate.protocol === 'https:' ? '443' : '80');
+  const gatewayPort = gateway.port || (gateway.protocol === 'https:' ? '443' : '80');
+  if (candidatePort !== gatewayPort) return false;
+  return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(String(candidate.hostname || '').toLowerCase());
+}
+
 function normalizeExternalUrl(rawUrl) {
   const candidate = parseUrl(rawUrl);
-  if (!candidate || candidate.protocol !== 'https:') return null;
+  if (!candidate || !['http:', 'https:'].includes(candidate.protocol)) return null;
   if (candidate.username || candidate.password) return null;
+  return candidate.href;
+}
+
+function normalizePassthroughExternalUrl(rawUrl) {
+  const candidate = parseUrl(rawUrl);
+  if (!candidate || !['mailto:', 'tel:'].includes(candidate.protocol)) return null;
+  if (/[\r\n]/.test(String(rawUrl || ''))) return null;
   return candidate.href;
 }
 
@@ -56,8 +75,10 @@ function parseWindowsListeningPids(output, port) {
 }
 
 module.exports = {
+  isLocalGatewayUrl,
   isTrustedRendererUrl,
   normalizeEmbeddedBrowserUrl,
   normalizeExternalUrl,
+  normalizePassthroughExternalUrl,
   parseWindowsListeningPids,
 };

@@ -8,7 +8,8 @@ import { getMCPManager } from '../mcp-manager';
 import { resolveHookConfig, buildWebhookRouter } from '../comms/webhook-handler';
 import { getOllamaClient } from '../../agents/ollama-client';
 import { getCredentialHandler } from '../../security/credential-handler';
-import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
+import { normalizeReasoningEffort, normalizeSpeed } from '../../providers/reasoning-capabilities';
+import { resolveConfiguredAgentModel } from '../../agents/model-routing.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import crypto from 'crypto';
@@ -72,6 +73,14 @@ import {
   submitPrometheusQuestionResponse,
 } from '../prometheus-questions';
 import { flushSession, touchSession } from '../session';
+import {
+  AutoSettleSettingsError,
+  getAutoSettleClientSettings,
+  getAutoSettleStatus,
+  hasAutoSettleInput,
+  resolveAutoSettleUpdate,
+  runAutoSettleSweep,
+} from '../auto-settle';
 
 export const router = Router();
 
@@ -583,6 +592,8 @@ function getSessionDefaults() {
     rollingCompactionToolTurns: 5,
     rollingCompactionSummaryMaxWords: 900,
     rollingCompactionModel: '',
+    autoSettleAfterDays: 0,
+    autoSettleAfterMs: 0,
     mainChatGoals: {
       compactionModel: '',
       compactionReasoning: '',
@@ -643,6 +654,7 @@ router.get('/api/settings/session', async (_req, res) => {
     // Keep settings fast and available even when provider metadata endpoints are offline.
   }
   const contextBudget = buildContextBudget(contextProfile);
+  const autoSettleStatus = getAutoSettleStatus();
   res.json({
     success: true,
     session: {
@@ -656,13 +668,15 @@ router.get('/api/settings/session', async (_req, res) => {
       rollingCompactionSummaryMaxWords: toBoundedInt(cfg.rollingCompactionSummaryMaxWords, 80, 1500, d.rollingCompactionSummaryMaxWords),
       rollingCompactionModel: String(cfg.rollingCompactionModel || '').trim(),
       mainChatGoals: mergeMainChatGoalRouting(cfg.mainChatGoals, {}),
+      autoSettle: autoSettleStatus.settings,
       contextProfile,
       contextBudget,
+      autoSettleLastRun: autoSettleStatus.lastRun,
     },
   });
 });
 
-router.post('/api/settings/session', (req, res) => {
+router.post('/api/settings/session', async (req, res) => {
   try {
     const cm = getConfig();
     const current = cm.getConfig() as any;
@@ -670,7 +684,7 @@ router.post('/api/settings/session', (req, res) => {
     const d = getSessionDefaults();
     const body = req.body || {};
 
-    const nextSession = {
+    const nextSession: Record<string, any> = {
       ...existing,
       maxMessages: toBoundedInt(body.maxMessages ?? existing.maxMessages, 20, 500, d.maxMessages),
       compactionThreshold: toBoundedFloat(body.compactionThreshold ?? existing.compactionThreshold, 0.4, 0.95, d.compactionThreshold),
@@ -706,10 +720,63 @@ router.post('/api/settings/session', (req, res) => {
       mainChatGoals: mergeMainChatGoalRouting(body.mainChatGoals, existing.mainChatGoals),
     };
 
-    cm.updateConfig({ session: nextSession } as any);
-    res.json({ success: true, session: nextSession });
+    let autoSettleRun: any = null;
+    const autoSettleInput = body.autoSettle && typeof body.autoSettle === 'object'
+      ? body.autoSettle
+      : body;
+    if (hasAutoSettleInput(autoSettleInput)) {
+      const resolved = resolveAutoSettleUpdate(autoSettleInput);
+      Object.assign(nextSession, resolved.persisted);
+      cm.updateConfig({ session: nextSession } as any);
+      if (resolved.applyExisting && resolved.immediateCutoffAt !== null) {
+        autoSettleRun = await runAutoSettleSweep({
+          reason: 'settings_apply_existing',
+          cutoffAtOverride: resolved.immediateCutoffAt,
+          maxBatches: 10,
+        });
+      }
+    } else {
+      cm.updateConfig({ session: nextSession } as any);
+    }
+
+    res.json({ success: true, session: nextSession, autoSettle: getAutoSettleClientSettings(), autoSettleRun });
   } catch (err: any) {
+    if (err instanceof AutoSettleSettingsError) {
+      res.status(err.statusCode).json({ success: false, error: err.message });
+      return;
+    }
     res.status(500).json({ success: false, error: err.message || 'Failed to save session settings' });
+  }
+});
+
+router.get('/api/settings/auto-settle/status', (_req, res) => {
+  res.json({ success: true, ...getAutoSettleStatus() });
+});
+
+router.post('/api/settings/auto-settle/preview', async (req, res) => {
+  try {
+    const input = req.body?.autoSettle;
+    let settingsOverride: any = undefined;
+    let cutoffAtOverride: number | undefined = undefined;
+    if (hasAutoSettleInput(input)) {
+      const resolved = resolveAutoSettleUpdate(input);
+      settingsOverride = resolved.settings;
+      if (resolved.applyExisting && resolved.immediateCutoffAt !== null) cutoffAtOverride = resolved.immediateCutoffAt;
+    }
+    const summary = await runAutoSettleSweep({
+      dryRun: true,
+      reason: 'settings_preview',
+      settingsOverride,
+      cutoffAtOverride,
+      maxBatches: 10,
+    });
+    res.json({ success: true, summary });
+  } catch (err: any) {
+    if (err instanceof AutoSettleSettingsError) {
+      res.status(err.statusCode).json({ success: false, error: err.message });
+      return;
+    }
+    res.status(500).json({ success: false, error: err?.message || 'Failed to preview auto-settle' });
   }
 });
 router.get('/api/settings/model', (_req, res) => {
@@ -800,6 +867,7 @@ type AgentModelDefaultTemplate = {
   name: string;
   defaults: Record<string, string>;
   reasoning: Record<string, string>;
+  speed: Record<string, 'standard' | 'fast'>;
   accounts: Record<string, string>;
   created_at: string;
   updated_at: string;
@@ -834,6 +902,18 @@ function normalizeAgentModelAccounts(raw: any, defaults: any): Record<string, st
   for (const key of AGENT_MODEL_DEFAULT_KEYS) {
     const value = typeof source[key] === 'string' ? source[key].trim() : '';
     if (value && models[key] && value.length <= 256) normalized[key] = value;
+  }
+  return normalized;
+}
+
+function normalizeAgentModelSpeed(raw: any, defaults: any): Record<string, 'standard' | 'fast'> {
+  const normalized: Record<string, 'standard' | 'fast'> = {};
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const models = normalizeAgentModelDefaults(defaults || {});
+  for (const key of AGENT_MODEL_DEFAULT_KEYS) {
+    if (String(source[key] || '').trim().toLowerCase() !== 'fast' || !models[key]) continue;
+    const { provider, model } = splitProviderModel(models[key]);
+    if (normalizeSpeed(provider, model, source[key]) === 'fast') normalized[key] = 'fast';
   }
   return normalized;
 }
@@ -911,6 +991,7 @@ function normalizeAgentModelTemplates(raw: any): AgentModelDefaultTemplate[] {
       name,
       defaults: normalizeAgentModelDefaults(item.defaults || {}),
       reasoning: normalizeAgentModelReasoning(item.reasoning || {}, item.defaults || {}),
+      speed: normalizeAgentModelSpeed(item.speed || {}, item.defaults || {}),
       accounts: normalizeAgentModelAccounts(item.accounts || {}, item.defaults || {}),
       created_at: String(item.created_at || now),
       updated_at: String(item.updated_at || item.created_at || now),
@@ -951,6 +1032,11 @@ function readTemplateAccountsFromBody(body: any, defaults: any, currentAccounts:
   return normalizeAgentModelAccounts(currentAccounts || {}, defaults);
 }
 
+function readTemplateSpeedFromBody(body: any, defaults: any, currentSpeed: any): Record<string, 'standard' | 'fast'> {
+  if (body?.speed && typeof body.speed === 'object') return normalizeAgentModelSpeed(body.speed, defaults);
+  return normalizeAgentModelSpeed(currentSpeed || {}, defaults);
+}
+
 // GET /api/settings/agent-model-defaults
 // Returns the stored per-type defaults and the per-agent overrides for reference.
 router.get('/api/settings/agent-model-defaults', (_req, res) => {
@@ -959,6 +1045,7 @@ router.get('/api/settings/agent-model-defaults', (_req, res) => {
     success: true,
     defaults: normalizeAgentModelDefaults(cfg.agent_model_defaults || {}),
     reasoning: normalizeAgentModelReasoning(cfg.agent_model_default_reasoning || {}, cfg.agent_model_defaults || {}),
+    speed: normalizeAgentModelSpeed(cfg.agent_model_default_speed || {}, cfg.agent_model_defaults || {}),
     accounts: normalizeAgentModelAccounts(cfg.agent_model_default_accounts || {}, cfg.agent_model_defaults || {}),
     voiceAgent: normalizeVoiceAgentDefault(cfg?.voice?.agent || {}),
     templates: normalizeAgentModelTemplates(cfg.agent_model_default_templates || []),
@@ -1010,6 +1097,15 @@ router.post('/api/settings/agent-model-defaults', (req, res) => {
     ? { ...(current.agent_model_default_reasoning || {}), ...incoming.reasoning }
     : (current.agent_model_default_reasoning || {});
   const normalizedReasoning = normalizeAgentModelReasoning(reasoningSource, normalizedDefaults);
+  const speedSource: Record<string, unknown> = { ...(current.agent_model_default_speed || {}) };
+  if (incoming.speed && typeof incoming.speed === 'object') {
+    for (const key of AGENT_MODEL_DEFAULT_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(incoming.speed, key)) continue;
+      if (String(incoming.speed[key] || '').trim().toLowerCase() === 'fast') speedSource[key] = 'fast';
+      else delete speedSource[key];
+    }
+  }
+  const normalizedSpeed = normalizeAgentModelSpeed(speedSource, normalizedDefaults);
   const accountsSource = incoming.accounts && typeof incoming.accounts === 'object'
     ? incoming.accounts
     : (current.agent_model_default_accounts || {});
@@ -1034,6 +1130,7 @@ router.post('/api/settings/agent-model-defaults', (req, res) => {
   cm.updateConfig({
     agent_model_defaults: normalizedDefaults,
     agent_model_default_reasoning: normalizedReasoning,
+    agent_model_default_speed: normalizedSpeed,
     agent_model_default_accounts: normalizedAccounts,
     voice: { ...(current.voice || {}), agent: voiceAgent },
     ...(defaultTemplateIdx >= 0 ? {
@@ -1043,7 +1140,7 @@ router.post('/api/settings/agent-model-defaults', (req, res) => {
     ...mainChatRoutePatchForDefaults(current, normalizedDefaults, normalizedReasoning, Object.prototype.hasOwnProperty.call(incoming.reasoning || {}, 'main_chat'), normalizedAccounts),
   } as any);
   if (normalizedDefaults.main_chat) resetProvider();
-  res.json({ success: true, defaults: normalizedDefaults, reasoning: normalizedReasoning, accounts: normalizedAccounts, voiceAgent });
+  res.json({ success: true, defaults: normalizedDefaults, reasoning: normalizedReasoning, speed: normalizedSpeed, accounts: normalizedAccounts, voiceAgent });
 });
 
 // GET /api/settings/agent-model-default-templates
@@ -1057,6 +1154,7 @@ router.get('/api/settings/agent-model-default-templates', (_req, res) => {
     defaultTemplateId: cfg.default_agent_model_template || '',
     currentDefaults: normalizeAgentModelDefaults(cfg.agent_model_defaults || {}),
     currentReasoning: normalizeAgentModelReasoning(cfg.agent_model_default_reasoning || {}, cfg.agent_model_defaults || {}),
+    currentSpeed: normalizeAgentModelSpeed(cfg.agent_model_default_speed || {}, cfg.agent_model_defaults || {}),
     currentAccounts: normalizeAgentModelAccounts(cfg.agent_model_default_accounts || {}, cfg.agent_model_defaults || {}),
   });
 });
@@ -1079,6 +1177,7 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
   const now = new Date().toISOString();
   const defaults = readTemplateDefaultsFromBody(body, current.agent_model_defaults || {});
   const reasoning = readTemplateReasoningFromBody(body, defaults, current.agent_model_default_reasoning || {});
+  const speed = readTemplateSpeedFromBody(body, defaults, current.agent_model_default_speed || {});
   const accounts = readTemplateAccountsFromBody(body, defaults, current.agent_model_default_accounts || {});
   const reasoningError = validateAgentModelReasoning(body.reasoning, defaults);
   if (reasoningError) {
@@ -1093,6 +1192,7 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
       name,
       defaults,
       reasoning,
+      speed,
       accounts,
       updated_at: now,
     };
@@ -1103,6 +1203,7 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
       name,
       defaults,
       reasoning,
+      speed,
       accounts,
       created_at: now,
       updated_at: now,
@@ -1117,6 +1218,7 @@ router.post('/api/settings/agent-model-default-templates', (req, res) => {
     ...(isStartupDefault ? {
       agent_model_defaults: defaults,
       agent_model_default_reasoning: reasoning,
+      agent_model_default_speed: speed,
       agent_model_default_accounts: accounts,
       active_agent_model_default_template: template.id,
     } : {}),
@@ -1144,6 +1246,7 @@ router.patch('/api/settings/agent-model-default-templates/:id', (req, res) => {
     ? readTemplateDefaultsFromBody(body, templates[idx].defaults)
     : templates[idx].defaults;
   const reasoning = readTemplateReasoningFromBody(body, defaults, templates[idx].reasoning || {});
+  const speed = readTemplateSpeedFromBody(body, defaults, templates[idx].speed || {});
   const accounts = readTemplateAccountsFromBody(body, defaults, templates[idx].accounts || {});
   const reasoningError = validateAgentModelReasoning(body.reasoning, defaults);
   if (reasoningError) {
@@ -1155,6 +1258,7 @@ router.patch('/api/settings/agent-model-default-templates/:id', (req, res) => {
     name,
     defaults,
     reasoning,
+    speed,
     accounts,
     updated_at: new Date().toISOString(),
   };
@@ -1166,6 +1270,7 @@ router.patch('/api/settings/agent-model-default-templates/:id', (req, res) => {
     ...(isStartupDefault ? {
       agent_model_defaults: defaults,
       agent_model_default_reasoning: reasoning,
+      agent_model_default_speed: speed,
       agent_model_default_accounts: accounts,
       active_agent_model_default_template: template.id,
     } : {}),
@@ -1189,10 +1294,12 @@ router.post('/api/settings/agent-model-default-templates/:id/apply', (req, res) 
   const template = templates[idx];
   const defaults = normalizeAgentModelDefaults(template.defaults);
   const reasoning = normalizeAgentModelReasoning(template.reasoning, template.defaults);
+  const speed = normalizeAgentModelSpeed(template.speed, template.defaults);
   const accounts = normalizeAgentModelAccounts(template.accounts, template.defaults);
   cm.updateConfig({
     agent_model_defaults: defaults,
     agent_model_default_reasoning: reasoning,
+    agent_model_default_speed: speed,
     agent_model_default_accounts: accounts,
     active_agent_model_default_template: template.id,
     // Applying/selecting a template is a durable selection. Without updating
@@ -1206,6 +1313,7 @@ router.post('/api/settings/agent-model-default-templates/:id/apply', (req, res) 
     template,
     defaults: (cm.getConfig() as any).agent_model_defaults || {},
     reasoning: (cm.getConfig() as any).agent_model_default_reasoning || {},
+    speed: (cm.getConfig() as any).agent_model_default_speed || {},
     accounts: (cm.getConfig() as any).agent_model_default_accounts || {},
     activeTemplateId: template.id,
     defaultTemplateId: template.id,
@@ -1227,10 +1335,12 @@ router.post('/api/settings/agent-model-default-templates/:id/set-default', (req,
   const template = templates[idx];
   const defaults = normalizeAgentModelDefaults(template.defaults);
   const reasoning = normalizeAgentModelReasoning(template.reasoning, template.defaults);
+  const speed = normalizeAgentModelSpeed(template.speed, template.defaults);
   const accounts = normalizeAgentModelAccounts(template.accounts, template.defaults);
   cm.updateConfig({
     agent_model_defaults: defaults,
     agent_model_default_reasoning: reasoning,
+    agent_model_default_speed: speed,
     agent_model_default_accounts: accounts,
     active_agent_model_default_template: template.id,
     default_agent_model_template: template.id,
@@ -1242,6 +1352,7 @@ router.post('/api/settings/agent-model-default-templates/:id/set-default', (req,
     template,
     defaults: (cm.getConfig() as any).agent_model_defaults || {},
     reasoning: (cm.getConfig() as any).agent_model_default_reasoning || {},
+    speed: (cm.getConfig() as any).agent_model_default_speed || {},
     activeTemplateId: template.id,
     defaultTemplateId: template.id,
   });
@@ -1297,7 +1408,11 @@ router.patch('/api/agents/:id/model', (req, res) => {
     agents[idx] = rest;
   }
   if (hasReasoning) {
-    const activeModel = model || agents[idx].model || '';
+    const activeModel = model || agents[idx].model || resolveConfiguredAgentModel(current, agents[idx], {
+      isManager: agents[idx].isTeamManager === true,
+      isTeamMember: agents[idx].isTeamMember === true,
+      fallbackToPrimary: true,
+    }).model || '';
     const { provider, model: modelName } = splitProviderModel(activeModel);
     const effort = normalizeReasoningEffort(provider, modelName, requestedReasoning);
     if (requestedReasoning && !effort) {
@@ -1953,12 +2068,13 @@ router.post('/api/settings/provider', (req, res) => {
 // config update. The UI previously fired six POSTs in parallel; every route
 // rewrote config.json, so whichever response finished last could clobber parts
 // of the others and each fetch had its own retry/timeout path.
-router.post('/api/settings/bulk', (req, res) => {
+router.post('/api/settings/bulk', async (req, res) => {
   try {
     const body = req.body || {};
     const configManager = getConfig();
     const current = configManager.getConfig() as any;
     const updates: Record<string, any> = {};
+    let autoSettleUpdate: ReturnType<typeof resolveAutoSettleUpdate> | null = null;
 
     if (body.paths) {
       const workspacePath = typeof body.paths.workspace_path === 'string' ? body.paths.workspace_path.trim() : '';
@@ -2061,6 +2177,11 @@ router.post('/api/settings/bulk', (req, res) => {
         rollingCompactionModel: String(s.rollingCompactionModel ?? existing.rollingCompactionModel ?? '').trim(),
         mainChatGoals: mergeMainChatGoalRouting(s.mainChatGoals, existing.mainChatGoals),
       };
+      const autoSettleInput = s.autoSettle && typeof s.autoSettle === 'object' ? s.autoSettle : s;
+      if (hasAutoSettleInput(autoSettleInput)) {
+        autoSettleUpdate = resolveAutoSettleUpdate(autoSettleInput);
+        Object.assign(updates.session, autoSettleUpdate.persisted);
+      }
     }
 
     if (body.security) {
@@ -2078,10 +2199,22 @@ router.post('/api/settings/bulk', (req, res) => {
     }
 
     configManager.updateConfig(updates as any);
+    let autoSettleRun: any = null;
+    if (autoSettleUpdate?.applyExisting && autoSettleUpdate.immediateCutoffAt !== null) {
+      autoSettleRun = await runAutoSettleSweep({
+        reason: 'settings_apply_existing',
+        cutoffAtOverride: autoSettleUpdate.immediateCutoffAt,
+        maxBatches: 10,
+      });
+    }
     if (providerChanged) resetProvider();
     if (providerChanged) refreshXAITools();
-    res.json({ success: true });
+    res.json({ success: true, autoSettle: getAutoSettleClientSettings(), autoSettleRun });
   } catch (err: any) {
+    if (err instanceof AutoSettleSettingsError) {
+      res.status(err.statusCode).json({ success: false, error: err.message });
+      return;
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });

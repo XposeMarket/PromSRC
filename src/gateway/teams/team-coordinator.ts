@@ -48,7 +48,7 @@ const TEAM_MANAGER_TOOL_FILTER: string[] | undefined = undefined;
 const LEGACY_TEAM_MANAGER_TOOL_FILTER = [
   'list_files', 'read_file', 'create_file', 'replace_lines', 'find_replace',
   'mkdir', 'list_directory',
-  'memory_write', 'memory_read', 'memory_search',
+  'memory',
   'write_note', 'send_telegram',
   'declare_plan', 'complete_plan_step', 'step_complete',
   'write_proposal',

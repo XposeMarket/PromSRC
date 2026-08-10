@@ -1688,6 +1688,8 @@ function serializeSchedule(job: any): any {
     last_run: job.lastRun,
     last_result: (job.lastResult || '').slice(0, 200),
     last_duration: job.lastDuration,
+    session_target: job.sessionTarget || 'isolated',
+    last_output_session_id: job.lastOutputSessionId || '',
     delivery_channel: job.delivery || 'web',
     subagent_id: job.subagent_id || '',
     team_id: job.team_id || '',

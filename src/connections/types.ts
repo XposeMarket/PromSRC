@@ -1,6 +1,9 @@
 /** Canonical contracts for Prometheus's plugin-backed connection orchestrator. */
 
 export const CONNECTION_SCHEMA_VERSION = 1 as const;
+/** Additive connection contract marker. The durable file schema remains v1 so
+ * existing records can still be read and rolled back without reauthorization. */
+export const CONNECTOR_CONNECTION_CONTRACT_VERSION = 2 as const;
 
 export type ConnectionAttemptState =
   | 'requested'
@@ -35,6 +38,7 @@ export type ConnectionHealth = 'healthy' | 'degraded' | 'unavailable' | 'unknown
 
 export type ConnectionAdapterKind =
   | 'oauth-pkce'
+  | 'connector-oauth'
   | 'oauth-device-code'
   | 'oauth-manual-callback'
   | 'api-key'
@@ -91,15 +95,29 @@ export interface ConnectionStrategy {
   name?: string;
   priority?: number;
   capabilities: string[];
+  capabilityContracts?: ConnectionCapabilityContract[];
   readOnly?: boolean;
   authentication?: {
     type: string;
     scopes?: string[];
     authorizationUrl?: string;
     tokenUrl?: string;
+    revokeUrl?: string;
+    pkceRequired?: boolean;
+    nonceRequired?: boolean;
+    callback?: { host?: string; port?: number; path?: string };
+    clientIdEnv?: string;
+    clientSecretEnv?: string;
   };
   configuration?: Record<string, unknown>;
   verification?: string[];
+}
+
+export interface ConnectionCapabilityContract {
+  id: string;
+  label?: string;
+  description?: string;
+  risk: 'read' | 'write' | 'high_impact';
 }
 
 export interface ConnectionPlan {
@@ -265,6 +283,51 @@ export interface ClassifiedConnectionTool {
   classificationReason?: string;
 }
 
+export interface ConnectionCapabilityGrant {
+  id: string;
+  label?: string;
+  risk: 'read' | 'write' | 'high_impact';
+  granted: boolean;
+  approvalRequired: boolean;
+  source: 'manifest' | 'user' | 'legacy';
+}
+
+export interface ConnectionAccountIdentity {
+  provider?: string;
+  providerAccountId?: string;
+  displayName?: string;
+  username?: string;
+  email?: string;
+}
+
+export interface ConnectionResourceIdentity {
+  kind: string;
+  id: string;
+  displayName?: string;
+  parentId?: string;
+  scope?: string;
+}
+
+export interface ConnectionProviderAppMetadata {
+  provider: string;
+  appType: 'oauth-app' | 'github-app' | 'public-client' | 'confidential-client' | 'unknown';
+  clientIdConfigured: boolean;
+  clientSecretConfigured: boolean;
+  pkceRequired: boolean;
+  nonceRequired?: boolean;
+  redirectUri?: string;
+  externalSetupRequired?: boolean;
+}
+
+export interface ConnectionMigrationMarker {
+  source: 'legacy' | 'canonical';
+  target: 'connection-v2';
+  version: number;
+  migratedAt: string;
+  rollbackSupported: boolean;
+  legacyReadable: boolean;
+}
+
 export interface ConnectionVerificationResult {
   id: string;
   passed: boolean;
@@ -291,8 +354,14 @@ export interface ConnectionRecord {
   verified: boolean;
   authState: ConnectionAuthState;
   health: ConnectionHealth;
+  contractVersion?: typeof CONNECTOR_CONNECTION_CONTRACT_VERSION | 1;
+  migration?: ConnectionMigrationMarker;
+  account?: ConnectionAccountIdentity;
+  resources?: ConnectionResourceIdentity[];
   grantedCapabilities: string[];
   grantedScopes?: string[];
+  capabilityGrants?: ConnectionCapabilityGrant[];
+  providerApp?: ConnectionProviderAppMetadata;
   registeredTools: string[];
   exposedTools: string[];
   tools?: ClassifiedConnectionTool[];

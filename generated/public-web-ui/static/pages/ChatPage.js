@@ -18,13 +18,6 @@ import { wsEventBus, wsSend } from '../ws.js';
 import { formatModelDisplayName } from '../model-display.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
 import { CREATIVE_LIBRARY_PACKS, CREATIVE_SIZE_PRESETS, CREATIVE_STYLE_PRESETS, createSceneDocument, applySceneGraphOps, executeSceneGraphOps, buildSceneSelectionContext, parseCreativeOpsFromText, getCreativePatchInstruction, resolveElementAtTime, measureTextBlock, buildTextFontSpec, getCreativeElementLibrary, getCreativeAnimationPresetCatalog, getEnabledCreativeLibraryIds, getCreativeLibraryPackCatalog, setCreativeLibraryRuntimePacks, validateCreativeSceneLayout } from '../components/creative/sceneGraph.js';
-import { normalizeCreativeAudioTrackConfig as normalizeCreativeAudioTrackConfigEngine, hasCreativeAudioTrackConfig as hasCreativeAudioTrackConfigEngine, stopCreativeAudioPreview as stopCreativeAudioPreviewEngine, ensureCreativeAudioPreviewElement as ensureCreativeAudioPreviewElementEngine, syncCreativeAudioPreviewToTimeline as syncCreativeAudioPreviewToTimelineEngine, getCreativeAudioTrackWindow as getCreativeAudioTrackWindowEngine, waitForCreativeMediaReady as waitForCreativeMediaReadyEngine, createCreativeExportAudioSession as createCreativeExportAudioSessionEngine, fetchCreativeAudioAnalysis } from '../components/creative/audioEngine.js';
-import { normalizeCreativeRenderJobStatus as normalizeCreativeRenderJobStatusEngine, isCreativeRenderJobTerminalStatus as isCreativeRenderJobTerminalStatusEngine, sortCreativeRenderJobEntries as sortCreativeRenderJobEntriesEngine, createCreativeRenderJobClient, createCreativeRenderWorkerController } from '../components/creative/renderJobs.js';
-import { createCreativeExportEngine } from '../components/creative/exportEngine.js';
-import { createCreativeMotionTemplateClient } from '../components/creative/motionTemplates.js';
-import { createHyperframesController } from '../components/creative/hyperframesController.js';
-import { createHyperframesCatalogBrowser } from '../components/creative/hyperframesCatalogBrowser.js';
-import { syncCreativeEditor } from '../components/creative/editor/index.js';
 import { installProcessRunCardHandlers, renderProcessRunCard } from '../components/ProcessRunCard.js';
 import {
   appendCommandTerminalChunkToDom,
@@ -37,8 +30,79 @@ import {
   toolActivitySummary,
 } from '../tool-activity.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
+import { mountThinkingOrb } from '../vendor/thinking-orb.js';
 installToolActivityExpansionPersistence();
 // (state.js imports handled via window.* proxy above)
+
+let creativeFeatureRuntime = null;
+let creativeFeatureRuntimePromise = null;
+let creativeFeatureUiRequestToken = 0;
+let creativeRenderJobClient = null;
+let creativeMotionTemplateClient = null;
+let creativeExportEngine = null;
+let creativeRenderWorkerController = null;
+let hyperframesFeature = null;
+let hyperframesFeaturePromise = null;
+let hyperframesControllerSyncToken = 0;
+
+function ensureCreativeFeatureRuntime() {
+  if (creativeFeatureRuntime) return Promise.resolve(creativeFeatureRuntime);
+  if (!creativeFeatureRuntimePromise) {
+    window.__PROM_CREATIVE_FEATURE_RUNTIME_STATE = 'loading';
+    creativeFeatureRuntimePromise = import('../components/creative/featureRuntime.js')
+      .then((runtime) => {
+        creativeFeatureRuntime = runtime;
+        initializeCreativeFeatureClients(runtime);
+        window.__PROM_CREATIVE_FEATURE_RUNTIME_STATE = 'ready';
+        return runtime;
+      })
+      .catch((error) => {
+        creativeFeatureRuntime = null;
+        creativeFeatureRuntimePromise = null;
+        window.__PROM_CREATIVE_FEATURE_RUNTIME_STATE = 'error';
+        throw error;
+      });
+  }
+  return creativeFeatureRuntimePromise;
+}
+
+function requireCreativeFeatureRuntime() {
+  if (!creativeFeatureRuntime) {
+    throw new Error('Creative workspace is still loading.');
+  }
+  return creativeFeatureRuntime;
+}
+
+function ensureHyperframesFeature() {
+  if (hyperframesFeature) return Promise.resolve(hyperframesFeature);
+  if (!hyperframesFeaturePromise) {
+    hyperframesFeaturePromise = ensureCreativeFeatureRuntime()
+      .then((runtime) => runtime.loadHyperframesFeature({
+        api,
+        getScene: () => creativeSceneDoc,
+        getElementById: (elementId) => getHyperframesElementById(elementId),
+        getSelectedId: () => creativeSelectedId,
+        applyExtractionToElement,
+        renderWorkspace: (options) => renderCreativeWorkspace(options),
+        persistActiveChat,
+        downloadFile: (path, name) => canvasDownloadFile(path, name),
+        getFrameRate: () => Number(creativeSceneDoc?.frameRate) || 60,
+        setActiveExport: (value) => { creativeActiveExport = value || null; },
+        onInsertHyperframesClip: (payload) => insertHyperframesClip(payload),
+        showToast,
+      }))
+      .then((feature) => {
+        hyperframesFeature = feature;
+        return feature;
+      })
+      .catch((error) => {
+        hyperframesFeature = null;
+        hyperframesFeaturePromise = null;
+        throw error;
+      });
+  }
+  return hyperframesFeaturePromise;
+}
 
 // ─── Global state: all shared mutable state accessed via window.* ───────────
 // ES modules have their own scope. To share state with the inline <script>,
@@ -141,8 +205,13 @@ if (window.browserCanvasState === undefined) {
     streamFocus: 'passive',
     streamStatus: '',
     streamLastFrameAt: 0,
+    loading: false,
+    lastError: '',
     frameFormat: 'png',
     active: false,
+    browserDesignMode: false,
+    browserDesignSelectMode: false,
+    browserDesignSelections: [],
     profileKind: '',
     browserTarget: '',
     profileLabel: '',
@@ -200,6 +269,10 @@ let nativeBrowserSyncQueued = false;
 let nativeBrowserAttachedSessionId = '';
 let nativeBrowserTeachUnsub = null;
 let nativeBrowserTeachCaptureOn = false;
+let nativeBrowserDesignUnsubscribers = [];
+let nativeBrowserDesignModeOn = false;
+let nativeBrowserDesignSessionId = '';
+let nativeBrowserLinkOpenInFlight = Promise.resolve();
 
 // Per-session streaming state — allows concurrent independent sessions
 if (window._sessionThinking === undefined) window._sessionThinking = {};
@@ -898,61 +971,9 @@ function formatChatContextWindowUsage(usage) {
 }
 
 function applyChatContextWindowLiveOverlay(data) {
-  if (!data || data.success === false) return data;
-  const live = chatContextWindowState.liveTurn;
-  const sid = getChatContextWindowSessionId();
-  if (!live || String(live.sessionId || '') !== sid) return data;
-  const stillVisible = live.active || (live.settledAt && Date.now() - live.settledAt < 7000);
-  const liveTokens = Math.max(0, Number(live.toolResultTokens || 0));
-  if (!stillVisible || liveTokens <= 0) return data;
-  const currentState = data.currentState || {};
-  const rows = Array.isArray(currentState.rows)
-    ? currentState.rows.map((row) => ({ ...row, children: Array.isArray(row.children) ? row.children.map((child) => ({ ...child })) : row.children }))
-    : [];
-  // Shrink free-space so the ring/total climb during the live turn instead of
-  // waiting for the next server snapshot (matches mobile behavior).
-  const freeIndex = rows.findIndex((row) => row?.id === 'free_space');
-  if (freeIndex >= 0) {
-    rows[freeIndex] = {
-      ...rows[freeIndex],
-      tokens: Math.max(0, Number(rows[freeIndex].tokens || 0) - liveTokens),
-    };
-  }
-  const toolChildren = Array.from(live.tools?.values?.() || [])
-    .sort((a, b) => Number(b.resultTokens || 0) - Number(a.resultTokens || 0))
-    .slice(0, 12)
-    .map((tool, index) => ({
-      id: `live_tool_${index}_${String(tool.tool || 'tool').replace(/[^a-z0-9_-]/gi, '_')}`,
-      label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}${formatContextToolDurationSuffix(tool)}`,
-      tokens: Math.max(0, Number(tool.resultTokens || 0)),
-      active: true,
-      includedInContext: true,
-      percentBasis: 'window',
-      estimated: true,
-    }));
-  const liveRow = {
-    id: 'live_tool_results',
-    label: `Live tool results${live.toolDurationMsTotal ? ` · ${formatContextDurationLabel(live.toolDurationMsTotal)} total` : ''}`,
-    tokens: liveTokens,
-    active: true,
-    includedInContext: true,
-    percentBasis: 'window',
-    estimated: true,
-    children: toolChildren,
-  };
-  const insertAt = rows.findIndex((row) => row?.id === 'mcp_tools');
-  if (insertAt >= 0) rows.splice(insertAt, 0, liveRow);
-  else rows.push(liveRow);
-  const overlaidState = {
-    ...currentState,
-    currentStateTokens: Math.max(0, Number(currentState.currentStateTokens || data.currentStateTokens || 0)) + liveTokens,
-    rows,
-  };
-  return {
-    ...data,
-    currentState: overlaidState,
-    currentStateTokens: overlaidState.currentStateTokens,
-  };
+  // Live tool events schedule an authoritative server refresh; do not add
+  // speculative tokens to the bar or breakdown between snapshots.
+  return data;
 }
 
 function toggleChatContextWindowRow(event) {
@@ -1235,10 +1256,13 @@ if (!window.__promChatContextWindowHandlersInstalled) {
     scheduleChatContextWindowRefresh(150);
     refreshChatContextPlanUsage(true).catch(() => {});
   });
+  // Keep the visible context chip/bar current even when no stream event is
+  // emitted (for example after a background tool or a resumed PWA tab).
   setInterval(() => {
-    refreshChatContextWindow().catch(() => {});
+    if (document.visibilityState === 'hidden') return;
+    refreshChatContextWindow({ force: true }).catch(() => {});
     if (chatContextWindowState.open) refreshChatContextPlanUsage().catch(() => {});
-  }, 15000);
+  }, 5000);
   // Expose for status/model route refresh paths in index.html.
   window.refreshChatContextWindow = refreshChatContextWindow;
   window.refreshChatContextPlanUsage = refreshChatContextPlanUsage;
@@ -1787,8 +1811,13 @@ function getBrowserCanvasState() {
       streamFocus: 'passive',
       streamStatus: '',
       streamLastFrameAt: 0,
+      loading: false,
+      lastError: '',
       frameFormat: 'png',
       active: false,
+      browserDesignMode: false,
+      browserDesignSelectMode: false,
+      browserDesignSelections: [],
       profileKind: '',
       browserTarget: '',
       profileLabel: '',
@@ -1847,6 +1876,11 @@ function snapshotBrowserCanvasSessionState(state = getBrowserCanvasState()) {
     surface: String(state.surface || 'files') === 'browser' ? 'browser' : 'files',
     interactionMode: normalizeBrowserInteractionMode(state.interactionMode),
     active: state.active === true,
+    browserDesignMode: state.browserDesignMode === true,
+    browserDesignSelectMode: state.browserDesignSelectMode === true,
+    browserDesignSelections: Array.isArray(state.browserDesignSelections)
+      ? state.browserDesignSelections.slice(0, 24).map((selection) => cloneBrowserDesignSelection(selection)).filter(Boolean)
+      : [],
     profileKind: String(state.profileKind || '').trim(),
     browserTarget: String(state.browserTarget || '').trim(),
     profileLabel: String(state.profileLabel || '').trim(),
@@ -1859,15 +1893,7 @@ function snapshotBrowserCanvasSessionState(state = getBrowserCanvasState()) {
     lastRestorableTitle: String(state.lastRestorableTitle || '').trim(),
     lastTool: String(state.lastTool || '').trim(),
     statusLabel: String(state.statusLabel || '').trim(),
-    selectedElement: state.selectedElement && typeof state.selectedElement === 'object'
-      ? {
-          selector: String(state.selectedElement.selector || '').trim(),
-          tagName: String(state.selectedElement.tagName || '').trim(),
-          id: String(state.selectedElement.id || '').trim(),
-          text: String(state.selectedElement.text || '').trim(),
-          bounds: state.selectedElement.bounds || null,
-        }
-      : null,
+    selectedElement: cloneBrowserDesignSelection(state.selectedElement),
     namedElements: Array.isArray(state.namedElements)
       ? state.namedElements.map((entry) => ({
           name: String(entry?.name || '').trim(),
@@ -1922,6 +1948,11 @@ function restoreBrowserCanvasSessionState(saved) {
   state.streamLastFrameAt = 0;
   state.frameFormat = 'png';
   state.active = restored.active === true;
+  state.browserDesignMode = restored.browserDesignMode === true;
+  state.browserDesignSelectMode = restored.browserDesignSelectMode === true;
+  state.browserDesignSelections = Array.isArray(restored.browserDesignSelections)
+    ? restored.browserDesignSelections.slice(0, 24).map((selection) => cloneBrowserDesignSelection(selection)).filter(Boolean)
+    : [];
   state.browserSessions = restored.browserSessions && typeof restored.browserSessions === 'object' && !Array.isArray(restored.browserSessions)
     ? Object.fromEntries(Object.entries(restored.browserSessions).map(([sessionId, record]) => {
         const clean = record && typeof record === 'object' ? { ...record } : {};
@@ -1938,15 +1969,7 @@ function restoreBrowserCanvasSessionState(saved) {
   state.lastTool = String(restored.lastTool || '').trim();
   state.statusLabel = String(restored.statusLabel || '').trim() || (state.active ? 'Browser active' : 'Browser idle');
   state.agentCursor = null;
-  state.selectedElement = restored.selectedElement && typeof restored.selectedElement === 'object'
-    ? {
-        selector: String(restored.selectedElement.selector || '').trim(),
-        tagName: String(restored.selectedElement.tagName || '').trim(),
-        id: String(restored.selectedElement.id || '').trim(),
-        text: String(restored.selectedElement.text || '').trim(),
-        bounds: restored.selectedElement.bounds || null,
-      }
-    : null;
+  state.selectedElement = cloneBrowserDesignSelection(restored.selectedElement);
   state.namedElements = Array.isArray(restored.namedElements)
     ? restored.namedElements.map((entry) => ({
         name: String(entry?.name || '').trim(),
@@ -2335,6 +2358,29 @@ function refreshBrowserTeachStepMetadata(step, state = getBrowserCanvasState()) 
 
 function isBrowserCanvasSurfaceActive() {
   return String(getBrowserCanvasState().surface || 'files') === 'browser';
+}
+
+function isBrowserDesignMode(state = getBrowserCanvasState()) {
+  return isBrowserCanvasSurfaceActive() && state?.browserDesignMode === true;
+}
+
+function cloneBrowserDesignSelection(selection) {
+  if (!selection || typeof selection !== 'object') return null;
+  return {
+    selector: String(selection.selector || '').trim(),
+    pack: selection.pack && typeof selection.pack === 'object' ? { ...selection.pack } : (selection.pack || null),
+    tagName: String(selection.tagName || '').trim(),
+    id: String(selection.id || '').trim(),
+    role: String(selection.role || '').trim(),
+    classList: Array.isArray(selection.classList) ? selection.classList.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 24) : [],
+    text: String(selection.text || '').trim().slice(0, 1200),
+    htmlSnippet: String(selection.htmlSnippet || '').trim().slice(0, 4000),
+    bounds: selection.bounds && typeof selection.bounds === 'object' ? { ...selection.bounds } : null,
+    liveBounds: selection.liveBounds && typeof selection.liveBounds === 'object' ? { ...selection.liveBounds } : null,
+    viewport: selection.viewport && typeof selection.viewport === 'object' ? { ...selection.viewport } : null,
+    url: String(selection.url || '').trim(),
+    title: String(selection.title || '').trim(),
+  };
 }
 
 function getCurrentChatModeSessionId() {
@@ -3096,6 +3142,131 @@ async function syncNativeBrowserSurface(options = {}) {
   }
 }
 
+function normalizeBrowserAddressInput(value) {
+  const raw = String(value || '').trim();
+  if (!raw) throw new Error('Enter a URL to open.');
+  if (raw === 'about:blank') return raw;
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+  let parsed;
+  try { parsed = new URL(withScheme); } catch {
+    throw new Error('Enter a valid HTTP or HTTPS URL.');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('The in-app browser accepts only HTTP or HTTPS URLs.');
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('URLs containing embedded credentials are not allowed.');
+  }
+  return parsed.href;
+}
+
+function getDirectBrowserSessionId(state = getBrowserCanvasState()) {
+  return String(window.activeChatSessionId || window.agentSessionId || state.sessionId || 'default').trim() || 'default';
+}
+
+async function openDirectNativeBrowserSurface(options = {}) {
+  const api = getNativeBrowserSurfaceApi();
+  if (!api || typeof api.available !== 'function' || typeof api.attach !== 'function') return false;
+  if (!(await api.available())) return false;
+
+  const state = getBrowserCanvasState();
+  const sessionId = getDirectBrowserSessionId(state);
+  const restoreHint = getBrowserCanvasRestoreHint(state);
+  const requestedUrl = String(options.url || state.url || restoreHint.restoreUrl || 'about:blank').trim() || 'about:blank';
+  if (requestedUrl === 'about:blank' && !String(state.title || '').trim()) state.title = 'New Tab';
+  state.sessionId = sessionId;
+  state.active = true;
+  state.profileKind = 'inhouse';
+  state.browserTarget = 'inhouse';
+  state.profileLabel = 'Prometheus in-house browser';
+  state.loading = false;
+  state.lastError = '';
+  state.statusLabel = requestedUrl === 'about:blank' ? 'New tab ready. Enter a URL to browse.' : 'Browser ready.';
+  upsertBrowserSessionRecord({
+    sessionId,
+    browserOwnerType: 'main',
+    browserLabel: 'Main Agent',
+    active: true,
+    url: requestedUrl,
+    title: state.title,
+    statusLabel: state.statusLabel,
+    profileKind: 'inhouse',
+    browserTarget: 'inhouse',
+    profileLabel: state.profileLabel,
+    timestamp: Date.now(),
+  }, { copyToCanvas: true });
+  setBrowserCanvasSurface('browser');
+  try {
+    const nativeState = await api.attach({ sessionId, url: requestedUrl, profile: 'main' });
+    if (nativeState && typeof nativeState === 'object') {
+      state.url = String(nativeState.url || state.url || 'about:blank').trim();
+      state.title = String(nativeState.title || state.title || '').trim();
+      state.loading = nativeState.loading === true;
+      state.lastError = String(nativeState.lastError || '').trim();
+      state.statusLabel = state.lastError
+        ? `Browser error: ${state.lastError}`
+        : (state.loading ? 'In-house browser loading.' : state.statusLabel);
+    }
+    renderBrowserCanvasSurface();
+    persistActiveChat();
+    window.requestAnimationFrame?.(() => {
+      const input = document.getElementById('browser-canvas-address-input');
+      if (input && document.activeElement !== input) {
+        input.focus({ preventScroll: true });
+        input.select?.();
+      }
+    });
+    return true;
+  } catch (error) {
+    state.lastError = String(error?.message || error || 'Could not open the in-app browser.').trim();
+    state.statusLabel = `Browser error: ${state.lastError}`;
+    renderBrowserCanvasSurface();
+    persistActiveChat();
+    showToast(state.lastError, 'error');
+    return true;
+  }
+}
+
+function openPrometheusBrowserLink(url, options = {}) {
+  const run = nativeBrowserLinkOpenInFlight.catch(() => false).then(async () => {
+    const address = normalizeBrowserAddressInput(url);
+    const api = getNativeBrowserSurfaceApi();
+    if (api && typeof api.available === 'function' && typeof api.attach === 'function' && await api.available()) {
+      // Electron always uses the in-house partition for UI links, even when a
+      // user-Chrome target is selected for agent tools. This does not touch or
+      // close the extension-owned personal tab.
+      return openDirectNativeBrowserSurface({ url: address });
+    }
+
+    const state = getBrowserCanvasState();
+    const sessionId = getBrowserCanvasPrimarySessionId() || getDirectBrowserSessionId(state);
+    if (!sessionId) throw new Error('No chat session is available for browser navigation.');
+    if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) {
+      showToast('Browser connection is reconnecting. Try again in a second.', 'info');
+      return false;
+    }
+    returnBrowserCanvasToPrimarySession({ render: false, requestData: false });
+    state.active = true;
+    state.url = address;
+    state.loading = true;
+    state.lastError = '';
+    state.statusLabel = `Opening ${address}`;
+    setBrowserCanvasSurface('browser');
+    renderBrowserCanvasSurface();
+    wsSend({
+      type: 'browser:link_open',
+      sessionId,
+      url: address,
+      source: String(options.source || 'desktop-link'),
+      lane: String(options.lane || 'prometheus'),
+      timestamp: Date.now(),
+    });
+    return true;
+  });
+  nativeBrowserLinkOpenInFlight = run.catch(() => false);
+  return run;
+}
+
 function ensureNativeBrowserBoundsObserver() {
   if (nativeBrowserBoundsObserver || typeof ResizeObserver === 'undefined') return;
   const targetEl = getNativeBrowserBoundsElement();
@@ -3117,13 +3288,18 @@ function ensureNativeBrowserSurfaceStateListener() {
     const nextActive = nativeState.attached !== false;
     const nextUrl = String(nativeState.url || state.url || '').trim();
     const nextTitle = String(nativeState.title || state.title || '').trim();
-    const nextStatus = nativeState.loading ? 'In-house browser loading.' : 'In-house browser active.';
+    const nextError = String(nativeState.lastError || '').trim();
+    const nextStatus = nextError
+      ? `Browser error: ${nextError}`
+      : (nativeState.loading ? 'In-house browser loading.' : 'In-house browser active.');
     // Skip churn when nothing meaningful changed — native state broadcasts fire on
     // every loading toggle, so avoid redundant render + persist cycles.
     const unchanged = state.active === nextActive
       && state.url === nextUrl
       && state.title === nextTitle
       && state.statusLabel === nextStatus
+      && state.loading === (nativeState.loading === true)
+      && state.lastError === nextError
       && state.profileKind === 'inhouse';
     if (unchanged) return;
     state.active = nextActive;
@@ -3132,6 +3308,8 @@ function ensureNativeBrowserSurfaceStateListener() {
     state.profileLabel = 'Prometheus in-house browser';
     state.url = nextUrl;
     state.title = nextTitle;
+    state.loading = nativeState.loading === true;
+    state.lastError = nextError;
     state.statusLabel = nextStatus;
     state.streamActive = false;
     state.streamTransport = 'native';
@@ -3165,6 +3343,92 @@ function ensureNativeBrowserTeachListener() {
   if (typeof api.onTeachFill === 'function') api.onTeachFill((payload) => handleNativeBrowserTeachFill(payload));
   if (typeof api.onTeachKey === 'function') api.onTeachKey((payload) => handleNativeBrowserTeachKey(payload));
   if (typeof api.onTeachScroll === 'function') api.onTeachScroll((payload) => handleNativeBrowserTeachScroll(payload));
+}
+
+function ensureNativeBrowserDesignListener() {
+  const api = getNativeBrowserSurfaceApi();
+  if (!api || nativeBrowserDesignUnsubscribers.length || typeof api.onDesignHover !== 'function') return;
+  nativeBrowserDesignUnsubscribers = [
+    api.onDesignHover((payload) => handleNativeBrowserDesignHover(payload)),
+    typeof api.onDesignSelect === 'function' ? api.onDesignSelect((payload) => handleNativeBrowserDesignSelect(payload)) : null,
+    typeof api.onDesignChat === 'function' ? api.onDesignChat((payload) => handleNativeBrowserDesignChat(payload)) : null,
+  ].filter((unsubscribe) => typeof unsubscribe === 'function');
+}
+
+function isNativeBrowserDesignEventForVisibleSession(payload) {
+  const sid = String(payload?.sessionId || '').trim();
+  return !sid || sid === getBrowserCanvasVisibleSessionId();
+}
+
+function nativeBrowserDesignSelectionFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  return cloneBrowserDesignSelection({
+    ...payload,
+    ...payload.selection,
+    bounds: payload.selection?.bounds || payload.bounds || null,
+    liveBounds: payload.selection?.bounds || payload.bounds || null,
+    viewport: payload.selection?.viewport || payload.viewport || null,
+    url: payload.selection?.url || payload.url || '',
+    title: payload.selection?.title || payload.title || '',
+  });
+}
+
+function handleNativeBrowserDesignHover(payload) {
+  if (!isNativeBrowserDesignEventForVisibleSession(payload)) return;
+  const state = getBrowserCanvasState();
+  if (!isBrowserDesignMode(state)) return;
+  state.hoverElement = nativeBrowserDesignSelectionFromPayload(payload);
+  renderBrowserCanvasSurface();
+}
+
+function handleNativeBrowserDesignSelect(payload) {
+  if (!isNativeBrowserDesignEventForVisibleSession(payload)) return;
+  const state = getBrowserCanvasState();
+  if (!isBrowserDesignMode(state)) return;
+  const selection = nativeBrowserDesignSelectionFromPayload(payload);
+  if (!selection) return;
+  applyBrowserDesignSelection(selection, { showPopover: false });
+  addProcessEntry('info', `Design: selected ${selection.selector || selection.tagName || 'element'}.`);
+}
+
+function handleNativeBrowserDesignChat(payload) {
+  if (!isNativeBrowserDesignEventForVisibleSession(payload)) return;
+  const state = getBrowserCanvasState();
+  if (!isBrowserDesignMode(state)) return;
+  const selection = nativeBrowserDesignSelectionFromPayload(payload);
+  if (selection) applyBrowserDesignSelection(selection, { showPopover: false });
+  const text = String(payload?.text || '').trim();
+  const input = document.getElementById('chat-input');
+  if (!text || !input) return;
+  input.value = text;
+  void sendChat().catch((err) => showToast(`Send failed: ${err.message}`, 'error'));
+}
+
+async function syncNativeBrowserDesignMode(state = getBrowserCanvasState()) {
+  const api = getNativeBrowserSurfaceApi();
+  if (!api || typeof api.setDesignMode !== 'function') return;
+  ensureNativeBrowserDesignListener();
+  const sessionId = getBrowserCanvasVisibleSessionId();
+  const want = !!(
+    isBrowserCanvasInHouseProvider(state)
+    && isBrowserCanvasSurfaceActive()
+    && state.browserDesignMode === true
+    && sessionId
+  );
+  if (!want && !nativeBrowserDesignModeOn) return;
+  if (want && nativeBrowserDesignModeOn && nativeBrowserDesignSessionId === sessionId) return;
+  try {
+    if (nativeBrowserDesignModeOn && nativeBrowserDesignSessionId && nativeBrowserDesignSessionId !== sessionId) {
+      await api.setDesignMode({ sessionId: nativeBrowserDesignSessionId, enabled: false });
+    }
+    await api.setDesignMode({ sessionId, enabled: want });
+    nativeBrowserDesignModeOn = want;
+    nativeBrowserDesignSessionId = want ? sessionId : '';
+  } catch (err) {
+    nativeBrowserDesignModeOn = false;
+    nativeBrowserDesignSessionId = '';
+    console.warn('[Prometheus] Native browser Design mode sync failed:', err);
+  }
 }
 
 function nativeTeachRecordingState() {
@@ -3528,6 +3792,7 @@ function updateCreativeModeControls() {
     document.getElementById('right-panel-browser-live-dot'),
   ].filter(Boolean);
   const browserModeButtons = document.querySelectorAll('[data-browser-mode-btn]');
+  const browserDesignButton = document.querySelector('[data-browser-design-btn]');
   const root = document.documentElement;
 
   if (root) root.dataset.creativeMode = mode || '';
@@ -3564,16 +3829,25 @@ function updateCreativeModeControls() {
   });
   browserModeButtons.forEach((btn) => {
     const btnMode = normalizeBrowserInteractionMode(btn.dataset.browserModeBtn);
-    const active = browserSurfaceActive && btnMode === normalizeBrowserInteractionMode(browserState.interactionMode);
+    const active = browserSurfaceActive && !browserState.browserDesignMode && btnMode === normalizeBrowserInteractionMode(browserState.interactionMode);
     btn.dataset.active = active ? 'true' : 'false';
   });
+  if (browserDesignButton) {
+    const active = browserSurfaceActive && browserState.browserDesignMode === true;
+    browserDesignButton.dataset.active = active ? 'true' : 'false';
+    browserDesignButton.style.borderColor = active ? '#38bdf8' : 'rgba(56,189,248,0.22)';
+    browserDesignButton.style.background = active ? 'rgba(56,189,248,0.2)' : 'rgba(56,189,248,0.08)';
+    browserDesignButton.style.color = active ? '#e0f2fe' : '#bae6fd';
+  }
   browserLiveDots.forEach((dot) => {
     dot.style.display = browserState.active ? 'inline-flex' : 'none';
   });
   if (browserModeRail) browserModeRail.style.display = browserSurfaceActive ? 'inline-flex' : 'none';
   if (browserStatusPill) browserStatusPill.style.display = browserSurfaceActive ? 'inline-flex' : 'none';
   if (browserStatusLabel) {
-    browserStatusLabel.textContent = browserState.active ? `${browserMeta.label} mode` : 'Browser idle';
+    browserStatusLabel.textContent = browserState.active
+      ? (browserState.browserDesignMode ? 'Design mode' : `${browserMeta.label} mode`)
+      : 'Browser idle';
   }
   if (browserStatusDot) {
     browserStatusDot.style.background = browserState.active ? '#22c55e' : '#94a3b8';
@@ -3596,6 +3870,7 @@ function updateCreativeModeControls() {
 function renderBrowserCanvasSurface() {
   const state = getBrowserCanvasState();
   const mode = normalizeBrowserInteractionMode(state.interactionMode);
+  const designMode = isBrowserDesignMode(state);
   const meta = getBrowserInteractionMeta(mode);
   const selectedKey = getSelectedBrowserElementKey(state.selectedElement);
   if (selectedKey && state.elementNameDraftKey !== selectedKey) {
@@ -3726,17 +4001,23 @@ function renderBrowserCanvasSurface() {
       `;
     }).join('');
   }
-  if (title) title.textContent = state.active ? `${meta.label} Browser` : 'Live Browser';
+  if (title) title.textContent = state.active ? (designMode ? 'Design Browser' : `${meta.label} Browser`) : 'Live Browser';
   if (subtitle) {
-    subtitle.textContent = state.active
-      ? (followingDetachedSession
-        ? `Watching Teach verifier tab${state.streamActive ? ` · ${streamDescriptor}` : ''}${state.streamStatus ? ` · ${state.streamStatus}` : ''}`
-        : (nativeProvider
-          ? `Prometheus in-house browser${state.statusLabel ? ` · ${state.statusLabel}` : ''}`
-          : (state.streamActive
-          ? `${streamDescriptor}${state.streamStatus ? ` · ${state.streamStatus}` : ''}`
-          : (state.statusLabel || `Watching ${state.title || state.url || 'the active page'}`))))
-      : 'Waiting for browser activity in this chat';
+    let subtitleText = 'Waiting for browser activity in this chat';
+    if (state.active) {
+      if (followingDetachedSession) {
+        subtitleText = `Watching Teach verifier tab${state.streamActive ? ` · ${streamDescriptor}` : ''}${state.streamStatus ? ` · ${state.streamStatus}` : ''}`;
+      } else if (nativeProvider) {
+        subtitleText = `Prometheus in-house browser${state.statusLabel ? ` · ${state.statusLabel}` : ''}`;
+      } else if (state.streamActive) {
+        subtitleText = `${streamDescriptor}${state.streamStatus ? ` · ${state.streamStatus}` : ''}`;
+      } else if (designMode) {
+        subtitleText = 'Hover an element to outline it, then click to inspect it.';
+      } else {
+        subtitleText = state.statusLabel || `Watching ${state.title || state.url || 'the active page'}`;
+      }
+    }
+    subtitle.textContent = subtitleText;
   }
   if (urlEl) urlEl.textContent = state.url || restoreHint.restoreUrl || 'No active browser session';
   if (addressInput && document.activeElement !== addressInput) {
@@ -3770,7 +4051,9 @@ function renderBrowserCanvasSurface() {
     stageCopy.textContent = state.active
       ? (followingDetachedSession
         ? `Teach verification is running in a detached browser tab so your original page stays intact. You can watch it here, then jump back to the main tab whenever you want.`
-        : `${meta.label} mode is active for this browser session. ${state.lastTool ? `Last tool: ${state.lastTool}.` : ''}`)
+         : (designMode
+           ? 'Design mode lets you hover, select, annotate, and send a selected browser element to the chat.'
+           : `${meta.label} mode is active for this browser session. ${state.lastTool ? `Last tool: ${state.lastTool}.` : ''}`))
       : 'When Prometheus opens or updates a browser session, the browser canvas will follow it here and keep the current session, page title, and interaction mode in sync.';
   }
   if (sessionEl) {
@@ -3809,6 +4092,7 @@ function renderBrowserCanvasSurface() {
     else if (mode === 'teach' && teachAwaitingApproval) modeTitleEl.textContent = 'Teach Review';
     else if (mode === 'teach' && teachVerified) modeTitleEl.textContent = 'Teach Verification';
     else if (mode === 'teach' && teachActive) modeTitleEl.textContent = 'Teach Session';
+    else if (designMode) modeTitleEl.textContent = 'Design Mode';
     else modeTitleEl.textContent = 'Mode Notes';
   }
   if (modeCopyEl) {
@@ -3822,6 +4106,8 @@ function renderBrowserCanvasSurface() {
       modeCopyEl.textContent = 'Prometheus has replayed the taught workflow. The next response should explain what happened, what the workflow appears to be for, and ask you to confirm that understanding before anything gets packaged.';
     } else if (mode === 'teach' && teachActive) {
       modeCopyEl.textContent = 'Teach mode is capturing a reusable workflow. Start from the current page, stage each step, and keep the log clean enough for Prometheus to replay later.';
+    } else if (designMode) {
+      modeCopyEl.textContent = 'Hover to highlight page elements. Click one to inspect it, add it to a multi-selection, or chat with Prometheus about what should change.';
     } else {
       modeCopyEl.textContent = meta.copy;
     }
@@ -3855,7 +4141,7 @@ function renderBrowserCanvasSurface() {
   const sideCol = document.getElementById('browser-canvas-side-col');
   const layoutGrid = document.getElementById('browser-canvas-layout');
   const controlSlot = document.getElementById('browser-canvas-control-slot');
-  const showSidePanels = mode === 'teach';
+  const showSidePanels = mode === 'teach' || designMode;
   if (sideCol) sideCol.style.display = showSidePanels ? 'flex' : 'none';
   // The grid columns are governed by a CSS rule keyed on this attribute because
   // #browser-canvas-layout sets grid-template-columns with !important, which an
@@ -4021,7 +4307,9 @@ function renderBrowserCanvasSurface() {
   if (emptyState) emptyState.style.display = hasVisualSurface ? 'none' : 'block';
   if (frameEl) {
     frameEl.style.display = nativeProvider ? 'none' : 'block';
-    frameEl.style.cursor = mode === 'teach'
+    frameEl.style.cursor = designMode
+      ? (followingDetachedSession ? 'default' : 'crosshair')
+      : mode === 'teach'
       ? (followingDetachedSession ? 'default' : 'crosshair')
       : (mode === 'copilot' ? ((controlCaptured && !followingDetachedSession) ? 'text' : 'pointer') : 'default');
   }
@@ -4057,7 +4345,7 @@ function renderBrowserCanvasSurface() {
       ? 'Native Electron surface'
       : (width > 0 && height > 0 ? `${width} × ${height}` : 'Viewport frame');
   }
-  if (selectionCard) selectionCard.style.display = mode === 'teach' && state.selectedElement && !followingDetachedSession ? 'block' : 'none';
+  if (selectionCard) selectionCard.style.display = ((mode === 'teach' || designMode) && state.selectedElement && !followingDetachedSession && !nativeProvider) ? 'block' : 'none';
   if (frameSize && state.streamActive) {
     const width = Number(state.frameWidth || 0);
     const height = Number(state.frameHeight || 0);
@@ -4073,7 +4361,9 @@ function renderBrowserCanvasSurface() {
   if (selectionText) {
     const fullSelectorText = state.selectedElement
       ? (state.selectedElement.selector || (state.selectedElement.id ? `#${state.selectedElement.id}` : state.selectedElement.tagName || 'element'))
-      : 'Enter Teach mode and click the live browser frame to capture a real page element.';
+       : (designMode
+         ? 'Hover over the live browser frame and click an element to open its Design actions.'
+         : 'Enter Teach mode and click the live browser frame to capture a real page element.');
     selectionText.textContent = state.selectedElement ? truncateBrowserPreview(fullSelectorText, 80) : fullSelectorText;
     selectionText.title = fullSelectorText;
   }
@@ -4088,6 +4378,7 @@ function renderBrowserCanvasSurface() {
   syncBrowserCanvasStream();
   queueNativeBrowserSurfaceSync();
   syncNativeBrowserTeachCapture(state);
+  syncNativeBrowserDesignMode(state);
   updateDesignSelectionChip();
   updateCreativeModeControls();
 }
@@ -4113,13 +4404,28 @@ function setBrowserCanvasSurface(surface, options = {}) {
 }
 
 async function openBrowserCanvasSurface() {
+  const preserveDesignIntent = normalizeCreativeMode(window.currentCreativeMode) === 'design';
   try {
     await exitCreativeModeForBrowserSwitch();
   } catch (err) {
     showToast(`Could not open Browser mode: ${err.message}`, 'error');
     return;
   }
+  const browserState = getBrowserCanvasState();
+  if (!browserState.active || isBrowserCanvasInHouseProvider(browserState)) {
+    try {
+      if (await openDirectNativeBrowserSurface()) {
+        if (preserveDesignIntent) setBrowserDesignMode(true, { persist: false });
+        return;
+      }
+    } catch (err) {
+      showToast(`Could not open Browser mode: ${String(err?.message || err || 'Electron browser unavailable.')}`, 'error');
+      return;
+    }
+  }
   setBrowserCanvasSurface('browser');
+  if (preserveDesignIntent) setBrowserDesignMode(true, { persist: false });
+  window.requestAnimationFrame?.(() => document.getElementById('browser-canvas-address-input')?.focus?.({ preventScroll: true }));
 }
 
 async function toggleBrowserCanvasSurface() {
@@ -4136,6 +4442,38 @@ function showCanvasFilesSurface() {
   setBrowserCanvasSurface('files', { autoOpen: false });
 }
 
+function setBrowserDesignMode(enabled, options = {}) {
+  const state = getBrowserCanvasState();
+  const next = enabled === true;
+  state.browserDesignMode = next;
+  if (!next) {
+    state.browserDesignSelectMode = false;
+    state.browserDesignSelections = [];
+    state.hoverElement = null;
+    hideBrowserDesignPopovers();
+  } else if (options.clearSelection === true) {
+    state.selectedElement = null;
+    state.browserDesignSelections = [];
+  }
+  if (next) state.statusLabel = 'Design mode is ready. Hover an element, then click to inspect it.';
+  if (options.render !== false) renderBrowserCanvasSurface();
+  if (options.persist !== false) persistActiveChat();
+  void syncNativeBrowserDesignMode(state);
+  return next;
+}
+
+async function toggleBrowserDesignMode() {
+  if (!isBrowserCanvasSurfaceActive()) {
+    await openBrowserCanvasSurface();
+    if (!isBrowserCanvasSurfaceActive()) return false;
+  }
+  const state = getBrowserCanvasState();
+  const enabled = !isBrowserDesignMode(state);
+  setBrowserDesignMode(enabled);
+  showToast(enabled ? 'Browser Design mode enabled' : 'Browser Design mode closed', 'info', 2200);
+  return enabled;
+}
+
 async function setBrowserInteractionMode(mode) {
   try {
     await exitCreativeModeForBrowserSwitch();
@@ -4145,6 +4483,7 @@ async function setBrowserInteractionMode(mode) {
   }
   const state = getBrowserCanvasState();
   const nextMode = normalizeBrowserInteractionMode(mode);
+  if (state.browserDesignMode) setBrowserDesignMode(false, { persist: false, render: false });
   if (state.interactionMode === nextMode && isBrowserCanvasSurfaceActive()) {
     renderBrowserCanvasSurface();
     return;
@@ -4292,7 +4631,7 @@ function positionBrowserOverlayElement(overlayEl, frameEl, bounds, options = {})
 function updateBrowserSelectionOverlay(selectionBox, frameEl, state = getBrowserCanvasState()) {
   if (!selectionBox || !frameEl) return;
   const mode = normalizeBrowserInteractionMode(state?.interactionMode);
-  if (isFollowingDetachedBrowserCanvasSession(state) || (mode !== 'teach' && mode !== 'copilot')) {
+  if (isFollowingDetachedBrowserCanvasSession(state) || (!isBrowserDesignMode(state) && mode !== 'teach' && mode !== 'copilot')) {
     selectionBox.style.display = 'none';
     return;
   }
@@ -4475,7 +4814,8 @@ function inspectBrowserCanvasPoint(event) {
   if (event?.button && Number(event.button) !== 0) return;
   if (!isBrowserCanvasSurfaceActive()) return;
   const mode = normalizeBrowserInteractionMode(state.interactionMode);
-  if (mode !== 'teach' && mode !== 'copilot') return;
+  const designMode = isBrowserDesignMode(state);
+  if (!designMode && mode !== 'teach' && mode !== 'copilot') return;
   if (isFollowingDetachedBrowserCanvasSession(state)) {
     showToast('The canvas is currently following the detached Teach verifier tab. Return to Main Tab before controlling or selecting the live browser.', 'info');
     return;
@@ -4490,6 +4830,20 @@ function inspectBrowserCanvasPoint(event) {
   if (!sessionId) return;
   if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) {
     showToast('Browser connection is reconnecting. Try again in a second.', 'info');
+    return;
+  }
+  if (designMode) {
+    state.selectionPending = true;
+    state.statusLabel = 'Inspecting browser element for Design mode...';
+    renderBrowserCanvasSurface();
+    wsSend({
+      type: 'browser:inspect_point',
+      sessionId,
+      x: viewportX,
+      y: viewportY,
+      purpose: 'design_select',
+      track: true,
+    });
     return;
   }
   const teach = getBrowserTeachSession(state);
@@ -4556,7 +4910,7 @@ function maybeRequestBrowserInteractableMap(state = getBrowserCanvasState(), opt
   if (!sessionId) return;
   if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) return;
   const mode = normalizeBrowserInteractionMode(state.interactionMode);
-  if (mode !== 'teach' && mode !== 'copilot' && options.force !== true) return;
+  if (!isBrowserDesignMode(state) && mode !== 'teach' && mode !== 'copilot' && options.force !== true) return;
   const now = Date.now();
   if (!options.force && (now - Number(state.interactableMapRequestedAt || 0)) < BROWSER_INTERACTABLE_MAP_TTL_MS) return;
   state.interactableMapRequestedAt = now;
@@ -4566,6 +4920,7 @@ function maybeRequestBrowserInteractableMap(state = getBrowserCanvasState(), opt
     sessionId,
     requestId: state.interactableMapRequestId,
     limit: 240,
+    includeStatic: isBrowserDesignMode(state),
   });
 }
 
@@ -4639,7 +4994,7 @@ function handleBrowserCanvasFramePointerMove(event) {
   const state = getBrowserCanvasState();
   if (!isBrowserCanvasSurfaceActive()) return;
   const mode = normalizeBrowserInteractionMode(state.interactionMode);
-  if (mode !== 'teach' && mode !== 'copilot') return;
+  if (!isBrowserDesignMode(state) && mode !== 'teach' && mode !== 'copilot') return;
   if (isFollowingDetachedBrowserCanvasSession(state)) return;
   // While the user has the browser captured (i.e. typing into the page), don't draw
   // hover overlays — the page itself should look "clicked into," not under inspection.
@@ -4683,7 +5038,7 @@ function updateBrowserHoverOverlay() {
   const state = getBrowserCanvasState();
   const mode = normalizeBrowserInteractionMode(state.interactionMode);
   const hover = state.hoverElement;
-  if (!hover?.bounds || (mode !== 'teach' && mode !== 'copilot') || isFollowingDetachedBrowserCanvasSession(state)) {
+   if (!hover?.bounds || (!isBrowserDesignMode(state) && mode !== 'teach' && mode !== 'copilot') || isFollowingDetachedBrowserCanvasSession(state)) {
     hoverEl.style.display = 'none';
     return;
   }
@@ -4807,6 +5162,62 @@ function reopenBrowserCanvasLastPage() {
   return true;
 }
 
+async function sendNativeBrowserNavigation(action, url = '') {
+  const api = getNativeBrowserSurfaceApi();
+  const state = getBrowserCanvasState();
+  const sessionId = getDirectBrowserSessionId(state);
+  if (!api || typeof api.navigate !== 'function') return false;
+  const normalizedAction = String(action || '').trim().toLowerCase();
+  let address = '';
+  try {
+    if (normalizedAction === 'open') address = normalizeBrowserAddressInput(url);
+  } catch (error) {
+    state.lastError = String(error?.message || error || 'Invalid browser URL.').trim();
+    state.statusLabel = `Browser error: ${state.lastError}`;
+    renderBrowserCanvasSurface();
+    showToast(state.lastError, 'error');
+    return true;
+  }
+  state.sessionId = sessionId;
+  state.active = true;
+  state.loading = true;
+  state.lastError = '';
+  state.statusLabel = normalizedAction === 'open' ? `Opening ${address}` : `${normalizedAction.charAt(0).toUpperCase()}${normalizedAction.slice(1)} requested.`;
+  if (normalizedAction === 'open') state.url = address;
+  renderBrowserCanvasSurface();
+  try {
+    const nativeState = await api.navigate({ sessionId, action: normalizedAction, url: address });
+    if (nativeState && typeof nativeState === 'object') {
+      state.url = String(nativeState.url || state.url || '').trim();
+      state.title = String(nativeState.title || state.title || '').trim();
+      state.loading = nativeState.loading === true;
+      state.lastError = String(nativeState.lastError || '').trim();
+      state.statusLabel = state.lastError
+        ? `Browser error: ${state.lastError}`
+        : (state.loading ? 'In-house browser loading.' : 'In-house browser active.');
+    }
+  } catch (error) {
+    state.loading = false;
+    state.lastError = String(error?.message || error || 'Browser navigation failed.').trim();
+    state.statusLabel = `Browser error: ${state.lastError}`;
+    showToast(state.lastError, 'error');
+  }
+  upsertBrowserSessionRecord({
+    sessionId,
+    active: true,
+    url: state.url,
+    title: state.title,
+    statusLabel: state.statusLabel,
+    profileKind: 'inhouse',
+    browserTarget: 'inhouse',
+    profileLabel: 'Prometheus in-house browser',
+    timestamp: Date.now(),
+  }, { copyToCanvas: true });
+  renderBrowserCanvasSurface();
+  persistActiveChat();
+  return true;
+}
+
 function sendBrowserCanvasNavigation(action, url = '') {
   const state = getBrowserCanvasState();
   const sessionId = getBrowserCanvasPrimarySessionId();
@@ -4819,10 +5230,20 @@ function sendBrowserCanvasNavigation(action, url = '') {
     return false;
   }
   const normalizedAction = String(action || '').trim().toLowerCase();
-  const address = String(url || '').trim();
-  if (normalizedAction === 'open' && !address) {
-    showToast('Enter a URL to open.', 'info');
-    return false;
+  let address = String(url || '').trim();
+  if (normalizedAction === 'open') {
+    try { address = normalizeBrowserAddressInput(address); }
+    catch (error) {
+      state.lastError = String(error?.message || error || 'Invalid browser URL.').trim();
+      state.statusLabel = `Browser error: ${state.lastError}`;
+      renderBrowserCanvasSurface();
+      showToast(state.lastError, 'error');
+      return false;
+    }
+  }
+  if (isBrowserCanvasInHouseProvider(state)) {
+    sendNativeBrowserNavigation(normalizedAction, address);
+    return true;
   }
   const wasActive = state.active === true;
   returnBrowserCanvasToPrimarySession({ render: false, requestData: false });
@@ -5332,6 +5753,24 @@ function applyBrowserEventState(msg, options = {}) {
 
 function applyCreativeModeUI(options = {}) {
   const mode = normalizeCreativeMode(window.currentCreativeMode);
+  if (!mode) creativeFeatureUiRequestToken += 1;
+  if (mode && !creativeFeatureRuntime) {
+    const requestToken = ++creativeFeatureUiRequestToken;
+    const expectedSessionId = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+    ensureCreativeFeatureRuntime()
+      .then(() => {
+        const activeSessionId = String(window.activeChatSessionId || window.agentSessionId || '').trim();
+        if (requestToken !== creativeFeatureUiRequestToken) return;
+        if (expectedSessionId && activeSessionId !== expectedSessionId) return;
+        if (normalizeCreativeMode(window.currentCreativeMode) !== mode) return;
+        applyCreativeModeUI(options);
+      })
+      .catch((error) => {
+        console.error('[creative] Failed to load feature runtime:', error);
+        showToast('Could not load Creative workspace', String(error?.message || error), 'error');
+      });
+    return;
+  }
   const suppressAutoOpen = window.__pmSuppressCreativeAutoOpen === true;
   const shouldAutoOpen = options.autoOpen === true && !suppressAutoOpen;
   const rightPanel = document.getElementById('right-panel');
@@ -5385,13 +5824,15 @@ function applyCreativeModeUI(options = {}) {
   syncCanvasSurfaceWidthLock();
   if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
   window.prometheusCreativeCompositionBridge = getCreativeCompositionBridge();
-  syncCreativeEditor({
-    mode: normalizeCreativeMode(window.currentCreativeMode),
-    shell: document.getElementById('canvas-creative-shell'),
-    scene: window.prometheusCreativeScene,
-    api: window.prometheusCreativeCore,
-    compositionBridge: window.prometheusCreativeCompositionBridge,
-  });
+  if (creativeFeatureRuntime) {
+    creativeFeatureRuntime.syncCreativeEditor({
+      mode: normalizeCreativeMode(window.currentCreativeMode),
+      shell: document.getElementById('canvas-creative-shell'),
+      scene: window.prometheusCreativeScene,
+      api: window.prometheusCreativeCore,
+      compositionBridge: window.prometheusCreativeCompositionBridge,
+    });
+  }
 }
 
 function revealCreativeCanvasForWorkspaceOutput(mode = window.currentCreativeMode) {
@@ -5473,7 +5914,12 @@ async function setCreativeModeFromUI(mode) {
   const sid = getCurrentChatModeSessionId();
   const nextMode = normalizeCreativeMode(mode);
   if (!sid || !nextMode) return;
+  if (nextMode === 'design' && isBrowserCanvasSurfaceActive()) {
+    await toggleBrowserDesignMode();
+    return;
+  }
   try {
+    await ensureCreativeFeatureRuntime();
     const savedMode = await persistCreativeMode(sid, nextMode);
     applySessionCreativeMode(sid, savedMode, { autoOpen: true });
     const meta = getCreativeModeMeta(savedMode);
@@ -6138,7 +6584,11 @@ function applyAutoSessionTitleOnce(session, history) {
   }
   const nextTitle = makeSessionTitle(history);
   if (!nextTitle || nextTitle === 'New chat') return false;
+  const changed = session.title !== nextTitle;
   session.title = nextTitle;
+  if (changed && String(session.id || '') === String(window.activeChatSessionId || '') && typeof syncChatTopbarTitle === 'function') {
+    syncChatTopbarTitle();
+  }
   return true;
 }
 
@@ -6151,6 +6601,7 @@ function applyServerSessionTitle(sessionId, title) {
   session.title = nextTitle;
   session.autoTitleLocked = true;
   if (sid === window.activeChatSessionId) window.chatTitle = nextTitle;
+  if (sid === window.activeChatSessionId && typeof syncChatTopbarTitle === 'function') syncChatTopbarTitle();
   saveChatSessions();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   if (typeof window.renderChannelSessionsList === 'function') window.renderChannelSessionsList();
@@ -6635,6 +7086,26 @@ function setChatSessions(next) {
   return window.chatSessions;
 }
 
+function normalizeExternalImportSummary(value) {
+  if (!value || typeof value !== 'object') return null;
+  const source = value.source && typeof value.source === 'object' ? value.source : {};
+  const provider = String(source.provider || '').trim().slice(0, 80);
+  const adapter = String(source.adapter || '').trim().slice(0, 120);
+  if (!provider && !adapter) return null;
+  return {
+    version: Number(value.version || 1) || 1,
+    source: {
+      provider,
+      adapter,
+      sourceLabel: String(source.sourceLabel || '').trim().slice(0, 120),
+      sourceAccountId: String(source.sourceAccountId || '').trim().slice(0, 160) || undefined,
+    },
+    continuation: 'prometheus',
+    sourceResume: 'unsupported',
+    importedAt: Number(value.importedAt || 0) || 0,
+  };
+}
+
 function normalizeStoredSession(session) {
   const history = reconcileChatHistoryAfterMerge(
     collapseDuplicateAssistantMessages(
@@ -6675,6 +7146,8 @@ function normalizeStoredSession(session) {
     sideChat: session?.sideChat === true,
     parentSessionId: session?.parentSessionId || null,
     voiceRoom: session?.voiceRoom && typeof session.voiceRoom === 'object' ? session.voiceRoom : null,
+    externalImport: normalizeExternalImportSummary(session?.externalImport),
+    sidebarOrder: Number.isFinite(Number(session?.sidebarOrder)) ? Number(session.sidebarOrder) : null,
   };
 }
 
@@ -6722,6 +7195,9 @@ function sessionStubFromServer(s) {
     creativeHtmlMotionClip: s.creativeHtmlMotionClip || null,
     mainChatGoal: s.mainChatGoal || null,
     pinnedAt: Number(s.pinnedAt || 0) || null,
+    sidebarOrder: Number.isFinite(Number(s.sidebarOrder)) ? Number(s.sidebarOrder) : null,
+    settledAt: Number(s.settledAt || 0) || null,
+    settled: s.settled === true || Number(s.settledAt || 0) > 0,
     activeRun: s.activeRun === true,
     createdAt: s.createdAt || Date.now(),
     updatedAt: s.lastActiveAt || s.createdAt || Date.now(),
@@ -6729,6 +7205,7 @@ function sessionStubFromServer(s) {
     channel,
     voiceRoom: s.voiceRoom && typeof s.voiceRoom === 'object' ? s.voiceRoom : null,
     lastOrigin: s.lastOrigin && typeof s.lastOrigin === 'object' ? s.lastOrigin : undefined,
+    externalImport: normalizeExternalImportSummary(s.externalImport),
     projectId: projectId || null,
     projectName: projectId ? (String(s.projectName || '').trim() || null) : null,
     source: projectId ? 'project' : (channel !== 'web' ? channel : undefined),
@@ -6772,6 +7249,7 @@ function mergeServerSessionSummaries(summaries) {
         channel: serverStub.channel || existing.channel,
         voiceRoom: serverStub.voiceRoom || existing.voiceRoom || null,
         lastOrigin: serverStub.lastOrigin || existing.lastOrigin,
+        externalImport: serverStub.externalImport || existing.externalImport || null,
         source: serverStub.source || existing.source,
         projectId: serverStub.projectId || existing.projectId || null,
         projectName: serverStub.projectName || existing.projectName || null,
@@ -6782,6 +7260,9 @@ function mergeServerSessionSummaries(summaries) {
         canvasProjectLink: existing.canvasProjectLink || serverStub.canvasProjectLink,
         mainChatGoal: serverStub.mainChatGoal || existing.mainChatGoal || null,
         pinnedAt: serverStub.pinnedAt || null,
+        sidebarOrder: serverStub.sidebarOrder ?? existing.sidebarOrder ?? null,
+        settledAt: serverStub.settledAt || null,
+        settled: serverStub.settled === true,
         activeRun: serverStub.activeRun === true,
       });
       const hasHistoryButNoProcessLog = Array.isArray(existing.history) && existing.history.length > 0
@@ -6795,7 +7276,7 @@ function mergeServerSessionSummaries(summaries) {
     }
   }
   if (pinsChanged) localStorage.setItem('prometheus_pinned_chats', JSON.stringify(_pinnedChats));
-  window.chatSessions.sort((a, b) => getSessionLastMessageAt(b) - getSessionLastMessageAt(a));
+  window.chatSessions.sort((a, b) => getSessionSortTime(b) - getSessionSortTime(a));
 }
 
 // Fetch a single session's full history from the server and populate the stub.
@@ -6832,6 +7313,8 @@ async function _loadSessionFromServer(id, options = {}) {
     const messageProcessLog = (sess.history || []).flatMap((m) => processEntriesForMessage(m));
     sess.processLog = mergeProcessEntryLists(localProcessLog, serverProcessLog, messageProcessLog);
     sess.creativeMode = normalizeCreativeMode(s.creativeMode);
+    sess.projectId = String(s.projectId || sess.projectId || '').trim() || null;
+    sess.projectName = String(s.projectName || sess.projectName || '').trim() || null;
     sess.canvasProjectRoot = normalizeCanvasPath(s.canvasProjectRoot) || null;
     sess.canvasProjectLabel = s.canvasProjectLabel || null;
     sess.canvasProjectLink = normalizeCanvasProjectLink(s.canvasProjectLink);
@@ -6841,6 +7324,8 @@ async function _loadSessionFromServer(id, options = {}) {
     sess.creativeHtmlMotionClip = s.creativeHtmlMotionClip || null;
     sess.mainChatGoal = s.mainChatGoal || null;
     sess.pinnedAt = Number(s.pinnedAt || 0) || null;
+    sess.settledAt = Number(s.settledAt || 0) || null;
+    sess.settled = s.settled === true || Number(s.settledAt || 0) > 0;
     sess.mainChatGoalHistory = Array.isArray(s.mainChatGoalHistory) ? s.mainChatGoalHistory : [];
     if (s.autoTitleLocked === true && String(s.title || '').trim()) {
       sess.title = String(s.title || '').trim();
@@ -6855,6 +7340,7 @@ async function _loadSessionFromServer(id, options = {}) {
     sess.voiceRoom = s.voiceRoom && typeof s.voiceRoom === 'object'
       ? s.voiceRoom
       : (sess.voiceRoom || null);
+    sess.externalImport = normalizeExternalImportSummary(s.externalImport) || normalizeExternalImportSummary(sess.externalImport);
     applyAutoSessionTitleOnce(sess, sess.history);
     sess.createdAt = s.createdAt || sess.createdAt;
     sess.updatedAt = s.lastActiveAt || sess.updatedAt;
@@ -7160,6 +7646,7 @@ async function mainGoalAction(action) {
 
 function syncActiveChat() {
   const sess = window.chatSessions.find(s => s.id === window.activeChatSessionId);
+  syncChatTopbarTitle();
   // Model/reasoning is per chat. Refresh it on every session switch instead of
   // letting the global provider-health poll overwrite the composer label.
   if (sess?.id && typeof window.refreshActiveChatModelRoute === 'function') {
@@ -7429,6 +7916,7 @@ function newChatSession() {
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   if (typeof window.renderChannelSessionsList === 'function') window.renderChannelSessionsList();
   renderChatMessages();
+  if (chatResourcesState.open) loadChatResources({ sessionId: id });
   // New regular chat always exits project mode
   if (typeof window._maybeClearProjectState === 'function') {
     window._maybeClearProjectState(id);
@@ -7496,6 +7984,7 @@ async function openSession(id) {
     await _loadSessionFromServer(id, { force: true });
   }
   syncActiveChat();
+  if (chatResourcesState.open) loadChatResources({ sessionId: id });
   if (isDesktopVoiceRoomSession(id)) {
     restoreDesktopVoiceRoomSession(id).catch((error) => showDesktopVoiceStatus('Voice Room needs microphone access', error?.message || 'Enable microphone access to join this room.', 'error'));
   } else {
@@ -7563,6 +8052,34 @@ function upsertAutomatedSession(as, opts = {}) {
   return true;
 }
 
+const DEFAULT_CHAT_TOPBAR_SUBTITLE = 'Prometheus operator workspace';
+
+function syncChatTopbarTitle() {
+  const titleEl = document.getElementById('page-title-text');
+  const subEl = document.getElementById('page-title-sub');
+  if (!titleEl && !subEl) return;
+
+  const sessions = Array.isArray(window.chatSessions) ? window.chatSessions : [];
+  const session = sessions.find((candidate) => String(candidate?.id || '') === String(window.activeChatSessionId || '')) || null;
+  const sessionTitle = String(session?.title || '').trim() || 'New chat';
+  const projectName = String(
+    session?.projectName
+      || session?.canvasProjectLabel
+      || document.body?.dataset?.projectName
+      || ''
+  ).trim();
+  const isProjectSession = Boolean(
+    session?.projectId
+      || document.body?.classList?.contains('in-project-session')
+      || projectName
+  );
+
+  if (titleEl) titleEl.textContent = sessionTitle;
+  if (subEl) subEl.textContent = isProjectSession && projectName
+    ? `Project · ${projectName}`
+    : DEFAULT_CHAT_TOPBAR_SUBTITLE;
+}
+
 // ---- Mode switching ----
 function setMode(mode) {
   const validModes = ['chat', 'bgtasks', 'schedule', 'teams', 'proposals', 'audit', 'memory'];
@@ -7598,6 +8115,7 @@ function setMode(mode) {
   const subEl = document.getElementById('page-title-sub');
   if (titleEl) titleEl.textContent = parts[0];
   if (subEl) subEl.textContent = parts[1];
+  if (mode === 'chat') syncChatTopbarTitle();
 
   // Toggle view panels
   const viewMap = {
@@ -9193,6 +9711,7 @@ async function openGeneratedImageInCanvas(diskPath, label) {
 }
 
 async function canvasExtractLayersFromSource(source, promptText = '', overrides = {}) {
+  await ensureCreativeFeatureRuntime();
   if (creativeLayerExtractionBusy) return;
   let targetSource = normalizeCanvasPath(source || '');
   if (!targetSource) {
@@ -9921,6 +10440,7 @@ async function canvasHandleCreativeUploadInput(input) {
     return;
   }
   try {
+    await ensureCreativeFeatureRuntime();
     const sid = getCurrentChatModeSessionId() || window.activeChatSessionId || window.agentSessionId || 'default';
     if (normalizeCreativeMode(window.currentCreativeMode) !== 'image') {
       const savedMode = await persistCreativeMode(sid, 'image');
@@ -11019,7 +11539,10 @@ async function connectionCardContinue(attemptId, input, button) {
 }
 
 async function connectionCardOAuth(attemptId, url, button) {
-  if (url) window.open(url, '_blank', 'noopener,noreferrer');
+  if (url) {
+    if (typeof window.openPrometheusExternalLink === 'function') window.openPrometheusExternalLink(url, { target: '_blank', features: 'noopener,noreferrer' });
+    else window.open(url, '_blank', 'noopener,noreferrer');
+  }
   if (button) { button.disabled = true; button.textContent = 'Waiting for authorization…'; }
   const started = Date.now();
   while (Date.now() - started < 10 * 60 * 1000) {
@@ -12223,19 +12746,30 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
     const assistantContentHtml = !isUser
       ? `${assistantApprovalHtml}${assistantQuestionHtml}${msg.content ? renderAssistantContent(msg.content, msg) : ''}`
       : userContentHtml;
+    const assistantWorkTimerHtml = !isUser
+      ? renderAssistantWorkTimer(msg, { active: msg?._steerTimerAnchor === true })
+      : '';
+    const assistantStatusDividerHtml = assistantWorkTimerHtml
+      ? '<div class="assistant-status-divider" aria-hidden="true"></div>'
+      : '';
+    const assistantRoleHtml = !isUser
+      && !((msg.approvalRequest || msg.questionRequest) && !msg.content)
+      && channelTag
+      ? `<div class="msg-role">${channelTag}</div>`
+      : '';
     const hasVisualContent = !isUser && /\bvisual-block\b/.test(assistantContentHtml);
     const actionsHtml = options.readonly || isSideBoundary ? '' : renderMessageActions(msg, originalIndex);
     return `
     <div class="msg-shell ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${msg.workflowPart ? ` workflow-${escHtml(String(msg.workflowPart))}` : ''}${isSideBoundary ? ' side-chat-boundary-msg' : ''}" data-chat-message-index="${originalIndex}">
       <div class="msg ${displayRole}${hasVisualContent ? ' has-visual' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}">
-        ${!isUser ? `<div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>` : ''}
         <div class="msg-bubble-stack">
           ${workflowLabel ? `<div class="workflow-transition-label">${escHtml(workflowLabel)}</div>` : ''}
           <div class="msg-body${hasVisualContent ? ' has-visual' : ''}${(msg.approvalRequest || msg.questionRequest) && !msg.content ? ' msg-body-approval-only' : ''}">
                 ${!isUser && msg.voiceSpeaker ? `<div class="voice-room-speaker">${escHtml(msg.voiceSpeaker)}</div>` : ''}
-                ${!isUser ? renderAssistantWorkTimer(msg, { active: msg?._steerTimerAnchor === true }) : ''}
+                ${assistantWorkTimerHtml}
+                ${assistantStatusDividerHtml}
                 ${!isUser ? (renderCapturedChatSteerTrace(msg) || renderCompletedAssistantTraceDrawer(msg)) : ''}
-                ${!isUser && !((msg.approvalRequest || msg.questionRequest) && !msg.content) ? `<div class="msg-role">${escHtml(msg.voiceSpeaker || 'Prom')}${channelTag}</div>` : ''}
+                ${assistantRoleHtml}
                 ${assistantContentHtml}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderRichArtifacts(msg) : ''}
                 ${(msg.role === 'ai' || msg.role === 'assistant') ? renderProductCarousel(msg) : ''}
@@ -12279,12 +12813,19 @@ function renderSessionThinkingBodyHtml(sessionId) {
   const currentTurnEntries = mergeLiveTraceProcessEntries(st.liveTraceEntries, rawCurrentTurnEntries);
   const pendingImageHtml = isGenerateImagePendingFromEntries(st.liveTraceEntries, currentTurnEntries) ? renderGeneratedImageLoadingCard() : '';
   const activeModelBadgeHtml = st.activeModelBadge
-    ? ` <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(st.activeModelBadge.label)}</span>`
+    ? `<div class="msg-role"><span style="display:inline-block;padding:1px 7px;border-radius:10px;font-size:10px;font-weight:600;background:#f0f4ff;color:#3366cc;border:1px solid #c5d3f0">⚡ ${escHtml(st.activeModelBadge.label)}</span></div>`
     : '';
   const timerAnchoredAboveSteer = st.steerTimerAnchored === true;
+  const assistantWorkTimerHtml = timerAnchoredAboveSteer
+    ? ''
+    : renderAssistantWorkTimer(null, { active: true, startedAt: Number(st.turnStartedAt || 0) });
+  const assistantStatusDividerHtml = assistantWorkTimerHtml
+    ? '<div class="assistant-status-divider" aria-hidden="true"></div>'
+    : '';
   return `
-            ${timerAnchoredAboveSteer ? '' : renderAssistantWorkTimer(null, { active: true, startedAt: Number(st.turnStartedAt || 0) })}
-            ${!thinkingOnly ? `<div class="msg-role">Prom${activeModelBadgeHtml}</div>` : ''}
+            ${assistantWorkTimerHtml}
+            ${assistantStatusDividerHtml}
+            ${!thinkingOnly ? activeModelBadgeHtml : ''}
             ${showLiveTrace ? liveTraceHtml : (!showAnswerText ? progressHtml : '')}
             ${pendingImageHtml}
             ${showAnswerText
@@ -12308,7 +12849,6 @@ function renderSessionThinkingHtml(sessionId) {
   return `
     <div class="msg-shell ai">
       <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="${sessionId === window.activeChatSessionId ? 'thinking-msg' : `thinking-msg-${escHtml(sessionId)}`}">
-        <div class="msg-avatar"><img src="/assets/Prometheus.png" style="width:20px;height:20px;object-fit:contain;"></div>
         <div class="msg-bubble-stack">
           <div class="msg-body" data-live-stream-body="${escHtml(sessionId)}">
             <div data-live-stream-content>${renderSessionThinkingBodyHtml(sessionId)}</div>
@@ -13027,6 +13567,13 @@ async function forkConversationFromAssistantMessage(originalIndex, ev) {
   // turn behaves like a fresh chat with no prior context.
   try {
     await syncSessionHistoryToServerById(id, forkedHistory, { resetCompaction: true });
+    if (source.id) {
+      await fetch(`/api/sessions/${encodeURIComponent(id)}/resources/copy-from`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceSessionId: source.id }),
+      });
+    }
     const routeResponse = await fetch(`/api/sessions/${encodeURIComponent(String(source.id || ''))}/model-route`);
     const routeData = routeResponse.ok ? await routeResponse.json() : null;
     const override = routeData?.chatModelRoute?.override;
@@ -14898,12 +15445,18 @@ function replaceSkillComposerWithSelection(skill, input = document.getElementByI
 }
 
 function hideSlashCommandPopover() {
-  const popover = document.getElementById('chat-slash-command-popover');
-  if (popover) popover.style.display = 'none';
+  ['chat-slash-command-popover', 'chat-skill-command-popover'].forEach((popoverId) => {
+    const popover = document.getElementById(popoverId);
+    if (!popover) return;
+    popover.style.display = 'none';
+    popover.innerHTML = '';
+  });
 }
 
 function renderSlashCommandPopover(inputValue = '') {
-  const popover = document.getElementById('chat-slash-command-popover');
+  const slashPopover = document.getElementById('chat-slash-command-popover');
+  const skillPopover = document.getElementById('chat-skill-command-popover') || slashPopover;
+  const popover = slashPopover || skillPopover;
   if (!popover || activeSlashCommand) {
     hideSlashCommandPopover();
     return;
@@ -14912,7 +15465,12 @@ function renderSlashCommandPopover(inputValue = '') {
   const skillSuggestions = getSkillComposerSuggestions(input);
   if (skillSuggestions.length) {
     skillComposerSelectionIndex = Math.max(0, Math.min(skillComposerSelectionIndex, skillSuggestions.length - 1));
-    popover.innerHTML = skillSuggestions.map((skill, idx) => {
+    const targetPopover = skillPopover || popover;
+    if (slashPopover && targetPopover !== slashPopover) {
+      slashPopover.style.display = 'none';
+      slashPopover.innerHTML = '';
+    }
+    targetPopover.innerHTML = skillSuggestions.map((skill, idx) => {
       const description = String(skill.description || '').trim();
       const shortDescription = description.length > 96 ? `${description.slice(0, 93).trim()}...` : description;
       return `
@@ -14923,7 +15481,7 @@ function renderSlashCommandPopover(inputValue = '') {
     </button>
   `;
     }).join('');
-    popover.querySelectorAll('.chat-slash-command-item').forEach((btn) => {
+    targetPopover.querySelectorAll('.chat-slash-command-item').forEach((btn) => {
       btn.addEventListener('mousedown', (event) => {
         event.preventDefault();
         const id = btn.getAttribute('data-skill-id') || '';
@@ -14931,7 +15489,7 @@ function renderSlashCommandPopover(inputValue = '') {
         replaceSkillComposerWithSelection(skill, input);
       });
     });
-    popover.style.display = 'block';
+    targetPopover.style.display = 'block';
     return;
   }
   const suggestions = getSlashCommandSuggestions(input);
@@ -14940,20 +15498,25 @@ function renderSlashCommandPopover(inputValue = '') {
     return;
   }
   slashCommandSelectionIndex = Math.max(0, Math.min(slashCommandSelectionIndex, suggestions.length - 1));
-  popover.innerHTML = suggestions.map((item, idx) => `
+  const targetPopover = slashPopover || popover;
+  if (skillPopover && targetPopover !== skillPopover) {
+    skillPopover.style.display = 'none';
+    skillPopover.innerHTML = '';
+  }
+  targetPopover.innerHTML = suggestions.map((item, idx) => `
     <button class="chat-slash-command-item ${idx === slashCommandSelectionIndex ? 'active' : ''}" type="button" data-command="${escHtml(item.command)}">
-      <span class="chat-slash-token">[${escHtml(item.command)}]</span>
+      <span class="chat-slash-token">${escHtml(item.command)}</span>
       <span class="chat-slash-label">${escHtml(item.label)}</span>
       <span class="chat-slash-hint">${idx === 0 ? 'Enter' : 'Click'}</span>
     </button>
   `).join('');
-  popover.querySelectorAll('.chat-slash-command-item').forEach((btn) => {
+  targetPopover.querySelectorAll('.chat-slash-command-item').forEach((btn) => {
     btn.addEventListener('mousedown', (event) => {
       event.preventDefault();
       selectSlashCommand(btn.getAttribute('data-command') || '');
     });
   });
-  popover.style.display = 'block';
+  targetPopover.style.display = 'block';
 }
 
 function refreshActiveSlashCommandChrome() {
@@ -15428,7 +15991,7 @@ async function sendChat(queuedMessage = null, options = {}) {
   let uploadedFileCount = 0;
   let visionAttachments = []; // image attachments to send as vision content
   let uploadedAttachmentPreviews = [];
-  const designAttachmentPreview = normalizeCreativeMode(window.currentCreativeMode) === 'design'
+  const designAttachmentPreview = (normalizeCreativeMode(window.currentCreativeMode) === 'design' || isBrowserDesignMode())
     ? designSelectionToAttachmentPreview()
     : null;
   let filesToUpload = [];
@@ -15886,7 +16449,31 @@ async function sendChat(queuedMessage = null, options = {}) {
 	        if (event.type === 'done' || event.type === 'error') {
 	          markChatPerformance(`chat_${event.type}`, { traceId: streamTraceId });
 	        }
-	        const activeBeforeStreamEvent = window.activeChatSessionId;
+        if (event.type === 'tool_call' || event.type === 'tool_progress' || event.type === 'tool_result') {
+          const toolTelemetry = event.telemetry && typeof event.telemetry === 'object' ? event.telemetry : {};
+          const toolDetails = {
+            traceId: streamTraceId,
+            telemetryId: event.telemetryId || toolTelemetry.telemetryId,
+            toolCallId: event.toolCallId || event.tool_call_id || toolTelemetry.toolCallId,
+            toolFamily: toolTelemetry.toolFamily,
+            toolName: event.action || toolTelemetry.toolName,
+            eventCount: toolTelemetry.eventCount,
+            resultBytes: toolTelemetry.resultBytes,
+            resultTokens: toolTelemetry.resultTokens,
+            dispatchMs: toolTelemetry.dispatchMs,
+            executorMs: toolTelemetry.executorMs,
+            firstOutputMs: toolTelemetry.firstOutputMs,
+            resultToModelMs: toolTelemetry.resultToModelMs,
+            modelToVisibleMs: toolTelemetry.modelToVisibleMs,
+            toolWallMs: toolTelemetry.toolWallMs,
+            transportMs: toolTelemetry.transportMs,
+          };
+          markChatPerformance(`chat_${event.type}_received`, toolDetails);
+          if (event.type === 'tool_result' && isSessionVisibleInChatSurface(thisSessionId)) {
+            requestAnimationFrame(() => markChatPerformance('chat_tool_result_visible', toolDetails));
+          }
+        }
+        const activeBeforeStreamEvent = window.activeChatSessionId;
 	        const isReasoningCompanionEvent =
 	          event.type === 'model_stream_event'
 	          && /^reasoning_/i.test(String(event.event?.type || ''));
@@ -15928,6 +16515,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 
           case 'creative_mode': {
             const sid = String(event.sessionId || thisSessionId || '').trim();
+            if (normalizeCreativeMode(event.creativeMode)) await ensureCreativeFeatureRuntime();
             applySessionCreativeMode(sid, event.creativeMode, { resetScene: event.resetScene === true });
             const meta = getCreativeModeMeta(event.creativeMode);
             addProcessEntry('info', meta ? `${meta.title} workspace selected.` : 'Creative workspace closed.');
@@ -16180,6 +16768,9 @@ async function sendChat(queuedMessage = null, options = {}) {
               { action, args: event.args || {}, error: !ok, durationMs: event.durationMs ?? event.elapsedMs, ...(extraPayload || {}) },
             );
             recordChatContextWindowToolResult(event, thisSessionId);
+            if (ok && shouldRefreshChatResourcesForAction(action)) {
+              scheduleChatResourcesReload(thisSessionId, 180);
+            }
             break;
           }
 
@@ -16709,6 +17300,7 @@ async function sendChat(queuedMessage = null, options = {}) {
   if (thisSession) thisSession.activeRun = false;
   clearDesktopActiveChatRun(thisSessionId);
   persistSession(thisSessionId);
+  scheduleChatResourcesReload(thisSessionId, 80);
   // Do this before the final non-streaming paint. A late render must never
   // reuse the completed turn's state and recreate an empty Working bubble.
   window._sessionStreamState[thisSessionId] = makeEmptyStreamState();
@@ -17284,6 +17876,17 @@ queueMicrotask(() => refreshVoiceProviderStatus().catch(() => {}));
 
 // ---- Canvas Panel ----
 let canvasOpen = false;
+const chatResourcesState = {
+  open: true,
+  expanded: false,
+  loading: false,
+  sessionId: '',
+  resources: [],
+  query: '',
+  requestToken: 0,
+};
+const CHAT_RESOURCES_PREVIEW_LIMIT = 6;
+let chatResourcesReloadTimer = null;
 let canvasFullscreenMode = false;
 let leftPanelCollapsed = false;
 let rightPanelCollapsed = false;
@@ -17303,6 +17906,192 @@ let canvasBrowserCollapsed = true;
 let canvasPreviewDevice = 'responsive';
 let canvasPreviewUpdateVersion = 0;
 const canvasFolderExpanded = new Set();
+
+function chatResourceLocatorLabel(resource) {
+  const locator = resource?.locator || {};
+  return String(
+    locator.url
+    || locator.path
+    || resource?.metadata?.liveWorkspacePath
+    || resource?.metadata?.workspacePath
+    || locator.artifactId
+    || locator.taskId
+    || '',
+  ).trim();
+}
+
+function chatResourceTitle(resource) {
+  return String(
+    resource?.title
+    || resource?.metadata?.pageTitle
+    || resource?.metadata?.name
+    || resource?.kind
+    || 'Source',
+  ).trim() || 'Source';
+}
+
+function chatResourceUrl(resource) {
+  const candidate = String(
+    resource?.locator?.url
+    || resource?.metadata?.sourceUrl
+    || resource?.metadata?.url
+    || '',
+  ).trim();
+  return /^https?:\/\//i.test(candidate) ? candidate : '';
+}
+
+function chatResourceFilePath(resource) {
+  return String(
+    resource?.locator?.path
+    || resource?.metadata?.liveWorkspacePath
+    || resource?.metadata?.workspacePath
+    || resource?.metadata?.path
+    || resource?.path
+    || resource?.filePath
+    || '',
+  ).trim();
+}
+
+function chatResourceMatchesQuery(resource, query) {
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return true;
+  const haystack = [
+    chatResourceTitle(resource),
+    chatResourceLocatorLabel(resource),
+    resource?.kind,
+    resource?.origin,
+    resource?.metadata?.publisher,
+    resource?.metadata?.snippet,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes(needle);
+}
+
+function renderChatResourceRow(resource) {
+  const id = String(resource?.id || '').trim();
+  const title = chatResourceTitle(resource);
+  const url = chatResourceUrl(resource);
+  const filePath = chatResourceFilePath(resource);
+  const unavailable = ['missing', 'unavailable', 'stale', 'deleted'].includes(String(resource?.status || '').toLowerCase());
+  const encodedId = encodeInlineJsString(id);
+  let label = `<span class="chat-source-title">${escHtml(title)}</span>`;
+  if (url) {
+    label = `<a class="chat-source-title chat-source-link" href="${escHtml(url)}" target="_blank" rel="noopener noreferrer" title="Open source">${escHtml(title)}</a>`;
+  } else if (filePath) {
+    label = `<button class="chat-source-title chat-source-file" type="button" onclick="openChatResourceFile(${encodedId})" title="Open in Canvas">${escHtml(title)}</button>`;
+  }
+  const icon = url ? '↗' : filePath ? '▤' : '•';
+  return `<div class="chat-source-row${unavailable ? ' is-unavailable' : ''}" data-chat-resource-row="${escHtml(id)}">
+    <span class="chat-source-icon" aria-hidden="true">${icon}</span>
+    <div class="chat-source-label">${label}</div>
+  </div>`;
+}
+
+function renderChatResourcesList(resources = chatResourcesState.resources) {
+  const host = document.getElementById('chat-resources-list');
+  if (!host) return;
+  const rows = (Array.isArray(resources) ? resources : []).filter((resource) => chatResourceMatchesQuery(resource, chatResourcesState.query));
+  const closeButton = document.getElementById('chat-resources-expanded-close');
+  if (closeButton) closeButton.style.display = chatResourcesState.expanded ? 'inline-flex' : 'none';
+  if (!rows.length) {
+    host.innerHTML = chatResourcesState.expanded
+      ? `<div class="chat-resources-expanded-toolbar"><input id="chat-resources-search" type="search" value="${escHtml(chatResourcesState.query)}" placeholder="Search sources" oninput="filterChatResources(this.value)" autocomplete="off"></div><div class="chat-resources-empty">${chatResourcesState.query ? 'No matching sources.' : 'No sources yet.'}</div>`
+      : '<div class="chat-resources-empty">No sources yet.</div>';
+    return;
+  }
+  if (chatResourcesState.expanded) {
+    host.innerHTML = `<div class="chat-resources-expanded-toolbar"><input id="chat-resources-search" type="search" value="${escHtml(chatResourcesState.query)}" placeholder="Search sources" oninput="filterChatResources(this.value)" autocomplete="off"></div><div class="chat-resources-expanded-list">${rows.map(renderChatResourceRow).join('')}</div>`;
+    return;
+  }
+  const preview = rows.slice(0, CHAT_RESOURCES_PREVIEW_LIMIT);
+  host.innerHTML = `<div class="chat-resources-preview">${preview.map(renderChatResourceRow).join('')}</div>${rows.length > CHAT_RESOURCES_PREVIEW_LIMIT ? '<button class="chat-sources-view-more" type="button" onclick="setChatResourcesExpanded(true)">View more</button>' : ''}`;
+}
+
+async function loadChatResources(options = {}) {
+  const sessionId = String(options.sessionId || window.activeChatSessionId || window.agentSessionId || '').trim();
+  if (!sessionId) return;
+  if (chatResourcesState.sessionId && chatResourcesState.sessionId !== sessionId) chatResourcesState.query = '';
+  const requestToken = ++chatResourcesState.requestToken;
+  chatResourcesState.loading = true;
+  chatResourcesState.sessionId = sessionId;
+  const host = document.getElementById('chat-resources-list');
+  if (host && !chatResourcesState.resources.length && options.background !== true) host.innerHTML = '<div class="chat-resources-empty">Loading sources…</div>';
+  try {
+    const endpoint = `/api/sessions/${encodeURIComponent(sessionId)}/resources?limit=100`;
+    const data = await api(endpoint, { timeoutMs: 8000, dedupe: false });
+    if (requestToken !== chatResourcesState.requestToken || sessionId !== chatResourcesState.sessionId) return;
+    chatResourcesState.resources = Array.isArray(data?.resources) ? data.resources : [];
+    renderChatResourcesList();
+  } catch (error) {
+    if (requestToken !== chatResourcesState.requestToken || sessionId !== chatResourcesState.sessionId) return;
+    if (!chatResourcesState.resources.length && host) host.innerHTML = `<div class="chat-resources-empty">Sources unavailable.</div>`;
+  } finally {
+    if (requestToken === chatResourcesState.requestToken) chatResourcesState.loading = false;
+  }
+}
+
+function shouldRefreshChatResourcesForAction(action) {
+  const normalized = String(action || '').trim().toLowerCase();
+  return normalized === 'show_sources'
+    || normalized === 'show_product_carousel'
+    || normalized === 'show_run_result'
+    || normalized === 'web_search'
+    || normalized === 'web_search_single'
+    || normalized === 'web_search_multi'
+    || normalized === 'web_search_snippets'
+    || normalized === 'web_fetch'
+    || normalized === 'web_fetch_batch'
+    || normalized === 'download_url';
+}
+
+function scheduleChatResourcesReload(sessionId = '', delayMs = 180) {
+  const sid = String(sessionId || window.activeChatSessionId || '').trim();
+  if (!sid || !document.getElementById('chat-resources-section')) return;
+  if (chatResourcesReloadTimer) clearTimeout(chatResourcesReloadTimer);
+  chatResourcesReloadTimer = setTimeout(() => {
+    chatResourcesReloadTimer = null;
+    if (String(window.activeChatSessionId || '') !== sid) return;
+    loadChatResources({ sessionId: sid, background: true }).catch(() => {});
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
+function filterChatResources(query = '') {
+  chatResourcesState.query = String(query || '').trim();
+  renderChatResourcesList();
+}
+
+function setChatResourcesExpanded(expanded = false) {
+  chatResourcesState.expanded = expanded === true;
+  if (!chatResourcesState.expanded) chatResourcesState.query = '';
+  renderChatResourcesList();
+  const section = document.getElementById('chat-resources-section');
+  if (chatResourcesState.expanded && section) {
+    setTimeout(() => {
+      section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      document.getElementById('chat-resources-search')?.focus();
+    }, 0);
+  }
+}
+
+function toggleSources(nextOpen = null) {
+  if (typeof nextOpen === 'boolean') {
+    setChatResourcesExpanded(nextOpen);
+    return;
+  }
+  setChatResourcesExpanded(!chatResourcesState.expanded);
+}
+
+function openChatResourceFile(resourceId) {
+  const resource = chatResourcesState.resources.find((item) => String(item?.id || '') === String(resourceId || ''));
+  const filePath = chatResourceFilePath(resource);
+  const title = chatResourceTitle(resource);
+  if (filePath && typeof canvasPresentFile === 'function') {
+    Promise.resolve(canvasPresentFile(filePath, title)).catch((error) => showToast(`Could not open ${title} in Canvas`, error?.message || String(error), 'error'));
+    return;
+  }
+  const url = chatResourceUrl(resource);
+  if (url) window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 let creativeSceneDoc = createSceneDocument();
 let creativeSelectedId = null;
 let creativeTimelineMs = 0;
@@ -17465,6 +18254,7 @@ function showDesktopVoiceStatus(title, body = '', type = 'info', duration = 5000
 // page. The dock is created only while Realtime voice is starting/active so the
 // normal composer and chat remain unchanged outside voice mode.
 let desktopVoiceOrbDock = null;
+let desktopVoiceOrbController = null;
 let desktopVoiceOrbAnimationFrame = 0;
 let desktopVoiceOrbAudioContext = null;
 let desktopVoiceOrbAnalyser = null;
@@ -17481,6 +18271,11 @@ let desktopVoiceOrbAudioLevel = 0;
 let desktopVoiceOrbNoiseFloor = 0.018;
 let desktopVoiceOrbParticlePalette = null;
 let desktopVoiceOrbParticlePaletteAt = 0;
+let desktopVoiceOrbTranscriptPulse = 0;
+let desktopVoiceOrbLastTranscript = '';
+let desktopVoiceOrbToolActiveUntil = 0;
+const desktopVoiceOrbActiveToolCalls = new Set();
+const DESKTOP_VOICE_ORB_TOOL_HOLD_MS = 360;
 const desktopVoiceOrbParticles = Array.from({ length: 38 }, (_, index) => {
   const seed = (value) => {
     const raw = Math.sin((index + 1) * (value * 12.9898 + 78.233)) * 43758.5453;
@@ -17496,6 +18291,32 @@ const desktopVoiceOrbParticles = Array.from({ length: 38 }, (_, index) => {
     twinkle: .55 + seed(9.17) * .75,
   };
 });
+
+function desktopVoiceOrbToolCallKey(callId = '', name = '') {
+  const normalizedCallId = String(callId || '').trim();
+  if (normalizedCallId) return normalizedCallId;
+  const normalizedName = String(name || '').trim();
+  return normalizedName ? `name:${normalizedName}` : '';
+}
+
+function markDesktopVoiceOrbToolActive(callId = '', name = '') {
+  const key = desktopVoiceOrbToolCallKey(callId, name);
+  if (key) {
+    desktopVoiceOrbActiveToolCalls.add(key);
+    const now = typeof performance?.now === 'function' ? performance.now() : Date.now();
+    desktopVoiceOrbToolActiveUntil = Math.max(desktopVoiceOrbToolActiveUntil, now + DESKTOP_VOICE_ORB_TOOL_HOLD_MS);
+  }
+}
+
+function clearDesktopVoiceOrbToolActive(callId = '', name = '') {
+  const key = desktopVoiceOrbToolCallKey(callId, name);
+  if (key) desktopVoiceOrbActiveToolCalls.delete(key);
+}
+
+function desktopVoiceOrbHasActiveTool() {
+  const now = typeof performance?.now === 'function' ? performance.now() : Date.now();
+  return desktopVoiceOrbActiveToolCalls.size > 0 || now < desktopVoiceOrbToolActiveUntil;
+}
 
 function desktopVoiceOrbSvg() {
   const id = `pm-desktop-orb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -17736,6 +18557,10 @@ function updateDesktopVoiceOrbTranscript(text = '', fallback = '') {
   const target = document.getElementById('desktop-voice-orb-transcript');
   if (!target) return;
   const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (value && value !== desktopVoiceOrbLastTranscript) {
+    desktopVoiceOrbTranscriptPulse = Math.max(desktopVoiceOrbTranscriptPulse, .3);
+  }
+  desktopVoiceOrbLastTranscript = value;
   target.textContent = value || String(fallback || '').trim();
   target.classList.toggle('has-text', !!value);
 }
@@ -17986,8 +18811,7 @@ function ensureDesktopVoiceOrbDock() {
     <div class="desktop-voice-target-popover" role="dialog" aria-label="Voice target picker" hidden></div>
     <div class="desktop-voice-orb-shell">
       <button type="button" class="desktop-voice-orb desktop-voice-orb-trigger pm-voice-orb pm-voice-particle-orb" id="desktop-voice-orb-trigger" aria-label="Choose voice target" aria-expanded="false" title="Choose voice target">
-        ${desktopVoiceOrbSvg()}
-        <canvas class="pm-voice-orb-particles desktop-voice-orb-particles" aria-hidden="true"></canvas>
+        <span class="pm-thinking-orb-host" id="desktop-thinking-orb-host" aria-hidden="true"></span>
       </button>
     </div>
   `;
@@ -17995,6 +18819,15 @@ function ensureDesktopVoiceOrbDock() {
   if (composer) chatView.insertBefore(dock, composer);
   else chatView.appendChild(dock);
   desktopVoiceOrbDock = dock;
+  try {
+    const host = dock.querySelector('#desktop-thinking-orb-host');
+    desktopVoiceOrbController = host
+      ? mountThinkingOrb(host, { state: 'thinking', size: 64, theme: 'auto' })
+      : null;
+  } catch (error) {
+    desktopVoiceOrbController = null;
+    console.warn('[desktop voice] thinking orb failed to mount:', error);
+  }
   dock.querySelector('.desktop-voice-orb-trigger')?.addEventListener('click', toggleDesktopVoiceRoomPopover);
   renderDesktopVoiceRoomPopover();
   return dock;
@@ -18018,12 +18851,18 @@ function cleanupDesktopVoiceOrb() {
   desktopVoiceOrbParticlePalette = null;
   desktopVoiceOrbParticlePaletteAt = 0;
   desktopVoiceOrbAudioLevel = 0;
+  desktopVoiceOrbTranscriptPulse = 0;
+  desktopVoiceOrbLastTranscript = '';
+  desktopVoiceOrbToolActiveUntil = 0;
+  desktopVoiceOrbActiveToolCalls.clear();
   desktopVoiceRoomPopoverOpen = false;
   desktopVoiceRoomSelectMode = false;
   desktopVoiceRoomDraftKeys = new Set();
   document.getElementById('chat-view')?.classList.remove('desktop-voice-target-open');
   desktopVoiceOrbDock?.remove?.();
   desktopVoiceOrbDock = null;
+  try { desktopVoiceOrbController?.destroy?.(); } catch {}
+  desktopVoiceOrbController = null;
 }
 
 function animateDesktopVoiceOrb(now) {
@@ -18032,14 +18871,16 @@ function animateDesktopVoiceOrb(now) {
     cleanupDesktopVoiceOrb();
     return;
   }
-  const orb = desktopVoiceOrbDock.querySelector('.desktop-voice-orb');
-  const canvas = desktopVoiceOrbDock.querySelector('.desktop-voice-orb-particles');
-  if (!orb || !canvas) return;
+  const host = desktopVoiceOrbDock.querySelector('#desktop-thinking-orb-host');
+  if (!host) {
+    desktopVoiceOrbAnimationFrame = requestAnimationFrame(animateDesktopVoiceOrb);
+    return;
+  }
   const micTrack = voiceAgentRealtimeConnection?.micTrack
+    || voiceAgentRealtimeConnection?.micStream?.getAudioTracks?.()[0]
     || realtimeDictationConnection?.stream?.getAudioTracks?.()[0]
     || backendVoiceRecorder?.stream?.getAudioTracks?.()[0];
   const listening = !!(micTrack?.readyState === 'live' && micTrack.enabled !== false);
-  const speaking = !!(realtimeVoicePlaybackActive || realtimeAssistantSpeaking || voiceAgentRealtimeConnection?.activeResponse);
   const rawLevel = listening ? sampleDesktopVoiceOrbLevel() : 0;
   if (listening) {
     const floorFollow = rawLevel < desktopVoiceOrbNoiseFloor ? .075 : .0025;
@@ -18048,32 +18889,20 @@ function animateDesktopVoiceOrb(now) {
   } else {
     desktopVoiceOrbNoiseFloor += (.018 - desktopVoiceOrbNoiseFloor) * .025;
   }
-  const signal = Math.max(0, rawLevel - desktopVoiceOrbNoiseFloor - .004);
-  const inputTarget = listening ? Math.max(0, Math.min(1, Math.pow(signal * 10.5, .72))) : 0;
-  const target = speaking ? Math.max(.14, inputTarget) : inputTarget;
-  const smoothing = target > desktopVoiceOrbAudioLevel ? .2 : .115;
-  desktopVoiceOrbAudioLevel += (target - desktopVoiceOrbAudioLevel) * smoothing;
-  if (desktopVoiceOrbAudioLevel < .004) desktopVoiceOrbAudioLevel = 0;
-  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  const delta = reducedMotion
-    ? 0
-    : desktopVoiceOrbParticleLastFrame ? Math.min(.05, Math.max(.001, (now - desktopVoiceOrbParticleLastFrame) / 1000)) : .016;
-  desktopVoiceOrbParticleLastFrame = now;
-  desktopVoiceOrbSpin = (desktopVoiceOrbSpin + delta * (8 + desktopVoiceOrbAudioLevel * 42)) % 360;
-  const spinRadians = desktopVoiceOrbSpin * Math.PI / 180;
-  const gridSquash = .52 + Math.abs(Math.cos(spinRadians)) * .48;
-  const gridRotation = Math.sin(spinRadians) * 8;
-  orb.style.setProperty('--pm-orb-audio', desktopVoiceOrbAudioLevel.toFixed(3));
-  orb.style.setProperty('--pm-orb-grid-squash', gridSquash.toFixed(3));
-  orb.style.setProperty('--pm-orb-grid-rotation', `${gridRotation.toFixed(2)}deg`);
-  orb.style.setProperty('--pm-orb-lift', `${(-desktopVoiceOrbAudioLevel * 7).toFixed(2)}px`);
-  orb.classList.toggle('pm-orb-sound-reactive', listening || speaking);
-  orb.classList.toggle('listening', listening && !speaking);
-  orb.classList.toggle('speaking', speaking);
-  orb.classList.toggle('thinking', !listening && !speaking && realtimeVoiceStarting);
-  drawDesktopVoiceOrbParticles(canvas, reducedMotion ? 0 : now, desktopVoiceOrbAudioLevel, listening || speaking || realtimeVoiceStarting);
+  const signal = Math.max(0, rawLevel - desktopVoiceOrbNoiseFloor - .003);
+  const inputTarget = listening ? Math.max(0, Math.min(1, Math.pow(signal * 16, .62))) : 0;
   const transcript = typeof getRealtimeDictationComposerText === 'function' ? getRealtimeDictationComposerText() : '';
   if (!realtimeAssistantSpeaking) updateDesktopVoiceOrbTranscript(transcript, realtimeVoiceStarting ? 'Connecting…' : 'Listening…');
+  const transcriptPulse = Math.max(0, Number(desktopVoiceOrbTranscriptPulse || 0) || 0);
+  desktopVoiceOrbTranscriptPulse = Math.max(0, transcriptPulse * .86 - .006);
+  const target = Math.max(inputTarget, transcriptPulse);
+  const smoothing = target > desktopVoiceOrbAudioLevel ? .42 : .16;
+  desktopVoiceOrbAudioLevel += (target - desktopVoiceOrbAudioLevel) * smoothing;
+  if (desktopVoiceOrbAudioLevel < .004) desktopVoiceOrbAudioLevel = 0;
+  const state = desktopVoiceOrbHasActiveTool() ? 'solving' : (listening ? 'listening' : 'thinking');
+  host.dataset.state = state;
+  desktopVoiceOrbController?.setState(state);
+  desktopVoiceOrbController?.setAudioLevel(desktopVoiceOrbAudioLevel);
   desktopVoiceOrbAnimationFrame = requestAnimationFrame(animateDesktopVoiceOrb);
 }
 
@@ -22547,6 +23376,8 @@ function stopVoiceAgentRealtimeSession() {
   voiceAgentRealtimeConnecting = null;
   voiceAgentRealtimeListenMode = 'idle';
   voiceAgentRealtimeFunctionCallBuffers.clear();
+  desktopVoiceOrbToolActiveUntil = 0;
+  desktopVoiceOrbActiveToolCalls.clear();
   clearVoiceAgentRealtimePendingCreateResponse();
   if (voiceAgentRealtimeContextRefreshTimer) {
     clearInterval(voiceAgentRealtimeContextRefreshTimer);
@@ -23055,6 +23886,7 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
   if (type === 'response.function_call_arguments.delta') {
     const callId = String(event.call_id || '').trim();
     if (!callId) return;
+    markDesktopVoiceOrbToolActive(callId);
     const buf = voiceAgentRealtimeFunctionCallBuffers.get(callId) || { name: '', argsStr: '' };
     buf.argsStr += String(event.delta || '');
     voiceAgentRealtimeFunctionCallBuffers.set(callId, buf);
@@ -23064,10 +23896,16 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
     const callId = String(event.call_id || '').trim();
     const name = String(event.name || voiceAgentRealtimeFunctionCallBuffers.get(callId)?.name || '').trim();
     const argsStr = String(event.arguments || voiceAgentRealtimeFunctionCallBuffers.get(callId)?.argsStr || '');
+    markDesktopVoiceOrbToolActive(callId, name);
     voiceAgentRealtimeFunctionCallBuffers.delete(callId);
     let args = {};
     try { args = argsStr ? JSON.parse(argsStr) : {}; } catch {}
-    await executeVoiceAgentRealtimeFunctionCall({ call_id: callId, name, args }, sessionId);
+    try {
+      await executeVoiceAgentRealtimeFunctionCall({ call_id: callId, name, args }, sessionId);
+    } finally {
+      clearDesktopVoiceOrbToolActive(callId, name);
+      clearDesktopVoiceOrbToolActive('', name);
+    }
     return;
   }
   if (type === 'response.created') {
@@ -23084,6 +23922,7 @@ async function handleVoiceAgentRealtimeEvent(event, sessionId) {
     const item = event.item;
     voiceAgentRealtimeTurn.hadFunctionCall = true;
     const callId = String(item.call_id || '').trim();
+    markDesktopVoiceOrbToolActive(callId, item.name);
     if (callId) {
       voiceAgentRealtimeFunctionCallBuffers.set(callId, { name: String(item.name || ''), argsStr: '' });
     }
@@ -24588,91 +25427,95 @@ async function toggleRealtimeVoiceReplies() {
   }
 }
 
-const creativeRenderJobClient = createCreativeRenderJobClient({
-  getSessionId: () => getActiveCreativeSessionId(),
-  getRoot: () => normalizeCanvasPath(canvasProjectRoot || ''),
-  getMode: () => window.currentCreativeMode,
-  getSceneDoc: () => creativeSceneDoc,
-  normalizeMode: (mode) => normalizeCreativeMode(mode),
-  isStructuredMode: (mode) => isStructuredCreativeMode(mode),
-  ensureStorageRootVisible: (data, mode) => ensureCreativeStorageRootVisible(data, mode),
-  mergeJobEntry: (entry, options = {}) => mergeCreativeRenderJobEntry(entry, options),
-  blobToBase64,
-  loadCreativeAssets,
-  persistCreativeExportBundle,
-  persistCreativeSceneSnapshot,
-  getArtifactStem: (mode) => getCreativeArtifactStem(mode),
-  buildArtifactTimestamp: () => { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}${String(d.getSeconds()).padStart(2,'0')}`; },
-  getStructuredModeLabel: (mode) => getStructuredCreativeModeLabel(mode),
-  addProcessEntry,
-});
+function initializeCreativeFeatureClients(runtime) {
+  if (creativeRenderJobClient && creativeMotionTemplateClient && creativeExportEngine && creativeRenderWorkerController) return;
 
-const creativeMotionTemplateClient = createCreativeMotionTemplateClient({
-  getSessionId: () => getActiveCreativeSessionId(),
-  getCreativeStorageRoot: () => normalizeCanvasPath(canvasProjectRoot || ''),
-});
+  creativeRenderJobClient = runtime.createCreativeRenderJobClient({
+    getSessionId: () => getActiveCreativeSessionId(),
+    getRoot: () => normalizeCanvasPath(canvasProjectRoot || ''),
+    getMode: () => window.currentCreativeMode,
+    getSceneDoc: () => creativeSceneDoc,
+    normalizeMode: (mode) => normalizeCreativeMode(mode),
+    isStructuredMode: (mode) => isStructuredCreativeMode(mode),
+    ensureStorageRootVisible: (data, mode) => ensureCreativeStorageRootVisible(data, mode),
+    mergeJobEntry: (entry, options = {}) => mergeCreativeRenderJobEntry(entry, options),
+    blobToBase64,
+    loadCreativeAssets,
+    persistCreativeExportBundle,
+    persistCreativeSceneSnapshot,
+    getArtifactStem: (mode) => getCreativeArtifactStem(mode),
+    buildArtifactTimestamp: () => { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}${String(d.getSeconds()).padStart(2,'0')}`; },
+    getStructuredModeLabel: (mode) => getStructuredCreativeModeLabel(mode),
+    addProcessEntry,
+  });
 
-const creativeExportEngine = createCreativeExportEngine({
-  normalizeMode: (mode) => normalizeCreativeMode(mode),
-  getMode: () => window.currentCreativeMode,
-  isExportActive: (format = '') => isCreativeExportActive(format),
-  showToast,
-  getTimelineDurationMs: () => getCreativeTimelineDurationMs(),
-  getTimelineFrameRate: () => getCreativeTimelineFrameRate(),
-  getSceneDoc: () => creativeSceneDoc,
-  hasAudioTrack: () => hasCreativeAudioTrack(),
-  isPlaybackActive: () => isCreativePlaybackActive(),
-  stopPlayback: (options = {}) => stopCreativePlayback(options),
-  playPlayback: () => playCreativePlayback(),
-  getTimelineMs: () => creativeTimelineMs,
-  getActiveExport: () => creativeActiveExport,
-  setActiveExport: (value) => { creativeActiveExport = value || null; },
+  creativeMotionTemplateClient = runtime.createCreativeMotionTemplateClient({
+    getSessionId: () => getActiveCreativeSessionId(),
+    getCreativeStorageRoot: () => normalizeCanvasPath(canvasProjectRoot || ''),
+  });
+
+  creativeExportEngine = runtime.createCreativeExportEngine({
+    normalizeMode: (mode) => normalizeCreativeMode(mode),
+    getMode: () => window.currentCreativeMode,
+    isExportActive: (format = '') => isCreativeExportActive(format),
+    showToast,
+    getTimelineDurationMs: () => getCreativeTimelineDurationMs(),
+    getTimelineFrameRate: () => getCreativeTimelineFrameRate(),
+    getSceneDoc: () => creativeSceneDoc,
+    hasAudioTrack: () => hasCreativeAudioTrack(),
+    isPlaybackActive: () => isCreativePlaybackActive(),
+    stopPlayback: (options = {}) => stopCreativePlayback(options),
+    playPlayback: () => playCreativePlayback(),
+    getTimelineMs: () => creativeTimelineMs,
+    getActiveExport: () => creativeActiveExport,
+    setActiveExport: (value) => { creativeActiveExport = value || null; },
     renderWorkspace: () => renderCreativeWorkspace(),
     syncVideoElements: (options = {}) => syncCreativeVideoElementsToTimeline(options),
     persistActiveChat: () => persistActiveChat(),
-  addProcessEntry,
-  getStructuredModeLabel: (mode) => getStructuredCreativeModeLabel(mode),
-  renderExportCanvas: (format) => renderCreativeExportCanvas(format),
-  createCreativeRenderJob: (options = {}) => creativeRenderJobClient.createCreativeRenderJob(options),
-  reportCreativeRenderJobProgress: (jobId, payload = {}, options = {}) => creativeRenderJobClient.reportCreativeRenderJobProgress(jobId, payload, options),
-  clearCreativeRenderJobReportState: (jobId) => creativeRenderJobClient.clearCreativeRenderJobReportState(jobId),
-  createCreativeExportAudioSession: (track, durationMs) => createCreativeExportAudioSession(track, durationMs),
-  refreshExportChrome: (patch = {}, options = {}) => refreshCreativeExportChrome(patch, options),
-  finalizeCreativeRenderJobBundle: (payload) => creativeRenderJobClient.finalizeCreativeRenderJobBundle(payload),
-  persistCreativeExportBundle,
-  downloadBlob,
-  getExportBaseName: (format) => getCreativeExportBaseName(format),
-  formatTimelineTime: (ms) => formatCreativeTimelineTime(ms),
-  setTimelinePosition: (value, options = {}) => setCreativeTimelinePosition(value, options),
-  isFabricRendererAvailable: (mode) => isCreativeFabricRendererAvailable(mode),
-  getFabricRenderPromise: () => creativeFabricLastRenderPromise,
-  resetExportUiStamp: () => { creativeExportUiStamp = 0; },
-  getAudioTrackConfig: (doc) => getCreativeAudioTrackConfig(doc),
-  getRenderJobEntryById: (jobId) => getCreativeRenderJobEntry(jobId),
-});
+    addProcessEntry,
+    getStructuredModeLabel: (mode) => getStructuredCreativeModeLabel(mode),
+    renderExportCanvas: (format) => renderCreativeExportCanvas(format),
+    createCreativeRenderJob: (options = {}) => creativeRenderJobClient.createCreativeRenderJob(options),
+    reportCreativeRenderJobProgress: (jobId, payload = {}, options = {}) => creativeRenderJobClient.reportCreativeRenderJobProgress(jobId, payload, options),
+    clearCreativeRenderJobReportState: (jobId) => creativeRenderJobClient.clearCreativeRenderJobReportState(jobId),
+    createCreativeExportAudioSession: (track, durationMs) => createCreativeExportAudioSession(track, durationMs),
+    refreshExportChrome: (patch = {}, options = {}) => refreshCreativeExportChrome(patch, options),
+    finalizeCreativeRenderJobBundle: (payload) => creativeRenderJobClient.finalizeCreativeRenderJobBundle(payload),
+    persistCreativeExportBundle,
+    downloadBlob,
+    getExportBaseName: (format) => getCreativeExportBaseName(format),
+    formatTimelineTime: (ms) => formatCreativeTimelineTime(ms),
+    setTimelinePosition: (value, options = {}) => setCreativeTimelinePosition(value, options),
+    isFabricRendererAvailable: (mode) => isCreativeFabricRendererAvailable(mode),
+    getFabricRenderPromise: () => creativeFabricLastRenderPromise,
+    resetExportUiStamp: () => { creativeExportUiStamp = 0; },
+    getAudioTrackConfig: (doc) => getCreativeAudioTrackConfig(doc),
+    getRenderJobEntryById: (jobId) => getCreativeRenderJobEntry(jobId),
+  });
 
-const creativeRenderWorkerController = createCreativeRenderWorkerController({
-  generateSessionId,
-  setAgentSessionId,
-  getSessionId: () => getActiveCreativeSessionId(),
-  normalizeMode: (mode) => normalizeCreativeMode(mode),
-  fetchCreativeRenderJobForWorker: (jobId, sessionId) => creativeRenderJobClient.fetchCreativeRenderJobForWorker(jobId, sessionId),
-  reportCreativeRenderJobProgress: (jobId, payload = {}, options = {}) => creativeRenderJobClient.reportCreativeRenderJobProgress(jobId, payload, options),
-  clearCreativeRenderJobReportState: (jobId) => creativeRenderJobClient.clearCreativeRenderJobReportState(jobId),
-  mergeJobEntry: (entry, options = {}) => mergeCreativeRenderJobEntry(entry, options),
-  applySessionCreativeMode,
-  setCanvasProjectState,
-  getCreativeWorkspaceLabel: (mode) => getCreativeWorkspaceLabel(mode),
-  setInspectorTab: (tab, options = {}) => setCreativeInspectorTab(tab, options),
-  createSceneDocument,
-  restoreCreativeSnapshot,
-  ensureCreativeStorageRootVisible,
-  loadCreativeLibraries,
-  renderCreativeWorkspace,
-  waitForCreativeExportPaint: (frames = 1) => creativeExportEngine.waitForCreativeExportPaint(frames),
-  exportCreativeVideoGif: (options = {}) => creativeExportEngine.exportCreativeVideoGif(options),
-  exportCreativeVideoRecording: (format = 'webm', options = {}) => creativeExportEngine.exportCreativeVideoRecording(format, options),
-});
+  creativeRenderWorkerController = runtime.createCreativeRenderWorkerController({
+    generateSessionId,
+    setAgentSessionId,
+    getSessionId: () => getActiveCreativeSessionId(),
+    normalizeMode: (mode) => normalizeCreativeMode(mode),
+    fetchCreativeRenderJobForWorker: (jobId, sessionId) => creativeRenderJobClient.fetchCreativeRenderJobForWorker(jobId, sessionId),
+    reportCreativeRenderJobProgress: (jobId, payload = {}, options = {}) => creativeRenderJobClient.reportCreativeRenderJobProgress(jobId, payload, options),
+    clearCreativeRenderJobReportState: (jobId) => creativeRenderJobClient.clearCreativeRenderJobReportState(jobId),
+    mergeJobEntry: (entry, options = {}) => mergeCreativeRenderJobEntry(entry, options),
+    applySessionCreativeMode,
+    setCanvasProjectState,
+    getCreativeWorkspaceLabel: (mode) => getCreativeWorkspaceLabel(mode),
+    setInspectorTab: (tab, options = {}) => setCreativeInspectorTab(tab, options),
+    createSceneDocument,
+    restoreCreativeSnapshot,
+    ensureCreativeStorageRootVisible,
+    loadCreativeLibraries,
+    renderCreativeWorkspace,
+    waitForCreativeExportPaint: (frames = 1) => creativeExportEngine.waitForCreativeExportPaint(frames),
+    exportCreativeVideoGif: (options = {}) => creativeExportEngine.exportCreativeVideoGif(options),
+    exportCreativeVideoRecording: (format = 'webm', options = {}) => creativeExportEngine.exportCreativeVideoRecording(format, options),
+  });
+}
 
 function getCanvasProjectDisplayName(projectRoot, fallbackLabel = '') {
   const normalized = normalizeCanvasPath(projectRoot);
@@ -24929,6 +25772,7 @@ function clearDesignSelectionContext() {
   designSelectedElementContext = null;
   updateDesignSelectionChip();
   if (typeof hideAllDesignPopovers === 'function') hideAllDesignPopovers();
+  if (typeof hideBrowserDesignPopovers === 'function') hideBrowserDesignPopovers();
   designLastClickedElement = null;
   designLastClickedFrame = null;
 }
@@ -25100,9 +25944,9 @@ function renderCanvasPublishControls() {
     parts.push(`<button onclick="canvasPreparePublishAction('vercel_deploy')" title="Deploy this project to Vercel" style="${getCanvasPublishButtonStyle('success')}"><iconify-icon icon="solar:rocket-bold-duotone" width="14" height="14"></iconify-icon>Deploy</button>`);
   }
   if (vercel.deploymentUrl) {
-    parts.push(`<button onclick="window.open('${escHtml(vercel.deploymentUrl).replace(/'/g, '&#39;')}', '_blank')" title="Open live deployment" style="${getCanvasPublishButtonStyle('muted')}"><iconify-icon icon="solar:square-arrow-right-up-bold-duotone" width="14" height="14"></iconify-icon>Live</button>`);
+    parts.push(`<button onclick="window.openPrometheusBrowserLink ? window.openPrometheusBrowserLink('${escHtml(vercel.deploymentUrl).replace(/'/g, '&#39;')}') : window.open('${escHtml(vercel.deploymentUrl).replace(/'/g, '&#39;')}', '_blank')" title="Open live deployment in Prometheus Browser" style="${getCanvasPublishButtonStyle('muted')}"><iconify-icon icon="solar:square-arrow-right-up-bold-duotone" width="14" height="14"></iconify-icon>Live</button>`);
   } else if (vercel.dashboardUrl) {
-    parts.push(`<button onclick="window.open('${escHtml(vercel.dashboardUrl).replace(/'/g, '&#39;')}', '_blank')" title="Open Vercel dashboard" style="${getCanvasPublishButtonStyle('muted')}"><iconify-icon icon="solar:window-frame-bold-duotone" width="14" height="14"></iconify-icon>Dashboard</button>`);
+    parts.push(`<button onclick="window.openPrometheusBrowserLink ? window.openPrometheusBrowserLink('${escHtml(vercel.dashboardUrl).replace(/'/g, '&#39;')}') : window.open('${escHtml(vercel.dashboardUrl).replace(/'/g, '&#39;')}', '_blank')" title="Open Vercel dashboard in Prometheus Browser" style="${getCanvasPublishButtonStyle('muted')}"><iconify-icon icon="solar:window-frame-bold-duotone" width="14" height="14"></iconify-icon>Dashboard</button>`);
   }
   wrap.innerHTML = parts.join('');
   wrap.style.display = 'flex';
@@ -25449,23 +26293,23 @@ function setCreativeInspectorTab(tab = 'properties', options = {}) {
 
 function getCreativeAudioTrackConfig(doc = creativeSceneDoc) {
   const source = doc?.audioTrack && typeof doc.audioTrack === 'object' ? doc.audioTrack : doc;
-  return normalizeCreativeAudioTrackConfigEngine(source || {});
+  return requireCreativeFeatureRuntime().normalizeCreativeAudioTrackConfig(source || {});
 }
 
 function hasCreativeAudioTrack(doc = creativeSceneDoc) {
-  return hasCreativeAudioTrackConfigEngine(doc?.audioTrack || doc);
+  return requireCreativeFeatureRuntime().hasCreativeAudioTrackConfig(doc?.audioTrack || doc);
 }
 
 function stopCreativeAudioPreview(options = {}) {
-  stopCreativeAudioPreviewEngine(options);
+  requireCreativeFeatureRuntime().stopCreativeAudioPreview(options);
 }
 
 function ensureCreativeAudioPreviewElement(track = getCreativeAudioTrackConfig()) {
-  return ensureCreativeAudioPreviewElementEngine(track);
+  return requireCreativeFeatureRuntime().ensureCreativeAudioPreviewElement(track);
 }
 
 function syncCreativeAudioPreviewToTimeline(options = {}) {
-  syncCreativeAudioPreviewToTimelineEngine({
+  requireCreativeFeatureRuntime().syncCreativeAudioPreviewToTimeline({
     mode: normalizeCreativeMode(window.currentCreativeMode),
     exportActive: isCreativeExportActive(),
     timelineMs: creativeTimelineMs,
@@ -25478,15 +26322,15 @@ function syncCreativeAudioPreviewToTimeline(options = {}) {
 }
 
 function getCreativeAudioTrackWindow(track = getCreativeAudioTrackConfig(), durationMs = getCreativeTimelineDurationMs()) {
-  return getCreativeAudioTrackWindowEngine(track, durationMs);
+  return requireCreativeFeatureRuntime().getCreativeAudioTrackWindow(track, durationMs);
 }
 
 function waitForCreativeMediaReady(media) {
-  return waitForCreativeMediaReadyEngine(media);
+  return requireCreativeFeatureRuntime().waitForCreativeMediaReady(media);
 }
 
 async function createCreativeExportAudioSession(track = getCreativeAudioTrackConfig(), durationMs = getCreativeTimelineDurationMs()) {
-  return createCreativeExportAudioSessionEngine(track, durationMs, {
+  return requireCreativeFeatureRuntime().createCreativeExportAudioSession(track, durationMs, {
     resolveSourceUrl: (source) => creativeMediaSourceUrl(source),
   });
 }
@@ -25498,7 +26342,7 @@ async function syncCreativeAudioTrackAnalysis(doc = creativeSceneDoc, options = 
   if (!sessionId) return null;
   const requestToken = ++creativeAudioAnalysisRequestToken;
   try {
-    const nextTrack = await fetchCreativeAudioAnalysis({
+    const nextTrack = await requireCreativeFeatureRuntime().fetchCreativeAudioAnalysis({
       sessionId,
       root: normalizeCanvasPath(canvasProjectRoot || ''),
       source: track.source,
@@ -26931,15 +27775,15 @@ async function canvasInsertHtmlMotionBlock(blockId) {
 }
 
 function normalizeCreativeRenderJobStatus(status) {
-  return normalizeCreativeRenderJobStatusEngine(status);
+  return requireCreativeFeatureRuntime().normalizeCreativeRenderJobStatus(status);
 }
 
 function isCreativeRenderJobTerminalStatus(status) {
-  return isCreativeRenderJobTerminalStatusEngine(status);
+  return requireCreativeFeatureRuntime().isCreativeRenderJobTerminalStatus(status);
 }
 
 function sortCreativeRenderJobEntries(entries = []) {
-  return sortCreativeRenderJobEntriesEngine(entries);
+  return requireCreativeFeatureRuntime().sortCreativeRenderJobEntries(entries);
 }
 
 function getCreativeRenderJobEntry(jobId) {
@@ -27048,9 +27892,14 @@ async function runCreativeRenderWorkerJob(job) {
   return creativeRenderWorkerController.runCreativeRenderWorkerJob(job);
 }
 
-async function bootCreativeRenderWorkerMode() {
+function bootCreativeRenderWorkerMode() {
   if (creativeRenderWorkerBootPromise) return creativeRenderWorkerBootPromise;
-  creativeRenderWorkerBootPromise = creativeRenderWorkerController.bootCreativeRenderWorkerMode();
+  creativeRenderWorkerBootPromise = ensureCreativeFeatureRuntime()
+    .then(() => creativeRenderWorkerController.bootCreativeRenderWorkerMode())
+    .catch((error) => {
+      creativeRenderWorkerBootPromise = null;
+      throw error;
+    });
   return creativeRenderWorkerBootPromise;
 }
 
@@ -28983,11 +29832,6 @@ function canvasApplyCreativeSizePreset(presetKey) {
   addProcessEntry('info', `Creative scene resized to ${preset.label} (${preset.width}x${preset.height}).`);
 }
 
-// HyperFrames controller registry — keyed by element.id. Survives stage
-// re-renders so the iframe doesn't re-mount on every keystroke. Reconciled
-// after every stage.innerHTML write by syncHyperframesControllers().
-const _hfControllers = new Map();
-
 function applyHyperframesExtractionToElement(live, extraction = {}, html = null) {
   if (!live) return;
   const meta = { ...(live.meta || {}) };
@@ -29008,369 +29852,60 @@ function applyHyperframesExtractionToElement(live, extraction = {}, html = null)
 
 function syncHyperframesControllers(stage) {
   if (!stage) return;
-  const liveIds = new Set();
-  const placeholders = stage.querySelectorAll('[data-hyperframes-mount]');
-  for (const placeholder of placeholders) {
-    const elementId = placeholder.getAttribute('data-hyperframes-mount');
-    liveIds.add(elementId);
-    const element = creativeSceneDoc.elements.find((el) => el.id === elementId);
-    if (!element) continue;
-    let entry = _hfControllers.get(elementId);
-    if (!entry) {
-      const controller = createHyperframesController({
-        element,
-        mount: placeholder,
-        api: {
-          post: (url, body) => api(url, { method: 'POST', body }),
-          get: (url) => api(url),
-        },
-        onSourceChanged: (html) => {
-          const live = creativeSceneDoc.elements.find((el) => el.id === elementId);
-          if (live) {
-            live.meta = { ...(live.meta || {}), html, dirty: false };
-          }
-        },
-        onLayersChanged: (layers, extraction = {}) => {
-          const live = creativeSceneDoc.elements.find((el) => el.id === elementId);
-          if (live) {
-            applyHyperframesExtractionToElement(live, { ...extraction, layers });
-            if (creativeSelectedId === elementId) {
-              try { renderCreativeWorkspace(); } catch {}
-            }
-          }
-        },
-        onExtractionChanged: (extraction = {}) => {
-          const live = creativeSceneDoc.elements.find((el) => el.id === elementId);
-          if (live) {
-            applyHyperframesExtractionToElement(live, extraction);
-            if (creativeSelectedId === elementId) {
-              try { renderCreativeWorkspace(); } catch {}
-            }
-          }
-        },
-        onPick: (info) => {
-          // Picker hits inside the iframe don't yet move canvas selection —
-          // canvas selection is at the clip level. Logged for the inspector.
-          window._lastHyperframesPick = info;
-        },
-        onError: (err) => console.warn('hyperframes controller error', err),
-        useStudio: element.meta?.useStudio === true,
-      });
-      entry = { controller, element };
-      _hfControllers.set(elementId, entry);
-    } else if (entry.element !== element) {
-      // Element identity changed — refresh source HTML if it differs.
-      const nextHtml = String(element.meta?.html || '');
-      if (nextHtml && entry.controller.getHtml() !== nextHtml) {
-        entry.controller.setHtml(nextHtml);
-      }
-      entry.element = element;
-    }
+  const requestToken = ++hyperframesControllerSyncToken;
+  if (!stage.querySelector('[data-hyperframes-mount]')) {
+    hyperframesFeature?.syncControllers(stage);
+    return;
   }
-  // Dispose controllers whose elements were removed.
-  for (const [id, entry] of _hfControllers) {
-    if (!liveIds.has(id)) {
-      try { entry.controller.dispose(); } catch {}
-      _hfControllers.delete(id);
-    }
-  }
+  ensureHyperframesFeature()
+    .then((feature) => {
+      if (requestToken !== hyperframesControllerSyncToken) return;
+      feature.syncControllers(document.getElementById('canvas-creative-stage') || stage);
+    })
+    .catch((error) => console.warn('Could not load HyperFrames workspace', error));
 }
 
 window.canvasOpenHyperframesCatalog = function () {
-  let modal = document.querySelector('#hyperframes-catalog-modal');
-  if (modal) { modal.remove(); modal = null; }
-  modal = document.createElement('div');
-  modal.id = 'hyperframes-catalog-modal';
-  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center';
-  const panel = document.createElement('div');
-  panel.style.cssText = 'background:#fff;width:min(960px,90vw);height:min(720px,85vh);border-radius:12px;display:flex;flex-direction:column;overflow:hidden';
-  const header = document.createElement('div');
-  header.style.cssText = 'padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e5e7eb';
-  header.innerHTML = `<div style="font-weight:700">HyperFrames Catalog</div><button id="hf-catalog-close" style="padding:4px 10px">Close</button>`;
-  const body = document.createElement('div');
-  body.style.cssText = 'flex:1;overflow:hidden;display:flex;flex-direction:column';
-  panel.appendChild(header);
-  panel.appendChild(body);
-  modal.appendChild(panel);
-  document.body.appendChild(modal);
-  header.querySelector('#hf-catalog-close').addEventListener('click', () => modal.remove());
-  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
-  createHyperframesCatalogBrowser({
-    mount: body,
-    api: { get: (url) => api(url), post: (url, b) => api(url, { method: 'POST', body: b }) },
-    onInsertEditable: (payload) => insertHyperframesClip({ ...payload, advancedBlock: false, modal }),
-    onInsertAdvanced: (payload) => insertHyperframesClip({ ...payload, advancedBlock: true, modal }),
-    onError: (err) => showToast({ message: `HyperFrames catalog: ${err?.message || err}`, kind: 'error' }),
-  });
+  return ensureHyperframesFeature()
+    .then((feature) => feature.openCatalog())
+    .catch((error) => showToast({ message: `Could not load HyperFrames catalog: ${error?.message || error}`, kind: 'error' }));
 };
 
 function renderHyperframesInspector(selected) {
-  const layers = Array.isArray(selected.meta?.layers) ? selected.meta.layers : [];
-  const tracks = Array.isArray(selected.meta?.tracks) ? selected.meta.tracks : [];
-  const slots = Array.isArray(selected.meta?.slots) ? selected.meta.slots : [];
-  const variableBindings = Array.isArray(selected.meta?.variableBindings) ? selected.meta.variableBindings : [];
-  const assets = Array.isArray(selected.meta?.assets) ? selected.meta.assets : [];
-  const warnings = Array.isArray(selected.meta?.warnings) ? selected.meta.warnings : [];
-  const lintErrors = Array.isArray(selected.meta?.lint?.errors) ? selected.meta.lint.errors : [];
-  const lintWarnings = Array.isArray(selected.meta?.lint?.warnings) ? selected.meta.lint.warnings : [];
-  const qaIssues = Array.isArray(selected.meta?.qaReport?.issues) ? selected.meta.qaReport.issues : [];
-  const ingest = selected.meta?.ingest && typeof selected.meta.ingest === 'object' ? selected.meta.ingest : null;
-  const advanced = selected.meta?.advancedBlock === true;
-  const safeElementId = escHtml(selected.id).replace(/'/g, '&#39;');
-  const layerRows = advanced
-    ? `<div style="font-size:11px;color:#a8a29e;padding:8px 0">Advanced block — internals are code-backed. Edit via slots and variables below.</div>`
-    : layers.length
-      ? layers.map((layer) => `
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border:1px solid rgba(255,255,255,0.08);border-radius:6px;margin-bottom:4px">
-            <div>
-              <div style="font-size:12px;color:#fafaf9">${escHtml(layer.name || layer.elementId)}</div>
-              <div style="font-size:10px;color:#a8a29e">${escHtml(layer.kind)} · ${layer.startMs}–${layer.endMs}ms</div>
-            </div>
-            ${layer.editable?.text ? `<button onclick="canvasHyperframesEditLayer('${escHtml(selected.id)}','${escHtml(layer.elementId)}','text')" style="font-size:10px;padding:3px 6px">Edit text</button>` : ''}
-          </div>
-        `).join('')
-      : `<div style="font-size:11px;color:#a8a29e;padding:8px 0">No layers extracted yet — open the clip preview to populate.</div>`;
-
-  const trackRows = tracks.length ? tracks.map((track) => `
-    <div style="display:grid;grid-template-columns:48px 1fr;gap:8px;align-items:center;padding:6px 8px;border:1px solid rgba(255,255,255,0.08);border-radius:6px;margin-bottom:4px">
-      <div style="font-size:10px;color:#a8a29e;font-weight:800">T${escHtml(String(track.index ?? 0))}</div>
-      <div style="min-width:0">
-        <div style="font-size:12px;color:#fafaf9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(track.name || `${track.layers?.length || 0} layers`)}</div>
-        <div style="font-size:10px;color:#a8a29e">${escHtml(String(track.startMs || 0))}-${escHtml(String(track.endMs || 0))}ms | ${escHtml(String(track.layers?.length || 0))} clips</div>
-      </div>
-    </div>
-  `).join('') : '';
-
-  const slotRows = slots.length ? slots.map((slot) => `
-    <div style="margin-bottom:8px">
-      <div style="font-size:10px;color:#a8a29e;margin-bottom:3px">${escHtml(slot.label || slot.id)} · ${escHtml(slot.kind)}</div>
-      <input data-hf-slot="${escHtml(slot.id)}" data-hf-slot-kind="${escHtml(slot.kind)}" data-hf-element="${escHtml(selected.id)}" type="${slot.kind === 'color' ? 'color' : slot.kind === 'number' ? 'number' : 'text'}" ${slot.min !== null ? `min="${slot.min}"` : ''} ${slot.max !== null ? `max="${slot.max}"` : ''} ${slot.step !== null ? `step="${slot.step}"` : ''} value="${escHtml(String(slot.default ?? ''))}" oninput="canvasHyperframesPatchFromSlot(this)" style="width:100%;padding:5px 8px;font-size:12px;background:rgba(255,255,255,0.06);color:#fafaf9;border:1px solid rgba(255,255,255,0.1);border-radius:6px"/>
-    </div>
-  `).join('') : '';
-
-  const variableRows = variableBindings.length ? variableBindings.map((binding) => {
-    const v = binding.variable || {};
-    return `
-      <div style="margin-bottom:8px">
-        <div style="font-size:10px;color:#a8a29e;margin-bottom:3px">${escHtml(v.label || v.id)} · ${escHtml(v.type || 'string')}</div>
-        <input data-hf-variable="${escHtml(v.id)}" data-hf-element="${escHtml(selected.id)}" type="${v.type === 'number' ? 'number' : v.type === 'color' ? 'color' : v.type === 'boolean' ? 'checkbox' : 'text'}" ${v.type === 'boolean' ? (binding.currentValue ? 'checked' : '') : `value="${escHtml(String(binding.currentValue ?? v.default ?? ''))}"`} onchange="canvasHyperframesPatchFromVariable(this)" style="width:100%;padding:5px 8px;font-size:12px;background:rgba(255,255,255,0.06);color:#fafaf9;border:1px solid rgba(255,255,255,0.1);border-radius:6px"/>
-      </div>
-    `;
-  }).join('') : '';
-
-  return `
-    <div style="padding:0 16px 14px">
-      <div style="font-size:10px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#a8a29e;margin-top:8px">HyperFrames clip</div>
-      <div style="font-size:11px;color:#a8a29e;margin-top:4px">${escHtml(selected.meta?.compositionId || '(unknown composition)')} · ${escHtml(advanced ? 'advanced' : 'editable')}</div>
-      <div style="margin-top:10px">
-        <div style="font-size:10px;font-weight:800;color:#a8a29e;margin-bottom:6px">LAYERS</div>
-        ${layerRows}
-      </div>
-      <div class="creative-pill-row" style="margin-top:10px">
-        <button type="button" class="creative-chip-btn" onclick="canvasToggleHyperframesStudio('${safeElementId}')"><iconify-icon icon="solar:code-square-bold-duotone" width="14" height="14"></iconify-icon>${selected.meta?.useStudio === true ? 'Canvas Preview' : 'Studio'}</button>
-        <button type="button" class="creative-chip-btn" onclick="canvasRefreshHyperframesClip('${safeElementId}')"><iconify-icon icon="solar:refresh-bold-duotone" width="14" height="14"></iconify-icon>Refresh</button>
-        <button type="button" class="creative-chip-btn" onclick="canvasLintHyperframesClip('${safeElementId}')"><iconify-icon icon="solar:check-circle-bold-duotone" width="14" height="14"></iconify-icon>Lint</button>
-        <button type="button" class="creative-chip-btn" onclick="canvasQaHyperframesClip('${safeElementId}')"><iconify-icon icon="solar:eye-bold-duotone" width="14" height="14"></iconify-icon>QA</button>
-        <button type="button" class="creative-chip-btn creative-chip-btn--accent" onclick="canvasExportHyperframesClip('${safeElementId}', 'mp4')"><iconify-icon icon="solar:videocamera-record-bold-duotone" width="14" height="14"></iconify-icon>Producer MP4</button>
-      </div>
-      ${ingest ? `<div class="creative-info-note" style="margin-top:10px">Catalog ingest: ${escHtml(String(ingest.assetCount ?? assets.length))} assets, ${escHtml(String(ingest.fontCount ?? 0))} fonts, ${escHtml(String(ingest.rewrittenPathCount ?? 0))} paths rewritten.</div>` : ''}
-      ${warnings.length ? `<div class="creative-info-note" style="margin-top:10px;color:#fbbf24">${warnings.slice(0, 3).map((warning) => escHtml(String(warning))).join('<br>')}</div>` : ''}
-      ${lintErrors.length || lintWarnings.length ? `<div class="creative-info-note" style="margin-top:10px">${lintErrors.length} lint errors, ${lintWarnings.length} warnings.</div>` : ''}
-      ${qaIssues.length ? `<div class="creative-info-note" style="margin-top:10px">${qaIssues.length} QA issues found.</div>` : ''}
-      ${trackRows ? `<div style="margin-top:10px"><div style="font-size:10px;font-weight:800;color:#a8a29e;margin-bottom:6px">TRACKS</div>${trackRows}</div>` : ''}
-      ${slotRows ? `<div style="margin-top:10px"><div style="font-size:10px;font-weight:800;color:#a8a29e;margin-bottom:6px">SLOTS</div>${slotRows}</div>` : ''}
-      ${variableRows ? `<div style="margin-top:10px"><div style="font-size:10px;font-weight:800;color:#a8a29e;margin-bottom:6px">VARIABLES</div>${variableRows}</div>` : ''}
-    </div>
-  `;
+  if (hyperframesFeature) return hyperframesFeature.renderInspector(selected);
+  ensureHyperframesFeature()
+    .then(() => {
+      if (getHyperframesElementById(selected?.id) && creativeSelectedId === selected?.id) {
+        renderCreativeWorkspace({ skipStageRender: true });
+      }
+    })
+    .catch((error) => console.warn('Could not load HyperFrames inspector', error));
+  return '<div style="padding:12px 16px;color:#a8a29e;font-size:11px">Loading HyperFrames controls…</div>';
 }
 
-window.canvasToggleHyperframesStudio = function (elementId) {
-  const live = getHyperframesElementById(elementId);
-  if (!live) return;
-  live.meta = { ...(live.meta || {}), useStudio: live.meta?.useStudio !== true };
-  const entry = _hfControllers.get(elementId);
-  if (entry) {
-    try { entry.controller.dispose(); } catch {}
-    _hfControllers.delete(elementId);
-  }
-  renderCreativeWorkspace();
-  persistActiveChat();
-};
+function callHyperframesAction(method, ...args) {
+  return ensureHyperframesFeature()
+    .then((feature) => feature[method](...args))
+    .catch((error) => showToast({ message: `Could not load HyperFrames tools: ${error?.message || error}`, kind: 'error' }));
+}
 
-window.canvasHyperframesEditLayer = function (elementId, layerElementId, kind) {
-  const entry = _hfControllers.get(elementId);
-  if (!entry) return;
-  if (kind === 'text') {
-    const newText = window.prompt('New text for layer:');
-    if (newText === null) return;
-    entry.controller.patch([{ op: 'set-text', elementId: layerElementId, text: newText }]);
-  }
-};
-
-window.canvasHyperframesPatchFromSlot = function (input) {
-  if (!input) return;
-  const elementId = input.getAttribute('data-hf-element');
-  const slotId = input.getAttribute('data-hf-slot');
-  const kind = input.getAttribute('data-hf-slot-kind');
-  const value = input.value;
-  const entry = _hfControllers.get(elementId);
-  if (!entry) return;
-  // Slot dispatch — the slot's `selector` resolved to an element id at extract
-  // time; we just pass through to set-attribute or set-variable depending on
-  // the kind. Element-level slots with selector "#id" route via element id.
-  const slot = (entry.element.meta?.slots || []).find((s) => s.id === slotId);
-  if (!slot) return;
-  if (slot.kind === 'variable') {
-    entry.controller.patch([{ op: 'set-variable', name: slot.variableName || slot.id, value }]);
-    return;
-  }
-  if (!slot.selector || !slot.selector.startsWith('#')) return;
-  const elementHfId = slot.selector.slice(1);
-  if (kind === 'text') entry.controller.patch([{ op: 'set-text', elementId: elementHfId, text: value }]);
-  else if (kind === 'color') entry.controller.patch([{ op: 'set-color', elementId: elementHfId, color: value }]);
-  else if (kind === 'number') entry.controller.patch([{ op: 'set-font-size', elementId: elementHfId, fontSize: Number(value) }]);
-  else if (kind === 'asset') entry.controller.patch([{ op: 'set-asset', elementId: elementHfId, assetPlaceholderId: value }]);
-};
-
-window.canvasHyperframesPatchFromVariable = function (input) {
-  if (!input) return;
-  const elementId = input.getAttribute('data-hf-element');
-  const variableId = input.getAttribute('data-hf-variable');
-  const value = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
-  const entry = _hfControllers.get(elementId);
-  if (!entry) return;
-  entry.controller.patch([{ op: 'set-variable', name: variableId, value }]);
-};
+window.canvasToggleHyperframesStudio = (elementId) => callHyperframesAction('toggleStudio', elementId);
+window.canvasHyperframesEditLayer = (elementId, layerElementId, kind) => callHyperframesAction('editLayer', elementId, layerElementId, kind);
+window.canvasHyperframesPatchFromSlot = (input) => callHyperframesAction('patchFromSlot', input);
+window.canvasHyperframesPatchFromVariable = (input) => callHyperframesAction('patchFromVariable', input);
 
 function getHyperframesElementById(elementId) {
   return creativeSceneDoc.elements.find((element) => element.id === elementId && element.type === 'hyperframes') || null;
 }
 
-function updateHyperframesElementMeta(elementId, patch = {}, options = {}) {
-  const live = getHyperframesElementById(elementId);
-  if (!live) return null;
-  live.meta = { ...(live.meta || {}), ...patch };
-  if (options.render !== false) renderCreativeWorkspace({ skipStageRender: options.skipStageRender === true });
-  persistActiveChat();
-  return live;
+function ensureHyperframesElementSourceHtml(element) {
+  return ensureHyperframesFeature().then((feature) => feature.ensureElementSourceHtml(element));
 }
 
-function getHyperframesElementEntryPath(element) {
-  const projectPath = String(element?.meta?.projectPath || '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
-  const entryFile = String(element?.meta?.entryFile || 'index.html').trim().replace(/\\/g, '/').replace(/^\/+/g, '') || 'index.html';
-  if (!projectPath) return '';
-  return `${projectPath}/${entryFile}`.replace(/\/+/g, '/');
-}
-
-async function ensureHyperframesElementSourceHtml(element) {
-  if (!element || element.type !== 'hyperframes') return '';
-  const existing = String(element.meta?.html || '');
-  if (existing.trim()) return existing;
-  const entryPath = getHyperframesElementEntryPath(element);
-  if (!entryPath) return '';
-  const res = await api(`/api/canvas/file?path=${encodeURIComponent(entryPath)}`);
-  const html = typeof res?.content === 'string' ? res.content : '';
-  if (html.trim()) {
-    element.meta = { ...(element.meta || {}), html, dirty: false };
-    persistActiveChat();
-  }
-  return html;
-}
-
-window.canvasRefreshHyperframesClip = async function (elementId) {
-  const live = getHyperframesElementById(elementId);
-  if (!live) return;
-  try {
-    const html = await ensureHyperframesElementSourceHtml(live);
-    const extraction = await api('/api/canvas/hyperframes/extract-layers', { method: 'POST', body: { html } });
-    if (!extraction?.success) throw new Error(extraction?.error || 'Could not parse HyperFrames clip');
-    applyHyperframesExtractionToElement(live, extraction);
-    renderCreativeWorkspace({ skipStageRender: true });
-    showToast({ message: 'HyperFrames metadata refreshed.', kind: 'success' });
-  } catch (err) {
-    showToast({ message: `HyperFrames refresh failed: ${err?.message || err}`, kind: 'error' });
-  }
-};
-
-window.canvasLintHyperframesClip = async function (elementId) {
-  const live = getHyperframesElementById(elementId);
-  if (!live) return;
-  try {
-    const html = await ensureHyperframesElementSourceHtml(live);
-    const lint = await api('/api/canvas/hyperframes/lint', { method: 'POST', body: { html } });
-    if (!lint?.success) throw new Error(lint?.error || 'HyperFrames lint failed');
-    const lintResult = lint.lint || lint;
-    updateHyperframesElementMeta(elementId, { lint: lintResult }, { skipStageRender: true });
-    const errorCount = Array.isArray(lintResult.errors) ? lintResult.errors.length : 0;
-    const warningCount = Array.isArray(lintResult.warnings) ? lintResult.warnings.length : 0;
-    showToast({ message: `HyperFrames lint: ${errorCount} errors, ${warningCount} warnings.`, kind: errorCount ? 'error' : 'success' });
-  } catch (err) {
-    showToast({ message: `HyperFrames lint failed: ${err?.message || err}`, kind: 'error' });
-  }
-};
-
-window.canvasQaHyperframesClip = async function (elementId) {
-  const live = getHyperframesElementById(elementId);
-  if (!live) return;
-  try {
-    const html = await ensureHyperframesElementSourceHtml(live);
-    const qaReport = await api('/api/canvas/hyperframes/qa', { method: 'POST', body: { html } });
-    if (!qaReport?.success) throw new Error(qaReport?.error || 'HyperFrames QA failed');
-    const report = qaReport.report || qaReport;
-    updateHyperframesElementMeta(elementId, { qaReport: report }, { skipStageRender: true });
-    const issueCount = Array.isArray(report.issues) ? report.issues.length : 0;
-    showToast({ message: `HyperFrames QA: ${issueCount} issues.`, kind: issueCount ? 'warning' : 'success' });
-  } catch (err) {
-    showToast({ message: `HyperFrames QA failed: ${err?.message || err}`, kind: 'error' });
-  }
-};
-
-window.canvasExportHyperframesClip = async function (elementId, format = 'mp4') {
-  const live = getHyperframesElementById(elementId);
-  if (!live) return;
-  try {
-    showToast({ message: 'Rendering HyperFrames clip with producer...', kind: 'info' });
-    const html = await ensureHyperframesElementSourceHtml(live);
-    if (!html.trim()) throw new Error('HyperFrames source HTML is missing.');
-    const safeId = String(live.meta?.compositionId || elementId || 'hyperframes').replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'hyperframes';
-    const variables = {};
-    (Array.isArray(live.meta?.variableBindings) ? live.meta.variableBindings : []).forEach((binding) => {
-      const id = String(binding?.variable?.id || '').trim();
-      if (id) variables[id] = binding.currentValue;
-    });
-    const result = await api('/api/canvas/hyperframes/render', {
-      method: 'POST',
-      body: {
-        html,
-        filename: `${safeId}.${String(format || 'mp4').toLowerCase()}`,
-        format,
-        fps: Number(creativeSceneDoc?.frameRate) || 60,
-        quality: 'standard',
-        variables,
-      },
-    });
-    if (!result?.success) throw new Error(result?.error || 'HyperFrames render failed');
-    updateHyperframesElementMeta(elementId, { lastProducerExport: result }, { skipStageRender: true });
-    if (result.outputPath) canvasDownloadFile(result.outputPath, result.outputPath.split(/[\\/]/).pop() || `${safeId}.${format}`);
-    creativeActiveExport = {
-      format: String(format || 'mp4').toLowerCase(),
-      renderer: 'hyperframes-producer',
-      serverJobId: result.job?.id || '',
-      startedAt: Date.now(),
-      frameRate: Number(creativeSceneDoc?.frameRate) || 60,
-      progress: 1,
-      elapsedMs: 0,
-      cancelRequested: false,
-      status: 'complete',
-      progressLabel: 'HyperFrames producer export complete',
-      hyperframesElementId: elementId,
-      outputPath: result.outputPath || '',
-    };
-    showToast({ message: 'HyperFrames producer export complete.', kind: 'success' });
-  } catch (err) {
-    showToast({ message: `HyperFrames export failed: ${err?.message || err}`, kind: 'error' });
-  }
-};
+window.canvasRefreshHyperframesClip = (elementId) => callHyperframesAction('refreshClip', elementId);
+window.canvasLintHyperframesClip = (elementId) => callHyperframesAction('lintClip', elementId);
+window.canvasQaHyperframesClip = (elementId) => callHyperframesAction('qaClip', elementId);
+window.canvasExportHyperframesClip = (elementId, format = 'mp4') => callHyperframesAction('exportClip', elementId, format);
 
 function insertHyperframesClip({ html, item, durationMs, compositionId, advancedBlock, modal, importResult = null, extraction = null }) {
   try {
@@ -33836,6 +34371,20 @@ function canvasNudgeCreativeZ(direction) {
 
 function buildCreativeSceneCallerContext() {
   const mode = normalizeCreativeMode(window.currentCreativeMode);
+  if (isBrowserDesignMode()) {
+    const state = getBrowserCanvasState();
+    const selected = cloneBrowserDesignSelection(state.selectedElement);
+    const selections = Array.isArray(state.browserDesignSelections) ? state.browserDesignSelections.map(cloneBrowserDesignSelection).filter(Boolean) : [];
+    return [
+      '[BROWSER_DESIGN_SURFACE]',
+      `browser_url: ${state.url || 'unknown'}`,
+      `browser_title: ${state.title || 'unknown'}`,
+      `browser_profile: ${state.profileLabel || state.browserTarget || state.profileKind || 'browser gateway'}`,
+      selected ? `[BROWSER_DESIGN_SELECTION]\n${JSON.stringify(selected).slice(0, 4200)}` : '',
+      selections.length ? `[BROWSER_DESIGN_MULTI_SELECTION]\n${JSON.stringify(selections).slice(0, 12000)}` : '',
+      selected ? 'Use the selected live browser element as the primary focus. Explain the change or edit the source if this is a local project; for external pages, describe the limitation and provide the exact DOM/CSS guidance.' : '',
+    ].filter(Boolean).join('\n');
+  }
   if (mode === 'design') {
     const tab = canvasTabs.find((candidate) => candidate.id === activeCanvasTabId) || null;
     const projectFiles = flattenCanvasWorkspaceFiles(canvasWorkspaceTree).slice(0, 24);
@@ -35661,6 +36210,7 @@ function compositionLint(comp) {
 }
 
 async function handleCreativeCommandMessage(message) {
+  await ensureCreativeFeatureRuntime();
   const previousActiveSessionId = String(window.activeChatSessionId || '').trim();
   const previousAgentSessionId = String(window.agentSessionId || '').trim();
   const previousCreativeMode = window.currentCreativeMode;
@@ -38825,6 +39375,154 @@ let designLastClickedElement = null;
 let designSelectMode = false;
 let designMultiSelectedElements = [];
 let designSelectModeOutsideHandler = null;
+let browserDesignActionPopoverEl = null;
+let browserDesignChatPopoverEl = null;
+
+function hideBrowserDesignPopovers() {
+  if (browserDesignActionPopoverEl) browserDesignActionPopoverEl.style.display = 'none';
+  if (browserDesignChatPopoverEl) browserDesignChatPopoverEl.style.display = 'none';
+}
+
+function getBrowserDesignSelectionRect(selection) {
+  const frame = document.getElementById('browser-canvas-frame');
+  if (!frame || !selection?.bounds) return null;
+  const frameRect = frame.getBoundingClientRect();
+  const state = getBrowserCanvasState();
+  const viewportWidth = Number(state.frameViewportWidth || state.frameWidth || selection.viewport?.width || 0);
+  const viewportHeight = Number(state.frameViewportHeight || state.frameHeight || selection.viewport?.height || 0);
+  if (!viewportWidth || !viewportHeight || !frameRect.width || !frameRect.height) return null;
+  const computed = window.getComputedStyle(frame);
+  const borderLeft = parseFloat(computed.borderLeftWidth) || 0;
+  const borderTop = parseFloat(computed.borderTopWidth) || 0;
+  const innerWidth = Math.max(1, frameRect.width - borderLeft - (parseFloat(computed.borderRightWidth) || 0));
+  const innerHeight = Math.max(1, frameRect.height - borderTop - (parseFloat(computed.borderBottomWidth) || 0));
+  const bounds = selection.liveBounds || selection.bounds;
+  return {
+    left: frameRect.left + borderLeft + (Number(bounds.x) || 0) * (innerWidth / viewportWidth),
+    top: frameRect.top + borderTop + (Number(bounds.y) || 0) * (innerHeight / viewportHeight),
+    width: Math.max(1, (Number(bounds.width) || 0) * (innerWidth / viewportWidth)),
+    height: Math.max(1, (Number(bounds.height) || 0) * (innerHeight / viewportHeight)),
+  };
+}
+
+function positionBrowserDesignPopover(popover, selection) {
+  const rect = getBrowserDesignSelectionRect(selection);
+  if (!popover || !rect) return false;
+  const pw = popover.offsetWidth || 240;
+  const ph = popover.offsetHeight || 40;
+  let left = rect.left;
+  let top = rect.top - ph - 8;
+  if (top < 10) top = rect.top + rect.height + 8;
+  if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+  if (left < 8) left = 8;
+  popover.style.left = `${left}px`;
+  popover.style.top = `${Math.max(8, top)}px`;
+  return true;
+}
+
+function showBrowserDesignActionPopover(selection = getBrowserCanvasState().selectedElement) {
+  if (!selection || isBrowserCanvasInHouseProvider()) return;
+  if (!browserDesignActionPopoverEl) {
+    browserDesignActionPopoverEl = document.createElement('div');
+    browserDesignActionPopoverEl.id = 'browser-design-action-popover';
+    browserDesignActionPopoverEl.style.cssText = 'position:fixed;z-index:10002;display:none;gap:4px;padding:5px;border-radius:10px;border:1px solid rgba(56,189,248,0.28);background:rgba(8,15,28,0.97);box-shadow:0 12px 30px rgba(2,6,23,0.5);backdrop-filter:blur(12px);font-family:Manrope,sans-serif';
+    browserDesignActionPopoverEl.innerHTML = `
+      <button type="button" onclick="handleBrowserDesignEdit()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(249,115,22,0.16);color:#fdba74;border-radius:7px;padding:7px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:pen-2-bold-duotone" width="14" height="14"></iconify-icon>Edit</button>
+      <button type="button" onclick="handleBrowserDesignChat()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(56,189,248,0.16);color:#bae6fd;border-radius:7px;padding:7px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:chat-round-line-bold-duotone" width="14" height="14"></iconify-icon>Chat</button>
+      <button type="button" onclick="handleBrowserDesignSelect()" style="display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(168,85,247,0.18);color:#d8b4fe;border-radius:7px;padding:7px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:inherit"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon>Select</button>
+    `;
+    document.body.appendChild(browserDesignActionPopoverEl);
+  }
+  browserDesignActionPopoverEl.style.display = 'flex';
+  positionBrowserDesignPopover(browserDesignActionPopoverEl, selection);
+}
+
+function showBrowserDesignChatPopover(options = {}) {
+  const state = getBrowserCanvasState();
+  const selection = options.selection || state.selectedElement;
+  if (!selection || isBrowserCanvasInHouseProvider()) return;
+  if (!browserDesignChatPopoverEl) {
+    browserDesignChatPopoverEl = document.createElement('div');
+    browserDesignChatPopoverEl.id = 'browser-design-chat-popover';
+    browserDesignChatPopoverEl.style.cssText = 'position:fixed;z-index:10003;display:none;width:min(360px,calc(100vw - 24px));padding:12px;border-radius:12px;border:1px solid rgba(56,189,248,0.28);background:rgba(8,15,28,0.98);box-shadow:0 16px 40px rgba(2,6,23,0.55);backdrop-filter:blur(14px);font-family:Manrope,sans-serif';
+    browserDesignChatPopoverEl.innerHTML = `
+      <div style="font-size:11px;font-weight:800;color:#e0f2fe">Chat about this browser element</div>
+      <div id="browser-design-chat-selection" style="margin-top:5px;font-size:10px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+      <textarea id="browser-design-chat-input" rows="3" placeholder="What should Prometheus change or explain?" style="width:100%;box-sizing:border-box;margin-top:9px;resize:vertical;border:1px solid rgba(148,163,184,0.2);border-radius:8px;background:rgba(15,23,42,0.75);color:#f8fafc;padding:8px;font:11px/1.45 Manrope,sans-serif"></textarea>
+      <div style="display:flex;justify-content:flex-end;gap:7px;margin-top:8px"><button type="button" onclick="hideBrowserDesignPopovers()" style="border:1px solid rgba(148,163,184,0.18);background:transparent;color:#cbd5e1;border-radius:7px;padding:6px 9px;font:700 10px Manrope,sans-serif;cursor:pointer">Close</button><button type="button" onclick="submitBrowserDesignChatPopover()" style="border:1px solid rgba(56,189,248,0.3);background:rgba(56,189,248,0.16);color:#e0f2fe;border-radius:7px;padding:6px 10px;font:800 10px Manrope,sans-serif;cursor:pointer">Send to chat</button></div>
+    `;
+    document.body.appendChild(browserDesignChatPopoverEl);
+  }
+  const label = selection.selector || (selection.id ? `#${selection.id}` : selection.tagName || 'element');
+  const labelEl = browserDesignChatPopoverEl.querySelector('#browser-design-chat-selection');
+  const input = browserDesignChatPopoverEl.querySelector('#browser-design-chat-input');
+  if (labelEl) labelEl.textContent = label;
+  if (input) {
+    input.value = String(options.prompt || '');
+    window.setTimeout(() => input.focus(), 0);
+  }
+  browserDesignChatPopoverEl.style.display = 'block';
+  positionBrowserDesignPopover(browserDesignChatPopoverEl, selection);
+}
+
+async function submitBrowserDesignChatPopover() {
+  const input = document.getElementById('browser-design-chat-input');
+  const text = String(input?.value || '').trim();
+  if (!text) return;
+  const mainInput = document.getElementById('chat-input');
+  if (!mainInput) return showToast('Main chat input not found.', 'error');
+  mainInput.value = text;
+  hideBrowserDesignPopovers();
+  try { await sendChat(); } catch (err) { showToast(`Send failed: ${err.message}`, 'error'); }
+}
+
+function handleBrowserDesignEdit() {
+  if (browserDesignActionPopoverEl) browserDesignActionPopoverEl.style.display = 'none';
+  const selection = getBrowserCanvasState().selectedElement;
+  if (selection) showBrowserDesignChatPopover({ selection, prompt: 'Edit this browser element so that ' });
+}
+
+function handleBrowserDesignChat() {
+  if (browserDesignActionPopoverEl) browserDesignActionPopoverEl.style.display = 'none';
+  showBrowserDesignChatPopover();
+}
+
+function handleBrowserDesignSelect() {
+  const state = getBrowserCanvasState();
+  if (browserDesignActionPopoverEl) browserDesignActionPopoverEl.style.display = 'none';
+  state.browserDesignSelectMode = true;
+  if (state.selectedElement) {
+    const key = getBrowserTeachSelectionKey(state.selectedElement);
+    if (!state.browserDesignSelections.some((entry) => getBrowserTeachSelectionKey(entry) === key)) {
+      state.browserDesignSelections.push(cloneBrowserDesignSelection(state.selectedElement));
+      state.browserDesignSelections = state.browserDesignSelections.filter(Boolean).slice(-24);
+    }
+  }
+  showToast('Design Select mode is on. Click more elements to attach them.', 'info', 2800);
+  renderBrowserCanvasSurface();
+  persistActiveChat();
+}
+
+function applyBrowserDesignSelection(selection, options = {}) {
+  const state = getBrowserCanvasState();
+  const next = cloneBrowserDesignSelection(selection);
+  if (!next) return;
+  state.selectedElement = next;
+  state.selectionPending = false;
+  state.updatedAt = Date.now();
+  if (state.browserDesignSelectMode) {
+    const key = getBrowserTeachSelectionKey(next);
+    if (!state.browserDesignSelections.some((entry) => getBrowserTeachSelectionKey(entry) === key)) {
+      state.browserDesignSelections.push(next);
+      state.browserDesignSelections = state.browserDesignSelections.slice(-24);
+    }
+  } else if (options.showPopover !== false && !isBrowserCanvasInHouseProvider(state)) {
+    showBrowserDesignActionPopover(next);
+  }
+  updateDesignSelectionChip();
+  renderBrowserCanvasSurface();
+  persistActiveChat();
+}
 
 function getDesignPreviewTabPath() {
   const tab = canvasTabs.find((t) => t.id === activeCanvasTabId);
@@ -39992,7 +40690,7 @@ async function canvasUpdatePreview() {
   const isDesignMode = normalizeCreativeMode(window.currentCreativeMode) === 'design';
 
   frame.onload = null;
-  const useProjectPreview = isDesignMode && !!canvasProjectRoot && !tab.isImage && !tab.isBinary;
+  const useProjectPreview = !!canvasProjectRoot && !tab.isImage && !tab.isBinary;
   const isScriptedPreview = useProjectPreview || isHtmlFile(tab.name) || content.trim().startsWith('<');
   // Design Mode adds editing behavior directly to the preview document. A
   // sandbox without allow-same-origin gives that document an opaque origin,
@@ -40001,7 +40699,7 @@ async function canvasUpdatePreview() {
   // top-level navigation); this exception is limited to the local authoring
   // surface while Design Mode is active.
   const sandboxPermissions = [isScriptedPreview ? 'allow-scripts' : '', 'allow-downloads'];
-  if (isDesignMode && !tab.isImage && !tab.isBinary) sandboxPermissions.push('allow-same-origin');
+  if (useProjectPreview) sandboxPermissions.push('allow-same-origin');
   frame.setAttribute('sandbox', sandboxPermissions.filter(Boolean).join(' '));
   if (useProjectPreview) {
     const previewPath = getDesignPreviewEntryPath(tab);
@@ -40017,9 +40715,18 @@ async function canvasUpdatePreview() {
         try {
           const doc = frame.contentDocument;
           if (!doc || !doc.body) return;
-          doc.body.contentEditable = 'false';
-          doc.body.spellcheck = false;
-          setupDesignPreviewSelection(frame, tab);
+           if (isDesignMode) {
+             doc.body.contentEditable = 'false';
+             doc.body.spellcheck = false;
+             setupDesignPreviewSelection(frame, tab);
+           } else {
+             doc.body.contentEditable = 'true';
+             doc.body.spellcheck = false;
+             doc.body.addEventListener('input', () => {
+               const html = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+               tab.content = html;
+             });
+           }
         } catch {}
       };
       frame.srcdoc = buildDesignPreviewDocument(content, previewPath);
@@ -40639,25 +41346,35 @@ function readFileAsBase64(file) {
 
 // Upload staged files to workspace/uploads/ and open them in canvas.
 // Returns an array of { name, workspacePath, isImage, base64, mimeType } for context injection.
-async function uploadStagedFilesToCanvas(stagedFiles = pendingChatFiles) {
+async function uploadStagedFilesToCanvas(stagedFiles = pendingChatFiles, { signal } = {}) {
   if (!stagedFiles.length) return [];
   const results = [];
+  const throwIfAborted = () => {
+    if (!signal?.aborted) return;
+    const error = new Error('Request stopped');
+    error.name = 'AbortError';
+    throw error;
+  };
   for (const sf of stagedFiles) {
+    throwIfAborted();
     if (sf.text !== null) {
       try {
         const r = await fetch('/api/canvas/upload', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: sf.name, content: sf.text })
+          body: JSON.stringify({ filename: sf.name, content: sf.text }),
+          signal,
         });
         const d = await r.json();
         if (d.success) {
+          throwIfAborted();
           await canvasPresentFile(d.absPath, d.filename, { autoOpen: false });
           results.push({ name: sf.name, ext: sf.ext, workspacePath: d.absPath, relPath: d.relPath });
         } else {
           results.push({ name: sf.name, ext: sf.ext, workspacePath: null, error: d.error });
         }
       } catch (e) {
+        if (signal?.aborted) throw e;
         results.push({ name: sf.name, ext: sf.ext, workspacePath: null, error: e.message });
       }
     } else if (sf.isImage && sf.dataUrl) {
@@ -40667,16 +41384,19 @@ async function uploadStagedFilesToCanvas(stagedFiles = pendingChatFiles) {
         const r = await fetch('/api/canvas/upload-binary', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: sf.name, base64: pureBase64, mimeType })
+          body: JSON.stringify({ filename: sf.name, base64: pureBase64, mimeType }),
+          signal,
         });
         const d = await r.json();
         if (d.success) {
+          throwIfAborted();
           await canvasPresentFile(d.absPath, d.filename, { autoOpen: false });
           results.push({ name: sf.name, ext: sf.ext, workspacePath: d.absPath, relPath: d.relPath, isImage: true, base64: pureBase64, mimeType });
         } else {
           results.push({ name: sf.name, ext: sf.ext, workspacePath: null, isImage: true, base64: pureBase64, mimeType, error: d.error });
         }
       } catch (e) {
+        if (signal?.aborted) throw e;
         results.push({ name: sf.name, ext: sf.ext, workspacePath: null, isImage: true, base64: pureBase64, mimeType, error: e.message });
       }
     } else if (sf.base64 || sf.binary) {
@@ -40687,16 +41407,19 @@ async function uploadStagedFilesToCanvas(stagedFiles = pendingChatFiles) {
         const r = await fetch('/api/canvas/upload-binary', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: sf.name, base64, mimeType })
+          body: JSON.stringify({ filename: sf.name, base64, mimeType }),
+          signal,
         });
         const d = await r.json();
         if (d.success) {
+          throwIfAborted();
           await canvasPresentFile(d.absPath, d.filename, { autoOpen: false });
           results.push({ name: sf.name, ext: sf.ext, workspacePath: d.absPath, relPath: d.relPath, binary: true, isVideo: !!sf.isVideo, mimeType });
         } else {
           results.push({ name: sf.name, ext: sf.ext, workspacePath: null, binary: true, isVideo: !!sf.isVideo, mimeType, error: d.error });
         }
       } catch (e) {
+        if (signal?.aborted) throw e;
         results.push({ name: sf.name, ext: sf.ext, workspacePath: null, binary: true, isVideo: !!sf.isVideo, mimeType, error: e.message });
       }
     } else {
@@ -40754,7 +41477,7 @@ function uploadResultsToAttachmentPreviews(uploadResults) {
   });
 }
 
-function designSelectionToAttachmentPreview(context = designSelectedElementContext) {
+function designSelectionToAttachmentPreview(context = (isBrowserDesignMode() ? getBrowserCanvasState().selectedElement : designSelectedElementContext)) {
   if (!context || typeof context !== 'object') return null;
   const selector = String(context.selector || '').trim();
   const tagName = String(context.tagName || '').trim();
@@ -42374,6 +43097,7 @@ window.closeChatContextWindowPopover = closeChatContextWindowPopover;
 window.toggleChatContextBreakdown = toggleChatContextBreakdown;
 window.loadTerminalSessions = loadTerminalSessions;
 window.syncActiveChat = syncActiveChat;
+window.syncChatTopbarTitle = syncChatTopbarTitle;
 window.persistActiveChat = persistActiveChat;
 window.newChatSession = newChatSession;
 window.openTerminalSession = openTerminalSession;
@@ -42493,6 +43217,11 @@ window.clearRealtimeWakeGate = clearRealtimeWakeGate;
 window.getCanvasLang = getCanvasLang;
 window.isHtmlFile = isHtmlFile;
 window.toggleCanvas = toggleCanvas;
+window.toggleSources = toggleSources;
+window.loadChatResources = loadChatResources;
+window.filterChatResources = filterChatResources;
+window.setChatResourcesExpanded = setChatResourcesExpanded;
+window.openChatResourceFile = openChatResourceFile;
 window.toggleCanvasFullscreen = toggleCanvasFullscreen;
 window.toggleLeftPanel = toggleLeftPanel;
 window.toggleRightPanel = toggleRightPanel;
@@ -42507,11 +43236,20 @@ window.canvasRenderTabs = canvasRenderTabs;
 window.canvasUpdatePreview = canvasUpdatePreview;
 window.canvasSave = canvasSave;
 window.openBrowserCanvasSurface = openBrowserCanvasSurface;
+window.openPrometheusBrowserLink = openPrometheusBrowserLink;
 window.toggleBrowserCanvasSurface = toggleBrowserCanvasSurface;
 window.showCanvasFilesSurface = showCanvasFilesSurface;
 window.setBrowserInteractionMode = setBrowserInteractionMode;
+window.setBrowserDesignMode = setBrowserDesignMode;
+window.toggleBrowserDesignMode = toggleBrowserDesignMode;
+window.handleBrowserDesignEdit = handleBrowserDesignEdit;
+window.handleBrowserDesignChat = handleBrowserDesignChat;
+window.handleBrowserDesignSelect = handleBrowserDesignSelect;
+window.submitBrowserDesignChatPopover = submitBrowserDesignChatPopover;
+window.hideBrowserDesignPopovers = hideBrowserDesignPopovers;
 window.releaseBrowserCanvasControl = releaseBrowserCanvasControl;
 window.returnBrowserCanvasToPrimarySession = returnBrowserCanvasToPrimarySession;
+window.followBrowserCanvasSession = followBrowserCanvasSession;
 window.reopenBrowserCanvasLastPage = reopenBrowserCanvasLastPage;
 window.sendBrowserCanvasNavigation = sendBrowserCanvasNavigation;
 window.openBrowserCanvasAddress = openBrowserCanvasAddress;
@@ -42693,6 +43431,23 @@ wsEventBus.on('boot_greeting', (msg) => {
 
 wsEventBus.on('brain_thought_done', () => {
   refreshEmptyChatBrainCards();
+});
+
+// Manual and automatic settling both change visibility only. Keep the local
+// sidebar projection in sync without navigating away from an open chat.
+wsEventBus.on('session_state_changed', (msg = {}) => {
+  const session = msg?.session;
+  if (!session?.id) return;
+  mergeServerSessionSummaries([session]);
+  saveChatSessions();
+  if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
+});
+
+wsEventBus.on('auto_settle_run', (summary = {}) => {
+  if (summary?.dryRun === true || summary?.reason !== 'scheduled') return;
+  const settled = Number(summary?.settled || 0);
+  if (settled <= 0 || typeof showToast !== 'function') return;
+  showToast('Chats auto-settled', `${settled} untouched chat${settled === 1 ? '' : 's'} moved to Settled Chats. You can reopen them there.`, 'info', 6500);
 });
 
 wsEventBus.on('main_chat_goal_updated', async (msg) => {
@@ -43596,6 +44351,7 @@ function _switchToChannelSession(sid) {
   syncActiveChat();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   renderChatMessages();
+  if (chatResourcesState.open) loadChatResources({ sessionId: sid });
   recoverDesktopMainChatSession(sid, { recovery: true, fullRefresh: false }).catch(() => {});
 }
 window._switchToChannelSession = _switchToChannelSession;
@@ -44039,7 +44795,8 @@ function appendTimerMessageToSession(sessionId, message) {
   saveChatSessions();
   if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   if (sid === window.activeChatSessionId) {
-    syncActiveChat();
+  syncActiveChat();
+  if (chatResourcesState.open) loadChatResources({ sessionId: sid });
     renderChatMessages();
   }
 }
@@ -44293,7 +45050,14 @@ wsEventBus.on('voice_worker_update', (msg = {}) => {
 wsEventBus.on('creative_mode_changed', (msg) => {
   const sid = String(msg?.sessionId || '').trim();
   if (!sid) return;
-  applySessionCreativeMode(sid, msg.creativeMode);
+  const mode = normalizeCreativeMode(msg.creativeMode);
+  if (!mode) {
+    applySessionCreativeMode(sid, null);
+    return;
+  }
+  ensureCreativeFeatureRuntime()
+    .then(() => applySessionCreativeMode(sid, mode))
+    .catch((error) => console.error('[creative] Failed to apply mode change:', error));
 });
 
 const CREATIVE_BRIDGE_ID = (() => {
@@ -44350,6 +45114,16 @@ wsEventBus.on('browser:open', (msg) => {
 });
 
 wsEventBus.on('browser:status', (msg) => {
+  if (msg?.linkNavigation && String(msg.requestedSessionId || '').trim() === getBrowserCanvasPrimarySessionId()) {
+    const linkSessionId = String(msg.sessionId || '').trim();
+    if (linkSessionId && linkSessionId !== getBrowserCanvasPrimarySessionId()) {
+      followBrowserCanvasSession(linkSessionId, {
+        statusLabel: String(msg.statusLabel || 'Opened from a Prometheus link.').trim(),
+        render: false,
+        requestData: false,
+      });
+    }
+  }
   applyBrowserEventState(msg, { autoOpen: !!msg.active });
   if (msg?.source === 'user' && msg?.clickHighlight?.bounds && isBrowserEventForActiveSession(msg, { scope: 'visible' })) {
     triggerBrowserTransientHighlight(msg.clickHighlight);
@@ -44539,7 +45313,9 @@ wsEventBus.on('browser:selection', (msg) => {
         pack: msg.selection.pack || null,
         tagName: String(msg.selection.tagName || '').trim(),
         role: String(msg.selection.role || '').trim(),
+        classList: Array.isArray(msg.selection.classList) ? msg.selection.classList : [],
         text: String(msg.selection.text || '').trim(),
+        htmlSnippet: String(msg.selection.htmlSnippet || '').trim(),
         bounds: msg.selection.bounds || null,
       };
     } else {
@@ -44556,9 +45332,14 @@ wsEventBus.on('browser:selection', (msg) => {
       tagName: String(msg.selection.tagName || '').trim(),
       id: String(msg.selection.id || '').trim(),
       role: String(msg.selection.role || '').trim(),
+      classList: Array.isArray(msg.selection.classList) ? msg.selection.classList : [],
       text: String(msg.selection.text || '').trim(),
+      htmlSnippet: String(msg.selection.htmlSnippet || '').trim(),
       bounds: msg.selection.bounds || null,
       liveBounds: msg.selection.bounds || null,
+      viewport: msg.selection.viewport || null,
+      url: String(msg.selection.url || state.url || '').trim(),
+      title: String(msg.selection.title || state.title || '').trim(),
     };
     state.elementNameDraftKey = '';
     // Tell the server to keep re-resolving the bounds of this selection so it
@@ -44579,7 +45360,12 @@ wsEventBus.on('browser:selection', (msg) => {
       addProcessEntry('info', `Teach: staged ${teach.pendingStep.summary || 'browser click step'}.`);
     } else {
       teach.pendingSelectionIntent = null;
-      addProcessEntry('info', `Browser: selected ${state.selectedElement.selector || state.selectedElement.tagName || 'element'}.`);
+      if (isBrowserDesignMode(state) && purpose === 'design_select') {
+        applyBrowserDesignSelection(state.selectedElement, { showPopover: !isBrowserCanvasInHouseProvider(state) });
+        addProcessEntry('info', `Design: selected ${state.selectedElement.selector || state.selectedElement.tagName || 'element'}.`);
+      } else {
+        addProcessEntry('info', `Browser: selected ${state.selectedElement.selector || state.selectedElement.tagName || 'element'}.`);
+      }
     }
   } else {
     state.selectedElement = null;
@@ -44705,6 +45491,16 @@ wsEventBus.on('browser:knowledge:error', (msg) => {
 });
 
 wsEventBus.on('browser:input:error', (msg) => {
+  if (msg?.linkNavigation) {
+    const state = getBrowserCanvasState();
+    state.lastError = String(msg?.error || 'Browser link navigation failed.').trim();
+    state.statusLabel = state.lastError;
+    state.loading = false;
+    state.updatedAt = Number(msg.timestamp || Date.now()) || Date.now();
+    renderBrowserCanvasSurface();
+    showToast(state.lastError, 'error');
+    return;
+  }
   if (!isBrowserEventForActiveSession(msg, { scope: 'visible' })) return;
   const state = getBrowserCanvasState();
   if (normalizeBrowserInteractionMode(state.interactionMode) === 'teach') {
@@ -44817,9 +45613,15 @@ wsEventBus.on('canvas_publish_state', (msg) => {
 });
 
 ['creative_scene_saved', 'creative_export_saved'].forEach((eventName) => {
-  wsEventBus.on(eventName, (msg) => {
+  wsEventBus.on(eventName, async (msg) => {
     const sid = String(msg?.sessionId || '').trim();
     if (!sid || (sid !== window.activeChatSessionId && sid !== window.agentSessionId)) return;
+    try {
+      await ensureCreativeFeatureRuntime();
+    } catch (error) {
+      console.error(`[creative] Failed to handle ${eventName}:`, error);
+      return;
+    }
     const mode = normalizeCreativeMode(msg?.creativeMode || window.currentCreativeMode);
     const storageRoot = normalizeCanvasPath(msg?.storageRoot || '');
     if (storageRoot && !canvasProjectRoot) {
@@ -44856,9 +45658,15 @@ wsEventBus.on('creative_html_motion_export_progress', (msg) => {
   });
 });
 
-wsEventBus.on('creative_render_job_updated', (msg) => {
+wsEventBus.on('creative_render_job_updated', async (msg) => {
   const sid = String(msg?.sessionId || '').trim();
   if (!sid || (sid !== window.activeChatSessionId && sid !== window.agentSessionId)) return;
+  try {
+    await ensureCreativeFeatureRuntime();
+  } catch (error) {
+    console.error('[creative] Failed to handle render job update:', error);
+    return;
+  }
   const mode = normalizeCreativeMode(msg?.creativeMode || window.currentCreativeMode);
   const storageRoot = normalizeCanvasPath(msg?.storageRoot || '');
   if (storageRoot && !canvasProjectRoot) {
@@ -44913,9 +45721,15 @@ wsEventBus.on('creative_render_job_updated', (msg) => {
   renderCreativeWorkspace();
 });
 
-wsEventBus.on('creative_library_registry_updated', (msg) => {
+wsEventBus.on('creative_library_registry_updated', async (msg) => {
   const sid = String(msg?.sessionId || '').trim();
   if (!sid || (sid !== window.activeChatSessionId && sid !== window.agentSessionId)) return;
+  try {
+    await ensureCreativeFeatureRuntime();
+  } catch (error) {
+    console.error('[creative] Failed to refresh library registry:', error);
+    return;
+  }
   const mode = normalizeCreativeMode(msg?.creativeMode || window.currentCreativeMode);
   loadCreativeLibraries({ force: true, silent: true, renderStart: false, mode }).catch(() => {});
 });

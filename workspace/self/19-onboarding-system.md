@@ -100,7 +100,13 @@ Migration can scan for:
 - LocalClaw
 - Custom source path, via the Settings migration panel
 
-The polished management surface for migration is the Settings migration panel in `SettingsPage.js`, backed by `/api/migration/*`.
+The legacy migration service remains backed by `/api/migration/*`, but the
+polished P11-37 external conversation and MCP/setup import surface is now in
+Settings → General, backed by `/api/imports/jobs`. The old Migration navigation
+target redirects there for compatibility. These are different operations:
+legacy workspace migration preserves older Prometheus/OpenClaw-style setup,
+while external conversation import creates resumable Prometheus threads and
+keeps source-session resume explicitly unsupported.
 
 The onboarding migration step should remain optional and defensive:
 

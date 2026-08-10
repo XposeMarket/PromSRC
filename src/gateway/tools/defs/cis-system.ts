@@ -1,63 +1,62 @@
 // src/gateway/tools/defs/cis-system.ts
 // Tool definitions for CIS (Competitive Intelligence System), self-improvement, and system management.
 
-import { filterPublicBuildToolDefs, getPublicBuildAllowedCategories } from '../../../runtime/distribution.js';
+import { arePrometheusDevToolsVisible, filterPublicBuildToolDefs, getRuntimeAllowedCategories } from '../../../runtime/distribution.js';
+import { TOOL_CATEGORY_IDS, TOOL_CATEGORY_MANIFEST } from '../../../runtime/tool-category-manifest';
 
 export function getCisSystemTools(): any[] {
-  const categoryDocs: Array<[string, string]> = [
-    ['browser_automation', 'browser_automation - browser_session/browser_observe/browser_act/browser_extract wrappers.'],
-    ['desktop_automation', 'desktop_automation - desktop_screen/apps/window/input/macro/background wrappers.'],
-    ['agents_and_teams', 'agents_and_teams - agent_ops/agent_chat_ops/team wrappers.'],
-    ['prometheus_source_read', 'prometheus_source_read - dev_source_read for Prometheus source/web-ui/root inspection.'],
-    ['prometheus_source_write', 'prometheus_source_write - dev_source_edit for approved Prometheus src/web-ui edits.'],
-    ['workspace_write', 'workspace_write - unified workspace read/edit/run/git/safety/code-nav wrappers.'],
-    ['advanced_memory', 'advanced_memory - memory graph, timeline, related records, index ops.'],
-    ['media_assets', 'media_assets - download/analyze images, video, audio, remote assets.'],
-    ['creative_quality', 'creative_quality - creative_quality_ops image/video QA checks.'],
-    ['automations', 'automations - advanced schedule/task/watch diagnostics and repair.'],
-    ['external_apps', 'external_apps - connected app wrappers; call connector_list first.'],
-    ['integration_admin', 'integration_admin - MCP/webhook/integration setup.'],
-    ['social_intelligence', 'social_intelligence - social profile analysis.'],
-    ['proposal_admin', 'proposal_admin - edit pending proposals.'],
-    ['mcp_server_tools', 'mcp_server_tools - connected MCP tools as mcp__server__tool.'],
-    ['composite_tools', 'composite_tools - saved multi-step tools.'],
-    ['creative_basic', 'creative_basic - creative_project and creative_scene wrappers.'],
-    ['creative_image', 'creative_image - creative_image_ops wrapper.'],
-    ['creative_video', 'creative_video - creative_video_ops wrapper.'],
-    ['creative_hyperframes', 'creative_hyperframes - creative_hyperframes_ops wrapper.'],
-    ['skills', 'skills - skill authoring/maintenance beyond skill_list/skill_read.'],
-    ['model_management', 'model_management - agent model defaults/templates.'],
-    ['business', 'business - structured business entity files/events.'],
-  ];
-  const categoryEnum = getPublicBuildAllowedCategories([
-    'browser_automation',
-    'desktop_automation',
-    'agents_and_teams',
-    'prometheus_source_read',
-    'prometheus_source_write',
-    'workspace_write',
-    'advanced_memory',
-    'media_assets',
-    'creative_quality',
-    'automations',
-    'external_apps',
-    'integration_admin',
-    'social_intelligence',
-    'proposal_admin',
-    'mcp_server_tools',
-    'composite_tools',
-    'creative_basic',
-    'creative_image',
-    'creative_video',
-    'creative_hyperframes',
-    'skills',
-    'model_management',
-    'business',
-  ] as const);
+  const devToolsVisible = arePrometheusDevToolsVisible();
+  const proposalTypeEnum = devToolsVisible
+    ? ['feature_addition', 'src_edit', 'config_change', 'task_trigger', 'memory_update', 'skill_evolution', 'prompt_mutation', 'general']
+    : ['feature_addition', 'config_change', 'task_trigger', 'memory_update', 'skill_evolution', 'prompt_mutation', 'general'];
+  const proposalExecutionModeEnum = devToolsVisible ? ['code_change', 'action', 'general'] : ['action', 'general'];
+  const proposalExecutionModeDescription = devToolsVisible
+    ? 'Execution lane. general = read/research/audit + internal Prometheus orchestration (start a team, message a subagent), no user-file/external side effects. action = real work in the user\'s world (build/fix in the workspace or an allowed path, respond to an incoming email/webhook); requires a "## Current state" section confirming the gap still exists. code_change = Prometheus\'s OWN src/ or web-ui/ self-edit only (sandboxed). Editing a user project is action, never code_change.'
+    : 'Execution lane. general = read/research/audit + internal Prometheus orchestration (start a team, message a subagent), no user-file/external side effects. action = real work in the user\'s world (build/fix in the workspace or an allowed path, respond to an incoming email/webhook); requires a "## Current state" section confirming the gap still exists. Prometheus self-edit/code-change proposals are hidden in workspace-first mode.';
+  const proposalDescription = devToolsVisible
+    ? 'Submit a human-approved proposal. Choose one execution_mode: general (read/research/internal orchestration), action (user-world work), or code_change (Prometheus src/web-ui self-edit). Include execution_steps for executable proposals.'
+    : 'Submit a human-approved proposal for user-work or internal orchestration. Prometheus self-edit/code-change proposals are hidden in workspace-first mode. Include execution_steps for executable proposals.';
+  const proposalEditDescription = devToolsVisible
+    ? 'Update a pending proposal before approval. Supports title/summary/details/affected_files/diff preview updates and writes a new revision entry. Returns 404 if proposal is missing, 409 if proposal is no longer pending, and 400 when src-edit details validation fails.'
+    : 'Update a pending user-work or internal proposal before approval. Supports title/summary/details/affected_files/diff preview updates and writes a new revision entry. Prometheus self-edit/code-change fields are hidden in workspace-first mode.';
+  const compactCategoryLabels: Record<string, string> = {
+    browser_automation: 'browser UI',
+    desktop_automation: 'desktop/apps',
+    agents_and_teams: 'agents/teams',
+    prometheus_source_read: 'Prometheus source read',
+    prometheus_source_write: 'Prometheus source edit',
+    workspace_write: 'workspace files/commands/git',
+    advanced_memory: 'memory graph/search/index',
+    media_assets: 'download/analyze media',
+    media_generation: 'generate image/video',
+    automations: 'all automation packs',
+    automation_scheduling: 'recurring schedules',
+    automation_tasks: 'task/run control',
+    automation_recovery: 'recovery/interruption handling',
+    automation_sessions: 'Prometheus sessions/threads',
+    runtime_admin: 'runtime diagnostics/restart',
+    external_apps: 'connected app use',
+    integration_admin: 'integration setup',
+    social_intelligence: 'social analysis',
+    proposal_admin: 'pending proposals',
+    mcp_server_tools: 'connected MCP tools',
+    composite_tools: 'saved composite tools',
+    creative_basic: 'Creative project/scene',
+    creative_image: 'Creative image editing',
+    creative_video: 'Creative video editing',
+    creative_hyperframes: 'HyperFrames motion',
+    creative_quality: 'creative QA',
+    skills: 'skill maintenance',
+    model_management: 'agent model templates',
+    business: 'business entities',
+  };
+  const categoryDocs: Array<[string, string]> = TOOL_CATEGORY_IDS.map((category) => [
+    category,
+    `${category} - ${compactCategoryLabels[category] || TOOL_CATEGORY_MANIFEST[category].menuLabel}`,
+  ]);
+  const categoryEnum = getRuntimeAllowedCategories(TOOL_CATEGORY_IDS);
   const requestToolCategoryDescription =
-    'Activate one on-demand tool category. Default scope is turn, so large tool groups do not stay loaded after the current user turn. ' +
-    'Use scope=session only when the user is clearly entering a longer workflow that should keep the category available across later turns. ' +
-    'Use scope=next_turn for the current turn plus one follow-up user turn, or scope=ttl with turns for a bounded multi-turn workflow. Available categories:\n' +
+    'Load one on-demand tool category. Default scope=turn; use scope=next_turn or scope=ttl with turns for a bounded follow-up, and scope=session only for an explicit ongoing workflow. Keep request_tool_category as the fallback when automatic routing is uncertain. IDs:\n' +
     categoryDocs
       .filter(([category]) => categoryEnum.includes(category as any))
       .map(([, line]) => `  ${line}`)
@@ -404,8 +403,7 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'edit_proposal',
-        description:
-          'Update a pending proposal before approval. Supports title/summary/details/affected_files/diff preview updates and writes a new revision entry. Returns 404 if proposal is missing, 409 if proposal is no longer pending, and 400 when src-edit details validation fails.',
+        description: proposalEditDescription,
         parameters: {
           type: 'object',
           required: ['proposal_id'],
@@ -417,12 +415,12 @@ export function getCisSystemTools(): any[] {
               properties: {
                 type: {
                   type: 'string',
-                  enum: ['feature_addition', 'src_edit', 'config_change', 'task_trigger', 'memory_update', 'skill_evolution', 'prompt_mutation', 'general'],
+                  enum: proposalTypeEnum,
                 },
                 execution_mode: {
                   type: 'string',
-                  enum: ['code_change', 'action', 'general'],
-                  description: 'Execution lane used after approval. general = read/research/audit + internal Prometheus orchestration (start a team, message a subagent), no user-file or external-world side effects. action = real work in the user\'s world (build/fix in the workspace or an allowed path, respond to an incoming email/webhook); requires a hardened "## Current state" section confirming the gap still exists. code_change = Prometheus\'s OWN src/ or web-ui/ self-edit only (sandboxed).',
+                  enum: proposalExecutionModeEnum,
+                  description: proposalExecutionModeDescription,
                 },
                 priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
                 title: { type: 'string' },
@@ -913,21 +911,20 @@ export function getCisSystemTools(): any[] {
       type: 'function',
       function: {
         name: 'write_proposal',
-	        description:
-	          'Submit a human-approved proposal. Choose one execution_mode: general (read/research/internal orchestration), action (user-world work), or code_change (Prometheus src/web-ui self-edit). Include execution_steps for executable proposals.',
+        description: proposalDescription,
         parameters: {
           type: 'object',
           required: ['type', 'title', 'summary', 'details'],
           properties: {
             type: {
               type: 'string',
-              enum: ['feature_addition', 'src_edit', 'config_change', 'task_trigger', 'memory_update', 'skill_evolution', 'prompt_mutation', 'general'],
+              enum: proposalTypeEnum,
               description: 'Category of change',
             },
             execution_mode: {
               type: 'string',
-              enum: ['code_change', 'action', 'general'],
-              description: 'Execution lane. general = read/research/audit + internal Prometheus orchestration (start a team, message a subagent), no user-file/external side effects. action = real work in the user\'s world (build/fix in the workspace or an allowed path, respond to an incoming email/webhook); requires a "## Current state" section confirming the gap still exists. code_change = Prometheus\'s OWN src/ or web-ui/ self-edit only (sandboxed). Editing a user project is action, never code_change.',
+              enum: proposalExecutionModeEnum,
+              description: proposalExecutionModeDescription,
             },
             priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'], description: 'How urgent (default: medium)' },
             title: { type: 'string', description: 'Short title shown in the proposals panel (max 120 chars)' },

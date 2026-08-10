@@ -18,6 +18,7 @@ import type {
   LoadedExtensionDescriptor,
 } from './types.js';
 import { ConnectionStore } from '../connections/connection-store.js';
+import type { ConnectionRecord } from '../connections/types.js';
 
 type CatalogState = Record<string, unknown>;
 
@@ -27,7 +28,15 @@ export type CatalogItem<TState extends CatalogState = CatalogState> = ExtensionD
 
 type ConnectorStatusMap = Record<
   string,
-  { connected: boolean; hasCredentials: boolean; authType: string }
+  {
+    connected: boolean;
+    hasCredentials: boolean;
+    authType: string;
+    account?: Record<string, unknown>;
+    grantedScopes?: string[];
+    expiresAt?: number;
+    refreshAvailable?: boolean;
+  }
 >;
 
 function buildConnectorState(
@@ -109,6 +118,10 @@ function buildConnectorState(
         : false),
     available: true,
     authType,
+    account: status?.account,
+    grantedScopes: status?.grantedScopes,
+    expiresAt: status?.expiresAt,
+    refreshAvailable: status?.refreshAvailable,
     connectedAt:
       typeof (saved as { connectedAt?: number }).connectedAt === 'number'
         ? (saved as { connectedAt?: number }).connectedAt
@@ -197,9 +210,10 @@ function buildCatalogItems(kind: ExtensionKind): CatalogItem[] {
     return descriptors.map((descriptor) => {
       const records = canonical.findByService(descriptor.id);
       const latest = records[0];
+      const baseState = buildConnectorState(descriptor, savedConnections, statuses, vercelCredentials);
       return {
         ...stripSourcePath(descriptor),
-        state: latest ? { ...buildConnectorState(descriptor, savedConnections, statuses, vercelCredentials), connectionId: latest.id, connected: latest.authenticated, configured: latest.configured, authenticated: latest.authenticated, registered: latest.registered, exposed: latest.exposed, verified: latest.verified, authState: latest.authState, health: latest.health, lastError: latest.lastError } : buildConnectorState(descriptor, savedConnections, statuses, vercelCredentials),
+        state: latest ? overlayCanonicalConnectorState(baseState, latest, statuses[descriptor.id]) : baseState,
       };
     });
   }
@@ -212,7 +226,33 @@ function buildCatalogItems(kind: ExtensionKind): CatalogItem[] {
       state = buildMcpPresetState(descriptor);
     }
     const latest = canonical.findByService(descriptor.id)[0];
-    return { ...stripSourcePath(descriptor), state: latest ? { ...state, connectionId: latest.id, connected: latest.authenticated, configured: latest.configured, authenticated: latest.authenticated, registered: latest.registered, exposed: latest.exposed, verified: latest.verified, authState: latest.authState, health: latest.health, lastError: latest.lastError } : state };
+    return { ...stripSourcePath(descriptor), state: latest ? {
+      ...state,
+      connectionId: latest.id,
+      connected: latest.authenticated,
+      configured: latest.configured,
+      authenticated: latest.authenticated,
+      registered: latest.registered,
+      exposed: latest.exposed,
+      verified: latest.verified,
+      authState: latest.authState,
+      health: latest.health,
+      contractVersion: latest.contractVersion,
+      migration: latest.migration,
+      account: latest.account,
+      resources: latest.resources,
+      grantedCapabilities: latest.grantedCapabilities,
+      grantedScopes: latest.grantedScopes,
+      capabilityGrants: latest.capabilityGrants,
+      registeredTools: latest.registeredTools,
+      exposedTools: latest.exposedTools,
+      tools: latest.tools,
+      providerApp: latest.providerApp,
+      verification: latest.verification,
+      lastVerifiedAt: latest.lastVerifiedAt,
+      lastHealthCheckAt: latest.lastHealthCheckAt,
+      lastError: latest.lastError,
+    } : state };
   });
 }
 
@@ -230,5 +270,42 @@ export function buildExtensionsCatalog(kind?: ExtensionKind) {
     connectors: buildCatalogItems('connector'),
     mcpPresets: buildCatalogItems('mcp_preset'),
     integrations: buildCatalogItems('integration'),
+  };
+}
+
+function overlayCanonicalConnectorState(
+  base: CatalogState,
+  latest: ConnectionRecord,
+  liveStatus?: ConnectorStatusMap[string],
+): CatalogState {
+  const liveKnown = liveStatus !== undefined;
+  const liveConnected = latest.authenticated && (!liveKnown || liveStatus.connected);
+  const needsReauth = latest.authenticated && liveKnown && !liveStatus.connected;
+  return {
+    ...base,
+    connectionId: latest.id,
+    connected: liveConnected,
+    configured: latest.configured,
+    authenticated: liveConnected,
+    registered: latest.registered,
+    exposed: liveConnected && latest.exposed,
+    verified: latest.verified && liveConnected,
+    authState: needsReauth ? 'reauth_required' : latest.authState,
+    health: needsReauth ? 'degraded' : latest.health,
+    contractVersion: latest.contractVersion,
+    migration: latest.migration,
+    account: latest.account || base.account,
+    resources: latest.resources,
+    grantedCapabilities: latest.grantedCapabilities,
+    grantedScopes: latest.grantedScopes || base.grantedScopes,
+    capabilityGrants: latest.capabilityGrants,
+    registeredTools: latest.registeredTools,
+    exposedTools: liveConnected ? latest.exposedTools : [],
+    tools: latest.tools,
+    providerApp: latest.providerApp,
+    verification: latest.verification,
+    lastVerifiedAt: latest.lastVerifiedAt,
+    lastHealthCheckAt: latest.lastHealthCheckAt,
+    lastError: latest.lastError,
   };
 }

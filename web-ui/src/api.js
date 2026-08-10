@@ -67,6 +67,7 @@ async function apiRequest(path, opts = {}) {
   let lastError = null;
   const timeoutMs = Number(opts.timeoutMs || 10000);
   const { timeoutMs: _timeoutMs, dedupe: _dedupe, ...fetchOpts } = opts;
+  const parentSignal = fetchOpts.signal;
   const body = fetchOpts.body;
   const shouldStringifyBody = body
     && typeof body === 'object'
@@ -79,6 +80,11 @@ async function apiRequest(path, opts = {}) {
   for (let index = 0; index < candidates.length; index++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const onParentAbort = () => controller.abort();
+    if (parentSignal) {
+      if (parentSignal.aborted) controller.abort();
+      else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+    }
     try {
       // Attach the paired-device token if the mobile UI has one stored.
       // Desktop loaders never set this, so the header is omitted there.
@@ -99,10 +105,12 @@ async function apiRequest(path, opts = {}) {
       }
       return r.json();
     } catch (err) {
+      if (parentSignal?.aborted) throw err;
       lastError = err?.name === 'AbortError' ? new Error('Request timed out') : err;
       if (!shouldRetryApiRequest(err) || index === candidates.length - 1) throw lastError;
     } finally {
       clearTimeout(timeout);
+      parentSignal?.removeEventListener?.('abort', onParentAbort);
     }
   }
 

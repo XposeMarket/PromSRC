@@ -17,7 +17,7 @@ import { addMessage, clearHistory, consolidateLegacyAutomatedSessions, flushSess
 import { ensureAgentWorkspace, getAgentById, getConfig } from '../../config/config';
 import { recordAgentRun } from '../../scheduler';
 import { buildSelfReflectionInstruction } from '../../config/self-reflection.js';
-import { loadScheduleMemory, formatScheduleMemoryForPrompt, startRunLogEntry, completeScheduledRun, addLearnedContext, setNote, type ScheduleAgentMemory } from './schedule-memory';
+import { loadScheduleMemory, formatScheduleMemoryForPrompt, startRunLogEntry, completeScheduledRun, updateRunLogEntry, addLearnedContext, setNote, type ScheduleAgentMemory } from './schedule-memory';
 import { ensureScheduleOwnerAgent, ensureScheduleRuntimeForAgent } from './schedule-agent';
 import { archiveCompletedScheduledJob, deleteArchivedScheduledJob } from './schedule-archive';
 import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
@@ -2179,6 +2179,20 @@ export class CronScheduler {
       automatedSession = createAutomatedOutputSession();
     } else {
       console.log(`[CronScheduler] Job "${job.name}" → HEARTBEAT_OK (suppressed)`);
+    }
+
+    // Keep the run log pointed at the user-facing conversation. For main-agent
+    // schedules this is the generated auto session, not the isolated scheduler
+    // task session. Standalone subagent schedules use their task chat session.
+    if (activeRunId) {
+      const runChatSessionId = String(
+        automatedSession?.id
+          || (!teamId && scheduledSubagentTaskId ? loadTask(scheduledSubagentTaskId)?.sessionId : '')
+          || '',
+      ).trim();
+      if (runChatSessionId) {
+        updateRunLogEntry(job.id, activeRunId, { chatSessionId: runChatSessionId });
+      }
     }
 
     this.appendRunHistory(job.id, {

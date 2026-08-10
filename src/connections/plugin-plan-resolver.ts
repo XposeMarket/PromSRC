@@ -1,5 +1,5 @@
 import { getExtensionDescriptor, listExtensionDescriptors } from '../extensions/registry';
-import type { ConnectionDiscoveryMatch, ConnectionDiscoveryResult, ConnectionPlan, ConnectionStrategy } from './types';
+import type { ConnectionCapabilityContract, ConnectionDiscoveryMatch, ConnectionDiscoveryResult, ConnectionPlan, ConnectionStrategy } from './types';
 import type { ConnectionPlanResolver } from './orchestrator';
 
 function normalize(value: string): string { return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
@@ -60,10 +60,35 @@ export class PluginConnectionPlanResolver implements ConnectionPlanResolver {
     const canonicalServiceId = discovery.status === 'resolved' ? discovery.canonicalServiceId! : serviceId;
     const descriptor = getExtensionDescriptor(canonicalServiceId);
     const declared = descriptor?.connection?.strategies || [];
+    const capabilityContracts: ConnectionCapabilityContract[] | undefined = descriptor?.connection?.requestedCapabilities?.map((item) => ({
+      id: item.id,
+      label: item.label,
+      description: item.description,
+      risk: item.risk || 'high_impact',
+    }));
     let strategies: ConnectionStrategy[] = declared.map((item) => ({
       id: item.id, adapter: item.adapter, priority: item.priority, capabilities: item.capabilities || input.requestedCapabilities,
-      readOnly: item.readOnlyDefault ?? input.readOnly, authentication: item.authentication ? { type: item.authentication.type, scopes: item.authentication.scopes } : undefined,
-      configuration: { ...(item.config || {}), ...(input.metadata || {}) }, verification: item.verification,
+      capabilityContracts,
+      readOnly: item.readOnlyDefault ?? input.readOnly,
+      authentication: item.authentication ? {
+        type: item.authentication.type,
+        scopes: item.authentication.scopes,
+        authorizationUrl: item.authentication.authorizationUrl,
+        tokenUrl: item.authentication.tokenUrl,
+        revokeUrl: item.authentication.revokeUrl,
+        pkceRequired: item.authentication.pkceRequired,
+        nonceRequired: item.authentication.nonceRequired,
+        callback: item.authentication.callback,
+        clientIdEnv: item.authentication.clientIdEnv,
+        clientSecretEnv: item.authentication.clientSecretEnv,
+      } : undefined,
+      configuration: {
+        ...(item.config || {}),
+        providerApp: descriptor?.connection?.providerApp,
+        registeredTools: descriptor?.ownership?.tools || [],
+        ...(input.metadata || {}),
+      },
+      verification: item.verification,
     }));
 
     const mcp = this.getMcpConfigs().find((item) => normalize(item.id) === normalize(canonicalServiceId) || normalize(item.name || '') === normalize(canonicalServiceId));

@@ -29,8 +29,17 @@ let scheduleSkillsCache = [];
 let _scheduleSkillIds = [];
 let _scheduleContextRefs = [];
 let _scheduleCtxRefEditId = null;
+const scheduleRunStates = new Map();
 
 const SCHEDULE_OWNER_MAIN = '__main__';
+
+function _scheduleLocalTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
 
 function _scheduleOwnerValue(job) {
   const teamId = String(job?.team_id || job?.teamId || '').trim();
@@ -77,10 +86,183 @@ async function refreshSchedules() {
         if (team?.id) teamsById[team.id] = team;
       }
     }
+    const scheduleIds = new Set(schedules.map((job) => String(job?.id || '').trim()).filter(Boolean));
+    for (const id of scheduleRunStates.keys()) {
+      if (!scheduleIds.has(id)) scheduleRunStates.delete(id);
+    }
+    schedules.forEach((job) => {
+      const id = String(job?.id || '').trim();
+      if (id) scheduleRunStates.set(id, { loading: true, opening: false, runs: [], selectedRun: null, target: null, reason: '' });
+    });
+    renderScheduleList();
+    await Promise.all(schedules.map((job) => _loadScheduleRunState(job)));
     renderScheduleList();
   } catch (err) {
     console.error('Failed to load schedules:', err);
   }
+}
+
+function _runTimestamp(run) {
+  return Math.max(
+    Number(run?.startedAt || 0),
+    Number(run?.scheduledAt || 0),
+    Number(run?.completedAt || 0),
+  );
+}
+
+function _selectCurrentOrLastRun(runs) {
+  const ordered = runs
+    .filter((run) => run && typeof run === 'object')
+    .slice()
+    .sort((a, b) => _runTimestamp(b) - _runTimestamp(a));
+  return ordered.find((run) => String(run.status || '').toLowerCase() === 'running') || ordered[0] || null;
+}
+
+async function _resolveScheduleRunState(job) {
+  const jobId = String(job?.id || '').trim();
+  if (!jobId) return { runs: [], selectedRun: null, target: null, reason: 'Schedule ID is missing.' };
+
+  const logResult = await api(`/api/schedules/${encodeURIComponent(jobId)}/run-log`, { dedupe: false });
+  const runs = Array.isArray(logResult?.runs) ? logResult.runs : [];
+  const selectedRun = _selectCurrentOrLastRun(runs);
+  if (!selectedRun) {
+    return { runs, selectedRun: null, target: null, reason: 'No scheduled run has been recorded yet.' };
+  }
+
+  const taskId = String(selectedRun.taskId || '').trim();
+  if (!taskId || taskId === `schedule_${jobId}`) {
+    return { runs, selectedRun, target: null, reason: 'This run did not create a conversation task.' };
+  }
+
+  let taskResult;
+  try {
+    taskResult = await api(`/api/bg-tasks/${encodeURIComponent(taskId)}`, { dedupe: false });
+  } catch {
+    return { runs, selectedRun, target: null, reason: 'The conversation task for this run is no longer available.' };
+  }
+  const task = taskResult?.task;
+  if (!task) {
+    return { runs, selectedRun, target: null, reason: 'The conversation task for this run is no longer available.' };
+  }
+
+  const taskScheduleId = String(task.scheduleId || '').trim();
+  const taskRunId = String(task.scheduleRunId || '').trim();
+  if (taskScheduleId !== jobId || (taskRunId && taskRunId !== String(selectedRun.runId || '').trim())) {
+    return { runs, selectedRun, target: null, reason: 'The run/task link could not be verified.' };
+  }
+
+  const teamId = String(job.team_id || job.teamId || '').trim();
+  if (teamId) {
+    return {
+      runs,
+      selectedRun,
+      target: { kind: 'team', teamId, taskId, runId: String(selectedRun.runId || '') },
+      reason: '',
+    };
+  }
+
+  const assignmentTarget = String(job.assignment_target || job.assignmentTarget || '').trim().toLowerCase();
+  const subagentId = String(job.subagent_id || job.subagentId || '').trim();
+  const isMainConversation = assignmentTarget === 'main'
+    || job.deliver_to_main_channel === true
+    || job.deliverToMainChannel === true
+    || !subagentId;
+
+  // Main-agent scheduled runs write their user-facing output to an automated
+  // conversation. The task session is only the scheduler's execution context.
+  if (isMainConversation) {
+    if (String(selectedRun.status || '').toLowerCase() === 'running') {
+      return { runs, selectedRun, target: null, reason: 'The current run has not created its chat yet.' };
+    }
+    const outputSessionId = String(
+      selectedRun.chatSessionId
+        || job.last_output_session_id
+        || job.lastOutputSessionId
+        || '',
+    ).trim();
+    if (!outputSessionId || /heartbeat_ok/i.test(String(job.last_result || job.lastResult || ''))) {
+      return { runs, selectedRun, target: null, reason: 'This run did not create a chat conversation.' };
+    }
+    try {
+      const sessionResult = await api(`/api/sessions/${encodeURIComponent(outputSessionId)}`, { dedupe: false });
+      if (!sessionResult?.session || !Array.isArray(sessionResult.session.history) || sessionResult.session.history.length === 0) {
+        throw new Error('Session has no conversation history');
+      }
+    } catch {
+      return { runs, selectedRun, target: null, reason: 'This run has no available chat session.' };
+    }
+    return {
+      runs,
+      selectedRun,
+      target: { kind: 'session', sessionId: outputSessionId, taskId, runId: String(selectedRun.runId || '') },
+      reason: '',
+    };
+  }
+
+  const sessionId = String(task.sessionId || '').trim();
+  if (!sessionId) {
+    return { runs, selectedRun, target: null, reason: 'This run has no chat session.' };
+  }
+  try {
+    const sessionResult = await api(`/api/sessions/${encodeURIComponent(sessionId)}`, { dedupe: false });
+    if (!sessionResult?.session || !Array.isArray(sessionResult.session.history) || sessionResult.session.history.length === 0) {
+      throw new Error('Session has no conversation history');
+    }
+  } catch {
+    return { runs, selectedRun, target: null, reason: 'This run has no available chat session.' };
+  }
+
+  return {
+    runs,
+    selectedRun,
+    target: { kind: 'session', sessionId, taskId, runId: String(selectedRun.runId || '') },
+    reason: '',
+  };
+}
+
+async function _loadScheduleRunState(job) {
+  const jobId = String(job?.id || '').trim();
+  if (!jobId) return;
+  const prior = scheduleRunStates.get(jobId) || {};
+  scheduleRunStates.set(jobId, { ...prior, loading: true, target: null, reason: '' });
+  try {
+    const resolved = await _resolveScheduleRunState(job);
+    scheduleRunStates.set(jobId, { ...resolved, loading: false, opening: prior.opening === true });
+  } catch (err) {
+    scheduleRunStates.set(jobId, {
+      ...prior,
+      loading: false,
+      target: null,
+      reason: 'Run history is unavailable right now.',
+      error: err?.message || 'Run history request failed',
+    });
+  }
+}
+
+function _scheduleChatControlHtml(job) {
+  const jobId = String(job?.id || '').trim();
+  const state = scheduleRunStates.get(jobId);
+  if (!state || state.loading || state.opening) {
+    return `<button disabled title="${state?.opening ? 'Opening the latest run chat' : 'Loading the latest run chat'}"
+      style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);opacity:.65;
+             border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:wait;white-space:nowrap">
+      ${state?.opening ? 'Opening…' : 'Loading…'}
+    </button>`;
+  }
+  if (state.target) {
+    return `<button onclick="event.stopPropagation(); openScheduleRunChat('${escHtml(jobId)}')"
+      style="border:1px solid color-mix(in srgb,var(--brand,#6c8ebf) 45%,var(--line));
+             background:color-mix(in srgb,var(--brand,#6c8ebf) 10%,transparent);color:var(--brand,#6c8ebf);
+             border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap"
+      title="Open the conversation created by the current or last run">Open chat</button>`;
+  }
+  const reason = state.reason || 'No chat is available for the current or last run.';
+  const label = 'No chat session available';
+  return `<button disabled title="${escHtml(reason)}"
+    style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);opacity:.7;
+           border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:not-allowed;white-space:nowrap">
+    ${label}
+  </button>`;
 }
 
 function renderScheduleList() {
@@ -115,9 +297,6 @@ function _renderBrainCards() {
     const lastRun   = job.lastRun ? new Date(job.lastRun).toLocaleString() : 'Never';
 
     const statusLabel = running ? 'running' : (enabled ? 'active' : 'disabled');
-    const statusColor = running ? '#a78bfa'
-      : enabled ? '#16a34a'
-      : '#6b7280';
     const statusBg    = running ? 'rgba(167,139,250,.15)'
       : enabled ? '#c8f0c4'
       : '#e5e7eb';
@@ -140,8 +319,7 @@ function _renderBrainCards() {
 
     return `
       <div style="display:flex;align-items:start;justify-content:space-between;gap:12px;padding:12px;
-                  background:var(--panel);border:1px solid var(--line);border-radius:10px;
-                  border-left:3px solid ${statusColor}">
+                  background:var(--panel);border:1px solid var(--line);border-radius:10px">
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
             <div style="font-weight:700;font-size:13px">${escHtml(job.name)}</div>
@@ -228,6 +406,7 @@ function _renderCronCard(job) {
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:8px;flex-shrink:0;padding-top:2px">
         ${_toggleHtml(enabled, `toggleJobEnabled('${job.id}', ${!enabled})`)}
+        ${_scheduleChatControlHtml(job)}
         <button onclick="event.stopPropagation(); runScheduleNow('${job.id}')"
           style="border:1px solid var(--line);background:var(--panel-2);color:var(--muted);
                  border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;
@@ -293,9 +472,7 @@ function _renderTeamScheduleCard(job) {
 
   return `
     <div style="display:flex;align-items:start;justify-content:space-between;gap:12px;padding:14px;
-                background:linear-gradient(180deg,color-mix(in srgb,#14b8a6 8%,var(--panel)),var(--panel));
-                border:1px solid color-mix(in srgb,#14b8a6 32%,var(--line));border-radius:10px;
-                border-left:3px solid #14b8a6;cursor:pointer"
+                background:var(--panel);border:1px solid var(--line);border-radius:10px;cursor:pointer"
          onclick="editSchedule('${job.id}')">
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
@@ -327,6 +504,7 @@ function _renderTeamScheduleCard(job) {
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:8px;flex-shrink:0;padding-top:2px">
         ${_toggleHtml(enabled, `toggleJobEnabled('${job.id}', ${!enabled})`)}
+        ${_scheduleChatControlHtml(job)}
         <button onclick="event.stopPropagation(); runScheduleNow('${job.id}')"
           style="border:1px solid rgba(20,184,166,.35);background:rgba(20,184,166,.10);color:#0f766e;
                  border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;
@@ -615,15 +793,11 @@ async function _loadScheduleModalData() {
 
 function _resetScheduleModalFields() {
   document.getElementById('schedule-name').value = '';
-  document.getElementById('schedule-occurrence').value = 'manual';
+  document.getElementById('schedule-occurrence').value = '0 * * * *';
   document.getElementById('schedule-time').value = '09:00';
   document.getElementById('schedule-pattern').value = '';
   document.getElementById('schedule-prompt').value = '';
-  document.getElementById('schedule-timezone').value = 'UTC';
-  document.getElementById('schedule-channel').value = 'web';
   document.getElementById('schedule-subagent').value = SCHEDULE_OWNER_MAIN;
-  const hbPreview = document.getElementById('schedule-heartbeat-preview');
-  if (hbPreview) hbPreview.style.display = 'none';
   document.getElementById('schedule-pattern-preview').style.display = 'none';
   document.getElementById('schedule-time-row').style.display = 'none';
   document.getElementById('schedule-custom-cron-row').style.display = 'none';
@@ -683,8 +857,6 @@ function editSchedule(jobId) {
     document.getElementById('schedule-custom-cron-row').style.display = '';
   }
   document.getElementById('schedule-prompt').value = job.prompt || '';
-  document.getElementById('schedule-timezone').value = job.timezone || 'UTC';
-  document.getElementById('schedule-channel').value = job.delivery_channel || 'web';
   document.getElementById('schedule-pattern-preview').style.display = 'none';
   document.getElementById('schedule-modal').style.display = 'flex';
   _loadScheduleModalData();
@@ -699,7 +871,7 @@ function closeScheduleModal() {
 
 async function parseSchedulePattern() {
   const pattern  = document.getElementById('schedule-pattern').value.trim();
-  const timezone = document.getElementById('schedule-timezone').value;
+  const timezone = _scheduleLocalTimezone();
   if (!pattern) {
     alert('Enter a schedule pattern (e.g., "daily at 09:00" or "0 9 * * *")');
     return;
@@ -731,8 +903,7 @@ async function parseSchedulePattern() {
 async function saveSchedule() {
   const name      = document.getElementById('schedule-name').value.trim();
   const prompt    = document.getElementById('schedule-prompt').value.trim();
-  const timezone  = document.getElementById('schedule-timezone').value;
-  const channel   = document.getElementById('schedule-channel').value;
+  const timezone  = _scheduleLocalTimezone();
   const ownerValue = document.getElementById('schedule-subagent').value.trim() || SCHEDULE_OWNER_MAIN;
   const subagentId = ownerValue === SCHEDULE_OWNER_MAIN ? '' : ownerValue;
   const pattern   = _resolveSchedulePattern();
@@ -754,7 +925,7 @@ async function saveSchedule() {
       pattern: pattern || '0 9 * * *',
       prompt,
       timezone,
-      delivery_channel: channel,
+      delivery_channel: 'web',
       confirm: true,
       ...(currentTeamId && !subagentId ? { team_id: currentTeamId } : {}),
       ...(!currentTeamId || subagentId ? { subagent_id: subagentId } : {}),
@@ -805,11 +976,71 @@ async function runScheduleNow(jobId) {
     if (result.success) {
       await refreshSchedules();
       showToast('Schedule running now', job?.name || '', 'success');
+      // The scheduler acknowledges before the run task is necessarily persisted.
+      // Re-check once the task/run-log write has had a chance to complete.
+      setTimeout(async () => {
+        if (!job) return;
+        await _loadScheduleRunState(job);
+        if (window.currentMode === 'schedule') renderScheduleList();
+      }, 800);
     } else {
       showToast('Run failed', result.error || 'Failed to run', 'error');
     }
   } catch (err) {
     showToast('Run failed', err.message, 'error');
+  }
+}
+
+async function _openScheduleTeamChat(teamId) {
+  if (typeof window.setMode === 'function') window.setMode('teams');
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  if (typeof window.openTeamBoard !== 'function' || typeof window.switchTeamTab !== 'function') {
+    throw new Error('Team chat navigation is unavailable in this view.');
+  }
+  await window.openTeamBoard(teamId);
+  window.switchTeamTab('chat', teamId);
+}
+
+async function openScheduleRunChat(jobId) {
+  const job = schedules.find((item) => String(item?.id || '') === String(jobId || ''));
+  if (!job) return;
+
+  const current = scheduleRunStates.get(String(jobId)) || {};
+  if (current.opening) return;
+  scheduleRunStates.set(String(jobId), { ...current, loading: true, opening: true, target: null });
+  renderScheduleList();
+
+  try {
+    // Re-resolve at click time so a newly-started run cannot accidentally open
+    // the previous run's conversation.
+    const resolved = await _resolveScheduleRunState(job);
+    scheduleRunStates.set(String(jobId), { ...resolved, loading: false, opening: true });
+    if (!resolved.target) {
+      throw new Error(resolved.reason || 'No chat is available for this run.');
+    }
+
+    if (resolved.target.kind === 'team') {
+      await _openScheduleTeamChat(resolved.target.teamId);
+      return;
+    }
+
+    const sessionId = resolved.target.sessionId;
+    if (typeof window.openTerminalSession === 'function') {
+      await window.openTerminalSession(sessionId, 'web');
+    } else if (typeof window.openSession === 'function') {
+      await window.openSession(sessionId);
+    } else {
+      throw new Error('Chat navigation is unavailable in this view.');
+    }
+    if (String(window.activeChatSessionId || '') !== sessionId) {
+      throw new Error('The run chat could not be opened.');
+    }
+  } catch (err) {
+    showToast('Chat unavailable', err?.message || 'Could not open the run chat', 'warning');
+  } finally {
+    const latest = scheduleRunStates.get(String(jobId)) || {};
+    scheduleRunStates.set(String(jobId), { ...latest, loading: false, opening: false });
+    renderScheduleList();
   }
 }
 
@@ -826,6 +1057,7 @@ window.toggleJobEnabled        = toggleJobEnabled;
 window.toggleBrainJob          = toggleBrainJob;
 window.runBrainNow             = runBrainNow;
 window.runScheduleNow          = runScheduleNow;
+window.openScheduleRunChat     = openScheduleRunChat;
 window.onScheduleOccurrenceChange = onScheduleOccurrenceChange;
 window.addScheduleSkill        = addScheduleSkill;
 window.removeScheduleSkill     = removeScheduleSkill;

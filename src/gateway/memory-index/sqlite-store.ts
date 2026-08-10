@@ -621,11 +621,40 @@ function statusPenalty(status: string): number {
   return 0;
 }
 
-function ftsQuery(query: string): string {
-  const qTerms = uniqTop(terms(query), 12);
+const QUICK_QUERY_FILLER = new Set([
+  'about', 'after', 'before', 'can', 'could', 'cold', 'decide', 'decision', 'did', 'does',
+  'earlier', 'find', 'give', 'history', 'how', 'just', 'last', 'learn', 'look', 'please',
+  'remember', 'tell', 'that', 'them', 'these', 'those', 'warm', 'want', 'what', 'would', 'you',
+]);
+
+function selectQuickQueryTerms(rawTerms: string[]): string[] {
+  const informative = rawTerms.filter((term) => !QUICK_QUERY_FILLER.has(term));
+  if (informative.length <= 6) return informative.slice(0, 6);
+
+  // Chat questions commonly start with low-signal framing ("what did we
+  // decide about ...") and put the discriminating subject at the end. Keep a
+  // small head for intent plus a tail for the actual subject instead of
+  // silently dropping terms such as "first", "token", or "latency".
+  return Array.from(new Set([
+    ...informative.slice(0, 2),
+    ...informative.slice(-4),
+  ])).slice(0, 6);
+}
+
+function ftsQuery(query: string, mode: string = 'quick'): string {
+  const rawTerms = uniqTop(terms(query), 12);
+  const qTerms = mode === 'deep' || mode === 'timeline'
+    ? rawTerms
+    : (selectQuickQueryTerms(rawTerms).length
+      ? selectQuickQueryTerms(rawTerms)
+      : rawTerms.slice(0, 4));
   if (!qTerms.length) return '';
   const escaped = qTerms.map((term) => `${term.replace(/"/g, '""')}*`);
-  return escaped.length <= 5 ? escaped.join(' ') : escaped.join(' OR ');
+  // Keep the bounded quick query conjunctive through six terms. Six is still
+  // small enough for natural-language questions after filler removal, while
+  // switching to OR at five terms turns ordinary prompts into hundreds of
+  // candidates and pushes them over the automatic latency budget.
+  return escaped.length <= 6 ? escaped.join(' ') : escaped.join(' OR ');
 }
 
 function safeJson(value: unknown): string {
@@ -1068,18 +1097,30 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
       dimensions: EMBEDDING_DIM,
     };
     const qEmbedding = activeQueryVector.vector;
-    const query = ftsQuery(q);
+    const query = ftsQuery(q, mode);
     const now = Date.now();
     const recencyBias = mode === 'deep' || mode === 'timeline';
     const filters = recordFilters(params);
     const queryRoute = String(params.queryRoute || 'tool_manual');
     const candidates = new Map<string, { row: any; chunkText?: string; fts: number; lexical: string[] }>();
+    let chunkSearchSkipped = false;
+
+    // Do not materialize the full transcript body once per matching chunk.
+    // The previous r.* projection duplicated large parent records across up to
+    // 260 chunk rows before ranking even began.
+    const recordSearchProjection = `
+      r.id, r.layer, r.canonical_key, r.type, r.title, r.summary,
+      r.source_type, r.source_path, r.source_section, r.source_start_line,
+      r.source_end_line, r.project_id, r.durability, r.confidence, r.authority,
+      r.status, r.supersedes_id, r.created_at, r.updated_at, r.timestamp_ms,
+      r.day, r.content_hash, r.metadata_json,
+      e.embedding, e.provider_id, e.model, e.dimensions`;
 
     if (query) {
       const ftsStartedAt = Date.now();
       const where = filters.where.length ? `AND ${filters.where.join(' AND ')}` : '';
       const recordRows = db.prepare(`
-        SELECT r.*, e.embedding, e.provider_id, e.model, e.dimensions, bm25(memory_fts) AS rank_score
+        SELECT ${recordSearchProjection}, bm25(memory_fts) AS rank_score
         FROM memory_fts
         JOIN memory_records r ON r.id = memory_fts.record_id
         LEFT JOIN memory_embeddings e ON e.record_id = r.id
@@ -1089,41 +1130,54 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
       `).all(query, ...filters.values);
       for (const row of recordRows) {
         const fts = 1 / (1 + Math.abs(Number(row.rank_score || 0)));
-        candidates.set(row.id, { row, fts, lexical: qTerms.filter((term) => String(row.content || row.summary || '').toLowerCase().includes(term)) });
+        candidates.set(row.id, { row, fts, lexical: qTerms.filter((term) => String(row.summary || row.title || '').toLowerCase().includes(term)) });
       }
 
-      const chunkRows = db.prepare(`
-        SELECT r.*, c.id AS chunk_id, c.text AS chunk_text, c.source_section AS chunk_source_section,
-               c.source_start_line AS chunk_source_start_line, c.source_end_line AS chunk_source_end_line,
-               e.embedding, e.provider_id, e.model, e.dimensions, bm25(memory_chunk_fts) AS rank_score
-        FROM memory_chunk_fts
-        JOIN memory_chunks c ON c.id = memory_chunk_fts.chunk_id
-        JOIN memory_records r ON r.id = c.record_id
-        LEFT JOIN memory_embeddings e ON e.record_id = r.id
-        WHERE memory_chunk_fts MATCH ? ${where}
-        ORDER BY rank_score
-        LIMIT 260
-      `).all(query, ...filters.values);
-      for (const row of chunkRows) {
-        const existing = candidates.get(row.id);
-        const fts = 1 / (1 + Math.abs(Number(row.rank_score || 0)));
-        const lexical = qTerms.filter((term) => String(row.chunk_text || '').toLowerCase().includes(term));
-        const mergedRow = {
-          ...row,
-          source_section: row.chunk_source_section || row.source_section,
-          source_start_line: row.chunk_source_start_line || row.source_start_line,
-          source_end_line: row.chunk_source_end_line || row.source_end_line,
-        };
-        if (!existing || fts > existing.fts) candidates.set(row.id, { row: mergedRow, chunkText: row.chunk_text, fts, lexical });
+      // Record FTS is enough for dense quick searches and avoids a second wide
+      // FTS/materialization pass. Keep chunk search for sparse results and for
+      // explicit deep/timeline requests where chunk-level evidence matters.
+      const chunkSearchThreshold = Math.max(24, limit * 4);
+      const shouldSearchChunks = mode === 'deep' || mode === 'timeline' || candidates.size < chunkSearchThreshold;
+      if (shouldSearchChunks) {
+        const chunkRows = db.prepare(`
+          SELECT ${recordSearchProjection},
+                 c.id AS chunk_id, c.text AS chunk_text, c.source_section AS chunk_source_section,
+                 c.source_start_line AS chunk_source_start_line, c.source_end_line AS chunk_source_end_line,
+                 bm25(memory_chunk_fts) AS rank_score
+          FROM memory_chunk_fts
+          JOIN memory_chunks c ON c.id = memory_chunk_fts.chunk_id
+          JOIN memory_records r ON r.id = c.record_id
+          LEFT JOIN memory_embeddings e ON e.record_id = r.id
+          WHERE memory_chunk_fts MATCH ? ${where}
+          ORDER BY rank_score
+          LIMIT 260
+        `).all(query, ...filters.values);
+        for (const row of chunkRows) {
+          const existing = candidates.get(row.id);
+          const fts = 1 / (1 + Math.abs(Number(row.rank_score || 0)));
+          const lexical = qTerms.filter((term) => String(row.chunk_text || '').toLowerCase().includes(term));
+          const mergedRow = {
+            ...row,
+            source_section: row.chunk_source_section || row.source_section,
+            source_start_line: row.chunk_source_start_line || row.source_start_line,
+            source_end_line: row.chunk_source_end_line || row.source_end_line,
+          };
+          if (!existing || fts > existing.fts) candidates.set(row.id, { row: mergedRow, chunkText: row.chunk_text, fts, lexical });
+        }
+      } else {
+        chunkSearchSkipped = true;
       }
       markPhase('fts_query_ms', ftsStartedAt);
     }
 
-    if (!candidates.size || mode === 'deep' || mode === 'timeline') {
+    // Quick/project misses should be misses. The old bounded scan returned
+    // arbitrary low-confidence records and spent ~0.5s proving that a query
+    // was absent. Deep/timeline remain intentionally exhaustive.
+    if (mode === 'deep' || mode === 'timeline') {
       const scanStartedAt = Date.now();
       const where = filters.where.length ? `WHERE ${filters.where.join(' AND ')}` : '';
       const rows = db.prepare(`
-        SELECT r.*, e.embedding, e.provider_id, e.model, e.dimensions
+        SELECT ${recordSearchProjection}, r.content
         FROM memory_records r
         LEFT JOIN memory_embeddings e ON e.record_id = r.id
         ${where}
@@ -1222,6 +1276,10 @@ function searchSqliteMemoryIndexWithVector(workspacePath: string, params: Memory
           candidate_count: candidates.size,
           ranked_count: ranked.length,
           returned_hits: hits.length,
+          quick_query_terms: mode === 'deep' || mode === 'timeline'
+            ? undefined
+            : selectQuickQueryTerms(uniqTop(terms(q), 12)),
+          chunk_search_skipped: chunkSearchSkipped,
           vector_provider_used: activeQueryVector.providerId,
           vector_model_used: activeQueryVector.model,
           requested_vector_used: canUseRequestedVector,

@@ -20,6 +20,12 @@ export interface OAuthConnectorConfig {
   usePkce: boolean;
   callbackPort: number;
   callbackPath: string;
+  revokeUrl?: string;
+  useOfflineAccess?: boolean;
+  /** Add an OIDC nonce and require it to bind the returned ID token when the provider supports OpenID Connect. */
+  useNonce?: boolean;
+  /** OAuth token endpoint client authentication method. Most connectors use body; Notion requires Basic. */
+  tokenAuthMethod?: 'body' | 'basic';
 }
 
 export interface ConnectorTokens {
@@ -30,12 +36,18 @@ export interface ConnectorTokens {
   token_type?: string;
   account_email?: string;
   account_id?: string;
+  resource_id?: string;
+  resource_name?: string;
+  resource_kind?: string;
+  identity_url?: string;
+  instance_url?: string;
 }
 
 export interface OAuthStartResult {
   success: false;
   authUrl: string;
   flowId: string;
+  error?: string;
 }
 
 export interface OAuthCallbackResult {
@@ -44,10 +56,23 @@ export interface OAuthCallbackResult {
   error?: string;
 }
 
+export interface OAuthConnectorMetadata {
+  account?: { providerAccountId?: string; email?: string; displayName?: string; username?: string };
+  resources?: Array<{ kind: string; id: string; displayName?: string; parentId?: string; scope?: string }>;
+  grantedScopes?: string[];
+  expiresAt?: number;
+  refreshAvailable: boolean;
+  clientIdConfigured: boolean;
+  clientSecretConfigured: boolean;
+}
+
 interface FlowState {
   verifier?: string;
   state: string;
   createdAt: number;
+  expectedAccountId?: string;
+  requestedScopes?: string[];
+  nonce?: string;
 }
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
@@ -64,9 +89,12 @@ export abstract class OAuthConnector {
 
   get id() { return this.cfg.id; }
 
-  private vaultKey(): string {
+  protected vaultKey(): string {
     return `integration.${this.cfg.id}.oauth_tokens`;
   }
+
+  /** Opaque vault reference only; never returns a credential value. */
+  public credentialReference(): string { return `vault:${this.vaultKey()}`; }
 
   loadTokens(): ConnectorTokens | null {
     try {
@@ -84,6 +112,25 @@ export abstract class OAuthConnector {
   clearTokens(): void {
     getVault(this.configDir).delete(this.vaultKey(), `oauth:clear:${this.cfg.id}`);
     this.updateConnectionsFile(false);
+  }
+
+  /** RFC 7009-compatible provider revoke. Providers with a different revoke
+   * contract can override this method; local disconnect remains the fallback. */
+  public async revokeAccess(): Promise<void> {
+    this.loadCredentialsFromVault();
+    const tokens = this.loadTokens();
+    if (!tokens?.access_token || !this.cfg.revokeUrl) return;
+    const body = new URLSearchParams({ token: tokens.refresh_token || tokens.access_token });
+    const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
+    this.applyClientAuthentication(body, headers);
+    const response = await fetch(this.cfg.revokeUrl, {
+      method: 'POST',
+      headers,
+      body: body.toString(),
+    });
+    if (!response.ok && response.status !== 400 && response.status !== 404) {
+      throw new Error(`${this.cfg.name} token revocation failed (HTTP ${response.status}).`);
+    }
   }
 
   isConnected(): boolean {
@@ -131,17 +178,17 @@ export abstract class OAuthConnector {
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: existing.refresh_token,
-      client_id: this.cfg.clientId,
     });
-    if (this.cfg.clientSecret) body.set('client_secret', this.cfg.clientSecret);
+    const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
+    this.applyClientAuthentication(body, headers);
     const res = await fetch(this.cfg.tokenUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers,
       body: body.toString(),
     });
     if (!res.ok) {
-      const txt = await res.text().catch(() => '');
-      throw new Error(`Token refresh failed (${res.status}): ${txt.slice(0, 200)}`);
+      await res.text().catch(() => '');
+      throw new Error(`Token refresh failed (${res.status}).`);
     }
     const data = await res.json() as any;
     const tokens: ConnectorTokens = {
@@ -161,7 +208,7 @@ export abstract class OAuthConnector {
 
   // Load credentials from vault if env vars weren't set at startup time.
   // Mutates cfg so subsequent calls (handleCallback, refreshTokens) use them too.
-  private loadCredentialsFromVault(): void {
+  protected loadCredentialsFromVault(): void {
     if (this.cfg.clientId && this.cfg.clientSecret) return; // already have credentials
     try {
       const vaultKey = `integration.${this.cfg.id}.credentials`;
@@ -191,20 +238,57 @@ export abstract class OAuthConnector {
     } catch { return false; }
   }
 
-  startFlow(): OAuthStartResult {
+  getOAuthMetadata(): OAuthConnectorMetadata {
     this.loadCredentialsFromVault();
+    const tokens = this.loadTokens();
+    return {
+      account: tokens ? {
+        providerAccountId: tokens.account_id,
+        email: tokens.account_email,
+        displayName: tokens.account_email,
+      } : undefined,
+      grantedScopes: tokens?.scope?.split(/\s+/).filter(Boolean),
+      expiresAt: tokens?.expires_at,
+      refreshAvailable: Boolean(tokens?.refresh_token && this.hasCredentials()),
+      clientIdConfigured: Boolean(this.cfg.clientId),
+      clientSecretConfigured: Boolean(this.cfg.clientSecret),
+    };
+  }
+
+  startFlow(expectedAccountId?: string, requestedScopes?: string[]): OAuthStartResult {
+    this.loadCredentialsFromVault();
+    if (!this.cfg.clientId) {
+      return {
+        success: false,
+        authUrl: '',
+        flowId: this.cfg.id,
+        error: `${this.cfg.name} OAuth app is not configured. Add the provider app credentials in Advanced setup.`,
+      };
+    }
+    const existing = activeFlows.get(this.cfg.id);
+    if (existing && Date.now() - existing.createdAt <= FLOW_TTL_MS) {
+      return { success: false, authUrl: '', flowId: this.cfg.id, error: `${this.cfg.name} authorization is already in progress.` };
+    }
+    activeFlows.delete(this.cfg.id);
     const state = crypto.randomBytes(16).toString('hex');
-    const flowState: FlowState = { state, createdAt: Date.now() };
+    const scopes = [...new Set((requestedScopes || this.cfg.scopes)
+      .map((scope) => String(scope || '').trim())
+      .filter(Boolean))];
+    const nonce = this.cfg.useNonce ? crypto.randomBytes(16).toString('hex') : undefined;
+    const flowState: FlowState = { state, createdAt: Date.now(), expectedAccountId, requestedScopes: scopes, nonce };
 
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: this.cfg.clientId,
       redirect_uri: this.callbackUrl(),
-      scope: this.cfg.scopes.join(' '),
       state,
-      access_type: 'offline',
-      prompt: 'consent',
     });
+    if (this.cfg.useOfflineAccess !== false) {
+      params.set('access_type', 'offline');
+      params.set('prompt', 'consent');
+    }
+    if (scopes.length) params.set('scope', scopes.join(' '));
+    if (nonce) params.set('nonce', nonce);
 
     if (this.cfg.usePkce) {
       const verifier = this.generateVerifier();
@@ -218,41 +302,59 @@ export abstract class OAuthConnector {
     return { success: false, authUrl, flowId: this.cfg.id };
   }
 
-  public async handleCallback(code: string, returnedState: string): Promise<OAuthCallbackResult> {
+  public async handleCallback(code: string, returnedState: string, returnedNonce?: string): Promise<OAuthCallbackResult> {
     this.loadCredentialsFromVault();
     const flow = activeFlows.get(this.cfg.id);
     if (!flow || Date.now() - flow.createdAt > FLOW_TTL_MS) {
+      activeFlows.delete(this.cfg.id);
       return { success: false, error: 'OAuth session expired or not found. Click Connect again.' };
     }
     if (returnedState !== flow.state) {
       return { success: false, error: 'State mismatch — possible CSRF.' };
+    }
+    if (flow.nonce && returnedNonce && returnedNonce !== flow.nonce) {
+      return { success: false, error: 'Nonce mismatch — possible replay.' };
     }
 
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       code,
       redirect_uri: this.callbackUrl(),
-      client_id: this.cfg.clientId,
     });
-    if (this.cfg.clientSecret) body.set('client_secret', this.cfg.clientSecret);
+    const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded' };
+    this.applyClientAuthentication(body, headers);
     if (flow.verifier) body.set('code_verifier', flow.verifier);
 
     const res = await fetch(this.cfg.tokenUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers,
       body: body.toString(),
     });
 
     if (!res.ok) {
-      const txt = await res.text().catch(() => '');
+      await res.text().catch(() => '');
       activeFlows.delete(this.cfg.id);
-      return { success: false, error: `Token exchange failed (${res.status}): ${txt.slice(0, 200)}` };
+      return { success: false, error: `Token exchange failed (${res.status}).` };
     }
 
     const data = await res.json() as any;
     activeFlows.delete(this.cfg.id);
 
+    if (!data?.access_token || typeof data.access_token !== 'string') {
+      return { success: false, error: 'Token exchange returned no access token.' };
+    }
+
+    if (flow.nonce) {
+      const idTokenNonce = this.readIdTokenNonce(data.id_token);
+      if (idTokenNonce !== flow.nonce) {
+        return { success: false, error: 'Nonce validation failed — restart authorization.' };
+      }
+    }
+
     const tokens = await this.buildTokens(data);
+    if (flow.expectedAccountId && tokens.account_id && flow.expectedAccountId !== tokens.account_id) {
+      return { success: false, error: 'OAuth account mismatch — the selected provider account did not authorize this connection.' };
+    }
     this.saveTokens(tokens);
 
     return { success: true, account_email: tokens.account_email };
@@ -260,19 +362,26 @@ export abstract class OAuthConnector {
 
   listenForCallback(): Promise<OAuthCallbackResult> {
     return new Promise((resolve) => {
+      let finished = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
       const server = http.createServer(async (req, res) => {
-        if (!req.url?.startsWith(this.cfg.callbackPath)) {
+        const url = new URL(req.url || '/', `http://localhost:${this.cfg.callbackPort}`);
+        if (req.method !== 'GET' || url.pathname !== this.cfg.callbackPath) {
           res.writeHead(404); res.end(); return;
         }
-        const url = new URL(req.url, `http://localhost:${this.cfg.callbackPort}`);
         const code = url.searchParams.get('code');
         const state = url.searchParams.get('state');
+        const nonce = url.searchParams.get('nonce') || undefined;
         const error = url.searchParams.get('error');
 
         const done = (html: string, result: OAuthCallbackResult) => {
+          if (finished) return;
+          finished = true;
+          if (timeout) clearTimeout(timeout);
+          activeFlows.delete(this.cfg.id);
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end(html);
-          server.close();
+          server.close(() => undefined);
           resolve(result);
         };
 
@@ -282,9 +391,15 @@ export abstract class OAuthConnector {
         }
 
         try {
-          const result = await this.handleCallback(code, state || '');
+          const result = await this.handleCallback(code, state || '', nonce);
           if (result.success) {
             return done(this.successHtml(result.account_email), result);
+          } else if (/state mismatch/i.test(result.error || '')) {
+            // Do not consume a valid pending flow on an invalid local request;
+            // a legitimate provider callback may still arrive next.
+            res.writeHead(400, { 'Content-Type': 'text/html' });
+            res.end(this.errorHtml(result.error || 'State mismatch — possible CSRF.'));
+            return;
           } else {
             return done(this.errorHtml(result.error || 'Unknown error'), result);
           }
@@ -293,9 +408,21 @@ export abstract class OAuthConnector {
         }
       });
 
-      server.on('error', (e: any) => resolve({ success: false, error: `Callback server error: ${e.message}` }));
+      server.on('error', (e: any) => {
+        if (finished) return;
+        finished = true;
+        if (timeout) clearTimeout(timeout);
+        activeFlows.delete(this.cfg.id);
+        resolve({ success: false, error: `Callback server error: ${e.message}` });
+      });
       server.listen(this.cfg.callbackPort, 'localhost', () => {
-        setTimeout(() => { server.close(); resolve({ success: false, error: 'Timed out waiting for OAuth callback.' }); }, 10 * 60 * 1000);
+        timeout = setTimeout(() => {
+          if (finished) return;
+          finished = true;
+          activeFlows.delete(this.cfg.id);
+          server.close(() => undefined);
+          resolve({ success: false, error: 'Timed out waiting for OAuth callback.' });
+        }, FLOW_TTL_MS);
       });
     });
   }
@@ -304,22 +431,52 @@ export abstract class OAuthConnector {
     return `http://localhost:${this.cfg.callbackPort}${this.cfg.callbackPath}`;
   }
 
+  private applyClientAuthentication(body: URLSearchParams, headers: Record<string, string>): void {
+    if (this.cfg.tokenAuthMethod === 'basic') {
+      if (!this.cfg.clientId || !this.cfg.clientSecret) throw new Error(`${this.cfg.name} OAuth client authentication is not configured.`);
+      headers.Authorization = `Basic ${Buffer.from(`${this.cfg.clientId}:${this.cfg.clientSecret}`, 'utf8').toString('base64')}`;
+      return;
+    }
+    if (this.cfg.clientId) body.set('client_id', this.cfg.clientId);
+    if (this.cfg.clientSecret) body.set('client_secret', this.cfg.clientSecret);
+  }
+
   protected abstract buildTokens(data: Record<string, any>): Promise<ConnectorTokens>;
 
+  private readIdTokenNonce(idToken: unknown): string | undefined {
+    if (typeof idToken !== 'string') return undefined;
+    const parts = idToken.split('.');
+    if (parts.length !== 3) return undefined;
+    try {
+      const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as { nonce?: unknown };
+      return typeof payload.nonce === 'string' ? payload.nonce : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private escapeHtml(value: string): string {
+    return String(value || '').replace(/[&<>'"]/g, (character) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
+    }[character] || character));
+  }
+
   private successHtml(email?: string): string {
+    const safeEmail = email ? this.escapeHtml(email) : '';
     return `<html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#0f1a2e;color:#e8edf6">
       <div style="font-size:48px;margin-bottom:16px">✅</div>
       <h2 style="color:#31b884">${this.cfg.name} Connected!</h2>
-      ${email ? `<p style="color:#aeb9cb">Signed in as <strong>${email}</strong></p>` : ''}
+      ${safeEmail ? `<p style="color:#aeb9cb">Signed in as <strong>${safeEmail}</strong></p>` : ''}
       <p style="color:#aeb9cb">You can close this window and return to Prometheus.</p>
     </body></html>`;
   }
 
   private errorHtml(error: string): string {
+    const safeError = this.escapeHtml(error);
     return `<html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#0f1a2e;color:#e8edf6">
       <div style="font-size:48px;margin-bottom:16px">❌</div>
       <h2 style="color:#e06d6d">Connection Failed</h2>
-      <p style="color:#aeb9cb">${error}</p>
+      <p style="color:#aeb9cb">${safeError}</p>
       <p style="color:#aeb9cb">You can close this window and try again.</p>
     </body></html>`;
   }

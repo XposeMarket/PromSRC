@@ -10,6 +10,61 @@
  */
 
 /* ─────────────────────────────────────────────────────────────────────────
+   ASH & EMBER  (base: dark)
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="gray"] {
+  --native-color-scheme: dark;
+  --bg: #2e2e2e;
+  --bg-soft: #363636;
+  --panel: #3d3d3d;
+  --panel-2: #484848;
+  --line: rgba(255,255,255,.12);
+  --line-strong: rgba(255,255,255,.20);
+  --text: #f1eee8;
+  --fg: #f1eee8;
+  --muted: #aaa49a;
+  --brand: #f97316;
+  --brand-2: #c2410c;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --err: #f87171;
+  --flame: #f97316;
+  --flame-mid: #fb923c;
+  --flame-glow: rgba(249,115,22,.22);
+  --flame-border: rgba(249,115,22,.45);
+  --sidebar-bg: #171717;
+  --sidebar-text: #f1eee8;
+  --sidebar-muted: #aaa49a;
+  --sidebar-icon-bg: rgba(255,255,255,.06);
+  --sidebar-icon-border: rgba(255,255,255,.12);
+  --sidebar-item-bg: rgba(255,255,255,.045);
+  --sidebar-item-hover: rgba(249,115,22,.13);
+  --sidebar-active-bg: rgba(249,115,22,.18);
+  --sidebar-search-bg: #202020;
+  --sidebar-seg-bg: #202020;
+  --sidebar-seg-active: rgba(249,115,22,.16);
+  --composer-bg: rgba(23,23,23,.78);
+  --composer-panel: rgba(61,61,61,.74);
+  --composer-input: rgba(72,72,72,.84);
+  --composer-border: rgba(255,255,255,.13);
+  --composer-text: #f1eee8;
+  --composer-muted: rgba(241,238,232,.58);
+  --pm-orange: #f97316;
+  --pm-orange-hot: #c2410c;
+  --pm-ember: #6b2f0e;
+  --pm-gold: #fb923c;
+}
+:root[data-skin="gray"] body {
+  background: var(--bg);
+}
+:root[data-skin="gray"] main {
+  background: var(--bg);
+}
+:root[data-skin="gray"] .main-shell-wrap {
+  background: #262626;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
    OLYMPIAN BLUE  (base: dark)
    ───────────────────────────────────────────────────────────────────────── */
 :root[data-skin="blue"] {
@@ -479,6 +534,9 @@
 .theme-swatch[data-skin-preview="light"] .tsc-bg    { background: #050505; }
 .theme-swatch[data-skin-preview="light"] .tsc-panel { background: #15130f; }
 .theme-swatch[data-skin-preview="light"] .tsc-accent{ background: #d6b75e; }
+.theme-swatch[data-skin-preview="gray"]  .tsc-bg    { background: #2e2e2e; }
+.theme-swatch[data-skin-preview="gray"]  .tsc-panel { background: #3d3d3d; }
+.theme-swatch[data-skin-preview="gray"]  .tsc-accent{ background: #f97316; }
 .theme-swatch[data-skin-preview="blue"]  .tsc-bg    { background: #07101f; }
 .theme-swatch[data-skin-preview="blue"]  .tsc-panel { background: #122444; }
 .theme-swatch[data-skin-preview="blue"]  .tsc-accent{ background: #3d8bff; }
@@ -922,13 +980,13 @@
   opacity: 0 !important;
 }
 :root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card {
-  border-color: rgba(214, 183, 94, .34);
+  border-color: color-mix(in srgb, var(--muted) 32%, transparent);
   background: rgba(13, 13, 12, .88);
   box-shadow: 0 14px 36px rgba(0, 0, 0, .24);
 }
 :root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card:hover,
 :root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card:focus-visible {
-  border-color: rgba(240, 217, 139, .68);
+  border-color: color-mix(in srgb, var(--muted) 52%, transparent);
   background: rgba(214, 183, 94, .065);
   box-shadow: 0 16px 42px rgba(0, 0, 0, .32), 0 0 18px rgba(214, 183, 94, .08);
 }
@@ -1466,10 +1524,10 @@ body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recordin
 
 /* Chat cards, message chrome, slash commands, and workflows */
 :root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-pulse-card {
-  border-color: var(--p1-shared-gold-line);
+  border-color: var(--line);
 }
 :root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .chat-pulse-card:hover {
-  border-color: rgba(240, 217, 139, .62);
+  border-color: var(--line-strong);
   box-shadow: 0 0 20px rgba(214, 183, 94, .12);
 }
 :root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .msg.user .msg-bubble::after {
@@ -1482,7 +1540,7 @@ body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recordin
 :root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.chat-slash-command-popover, .chat-command-chip) {
   border-color: var(--p1-shared-gold-line);
 }
-:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.chat-slash-command-item:hover, .chat-slash-command-item.is-active, .chat-slash-token, .chat-command-chip:hover) {
+:root:is([data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) :is(.chat-slash-command-item:hover, .chat-slash-command-item.active, .chat-command-chip:hover) {
   color: var(--p1-shared-gold-light);
   border-color: rgba(214, 183, 94, .46);
   background: var(--p1-shared-gold-soft);
@@ -1738,7 +1796,9 @@ body:not(.pm-mobile-active) #chat-view .chat-input-area #chat-voice-btn.recordin
 :root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #channels-list {
   gap: 5px;
 }
-:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #jobs-list,
+:root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #jobs-list {
+  padding: 0 10px 10px 0;
+}
 :root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #skills-list,
 :root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #skills-search-results,
 :root[data-skin="light"] body:not(.pm-mobile-active) .sidebar #channels-list {
@@ -1925,14 +1985,11 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.voice-mode-b
   height: 18px;
 }
 
-/* No ambient composer halo. A restrained edge response is only present while
-   the composer is actually being used. */
+/* Keep the composer surface stable while it is hovered or focused. Individual
+   controls retain their own interaction feedback below. */
 body:not(.pm-mobile-active) #chat-view > .chat-input-area:hover,
 body:not(.pm-mobile-active) #chat-view > .chat-input-area:focus-within {
-  box-shadow:
-    0 14px 38px rgba(0, 0, 0, .34),
-    0 0 16px color-mix(in srgb, var(--brand, #d6b75e) 14%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, .09);
+  box-shadow: none;
 }
 
 :root[data-skin="light"] body:not(.pm-mobile-active) #chat-view > .chat-input-area {
@@ -1947,9 +2004,8 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area:focus-within {
 :root[data-skin="light"] body:not(.pm-mobile-active) #chat-view > .chat-input-area:focus-within {
   border-color: rgba(240, 217, 139, .42);
   box-shadow:
-    0 14px 38px rgba(0, 0, 0, .38),
-    0 0 16px rgba(214, 183, 94, .09),
-    inset 0 1px 0 rgba(240, 217, 139, .09);
+    0 12px 34px rgba(0, 0, 0, .30),
+    inset 0 1px 0 rgba(240, 217, 139, .06);
 }
 
 /* Desktop Realtime voice: reuse the mobile orb's visual language while the
@@ -2398,6 +2454,62 @@ body:not(.pm-mobile-active) #chat-view .desktop-voice-orb.speaking {
   to { transform: translate3d(7px, -5px, 0); opacity: 1; }
 }
 
+/* Desktop voice uses the same published ThinkingOrb canvas and transition
+   layers as mobile. The room picker still owns the button, while the actual
+   particles come from thinking-orbs (thinking/listening/solving). */
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb {
+  transform: none;
+  filter: none !important;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-thinking-orb-host {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  overflow: visible;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-thinking-orb-transition {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: scale(calc(1 + var(--pm-thinking-orb-audio, 0) * .05));
+  transform-origin: center;
+  transition: transform 48ms linear;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-thinking-orb-layer {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  display: block !important;
+  opacity: 0;
+  transform: scale(.94);
+  transform-origin: center;
+  mix-blend-mode: screen;
+  filter:
+    brightness(calc(1.04 + var(--pm-thinking-orb-audio, 0) * 2.15))
+    saturate(calc(1 + var(--pm-thinking-orb-audio, 0) * .52))
+    drop-shadow(0 0 calc(1px + var(--pm-thinking-orb-audio, 0) * 8px) color-mix(in srgb, var(--pm-voice-orb-light) 62%, transparent))
+    drop-shadow(0 0 calc(4px + var(--pm-thinking-orb-audio, 0) * 18px) color-mix(in srgb, var(--pm-voice-orb-glow) 34%, transparent));
+  transition: opacity 180ms ease, transform 180ms ease, filter 42ms linear;
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-thinking-orb-layer.is-current {
+  opacity: 1;
+  transform: scale(1);
+}
+
+body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-thinking-orb-layer.is-leaving {
+  opacity: 0;
+  transform: scale(1.04);
+}
+
 /* Leave enough air above the dock for transcript text. The existing bottom
    mask then lets older messages fade behind the orb as the conversation moves. */
 body:not(.pm-mobile-active) #chat-view.desktop-voice-mode #chat-messages {
@@ -2522,6 +2634,10 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-orb-svg {
     transition: none;
   }
+  body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-thinking-orb-transition,
+  body:not(.pm-mobile-active) #chat-view .desktop-voice-orb .pm-thinking-orb-layer {
+    transition: none !important;
+  }
 }
 
 /* Project/right-rail skin parity. The base right panel historically forced a
@@ -2608,4 +2724,332 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
 :root:is([data-skin="dark"], [data-skin="light"], [data-skin="blue"], [data-skin="purple"]) body:not(.pm-mobile-active) .right-panel #process-log {
   background: var(--bg-soft) !important;
   border-color: var(--line) !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Appearance preferences
+
+   Background artwork and embers are deliberately opt-in. The preference is
+   stored on the root so the CSS, canvas, and settings controls share one
+   source of truth without changing the existing preset palette definitions.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-background-visuals="off"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+  background: var(--bg) !important;
+}
+
+:root[data-background-visuals="off"][data-skin="light"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+  background: #000 !important;
+}
+
+:root[data-background-visuals="off"] body:not(.pm-mobile-active) #ember-canvas {
+  display: none !important;
+  opacity: 0;
+}
+
+:root[data-background-visuals="on"] body:not(.pm-mobile-active) #ember-canvas {
+  display: block !important;
+  opacity: var(--pm-background-opacity, .82);
+}
+
+:root[data-background-visuals="on"][data-skin="light"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+  background:
+    linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
+    #050505 url('/assets/chat-main-background-dark.png') center center / cover no-repeat !important;
+}
+
+:root[data-background-visuals="on"][data-skin="dark"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+  background:
+    linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
+    #1a1a1a url('/assets/chat-main-background-dark.png') center center / cover no-repeat !important;
+}
+
+:root[data-background-visuals="on"][data-skin="blue"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+  background:
+    linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
+    #07101f url('/assets/chat-main-background-blue.jpeg') center center / cover no-repeat !important;
+}
+
+:root[data-background-visuals="on"][data-skin="purple"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+  background:
+    linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
+    #0c0518 url('/assets/chat-main-background-purple.jpeg') center center / cover no-repeat !important;
+}
+
+:root[data-background-visuals="on"][data-skin="custom"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+  background:
+    linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
+    var(--bg) url('/assets/chat-main-background-dark.png') center center / cover no-repeat !important;
+}
+
+/* Custom theme surface layer. The editor writes the shared design tokens so
+   the rest of the desktop UI continues to use its normal component styles. */
+:root[data-skin="custom"] body:not(.pm-mobile-active) {
+  background: var(--bg) !important;
+  color: var(--text);
+  font-family: var(--pm-custom-font, 'Manrope', sans-serif);
+}
+:root[data-skin="custom"] body:not(.pm-mobile-active) :is(main, .main-shell-wrap, .page-view) {
+  background: var(--bg) !important;
+}
+:root[data-skin="custom"] body:not(.pm-mobile-active) :is(.sidebar, .topbar) {
+  background: var(--sidebar-bg) !important;
+  border-color: var(--line) !important;
+  color: var(--sidebar-text);
+}
+:root[data-skin="custom"] body:not(.pm-mobile-active) :is(.sidebar, .topbar, .main-shell, .right-panel, #chat-view, #settings-modal) :is(button, input, textarea, select) {
+  font-family: inherit;
+}
+:root[data-skin="custom"] body:not(.pm-mobile-active) .right-panel {
+  background: var(--bg) !important;
+  border-left-color: var(--line-strong) !important;
+}
+:root[data-skin="custom"] body:not(.pm-mobile-active) .right-panel :is(#right-panel-topbar, .right-section, #project-session-section) {
+  background: var(--bg) !important;
+  border-color: var(--line) !important;
+  color: var(--text);
+}
+:root[data-skin="custom"] body:not(.pm-mobile-active) .right-panel :is(.project-editor-block, .project-context-card, .progress-card, .conn-tile, .channel-hub-card) {
+  background: var(--panel-2) !important;
+  border-color: var(--line) !important;
+  color: var(--text);
+}
+:root[data-skin="custom"] body:not(.pm-mobile-active) .right-panel :is(.project-editor-textarea, #connections-search) {
+  background: var(--panel) !important;
+  border-color: var(--line) !important;
+  color: var(--text) !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Opaque desktop chat surfaces
+
+   The page background should read as the same solid surface as an unread
+   session, while the composer should match the solid pinned-chat surface.
+   Keep those two roles as explicit tokens so every skin stays internally
+   consistent instead of compositing through the optional artwork layer.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="light"] {
+  --pm-brain-card-bg: #2b2b2b;
+  --pm-chat-page-bg: var(--pm-brain-card-bg);
+  --pm-unread-chat-bg: var(--pm-brain-card-bg);
+  --pm-pinned-chat-bg: #121211;
+}
+
+:root[data-skin="dark"] {
+  --pm-brain-card-bg: #2a2a2a;
+  --pm-chat-page-bg: var(--pm-brain-card-bg);
+  --pm-unread-chat-bg: var(--pm-brain-card-bg);
+  --pm-pinned-chat-bg: #313131;
+}
+
+:root[data-skin="blue"] {
+  --pm-chat-page-bg: #10284d;
+  --pm-unread-chat-bg: #10284d;
+  --pm-pinned-chat-bg: #17335f;
+}
+
+:root[data-skin="purple"] {
+  --pm-chat-page-bg: #1c0e36;
+  --pm-unread-chat-bg: #1c0e36;
+  --pm-pinned-chat-bg: #2a1650;
+}
+
+:root[data-skin="custom"] {
+  --pm-chat-page-bg: color-mix(in srgb, var(--panel) 82%, var(--brand) 18%);
+  --pm-unread-chat-bg: var(--pm-chat-page-bg);
+  --pm-pinned-chat-bg: var(--panel-2);
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"]) {
+  --composer-bg: var(--pm-pinned-chat-bg);
+  --composer-panel: var(--pm-pinned-chat-bg);
+  --composer-input: var(--pm-pinned-chat-bg);
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, .side-chat-main-pane, .side-chat-pane) {
+  background: var(--pm-chat-page-bg) !important;
+  background-image: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-session-item.job-item.unread:not(.active),
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #jobs-list .chat-session-item.job-item.unread:not(.active),
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #channels-list .chat-session-item.job-item.unread:not(.active) {
+  background: var(--pm-unread-chat-bg) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #pinned-chats-list .chat-session-item.job-item {
+  background: var(--pm-pinned-chat-bg) !important;
+  border-color: var(--line) !important;
+  box-shadow: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-input-area {
+  background: var(--pm-pinned-chat-bg) !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .18) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-input-area .queued-prompts-panel {
+  background: var(--pm-pinned-chat-bg) !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card {
+  background: var(--pm-brain-card-bg) !important;
+}
+
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card:hover,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card:focus-visible {
+  background: color-mix(in srgb, var(--pm-brain-card-bg), var(--pm-orange) 4%) !important;
+}
+
+:root[data-skin="dark"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card {
+  background: var(--pm-brain-card-bg) !important;
+}
+
+:root[data-skin="dark"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card:hover,
+:root[data-skin="dark"] body:not(.pm-mobile-active) #chat-view .chat-pulse-card:focus-visible {
+  background: color-mix(in srgb, var(--pm-brain-card-bg), var(--pm-orange) 4%) !important;
+}
+
+/* Final empty-chat polish: keep the orange skin's page surface identical to
+   the brain cards, bring the composer into the same visual group, and keep
+   header hover states free of the shell's broad glow. */
+:root[data-skin="light"] body:not(.pm-mobile-active) main.main-shell,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view.chat-empty,
+:root[data-skin="light"] body:not(.pm-mobile-active) #chat-view.chat-empty #chat-messages {
+  background: var(--pm-brain-card-bg) !important;
+  background-image: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view.chat-empty:not(.desktop-voice-mode) > .chat-input-area {
+  transform: translateY(clamp(-180px, -12vh, -90px));
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .topbar:hover,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .topbar:focus-within {
+  --pm-glow: transparent !important;
+  box-shadow: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .topbar :is(.icon-btn, .panel-toggle-btn, .status-pill):is(:hover, :focus-visible) {
+  box-shadow: none !important;
+}
+
+/* Theme the secondary navigation and studio shells from the same structural
+   surface as the desktop header/sidebar. Buttons and content previews keep
+   their own accent and artwork treatment. */
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) {
+  --pm-studio-surface: var(--sidebar-bg);
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .more-popover {
+  background: var(--pm-studio-surface) !important;
+  border-color: var(--line-strong) !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .more-popover-item:hover {
+  background: var(--sidebar-item-hover) !important;
+  border-color: var(--line-strong) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .more-popover-item.active {
+  background: var(--sidebar-active-bg) !important;
+  border-color: var(--flame-border) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .more-popover .nav-icon {
+  background: var(--sidebar-icon-bg) !important;
+  border-color: var(--sidebar-icon-border) !important;
+  color: var(--brand) !important;
+}
+
+/* Code Canvas shell and editor surface. */
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-panel,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-panel > div:first-child,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-panel > div:nth-child(2),
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-panel > div:nth-child(2) > div:last-child,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-tabs,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-header-mode-rail,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-workspace-sidebar,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-workspace-header,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-workspace-actions,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-empty-state,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-file-browser,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-editor-wrap,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-preview-shell,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-preview-toolbar,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-preview-stage {
+  background: var(--pm-studio-surface) !important;
+  background-image: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-tabs .canvas-tab {
+  background: transparent !important;
+  color: var(--muted) !important;
+  border-color: var(--line) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-tabs .canvas-tab:hover,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-tabs .canvas-tab.active {
+  background: var(--panel) !important;
+  color: var(--text) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror-scroll,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror-gutters {
+  background: var(--pm-studio-surface) !important;
+  color: var(--text) !important;
+  border-color: var(--line) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-editor-wrap .CodeMirror-linenumber {
+  color: var(--muted) !important;
+}
+
+/* Creative studio outer surfaces; the stage itself remains the artwork. */
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-toolbar,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-layout,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-library,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-lib-nav,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-lib-panel,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-center,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-studio-properties,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-lib-panel-header,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-panel-header,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-stage-wrap,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-stage-viewport,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-inspector-tabs,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-timeline-shell,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-timeline-header,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-creative-shell .creative-timeline-track-list {
+  background: var(--pm-studio-surface) !important;
+  background-image: none !important;
+}
+
+/* Browser workspace outer surfaces; the live page/frame remains untouched. */
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-browser-shell,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-browser-shell > div:first-child,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-layout,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-control-slot,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-live-card,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-live-card > div:first-child,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-empty,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-side-col > div {
+  background: var(--pm-studio-surface) !important;
+  background-image: none !important;
+  border-color: var(--line) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-frame-wrap {
+  background: var(--pm-studio-surface) !important;
 }

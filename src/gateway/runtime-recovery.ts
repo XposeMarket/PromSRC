@@ -586,16 +586,43 @@ export function resumePlannedRestartMainChats(
   return Array.from(new Set(resumed));
 }
 
+/**
+ * Start one foreground recovery that was held back during gateway startup.
+ * The original durable runtime remains recoverable until the replacement
+ * execution owner has actually been admitted.
+ */
+export function retriggerDeferredMainChatRuntime(
+  runtime: LiveRuntimeSnapshot,
+  retrigger: (runtime: LiveRuntimeSnapshot) => boolean,
+): boolean {
+  let started = false;
+  try {
+    started = retrigger(runtime) === true;
+  } catch (err: any) {
+    console.warn('[runtime-recovery] Deferred main-chat retrigger failed:', runtime.id, err?.message || err);
+  }
+  if (!started) return false;
+  markDurableRuntimeRecovered(runtime.id, 'interrupted', {
+    recovery: 'chat_auto_retriggered',
+    sessionId: runtime.sessionId,
+    recoveredAt: Date.now(),
+  });
+  return true;
+}
+
 export function recoverInterruptedRuntimes(opts: {
   launchBackgroundTaskRunner?: (taskId: string) => void;
   completePlainGatewayRestartTask?: (taskId: string) => boolean;
   retriggerInterruptedMainChat?: (runtime: LiveRuntimeSnapshot) => boolean;
+  /** Keep foreground model turns out of the pre-listener startup window. */
+  deferMainChatRetrigger?: boolean;
   notify?: (message: string) => void;
 } = {}): {
   inspected: number;
   resumedTasks: string[];
   retriggeredChats: string[];
   interruptedChats: string[];
+  deferredMainChatRuntimes: LiveRuntimeSnapshot[];
   crashRecoveredGoalSessionIds: string[];
 } {
   const runtimes = listInterruptedRuntimes()
@@ -603,6 +630,7 @@ export function recoverInterruptedRuntimes(opts: {
   const resumedTasks: string[] = [];
   const retriggeredChats: string[] = [];
   const interruptedChats: string[] = [];
+  const deferredMainChatRuntimes: LiveRuntimeSnapshot[] = [];
   const crashRecoveredGoalSessionIds = new Set<string>();
 
   for (const runtime of runtimes) {
@@ -690,18 +718,29 @@ export function recoverInterruptedRuntimes(opts: {
         // request/checkpoint. Planned restart/apply boundaries are excluded: the
         // BOOT owner handles those, and replaying the tool-owning turn could create
         // a restart loop. Main-chat goals likewise retain their dedicated runner.
-        const autoRetriggered = runtime.kind === 'main_chat'
+        const deferMainChatRetrigger = opts.deferMainChatRetrigger === true
+          && runtime.kind === 'main_chat'
+          && !plannedRestartTool;
+        if (deferMainChatRetrigger) deferredMainChatRuntimes.push(runtime);
+        const autoRetriggered = !deferMainChatRetrigger
+          && runtime.kind === 'main_chat'
           && !plannedRestartTool
           && opts.retriggerInterruptedMainChat?.(runtime) === true;
         if (autoRetriggered) retriggeredChats.push(runtime.sessionId);
-        markDurableRuntimeRecovered(runtime.id, 'interrupted', {
-          recovery: crashRecoveryFinalized
-            ? 'main_chat_goal_crash_recovered'
-            : autoRetriggered
-              ? 'chat_auto_retriggered'
-              : 'chat_checkpointed',
-          sessionId: runtime.sessionId,
-        });
+        // A deferred recovery intentionally remains unrecovered in the
+        // durable ledger until the replacement owner actually starts. If the
+        // process exits again before the post-listener drain, the next gateway
+        // can safely pick up the same checkpoint.
+        if (!deferMainChatRetrigger) {
+          markDurableRuntimeRecovered(runtime.id, 'interrupted', {
+            recovery: crashRecoveryFinalized
+              ? 'main_chat_goal_crash_recovered'
+              : autoRetriggered
+                ? 'chat_auto_retriggered'
+                : 'chat_checkpointed',
+            sessionId: runtime.sessionId,
+          });
+        }
         continue;
       }
 
@@ -722,6 +761,7 @@ export function recoverInterruptedRuntimes(opts: {
     resumedTasks,
     retriggeredChats,
     interruptedChats,
+    deferredMainChatRuntimes,
     crashRecoveredGoalSessionIds: Array.from(crashRecoveredGoalSessionIds),
   };
 }

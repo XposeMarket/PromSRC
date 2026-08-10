@@ -14,6 +14,7 @@ import {
 } from '../gateway/tool-builder';
 import {
   ToolCategoryId,
+  AUTOMATION_WORKFLOW_PACK_IDS,
   classifyToolFromManifest,
   compareToolCategoryClassifiers,
   isToolAvailableForManifestCategory,
@@ -88,13 +89,15 @@ function buildPrivateReport() {
   const categoryResults = getRuntimeToolCategories().map((category) => {
     const surface = buildTools(deps, new Set([category]));
     const surfaceNames = namesOf(surface);
-    const categoryOwned = surfaceNames.filter((name) => getToolCategory(name) === category);
+    const categoryOwns = (owner: ToolCategoryId | null): boolean => owner === category
+      || category === 'automations' && owner !== null && (AUTOMATION_WORKFLOW_PACK_IDS as readonly string[]).includes(owner);
+    const categoryOwned = surfaceNames.filter((name) => categoryOwns(getToolCategory(name)));
     const dynamicUnclassifiedTools = surfaceNames.filter((name) => (
       getToolCategory(name) === null && !baselineCoreNames.has(name)
     ));
     const crossCategoryExceptions = surfaceNames.filter((name) => {
       const owner = getToolCategory(name);
-      return owner !== null && owner !== category;
+      return owner !== null && !categoryOwns(owner);
     });
     if (category === 'prometheus_source_read') {
       assert.ok(crossCategoryExceptions.every((name) => isToolAvailableForManifestCategory(name, category)));

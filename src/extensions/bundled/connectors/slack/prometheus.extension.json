@@ -78,5 +78,44 @@
         "placeholder": "abc123..."
       }
     ]
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["Slack OAuth", "Slack workspace"],
+    "domains": ["slack.com", "api.slack.com"],
+    "providerApp": {
+      "provider": "slack",
+      "appType": "confidential-client",
+      "clientIdEnv": "SLACK_CLIENT_ID",
+      "clientSecretEnv": "SLACK_CLIENT_SECRET",
+      "externalSetupRequired": true
+    },
+    "strategies": [{
+      "id": "slack-oauth",
+      "adapter": "connector-oauth",
+      "priority": 110,
+      "capabilities": ["channels.read", "messages.read", "search.read"],
+      "readOnlyDefault": true,
+      "authentication": {
+        "type": "oauth2",
+        "scopes": ["channels:history", "channels:read", "users:read", "search:read", "files:read", "im:history"],
+        "authorizationUrl": "https://slack.com/oauth/v2/authorize",
+        "tokenUrl": "https://slack.com/api/oauth.v2.access",
+        "pkceRequired": false,
+        "callback": { "host": "localhost", "port": 19421, "path": "/auth/callback/slack" },
+        "clientIdEnv": "SLACK_CLIENT_ID",
+        "clientSecretEnv": "SLACK_CLIENT_SECRET"
+      },
+      "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+      "config": { "provider": "slack", "connectorId": "slack", "resourceScope": "selected Slack workspace" }
+    }],
+    "requestedCapabilities": [
+      { "id": "channels.read", "label": "Read channels", "description": "Read public and private channel history available to the connection.", "risk": "read" },
+      { "id": "messages.read", "label": "Read messages", "description": "Search and inspect Slack messages.", "risk": "read" },
+      { "id": "search.read", "label": "Search Slack", "description": "Search message history in the selected workspace.", "risk": "read" },
+      { "id": "messages.post", "label": "Post messages", "description": "Posting is an explicit external write.", "risk": "write" }
+    ],
+    "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+    "toolPolicy": { "defaultExposure": "read-only", "unknownTools": "blocked" }
   }
 }

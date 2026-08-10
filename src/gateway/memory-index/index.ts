@@ -121,6 +121,57 @@ export interface MemorySearchResult {
   stats: { records: number; chunks: number; indexedAt: string; backend?: string; sqlite?: any; embedding?: any; rerank?: string; telemetry?: any };
 }
 
+/**
+ * Keep the diagnostic-rich worker response available to callers that need it,
+ * while giving normal model-facing tools a small, citation-preserving payload.
+ * The search backend does not make a model call; this is strictly a prompt
+ * bandwidth/token safeguard at the tool boundary.
+ */
+export function compactMemorySearchResult(serialized: string, options: { debug?: boolean } = {}): string {
+  if (options.debug) return serialized;
+  try {
+    const parsed = JSON.parse(serialized);
+    if (!parsed || typeof parsed !== 'object') return serialized;
+    const hits = Array.isArray(parsed.hits)
+      ? parsed.hits.map((hit: any) => ({
+        rank: hit.rank,
+        score: hit.score,
+        recordId: hit.recordId,
+        chunkId: hit.chunkId,
+        title: hit.title,
+        preview: hit.preview,
+        sourceType: hit.sourceType,
+        sourcePath: hit.sourcePath,
+        timestamp: hit.timestamp,
+        projectId: hit.projectId,
+        layer: hit.layer,
+        recordType: hit.recordType,
+        canonicalKey: hit.canonicalKey,
+        whyMatched: hit.whyMatched
+          ? { lexical: Array.isArray(hit.whyMatched.lexical) ? hit.whyMatched.lexical : [] }
+          : undefined,
+        citation: hit.citation,
+      }))
+      : [];
+    const stats = parsed.stats && typeof parsed.stats === 'object' ? parsed.stats : {};
+    return JSON.stringify({
+      query: parsed.query,
+      mode: parsed.mode,
+      totalCandidates: parsed.totalCandidates,
+      hits,
+      stats: {
+        records: stats.records,
+        chunks: stats.chunks,
+        indexedAt: stats.indexedAt,
+        backend: stats.backend,
+        rerank: stats.rerank,
+      },
+    });
+  } catch {
+    return serialized;
+  }
+}
+
 export interface ResolvedMemoryRecord {
   layer: 'evidence' | 'operational';
   record: any | null;
@@ -635,7 +686,9 @@ function addChunkIndex(tokenIndex: Record<string, string[]>, chunk: ChunkItem): 
 }
 
 export function buildBoundedTokenIndex(chunks: Record<string, Pick<ChunkItem, 'id' | 'terms'>>): Record<string, string[]> {
-  const tokenIndex: Record<string, string[]> = {};
+  // A null-prototype map prevents corpus terms such as "constructor" and
+  // "prototype" from resolving to inherited Object/Function properties.
+  const tokenIndex: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
   let postings = 0;
   let tokenKeyCount = 0;
   for (const chunk of Object.values(chunks)) {
@@ -949,13 +1002,31 @@ export function refreshMemoryIndexFromAudit(workspacePath: string, options?: Mem
     removed += 1;
   }
   const changed: string[] = [];
+  const changedMtimeMs = new Map<string, number>();
   for (const relPath of rels) {
     const st = fs.statSync(sourceFiles.get(relPath) || path.join(auditRoot, relPath));
     const prev = manifest.files[relPath];
-    if (options?.force || !prev || prev.mtimeMs !== st.mtimeMs || prev.size !== st.size) changed.push(relPath); else skipped += 1;
+    if (options?.force || !prev || prev.mtimeMs !== st.mtimeMs || prev.size !== st.size) {
+      changed.push(relPath);
+      changedMtimeMs.set(relPath, Number(st.mtimeMs || 0));
+    } else skipped += 1;
   }
   memoryMark(`changes compared (changed=${changed.length}, removed=${removed})`);
   const maxChanged = Math.max(1, Number(options?.maxChangedFiles ?? 200));
+  // When the corpus is larger than one bounded maintenance batch, directory
+  // enumeration order can leave newly written chat transcripts behind a very
+  // large historical backlog. Prioritize the newest changed files so recent
+  // conversations become searchable promptly; older deferred files continue
+  // draining on later refresh passes.
+  const refreshPriority = (relPath: string): number => {
+    if (relPath === `${WORKSPACE_FILE_PREFIX}MEMORY.md` || relPath === `${WORKSPACE_FILE_PREFIX}USER.md`) return 5;
+    if (relPath.startsWith('memory/')) return 4;
+    if (relPath.startsWith('chats/transcripts/') || relPath.startsWith('chats/compactions/')) return 3;
+    if (relPath.startsWith(WORKSPACE_FILE_PREFIX)) return 2;
+    return 1;
+  };
+  changed.sort((a, b) => refreshPriority(b) - refreshPriority(a)
+    || (changedMtimeMs.get(b) || 0) - (changedMtimeMs.get(a) || 0));
   let nowChanges = changed.slice(0, maxChanged);
   let deferred = Math.max(0, changed.length - nowChanges.length);
   if (removed === 0 && nowChanges.length === 0) {

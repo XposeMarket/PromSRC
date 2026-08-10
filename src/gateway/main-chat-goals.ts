@@ -1281,7 +1281,10 @@ export function recordActiveMainChatGoalsInterruptedForRestart(
   reason = 'gateway_restart',
 ): string[] {
   const checkpointed: string[] = [];
-  for (const record of listMainChatGoalRecords()) {
+  // Shutdown only needs currently active goals. The summary index already
+  // carries each current goal; loading up to 250 historical session files here
+  // adds restart latency without contributing resumable work.
+  for (const record of listMainChatGoalRecords({ includeHistory: false })) {
     if ((record as any)?.current === false || String(record?.status || '') !== 'active') continue;
     const sessionId = String(record?.sessionId || '').trim();
     if (!sessionId) continue;

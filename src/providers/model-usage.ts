@@ -6,6 +6,8 @@ import { estimateModelUsageCost } from './model-pricing';
 
 export interface ModelUsageEvent {
   timestamp: string;
+  /** Opaque chat/tool correlation ID; never a prompt, token, or credential. */
+  traceId?: string;
   provider: string;
   model: string;
   requestedModel?: string;
@@ -214,6 +216,7 @@ export function appendModelUsageEvent(event: Omit<ModelUsageEvent, 'timestamp'> 
   try {
     const base: ModelUsageEvent = {
       timestamp: event.timestamp || new Date().toISOString(),
+      traceId: event.traceId ? String(event.traceId).slice(0, 160) : undefined,
       provider: String(event.provider || 'unknown'),
       model: String(event.model || 'unknown'),
       requestedModel: event.requestedModel ? String(event.requestedModel) : undefined,

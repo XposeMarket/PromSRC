@@ -44,7 +44,7 @@ The exact prompt/injection map is deliberately detailed in `../21-runtime-prompt
 
 ## Data and persistence model
 
-- **Workspace files** hold identity, user/business context, operational memory, skills, entities, events, generated/downloaded assets, and agent/team workspaces.
+- **Workspace files** hold identity, user/business context, operational memory, skills, entities, events, generated/downloaded assets, and agent/team workspaces. The separate resource registry holds workspace-scoped Source metadata, immutable snapshots, thread links, and bounded provenance.
 - **Sessions/history** preserve conversations and channel identities; local client caches accelerate navigation but server state is authoritative.
 - **Memory** is file-backed and indexed, with graph/timeline/related-record/search and claim-review layers.
 - **Audit/evidence/journal** record tool/agent/background activity, supporting inspection and recovery rather than opaque execution.
@@ -65,4 +65,4 @@ Prometheus can run as a local gateway/web UI, Electron desktop package, paired m
 
 ## Source references
 
-`../02-startup-runtime.md`, `../03-execution-and-prompting.md`, `../08-tasks-and-agents.md`, `../11-run-and-supervisor.md`, `../12-telegram-and-brain.md`, `../13-memory.md`, `../21-runtime-prompt-map.md`–`../23-runtime-context-flow.md`, `../29-agent-identity-and-memory-runtime.md`, and `../30-runtime-process-isolation.md`.
+`../02-startup-runtime.md`, `../03-execution-and-prompting.md`, `../08-tasks-and-agents.md`, `../11-run-and-supervisor.md`, `../12-telegram-and-brain.md`, `../13-memory.md`, `../21-runtime-prompt-map.md`–`../23-runtime-context-flow.md`, `../29-agent-identity-and-memory-runtime.md`, `../30-runtime-process-isolation.md`, and `../32-persistent-chat-sources.md`.

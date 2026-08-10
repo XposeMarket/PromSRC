@@ -95,3 +95,7 @@ All `show_*` card tools are exposed to the realtime voice agent (OpenAI + xAI), 
 - `jobs`, `places`, `sports` types are declared for forward-compat but have no renderers.
 - Equities need a key only if you want a provider beyond Yahoo/Stooq; sports would rely on ESPN's unofficial API (fragile).
 - **Transacting** (buy/bet — Polymarket/Kalshi/Alpaca/Stripe etc.) is intentionally NOT built. The design intent is "Connected Actions": keyless read card → connector creds in the vault → a transact tool that ALWAYS routes through the approval gate. Read-only cards never move money.
+
+## Persistent Chat Sources integration — 2026-08-08
+
+Completed-turn outputs are registered by `chat.router.ts` through `ResourceStore.registerArtifact(...)`. Workspace-backed artifact files retain a live file locator plus immutable snapshots; inline cards and metadata-only outputs remain discoverable as `artifact` resources when there is no durable file. Artifact content is not replayed wholesale into later prompts: the resource manifest is always bounded and text is selected only when relevant or pinned.

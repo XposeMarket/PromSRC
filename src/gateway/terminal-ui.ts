@@ -3709,6 +3709,7 @@ function prettify(name: string): string {
     skill_read:         'Reading skill',
     skill_create:       'Creating skill',
     // Memory
+    memory:             'Memory operation',
     memory_read:        'Reading memory',
     memory_write:       'Writing memory',
     memory_browse:      'Browsing memory',

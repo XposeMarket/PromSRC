@@ -30,7 +30,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'read-files',
     description: 'File read operations are always allowed',
-    toolPattern: 'read|list|stat|memory_read|memory_browse',
+    toolPattern: 'read|list|stat|memory|memory_read|memory_browse',
     tier: 'read',
     riskScore: 0,
   },

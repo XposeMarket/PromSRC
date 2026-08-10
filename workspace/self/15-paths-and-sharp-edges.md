@@ -2,6 +2,7 @@
 
 - Config: `.prometheus/config.json`
 - Sessions: `.prometheus/sessions/*.json`
+- Auto-settle audit summary: `<configDir>/auto-settle/last-run.json` (counts and session IDs only; no transcript/content copy)
 - Browser session registry: `<configDir>/browser-sessions.json`
 - Encrypted account session vault entry: `account.supabase.session`
 - Paired mobile devices: `.prometheus/paired-devices.json`
@@ -73,6 +74,12 @@
 - Project knowledge metadata is compatibility data, not authority: reads/deletes derive the absolute path from a confined `relPath`, and a legacy absolute `path` is accepted only when it resolves inside that project's knowledge directory.
 - `removeSessionFromProject(...)` must prove the session is a member before deleting its session record.
 - Run `npm run test:storage-boundaries` after changing any of these stores or their route parameters. The test uses an isolated temporary data/workspace root and covers Windows/POSIX traversal, encoded IDs, junctions/symlinks, task deletion, knowledge metadata, and project-session membership.
+
+### Settled-session boundary
+
+- Manual and automatic settling persist only the session's durable `settledAt` visibility marker. They do not delete session files, transcripts, resources, memory, task content, unread state, or scheduled work.
+- Auto-settle is Never by default. When enabled, it uses durable `lastActiveAt`, reads authoritative runtime/task/approval/schedule/supervision/project state, skips protected sessions, and processes bounded ordered batches with a sentinel row for retry/truncation reporting.
+- The prior startup path that deleted stale automated session files is not part of gateway startup. Do not reintroduce file cleanup as an implementation of settling; Unsettle is the reversible recovery path.
 
 ## 30) Current Sharp Edges / Truths To Preserve
 

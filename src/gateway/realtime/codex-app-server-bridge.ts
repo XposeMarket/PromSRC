@@ -40,6 +40,7 @@ export type CodexRealtimeBridgeSession = {
   threadId: string;
   sdp: string;
   realtimeSessionId?: string;
+  realtimeReady?: boolean;
   voice?: string;
   realtimeVersion?: string;
   voiceVersion?: string;
@@ -567,6 +568,7 @@ class CodexAppServerBridge {
       threadId,
       sdp: answerSdp,
       realtimeSessionId: String(started?.params?.realtimeSessionId || '').trim() || undefined,
+      realtimeReady: !!started,
       voice: resolvedVoice,
       realtimeVersion: REALTIME_CONVERSATION_VERSION,
       voiceVersion: REALTIME_VOICE_CATALOG_VERSION,

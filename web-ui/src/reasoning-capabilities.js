@@ -31,6 +31,24 @@ export function effortOptions(provider, model, includeDefault = true) {
   return includeDefault ? ['', ...efforts] : efforts.slice();
 }
 
+// Shared presentation contract for the mobile and subagent selectors. Keep
+// the empty/default entry in the same position so keyboard, touch, and saved
+// reasoning routes all use identical terminology.
+export function reasoningSelectorOptions(provider, model) {
+  const options = effortOptions(provider, model, true);
+  return options.length > 1 ? options : null;
+}
+
+export function formatReasoningSelectorLabel(value, provider) {
+  const effort = String(value || '').trim().toLowerCase();
+  const id = String(provider || '').trim().toLowerCase();
+  if (!effort) return id === 'anthropic' || id === 'xai' ? 'Auto' : 'None';
+  if (effort === 'xhigh') return 'X high';
+  if (effort === 'max') return 'Max';
+  if (effort === 'ultra') return 'Ultra';
+  return effort.charAt(0).toUpperCase() + effort.slice(1);
+}
+
 export function validEffort(provider, model, value) {
   const effort = String(value || '').trim().toLowerCase();
   return !effort || reasoningCapability(provider, model).efforts.includes(effort);

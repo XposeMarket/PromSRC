@@ -39,6 +39,7 @@ import { broadcastWS } from './comms/broadcaster';
 import { normalizeScreenshotBuffer } from './screenshot-normalize.js';
 import { createUserChromePage, UserChromePage } from './user-chrome-transport.js';
 import { getUserChromeExtensionOnboarding, getUserChromeRelay } from './user-chrome-relay.js';
+import { getResourceStore, redactResourceText } from './resources/resource-store';
 
 type PwBrowser = any;
 type PwContext = any;
@@ -94,6 +95,8 @@ export interface BrowserSessionMetadata {
   sessionId: string;
   ownerType: 'main' | 'background' | 'task' | 'team-agent' | 'detached';
   ownerId?: string;
+  /** Internal resource-store scope; never exposed in browser UI payloads. */
+  workspacePath?: string;
   label?: string;
   taskPrompt?: string;
   spawnerSessionId?: string;
@@ -111,6 +114,46 @@ interface PersistedBrowserSessionRecord {
 interface BrowserSessionRestoreHint {
   url?: string;
   title?: string;
+}
+
+function recordBrowserHistoryResource(sessionId: string, url: string, title?: string, metadata?: Record<string, unknown>): void {
+  const normalizedUrl = String(url || '').trim();
+  if (!normalizedUrl || /^(?:about:blank|data:|chrome:|devtools:)/i.test(normalizedUrl)) return;
+  try {
+    const sessionMetadata = getBrowserSessionMetadata(sessionId);
+    const workspacePath = sessionMetadata.workspacePath || getActiveWorkspace(getConfig().getWorkspacePath());
+    getResourceStore(workspacePath).recordBrowserVisit({
+      url: normalizedUrl,
+      title,
+      browserSessionId: sessionId,
+      metadata,
+    });
+  } catch (error: any) {
+    console.warn('[Resources] Browser history registration skipped:', redactResourceText(error?.message || error));
+  }
+}
+
+export type BrowserPerformanceObserver = (
+  stage: string,
+  fields?: Record<string, number | string | boolean>,
+) => void;
+
+function markBrowserPerformance(
+  observer: BrowserPerformanceObserver | undefined,
+  stage: string,
+  fields: Record<string, number | string | boolean> = {},
+): void {
+  try { observer?.(stage, fields); } catch { /* telemetry must not affect browser semantics */ }
+}
+
+function classifyBrowserLifecycleError(error: unknown): string {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  if (/personal chrome.*extension|extension.*not connected|extension.*onboarding/.test(message)) return 'extension_unavailable';
+  if (/target page|target closed|page.*closed|context.*closed|browser.*closed|disconnected/.test(message)) return 'session_closed';
+  if (/timeout|timed out/.test(message)) return 'timeout';
+  if (/debug port|cdp|connect|attach/.test(message)) return 'cdp_attach';
+  if (/net::|navigation|url/.test(message)) return 'navigation';
+  return 'unknown';
 }
 
 export type BrowserInteractionMode = 'agent' | 'copilot' | 'teach';
@@ -454,6 +497,9 @@ async function syncPageMetadata(session: BrowserSession): Promise<{
   if (session.lastPageUrl !== previousUrl || session.lastPageTitle !== previousTitle) {
     persistBrowserSessionRecord(session);
   }
+  if (urlChanged || (!previousUrl && session.lastPageUrl)) {
+    recordBrowserHistoryResource(session.sessionId, session.lastPageUrl, session.lastPageTitle, { source: 'browser_metadata_sync' });
+  }
   return {
     url: session.lastPageUrl,
     title: session.lastPageTitle,
@@ -471,6 +517,9 @@ function rememberPageMetadata(session: BrowserSession, state: { url?: string; ti
   if (title) session.lastPageTitle = title;
   if (session.lastPageUrl !== previousUrl || session.lastPageTitle !== previousTitle) {
     persistBrowserSessionRecord(session);
+  }
+  if (url && url !== previousUrl) {
+    recordBrowserHistoryResource(session.sessionId, session.lastPageUrl, session.lastPageTitle, { source: 'browser_metadata' });
   }
 }
 
@@ -669,6 +718,8 @@ function shouldUseFastBrowserAck(mode: BrowserObserveMode): boolean {
 // ─── Session Management ────────────────────────────────────────────────────────
 
 const sessions: Map<string, BrowserSession> = new Map();
+const browserSessionInitInFlight: Map<string, Promise<BrowserSession>> = new Map();
+const browserLinkNavigationInFlight: Map<string, Promise<any>> = new Map();
 const inHouseSessions: Map<string, InHouseBrowserSession> = new Map();
 const mainBrowserTargetPreferences: Map<string, BrowserProfileKind> = new Map();
 const mainBrowserProfileDirectoryPreferences: Map<string, string> = new Map();
@@ -835,6 +886,7 @@ export function registerBrowserSessionMetadata(sessionId: string, input: Partial
     sessionId: resolved,
     ownerType,
     ownerId: String(input.ownerId || previous?.ownerId || inferBrowserOwnerId(resolved)).trim(),
+    workspacePath: path.resolve(String(input.workspacePath || previous?.workspacePath || getActiveWorkspace(getConfig().getWorkspacePath()))),
     label: String(input.label || previous?.label || buildDefaultBrowserLabel(resolved, ownerType)).trim(),
     taskPrompt: String(input.taskPrompt || previous?.taskPrompt || '').trim(),
     spawnerSessionId: String(input.spawnerSessionId || previous?.spawnerSessionId || '').trim(),
@@ -2382,6 +2434,42 @@ async function connectOverCDPWithTimeout(pw: any, debugPort: number, timeoutMs: 
   return await pw.chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`, { timeout: timeoutMs });
 }
 
+async function connectOverCDPWithRetry(
+  pw: any,
+  debugPort: number,
+  onPerformanceStage?: BrowserPerformanceObserver,
+): Promise<any> {
+  const startedAt = Date.now();
+  let lastError: unknown = null;
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, Math.min(1000, 250 * (attempt - 1))));
+    markBrowserPerformance(onPerformanceStage, 'cdp_attach_attempt', { attempt, debugPort });
+    try {
+      const browser = await connectOverCDPWithTimeout(pw, debugPort);
+      markBrowserPerformance(onPerformanceStage, 'cdp_attach_done', {
+        attempt,
+        attempts: attempt,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        debugPort,
+      });
+      return browser;
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        markBrowserPerformance(onPerformanceStage, 'cdp_attach_retry', { attempt, debugPort, errorCode: 'cdp_attach' });
+      }
+    }
+  }
+  markBrowserPerformance(onPerformanceStage, 'cdp_attach_error', {
+    attempts,
+    durationMs: Math.max(0, Date.now() - startedAt),
+    debugPort,
+    errorCode: 'cdp_attach',
+  });
+  throw lastError instanceof Error ? lastError : new Error('CDP attach failed.');
+}
+
 function getMainChromeDebugPort(): number {
   return Number(process.env.CHROME_DEBUG_PORT || '9222');
 }
@@ -2461,6 +2549,9 @@ function upsertInHouseSession(sessionId: string, state: any = {}): InHouseBrowse
     lastPageUrl: next.url,
     lastPageTitle: next.title,
   } as BrowserSession);
+  if (next.url && next.url !== existing?.url) {
+    recordBrowserHistoryResource(resolved, next.url, next.title, { source: 'inhouse_browser' });
+  }
   return next;
 }
 
@@ -2649,6 +2740,7 @@ async function connectOrLaunchPersistentChrome(
   pw: any,
   sessionId: string,
   metadata: BrowserSessionMetadata,
+  onPerformanceStage?: BrowserPerformanceObserver,
 ): Promise<{ browser: any; debugPort: number; profileDir: string; ownsBrowser: boolean; profileKind: BrowserProfileKind; browserTarget: BrowserProfileKind }> {
   const identity = getStableBrowserIdentity(sessionId, metadata);
   const mainTarget = metadata.ownerType === 'main' ? getMainBrowserTarget(sessionId) : 'prometheus';
@@ -2671,7 +2763,7 @@ async function connectOrLaunchPersistentChrome(
 
   if (await isPortOpen(debugPort)) {
     try {
-      const browser = await connectOverCDPWithTimeout(pw, debugPort);
+      const browser = await connectOverCDPWithRetry(pw, debugPort, onPerformanceStage);
       console.log(`[Browser] Connected to Chrome on port ${debugPort} (${metadata.ownerType}, ${getBrowserProfileLabel(profileKind)}, profile: ${profileDir})`);
       return { browser, debugPort, profileDir, ownsBrowser: false, profileKind, browserTarget: profileKind };
     } catch (e: any) {
@@ -2732,6 +2824,7 @@ async function isSessionAlive(session: BrowserSession): Promise<boolean> {
       return true;
     }
     // A closed page will throw on .url() or return 'about:blank' after CDP disconnect
+    if (typeof (session.page as any).isClosed === 'function' && (session.page as any).isClosed()) return false;
     const url = session.page.url();
     if (!url && url !== 'about:blank') return false;
     if (session.ownsBrowser && !session.debugPort) return true;
@@ -2760,14 +2853,61 @@ function getRealChromeProfileDir(): string {
   return `${home}/.config/google-chrome`;
 }
 
-async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessionRestoreHint): Promise<BrowserSession> {
+async function getOrCreateSession(
+  sessionId: string,
+  restoreHint?: BrowserSessionRestoreHint,
+  onPerformanceStage?: BrowserPerformanceObserver,
+): Promise<BrowserSession> {
+  const resolved = resolveSessionId(sessionId);
+  const pending = browserSessionInitInFlight.get(resolved);
+  if (pending) {
+    markBrowserPerformance(onPerformanceStage, 'session_init_join', { pending: true });
+    return pending;
+  }
+  const startedAt = Date.now();
+  markBrowserPerformance(onPerformanceStage, 'session_lookup', { existing: sessions.has(resolved) });
+  const promise = getOrCreateSessionUncoalesced(resolved, restoreHint, onPerformanceStage)
+    .then((session) => {
+      markBrowserPerformance(onPerformanceStage, 'session_ready', {
+        durationMs: Math.max(0, Date.now() - startedAt),
+        reused: session.createdAt < startedAt,
+        transport: session.transport || 'cdp',
+      });
+      return session;
+    })
+    .catch((error) => {
+      markBrowserPerformance(onPerformanceStage, 'session_init_error', {
+        durationMs: Math.max(0, Date.now() - startedAt),
+        errorCode: classifyBrowserLifecycleError(error),
+      });
+      throw error;
+    })
+    .finally(() => {
+      if (browserSessionInitInFlight.get(resolved) === promise) browserSessionInitInFlight.delete(resolved);
+    });
+  browserSessionInitInFlight.set(resolved, promise);
+  return promise;
+}
+
+async function getOrCreateSessionUncoalesced(
+  sessionId: string,
+  restoreHint?: BrowserSessionRestoreHint,
+  onPerformanceStage?: BrowserPerformanceObserver,
+): Promise<BrowserSession> {
+  const startedAt = Date.now();
   if (sessions.has(sessionId)) {
     const existing = sessions.get(sessionId)!;
     // Verify the session is still usable — if Chrome was closed externally the
     // page/browser objects are dead and every tool call will fail with
     // "Target page, context or browser has been closed". Evict and recreate.
+    const aliveStartedAt = Date.now();
     const alive = await isSessionAlive(existing);
+    markBrowserPerformance(onPerformanceStage, 'session_alive_check', {
+      alive,
+      durationMs: Math.max(0, Date.now() - aliveStartedAt),
+    });
     if (alive) return existing;
+    markBrowserPerformance(onPerformanceStage, 'session_reconnect_start', { reason: 'session_not_alive' });
     console.log(`[Browser] Session "${sessionId}" is dead (Chrome was closed). Evicting and relaunching...`);
     await stopBrowserLiveStream(sessionId, 'Live browser stream stopped because the Chrome session ended.').catch(() => {});
     sessions.delete(sessionId);
@@ -2776,15 +2916,22 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
     try { await existing.browser.close(); } catch {}
   }
 
+  markBrowserPerformance(onPerformanceStage, 'session_create_start', { ownerType: inferBrowserOwnerType(sessionId) });
   const metadata = registerBrowserSessionMetadata(sessionId);
-  if (metadata.ownerType === 'main' && getMainBrowserTarget(sessionId) === 'inhouse') {
+  const targetKind = metadata.ownerType === 'main' ? getMainBrowserTarget(sessionId) : 'prometheus';
+  markBrowserPerformance(onPerformanceStage, 'session_target_selected', {
+    ownerType: metadata.ownerType,
+    profileKind: targetKind,
+  });
+  if (metadata.ownerType === 'main' && targetKind === 'inhouse') {
     throw new Error('The current browser target is Prometheus in-house browser. Use browser_open with target="prometheus" to switch back to regular Chrome/CDP.');
   }
 
   // Personal Chrome is not and must never become a CDP launch target. The
   // extension has chrome.debugger permission and supplies a page-shaped CDP
   // adapter over an authenticated loopback relay instead.
-  if (metadata.ownerType === 'main' && getMainBrowserTarget(sessionId) === 'user') {
+  if (metadata.ownerType === 'main' && targetKind === 'user') {
+    markBrowserPerformance(onPerformanceStage, 'extension_session_create_start', { profileKind: targetKind });
     const page = await createUserChromePage();
     claimUserChromeTab(sessionId, page);
     await page.cdp('Runtime.enable').catch(() => {});
@@ -2812,13 +2959,17 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
     attachUserChromeRelayObservers(session);
     await syncPageMetadata(session).catch(() => {});
     persistBrowserSessionRecord(session);
+    markBrowserPerformance(onPerformanceStage, 'session_create_done', {
+      durationMs: Math.max(0, Date.now() - startedAt),
+      transport: 'extension',
+    });
     return session;
   }
 
   const pw = await getPW();
   if (!pw) throw new Error('Playwright not installed. Run: npm install playwright && npx playwright install chromium');
 
-  const browserConnection = await connectOrLaunchPersistentChrome(pw, sessionId, metadata);
+  const browserConnection = await connectOrLaunchPersistentChrome(pw, sessionId, metadata, onPerformanceStage);
   const browser = browserConnection.browser;
 
   // Get or create a context, then a page
@@ -2910,6 +3061,10 @@ async function getOrCreateSession(sessionId: string, restoreHint?: BrowserSessio
     }
   });
 
+  markBrowserPerformance(onPerformanceStage, 'session_create_done', {
+    durationMs: Math.max(0, Date.now() - startedAt),
+    transport: session.transport || 'cdp',
+  });
   return session;
 }
 
@@ -4516,6 +4671,8 @@ export async function browserSetProfileTarget(
   const currentTarget = getMainBrowserTarget(resolved);
   mainBrowserTargetPreferences.set(resolved, nextTarget);
   if (profileDirectory) mainBrowserProfileDirectoryPreferences.set(resolved, profileDirectory);
+  const pendingInit = browserSessionInitInFlight.get(resolved);
+  if (pendingInit && options?.closeExisting !== false) await pendingInit.catch(() => {});
   const existing = sessions.get(resolved);
   if (existing && existing.browserTarget !== nextTarget && options?.closeExisting !== false) {
     await stopBrowserLiveStream(resolved, `Browser profile target changed to ${getBrowserProfileLabel(nextTarget)}.`).catch(() => {});
@@ -4947,7 +5104,7 @@ async function browserVisionScreenshotInHouse(sessionId: string): Promise<{
 export async function browserOpen(
   sessionId: string,
   url: string,
-  options?: { observe?: BrowserObserveMode; target?: BrowserProfileKind | string; profile?: BrowserProfileKind | string; inhouseProfile?: unknown; profileDirectory?: unknown },
+  options?: { observe?: BrowserObserveMode; target?: BrowserProfileKind | string; profile?: BrowserProfileKind | string; inhouseProfile?: unknown; profileDirectory?: unknown; onPerformanceStage?: BrowserPerformanceObserver },
 ): Promise<string> {
   // ── URL sanity guard ──────────────────────────────────────────────────────
   // When called from inside the node_call<> VM sandbox the URL may arrive as
@@ -4998,16 +5155,19 @@ export async function browserOpen(
   }
   let session: BrowserSession;
   try {
-    session = await getOrCreateSession(resolvedSessionId);
+    session = await getOrCreateSession(resolvedSessionId, undefined, options?.onPerformanceStage);
   } catch (err: any) {
     return `ERROR: ${err.message}`;
   }
 
+  const observeMode = options?.observe || resolveBrowserObserveMode('browser_open');
+  let compactBefore: BrowserCompactState | null = null;
   try {
     let targetUrl = rawUrl;
     if (!/^[a-z][a-z0-9+.-]*:/i.test(targetUrl)) targetUrl = 'https://' + targetUrl;
-    const observeMode = options?.observe || resolveBrowserObserveMode('browser_open');
-    const compactBefore = shouldUseCompactObservation(observeMode)
+    const navigationStartedAt = Date.now();
+    markBrowserPerformance(options?.onPerformanceStage, 'navigation_start', { observeMode });
+    compactBefore = shouldUseCompactObservation(observeMode)
       ? await captureCompactBrowserState(session.page)
       : null;
 
@@ -5032,24 +5192,93 @@ export async function browserOpen(
       return attachShortcutsContext(snapshot, session.page.url(), sessionId);
     }
     if (compactBefore) {
+      markBrowserPerformance(options?.onPerformanceStage, 'navigation_done', {
+        observeMode,
+        durationMs: Math.max(0, Date.now() - navigationStartedAt),
+      });
       return buildCompactBrowserObservation(session, 'Browser opened.', compactBefore);
     }
+    markBrowserPerformance(options?.onPerformanceStage, 'navigation_done', {
+      observeMode,
+      durationMs: Math.max(0, Date.now() - navigationStartedAt),
+    });
     return buildMinimalBrowserAck(session, 'Browser opened.');
   } catch (err: any) {
+    const errorCode = classifyBrowserLifecycleError(err);
+    markBrowserPerformance(options?.onPerformanceStage, 'navigation_error', { errorCode });
+    if (errorCode === 'session_closed') {
+      // A CDP target can disappear after the liveness check but before goto.
+      // Recreate the session once, then retry the same read/navigation request.
+      markBrowserPerformance(options?.onPerformanceStage, 'session_reconnect_start', { reason: 'navigation_target_closed' });
+      await stopBrowserLiveStream(resolvedSessionId, 'Live browser stream stopped before browser-session recovery.').catch(() => {});
+      sessions.delete(resolvedSessionId);
+      if (session.transport === 'extension') releaseUserChromeTabLocks(session.sessionId);
+      try { await session.page.close(); } catch {}
+      try { await session.browser.close(); } catch {}
+      try {
+        session = await getOrCreateSession(resolvedSessionId, undefined, options?.onPerformanceStage);
+        let retryUrl = rawUrl;
+        if (!/^[a-z][a-z0-9+.-]*:/i.test(retryUrl)) retryUrl = 'https://' + retryUrl;
+        await session.page.goto(retryUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+        if (observeMode === 'snapshot' || observeMode === 'screenshot') {
+          await session.page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+          await session.page.waitForTimeout(1200);
+        } else if (shouldUseCompactObservation(observeMode)) {
+          await session.page.waitForTimeout(100);
+        }
+        await syncPageMetadata(session).catch(() => {});
+        markBrowserPerformance(options?.onPerformanceStage, 'navigation_retry_done', { observeMode });
+        if (shouldReturnSnapshot(observeMode)) {
+          const snapshot = await takeSnapshot(session.page);
+          rememberSnapshot(session, snapshot);
+          return attachShortcutsContext(snapshot, session.page.url(), sessionId);
+        }
+        if (compactBefore) return buildCompactBrowserObservation(session, 'Browser opened.', compactBefore);
+        return buildMinimalBrowserAck(session, 'Browser opened.');
+      } catch (retryError: any) {
+        markBrowserPerformance(options?.onPerformanceStage, 'navigation_retry_error', {
+          errorCode: classifyBrowserLifecycleError(retryError),
+        });
+      }
+    }
     return `ERROR: Navigation failed: ${err.message}`;
   }
 }
 
-export async function browserSnapshot(sessionId: string): Promise<string> {
+export async function browserSnapshot(
+  sessionId: string,
+  options?: { onPerformanceStage?: BrowserPerformanceObserver },
+): Promise<string> {
   const resolved = resolveSessionId(sessionId);
   if (getInHouseSession(resolved)) return browserSnapshotInHouse(resolved);
   let session = sessions.get(resolved);
+  const aliveStartedAt = session ? Date.now() : 0;
   if (session && !(await isSessionAlive(session))) {
+    markBrowserPerformance(options?.onPerformanceStage, 'session_alive_check', {
+      alive: false,
+      durationMs: Math.max(0, Date.now() - aliveStartedAt),
+    });
     console.log(`[Browser] browserSnapshot: session dead, evicting.`);
+    await stopBrowserLiveStream(resolved, 'Live browser stream stopped before browser-session recovery.').catch(() => {});
     sessions.delete(resolved);
+    if (session.transport === 'extension') releaseUserChromeTabLocks(session.sessionId);
     try { await session.page.close(); } catch {}
     try { await session.browser.close(); } catch {}
     session = undefined;
+  }
+  if (!session) {
+    // Snapshot is commonly the first recovery call after a lost/aborted open.
+    // Restore a persisted regular Chrome session when possible instead of
+    // turning the follow-up into a second, misleading "no session" failure.
+    if (!shouldUseInHouseBrowser(resolved)) {
+      try {
+        session = await getOrCreateSession(resolved, undefined, options?.onPerformanceStage);
+      } catch (err: any) {
+        markBrowserPerformance(options?.onPerformanceStage, 'snapshot_session_error', {
+          errorCode: classifyBrowserLifecycleError(err),
+        });
+      }
+    }
   }
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   try {
@@ -5060,10 +5289,76 @@ export async function browserSnapshot(sessionId: string): Promise<string> {
     await session.page.waitForTimeout(250);
     const snapshot = await takeSnapshot(session.page);
     rememberSnapshot(session, snapshot);
+    markBrowserPerformance(options?.onPerformanceStage, 'snapshot_done', { resultBytes: Buffer.byteLength(snapshot, 'utf8') });
     return attachShortcutsContext(snapshot, session.page.url(), sessionId);
   } catch (err: any) {
+    markBrowserPerformance(options?.onPerformanceStage, 'snapshot_error', { errorCode: classifyBrowserLifecycleError(err) });
+    if (classifyBrowserLifecycleError(err) === 'session_closed') {
+      await stopBrowserLiveStream(resolved, 'Live browser stream stopped after the browser session closed.').catch(() => {});
+      sessions.delete(resolved);
+      if (session.transport === 'extension') releaseUserChromeTabLocks(session.sessionId);
+      try { await session.page.close(); } catch {}
+      try { await session.browser.close(); } catch {}
+    }
     return `ERROR: Snapshot failed: ${err.message}`;
   }
+}
+
+function normalizeDesktopBrowserLinkUrl(rawUrl: unknown): string {
+  const raw = String(rawUrl || '').trim();
+  if (!raw) throw new Error('Browser link URL is required.');
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+  let parsed: URL;
+  try { parsed = new URL(withScheme); } catch { throw new Error('Browser link URL is invalid.'); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Only HTTP and HTTPS links can open in the Prometheus Browser.');
+  if (parsed.username || parsed.password) throw new Error('Browser links cannot contain embedded credentials.');
+  return parsed.href;
+}
+
+function resolveDesktopBrowserLinkSession(sessionId: string): { requestedSessionId: string; linkSessionId: string; lane: BrowserProfileKind } {
+  const requestedSessionId = resolveSessionId(sessionId);
+  const metadata = getBrowserSessionMetadata(requestedSessionId);
+  if (metadata.ownerType !== 'main') {
+    return { requestedSessionId, linkSessionId: requestedSessionId, lane: 'prometheus' };
+  }
+  const target = getMainBrowserTarget(requestedSessionId);
+  // A link click must never claim a personal Chrome tab. Use a stable, non-
+  // persisted main-owned alias that still attaches to the Prometheus CDP
+  // profile/debug port. Existing user-Chrome sessions remain untouched.
+  if (target === 'user' || (target === 'inhouse' && !getInHouseSession(requestedSessionId))) {
+    const linkSessionId = `${requestedSessionId}::prometheus-link`;
+    registerBrowserSessionMetadata(linkSessionId, {
+      ownerType: 'main',
+      ownerId: requestedSessionId,
+      label: 'Prometheus Browser links',
+      spawnerSessionId: requestedSessionId,
+    });
+    return { requestedSessionId, linkSessionId, lane: 'prometheus' };
+  }
+  return { requestedSessionId, linkSessionId: requestedSessionId, lane: target };
+}
+
+export function browserOpenUiLink(sessionId: string, rawUrl: string): Promise<any> {
+  const url = normalizeDesktopBrowserLinkUrl(rawUrl);
+  const resolved = resolveDesktopBrowserLinkSession(sessionId);
+  const previous = browserLinkNavigationInFlight.get(resolved.linkSessionId);
+  const run = (previous || Promise.resolve()).catch(() => null).then(async () => {
+    const status = await browserNavigateControl(resolved.linkSessionId, { action: 'open', url });
+    return {
+      ...status,
+      requestedSessionId: resolved.requestedSessionId,
+      linkSessionId: resolved.linkSessionId,
+      linkNavigation: true,
+      linkLane: resolved.lane,
+      source: 'system',
+      tool: 'browser_link',
+    };
+  });
+  const tracked = run.finally(() => {
+    if (browserLinkNavigationInFlight.get(resolved.linkSessionId) === tracked) browserLinkNavigationInFlight.delete(resolved.linkSessionId);
+  });
+  browserLinkNavigationInFlight.set(resolved.linkSessionId, tracked);
+  return tracked;
 }
 
 export async function browserNavigateControl(
@@ -5894,6 +6189,8 @@ export async function browserGetFocusedItem(sessionId: string): Promise<string> 
 
 export async function browserClose(sessionId: string): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  const pendingInit = browserSessionInitInFlight.get(resolved);
+  if (pendingInit) await pendingInit.catch(() => {});
   const session = sessions.get(resolved);
   if (!session) return 'No browser session to close.';
   const persistedSessionId = String(session.sessionId || resolved || '').trim();

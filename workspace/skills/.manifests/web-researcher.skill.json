@@ -3,7 +3,7 @@
   "entrypoint": "SKILL.md",
   "description": "Answer a research question with current web sources using search, batched or single-page fetch, source evaluation, triangulation, synthesis, and citations. Use for web research and current facts; do not use browser automation unless interactive/authenticated UI state is necessary.",
   "triggers": [
-    "what are people saying",
+    "latest web research",
     "summarize these links",
     "read this webpage",
     "fact check this",
@@ -11,10 +11,10 @@
     "search the web",
     "source-backed answer",
     "current information",
-    "investigate online",
+    "research current facts online",
     "credible sources",
     "compare sources",
-    "gather evidence"
+    "find current web sources"
   ],
   "categories": [
     "research",

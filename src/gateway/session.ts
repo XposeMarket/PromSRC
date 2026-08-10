@@ -30,6 +30,7 @@ import {
   resolveConfinedStoragePath,
   storageFilePath,
 } from './storage/storage-paths';
+import type { ExternalImportBinding, ImportedHistoricalEvent } from './imports/import-types';
 
 export interface ChatMessage {
   messageId?: string;
@@ -78,6 +79,8 @@ export interface ChatMessage {
   /** Display identity for durable multi-speaker voice-room transcripts. */
   voiceSpeaker?: string;
   voiceTargetKey?: string;
+  /** Historical source events imported as data; never dispatched by the runtime. */
+  historicalEvents?: ImportedHistoricalEvent[];
 }
 
 export interface VoiceRoomParticipant {
@@ -307,6 +310,10 @@ export interface Session {
   lastActiveAt: number;
   lastAssistantAt?: number;
   pinnedAt?: number;
+  /** Higher values appear earlier in the manual sidebar order. */
+  sidebarOrder?: number;
+  /** Manual visibility state. Settling never removes or transforms history. */
+  settledAt?: number;
   mobileLastReadAt?: number;
   pendingMemoryFlush?: boolean;
   pendingCompaction?: boolean;
@@ -334,6 +341,7 @@ export interface Session {
   mainChatGoalHistory?: MainChatGoalState[];
   chatModelRoute?: ChatModelRoute;
   voiceRoom?: VoiceRoomMetadata | null;
+  externalImport?: ExternalImportBinding;
 }
 
 export interface SessionMutationScope {
@@ -349,6 +357,10 @@ export interface SessionSummary {
   lastMessageAt?: number;
   lastAssistantAt?: number;
   pinnedAt?: number;
+  /** Higher values appear earlier in the manual sidebar order. */
+  sidebarOrder?: number;
+  settledAt?: number;
+  settled?: boolean;
   mobileLastReadAt?: number;
   mobileUnread?: boolean;
   activeRun?: boolean;
@@ -364,6 +376,7 @@ export interface SessionSummary {
   mainChatGoal?: MainChatGoalState | null;
   chatModelRoute?: ChatModelRoute;
   voiceRoom?: VoiceRoomMetadata | null;
+  externalImport?: Pick<ExternalImportBinding, 'version' | 'source' | 'continuation' | 'sourceResume' | 'importedAt'>;
 }
 
 export interface SessionSearchResult extends SessionSummary {
@@ -378,6 +391,10 @@ export interface SessionListOptions {
   scope?: 'all';
   limit?: number;
   offset?: number;
+  /** Defaults to active so existing callers keep the normal sidebar behavior. */
+  state?: 'active' | 'settled' | 'all';
+  /** Return only sessions that are currently pinned. */
+  pinnedOnly?: boolean;
   // When true and a first-party chat channel is requested, also include
   // automated scheduled-task sessions (auto_*, stored under 'system'). This
   // lets each client surface those shared threads in its primary chat list.
@@ -407,7 +424,7 @@ const SESSION_CACHE_IDLE_MS = 30 * 60 * 1000;
 const sessionCacheAccessAt = new Map<string, number>();
 export const PRE_COMPACTION_MEMORY_FLUSH_PROMPT = [
   'SYSTEM: Context is getting long. Before we continue, do this NOW (be quick):',
-  '1. memory_write — save new facts/preferences/rules to the correct file: user, soul, or memory',
+  '1. memory(action="write") — save new facts/preferences/rules to the correct file: user, soul, or memory',
   '2. persona_update USER.md — update anything new you learned about your human (name, preferences, quirks, projects)',
   '3. persona_update SOUL.md — if you developed any new operating principles or learned how to work better with this human, add them',
   '4. write_note — log a 1-2 line session note via the write_note tool (intraday notes)',
@@ -431,6 +448,16 @@ let sessionIndexRevision = 0;
 const sessionMutationScopes = new Map<string, SessionMutationScope>();
 let sessionIndexCache: SessionIndex | null = null;
 let sessionIndexCommandTitleRebuildAttempted = false;
+// A legacy-format repair is allowed once per process. Rechecking every sidebar
+// poll made one stale summary turn into a full transcript-corpus rebuild on
+// every request/restart, which is catastrophic on large workspaces.
+let sessionIndexRepairCheckAttempted = false;
+let sidebarOrderSequence = 0;
+
+function allocateSidebarOrder(): number {
+  sidebarOrderSequence = (sidebarOrderSequence + 1) % 1000;
+  return Date.now() * 1000 + sidebarOrderSequence;
+}
 
 function touchSessionCache(sessionId: string): void {
   sessionCacheAccessAt.set(sessionId, Date.now());
@@ -972,17 +999,22 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
     channel,
     createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
     lastActiveAt: Number.isFinite(lastActiveAt) ? lastActiveAt : Date.now(),
+    lastMessageAt: Number.isFinite(Number(input?.lastMessageAt)) ? Number(input.lastMessageAt) : undefined,
     lastAssistantAt: Number.isFinite(Number(input?.lastAssistantAt)) ? Number(input.lastAssistantAt) : undefined,
     pinnedAt: Number.isFinite(Number(input?.pinnedAt)) && Number(input.pinnedAt) > 0 ? Number(input.pinnedAt) : undefined,
+    sidebarOrder: normalizeSidebarOrder(input?.sidebarOrder),
+    settledAt: Number.isFinite(Number(input?.settledAt)) && Number(input.settledAt) > 0 ? Number(input.settledAt) : undefined,
+    settled: input?.settled === true || (Number.isFinite(Number(input?.settledAt)) && Number(input.settledAt) > 0),
     mobileLastReadAt: Number.isFinite(Number(input?.mobileLastReadAt)) ? Number(input.mobileLastReadAt) : undefined,
     mobileUnread: input?.mobileUnread === true,
     activeRun: input?.activeRun === true,
     messageCount: Number.isFinite(messageCount) ? Math.max(0, Math.floor(messageCount)) : 0,
     title: String(input?.title || '(empty)').slice(0, 60) || '(empty)',
     preview: String(input?.preview || input?.title || '(empty)').slice(0, 60) || '(empty)',
-    // Do not invent a value while reading an old index: its absence tells the
-    // index loader to rebuild once from durable message history.
-    lastOrigin: normalizeSessionOriginSummary(input?.lastOrigin),
+    // Older indexes did not persist origin metadata. Preserve the compact
+    // index fast path by falling back to the known session channel instead of
+    // forcing a full transcript-corpus rebuild during the first list request.
+    lastOrigin: normalizeSessionOriginSummary(input?.lastOrigin, channel),
     creativeMode: normalizeCreativeMode(input?.creativeMode),
     canvasProjectRoot: typeof input?.canvasProjectRoot === 'string' && input.canvasProjectRoot.trim()
       ? input.canvasProjectRoot
@@ -993,6 +1025,7 @@ function normalizeSessionSummary(input: any): SessionSummary | null {
     canvasProjectLink: normalizeCanvasProjectLink(input?.canvasProjectLink),
     chatModelRoute: normalizeChatModelRoute(input?.chatModelRoute),
     voiceRoom: input?.voiceRoom && typeof input.voiceRoom === 'object' ? input.voiceRoom as VoiceRoomMetadata : null,
+    externalImport: normalizeExternalImport(input?.externalImport),
   };
 }
 
@@ -1045,6 +1078,46 @@ function normalizeChatModelRoute(input: any): ChatModelRoute | undefined {
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(accountId ? { accountId } : {}),
     updatedAt: Number.isFinite(Number(input.updatedAt)) ? Number(input.updatedAt) : Date.now(),
+  };
+}
+
+function normalizeSidebarOrder(input: any): number | undefined {
+  const value = Number(input);
+  if (!Number.isFinite(value)) return undefined;
+  return Math.max(Number.MIN_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(value)));
+}
+
+function normalizeExternalImport(input: any): ExternalImportBinding | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const source = input.source && typeof input.source === 'object' ? input.source : {};
+  const provider = String(source.provider || '').trim().slice(0, 120);
+  const adapter = String(source.adapter || '').trim().slice(0, 120);
+  const sourceLabel = String(source.sourceLabel || provider || 'Imported source').trim().slice(0, 240);
+  const jobId = String(input.jobId || '').trim().slice(0, 160);
+  const dedupeKey = String(input.dedupeKey || '').trim().slice(0, 160);
+  if (!provider || !adapter || !jobId || !dedupeKey) return undefined;
+  const sourceIdentity = {
+    provider,
+    adapter: adapter as any,
+    sourceLabel,
+    ...(String(source.sourceAccountId || '').trim() ? { sourceAccountId: String(source.sourceAccountId).trim().slice(0, 240) } : {}),
+    ...(String(source.sourceConversationId || '').trim() ? { sourceConversationId: String(source.sourceConversationId).trim().slice(0, 300) } : {}),
+    ...(String(source.sourceSessionKey || '').trim() ? { sourceSessionKey: String(source.sourceSessionKey).trim().slice(0, 300) } : {}),
+    ...(String(source.sourceFile || '').trim() ? { sourceFile: String(source.sourceFile).trim().slice(0, 500) } : {}),
+    inputDigest: String(source.inputDigest || '').trim().slice(0, 160),
+    importedAt: String(source.importedAt || input.importedAt || '').trim().slice(0, 80) || new Date().toISOString(),
+  };
+  return {
+    version: 1,
+    jobId,
+    dedupeKey,
+    source: sourceIdentity,
+    continuation: 'prometheus',
+    sourceResume: 'unsupported',
+    importedMessageCount: Math.max(0, Math.floor(Number(input.importedMessageCount) || 0)),
+    importedEventCount: Math.max(0, Math.floor(Number(input.importedEventCount) || 0)),
+    importedResourceCount: Math.max(0, Math.floor(Number(input.importedResourceCount) || 0)),
+    importedAt: String(input.importedAt || source.importedAt || '').trim() || new Date().toISOString(),
   };
 }
 
@@ -1184,6 +1257,8 @@ function buildSessionSummary(session: Session): SessionSummary {
       lastActiveAt: Number(session.lastActiveAt || Date.now()),
       lastAssistantAt: undefined,
       pinnedAt: undefined,
+      settledAt: undefined,
+      settled: false,
       mobileLastReadAt: undefined,
       mobileUnread: false,
       activeRun: false,
@@ -1210,6 +1285,9 @@ function buildSessionSummary(session: Session): SessionSummary {
     lastMessageAt,
     lastAssistantAt,
     pinnedAt: Number.isFinite(Number(session.pinnedAt)) && Number(session.pinnedAt) > 0 ? Number(session.pinnedAt) : undefined,
+    sidebarOrder: normalizeSidebarOrder(session.sidebarOrder),
+    settledAt: Number.isFinite(Number(session.settledAt)) && Number(session.settledAt) > 0 ? Number(session.settledAt) : undefined,
+    settled: Number.isFinite(Number(session.settledAt)) && Number(session.settledAt) > 0,
     mobileLastReadAt,
     mobileUnread: getMobileUnreadState(lastAssistantAt, mobileLastReadAt),
     activeRun: false,
@@ -1224,6 +1302,15 @@ function buildSessionSummary(session: Session): SessionSummary {
     mainChatGoal: session.mainChatGoal || null,
     chatModelRoute: normalizeChatModelRoute(session.chatModelRoute),
     voiceRoom: session.voiceRoom || null,
+    externalImport: session.externalImport
+      ? {
+          version: 1,
+          source: session.externalImport.source,
+          continuation: 'prometheus',
+          sourceResume: 'unsupported',
+          importedAt: session.externalImport.importedAt,
+        }
+      : undefined,
   };
 }
 
@@ -1246,11 +1333,12 @@ function upsertSessionSummary(session: Session): void {
   saveSessionIndex(index);
 }
 
-function removeSessionSummary(id: string): void {
+function removeSessionSummary(id: string): boolean {
   const index = loadSessionIndex();
-  if (!index.summaries[id]) return;
+  if (!index.summaries[id]) return false;
   delete index.summaries[id];
   saveSessionIndex(index);
+  return true;
 }
 
 function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
@@ -1265,6 +1353,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
     const lastMessageAt = getLastMessageTimestamp(history);
     const lastAssistantAt = getLastAssistantTimestamp(history);
     const mobileLastReadAt = Number.isFinite(Number(data?.mobileLastReadAt)) ? Number(data.mobileLastReadAt) : undefined;
+    const settledAt = Number.isFinite(Number(data?.settledAt)) && Number(data.settledAt) > 0 ? Number(data.settledAt) : undefined;
     const channel = data?.channel === 'terminal'
       || data?.channel === 'telegram'
       || data?.channel === 'mobile'
@@ -1282,6 +1371,9 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
       lastMessageAt,
       lastAssistantAt,
       pinnedAt: Number.isFinite(Number(data?.pinnedAt)) && Number(data.pinnedAt) > 0 ? Number(data.pinnedAt) : undefined,
+      sidebarOrder: normalizeSidebarOrder(data?.sidebarOrder ?? loadSessionIndex().summaries[sessionId]?.sidebarOrder),
+      settledAt,
+      settled: !!settledAt,
       mobileLastReadAt,
       mobileUnread: getMobileUnreadState(lastAssistantAt, mobileLastReadAt),
       activeRun: false,
@@ -1299,6 +1391,7 @@ function buildSessionSummaryFromFile(sessionId: string): SessionSummary | null {
       canvasProjectLink: normalizeCanvasProjectLink(data?.canvasProjectLink),
       mainChatGoal: normalizeMainChatGoal(data?.mainChatGoal, sessionId),
       voiceRoom: data?.voiceRoom && typeof data.voiceRoom === 'object' ? data.voiceRoom as VoiceRoomMetadata : null,
+      externalImport: normalizeExternalImport(data?.externalImport),
     };
   } catch {
     return null;
@@ -1325,11 +1418,14 @@ function getSortedSessionSummaries(
   channel?: Session['channel'],
   includeAutomated?: boolean,
   scope?: SessionListOptions['scope'],
+  state: SessionListOptions['state'] = 'active',
+  pinnedOnly = false,
 ): SessionSummary[] {
   ensureSessionDir();
   let index = loadSessionIndex();
   const hasSessionFiles = fs.readdirSync(SESSION_DIR).some((f) => f.endsWith('.json') && f !== '_index.json');
-  if (hasSessionFiles) {
+  if (hasSessionFiles && !sessionIndexRepairCheckAttempted) {
+    sessionIndexRepairCheckAttempted = true;
     if (Object.keys(index.summaries).length === 0) {
       index = rebuildSessionIndex();
     } else if (
@@ -1338,7 +1434,7 @@ function getSortedSessionSummaries(
     ) {
       sessionIndexCommandTitleRebuildAttempted = true;
       index = rebuildSessionIndex();
-    } else if (Object.values(index.summaries).some((summary) => summary.messageCount > 0 && (!summary.lastMessageAt || !summary.lastOrigin))) {
+    } else if (Object.values(index.summaries).some((summary) => summary.messageCount > 0 && !summary.lastMessageAt)) {
       index = rebuildSessionIndex();
     }
   }
@@ -1357,8 +1453,17 @@ function getSortedSessionSummaries(
       if (summary.channel === channel) return true;
       return admitAutomated && summary.channel === 'system' && /^auto_/i.test(summary.id);
     })
+    .filter((summary) => state === 'all' || (state === 'settled' ? summary.settled === true : summary.settled !== true))
+    .filter((summary) => !pinnedOnly || Number(summary.pinnedAt || 0) > 0)
     .filter((summary) => summary.messageCount > 0 || !!summary.pinnedAt)
     .sort((a, b) => {
+      const aOrder = normalizeSidebarOrder(a.sidebarOrder);
+      const bOrder = normalizeSidebarOrder(b.sidebarOrder);
+      if (aOrder !== undefined || bOrder !== undefined) {
+        if (aOrder === undefined) return 1;
+        if (bOrder === undefined) return -1;
+        if (aOrder !== bOrder) return bOrder - aOrder;
+      }
       const aPinned = Number(a.pinnedAt || 0);
       const bPinned = Number(b.pinnedAt || 0);
       if (!!aPinned !== !!bPinned) return bPinned ? 1 : -1;
@@ -1372,7 +1477,7 @@ export function listSessionSummaries(channel?: Session['channel']): SessionSumma
 export function listSessionSummaries(options: SessionListOptions): SessionListPage;
 export function listSessionSummaries(input?: Session['channel'] | SessionListOptions): SessionSummary[] | SessionListPage {
   const options = typeof input === 'object' && input !== null ? input : { channel: input };
-  const sorted = getSortedSessionSummaries(options.channel, options.includeAutomated, options.scope);
+  const sorted = getSortedSessionSummaries(options.channel, options.includeAutomated, options.scope, options.state, options.pinnedOnly === true);
   if (typeof input !== 'object' || input === null) return sorted;
 
   const limit = Number.isFinite(Number(options.limit))
@@ -1408,6 +1513,8 @@ function readSessionFileForSearch(sessionId: string): Session | null {
       lastActiveAt: Number.isFinite(Number(data?.lastActiveAt)) ? Number(data.lastActiveAt) : Date.now(),
       lastAssistantAt: Number.isFinite(Number(data?.lastAssistantAt)) ? Number(data.lastAssistantAt) : undefined,
       pinnedAt: Number.isFinite(Number(data?.pinnedAt)) && Number(data.pinnedAt) > 0 ? Number(data.pinnedAt) : undefined,
+      sidebarOrder: normalizeSidebarOrder(data?.sidebarOrder ?? loadSessionIndex().summaries[sessionId]?.sidebarOrder),
+      settledAt: Number.isFinite(Number(data?.settledAt)) && Number(data.settledAt) > 0 ? Number(data.settledAt) : undefined,
       mobileLastReadAt: Number.isFinite(Number(data?.mobileLastReadAt)) ? Number(data.mobileLastReadAt) : undefined,
       pendingMemoryFlush: data?.pendingMemoryFlush === true,
       pendingCompaction: data?.pendingCompaction === true,
@@ -1434,6 +1541,7 @@ function readSessionFileForSearch(sessionId: string): Session | null {
       mainChatGoal: normalizeMainChatGoal(data?.mainChatGoal, sessionId),
       mainChatGoalHistory: normalizeMainChatGoalHistory(data?.mainChatGoalHistory, sessionId),
       chatModelRoute: normalizeChatModelRoute(data?.chatModelRoute),
+      externalImport: normalizeExternalImport(data?.externalImport),
     };
   } catch {
     return null;
@@ -1442,14 +1550,14 @@ function readSessionFileForSearch(sessionId: string): Session | null {
 
 export function searchSessionSummaries(
   query: string,
-  options: { channel?: Session['channel']; scope?: SessionListOptions['scope']; includeAutomated?: boolean; limit?: number; includeContent?: boolean } = {},
+  options: { channel?: Session['channel']; scope?: SessionListOptions['scope']; state?: SessionListOptions['state']; includeAutomated?: boolean; limit?: number; includeContent?: boolean } = {},
 ): SessionSearchResult[] {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return [];
   const limit = Number.isFinite(Number(options.limit))
     ? Math.max(1, Math.min(200, Math.floor(Number(options.limit))))
     : 80;
-  const summaries = getSortedSessionSummaries(options.channel, options.includeAutomated, options.scope);
+  const summaries = getSortedSessionSummaries(options.channel, options.includeAutomated, options.scope, options.state);
   const results: SessionSearchResult[] = [];
   const titleMatchedIds = new Set<string>();
 
@@ -2000,7 +2108,7 @@ export function archiveMainChatGoal(sessionId: string, goal: MainChatGoalState |
   saveSession(sessionId);
 }
 
-export function listMainChatGoalRecords(): Array<MainChatGoalState & {
+export function listMainChatGoalRecords(options: { includeHistory?: boolean } = {}): Array<MainChatGoalState & {
   current: boolean;
   sessionTitle: string;
   sessionLastActiveAt: number;
@@ -2024,14 +2132,16 @@ export function listMainChatGoalRecords(): Array<MainChatGoalState & {
     pushGoalForSummary(summary, summary.mainChatGoal, true);
   }
 
-  // Historical goals are useful context, but loading every session file can
-  // stall the Hub on long-lived installs. Scan the recent sessions only.
-  for (const summary of summaries.slice(0, 250)) {
-    const session = readSessionFileForSearch(summary.id);
-    if (!session) continue;
-    pushGoalForSummary(summary, session.mainChatGoal, true);
-    for (const goal of session.mainChatGoalHistory || []) {
-      pushGoalForSummary(summary, goal, false);
+  if (options.includeHistory !== false) {
+    // Historical goals are useful context, but loading every session file can
+    // stall the Hub on long-lived installs. Scan the recent sessions only.
+    for (const summary of summaries.slice(0, 250)) {
+      const session = readSessionFileForSearch(summary.id);
+      if (!session) continue;
+      pushGoalForSummary(summary, session.mainChatGoal, true);
+      for (const goal of session.mainChatGoalHistory || []) {
+        pushGoalForSummary(summary, goal, false);
+      }
     }
   }
   return out.sort((a, b) => Number(b.updatedAt || b.createdAt || 0) - Number(a.updatedAt || a.createdAt || 0));
@@ -2179,6 +2289,8 @@ export function getSession(id: string): Session {
         lastActiveAt: data.lastActiveAt || Date.now(),
         lastAssistantAt: Number.isFinite(Number(data.lastAssistantAt)) ? Number(data.lastAssistantAt) : undefined,
         pinnedAt: Number.isFinite(Number(data.pinnedAt)) && Number(data.pinnedAt) > 0 ? Number(data.pinnedAt) : undefined,
+        sidebarOrder: normalizeSidebarOrder(data.sidebarOrder ?? loadSessionIndex().summaries[sessionId]?.sidebarOrder),
+        settledAt: Number.isFinite(Number(data.settledAt)) && Number(data.settledAt) > 0 ? Number(data.settledAt) : undefined,
         mobileLastReadAt: Number.isFinite(Number(data.mobileLastReadAt)) ? Number(data.mobileLastReadAt) : undefined,
         pendingMemoryFlush: data.pendingMemoryFlush === true,
         pendingCompaction: data.pendingCompaction === true,
@@ -2223,6 +2335,7 @@ export function getSession(id: string): Session {
         mainChatGoal: normalizeMainChatGoal(data.mainChatGoal, sessionId),
         mainChatGoalHistory: normalizeMainChatGoalHistory(data.mainChatGoalHistory, sessionId),
         chatModelRoute: normalizeChatModelRoute(data.chatModelRoute),
+        externalImport: normalizeExternalImport(data.externalImport),
       };
       sessions.set(sessionId, session);
       touchSessionCache(sessionId);
@@ -2244,6 +2357,8 @@ export function getSession(id: string): Session {
     lastActiveAt: Date.now(),
     lastAssistantAt: undefined,
     pinnedAt: undefined,
+    sidebarOrder: allocateSidebarOrder(),
+    settledAt: undefined,
     mobileLastReadAt: undefined,
     pendingMemoryFlush: false,
     pendingCompaction: false,
@@ -2265,6 +2380,7 @@ export function getSession(id: string): Session {
     canvasProjectLink: null,
     mainChatGoal: null,
     mainChatGoalHistory: [],
+    externalImport: undefined,
   };
   sessions.set(sessionId, session);
   touchSessionCache(sessionId);
@@ -2300,6 +2416,10 @@ export function getSessionsByChannel(channel: Session['channel']): Session[] {
 
 export function addMessage(id: string, msg: ChatMessage, options: AddMessageOptions = {}): AddMessageResult {
   const session = getSession(id);
+  // A newly received user turn makes a settled conversation active again so
+  // live connector traffic cannot remain hidden in the normal sidebar. This
+  // is the inverse of manual settling, not an auto-settle policy.
+  if (msg.role === 'user' && session.settledAt) session.settledAt = undefined;
   const sessionPolicy = resolveSessionPolicy();
   const maxMessages = Number.isFinite(Number(options.maxMessages)) && Number(options.maxMessages) >= 10
     ? Math.floor(Number(options.maxMessages))
@@ -2429,6 +2549,32 @@ export function addMessage(id: string, msg: ChatMessage, options: AddMessageOpti
     contextLimitTokens,
     thresholdTokens,
   };
+}
+
+/**
+ * Return a bounded, state-aware auto-settle candidate batch without using
+ * offset pagination. The caller re-reads each session and re-checks all
+ * authoritative runtime/task/protection state before changing anything.
+ * `lastActiveAt` is the durable activity clock: it is updated by message and
+ * other user-facing session mutations and is intentionally independent of
+ * message count, title text, summaries, memory, or resource associations.
+ */
+export function listAutoSettleCandidates(options: {
+  cutoffAt: number;
+  activationAt?: number;
+  limit?: number;
+}): SessionSummary[] {
+  const cutoffAt = Number(options.cutoffAt);
+  if (!Number.isFinite(cutoffAt)) return [];
+  const activationAt = Number(options.activationAt || 0);
+  const limit = Math.max(1, Math.min(5000, Math.floor(Number(options.limit) || 50)));
+  return getSortedSessionSummaries(undefined, false, 'all', 'active')
+    .filter((summary) => {
+      const activityAt = Number(summary.lastActiveAt || summary.createdAt || 0);
+      if (!Number.isFinite(activityAt) || activityAt <= 0) return false;
+      return Math.max(activityAt, activationAt) <= cutoffAt;
+    })
+    .slice(0, limit);
 }
 
 /**
@@ -2903,14 +3049,19 @@ export function deleteSession(id: string): boolean {
     sessionSaveTimers.delete(sessionId);
   }
   const filePath = getSessionPath(sessionId);
-  if (!fs.existsSync(filePath)) return false;
-  try {
-    fs.unlinkSync(filePath);
-    removeSessionSummary(sessionId);
-    return true;
-  } catch {
-    return false;
+  if (fs.existsSync(filePath)) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      return false;
+    }
   }
+  // Rollbacks and external cleanup can remove the transcript before a
+  // long-lived gateway reloads its in-memory/index summary. Treat removal of
+  // that orphaned summary as a successful deletion so stale sidebar rows do
+  // not survive a restart.
+  const removedSummary = removeSessionSummary(sessionId);
+  return removedSummary || !fs.existsSync(filePath);
 }
 
 /**
@@ -3069,10 +3220,14 @@ function scrubSession(session: Session): Session {
     mainChatGoalHistory: Array.isArray(session.mainChatGoalHistory)
       ? session.mainChatGoalHistory.map((goal) => scrubMainChatGoal(goal)).filter(Boolean) as MainChatGoalState[]
       : session.mainChatGoalHistory,
+    externalImport: session.externalImport ? scrubPersistedData(session.externalImport) : session.externalImport,
     history: session.history.map(msg => ({
       ...msg,
       content: scrubPersistedText(msg.content),
       toolLog: msg.toolLog ? scrubPersistedText(msg.toolLog) : msg.toolLog,
+      historicalEvents: Array.isArray(msg.historicalEvents)
+        ? scrubPersistedData(msg.historicalEvents).slice(0, 500)
+        : msg.historicalEvents,
       processEntries: Array.isArray(msg.processEntries)
         ? msg.processEntries.map((entry) => ({
             ...entry,
@@ -3249,6 +3404,85 @@ export function setSessionPinned(id: string, pinned: boolean): SessionSummary | 
   session.pinnedAt = pinned ? (Number(session.pinnedAt) || Date.now()) : undefined;
   flushSession(sessionId);
   return buildSessionSummary(session);
+}
+
+/**
+ * Persist the order of the visible sidebar thread set. The caller may send
+ * only the cards currently rendered; omitted sessions retain their current
+ * relative order and remain below the supplied cards. This keeps drag/drop
+ * useful even when the sidebar is virtualized or showing only its first page.
+ */
+export function reorderSessionSidebar(
+  sessionIds: string[],
+  options: { channel?: Session['channel']; state?: SessionListOptions['state'] } = {},
+): SessionSummary[] {
+  const requestedIds = [...new Set((Array.isArray(sessionIds) ? sessionIds : [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => isSafeStorageId(id)))];
+  if (!requestedIds.length) return [];
+
+  const available = getSortedSessionSummaries(
+    options.channel || 'web',
+    true,
+    'all',
+    options.state || 'all',
+  );
+  const availableIds = available.map((summary) => summary.id);
+  const availableSet = new Set(availableIds);
+  const orderedIds = [
+    ...requestedIds.filter((id) => availableSet.has(id)),
+    ...availableIds.filter((id) => !requestedIds.includes(id)),
+  ];
+  if (!orderedIds.length) return [];
+
+  const index = loadSessionIndex();
+  const maxExistingOrder = available.reduce((max, summary) => {
+    const value = normalizeSidebarOrder(summary.sidebarOrder);
+    return value === undefined ? max : Math.max(max, value);
+  }, 0);
+  const base = Math.max(Date.now() * 1000, maxExistingOrder + orderedIds.length + 1);
+  orderedIds.forEach((id, position) => {
+    const order = base + orderedIds.length - position;
+    const summary = index.summaries[id];
+    if (summary) {
+      // Older compact indexes may have been written before import provenance
+      // (or sidebar ordering) was added. Hydrate only the rows being moved so
+      // drag/drop does not turn into a full transcript-corpus scan, while an
+      // import promotion still restores the metadata needed by the sidebar.
+      const hydrated = (!summary.externalImport || summary.sidebarOrder === undefined)
+        ? buildSessionSummaryFromFile(id)
+        : null;
+      index.summaries[id] = {
+        ...summary,
+        ...(hydrated || {}),
+        sidebarOrder: order,
+      };
+    }
+    const cached = sessions.get(id);
+    if (cached) cached.sidebarOrder = order;
+  });
+  saveSessionIndex(index);
+  return orderedIds
+    .map((id) => index.summaries[id])
+    .filter((summary): summary is SessionSummary => !!summary);
+}
+
+/**
+ * Manual settling changes only sidebar visibility. The full session object,
+ * transcript, memory links, resources, pins, unread state, and runtime state
+ * remain intact and are persisted exactly as before.
+ */
+export function settleSession(id: string, settled = true): SessionSummary | null {
+  const sessionId = String(id || '').trim();
+  if (!sessionId) return null;
+  const session = getSession(sessionId);
+  session.settledAt = settled ? (Number(session.settledAt) || Date.now()) : undefined;
+  flushSession(sessionId);
+  return buildSessionSummary(session);
+}
+
+export function unsettleSession(id: string): SessionSummary | null {
+  return settleSession(id, false);
 }
 
 /**

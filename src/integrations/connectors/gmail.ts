@@ -34,8 +34,10 @@ export class GmailConnector extends OAuthConnector {
         'openid',
       ],
       usePkce: false, // Google uses client_secret instead of PKCE for desktop apps
+      useNonce: true,
       callbackPort: CALLBACK_PORT,
       callbackPath: '/auth/callback/gmail',
+      revokeUrl: 'https://oauth2.googleapis.com/revoke',
     };
     super(cfg, configDir);
   }

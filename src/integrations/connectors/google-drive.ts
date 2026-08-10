@@ -25,8 +25,10 @@ export class GoogleDriveConnector extends OAuthConnector {
         'openid',
       ],
       usePkce: false,
+      useNonce: true,
       callbackPort: 19425,
       callbackPath: '/auth/callback/google-drive',
+      revokeUrl: 'https://oauth2.googleapis.com/revoke',
     };
     super(cfg, configDir);
   }

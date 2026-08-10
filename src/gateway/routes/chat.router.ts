@@ -16,6 +16,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { createTurnTimingRecorder, type TurnTimingRecorder } from '../chat/turn-timing';
+import { ToolPerformanceTracker } from '../chat/tool-performance-telemetry';
 import { digestCanonicalToolArgs, previewCanonicalToolArgs } from '../chat/tool-loop-identity';
 import { assembleCacheAwareSystemPrompt } from '../prompt-cache';
 import { enqueuePostTurnJob, getPostTurnQueueStatus } from '../chat/post-turn-queue';
@@ -45,7 +46,8 @@ import { readModelUsageEventsForSession, getUsageCalibration } from '../../provi
 import { estimateContextCostMicros, resolveModelPricing } from '../../providers/model-pricing';
 import { normalizeReasoningEffort } from '../../providers/reasoning-capabilities';
 import { spawnAgent } from '../../agents/spawner';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getRecentToolObservationsForContext, getWorkingContextForContext, recordWorkingContextPacket, persistToolLog, getWorkspace, setWorkspace, cleanupSessions, listSessionSummaries, searchSessionSummaries, recordSessionCompaction, deleteSession, renameSession, setSessionPinned, reorderSessionSidebar, autoNameSession, replaceHistory, touchSession, flushSession, markSessionReadForMobile, markSessionUnreadForMobile, getCreativeMode, getCreativeReferences, formatCreativeReferencesForPrompt, getActivatedToolCategories, getActivatedSkillIds, getActivatedSkillResources, activateSkillForSession, activateSkillResourceForSession, getSessionDisplayTitle, isBusinessContextEnabled, getSessionPersistenceStatus, type TurnOrigin, type VoiceRoomMetadata, type VoiceRoomParticipant } from '../session';
+import { SessionSettlementError, settleSessionWithGuards, unsettleSessionSafely } from '../session-settlement';
 import { clearChatModelRoute, setChatModelRoute } from '../session';
 import { mergeHistoryWithExistingMessageMetadata } from '../history-reconciliation';
 import { getSubagentChatHistory } from '../agents-runtime/subagent-chat-store';
@@ -75,7 +77,7 @@ import { runBootMd } from '../boot';
 import { ensurePrometheusThreadOpsForSupervision, getAgentTeamScheduleTools } from '../tools/defs/agent-team-schedule';
 import { buildCisContextBlock } from '../business/cis-context-builder.js';
 import { refreshProjectContextForSession } from '../projects/project-learning.js';
-import { buildProjectContextBlock, findProjectBySessionId, removeSessionFromProject } from '../projects/project-store.js';
+import { buildProjectContextBlock, findProjectBySessionId, listProjects, removeSessionFromProject } from '../projects/project-store.js';
 import { assertSafeStorageId, isStorageBoundaryError } from '../storage/storage-paths.js';
 import { TaskRunner, runTask, TaskTool, TaskState, bgPlanDeclare, bgPlanAdvance, backgroundJoin, backgroundAbort, listActiveBackgroundIdsForSession } from '../tasks/task-runner';
 import { setupErrorResponseEndpoint } from '../errors/error-response-endpoint-integrated';
@@ -96,6 +98,7 @@ import { readAgentPromptFile } from '../../agents/agent-prompt-file.js';
 import { buildRuntimeActorRoleContract, getRuntimeActorContext, isDistinctRuntimeActor } from '../runtime-actor.js';
 import { recordSkillGardenerTurn } from '../brain/skill-episodes.js';
 import { buildAttachmentRuntimeContext, appendAttachmentContextToMessage, type RuntimeVisionAttachment } from '../chat/attachment-context';
+import { autoAttachChatInputResources, getResourceStore, redactResourceText, type ResourceContextResult } from '../resources/resource-store';
 import { decideTurnAdmission, mainChatTurnCoordinator, type SessionTurnLease } from '../chat/turn-coordinator';
 import {
   browserOpen,
@@ -172,6 +175,7 @@ import {
   getDesktopToolDefinitions,
   getDesktopAdvisorPacket,
 } from '../desktop-tools';
+import { desktopBackgroundReleaseSession } from '../desktop-background';
 // import { runDesktopTask } from '../tasks/desktop-task-runner'; // removed — module deleted
 import { CronScheduler } from '../scheduling/cron-scheduler';
 import { HeartbeatRunner } from '../scheduling/heartbeat-runner';
@@ -198,7 +202,8 @@ import {
 import { executeGenerateImage } from '../../tools/generate-image.js';
 import { executeGenerateVideo } from '../../tools/generate-video.js';
 import { executeWriteNote } from '../../tools/write-note';
-import { searchMemoryIndexAsync, readMemoryRecord } from '../memory-index/index';
+import { getMemoryIndexRefreshWorkerStatus, searchMemoryIndexAsync, readMemoryRecord } from '../memory-index/index';
+import { getMemorySearchWorkerStatus } from '../memory-index/search-worker-client';
 import {
   cancelMainChatTimer,
   createMainChatTimer,
@@ -1565,9 +1570,12 @@ import {
 
 import {
   buildBootStartupSnapshot as _buildBootStartupSnapshot,
+  loadFullMemoryProfile,
   loadWorkspaceFile,
   loadVoiceAgentMemory,
   readDailyMemoryContext,
+  processIntradayNotes,
+  isLowInformationAutomaticMemoryQuery,
   detectToolCategories,
   readMemoryCategories,
   readMemorySnippets,
@@ -1577,6 +1585,12 @@ import {
   TOOL_TO_MEMORY_CATS,
   type SkillWindow,
 } from '../prompt-context';
+import { buildBrainCapsuleContextDetails } from '../brain/brain-continuity.js';
+import {
+  formatMemoryAtomReferenceContext,
+  formatMemoryAtomReferenceEntries,
+  retrieveMemoryAtoms,
+} from '../memory-index/memory-atoms.js';
 import { OllamaProcessManager } from '../ollama-process-manager';
 import { raceWithWatchdog, PreemptState } from '../scheduling/preempt-watchdog';
 import { detectGpu, logGpuStatus } from '../gpu-detector';
@@ -2388,14 +2402,15 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
-  try {
   const latencyStartAt = Date.now();
   const turnTiming = runtimeOptions?.timingRecorder || createTurnTimingRecorder(sessionId, {
     startedAt: latencyStartAt,
     phase: 'handle_chat',
   });
+  const toolPerformance = new ToolPerformanceTracker(turnTiming, abortSignal?.signal);
+  try {
   const htime = (label: string, extra: Record<string, unknown> = {}): number => turnTiming.mark(`handle.${label}`, extra);
   htime('entered');
   let firstProviderEventAt = 0;
@@ -2509,7 +2524,10 @@ async function handleChat(
       rawSendSSE('final_response_start', boundary);
       mirrorSessionChatEvent(sessionId, 'final_response_start', boundary, broadcastWS);
     }
-    rawSendSSE(event, data);
+    const trackedData = toolPerformance.decorate(event, data);
+    toolPerformance.markSse(event, trackedData, 'before');
+    rawSendSSE(event, trackedData);
+    toolPerformance.markSse(event, trackedData, 'after');
     mirrorSessionChatEvent(sessionId, event, data, broadcastWS);
     try { voiceNarrator?.observe(event, data); } catch (err: any) {
       console.warn('[voice narrator] failed:', err?.message || err);
@@ -2558,6 +2576,12 @@ async function handleChat(
       broadcastMainChatGoalState(sessionId, 'policy_denied', { goal: updated, denial: event.decision, toolName: event.toolName });
     },
     internalWatchContext: activeInternalWatchContext,
+    onPerformanceStage: (stage: string, fields: Record<string, number | string | boolean> = {}) => {
+      turnTiming.mark(`runtime.${stage}`, {
+        toolCallId: String(toolCallId || '').trim() || undefined,
+        ...fields,
+      });
+    },
   });
   const finalizeBoundTaskRun = (status: 'complete' | 'failed', summary: string) => {
     const binding = getTaskRunBinding(sessionId);
@@ -2600,6 +2624,11 @@ async function handleChat(
     && String(rawHistory[rawHistory.length - 1]?.content || '').replace(/\s+/g, ' ').trim() === normalizedIncomingMessage
       ? rawHistory.slice(0, -1)
       : rawHistory;
+  try {
+    getResourceStore(workspacePath).migrateLegacyHistory(sessionId, rawHistory as any);
+  } catch (error: any) {
+    console.warn('[Resources] Legacy session migration skipped:', redactResourceText(error?.message || error));
+  }
   if (!isSupervisionLoop) autoActivateToolCategories(sessionId, message, history.length);
   const stage4InstructionIntents = detectStage4InstructionIntents({
     message,
@@ -2623,9 +2652,13 @@ async function handleChat(
   const activeContextBudget = admittedRouteSnapshot?.contextBudget || buildContextBudget(activeContextProfile);
   const recentToolLogMaxChars = Math.max(1000, Math.min(2200, activeContextBudget.toolContextBudgetTokens * 2));
   htime('before getRecentToolObservationsForContext');
-  const recentToolLog = executionMode === 'cron' ? '' : getRecentToolObservationsForContext(sessionId, 3, recentToolLogMaxChars, true);
+  const recentToolLog = executionMode === 'cron' || isBootStartupTurn
+    ? ''
+    : getRecentToolObservationsForContext(sessionId, 3, recentToolLogMaxChars, true);
   htime('after getRecentToolObservationsForContext');
-  const workingContextBlock = executionMode === 'cron' ? '' : getWorkingContextForContext(sessionId, 9_000);
+  const workingContextBlock = executionMode === 'cron' || isBootStartupTurn
+    ? ''
+    : getWorkingContextForContext(sessionId, 9_000);
   const codingContextPacketDecision = selectCodingContextPacket({
     enabled: codingContextPacketEnabled,
     sessionId,
@@ -2761,10 +2794,34 @@ async function handleChat(
     if (currentModelCapabilities.hasVision) return toolDefs;
     return toolDefs.filter((t: any) => !isVisionToolName(String(t?.function?.name || '')));
   };
+  const builtToolSurfaceCache = new Map<string, any[]>();
   const buildCurrentTurnBaseTools = (categoryOverride?: Set<string>): any[] => {
-	    const allBuiltTools = categoryOverride
-        ? _buildTools({ getMCPManager }, categoryOverride)
-        : buildTools(sessionId);
+    if (isBootStartupTurn) {
+      turnTiming.mark('runtime.tool_surface_build_done', {
+        durationMs: 0,
+        cacheHit: true,
+        toolCount: 0,
+        categoryCount: 0,
+        skipped: true,
+        reason: 'boot_startup_no_tools',
+      });
+      return [];
+    }
+    const activeCategories = categoryOverride
+      ? [...categoryOverride].map(String).sort()
+      : [...getActivatedToolCategories(sessionId)].map(String).sort();
+    const cacheKey = `${categoryOverride ? 'override' : 'session'}:${activeCategories.join(',')}`;
+    const cacheHit = builtToolSurfaceCache.has(cacheKey);
+    const surfaceStartedAt = Date.now();
+    const allBuiltTools = builtToolSurfaceCache.get(cacheKey)
+      || (categoryOverride ? _buildTools({ getMCPManager }, categoryOverride) : buildTools(sessionId));
+    if (!cacheHit) builtToolSurfaceCache.set(cacheKey, allBuiltTools);
+	    turnTiming.mark('runtime.tool_surface_build_done', {
+      durationMs: Math.max(0, Date.now() - surfaceStartedAt),
+      cacheHit,
+      toolCount: allBuiltTools.length,
+      categoryCount: activeCategories.length,
+    });
 	    return isBootStartupTurn
 	      ? allBuiltTools.filter((t: any) => bootAllowedTools.has(String(t?.function?.name || '')))
 	      : isHotRestartTurn
@@ -2889,7 +2946,7 @@ async function handleChat(
     'read_file', 'read_files_batch', 'create_file', 'replace_lines', 'insert_after', 'delete_lines', 'find_replace', 'apply_patchset',
     'list_files', 'list_directory', 'mkdir', 'file_stats', 'validate_file', 'grep_file', 'grep_files', 'search_files',
     'write_note',
-    'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
+    'memory', 'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
     'task_control',
     'declare_plan', 'complete_plan_step', 'step_complete',
     'request_tool_category',
@@ -2904,6 +2961,7 @@ async function handleChat(
     ] : []),
   ]);
   const buildCurrentTurnTools = (categoryOverride?: Set<string>): any[] => {
+    if (isBootStartupTurn) return [];
     const baseTools = buildCurrentTurnBaseTools(categoryOverride);
     let currentTools = isProposalExecutionMode
       ? baseTools.filter((t: any) => {
@@ -2964,7 +3022,7 @@ async function handleChat(
     'delivery_send_screenshot',
     'connector_list',
     'business_context_mode',
-    'memory_search',
+    'memory', 'memory_search',
     'memory_read_record',
     'time_now',
   ]);
@@ -3289,6 +3347,10 @@ async function handleChat(
   const initialGenerationOverride = resolveProviderModelOverride();
   htime('after initial provider/model resolution');
   currentModelCapabilities = resolveCapabilitiesForGenerationOverride(initialGenerationOverride);
+  // Resolve this before the first system prompt is assembled. The provider
+  // loop reuses the same turn snapshot, so building the initial prompt without
+  // this block only causes a duplicate prompt assembly on round one.
+  currentModelSystemBlock = formatCurrentModelSystemBlock(initialGenerationOverride);
   htime('before initial tool build');
   sendSSE('ui_preflight', { message: 'Loading tool schemas...' });
   tools = capToolsForProvider(buildToolsForGeneration(initialGenerationOverride), initialGenerationOverride);
@@ -3444,7 +3506,7 @@ async function handleChat(
   const READ_ONLY_PROGRESS_TOOLS = new Set([
     'list_files', 'list_directory', 'read_file', 'read_files_batch', 'read_dev_sources', 'web_search', 'web_fetch',
     'browser_snapshot', 'browser_get_page_text', 'browser_get_focused_item',
-    'memory_browse', 'memory_read', 'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
+    'memory', 'memory_browse', 'memory_read', 'memory_search', 'memory_read_record', 'memory_search_project', 'memory_search_timeline', 'memory_get_related', 'memory_graph_snapshot',
     'skill_list', 'skill_read',
   ]);
 
@@ -3985,6 +4047,9 @@ async function handleChat(
 
   const executeToolWithTelemetry = async (toolName: string, toolArgs: any, toolCallId = ''): Promise<ToolResult> => {
     const startedAt = Date.now();
+    const performanceRecord = toolPerformance.find(toolCallId, undefined, toolName);
+    toolPerformance.dispatch(performanceRecord);
+    toolPerformance.executorStart(performanceRecord);
     const wrapperAction = String(toolArgs?.action || toolArgs?.operation || toolArgs?.mode || '').trim().toLowerCase();
     const isBackgroundSpawn = toolName === 'background_spawn'
       || (toolName === 'background_ops' && (wrapperAction === 'spawn' || wrapperAction === 'start'));
@@ -4048,6 +4113,8 @@ async function handleChat(
         attachUniversalToolTelemetry(toolResult, toolName, effectiveToolArgs, startedAt),
         { sessionId, toolName },
       );
+      toolPerformance.complete(performanceRecord, instrumentedResult.result, instrumentedResult.error);
+      const performanceTelemetry = toolPerformance.snapshot(performanceRecord);
       if (codingContextPacketEnabled) {
         observeCodingContext({
           sessionId,
@@ -4065,14 +4132,26 @@ async function handleChat(
           extra: instrumentedResult.extra,
         });
       }
-      return instrumentedResult;
+      return {
+        ...instrumentedResult,
+        extra: {
+          ...(instrumentedResult.extra || {}),
+          telemetry: {
+            ...(instrumentedResult.extra?.telemetry || {}),
+            ...performanceTelemetry,
+          },
+        },
+      };
     } catch (err: any) {
+      const failureText = `Tool execution failed: ${String(err?.message || err || 'Unknown error')}`;
+      toolPerformance.complete(performanceRecord, failureText, true);
       return makeInstrumentedToolResult(
         toolName,
         effectiveToolArgs,
-        `Tool execution failed: ${String(err?.message || err || 'Unknown error')}`,
+        failureText,
         true,
         startedAt,
+        { telemetry: toolPerformance.snapshot(performanceRecord) },
       );
     }
   };
@@ -4264,42 +4343,66 @@ async function handleChat(
 
   const teachModeActive = /\[TEACH_SESSION\]/i.test(String(callerContext || ''));
   const personalityProfile = isDirectSubagentChatTurn
-    ? { profile: 'direct_subagent' as const, excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents }
+    ? { profile: 'direct_subagent' as const, excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents, memoryMode: runtimeOptions?.promptMemoryMode }
     : teachModeActive
-      ? { profile: 'teach_mode' as const, excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents }
+      ? { profile: 'teach_mode' as const, excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents, memoryMode: runtimeOptions?.promptMemoryMode }
       : (isLocalPrimary
-        ? { profile: 'local_llm' as const, excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents }
-        : { excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents });
+        ? { profile: 'local_llm' as const, excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents, memoryMode: runtimeOptions?.promptMemoryMode }
+        : { excludedSkillIds, forcedSkillIds, instructionIntents: stage4InstructionIntents, memoryMode: runtimeOptions?.promptMemoryMode });
   htime('reached Building model context');
   sendSSE('ui_preflight', { message: 'Building model context...' });
   const contextBuildStartedAt = markLatency('context_build_start');
   const contextAdmissionStartedAt = Date.now();
   turnTiming.mark('context_queue_wait_start');
   let contextPermitAcquiredAt = contextAdmissionStartedAt;
-  const personalityCtx = await runWithContextBuildPermit(
-    sessionId,
-    () => {
-      contextPermitAcquiredAt = Date.now();
-      turnTiming.mark('context_queue_wait_done', {
-        durationMs: Math.max(0, contextPermitAcquiredAt - contextAdmissionStartedAt),
-      });
-      return buildPersonalityContext(
-        sessionId,
-        workspacePath,
-        message,
-        executionMode || 'interactive',
-        history.length,
-        _skillsManager,
-        // Component 5: inject browser_vision hint when vision mode is active for this session.
-        // browserVisionModeActive is declared higher in handleChat's closure scope.
-        browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
-        personalityProfile,
-        abortSignal?.signal,
-        turnTiming,
-      );
-    },
-    abortSignal?.signal,
-  );
+  let personalityCtx: string;
+  if (isBootStartupTurn) {
+    // BOOT already has a bounded, pre-fetched snapshot in callerContext. The
+    // normal interactive personality build would reread USER/SOUL/MEMORY,
+    // skills, brain context, and tool instructions for no benefit, adding
+    // latency and tens of thousands of input characters to a summary turn.
+    contextPermitAcquiredAt = Date.now();
+    turnTiming.mark('context_queue_wait_done', {
+      durationMs: 0,
+      skipped: true,
+      reason: 'boot_startup_fast_path',
+    });
+    personalityCtx = [
+      '[BOOT PERSONALITY CONTEXT]',
+      'Produce only the concise startup summary requested by the BOOT prompt.',
+      'Treat the caller-provided BOOT snapshot as authoritative; do not invent carryover or claim work that is not present there.',
+    ].join('\n');
+    turnTiming.mark('runtime.boot_fast_context_built', {
+      durationMs: Math.max(0, Date.now() - contextBuildStartedAt),
+      contextChars: personalityCtx.length,
+      skippedNormalContextBuild: true,
+    });
+  } else {
+    personalityCtx = await runWithContextBuildPermit(
+      sessionId,
+      () => {
+        contextPermitAcquiredAt = Date.now();
+        turnTiming.mark('context_queue_wait_done', {
+          durationMs: Math.max(0, contextPermitAcquiredAt - contextAdmissionStartedAt),
+        });
+        return buildPersonalityContext(
+          sessionId,
+          workspacePath,
+          message,
+          executionMode || 'interactive',
+          history.length,
+          _skillsManager,
+          // Component 5: inject browser_vision hint when vision mode is active for this session.
+          // browserVisionModeActive is declared higher in handleChat's closure scope.
+          browserVisionModeActive ? new Set(['browser_vision', 'browser']) : undefined,
+          personalityProfile,
+          abortSignal?.signal,
+          turnTiming,
+        );
+      },
+      abortSignal?.signal,
+    );
+  }
   htime('context_build_admitted', { waitMs: Math.max(0, contextPermitAcquiredAt - contextAdmissionStartedAt) });
   htime('after buildPersonalityContext');
   htime('personality_context_built', { contextChars: String(personalityCtx || '').length });
@@ -4323,6 +4426,84 @@ async function handleChat(
         browserInfo.mode ? ` Current browser control mode: ${browserInfo.mode}.` : ''
       }]${browserControlCtx ? `\n${browserControlCtx}` : ''}`
     : '';
+  if (executionMode === 'cron') {
+    const refreshStartedAt = Date.now();
+    try {
+      const scheduledResourceStore = getResourceStore(workspacePath);
+      const boundResources = scheduledResourceStore.listThreadResources(sessionId, { limit: 100 });
+      const refreshable = boundResources.filter((resource) => (
+        resource.locator.type === 'file' && !!resource.locator.path
+      ) || !!resource.locator.url).slice(0, 8);
+      for (const resource of refreshable) {
+        try {
+          if (resource.locator.type === 'file' && resource.locator.path) {
+            scheduledResourceStore.refreshFile(sessionId, resource.id, 'scheduler');
+            continue;
+          }
+          const url = String(resource.locator.url || '').trim();
+          if (!url) continue;
+          const fetched = await executeWebFetch({ url, max_chars: 12_000 });
+          const text = String(fetched.data?.preview || fetched.data?.text || fetched.stdout || '').trim();
+          if (!text) {
+            scheduledResourceStore.markStatus(resource.id, 'stale', 'scheduler', { error: fetched.error || 'Scheduled refresh returned no readable content.' });
+            continue;
+          }
+          scheduledResourceStore.attach({
+            threadId: sessionId,
+            kind: resource.kind,
+            title: String(fetched.data?.title || resource.title),
+            mimeType: String(fetched.data?.content_type || resource.mimeType || 'text/html'),
+            origin: resource.origin === 'browser_save' || resource.kind === 'browser_page' ? 'browser_save' : 'web_fetch',
+            locator: resource.locator,
+            content: text,
+            snapshotKind: 'text',
+            metadata: { ...(resource.metadata || {}), refreshedAt: new Date().toISOString(), refreshedBy: 'scheduler' },
+            actor: 'scheduler',
+          });
+        } catch (error: any) {
+          try { scheduledResourceStore.markStatus(resource.id, 'stale', 'scheduler', { error: redactResourceText(error?.message || String(error)) }); } catch {}
+        }
+      }
+      turnTiming.mark('scheduled_resources_refreshed', {
+        durationMs: Date.now() - refreshStartedAt,
+        attempted: refreshable.length,
+      });
+    } catch (error: any) {
+      console.warn('[Resources] Scheduled refresh skipped:', redactResourceText(error?.message || error));
+      turnTiming.mark('scheduled_resources_refresh_failed', { durationMs: Date.now() - refreshStartedAt });
+    }
+  }
+  // Persistent chat resources expose a bounded metadata manifest on every
+  // attached turn and load text only when it matches the current request or is
+  // explicitly pinned. The store is workspace-scoped so a session cannot
+  // retrieve a resource from another agent/workspace.
+  let resourceContext: ResourceContextResult = {
+    block: '',
+    resourceIds: [],
+    injectionDetected: false,
+    detectedResourceIds: [],
+    chars: 0,
+  };
+  try {
+    resourceContext = getResourceStore(workspacePath).getContext(sessionId, message, {
+      maxChars: 32_000,
+      includePinned: true,
+    });
+  } catch (error: any) {
+    console.warn('[Resources] Context retrieval skipped:', redactResourceText(error?.message || error));
+  }
+  const resourceContextBlock = resourceContext.block;
+  turnTiming.mark('resource_context_built', {
+    chars: resourceContext.chars,
+    selectedCount: resourceContext.resourceIds.length,
+    injectionDetected: resourceContext.injectionDetected,
+  });
+  if (resourceContext.injectionDetected) {
+    sendSSE('resource_safety', {
+      detectedResourceIds: resourceContext.detectedResourceIds,
+      message: 'Instruction-like text was detected in a selected attached resource and was isolated as external content.',
+    });
+  }
 
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -4418,6 +4599,14 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
   ].join('\n');
 
   const buildBaseSystemPrompt = (): string => {
+    if (isBootStartupTurn) {
+      return [
+        'You are Prom, a local AI assistant running inside Prometheus.',
+        'BOOT MODE: This is an internal daily startup summary, not an interactive user turn.',
+        'Use only the pre-fetched BOOT snapshot supplied by the caller as authoritative context.',
+        'Return exactly a brief, accurate 2-3 sentence startup summary. Do not infer missing events, claim work that is not in the snapshot, or call tools.',
+      ].join('\n');
+    }
     const visualGroundingPolicy = currentModelCapabilities.hasVision
       ? 'Visual-first policy: for browser/desktop workflows, ground decisions in fresh snapshots/screenshots when state likely changed, the UI is ambiguous, or a risky action just ran. Vision screenshots are the highest-confidence source of current UI truth on dynamic pages. If DOM refs, assumptions, or JS probes conflict with what the page is doing, trust fresh vision/snapshot evidence and re-anchor before acting. Prefer browser_snapshot/browser_vision_screenshot and desktop_screenshot over repeated browser_run_js probing. Use browser_run_js only when visual/snapshot evidence is insufficient for a concrete action.'
       : 'Text-first UI policy: the active model is not vision-capable. For browser/desktop workflows, ground decisions in browser_snapshot, browser_get_page_text, DOM/accessibility data, OCR/window text from desktop screenshots, metadata, and explicit tool outputs. Do not call browser_vision_screenshot, browser_vision_click, browser_vision_type, analyze_image, or analyze_video. Use browser_run_js only when text/snapshot evidence is insufficient for a concrete action.';
@@ -4464,26 +4653,52 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
       creativeBlock,
       planProtocolInstruction,
       `${responseStyleInstruction} Keep internal reasoning private. Be transparent about actions and results, and greet naturally without tools.`,
-      executionMode === 'interactive'
+      executionMode === 'interactive' && !isBootStartupTurn
         ? 'For tool-using work, keep the user oriented with brief visible work updates: state the approach before the first meaningful tool call; after important tool results, report what you found and what you will do next; and add another update when the approach changes, a blocker appears, or verification finishes. These updates are user-facing commentary, not private chain-of-thought. Make them concrete and evidence-based, avoid narrating every low-level call, and do not repeat information already obvious from the tool activity UI.'
+        : '',
+      isBootStartupTurn
+        ? 'BOOT MODE: This is an internal daily startup summary. Use only the pre-fetched BOOT snapshot supplied by the caller, do not infer missing events, and do not call tools.'
         : '',
     ].filter(Boolean);
     return baseParts.join('\n');
   };
+  let cachedFullSystemPromptKey = '';
+  let cachedFullSystemPrompt = '';
   const buildSystemPrompt = (mode: 'full' | 'switch_model'): string => {
-    const baseSystemPrompt = buildBaseSystemPrompt();
-    if (mode === 'switch_model') {
-      return assembleCacheAwareSystemPrompt({
-        stableParts: [baseSystemPrompt, currentModelSystemBlock],
-        personalityContext: switchModelPersonalityCtx || '',
-        volatileParts: [`Current date: ${dateStr}, ${timeStr}.`],
+    const promptStartedAt = Date.now();
+    const cacheKey = [
+      mode,
+      currentModelSystemBlock,
+      currentModelCapabilities.provider,
+      currentModelCapabilities.model,
+      currentModelCapabilities.source,
+      switchModelPersonalityCtx ? String(switchModelPersonalityCtx.length) : '0',
+      resourceContextBlock ? `${resourceContext.resourceIds.join(',')}:${resourceContextBlock.length}` : '0',
+    ].join('|');
+    const markSystemPromptBuilt = (value: string, cacheHit: boolean): string => {
+      turnTiming.mark('runtime.system_prompt_build_done', {
+        mode,
+        cacheHit,
+        durationMs: Math.max(0, Date.now() - promptStartedAt),
+        promptChars: value.length,
       });
+      return value;
+    };
+    if (mode === 'full' && cachedFullSystemPromptKey === cacheKey) return markSystemPromptBuilt(cachedFullSystemPrompt, true);
+    const baseSystemPrompt = buildBaseSystemPrompt();
+    const modelSystemBlock = isBootStartupTurn ? '' : currentModelSystemBlock;
+    if (mode === 'switch_model') {
+      return markSystemPromptBuilt(assembleCacheAwareSystemPrompt({
+        stableParts: [baseSystemPrompt, modelSystemBlock],
+        personalityContext: switchModelPersonalityCtx || '',
+        volatileParts: [`Current date: ${dateStr}, ${timeStr}.`, resourceContextBlock],
+      }), false);
     }
     if (executionMode === 'team_subagent' || executionMode === 'team_manager' || executionMode === 'background_agent' || isDirectSubagentChatTurn) {
       // Subagents receive subagent personality context first, then their role file
       // and task/chat context from callerContext as the final, most specific layer.
-      return assembleCacheAwareSystemPrompt({
-        stableParts: [baseSystemPrompt, currentModelSystemBlock],
+      const value = assembleCacheAwareSystemPrompt({
+        stableParts: [baseSystemPrompt, modelSystemBlock],
         personalityContext: personalityCtx,
         volatileBeforePersonality: [
           `Current date: ${dateStr}, ${timeStr}.`,
@@ -4492,27 +4707,39 @@ const creativeRoutingInstruction = 'Creative routing: Creative is a normal main-
           codingContextPacketDecision.block,
         ],
         volatileAfterPersonality: [
+          resourceContextBlock,
           callerContext,
           browserStateCtx,
         ],
       });
+      if (mode === 'full') {
+        cachedFullSystemPromptKey = cacheKey;
+        cachedFullSystemPrompt = value;
+      }
+      return markSystemPromptBuilt(value, false);
     }
     const onboardingBlock = isOnboardingSession(sessionId) ? '\n\n' + getMeetAndGreetSystemPrompt() : '';
-    return assembleCacheAwareSystemPrompt({
-      stableParts: [baseSystemPrompt, currentModelSystemBlock],
+    const value = assembleCacheAwareSystemPrompt({
+      stableParts: [baseSystemPrompt, modelSystemBlock],
       personalityContext: personalityCtx,
       volatileBeforePersonality: [
         `Current date: ${dateStr}, ${timeStr}.`,
         workingContextBlock,
         recentToolLog,
         codingContextPacketDecision.block,
-        callerContext,
-        browserStateCtx,
       ],
       volatileAfterPersonality: [
+        callerContext,
+        browserStateCtx,
+        resourceContextBlock,
         onboardingBlock,
       ],
     });
+    if (mode === 'full') {
+      cachedFullSystemPromptKey = cacheKey;
+      cachedFullSystemPrompt = value;
+    }
+    return markSystemPromptBuilt(value, false);
   };
   const messages: any[] = [
     {
@@ -4954,6 +5181,10 @@ Do not produce prose. Use the canonical thread tool now.` });
     toolResult: ToolResult,
     preContext: PreActionObservationContext,
   ): Promise<AppliedObservationContext> => {
+    const observationStartedAt = Date.now();
+    turnTiming.mark('runtime.post_action_observation_start', {
+      toolName: String(toolName || '').trim(),
+    });
     const executedToolName = String(toolResult?.name || toolName || '').trim() || toolName;
     const executedToolArgs = toolResult?.args && typeof toolResult.args === 'object'
       ? toolResult.args
@@ -4983,12 +5214,19 @@ Do not produce prose. Use the canonical thread tool now.` });
 
     await appendObservationArtifacts(executedToolName, executedToolArgs, toolResult, decision);
 
+    const isDoctorHealthCheck = executedToolName === 'desktop_doctor'
+      || (executedToolName === 'desktop_screen' && String(executedToolArgs?.action || '').trim().toLowerCase() === 'doctor');
     if (
       isDesktopToolName(executedToolName)
       && !isDesktopVisualToolName(executedToolName, executedToolArgs)
+      && !isDoctorHealthCheck
       && decision.mode === 'screenshot'
     ) {
       try {
+        const autoScreenshotStartedAt = Date.now();
+        turnTiming.mark('runtime.desktop_auto_screenshot_start', {
+          toolName: executedToolName,
+        });
         await desktopWait(350);
         const autoToolName: 'desktop_screenshot' = 'desktop_screenshot';
         const activeMonitorIndex = await desktopGetActiveMonitorIndex();
@@ -5029,10 +5267,27 @@ Do not produce prose. Use the canonical thread tool now.` });
           advisorTriggerToolArgs = autoToolArgs;
           advisorTriggerToolResult = syntheticResult;
         }
+        turnTiming.mark('runtime.desktop_auto_screenshot_done', {
+          toolName: executedToolName,
+          durationMs: Math.max(0, Date.now() - autoScreenshotStartedAt),
+          error: syntheticResult.error === true,
+        });
       } catch {
+        turnTiming.mark('runtime.desktop_auto_screenshot_done', {
+          toolName: executedToolName,
+          durationMs: Math.max(0, Date.now() - observationStartedAt),
+          error: true,
+        });
         // Non-fatal: continue without synthetic screenshot.
       }
     }
+
+    turnTiming.mark('runtime.post_action_observation_done', {
+      toolName: executedToolName,
+      durationMs: Math.max(0, Date.now() - observationStartedAt),
+      mode: decision.mode,
+      doctorHealthCheck: isDoctorHealthCheck,
+    });
 
     return {
       decision,
@@ -6532,6 +6787,7 @@ RULES:
           noteProviderPassEvent('assistant_delta');
           if (!providerPassFirstVisibleTokenAt) providerPassFirstVisibleTokenAt = Date.now();
           if (!firstVisibleTokenAt) {
+            toolPerformance.nextVisibleToken();
             const providerTtftMs = providerRequestStartedAt && providerPassFirstVisibleTokenAt
               ? Math.max(0, providerPassFirstVisibleTokenAt - providerRequestStartedAt)
               : undefined;
@@ -6661,6 +6917,7 @@ RULES:
       }
       providerPassFirstEventAt = 0;
       providerPassFirstVisibleTokenAt = 0;
+      toolPerformance.beforeModelRound();
       providerRequestStartedAt = markLatency('provider_request_start', {
         provider: generationOverride.providerId,
         model: generationOverride.model,
@@ -6685,11 +6942,19 @@ RULES:
 	        onThinking: (chunk: string) => emitThinkingToken(chunk, 'thinking'),
 	        onReasoningSummary: (chunk: string) => emitThinkingToken(chunk, 'reasoning_summary'),
 	        onModelEvent: emitModelStreamEvent,
+        onWorkerStage: (stage: string, fields?: Record<string, number | string | boolean>) => {
+          turnTiming.mark(`model_worker_${stage}`, {
+            provider: generationOverride.providerId,
+            model: generationOverride.model,
+            ...fields,
+          });
+        },
 	        abortSignal: abortSignal?.signal,
 	        usageContext: {
-            sessionId,
-            agentId: 'main',
-            promptManifest: {
+          sessionId,
+          agentId: 'main',
+          traceId: turnTiming.turnId,
+          promptManifest: {
               executionMode: executionMode || 'interactive',
               personalityProfile: String((personalityProfile as any)?.profile || 'default'),
               surface: isTelegramSessionForTools ? 'telegram' : (voiceAgentHandoffActive ? 'voice_handoff' : 'chat'),
@@ -7675,6 +7940,31 @@ RULES:
 
       const finalTextWithSkillOffer = finalizeSkillGardenerForTurn(finalText);
       finalizeBoundTaskRun(/^\s*ERROR:/i.test(finalTextWithSkillOffer) ? 'failed' : 'complete', finalTextWithSkillOffer);
+      const resourceOutputStartedAt = Date.now();
+      try {
+        const resourceStore = getResourceStore(workspacePath);
+        const outputResources = [
+          ...(finalArtifacts as any[]),
+          ...(finalRichArtifacts as any[]).map((artifact: any) => ({
+            ...artifact,
+            id: artifact?.id || artifact?.artifactId,
+            title: artifact?.title || `${artifact?.type || 'Rich'} artifact`,
+          })),
+          ...(finalGeneratedImages as any[]),
+          ...(finalGeneratedVideos as any[]),
+          ...(finalCanvasFiles as any[]),
+        ];
+        for (const output of outputResources.slice(0, 80)) {
+          if (output && typeof output === 'object') resourceStore.registerArtifact(sessionId, output, 'assistant');
+        }
+        turnTiming.mark('chat_resources_outputs_registered', {
+          durationMs: Date.now() - resourceOutputStartedAt,
+          count: Math.min(outputResources.length, 80),
+        });
+      } catch (error: any) {
+        turnTiming.mark('chat_resources_outputs_failed', { durationMs: Date.now() - resourceOutputStartedAt });
+        console.warn('[Resources] Turn output registration skipped:', redactResourceText(error?.message || error));
+      }
       return {
         type: allToolResults.length > 0 ? 'execute' : 'chat',
         text: finalTextWithSkillOffer,
@@ -7701,6 +7991,7 @@ RULES:
       const toolCallId = String((call as any)?.id || '').trim();
       const toolName = call.function?.name || 'unknown';
       const toolArgs = normalizeToolArgsForTool(toolName, call.function?.arguments);
+      toolPerformance.start(toolName, toolCallId, round);
 
       if (toolName === 'desktop_click') {
         const hasFiniteX = Number.isFinite(Number(toolArgs?.x));
@@ -9037,6 +9328,10 @@ RULES:
     toolResults: allToolResults,
   };
   } finally {
+    // Close any in-flight tool records at the same terminal boundary as the
+    // model turn. This distinguishes an aborted/abandoned tool from a normal
+    // completion without changing tool execution semantics.
+    toolPerformance.closeUnfinished();
     // switch_model overrides are strictly turn-scoped; always clear on turn end.
     // If a turn override was active, notify the UI so it can revert the model badge.
     const hadTurnOverride = getTurnModelOverride(sessionId);
@@ -9058,6 +9353,11 @@ RULES:
         // Non-critical — badge will refresh on next navigation or badge click.
       }
     }
+    // A background desktop target is leased for the whole turn so multiple
+    // desktop commands reuse it. Mark the session complete only after the
+    // turn's tool/stream boundary has closed; the manager then stops owned
+    // targets immediately unless warm mode was explicitly enabled.
+    try { desktopBackgroundReleaseSession(sessionId); } catch { /* cleanup is best effort */ }
   }
 }
 // Wire chat-helpers and task-router deps moved into initChatRouter() (B6)
@@ -9559,7 +9859,7 @@ async function runInteractiveTurn(
 	  attachments?: Array<{ base64: string; mimeType: string; name: string }>,
     attachmentPreviews?: any[],
     modelOverride?: string,
-    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string },
+    flags?: { syntheticGoalContinuation?: boolean; syntheticSubagentCompletion?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; syntheticInternalWatch?: boolean; syntheticRestartRecovery?: boolean; internalWatchContextInstalled?: boolean; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' }; directSubagentChat?: boolean; excludedSkillIds?: string[]; forcedSkillIds?: string[]; toolFilter?: string[]; timingRecorder?: TurnTimingRecorder; preAcquiredTurnLease?: SessionTurnLease; runtimeId?: string; promptMemoryMode?: 'full' | 'compact' },
     turnOriginInput?: TurnOrigin,
     requestMeta?: { clientRequestId?: string },
     /** Optional token-stream sink forwarded to handleChat (see callerOnToken there). */
@@ -9706,6 +10006,39 @@ async function runInteractiveTurn(
     ...(isGoalContinuationTurn ? { channel: 'system' as const, channelLabel: 'goal' } : {}),
     ...(Array.isArray(attachmentPreviews) && attachmentPreviews.length ? { attachmentPreviews } : {}),
   };
+  // Persist user-provided URLs and uploads before prompt construction. The
+  // operation is idempotent, stores immutable snapshots separately from the
+  // transcript, and never places raw base64 bytes in session history.
+  if (turnOrigin.channel !== 'system' && !isSyntheticInternalWatch && !isSyntheticRestartRecovery) {
+    const resourceAttachStartedAt = Date.now();
+    try {
+      const resourceResult = await autoAttachChatInputResources({
+        threadId: sessionId,
+        message,
+        workspacePath: getWorkspace(sessionId) || getConfig().getWorkspacePath(),
+        attachments: Array.isArray(attachments) ? attachments as any[] : [],
+        attachmentPreviews: Array.isArray(attachmentPreviews) ? attachmentPreviews as any[] : [],
+        actor: 'user',
+        fetchUrl: async (url) => executeWebFetch({ url, max_chars: 12_000 }),
+      });
+      const attachedCount = resourceResult.attached.length + resourceResult.fetched.length;
+      turnTiming.mark('chat_resources_attached', {
+        durationMs: Date.now() - resourceAttachStartedAt,
+        attachedCount,
+        fetchedCount: resourceResult.fetched.length,
+      });
+      if (attachedCount > 0) {
+        sendSSE('resource_attached', {
+          count: attachedCount,
+          fetchedCount: resourceResult.fetched.length,
+          resources: [...resourceResult.attached, ...resourceResult.fetched].slice(0, 20),
+        });
+      }
+    } catch (error: any) {
+      turnTiming.mark('chat_resources_attach_failed', { durationMs: Date.now() - resourceAttachStartedAt });
+      console.warn('[Resources] Chat input attachment maintenance skipped:', redactResourceText(error?.message || error));
+    }
+  }
   const persistEarlyAbortPacket = (reason: string): void => {
     if (!abortSignal?.aborted) return;
     try {
@@ -10001,9 +10334,9 @@ async function runInteractiveTurn(
 	    pins.length > 0 ? pins : undefined,
 	    abortSignal,
 	    mergedCallerContext,
-	    modelOverride,
-	    undefined,
-	    undefined,
+    modelOverride,
+    undefined,
+    Array.isArray(flags?.toolFilter) && flags.toolFilter.length ? flags.toolFilter : undefined,
 	    Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
 	    reasoningOptions,
 	    undefined, // providerOverride
@@ -10021,6 +10354,7 @@ async function runInteractiveTurn(
         instructionCallerRequirements: callerContext ? [callerContext] : [],
         timingRecorder: turnTiming,
         turnRouteSnapshot,
+        promptMemoryMode: flags?.promptMemoryMode,
       },
   ));
   turnTiming.mark('handle_chat_done');
@@ -11010,6 +11344,7 @@ router.get('/api/status', async (_req, res) => {
   const providerChecking = !isCloudProvider && !cachedProviderStatus && isProviderStatusChecking();
   const providerCfg = rawCfg.llm?.providers?.[provider] || {};
   const activeModel: string = providerCfg.model || rawCfg.models?.primary || 'unknown';
+  const workspacePath = String(rawCfg.workspace?.path || getConfig().getWorkspacePath() || '').trim();
   const orchCfg = getOrchestrationConfig();
   res.json({
 	    status: 'ok', version: 'v2-tools', ollama: connected, providerOnline: connected, providerChecking,
@@ -11017,6 +11352,10 @@ router.get('/api/status', async (_req, res) => {
     currentModel: activeModel,
     workspace: (getConfig().getConfig() as any).workspace?.path || '',
     search: rawCfg.search?.tinyfish_api_key ? 'tinyfish' : rawCfg.search?.google_api_key ? 'google' : (rawCfg.search?.tavily_api_key ? 'tavily' : 'none'),
+    memory: {
+      searchWorker: getMemorySearchWorkerStatus(),
+      refreshWorker: getMemoryIndexRefreshWorkerStatus(),
+    },
     orchestration: orchCfg ? {
       enabled: orchCfg.enabled,
       secondary: orchCfg.secondary,
@@ -12933,7 +13272,7 @@ function buildVoiceThreadOpsDefinition(): any {
     function: {
       ...canonical.function,
       name: 'voice_thread_ops',
-      description: 'Voice-native control plane for first-class Prometheus chat threads. For creation choose launch_mode ping (notify when the detached turn completes), forget (no completion notification), or supervise (hidden persistent review loop with terminal verification); action aliases create_and_ping/create_and_forget/create_and_supervise are also valid. Voice remains the user-facing coordinator; threads perform independent or blocking mechanics. Creation only confirms acceptance/queueing, never a target reply, completion, or verification. This is the only Voice delegation path: never create a voice worker group or background task group.',
+      description: 'Voice-native control plane for first-class Prometheus chat threads. List/find/search include active and settled chats by default and mark settled results; use state=active or state=settled to narrow results, and action=reopen (open/unsettle aliases) to return a settled chat to the active view without changing its history. For creation choose launch_mode ping (notify when the detached turn completes), forget (no completion notification), or supervise (hidden persistent review loop with terminal verification); action aliases create_and_ping/create_and_forget/create_and_supervise are also valid. Voice remains the user-facing coordinator; threads perform independent or blocking mechanics. Creation only confirms acceptance/queueing, never a target reply, completion, or verification. This is the only Voice delegation path: never create a voice worker group or background task group.',
     },
   };
 }
@@ -14407,6 +14746,7 @@ function summarizeVoiceThreadOperation(action: string, output: Record<string, an
     case 'review_decision': return `Recorded the supervision decision: ${String(output?.supervision?.lastDecision || 'updated')}.`;
     case 'read': return `Loaded thread${target}.`;
     case 'status': return `Loaded thread status${target}.`;
+    case 'reopen': case 'open': case 'unsettle': return `Reopened the thread${target}.`;
     case 'list': return `Found ${Array.isArray(output?.sessions) ? output.sessions.length : 0} threads.`;
     case 'find': case 'search': return `Found ${Array.isArray(output?.sessions) ? output.sessions.length : 0} matching threads.`;
     case 'supervisions': case 'followed': return `Loaded ${Array.isArray(output?.supervisions) ? output.supervisions.length : 0} supervision records.`;
@@ -14457,6 +14797,23 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
   try {
     if (VOICE_SHOW_ARTIFACT_TOOLS.has(name)) {
       const built = await buildVoiceShowArtifact(name, args || {});
+      const artifact = built.artifact as Record<string, any> | undefined;
+      if (built.ok && artifact) {
+        const linkItems = [artifact.items, artifact.products, artifact.links, artifact.sources]
+          .filter(Array.isArray)
+          .flat()
+          .filter((item: any) => item && typeof item === 'object' && /^https?:\/\//i.test(String(item.url || item.link || item.href || '').trim()));
+        if (linkItems.length) {
+          try {
+            getResourceStore(workspacePath).registerSourceItems(sessionId, linkItems, {
+              actor: `voice_${name}`,
+              origin: name === 'show_sources' ? 'tool_observation' : 'assistant_artifact',
+            });
+          } catch (error: any) {
+            console.warn('[Resources] Voice card source registration skipped:', redactResourceText(error?.message || error));
+          }
+        }
+      }
       return voiceToolResult(built.ok, built.summary, built.artifact ? { richArtifacts: [built.artifact] } : {});
     }
     if (name === 'voice_web_search') {
@@ -14480,6 +14837,16 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         ...(args.fetch_max_chars != null ? { fetch_max_chars: Number(args.fetch_max_chars) } : {}),
         ...(args.provider_timeout_ms != null ? { provider_timeout_ms: Number(args.provider_timeout_ms) } : {}),
       });
+      if (result.success !== false) {
+        const rows = Array.isArray(result.data?.results) ? result.data.results
+          : Array.isArray(result.data?.items) ? result.data.items
+            : [];
+        try {
+          getResourceStore(workspacePath).registerSourceItems(sessionId, rows, { actor: 'voice_web_search', origin: 'web_fetch' });
+        } catch (error: any) {
+          console.warn('[Resources] Voice search source registration skipped:', redactResourceText(error?.message || error));
+        }
+      }
       return voiceToolResult(result.success !== false, result.success === false ? (result.error || 'Search failed.') : 'Search complete.', summarizeVoiceSearchResult(result));
     }
     if (name === 'voice_web_fetch') {
@@ -14489,6 +14856,19 @@ async function executeVoiceAgentTool(sessionId: string, name: string, args: Reco
         return voiceToolResult(false, 'This URL needs Worker handling because it is social/video/media-heavy or may need browser/media analysis.', { escalateToWorker: true, url });
       }
       const result = await executeWebFetch({ url, max_chars: Math.min(6000, Math.max(1200, Number(args.max_chars || 4000) || 4000)) });
+      if (result.success !== false) {
+        try {
+          getResourceStore(workspacePath).registerSourceItems(sessionId, [{
+            url: result.data?.final_url || result.data?.url || url,
+            title: result.data?.title || url,
+            text: result.stdout || '',
+            mimeType: result.data?.mime_type || result.data?.content_type || 'text/html',
+            fetched: true,
+          }], { actor: 'voice_web_fetch', origin: 'web_fetch', fetched: true });
+        } catch (error: any) {
+          console.warn('[Resources] Voice fetch source registration skipped:', redactResourceText(error?.message || error));
+        }
+      }
       const text = compactVoiceText(result?.stdout || result?.error || '', 2400);
       return voiceToolResult(result.success !== false, result.success === false ? (result.error || 'Fetch failed.') : 'Fetch complete.', { text, url });
     }
@@ -15861,7 +16241,7 @@ function buildVoiceAgentSystemPrompt(contextBlock: string, contextPacket: Record
     '- no_reply: use only when the transcript is empty, duplicate, or just says continue/resume without needing speech.',
     '',
     'Voice tool rules:',
-    '- voice_thread_ops: the full Prometheus thread control plane. Use it to find, read, create, model-route, message, steer, interrupt, rename, pin, and supervise threads. For several genuinely independent work items use create_many; do not create a voice worker group. A thread created without model fields follows the current Main Chat route dynamically. Create returns a queued launch, never a reply; wait for completion evidence before describing its outcome.',
+    '- voice_thread_ops: the full Prometheus thread control plane. Use list/find/search to discover active and settled threads (settled results are marked; pass state=active or state=settled to narrow), action=reopen (open/unsettle aliases) to return a settled thread to the active view without changing history, and read/create/model-route/message/steer/interrupt/rename/pin/supervise for the remaining lifecycle work. For several genuinely independent work items use create_many; do not create a voice worker group. A thread created without model fields follows the current Main Chat route dynamically. Create returns a queued launch, never a reply; wait for completion evidence before describing its outcome.',
     '- voice_ops: quick operations plus legacy task discovery/control, task watches, and standalone-agent control. It is not the Voice delegation path.',
     '- Quiet-mode intent must be a real instruction. Do not call quiet tools for mentions, examples, debugging, or questions about the words "quiet" or "Prometheus".',
     '- When a quiet tool succeeds, give one natural acknowledgement in spokenReply. The runtime will activate quiet mode after the acknowledgement finishes.',
@@ -16547,6 +16927,90 @@ function getLastUserContextText(sessionId: string): string {
   return '';
 }
 
+function isBrainMemoryContextSession(sessionId: string): boolean {
+  return /^(?:brain_|auto_brain_)/i.test(String(sessionId || ''));
+}
+
+function resolveContextWindowMemoryMode(sessionId: string): 'full' | 'compact' | 'atoms' {
+  if (isBrainMemoryContextSession(sessionId)) return 'full';
+  const configured = String(process.env.PROMETHEUS_MEMORY_PROMPT_MODE || '').trim().toLowerCase();
+  if (configured === 'full' || configured === 'compact') return configured;
+  return 'atoms';
+}
+
+function buildContextWindowMemoryAtomEstimate(
+  workspacePath: string,
+  messageText: string,
+  projectContext: string,
+  profile: { tokenizer: any },
+): {
+  text: string;
+  tokens: number;
+  selectedCount: number;
+  directCount: number;
+  relatedCount: number;
+  directTokens: number;
+  relatedTokens: number;
+  metadataTokens: number;
+} {
+  const empty = {
+    text: '',
+    tokens: 0,
+    selectedCount: 0,
+    directCount: 0,
+    relatedCount: 0,
+    directTokens: 0,
+    relatedTokens: 0,
+    metadataTokens: 0,
+  };
+  if (isLowInformationAutomaticMemoryQuery(String(messageText || ''))) return empty;
+  const result = retrieveMemoryAtoms(workspacePath, messageText, { additionalContext: projectContext });
+  if (!result.selected.length) return empty;
+  const text = formatMemoryAtomReferenceContext(result);
+  const selectedDirect = result.selected.filter((match) => match.relation === 'direct');
+  const selectedRelated = result.selected.filter((match) => match.relation === 'related');
+  const directText = formatMemoryAtomReferenceEntries(selectedDirect);
+  const relatedText = formatMemoryAtomReferenceEntries(selectedRelated);
+  const sharedHeader = [
+    '[MEMORY_REFERENCE]',
+    'Selected durable memory atoms from workspace/MEMORY.md. Preserve the cited meaning and prefer a directly matching atom over a weak association. The source file remains authoritative; use memory_read when the user asks for the complete file or exact historical evidence.',
+    `atom_count=${result.selected.length} | source_atoms=${result.stats.atomCount}`,
+  ].join('\n');
+  const directTokens = selectedDirect.length
+    ? estimateTextTokensForModel(`${sharedHeader}\n${directText}`, profile.tokenizer)
+    : 0;
+  const relatedTokens = selectedRelated.length
+    ? estimateTextTokensForModel(relatedText, profile.tokenizer)
+    : 0;
+  const tokens = estimateTextTokensForModel(text, profile.tokenizer);
+  return {
+    text,
+    tokens,
+    selectedCount: result.selected.length,
+    directCount: selectedDirect.length,
+    relatedCount: selectedRelated.length,
+    directTokens,
+    relatedTokens,
+    metadataTokens: Math.max(0, tokens - directTokens - relatedTokens),
+  };
+}
+
+function buildContextWindowThoughtPacketEstimate(
+  workspacePath: string,
+  messageText: string,
+  profile: { tokenizer: any },
+) {
+  const details = buildBrainCapsuleContextDetails(workspacePath, messageText);
+  const tokens = estimateTextTokensForModel(details.text, profile.tokenizer);
+  return {
+    text: details.text,
+    tokens,
+    selectedCount: details.selected.length,
+    relatedCount: details.relatedCount,
+    fallbackCount: details.fallbackCount,
+  };
+}
+
 function buildSystemPromptChildren(totalTokens: number, sessionId: string, profile: { tokenizer: any }): ContextWindowRow[] {
   const rows: ContextWindowRow[] = [];
   const addText = (id: string, label: string, text: string, estimated = false) => {
@@ -16567,9 +17031,11 @@ function buildSystemPromptChildren(totalTokens: number, sessionId: string, profi
     const workspacePath = getConfig().getWorkspacePath();
     const activeCategories = getActivatedToolCategories(sessionId);
     const today = new Date().toISOString().split('T')[0];
-    const intraday = loadWorkspaceFile(workspacePath, path.join('memory', `${today}-intraday-notes.md`), 1800);
+    const intradayRaw = loadWorkspaceFile(workspacePath, path.join('memory', `${today}-intraday-notes.md`), 32_000);
+    const intraday = processIntradayNotes(intradayRaw);
     const business = isBusinessContextEnabled(sessionId) ? loadWorkspaceFile(workspacePath, 'BUSINESS.md', 4000) : '';
-    const cisContext = buildCisContextBlock(workspacePath, getLastUserContextText(sessionId), { force: isBusinessContextEnabled(sessionId) });
+    const lastUserText = getLastUserContextText(sessionId);
+    const cisContext = buildCisContextBlock(workspacePath, lastUserText, { force: isBusinessContextEnabled(sessionId) });
     const projectContext = findProjectBySessionId(sessionId) ? (buildProjectContextBlock(sessionId) || '') : '';
     const toolsBlock = buildToolsContext(activeCategories);
     const baseToolsBlock = buildToolsContext(new Set<string>());
@@ -16593,12 +17059,80 @@ function buildSystemPromptChildren(totalTokens: number, sessionId: string, profi
     addText('prometheus_soul', '[PROMETHEUS_SOUL]', loadSoul());
     addText('user', '[USER]', loadWorkspaceFile(workspacePath, 'USER.md', 5000));
     addText('soul', '[SOUL]', loadWorkspaceFile(workspacePath, 'SOUL.md', 6000));
-    addText('memory', '[MEMORY]', loadWorkspaceFile(workspacePath, 'MEMORY.md', 8000));
+    const memoryMode = resolveContextWindowMemoryMode(sessionId);
+    if (memoryMode === 'full' || memoryMode === 'compact') {
+      addText(
+        'memory',
+        memoryMode === 'full' ? '[MEMORY]' : '[MEMORY] (compact)',
+        loadFullMemoryProfile(workspacePath, 'MEMORY.md', memoryMode === 'compact' ? 8000 : undefined),
+      );
+    } else {
+      const atomEstimate = buildContextWindowMemoryAtomEstimate(workspacePath, lastUserText, projectContext, profile);
+      const atomLabel = atomEstimate.selectedCount > 0
+        ? `Atomic memories (${atomEstimate.directCount} direct · ${atomEstimate.relatedCount} related)`
+        : 'Atomic memories (none)';
+      const atomChildren = atomEstimate.selectedCount > 0
+        ? [
+          {
+            id: 'system_prompt.atomic_memory.direct',
+            label: `Direct atoms (${atomEstimate.directCount})`,
+            tokens: atomEstimate.directTokens,
+            active: atomEstimate.directTokens > 0,
+            includedInContext: true,
+            percentBasis: 'window',
+            estimated: true,
+          },
+          {
+            id: 'system_prompt.atomic_memory.related',
+            label: `Related atoms (${atomEstimate.relatedCount})`,
+            tokens: atomEstimate.relatedTokens,
+            active: atomEstimate.relatedTokens > 0,
+            includedInContext: true,
+            percentBasis: 'window',
+            estimated: true,
+          },
+          ...(atomEstimate.metadataTokens > 0
+            ? [{
+              id: 'system_prompt.atomic_memory.reference_metadata',
+              label: 'Reference metadata',
+              tokens: atomEstimate.metadataTokens,
+              active: true,
+              includedInContext: true,
+              percentBasis: 'window',
+              estimated: true,
+            }]
+            : []),
+        ]
+        : undefined;
+      rows.push({
+        id: 'system_prompt.atomic_memory',
+        label: atomLabel,
+        tokens: atomEstimate.tokens,
+        active: atomEstimate.tokens > 0,
+        includedInContext: atomEstimate.tokens > 0,
+        percentBasis: 'window',
+        estimated: true,
+        ...(atomChildren ? { children: atomChildren } : {}),
+      });
+    }
     addText('business', '[BUSINESS]', business);
     addText('cis_context', '[CIS_CONTEXT]', cisContext, true);
     addText('subagents', '[SUBAGENTS]', buildContextWindowSubagentsRosterEstimate(), true);
     addText('project_context', '[PROJECT_CONTEXT]', projectContext);
     addText('today_notes', '[TODAY_NOTES]', intraday);
+    const thoughtEstimate = buildContextWindowThoughtPacketEstimate(workspacePath, lastUserText, profile);
+    const thoughtLabel = thoughtEstimate.selectedCount > 0
+      ? `Thought context packets (${thoughtEstimate.relatedCount} related${thoughtEstimate.fallbackCount ? ` · ${thoughtEstimate.fallbackCount} fallback` : ''})`
+      : 'Thought context packets (none)';
+    rows.push({
+      id: 'system_prompt.thought_context_packets',
+      label: thoughtLabel,
+      tokens: thoughtEstimate.tokens,
+      active: thoughtEstimate.tokens > 0,
+      includedInContext: thoughtEstimate.tokens > 0,
+      percentBasis: 'window',
+      estimated: true,
+    });
     addText('tools_menu', '[TOOLS] menu', toolsMenu, true);
     addText('activated_tool_blocks', 'Activated TOOL_BLOCKS.*', activeToolBlocks, true);
     addText('skills_hint', 'Skills hint / matching skills', skillsHint, true);
@@ -16729,11 +17263,12 @@ function buildLastTurnUsageRow(turnTelemetry: any): ContextWindowRow | null {
   };
 }
 
-function buildContextWindowCurrentState(input: {
+export function buildContextWindowCurrentState(input: {
   sessionId: string;
   profile: { contextWindowTokens: number; tokenizer: any };
   currentInputTokens: number;
   messageTokens: number;
+  historyMessages: number;
   recentToolTokens: number;
   inputBudgetTokens: number;
   compactionTriggerTokens: number;
@@ -16742,31 +17277,49 @@ function buildContextWindowCurrentState(input: {
   turnTelemetry?: any;
 }) {
   const lastCall = input.modelUsage?.lastContextCall || input.modelUsage?.lastCall || {};
-  const latestMessageInputTokens = Math.max(0, Number(lastCall.estimatedMessageInputTokens || 0));
-  const latestSystemPromptTokens = Math.max(0, Number(lastCall.estimatedSystemPromptTokens || 0));
+  // A newly-created web/mobile draft can have no current history but still
+  // share a session/model telemetry cache with the previous visible chat.
+  // Recorded prompt numbers are only authoritative once this session has
+  // current messages; otherwise they make the popover open with stale totals.
+  const hasCurrentHistory = Math.max(0, Number(input.historyMessages || 0)) > 0;
+  const latestMessageInputTokens = hasCurrentHistory
+    ? Math.max(0, Number(lastCall.estimatedMessageInputTokens || 0))
+    : 0;
+  const latestSystemPromptTokens = hasCurrentHistory
+    ? Math.max(0, Number(lastCall.estimatedSystemPromptTokens || 0))
+    : 0;
+  const recordedToolSchemaTokens = hasCurrentHistory
+    ? Math.max(0, Number(lastCall.estimatedToolSchemaTokens || 0))
+    : 0;
   const latestToolSchemaTokens = Math.max(
     0,
-    Number(lastCall.estimatedToolSchemaTokens || 0) || estimateCurrentSystemToolSchemaTokens(input.sessionId, input.profile),
+    recordedToolSchemaTokens || estimateCurrentSystemToolSchemaTokens(input.sessionId, input.profile),
   );
-  const latestProviderInputTokens = Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0));
+  const latestProviderInputTokens = hasCurrentHistory
+    ? Math.max(0, Number(lastCall.estimatedProviderInputTokens || 0))
+    : 0;
   const activeSkillEstimate = buildActiveSkillsContextEstimate(input.sessionId, input.profile);
   const activeSkillTokens = activeSkillEstimate.tokens;
-  const legacySystemPromptEstimate = Math.max(0, latestMessageInputTokens - input.currentInputTokens - activeSkillTokens);
+  const legacySystemPromptEstimate = hasCurrentHistory
+    ? Math.max(0, latestMessageInputTokens - input.currentInputTokens - activeSkillTokens)
+    : 0;
   const systemPromptTokens = latestSystemPromptTokens > 0
     ? Math.max(0, latestSystemPromptTokens - activeSkillTokens)
     : (legacySystemPromptEstimate || estimateCurrentSystemPromptTokens(input.sessionId, input.profile));
-  const storedMessageTokens = Math.max(0, Number(input.storedThread?.visibleChatTokens || 0) + Number(input.storedThread?.attachmentMetadataTokens || 0));
-  const processTokens = Math.max(0, Number(input.storedThread?.processEntryTokens || 0) + Number(input.storedThread?.legacyToolLogTokens || 0));
-  const storedObservationTokens = Math.max(0, Number(input.storedThread?.toolObservationStoredTokens || 0));
-  const rawToolStorageTokens = Math.max(0, Number(input.storedThread?.rawToolResultTokens || 0));
   const systemToolChildren = buildSystemToolSchemaChildren(input.sessionId, input.profile, latestToolSchemaTokens);
   const systemPromptChildren = buildSystemPromptChildren(systemPromptTokens, input.sessionId, input.profile);
-  const providerUsageChildren = buildProviderUsageChildren(input.modelUsage);
-  const lastTurnUsageRow = buildLastTurnUsageRow(input.turnTelemetry);
   const skillChildren = activeSkillEstimate.children;
   const contextWindowTokens = Math.max(0, Number(input.profile.contextWindowTokens || 0));
   const inputBudgetTokens = Math.max(0, Number(input.inputBudgetTokens || 0));
   const compactionTriggerTokens = Math.max(0, Number(input.compactionTriggerTokens || 0));
+  // Cache reads are the tokens reused from the provider cache. Cache writes
+  // are storage activity, not cached context already available to the model.
+  const cachedTokens = hasCurrentHistory
+    ? Math.max(0, Number(input.modelUsage?.cacheReadTokens || 0))
+    : 0;
+  // This is the aggregate persisted footprint of the thread, not the latest
+  // message estimate shown in the current-context rows.
+  const totalThreadTokens = Math.max(0, Number(input.storedThread?.fullStoredThreadTokens || 0));
   const contextLimitTokens = contextWindowTokens || inputBudgetTokens || compactionTriggerTokens;
   const inContextRows: ContextWindowRow[] = [
     { id: 'messages', label: 'Messages', tokens: Math.max(0, input.messageTokens), active: input.messageTokens > 0 },
@@ -16774,8 +17327,6 @@ function buildContextWindowCurrentState(input: {
     { id: 'system_prompt', label: 'System prompt', tokens: systemPromptTokens, active: systemPromptTokens > 0, children: systemPromptChildren },
     { id: 'skills', label: 'Skills', tokens: activeSkillTokens, active: activeSkillTokens > 0, children: skillChildren, estimated: activeSkillTokens > 0 },
     { id: 'tool_observations', label: 'Tool observations', tokens: Math.max(0, input.recentToolTokens), active: input.recentToolTokens > 0 },
-    { id: 'mcp_tools', label: 'MCP tools', tokens: 0, active: false },
-    { id: 'mcp_tools_deferred', label: 'MCP tools (deferred)', tokens: 0, active: false },
   ].map((row) => ({ ...row, includedInContext: true, percentBasis: 'window' }));
   const inContextRowTotal = inContextRows.reduce((sum, row) => sum + Math.max(0, Number(row.tokens || 0)), 0);
   const runtimeOverheadBasis = latestSystemPromptTokens > 0
@@ -16794,23 +17345,17 @@ function buildContextWindowCurrentState(input: {
     contextLimitTokens,
     contextWindowTokens,
     compactionTriggerTokens,
+    cachedTokens,
+    totalThreadTokens,
     latestProviderInputTokens,
     nextCallEstimateTokens: input.currentInputTokens,
     freeSpaceTokens,
     rows: [
       ...inContextRows,
       ...runtimeOverheadRow,
-      { id: 'free_space', label: 'Free context window', tokens: freeSpaceTokens, active: freeSpaceTokens > 0, includedInContext: false, percentBasis: 'window' },
-      { id: 'next_call_estimate', label: 'Next call estimate', tokens: input.currentInputTokens, active: input.currentInputTokens > 0, includedInContext: false, percentLabel: 'next' },
-      { id: 'input_budget', label: 'Input budget after reserves', tokens: inputBudgetTokens, active: false, includedInContext: false, outOfBand: true, percentBasis: 'window', percentLabel: 'budget' },
       { id: 'compaction_trigger', label: 'Compaction trigger', tokens: compactionTriggerTokens, active: false, includedInContext: false, outOfBand: true, percentBasis: 'window', percentLabel: 'trigger' },
-      { id: 'model_context_window', label: 'Model context window', tokens: contextWindowTokens, active: false, includedInContext: false, outOfBand: true, percentLabel: 'full' },
-      { id: 'full_stored_thread', label: 'Full stored thread', tokens: Math.max(0, Number(input.storedThread?.fullStoredThreadTokens || 0)), active: false, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
-      { id: 'stored_process_logs', label: 'Stored process logs', tokens: processTokens, active: processTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
-      { id: 'stored_tool_observations', label: 'Stored tool observations', tokens: storedObservationTokens, active: storedObservationTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
-      { id: 'raw_tool_storage', label: 'Raw tool storage', tokens: rawToolStorageTokens, active: rawToolStorageTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'stored' },
-      ...(lastTurnUsageRow ? [lastTurnUsageRow] : []),
-      { id: 'logged_provider_usage', label: 'Logged provider usage', tokens: Math.max(0, Number(input.modelUsage?.totalTokens || 0)), active: Number(input.modelUsage?.totalTokens || 0) > 0, includedInContext: false, outOfBand: true, percentLabel: 'total', children: providerUsageChildren },
+      { id: 'cached', label: 'Cached', tokens: cachedTokens, active: cachedTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'cached' },
+      { id: 'total_thread_tokens', label: 'Total thread tokens', tokens: totalThreadTokens, active: totalThreadTokens > 0, includedInContext: false, outOfBand: true, percentLabel: 'total' },
     ],
   };
 }
@@ -18681,7 +19226,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
       : '',
     identity.isSubagent
       ? `- voice_ops agent_control is your worker path. For a request that needs ${identity.label}'s full worker capabilities, call voice_ops with action agent_control, agent_action chat, and the complete message. agent_id defaults to your own subagent id. The call waits for your worker's real response and returns it to this same ${identity.label} Voice/Live session; then summarize the result as yourself.`
-      : '- voice_thread_ops: the first-class Prometheus thread control plane. For every new thread choose launch_mode ping, forget, or supervise. Use ping for a detached completion notification, forget when no owner update is wanted, and supervise for a hidden review loop that checks reasoning, tool findings, runtime state, and artifacts while the target works. Default new threads to the current Main Chat route. Use create_many only for genuinely independent work; there are no Voice worker groups.',
+      : '- voice_thread_ops: the first-class Prometheus thread control plane. List/find/search include active and settled threads by default and mark settled state; pass state=active or state=settled to narrow, and use reopen (open/unsettle aliases) to return a settled thread to the active view without changing history. For every new thread choose launch_mode ping, forget, or supervise. Use ping for a detached completion notification, forget when no owner update is wanted, and supervise for a hidden review loop that checks reasoning, tool findings, runtime state, and artifacts while the target works. Default new threads to the current Main Chat route. Use create_many only for genuinely independent work; there are no Voice worker groups.',
     '- voice_ops: unified quick voice operations. It also provides task_directory for global task discovery, task_control for existing-task operations, task_watch for explicit opt-in notifications, agent_directory for subagent discovery, and agent_control for standalone-subagent chat/dispatch/run recovery. Controlling an outside task never tracks it automatically.',
     '- Visual cards use the show_ui wrapper (render a card in the app while you speak the gist — keep speech short, the card carries the detail). Actions: weather (forecast), market (crypto/memecoins), stocks (equities/ETFs), prediction_market (Polymarket odds), map (places/locations), sources (news/citations), comparison (side-by-side table), chart (line/bar/area from numbers), product_carousel (products), agent_work (operator snapshot — gather via voice_ops action automation_dashboard first), and run_result (finished-task summary). For sources or product_carousel, pass the user\'s query directly; show_ui searches and assembles the items, so do not call it first with an empty items array and do not separately call voice_ops web_search unless show_ui reports a search failure. If the user asks for unspecified news sources, use query "latest news". All are keyless and read-only; call show_ui directly instead of dispatching the Worker for these.',
     '- skill_list: canonical skill discovery. Use it to inspect available workflows, triggers, categories, and required tools for multi-step or unfamiliar workflows. Do not call skill_list for direct live UI control; use voice_browser or voice_desktop. Use totalInstalled, matchedCount, returnedCount, and truncated exactly; do not infer that the returned array length is the total skill count.',
@@ -18708,7 +19253,7 @@ function buildRealtimeVoiceAgentInstructions(args: {
       : '- For heavy or durable work outside voice scope, call voice_thread_ops action=create immediately with an explicit launch_mode. Use supervise when the user expects ongoing verification/steering, ping for a one-shot completion notification, and forget when they do not want a notification. For several independent work items, call create_many with a route on each item. Keep user choices, approvals, and interactive judgment here in Voice.',
     identity.isSubagent
       ? '- For your existing worker run, use voice_ops agent_control run_status, run_message, run_resume, run_pause, run_rerun, or run_cancel. Do not call Prometheus thread operations.'
-      : '- For existing thread work, call voice_thread_ops find/read/status, then send or steer the exact thread. Use follow only as a legacy compatibility alias; for new threads choose launch_mode supervise when the user asks for ongoing supervision. Do not create a duplicate thread.',
+      : '- For existing thread work, call voice_thread_ops list/find/search/read/status, including settled state when needed, then use reopen (open/unsettle aliases) before sending or steering a settled thread when you want it back in the active view. Use follow only as a legacy compatibility alias; for new threads choose launch_mode supervise when the user asks for ongoing supervision. Do not create a duplicate thread.',
     identity.isSubagent
       ? ''
       : '- For a correction to an active current runtime, steer_active_worker remains available as a compatibility control. Prefer voice_thread_ops steer for an identified first-class thread.',
@@ -19440,6 +19985,10 @@ router.post('/api/voice-agent/restart-gateway-quick', (req, res) => {
       restarting: true,
       message: 'Quick gateway restart accepted. No npm build will run.',
     });
+    // The HTTP 202 is already written before restart begins. Keep a small
+    // configurable grace window for the voice client to receive that ack,
+    // instead of holding every quick restart for the former 3.5s default.
+    const restartDelayMs = Math.max(100, Number(process.env.PROMETHEUS_QUICK_RESTART_DELAY_MS || 250));
     const timer = setTimeout(() => {
       try {
         const { gracefulRestart } = require('../lifecycle') as typeof import('../lifecycle');
@@ -19449,12 +19998,13 @@ router.post('/api/voice-agent/restart-gateway-quick', (req, res) => {
           title: 'Voice quick gateway restart',
           summary: reason || 'Voice-requested quick gateway restart',
           previousSessionId: sessionId,
+          quickRestart: true,
           originChannel: String(body.source || '').toLowerCase().includes('mobile') ? 'mobile' : 'web',
         }).catch((err: any) => console.error('[VoiceRestart] Quick restart failed:', err?.message || err));
       } catch (err: any) {
         console.error('[VoiceRestart] Could not start quick restart:', err?.message || err);
       }
-    }, 3500);
+    }, restartDelayMs);
     timer.unref?.();
   } catch (err: any) {
     if (!res.headersSent) res.status(storageAwareStatus(err)).json({ ok: false, success: false, error: String(err?.message || err) });
@@ -20144,6 +20694,23 @@ router.post('/api/chat', async (req, res) => {
     device: req.headers['x-pairing-token'] ? 'phone' : undefined,
     source: 'api_chat',
   });
+  // The benchmark harness can restrict its local synthetic run to the named
+  // safe tool family. This is intentionally opt-in and source-scoped: normal
+  // clients retain the existing automatic tool selection behavior.
+  const benchmarkToolFilter = turnOrigin.source === 'local_benchmark' && Array.isArray(req.body?.toolFilter)
+    ? req.body.toolFilter
+      .map((value: unknown) => String(value || '').trim())
+      .filter((value: string) => /^[a-zA-Z0-9_.*:-]{1,120}$/.test(value))
+      .slice(0, 32)
+    : undefined;
+  // Benchmark-only prompt A/B control. The benchmark runner is a separate
+  // process, so its environment cannot directly reach the gateway process;
+  // keep the value request-scoped and source-gated so normal clients cannot
+  // alter prompt construction.
+  const benchmarkPromptMemoryMode = turnOrigin.source === 'local_benchmark'
+    && String(req.body?.memoryMode || '').trim().toLowerCase() === 'compact'
+    ? 'compact' as const
+    : undefined;
   persistTurnOriginChannelHint(resolvedSessionId, turnOrigin);
   const isMobileChatRequest = turnOrigin.channel === 'mobile' || !!req.headers['x-pairing-token'];
 
@@ -20543,7 +21110,7 @@ router.post('/api/chat', async (req, res) => {
 		      Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
           Array.isArray(attachmentPreviews) && attachmentPreviews.length > 0 ? attachmentPreviews : undefined,
           undefined,
-          { excludedSkillIds, forcedSkillIds, timingRecorder: turnTiming, preAcquiredTurnLease: admissionLease, runtimeId },
+          { excludedSkillIds, forcedSkillIds, toolFilter: benchmarkToolFilter, timingRecorder: turnTiming, preAcquiredTurnLease: admissionLease, runtimeId, promptMemoryMode: benchmarkPromptMemoryMode },
           turnOrigin,
           { clientRequestId },
 			    );
@@ -20669,9 +21236,28 @@ function markActiveRunsOnSessionList<T extends any>(input: T): T {
  * record.  Expose it on every list response so clients can keep project chats
  * out of the ordinary Chats sidebar. */
 function attachProjectMembershipToSessionList<T extends any>(input: T): T {
+  // The session index is already compact, but project membership used to call
+  // listProjects() once per session. A sidebar refresh over ~1,400 sessions
+  // therefore performed thousands of synchronous directory/file reads and could
+  // monopolize the gateway event loop for tens of seconds. Build the reverse map
+  // once per response instead; project writes remain durable and this only
+  // changes the read-side work from O(sessions * projects) to O(sessions + projects).
+  const projectBySessionId = new Map<string, { id: string; name: string }>();
+  try {
+    for (const project of listProjects()) {
+      for (const session of Array.isArray(project.sessions) ? project.sessions : []) {
+        const sessionId = String(session?.id || '').trim();
+        if (!sessionId || projectBySessionId.has(sessionId)) continue;
+        projectBySessionId.set(sessionId, { id: project.id, name: project.name });
+      }
+    }
+  } catch {
+    // Project metadata is an optional presentation overlay; a broken project
+    // record must never make the ordinary chat list unavailable.
+  }
   const attach = (session: any) => {
     if (!session || typeof session !== 'object') return session;
-    const project = findProjectBySessionId(String(session.id || ''));
+    const project = projectBySessionId.get(String(session.id || '').trim());
     return project
       ? { ...session, projectId: project.id, projectName: project.name }
       : session;
@@ -20686,6 +21272,11 @@ function attachProjectMembershipToSessionList<T extends any>(input: T): T {
 // ── List sessions endpoint ────────────────────────────────────────────────────
 router.get('/api/sessions', async (req, res) => {
   try {
+    const profileSessions = (label: string, startedAt: number, detail = '') => {
+      if (process.env.PROMETHEUS_STARTUP_DIAGNOSTICS !== '1') return;
+      try { process.stderr.write(`[sessions-profile] ${label} durationMs=${Date.now() - startedAt}${detail ? ` ${detail}` : ''}\n`); } catch {}
+    };
+    const routeStartedAt = Date.now();
     const channel = req.query.channel as string | undefined;
     const scope = String(req.query.scope || '').trim().toLowerCase();
     if (scope && scope !== 'all') {
@@ -20706,24 +21297,76 @@ router.get('/api/sessions', async (req, res) => {
 
     const includeAutomated = req.query.includeAutomated === '1'
       || req.query.includeAutomated === 'true';
+    const state = String(req.query.state || 'active').trim().toLowerCase();
+    if (!['active', 'settled', 'all'].includes(state)) {
+      res.status(400).json({ error: 'Invalid state. Valid values: active, settled, all' });
+      return;
+    }
+    const pinnedOnly = req.query.pinned === '1'
+      || req.query.pinned === 'true';
 
-    const hasPaging = req.query.limit != null || req.query.offset != null || scope === 'all';
+    const hasPaging = req.query.limit != null || req.query.offset != null || scope === 'all' || req.query.state != null || req.query.pinned != null;
     if (hasPaging) {
+      const listStartedAt = Date.now();
       const page = listSessionSummaries({
         channel: channel as any,
         scope: scope === 'all' ? 'all' : undefined,
         limit: Number(req.query.limit),
         offset: Number(req.query.offset),
         includeAutomated,
+        state: state as any,
+        pinnedOnly,
       });
-      res.json(markActiveRunsOnSessionList(attachProjectMembershipToSessionList(page)));
+      profileSessions('list', listStartedAt, `count=${page.sessions.length} total=${page.total}`);
+      const projectStartedAt = Date.now();
+      const withProjects = attachProjectMembershipToSessionList(page);
+      profileSessions('projects', projectStartedAt);
+      const activeStartedAt = Date.now();
+      const withActiveRuns = markActiveRunsOnSessionList(withProjects);
+      profileSessions('active-runs', activeStartedAt);
+      const responseStartedAt = Date.now();
+      res.json(withActiveRuns);
+      profileSessions('response', responseStartedAt, `routeMs=${Date.now() - routeStartedAt}`);
       return;
     }
 
-    res.json({ sessions: markActiveRunsOnSessionList(attachProjectMembershipToSessionList(listSessionSummaries(channel as any))) });
+    const listStartedAt = Date.now();
+    const sessions = listSessionSummaries(channel as any);
+    profileSessions('list', listStartedAt, `count=${sessions.length}`);
+    const projectStartedAt = Date.now();
+    const withProjects = attachProjectMembershipToSessionList(sessions);
+    profileSessions('projects', projectStartedAt);
+    const activeStartedAt = Date.now();
+    const withActiveRuns = markActiveRunsOnSessionList(withProjects);
+    profileSessions('active-runs', activeStartedAt);
+    const responseStartedAt = Date.now();
+    res.json({ sessions: withActiveRuns });
+    profileSessions('response', responseStartedAt, `routeMs=${Date.now() - routeStartedAt}`);
   } catch (err: any) {
     console.error('[/api/sessions] Error:', err);
     res.status(500).json({ error: err.message || 'Failed to list sessions' });
+  }
+});
+
+router.post('/api/sessions/reorder', (req, res) => {
+  try {
+    const requestedChannel = String(req.body?.channel || 'web').trim();
+    const validChannels = ['terminal', 'telegram', 'web', 'mobile', 'voice_room', 'discord', 'whatsapp', 'system'];
+    if (!validChannels.includes(requestedChannel)) {
+      res.status(400).json({ error: 'Invalid channel.' });
+      return;
+    }
+    const ordered = reorderSessionSidebar(
+      Array.isArray(req.body?.sessionIds) ? req.body.sessionIds : [],
+      {
+        channel: requestedChannel as any,
+        state: req.body?.state === 'settled' ? 'settled' : 'all',
+      },
+    );
+    res.json({ success: true, sessionIds: ordered.map((summary) => summary.id), sessions: ordered });
+  } catch (err: any) {
+    console.error('[/api/sessions/reorder] Error:', err);
+    res.status(500).json({ error: err.message || 'Failed to reorder sessions' });
   }
 });
 
@@ -20748,7 +21391,7 @@ router.post('/api/sessions', (req, res) => {
         : undefined,
     });
     flushSession(id);
-    res.json({ success: true, session: { id: session.id, channel: session.channel, title: getSessionDisplayTitle(session), createdAt: session.createdAt, lastActiveAt: session.lastActiveAt, pinnedAt: session.pinnedAt || null } });
+    res.json({ success: true, session: { id: session.id, channel: session.channel, title: getSessionDisplayTitle(session), createdAt: session.createdAt, lastActiveAt: session.lastActiveAt, pinnedAt: session.pinnedAt || null, settledAt: session.settledAt || null, settled: !!session.settledAt } });
   } catch (err: any) {
     console.error('[/api/sessions POST] Error:', err);
     res.status(500).json({ error: err.message || 'Failed to create session' });
@@ -20874,6 +21517,7 @@ router.get('/api/sessions/search', (req, res) => {
     const scope = String(req.query.scope || '').trim().toLowerCase();
     const mode = String(req.query.mode || 'content').trim().toLowerCase();
     const limit = Number(req.query.limit || 80);
+    const state = String(req.query.state || 'active').trim().toLowerCase();
     const validChannels = ['', 'terminal', 'telegram', 'web', 'mobile', 'voice_room', 'discord', 'whatsapp', 'system'];
     if (!validChannels.includes(channel)) {
       res.status(400).json({ error: 'Invalid channel. Valid values: terminal, telegram, web, system' });
@@ -20881,6 +21525,10 @@ router.get('/api/sessions/search', (req, res) => {
     }
     if (scope && scope !== 'all') {
       res.status(400).json({ error: 'Invalid scope. Valid values: all' });
+      return;
+    }
+    if (!['active', 'settled', 'all'].includes(state)) {
+      res.status(400).json({ error: 'Invalid state. Valid values: active, settled, all' });
       return;
     }
     if (scope === 'all' && channel) {
@@ -20894,6 +21542,7 @@ router.get('/api/sessions/search', (req, res) => {
     const sessions = searchSessionSummaries(q, {
       channel: channel ? channel as any : undefined,
       scope: scope === 'all' ? 'all' : undefined,
+      state: state as any,
       includeAutomated: req.query.includeAutomated === '1' || req.query.includeAutomated === 'true',
       limit,
       includeContent: mode !== 'title',
@@ -20910,6 +21559,7 @@ router.get('/api/sessions/search', (req, res) => {
     res.json({
       query: q,
       mode,
+      state,
       sessions: markActiveRunsOnSessionList(sessions),
     });
   } catch (err: any) {
@@ -20951,6 +21601,46 @@ router.delete('/api/thread-supervisions/:id', requireSafeSessionParam, (req, res
   } catch (e: any) {
     console.error('[/api/thread-supervisions/:id DELETE] Error:', e);
     res.status(500).json({ success: false, error: e.message || 'Failed to cancel managed-thread supervision' });
+  }
+});
+
+router.post('/api/sessions/:id/settle', requireSafeSessionParam, (req, res) => {
+  try {
+    const sessionId = String(req.params.id || '').trim();
+    const summary = settleSessionWithGuards(sessionId, {
+      confirmPinned: req.body?.confirmPinned === true,
+      runtimeRecords: listLiveRuntimes(),
+    });
+    broadcastWS({ type: 'session_state_changed', sessionId, state: 'settled', session: summary, source: 'manual' });
+    res.json({ success: true, state: 'settled', session: summary });
+  } catch (error: any) {
+    if (error instanceof SessionSettlementError) {
+      res.status(error.statusCode).json({
+        success: false,
+        code: error.code,
+        error: error.message,
+        blockers: error.blockers,
+      });
+      return;
+    }
+    console.error('[/api/sessions/:id/settle POST] Error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to settle session' });
+  }
+});
+
+router.post('/api/sessions/:id/unsettle', requireSafeSessionParam, (req, res) => {
+  try {
+    const sessionId = String(req.params.id || '').trim();
+    const summary = unsettleSessionSafely(sessionId);
+    broadcastWS({ type: 'session_state_changed', sessionId, state: 'active', session: summary, source: 'manual' });
+    res.json({ success: true, state: 'active', session: summary });
+  } catch (error: any) {
+    if (error instanceof SessionSettlementError) {
+      res.status(error.statusCode).json({ success: false, code: error.code, error: error.message, blockers: error.blockers });
+      return;
+    }
+    console.error('[/api/sessions/:id/unsettle POST] Error:', error);
+    res.status(500).json({ success: false, error: error?.message || 'Failed to reopen session' });
   }
 });
 
@@ -21185,6 +21875,8 @@ router.get('/api/sessions/:id', requireSafeSessionParam, (req, res) => {
         lastActiveAt: session.lastActiveAt,
         lastAssistantAt: session.lastAssistantAt || null,
         pinnedAt: session.pinnedAt || null,
+        settledAt: session.settledAt || null,
+        settled: !!session.settledAt,
         mobileLastReadAt: session.mobileLastReadAt || null,
         mobileUnread: Number(session.lastAssistantAt || 0) > Number(session.mobileLastReadAt || 0),
         creativeMode: session.creativeMode || null,
@@ -21239,6 +21931,7 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
       profile,
       currentInputTokens,
       messageTokens,
+      historyMessages: history.length,
       recentToolTokens: toolTokens,
       inputBudgetTokens: budget.inputBudgetTokens,
       compactionTriggerTokens: budget.compactionTriggerTokens,
@@ -21269,6 +21962,8 @@ router.get('/api/sessions/:id/context-window', requireSafeSessionParam, (req, re
       currentContextLimitTokens: profile.contextWindowTokens,
       inputBudgetTokens: budget.inputBudgetTokens,
       compactionTriggerTokens: budget.compactionTriggerTokens,
+      cachedTokens: currentState.cachedTokens,
+      totalThreadTokens: currentState.totalThreadTokens,
       percentOfWindow: profile.contextWindowTokens > 0 ? currentState.currentStateTokens / profile.contextWindowTokens : 0,
       percentOfContextLimit: contextUsage.ratio,
       percentOfCompactionTrigger: budget.compactionTriggerTokens > 0 ? currentState.currentStateTokens / budget.compactionTriggerTokens : 0,

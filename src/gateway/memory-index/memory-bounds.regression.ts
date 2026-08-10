@@ -34,4 +34,13 @@ for (let i = 0; i < 500; i += 1) sharedTermChunks[`chunk-${i}`] = { id: `chunk-$
 const boundedTokenIndex = buildBoundedTokenIndex(sharedTermChunks);
 assert.equal(boundedTokenIndex.shared.length, 200, 'individual token posting lists must remain bounded');
 
+const reservedWordTokenIndex = buildBoundedTokenIndex({
+  constructor: { id: 'constructor-chunk', terms: ['constructor'] },
+  prototype: { id: 'prototype-chunk', terms: ['prototype'] },
+  normal: { id: 'normal-chunk', terms: ['normal'] },
+});
+assert.deepEqual(reservedWordTokenIndex.constructor, ['constructor-chunk']);
+assert.deepEqual(reservedWordTokenIndex.prototype, ['prototype-chunk']);
+assert.deepEqual(reservedWordTokenIndex.normal, ['normal-chunk']);
+
 console.log('memory bounds regression passed');

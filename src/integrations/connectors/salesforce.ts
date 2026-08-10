@@ -26,6 +26,7 @@ export class SalesforceConnector extends OAuthConnector {
       clientSecret: process.env.SALESFORCE_CLIENT_SECRET || '',
       scopes: ['api', 'refresh_token', 'openid'],
       usePkce: false,
+      useNonce: true,
       callbackPort: 19427,
       callbackPath: '/auth/callback/salesforce',
     };
@@ -37,22 +38,36 @@ export class SalesforceConnector extends OAuthConnector {
 
   protected async buildTokens(data: Record<string, any>): Promise<ConnectorTokens> {
     this.instanceUrl = data.instance_url || LOGIN_URL;
+    const identity = data.id ? await this.fetchUserIdentity(data.access_token, data.id) : {};
     return {
       access_token: data.access_token,
       refresh_token: data.refresh_token,
       expires_at: Date.now() + 7200 * 1000,
-      account_email: data.id ? await this.fetchUserEmail(data.access_token, data.id) : undefined,
-      account_id: data.id,
+      account_email: identity.email || identity.username,
+      account_id: identity.user_id || data.id,
+      resource_id: identity.organization_id,
+      resource_name: identity.organization_name,
+      resource_kind: 'org',
       ...(data.instance_url ? { instance_url: data.instance_url } : {}),
-    } as ConnectorTokens & { instance_url?: string };
+      ...(data.id ? { identity_url: data.id } : {}),
+    };
   }
 
-  private async fetchUserEmail(token: string, idUrl: string): Promise<string | undefined> {
+  private async fetchUserIdentity(token: string, idUrl: string): Promise<Record<string, any>> {
     try {
       const res = await fetch(idUrl, { headers: { Authorization: `Bearer ${token}` } });
-      if (res.ok) { const d = await res.json() as any; return d.email || d.username; }
+      if (res.ok) return await res.json() as any;
     } catch {}
-    return undefined;
+    return {};
+  }
+
+  async getIdentity(): Promise<any> {
+    const token = await this.getValidAccessToken();
+    const saved = this.loadTokens() as ConnectorTokens & { identity_url?: string } | null;
+    const identityUrl = saved?.identity_url || `${this.getInstanceUrl()}/services/oauth2/userinfo`;
+    const res = await fetch(identityUrl, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Salesforce identity verification failed (${res.status}).`);
+    return res.json();
   }
 
   private getInstanceUrl(): string {

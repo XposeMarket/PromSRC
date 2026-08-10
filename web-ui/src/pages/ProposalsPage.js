@@ -69,6 +69,17 @@ function getDisplayStatus(proposal, statusColor, statusIcon) {
   };
 }
 
+function getProposalExecutionStepStatus(proposal, step) {
+  const explicit = String(step?.status || step?.state || '').trim().toLowerCase();
+  if (explicit) return explicit.replace(/\s+/g, '_');
+  const proposalStatus = String(proposal?.status || '').trim().toLowerCase();
+  return ['approved', 'executing', 'repairing', 'executed'].includes(proposalStatus) ? 'approved' : 'pending';
+}
+
+function isApprovedProposalExecutionStep(proposal, step) {
+  return step?.approved === true || step?.isApproved === true || getProposalExecutionStepStatus(proposal, step) === 'approved';
+}
+
 export async function loadProposals() {
   const list = document.getElementById('proposals-list');
   if (!list) return;
@@ -120,7 +131,10 @@ function renderProposals(proposals, filter = getProposalFilterValue()) {
         const kind = String(step?.kind || '').trim();
         const description = String(step?.description || '').trim();
         const success = String(step?.successCriteria || step?.success_criteria || '').trim();
-        return `<li style="margin-bottom:6px"><strong>${index + 1}. ${escHtml(title)}</strong>${kind ? ` <span style="font-size:10px;color:var(--muted);text-transform:uppercase">[${escHtml(kind)}]</span>` : ''}${description ? `<div style="margin-top:2px;color:var(--fg);opacity:0.82">${escHtml(description)}</div>` : ''}${success ? `<div style="margin-top:2px;color:var(--muted)">Success: ${escHtml(success)}</div>` : ''}</li>`;
+        const stepStatus = getProposalExecutionStepStatus(proposal, step);
+        const approved = isApprovedProposalExecutionStep(proposal, step);
+        const safeStatus = stepStatus.replace(/[^a-z0-9_-]/g, '_');
+        return `<li class="proposal-execution-step ${approved ? 'is-approved' : ''} is-${safeStatus}" data-step-status="${escHtml(stepStatus)}" style="margin-bottom:6px"><span class="proposal-execution-step-title">${index + 1}. ${escHtml(title)}</span>${kind ? ` <span style="font-size:10px;color:var(--muted);text-transform:uppercase">[${escHtml(kind)}]</span>` : ''}${description ? `<div style="margin-top:2px;color:var(--fg);opacity:0.82">${escHtml(description)}</div>` : ''}${success ? `<div style="margin-top:2px;color:var(--muted)">Success: ${escHtml(success)}</div>` : ''}</li>`;
       }).filter(Boolean).join('')
       : '';
     const resultText = String(proposal.executionResult || '');

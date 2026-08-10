@@ -73,5 +73,44 @@
         "placeholder": "secret_..."
       }
     ]
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["Notion OAuth", "Notion workspace"],
+    "domains": ["api.notion.com", "notion.so"],
+    "providerApp": {
+      "provider": "notion",
+      "appType": "confidential-client",
+      "clientIdEnv": "NOTION_CLIENT_ID",
+      "clientSecretEnv": "NOTION_CLIENT_SECRET",
+      "externalSetupRequired": true
+    },
+    "strategies": [{
+      "id": "notion-oauth",
+      "adapter": "connector-oauth",
+      "priority": 110,
+      "capabilities": ["pages.read", "databases.read", "search.read"],
+      "readOnlyDefault": true,
+      "authentication": {
+        "type": "oauth2",
+        "scopes": [],
+        "authorizationUrl": "https://api.notion.com/v1/oauth/authorize",
+        "tokenUrl": "https://api.notion.com/v1/oauth/token",
+        "pkceRequired": false,
+        "callback": { "host": "localhost", "port": 19423, "path": "/auth/callback/notion" },
+        "clientIdEnv": "NOTION_CLIENT_ID",
+        "clientSecretEnv": "NOTION_CLIENT_SECRET"
+      },
+      "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+      "config": { "provider": "notion", "connectorId": "notion", "resourceScope": "selected Notion workspace" }
+    }],
+    "requestedCapabilities": [
+      { "id": "pages.read", "label": "Read pages", "description": "Read pages and their block content.", "risk": "read" },
+      { "id": "databases.read", "label": "Read databases", "description": "Query databases shared with the connection.", "risk": "read" },
+      { "id": "search.read", "label": "Search workspace", "description": "Search pages and databases in the selected workspace.", "risk": "read" },
+      { "id": "pages.create", "label": "Create pages", "description": "Page creation is an explicit external write.", "risk": "write" }
+    ],
+    "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+    "toolPolicy": { "defaultExposure": "read-only", "unknownTools": "blocked" }
   }
 }

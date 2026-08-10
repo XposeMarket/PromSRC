@@ -9,9 +9,11 @@
     "resume scheduled job",
     "delete scheduled job",
     "scheduled job status",
-    "diagnose scheduled delivery",
+    "schedule recurring job",
     "verify scheduled output",
-    "pause scheduled job"
+    "pause scheduled job",
+    "diagnose scheduled job stuck",
+    "inspect scheduled job history"
   ],
   "id": "scheduler-operations-playbook",
   "name": "scheduler-operations-playbook",

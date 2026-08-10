@@ -206,6 +206,10 @@ interface CollectorState {
 }
 
 function epoch(value: unknown): number | null {
+  if (value instanceof Date) {
+    const milliseconds = value.getTime();
+    return Number.isFinite(milliseconds) ? milliseconds : null;
+  }
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value < 100_000_000_000 ? Math.round(value * 1000) : Math.round(value);
   }

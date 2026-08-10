@@ -5,6 +5,7 @@ import path from 'path';
 import {
   applyCarryForwardToIntradayFile,
   buildBrainCapsuleContext,
+  buildBrainCapsuleContextDetails,
   loadActiveBrainThoughtCapsules,
   parseBrainCarryForwardDecision,
   parseBrainThoughtCapsules,
@@ -76,6 +77,13 @@ const gameContext = buildBrainCapsuleContext(root, 'lets continue the Galaxy Dri
 assert.match(gameContext, /Galaxy Drift touch controls changed/);
 assert.doesNotMatch(gameContext, /NebulaX audit/);
 assert.match(gameContext, /Verify live state/);
+const gameDetails = buildBrainCapsuleContextDetails(root, 'lets continue the Galaxy Drift game', {
+  now: new Date('2026-07-18T03:00:00.000Z'),
+  maxChars: 1200,
+});
+assert.equal(gameDetails.relatedCount, 1, 'context telemetry should count the selected related Thought capsule');
+assert.equal(gameDetails.fallbackCount, 0);
+assert.equal(gameDetails.text, gameContext, 'telemetry and prompt builders must share the exact rendered packet');
 
 const tinyBudget = buildBrainCapsuleContext(root, 'Galaxy Drift NebulaX', {
   now: new Date('2026-07-18T03:00:00.000Z'),

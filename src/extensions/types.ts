@@ -16,7 +16,7 @@ export type ExtensionSetupAuthType =
   | 'none';
 
 export type ExtensionConnectionAdapter =
-  | 'oauth-pkce' | 'oauth-device-code' | 'oauth-manual-callback'
+  | 'oauth-pkce' | 'connector-oauth' | 'oauth-device-code' | 'oauth-manual-callback'
   | 'api-key' | 'setup-token' | 'browser-session' | 'cli-login'
   | 'mcp-oauth' | 'mcp-stdio' | 'mcp-http' | 'local-resource'
   | 'custom-http' | 'openai-compatible-model' | 'external-admin-approval' | 'composite';
@@ -27,7 +27,19 @@ export type ExtensionConnectionStrategy = {
   priority?: number;
   capabilities?: string[];
   readOnlyDefault?: boolean;
-  authentication?: { type: string; scopes?: string[]; audience?: string; };
+  authentication?: {
+    type: string;
+    scopes?: string[];
+    audience?: string;
+    authorizationUrl?: string;
+    tokenUrl?: string;
+    revokeUrl?: string;
+    pkceRequired?: boolean;
+    nonceRequired?: boolean;
+    callback?: { host?: string; port?: number; path?: string };
+    clientIdEnv?: string;
+    clientSecretEnv?: string;
+  };
   verification?: string[];
   config?: Record<string, unknown>;
 };
@@ -145,6 +157,13 @@ export type ExtensionDescriptor = {
     aliases?: string[];
     /** Official provider hosts used as high-confidence discovery identities. */
     domains?: string[];
+    providerApp?: {
+      provider?: string;
+      appType?: 'oauth-app' | 'github-app' | 'public-client' | 'confidential-client' | 'unknown';
+      clientIdEnv?: string;
+      clientSecretEnv?: string;
+      externalSetupRequired?: boolean;
+    };
     strategies: ExtensionConnectionStrategy[];
     requestedCapabilities?: Array<{ id: string; label?: string; description?: string; risk?: 'read' | 'write' | 'high_impact' }>;
     verification?: string[];

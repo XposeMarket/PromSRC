@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { getPublicBuildAllowedCategories } from './distribution';
+import { getRuntimeAllowedCategories } from './distribution';
 
 /**
  * Canonical ownership registry for runtime tool categories.
@@ -13,7 +13,9 @@ import { getPublicBuildAllowedCategories } from './distribution';
 export const TOOL_CATEGORY_IDS = [
   'browser_automation', 'desktop_automation', 'agents_and_teams',
   'prometheus_source_read', 'prometheus_source_write', 'workspace_write',
-  'advanced_memory', 'media_assets', 'automations', 'external_apps',
+  'advanced_memory', 'media_assets', 'media_generation', 'automations',
+  'automation_scheduling', 'automation_tasks', 'automation_recovery', 'automation_sessions',
+  'runtime_admin', 'external_apps',
   'integration_admin', 'social_intelligence', 'proposal_admin',
   'mcp_server_tools', 'composite_tools', 'creative_basic', 'creative_image',
   'creative_video', 'creative_hyperframes', 'creative_quality', 'skills',
@@ -25,7 +27,7 @@ export const TOOL_CATEGORY_IDS = [
 export const TOOL_CATEGORY_MENU_ORDER: readonly ToolCategoryId[] = [
   'browser_automation', 'desktop_automation', 'agents_and_teams', 'workspace_write',
   'prometheus_source_read', 'prometheus_source_write', 'advanced_memory', 'media_assets',
-  'creative_quality', 'automations', 'integration_admin', 'external_apps',
+  'media_generation', 'creative_quality', 'automations', 'runtime_admin', 'integration_admin', 'external_apps',
   'social_intelligence', 'proposal_admin', 'mcp_server_tools', 'composite_tools',
   'creative_basic', 'creative_image', 'creative_video', 'creative_hyperframes',
   'skills', 'model_management', 'business',
@@ -60,11 +62,17 @@ export const TOOL_CATEGORY_MANIFEST: Readonly<Record<ToolCategoryId, ToolCategor
   workspace_write: entry('workspace_write', ['file_ops', 'files', 'shell', 'commands', 'run_commands'], 'unified workspace read/edit/run/git/safety/code-nav wrappers', 'workspace changes or command execution'),
   advanced_memory: entry('advanced_memory', ['memory'], 'memory graph, timeline, related records, project search, index refresh', 'advanced memory operations'),
   media_assets: entry('media_assets', ['media'], 'download/analyze images, video, audio, remote assets', 'media download or analysis'),
-  automations: entry('automations', ['schedule', 'scheduling'], 'schedule detail/history/outputs/patch/stuck control/dashboard and Prometheus peer-session control', 'advanced automation and managed-thread operations'),
+  media_generation: entry('media_generation', ['media_gen'], 'one-shot AI image/video generation with media_generate', 'AI image or video generation'),
+  automations: entry('automations', ['schedule', 'scheduling'], 'schedule creation/detail/history/outputs/patch/stuck control/dashboard and Prometheus peer-session control', 'scheduling or automation operations'),
+  automation_scheduling: entry('automation_scheduling', ['scheduling_pack', 'schedule_pack'], 'create/inspect/update recurring schedules', 'schedule or recurring job operations'),
+  automation_tasks: entry('automation_tasks', ['task_pack', 'automation_task_pack'], 'inspect/run/watch task and automation executions', 'background task or automation run operations'),
+  automation_recovery: entry('automation_recovery', ['recovery_pack', 'automation_recovery_pack'], 'recover interrupted requests, approvals, and failed runs', 'automation recovery or interrupted work'),
+  automation_sessions: entry('automation_sessions', ['session_pack', 'thread_pack'], 'create/send/steer Prometheus sessions and threads', 'Prometheus thread or session operations'),
+  runtime_admin: entry('runtime_admin', ['runtime', 'diagnostics'], 'Prometheus runtime diagnostics, incident packets, and controlled gateway restart', 'Prometheus runtime diagnostics or restart'),
   external_apps: entry('external_apps', ['connectors'], 'connected app wrappers: X/xAI, Vercel, and other connected tools', 'connected application use'),
   integration_admin: entry('integration_admin', ['integrations'], 'MCP server setup, webhooks, integration quick setup', 'integration administration'),
   social_intelligence: entry('social_intelligence', [], 'social profile analysis and recommendations', 'social intelligence analysis'),
-  proposal_admin: entry('proposal_admin', [], 'edit pending proposals before approval', 'pending proposal administration'),
+  proposal_admin: entry('proposal_admin', [], 'create/edit pending proposals before approval', 'proposal creation or administration'),
   mcp_server_tools: entry('mcp_server_tools', ['mcp'], 'dynamic mcp__server__tool functions from connected servers', 'connected MCP server tools'),
   composite_tools: entry('composite_tools', ['composites'], 'saved multi-step tools and composite management', 'saved composite tools'),
   creative_basic: entry('creative_basic', ['creative_mode', 'creative'], 'creative_project + creative_scene wrappers', 'basic Creative editing'),
@@ -82,23 +90,33 @@ const CATEGORY_ALIAS_INDEX: Readonly<Record<string, ToolCategoryId>> = Object.fr
 );
 
 export function getRuntimeToolCategoryIds(): ToolCategoryId[] {
-  return getPublicBuildAllowedCategories(TOOL_CATEGORY_IDS) as ToolCategoryId[];
+  return getRuntimeAllowedCategories(TOOL_CATEGORY_IDS) as ToolCategoryId[];
 }
 
 export function normalizeManifestToolCategory(raw: unknown): ToolCategoryId | null {
   const category = CATEGORY_ALIAS_INDEX[String(raw || '').trim().toLowerCase()];
-  return category && getRuntimeToolCategoryIds().includes(category) ? category : null;
+  // Manifest normalization remains an internal registry lookup. Runtime/model
+  // availability is enforced by getRuntimeToolCategoryIds() and the gateway
+  // tool-builder, so hidden categories can still be classified and restored
+  // without being requestable in the normal surface.
+  return category || null;
 }
 
 const names = (value: string) => new Set(value.split(/\s+/).filter(Boolean));
-const CORE_OVERRIDES = names('browser_send_to_telegram delivery_send delivery_send_screenshot connector_list generate_image generate_video chat_with_subagent agent_run_ops');
-const TEAM = names('agent_ops agent_chat_ops team_ops_wrapper team_collab_ops spawn_subagent agent_list agent_info agent_update delete_agent message_subagent agent_message_send agent_turn_request agent_reply_wait agent_thread_watch talk_to_subagent talk_to_manager talk_to_teammate request_context request_manager_help update_my_status update_team_goal share_artifact team_manage dispatch_to_agent dispatch_team_agent request_team_member_turn get_agent_result post_to_team_chat message_main_agent reply_to_team manage_team_goal manage_team_context_ref deploy_analysis_team');
+const CORE_OVERRIDES = names('browser_send_to_telegram delivery_send delivery_send_screenshot generate_image generate_video');
+const TEAM = names('agent_ops agent_chat_ops team_ops_wrapper team_collab_ops spawn_subagent agent_list agent_info agent_update delete_agent message_subagent agent_message_send agent_turn_request agent_reply_wait agent_thread_watch talk_to_subagent talk_to_manager talk_to_teammate request_context request_manager_help update_my_status update_team_goal share_artifact team_manage dispatch_to_agent dispatch_team_agent request_team_member_turn get_agent_result post_to_team_chat message_main_agent reply_to_team manage_team_goal manage_team_context_ref deploy_analysis_team chat_with_subagent agent_run_ops ask_team_coordinator');
 const SOURCE_READ = names('dev_source_read request_dev_source_edit update_dev_source_edit await_dev_source_edit_approval read_dev_sources read_source list_source grep_source source_stats src_stats read_webui_source list_webui_source grep_webui_source webui_source_stats webui_stats list_prom prom_file_stats read_prom_file grep_prom source_stats_batch');
 const SOURCE_WRITE = names('dev_source_edit apply_dev_source_patchset find_replace_source replace_lines_source insert_after_source delete_lines_source write_source delete_source find_replace_webui_source replace_lines_webui_source insert_after_webui_source delete_lines_webui_source write_webui_source delete_webui_source find_replace_prom replace_lines_prom insert_after_prom delete_lines_prom write_prom_file delete_prom_file prom_apply_dev_changes');
 const WORKSPACE = names('workspace_read workspace_edit workspace_run workspace_git workspace_safety workspace_code_nav validate_file read_file list_files list_directory grep_file grep_files file_stats mkdir present_file apply_workspace_patchset clone_repo search_files read_files_batch file_tree create_file replace_lines insert_after delete_lines find_replace delete_file write_file rename_file copy_file move_file copy_directory move_directory path_exists show_diff preview_patch apply_patch format_changed_files revert_last_tool_change revert_own_patch git_status git_diff git_log git_branch git_commit git_push open_pr run_tests run_linter run_formatter run_typecheck start_dev_server stop_process read_process_output snapshot_workspace restore_snapshot scan_secrets scan_large_files operation_plan code_outline get_symbols go_to_definition find_references terminal run_command start_process process_status process_log process_wait process_kill process_submit');
 const MEMORY = names('memory_browse memory_read_record memory_search_project memory_search_timeline memory_get_related memory_graph_snapshot memory_index_refresh memory_provider_status memory_embedding_status memory_embedding_backfill memory_debug_search memory_consolidate memory_review_claims memory_accept_claim memory_reject_claim memory_supersede_record');
 const MEDIA = names('download_url download_media video_social_cut analyze_image analyze_video');
-const AUTOMATIONS = names('schedule_job_detail schedule_job_history schedule_job_log_search schedule_job_outputs schedule_job_patch schedule_job_stuck_control task_control run_task_now internal_watch prometheus_request_ops prometheus_audit_ops');
+const MEDIA_GENERATION = names('media_generate');
+const AUTOMATION_SCHEDULING = names('schedule_job schedule_job_detail schedule_job_history schedule_job_log_search schedule_job_outputs schedule_job_patch schedule_job_stuck_control');
+const AUTOMATION_TASKS = names('automation_dashboard task_control run_task_now internal_watch');
+const AUTOMATION_RECOVERY = names('prometheus_request_ops prometheus_audit_ops');
+const AUTOMATION_SESSIONS = names('prometheus_thread_ops');
+const AUTOMATIONS = new Set([...AUTOMATION_SCHEDULING, ...AUTOMATION_TASKS, ...AUTOMATION_RECOVERY, ...AUTOMATION_SESSIONS]);
+const RUNTIME_ADMIN = names('diagnostic_packet system_diagnostics gateway_restart');
 const SKILLS = names('skill_create skill_create_bundle skill_import_bundle skill_export_bundle skill_update_from_source skill_manifest_write skill_resource_write skill_resource_delete skill_inspect');
 const MODELS = names('get_agent_models set_agent_model list_agent_model_templates save_agent_model_template update_agent_model_template apply_agent_model_template select_agent_model_template delete_agent_model_template');
 const BUSINESS = names('list_entities read_entity write_entity append_entity_event');
@@ -108,6 +126,24 @@ const COMPOSITES = names('create_composite get_composite edit_composite delete_c
 const CREATIVE_CORE = names('get_creative_mode switch_creative_mode');
 const QUALITY = names('image_check_contrast image_check_text_overflow image_detect_empty_regions image_get_bounds_summary image_get_element_at_point image_get_overlaps video_render_contact_sheet video_render_frame video_check_audio_sync video_check_caption_timing video_analyze_frame video_analyze_timeline video_check_keyframes video_extract_clip_frames video_analyze_imported_video creative_quality_report creative_validate_layout creative_validate_composition_layers creative_preflight_overlay creative_sample_composite_frames creative_frame_trace creative_frame_diff creative_analyze_generated_video creative_compare_shots creative_select_best_take creative_retry_shot_until_pass creative_lint_html_motion_clip creative_measure_text creative_text_fit_report creative_composition_lint');
 const HYPERFRAMES = names('hyperframes_browse_catalog hyperframes_insert_clip hyperframes_apply_patch hyperframes_set_text hyperframes_set_color hyperframes_set_timing hyperframes_set_variable hyperframes_set_asset hyperframes_add_animation hyperframes_lint hyperframes_qa hyperframes_materialize hyperframes_export creative_list_hyperframes_components creative_import_hyperframes_component creative_sync_hyperframes_catalog creative_apply_hyperframes_component creative_overlay_hyperframes_on_video creative_list_html_motion_templates creative_apply_html_motion_template creative_create_html_motion_clip creative_save_html_motion_template creative_save_html_motion_block creative_promote_scene_to_template creative_list_html_motion_blocks creative_render_html_motion_block creative_read_html_motion_clip creative_patch_html_motion_clip creative_restore_html_motion_revision creative_render_html_motion_snapshot creative_export_html_motion_clip');
+
+export const AUTOMATION_WORKFLOW_PACK_IDS = [
+  'automation_scheduling',
+  'automation_tasks',
+  'automation_recovery',
+  'automation_sessions',
+] as const;
+
+export type AutomationWorkflowPackId = typeof AUTOMATION_WORKFLOW_PACK_IDS[number];
+
+export function getAutomationWorkflowPackForTool(nameInput: string): AutomationWorkflowPackId | null {
+  const name = String(nameInput || '').trim();
+  if (AUTOMATION_SCHEDULING.has(name)) return 'automation_scheduling';
+  if (AUTOMATION_TASKS.has(name)) return 'automation_tasks';
+  if (AUTOMATION_RECOVERY.has(name)) return 'automation_recovery';
+  if (AUTOMATION_SESSIONS.has(name)) return 'automation_sessions';
+  return null;
+}
 
 function creativeCategory(name: string): ToolCategoryId {
   if (CREATIVE_CORE.has(name)) return 'creative_basic';
@@ -141,15 +177,19 @@ export function classifyToolFromManifest(nameInput: string, options: { isSavedCo
   if (WORKSPACE.has(name)) return 'workspace_write';
   if (MEMORY.has(name)) return 'advanced_memory';
   if (MEDIA.has(name)) return 'media_assets';
+  if (MEDIA_GENERATION.has(name)) return 'media_generation';
   if (QUALITY.has(name) || HYPERFRAMES.has(name)) return creativeCategory(name);
-  if (AUTOMATIONS.has(name)) return 'automations';
+  const automationPack = getAutomationWorkflowPackForTool(name);
+  if (automationPack) return automationPack;
+  if (RUNTIME_ADMIN.has(name)) return 'runtime_admin';
   if ((name.startsWith('skill_') && name !== 'skill_list' && name !== 'skill_read') || SKILLS.has(name)) return 'skills';
   if (MODELS.has(name)) return 'model_management';
   if (BUSINESS.has(name)) return 'business';
   if (name.startsWith('creative_')) return creativeCategory(name);
   if (INTEGRATION_ADMIN.has(name)) return 'integration_admin';
   if (name === 'social_intel') return 'social_intelligence';
-  if (name === 'edit_proposal') return 'proposal_admin';
+  if (name === 'edit_proposal' || name === 'write_proposal') return 'proposal_admin';
+  if (name === 'video_compose') return 'creative_video';
   if (COMPOSITES.has(name) || options.isSavedComposite?.(name)) return 'composite_tools';
   return null;
 }

@@ -1,6 +1,6 @@
 import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=slash-command-style-align-v1';
 import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile-api.js';
-import { prettifyModelName } from './mobile-model-badge.js';
+import { prettifyModelName } from './mobile-model-badge.js?v=pm-v260-2026-08-09-mobile-theme-palette';
 import { effortOptions, reasoningCapability, supportsFastSpeed, validEffort } from '../reasoning-capabilities.js';
 
 // Fallback model lists when /api/extensions/catalog is unavailable.
@@ -48,6 +48,7 @@ function modelsForProvider(provider, currentModel = '') {
 
 
 const SECTIONS = [
+  { id: 'system', title: 'System', icon: 'gear', desc: 'Theme-independent runtime and automatic chat settling.' },
   { id: 'heartbeat', title: 'Heartbeat', icon: 'clock', desc: 'Background heartbeat cadence and instructions.' },
   { id: 'search', title: 'Search', icon: 'target', desc: 'Preferred web search provider.' },
   { id: 'credentials', title: 'Credentials', icon: 'gear', desc: 'Search keys, vault status, and audit log.' },
@@ -197,7 +198,7 @@ export function renderMobileSettingsPage(slot, { section = '', navigate } = {}) 
 
 function renderSettingsOverview() {
   return `
-    ${card('Mobile Settings', `<div class="pm-card-body">Configure the same Settings tabs from desktop, adapted for this paired phone. System, Shortcuts, and Pairing stay desktop-only.</div>`, 'gear', 'pm-card-strong')}
+    ${card('Mobile Settings', `<div class="pm-card-body">Configure the same Settings tabs from desktop, adapted for this paired phone. Shortcuts and Pairing stay desktop-only.</div>`, 'gear', 'pm-card-strong')}
     ${renderSectionNav('')}
   `;
 }
@@ -205,6 +206,7 @@ function renderSettingsOverview() {
 async function loadSection(page, section, navigate) {
   const content = page.querySelector('#pm-settings-content');
   if (!content) return;
+  if (section === 'system') return renderSystem(content, page);
   if (section === 'models') return renderModels(content, page);
   if (section === 'credentials') return renderCredentials(content, page);
   if (section === 'search') return renderSearch(content, page);
@@ -213,6 +215,95 @@ async function loadSection(page, section, navigate) {
   if (section === 'agents') return renderAgents(content, page);
   if (section === 'channels') return renderChannels(content, page);
   if (section === 'integrations') return renderIntegrations(content, page);
+}
+
+function mobileDateMax() {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  return `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+}
+
+function askMobileAutoSettleActivationMode() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.38);display:flex;align-items:center;justify-content:center;padding:16px';
+    const box = document.createElement('div');
+    box.style.cssText = 'width:min(520px,100%);background:var(--pm-panel,var(--panel));border:1px solid var(--pm-line,var(--line));border-radius:16px;padding:20px;color:var(--pm-text,var(--text));box-shadow:0 12px 42px rgba(0,0,0,.22)';
+    box.innerHTML = `
+      <div style="font-size:16px;font-weight:800;margin-bottom:9px">When should auto-settle begin?</div>
+      <div style="font-size:13px;line-height:1.55;color:var(--pm-muted,var(--muted));margin-bottom:16px">Include chats already older than the selected date, or start the inactivity clock from now for existing chats.</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+        <button data-choice="cancel" class="pm-btn ghost" type="button">Cancel</button>
+        <button data-choice="start_now" class="pm-btn" type="button">Start from now</button>
+        <button data-choice="apply_existing" class="pm-btn primary" type="button">Apply to eligible chats</button>
+      </div>`;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const finish = (value) => { overlay.remove(); resolve(value); };
+    box.querySelectorAll('[data-choice]').forEach((button) => button.addEventListener('click', () => {
+      const choice = button.getAttribute('data-choice');
+      finish(choice === 'cancel' ? null : choice);
+    }));
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) finish(null); });
+  });
+}
+
+async function renderSystem(content, page) {
+  const data = await mobileGatewayFetch('/api/settings/session');
+  const settings = data?.session?.autoSettle || {};
+  const selected = settings.mode === 'custom' ? 'custom' : String(Number(settings.afterDays) || 0);
+  const options = [
+    { value: '0', label: 'Never' },
+    { value: '7', label: '7 days' },
+    { value: '14', label: '14 days' },
+    { value: '30', label: '30 days' },
+    { value: '90', label: '90 days' },
+    { value: 'custom', label: 'Custom' },
+  ];
+  content.innerHTML = `
+    ${card('Auto-settle untouched chats', `
+      <div class="pm-card-body">Move untouched conversations to Settled Chats after the selected inactivity period. Nothing is deleted, summarized, marked read, or detached.</div>
+      ${field('Inactivity period', select('pm-auto-settle-after', options, selected))}
+      <div id="pm-auto-settle-custom-wrap" style="display:${selected === 'custom' ? 'block' : 'none'}">
+        ${field('Custom cutoff date', input('pm-auto-settle-custom-date', settings.customDate || '', `type="date" max="${mobileDateMax()}"`), 'Choose a date before today.')}
+      </div>
+      <div class="pm-card-body">Protected chats—pinned, active, task-owned, scheduled, supervised, project, approval-sensitive, and automated chats—are always skipped.</div>
+      <div id="pm-settings-live-status"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="pm-btn" id="pm-preview-auto-settle" type="button">Preview eligible chats</button>
+        <button class="pm-btn primary" id="pm-save-auto-settle" type="button">Save auto-settle</button>
+      </div>
+    `, 'gear', 'pm-card-strong')}
+    ${card('Last auto-settle check', `<div class="pm-card-body" id="pm-auto-settle-last-run">${escapeHtml(data?.session?.autoSettleLastRun ? `Completed ${new Date(Number(data.session.autoSettleLastRun.completedAt || 0)).toLocaleString()} · ${Number(data.session.autoSettleLastRun.settled || 0)} settled.` : 'No automatic check has run yet.')}</div>`, 'clock')}
+  `;
+  const after = page.querySelector('#pm-auto-settle-after');
+  const customWrap = page.querySelector('#pm-auto-settle-custom-wrap');
+  after?.addEventListener('change', () => { if (customWrap) customWrap.style.display = after.value === 'custom' ? 'block' : 'none'; });
+  page.querySelector('#pm-preview-auto-settle')?.addEventListener('click', async () => {
+    try {
+      setSectionStatus(page, 'Previewing protected-state checks...');
+      const result = await mobileGatewayFetch('/api/settings/auto-settle/preview', { method: 'POST', body: JSON.stringify({}) });
+      const summary = result?.summary || {};
+      setSectionStatus(page, `${Number(summary.wouldSettle || 0)} eligible · ${Number(summary.scanned || 0)} scanned.`, 'ok');
+    } catch (err) { setSectionStatus(page, err.message, 'error'); }
+  });
+  page.querySelector('#pm-save-auto-settle')?.addEventListener('click', async () => {
+    const value = after?.value || '0';
+    const autoSettle = { afterDays: value === 'custom' ? 'custom' : Number(value), activationMode: 'start_now' };
+    if (value === 'custom') {
+      autoSettle.customDate = val(page, 'pm-auto-settle-custom-date');
+      if (!autoSettle.customDate) { setSectionStatus(page, 'Choose a custom cutoff date first.', 'error'); return; }
+      const localDate = new Date(`${autoSettle.customDate}T00:00:00`);
+      autoSettle.customDateOffsetMinutes = Number.isFinite(localDate.getTime()) ? localDate.getTimezoneOffset() : new Date().getTimezoneOffset();
+      autoSettle.activationMode = await askMobileAutoSettleActivationMode();
+      if (!autoSettle.activationMode) return;
+    }
+    try {
+      await mobileGatewayFetch('/api/settings/session', { method: 'POST', body: JSON.stringify({ autoSettle }) });
+      setSectionStatus(page, 'Auto-settle settings saved.', 'ok');
+      await renderSystem(content, page);
+    } catch (err) { setSectionStatus(page, err.message, 'error'); }
+  });
 }
 
 async function renderModels(content, page) {

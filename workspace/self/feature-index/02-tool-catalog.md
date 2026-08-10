@@ -10,6 +10,8 @@ The exact tool schema is authoritative for parameters. This catalog is the compl
 
 ## Static schema registry coverage
 
+Automation is split into four narrower workflow packs—scheduling, tasks, recovery, and sessions—plus a compatibility `automations` umbrella. The umbrella remains available for legacy callers; narrow activation is preferred for token savings.
+
 The current gateway builder assembles static schemas from four source modules: `file-web-memory.ts` (**135** names), `agent-team-schedule.ts` (**56**), `cis-system.ts` (**77**), and `creative-tools.ts` (**162**)—**430 static schema names** before dynamic connector/MCP/composite definitions and public-build filtering. The category table below accounts for this product-facing surface by operation family. Use those files for the exact parameter contract, and use the category manifest for ownership/activation; neither hardcodes a promise that a dynamic integration tool is installed.
 
 For an exact, copy-ready list of every one of those 430 names, use [08-static-tool-schema-inventory.md](08-static-tool-schema-inventory.md). The fifth definition module, `xai-tools.ts`, is currently present but contributes no static schema names through this scan.
@@ -42,7 +44,11 @@ The always-assembled delivery, process, terminal, Telegram, X/Vercel wrapper, an
 | `workspace_write` | Work in the user workspace and run development operations | `workspace_read/edit/run/git/safety/code_nav`, file/tree/read/search/batch/patch operations, create/move/copy/rename/delete, validation/diff/rollback, Git, test/lint/format/typecheck, process/server control, snapshots, scans, symbols/references |
 | `advanced_memory` | Search, inspect, maintain, and govern durable memory | `memory_browse`, `memory_read_record`, project/timeline search, related records, graph snapshot, index/provider/embedding status and backfill, debug search, consolidate/review/accept/reject/supersede claims |
 | `media_assets` | Download and analyze externally sourced media | `download_url`, `download_media`, `analyze_image`, `analyze_video` |
-| `automations` | Inspect and control schedules, task runs, watches, and managed-thread operations | `schedule_job_detail/history/log_search/outputs/patch/stuck_control`, `task_control`, `run_task_now`, `automation_dashboard`, `prometheus_request_ops`, `prometheus_audit_ops` |
+| `automations` | Compatibility umbrella for automation workflow packs | Prefer one of `automation_scheduling`, `automation_tasks`, `automation_recovery`, or `automation_sessions`; the umbrella remains available for legacy callers and loads all four packs |
+| `automation_scheduling` | Create and inspect recurring schedules and cron jobs | `schedule_job`, `schedule_job_detail/history/log_search/outputs/patch/stuck_control` |
+| `automation_tasks` | Inspect, run, control, and watch task executions | `automation_dashboard`, `task_control`, `run_task_now`, `internal_watch` |
+| `automation_recovery` | Reconstruct and recover interrupted or failed work | `prometheus_request_ops`, `prometheus_audit_ops` |
+| `automation_sessions` | List/find active and settled Prometheus sessions, inspect, reopen, create, and steer threads | `prometheus_thread_ops` |
 | `external_apps` | Use configured app wrappers and provider-connected systems | `connector_*` tools, `x_search_ops`, `x_posts`, `x_users`, `x_lists`, `x_dm`, `x_admin`, `vercel_ops`, `x_api_*` |
 | `integration_admin` | Administer integrations | `connection_ops`, `mcp_server_manage`, `webhook_manage`, `integration_quick_setup` |
 | `social_intelligence` | Analyze social profiles/opportunities | `social_intel` |

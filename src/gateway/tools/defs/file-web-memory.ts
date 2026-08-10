@@ -2211,29 +2211,25 @@ export function getFileWebMemoryTools(): any[] {
     {
       type: 'function',
       function: {
-        name: 'memory_write',
-        description: 'Write a durable fact under a category. In main Prometheus this can target USER.md, SOUL.md, or MEMORY.md. In a distinct manager/agent runtime only file="memory" is allowed and resolves to that actor’s private MEMORY.md; it never falls back to main memory.',
+        name: 'memory',
+        description: 'Unified lightweight memory wrapper. Set action="write" to save a durable fact, action="read" to read USER.md/SOUL.md/MEMORY.md, or action="search" to retrieve relevant long-term memory. In a distinct manager/agent runtime only file="memory" is allowed for file access and resolves to that actor’s private MEMORY.md; it never falls back to main memory.',
         parameters: {
           type: 'object',
-          required: ['file', 'category', 'content'],
+          required: ['action'],
+          additionalProperties: false,
           properties: {
-            file: { type: 'string', description: '"user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md' },
-            category: { type: 'string', description: 'Category section name (e.g. "coding", "communication_style", "projects"). Use existing categories when possible.' },
-            content: { type: 'string', description: 'The fact or update to write. Be specific and concise. Example: "Prefers vanilla JS over frameworks"' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_read',
-        description: 'Read a markdown memory file. In a distinct manager/agent runtime only file="memory" is allowed and resolves to that actor’s private MEMORY.md.',
-        parameters: {
-          type: 'object',
-          required: ['file'],
-          properties: {
-            file: { type: 'string', description: '"user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md' },
+            action: { type: 'string', enum: ['write', 'read', 'search'], description: 'Memory operation to perform.' },
+            file: { type: 'string', enum: ['user', 'soul', 'memory'], description: 'For write/read: "user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md.' },
+            category: { type: 'string', description: 'For write: category section name, such as coding, communication_style, or projects.' },
+            content: { type: 'string', description: 'For write: the specific, concise fact or update to save.' },
+            query: { type: 'string', description: 'For search: natural-language query or exact memory ID/key.' },
+            mode: { type: 'string', enum: ['quick', 'deep', 'project', 'timeline'], description: 'For search: quick (default), deep, project, or timeline.' },
+            limit: { type: 'integer', minimum: 1, maximum: 50, description: 'For search: maximum number of hits.' },
+            project_id: { type: 'string', description: 'For search: restrict results to a project.' },
+            date_from: { type: 'string', description: 'For search: lower date bound, YYYY-MM-DD or ISO timestamp.' },
+            date_to: { type: 'string', description: 'For search: upper date bound, YYYY-MM-DD or ISO timestamp.' },
+            source_types: { type: 'array', items: { type: 'string' }, description: 'For search: evidence source-type filters.' },
+            min_durability: { type: 'number', minimum: 0, maximum: 1, description: 'For search: minimum evidence durability from 0 to 1.' },
           },
         },
       },
@@ -2242,33 +2238,12 @@ export function getFileWebMemoryTools(): any[] {
       type: 'function',
       function: {
         name: 'memory_browse',
-        description: 'List the category sections currently in USER.md, SOUL.md, or MEMORY.md. Call this before memory_write to find the right category or decide to create a new one.',
+        description: 'List the category sections currently in USER.md, SOUL.md, or MEMORY.md. Call this before memory(action="write") to find the right category or decide to create a new one.',
         parameters: {
           type: 'object',
           required: ['file'],
           properties: {
             file: { type: 'string', description: '"user" for USER.md, "soul" for SOUL.md, or "memory" for MEMORY.md' },
-          },
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'memory_search',
-          description: 'Search long-term memory with SQLite/FTS/vector hybrid retrieval when available, falling back to the JSON index. Results blend exact/FTS recall, operational records (canonical decisions, preferences, proposals, task_outcomes, project_facts), semantic vectors, recency, durability, authority, status/supersession, and evidence chunks. Hits include layer ("operational"|"evidence"), recordType, canonicalKey, whyMatched, and citation/source span fields. Use record_id from hits with memory_read_record to fetch full record.',
-        parameters: {
-          type: 'object',
-          required: ['query'],
-          properties: {
-            query: { type: 'string', description: 'Natural language query or exact ID (proposal ID, task UUID, canonical key like "proposal:prop_xxx" or "preference:root:memory:key_decisions").' },
-            mode: { type: 'string', description: 'Search mode: quick (default), deep (broader, all candidates), project (project-scoped), or timeline (chronological evidence).' },
-            limit: { type: 'number', description: 'Maximum hits to return (default 8, max 50).' },
-            project_id: { type: 'string', description: 'Filter results to a specific project ID.' },
-            date_from: { type: 'string', description: 'Lower date bound YYYY-MM-DD or ISO timestamp (evidence layer only).' },
-            date_to: { type: 'string', description: 'Upper date bound YYYY-MM-DD or ISO timestamp (evidence layer only).' },
-            source_types: { type: 'array', items: { type: 'string' }, description: 'Source type filter (skips operational layer when set). Types: chat_session, chat_transcript, chat_compaction, task_state, proposal_state, memory_root, memory_note, obsidian_note, project_state, etc.' },
-            min_durability: { type: 'number', description: 'Minimum durability 0..1 (evidence layer only).' },
           },
         },
       },

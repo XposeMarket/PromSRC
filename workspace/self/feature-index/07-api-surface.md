@@ -6,7 +6,7 @@ Last source verification: 2026-07-22. This is a route-family map for internal pr
 
 | Family | Responsibilities |
 |---|---|
-| Chat and sessions | Gateway status, stream/non-stream chat, steering, sessions/history/search/rename/delete, edit-rerun reset, model-route override, context-window data, main-goal actions, thread supervision, push subscription/status/test; `scope=all` provides a unified, paged interactive-session timeline with durable `lastOrigin` summaries |
+| Chat and sessions | Gateway status, stream/non-stream chat, steering, sessions/history/search/rename/delete, edit-rerun reset, model-route override, context-window data, main-goal actions, thread supervision, settled-session listing/search/reopen through `settledAt`, push subscription/status/test; `scope=all` provides a unified, paged interactive-session timeline with durable `lastOrigin` summaries |
 | Mobile chat and commands | Mobile stream replay/runs/reconciliation, model/stop controls, screenshots, mobile read state; paired authorization supplied by mobile client |
 | Voice/realtime | Voice status/voices/audio/TTS/STT; voice-agent context/narration/input/realtime bootstrap/calls/skills/workgroups; xAI realtime/vision; mobile interruption |
 | Tasks/background/heartbeat | Background task list/detail/evidence/stream, message/pause/resume/restart/delete/join/error response, legacy/current background status, schedule task logs/memory, heartbeat config and per-agent tick/config |

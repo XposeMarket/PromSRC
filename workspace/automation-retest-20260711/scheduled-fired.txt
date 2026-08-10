@@ -1,2 +1,0 @@
-SCHEDULE_RETEST=PASS
-SOURCE=one_shot_job

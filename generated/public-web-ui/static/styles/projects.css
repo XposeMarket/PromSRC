@@ -190,7 +190,7 @@ body.projects-edit-mode .project-card-delete-btn { display: flex; }
 .project-session-item:hover { background: color-mix(in srgb, var(--panel) 82%, transparent); }
 
 /* Projects are a compact tree, not a stack of cards. */
-#projects-list { padding: 4px 8px 12px; }
+#projects-list { padding: 4px 10px 12px 0; }
 .project-card {
   margin: 0;
   border: 0;
@@ -304,6 +304,157 @@ body.projects-edit-mode .project-card-delete-btn { display: flex; }
   background: color-mix(in srgb, var(--flame-glow) 55%, var(--panel) 45%);
   color: var(--text);
   font-weight: 700;
+}
+
+/* Project groups live in the Projects rail. The group row uses the same quiet
+   session treatment; only the chevron and folder mark signal that it expands. */
+.project-sidebar-tree {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 10px 2px;
+}
+.project-sidebar-group {
+  margin: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.project-sidebar-row {
+  display: block;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 7px 30px 7px 32px;
+  margin: 0 0 2px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+}
+.project-sidebar-row:hover,
+.project-sidebar-group.active-project .project-sidebar-row {
+  background: var(--sidebar-item-hover);
+  border-color: transparent;
+  box-shadow: none;
+}
+.project-sidebar-row.active { background: var(--sidebar-active-bg); }
+.project-sidebar-row .project-card-icon {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 17px;
+  height: 17px;
+  border: 0;
+  background: transparent;
+  color: var(--sidebar-muted, var(--muted));
+}
+.project-sidebar-row .project-card-icon svg { width: 15px; height: 15px; }
+.project-row-content {
+  display: block;
+  min-width: 0;
+}
+.project-row-meta {
+  display: flex;
+  margin-top: 0;
+}
+.project-sidebar-row .project-card-meta {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.project-sidebar-row .project-card-name {
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.25;
+  color: var(--sidebar-text, var(--text));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-sidebar-row .project-card-sub { display: none; }
+.project-row-time {
+  flex: 0 0 auto;
+  color: var(--sidebar-muted, var(--muted));
+  font-size: 10px;
+}
+.project-sidebar-row .project-card-add-btn {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sidebar-muted, var(--muted));
+  opacity: 0;
+}
+.project-sidebar-row:hover .project-card-add-btn,
+.project-sidebar-row:focus-within .project-card-add-btn { opacity: 1; }
+.project-sidebar-row .project-card-add-btn:hover { background: var(--sidebar-active-bg); color: var(--text); }
+.project-sidebar-row .project-card-delete-btn { position: absolute; top: 7px; right: 32px; }
+.project-sidebar-group .project-sessions-list {
+  display: none;
+  gap: 2px;
+  margin: 1px 0 3px 16px;
+  padding-left: 8px;
+  border-left: 1px solid color-mix(in srgb, var(--line-strong) 72%, transparent);
+}
+.project-sidebar-group.open .project-sessions-list { display: flex; }
+#projects-list .project-sessions-list { background: transparent !important; }
+#projects-list .project-sidebar-row {
+  padding: 7px 30px 7px 32px !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  box-shadow: none !important;
+}
+#projects-list .project-sidebar-row:hover {
+  background: var(--sidebar-item-hover) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+#projects-list .project-sidebar-group.active-project .project-sidebar-row,
+#projects-list .project-sidebar-row.active {
+  background: var(--sidebar-active-bg) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+#projects-list .project-sidebar-row::before { display: none !important; }
+#projects-list .project-chat-session-card {
+  margin-bottom: 2px;
+  padding: 7px 30px 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+#projects-list .project-chat-session-card:hover,
+#projects-list .project-chat-session-card.active {
+  background: var(--sidebar-item-hover) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+#projects-list .project-chat-session-card.is-working,
+#projects-list .project-chat-session-card.unread:not(.active) {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+#projects-list .project-chat-session-card.is-working::before,
+#projects-list .project-chat-session-card.unread::before { display: none; }
+.project-chat-delete-btn {
+  display: none;
+  right: 32px;
+}
+body.projects-edit-mode .project-chat-delete-btn { display: inline-flex; }
+.project-chat-delete-btn:hover { color: #f87171; background: rgba(248,113,113,0.12); }
+.project-empty-session {
+  padding: 7px 8px;
+  color: var(--sidebar-muted, var(--muted));
+  font-size: 10px;
 }
 
 .project-session-dot {
@@ -742,3 +893,17 @@ body.in-project-session .project-editors-wrap { display: flex; }
   padding: 18px;
 }
 #new-project-modal.open { display: flex; }
+
+/* Inline project rows use the regular chat footprint; only their children
+   receive the tree guide, with no extra project panel. */
+.project-inline-section-title { margin-top: 10px; }
+.project-chat-group { display: block; }
+.project-chat-row { position: relative; cursor: pointer; }
+.project-chat-row .project-chat-pin-btn { z-index: 2; }
+.project-chat-icon-line { display: inline-flex; align-items: center; gap: 5px; margin-right: 5px; color: var(--brand, #d6b75e); vertical-align: -2px; }
+.project-chat-icon-line .imported-source-logo { display: inline-block; width: 18px; height: 18px; flex: 0 0 18px; vertical-align: -4px; }
+.project-chat-icon-line .imported-source-logo-fallback { display: inline-block; width: 18px; height: 18px; flex: 0 0 18px; }
+.project-chat-folder { display: inline-flex; width: 15px; height: 15px; }
+.project-chat-folder svg { width: 100%; height: 100%; }
+.project-chat-children { margin: 1px 0 4px 16px; padding-left: 8px; border-left: 1px solid color-mix(in srgb, var(--line, #596273) 76%, transparent); }
+.project-chat-children[hidden] { display: none; }

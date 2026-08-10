@@ -17,8 +17,13 @@
 // threshold as best-effort. All paths degrade silently.
 
 import { mobileGatewayFetch } from './mobile-api.js';
-import { effortOptions, supportsFastSpeed } from '../reasoning-capabilities.js';
+import {
+  reasoningSelectorOptions,
+  formatReasoningSelectorLabel,
+  supportsFastSpeed,
+} from '../reasoning-capabilities.js';
 import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
+import { renderReasoningSelector } from '../components/reasoning-selector.js';
 
 // ── Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ──
 const BUILTIN_LABELS = {
@@ -56,6 +61,7 @@ let _llmCache = null;            // full llm config { provider, providers }
 let _catalogCache = null;        // [{ id, name, runtime, ... }]
 let _credentialedIds = null;     // [providerId, ...]
 let _mobileDraftModelRoute = null; // Unsaved new-chat override; never writes Settings.
+let _subagentReasoningContext = null;
 
 function _esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
@@ -141,6 +147,8 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   const proxy = document.createElement('label');
   const input = document.createElement('input');
   proxy.className = 'pm-haptic-gesture-surface';
+  const isTabbarGestureSurface = surface.classList.contains('pm-tabbar');
+  if (isTabbarGestureSurface) proxy.classList.add('pm-tabbar-haptic-gesture-surface');
   proxy.setAttribute('aria-hidden', 'true');
   proxy.tabIndex = -1;
   input.type = 'checkbox';
@@ -162,7 +170,7 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
   proxy.style.cssText = [
     'all: unset',
     'position: fixed',
-    'z-index: 2147483647',
+    `z-index: ${isTabbarGestureSurface ? '6' : '2147483647'}`,
     'overflow: hidden',
     'opacity: 0',
     'pointer-events: auto',
@@ -501,6 +509,7 @@ export function mobileModelBadgeSeedLabel() {
 function _closeSheet() {
   const scrim = document.getElementById('pm-msheet-scrim');
   const sheet = document.getElementById('pm-msheet');
+  const restoreFocus = sheet?.__pmModelSheetRestoreFocus;
   sheet?.__pmModelSheetCleanup?.();
   if (scrim) scrim.classList.remove('open');
   if (sheet) sheet.classList.remove('open');
@@ -508,6 +517,9 @@ function _closeSheet() {
   setTimeout(() => {
     if (scrim) scrim.remove();
     if (sheet) sheet.remove();
+    if (!document.getElementById('pm-msheet') && restoreFocus?.isConnected && typeof restoreFocus.focus === 'function') {
+      restoreFocus.focus({ preventScroll: true });
+    }
   }, 220);
 }
 
@@ -529,6 +541,7 @@ function _positionSheetNearBadge(sheet) {
 }
 
 function _openSheet(titleHtml, bodyHtml) {
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   _closeSheetImmediate();
   document.body.classList.add('pm-mobile-overlay-open');
   const scrim = document.createElement('div');
@@ -566,12 +579,21 @@ function _openSheet(titleHtml, bodyHtml) {
     event.preventDefault();
     event.stopPropagation();
   }, true);
+  const onKeyDown = (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    _closeSheet();
+  };
+  document.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('resize', reposition, { passive: true });
   window.visualViewport?.addEventListener?.('resize', reposition, { passive: true });
   sheet.__pmModelSheetCleanup = () => {
     window.removeEventListener('resize', reposition);
     window.visualViewport?.removeEventListener?.('resize', reposition);
+    document.removeEventListener('keydown', onKeyDown, true);
   };
+  sheet.__pmModelSheetRestoreFocus = previousFocus;
   return sheet;
 }
 
@@ -602,23 +624,20 @@ let _reasoningSaveTimer = null;
 let _reasoningSaveChain = Promise.resolve();
 
 function _effortOptions(provider, cfg = {}) {
-  if (provider === 'openai' || provider === 'openai_codex' || provider === 'anthropic') {
-    return effortOptions(provider, cfg.model || '');
-  }
-  if (provider === 'perplexity') return PERPLEXITY_EFFORT_OPTIONS;
-  if (provider === 'xai') {
-    const model = String(cfg.model || '').trim();
-    return /^grok-4\.20-multi-agent(?:-|$)/i.test(model) ? XAI_MULTI_AGENT_EFFORT_OPTIONS : XAI_EFFORT_OPTIONS;
-  }
-  return null;
+  return reasoningSelectorOptions(provider, cfg.model || '');
 }
 
 function _effortLabel(value, provider) {
-  if (!value) return (provider === 'anthropic' || provider === 'xai') ? 'Auto' : 'None';
-  if (value === 'xhigh') return 'X high';
-  if (value === 'max') return 'Max';
-  if (value === 'ultra') return 'Ultra';
-  return value.charAt(0).toUpperCase() + value.slice(1);
+  return formatReasoningSelectorLabel(value, provider);
+}
+
+// The subagent route owns a per-agent model/reasoning route, while the main
+// badge owns the current chat session route. Keeping this context explicit
+// prevents a tap in subagent chat from mutating the main-chat model.
+export function setMobileSubagentReasoningContext(context = null) {
+  _subagentReasoningContext = context && typeof context === 'object'
+    ? { ...context }
+    : null;
 }
 
 async function _openReasoningSheet() {
@@ -631,37 +650,30 @@ async function _openReasoningSheet() {
   await refreshMobileModelBadge(true);
   const { provider } = _activeModel(_llmCache);
   const cfg = (_llmCache.providers || {})[provider] || {};
-  _renderReasoningBody(provider, cfg);
+  _renderReasoningBody(provider, cfg, { onAdvanced: _openSwitchSheet });
 }
 
-function _renderReasoningBody(provider, cfg) {
+function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, onSave = null } = {}) {
   const options = _effortOptions(provider, cfg);
   const current = String(cfg.reasoning_effort || '').trim();
   const selectedIndex = Math.max(0, options ? options.indexOf(current) : 0);
   const selectedProgress = options && options.length > 1 ? selectedIndex / (options.length - 1) : 0;
-  const selectedFillWidth = options && options.length ? ((1 / options.length) + selectedProgress * ((options.length - 1) / options.length)) * 100 : 0;
-  const modelName = prettifyModelName(cfg.model, provider);
-  const effortName = options ? _effortLabel(options[selectedIndex], provider) : 'Default';
   _setSheetTitle('');
-
-  const slider = options ? `
-    <div class="pm-reasoning-control" id="pm-reasoning-control" style="--pm-reasoning-index:${selectedIndex};--pm-reasoning-progress:${selectedProgress};--pm-reasoning-fill-width:${selectedFillWidth}%;--pm-reasoning-steps:${Math.max(1, options.length - 1)}" role="slider" tabindex="0" aria-label="Reasoning level" aria-valuemin="0" aria-valuemax="${options.length - 1}" aria-valuenow="${selectedIndex}" aria-valuetext="${_esc(effortName)}">
-      <div class="pm-reasoning-track" aria-hidden="true">
-        <div class="pm-reasoning-fill"></div>
-        ${options.map((value, index) => `<button type="button" class="pm-reasoning-segment ${index === selectedIndex ? 'is-active ' : ''}${index <= selectedIndex ? 'is-filled' : ''}" data-index="${index}" aria-label="${_esc(_effortLabel(value, provider))}"><span>${_esc(_effortLabel(value, provider))}</span></button>`).join('')}
-      </div>
-    </div>` : `<div class="pm-msheet-empty">${_esc(_providerLabel(provider))} has no adjustable reasoning levels.</div>`;
-
-  const body = _setSheetBody(`
-    <button type="button" class="pm-reasoning-summary" id="pm-reasoning-model" aria-label="Choose model and provider">
-      <strong>${_esc(modelName)}</strong><span aria-hidden="true">·</span><span id="pm-reasoning-live-label">${_esc(effortName)}</span><span class="pm-reasoning-summary-chev" aria-hidden="true">›</span>
-    </button>
-    ${slider}`);
+  const body = _setSheetBody(renderReasoningSelector({
+    provider,
+    model: cfg.model,
+    effort: current,
+    selectorId: 'pm-reasoning-selector',
+    controlId: 'pm-reasoning-control',
+    liveLabelId: 'pm-reasoning-live-label',
+    advancedId: 'pm-reasoning-advanced',
+    includeAdvanced: typeof onAdvanced === 'function',
+  }));
   if (!body) return;
 
-  document.getElementById('pm-reasoning-model')?.addEventListener('click', () => {
+  document.getElementById('pm-reasoning-advanced')?.addEventListener('click', () => {
     pmHaptic(10);
-    _openSwitchSheet();
+    onAdvanced?.();
   });
 
   const control = document.getElementById('pm-reasoning-control');
@@ -696,7 +708,12 @@ function _renderReasoningBody(provider, cfg) {
         }
         lastIndex = safeIndex;
       }
-      if (save) _queueReasoningSave(provider, { reasoning_effort: value }, immediate);
+      if (save) {
+        const saveResult = onSave
+          ? onSave(value, { immediate })
+          : _queueReasoningSave(provider, { reasoning_effort: value }, immediate);
+        if (saveResult?.catch) saveResult.catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
+      }
     };
     const progressFromEvent = (event) => {
       const rect = control.getBoundingClientRect();
@@ -762,6 +779,41 @@ function _renderReasoningBody(provider, cfg) {
       else commitIndex(currentIndex + (event.key === 'ArrowRight' ? 1 : -1), true);
     });
   }
+}
+
+async function _openSubagentReasoningSheet() {
+  const context = _subagentReasoningContext;
+  if (!context?.agentId) return;
+  pmHaptic(10);
+  const sheet = _openSheet('', '<div class="pm-msheet-loading">Loading…</div>');
+  sheet?.classList.add('is-reasoning');
+  document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
+  sheet?.removeAttribute('style');
+  const provider = String(context.provider || '').trim();
+  const model = String(context.model || '').trim();
+  _renderReasoningBody(provider, {
+    model,
+    reasoning_effort: String(context.effort || '').trim(),
+  }, {
+    onAdvanced: null,
+    onSave: (() => {
+      let saveChain = Promise.resolve();
+      return (value) => {
+        const effort = String(value || '');
+        saveChain = saveChain.catch(() => {}).then(async () => {
+          const result = await mobileGatewayFetch(`/api/agents/${encodeURIComponent(context.agentId)}/model`, {
+            method: 'PATCH',
+            body: JSON.stringify({ reasoning_effort: effort }),
+          });
+          if (result?.success === false) throw new Error(result.error || 'Could not save reasoning');
+          context.effort = effort;
+          _subagentReasoningContext = { ...context };
+          context.onSaved?.({ effort: context.effort, agent: result?.agent || null });
+        });
+        return saveChain;
+      };
+    })(),
+  });
 }
 
 function _queueReasoningSave(provider, patch, immediate = false) {
@@ -976,8 +1028,10 @@ export function initMobileModelBadge() {
     if (!badge) return;
     event.preventDefault();
     event.stopPropagation();
-    // Subagent chat badge is display-only (Name/Model Effort).
-    if (_isSubagentModelBadge(badge)) return;
+    if (_isSubagentModelBadge(badge)) {
+      _openSubagentReasoningSheet();
+      return;
+    }
     _openReasoningSheet();
   });
 

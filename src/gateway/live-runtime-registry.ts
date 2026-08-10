@@ -380,6 +380,7 @@ function toDurableSnapshot(snapshot: LiveRuntimeSnapshot): LiveRuntimeSnapshot {
   if (cp && typeof cp === 'object') {
     const light: Record<string, any> = {
       event: cp.event,
+      phase: cp.phase,
       message: typeof cp.message === 'string' ? cp.message.slice(0, MAX_DURABLE_CHECKPOINT_TEXT) : cp.message,
       toolName: cp.toolName,
       label: cp.label,

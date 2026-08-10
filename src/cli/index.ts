@@ -122,7 +122,8 @@ function gatewayChildArgs(): string[] {
   // Supervise the gateway server itself. Recursively spawning another CLI
   // created a CLI -> server grandchild tree, so killing a frozen server left
   // the watched CLI alive and forced recovery to wait for health timeouts.
-  return [...process.execArgv, resolveGatewayEntryForTerminal()];
+  const entry = resolveGatewayEntryForTerminal();
+  return entry.endsWith('.ts') ? [...process.execArgv, entry] : [entry];
 }
 
 function killGatewayChild(child: ChildProcess): void {
@@ -308,12 +309,62 @@ async function ensureGatewayForCli(): Promise<boolean> {
   return false;
 }
 
+function sourceTreeNewerThanCompiled(rootDir: string, compiledMtimeMs: number): boolean {
+  const pending: string[] = [path.join(rootDir, 'src')];
+  while (pending.length) {
+    const current = pending.pop()!;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name === '.git') continue;
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(fullPath);
+        continue;
+      }
+      if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
+      try {
+        if (fs.statSync(fullPath).mtimeMs > compiledMtimeMs) return true;
+      } catch {}
+    }
+  }
+  return false;
+}
+
 function resolveGatewayEntryForTerminal(): string {
-  const jsEntry = path.join(__dirname, '..', 'gateway', 'server-v2.js');
-  if (fs.existsSync(jsEntry)) return jsEntry;
-  const tsEntry = path.join(__dirname, '..', 'gateway', 'server-v2.ts');
-  if (fs.existsSync(tsEntry)) return tsEntry;
-  return jsEntry;
+  const rootDir = resolveInstallRoot();
+  const compiledEntry = path.join(rootDir, 'dist', 'gateway', 'server-v2.js');
+  const sourceEntry = path.join(rootDir, 'src', 'gateway', 'server-v2.ts');
+  const preferSource = process.env.PROMETHEUS_GATEWAY_USE_SOURCE === '1';
+  const preferCompiled = process.env.PROMETHEUS_GATEWAY_USE_COMPILED === '1';
+  if (fs.existsSync(compiledEntry) && !preferSource) {
+    try {
+      const compiledMtimeMs = fs.statSync(compiledEntry).mtimeMs;
+      if (preferCompiled || !sourceTreeNewerThanCompiled(rootDir, compiledMtimeMs)) return compiledEntry;
+    } catch {}
+  }
+  if (fs.existsSync(sourceEntry)) return sourceEntry;
+  return compiledEntry;
+}
+
+function hasExplicitQuickRestartContext(stateDir: string): boolean {
+  const candidates = [
+    path.join(stateDir, 'restart-context.json'),
+    process.env.PROMETHEUS_DATA_DIR ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus', 'restart-context.json') : '',
+  ].filter(Boolean);
+  for (const filePath of candidates) {
+    try {
+      const context = JSON.parse(fs.readFileSync(filePath, 'utf8')) as any;
+      const timestamp = Number(context?.timestamp || 0);
+      if (context?.quickRestart === true
+        && (!timestamp || Math.abs(Date.now() - timestamp) < 60_000)
+        && !context?.taskId
+        && (!Array.isArray(context?.affectedFiles) || context.affectedFiles.length === 0)) {
+        return true;
+      }
+    } catch {}
+  }
+  return false;
 }
 
 function appendStreamToStartupLog(stream: NodeJS.ReadableStream | null, capture: (line: string) => void): void {
@@ -475,6 +526,7 @@ async function runSupervisedGateway(): Promise<void> {
   let child: ChildProcess | null = null;
   let launchInFlight = false;
   let restartTimer: NodeJS.Timeout | null = null;
+  let fastLaunchPending = false;
   const supervisorStateDir = process.env.PROMETHEUS_SUPERVISOR_STATE_DIR
     || path.join(resolveInstallRoot(), '.prometheus');
 
@@ -521,25 +573,31 @@ async function runSupervisedGateway(): Promise<void> {
     }
   };
 
-  const scheduleLaunch = () => {
+  const scheduleLaunch = (explicitQuickRestart = false) => {
     if (stopping || restartTimer || launchInFlight) return;
     restartCount++;
-    const delayMs = Math.min(10_000, 1000 + restartCount * 1000);
-    console.error(`[GatewaySupervisor] Scheduling gateway restart in ${delayMs}ms...`);
+    const delayMs = explicitQuickRestart ? 100 : Math.min(10_000, 1000 + restartCount * 1000);
+    console.error(`[GatewaySupervisor] Scheduling gateway restart in ${delayMs}ms${explicitQuickRestart ? ' (explicit quick restart)' : ''}...`);
+    fastLaunchPending = explicitQuickRestart;
     restartTimer = setTimeout(() => {
       restartTimer = null;
-      launch().catch((err: any) => {
+      const launchFast = fastLaunchPending;
+      fastLaunchPending = false;
+      launch(launchFast).catch((err: any) => {
         console.error(`[GatewaySupervisor] Restart failed: ${err?.message || err}`);
         scheduleLaunch();
       });
     }, delayMs);
   };
 
-  const launch = async () => {
+  const launch = async (explicitQuickRestart = false) => {
     if (stopping || launchInFlight || (child && child.exitCode === null && child.signalCode === null)) return;
     launchInFlight = true;
     try {
-    await clearUnhealthyGatewayPort(child?.pid ? [child.pid] : []);
+    // The gateway process has already emitted its exit event for an explicit
+    // quick restart, so the supervisor can spawn immediately. The health/port
+    // ownership probe remains on crash-recovery and manual relaunch paths.
+    if (!explicitQuickRestart) await clearUnhealthyGatewayPort(child?.pid ? [child.pid] : []);
     if (stopping) return;
     const launched = spawn(process.execPath, gatewayChildArgs(), {
       cwd: process.cwd(),
@@ -547,9 +605,12 @@ async function runSupervisedGateway(): Promise<void> {
         ...process.env,
         PROMETHEUS_SUPERVISED_GATEWAY_CHILD: '1',
         PROMETHEUS_SUPERVISOR_STATE_DIR: supervisorStateDir,
+        ...(explicitQuickRestart ? { PROMETHEUS_HOT_RESTART: '1' } : {}),
       },
       stdio: 'inherit',
-      windowsHide: false,
+      // A failed child may be relaunched several times while the supervisor
+      // resolves ownership. Never surface each attempt as a new console on Windows.
+      windowsHide: true,
     });
     child = launched;
     launched.once('exit', (code, signal) => {
@@ -558,14 +619,16 @@ async function runSupervisedGateway(): Promise<void> {
       if (child === launched) child = null;
       console.error(`[GatewaySupervisor] Gateway exited (${signal || (code ?? 'unknown')}).`);
       const now = Date.now();
+      const probe = await probeGatewayHealth(1200);
+      const portOwnerPids = getGatewayPortOwnerPids();
       const runtimeStatus = readGatewayRuntimeStatus();
       const progressLease = readGatewayProgressLease(path.join(resolveInstallRoot(), '.prometheus'));
       const decision = classifyGatewaySupervisorObservation({
         now,
-        healthOk: false,
+        healthOk: probe.healthy,
         childPid: launched.pid,
         childExited: true,
-        portOwnerPids: [],
+        portOwnerPids,
         consecutiveFailures: 0,
         failureLimit: GATEWAY_HEALTH_FAILURE_LIMIT,
         restartEnabled: gatewaySupervisorRestartEnabled(),
@@ -581,8 +644,13 @@ async function runSupervisedGateway(): Promise<void> {
           supervisorPid: process.pid,
           childPid: launched.pid,
           childExit: { code, signal },
-          portOwnerPids: [],
-          probe: { healthy: false, durationMs: 0, outcome: signal ? 'child_signal_exit' : 'child_exit' },
+          portOwnerPids,
+          probe: {
+            healthy: probe.healthy,
+            durationMs: probe.durationMs,
+            outcome: probe.healthy ? 'healthy_after_child_exit' : signal ? 'child_signal_exit' : 'child_exit',
+            statusCode: probe.statusCode,
+          },
           consecutiveFailures: 0,
           decision,
           runtimeStatus,
@@ -608,7 +676,16 @@ async function runSupervisedGateway(): Promise<void> {
       } else if (supervisorRequest.status !== 'none') {
         console.error(`[GatewaySupervisor] Ignored supervisor replacement request (${supervisorRequest.status}).`);
       }
-      scheduleLaunch();
+      if (probe.healthy) {
+        console.error('[GatewaySupervisor] Child exited, but a healthy gateway is already serving port 18789. Stopping this supervisor instead of relaunching a duplicate.');
+        stopping = true;
+        if (restartTimer) {
+          clearTimeout(restartTimer);
+          restartTimer = null;
+        }
+        return;
+      }
+      scheduleLaunch(hasExplicitQuickRestartContext(supervisorStateDir));
       })().catch((error: any) => {
         console.error(`[GatewaySupervisor] Child-exit handling failed: ${error?.message || error}`);
         scheduleLaunch();
@@ -1067,13 +1144,14 @@ gateway
 
     const loading = runLoadingScreen();
 
-    const gatewayEntry = resolveGatewayEntryForTerminal();
+    const gatewayArgs = gatewayChildArgs();
+    const gatewayEntry = gatewayArgs[gatewayArgs.length - 1];
     let lastStartupError: unknown = null;
     for (let attempt = 1; attempt <= GATEWAY_START_ATTEMPTS; attempt++) {
       await clearUnhealthyGatewayPort();
       const suffix = GATEWAY_START_ATTEMPTS > 1 ? ` (attempt ${attempt}/${GATEWAY_START_ATTEMPTS})` : '';
       captureStartupLog(`[Gateway] Starting child process${suffix}: ${gatewayEntry}`);
-      const child = spawn(process.execPath, [...process.execArgv, gatewayEntry], {
+      const child = spawn(process.execPath, gatewayArgs, {
         cwd: resolveInstallRoot(),
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],

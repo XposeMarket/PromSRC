@@ -90,5 +90,6 @@ export const API = '';
 export const CHAT_SESSIONS_KEY = 'prometheus_chat_sessions_v1';
 export const AGENT_SESSION_KEY = 'prometheus_agent_session_id';
 export const THEME_KEY = 'prometheus_theme';
+export const APPEARANCE_KEY = 'prometheus_appearance_v1';
 export const MAX_QUEUED_PROMPTS = 8;
 export const AGENT_STATUS = { ACTIVE: 'active', COMPLETED: 'completed', PAUSED: 'paused' };

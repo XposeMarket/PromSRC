@@ -1,5 +1,6 @@
 import assert from 'assert';
 import {
+  AUTOMATION_WORKFLOW_PACK_IDS,
   TOOL_CATEGORY_IDS,
   TOOL_CATEGORY_MANIFEST,
   TOOL_CATEGORY_MENU_ORDER,
@@ -18,7 +19,12 @@ import {
 
 function testRegistryCompleteness(): void {
   assert.equal(Object.keys(TOOL_CATEGORY_MANIFEST).length, TOOL_CATEGORY_IDS.length);
-  assert.deepEqual([...TOOL_CATEGORY_MENU_ORDER].sort(), [...TOOL_CATEGORY_IDS].sort());
+  const menuIds = new Set(TOOL_CATEGORY_MENU_ORDER);
+  for (const id of TOOL_CATEGORY_IDS) {
+    if ((AUTOMATION_WORKFLOW_PACK_IDS as readonly string[]).includes(id)) continue;
+    assert.equal(menuIds.has(id), true, `top-level category missing from menu: ${id}`);
+  }
+  for (const id of menuIds) assert.equal((TOOL_CATEGORY_IDS as readonly string[]).includes(id), true, `unknown menu category: ${id}`);
   for (const id of TOOL_CATEGORY_IDS) {
     const item = TOOL_CATEGORY_MANIFEST[id];
     assert.equal(item.id, id);
@@ -41,8 +47,21 @@ function testRepresentativeClassification(): void {
     ['write_source', 'prometheus_source_write'],
     ['memory_graph_snapshot', 'advanced_memory'],
     ['download_media', 'media_assets'],
-    ['schedule_job_history', 'automations'],
-    ['prometheus_audit_ops', 'automations'],
+    ['media_generate', 'media_generation'],
+    ['schedule_job_history', 'automation_scheduling'],
+    ['schedule_job', 'automation_scheduling'],
+    ['automation_dashboard', 'automation_tasks'],
+    ['diagnostic_packet', 'runtime_admin'],
+    ['system_diagnostics', 'runtime_admin'],
+    ['gateway_restart', 'runtime_admin'],
+    ['connector_list', 'external_apps'],
+    ['chat_with_subagent', 'agents_and_teams'],
+    ['agent_run_ops', 'agents_and_teams'],
+    ['ask_team_coordinator', 'agents_and_teams'],
+    ['write_proposal', 'proposal_admin'],
+    ['video_compose', 'creative_video'],
+    ['prometheus_audit_ops', 'automation_recovery'],
+    ['prometheus_thread_ops', 'automation_sessions'],
     ['connector_gmail_search', 'external_apps'],
     ['x_search_ops', 'external_apps'],
     ['xai_live_search', null], // deprecated and no longer registered
@@ -63,7 +82,6 @@ function testRepresentativeClassification(): void {
     ['set_agent_model', 'model_management'],
     ['write_entity', 'business'],
     ['delivery_send', null],
-    ['schedule_job', null],
   ];
   for (const [name, expected] of cases) {
     assert.equal(classifyToolFromManifest(name), expected, name);
@@ -110,10 +128,10 @@ function testMetadataIsInternalOnly(): void {
 
 function testParityReport(): void {
   const authoritative = (name: string) => name === 'browser_open' ? 'browser_automation' as const : null;
-  const report = compareToolCategoryClassifiers(['browser_open', 'schedule_job'], authoritative);
+  const report = compareToolCategoryClassifiers(['browser_open', 'schedule_job'], (name) => name === 'schedule_job' ? 'automation_scheduling' as const : authoritative(name));
   assert.equal(report.checked, 2);
   assert.deepEqual(report.mismatches, []);
-  assert.deepEqual(report.unownedCoreTools, ['schedule_job']);
+  assert.deepEqual(report.unownedCoreTools, []);
 
   const disagreement = compareToolCategoryClassifiers(['browser_open'], () => null);
   assert.deepEqual(disagreement.mismatches, [{ name: 'browser_open', authoritative: null, shadow: 'browser_automation' }]);

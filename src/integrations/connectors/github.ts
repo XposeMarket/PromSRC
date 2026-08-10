@@ -19,9 +19,12 @@ export class GitHubConnector extends OAuthConnector {
       clientId: process.env.GITHUB_CLIENT_ID || '',
       clientSecret: process.env.GITHUB_CLIENT_SECRET || '',
       scopes: ['repo', 'read:user', 'user:email', 'read:org'],
-      usePkce: false,
+      // Desktop clients are public clients in practice; PKCE protects the
+      // authorization-code exchange even when an OAuth App secret is present.
+      usePkce: true,
       callbackPort: 19422,
       callbackPath: '/auth/callback/github',
+      revokeUrl: 'https://api.github.com/applications/{client_id}/grant',
     };
     super(cfg, configDir);
   }
@@ -29,8 +32,10 @@ export class GitHubConnector extends OAuthConnector {
   protected async buildTokens(data: Record<string, any>): Promise<ConnectorTokens> {
     const tokens: ConnectorTokens = {
       access_token: data.access_token,
-      expires_at: Date.now() + 365 * 24 * 60 * 60 * 1000,
+      refresh_token: data.refresh_token,
+      expires_at: data.expires_in ? Date.now() + Number(data.expires_in) * 1000 : Date.now() + 365 * 24 * 60 * 60 * 1000,
       scope: data.scope,
+      token_type: data.token_type,
     };
     try {
       const res = await fetch('https://api.github.com/user', {
@@ -60,6 +65,32 @@ export class GitHubConnector extends OAuthConnector {
       return await super.handleCallback(code, state);
     } finally {
       global.fetch = origFetch;
+    }
+  }
+
+  /** Revoke the GitHub OAuth App grant before clearing the local vault token.
+   * A missing/invalid provider app is surfaced to the canonical adapter, while
+   * the orchestrator still clears the local session on disconnect. */
+  public async revokeAccess(): Promise<void> {
+    this.loadCredentialsFromVault();
+    const tokens = this.loadTokens();
+    if (!tokens?.access_token) return;
+    if (!this.cfg.clientId || !this.cfg.clientSecret) {
+      throw new Error('GitHub OAuth App credentials are required to revoke access remotely.');
+    }
+    const endpoint = `https://api.github.com/applications/${encodeURIComponent(this.cfg.clientId)}/grant`;
+    const response = await fetch(endpoint, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${this.cfg.clientId}:${this.cfg.clientSecret}`).toString('base64')}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'Prometheus-CIS',
+      },
+      body: JSON.stringify({ access_token: tokens.access_token }),
+    });
+    if (!response.ok && response.status !== 404) {
+      throw new Error(`GitHub token revocation failed (HTTP ${response.status}).`);
     }
   }
 

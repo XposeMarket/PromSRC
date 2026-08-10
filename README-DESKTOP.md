@@ -90,6 +90,21 @@ D:\Prometheus\
 - When you close the window, both Electron and the gateway shut down cleanly
 - External links open in your default browser, not inside the app
 
+## Updates
+
+Installed public builds use `electron-updater` with the GitHub feed configured in
+`electron-builder-public.yml`. The updater checks after startup, shows its state
+in the top bar, and exposes the same controls under Settings → General → Updates.
+Automatic updates are enabled by default: releases download in the background and
+install the next time Prometheus quits. The preference is stored in the user's
+Prometheus data directory and survives app upgrades. Turning it off leaves manual
+Check, Download, and Restart & install controls available.
+
+Updates are intentionally unavailable in development and non-public packaged
+builds. Before publishing a release, build with the public config and run
+`npm run verify:public-release`; the generated `latest.yml` must match the
+installer version, filename, checksum, and size.
+
 ---
 
 ## Notes

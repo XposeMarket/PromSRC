@@ -8,8 +8,18 @@ import { hookBus } from './hooks';
 import { SkillsManager } from './skills-runtime/skills-manager';
 import { getConfig, getAgents } from '../config/config';
 import { getActivatedSkillIds, getActivatedSkillResources, getActivatedToolCategories, isBusinessContextEnabled } from './session';
-import { searchMemoryInWorker } from './memory-index/search-worker-client';
-import { getPublicBuildAllowedCategories, isPublicDistributionBuild } from '../runtime/distribution.js';
+import {
+  getAutomaticMemorySearchWorkerStatus,
+  scheduleAutomaticMemorySearchWorkerWarmup,
+  searchMemoryAutomaticallyInWorker,
+  searchMemoryInWorker,
+} from './memory-index/search-worker-client';
+import {
+  arePrometheusDevToolsVisible,
+  getRuntimeAllowedCategories,
+  isPrometheusDevToolCategoryHidden,
+  isPublicDistributionBuild,
+} from '../runtime/distribution.js';
 import { buildCisContextBlock } from './business/cis-context-builder';
 import { loadSoul, loadPrometheusRuntimeContract, loadVoiceSoul } from '../config/soul-loader';
 import { getRuntimeActorContext, loadRuntimeActorMemoryContext, type RuntimeActorContext } from './runtime-actor';
@@ -27,6 +37,18 @@ import {
 } from '../runtime/instruction-intent-detector';
 import { memoizePromptProfileBlock, readPromptProfileText } from './prompt-profile-snapshot';
 import { BRAIN_CARRY_FORWARD_MARKERS, buildBrainCapsuleContext } from './brain/brain-continuity.js';
+import { detectKeywordToolCategories } from '../runtime/tool-category-keyword-router';
+import { buildMemoryAtomReferenceContext } from './memory-index/memory-atoms.js';
+import { buildRuntimeHostContext } from './runtime-host-context.js';
+import { readCachedGpuInfo } from './gpu-detector';
+
+function buildPromptRuntimeHostContext(workspacePath: string): string {
+  const gpu = readCachedGpuInfo();
+  const gpuLabel = gpu
+    ? [gpu.backend, gpu.name].filter(Boolean).join(' — ')
+    : undefined;
+  return buildRuntimeHostContext({ workspacePath, gpu: gpuLabel });
+}
 
 // ─── Prompt-cache assembly ─────────────────────────────────────────────────────
 // Splits the system prompt into a STABLE (cacheable) prefix and a VOLATILE
@@ -129,6 +151,8 @@ export interface BuildPersonalityContextOptions {
   excludedSkillIds?: string[];
   forcedSkillIds?: string[];
   instructionIntents?: Stage4InstructionIntents;
+  /** Benchmark-only A/B control for the interactive MEMORY.md prompt budget. */
+  memoryMode?: 'full' | 'compact';
   serializedSnapshot?: PersonalityContextSnapshot;
 }
 
@@ -141,12 +165,14 @@ export interface BuildPersonalityContextOptions {
 export interface PersonalityContextSnapshot {
   businessContextEnabled: boolean;
   activatedToolCategories: string[];
+  runtimeHostContext: string;
   runtimeActor: RuntimeActorContext | null;
   runtimeActorMemory: string;
   runtimeActorManagerMemory: string;
   projectContextBlock: string;
   skillTurnContext: string;
   activeSkillsContext: string;
+  memoryAtomContext: string;
   retrievedMemoryContext: string;
   subagentsRosterBlock: string;
   advanceTurn: boolean;
@@ -494,8 +520,8 @@ function stripMemoryToolHints(content: string): string {
       if (/This file is yours\. Prom builds and evolves it over time/i.test(s)) return false;
       if (/Use memory_browse\("user"\)/i.test(s)) return false;
       if (/Use memory_browse\("soul"\)/i.test(s)) return false;
-      if (/memory_read\("user"\)/i.test(s)) return false;
-      if (/memory_read\("soul"\)/i.test(s)) return false;
+      if (/memory(?:_read\("user"\)|\(\s*action\s*:\s*["']read["'][^)]*file\s*[:=]\s*["']user)/i.test(s)) return false;
+      if (/memory(?:_read\("soul"\)|\(\s*action\s*:\s*["']read["'][^)]*file\s*[:=]\s*["']soul)/i.test(s)) return false;
       return true;
     })
     .join('\n');
@@ -514,7 +540,7 @@ function readMemoryProfileFile(filePath: string, maxChars?: number): string {
   }
 }
 
-function loadFullMemoryProfile(
+export function loadFullMemoryProfile(
   workspacePath: string,
   filename: 'USER.md' | 'SOUL.md' | 'MEMORY.md',
   maxChars?: number,
@@ -536,6 +562,56 @@ function loadFullMemoryProfile(
     if (content) return content;
   }
   return '';
+}
+
+type MemoryPromptMode = 'full' | 'compact' | 'atoms';
+
+function resolveMemoryPromptMode(options?: BuildPersonalityContextOptions): MemoryPromptMode {
+  // Explicit benchmark/rollback options win over the process default. The
+  // default is the atom compiler; MEMORY.md itself remains untouched and is
+  // still available through memory_read and explicit evidence retrieval.
+  if (options?.memoryMode === 'full') return 'full';
+  if (options?.memoryMode === 'compact') return 'compact';
+  const configured = String(process.env.PROMETHEUS_MEMORY_PROMPT_MODE || '').trim().toLowerCase();
+  if (configured === 'full' || configured === 'compact' || configured === 'atoms') return configured;
+  return 'atoms';
+}
+
+function isBrainMemoryTurn(sessionId: string): boolean {
+  return /^(?:brain_|auto_brain_)/i.test(String(sessionId || ''));
+}
+
+function shouldInjectMemoryAtoms(
+  sessionId: string,
+  executionMode: string,
+  profile: BuildPersonalityContextOptions['profile'],
+  runtimeActor: RuntimeActorContext | null,
+): boolean {
+  if (profile === 'local_llm' || profile === 'direct_subagent' || profile === 'teach_mode') return false;
+  if (executionMode === 'proposal_execution' || isBrainMemoryTurn(sessionId)) return false;
+  if (runtimeActor?.kind === 'agent' || runtimeActor?.kind === 'manager') return false;
+  return true;
+}
+
+function buildMemoryAtomContext(
+  workspacePath: string,
+  messageText: string,
+  projectContextBlock: string,
+  profile: BuildPersonalityContextOptions['profile'],
+  maxChars?: number,
+): string {
+  if (profile === 'local_llm' || profile === 'direct_subagent' || profile === 'teach_mode') return '';
+  if (isLowInformationAutomaticMemoryQuery(messageText)) return '';
+  const isVoice = profile === 'voice_agent';
+  return buildMemoryAtomReferenceContext(workspacePath, messageText, {
+    // Main Prometheus uses the source-relative default in the atom compiler:
+    // every qualifying durable fact is eligible. Voice keeps a small explicit
+    // budget because its first-turn latency and spoken prompt size are tighter.
+    ...(isVoice
+      ? { maxChars: maxChars || 4_500, maxAtoms: 4 }
+      : (maxChars ? { maxChars } : {})),
+    additionalContext: projectContextBlock,
+  });
 }
 
 // ─── readDailyMemoryContext ───────────────────────────────────────────────────────
@@ -566,14 +642,113 @@ export function readDailyMemoryContext(workspacePath: string, maxTokens: number 
   }
 }
 
-type MemorySearchRouting = {
+export type MemorySearchRouting = {
   mode: 'no_search' | 'light_search' | 'deep_search';
   reason: string;
+  /** Automatic retrieval is a bounded prompt sidecar, never a deep search. */
+  automatic?: boolean;
 };
 
-export function routeMemorySearchMode(messageText: string): MemorySearchRouting {
+const AUTOMATIC_MEMORY_SEARCH_DEFAULT_BUDGET_MS = 250;
+const AUTOMATIC_MEMORY_SEARCH_MAX_BUDGET_MS = 250;
+const AUTOMATIC_MEMORY_SEARCH_MIN_BUDGET_MS = 40;
+
+function automaticMemorySearchBudgetMs(): number {
+  const configured = Number(process.env.PROMETHEUS_AUTOMATIC_MEMORY_SEARCH_BUDGET_MS);
+  if (!Number.isFinite(configured)) return AUTOMATIC_MEMORY_SEARCH_DEFAULT_BUDGET_MS;
+  return Math.max(
+    AUTOMATIC_MEMORY_SEARCH_MIN_BUDGET_MS,
+    Math.min(AUTOMATIC_MEMORY_SEARCH_MAX_BUDGET_MS, Math.floor(configured)),
+  );
+}
+
+export function isLowInformationAutomaticMemoryQuery(text: string): boolean {
+  const normalized = text
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[^a-z0-9!?\s']/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return true;
+
+  // These messages are useful conversationally but have no stable memory
+  // retrieval signal. In particular, searching "hi prometheus" tends to
+  // retrieve durable records merely because they contain the assistant name.
+  if (/^(?:hi|hey|hello|yo|sup)(?:\s+prometheus)?[!?.,\s]*$/i.test(normalized)) return true;
+  if (/^(?:thanks|thank you|thx|ty|ok|okay|got it|sounds good|great|perfect|nice|cool|alright|all right)(?:\s+[^!?]*)?[!?.,\s]*$/i.test(normalized)) return true;
+
+  return false;
+}
+
+function memoryQueryTerms(text: string): string[] {
+  const stopWords = new Set([
+    'a', 'about', 'after', 'again', 'all', 'am', 'an', 'and', 'are', 'as', 'at', 'be', 'because',
+    'been', 'before', 'but', 'by', 'can', 'could', 'did', 'do', 'does', 'for', 'from', 'get',
+    'got', 'had', 'has', 'have', 'how', 'i', 'if', 'in', 'into', 'is', 'it', 'its', 'just',
+    'like', 'me', 'my', 'of', 'on', 'or', 'our', 'please', 'should', 'so', 'that', 'the', 'their',
+    'then', 'there', 'these', 'this', 'to', 'us', 'was', 'we', 'were', 'what', 'when', 'where',
+    'which', 'who', 'why', 'will', 'with', 'would', 'you', 'your',
+  ]);
+  return Array.from(new Set((String(text || '').toLowerCase().match(/[a-z0-9]{3,}/g) || [])
+    .filter((term) => !stopWords.has(term))));
+}
+
+function automaticMemoryHitIsUsable(
+  hit: any,
+  messageText: string,
+  routing: MemorySearchRouting,
+  currentSessionId?: string,
+): boolean {
+  const score = Number(hit?.score);
+  if (!Number.isFinite(score)) return false;
+  const sourceType = String(hit?.sourceType || hit?.citation?.sourceType || '').toLowerCase();
+  const sourcePath = String(hit?.sourcePath || hit?.citation?.sourcePath || '').replace(/\\/g, '/');
+  const authority = String(hit?.authority || hit?.citation?.authority || '').toLowerCase();
+  const sessionId = String(currentSessionId || '').trim();
+  if (sessionId && sourcePath.includes(`/chats/transcripts/${sessionId}.`)) return false;
+
+  // The atom compiler is authoritative for the canonical main MEMORY.md
+  // file. Do not inject a second, overlapping snippet from the indexed
+  // memory_root/workspace-file layer into the same prompt; explicit
+  // memory_search still returns these records when the user asks for them.
+  if (/workspace\/memory\.md$/i.test(sourcePath) || authority === 'durable_memory_file') return false;
+
+  // Raw chat transcripts are useful evidence for an explicit history/decision
+  // question, but they are too easy to match on ordinary conversational nouns
+  // (and the recent-turn context already contains the current chat). Automatic
+  // turns therefore inject durable/operational memory only; the explicit
+  // memory_search tool remains the escape hatch for broad evidence recall.
+  const historyCue = routing.reason === 'automatic_history_cue' || routing.reason === 'automatic_deep_cue_bounded';
+  if ((sourceType === 'chat_transcript' || sourceType === 'chat_session') && !historyCue) return false;
+
+  const terms = memoryQueryTerms(messageText);
+  const why = hit?.whyMatched || {};
+  const lexical = Array.isArray(why.lexical) ? why.lexical.map((term: unknown) => String(term).toLowerCase()) : [];
+  const exactTerms = Array.isArray(why.exactTerms) ? why.exactTerms.map((term: unknown) => String(term).toLowerCase()) : [];
+  const entities = Array.isArray(why.entities) ? why.entities.map((term: unknown) => String(term).toLowerCase()) : [];
+  const matchedSignal = [...lexical, ...exactTerms, ...entities].some((term) =>
+    terms.some((queryTerm) => queryTerm === term || queryTerm.startsWith(term) || term.startsWith(queryTerm)),
+  );
+
+  // The quick scorer's low-confidence vector tail is intentionally not
+  // injected into every prompt. Automatic context requires either a strong
+  // semantic hit or an explicit query-term/metadata signal. Explicit
+  // memory_search remains available for cases below this threshold.
+  if (score >= 0.30) return true;
+  if (matchedSignal && score >= 0.14) return true;
+  if (hit?.layer === 'operational' && hit?.citation?.authority === 'durable_memory_file' && score >= 0.20) return true;
+  return false;
+}
+
+export function routeMemorySearchMode(
+  messageText: string,
+  options: { automatic?: boolean } = {},
+): MemorySearchRouting {
   const text = String(messageText || '').toLowerCase();
-  if (!text.trim()) return { mode: 'no_search', reason: 'empty_message' };
+  const automatic = options.automatic === true;
+  if (!text.trim()) return { mode: 'no_search', reason: 'empty_message', automatic };
+  if (automatic && isLowInformationAutomaticMemoryQuery(text)) {
+    return { mode: 'no_search', reason: 'automatic_low_information', automatic: true };
+  }
 
   const deepCues = [
     'everything we discussed',
@@ -586,7 +761,11 @@ export function routeMemorySearchMode(messageText: string): MemorySearchRouting 
     'comprehensive history',
     'all previous',
   ];
-  if (deepCues.some((k) => text.includes(k))) return { mode: 'deep_search', reason: 'deep_cue' };
+  if (deepCues.some((k) => text.includes(k))) {
+    return automatic
+      ? { mode: 'light_search', reason: 'automatic_deep_cue_bounded', automatic: true }
+      : { mode: 'deep_search', reason: 'deep_cue' };
+  }
 
   const lightCues = [
     'previous',
@@ -599,11 +778,35 @@ export function routeMemorySearchMode(messageText: string): MemorySearchRouting 
     'remember when',
     'past discussion',
     'what did we decide',
+    // Historical questions are not always phrased with "decide". These
+    // bounded phrases let automatic retrieval admit transcript evidence for
+    // shipped/learned/outcome questions without treating ordinary messages
+    // containing a single generic noun as history requests.
+    'can you recall',
+    'do you remember',
+    'remind me',
+    'what did we learn',
+    'did we learn',
+    'what did we ship',
+    'did we ship',
+    'what did we implement',
+    'did we implement',
+    'what did we build',
+    'did we build',
+    'what did we find',
+    'did we find',
+    'what happened with',
+    'what was the outcome',
+    'what was the result',
     'context from before',
   ];
-  if (lightCues.some((k) => text.includes(k))) return { mode: 'light_search', reason: 'history_cue' };
+  if (lightCues.some((k) => text.includes(k))) {
+    return { mode: 'light_search', reason: automatic ? 'automatic_history_cue' : 'history_cue', automatic };
+  }
 
-  return { mode: 'no_search', reason: 'not_needed' };
+  return automatic
+    ? { mode: 'light_search', reason: 'automatic_turn', automatic: true }
+    : { mode: 'no_search', reason: 'not_needed' };
 }
 
 export async function buildRetrievedMemoryContext(
@@ -611,31 +814,144 @@ export async function buildRetrievedMemoryContext(
   messageText: string,
   routing: MemorySearchRouting,
   signal?: AbortSignal,
+  onTelemetry?: (fields: Record<string, unknown>) => void,
+  currentSessionId?: string,
 ): Promise<string> {
   if (routing.mode === 'no_search') return '';
+  const automatic = routing.automatic === true;
+  const startedAt = Date.now();
+  const budgetMs = automatic ? automaticMemorySearchBudgetMs() : undefined;
+  if (automatic) {
+    const workerStatus = getAutomaticMemorySearchWorkerStatus();
+    if (workerStatus.ready === 0 && workerStatus.active === 0 && workerStatus.queued === 0) {
+      scheduleAutomaticMemorySearchWorkerWarmup(workspacePath);
+      onTelemetry?.({
+        status: 'skipped',
+        automatic: true,
+        reason: 'automatic_worker_not_ready',
+        mode: routing.mode,
+        queryChars: String(messageText || '').length,
+        injected: false,
+        workerReady: workerStatus.ready,
+        workerCount: workerStatus.workerCount,
+        workerActive: workerStatus.active,
+        workerQueued: workerStatus.queued,
+      });
+      return '';
+    }
+  }
+  let searchController: AbortController | undefined;
+  let removeSignalListener: (() => void) | undefined;
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  let timedOut = false;
+
+  if (automatic) {
+    searchController = new AbortController();
+    if (signal) {
+      const onAbort = () => searchController?.abort();
+      if (signal.aborted) searchController.abort();
+      else {
+        signal.addEventListener('abort', onAbort, { once: true });
+        removeSignalListener = () => signal.removeEventListener('abort', onAbort);
+      }
+    }
+    onTelemetry?.({
+      status: 'started',
+      automatic: true,
+      budgetMs,
+      mode: routing.mode,
+      reason: routing.reason,
+      queryChars: String(messageText || '').length,
+    });
+  }
+
+  const finishTelemetry = (status: string, extra: Record<string, unknown> = {}) => {
+    if (!automatic) return;
+    onTelemetry?.({
+      status,
+      automatic: true,
+      budgetMs,
+      mode: routing.mode,
+      reason: routing.reason,
+      durationMs: Date.now() - startedAt,
+      queryChars: String(messageText || '').length,
+      ...extra,
+    });
+  };
+
   try {
-    const searchMode = routing.mode === 'deep_search' ? 'deep' : 'quick';
-    const limit = routing.mode === 'deep_search' ? 8 : 4;
-    const serialized = await searchMemoryInWorker('memory_search', {
+    const searchMode = automatic ? 'quick' : routing.mode === 'deep_search' ? 'deep' : 'quick';
+    // Search a slightly wider bounded candidate set, then inject at most
+    // three usable hits below. The extra candidates improve recall when the
+    // first results are duplicate/raw transcript records without increasing
+    // prompt size.
+    const limit = automatic ? 8 : routing.mode === 'deep_search' ? 8 : 4;
+    const searchRequest = {
       workspacePath,
       params: {
         query: messageText,
         mode: searchMode as any,
         limit,
+        rerank: automatic ? false : undefined,
         queryRoute: 'automatic_prompt_retrieval',
       },
-    }, { signal });
+    };
+    const searchPromise = automatic
+      ? searchMemoryAutomaticallyInWorker('memory_search', searchRequest, {
+        signal: searchController?.signal || signal,
+        timeoutMs: budgetMs,
+      })
+      : searchMemoryInWorker('memory_search', searchRequest, { signal: searchController?.signal || signal });
+    let serialized: string;
+    if (automatic) {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          searchController?.abort();
+          reject(new Error(`Automatic memory search exceeded ${budgetMs}ms.`));
+        }, budgetMs);
+        timeoutHandle.unref?.();
+      });
+      try {
+        serialized = await Promise.race([searchPromise, timeoutPromise]);
+      } catch (error) {
+        if (timedOut) throw new Error(`Automatic memory search exceeded ${budgetMs}ms.`);
+        throw error;
+      }
+    } else {
+      serialized = await searchPromise;
+    }
     const result = JSON.parse(serialized);
+    const searchTelemetry = result?.stats?.telemetry || {};
+    const searchTelemetryFields = {
+      searchMs: Number.isFinite(Number(searchTelemetry.total_ms)) ? Number(searchTelemetry.total_ms) : undefined,
+      backend: result?.stats?.backend,
+      searchCandidates: Number.isFinite(Number(searchTelemetry.candidate_count)) ? Number(searchTelemetry.candidate_count) : undefined,
+    };
     if (!Array.isArray(result.hits) || result.hits.length === 0) {
+      finishTelemetry('miss', { hits: 0, injected: false, ...searchTelemetryFields });
+      if (automatic) return '';
       return `[MEMORY_SEARCH_ROUTING]\nmode=${routing.mode}\nreason=${routing.reason}\nresults=none`;
+    }
+    const hits = automatic
+      ? result.hits.filter((hit: any) => automaticMemoryHitIsUsable(hit, messageText, routing, currentSessionId)).slice(0, 3)
+      : result.hits;
+    if (automatic) {
+      finishTelemetry(hits.length ? 'hit' : 'filtered', {
+        hits: hits.length,
+        candidates: result.hits.length,
+        injected: hits.length > 0,
+        ...searchTelemetryFields,
+      });
+      if (!hits.length) return '';
     }
     const lines = [
       `[MEMORY_SEARCH_ROUTING]`,
       `mode=${routing.mode}`,
       `reason=${routing.reason}`,
-      `results=${result.hits.length}`,
+      `results=${hits.length}`,
       `[MEMORY_RETRIEVED]`,
-      ...result.hits.map((h: any) => {
+      ...hits.map((h: any) => {
         const citation = h.citation
           ? ` | citation=${h.citation.sourcePath}${h.citation.sourceStartLine ? `:${h.citation.sourceStartLine}` : ''} | authority=${h.citation.authority} | status=${h.citation.status}`
           : ` | source=${h.sourceType} | path=${h.sourcePath}`;
@@ -649,12 +965,24 @@ export async function buildRetrievedMemoryContext(
     const stopReason = err?.name === 'AbortError'
       ? 'cancelled'
       : /timed out/i.test(message) ? 'time_limit' : 'search_error';
+    finishTelemetry(timedOut ? 'timeout' : stopReason === 'cancelled' ? 'cancelled' : 'error', {
+      injected: false,
+      error: message.slice(0, 160),
+    });
+    if (automatic) return '';
     return `[MEMORY_SEARCH_ROUTING]\nmode=${routing.mode}\nreason=${stopReason}\nresults=unavailable\nerror=${message}`;
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    removeSignalListener?.();
   }
 }
 
 // ─── detectToolCategories ─────────────────────────────────────────────────────────
-export function detectToolCategories(text: string): Set<string> {
+/**
+ * Pre-keyword-router detector retained as a local rollback/reference oracle.
+ * Runtime activation uses detectKeywordToolCategories below.
+ */
+export function detectLegacyToolCategories(text: string): Set<string> {
   const lower = String(text || '').toLowerCase();
   const cats = new Set<string>();
   const WEB = ['search', 'find', 'look up', 'google', 'what is', 'who is', 'news', 'latest', 'research', 'look into', 'check online', 'summarize', 'article', 'read about'];
@@ -704,13 +1032,15 @@ export function detectToolCategories(text: string): Set<string> {
   ];
   // Much stricter MEMORY detection — only explicit memory operations, not casual conversation
   const MEMORY = ['remember this', 'note that', 'save that', 'write that down', 'dont forget', "don't forget", 'update my memory', 'add to my memory', 'save to memory', 'memory note', 'remember:', 'note:', 'update memory', 'memory write'];
+  const ADVANCED_MEMORY = ['memory graph', 'memory timeline', 'related memory', 'related records', 'memory index', 'memory provider', 'memory embedding', 'memory consolidation', 'consolidate memory', 'memory claims', 'debug memory search', 'project memory search'];
   const DEBUG = ['why', 'error', 'failed', 'how does', 'architecture', 'debug', 'caused', 'broke', 'not working', 'explain how', 'whats wrong', "what's wrong"];
   const TEAMS = ['team', 'sub-team', 'sub team', 'managed team', 'team manager', 'team chat', 'team members'];
   const INTEGRATIONS = ['integration', 'integrations', 'mcp', 'model context protocol', 'webhook', 'supabase', 'connect service', 'connect to'];
   const MEDIA = ['download_url', 'download_media', 'analyze_image', 'analyze_video', 'download image', 'download video', 'analyze image', 'analyze video', 'media analysis'];
+  const MEDIA_GENERATION = ['media_generate', 'generate image', 'generate an image', 'generate images', 'image generation', 'text to image', 'make an image', 'generate video', 'generate a video', 'generate videos', 'video generation', 'text to video', 'make a video', 'image to video', 'grok imagine'];
   const MEDIA_QUALITY = ['contrast', 'text overflow', 'empty region', 'bounds summary', 'element at point', 'overlap', 'contact sheet', 'render frame', 'audio sync', 'caption timing'];
   const AUTOMATIONS = ['schedule', 'scheduled', 'every day', 'every week', 'recurring', 'cron', 'automate', 'automation', 'remind me', 'daily', 'weekly', 'cut off', 'cutoff', 'got cut', 'interrupted', 'pending approval', 'dev edit', 'previous request', 'request status', 'recovery request'];
-  const CONNECTORS = ['gmail', 'github', 'slack', 'notion', 'google drive', 'hubspot', 'salesforce', 'stripe', 'ga4', 'external app', 'connected app'];
+  const CONNECTORS = ['connector', 'connectors', 'list connectors', 'gmail', 'github', 'slack', 'notion', 'google drive', 'hubspot', 'salesforce', 'stripe', 'ga4', 'external app', 'connected app'];
   const SOURCE_READ = ['prometheus source', 'prom source', 'read source', 'inspect source', 'grep source', 'read webui source', 'webui source', 'source_read', 'prometheus_source_read'];
   const SOURCE_WRITE = ['edit prometheus source', 'change prometheus source', 'patch prometheus source', 'modify prometheus source', 'source_write', 'prometheus_source_write', 'dev source edit'];
   const explicitPromSourcePath = /(?:^|[\s("'`])(?:\.\/)?(?:src\/(?:gateway|runtime)(?:\/|$)|web-ui\/src(?:\/|$))/i.test(String(text || '').replace(/\\/g, '/'));
@@ -719,7 +1049,8 @@ export function detectToolCategories(text: string): Set<string> {
     && /(?:^|[\s("'`])(?:\.\/)?(?:src|web-ui)\/[a-z0-9_.@/-]+/i.test(String(text || '').replace(/\\/g, '/'));
   const sourceMutationIntent = /\b(edit|change|patch|modify|fix|update|refactor|remove|add|implement)\b/i.test(lower);
   const SOCIAL_INTELLIGENCE = ['social intelligence', 'social profile', 'profile analysis', 'engagement analysis', 'growth trajectory', 'content recommendations', 'social_intel'];
-  const PROPOSAL_ADMIN = ['edit proposal', 'update proposal', 'revise proposal', 'proposal admin', 'proposal_admin', 'pending proposal'];
+  const PROPOSAL_ADMIN = ['write proposal', 'write a proposal', 'create proposal', 'create a proposal', 'file proposal', 'file a proposal', 'proposal workflow', 'edit proposal', 'edit the proposal', 'update proposal', 'revise proposal', 'proposal admin', 'proposal_admin', 'pending proposal'];
+  const RUNTIME_ADMIN = ['diagnostic packet', 'system diagnostics', 'runtime diagnostics', 'gateway restart', 'restart the gateway', 'restart prometheus', 'runtime admin'];
   const MCP_SERVER_TOOLS = ['mcp server tools', 'mcp tools', 'mcp__', 'connected mcp', 'server tool', 'mcp_server_tools'];
   const COMPOSITE_TOOLS = ['composite tool', 'composite tools', 'saved tool', 'multi-step tool', 'composites', 'composite_tools'];
   const SKILLS_CATEGORY = ['skill create', 'create skill', 'update skill', 'skill authoring', 'skill manifest', 'skill resource', 'skill bundle', 'skill maintenance'];
@@ -733,6 +1064,7 @@ export function detectToolCategories(text: string): Set<string> {
   if (SCHEDULE.some(k => lower.includes(k)) || SCHEDULE_TIME.test(lower)) cats.add('schedule');
   if (SHELL.some(k => lower.includes(k))) cats.add('shell');
   if (MEMORY.some(k => lower.includes(k))) cats.add('memory');
+  if (ADVANCED_MEMORY.some(k => lower.includes(k))) cats.add('advanced_memory');
   if (DEBUG.some(k => lower.includes(k))) cats.add('debug');
   if (TEAMS.some(k => lower.includes(k))) {
     cats.add('teams');
@@ -740,6 +1072,7 @@ export function detectToolCategories(text: string): Set<string> {
   }
   if (INTEGRATIONS.some(k => lower.includes(k))) cats.add('integrations');
   if (MEDIA.some(k => lower.includes(k))) cats.add('media');
+  if (MEDIA_GENERATION.some(k => lower.includes(k))) cats.add('media_generation');
   if (AUTOMATIONS.some(k => lower.includes(k))) cats.add('automations');
   if (CONNECTORS.some(k => lower.includes(k))) cats.add('external_apps');
   if (SOURCE_READ.some(k => lower.includes(k)) || explicitPromSourcePath || contextualPromSourcePath) {
@@ -750,6 +1083,7 @@ export function detectToolCategories(text: string): Set<string> {
   }
   if (SOCIAL_INTELLIGENCE.some(k => lower.includes(k))) cats.add('social_intelligence');
   if (PROPOSAL_ADMIN.some(k => lower.includes(k))) cats.add('proposal_admin');
+  if (RUNTIME_ADMIN.some(k => lower.includes(k))) cats.add('runtime_admin');
   if (MCP_SERVER_TOOLS.some(k => lower.includes(k))) cats.add('mcp_server_tools');
   if (COMPOSITE_TOOLS.some(k => lower.includes(k))) cats.add('composite_tools');
   if (SKILLS_CATEGORY.some(k => lower.includes(k))) cats.add('skills');
@@ -771,6 +1105,10 @@ export function detectToolCategories(text: string): Set<string> {
   // DISABLED: Don't auto-add 'skills' — only add it if explicitly detected or user asks for execution
   // if (cats.size > 0) cats.add('skills');
   return cats;
+}
+
+export function detectToolCategories(text: string): Set<string> {
+  return detectKeywordToolCategories(text);
 }
 
 // ─── readMemoryCategories ─────────────────────────────────────────────────────────
@@ -862,8 +1200,8 @@ instruction_prompt must be FULLY SELF-CONTAINED — write as if briefing a fresh
 
   shell: `SHELL/RUN COMMANDS: activate workspace_write before command/process work. Use workspace_run(action:"run", command) for bounded commands and workspace_run(action:"start", command) for dev servers, watchers, long builds, renders, or interactive CLIs; manage runIds with workspace_run(action:"status"|"log"|"wait"|"kill"|"submit"). Default permissions enforce capability-based tool and command approval gates. Lite permissions bypass generic approval pauses for non-elevated tools while hard-blocked dangerous commands, explicit final-action/dev-edit approvals, and administrator commands remain gated. On Windows, set elevated:true only when administrator rights are actually required. Every elevated command uses the existing approval card as a fresh one-shot Approve/Reject decision; goals, Lite mode, trusted commands, and saved permissions never bypass it. The administrator broker requires UAC once when first installed, then later approved commands run hands-free without per-command UAC. Elevated background/start commands are unsupported. Use browser_* for websites, desktop_* for UI interaction.`,
 
-  memory: `MEMORY: memory_browse(file)→categories. memory_write(file,category,content)→add/update fact. memory_read(file)→full contents. file="user"|"soul"|"memory". Use user for user profile facts, soul for operating rules, memory for durable long-term context and decisions.
-LONG-TERM RETRIEVAL: memory_search(query, mode?, ...filters)→SQLite/FTS/vector-ranked hits with operational/evidence layers, citations, authority, status, and source spans when available. memory_read_record(record_id)→full source record. memory_search_project(project_id, query) and memory_search_timeline(query, date_from?, date_to?) for scoped retrieval. memory_get_related(record_id) expands to connected context.
+  memory: `MEMORY: memory(action:"write"|"read"|"search", ...) is the lightweight unified memory wrapper. Use action="write" with file/category/content to add a durable fact, action="read" with file to inspect USER.md/SOUL.md/MEMORY.md, and action="search" with query/mode/filters for ranked long-term retrieval. Use memory_browse(file)→categories before a write when the right section is unclear. file="user"|"soul"|"memory". Use user for user profile facts, soul for operating rules, memory for durable long-term context and decisions.
+LONG-TERM RETRIEVAL: memory(action:"search", query, mode?, ...filters)→SQLite/FTS/vector-ranked hits with operational/evidence layers, citations, authority, status, and source spans when available. memory_read_record(record_id)→full source record when a hit needs full evidence. Use mode="project" or mode="timeline" for scoped retrieval; memory_get_related(record_id) expands to connected context.
 OBSIDIAN: Obsidian is an optional external app connector. After it is connected in the Connections panel and external_apps is active, connector_obsidian_status/connect_vault/sync/writeback link local vault notes into Prometheus as obsidian_note evidence. Notes tagged #prometheus/memory, #prometheus/decision, #prometheus/preference, #prometheus/rule, or with prometheus-memory frontmatter can be promoted into operational memory.
 TRIGGERS: use retrieval when user asks about previous discussions, older decisions, historical project context, what changed over time, or "what did we decide" questions.
 GRAPH/DIAGNOSTICS: memory_graph_snapshot() returns relation graph nodes/edges; memory_index_refresh() forces reindex from workspace/audit.
@@ -873,30 +1211,34 @@ SEARCH MODES: quick(default)=fast focused retrieval; deep=broad recall; project=
 
   media_assets: `MEDIA ASSETS: download_url(url,filename?) and download_media(url,audio_only?) retrieve remote assets. download_url auto-rewrites GitHub blob URLs to raw files. For a git/GitHub REPO (URL or owner/repo), use clone_repo(repo,paths?) to pull the whole repo or only specific files/dirs into the workspace (repos/<name>) — never fetch individual file URLs and re-type their contents. analyze_image/analyze_video inspect uploaded or downloaded media. Use browser_automation for browser-triggered downloads and media_assets for direct URL/media processing.`,
 
+  media_generation: `MEDIA GENERATION: activate media_generation for the unified media_generate(action:"image"|"video", prompt, ...) wrapper. Use it for one-shot AI image/video outputs, image-to-video, reference generation, editing, or extension when the user wants a generated asset rather than an editable Creative timeline. Use creative_video for editable timeline/composition work and media_assets for downloading or analyzing existing files.`,
+
   media_quality: `MEDIA QUALITY: image_check_contrast, image_check_text_overflow, image_detect_empty_regions, image_get_bounds_summary, image_get_element_at_point, image_get_overlaps, video_render_frame, video_render_contact_sheet, video_check_audio_sync, and video_check_caption_timing validate visual/video output. Activate when checking layout polish, frame rendering, captions, or audio timing.`,
 
-  automations: `AUTOMATIONS: schedule_job is core for normal list/create/update/pause/resume/delete/run_now. Activate automations for deeper operator tools: schedule_job_detail/history/log_search/outputs/patch/stuck_control inspect and repair scheduled runs; automation_dashboard returns a unified operator snapshot. prometheus_thread_ops controls other first-class Prometheus chat sessions: find/read/create/create_many/send/steer/interrupt/rename/pin/follow. Every new create/create_many call must choose exactly one route: launch_mode="ping" or action=create_and_ping creates and notifies on detached completion; launch_mode="forget" or action=create_and_forget creates and stays silent; launch_mode="supervise" or action=create_and_supervise creates a Goal target and runs a hidden persistent supervisor loop that waits between target idle events, reviews the full evidence packet, and reports only terminal verification/blocker/failure. Creation only confirms acceptance/queueing, never a reply or completion. New threads inherit current Main Chat unless the user asks for a model route; then pass provider_id, exact model, and optional reasoning_effort/account_id on create/create_many, which creates a sticky route for only that target chat. prometheus_audit_ops is read-only evidence reconstruction for interruptions: inspect recent_sessions, timelines, recovery candidates, and recovery briefs first; then verify live Goal/request state and resume only through existing prometheus_thread_ops, prometheus_request_ops, or Goal recovery. Never use audit evidence to assume a started tool completed or to duplicate a recovery. prometheus_request_ops lists/finds/reads durable dev edits, approvals, proposals, and questions; when the user says work was cut off, call recovery_candidates, inspect the exact request, then recover the existing approved dev edit in its original owner thread. Recovery never approves or marks changes live. Use create_many only for genuinely independent first-class threads, and put the explicit launch_mode on each thread item when their notification/supervision behavior differs. These are Prometheus sessions, not subagents or Codex threads. Confirm before mutating existing jobs. Prompts and new-thread objectives must be self-contained for a fresh session.`,
+  automations: `AUTOMATIONS: activate automations for schedule_job(action:"list"|"create"|"update"|"pause"|"resume"|"delete"|"run_now"), schedule_job_detail/history/log_search/outputs/patch/stuck_control, and automation_dashboard. These tools inspect, create, and repair scheduled runs; confirm before mutating existing jobs. prometheus_thread_ops controls other first-class Prometheus chat sessions: list/find/search include active and settled chats by default and mark settled state; use state="active" or state="settled" to narrow results, then action=reopen (open/unsettle aliases) to return a settled chat to the active view without changing its history. It also supports read/create/create_many/send/steer/interrupt/rename/pin/follow. Every new create/create_many call must choose exactly one route: launch_mode="ping" or action=create_and_ping creates and notifies on detached completion; launch_mode="forget" or action=create_and_forget creates and stays silent; launch_mode="supervise" or action=create_and_supervise creates a Goal target and runs a hidden persistent supervisor loop that waits between target idle events, reviews the full evidence packet, and reports only terminal verification/blocker/failure. Creation only confirms acceptance/queueing, never a reply or completion. New threads inherit current Main Chat unless the user asks for a model route; then pass provider_id, exact model, and optional reasoning_effort/account_id on create/create_many, which creates a sticky route for only that target chat. prometheus_audit_ops is read-only evidence reconstruction for interruptions: inspect recent_sessions, timelines, recovery candidates, and recovery briefs first; then verify live Goal/request state and resume only through existing prometheus_thread_ops, prometheus_request_ops, or Goal recovery. Never use audit evidence to assume a started tool completed or to duplicate a recovery. prometheus_request_ops lists/finds/reads durable dev edits, approvals, proposals, and questions; when the user says work was cut off, call recovery_candidates, inspect the exact request, then recover the existing approved dev edit in its original owner thread. Recovery never approves or marks changes live. Use create_many only for genuinely independent first-class threads, and put the explicit launch_mode on each thread item when their notification/supervision behavior differs. These are Prometheus sessions, not subagents or Codex threads. Prompts and new-thread objectives must be self-contained for a fresh session.`,
 
-  external_apps: `EXTERNAL APPS: connector_list is core for discovery. Activating external_apps loads wrapper-first connected app tools. For X/Twitter and xAI/Grok use x_search_ops, x_posts, x_users, x_lists, x_dm, and x_admin. For Vercel use vercel_ops. Other connected app tools may still appear directly from their connectors. Check connector_list first when connection status matters.`,
+  runtime_admin: `RUNTIME ADMIN: diagnostic_packet builds a bounded incident/evidence packet, system_diagnostics reports Prometheus runtime health and configuration state, and gateway_restart performs a controlled gateway restart. Use for runtime diagnosis, incident recovery, or an explicitly requested restart. Treat restart as a consequential operation: verify the target and preserve/review the recovery checkpoint before reporting success.`,
+
+  external_apps: `EXTERNAL APPS: activate external_apps for connector_list and wrapper-first connected app tools. connector_list inventories available connectors and connection status. For X/Twitter and xAI/Grok use x_search_ops, x_posts, x_users, x_lists, x_dm, and x_admin. For Vercel use vercel_ops. Other connected app tools may still appear directly from their connectors. Check connector_list first when connection status matters.`,
 
   social_intelligence: `SOCIAL INTELLIGENCE: social_intel(platform, handle, mode?) analyzes social profiles and persists structured findings under entities/social. Use for profile metrics, engagement analysis, growth trajectory, and content recommendations.`,
 
-  proposal_admin: `PROPOSAL ADMIN: edit_proposal updates pending proposals before approval. Use only for proposal metadata/details/diff revisions, not for executing source edits directly.`,
+  proposal_admin: `PROPOSAL WORKFLOW: write_proposal creates a pending proposal for human approval; edit_proposal revises pending proposal metadata/details/diffs before approval. Use these for proposal workflow only, not for executing source edits directly.`,
 
   mcp_server_tools: `MCP SERVER TOOLS: dynamic tools from connected MCP servers appear as mcp__serverId__toolName. Use mcp_server_manage(action:"list_tools") or integration_admin first when you need to inspect available MCP tools. Use only trusted connected servers.`,
 
-  creative_mode: `CREATIVE TOOLS: wrapper-first editable Creative editor tools. Use creative_project for mode/state/history/project/export, creative_scene for canvas/scene/element/style operations, creative_image_ops for image assets/generation/layers/icons, creative_video_ops for shots/audio/timeline/composition/rendering, creative_hyperframes_ops for HyperFrames/HTML Motion, and creative_quality_ops for QA/layout/frame/text checks. Use Creative/HyperFrames skills for workflow guidance. Workspace selection is editor state, not an assistant runtime mode. Use generate_image/generate_video for one-shot AI media without opening an editable workspace.`,
+  creative_mode: `CREATIVE TOOLS: wrapper-first editable Creative editor tools. Use creative_project for mode/state/history/project/export, creative_scene for canvas/scene/element/style operations, creative_image_ops for image assets/generation/layers/icons, creative_video_ops for shots/audio/timeline/composition/rendering, creative_hyperframes_ops for HyperFrames/HTML Motion, and creative_quality_ops for QA/layout/frame/text checks. Use Creative/HyperFrames skills for workflow guidance. Workspace selection is editor state, not an assistant runtime mode. For one-shot AI media, activate media_generation and use media_generate; generate_image/generate_video remain compatibility tools.`,
 
   debug: isPublicDistributionBuild()
     ? `DEBUG: Use workspace files, logs, audit records, generated artifacts, and visible runtime state to diagnose issues in the public app build. Do not assume Prometheus source or dev-only self reference files are available.`
     : `DEBUG: For Prometheus internal/runtime errors, inspect self/index.md first, then use workspace logs/audit when relevant: workspace_read(action:"list", path:"audit"), workspace_read(action:"search", directory:"audit", pattern:...), and workspace_read(action:"read", path:...) on specific transcripts, task records, or compaction summaries. For Prometheus source errors in dev/private builds, use dev_source_read(action:"read"|"grep", surface:"src"|"web-ui", ...) for source errors. For running compiled-backend mismatches, compare src/ with dist/ through dev_source_read(surface:"prom-root") when available.`,
 
-  agents: `AGENTS: chat_with_subagent(agent_id,message) is core for normal persistent chat/check-ins with a standalone non-team subagent. agent_run_ops(action,...) is core for existing agent-owned task runs, live steering, and recovery chats. Activate agents_and_teams for wrappers: agent_ops(action:"list"|"info"|"spawn"|"update"|"delete"|"deploy_analysis_team"), agent_chat_ops(action:"chat"|"delegate"|"steer"|"send_mailbox"), team_ops_wrapper(action:"manage"|"delete"|...), and team_collab_ops(...).
+  agents: `AGENTS: activate agents_and_teams for chat_with_subagent(agent_id,message) normal persistent chat/check-ins, agent_run_ops(action,...) existing agent-owned task runs/live steering/recovery, and the agent/team wrappers: agent_ops(action:"list"|"info"|"spawn"|"update"|"delete"|"deploy_analysis_team"), agent_chat_ops(action:"chat"|"delegate"|"steer"|"send_mailbox"), team_ops_wrapper(action:"manage"|"delete"|...), and team_collab_ops(...).
 RULES: agent_chat_ops(action:"delegate", agent_id, assignment) already creates exactly one task. The assignment tells the worker to perform the work directly; NEVER put "create/start/spawn a new task/run" inside it. If an agent has a matching ACTIVE run, use agent_run_ops(action:"steer", task_id, message) to join that run. Once a subagent task completes it is immutable: milestone 2 or any later follow-up is a NEW delegated task, never a steer/resume/rerun/continue of milestone 1. Use agent_run_ops(action:"recover") only for paused/stalled/failed recovery chat and resume/rerun only after an explicit recovery decision on unfinished or failed work. Use chat_with_subagent for Home-thread check-ins unrelated to an active run. Activate agents_and_teams and call agent_ops(action:"list") first when discovery is needed.`,
 
-  teams: `TEAMS: ask_team_coordinator(goal, context?) for multi-agent team work. spawn_subagent() for single standalone agent tasks.
+  teams: `TEAMS: activate agents_and_teams, then use ask_team_coordinator(goal, context?) for multi-agent team work. spawn_subagent() is for single standalone agent tasks.
 WHEN TO USE EACH:
-  → chat_with_subagent: core direct chat/check-in with a known standalone non-team agent
+  → chat_with_subagent: direct chat/check-in with a known standalone non-team agent
   → agent_chat_ops(action:"chat"): persistent conversation; action:"delegate": exactly one new formal task; action:"steer": existing task; action:"send_mailbox": delivery without starting work
   → ask_team_coordinator: multiple agents needed, parallel workstreams, complex goal that benefits from roles (planner+builder+verifier etc.)
 TEAM OPS: Do NOT call granular team_manage directly from main chat. Use ask_team_coordinator for normal managed team work; use team_ops_wrapper/team_collab_ops only when you intentionally need lower-level managed-team operations.`,
@@ -906,6 +1248,16 @@ TEAM OPS: Do NOT call granular team_manage directly from main chat. Use ask_team
   agent_builder: `AGENT BUILDER (localhost:3005): search_workflow_templates(query) first → architect_workflow() only if no match → verify_workflow_credentials → deploy_workflow → create_node_subagent if needed.
 STOP if credentials missing — tell user exactly what's needed with add_credential_url links. Workflows run inside Agent Builder — use execute_workflow_template(), NOT browser_* tools.`,
 };
+
+// Automation was previously one long policy block. Keep the broad alias for
+// compatibility, but make the normal surface pay only for the workflow pack it
+// actually activates. Shared safety is injected once by buildToolsContext.
+const AUTOMATION_SAFETY = 'AUTOMATION SAFETY: inspect current state before mutation; confirm before durable, external, destructive, or approval-changing actions; report only tool evidence.';
+TOOL_BLOCKS.automations = `${AUTOMATION_SAFETY} Use the specific workflow pack when possible: scheduling, tasks, recovery, or sessions.`;
+TOOL_BLOCKS.automation_scheduling = 'AUTOMATION SCHEDULING: schedule_job(action=list|create|update|pause|resume|delete|run_now) plus schedule_job_detail/history/log_search/outputs/patch/stuck_control. Inspect first; confirm before changing an existing schedule.';
+TOOL_BLOCKS.automation_tasks = 'AUTOMATION TASKS: automation_dashboard and task_control inspect/control task runs; run_task_now starts an eligible task; internal_watch waits on a task/run and returns evidence.';
+TOOL_BLOCKS.automation_recovery = 'AUTOMATION RECOVERY: prometheus_audit_ops reconstructs interruptions; prometheus_request_ops finds/reads durable requests, approvals, proposals, and recovery candidates. Verify live state, then resume through the owning operation; never infer completion or re-approve.';
+TOOL_BLOCKS.automation_sessions = 'AUTOMATION SESSIONS: prometheus_thread_ops lists/finds/searches active and settled first-class Prometheus sessions by default and marks settled state. Use state=active or state=settled to narrow results, and action=reopen (open/unsettle aliases) to return a settled session to the active view without changing history. It also reads/creates/sends/steers/interrupts/renames/pins/follows sessions. New threads choose exactly one launch_mode: ping, forget, or supervise. Creation confirms queueing only, not completion.';
 
 export const TOOL_TO_MEMORY_CATS: Record<string, string[]> = {
   web: ['web', 'research', 'search'],
@@ -930,19 +1282,28 @@ export const CATEGORY_POLICIES: Record<string, string> = {
   team_ops: `${TOOL_BLOCKS.agents}\n\n${TOOL_BLOCKS.teams}`,
   automations: TOOL_BLOCKS.automations,
   scheduling: TOOL_BLOCKS.automations,
+  automation_scheduling: TOOL_BLOCKS.automation_scheduling,
+  automation_tasks: TOOL_BLOCKS.automation_tasks,
+  automation_recovery: TOOL_BLOCKS.automation_recovery,
+  automation_sessions: TOOL_BLOCKS.automation_sessions,
+  runtime_admin: TOOL_BLOCKS.runtime_admin,
+  runtime: TOOL_BLOCKS.runtime_admin,
+  diagnostics: TOOL_BLOCKS.runtime_admin,
   workspace_write: `${TOOL_BLOCKS.files}\n\n${TOOL_BLOCKS.shell}`,
   file_ops: `${TOOL_BLOCKS.files}\n\n${TOOL_BLOCKS.shell}`,
   shell: `${TOOL_BLOCKS.files}\n\n${TOOL_BLOCKS.shell}`,
   commands: `${TOOL_BLOCKS.files}\n\n${TOOL_BLOCKS.shell}`,
-  prometheus_source_read: TOOL_BLOCKS.debug,
-  ...(isPublicDistributionBuild() ? {} : {
+  ...(arePrometheusDevToolsVisible() ? {
+    prometheus_source_read: TOOL_BLOCKS.debug,
     prometheus_source_write: `${TOOL_BLOCKS.files}`,
     source_write: `${TOOL_BLOCKS.files}`,
-  }),
+  } : {}),
   advanced_memory: TOOL_BLOCKS.memory,
   memory: TOOL_BLOCKS.memory,
   media_assets: TOOL_BLOCKS.media_assets,
   media: TOOL_BLOCKS.media_assets,
+  media_generation: TOOL_BLOCKS.media_generation,
+  media_gen: TOOL_BLOCKS.media_generation,
   media_quality: TOOL_BLOCKS.media_quality,
   integration_admin: TOOL_BLOCKS.integrations,
   integrations: TOOL_BLOCKS.integrations,
@@ -972,11 +1333,22 @@ export const CATEGORY_POLICIES: Record<string, string> = {
 const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
   browser_automation: 'control and inspect browser pages with browser_session, browser_observe, browser_act, and browser_extract wrappers.',
   desktop_automation: 'control and inspect OS windows/apps with desktop_screen, desktop_apps, desktop_window, desktop_input, desktop_macro, and desktop_background wrappers.',
-  agents_and_teams: 'list/create/update subagents with agent_ops; use agent_chat_ops chat/delegate/steer/send_mailbox, team_ops_wrapper, team_collab_ops, managed team tools, or background handoffs. Delegate already creates one task, so its assignment must directly describe the work and must not ask the worker to create another task. For normal known-agent chat, chat_with_subagent is core and does not need this category.',
+  workspace_write: 'read/edit/run/git workspace operations with workspace_read, workspace_edit, workspace_run, workspace_git, workspace_safety, and workspace_code_nav.',
+  agents_and_teams: 'use chat_with_subagent or agent_run_ops for known standalone-agent chat and run steering/recovery, or use agent_ops, agent_chat_ops, team_ops_wrapper, team_collab_ops, managed team tools, and background handoffs. Delegate already creates one task, so its assignment must directly describe the work and must not ask the worker to create another task.',
+  advanced_memory: 'use advanced memory graph, timeline, related-record, project-search, or index tools when basic memory is insufficient.',
+  media_assets: 'download or analyze existing image, video, audio, PDF, or remote media assets.',
+  media_generation: 'use media_generate(action:"image"|"video", prompt, ...) for one-shot AI image/video generation, image-to-video, reference generation, editing, or extension.',
+  automation_scheduling: 'create, inspect, update, pause, resume, delete, or run recurring schedules and cron jobs.',
+  automation_tasks: 'inspect, start, control, monitor, or retrieve outputs from background tasks and automation executions.',
+  automation_recovery: 'reconstruct and recover interrupted, stalled, failed, or approval-pending Prometheus requests and runs.',
+  automation_sessions: 'create, find, read, send to, steer, interrupt, rename, pin, or follow Prometheus sessions and threads.',
+  runtime_admin: 'use diagnostic_packet, system_diagnostics, or gateway_restart for Prometheus runtime diagnostics, incident recovery, and controlled restart operations.',
   prometheus_source_read: 'inspect Prometheus app/source files with dev_source_read plus shared search_files/read_files_batch/file_tree helpers for src/ and web-ui/.',
   prometheus_source_write: 'edit Prometheus app/source files after approval with dev_source_edit; use request_dev_source_edit or an approved code_change proposal first.',
+  integration_admin: 'connect, configure, authorize, or diagnose MCP servers, webhooks, APIs, and other integrations.',
+  external_apps: 'use connected application wrappers after checking connector availability when needed.',
   social_intelligence: 'run social_intel for social profile metrics, engagement/growth analysis, and content recommendations.',
-  proposal_admin: 'use edit_proposal to revise pending proposal metadata/details/diffs before approval.',
+  proposal_admin: 'use write_proposal to create a pending proposal and edit_proposal to revise pending proposal metadata/details/diffs before approval.',
   mcp_server_tools: 'use dynamic mcp__server__tool functions exposed by connected MCP servers; inspect/setup servers with integration_admin first when needed.',
   composite_tools: 'manage or run saved multi-step tools: create_composite, get_composite, edit_composite, delete_composite, list_composites, plus saved composite tool names.',
   creative_basic: 'use creative_project and creative_scene wrappers for canvas/editor controls, scene, element, style, export, undo/redo, and project state work.',
@@ -991,7 +1363,7 @@ const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
 
 function buildToolCategoryMatchContext(messageText: string, activatedCategories: Set<string>): string {
   const detected = detectToolCategories(messageText);
-  const allowed = new Set(getPublicBuildAllowedCategories(Object.keys(TOOL_CATEGORY_MATCH_HINTS) as any));
+  const allowed = new Set(getRuntimeAllowedCategories(Object.keys(TOOL_CATEGORY_MATCH_HINTS) as any));
   const lines: string[] = [];
   for (const category of Object.keys(TOOL_CATEGORY_MATCH_HINTS)) {
     if (!detected.has(category)) continue;
@@ -1004,6 +1376,22 @@ function buildToolCategoryMatchContext(messageText: string, activatedCategories:
     );
   }
   return lines.length ? `[TOOL_CATEGORY_MATCH]\n${lines.join('\n')}` : '';
+}
+
+function getVisibleCategoryPolicy(policy: string): string {
+  if (arePrometheusDevToolsVisible()) return policy;
+  return String(policy || '')
+    // Remove the private self-edit routing paragraphs from the generic
+    // workspace policy when that surface is hidden.
+    .replace(/(?:^|\n)[ \t]*SOURCE CODE REFERENCE FILES:[^\n]*/g, '')
+    .replace(/(?:^|\n)[ \t]*SRC\/WEB-UI SURFACES[^\n]*/g, '')
+    .replace(/(?:^|\n)[ \t]*Write \(approved dev source sessions only\):[^\n]*/g, '')
+    .replace(/(?:^|\n)[ \t]*EDIT PRIORITY:[^\n]*/g, '')
+    .replace(/\bdev_source_read\b/g, 'workspace_read')
+    .replace(/\bdev_source_edit\b/g, 'workspace_edit')
+    .replace(/\brequest_dev_source_edit\b/g, 'workspace_edit')
+    .replace(/\bprom_apply_dev_changes\b/g, 'workspace_run')
+    .replace(/\bprom_repo_(?:ops|push|pull|sync)\b/g, 'workspace_git');
 }
 
 const BG_AGENT_RUNTIME_HINT = `BACKGROUND AGENTS: background_ops(action:"spawn", prompt) runs a full parallel agent that does real work and reports back. Reach for it proactively — it is a primary tool, not a last resort. Two patterns to default to:
@@ -1037,24 +1425,28 @@ function buildToolsContextUncached(activatedCategories: Set<string>, options?: {
     id,
     `${id} (${TOOL_CATEGORY_MANIFEST[id].menuLabel})`,
   ]);
-  const allowedCategoryIds: Set<string> = new Set(getPublicBuildAllowedCategories(TOOL_CATEGORY_MENU_ORDER));
+  const allowedCategoryIds: Set<string> = new Set(getRuntimeAllowedCategories(TOOL_CATEGORY_MENU_ORDER));
   const categoryMenu = runtimeCategoryDefs
     .filter(([id]) => allowedCategoryIds.has(id))
     .map(([, label]) => label)
     .join(' | ');
 
-  const legacyMenu = `[TOOLS] Core tools loaded (file read/search, web, basic memory, skill_list/skill_read only for core skill discovery, tasks, schedule_job, switch_model, set_current_model, update_heartbeat, write_proposal, ask_team_coordinator). Activate additional categories as needed:
+  const legacyMenu = `[TOOLS] Core tools loaded (file read/search, web, basic memory(action="write"|"read"|"search"), skill_list/skill_read only for core skill discovery, tasks, switch_model, set_current_model, update_heartbeat). Activate additional categories as needed:
   ${categoryMenu}
   Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
   Use: request_tool_category({"category":"browser_automation","scope":"turn"}) for the current user turn. Use scope=session only for explicit ongoing workflows; scope=next_turn keeps it through one follow-up turn; scope=ttl with turns keeps it for a bounded multi-turn workflow.
 
 [FILE EDIT ROUTING] For workspace edits, activate/use workspace_write/file_ops. Use workspace_read(action:"grep"/"search"/"stats"/"read") when locating or understanding the target; if an exact file plus exact snippet/line range is already known, use workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"patchset") directly. For obvious small single-file edits or bug fixes, do not call skill_list/skill_read just because broad file/frontend skills match; read a skill only when the user explicitly asks, the workflow is unfamiliar/high-risk, or the skill is needed for a specific non-obvious procedure. Edit tools fail safely and return post-edit context. Do not use workspace_run/terminal/Python/PowerShell/sed/node scripts as the default file editor.
-[SOURCE ROOT SAFETY] When the request concerns Prometheus itself, inspect the live product tree with dev_source_read. Do not use workspace/repos/PromSRC*, PromSRC-compare, rescue copies, or other workspace clones as current product source unless the user explicitly asks to compare that copy.
+${arePrometheusDevToolsVisible()
+  ? '[SOURCE ROOT SAFETY] When the request concerns Prometheus itself, inspect the live product tree with dev_source_read. Do not use workspace/repos/PromSRC*, PromSRC-compare, rescue copies, or other workspace clones as current product source unless the user explicitly asks to compare that copy.'
+  : '[PROMETHEUS REPO ROUTING] Treat the configured workspace repository as the editable project. Use workspace_read/workspace_code_nav to inspect it and workspace_edit/workspace_run/workspace_git to change and verify it. Direct Prometheus self-edit/dev-source and repo-sync tools are hidden by default.'}
 
 [RUN COMMAND ROUTING] For shell/dev-server/process work, activate workspace_write. Use workspace_run(action:"run", command) for bounded commands; use workspace_run(action:"start", command) for long-running or interactive commands; manage runIds with workspace_run(action:"status"|"log"|"wait"|"kill"|"submit").
 
 [PROPOSAL LANES] When using write_proposal, set execution_mode explicitly:
-- code_change: Prometheus dev self-edit only. Use only for exact src/ and/or web-ui/ affected_files, include execution_steps, executor_prompt, risk_tier, and required src proposal headings. Do not use code_change for prom-root/config/build scripts unless the proposal lane explicitly supports that scope.
+${arePrometheusDevToolsVisible()
+  ? '- code_change: Prometheus dev self-edit only. Use only for exact src/ and/or web-ui/ affected_files, include execution_steps, executor_prompt, risk_tier, and required src proposal headings. Do not use code_change for prom-root/config/build scripts unless the proposal lane explicitly supports that scope.'
+  : '- code_change: Prometheus self-edit proposals are hidden in this workspace-oriented mode. Use action for edits to the configured workspace repository.'}
 - action: approve and perform/trigger/create something exactly once. Use for team starts, scheduled runs, artifacts, and bounded workflows. Include 3-7 execution_steps and requires_build=false.
 - review: read-mostly verification/audit/report. Do not mutate unless the proposal explicitly approves that exact mutation. Include evidence/resource refs and 3-7 execution_steps.
 
@@ -1073,15 +1465,15 @@ SKIP: casual chat, greetings, simple Q&A, turns where nothing actionable happene
 SPEED RULE: if write_note is the only action in your turn, call switch_model('low') first — it reverts automatically after.
 DURING PLANS/TASKS: write a note at each meaningful step — capturing gathered data, intermediate results, or blockers keeps context recoverable if the task is interrupted.
 
-[MEMORY CONTINUITY] Memory search is Prometheus' long-term recall. Use memory_search before answering from memory when the user asks about previous discussions, decisions, recurring preferences, project history, older tasks, "what did we decide", "what happened before", or any answer that depends on continuity. Use memory_read_record for important hits and memory_get_related to expand useful context. Use memory_search_timeline when chronology matters.
+[MEMORY CONTINUITY] Memory search is Prometheus' long-term recall. Use memory(action:"search", query=...) before answering from memory when the user asks about previous discussions, decisions, recurring preferences, project history, older tasks, "what did we decide", "what happened before", or any answer that depends on continuity. Use memory_read_record for important hits and memory_get_related to expand useful context. Use mode="timeline" when chronology matters.
 
 [BUSINESS CONTEXT] BUSINESS.md is available but not auto-injected by default. Use business_context_mode({"action":"enable"}) when ongoing work needs persistent business/company context across this session. Use "status" to check the mode and "disable" to turn it back off. Enabling returns the current BUSINESS.md snapshot immediately so you can use it in the same turn. Business entity tools are core: list_entities(type?), read_entity(type,id), write_entity(type,id,content), append_entity_event(type,id,event,display_name?,source?,confidence?). Use entities for clients, contacts, projects, vendors, and social accounts; use BUSINESS.md for company-level profile, offers, policies, and priorities.
 
-[TEAMS & AGENTS] Agent/task routes — pick the right one:
-  → chat_with_subagent(id,message) — core normal persistent chat/check-in with a known standalone non-team agent.
+[TEAMS & AGENTS] Agent/task routes — activate agents_and_teams, then pick the right one:
+  → chat_with_subagent(id,message) — normal persistent chat/check-in with a known standalone non-team agent.
   → agent_run_ops(action:"list"|"get"|"steer"|"recover"|"resume"|"rerun",...) — existing unfinished/failed subagent/team-agent runs. Use steer for live instruction changes and recover only for paused/stalled recovery chat. Completed subagent tasks cannot be reopened.
   → spawn_subagent('id', task, ...) and message_subagent(id,assignment) — create NEW standalone work only. These calls already create the run: the assignment must directly describe work, never ask the worker to create/start/spawn another task. Each milestone/follow-up after completion gets a new task id; reference the prior task in context rather than reopening it. agent_message_send/agent_turn_request/agent_reply_wait — lower-level mailbox/reply workflows. These require agents_and_teams/team_ops category.
-  → ask_team_coordinator(goal) — always available (core). Multi-agent teams with roles. Use when: parallel workstreams, multiple specializations needed, or task is too large for one agent context.
+  → ask_team_coordinator(goal) — managed multi-agent teams with roles. Use when: parallel workstreams, multiple specializations needed, or task is too large for one agent context.
 Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct team call — use only when a coordinator is waiting on your reply.
 
 [MODEL ROUTING] Default: primary model (powerful, for complex work). Call switch_model(tier, reason) EARLY when the task is clearly lighter.
@@ -1089,7 +1481,7 @@ Do NOT call team_manage directly. reply_to_team(team_id, msg) is the only direct
   → 'low' (speed): single command, file read/summary, write_note only, quick lookups.
   → 'medium' (careful): multi-step analysis or structured work that doesn't need full primary model power.
   → Stay on primary: ${isPublicDistributionBuild() ? 'proposal work, deep reasoning, auth/security/build, anything expensive if wrong.' : 'src/ edits, proposals, deep reasoning, auth/security/build, anything expensive if wrong.'}
-  → Mixed intent rule: if a turn contains BOTH memory work (memory_write/write_note) and a separate actionable task, prefer background_ops(action:"spawn") for the memory sidecar so primary execution continues in parallel.
+  → Mixed intent rule: if a turn contains BOTH memory work (memory(action:"write")/write_note) and a separate actionable task, prefer background_ops(action:"spawn") for the memory sidecar so primary execution continues in parallel.
   → If you choose not to spawn and you used switch_model for a memory side action, continue executing the user's remaining task in the same turn (do not stop after memory).
   Auto-reverts after turn end — never switch back manually.
 
@@ -1119,7 +1511,7 @@ ${BG_AGENT_RUNTIME_HINT}`;
   }
   const activeCategoryList = Array.from(activatedCategories)
     .map((category) => String(category || '').trim())
-    .filter(Boolean);
+    .filter((category) => Boolean(category) && !isPrometheusDevToolCategoryHidden(category));
   const activeCategoryHint = activeCategoryList.length > 0
     ? `\n\n[ACTIVE_TOOL_CATEGORIES] Already active for this session: ${activeCategoryList.join(', ')}. Do not request these categories again; use their tools directly when relevant.`
     : '';
@@ -1128,9 +1520,16 @@ ${BG_AGENT_RUNTIME_HINT}`;
   if (activatedCategories.size === 0) return baseMenu;
 
   const activePolicies: string[] = [];
+  const automationPackActive = ['automation_scheduling', 'automation_tasks', 'automation_recovery', 'automation_sessions']
+    .some((category) => activatedCategories.has(category));
+  if (automationPackActive && !activatedCategories.has('automations')) {
+    activePolicies.push(AUTOMATION_SAFETY);
+  }
   for (const cat of activatedCategories) {
-    const policy = CATEGORY_POLICIES[cat];
-    if (!policy) continue;
+    if (isPrometheusDevToolCategoryHidden(cat)) continue;
+    const rawPolicy = CATEGORY_POLICIES[cat];
+    if (!rawPolicy) continue;
+    const policy = getVisibleCategoryPolicy(rawPolicy);
     const mode = getInstructionResolverMode();
     const pilotDecision = resolveStage3PilotPolicyDecision(cat, activatedCategories);
     if (mode === 'pilot' && pilotDecision.pilotCategory) {
@@ -1140,6 +1539,17 @@ ${BG_AGENT_RUNTIME_HINT}`;
     // legacy and shadow preserve the existing builder. Non-pilot categories
     // remain on the existing path in every mode during Stage 3.
     activePolicies.push(policy);
+  }
+
+  // The broad legacy alias loads every automation pack for compatibility. Give
+  // that path the pack-specific operating rules too, without duplicating any
+  // pack that was explicitly activated.
+  if (activatedCategories.has('automations')) {
+    for (const pack of ['automation_scheduling', 'automation_tasks', 'automation_recovery', 'automation_sessions']) {
+      if (activatedCategories.has(pack)) continue;
+      const policy = CATEGORY_POLICIES[pack];
+      if (policy) activePolicies.push(getVisibleCategoryPolicy(policy));
+    }
   }
 
   if (activePolicies.length === 0) return baseMenu;
@@ -1237,22 +1647,56 @@ export async function capturePersonalityContextSnapshot(
   setCurrentTurn: (sessionId: string, turn: number) => void,
   extraCats?: Set<string>,
   options?: BuildPersonalityContextOptions,
+  signal?: AbortSignal,
+  onMemorySearchTelemetry?: (fields: Record<string, unknown>) => void,
 ): Promise<PersonalityContextSnapshot> {
   const runtimeActor = getRuntimeActorContext(sessionId);
+  const runtimeHostContext = buildPromptRuntimeHostContext(workspacePath);
   const profile = options?.profile || 'default';
   const isDirectSubagentProfile = profile === 'direct_subagent';
+  const allowAtomicMemory = shouldInjectMemoryAtoms(sessionId, executionMode, profile, runtimeActor || null);
   const allowLongTermSearch = profile !== 'local_llm'
     && profile !== 'teach_mode'
+    && profile !== 'voice_agent'
     && executionMode === 'interactive'
     && !isDirectSubagentProfile
     && runtimeActor?.kind !== 'agent'
     && runtimeActor?.kind !== 'manager';
   const memorySearchRouting = allowLongTermSearch
-    ? routeMemorySearchMode(messageText)
+    ? routeMemorySearchMode(messageText, { automatic: true })
     : ({ mode: 'no_search', reason: 'execution_mode_skip' } as MemorySearchRouting);
-  const retrievedMemoryContext = allowLongTermSearch
-    ? await buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
-    : '';
+  if (allowLongTermSearch && memorySearchRouting.mode === 'no_search') {
+    onMemorySearchTelemetry?.({
+      status: 'skipped',
+      automatic: true,
+      reason: memorySearchRouting.reason,
+      mode: memorySearchRouting.mode,
+      queryChars: String(messageText || '').length,
+      injected: false,
+    });
+  }
+  // Start broad evidence retrieval before project/skill snapshot work so a
+  // warm result can be reused if it finishes naturally during prompt assembly.
+  // Do not await it here: the durable MEMORY atom path is local and immediate,
+  // while broad search is an optional evidence supplement and must never hold
+  // the first model request hostage.
+  let memorySearchSettled = false;
+  let memorySearchValue = '';
+  if (allowLongTermSearch && memorySearchRouting.mode !== 'no_search') {
+    void buildRetrievedMemoryContext(
+      workspacePath,
+      messageText,
+      memorySearchRouting,
+      signal,
+      onMemorySearchTelemetry,
+      sessionId,
+    ).then((value) => {
+      memorySearchSettled = true;
+      memorySearchValue = value;
+    }).catch(() => {
+      memorySearchSettled = true;
+    });
+  }
   let projectContextBlock = '';
   try {
     const { buildProjectContextBlock, findProjectBySessionId } = await import('./projects/project-store.js');
@@ -1260,6 +1704,10 @@ export async function capturePersonalityContextSnapshot(
       projectContextBlock = buildProjectContextBlock(sessionId) || '';
     }
   } catch {}
+  const memoryAtomContext = allowAtomicMemory
+    ? buildMemoryAtomContext(workspacePath, messageText, projectContextBlock, profile)
+    : '';
+  const retrievedMemoryContext = memorySearchSettled ? memorySearchValue : '';
   const advanceTurn = shouldAdvancePromptTurn(executionMode, historyLength, profile, runtimeActor || null);
   const autonomous = executionMode === 'background_task'
     || executionMode === 'proposal_execution'
@@ -1306,12 +1754,14 @@ export async function capturePersonalityContextSnapshot(
   const snapshot: PersonalityContextSnapshot = {
     businessContextEnabled: isBusinessContextEnabled(sessionId),
     activatedToolCategories: [...getActivatedToolCategories(sessionId)],
+    runtimeHostContext,
     runtimeActor: runtimeActor ? { ...runtimeActor } : null,
     runtimeActorMemory: loadRuntimeActorMemoryContext(sessionId),
     runtimeActorManagerMemory: loadRuntimeActorMemoryContext(sessionId, 8000),
     projectContextBlock,
     skillTurnContext: skillsManager.buildTurnContext(messageText, skillContextOptions),
     activeSkillsContext: buildActiveSkillsContext(sessionId, skillsManager),
+    memoryAtomContext,
     retrievedMemoryContext,
     subagentsRosterBlock: buildSubagentsRosterBlock(),
     advanceTurn: advanceTurn && !advanceBeforeSkillContext,
@@ -1350,6 +1800,7 @@ export async function buildPersonalityContext(
   setCurrentTurn: (sessionId: string, turn: number) => void,
   extraCats?: Set<string>,
   options?: BuildPersonalityContextOptions,
+  signal?: AbortSignal,
 ): Promise<string> {
   if ((getSessionSkillWindowsFn as unknown) instanceof Set || getSessionSkillWindowsFn == null) {
     options = (setCurrentTurn && typeof setCurrentTurn === 'object' && !((setCurrentTurn as unknown) instanceof Set))
@@ -1368,6 +1819,9 @@ export async function buildPersonalityContext(
     forcedSkillIds: options?.forcedSkillIds || [],
   };
   const snapshot = options?.serializedSnapshot;
+  // Capture this in the gateway snapshot so isolated prompt workers cannot
+  // accidentally describe themselves instead of the host where tools run.
+  const runtimeHostContext = snapshot?.runtimeHostContext || buildPromptRuntimeHostContext(workspacePath);
   const businessContextEnabled = snapshot?.businessContextEnabled ?? isBusinessContextEnabled(sessionId);
   const activatedToolCategories = (): Set<string> => snapshot
     ? new Set(snapshot.activatedToolCategories)
@@ -1407,7 +1861,7 @@ export async function buildPersonalityContext(
     const selectedSkillCtxLocal = skillTurnContext();
     const activeSkillCtxLocal = activeSkillsContext();
     await finishGatewayBootstrap(true);
-    return buildLocalModelPersonalityCtx(timeString, userMemory)
+    return `${runtimeHostContext}\n\n${buildLocalModelPersonalityCtx(timeString, userMemory)}`
       + (business ? `\n\n[BUSINESS]\n${business}` : '')
       + (selectedSkillCtxLocal ? `\n\n${selectedSkillCtxLocal}` : '')
       + (activeSkillCtxLocal ? `\n\n${activeSkillCtxLocal}` : '');
@@ -1430,6 +1884,7 @@ export async function buildPersonalityContext(
     await finishGatewayBootstrap(true);
     return assembleContext(
       [
+        runtimeHostContext,
         user ? `[USER]\n${user}` : '',
         soul ? `[SOUL]\n${soul}` : '',
         buildToolsContext(activatedCatsTeach, { instructionIntents: options?.instructionIntents }),
@@ -1448,14 +1903,14 @@ export async function buildPersonalityContext(
   // Main-chat memory retrieval is never inherited by a subagent runtime. A
   // subagent may still use an explicitly available memory tool when its task
   // calls for it, but no user/main memory is silently injected into its prompt.
-  const allowLongTermSearch = executionMode === 'interactive' && !isDirectSubagentProfile && runtimeActor?.kind !== 'agent' && runtimeActor?.kind !== 'manager';
-  const memorySearchRouting = allowLongTermSearch
-    ? routeMemorySearchMode(messageText)
-    : ({ mode: 'no_search', reason: 'execution_mode_skip' } as MemorySearchRouting);
-  const retrievedMemoryCtx = snapshot
-    ? snapshot.retrievedMemoryContext
-    : allowLongTermSearch
-      ? await buildRetrievedMemoryContext(workspacePath, messageText, memorySearchRouting)
+  // The isolated snapshot capture owns the optional broad-search prefetch.
+  // In-process fallback must remain safe too, so it only uses the local atom
+  // projection and never waits on the worker search lane.
+  const retrievedMemoryCtx = snapshot ? snapshot.retrievedMemoryContext : '';
+  const memoryAtomCtx = snapshot
+    ? snapshot.memoryAtomContext
+    : shouldInjectMemoryAtoms(sessionId, executionMode, profile, runtimeActor || null)
+      ? buildMemoryAtomContext(workspacePath, messageText, '', profile)
       : '';
   const cisContext = buildCisContextBlock(workspacePath, messageText, { force: businessContextEnabled });
   const configSoul = loadSoul();
@@ -1486,6 +1941,7 @@ export async function buildPersonalityContext(
     await finishGatewayBootstrap(true);
     return assembleContext(
       [
+        runtimeHostContext,
         voiceSoulContract ? `[VOICE_SOUL]\n${voiceSoulContract}` : '',
         user ? `[USER]\n${user}` : '',
         soul ? `[SOUL]\n${soul}` : '',
@@ -1495,6 +1951,7 @@ export async function buildPersonalityContext(
         voiceSelf ? `[SELF_VOICE_SECTION]\n${voiceSelf}` : '',
       ],
       [
+        memoryAtomCtx,
         retrievedMemoryCtx,
         referenceHint,
         skillCtx,
@@ -1509,7 +1966,12 @@ export async function buildPersonalityContext(
     const user = loadFullMemoryProfile(workspacePath, 'USER.md');
     const soul = loadFullMemoryProfile(workspacePath, 'SOUL.md');
     const business = businessContextEnabled ? loadBusinessContextProfile(workspacePath) : '';
-    const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md');
+    const memoryMode = resolveMemoryPromptMode(options);
+    const memory = memoryMode === 'full'
+      ? loadFullMemoryProfile(workspacePath, 'MEMORY.md')
+      : memoryMode === 'compact'
+        ? loadFullMemoryProfile(workspacePath, 'MEMORY.md', 8000)
+        : '';
     // switch_model starts a fresh generation context. Do not inherit the
     // interactive session's expanded tool categories, otherwise a lightweight
     // switch can receive the full schema payload from prior category opens.
@@ -1526,6 +1988,7 @@ export async function buildPersonalityContext(
     await finishGatewayBootstrap(true);
     return assembleContext(
       [
+        runtimeHostContext,
         configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
         user ? `[USER]\n${user}` : '',
         soul ? `[SOUL]\n${soul}` : '',
@@ -1533,7 +1996,7 @@ export async function buildPersonalityContext(
         memory ? `[MEMORY]\n${memory}` : '',
         buildToolsContext(activatedCatsSwitch, { instructionIntents: options?.instructionIntents }),
       ],
-      [cisContext, retrievedMemoryCtx, toolCategoryMatchSwitch, skillCtx, activeSkillCtx],
+      [cisContext, memoryAtomCtx, retrievedMemoryCtx, toolCategoryMatchSwitch, skillCtx, activeSkillCtx],
     );
   }
   if (isDirectSubagentProfile || isScheduledAgentActor || isHeartbeatAgentActor || isInteractiveAgentSwitch) {
@@ -1555,6 +2018,7 @@ export async function buildPersonalityContext(
     await finishGatewayBootstrap(true);
     return assembleContext(
       [
+        runtimeHostContext,
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
         agentIdentityMemory,
         buildToolsContext(activatedCatsDirectSub, { instructionIntents: options?.instructionIntents }),
@@ -1593,6 +2057,7 @@ export async function buildPersonalityContext(
     await finishGatewayBootstrap(true);
     return assembleContext(
       [
+        runtimeHostContext,
         messageText ? `[Spawning Prompt from the Main Agent (or whomever is spawning it)]\n${messageText}` : '',
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
         agentIdentityMemory,
@@ -1629,6 +2094,7 @@ export async function buildPersonalityContext(
     await finishGatewayBootstrap(true);
     return assembleContext(
       [
+        runtimeHostContext,
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
         agentIdentityMemory,
         buildToolsContext(activatedCatsSub, { instructionIntents: options?.instructionIntents }),
@@ -1664,6 +2130,7 @@ export async function buildPersonalityContext(
     await finishGatewayBootstrap(true);
     return assembleContext(
       [
+        runtimeHostContext,
         runtimeContract ? `[PROMETHEUS_RUNTIME_CONTRACT]\n${runtimeContract}` : '',
         agentIdentityMemory,
         buildToolsContext(activatedCatsManager, { instructionIntents: options?.instructionIntents }),
@@ -1672,7 +2139,7 @@ export async function buildPersonalityContext(
     );
   }
 
-  // ── Path B: autonomous execution — full prompt, no changes ─────────────────
+  // ── Path B: autonomous execution — bounded durable-memory atoms ─────────────
   // NOTE: 'cron' is intentionally NOT autonomous here — a Prometheus-owned scheduled
   // run gets its owner's normal (interactive/main-chat) stack. The lean "don't ask
   // questions, proceed" framing comes from the cron execution-mode block + the
@@ -1684,8 +2151,13 @@ export async function buildPersonalityContext(
     const business = businessContextEnabled ? loadBusinessContextProfile(workspacePath) : '';
     const soul = isProposalExecution ? configSoul : loadFullMemoryProfile(workspacePath, 'SOUL.md');
     // Proposal executors get only the approved task context plus the configured
-    // Prometheus soul. Workspace MEMORY.md is intentionally excluded here.
-    const memory = isProposalExecution ? '' : loadFullMemoryProfile(workspacePath, 'MEMORY.md');
+    // Prometheus soul. Other Prometheus-owned autonomous turns use selected
+    // atoms; the full file remains available to explicit memory_read and to
+    // the Brain Thought exception below.
+    const memoryMode = resolveMemoryPromptMode(options);
+    const memory = isProposalExecution || memoryMode === 'atoms'
+      ? ''
+      : loadFullMemoryProfile(workspacePath, 'MEMORY.md', memoryMode === 'compact' ? 8000 : undefined);
     // USER.md intentionally excluded from background tasks — user preferences are
     // not relevant to focused task execution and waste token budget.
     // AGENTS.md intentionally excluded from autonomous path — background tasks,
@@ -1718,6 +2190,7 @@ export async function buildPersonalityContext(
     await finishGatewayBootstrap();
     return assembleContext(
       [
+        runtimeHostContext,
         business ? `[BUSINESS]\n${business}` : '',
         soul ? `${isProposalExecution ? '[PROMETHEUS_SOUL]' : '[SOUL]'}\n${soul}` : '',
         memory ? `[MEMORY]\n${memory}` : '',
@@ -1726,6 +2199,7 @@ export async function buildPersonalityContext(
       ],
       [
         cisContext,
+        memoryAtomCtx,
         toolCategoryMatchAuto,
         intradayNotes ? `[TODAY_NOTES]\n${intradayNotes}` : '',
         skillCtx,
@@ -1737,7 +2211,20 @@ export async function buildPersonalityContext(
   // ── Path A: interactive chat — tiered ─────────────────────────────────────
   const user = loadFullMemoryProfile(workspacePath, 'USER.md');
   const business = businessContextEnabled ? loadBusinessContextProfile(workspacePath) : '';
-  const memory = loadFullMemoryProfile(workspacePath, 'MEMORY.md');
+  // Brain/Thought sessions are the compatibility exception: their continuity
+  // contract still depends on the complete durable MEMORY.md alongside the
+  // separate six-hour activity capsule. Normal interactive turns use atoms;
+  // an explicit A/B option can still force a benchmark mode when needed.
+  const memoryMode = isBrainMemoryTurn(sessionId) && !options?.memoryMode
+    ? 'full'
+    : resolveMemoryPromptMode(options);
+  const memory = memoryMode === 'atoms'
+    ? ''
+    : loadFullMemoryProfile(
+      workspacePath,
+      'MEMORY.md',
+      memoryMode === 'compact' ? 8000 : undefined,
+    );
   const today = new Date().toISOString().split('T')[0];
   const intradayPath = path.join(workspacePath, 'memory', `${today}-intraday-notes.md`);
   const _skipIntradayInteractive = sessionId.startsWith('proposal_') || executionMode === 'background_agent';
@@ -1766,6 +2253,7 @@ export async function buildPersonalityContext(
     await finishGatewayBootstrap();
     return assembleContext(
       [
+        runtimeHostContext,
         configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
         user ? `[USER]\n${user}` : '',
         soulT1 ? `[SOUL]\n${soulT1}` : '',
@@ -1776,6 +2264,7 @@ export async function buildPersonalityContext(
       ],
       [
         cisContext,
+        memoryAtomCtx,
         retrievedMemoryCtx,
         toolCategoryMatchT1,
         brainActiveContext,
@@ -1818,6 +2307,7 @@ export async function buildPersonalityContext(
   await finishGatewayBootstrap();
   return assembleContext(
     [
+      runtimeHostContext,
       configSoul ? `[PROMETHEUS_SOUL]\n${configSoul}` : '',
       user ? `[USER]\n${user}` : '',
       soul ? `[SOUL]\n${soul}` : '',
@@ -1829,6 +2319,7 @@ export async function buildPersonalityContext(
     ],
     [
       cisContext,
+      memoryAtomCtx,
       retrievedMemoryCtx,
       toolCategoryMatch,
       brainActiveContext,

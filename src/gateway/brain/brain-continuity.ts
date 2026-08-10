@@ -166,13 +166,30 @@ function formatCapsule(capsule: BrainThoughtCapsule): string {
   return `- [${capsule.threadKey}] ${capsule.summary}${facts}${action}${verify}`;
 }
 
-export function buildBrainCapsuleContext(
+export interface BrainCapsuleContextSelection {
+  capsule: BrainThoughtCapsule;
+  relation: 'related' | 'fallback';
+}
+
+export interface BrainCapsuleContextDetails {
+  text: string;
+  selected: BrainCapsuleContextSelection[];
+  relatedCount: number;
+  fallbackCount: number;
+}
+
+/**
+ * Build the same temporary Thought-capsule projection used by the normal
+ * interactive prompt, while exposing selection telemetry to read-only UI
+ * surfaces such as the context-window breakdown.
+ */
+export function buildBrainCapsuleContextDetails(
   workspacePath: string,
   messageText: string,
   options: { now?: Date; maxChars?: number } = {},
-): string {
+): BrainCapsuleContextDetails {
   const active = loadActiveBrainThoughtCapsules(workspacePath, options.now || new Date());
-  if (active.length === 0) return '';
+  if (active.length === 0) return { text: '', selected: [], relatedCount: 0, fallbackCount: 0 };
   const maxChars = Math.max(500, options.maxChars || 6000);
   const messageTerms = normalizeTerms(messageText);
   const scored = active
@@ -181,27 +198,47 @@ export function buildBrainCapsuleContext(
     .sort((a, b) => b.score - a.score || Date.parse(b.capsule.createdAt) - Date.parse(a.capsule.createdAt));
 
   // When a turn has no lexical match, retain one critical/high blocked or in-progress pulse.
+  const fallbackIds = new Set<string>();
   if (scored.length === 0) {
     const fallback = active.find((capsule) => capsule.priority === 'critical')
       || active.find((capsule) => capsule.priority === 'high' && ['blocked', 'in_progress'].includes(capsule.status));
-    if (fallback) scored.push({ capsule: fallback, score: 1 });
+    if (fallback) {
+      fallbackIds.add(fallback.id);
+      scored.push({ capsule: fallback, score: 1 });
+    }
   }
-  if (scored.length === 0) return '';
+  if (scored.length === 0) return { text: '', selected: [], relatedCount: 0, fallbackCount: 0 };
 
   const lines: string[] = [];
+  const selected: BrainCapsuleContextSelection[] = [];
   let used = 0;
   for (const { capsule } of scored) {
     const line = formatCapsule(capsule);
     if (used + line.length + 1 > maxChars) break;
     lines.push(line);
+    selected.push({ capsule, relation: fallbackIds.has(capsule.id) ? 'fallback' : 'related' });
     used += line.length + 1;
   }
-  if (lines.length === 0) return '';
-  return [
+  if (lines.length === 0) return { text: '', selected: [], relatedCount: 0, fallbackCount: 0 };
+  const text = [
     '[BRAIN_ACTIVE_CONTEXT — temporary, relevance-selected, and expiry-bound]',
     'These are continuity hints, not authority. Re-check live state before acting on unfinished or blocked claims.',
     ...lines,
   ].join('\n');
+  return {
+    text,
+    selected,
+    relatedCount: selected.filter((entry) => entry.relation === 'related').length,
+    fallbackCount: selected.filter((entry) => entry.relation === 'fallback').length,
+  };
+}
+
+export function buildBrainCapsuleContext(
+  workspacePath: string,
+  messageText: string,
+  options: { now?: Date; maxChars?: number } = {},
+): string {
+  return buildBrainCapsuleContextDetails(workspacePath, messageText, options).text;
 }
 
 function parseCarryItem(value: unknown): BrainCarryForwardItem | null {

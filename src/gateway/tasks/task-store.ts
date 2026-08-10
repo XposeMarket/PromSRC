@@ -1124,6 +1124,38 @@ export function saveTask(task: TaskRecord): void {
   task.continuationHistory = normalizeContinuationHistory(task.continuationHistory);
   fs.writeFileSync(taskFilePath(task.id), JSON.stringify(task, null, 2), 'utf-8');
   upsertTaskSummary(task);
+  // Keep the durable journal searchable from the task's originating chat. A
+  // dynamic import avoids coupling the task persistence module to the chat
+  // runtime and makes a resource-store failure non-fatal to task execution.
+  try {
+    const { syncTaskJournalResource } = require('../resources/resource-store') as typeof import('../resources/resource-store');
+    syncTaskJournalResource({
+      id: task.id,
+      title: task.title,
+      assignment: task.originalAssignment || task.prompt,
+      sessionId: task.sessionId,
+      originatingSessionId: task.originatingSessionId,
+      parentTaskId: task.parentTaskId,
+      journal: task.journal as any,
+      scheduleIds: task.scheduleId ? [task.scheduleId] : [],
+      status: task.status,
+      updatedAt: new Date(task.lastProgressAt || Date.now()).toISOString(),
+      createdAt: new Date(task.startedAt || Date.now()).toISOString(),
+      workspacePath: task.agentWorkspace,
+      metadata: {
+        taskKind: task.taskKind,
+        scheduleRunId: task.scheduleRunId,
+        agentWorkspace: task.agentWorkspace,
+      },
+    });
+  } catch (error: any) {
+    let safeError = String(error?.message || error);
+    try {
+      const { redactResourceText } = require('../resources/resource-store') as typeof import('../resources/resource-store');
+      safeError = redactResourceText(safeError);
+    } catch { /* preserve task persistence even if optional resource diagnostics cannot load */ }
+    console.warn('[Resources] Task journal resource sync failed:', safeError);
+  }
 }
 
 export function updateTaskStatus(

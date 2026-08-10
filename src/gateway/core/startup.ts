@@ -54,6 +54,8 @@ import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import { markProviderStatus, markProviderStatusChecking, resolveProviderStatus } from '../provider-status';
 import { getProvider } from '../../providers/factory';
 import type { spawnAgent as SpawnAgentFn } from '../../agents/spawner';
+import { startAutoSettleScheduler } from '../auto-settle';
+import type { LiveRuntimeSnapshot } from '../live-runtime-registry';
 
 function retireLegacySelfRepairStore(configDir: string): void {
   const legacy = path.join(configDir, 'pending-repairs');
@@ -221,7 +223,7 @@ const getBackgroundTaskRunner = (): typeof import('../tasks/background-task-runn
 
 // ─── Main startup function ────────────────────────────────────────────────────
 
-export async function runStartup(deps: StartupDeps): Promise<void> {
+export async function runStartup(deps: StartupDeps): Promise<LiveRuntimeSnapshot[]> {
   startupMark('runStartup entered');
   await yieldStartup();
   const {
@@ -229,6 +231,7 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
     handleChat, retriggerInterruptedMainChat, buildTools, runTeamAgentViaChat,
   } = deps;
+  let deferredMainChatRecoveries: LiveRuntimeSnapshot[] = [];
 
   try { retireLegacySelfRepairStore(getConfig().getConfigDir()); }
   catch (err: any) { console.warn('[SelfRepair] Could not archive legacy patch records:', err?.message || err); }
@@ -341,10 +344,16 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
       launchBackgroundTaskRunner,
       completePlainGatewayRestartTask,
       retriggerInterruptedMainChat,
+      // Checkpoint recovery before the listener, but do not start foreground
+      // model turns until the replacement gateway is already responsive.
+      // Context construction/model work can otherwise monopolize the event
+      // loop while health and restart clients are still trying to connect.
+      deferMainChatRetrigger: true,
       notify: (message) => console.log(`[RuntimeRecovery] ${message}`),
     });
+    deferredMainChatRecoveries = recovery.deferredMainChatRuntimes;
     if (recovery.inspected > 0) {
-      console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), retriggered ${recovery.retriggeredChats.length} chat turn(s), preserved ${recovery.interruptedChats.length - recovery.retriggeredChats.length} chat checkpoint(s), finalized ${recovery.crashRecoveredGoalSessionIds.length} crashed main-chat goal(s).`);
+      console.log(`[RuntimeRecovery] Inspected ${recovery.inspected} interrupted runtime(s); resumed ${recovery.resumedTasks.length} task(s), retriggered ${recovery.retriggeredChats.length} chat turn(s), deferred ${deferredMainChatRecoveries.length} foreground chat retrigger(s), preserved ${recovery.interruptedChats.length - recovery.retriggeredChats.length} chat checkpoint(s), finalized ${recovery.crashRecoveredGoalSessionIds.length} crashed main-chat goal(s).`);
     }
     // Main-chat goals resume only after gateway:startup has finalized ownership:
     // BOOT owns planned restart/apply boundaries, while runtime recovery owns
@@ -366,6 +375,8 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   cronScheduler.start();
   console.log('[CronScheduler] Tick loop started.');
   startupMark('cron started');
+  startAutoSettleScheduler();
+  startupMark('auto-settle scheduler started');
   await yieldStartup();
 
   // Wire handleChat into background agent executor so spawned bg agents run full tool loop
@@ -785,7 +796,15 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
   const isHotRestartBoot = process.env.PROMETHEUS_HOT_RESTART === '1';
   const shouldStartTelegramImmediately = isHotRestartBoot || hasPendingTelegramRestartNotification;
   const configuredTelegramStartDelayMs = Math.max(0, Number(process.env.PROMETHEUS_TELEGRAM_STARTUP_DELAY_MS ?? 5 * 60_000));
-  const telegramStartDelayMs = shouldStartTelegramImmediately ? 0 : configuredTelegramStartDelayMs;
+  // A hot replacement still starts Telegram automatically so queued restart
+  // notices are eventually delivered, but keep the network handshake outside
+  // the first readiness window. Telegram is durable-channel work, not a local
+  // health/chat dependency; the 30s grace also prevents a slow API/DNS path
+  // from competing with the next restart request.
+  const hotTelegramStartDelayMs = Math.max(10_000, Number(process.env.PROMETHEUS_HOT_TELEGRAM_STARTUP_DELAY_MS || 30_000));
+  const telegramStartDelayMs = isHotRestartBoot
+    ? hotTelegramStartDelayMs
+    : shouldStartTelegramImmediately ? 0 : configuredTelegramStartDelayMs;
   const telegramStartTimer = setTimeout(startTelegram, telegramStartDelayMs);
   if (typeof (telegramStartTimer as any).unref === 'function') (telegramStartTimer as any).unref();
   startupMark(telegramStartDelayMs > 0 ? `telegram startup deferred ${telegramStartDelayMs}ms` : 'telegram startup scheduled immediately');
@@ -806,12 +825,24 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     }
 
     loadWorkspaceHooks(bootWorkspace);
-    setImmediate(() => {
-      hookBus
-        .fire({ type: 'gateway:startup', workspacePath: bootWorkspace })
-        .catch((err: any) => console.warn('[hooks] gateway:startup error:', err?.message || err));
-    });
+  }
+  startupMark('runStartup complete');
+  return deferredMainChatRecoveries;
+}
 
+/**
+ * Starts workspace hooks and remote-access recovery only after the HTTP
+ * listener is bound. These tasks can import tools, invoke provider hooks, and
+ * shell out to Tailscale; none of that should delay the first health response.
+ */
+export function startPostReadyWorkspaceStartup(bootWorkspace?: string): void {
+  const workspacePath = bootWorkspace || getConfig().getWorkspacePath() || (getConfig().getConfig() as any).workspace?.path || '';
+  if (!workspacePath) return;
+  hookBus
+    .fire({ type: 'gateway:startup', workspacePath })
+    .catch((err: any) => console.warn('[hooks] gateway:startup error:', err?.message || err));
+
+  void (async () => {
     // Re-establish Tailscale funnel if remote access was enabled before this
     // gateway session started, then keep a watchdog running so it auto-recovers
     // if Tailscale is restarted or the funnel drops unexpectedly.
@@ -822,6 +853,5 @@ export async function runStartup(deps: StartupDeps): Promise<void> {
     } catch (err: any) {
       console.warn('[Startup/TailscaleFunnel] Could not start funnel watchdog:', err?.message || err);
     }
-  }
-  startupMark('runStartup complete');
+  })();
 }

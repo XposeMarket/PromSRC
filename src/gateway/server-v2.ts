@@ -13,6 +13,7 @@
 // Electron main process, before any vault access or config side effects run.
 import '../security/vault-key-bootstrap.js';
 import './exit-diagnostics.js';
+import './startup-async-diagnostics.js';
 
 import path from 'path';
 import fs from 'fs';
@@ -27,10 +28,9 @@ import {
 } from '../config/config';
 import { getVault } from '../security/vault';
 import { getOllamaClient } from '../agents/ollama-client';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, cleanupSessions, flushAllSessions, flushPendingChatAuditWrites, getChatAuditPersistenceStatus, getSessionPersistenceStatus, getSessionCacheStatus } from './session';
-import { compactRuntimeStateOnStartup, flushLiveRuntimePersistence, getLiveRuntimePersistenceStatus, warmLiveRuntimePersistence } from './live-runtime-registry';
-import { hookBus } from './hooks';
-import { loadWorkspaceHooks } from './hook-loader';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, flushAllSessions, flushPendingChatAuditWrites, getChatAuditPersistenceStatus, getSessionPersistenceStatus, getSessionCacheStatus } from './session';
+import { stopAutoSettleScheduler } from './auto-settle';
+import { compactRuntimeStateOnStartup, flushLiveRuntimePersistence, getLiveRuntimePersistenceStatus, warmLiveRuntimePersistence, type LiveRuntimeSnapshot } from './live-runtime-registry';
 import { runBootMd } from './boot';
 import { setupErrorResponseEndpoint } from './errors/error-response-endpoint-integrated';
 import { isStorageBoundaryError } from './storage/storage-paths';
@@ -74,7 +74,7 @@ import { TelegramPersonaBotManager } from './comms/telegram-persona-bots';
 import { TelegramTeamRoomBridge } from './comms/telegram-team-room-bridge';
 import { setShutdownHooks } from './lifecycle';
 import { attachOpenAiRealtimeProxy, attachXaiVoiceStreaming } from './voice/xai-streaming';
-import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
+import { prepareActiveRuntimesForGatewayShutdown, retriggerDeferredMainChatRuntime } from './runtime-recovery';
 import { browserVisionScreenshot, browserVisionClick, browserVisionType, browserPreviewScreenshot } from './browser-tools';
 import {
   createTask, loadTask, saveTask, updateTaskStatus, setTaskStepRunning,
@@ -148,6 +148,7 @@ import { router as connectionsRouter } from './routes/connections.router';
 import { router as connectionsV2Router } from './routes/connections-v2.router';
 import { router as extensionsRouter } from './routes/extensions.router';
 import { router as canvasRouter, initCanvasRouter } from './routes/canvas.router';
+import { router as resourcesRouter } from './routes/resources.router';
 import { router as projectsRouter } from './routes/projects.router';
 import { router as memoryRouter } from './routes/memory.router';
 import { router as pairingRouter } from './routes/pairing.router';
@@ -155,7 +156,9 @@ import { router as obsidianRouter } from './routes/obsidian.router';
 import { router as hubRouter, setHubRouterDeps } from './routes/hub.router';
 import { router as onboardingRouter } from './routes/onboarding.router';
 import { router as migrationRouter } from './routes/migration.router';
+import { router as importsRouter } from './routes/imports.router';
 import { router as processesRouter } from './routes/processes.router';
+import { router as processHygieneRouter } from './routes/process-hygiene.router';
 import { router as codingRouter } from './routes/coding.router';
 import { router as realtimeRouter } from './routes/realtime.router';
 import { router as voiceRouter } from './routes/voice.router';
@@ -178,9 +181,16 @@ import {
 } from './chat/chat-helpers';
 import { createApp } from './core/app';
 import { createServer } from './core/server';
-import { runStartup } from './core/startup';
-import { scheduleMemoryIndexRefresh, shutdownMemoryIndexRefreshWorker } from './memory-index/index';
-import { shutdownMemorySearchWorker } from './memory-index/search-worker-client';
+import { runStartup, startPostReadyWorkspaceStartup } from './core/startup';
+import { getMemoryIndexRefreshWorkerStatus, scheduleMemoryIndexRefresh, shutdownMemoryIndexRefreshWorker } from './memory-index/index';
+import { warmMemoryAtomSnapshot } from './memory-index/memory-atoms.js';
+import {
+  getMemorySearchWorkerStatus,
+  getAutomaticMemorySearchWorkerStatus,
+  shutdownMemorySearchWorker,
+  warmAutomaticMemorySearchWorkers,
+  warmMemorySearchWorker,
+} from './memory-index/search-worker-client';
 import { warmModelUsageIndex } from '../providers/model-usage';
 import { getContextBuildLimiterStatus } from './chat/context-build-limiter';
 import { getContextBuildWorkerPoolStatus, shutdownContextBuildWorkerPool, warmContextBuildWorkerPool } from './chat/context-build-worker-client';
@@ -189,6 +199,7 @@ import { getModelCallWorkerPoolStatus, shutdownModelCallWorkerPool } from './pro
 import { getPostTurnQueueStatus } from './chat/post-turn-queue';
 import { requireGatewayAuth } from './gateway-auth';
 import { isProviderStatusChecking, readProviderStatusCache } from './provider-status';
+import { getGatewayDescriptor } from './gateway-identity';
 import {
   buildBootStartupSnapshot as _buildBootStartupSnapshot, loadWorkspaceFile,
   readDailyMemoryContext, detectToolCategories, readMemoryCategories, readMemorySnippets,
@@ -342,13 +353,6 @@ const bindTeamNotificationTargetFromSession: ChatRouterModule['bindTeamNotificat
 // scaffold here rather than relying on the CLI onboarding flow.
 configManager.ensureDirectories();
 startupMark('config directories ensured');
-
-{
-  const cleaned = cleanupSessions();
-  if (cleaned.deleted > 0) {
-    console.log(`[session] Cleaned up ${cleaned.deleted} stale automated session file(s).`);
-  }
-}
 
 const skillsDir = resolveSkillsDir(configuredSkillsDir);
 
@@ -750,6 +754,7 @@ app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => 
   const providerChecking = !isCloudProvider && !cachedProviderStatus && isProviderStatusChecking();
   const providerCfg = rawCfg.llm?.providers?.[provider] || {};
   const activeModel: string = providerCfg.model || rawCfg.models?.primary || 'unknown';
+  const workspacePath = String(rawCfg.workspace?.path || getConfig().getWorkspacePath() || '').trim();
   res.json({
     status: 'ok',
     version: 'v2-tools',
@@ -763,6 +768,11 @@ app.get('/api/status', requireGatewayAuth, requireAccountAccess, (_req, res) => 
     search: rawCfg.search?.tinyfish_api_key ? 'tinyfish' : rawCfg.search?.google_api_key ? 'google' : (rawCfg.search?.tavily_api_key ? 'tavily' : 'none'),
     orchestration: null,
     chatRouter: getChatRouterWarmupStatus(),
+    memory: {
+      searchWorker: getMemorySearchWorkerStatus(),
+      automaticSearchWorkers: getAutomaticMemorySearchWorkerStatus(),
+      refreshWorker: getMemoryIndexRefreshWorkerStatus(),
+    },
     gatewayQueues: {
       contextBuild: getContextBuildLimiterStatus(),
       contextBuildWorkers: getContextBuildWorkerPoolStatus(),
@@ -834,12 +844,15 @@ app.use('/', requireGatewayAuth, requireAccountAccess, connectionsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, connectionsV2Router);
 app.use('/', requireGatewayAuth, requireAccountAccess, extensionsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, canvasRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, resourcesRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, projectsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, memoryRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, obsidianRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, hubRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, migrationRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, importsRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, processesRouter);
+app.use('/', requireGatewayAuth, requireAccountAccess, processHygieneRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, codingRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, chatRouter);
 app.use('/', requireGatewayAuth, requireAccountAccess, onboardingRouter);
@@ -864,6 +877,32 @@ const getGatewayQueueStatus = () => ({
   sessionCache: getSessionCacheStatus(),
   chatAuditPersistence: getChatAuditPersistenceStatus(),
   runtimePersistence: getLiveRuntimePersistenceStatus(),
+  memory: {
+    searchWorker: getMemorySearchWorkerStatus(),
+    automaticSearchWorkers: getAutomaticMemorySearchWorkerStatus(),
+    refreshWorker: getMemoryIndexRefreshWorkerStatus(),
+  },
+});
+
+// Read-only identity surface for a phone's gateway catalog. The paired-device
+// token is checked by requireGatewayAuth; no token is accepted in the query
+// string on this route. Descriptor metadata is deliberately available to a
+// paired device without forwarding this gateway's account cookie/session.
+const rejectPairingQueryToken = (req: Request, res: Response, next: NextFunction) => {
+  if (String(req.query?.pt || '').trim()) {
+    res.status(401).json({ error: 'Pairing credentials must use X-Pairing-Token.' });
+    return;
+  }
+  next();
+};
+
+app.get('/api/gateway/descriptor', rejectPairingQueryToken, requireGatewayAuth, (req, res) => {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const protocol = forwardedProto || (req.secure ? 'https' : 'http');
+  const host = String(req.headers.host || '').trim();
+  const origin = host ? `${protocol}://${host}` : '';
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ success: true, gateway: getGatewayDescriptor(origin) });
 });
 const { server, wss } = createServer(app, PORT, HOST, undefined, httpsGateway?.port, getGatewayQueueStatus);
 const secureBundle = httpsGateway
@@ -884,6 +923,7 @@ startupMark('error endpoints setup');
 setShutdownHooks({
   stopTelegram: () => { telegramChannel.stop(); telegramPersonaBots.stop().catch(() => {}); },
   stopCron: () => { cronScheduler.stop(); stopAgentSchedules(); },
+  stopAutoSettle: () => stopAutoSettleScheduler(),
   stopTimers: () => mainChatTimerRunner.stop(),
   stopInternalWatches: () => internalWatchRunner.stop(),
   stopHeartbeat: () => heartbeatRunner.stop(),
@@ -898,11 +938,40 @@ setShutdownHooks({
       shutdownModelCallWorkerPool(),
     ]).then(() => undefined);
   },
-  closeWebSocket: () => { try { wss.close(); } catch {}; try { secureBundle?.wss.close(); } catch {}; try { xaiVoiceStreaming.close(); } catch {}; try { secureXaiVoiceStreaming?.close(); } catch {}; try { openAiRealtimeProxy.close(); } catch {}; try { secureOpenAiRealtimeProxy?.close(); } catch {} },
+  closeWebSocket: () => {
+    // WebSocket upgrades are removed from the HTTP socket set, so
+    // closeAllConnections() cannot drain them. Terminate clients before
+    // closing the WebSocket server; otherwise server.close() falls through to
+    // the two-second force timer on every supervised restart.
+    const terminateClients = (socketServer: any): void => {
+      try {
+        socketServer?.clients?.forEach((client: any) => {
+          try { client.terminate(); } catch {}
+        });
+      } catch {}
+      try { socketServer?.close(); } catch {}
+    };
+    terminateClients(wss);
+    terminateClients(secureBundle?.wss);
+    try { xaiVoiceStreaming.close(); } catch {}
+    try { secureXaiVoiceStreaming?.close(); } catch {}
+    try { openAiRealtimeProxy.close(); } catch {}
+    try { secureOpenAiRealtimeProxy?.close(); } catch {}
+  },
   closeHttpServer: () => new Promise<void>((resolve) => {
     try {
+      // Keep-alive probes and idle browser sockets otherwise make
+      // server.close wait for the two-second force timer on every restart.
+      try { (server as any).closeIdleConnections?.(); } catch {}
+      try { (secureBundle?.server as any)?.closeIdleConnections?.(); } catch {}
+      // Stop accepting first, then terminate established HTTP connections. The
+      // ordering matters on Node: closeAllConnections called before close can
+      // race with a new health/keep-alive probe and leave server.close waiting
+      // for the force timer.
       server.close(() => resolve());
       try { secureBundle?.server.close(); } catch {}
+      try { (server as any).closeAllConnections?.(); } catch {}
+      try { (secureBundle?.server as any)?.closeAllConnections?.(); } catch {}
       setTimeout(resolve, 2000); // force-resolve after 2s
     } catch { resolve(); }
   }),
@@ -930,25 +999,12 @@ startupMark('advanced systems initialized');
 console.log('[Server] ✅ Advanced error response systems initialized');
 try { seedDefaultShortcuts(); console.log('[SiteShortcuts] Default shortcuts seeded.'); } catch (e: any) { console.warn('[SiteShortcuts] Seed failed:', e.message); }
 try {
-  const usageWarmup = warmModelUsageIndex();
-  console.log(`[model-usage] Indexed ${usageWarmup.events} events in ${usageWarmup.durationMs}ms before accepting traffic.`);
-} catch (e: any) {
-  console.warn('[model-usage] Startup index warmup failed:', e?.message || e);
-}
-try {
   compactRuntimeStateOnStartup();
   const runtimeWarmup = warmLiveRuntimePersistence();
   console.log(`[live-runtime] Loaded ${runtimeWarmup.runtimes} durable runtime(s) before accepting traffic.`);
 } catch (e: any) {
   console.warn('[live-runtime] Startup ledger warmup failed:', e?.message || e);
 }
-try {
-  const vaultWarmup = getVault(CONFIG_DIR_PATH).prewarmDerivedKeys();
-  console.log(`[Vault] Prewarmed ${vaultWarmup.warmed}/${vaultWarmup.entries} derived key(s) in ${vaultWarmup.durationMs}ms before accepting traffic.`);
-} catch (e: any) {
-  console.warn('[Vault] Derived-key warmup failed:', e?.message || e);
-}
-
 try {
   const taskLookupIndex = prepareTaskReplyLookupIndex();
   if (taskLookupIndex.rebuilt) {
@@ -961,50 +1017,198 @@ try {
   console.warn('[tasks] Compact reply lookup index warmup failed:', e?.message || e);
 }
 
-void warmContextBuildWorkerPool()
-  .then(() => {
-    console.log('[context-build] Worker pool prewarmed.');
-    startupMark('context build workers prewarmed');
-  })
-  .catch((e: any) => console.warn('[context-build] Worker pool prewarm failed:', e?.message || e));
-startupMark('context build worker prewarm scheduled');
-
-server.listen(PORT, HOST, () => {
-  startupMark('server listen callback');
-  const chatWarmupTimer = setTimeout(() => warmChatRouter('post-listen'), 1500);
-  if (typeof (chatWarmupTimer as any).unref === 'function') (chatWarmupTimer as any).unref();
-  // Silently refresh persisted Supabase session so users stay logged in
-  refreshPersistedSession().catch(() => {});
+async function startGatewayListeners(): Promise<void> {
+  let deferredMainChatRecoveries: LiveRuntimeSnapshot[] = [];
   try {
-    if (process.env.PROMETHEUS_STARTUP_MEMORY_REFRESH === '1') {
-      const memoryIndexTimer = setTimeout(() => {
-        scheduleMemoryIndexRefresh(getConfig().getWorkspacePath(), { minIntervalMs: 5 * 60_000, maxChangedFiles: 50 });
-      }, 30_000);
-      if (typeof (memoryIndexTimer as any).unref === 'function') (memoryIndexTimer as any).unref();
-    }
-  } catch {}
-  setTimeout(() => {
-    warmChatRouter('pre-startup');
-    runStartup({
+    const atomCount = warmMemoryAtomSnapshot(getConfig().getWorkspacePath());
+    console.log(`[memory-atoms] Preloaded ${atomCount} durable MEMORY.md atoms.`);
+  } catch (error: any) {
+    console.warn('[memory-atoms] Preload failed; prompt turns will retry lazily:', error?.message || error);
+  }
+  const [contextWarmup, memoryWarmup, automaticMemoryWarmup] = await Promise.allSettled([
+    warmContextBuildWorkerPool(),
+    warmMemorySearchWorker(getConfig().getWorkspacePath()),
+    warmAutomaticMemorySearchWorkers(getConfig().getWorkspacePath()),
+  ]);
+  if (contextWarmup.status === 'fulfilled') {
+    console.log('[context-build] Worker pool prewarmed before accepting traffic.');
+    startupMark('context build workers prewarmed');
+  } else {
+    // Keep the gateway available with the existing bounded in-process fallback
+    // if a child worker cannot start, but never expose a half-warmed success.
+    console.warn('[context-build] Worker pool prewarm failed before listen:', contextWarmup.reason?.message || contextWarmup.reason);
+    startupMark('context build worker prewarm failed');
+  }
+  if (memoryWarmup.status === 'fulfilled') {
+    console.log('[memory-search] Query worker prewarmed before accepting traffic.');
+    startupMark('memory search worker prewarmed');
+  } else {
+    // Search remains lazy and isolated if the optional prewarm cannot start.
+    console.warn('[memory-search] Query worker prewarm failed before listen:', memoryWarmup.reason?.message || memoryWarmup.reason);
+    startupMark('memory search worker prewarm failed');
+  }
+  if (automaticMemoryWarmup.status === 'fulfilled') {
+    console.log('[memory-search] Automatic query workers prewarmed before accepting traffic.');
+    startupMark('automatic memory search workers prewarmed');
+  } else {
+    console.warn('[memory-search] Automatic query worker prewarm failed before listen:', automaticMemoryWarmup.reason?.message || automaticMemoryWarmup.reason);
+    startupMark('automatic memory search worker prewarm failed');
+  }
+
+  // Load and initialize the chat router before the first request. This removes
+  // the post-restart race where the first message can arrive while the lazy
+  // router/tool surface is still being imported.
+  warmChatRouter('pre-listen');
+  startupMark('chat router prewarmed before listen');
+
+  // Finish the synchronous/background wiring that historically ran one second
+  // after listen. Some of those startup phases perform large synchronous
+  // ledger/index work; keeping them before the listener prevents a port-open
+  // but event-loop-blocked window where the first message can time out or lose
+  // its tool surface.
+  try {
+    deferredMainChatRecoveries = await runStartup({
       HOST, PORT, config, skillsManager, cronScheduler, heartbeatRunner, brainRunner, telegramChannel,
       handleChat, retriggerInterruptedMainChat, buildTools, runTeamAgentViaChat,
-    }).then(() => {
-      // These observers must see runtime recovery's settled task/session state.
-      // Starting them earlier can turn a restart into a generic idle/timeout
-      // event before pause reasons and checkpoints have been persisted.
-      internalWatchRunner.start();
-      stopThreadSupervisionRunner = activeThreadSupervisionController.start();
-      startupMark('recovery-aware timers started');
-    }).catch((err: any) => console.error('[Gateway] Startup error:', err?.message || err));
-    telegramPersonaBots.start().catch((err: any) => console.error('[TelegramPersonaBots] Startup error:', err?.message || err));
-  }, 1000).unref?.();
-});
+    });
+    // The shutdown hook is installed at module initialization. The first
+    // supervision recovery/tick can inspect session state synchronously, so
+    // start it after the listener is bound rather than making health wait for
+    // an otherwise non-critical scan.
+    startupMark('recovery-aware timers prepared before listen');
+  } catch (err: any) {
+    console.error('[Gateway] Pre-listen startup error:', err?.message || err);
+  }
 
-if (secureBundle && httpsGateway) {
-  secureBundle.server.listen(httpsGateway.port, HOST, () => {
-    console.log(`[Gateway] HTTPS listener ready on https://${HOST}:${httpsGateway.port}`);
+  server.listen(PORT, HOST, () => {
+    startupMark('server listen callback');
+    const isHotRestartBoot = process.env.PROMETHEUS_HOT_RESTART === '1';
+    // Foreground recovery checkpoints are durable before the listener binds,
+    // but their model turns are deliberately drained only after readiness.
+    // Start one at a time and wait for the shared model-busy guard to clear so
+    // a restart cannot immediately recreate a CPU-bound context backlog.
+    if (deferredMainChatRecoveries.length > 0) {
+      const recoveryDelayMs = isHotRestartBoot
+        ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_STARTUP_RECOVERY_DELAY_MS || 60_000))
+        : Math.max(10_000, Number(process.env.PROMETHEUS_STARTUP_RECOVERY_DELAY_MS || 30_000));
+      const recoveryQueue = [...deferredMainChatRecoveries];
+      const recoveryPollMs = 5_000;
+      const scheduleRecoveryDrain = (delayMs: number): void => {
+        const timer = setTimeout(drainRecoveryQueue, delayMs);
+        if (typeof (timer as any).unref === 'function') (timer as any).unref();
+      };
+      const drainRecoveryQueue = (): void => {
+        if (shuttingDown || recoveryQueue.length === 0) return;
+        if (isModelBusy()) {
+          scheduleRecoveryDrain(recoveryPollMs);
+          return;
+        }
+        const runtime = recoveryQueue.shift();
+        if (!runtime) return;
+        if (!retriggerDeferredMainChatRuntime(runtime, retriggerInterruptedMainChat)) {
+          recoveryQueue.push(runtime);
+        }
+        scheduleRecoveryDrain(recoveryPollMs);
+      };
+      scheduleRecoveryDrain(recoveryDelayMs);
+      startupMark(`foreground recovery deferred ${recoveryDelayMs}ms (${recoveryQueue.length} turn(s))`);
+    }
+    // Internal watches are durable, but their first scan can inspect task and
+    // session state synchronously. Bind the listener first and give health and
+    // restart clients a short scheduling window before starting that watcher.
+    const delayedInternalWatchStart = setTimeout(() => {
+      if (shuttingDown) return;
+      startupMark('internal watch callback entered');
+      internalWatchRunner.start();
+      startupMark('internal watch runner started after listen');
+    }, 250);
+    if (typeof (delayedInternalWatchStart as any).unref === 'function') (delayedInternalWatchStart as any).unref();
+    const delayedThreadSupervisionStart = setTimeout(() => {
+      if (shuttingDown) return;
+      startupMark('thread supervision callback entered');
+      const supervisionStartAt = Date.now();
+      stopThreadSupervisionRunner = activeThreadSupervisionController.start();
+      startupMark(`thread supervision started after listen (${Date.now() - supervisionStartAt}ms)`);
+    }, 750);
+    if (typeof (delayedThreadSupervisionStart as any).unref === 'function') (delayedThreadSupervisionStart as any).unref();
+    // Silently refresh persisted Supabase session so users stay logged in
+    startupMark('persisted account refresh begin');
+    const persistedAccountRefresh = refreshPersistedSession();
+    startupMark('persisted account refresh scheduled');
+    persistedAccountRefresh.catch(() => {});
+    // Vault key derivation is valuable for later connector reads but is not a
+    // readiness dependency. PBKDF2 still consumes a full CPU core for roughly
+    // 20–30s on this workspace and can delay unrelated timers even though it is
+    // dispatched asynchronously. Keep it outside the first restart/health
+    // window; a hot replacement gets a longer idle grace period because another
+    // restart is most likely while the previous build/apply is still settling.
+    const vaultWarmupDelayMs = isHotRestartBoot
+      ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_VAULT_WARMUP_DELAY_MS || 60_000))
+      : Math.max(5_000, Number(process.env.PROMETHEUS_VAULT_WARMUP_DELAY_MS || 15_000));
+    const vaultWarmupTimer = setTimeout(() => {
+      void getVault(CONFIG_DIR_PATH).prewarmDerivedKeysAsync().then((vaultWarmup) => {
+        console.log(`[Vault] Prewarmed ${vaultWarmup.warmed}/${vaultWarmup.entries} derived key(s) asynchronously after readiness.`);
+      }).catch((err: any) => {
+        console.warn('[Vault] Async derived-key warmup failed:', err?.message || err);
+      });
+    }, vaultWarmupDelayMs);
+    if (typeof (vaultWarmupTimer as any).unref === 'function') (vaultWarmupTimer as any).unref();
+    // Give the listener a real scheduling window before BOOT/hooks begin. The
+    // hook handler can construct a large snapshot or enter the model path; a
+    // short post-bind delay keeps /api/health responsive even in TSX mode.
+    const postReadyDelayMs = isHotRestartBoot
+      ? Math.max(3_000, Number(process.env.PROMETHEUS_POST_READY_STARTUP_DELAY_MS || 5_000))
+      : Math.max(500, Number(process.env.PROMETHEUS_POST_READY_STARTUP_DELAY_MS || 3000));
+    const postReadyMaintenanceTimer = setTimeout(() => {
+      startupMark('post-ready workspace startup callback entered');
+      startPostReadyWorkspaceStartup(getConfig().getWorkspacePath());
+      startupMark('post-ready workspace startup invoked');
+    }, postReadyDelayMs);
+    if (typeof (postReadyMaintenanceTimer as any).unref === 'function') (postReadyMaintenanceTimer as any).unref();
+    // Usage telemetry is useful after a stable boot but has no bearing on
+    // health, BOOT recovery, or the explicit quick-restart acknowledgement.
+    // The current JSONL is ~31 MB / ~50k events and the indexer parses it
+    // synchronously, so even a "deferred" 15s timer can monopolize the event
+    // loop and grow the heap by hundreds of MB. Leave a long quiet window for
+    // hot replacements and keep cold starts clear of the same burst.
+    const usageWarmupDelayMs = isHotRestartBoot
+      ? Math.max(30_000, Number(process.env.PROMETHEUS_HOT_USAGE_WARMUP_DELAY_MS || 60_000))
+      : Math.max(15_000, Number(process.env.PROMETHEUS_USAGE_WARMUP_DELAY_MS || 30_000));
+    const deferredUsageTimer = setTimeout(() => {
+      try {
+        const usageWarmup = warmModelUsageIndex();
+        console.log(`[model-usage] Indexed ${usageWarmup.events} events after stable readiness in ${usageWarmup.durationMs}ms.`);
+      } catch (e: any) {
+        console.warn('[model-usage] Deferred startup index warmup failed:', e?.message || e);
+      }
+    }, usageWarmupDelayMs);
+    if (typeof (deferredUsageTimer as any).unref === 'function') (deferredUsageTimer as any).unref();
+    try {
+      if (process.env.PROMETHEUS_STARTUP_MEMORY_REFRESH === '1') {
+        const memoryIndexTimer = setTimeout(() => {
+          scheduleMemoryIndexRefresh(getConfig().getWorkspacePath(), { minIntervalMs: 5 * 60_000, maxChangedFiles: 50 });
+        }, 30_000);
+        if (typeof (memoryIndexTimer as any).unref === 'function') (memoryIndexTimer as any).unref();
+      }
+    } catch {}
+    const personaBotStartupDelayMs = isHotRestartBoot
+      ? Math.max(10_000, Number(process.env.PROMETHEUS_HOT_TELEGRAM_PERSONA_STARTUP_DELAY_MS || 30_000))
+      : 0;
+    const personaBotStartupTimer = setTimeout(() => {
+      telegramPersonaBots.start().catch((err: any) => console.error('[TelegramPersonaBots] Startup error:', err?.message || err));
+    }, personaBotStartupDelayMs);
+    if (typeof (personaBotStartupTimer as any).unref === 'function') (personaBotStartupTimer as any).unref();
   });
+
+  if (secureBundle && httpsGateway) {
+    secureBundle.server.listen(httpsGateway.port, HOST, () => {
+      console.log(`[Gateway] HTTPS listener ready on https://${HOST}:${httpsGateway.port}`);
+    });
+  }
 }
+
+void startGatewayListeners();
+startupMark('gateway listener startup scheduled after readiness warmup');
 
 let shuttingDown = false;
 async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
@@ -1025,6 +1229,7 @@ async function gracefulShutdown(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
   try { telegramPersonaBots.stop().catch(() => {}); } catch {}
   try { getMCPManager().disconnectAll(); } catch {}
   try { cronScheduler.stop(); } catch {}
+  try { stopAutoSettleScheduler(); } catch {}
   try { mainChatTimerRunner.stop(); } catch {}
   try { internalWatchRunner.stop(); } catch {}
   try { stopThreadSupervisionRunner(); } catch {}

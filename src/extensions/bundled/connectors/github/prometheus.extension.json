@@ -49,6 +49,7 @@
       "connector_github_list_repos",
       "connector_github_list_issues",
       "connector_github_create_issue",
+      "connector_github_create_repo",
       "connector_github_list_prs",
       "connector_github_search"
     ]
@@ -57,7 +58,7 @@
     "authType": "oauth",
     "statusMode": "oauth_connector",
     "docsUrl": "https://github.com/settings/applications/new",
-    "docsHint": "GitHub -> Settings -> Developer settings -> OAuth Apps -> Callback URL: http://localhost:19422/auth/callback/github",
+    "docsHint": "The managed flow needs a GitHub OAuth App configured by the deployment owner. Advanced setup lets you provide your own app; callback URL: http://localhost:19422/auth/callback/github.",
     "callback": {
       "port": 19422,
       "path": "/auth/callback/github"
@@ -79,5 +80,60 @@
         "placeholder": "abc123..."
       }
     ]
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["GitHub OAuth", "GitHub repositories"],
+    "domains": ["github.com", "api.github.com"],
+    "providerApp": {
+      "provider": "github",
+      "appType": "oauth-app",
+      "clientIdEnv": "GITHUB_CLIENT_ID",
+      "clientSecretEnv": "GITHUB_CLIENT_SECRET",
+      "externalSetupRequired": true
+    },
+    "strategies": [
+      {
+        "id": "github-oauth-pkce",
+        "adapter": "connector-oauth",
+        "priority": 120,
+        "capabilities": ["repositories.read", "issues.read", "pull_requests.read", "search.read"],
+        "readOnlyDefault": true,
+        "authentication": {
+          "type": "oauth2-pkce",
+          "scopes": ["repo", "read:user", "user:email", "read:org"],
+          "authorizationUrl": "https://github.com/login/oauth/authorize",
+          "tokenUrl": "https://github.com/login/oauth/access_token",
+          "revokeUrl": "https://api.github.com/applications/{client_id}/grant",
+          "pkceRequired": true,
+          "callback": {
+            "host": "localhost",
+            "port": 19422,
+            "path": "/auth/callback/github"
+          },
+          "clientIdEnv": "GITHUB_CLIENT_ID",
+          "clientSecretEnv": "GITHUB_CLIENT_SECRET"
+        },
+        "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+        "config": {
+          "provider": "github",
+          "resourceScope": "authenticated account",
+          "rollback": "legacy-vault-session-remains-readable"
+        }
+      }
+    ],
+    "requestedCapabilities": [
+      { "id": "repositories.read", "label": "Read repositories", "description": "List and inspect repository activity.", "risk": "read" },
+      { "id": "issues.read", "label": "Read issues", "description": "Read issue metadata and discussions.", "risk": "read" },
+      { "id": "pull_requests.read", "label": "Read pull requests", "description": "Read pull request metadata.", "risk": "read" },
+      { "id": "search.read", "label": "Search GitHub", "description": "Search repositories, code, and issues.", "risk": "read" },
+      { "id": "issues.write", "label": "Create or update issues", "description": "State-changing issue operations require explicit approval.", "risk": "write" },
+      { "id": "repositories.create", "label": "Create repositories", "description": "Repository creation is a high-impact external mutation.", "risk": "high_impact" }
+    ],
+    "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+    "toolPolicy": {
+      "defaultExposure": "read-only",
+      "unknownTools": "blocked"
+    }
   }
 }

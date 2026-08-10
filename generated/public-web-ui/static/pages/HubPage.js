@@ -34,6 +34,14 @@ const _expandedGoals = new Set();
 let _skills = [];
 let _hubSkillSearch = '';
 let _goals = [];
+const GOALS_INITIAL_VISIBLE_COUNT = 4;
+const GOALS_RENDER_BATCH_SIZE = 4;
+let _goalsVisibleCount = GOALS_INITIAL_VISIBLE_COUNT;
+let _goalsLoading = false;
+let _goalsLoaded = false;
+let _goalsError = '';
+let _goalsRequestId = 0;
+let _goalsScrollHandler = null;
 let _curator = {
   suggestions: [],
   activity: [],
@@ -345,61 +353,147 @@ function renderAchievements() {
   `).join('');
 }
 
+function hubGoalId(goal) {
+  return String(goal?.id || `${goal?.sessionId || 'goal'}:${goal?.createdAt || goal?.updatedAt || ''}`);
+}
+
+function updateGoalsStatus(message = '', tone = 'info') {
+  const status = document.getElementById('hub-goals-status');
+  if (!status) return;
+  status.hidden = !message;
+  status.className = `hub-goals-status${tone === 'error' ? ' error' : ''}`;
+  status.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+  status.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
+  status.textContent = message;
+}
+
+function updateGoalsRefreshControl() {
+  const refresh = document.getElementById('hub-goals-refresh');
+  if (!refresh) return;
+  refresh.disabled = _goalsLoading;
+  refresh.setAttribute('aria-busy', _goalsLoading ? 'true' : 'false');
+  refresh.title = _goalsLoading ? 'Refreshing goals' : 'Refresh goals';
+}
+
+function goalStateMarkup(message, tone = 'info') {
+  return `<div class="hub-goals-state${tone === 'error' ? ' error' : ''}" role="${tone === 'error' ? 'alert' : 'status'}" aria-live="${tone === 'error' ? 'assertive' : 'polite'}">${escHtml(message)}</div>`;
+}
+
+function renderGoalCard(goal) {
+  const status = String(goal?.status || 'unknown').trim().toLowerCase() || 'unknown';
+  const goalId = hubGoalId(goal);
+  const expanded = _expandedGoals.has(goalId);
+  const summary = String(goal?.progressSummary || goal?.lastReason || goal?.blockedReason || goal?.pausedReason || goal?.failureReason || '').trim();
+  const deniedActions = Array.isArray(goal?.deniedActions) ? goal.deniedActions : [];
+  const latestDenial = deniedActions[deniedActions.length - 1] || null;
+  const updatedAt = Number(goal?.updatedAt || goal?.createdAt || 0);
+  const updatedIso = Number.isFinite(updatedAt) && updatedAt > 0
+    ? new Date(updatedAt).toISOString()
+    : String(goal?.updatedAt || goal?.createdAt || '');
+  const metrics = goal?.goalMetrics && typeof goal.goalMetrics === 'object' ? goal.goalMetrics : null;
+  const goalTime = metrics && Number.isFinite(Number(metrics.elapsedMs))
+    ? formatGoalDuration(metrics.elapsedMs)
+    : 'Not recorded';
+  const goalTokens = metrics && Number.isFinite(Number(metrics.totalTokens))
+    ? Math.max(0, Number(metrics.totalTokens)).toLocaleString()
+    : 'Not recorded';
+  const title = String(goal?.goal || 'Untitled goal');
+  return `
+    <article class="hub-goal-card${expanded ? ' open' : ''}" data-status="${escHtml(status)}" data-goal-id="${escHtml(goalId)}" title="${escHtml(title)}" tabindex="0" role="button" aria-label="${escHtml(title)}" aria-expanded="${expanded ? 'true' : 'false'}">
+      <div class="hub-goal-card-head">
+        <div class="hub-goal-status">${escHtml(status)}${goal?.current ? ' · current' : ''}</div>
+        <div class="hub-goal-turns">${Number(goal?.turnsUsed || 0)} turns</div>
+      </div>
+      <div class="hub-goal-title">${escHtml(title)}</div>
+      <div class="hub-goal-meta">
+        <span>${escHtml(goal?.sessionTitle || goal?.sessionId || 'session')}</span>
+        <span>${escHtml(relTime(updatedIso))}</span>
+        <span>Autonomous</span>
+        <span>Hard policy</span>
+        ${deniedActions.length ? `<span>${deniedActions.length} denied</span>` : ''}
+      </div>
+      ${latestDenial ? `<div class="hub-goal-denial">${escHtml(`${latestDenial.category || 'policy'}: ${latestDenial.reason || 'Blocked by hard policy.'}`)}</div>` : ''}
+      ${summary ? `<div class="hub-goal-summary">${escHtml(summary)}</div>` : ''}
+      <div class="hub-goal-expand-label">${expanded ? 'Hide goal metrics' : 'View goal metrics'} <span aria-hidden="true">${expanded ? '▴' : '▾'}</span></div>
+      ${expanded ? `
+        <div class="hub-goal-details" aria-label="Goal metrics">
+          <div><span>Total goal time</span><strong>${escHtml(goalTime)}</strong></div>
+          <div><span>Tokens used</span><strong>${escHtml(goalTokens)}</strong></div>
+        </div>
+      ` : ''}
+    </article>
+  `;
+}
+
+function renderMoreGoals({ focusControl = false } = {}) {
+  if (_goalsLoading && !_goalsLoaded) return;
+  if (_goalsVisibleCount >= _goals.length) return;
+  _goalsVisibleCount = Math.min(_goals.length, _goalsVisibleCount + GOALS_RENDER_BATCH_SIZE);
+  renderGoals();
+  if (focusControl) document.querySelector('[data-goal-load-more]')?.focus();
+}
+
 function renderGoals() {
   const grid = document.getElementById('hub-achievements-grid');
   if (!grid) return;
-  if (!_goals.length) {
-    grid.innerHTML = `<div class="hub-empty">No main-chat goals yet.</div>`;
+  const previousScrollTop = grid.scrollTop;
+  if (_goalsScrollHandler) {
+    grid.removeEventListener('scroll', _goalsScrollHandler);
+    _goalsScrollHandler = null;
+  }
+  grid.setAttribute('aria-busy', _goalsLoading ? 'true' : 'false');
+  updateGoalsRefreshControl();
+
+  if (_goalsLoading && !_goals.length) {
+    updateGoalsStatus();
+    grid.setAttribute('aria-label', 'Goals loading');
+    grid.innerHTML = goalStateMarkup('Loading goals…');
+    grid.scrollTop = 0;
     return;
   }
-  grid.innerHTML = _goals.map(g => {
-    const status = String(g.status || 'unknown').trim().toLowerCase() || 'unknown';
-    const goalId = String(g.id || `${g.sessionId || 'goal'}:${g.createdAt || g.updatedAt || ''}`);
-    const expanded = _expandedGoals.has(goalId);
-    const summary = String(g.progressSummary || g.lastReason || g.blockedReason || g.pausedReason || g.failureReason || '').trim();
-    const deniedActions = Array.isArray(g.deniedActions) ? g.deniedActions : [];
-    const latestDenial = deniedActions[deniedActions.length - 1] || null;
-    const updatedIso = Number(g.updatedAt || g.createdAt || 0) ? new Date(Number(g.updatedAt || g.createdAt)).toISOString() : '';
-    const metrics = g.goalMetrics && typeof g.goalMetrics === 'object' ? g.goalMetrics : null;
-    const goalTime = metrics && Number.isFinite(Number(metrics.elapsedMs))
-      ? formatGoalDuration(metrics.elapsedMs)
-      : 'Not recorded';
-    const goalTokens = metrics && Number.isFinite(Number(metrics.totalTokens))
-      ? Math.max(0, Number(metrics.totalTokens)).toLocaleString()
-      : 'Not recorded';
-    return `
-      <article class="hub-goal-card${expanded ? ' open' : ''}" data-status="${escHtml(status)}" data-goal-id="${escHtml(goalId)}" title="${escHtml(g.goal || '')}" tabindex="0" role="button" aria-expanded="${expanded ? 'true' : 'false'}">
-        <div class="hub-goal-card-head">
-          <div class="hub-goal-status">${escHtml(status)}${g.current ? ' · current' : ''}</div>
-          <div class="hub-goal-turns">${Number(g.turnsUsed || 0)} turns</div>
-        </div>
-        <div class="hub-goal-title">${escHtml(g.goal || 'Untitled goal')}</div>
-        <div class="hub-goal-meta">
-          <span>${escHtml(g.sessionTitle || g.sessionId || 'session')}</span>
-          <span>${escHtml(relTime(updatedIso))}</span>
-          <span>Autonomous</span>
-          <span>Hard policy</span>
-          ${deniedActions.length ? `<span>${deniedActions.length} denied</span>` : ''}
-        </div>
-        ${latestDenial ? `<div class="hub-goal-denial">${escHtml(`${latestDenial.category || 'policy'}: ${latestDenial.reason || 'Blocked by hard policy.'}`)}</div>` : ''}
-        ${summary ? `<div class="hub-goal-summary">${escHtml(summary)}</div>` : ''}
-        <div class="hub-goal-expand-label">${expanded ? 'Hide goal metrics' : 'View goal metrics'} <span aria-hidden="true">${expanded ? '▴' : '▾'}</span></div>
-        ${expanded ? `
-          <div class="hub-goal-details" aria-label="Goal metrics">
-            <div><span>Total goal time</span><strong>${escHtml(goalTime)}</strong></div>
-            <div><span>Tokens used</span><strong>${escHtml(goalTokens)}</strong></div>
-          </div>
-        ` : ''}
-      </article>
-    `;
-  }).join('');
+  if (!_goals.length) {
+    updateGoalsStatus();
+    grid.setAttribute('aria-label', _goalsError ? 'Goals failed to load' : 'Goals');
+    grid.innerHTML = goalStateMarkup(_goalsError ? `Unable to load goals. ${_goalsError}` : 'No main-chat goals yet.', _goalsError ? 'error' : 'info');
+    grid.scrollTop = 0;
+    return;
+  }
+
+  const expandedIndexes = [..._expandedGoals]
+    .map((id) => _goals.findIndex((goal) => hubGoalId(goal) === id))
+    .filter((index) => index >= 0);
+  const requestedVisibleCount = Math.max(
+    GOALS_INITIAL_VISIBLE_COUNT,
+    _goalsVisibleCount,
+    expandedIndexes.length ? Math.max(...expandedIndexes) + 1 : 0,
+  );
+  const visibleCount = Math.min(_goals.length, requestedVisibleCount);
+  _goalsVisibleCount = visibleCount;
+  const visibleGoals = _goals.slice(0, visibleCount);
+  const hasMore = visibleCount < _goals.length;
+  const nextBatch = Math.min(GOALS_RENDER_BATCH_SIZE, _goals.length - visibleCount);
+
+  if (_goalsLoading) updateGoalsStatus('Refreshing goals…');
+  else if (_goalsError) updateGoalsStatus(`Unable to refresh goals. ${_goalsError}`, 'error');
+  else updateGoalsStatus();
+  grid.setAttribute('aria-label', `Goals, showing ${visibleCount} of ${_goals.length}`);
+  grid.innerHTML = `${visibleGoals.map(renderGoalCard).join('')}
+    ${hasMore ? `<button class="hub-goals-load-more" data-goal-load-more type="button" aria-controls="hub-achievements-grid">Show ${nextBatch} more goal${nextBatch === 1 ? '' : 's'} <span>${visibleCount} of ${_goals.length}</span></button>` : ''}`;
+  grid.scrollTop = previousScrollTop;
+
   grid.querySelectorAll('[data-goal-id]').forEach((card) => {
     const toggle = () => {
       const id = card.getAttribute('data-goal-id');
       if (!id) return;
+      const shouldRestoreFocus = document.activeElement === card;
       if (_expandedGoals.has(id)) _expandedGoals.delete(id);
       else _expandedGoals.add(id);
       renderGoals();
+      if (shouldRestoreFocus) {
+        [...grid.querySelectorAll('[data-goal-id]')]
+          .find((nextCard) => nextCard.getAttribute('data-goal-id') === id)
+          ?.focus();
+      }
     };
     card.addEventListener('click', toggle);
     card.addEventListener('keydown', (event) => {
@@ -408,6 +502,14 @@ function renderGoals() {
       toggle();
     });
   });
+  grid.querySelector('[data-goal-load-more]')?.addEventListener('click', () => renderMoreGoals({ focusControl: true }));
+
+  if (hasMore) {
+    _goalsScrollHandler = () => {
+      if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 48) renderMoreGoals();
+    };
+    grid.addEventListener('scroll', _goalsScrollHandler, { passive: true });
+  }
 }
 
 function renderHeatmap() {
@@ -1320,14 +1422,26 @@ async function loadSkills() {
   renderSkillsGrid();
 }
 
-async function loadGoals() {
+async function loadGoals({ force = false } = {}) {
+  if (_goalsLoading && !force) return;
+  const requestId = ++_goalsRequestId;
+  _goalsLoading = true;
+  _goalsError = '';
+  renderGoals();
   try {
     const r = await api('/api/hub/goals');
+    if (requestId !== _goalsRequestId) return;
+    if (r?.success === false) throw new Error(r.error || 'The goals endpoint returned an error.');
     _goals = Array.isArray(r?.goals) ? r.goals : [];
-  } catch {
-    _goals = [];
+    _goalsLoaded = true;
+  } catch (err) {
+    if (requestId !== _goalsRequestId) return;
+    _goalsError = err?.message || String(err);
+  } finally {
+    if (requestId !== _goalsRequestId) return;
+    _goalsLoading = false;
+    renderGoals();
   }
-  renderGoals();
 }
 
 async function loadHeatmap() {
@@ -1575,6 +1689,12 @@ function wireHeader() {
   if (curatorRun && !curatorRun._wired) {
     curatorRun._wired = true;
     curatorRun.addEventListener('click', runCuratorReview);
+  }
+
+  const goalsRefresh = document.getElementById('hub-goals-refresh');
+  if (goalsRefresh && !goalsRefresh._wired) {
+    goalsRefresh._wired = true;
+    goalsRefresh.addEventListener('click', () => loadGoals({ force: true }));
   }
 
   const provRefresh = document.getElementById('hub-providers-refresh');

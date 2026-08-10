@@ -29,6 +29,7 @@ interface AuthServerMetadata {
   issuer?: string;
   authorization_endpoint: string;
   token_endpoint: string;
+  revocation_endpoint?: string;
   registration_endpoint?: string;
   scopes_supported?: string[];
   code_challenge_methods_supported?: string[];
@@ -92,11 +93,59 @@ function loadTokens(id: string): StoredTokens | null {
 function saveTokens(id: string, tokens: StoredTokens): void {
   vault().set(tokenKey(id), JSON.stringify(tokens), `mcp-oauth:tokens:${id}`);
 }
+
+function safeOAuthError(value: unknown): string {
+  const text = String(value || 'OAuth operation failed.')
+    .replace(/"(?:access_token|refresh_token|client_secret|authorization)"\s*:\s*"[^"]*"/gi, '"credential":"[redacted]"')
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+    .replace(/(access_token|refresh_token|client_secret|authorization|code_verifier|state)=?[^\s&,'"}]*/gi, '$1=[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.slice(0, 240) || 'OAuth operation failed.';
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export function clearMcpOAuth(id: string): void {
   const flow = activeFlows.get(id);
   if (flow) { try { flow.server.close(); } catch {} activeFlows.delete(id); }
   try { vault().delete(tokenKey(id), `mcp-oauth:clear:${id}`); } catch {}
   try { vault().delete(clientKey(id), `mcp-oauth:clear:${id}`); } catch {}
+}
+
+/** Revoke a remote-MCP token when the authorization server advertises RFC 7009 support, then clear local state. */
+export async function revokeMcpOAuth(id: string): Promise<{ revoked: boolean; cleared: true }> {
+  const tokens = loadTokens(id);
+  const client = loadClient(id);
+  let revoked = false;
+  const endpoint = client?.metadata?.revocation_endpoint;
+  if (tokens?.access_token && endpoint) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams({
+          token: tokens.refresh_token || tokens.access_token,
+          token_type_hint: tokens.refresh_token ? 'refresh_token' : 'access_token',
+          client_id: client.client_id,
+          ...(client.client_secret ? { client_secret: client.client_secret } : {}),
+        }).toString(),
+        signal: AbortSignal.timeout(10000),
+      });
+      revoked = response.ok || response.status === 400 || response.status === 404;
+    } catch {
+      // Local state is still cleared below; the provider can be revisited from repair.
+    }
+  }
+  clearMcpOAuth(id);
+  return { revoked, cleared: true };
 }
 
 export function hasMcpOAuthTokens(id: string): boolean {
@@ -179,6 +228,7 @@ export async function discoverMcpAuthServer(serverUrl: string, wwwAuthenticate?:
         issuer: meta.issuer,
         authorization_endpoint: meta.authorization_endpoint,
         token_endpoint: meta.token_endpoint,
+        revocation_endpoint: meta.revocation_endpoint,
         registration_endpoint: meta.registration_endpoint,
         scopes_supported: meta.scopes_supported,
         code_challenge_methods_supported: meta.code_challenge_methods_supported,
@@ -253,7 +303,7 @@ async function postToken(metadata: AuthServerMetadata, body: Record<string, stri
     signal: AbortSignal.timeout(15000),
   });
   const text = await r.text();
-  if (!r.ok) throw new Error(`token endpoint ${r.status}: ${text.slice(0, 200)}`);
+  if (!r.ok) throw new Error(`token endpoint rejected request (${r.status})`);
   const json = JSON.parse(text);
   const expiresIn = Number(json.expires_in);
   return {
@@ -320,7 +370,7 @@ export async function startMcpOAuthFlow(serverId: string, serverUrl: string, www
     metadata = await discoverMcpAuthServer(serverUrl, wwwAuthenticate);
     client = await ensureClient(serverId, serverUrl, metadata, scope);
   } catch (e: any) {
-    return { status: 'error', error: `OAuth discovery failed: ${e?.message || e}` };
+    return { status: 'error', error: `OAuth discovery failed: ${safeOAuthError(e?.message || e)}` };
   }
 
   const { verifier, challenge } = makePkce();
@@ -341,7 +391,7 @@ export async function startMcpOAuthFlow(serverId: string, serverUrl: string, www
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || '', `http://127.0.0.1:${REDIRECT_PORT}`);
-      if (!url.pathname.startsWith(REDIRECT_PATH)) { res.writeHead(404); res.end(); return; }
+      if (url.pathname !== REDIRECT_PATH) { res.writeHead(404); res.end(); return; }
       const flow = activeFlows.get(serverId);
       const code = url.searchParams.get('code');
       const gotState = url.searchParams.get('state');
@@ -349,10 +399,10 @@ export async function startMcpOAuthFlow(serverId: string, serverUrl: string, www
 
       const finish = (ok: boolean, message: string) => {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`<!doctype html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui;background:#0b0b12;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>${ok ? '&#10003; Connected' : '&#10007; Authorization failed'}</h2><p style="color:#9a9">${message}</p><p style="color:#667">You can close this tab and return to Prometheus.</p></div></body></html>`);
+        res.end(`<!doctype html><html><head><meta charset="utf-8"></head><body style="font-family:system-ui;background:#0b0b12;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><h2>${ok ? '&#10003; Connected' : '&#10007; Authorization failed'}</h2><p style="color:#9a9">${escapeHtml(message)}</p><p style="color:#667">You can close this tab and return to Prometheus.</p></div></body></html>`);
       };
 
-      if (err) { if (flow) { flow.status = 'error'; flow.error = err; } finish(false, err); server.close(); return; }
+      if (err) { if (flow) { flow.status = 'error'; flow.error = `Provider authorization error (${safeOAuthError(err)})`; } finish(false, 'Provider authorization was not completed.'); server.close(); return; }
       if (!code || !flow || gotState !== flow.state) { if (flow) { flow.status = 'error'; flow.error = 'invalid callback (state mismatch)'; } finish(false, 'Invalid callback.'); server.close(); return; }
 
       try {
@@ -369,8 +419,8 @@ export async function startMcpOAuthFlow(serverId: string, serverUrl: string, www
         finish(true, 'Authorization complete.');
       } catch (e: any) {
         flow.status = 'error';
-        flow.error = e?.message || String(e);
-        finish(false, flow.error || 'Token exchange failed.');
+        flow.error = safeOAuthError(e?.message || e);
+        finish(false, 'Token exchange failed.');
       } finally {
         server.close();
       }
@@ -384,7 +434,7 @@ export async function startMcpOAuthFlow(serverId: string, serverUrl: string, www
     server.listen(REDIRECT_PORT, '127.0.0.1', () => resolve());
   }); } catch (error: any) {
     try { server.close(); } catch {}
-    return { status: 'error', error: `OAuth callback listener failed: ${error?.message || error}` };
+    return { status: 'error', error: `OAuth callback listener failed: ${safeOAuthError(error?.message || error)}` };
   }
 
   const flow: ActiveFlow = {

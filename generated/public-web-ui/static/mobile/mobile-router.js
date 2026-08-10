@@ -4,20 +4,43 @@
 
 import { markClientPerformance } from '../performance.js';
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v240-mobile-splash';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v263-2026-08-09-directed-chat-shield';
 import {
-  renderChatPage, renderVoicePage, renderSchedulePage,
+  renderChatPage, renderVoicePage, renderSchedulePage, renderScheduleEditorPage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
-  renderPairPage, renderTasksPage, renderMorePage, renderProposalsPage,
+  renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage, renderSubagentChatPage,
-} from './mobile-pages.js?v=pm-v240-mobile-splash';
+} from './mobile-pages.js?v=pm-v263-2026-08-09-directed-chat-shield';
+import { renderMobileGatewaysPage } from './mobile-gateways-page.js';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
   prefetchMobileSecondaryPages,
   searchMobileChatSessions,
-} from './mobile-api.js?v=pm-v240-mobile-splash';
+} from './mobile-api.js?v=pm-v263-2026-08-09-directed-chat-shield';
+import {
+  loadMobileGatewaySessionGroups,
+  searchMobileGatewaySessions,
+  parseTargetNamespacedId,
+  bindMobileSessionTarget,
+  hasAnyGatewayCredential,
+  isMobileGatewayCatalogEnabled,
+} from './mobile-gateway-catalog.js';
 import { connectWS, ensureWSConnected } from '../ws.js';
+
+let mobilePairingPagePromise = null;
+let mobileRenderGeneration = 0;
+
+function loadMobilePairingPage() {
+  if (!mobilePairingPagePromise) {
+    mobilePairingPagePromise = import('./mobile-pairing-page.js?v=pm-v260-2026-08-09-mobile-theme-palette')
+      .catch((error) => {
+        mobilePairingPagePromise = null;
+        throw error;
+      });
+  }
+  return mobilePairingPagePromise;
+}
 
 // Once a device has ever entered mobile mode (or completed pairing), this flag
 // is written to localStorage so we stay in mobile mode even when the URL loses
@@ -55,6 +78,7 @@ function isMobileRoute() {
   // of URL — paired phones are by definition mobile clients.
   if (_readForceMobile()) return true;
   try { if (localStorage.getItem('pm_device_token')) return true; } catch {}
+  if (hasAnyGatewayCredential()) return true;
   return false;
 }
 
@@ -88,7 +112,7 @@ function normalizeMobileRouteParts(parts) {
     creative: 'hub',
   };
   page = aliases[page] || page;
-  if (!['chat', 'voice', 'schedule', 'teams', 'tasks', 'settings', 'hub', 'subagents', 'proposals', 'more', 'pair'].includes(page)) {
+  if (!['chat', 'voice', 'schedule', 'teams', 'tasks', 'settings', 'hub', 'subagents', 'proposals', 'more', 'pair', 'gateways'].includes(page)) {
     extra = [arg, ...extra].filter(Boolean);
     arg = page || null;
     page = 'chat';
@@ -159,7 +183,7 @@ function openMobileSettings(tab) {
     try { window.openSettings(tab || undefined); } catch (err) { console.warn('[mobile settings] openSettings failed', err); }
     return true;
   }
-  import('../pages/SettingsPage.js?v=pm-v240-mobile-splash')
+  import('../pages/SettingsPage.js?v=settings-boot-recovery-v12')
     .then(() => openMobileSettings(tab))
     .catch((err) => console.warn('[mobile settings] could not lazy-load SettingsPage.js', err));
   console.warn('[mobile settings] desktop Settings modal not available yet');
@@ -180,10 +204,11 @@ function closeMobileSettings() {
 
 const TAB_FOR_PAGE = {
   chat: 'chat', voice: 'voice', tasks: 'tasks', hub: 'hub',
-  schedule: null, teams: null, subagents: null, proposals: null, settings: null, more: null,
+  schedule: null, teams: null, subagents: null, proposals: null, settings: null, more: null, gateways: null,
 };
 
 function render() {
+  const renderGeneration = ++mobileRenderGeneration;
   try {
     navigator.serviceWorker?.controller?.postMessage('pm-clear-badge');
     navigator.clearAppBadge?.();
@@ -224,6 +249,18 @@ function render() {
 
   let { page, arg, extra } = mobileRouteFromLocation();
   const pairCode = _pairCodeFromUrl();
+  const gatewayCatalogEnabled = isMobileGatewayCatalogEnabled();
+
+  // The current legacy API helpers are intentionally single-origin. Clear a
+  // chat target before rendering another surface so a prior remote read-only
+  // chat cannot accidentally constrain or redirect unrelated local UI calls.
+  if (!['chat', 'voice'].includes(page)) {
+    try {
+      window.__pmMobileActiveGatewayOrigin = '';
+      window.__pmMobileActiveGatewayId = '';
+      window.__pmMobileActiveGatewayToken = '';
+    } catch {}
+  }
 
   // Pairing gate:
   //   - `?pair=<code>` in URL or `#mobile/pair` route → always show pair page
@@ -231,7 +268,7 @@ function render() {
   //   - No device token saved → force pair page on every other route, so an
   //     unpaired phone can never accidentally hit /api endpoints.
   if (pairCode) page = 'pair';
-  else if (!getDeviceToken() && page !== 'pair') page = 'pair';
+  else if (!getDeviceToken() && !hasAnyGatewayCredential() && page !== 'pair') page = 'pair';
 
   // The desktop Settings modal can be opened on top of any mobile page (via the
   // header gear) without changing the route. Any actual navigation to a
@@ -270,19 +307,22 @@ function render() {
       mobileNavigate('#mobile/chat');
     },
     onOpenSession: (sessionId, sessionChannel = '') => {
+      const parsedTarget = parseTargetNamespacedId(sessionId);
+      const openSessionId = parsedTarget?.targetId || sessionId;
+      if (parsedTarget?.gatewayId) bindMobileSessionTarget(openSessionId, parsedTarget.gatewayId, { started: true });
       if (String(sessionChannel || '') === 'voice_room' || String(sessionId || '').startsWith('voice_room_')) {
-        mobileNavigate(`#mobile/voice/${encodeURIComponent(sessionId)}`);
+        mobileNavigate(`#mobile/voice/${encodeURIComponent(openSessionId)}`);
         return;
       }
       const picker = window.__pmVoiceTargetPicker;
       if (typeof picker === 'function') {
-        picker(sessionId);
+        picker(openSessionId);
       } else {
-        mobileNavigate(`#mobile/chat/${encodeURIComponent(sessionId)}`);
+        mobileNavigate(`#mobile/chat/${encodeURIComponent(parsedTarget?.namespacedId || openSessionId)}`);
       }
     },
-    loadSessions: loadMobileSessionGroups,
-    searchSessions: searchMobileChatSessions,
+    loadSessions: gatewayCatalogEnabled ? loadMobileGatewaySessionGroups : loadMobileSessionGroups,
+    searchSessions: gatewayCatalogEnabled ? searchMobileGatewaySessions : searchMobileChatSessions,
   });
   const slot = shell.page;
   // Expose the active mobile surface to the theme layer. This keeps chat and
@@ -310,10 +350,23 @@ function render() {
 
   switch (page) {
     case 'pair':
-      return renderPairPage(slot, { code: pairCode, navigate: mobileNavigate });
+      return loadMobilePairingPage().then(({ renderPairPage }) => {
+        // A route change can happen while the pairing-only chunk is loading.
+        // Do not let a late import resolution repaint a newer mobile route.
+        if (renderGeneration !== mobileRenderGeneration) return undefined;
+        return renderPairPage(slot, { code: pairCode, addMode: arg === 'add', navigate: mobileNavigate });
+      });
+    case 'gateways': return renderMobileGatewaysPage(slot, { navigate: mobileNavigate });
     case 'chat':      return renderChatPage(slot, { navigate: mobileNavigate, sessionId: arg ? decodeURIComponent(arg) : null, voiceRoomTranscript: String(extra?.[0] || '').toLowerCase() === 'voice-room' });
     case 'voice':     return renderVoicePage(slot, { navigate: mobileNavigate, sessionId: arg ? decodeURIComponent(arg) : null, autoStart: !!arg });
-    case 'schedule':  return renderSchedulePage(slot);
+    case 'schedule':
+      if (String(arg || '').toLowerCase() === 'edit' && extra?.[0]) {
+        return renderScheduleEditorPage(slot, {
+          scheduleId: decodeURIComponent(extra[0]),
+          navigate: mobileNavigate,
+        });
+      }
+      return renderSchedulePage(slot, { navigate: mobileNavigate });
     case 'teams':
       if (arg) return renderTeamDetailPage(slot, { teamId: arg, navigate: mobileNavigate, initialTab: extra?.[0] || '' });
       return renderTeamsPage(slot, { navigate: mobileNavigate });

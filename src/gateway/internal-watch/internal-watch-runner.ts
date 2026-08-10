@@ -390,6 +390,7 @@ export function resolveWatchDeliverySessionId(watch: InternalWatch, obs: Observa
 
 export class InternalWatchRunner {
   private timer: NodeJS.Timeout | null = null;
+  private initialTickTimer: NodeJS.Timeout | null = null;
   private runningWatchIds = new Set<string>();
   private readonly runInteractiveTurn: RunInteractiveTurn;
   private readonly broadcast: (data: any) => void;
@@ -409,7 +410,15 @@ export class InternalWatchRunner {
       this.tick().catch((err) => console.warn('[InternalWatchRunner] tick failed:', err?.message || err));
     }, this.tickMs);
     if (typeof (this.timer as any).unref === 'function') (this.timer as any).unref();
-    this.tick().catch(() => {});
+    // The first scan performs synchronous persistence/target inspection before
+    // its first await. Defer it until after the gateway has had a chance to
+    // bind its listener; the interval above still guarantees a bounded retry
+    // window and the durable watch data remains available across the restart.
+    this.initialTickTimer = setTimeout(() => {
+      this.initialTickTimer = null;
+      this.tick().catch((err) => console.warn('[InternalWatchRunner] initial tick failed:', err?.message || err));
+    }, 250);
+    if (typeof (this.initialTickTimer as any).unref === 'function') (this.initialTickTimer as any).unref();
     console.log(`[InternalWatchRunner] Started - ticking every ${this.tickMs}ms`);
   }
 
@@ -417,6 +426,8 @@ export class InternalWatchRunner {
     if (!this.timer) return;
     clearInterval(this.timer);
     this.timer = null;
+    if (this.initialTickTimer) clearTimeout(this.initialTickTimer);
+    this.initialTickTimer = null;
   }
 
   private async tick(): Promise<void> {

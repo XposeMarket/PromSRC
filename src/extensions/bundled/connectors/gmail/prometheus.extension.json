@@ -80,5 +80,46 @@
         "placeholder": "GOCSPX-..."
       }
     ]
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["Google Mail", "Gmail OAuth"],
+    "domains": ["gmail.googleapis.com", "googleapis.com", "accounts.google.com"],
+    "providerApp": {
+      "provider": "google",
+      "appType": "confidential-client",
+      "clientIdEnv": "GMAIL_CLIENT_ID",
+      "clientSecretEnv": "GMAIL_CLIENT_SECRET",
+      "externalSetupRequired": true
+    },
+    "strategies": [{
+      "id": "gmail-oauth",
+      "adapter": "connector-oauth",
+      "priority": 110,
+      "capabilities": ["email.read", "inbox.read", "attachments.read"],
+      "readOnlyDefault": true,
+      "authentication": {
+        "type": "oauth2",
+        "scopes": ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/userinfo.email", "openid"],
+        "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+        "tokenUrl": "https://oauth2.googleapis.com/token",
+        "pkceRequired": false,
+        "nonceRequired": true,
+        "callback": { "host": "localhost", "port": 19420, "path": "/auth/callback/gmail" },
+        "clientIdEnv": "GMAIL_CLIENT_ID",
+        "clientSecretEnv": "GMAIL_CLIENT_SECRET"
+      },
+      "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+      "config": { "provider": "google", "connectorId": "gmail", "resourceScope": "Google account" }
+    }],
+    "requestedCapabilities": [
+      { "id": "email.read", "label": "Read email", "description": "Read inbox messages and thread content.", "risk": "read" },
+      { "id": "inbox.read", "label": "Search inbox", "description": "Search messages and labels.", "risk": "read" },
+      { "id": "attachments.read", "label": "Read attachments", "description": "Read attachment metadata and message content.", "risk": "read" },
+      { "id": "email.send", "label": "Send email", "description": "Sending email is an explicit external write.", "risk": "write" },
+      { "id": "email.modify", "label": "Modify mailbox", "description": "Mailbox changes require explicit approval and a separate scope grant.", "risk": "write" }
+    ],
+    "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+    "toolPolicy": { "defaultExposure": "read-only", "unknownTools": "blocked" }
   }
 }

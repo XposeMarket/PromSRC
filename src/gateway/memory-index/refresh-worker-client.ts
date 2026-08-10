@@ -3,6 +3,7 @@ import {
   type RuntimeWorkerBrokerStatus,
 } from '../process/runtime-worker-broker.js';
 import path from 'path';
+import { acquireMemoryAccess } from './memory-access-gate.js';
 
 export interface MemoryRefreshOptions {
   force?: boolean;
@@ -170,7 +171,10 @@ async function drainRefreshQueue(): Promise<void> {
         runningKind = embeddingJob.automatic ? 'memory_embedding_auto_backfill' : 'memory_embedding_backfill';
         lastRunStartedAt = Date.now();
         lastError = '';
+        let releaseMemoryAccess: (() => void) | undefined;
         try {
+          releaseMemoryAccess = await acquireMemoryAccess('maintenance');
+          if (shuttingDown) throw new Error('Memory index maintenance worker is shutting down.');
           const result = await broker.run<MemoryEmbeddingBackfillResult>(runningKind, {
             workspacePath: embeddingJob.workspacePath,
             options: embeddingJob.options,
@@ -190,6 +194,7 @@ async function drainRefreshQueue(): Promise<void> {
           runningWorkspace = '';
           runningKind = undefined;
           await broker.shutdown(1500).catch(() => undefined);
+          releaseMemoryAccess?.();
         }
         continue;
       }
@@ -203,7 +208,10 @@ async function drainRefreshQueue(): Promise<void> {
       runningKind = 'memory_index_refresh';
       lastRunStartedAt = Date.now();
       lastError = '';
+      let releaseMemoryAccess: (() => void) | undefined;
       try {
+        releaseMemoryAccess = await acquireMemoryAccess('maintenance');
+        if (shuttingDown) throw new Error('Memory index maintenance worker is shutting down.');
         const result = await broker.run<MemoryRefreshResult>('memory_index_refresh', {
           workspacePath,
           options,
@@ -218,7 +226,7 @@ async function drainRefreshQueue(): Promise<void> {
         const normalized = error instanceof Error ? error : new Error(message);
         lastError = message;
         lastRunCompletedAt = Date.now();
-        warnRefreshFailure(message);
+        if (!shuttingDown) warnRefreshFailure(message);
         for (const waiter of waiters) waiter.reject(normalized);
       } finally {
         state.running = false;
@@ -228,6 +236,7 @@ async function drainRefreshQueue(): Promise<void> {
         // snapshots. Recycle the process after every run so that heap is returned
         // to the OS instead of becoming the maintenance worker's new baseline.
         await broker.shutdown(1500).catch(() => undefined);
+        releaseMemoryAccess?.();
       }
     }
   } finally {

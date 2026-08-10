@@ -6,8 +6,8 @@
 // Mirrors the desktop context-window popover (ChatPage.js) but self-contained
 // for the mobile shell.
 
-import { mobileGatewayFetch } from './mobile-api.js';
-import { escapeHtml } from './mobile-shell.js';
+import { mobileGatewayFetch } from './mobile-api.js?v=pm-v260-2026-08-09-mobile-theme-palette';
+import { escapeHtml } from './mobile-shell.js?v=pm-v260-2026-08-09-mobile-theme-palette';
 
 let _open = false;
 let _expanded = false;
@@ -21,10 +21,13 @@ let _lastSessionId = '';
 let _modelChangeListenerBound = false;
 let _refreshSeq = 0;
 let _refreshTimer = 0;
+let _freshnessTimer = 0;
 let _getSessionId = null;
 let _getProvider = null;
 let _getAccountId = null;
 let _liveTurn = null;
+
+const MOBILE_CONTEXT_REFRESH_INTERVAL_MS = 5000;
 
 function _fmtDuration(value) {
   const durationMs = Number(value);
@@ -77,6 +80,21 @@ function _scheduleRefresh(sessionId, delayMs = 500) {
     _refreshTimer = 0;
     _refresh(String(sessionId || (typeof _getSessionId === 'function' ? _getSessionId() : '') || _lastSessionId || ''), {});
   }, Math.max(0, Number(delayMs) || 0));
+}
+
+function _scheduleFreshnessRefresh(delayMs = MOBILE_CONTEXT_REFRESH_INTERVAL_MS) {
+  if (_freshnessTimer) clearTimeout(_freshnessTimer);
+  if (!document.getElementById('pm-ctx-chip')) return;
+  _freshnessTimer = setTimeout(() => {
+    _freshnessTimer = 0;
+    const sessionId = String(typeof _getSessionId === 'function' ? _getSessionId() : _lastSessionId || '').trim();
+    const refresh = document.visibilityState === 'hidden' || !sessionId
+      ? Promise.resolve()
+      : _refresh(sessionId);
+    Promise.resolve(refresh)
+      .catch(() => {})
+      .finally(() => _scheduleFreshnessRefresh());
+  }, Math.max(1000, Number(delayMs) || MOBILE_CONTEXT_REFRESH_INTERVAL_MS));
 }
 
 function _resetLiveTurn(sessionId) {
@@ -143,48 +161,9 @@ function _recordLiveToolResult(sessionId, evt = {}) {
 }
 
 function _applyLiveOverlay(data) {
-  if (!data || data.success === false) return data;
-  const sid = String(typeof _getSessionId === 'function' ? _getSessionId() : _lastSessionId || '').trim();
-  const live = _liveTurn;
-  if (!live || String(live.sessionId || '') !== sid) return data;
-  const stillVisible = live.active || (live.settledAt && Date.now() - live.settledAt < 7000);
-  const liveTokens = Math.max(0, Number(live.toolResultTokens || 0));
-  if (!stillVisible || liveTokens <= 0) return data;
-  const currentState = data.currentState || {};
-  const rows = Array.isArray(currentState.rows)
-    ? currentState.rows.map((row) => ({ ...row, children: Array.isArray(row.children) ? row.children.map((child) => ({ ...child })) : row.children }))
-    : [];
-  const children = Array.from(live.tools?.values?.() || [])
-    .sort((a, b) => Number(b.resultTokens || 0) - Number(a.resultTokens || 0))
-    .slice(0, 12)
-    .map((tool, index) => ({
-      id: `live_tool_${index}_${String(tool.tool || 'tool').replace(/[^a-z0-9_-]/gi, '_')}`,
-      label: `${String(tool.tool || 'tool')} x${Math.max(1, Number(tool.calls || 0))}${_toolDurationSuffix(tool)}`,
-      tokens: Math.max(0, Number(tool.resultTokens || 0)),
-      active: true,
-      includedInContext: true,
-      percentBasis: 'window',
-    }));
-  const freeIndex = rows.findIndex((row) => row?.id === 'free_space');
-  if (freeIndex >= 0) rows[freeIndex] = { ...rows[freeIndex], tokens: Math.max(0, Number(rows[freeIndex].tokens || 0) - liveTokens) };
-  const liveRow = {
-    id: 'live_tool_results',
-    label: `Live tool results${live.toolDurationMsTotal ? ` · ${_fmtDuration(live.toolDurationMsTotal)} total` : ''}`,
-    tokens: liveTokens,
-    active: true,
-    includedInContext: true,
-    percentBasis: 'window',
-    children,
-  };
-  const insertAt = rows.findIndex((row) => row?.id === 'mcp_tools');
-  if (insertAt >= 0) rows.splice(insertAt, 0, liveRow);
-  else rows.push(liveRow);
-  const overlaidState = {
-    ...currentState,
-    currentStateTokens: Math.max(0, Number(currentState.currentStateTokens || data.currentStateTokens || 0)) + liveTokens,
-    rows,
-  };
-  return { ...data, currentState: overlaidState, currentStateTokens: overlaidState.currentStateTokens };
+  // Live tool events schedule an authoritative server refresh; do not add
+  // speculative tokens to the bar or breakdown between snapshots.
+  return data;
 }
 
 function _gaugeClass(pct) {
@@ -492,6 +471,7 @@ export function wireMobileContextWindow(page, { getSessionId, getProvider, getAc
   };
   // Reset transient state for the fresh page render.
   _open = false; _expanded = false; _expandedRows = new Set();
+  if (_freshnessTimer) { clearTimeout(_freshnessTimer); _freshnessTimer = 0; }
   if (_outsideHandler) { document.removeEventListener('pointerdown', _outsideHandler, true); _outsideHandler = null; }
 
   chip.addEventListener('click', (e) => {
@@ -521,4 +501,5 @@ export function wireMobileContextWindow(page, { getSessionId, getProvider, getAc
     provider: typeof getProvider === 'function' ? getProvider() : '',
     accountId: typeof getAccountId === 'function' ? getAccountId() : '',
   });
+  _scheduleFreshnessRefresh();
 }

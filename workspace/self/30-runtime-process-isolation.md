@@ -130,6 +130,8 @@ Provider/model network calls and their stream parsing now run outside the gatewa
 
 The complete `runInteractiveTurn(...)` / `handleChat(...)` orchestration does **not** yet run in a child. Prompt construction, session/history mutation, plan/Goal control, the tool loop, tool execution, approvals/questions, browser/desktop ownership, task/team managers, scheduler services, MCP services, and final client routing remain gateway-owned. A model-heavy hour-long turn benefits immediately from process isolation, but a synchronous CPU loop, native crash, or unbounded allocation in any of those remaining gateway paths can still affect every client.
 
+The 2026-08-08 tool-performance pass makes that boundary measurable without moving it: the gateway owns tool admission/dispatch/execution and records opaque tool spans, while model-call workers report provider-round queue/IPC/event/RSS timing. The local safe fixtures showed dispatch and result transport at only a few milliseconds, with provider emission and post-result model visibility dominating. Do not infer that model-worker isolation means complete tool-loop isolation; browser, desktop, workspace, MCP, approvals, and task/subagent execution still cross the gateway-owned executor.
+
 Request ingress is also still gateway-owned. `core/app.ts` uses a global `express.json({ limit: '50mb' })`, so a legitimately large JSON request can still impose one synchronous parse/allocation pause before route code or blob references take over. Replacing that safely requires route-specific limits/streaming attachment admission and client compatibility work; it is a remaining API-boundary project, not silently changed by this phase. Cold loading/parsing of a large legacy session and a few legacy synchronous endpoints are similarly outside the completed hot-path work.
 
 Also keep these durability limits explicit:
@@ -177,3 +179,29 @@ Do not fork `chat.router.ts` wholesale into every child. It still depends on gat
 - `chat.router.ts` now keeps per-provider-round first-event and first-visible timestamps as well as turn-level marks. This prevents a later tool-round `providerWaitMs` or `provider_done` delta from subtracting the current round's start from an earlier round's event.
 - The local Luna-medium surface smoke confirmed the correction: the pre-fix multi-pass trace emitted an impossible negative provider wait, while the post-fix trace reported a positive per-round wait. The remaining user-visible wall time is still dominated by provider/tool round trips, so complete-turn worker extraction and per-round queue/tool spans remain follow-up work.
 - Future memory profiling should use the health byte fields, sessionCache status, worker RSS, and retained stream counts together. Do not attribute all gateway RSS to model workers or durable raw-observation disk usage.
+
+## P0-1 focused follow-up — provider rounds, startup readiness, and tool tails — 2026-08-08
+
+- `src/gateway/chat/context-build-worker-client.ts` already exposes worker-pool warmup; `server-v2.ts` now awaits it and prewarms the lazy chat router before opening the HTTP listener. The remaining startup wiring that previously began one second after listen also completes before the listener, preventing a port-open but event-loop-blocked first-message window.
+- Final controlled samples showed context-worker ready waits of 0–1 ms and context builds of roughly 0.33–0.68 s. The model/provider round remained the dominant accepted→tool-call and result→visible span, while local dispatch/result transport stayed in the low single-digit milliseconds.
+- `chat.router.ts` now reuses the built tool surface and full system prompt across rounds within a turn. Final traces show initial tool-surface work of 0–98 ms and later `cacheHit=true` builds at 0 ms; this removes repeated schema/prompt assembly without changing the normal tool contract.
+- A startup-window benchmark timeout was excluded because it had no trace and occurred while the managed listener was rotating. The final post-restart desktop/browser batch completed 6/6 turns with zero tool errors, and the harness now retries only disposable setup/cleanup calls during that rotation.
+- Desktop/browser remain gateway-owned tool execution paths; model-call process isolation does not isolate synchronous desktop PowerShell, OCR, UI Automation, CDP, or tool orchestration work. Continue measuring those spans separately before attempting full-turn extraction.
+
+## Desktop target lifecycle — 2026-08-08
+
+- `src/gateway/desktop-target-lease.ts` now owns the background-target state
+  machine: on-demand acquire, single-flight start/readiness, renew, explicit
+  session release, bounded idle stop, stale ownership recovery, cancellation,
+  and shutdown race protection. The default idle grace is ten minutes;
+  `PROMETHEUS_DESKTOP_WARM_MODE=1` is opt-in.
+- The default repository target is the local Windows Sandbox folder bridge.
+  The foreground native helper is host-native and is a separate boundary.
+  The registered Hyper-V `Prometheus-Desktop` VM is external to the current
+  repository transport; `src/gateway/desktop-hyperv-target.ts` provides an
+  exact-name, ownership-marked control boundary but background commands remain
+  disabled in Hyper-V mode until an authenticated worker protocol exists.
+- Lifecycle status is persisted under `.prometheus/desktop-background/` with a
+  bounded event log that contains metadata only. Gateway shutdown rehydrates
+  persisted ownership before stopping an owned target, while active leases
+  defer cleanup for the next recovery boundary.

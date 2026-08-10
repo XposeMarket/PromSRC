@@ -38,7 +38,14 @@ export class SlackConnector extends OAuthConnector {
       expires_at: data.expires_in ? Date.now() + data.expires_in * 1000 : Date.now() + 365 * 24 * 60 * 60 * 1000,
       account_email: data.authed_user?.email,
       account_id: email,
+      resource_id: data.team?.id,
+      resource_name: data.team?.name,
+      resource_kind: 'workspace',
     };
+  }
+
+  async authTest(): Promise<any> {
+    return this.slackGet('auth.test');
   }
 
   private async slackGet(path: string, params: Record<string, string> = {}): Promise<any> {

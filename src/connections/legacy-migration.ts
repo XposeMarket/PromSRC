@@ -1,5 +1,6 @@
 import { loadSavedConnections } from '../integrations/connection-state';
 import { getConnectorStatuses } from '../integrations/connector-registry';
+import { CONNECTOR_CONNECTION_CONTRACT_VERSION } from './types';
 import type { ConnectionStore } from './connection-store';
 
 /** One-way compatibility projection. Legacy sources remain readable until each
@@ -22,7 +23,14 @@ export function migrateLegacyConnections(store: ConnectionStore): { migrated: st
       serviceId, serviceName: serviceId, pluginId: serviceId, strategyId: 'legacy-compatibility', adapterId: 'legacy',
       installed: true, enabled: true, configured, authenticated, registered: false, exposed: false, verified: false,
       authState: authenticated ? 'healthy' : 'none', health: authenticated ? 'unknown' : 'unavailable',
+      contractVersion: 1,
+      migration: {
+        source: 'legacy', target: 'connection-v2', version: CONNECTOR_CONNECTION_CONTRACT_VERSION,
+        migratedAt: new Date().toISOString(), rollbackSupported: true, legacyReadable: true,
+      },
+      account: status.account || (savedState.accountId ? { provider: serviceId, providerAccountId: String(savedState.accountId) } : undefined),
       grantedCapabilities: [], registeredTools: [], exposedTools: [],
+      grantedScopes: status.grantedScopes,
       configuration: { migratedFrom: 'legacy', authType: status.authType || savedState.authType },
     });
     migrated.push(serviceId);

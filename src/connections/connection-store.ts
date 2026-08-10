@@ -25,7 +25,11 @@ export class ConnectionStore {
     return existing ? this.update(existing.id, input) : this.create(input);
   }
   get(id: string): ConnectionRecord | undefined { const value = this.data.connections[id]; return value ? structuredClone(value) : undefined; }
-  findByService(serviceId: string): ConnectionRecord[] { return structuredClone(Object.values(this.data.connections).filter((item) => item.serviceId === serviceId)); }
+  findByService(serviceId: string): ConnectionRecord[] {
+    return structuredClone(Object.values(this.data.connections)
+      .filter((item) => item.serviceId === serviceId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+  }
   list(filter?: { pluginId?: string; health?: ConnectionRecord['health']; enabled?: boolean }): ConnectionRecord[] {
     let items = Object.values(this.data.connections);
     if (filter?.pluginId) items = items.filter((item) => item.pluginId === filter.pluginId);

@@ -17,7 +17,7 @@
 // only signal browsers use to decide whether to re-install the SW and purge
 // the old cache. If you forget to bump it, devices keep serving stale assets
 // even after `npm run build` + gateway restart.
-const VERSION = 'pm-v240-2026-08-01-mobile-splash';
+const VERSION = 'pm-v263-2026-08-09-directed-chat-gesture-shield';
 const STATIC_CACHE  = `prometheus-static-${VERSION}`;
 const RUNTIME_CACHE = `prometheus-runtime-${VERSION}`;
 
@@ -51,8 +51,8 @@ const PRECACHE = [
   '/src/state.js',
   '/src/utils.js',
   '/assets/Prometheus.png',
-  '/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v240-mobile-splash',
-  '/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v240-mobile-splash',
+  '/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette',
+  '/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette',
 ];
 
 self.addEventListener('install', (event) => {

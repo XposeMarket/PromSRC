@@ -323,6 +323,7 @@ export const PrometheusConfigSchema = z.object({
   }).optional(),
 
   agent_model_default_reasoning: z.record(z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).optional(),
+  agent_model_default_speed: z.record(z.enum(['standard', 'fast'])).optional(),
   agent_model_default_accounts: z.record(z.string()).optional(),
 
   agent_model_default_templates: z.array(z.object({
@@ -349,6 +350,7 @@ export const PrometheusConfigSchema = z.object({
       coordinator:                   z.string().optional(),
     }).optional().default({}),
     reasoning: z.record(z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])).optional().default({}),
+    speed: z.record(z.enum(['standard', 'fast'])).optional().default({}),
     accounts: z.record(z.string()).optional().default({}),
     created_at: z.string().optional(),
     updated_at: z.string().optional(),
@@ -407,6 +409,11 @@ export const PrometheusConfigSchema = z.object({
     rollingCompactionToolTurns: z.number().int().min(1).max(12).optional(),
     rollingCompactionSummaryMaxWords: z.number().int().min(80).max(1500).optional(),
     rollingCompactionModel: z.string().optional(),
+    autoSettleAfterDays: z.number().int().min(0).max(3650).optional(),
+    autoSettleAfterMs: z.number().int().min(0).max(3650 * 24 * 60 * 60 * 1000).optional(),
+    autoSettleCustomDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    autoSettleCustomCutoffAt: z.number().int().positive().optional(),
+    autoSettleActivationAt: z.number().int().positive().optional(),
     mainChatGoals: z.object({
       enabled: z.boolean().optional(),
       autoResumeOnRestart: z.boolean().optional(),

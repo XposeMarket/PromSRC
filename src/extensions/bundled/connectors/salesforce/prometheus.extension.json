@@ -52,7 +52,7 @@
     "authType": "oauth",
     "statusMode": "oauth_connector",
     "docsUrl": "https://login.salesforce.com/",
-    "docsHint": "Salesforce -> Setup -> App Manager -> New Connected App -> Enable OAuth -> Callback: http://localhost:19427/auth/callback/salesforce",
+    "docsHint": "Salesforce -> Setup -> App Manager -> New Connected App -> Enable OAuth and Configure ID Token for nonce validation -> Callback: http://localhost:19427/auth/callback/salesforce",
     "callback": {
       "port": 19427,
       "path": "/auth/callback/salesforce"
@@ -74,5 +74,45 @@
         "placeholder": "abc123..."
       }
     ]
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["Salesforce OAuth", "Salesforce org"],
+    "domains": ["login.salesforce.com", "salesforce.com"],
+    "providerApp": {
+      "provider": "salesforce",
+      "appType": "confidential-client",
+      "clientIdEnv": "SALESFORCE_CLIENT_ID",
+      "clientSecretEnv": "SALESFORCE_CLIENT_SECRET",
+      "externalSetupRequired": true
+    },
+    "strategies": [{
+      "id": "salesforce-oauth",
+      "adapter": "connector-oauth",
+      "priority": 105,
+      "capabilities": ["crm.read", "pipeline.read", "records.read"],
+      "readOnlyDefault": true,
+      "authentication": {
+        "type": "oauth2",
+        "scopes": ["api", "refresh_token", "openid"],
+        "authorizationUrl": "https://login.salesforce.com/services/oauth2/authorize",
+        "tokenUrl": "https://login.salesforce.com/services/oauth2/token",
+        "pkceRequired": false,
+        "nonceRequired": true,
+        "callback": { "host": "localhost", "port": 19427, "path": "/auth/callback/salesforce" },
+        "clientIdEnv": "SALESFORCE_CLIENT_ID",
+        "clientSecretEnv": "SALESFORCE_CLIENT_SECRET"
+      },
+      "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+      "config": { "provider": "salesforce", "connectorId": "salesforce", "resourceScope": "selected Salesforce org" }
+    }],
+    "requestedCapabilities": [
+      { "id": "crm.read", "label": "Read CRM records", "description": "Read accounts, contacts, and opportunity records.", "risk": "read" },
+      { "id": "pipeline.read", "label": "Read pipeline", "description": "Read pipeline and forecast data.", "risk": "read" },
+      { "id": "records.read", "label": "Query records", "description": "Run read-only SOQL/SOSL queries and fetch records.", "risk": "read" },
+      { "id": "records.write", "label": "Create or update records", "description": "Salesforce mutations are explicit external writes.", "risk": "write" }
+    ],
+    "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+    "toolPolicy": { "defaultExposure": "read-only", "unknownTools": "blocked" }
   }
 }

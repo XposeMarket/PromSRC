@@ -14,6 +14,8 @@ import { McpStdioConnectionAdapter } from './adapters/mcp-stdio';
 import { ApiKeyConnectionAdapter } from './adapters/api-key';
 import { OpenAiCompatibleModelConnectionAdapter } from './adapters/openai-compatible-model';
 import { CustomHttpConnectionAdapter } from './adapters/custom-http';
+import { ConnectorOAuthConnectionAdapter } from './adapters/connector-oauth';
+import { buildConnectorOAuthBridges } from './connector-oauth-bridges';
 import type { ConnectionAdapterContext } from './types';
 import { buildMcpServerConfigFromPreset } from '../extensions/mcp-preset-service';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
@@ -66,6 +68,7 @@ export function getConnectionRuntime() {
       return { ok: result.success, tools: (result.tools || []).map((tool: any) => tool.name), error: result.error, configuration: { mcpServerId: id } };
     },
     disconnectServer: async (context) => { await mcp.disconnect(mcpServerId(context)); },
+    revokeOAuth: async (context) => { const { revokeMcpOAuth } = await import('../gateway/mcp-oauth.js'); await revokeMcpOAuth(mcpServerId(context)); },
     clearOAuth: async (context) => { const { clearMcpOAuth } = await import('../gateway/mcp-oauth.js'); clearMcpOAuth(mcpServerId(context)); },
   }));
 
@@ -127,6 +130,11 @@ export function getConnectionRuntime() {
       return { endpoint: configuration.endpoint || configuration.url };
     },
   }));
+
+  // Native OAuth connector bridges delegate OAuth, vault storage, refresh, and
+  // provider verification to the existing connector classes. The shared host
+  // adapter owns canonical records, capability grants, and lifecycle state.
+  adapters.register(new ConnectorOAuthConnectionAdapter(buildConnectorOAuthBridges()));
 
   // Touch the runtime registry so plugin-contributed connection metadata and
   // operational tools share one lifecycle boundary.

@@ -15,9 +15,10 @@
  *   GET  /api/pairing/me            (mobile)  return identity for the device
  *                                             behind the supplied token
  *
- * Only certificate, claim, poll, and /me are public/mobile-facing. Challenge
- * creation, approval, device management, and remote-access operations require
- * a separate trusted desktop authority that paired-device tokens cannot use.
+ * Only certificate, claim, poll, bounded catalog, and /me are public/mobile-
+ * facing. Challenge creation, approval, device management, and remote-access
+ * operations require a separate trusted desktop authority that paired-device
+ * tokens cannot use.
  */
 
 import { Router } from 'express';
@@ -25,8 +26,7 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import * as QRCode from 'qrcode';
-import { getConfig } from '../../config/config';
-import { getSessionStatus } from './account.router';
+import { getConfig, getAgents } from '../../config/config';
 import {
   createPairingChallenge, getChallengeByCode,
   createPendingRequest, findRequestForChallengeClaim, getPendingRequest, listPendingRequests,
@@ -36,8 +36,12 @@ import {
 } from '../pairing/pairing-store';
 import { broadcastWS } from '../comms/broadcaster';
 import { requirePairingAdmin } from '../pairing/pairing-admin-auth';
+import { getGatewayDescriptor } from '../gateway-identity';
+import { listSessionSummaries, searchSessionSummaries } from '../session';
+import { listTaskSummaries } from '../tasks/task-store';
 
 export const router: Router = Router();
+const MOBILE_GATEWAY_CATALOG_ENABLED = process.env.PROMETHEUS_MOBILE_GATEWAY_CATALOG !== '0';
 
 function _isLoopbackHost(host: string): boolean {
   const value = String(host || '').trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
@@ -140,6 +144,96 @@ async function _resolvePairingOrigin(req: any, overrideOrigin: string): Promise<
   return { origin: fallbackOrigin, bindHost, lanOrigins, warning, remoteAccessActive: false };
 }
 
+function _requirePairedDevice(req: any, res: any): any | null {
+  const token = String(req.headers?.['x-pairing-token'] || '').trim();
+  if (!token) {
+    res.status(401).json({ success: false, error: 'A paired-device header is required.' });
+    return null;
+  }
+  const device = verifyDeviceToken(token, {
+    ipHint: _ipHintFromReq(req),
+    userAgent: String(req.headers?.['user-agent'] || ''),
+  });
+  if (!device) {
+    res.status(401).json({ success: false, error: 'Invalid or revoked device token.' });
+    return null;
+  }
+  return device;
+}
+
+function _safeCatalogSession(session: any): Record<string, unknown> {
+  const externalImport = session?.externalImport && typeof session.externalImport === 'object'
+    ? session.externalImport
+    : null;
+  const externalSource = externalImport?.source && typeof externalImport.source === 'object'
+    ? externalImport.source
+    : null;
+  return {
+    id: String(session?.id || '').trim(),
+    channel: String(session?.channel || '').trim(),
+    createdAt: Number(session?.createdAt || 0) || 0,
+    lastActiveAt: Number(session?.lastActiveAt || 0) || 0,
+    lastMessageAt: Number(session?.lastMessageAt || 0) || undefined,
+    lastAssistantAt: Number(session?.lastAssistantAt || 0) || undefined,
+    pinnedAt: Number(session?.pinnedAt || 0) || undefined,
+    sidebarOrder: Number(session?.sidebarOrder || 0) || undefined,
+    settledAt: Number(session?.settledAt || 0) || undefined,
+    settled: session?.settled === true,
+    mobileUnread: session?.mobileUnread === true,
+    activeRun: session?.activeRun === true,
+    messageCount: Number(session?.messageCount || 0) || 0,
+    title: String(session?.title || 'New chat').replace(/\s+/g, ' ').trim().slice(0, 240),
+    // Preserve only the compact, non-secret provenance needed by the mobile
+    // sidebar to render a packaged source mark. Transcript content and source
+    // filesystem details remain excluded from this cross-origin catalog.
+    ...(externalImport && externalSource ? {
+      externalImport: {
+        version: 1,
+        source: {
+          provider: String(externalSource.provider || '').trim().slice(0, 80),
+          adapter: String(externalSource.adapter || '').trim().slice(0, 120),
+          sourceLabel: String(externalSource.sourceLabel || '').trim().slice(0, 120),
+        },
+        continuation: 'prometheus',
+        sourceResume: 'unsupported',
+        importedAt: String(externalImport.importedAt || '').slice(0, 40),
+      },
+    } : {}),
+    // Deliberately omit preview, history, workspace paths, project roots,
+    // goals, and tool/runtime fields from the cross-origin catalog.
+  };
+}
+
+function _safeCatalogAgent(agent: any): Record<string, unknown> {
+  return {
+    id: String(agent?.id || '').trim(),
+    name: String(agent?.name || agent?.label || agent?.id || 'Agent').replace(/\s+/g, ' ').trim().slice(0, 160),
+    description: String(agent?.description || '').replace(/\s+/g, ' ').trim().slice(0, 240),
+    default: agent?.default === true,
+    role: String(agent?.role || '').trim().slice(0, 40),
+    isTeamMember: agent?.isTeamMember === true,
+    isTeamManager: agent?.isTeamManager === true,
+    teamId: String(agent?.teamId || '').trim().slice(0, 120) || null,
+    teamName: String(agent?.teamName || '').replace(/\s+/g, ' ').trim().slice(0, 160) || null,
+  };
+}
+
+function _safeCatalogTask(task: any): Record<string, unknown> {
+  return {
+    id: String(task?.id || '').trim(),
+    title: String(task?.title || 'Task').replace(/\s+/g, ' ').trim().slice(0, 240),
+    sessionId: String(task?.sessionId || '').trim(),
+    channel: String(task?.channel || '').trim(),
+    status: String(task?.status || '').trim().slice(0, 60),
+    startedAt: Number(task?.startedAt || 0) || undefined,
+    completedAt: Number(task?.completedAt || 0) || undefined,
+    lastProgressAt: Number(task?.lastProgressAt || 0) || undefined,
+    scheduleId: String(task?.scheduleId || '').trim().slice(0, 120) || null,
+    taskKind: String(task?.taskKind || '').trim().slice(0, 80) || null,
+    verificationStatus: String(task?.verificationStatus || '').trim().slice(0, 80) || null,
+  };
+}
+
 function _ipHintFromReq(req: any): string {
   const xff = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
   return xff || String(req.ip || req.socket?.remoteAddress || '');
@@ -171,6 +265,10 @@ function _publicRequest(r: any) {
   };
 }
 
+function _base64UrlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
 // ── desktop: create a fresh challenge + QR ────────────────────────────────
 router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
   try {
@@ -181,7 +279,22 @@ router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
     const origin = pairingOrigin.origin;
 
     const challenge = createPairingChallenge();
-    const pairUrl = `${origin}/?pair=${encodeURIComponent(challenge.code)}#mobile/pair`;
+    const gateway = getGatewayDescriptor(origin);
+    // This payload contains only a short-lived, one-time challenge handle and
+    // public target metadata. It is not a credential and must never be reused
+    // as an API token.
+    const pairingPayload = _base64UrlJson({
+      version: 1,
+      audience: 'prometheus-mobile-pairing',
+      gatewayId: gateway.gatewayId,
+      origin,
+      challenge: challenge.code,
+      expiresAt: challenge.expiresAt,
+      name: gateway.name,
+      platform: gateway.platform,
+      gatewayVersion: gateway.version,
+    });
+    const pairUrl = `${origin}/?pair=${encodeURIComponent(pairingPayload)}#mobile/pair`;
 
     const svg = await QRCode.toString(pairUrl, {
       type: 'svg',
@@ -205,6 +318,7 @@ router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
         ? { active: true, mode: String(ra.mode || 'custom'), publicUrl: String(ra.publicUrl).trim() }
         : { active: false },
       expiresAt: challenge.expiresAt,
+      gateway,
       qrSvg: svg,
     });
   } catch (err: any) {
@@ -231,11 +345,11 @@ router.get('/api/pairing/certificate', (_req, res) => {
 
 router.post('/api/pairing/claim', (req, res) => {
   try {
-    const account = getSessionStatus();
-    if (!account.authenticated || (!account.accessActive && !account.purchaseActive && !account.subscriptionActive && !account.isAdmin)) {
-      return res.status(401).json({ success: false, error: 'Prometheus account login required before pairing.' });
-    }
-
+    // The QR is a one-time challenge handle, not an account credential. The
+    // target desktop's explicit Allow/Deny decision is the enrollment gate;
+    // requiring a cookie-bound account here would prevent a phone from pairing
+    // to a second independent gateway on another origin. Account/session
+    // authorization still protects all post-pairing API surfaces.
     const code = String(req.body?.code || '').trim();
     if (!code) return res.status(400).json({ success: false, error: 'code required' });
     const ch = getChallengeByCode(code);
@@ -259,6 +373,7 @@ router.post('/api/pairing/claim', (req, res) => {
           expiresAt: existing.expiresAt,
           status: existing.status,
           resumed: true,
+          gateway: getGatewayDescriptor(),
         });
       }
       return res.status(409).json({ success: false, error: 'This QR code has already been used.' });
@@ -268,7 +383,7 @@ router.post('/api/pairing/claim', (req, res) => {
 
     broadcastWS({ type: 'pairing_pending', requestId: r.id, deviceName: r.deviceName, createdAt: r.createdAt });
 
-    res.json({ success: true, requestId: r.id, expiresAt: r.expiresAt });
+    res.json({ success: true, requestId: r.id, expiresAt: r.expiresAt, gateway: getGatewayDescriptor() });
   } catch (err: any) {
     res.status(500).json({ success: false, error: String(err?.message || err) });
   }
@@ -279,6 +394,18 @@ router.get('/api/pairing/poll/:id', (req, res) => {
   const id = String(req.params.id || '');
   const r = getPendingRequest(id);
   if (!r) return res.status(404).json({ success: false, status: 'not_found' });
+  // The request id is not itself a bearer credential. Bind token delivery to
+  // the fingerprint that claimed the one-time challenge; legacy clients that
+  // did not send one must still match their claim's user-agent/IP hint.
+  const presentedFingerprint = String(req.headers['x-pairing-device-fingerprint'] || '').slice(0, 120);
+  const presentedUserAgent = String(req.headers['user-agent'] || '').slice(0, 240);
+  const presentedIpHint = _ipHintFromReq(req);
+  if (r.deviceFingerprint && presentedFingerprint !== r.deviceFingerprint) {
+    return res.status(403).json({ success: false, status: 'wrong_device' });
+  }
+  if (!r.deviceFingerprint && (presentedUserAgent !== r.userAgent || presentedIpHint !== r.ipHint)) {
+    return res.status(403).json({ success: false, status: 'wrong_device' });
+  }
   if (r.status === 'approved') {
     const token = consumePendingRequestToken(id);
     if (token) {
@@ -287,6 +414,7 @@ router.get('/api/pairing/poll/:id', (req, res) => {
         status: 'approved',
         deviceId: r.deviceId,
         deviceToken: token,
+        gateway: getGatewayDescriptor(),
       });
     }
     return res.json({ success: true, status: 'approved_already_collected' });
@@ -555,6 +683,55 @@ export function startFunnelWatchdog(intervalMs: number = 5 * 60_000): void {
   if (typeof (_funnelWatchdogTimer as any).unref === 'function') (_funnelWatchdogTimer as any).unref();
 }
 
+// ── mobile: bounded read-only catalog ────────────────────────────────────
+// This is intentionally mounted with the pairing router so a phone can read
+// safe target metadata without forwarding a desktop account cookie/session to
+// another computer. It never returns transcript text, workspace paths,
+// credentials, tool state, or mutation affordances.
+router.get('/api/mobile/gateway/catalog', (req, res) => {
+  if (!MOBILE_GATEWAY_CATALOG_ENABLED) {
+    res.status(404).json({ success: false, error: 'Mobile gateway catalog is disabled.' });
+    return;
+  }
+  const device = _requirePairedDevice(req, res);
+  if (!device) return;
+  try {
+    const rawState = String(req.query.state || 'active').trim().toLowerCase();
+    const state = ['active', 'settled', 'all'].includes(rawState) ? rawState as 'active' | 'settled' | 'all' : 'active';
+    const limit = Math.max(1, Math.min(100, Math.floor(Number(req.query.limit || 50) || 50)));
+    const offset = Math.max(0, Math.floor(Number(req.query.offset || 0) || 0));
+    const sessionPage = listSessionSummaries({
+      scope: 'all',
+      state,
+      includeAutomated: true,
+      limit,
+      offset,
+    }) as any;
+    const agents = getAgents()
+      .map(_safeCatalogAgent)
+      .filter((agent) => agent.id);
+    const tasks = listTaskSummaries({ limit: 100 })
+      .map(_safeCatalogTask)
+      .filter((task) => task.id);
+    const gateway = getGatewayDescriptor();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      gatewayId: gateway.gatewayId,
+      deviceId: device.id,
+      sessions: (sessionPage.sessions || []).map(_safeCatalogSession).filter((session: any) => session.id),
+      total: Number(sessionPage.total || 0) || 0,
+      limit,
+      offset,
+      hasMore: sessionPage.hasMore === true,
+      agents,
+      tasks,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: String(error?.message || 'Read-only gateway catalog unavailable.') });
+  }
+});
+
 // ── mobile: who am I? (validate token in hand) ───────────────────────────
 router.get('/api/pairing/me', (req, res) => {
   const token = String(req.headers['x-pairing-token'] || req.query.pt || '').trim();
@@ -564,4 +741,20 @@ router.get('/api/pairing/me', (req, res) => {
   });
   if (!device) return res.status(401).json({ success: false, error: 'Invalid or revoked device token.' });
   res.json({ success: true, device: _publicDevice(device) });
+});
+
+// A paired phone may revoke its own target-scoped grant. This is intentionally
+// narrower than desktop device administration: it cannot revoke another phone
+// and it does not touch any other gateway.
+router.post('/api/pairing/me/revoke', (req, res) => {
+  const token = String(req.headers['x-pairing-token'] || '').trim();
+  const device = verifyDeviceToken(token, {
+    ipHint: _ipHintFromReq(req),
+    userAgent: String(req.headers['user-agent'] || ''),
+  });
+  if (!device) return res.status(401).json({ success: false, error: 'Invalid or revoked device token.' });
+  const changed = setDeviceEnabled(device.id, false);
+  if (!changed) return res.status(404).json({ success: false, error: 'Paired device not found.' });
+  broadcastWS({ type: 'pairing_device_changed', deviceId: device.id });
+  res.json({ success: true, revoked: true, deviceId: device.id });
 });

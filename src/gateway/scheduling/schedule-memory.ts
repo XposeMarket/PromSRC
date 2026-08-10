@@ -96,6 +96,8 @@ export interface RunLogEntry {
   completedAt?: number;
   status: 'running' | 'complete' | 'failed' | 'skipped';
   taskId: string;          // the BackgroundTask ID that handled this run
+  /** User-facing conversation created or used by this scheduled execution. */
+  chatSessionId?: string;
   agentId?: string;
   summary?: string;
   errorIfAny?: string;
@@ -343,7 +345,7 @@ export function appendRunLog(scheduleId: string, entry: RunLogEntry): void {
 export function updateRunLogEntry(
   scheduleId: string,
   runId: string,
-  updates: Partial<Pick<RunLogEntry, 'completedAt' | 'status' | 'summary' | 'errorIfAny' | 'errorType' | 'attempts' | 'evidenceWritten'>>,
+  updates: Partial<Pick<RunLogEntry, 'completedAt' | 'status' | 'summary' | 'errorIfAny' | 'errorType' | 'attempts' | 'evidenceWritten' | 'chatSessionId'>>,
 ): void {
   const log = loadRunLog(scheduleId);
   const entry = log.runs.find(r => r.runId === runId);

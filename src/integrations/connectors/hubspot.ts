@@ -32,6 +32,9 @@ export class HubSpotConnector extends OAuthConnector {
       access_token: data.access_token,
       refresh_token: data.refresh_token,
       expires_at: Date.now() + (data.expires_in || 1800) * 1000,
+      resource_id: data.hub_id || data.portal_id ? String(data.hub_id || data.portal_id) : undefined,
+      resource_name: data.hub_name || data.portal_name,
+      resource_kind: 'portal',
     };
     try {
       const res = await fetch('https://api.hubapi.com/oauth/v1/access-tokens/' + data.access_token);
@@ -39,9 +42,15 @@ export class HubSpotConnector extends OAuthConnector {
         const info = await res.json() as any;
         tokens.account_email = info.user;
         tokens.account_id = String(info.user_id || '');
+        tokens.resource_id = info.hub_id ? String(info.hub_id) : tokens.resource_id;
+        tokens.resource_name = info.hub_name || tokens.resource_name;
       }
     } catch {}
     return tokens;
+  }
+
+  async getPortalInfo(): Promise<any> {
+    return this.apiGet('/account-info/v3/details');
   }
 
   private async apiGet(path: string): Promise<any> {

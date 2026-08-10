@@ -32,7 +32,11 @@
     "authType": "oauth",
     "statusMode": "oauth_connector",
     "docsUrl": "https://console.cloud.google.com/",
-    "docsHint": "Google Cloud Console -> Enable Analytics Data API -> Desktop app credentials. Also set your GA4 property ID.",
+    "docsHint": "Google Cloud Console -> Enable Analytics Data API -> Desktop app credentials. Property selection is verified after sign-in; the legacy property field remains an advanced runtime override.",
+    "callback": {
+      "port": 19429,
+      "path": "/auth/callback/ga4"
+    },
     "fields": [
       {
         "key": "clientId",
@@ -50,5 +54,44 @@
         "placeholder": "GOCSPX-..."
       }
     ]
+  },
+  "connection": {
+    "schemaVersion": 1,
+    "aliases": ["Google Analytics", "GA4 OAuth"],
+    "domains": ["analyticsdata.googleapis.com", "analyticsadmin.googleapis.com", "accounts.google.com"],
+    "providerApp": {
+      "provider": "google",
+      "appType": "confidential-client",
+      "clientIdEnv": "GA4_CLIENT_ID",
+      "clientSecretEnv": "GA4_CLIENT_SECRET",
+      "externalSetupRequired": true
+    },
+    "strategies": [{
+      "id": "ga4-oauth",
+      "adapter": "connector-oauth",
+      "priority": 110,
+      "capabilities": ["analytics.read", "reports.read", "properties.read"],
+      "readOnlyDefault": true,
+      "authentication": {
+        "type": "oauth2",
+        "scopes": ["https://www.googleapis.com/auth/analytics.readonly", "https://www.googleapis.com/auth/userinfo.email", "openid"],
+        "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+        "tokenUrl": "https://oauth2.googleapis.com/token",
+        "pkceRequired": false,
+        "nonceRequired": true,
+        "callback": { "host": "localhost", "port": 19429, "path": "/auth/callback/ga4" },
+        "clientIdEnv": "GA4_CLIENT_ID",
+        "clientSecretEnv": "GA4_CLIENT_SECRET"
+      },
+      "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+      "config": { "provider": "google", "connectorId": "ga4", "resourceScope": "GA4 properties returned after sign-in" }
+    }],
+    "requestedCapabilities": [
+      { "id": "analytics.read", "label": "Read analytics", "description": "Read traffic, conversions, and audience metrics.", "risk": "read" },
+      { "id": "reports.read", "label": "Run reports", "description": "Run read-only Analytics Data API reports.", "risk": "read" },
+      { "id": "properties.read", "label": "Select GA4 properties", "description": "Associate the connection with accessible GA4 property identities.", "risk": "read" }
+    ],
+    "verification": ["oauth.authentication", "account.identity", "resource.scope", "safe-read"],
+    "toolPolicy": { "defaultExposure": "read-only", "unknownTools": "blocked" }
   }
 }

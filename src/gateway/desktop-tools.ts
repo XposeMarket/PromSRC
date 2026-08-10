@@ -286,7 +286,20 @@ interface DesktopWindowGenerationRecord {
 const desktopWindowGenerations = new Map<string, DesktopWindowGenerationRecord>();
 
 const DESKTOP_CONTEXT_CACHE_MS = Math.max(0, Number(process.env.PROMETHEUS_DESKTOP_CONTEXT_CACHE_MS || 250));
-let desktopContextCache: { capturedAt: number; value: DesktopContextGathered } | null = null;
+let desktopContextCache: { capturedAt: number; value: DesktopContextGathered; includeWindows: boolean } | null = null;
+
+export type DesktopPerformanceObserver = (
+  stage: string,
+  fields?: Record<string, number | string | boolean>,
+) => void;
+
+function markDesktopPerformance(
+  observer: DesktopPerformanceObserver | undefined,
+  stage: string,
+  fields: Record<string, number | string | boolean> = {},
+): void {
+  try { observer?.(stage, fields); } catch { /* telemetry must not affect desktop semantics */ }
+}
 
 interface DesktopWindowFrameCacheEntry {
   capturedAt: number;
@@ -776,10 +789,23 @@ function normalizeDesktopContext(raw: any): DesktopContextGathered {
  * One PowerShell round-trip: monitors, virtual screen, window list with monitor index, active window.
  */
 /** Exported for the Win32 DesktopBackend (desktop-platform-win32.ts). */
-export async function gatherDesktopContextInternal(signal?: AbortSignal): Promise<DesktopContextGathered> {
+export async function gatherDesktopContextInternal(
+  signal?: AbortSignal,
+  options?: { includeWindows?: boolean; onPerformanceStage?: DesktopPerformanceObserver },
+): Promise<DesktopContextGathered> {
+  const includeWindows = options?.includeWindows !== false;
+  const observer = options?.onPerformanceStage;
+  const startedAt = Date.now();
+  markDesktopPerformance(observer, 'context_start', { includeWindows });
   throwIfDesktopCancelled(signal);
   const now = Date.now();
-  if (desktopContextCache && now - desktopContextCache.capturedAt <= DESKTOP_CONTEXT_CACHE_MS) {
+  if (desktopContextCache
+    && now - desktopContextCache.capturedAt <= DESKTOP_CONTEXT_CACHE_MS
+    && (includeWindows ? desktopContextCache.includeWindows : true)) {
+    markDesktopPerformance(observer, 'context_cache_hit', {
+      includeWindows,
+      durationMs: Math.max(0, Date.now() - startedAt),
+    });
     return desktopContextCache.value;
   }
   if (DELEGATE_TO_BACKEND) {
@@ -790,7 +816,13 @@ export async function gatherDesktopContextInternal(signal?: AbortSignal): Promis
       windows: ctx.windows,
       activeWindow: ctx.activeWindow,
     };
-    desktopContextCache = { capturedAt: Date.now(), value: gathered };
+    desktopContextCache = { capturedAt: Date.now(), value: gathered, includeWindows: true };
+    markDesktopPerformance(observer, 'context_done', {
+      includeWindows,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      monitorCount: gathered.monitors.length,
+      windowCount: gathered.windows.length,
+    });
     return gathered;
   }
   const script = `
@@ -828,11 +860,14 @@ function Get-MonitorIndex([IntPtr]$hwnd) {
   } catch { }
   return -1
 }
-$winRows = Get-Process | Where-Object {
-  $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and $_.MainWindowTitle.Trim().Length -gt 0
-}
 $windows = New-Object System.Collections.ArrayList
-foreach ($r in $winRows) {
+$winRows = @()
+if (${includeWindows ? '$true' : '$false'}) {
+  $winRows = Get-Process | Where-Object {
+    $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -and $_.MainWindowTitle.Trim().Length -gt 0
+  }
+}
+foreach ($r in @($winRows)) {
   $hPtr = [IntPtr]::new([Int64]$r.MainWindowHandle)
   $mi = Get-MonitorIndex $hPtr
   $rect = New-Object PrometheusWinApi+RECT
@@ -904,17 +939,43 @@ if ($hFg -ne [IntPtr]::Zero) {
   activeWindow = $activeWindow
 } | ConvertTo-Json -Compress -Depth 8
 `;
-  const raw = await runPowerShell(script, { timeoutMs: 14000, sta: true, signal });
+  const powerShellStartedAt = Date.now();
+  markDesktopPerformance(observer, 'powershell_start', { includeWindows });
+  const raw = await runPowerShell(script, { timeoutMs: includeWindows ? 14000 : 8000, sta: true, signal });
+  markDesktopPerformance(observer, 'powershell_done', {
+    includeWindows,
+    durationMs: Math.max(0, Date.now() - powerShellStartedAt),
+    outputBytes: Buffer.byteLength(raw, 'utf8'),
+  });
   const parsed = parseJsonMaybe(raw);
   if (!parsed) {
-    return {
+    const empty = {
       monitors: [],
       virtualScreen: { left: 0, top: 0, width: 0, height: 0 },
       windows: [],
       activeWindow: null,
     };
+    markDesktopPerformance(observer, 'context_done', {
+      includeWindows,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      monitorCount: 0,
+      windowCount: 0,
+      parseFailed: true,
+    });
+    return empty;
   }
-  return normalizeDesktopContext(parsed);
+  const gathered = normalizeDesktopContext(parsed);
+  if (includeWindows) desktopContextCache = { capturedAt: Date.now(), value: gathered, includeWindows: true };
+  else if (!desktopContextCache || Date.now() - desktopContextCache.capturedAt > DESKTOP_CONTEXT_CACHE_MS) {
+    desktopContextCache = { capturedAt: Date.now(), value: gathered, includeWindows: false };
+  }
+  markDesktopPerformance(observer, 'context_done', {
+    includeWindows,
+    durationMs: Math.max(0, Date.now() - startedAt),
+    monitorCount: gathered.monitors.length,
+    windowCount: gathered.windows.length,
+  });
+  return gathered;
 }
 
 /**
@@ -954,12 +1015,25 @@ export async function desktopGetMonitorsSummary(): Promise<string> {
   return [`Monitors detected: ${monitors.length}.`, vsLine, ...lines].join('\n');
 }
 
-export async function desktopDoctor(sessionId: string, options: { deep?: boolean } = {}): Promise<string> {
+export async function desktopDoctor(
+  sessionId: string,
+  options: { deep?: boolean; signal?: AbortSignal; onPerformanceStage?: DesktopPerformanceObserver } = {},
+): Promise<string> {
   const deep = options.deep === true;
+  const observer = options.onPerformanceStage;
+  const doctorStartedAt = Date.now();
+  markDesktopPerformance(observer, 'doctor_start', { deep });
   const lines: string[] = [`Desktop doctor (${deep ? 'deep' : 'fast'}):`];
   const ok = (label: string, detail: string) => lines.push(`PASS ${label}: ${detail}`);
   const warn = (label: string, detail: string) => lines.push(`WARN ${label}: ${detail}`);
   const fail = (label: string, detail: string) => lines.push(`FAIL ${label}: ${detail}`);
+  const markDoctorStage = (stage: string, startedAt: number, fields: Record<string, number | string | boolean> = {}) => {
+    markDesktopPerformance(observer, `doctor_${stage}`, {
+      deep,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      ...fields,
+    });
+  };
 
   try {
     ensureWindows();
@@ -985,7 +1059,13 @@ export async function desktopDoctor(sessionId: string, options: { deep?: boolean
 
   let ctx: DesktopContextGathered | null = null;
   try {
-    ctx = await gatherDesktopContextInternal();
+    // Fast doctor only needs monitor geometry and the foreground window. The
+    // full window list is useful to discovery tools, but it is an avoidable
+    // Get-Process + GetWindowRect sweep on the health-check path.
+    ctx = await gatherDesktopContextInternal(options.signal, {
+      includeWindows: deep,
+      onPerformanceStage: observer,
+    });
     ok('Monitor/DPI context', `${ctx.monitors.length || 0} monitor(s), virtual ${ctx.virtualScreen.width}x${ctx.virtualScreen.height} at (${ctx.virtualScreen.left},${ctx.virtualScreen.top})`);
     if (!ctx.monitors.length) warn('Monitor/DPI context', 'no monitor records returned by Windows Forms');
     const bad = ctx.monitors.filter((m) => m.width < 1 || m.height < 1);
@@ -998,10 +1078,21 @@ export async function desktopDoctor(sessionId: string, options: { deep?: boolean
   let ocrProbe: { text: string; confidence: number } | null | undefined;
   let ocrProbeError = '';
   if (deep) try {
+    const probeStartedAt = Date.now();
+    markDesktopPerformance(observer, 'doctor_screenshot_probe_start', { deep });
     const shot = await captureScreenshotInternal({ kind: 'primary' });
     const raw = fs.readFileSync(shot.path);
     if (String(process.env.PROMETHEUS_DESKTOP_OCR || '1').trim() !== '0') {
-      try { ocrProbe = await runOcr(shot.path); } catch (error: any) { ocrProbeError = String(error?.message || error); }
+      const ocrStartedAt = Date.now();
+      const doctorOcrTimeoutMs = clampInt(process.env.PROMETHEUS_DESKTOP_DOCTOR_OCR_TIMEOUT_MS, 1000, 30000, 5000);
+      markDesktopPerformance(observer, 'doctor_ocr_probe_start', { deep, timeoutMs: doctorOcrTimeoutMs });
+      try {
+        ocrProbe = await runOcr(shot.path, doctorOcrTimeoutMs);
+        markDoctorStage('ocr_probe_done', ocrStartedAt, { ocrAvailable: ocrProbe !== null, timeoutMs: doctorOcrTimeoutMs });
+      } catch (error: any) {
+        ocrProbeError = String(error?.message || error);
+        markDoctorStage('ocr_probe_done', ocrStartedAt, { error: true, errorCode: 'ocr_probe_failed', timeoutMs: doctorOcrTimeoutMs });
+      }
     }
     try { fs.unlinkSync(shot.path); } catch {}
     const normalized = await normalizeScreenshotBuffer(raw, {
@@ -1013,11 +1104,19 @@ export async function desktopDoctor(sessionId: string, options: { deep?: boolean
       'Screenshot budget',
       `primary raw=${shot.width}x${shot.height} ${Math.round(raw.byteLength / 1024)}KB, transport=${normalized.width}x${normalized.height} ${normalized.mimeType} ${Math.round(normalized.bytes / 1024)}KB, coordinateScale=${normalized.scaleX.toFixed(3)}x${normalized.scaleY.toFixed(3)}`,
     );
+    markDoctorStage('screenshot_probe_done', probeStartedAt, {
+      rawBytes: raw.byteLength,
+      width: shot.width,
+      height: shot.height,
+    });
   } catch (err: any) {
+    markDesktopPerformance(observer, 'doctor_screenshot_probe_done', { deep, error: true, errorCode: 'screenshot_probe_failed' });
     fail('Screenshot budget', err?.message || String(err));
   }
 
   if (deep) try {
+    const ocrStatusStartedAt = Date.now();
+    markDesktopPerformance(observer, 'doctor_ocr_status_start', { deep });
     const ocrEnabled = String(process.env.PROMETHEUS_DESKTOP_OCR || '1').trim() !== '0';
     if (!ocrEnabled) warn('OCR', 'disabled by PROMETHEUS_DESKTOP_OCR=0');
     else {
@@ -1030,31 +1129,43 @@ export async function desktopDoctor(sessionId: string, options: { deep?: boolean
       else if (packet?.ocrText) ok('OCR', `runtime previously returned ${packet.ocrText.length} cached chars (confidence ${Math.round(packet.ocrConfidence || 0)}%)`);
       else warn('OCR', 'runtime probe completed but detected no text in the primary-screen sample');
     }
+    markDoctorStage('ocr_status_done', ocrStatusStartedAt, { ocrEnabled });
   } catch (err: any) {
+    markDesktopPerformance(observer, 'doctor_ocr_status_done', { deep, error: true, errorCode: 'ocr_status_failed' });
     fail('OCR', err?.message || String(err));
   }
 
   if (deep) try {
+    const uiAutomationStartedAt = Date.now();
+    markDesktopPerformance(observer, 'doctor_ui_automation_start', { deep });
     const out = await desktopGetAccessibilityTree(undefined, 2, 40);
     if (out.startsWith('ERROR:')) fail('UI Automation', out);
     else ok('UI Automation', `returned ${out.split(/\r?\n/).length} line(s) from active window`);
+    markDoctorStage('ui_automation_done', uiAutomationStartedAt, { error: out.startsWith('ERROR') });
   } catch (err: any) {
+    markDesktopPerformance(observer, 'doctor_ui_automation_done', { deep, error: true, errorCode: 'ui_automation_failed' });
     fail('UI Automation', err?.message || String(err));
   }
 
   if (!deep) ok('Deep probes', 'skipped; call doctor with deep=true for live screenshot/OCR/UI Automation probes');
 
   try {
+    const captureBackendStartedAt = Date.now();
     const backend = resolveDesktopCaptureBackend();
     (backend.active === 'graphics_capture' ? ok : warn)('Capture backend', `${backend.active} (requested=${backend.requested}). ${backend.reason}`);
+    markDoctorStage('capture_backend_done', captureBackendStartedAt, { backend: backend.active });
   } catch (err: any) {
+    markDesktopPerformance(observer, 'doctor_capture_backend_done', { deep, error: true, errorCode: 'capture_backend_failed' });
     warn('Capture backend', err?.message || String(err));
   }
 
   try {
+    const registryStartedAt = Date.now();
     const toolNames = getDesktopToolNames();
     ok('Tool registry', `${toolNames.length} desktop tool definitions exposed; canonical model + window-scoped input available`);
+    markDoctorStage('tool_registry_done', registryStartedAt, { toolCount: toolNames.length });
   } catch (err: any) {
+    markDesktopPerformance(observer, 'doctor_tool_registry_done', { deep, error: true, errorCode: 'tool_registry_failed' });
     warn('Tool registry', err?.message || String(err));
   }
 
@@ -1074,6 +1185,12 @@ export async function desktopDoctor(sessionId: string, options: { deep?: boolean
   if (ctx?.activeWindow) ok('Active window', describeDesktopWindowBounds(ctx.activeWindow));
   else warn('Active window', 'no active window metadata available');
 
+  markDesktopPerformance(observer, 'doctor_done', {
+    deep,
+    durationMs: Math.max(0, Date.now() - doctorStartedAt),
+    monitorCount: ctx?.monitors.length || 0,
+    windowCount: ctx?.windows.length || 0,
+  });
   return lines.join('\n');
 }
 
@@ -2777,14 +2894,16 @@ async function verifyDesktopAction(options: {
 
 let lastOcrDiagnostic: { status: string; stage: string; error?: string; at: number } | null = null;
 
-async function runOcr(imagePath: string): Promise<{ text: string; confidence: number } | null> {
+async function runOcr(imagePath: string, timeoutOverrideMs?: number): Promise<{ text: string; confidence: number } | null> {
   try {
     const ocrEnabled = String(process.env.PROMETHEUS_DESKTOP_OCR || '1').trim() !== '0';
     if (!ocrEnabled) {
       lastOcrDiagnostic = { status: 'disabled', stage: 'configuration', at: Date.now() };
       return null;
     }
-    const timeoutMs = clampInt(process.env.PROMETHEUS_OCR_TIMEOUT_MS, 1000, 120000, 15000);
+    const timeoutMs = timeoutOverrideMs == null
+      ? clampInt(process.env.PROMETHEUS_OCR_TIMEOUT_MS, 1000, 120000, 15000)
+      : clampInt(timeoutOverrideMs, 1000, 120000, 15000);
     const ocrCacheDir = path.join(
       process.env.PROMETHEUS_DATA_DIR ? path.join(process.env.PROMETHEUS_DATA_DIR, '.prometheus') : path.join(process.cwd(), '.prometheus'),
       'ocr-cache'

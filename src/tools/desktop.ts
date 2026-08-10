@@ -927,6 +927,7 @@ export const desktopBackgroundPrepareSandboxTool: Tool = {
         networking: args?.networking,
         vgpu: args?.vgpu,
         memory_mb: args?.memory_mb == null ? undefined : Number(args.memory_mb),
+        session_id: DESKTOP_SESSION,
       }));
     } catch (e: any) {
       return fail(String(e?.message || e));
@@ -989,6 +990,7 @@ export const desktopBackgroundCommandTool: Tool = {
         include_text: args?.include_text === true,
         max_depth: args?.max_depth == null ? undefined : Number(args.max_depth),
         max_nodes: args?.max_nodes == null ? undefined : Number(args.max_nodes),
+        session_id: DESKTOP_SESSION,
       } as any));
     } catch (e: any) {
       return fail(String(e?.message || e));

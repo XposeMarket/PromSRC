@@ -6,6 +6,8 @@ Last verified against the active `C:\Users\rafel\PromSRC` working tree and provi
 
 > 2026-07-10 isolation correction: any older matrix or line-number note below that says a standalone/direct/background or team subagent receives main `USER.md`, workspace `SOUL.md`, `MEMORY.md`, `BUSINESS.md`, intraday/project/CIS context, or retrieved memory is superseded. Subagents now receive the dedicated subagent soul, canonical per-agent `AGENT.md`, explicit assignment/caller/team context, and shared runtime/tool/skill policies only. `system_prompt.md` and `AGENTS.md` are non-destructive migration inputs; `HEARTBEAT.md` is scheduler-only.
 
+> 2026-08-09 atomic MEMORY correction: normal main/Prometheus-owned turns no longer inject raw `workspace/MEMORY.md`. `prompt-context.ts` projects exact, line-cited atoms into `[MEMORY_REFERENCE]` with no arbitrary main-path top-N cap; `memory_read` remains the complete-file/evidence escape hatch. Brain/Thought turns retain the full raw file for continuity, while voice uses a smaller atom budget. Any older table entry below that says interactive or voice always receives raw MEMORY.md is historical and superseded.
+
 This file is the source-verified map of **where runtime prompts live**, **what each agent/runtime receives**, and **what overlaps**. It supplements [03-execution-and-prompting.md](03-execution-and-prompting.md), which describes layers at a high level but does not enumerate every surface, file, or injection difference.
 
 ---
@@ -49,7 +51,7 @@ These are the **on-disk instruction sources** the runtime reads:
 | Config soul | `src/config/soul.md` or `.prometheus/soul.md` | `loadSoul()` — `src/config/soul-loader.ts:70–72` | `[PROMETHEUS_SOUL]` in interactive, switch_model, voice, proposal execution |
 | USER.md | `workspace/USER.md` | `loadFullMemoryProfile()` | Main chat and other Prometheus-owned paths; never standalone/team subagents |
 | SOUL.md | `workspace/SOUL.md` | same | Same as USER (with mode-specific exceptions below) |
-| MEMORY.md | `workspace/MEMORY.md` | same | Same, with per-path char caps |
+| MEMORY.md | `workspace/MEMORY.md` | `memory-atoms.ts` for default prompt projection; `loadFullMemoryProfile()` for explicit full/Brain paths | `[MEMORY_REFERENCE]` exact source-cited atoms by default; raw file remains available through `memory_read` and compatibility exceptions |
 | BUSINESS.md | `workspace/BUSINESS.md` | `loadBusinessContextProfile()` — `prompt-context.ts:394–396` | When business context mode is enabled for the session |
 | Intraday notes | `workspace/memory/YYYY-MM-DD-intraday-notes.md` | `prompt-context.ts:1219–1222` | Interactive main chat; skipped for background_agent and all autonomous paths |
 | AGENTS.md | `workspace/AGENTS.md` | no current bootstrap read | Not injected by current `loadWorkspaceBootstrap()`; legacy documentation only |
@@ -60,7 +62,7 @@ These are the **on-disk instruction sources** the runtime reads:
 | Subagent role | `.prometheus/subagents/<id>/AGENT.md` | `agent-prompt-file.ts`, `subagent-manager.ts` | System/caller role overlay |
 | Team agent role | team-scoped `AGENT.md` | `team-workspace.ts`, `team-dispatch-runtime.ts` | In `callerContext` |
 
-**Correction vs older docs:** `workspace/AGENTS.md` is **not** auto-injected into main-chat `handleChat` turns. Main chat gets USER/SOUL/MEMORY via `buildPersonalityContext`, not `loadWorkspaceBootstrap`.
+**Correction vs older docs:** `workspace/AGENTS.md` is **not** auto-injected into main-chat `handleChat` turns. Main chat gets USER/SOUL plus the atomized MEMORY reference via `buildPersonalityContext`, not `loadWorkspaceBootstrap`.
 
 ---
 
@@ -121,12 +123,12 @@ This is the main branching logic for memory, tools, and skills.
 ### Path: `voice_agent`
 
 - **Lines:** 1030–1087
-- **Gets:** config soul, USER, SOUL, BUSINESS, MEMORY, VOICEAGENT, BOOT, `self/index.md`, `self/06-image-voice.md`, project, CIS, retrieved memory, intraday, skills
+- **Gets:** voice soul contract, USER, SOUL, bounded durable MEMORY atoms, VOICEAGENT/BOOT/self references, project, CIS, and skills; broad indexed search is not awaited on the voice path
 
 ### Path: `switch_model` (cloud handoff from local primary)
 
 - **Lines:** 1090–1119
-- **Gets:** config soul, USER, SOUL, BUSINESS, MEMORY, clean tool menu (no inherited session categories), CIS, retrieved memory, skills
+- **Gets:** config soul, USER, SOUL, BUSINESS, bounded durable MEMORY atoms by default (or raw MEMORY in explicit full mode), clean tool menu, CIS, retrieved memory, skills
 
 ### Path: `direct_subagent`, `background_agent`, and `team_subagent`
 
@@ -137,7 +139,7 @@ This is the main branching logic for memory, tools, and skills.
 ### Path: Autonomous (`background_task`, `proposal_execution`, `cron`, `heartbeat`)
 
 - **Lines:** 1155–1212
-- **Gets:** BUSINESS, SOUL, MEMORY (varies), project, tools, CIS, skills
+- **Gets:** BUSINESS, SOUL, durable MEMORY atoms where the actor/path permits, project, tools, CIS, skills; proposal execution remains intentionally lean and excludes main durable-memory injection
 - **Explicitly excludes (comments at 1163–1176):**
   - `USER.md` — all autonomous modes
   - `AGENTS.md` — all autonomous modes
@@ -148,7 +150,7 @@ This is the main branching logic for memory, tools, and skills.
 
 - **Lines:** 1215–1320 (tiered by `historyLength`)
 - **Used by:** main chat, `team_manager`, `background_agent`, boot, scheduled subagent-owner
-- **Gets:** config soul, USER, SOUL, BUSINESS, MEMORY (8k), project, full `buildToolsContext()`, CIS, retrieved memory search (interactive + background_agent only — line 1020), intraday notes (skipped for `background_agent` — line 1221), skills, `self/index.md` reference hint
+- **Gets:** config soul, USER, SOUL, BUSINESS, `[MEMORY_REFERENCE]` durable atoms, project, full `buildToolsContext()`, CIS, optional best-effort indexed evidence, intraday notes, skills, and `self/index.md` reference hint. Raw MEMORY is only the Brain/Thought compatibility exception or an explicit full-mode selection.
 
 ### Tool instruction corpus (shared across most paths)
 
@@ -191,7 +193,7 @@ Volatile vs stable parts are joined with `PROMPT_CACHE_MARKER` via `assembleCont
 | Working context packets | `session.ts` + `context/turn-context-packet.ts` → `chat.router.ts` — bounded safe handoffs from up to five recent rich turns; private/raw thinking excluded |
 | Context compaction (isolated) | `chat.router.ts` — separate `ContextCompactor`, no persona; receives working-context packets and bounded provider reasoning summaries |
 
-**Main chat gets the fullest stack:** config soul + USER + SOUL + MEMORY + tools + skills + intraday + memory search + all base routing policies.
+**Main chat gets the fullest stack:** config soul + USER + SOUL + atomized durable MEMORY references + tools + skills + intraday + optional evidence recall + all base routing policies. The canonical full file remains readable on demand.
 
 ### 5B) Background tasks
 

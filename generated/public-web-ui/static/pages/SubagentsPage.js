@@ -10,7 +10,9 @@ import { api } from '../api.js';
 import { escHtml, renderMd, bgtToast, timeAgo, showToast } from '../utils.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { wsEventBus } from '../ws.js';
+import { formatModelWithReasoning } from '../model-display.js';
 import { renderAgentModelPicker as _renderAgentModelPicker, agentModelPickerHydrate, registerAgentModelPickerOnSaved } from '../components/agent-model-picker.js';
+import { renderReasoningSelector, wireReasoningSelector } from '../components/reasoning-selector.js';
 import { renderAgentVoicePicker as _renderAgentVoicePicker, agentVoicePickerHydrate, registerAgentVoicePickerOnSaved } from '../components/agent-voice-picker.js';
 import {
   applyToolActivityEvent,
@@ -41,6 +43,8 @@ let subagentChatQueueDrainTimers = {}; // agentId -> timer id
 let subagentChatPendingFilesByAgent = {}; // agentId -> staged files before send
 let subagentChatFileStagingPromisesByAgent = {}; // agentId -> Promise[]
 let subagentChatApprovalsByAgent = {}; // agentId -> inline approval cards shown in direct chat
+let subagentRunComposerStateByTask = {}; // taskId -> { busy, queue, controller, error, stopRequested }
+let subagentReasoningPopoverCleanup = null;
 let subagentDesktopVoiceTargetAgentId = '';
 let agentPackImportPath = 'workspace/oss-agents/marketplace-plan/examples/technical-docs-agent';
 let agentPackImportPreview = null;
@@ -331,28 +335,35 @@ function subagentUploadResultsToAttachmentPreviews(uploadResults) {
     : { kind: r.isVideo ? 'video' : 'file', name: r.name, ext: r.ext || '', workspacePath: r.workspacePath || '', mimeType: r.mimeType || '', binary: !!r.binary });
 }
 
-async function uploadSubagentChatStagedFiles(stagedFiles) {
+async function uploadSubagentChatStagedFiles(stagedFiles, { signal } = {}) {
   if (!Array.isArray(stagedFiles) || !stagedFiles.length) return [];
-  if (typeof window.uploadStagedFilesToCanvas === 'function') return window.uploadStagedFilesToCanvas(stagedFiles);
+  if (typeof window.uploadStagedFilesToCanvas === 'function') return window.uploadStagedFilesToCanvas(stagedFiles, { signal });
   const results = [];
   for (const sf of stagedFiles) {
+    if (signal?.aborted) throw new DOMException('Request stopped', 'AbortError');
     if (sf.text !== null) {
       try {
-        const r = await fetch('/api/canvas/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: sf.name, content: sf.text }) });
+        const r = await fetch('/api/canvas/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: sf.name, content: sf.text }), signal });
         const d = await r.json();
         results.push(d.success ? { name: sf.name, ext: sf.ext, workspacePath: d.absPath, relPath: d.relPath } : { name: sf.name, ext: sf.ext, error: d.error });
-      } catch (e) { results.push({ name: sf.name, ext: sf.ext, error: e.message }); }
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        results.push({ name: sf.name, ext: sf.ext, error: e.message });
+      }
     } else {
       const base64 = sf.isImage && sf.dataUrl ? sf.dataUrl.replace(/^data:[^;]+;base64,/, '') : sf.base64;
       const mimeType = sf.isImage && sf.dataUrl ? (sf.dataUrl.split(';')[0].replace('data:', '') || getSubagentMimeType(sf.ext)) : getSubagentMimeType(sf.ext);
       if (!base64) { results.push({ name: sf.name, ext: sf.ext, binary: true, isImage: !!sf.isImage, isVideo: !!sf.isVideo, mimeType, error: 'Could not read file bytes' }); continue; }
       try {
-        const r = await fetch('/api/canvas/upload-binary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: sf.name, base64, mimeType }) });
+        const r = await fetch('/api/canvas/upload-binary', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: sf.name, base64, mimeType }), signal });
         const d = await r.json();
         results.push(d.success
           ? { name: sf.name, ext: sf.ext, workspacePath: d.absPath, relPath: d.relPath, binary: !!sf.binary, isImage: !!sf.isImage, isVideo: !!sf.isVideo, base64: sf.isImage ? base64 : undefined, mimeType }
           : { name: sf.name, ext: sf.ext, binary: !!sf.binary, isImage: !!sf.isImage, isVideo: !!sf.isVideo, mimeType, error: d.error });
-      } catch (e) { results.push({ name: sf.name, ext: sf.ext, binary: !!sf.binary, isImage: !!sf.isImage, isVideo: !!sf.isVideo, mimeType, error: e.message }); }
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        results.push({ name: sf.name, ext: sf.ext, binary: !!sf.binary, isImage: !!sf.isImage, isVideo: !!sf.isVideo, mimeType, error: e.message });
+      }
     }
   }
   return results;
@@ -1656,6 +1667,164 @@ function hydrateSubagentChatComposer(agentId, opts = {}) {
   });
 }
 
+function subagentReasoningParts(agent = {}) {
+  const raw = agent?.raw && typeof agent.raw === 'object' ? agent.raw : {};
+  const modelRef = String(agent?.effectiveModel || agent?.model || raw.effectiveModel || raw.model || '').trim();
+  const slash = modelRef.indexOf('/');
+  const provider = String(agent?.provider || raw.provider || (slash > 0 ? modelRef.slice(0, slash) : '')).trim();
+  const model = String(agent?.modelName || raw.modelName || (slash > 0 ? modelRef.slice(slash + 1) : modelRef)).trim();
+  const effort = String(
+    agent?.reasoning_effort
+      || agent?.reasoningEffort
+      || raw.reasoning_effort
+      || raw.reasoningEffort
+      || raw.effort
+      || '',
+  ).trim();
+  return { provider, model, effort };
+}
+
+function subagentReasoningLabel(agent) {
+  const { provider, model, effort } = subagentReasoningParts(agent);
+  return model ? formatModelWithReasoning(model, provider, effort) : 'Default model';
+}
+
+function subagentReasoningDomId(agentId) {
+  return `subagent-reasoning-trigger-${String(agentId || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+}
+
+function renderSubagentReasoningTrigger(agent) {
+  const label = subagentReasoningLabel(agent);
+  return `<button type="button" class="subagent-reasoning-trigger" id="${subagentReasoningDomId(agent.id)}" data-subagent-reasoning-trigger="${escHtml(agent.id)}" aria-haspopup="dialog" aria-expanded="false" aria-label="Reasoning level: ${escHtml(label)}" title="Choose reasoning level">
+    <span class="subagent-reasoning-trigger-label">${escHtml(label)}</span><span class="subagent-reasoning-trigger-chevron" aria-hidden="true">⌄</span>
+  </button>`;
+}
+
+function closeSubagentReasoningPopover({ restoreFocus = true } = {}) {
+  const cleanup = subagentReasoningPopoverCleanup;
+  const trigger = document.querySelector('.subagent-reasoning-trigger[aria-expanded="true"]');
+  subagentReasoningPopoverCleanup = null;
+  cleanup?.();
+  if (restoreFocus) {
+    trigger?.setAttribute('aria-expanded', 'false');
+    if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+  }
+}
+
+function openSubagentReasoningPopover(agentId) {
+  const agent = subagentsData.find((item) => String(item?.id) === String(agentId));
+  const trigger = document.getElementById(subagentReasoningDomId(agentId));
+  if (!agent || !trigger) return;
+  if (subagentReasoningPopoverCleanup) {
+    closeSubagentReasoningPopover({ restoreFocus: false });
+    return;
+  }
+
+  const { provider, model, effort } = subagentReasoningParts(agent);
+  const popover = document.createElement('div');
+  popover.className = 'subagent-reasoning-popover';
+  popover.id = `subagent-reasoning-popover-${String(agentId || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-label', `Reasoning level for ${agent.name || agent.id}`);
+  popover.innerHTML = renderReasoningSelector({
+    provider,
+    model,
+    effort,
+    selectorId: `${popover.id}-selector`,
+    controlId: `${popover.id}-control`,
+    liveLabelId: `${popover.id}-live-label`,
+    className: 'subagent-reasoning-selector',
+  });
+  document.body.appendChild(popover);
+  trigger.setAttribute('aria-expanded', 'true');
+
+  const position = () => {
+    const rect = trigger.getBoundingClientRect();
+    const margin = 12;
+    const width = Math.min(420, Math.max(300, window.innerWidth - margin * 2));
+    const measuredHeight = Math.min(popover.scrollHeight || 170, window.innerHeight - margin * 2);
+    let top = rect.bottom + 8;
+    if (top + measuredHeight > window.innerHeight - margin) top = rect.top - measuredHeight - 8;
+    popover.style.left = `${Math.max(margin, Math.min(window.innerWidth - width - margin, rect.right - width))}px`;
+    popover.style.top = `${Math.max(margin, top)}px`;
+    popover.style.width = `${width}px`;
+    popover.style.maxHeight = `${Math.max(150, window.innerHeight - margin * 2)}px`;
+  };
+  position();
+
+  let saving = false;
+  let pendingEffort = null;
+  const onChange = async (nextEffort) => {
+    const previous = subagentReasoningParts(agent).effort;
+    const requestedEffort = String(nextEffort || '');
+    agent.reasoning_effort = requestedEffort;
+    updateSubagentReasoningTrigger(agent);
+    if (saving) {
+      pendingEffort = requestedEffort;
+      return;
+    }
+    saving = true;
+    popover.setAttribute('aria-busy', 'true');
+    try {
+      const result = await api(`/api/agents/${encodeURIComponent(agentId)}/model`, {
+        method: 'PATCH',
+        body: { reasoning_effort: requestedEffort },
+        timeoutMs: 15000,
+      });
+      if (result?.success === false) throw new Error(result.error || 'Could not save reasoning');
+      const saved = result?.agent && typeof result.agent === 'object' ? result.agent : {};
+      Object.assign(agent, saved);
+      showToast('Reasoning saved', formatModelWithReasoning(model, provider, requestedEffort), 'success');
+    } catch (err) {
+      agent.reasoning_effort = previous;
+      updateSubagentReasoningTrigger(agent);
+      showToast('Reasoning error', err?.message || 'Could not save reasoning', 'error');
+      closeSubagentReasoningPopover({ restoreFocus: true });
+    } finally {
+      saving = false;
+      popover.removeAttribute('aria-busy');
+      const queuedEffort = pendingEffort;
+      pendingEffort = null;
+      if (queuedEffort != null && queuedEffort !== subagentReasoningParts(agent).effort) {
+        void onChange(queuedEffort);
+      }
+    }
+  };
+  const removeWire = wireReasoningSelector(popover, { onChange });
+  const onOutsidePointer = (event) => {
+    if (!popover.contains(event.target) && event.target !== trigger) closeSubagentReasoningPopover();
+  };
+  const onKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSubagentReasoningPopover();
+    }
+  };
+  document.addEventListener('pointerdown', onOutsidePointer, true);
+  document.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('resize', position, { passive: true });
+  window.visualViewport?.addEventListener?.('resize', position, { passive: true });
+  subagentReasoningPopoverCleanup = () => {
+    removeWire?.();
+    document.removeEventListener('pointerdown', onOutsidePointer, true);
+    document.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('resize', position);
+    window.visualViewport?.removeEventListener?.('resize', position);
+    popover.remove();
+    trigger.setAttribute('aria-expanded', 'false');
+  };
+  requestAnimationFrame(() => popover.querySelector('.pm-reasoning-control')?.focus({ preventScroll: true }));
+}
+
+function updateSubagentReasoningTrigger(agent) {
+  const trigger = document.getElementById(subagentReasoningDomId(agent?.id));
+  if (!trigger) return;
+  const label = subagentReasoningLabel(agent);
+  const text = trigger.querySelector('.subagent-reasoning-trigger-label');
+  if (text) text.textContent = label;
+  trigger.setAttribute('aria-label', `Reasoning level: ${label}`);
+}
+
 function renderSubagentBoard(agentId) {
   const agent = subagentsData.find(a => a.id === agentId);
   if (!agent) return;
@@ -1668,6 +1837,7 @@ function renderSubagentBoard(agentId) {
   const emoji = agentEmoji(agent);
   const chatDraftSelection = captureSubagentChatDraft();
   const chatScrollSnapshot = getSubagentChatScrollSnapshot();
+  closeSubagentReasoningPopover({ restoreFocus: false });
 
   header.innerHTML = `
     <div style="display:flex;align-items:center;gap:12px;min-width:0">
@@ -1698,8 +1868,16 @@ function renderSubagentBoard(agentId) {
     agentModelPickerHydrate('sa-model', agent);
     agentVoicePickerHydrate('sa-voice', agent);
   }
+  if (subagentDetailTab === 'chat') {
+    document.getElementById(subagentReasoningDomId(agentId))?.addEventListener('click', () => openSubagentReasoningPopover(agentId));
+  }
   restoreSubagentChatScroll(chatScrollSnapshot);
   hydrateSubagentChatComposer(agentId, { selection: chatDraftSelection });
+  requestAnimationFrame(() => {
+    body.querySelectorAll('[data-subagent-run-composer]').forEach((composer) => {
+      refreshSubagentRunComposerState(composer.getAttribute('data-subagent-run-composer'));
+    });
+  });
 }
 
 function renderSubagentTabContent(agent) {
@@ -2048,6 +2226,45 @@ function renderSubagentRunProgress(taskOrRun) {
   }).join('')}</div>`;
 }
 
+function getSubagentRunComposerState(taskId, create = true) {
+  const id = String(taskId || '').trim();
+  if (!id) return { busy: false, queue: [], controller: null, error: '' };
+  if (!subagentRunComposerStateByTask[id] && create) {
+    subagentRunComposerStateByTask[id] = { busy: false, queue: [], controller: null, error: '', stopRequested: false };
+  }
+  return subagentRunComposerStateByTask[id] || { busy: false, queue: [], controller: null, error: '', stopRequested: false };
+}
+
+function refreshSubagentRunComposerState(taskId) {
+  const id = String(taskId || '').trim();
+  const state = getSubagentRunComposerState(id);
+  const composer = document.querySelector(`[data-subagent-run-composer="${CSS.escape(id)}"]`);
+  if (!composer) return;
+  const textarea = composer.querySelector(`#sa-run-recovery-${CSS.escape(id)}`);
+  const fileInput = composer.querySelector(`#sa-run-recovery-files-${CSS.escape(id)}`);
+  const button = composer.querySelector(`#sa-run-recovery-send-${CSS.escape(id)}`);
+  const status = composer.querySelector('.subagent-run-composer-status');
+  const hasOutbound = !!(String(textarea?.value || '').trim() || fileInput?.files?.length);
+  const abortMode = state.busy && !hasOutbound;
+  composer.classList.toggle('is-busy', state.busy);
+  composer.classList.toggle('is-abort', abortMode);
+  composer.setAttribute('aria-busy', state.busy ? 'true' : 'false');
+  if (textarea) textarea.placeholder = state.busy ? 'Queue a reply for this run...' : 'Reply to this run...';
+  if (button) {
+    button.classList.toggle('is-abort', abortMode);
+    button.title = abortMode ? 'Stop waiting for recovery' : state.busy ? 'Queue reply' : 'Send reply';
+    button.setAttribute('aria-label', abortMode ? 'Stop recovery' : state.busy ? 'Queue reply' : 'Send reply');
+    button.innerHTML = abortMode
+      ? '<span aria-hidden="true">■</span>'
+      : '<iconify-icon icon="solar:arrow-up-bold" width="20" height="20"></iconify-icon>';
+  }
+  if (status) {
+    const queued = state.queue.length;
+    status.hidden = !state.busy && !state.error && !queued;
+    status.textContent = state.error || (state.busy ? 'Sending recovery reply…' : queued ? `${queued} queued` : '');
+  }
+}
+
 function renderSubagentRunRecovery(task, agentId) {
   const canRecover = !!task?.canRecover || ['needs_assistance', 'awaiting_user_input', 'paused', 'stalled', 'failed'].includes(String(task?.status || '').toLowerCase());
   const canMessageRun = canRecover;
@@ -2080,18 +2297,19 @@ function renderSubagentRunRecovery(task, agentId) {
       ${pending ? `<div style="font-size:12px;line-height:1.45"><strong>Pending question:</strong> ${escHtml(pending)}</div>` : ''}
       ${pauseMessage ? `<div style="font-size:12px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere"><strong>Pause analysis:</strong><br>${escHtml(pauseMessage.slice(0, 1400))}</div>` : ''}
       <div style="display:flex;flex-direction:column;gap:10px;align-items:stretch">${recoveryTurnsHtml}</div>
-      ${canMessageRun ? `<div class="panel-chat-composer" style="border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:8px">
+      ${canMessageRun ? `<div class="panel-chat-composer subagent-run-recovery-composer" data-subagent-run-composer="${escHtml(taskId)}" aria-live="polite">
         <input id="sa-run-recovery-files-${escHtml(taskId)}" type="file" multiple accept="image/*,video/*,.pdf,.txt,.md,.json,.csv,.log,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.yaml,.yml" style="display:none" onchange="updateSubagentRunRecoveryFileLabel('${escHtml(taskId)}')" />
-        <div id="sa-run-recovery-files-label-${escHtml(taskId)}" style="display:none;margin-bottom:6px;font-size:11px;color:var(--muted)"></div>
-        <div style="display:flex;gap:8px;align-items:flex-end">
+        <div id="sa-run-recovery-files-label-${escHtml(taskId)}" class="subagent-run-recovery-files-label" hidden></div>
+        <div class="subagent-run-composer-row">
           <button type="button" class="chat-attach-btn panel-chat-attach-btn" title="Attach files" aria-label="Attach files" onclick="document.getElementById('sa-run-recovery-files-${escHtml(taskId)}')?.click()">
             <iconify-icon icon="solar:paperclip-bold-duotone" width="17" height="17"></iconify-icon>
           </button>
-          <textarea id="sa-run-recovery-${escHtml(taskId)}" rows="1" placeholder="Reply to this run..." class="chat-textarea" style="min-height:42px;max-height:140px"></textarea>
-          <button class="send-btn" onclick="sendSubagentRunRecovery('${escHtml(agentId)}','${escHtml(taskId)}')" title="Send">
+          <textarea id="sa-run-recovery-${escHtml(taskId)}" rows="1" placeholder="Reply to this run..." class="chat-textarea" aria-label="Recovery reply" oninput="refreshSubagentRunComposerState('${escHtml(taskId)}')" onkeydown="handleSubagentRunRecoveryKeydown(event,'${escHtml(agentId)}','${escHtml(taskId)}')"></textarea>
+          <button type="button" id="sa-run-recovery-send-${escHtml(taskId)}" class="send-btn" onclick="sendSubagentRunRecovery('${escHtml(agentId)}','${escHtml(taskId)}')" title="Send" aria-label="Send reply">
             <iconify-icon icon="solar:arrow-up-bold" width="20" height="20"></iconify-icon>
           </button>
         </div>
+        <div class="subagent-run-composer-status" hidden role="status"></div>
       </div>` : ''}
     </section>`;
 }
@@ -2253,7 +2471,7 @@ function renderSubagentChatTab(agent) {
           </div>
           <div class="agent-toggle" style="display:flex;align-items:center;gap:8px;margin:0">
             <div class="chat-hint" style="margin:0;flex:1">Enter to send · Shift+Enter for newline <span id="subagent-chat-queue-badge" style="display:${queuedCount ? 'inline' : 'none'};margin-left:8px;color:var(--brand);font-weight:700">${queuedCount} queued</span></div>
-            <span style="color:var(--muted);font-size:11px;white-space:nowrap">${escHtml(agent.effectiveModel || agent.model || 'Default model')}</span>
+            ${renderSubagentReasoningTrigger(agent)}
           </div>
         </div>
       </div>
@@ -2288,38 +2506,106 @@ async function openSubagentRunDetail(agentId, taskId) {
   renderSubagentBoard(agentId);
 }
 
-async function sendSubagentRunRecovery(agentId, taskId) {
+function clearSubagentRunRecoveryDraft(taskId) {
+  const id = String(taskId || '').trim();
+  const textarea = document.getElementById(`sa-run-recovery-${id}`);
+  const fileInput = document.getElementById(`sa-run-recovery-files-${id}`);
+  if (textarea) textarea.value = '';
+  if (fileInput) fileInput.value = '';
+  updateSubagentRunRecoveryFileLabel(id);
+}
+
+function getSubagentRunRecoveryDraft(taskId) {
   const id = String(taskId || '').trim();
   const textarea = document.getElementById(`sa-run-recovery-${id}`);
   const fileInput = document.getElementById(`sa-run-recovery-files-${id}`);
   const message = String(textarea?.value || '').trim();
-  const selectedFiles = Array.from(fileInput?.files || []);
-  if (!id || (!message && !selectedFiles.length)) return;
+  const files = Array.from(fileInput?.files || []);
+  return { message, files };
+}
+
+function abortSubagentRunRecovery(taskId) {
+  const state = getSubagentRunComposerState(taskId, false);
+  if (!state?.busy || !state.controller) return;
+  state.stopRequested = true;
+  state.controller.abort();
+  refreshSubagentRunComposerState(taskId);
+}
+
+function handleSubagentRunRecoveryKeydown(event, agentId, taskId) {
+  if (event.key !== 'Enter' || event.shiftKey) return;
+  event.preventDefault();
+  sendSubagentRunRecovery(agentId, taskId);
+}
+
+async function sendSubagentRunRecovery(agentId, taskId, queuedDraft = null) {
+  const id = String(taskId || '').trim();
+  if (!id) return;
+  const state = getSubagentRunComposerState(id);
+  const draft = queuedDraft && typeof queuedDraft === 'object'
+    ? { message: String(queuedDraft.message || '').trim(), files: Array.isArray(queuedDraft.files) ? queuedDraft.files.slice() : [] }
+    : getSubagentRunRecoveryDraft(id);
+  if (!draft.message && !draft.files.length) {
+    if (state.busy) abortSubagentRunRecovery(id);
+    return;
+  }
+
+  if (state.busy) {
+    if (state.queue.length >= 8) {
+      showToast('Queue full', 'Wait for this recovery reply to finish before adding more.', 'warning');
+      return;
+    }
+    state.queue.push(draft);
+    if (!queuedDraft) clearSubagentRunRecoveryDraft(id);
+    refreshSubagentRunComposerState(id);
+    showToast('Recovery reply queued', 'It will be sent when the current reply finishes.', 'info');
+    return;
+  }
+
+  if (!queuedDraft) clearSubagentRunRecoveryDraft(id);
+  state.busy = true;
+  state.error = '';
+  state.stopRequested = false;
+  state.controller = new AbortController();
+  refreshSubagentRunComposerState(id);
   try {
     let attachmentPreviews = [];
-    if (selectedFiles.length) {
-      const staged = await stageSubagentFilesForUpload(selectedFiles);
-      const uploadResults = await uploadSubagentChatStagedFiles(staged);
+    if (draft.files.length) {
+      const staged = await stageSubagentFilesForUpload(draft.files);
+      const uploadResults = await uploadSubagentChatStagedFiles(staged, { signal: state.controller.signal });
       attachmentPreviews = subagentUploadResultsToAttachmentPreviews(uploadResults);
     }
     const data = await api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(id)}/recovery`, {
       method: 'POST',
-      body: JSON.stringify({
-        message: message || (attachmentPreviews.length ? 'Please review the attached file(s).' : ''),
+      body: {
+        message: draft.message || (attachmentPreviews.length ? 'Please review the attached file(s).' : ''),
         attachmentPreviews,
-      }),
+      },
       timeoutMs: 300000,
+      signal: state.controller.signal,
     });
-    if (textarea) textarea.value = '';
-    if (fileInput) fileInput.value = '';
-    updateSubagentRunRecoveryFileLabel(id);
     if (data?.task) subagentRunDetails[id] = { task: data.task, run: data.run || null, evidenceBus: data.evidenceBus || null };
-    const runsData = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`).catch(() => null);
+    const runsData = await api(`/api/agents/${encodeURIComponent(agentId)}/runs?limit=50`, { dedupe: false }).catch(() => null);
     if (Array.isArray(runsData?.runs)) subagentRuns = runsData.runs;
     showToast('Recovery updated', data?.resumed ? 'Run resumed' : 'Reply sent', 'success');
     renderSubagentBoard(agentId);
   } catch (err) {
-    showToast('Recovery error', err.message || 'Failed to send recovery reply', 'error');
+    if (state.controller?.signal?.aborted) {
+      showToast('Recovery stopped', 'The request was stopped; the run itself was not changed.', 'info');
+    } else {
+      state.error = err?.message || 'Failed to send recovery reply';
+      showToast('Recovery error', state.error, 'error');
+      const textarea = document.getElementById(`sa-run-recovery-${id}`);
+      if (textarea && draft.message) textarea.value = draft.message;
+    }
+  } finally {
+    state.busy = false;
+    state.controller = null;
+    refreshSubagentRunComposerState(id);
+    if (!state.error && !state.stopRequested && state.queue.length) {
+      const next = state.queue.shift();
+      setTimeout(() => sendSubagentRunRecovery(agentId, id, next), 0);
+    }
   }
 }
 
@@ -2330,12 +2616,14 @@ function updateSubagentRunRecoveryFileLabel(taskId) {
   if (!label) return;
   const files = Array.from(input?.files || []);
   if (!files.length) {
-    label.style.display = 'none';
+    label.hidden = true;
     label.textContent = '';
+    refreshSubagentRunComposerState(id);
     return;
   }
-  label.style.display = 'block';
+  label.hidden = false;
   label.textContent = files.length === 1 ? files[0].name : `${files.length} files attached`;
+  refreshSubagentRunComposerState(id);
 }
 
 function startSubagentDesktopVoice(agentId) {
@@ -3518,6 +3806,8 @@ window.reloadSubagentRuns = reloadSubagentRuns;
 window.openSubagentRunDetail = openSubagentRunDetail;
 window.sendSubagentRunRecovery = sendSubagentRunRecovery;
 window.updateSubagentRunRecoveryFileLabel = updateSubagentRunRecoveryFileLabel;
+window.refreshSubagentRunComposerState = refreshSubagentRunComposerState;
+window.handleSubagentRunRecoveryKeydown = handleSubagentRunRecoveryKeydown;
 // Context refs
 window.saveSubagentCtxRef = saveSubagentCtxRef;
 window.addSubagentSkill = addSubagentSkill;

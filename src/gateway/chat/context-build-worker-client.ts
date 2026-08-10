@@ -287,6 +287,7 @@ export async function buildPersonalityContextIsolated(
       setCurrentTurn,
       extraCats,
       options,
+      signal,
     );
   }
   const snapshotStartedAt = Date.now();
@@ -301,6 +302,8 @@ export async function buildPersonalityContextIsolated(
     setCurrentTurn,
     extraCats,
     options,
+    signal,
+    (fields) => timing?.mark('automatic_memory_search', fields),
   );
   timing?.mark('personality_snapshot_capture_done', { durationMs: Date.now() - snapshotStartedAt });
   if (signal?.aborted) {
@@ -319,6 +322,7 @@ export async function buildPersonalityContextIsolated(
     setCurrentTurn,
     extraCats,
     isolatedOptions,
+    signal,
   );
   let context: string;
   try {

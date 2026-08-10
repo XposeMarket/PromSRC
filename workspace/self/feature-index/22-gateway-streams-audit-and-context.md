@@ -150,7 +150,17 @@ When work is interrupted, inspect evidence and then verify live Goal/request/tas
 
 Brain Thought has a separate direct-context assembly step before its normal `handleChat(..., executionMode: 'cron')` turn. The activity package reads canonical stores for the exact six-hour UTC window and hands the model a redacted event ledger, source manifest, unresolved-work list, and direct continuation refs. Thought must not use the audit mirror or search/list calls to rediscover activity already covered by that package. The package records stable IDs/provenance, deduplication, source failures, mtime/pagination caps, continuation hashes, and estimated prompt cost. This direct lane is Brain-specific; normal chat still uses its ordinary bounded observations and working-context packets.
 
-## 7. Where to find every exact element
+## 7. Cross-boundary tool performance telemetry — 2026-08-08
+
+The tool loop remains gateway-owned, but each tool-associated provider round now has a bounded opaque trace across the stream. `chat.router.ts` starts the tool record when the model emits the call, `executeToolWithTelemetry` marks dispatch/executor start and completion, SSE decoration marks serialization/delivery, the next provider round marks model receipt, and the first visible token closes the model-to-visible span. `ChatPage.js` records client receipt/visible marks using the same safe IDs. `model-call-worker-pool.ts` reports worker queue/provider/event-batch/request-result-byte/PID/RSS metadata under the turn trace.
+
+This is diagnostic metadata, not a second tool protocol. It contains no prompts, message/token text, tool arguments, file/page contents, credentials, or tool result contents. `tool_progress` increments an event count and only emits numeric/category fields. An abort marks in-flight records cancelled; the owning turn's terminal boundary marks any remaining emitted/running record abandoned.
+
+The controlled benchmark family map and results live in [P0-1 tool performance report](../../../docs/P0-1-TOOL-PERFORMANCE-REPORT-2026-08-08.md). Note the important interpretation rule: accepted→tool-call and result→next-visible include Luna/provider decision time; dispatch, serialization, and delivery are separate and were small in the local safe fixtures. A missing tool in the first model message is recoverable in the benchmark through one same-session bounded follow-up, with recovery time retained as a separate attempt.
+
+The 2026-08-08 focused follow-up adds two readiness protections around this boundary: context-build workers and the lazy chat/tool router are warmed before the gateway listener opens, and post-listen startup work no longer competes with the first chat request. Within a turn, repeated tool-surface and full-system-prompt builds are cached and marked with numeric `cacheHit`/duration fields. The final Luna-low desktop/browser batch had 0 tool errors; desktop fast-doctor tool wall was 2.25 s p50, explicit Prometheus browser tool wall was 1.85 s p50, and accepted→tool-call remained provider-dominated (3.36 s desktop, 5.79 s browser p50). Do not treat those provider-inclusive spans as local tool execution time.
+
+## 8. Where to find every exact element
 
 | Need | Reference |
 |---|---|

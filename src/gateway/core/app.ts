@@ -17,8 +17,13 @@ import { isModelBusy, getLastMainSessionId } from '../comms/broadcaster';
 import { listLiveRuntimes } from '../live-runtime-registry';
 import { getMemoryIndexRefreshWorkerStatus } from '../memory-index/refresh-worker-client';
 import { providerWebhookRawBodyMiddleware, resolveHookConfig } from '../comms/webhook-handler';
+import { registerStartupAsyncRequest } from '../startup-async-diagnostics';
 
 const startedAt = Date.now();
+// Request timing is intentionally separate from the normal startup profile:
+// it is useful while diagnosing a live stall, but should not add a listener to
+// every HTTP response in the fast path.
+const STARTUP_HTTP_PROFILE = process.env.PROMETHEUS_STARTUP_DIAGNOSTICS === '1';
 
 function setStaticCacheHeaders(res: express.Response, filePath: string): void {
   const normalized = filePath.replace(/\\/g, '/');
@@ -36,6 +41,19 @@ function setStaticCacheHeaders(res: express.Response, filePath: string): void {
 export function createApp(): express.Application {
   const app = express();
 
+  app.use((req, _res, next) => {
+    registerStartupAsyncRequest(`${req.method} ${req.path || '/'}`);
+    if (STARTUP_HTTP_PROFILE) {
+      const requestStartedAt = Date.now();
+      _res.once('finish', () => {
+        const elapsedMs = Date.now() - requestStartedAt;
+        if (elapsedMs >= 500) {
+          try { process.stderr.write(`[startup-http] ${req.method} ${req.path || '/'} status=${_res.statusCode} durationMs=${elapsedMs}\n`); } catch {}
+        }
+      });
+    }
+    next();
+  });
   app.use(cors(buildGatewayCorsOptions()));
   // Provider routes must enforce their smaller limit before the general JSON
   // parser buffers or parses the request. The raw parser preserves exact HMAC bytes.

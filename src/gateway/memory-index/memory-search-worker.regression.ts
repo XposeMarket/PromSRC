@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
+  compactMemorySearchResult,
   closeSqliteMemoryConnections,
   refreshMemoryIndexFromAudit,
   searchMemoryIndexAsync,
@@ -114,6 +115,10 @@ async function main(): Promise<void> {
     const worker = await searchMemoryInWorker('memory_search', { workspacePath, params });
     assert.deepStrictEqual(normalizedResult(worker), normalizedResult(legacy), 'worker memory_search must preserve the full result except timing telemetry');
     assert.equal(worker, JSON.stringify(JSON.parse(worker), null, 2), 'worker must preserve pretty JSON output');
+    const compact = compactMemorySearchResult(worker);
+    assert.ok(compact.length < worker.length * 0.75, 'normal tool payload should omit diagnostic bulk');
+    assert.deepEqual(JSON.parse(compact).hits.map((hit: any) => hit.recordId), JSON.parse(worker).hits.map((hit: any) => hit.recordId));
+    assert.equal(compactMemorySearchResult(worker, { debug: true }), worker, 'debug mode must preserve the full worker payload');
     assert.ok(getMemorySearchWorkerStatus().broker.pid !== process.pid, 'memory query must execute outside the gateway PID');
 
     let eventLoopTicks = 0;

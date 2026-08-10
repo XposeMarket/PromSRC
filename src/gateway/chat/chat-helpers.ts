@@ -18,7 +18,7 @@ import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace,
 import { hookBus } from '../hooks';
 import { runBootMd } from '../boot';
 import { consumeCrashRecoveredMainChatGoalSessionIds } from '../runtime-recovery';
-import { listPendingStartupNotifications } from '../lifecycle';
+import { listPendingStartupNotifications, readRestartContext } from '../lifecycle';
 import {
   createTask,
   loadTask,
@@ -88,6 +88,7 @@ import {
   TOOL_TO_MEMORY_CATS,
   type SkillWindow,
 } from '../prompt-context';
+import { getRuntimeToolCategoryIds } from '../../runtime/tool-category-manifest';
 import { buildPersonalityContextIsolated } from './context-build-worker-client';
 import type { TurnTimingRecorder } from './turn-timing';
 import {
@@ -477,11 +478,28 @@ function buildBootStartupSnapshot(workspacePath: string): string {
 }
 
 hookBus.register('gateway:startup', async ({ workspacePath }) => {
-  const startupSnapshot = buildBootStartupSnapshot(workspacePath);
+  const startupProfileStartedAt = Date.now();
+  const startupProfileMark = (label: string): void => {
+    if (process.env.PROMETHEUS_STARTUP_PROFILE !== '1') return;
+    console.error(`[startup-hook] +${Date.now() - startupProfileStartedAt}ms ${label}`);
+  };
+  startupProfileMark('gateway:startup handler entered');
+  const pendingRestartContext = readRestartContext();
+  const explicitQuickRestart = pendingRestartContext?.quickRestart === true
+    && (!Array.isArray(pendingRestartContext.affectedFiles) || pendingRestartContext.affectedFiles.length === 0)
+    && !pendingRestartContext.taskId;
+  // A quick manual restart has a deterministic acknowledgement and must not
+  // build the normal BOOT snapshot or enter the model path just because the
+  // previous session happened to contain a large conversation.
+  startupProfileMark(`BOOT snapshot build begin (quick=${explicitQuickRestart})`);
+  const startupSnapshot = explicitQuickRestart ? '' : buildBootStartupSnapshot(workspacePath);
+  startupProfileMark(`BOOT snapshot build complete (${startupSnapshot.length} chars)`);
   let bootResult: Awaited<ReturnType<typeof runBootMd>> | undefined;
   try {
+    startupProfileMark('runBootMd begin');
     bootResult = await runBootMd(workspacePath, async (message, sessionId, sendSSE, callerContext) => {
       const bootContext = [
+        '[BOOT STARTUP TURN]',
         'CONTEXT: Internal startup BOOT.md turn. All data has been pre-fetched and is in the snapshot below.',
         'Do NOT call any tools. Read the snapshot and write a 2-3 sentence startup summary.',
         '[BOOT STARTUP SNAPSHOT - pre-fetched runtime data, no tools needed]',
@@ -499,6 +517,7 @@ hookBus.register('gateway:startup', async ({ workspacePath }) => {
       }
       return { text: result.text };
     });
+    startupProfileMark(`runBootMd complete (${bootResult.status})`);
   } catch (err: any) {
     // Unexpected goal recovery must not depend on BOOT.md/model success.
     console.warn('[RuntimeRecovery] BOOT startup processing failed; continuing crash-goal recovery:', err?.message || err);
@@ -602,7 +621,7 @@ export async function buildPersonalityContext(
   historyLength: number,
   skillsManager: any,
   extraCats?: Set<string>,
-  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent'; excludedSkillIds?: string[]; forcedSkillIds?: string[] },
+  options?: { profile?: 'default' | 'switch_model' | 'local_llm' | 'teach_mode' | 'voice_agent' | 'direct_subagent'; excludedSkillIds?: string[]; forcedSkillIds?: string[]; memoryMode?: 'full' | 'compact' },
   signal?: AbortSignal,
   timing?: TurnTimingRecorder,
 ): Promise<string> {
@@ -643,22 +662,19 @@ export function autoActivateToolCategories(sessionId: string, message: string, h
   // still activate required tool categories in the same session.
   void historyLength; // retained for call-site compatibility
   const cats = detectToolCategories(message);
-  const catMap: Partial<Record<string, string>> = {
-    browser: 'browser_automation',
-    desktop: 'desktop_automation',
-    integrations: 'integration_admin',
-    files: 'workspace_write',
-    memory: 'advanced_memory',
-    media: 'media_assets',
-    automations: 'automations',
-    schedule: 'automations',
-    external_apps: 'external_apps',
-    // 'schedule' → not needed; schedule_job is now core
-    // 'source_write' requires explicit activation (code editing)
-  };
-  for (const [detectedCat, toolCat] of Object.entries(catMap)) {
-    if (cats.has(detectedCat) && toolCat) {
-      activateToolCategory(sessionId, toolCat, { scope: 'turn' });
+  const runtimeCategories = new Set<string>(getRuntimeToolCategoryIds());
+  const autoActivatable = [
+    'browser_automation', 'desktop_automation', 'workspace_write', 'advanced_memory',
+    'media_assets', 'media_generation', 'automation_scheduling', 'automation_tasks',
+    'automation_recovery', 'automation_sessions', 'runtime_admin', 'external_apps',
+    'integration_admin', 'agents_and_teams', 'proposal_admin', 'mcp_server_tools',
+    'composite_tools', 'creative_basic', 'creative_image', 'creative_video',
+    'creative_hyperframes', 'creative_quality', 'skills', 'model_management', 'business',
+    'prometheus_source_read', 'prometheus_source_write',
+  ];
+  for (const toolCategory of autoActivatable) {
+    if (cats.has(toolCategory) && runtimeCategories.has(toolCategory)) {
+      activateToolCategory(sessionId, toolCategory, { scope: 'turn' });
     }
   }
 }

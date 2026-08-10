@@ -87,17 +87,19 @@ export function evaluatePairingAdminRequestWithPolicy(
   }
 
   // Standalone / browser-dev gateway pairing admin:
-  // - Request IP must be loopback (the Settings UI talking to its local gateway).
-  // - gateway.host may be loopback OR a wildcard bind (0.0.0.0 / ::). Dev gateways
-  //   intentionally bind 0.0.0.0 so phones can reach LAN pairing endpoints; that
-  //   must not disable the local browser Settings → Pairing panel.
+  // - The gateway must be loopback-bound. A wildcard/LAN bind (0.0.0.0 / ::)
+  //   must have an explicit desktop or gateway credential even when the request
+  //   itself arrives from loopback; otherwise local malware could administer
+  //   pairing on a gateway that is reachable by other machines.
+  // - Request IP must still be loopback (the Settings UI talking to its local
+  //   gateway).
   // - Browser requests must be exact same-origin on the gateway port. Origin:null
   //   and alternate localhost ports are deliberately rejected.
   // - Non-browser local clients (no Origin / Sec-Fetch-Site:none) remain allowed
   //   from loopback only.
   const gatewayHost = String(policy.gatewayHost || '').trim();
   const wildcardBind = gatewayHost === '0.0.0.0' || gatewayHost === '::';
-  if ((!isLoopbackHost(gatewayHost) && !wildcardBind) || !isLoopbackAddress(getGatewayRequestIp(req))) {
+  if (wildcardBind || !isLoopbackHost(gatewayHost) || !isLoopbackAddress(getGatewayRequestIp(req))) {
     return { ok: false, status: 403, message: 'Trusted desktop pairing authority required.' };
   }
 

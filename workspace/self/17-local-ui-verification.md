@@ -28,3 +28,18 @@ Whenever Raul asks for Prometheus self edits, fixes, or internal UI investigatio
 - [16-mobile-app.md](16-mobile-app.md) — mobile source and verification
 - [17-desktop-web-ui.md](17-desktop-web-ui.md) — desktop web UI maintenance
 - [02-startup-runtime.md](02-startup-runtime.md) — gateway host, pairing, Tailscale funnel on 18789
+
+## P1-7 desktop link QA — 2026-08-09
+
+| Link case | Expected route |
+|---|---|
+| Same-origin Prometheus route | Normal app/router navigation |
+| `127.0.0.1`/`localhost` gateway route on port 18789 | Local gateway UI; never an external destination |
+| External HTTP/HTTPS, ordinary click | Prometheus Browser surface/lane |
+| External HTTP/HTTPS, context menu or Shift+F10 | Accessible Browser or Open externally action |
+| `Ctrl`/`Meta`/`Shift`/`Alt` click | Native modifier/target behavior retained |
+| Download/file path/`mailto:`/`tel:` | Existing non-Browser flow |
+| OAuth/system-auth control | Explicit external flow |
+| `javascript:`/`data:`/credential URL | Blocked, except the trusted `javascript:void(0)` placeholder with its existing action |
+
+Run `npm run test:link-routing`, `npm run test:electron-security-boundary`, `npm run check:web-ui`, and reload `http://127.0.0.1:18789/?desktop=1` after source/generated sync. Do not restart the terminal gateway or user Chrome for this check.

@@ -120,3 +120,32 @@ Browser hardening additions (2026-07-13):
 - `browser_observe(action:"page_text")` supports `query`, `max_chars`, and `max_lines`; output whitespace is normalized and defaults remain bounded.
 - console inspection bounds message and location URLs; `max_message_chars` controls the per-entry cap.
 - smoke-test steps accept both legacy nested shapes and canonical `{ action: "assertText", ... }` / `{ action: "click", ... }` shapes.
+
+## 9B) Browser lifecycle recovery and performance — 2026-08-08
+
+Browser session creation is now single-flight per resolved session ID. Concurrent callers join the same initialization promise instead of racing CDP/profile startup. Existing sessions receive a bounded liveness check; stale sessions are evicted and recreated, with live-stream state and user-Chrome tab locks cleaned up during recovery. `browser_open` retries one navigation after a `session_closed` target race, and `browser_snapshot` can restore a missing regular session instead of turning recovery into a second misleading “no session” error.
+
+Regular Prometheus CDP attach now has three bounded attempts with numeric attempt/duration/error-category marks. Session telemetry records target/profile category, attach attempts, session creation, navigation, snapshot completion, and recovery outcomes without URLs/page text or credentials. Personal Chrome extension onboarding/unavailable errors are classified separately from CDP/session failures, so the two lanes are not mixed in reports. The controlled Luna-low Prometheus-target run measured 6/6 required browser calls with 0 errors; browser tool wall time was 1.85 s p50 / 6.19 s p95, with cold CDP attach the main local tail.
+
+The browser benchmark uses an explicit `target="prometheus"` and a local URL. Earlier mixed-target samples that selected the user-extension lane are retained only as a diagnosis of the classification bug, not as Prometheus browser latency. Concurrent same-session recovery and long-lived live-stream reconnects remain unmeasured follow-up cases.
+
+## Persistent Chat Sources integration — 2026-08-08
+
+`src/gateway/browser-tools.ts` records URL/title navigation metadata as workspace-scoped `browser_page` resources. This makes Browser history available to the Sources layer without attaching every visited page to every chat. The navigation path captures metadata only; it does not automatically snapshot full page text, DOM, HTML, or screenshots.
+
+The explicit “Save current page” action is implemented by `src/gateway/routes/resources.router.ts` and `ResourceStore.captureBrowserPage(...)`. It reads bounded readable page text, creates an immutable version, and pins the page to the selected chat. Browser history remains separately searchable and can be attached later. The UI never treats visited-page text as system instructions; selected external text is wrapped as untrusted resource content.
+
+## Desktop link routing — P1-7 — 2026-08-09
+
+Desktop web and Electron links use the shared policy in `web-ui/src/link-routing-policy.mjs` and delegated router in `web-ui/src/link-router.js` (mirrored under `generated/public-web-ui/static/`). Eligible external HTTP/HTTPS anchors from Markdown, assistant/user messages, source/reference cards, search/tool results, documentation, artifacts, generated pages, and map/site UI route to the existing Prometheus Browser surface by default.
+
+Lane rules are deliberately conservative:
+
+- Electron uses the existing in-house Browser partition.
+- Desktop web uses the existing Prometheus gateway/CDP session and its single-flight session initialization.
+- A main session whose agent target is `user`/`user_chrome`, or an unavailable in-house target, gets a non-persisted `sessionId::prometheus-link` alias on the Prometheus CDP profile. The personal Chrome extension lane is never claimed, and existing user tabs are not closed or stolen.
+- An active in-house session remains in-house; ordinary app/router routes and the terminal/local gateway address remain internal.
+
+Downloads, file paths, `mailto:`, `tel:`, modifier clicks, same-origin routes, local gateway routes, and marked intentional external flows are excluded from default Browser routing. `javascript:` and `data:` are blocked; the only retained legacy exception is a trusted `javascript:void(0)` anchor with its explicit inline action. Every eligible external anchor exposes context-menu/keyboard actions for “Open in Prometheus Browser” and “Open externally.” OAuth and other system-auth flows opt into the explicit external helper.
+
+Routing decisions and failures are privacy-bounded in `window.__prometheusLinkRoutingTelemetry` and the `prometheus:link-routing` event. The gateway link message is `browser:link_open`; failures are returned as `browser:input:error` with `linkNavigation: true`. No gateway, terminal-launched Chrome, or user Chrome session is restarted or reconfigured by link routing.

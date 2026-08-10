@@ -15,6 +15,7 @@ import {
   setWorkspace,
   touchSession,
 } from '../session';
+import { unsettleSessionSafely } from '../session-settlement';
 import { resolveChatModelRouteSource, resolveConfiguredMainChatRouteSource, validateChatModelRoute } from '../chat/chat-model-route';
 import type { ResolvedTurnRouteSource } from '../chat/turn-route-snapshot';
 import { handleMainChatGoalCommand } from '../main-chat-goals';
@@ -49,6 +50,7 @@ export interface PrometheusThreadOpsDeps {
 }
 
 export type ManagedThreadLaunchMode = 'ping' | 'forget' | 'supervise';
+export type ThreadSessionState = 'active' | 'settled' | 'all';
 
 const MANAGED_THREAD_LAUNCH_ROUTES: Record<ManagedThreadLaunchMode, string> = {
   ping: 'create_and_ping',
@@ -157,6 +159,28 @@ function activeRuntimeForSession(sessionId: string): any | null {
     .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
 }
 
+/**
+ * Thread operations are an operator/model-facing inventory, so settled chats
+ * remain discoverable by default. Callers can still narrow this to active or
+ * settled sessions explicitly.
+ */
+export function normalizeThreadSessionState(args: any): ThreadSessionState {
+  const hasState = args && typeof args === 'object'
+    && (Object.prototype.hasOwnProperty.call(args, 'state')
+      || Object.prototype.hasOwnProperty.call(args, 'session_state')
+      || Object.prototype.hasOwnProperty.call(args, 'sessionState'));
+  const raw = hasState
+    ? (args.state ?? args.session_state ?? args.sessionState)
+    : args?.include_settled === false
+      ? 'active'
+      : 'all';
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (value === 'active' || value === 'open') return 'active';
+  if (value === 'settled' || value === 'settle') return 'settled';
+  if (value === 'all' || value === 'any' || value === 'both' || value === '') return 'all';
+  throw new Error('state must be one of active, settled, or all.');
+}
+
 function sessionRouteState(sessionId: string): Record<string, any> {
   try { return resolveChatModelRouteSource(sessionId).state; }
   catch { return { mode: getChatModelRoute(sessionId) ? 'explicit' : 'inherited', availability: 'unavailable' }; }
@@ -197,6 +221,8 @@ function sessionSnapshot(sessionId: string, includeHistory = false, historyLimit
     createdAt: session.createdAt,
     lastActiveAt: session.lastActiveAt,
     pinnedAt: session.pinnedAt || null,
+    settledAt: session.settledAt || null,
+    settled: !!session.settledAt,
     chatModelRoute: sessionRouteState(sessionId),
     messageCount: session.history.length,
     runtime,
@@ -424,6 +450,9 @@ const THREAD_LINK_ACTION_LABELS: Record<string, string> = {
   rename: 'Thread renamed',
   pin: 'Thread pinned',
   unpin: 'Thread unpinned',
+  reopen: 'Thread reopened',
+  open: 'Thread reopened',
+  unsettle: 'Thread reopened',
   follow: 'Thread followed',
   revise_supervision: 'Supervision updated',
   pause_supervision: 'Supervision paused',
@@ -500,13 +529,16 @@ export async function executePrometheusThreadOps(
   }
 
   if (action === 'list') {
+    const state = normalizeThreadSessionState(args);
     const page: any = listSessionSummaries({
       channel: args?.channel || undefined,
       includeAutomated: args?.include_automated === true,
+      state,
       limit: Math.max(1, Math.min(200, Number(args?.limit) || 50)),
       offset: Math.max(0, Number(args?.offset) || 0),
     });
     return {
+      state,
       ...page,
       sessions: page.sessions.map(sessionSummaryWithRuntime),
     };
@@ -515,10 +547,14 @@ export async function executePrometheusThreadOps(
   if (action === 'find' || action === 'search') {
     const query = String(args?.query || args?.q || '').trim();
     if (!query) throw new Error('query is required.');
+    const state = normalizeThreadSessionState(args);
     return {
       query,
+      state,
       sessions: searchSessionSummaries(query, {
         channel: args?.channel || undefined,
+        state,
+        includeAutomated: args?.include_automated === true,
         limit: Math.max(1, Math.min(200, Number(args?.limit) || 50)),
       }).map(sessionSummaryWithRuntime),
     };
@@ -720,6 +756,20 @@ export async function executePrometheusThreadOps(
 
   if (action === 'pin' || action === 'unpin') {
     return { session: setSessionPinned(targetSessionId, action === 'pin') };
+  }
+
+  if (action === 'reopen' || action === 'open' || action === 'unsettle') {
+    const wasSettled = !!getSession(targetSessionId).settledAt;
+    const session = unsettleSessionSafely(targetSessionId);
+    deps.broadcastWS?.({
+      type: 'session_state_changed',
+      sessionId: targetSessionId,
+      state: 'active',
+      session,
+      source: 'thread_ops',
+      reason: 'manual_reopen',
+    });
+    return { session, state: 'active', reopened: wasSettled, alreadyActive: !wasSettled };
   }
 
   if (action === 'steer') {

@@ -3,6 +3,7 @@ import path from 'path';
 import { getConfig } from '../../../config/config';
 import {
   backfillMemoryEmbeddingsInWorker,
+  compactMemorySearchResult,
   getMemoryGraphSnapshot,
   getRelatedMemory,
   readMemoryRecord,
@@ -11,6 +12,7 @@ import {
 import {
   searchMemoryInWorker,
 } from '../../memory-index/search-worker-client';
+import { invalidateMemoryAtomSnapshot } from '../../memory-index/memory-atoms.js';
 import { getMemoryEmbeddingStatus } from '../../memory/embeddings/registry';
 import { getMemoryProviderStatus } from '../../memory/providers/registry';
 import { consolidateMemory, listMemoryClaims, reviewMemoryClaim } from '../../memory/consolidation/runner';
@@ -29,6 +31,7 @@ const MEMORY_TOOL_NAMES = new Set([
   'read_entity',
   'write_entity',
   'append_entity_event',
+  'memory',
   'memory_browse',
   'memory_write',
   'memory_read',
@@ -99,6 +102,32 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
 
   async execute(ctx: CapabilityExecutionContext): Promise<ToolResult> {
     const { name, args, workspacePath, sessionId } = ctx;
+
+    // Keep one compact model-facing memory surface while retaining the
+    // existing handlers as internal compatibility implementations. The
+    // wrapper deliberately delegates so validation, actor scoping, indexing,
+    // and result formatting stay identical across old and new call paths.
+    if (name === 'memory') {
+      const action = String(args?.action || '').trim().toLowerCase();
+      const delegateName = action === 'write'
+        ? 'memory_write'
+        : action === 'read'
+          ? 'memory_read'
+          : action === 'search'
+            ? 'memory_search'
+            : '';
+      if (!delegateName) {
+        return {
+          name,
+          args,
+          result: 'memory: action must be "write", "read", or "search"',
+          error: true,
+        };
+      }
+      const delegated = await memoryCapabilityExecutor.execute({ ...ctx, name: delegateName });
+      const result = delegated.result.replace(new RegExp(`^${delegateName}`), `memory(action="${action}")`);
+      return { ...delegated, name, args, result };
+    }
 
     switch (name) {
       case 'business_context_mode': {
@@ -209,12 +238,12 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
         const matches = content.match(/^## (.+)/gm) || [];
         const categories = matches.map((m: string) => m.replace(/^## /, '').trim());
         if (categories.length === 0) {
-          return { name, args, result: `${filename} has no categories yet. Use memory_write to create the first one.`, error: false };
+          return { name, args, result: `${filename} has no categories yet. Use memory(action="write") to create the first one.`, error: false };
         }
         return {
           name,
           args,
-          result: `${filename} categories:\n${categories.map((c: string) => `- ${c}`).join('\n')}\n\nUse memory_write(file="${key}", category="<name>", content="...") to add a fact.`,
+          result: `${filename} categories:\n${categories.map((c: string) => `- ${c}`).join('\n')}\n\nUse memory(action="write", file="${key}", category="<name>", content="...") to add a fact.`,
           error: false,
         };
       }
@@ -247,6 +276,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
           fileContent = fileContent.slice(0, insertAt) + '\n\n' + sectionHeader + '\n' + entry + fileContent.slice(insertAt);
         }
         fs.writeFileSync(memoryPath, fileContent, 'utf-8');
+        if (filename === 'MEMORY.md') invalidateMemoryAtomSnapshot(path.dirname(memoryPath));
         const actor = getRuntimeActorContext(sessionId);
         const scope = actor?.kind === 'agent' || actor?.kind === 'manager' ? `${actor.kind}:${actor.agentId || 'unknown'}` : 'main';
         return { name, args, result: `Written to ${scope} ${filename} [${category}]: ${content}`, error: false };
@@ -291,7 +321,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
             { workspacePath, params },
             { signal: ctx.deps.abortSignal?.signal },
           );
-          return { name, args, result, error: false };
+          return { name, args, result: compactMemorySearchResult(result, { debug: params.debug }), error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search failed: ${String(err?.message || err)}`, error: true };
         }
@@ -324,7 +354,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
             query,
             limit: Number(args.limit || 10),
           }, { signal: ctx.deps.abortSignal?.signal });
-          return { name, args, result, error: false };
+          return { name, args, result: compactMemorySearchResult(result), error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search_project failed: ${String(err?.message || err)}`, error: true };
         }
@@ -347,7 +377,7 @@ export const memoryCapabilityExecutor: CapabilityExecutor = {
             dateTo,
             limit,
           }, { signal: ctx.deps.abortSignal?.signal });
-          return { name, args, result, error: false };
+          return { name, args, result: compactMemorySearchResult(result), error: false };
         } catch (err: any) {
           return { name, args, result: `memory_search_timeline failed: ${String(err?.message || err)}`, error: true };
         }

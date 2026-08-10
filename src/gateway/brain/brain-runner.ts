@@ -44,7 +44,11 @@ import {
   fmtLocal,
   type BrainLatestState,
 } from './brain-state';
-import { registerLiveRuntime, finishLiveRuntime } from '../live-runtime-registry';
+import {
+  registerLiveRuntime,
+  finishLiveRuntime,
+  updateLiveRuntimeCheckpoint,
+} from '../live-runtime-registry';
 import type { SkillsManager } from '../skills-runtime/skills-manager';
 import { getConfig } from '../../config/config';
 import { listBrowserSessions } from '../browser-tools';
@@ -109,6 +113,18 @@ function isPublicBrainProfile(): boolean {
 function brainDreamToolFilter(toolNames: string[]): string[] {
   if (!isPublicBrainProfile()) return toolNames;
   return toolNames.filter((name) => !PRIVATE_BRAIN_SOURCE_TOOL_NAMES.has(name));
+}
+
+export function checkpointBrainRuntime(runtimeId: string, event: string, data?: any): void {
+  const checkpoint: Record<string, any> = {
+    event: String(event || '').slice(0, 80),
+    at: Date.now(),
+  };
+  const phase = String(data?.phase || '').trim();
+  if (phase) checkpoint.phase = phase.slice(0, 80);
+  const toolName = String(data?.action || data?.name || data?.toolName || '').trim();
+  if (toolName) checkpoint.toolName = toolName.slice(0, 160);
+  updateLiveRuntimeCheckpoint(runtimeId, checkpoint);
 }
 
 function brainThoughtProposalTypes(): string {
@@ -848,6 +864,7 @@ export class BrainRunner {
     });
 
     console.log(`[BrainRunner] Starting Thought ${thoughtNumber} — window ${fmtUtc(windowStart)} → ${fmtUtc(windowEnd)}`);
+    checkpointBrainRuntime(runtimeId, 'thought_started', { phase: 'preparing' });
 
     // Persist attempt immediately (separate from success state)
     const state = loadLatestState();
@@ -875,6 +892,7 @@ export class BrainRunner {
     // partial store outage is visible to Thought rather than silently omitted.
     let builtActivityPackage: BuiltActivityPackage;
     try {
+      checkpointBrainRuntime(runtimeId, 'activity_package_started', { phase: 'activity_package' });
       const packageDir = path.join(this.deps.workspacePath, 'Brain', 'activity-packages', dateStr, windowLabel);
       builtActivityPackage = await buildThoughtActivityPackage({
         configDir: getConfig().getConfigDir(),
@@ -888,6 +906,7 @@ export class BrainRunner {
         browserSessions: listBrowserSessions(),
       });
       console.log(`[BrainRunner] Activity package ${builtActivityPackage.package.packageId}: ${builtActivityPackage.package.metrics.eventsIncluded} events, ${builtActivityPackage.package.metrics.packageChars} chars, ${builtActivityPackage.package.metrics.assemblyLatencyMs}ms`);
+      checkpointBrainRuntime(runtimeId, 'activity_package_completed', { phase: 'prompt_build' });
     } catch (err: any) {
       // An unexpected assembler failure must not make the Thought fall back to
       // searching. Keep the model call explicit about the unavailable package.
@@ -908,6 +927,7 @@ export class BrainRunner {
         metrics: { assemblyStartedAt: new Date().toISOString(), assemblyCompletedAt: new Date().toISOString(), assemblyLatencyMs: 0, filesVisited: 0, filesParsed: 0, recordsScanned: 0, eventsDiscovered: 0, eventsIncluded: 0, duplicateEvents: 0, inlineEventCount: 0, continuationEventCount: 0, inlineChars: 2, fullLedgerChars: 2, packageChars: 0, estimatedPackageTokens: 0, continuationWriteFailures: 0, sourceFailures: 1, sourcePartial: 0 },
       };
       builtActivityPackage = { package: failedPackage, continuationPaths: [] };
+      checkpointBrainRuntime(runtimeId, 'activity_package_failed', { phase: 'prompt_build' });
     }
 	    const prompt = this._buildThoughtPromptV2({
 	      windowStart, windowEnd, dateStr, windowLabel,
@@ -916,6 +936,7 @@ export class BrainRunner {
 	    });
 
     const sendSSE = (event: string, data: any) => {
+      checkpointBrainRuntime(runtimeId, event, data);
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
         this.deps.broadcast({ type: 'brain_thought_sse', thoughtNumber, event, data });
       }
@@ -938,6 +959,7 @@ export class BrainRunner {
           allowedFiles: [workspaceOutFile, capsuleFile, businessCandidatesFile, activeWorkFile],
           allowedDirs: [path.posix.dirname(workspaceOutFile), path.posix.dirname(capsuleFile), path.posix.dirname(businessCandidatesFile)],
         });
+	      checkpointBrainRuntime(runtimeId, 'model_turn_started', { phase: 'model_request' });
 	      const result = await this.deps.handleChat(
 	        prompt,
 	        sessionId,
@@ -989,6 +1011,7 @@ export class BrainRunner {
         ? 'ABORTED: Brain thought run aborted by operator.'
         : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
+      checkpointBrainRuntime(runtimeId, 'model_turn_completed', { phase: 'finalizing' });
 
       const searchToolNames = new Set(['search_files', 'grep_file', 'grep_files', 'prometheus_audit_ops', 'audit_ops', 'web_search', 'web_search_multi', 'web_search_single']);
       const coveredActivitySearchNames = new Set(['search_files', 'grep_file', 'grep_files', 'prometheus_audit_ops', 'audit_ops']);
@@ -1156,6 +1179,7 @@ export class BrainRunner {
     });
 
     console.log(`[BrainRunner] Starting Dream for ${dateStr} (${thoughtCount} thoughts available)`);
+    checkpointBrainRuntime(runtimeId, 'dream_started', { phase: 'preparing' });
 
     clearHistory(sessionId);
     addMessage(
@@ -1178,6 +1202,7 @@ export class BrainRunner {
       });
 
     const sendSSE = (event: string, data: any) => {
+      checkpointBrainRuntime(runtimeId, event, data);
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
         this.deps.broadcast({ type: 'brain_dream_sse', date: dateStr, event, data });
       }
@@ -1205,6 +1230,7 @@ export class BrainRunner {
 	        allowedFiles: [workspaceOutFile, workspaceProposalsFile, carryDecisionFile, 'BUSINESS.md', activeWorkFile],
 	        allowedDirs: [path.posix.dirname(workspaceOutFile), path.posix.dirname(carryDecisionFile), 'entities', 'Brain', path.posix.join('Brain', 'business-reconciliation', dateStr)],
 	      });
+	      checkpointBrainRuntime(runtimeId, 'model_turn_started', { phase: 'model_request' });
 	      const result = await this.deps.handleChat(
 	        prompt,
 	        sessionId,
@@ -1276,6 +1302,7 @@ export class BrainRunner {
         ? 'ABORTED: Brain dream run aborted by operator.'
         : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
+      checkpointBrainRuntime(runtimeId, 'model_turn_completed', { phase: 'finalizing' });
 	    } catch (err: any) {
 	      resultText = `Error: ${err?.message || String(err)}`;
 	      console.error(`[BrainRunner] Dream for ${dateStr} failed:`, err?.message);
@@ -1478,6 +1505,7 @@ export class BrainRunner {
     });
 
     console.log(`[BrainRunner] Starting Dream cleanup for ${dateStr}`);
+    checkpointBrainRuntime(runtimeId, 'dream_cleanup_started', { phase: 'preparing' });
 
     const state = loadLatestState();
     state.lastDreamCleanupAttemptAt = new Date().toISOString();
@@ -1499,6 +1527,7 @@ export class BrainRunner {
     const prompt = this._buildDreamCleanupPromptV2({ dateStr, outFile: absOutFile });
 
     const sendSSE = (event: string, data: any) => {
+      checkpointBrainRuntime(runtimeId, event, data);
       if (['tool_call', 'tool_result', 'thinking', 'info'].includes(event)) {
         this.deps.broadcast({ type: 'brain_dream_cleanup_sse', date: dateStr, event, data });
       }
@@ -1518,6 +1547,7 @@ export class BrainRunner {
           path.posix.join('Brain', 'skill-curator'),
         ],
       });
+      checkpointBrainRuntime(runtimeId, 'model_turn_started', { phase: 'model_request' });
       const result = await this.deps.handleChat(
         prompt,
         sessionId,
@@ -1560,6 +1590,7 @@ export class BrainRunner {
         ? 'ABORTED: Brain dream cleanup run aborted by operator.'
         : (result?.text || '');
       toolResults = Array.isArray(result?.toolResults) ? result.toolResults : [];
+      checkpointBrainRuntime(runtimeId, 'model_turn_completed', { phase: 'finalizing' });
     } catch (err: any) {
       resultText = `Error: ${err?.message || String(err)}`;
       console.error(`[BrainRunner] Dream cleanup for ${dateStr} failed:`, err?.message);

@@ -81,13 +81,41 @@ export function setDeviceToken(token, deviceId) {
 export function clearDeviceToken() { setDeviceToken('', ''); }
 
 function _buildUrl(path) {
-  const base = String(API || '').replace(/\/+$/, '');
+  const base = String(window.__pmMobileActiveGatewayOrigin || API || '').replace(/\/+$/, '');
   return base + path;
 }
 
+function _mobileRequestToken() {
+  try {
+    return String(window.__pmMobileActiveGatewayToken || '').trim() || getDeviceToken();
+  } catch {
+    return getDeviceToken();
+  }
+}
+
+const REMOTE_EXECUTION_NOT_ENABLED = 'REMOTE_EXECUTION_NOT_ENABLED';
+
+function _isCurrentMobileRequestTarget() {
+  try {
+    const target = new URL(_buildUrl('/'), window.location.origin).origin;
+    const current = new URL(String(API || '') || window.location.origin, window.location.origin).origin;
+    return target === current;
+  } catch {
+    return true;
+  }
+}
+
+function _assertMobileRequestTarget() {
+  if (_isCurrentMobileRequestTarget()) return;
+  const error = new Error('Remote execution is not enabled for this gateway target.');
+  error.code = REMOTE_EXECUTION_NOT_ENABLED;
+  throw error;
+}
+
 export function buildMobileGatewayWsUrl(path, params = {}) {
-  const token = getDeviceToken();
-  const base = String(API || '').replace(/\/+$/, '') || location.origin;
+  const token = _mobileRequestToken();
+  _assertMobileRequestTarget();
+  const base = String(window.__pmMobileActiveGatewayOrigin || API || '').replace(/\/+$/, '') || location.origin;
   const httpUrl = new URL(path, base);
   httpUrl.protocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
   if (token) httpUrl.searchParams.set('pt', token);
@@ -99,7 +127,8 @@ export function buildMobileGatewayWsUrl(path, params = {}) {
 }
 
 async function mfetch(path, opts = {}) {
-  const token = getDeviceToken();
+  _assertMobileRequestTarget();
+  const token = _mobileRequestToken();
   const headers = new Headers(opts.headers || {});
   if (!headers.has('Content-Type') && opts.body && !(opts.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   if (token) headers.set('X-Pairing-Token', token);
@@ -117,6 +146,7 @@ async function mfetch(path, opts = {}) {
   try {
     res = await fetch(_buildUrl(path), { ...fetchOpts, headers, signal: controller.signal });
   } catch (err) {
+    if (parentSignal?.aborted) throw err;
     const isAbort = err?.name === 'AbortError';
     const out = new Error(isAbort
       ? 'Gateway request timed out. Prometheus may still be starting.'
@@ -128,7 +158,7 @@ async function mfetch(path, opts = {}) {
     clearTimeout(timeout);
     if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
   }
-  if (res.status === 401 && token) {
+  if (res.status === 401 && token && _isCurrentMobileRequestTarget()) {
     // Device token rejected — invalidate locally so the router sends user to pairing.
     clearDeviceToken();
     window.dispatchEvent(new Event('pm-device-revoked'));
@@ -153,6 +183,7 @@ async function mfetchWithRetry(path, opts = {}, retry = {}) {
       return await mfetch(path, opts);
     } catch (err) {
       lastErr = err;
+      if (opts.signal?.aborted) break;
       const status = Number(err?.status || 0);
       const retryable = err?.retryable === true || status === 408 || status === 429 || status >= 500;
       if (!retryable || attempt >= attempts - 1) break;
@@ -166,13 +197,53 @@ export async function mobileGatewayFetch(path, opts = {}) {
   return mfetch(path, opts);
 }
 
+// Persistent chat source operations intentionally return metadata only on
+// mobile. Full snapshots remain on the gateway and are retrieved by the chat
+// runtime when relevant; the phone does not turn its local cache into a second
+// unbounded context store.
+export function loadMobileChatResources(sessionId, query = '') {
+  const sid = encodeURIComponent(String(sessionId || '').trim());
+  const suffix = String(query || '').trim() ? `&q=${encodeURIComponent(String(query).trim())}` : '';
+  return mfetch(`/api/sessions/${sid}/resources?limit=100${suffix}`);
+}
+
+export function loadMobileBrowserHistory(query = '', sessionId = '') {
+  const queryValue = String(query || '').trim();
+  const sid = String(sessionId || '').trim();
+  const suffix = `${queryValue ? `&q=${encodeURIComponent(queryValue)}` : ''}${sid ? `&sessionId=${encodeURIComponent(sid)}` : ''}`;
+  return mfetch(`/api/browser/history?limit=100${suffix}`);
+}
+
+export function saveMobileCurrentBrowserPage(sessionId, browserSessionId = sessionId) {
+  const sid = encodeURIComponent(String(sessionId || '').trim());
+  return mfetch(`/api/sessions/${sid}/resources/browser/current`, {
+    method: 'POST',
+    body: JSON.stringify({ browserSessionId: String(browserSessionId || sessionId || '').trim() }),
+    timeoutMs: 30_000,
+  });
+}
+
+export function attachMobileResource(sessionId, payload) {
+  const sid = encodeURIComponent(String(sessionId || '').trim());
+  return mfetch(`/api/sessions/${sid}/resources/attach`, {
+    method: 'POST',
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export function detachMobileResource(sessionId, resourceId) {
+  const sid = encodeURIComponent(String(sessionId || '').trim());
+  return mfetch(`/api/sessions/${sid}/resources/${encodeURIComponent(String(resourceId || '').trim())}`, { method: 'DELETE' });
+}
+
 export async function mobileGatewayTextFetch(path, opts = {}) {
-  const token = getDeviceToken();
+  _assertMobileRequestTarget();
+  const token = _mobileRequestToken();
   const headers = new Headers(opts.headers || {});
   if (!headers.has('Content-Type') && opts.body && !(opts.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   if (token) headers.set('X-Pairing-Token', token);
   const res = await fetch(_buildUrl(path), { ...opts, headers });
-  if (res.status === 401 && token) {
+  if (res.status === 401 && token && _isCurrentMobileRequestTarget()) {
     clearDeviceToken();
     window.dispatchEvent(new Event('pm-device-revoked'));
   }
@@ -373,19 +444,21 @@ export async function submitMobileProcessInput(runId, data) {
   });
 }
 
-export async function uploadMobileTextFile({ filename, content }) {
+export async function uploadMobileTextFile({ filename, content, signal }) {
   return mfetchWithRetry('/api/canvas/upload', {
     method: 'POST',
     body: JSON.stringify({ filename, content }),
     timeoutMs: 60000,
+    signal,
   }, { attempts: 3, delayMs: 700 });
 }
 
-export async function uploadMobileBinaryFile({ filename, base64, mimeType }) {
+export async function uploadMobileBinaryFile({ filename, base64, mimeType, signal }) {
   return mfetchWithRetry('/api/canvas/upload-binary', {
     method: 'POST',
     body: JSON.stringify({ filename, base64, mimeType }),
     timeoutMs: 60000,
+    signal,
   }, { attempts: 3, delayMs: 700 });
 }
 
@@ -397,8 +470,9 @@ export async function claimPairing({ code, deviceName, deviceFingerprint }) {
     body: JSON.stringify({ code, deviceName, deviceFingerprint }),
   });
 }
-export async function pollPairing(requestId) {
-  return mfetch(`/api/pairing/poll/${encodeURIComponent(requestId)}`);
+export async function pollPairing(requestId, deviceFingerprint = '') {
+  const headers = deviceFingerprint ? { 'X-Pairing-Device-Fingerprint': String(deviceFingerprint).slice(0, 120) } : undefined;
+  return mfetch(`/api/pairing/poll/${encodeURIComponent(requestId)}`, headers ? { headers } : {});
 }
 export async function verifyPairingMe() {
   if (!getDeviceToken()) return null;
@@ -503,6 +577,7 @@ function _normalizeBrainJob(job, kind) {
   const enabled = job.enabled !== false;
   const running = job.running === true;
   const isThought = kind === 'thought';
+  const sessionId = String(job.lastOutputSessionId || job.last_output_session_id || '').trim() || null;
   return {
     id: isThought ? 'brain_thought' : 'brain_dream',
     kind: 'brain',
@@ -522,21 +597,24 @@ function _normalizeBrainJob(job, kind) {
     footRight: isThought
       ? (job.todayCount !== undefined ? `Thoughts today: ${job.todayCount}` : '')
       : (job.ranTonight ? 'Dream ran tonight: yes' : 'Dream ran tonight: not yet'),
+    sessionId,
   };
 }
 
 function _normalizeCronJob(job) {
   const enabled = job.enabled !== false;
   const running = job.status === 'running';
+  const paused = job.status === 'paused';
   const subagentId = String(job.subagent_id || job.subagentId || '').trim() || null;
   const cron = String(job.cron || job.run_at || job.pattern || '').trim();
+  const sessionId = String(job.last_output_session_id || job.lastOutputSessionId || '').trim() || null;
   return {
     id: job.id,
     kind: 'cron',
     emoji: pickEmoji(job),
     name: job.name || 'Schedule',
     color: pickColor(job.name),
-    status: running ? 'running' : (enabled ? 'active' : 'disabled'),
+    status: running ? 'running' : (!enabled ? 'disabled' : (paused ? 'paused' : 'active')),
     builtin: false,
     enabled,
     description: String(job.prompt || job.description || '').slice(0, 160),
@@ -547,6 +625,8 @@ function _normalizeCronJob(job) {
     timezone: job.timezone || 'UTC',
     prompt: String(job.prompt || ''),
     deliveryChannel: job.delivery_channel || job.deliveryChannel || 'web',
+    sessionId,
+    lastResult: String(job.last_result || job.lastResult || '').trim(),
     skillIds: Array.isArray(job.skillIds) ? job.skillIds.map(id => String(id || '').trim()).filter(Boolean) : [],
     contextRefs: Array.isArray(job.context_refs)
       ? job.context_refs
@@ -557,9 +637,48 @@ function _normalizeCronJob(job) {
   };
 }
 
+async function _resolveMobileScheduleSessionAvailability(items) {
+  const rows = Array.isArray(items) ? items : [];
+  const candidateIds = Array.from(new Set(rows
+    .map((item) => String(item?.sessionId || '').trim())
+    .filter(Boolean)));
+  if (!candidateIds.length) return rows;
+
+  const availability = new Map();
+  await Promise.all(candidateIds.map(async (sessionId) => {
+    try {
+      const session = await loadMobileChatSession(sessionId, {
+        historyLimit: 20,
+        processLimit: 20,
+        fullProcess: false,
+      });
+      const historyCount = Math.max(
+        Number(session?.totalHistoryCount || 0) || 0,
+        Array.isArray(session?.history) ? session.history.length : 0,
+      );
+      availability.set(sessionId, historyCount > 0);
+    } catch (err) {
+      // A 404 is authoritative: the scheduler points at a missing session.
+      // Keep the link during transient gateway failures so a temporary network
+      // problem does not erase a valid chat affordance from the cached card.
+      availability.set(sessionId, Number(err?.status || 0) === 404 ? false : null);
+    }
+  }));
+
+  return rows.map((item) => {
+    const sessionId = String(item?.sessionId || '').trim();
+    return availability.get(sessionId) === false
+      ? { ...item, sessionId: null }
+      : item;
+  });
+}
+
 export async function loadMobileSchedules({ force = false } = {}) {
   const cached = !force ? getCachedMobilePageData('schedules', 21_600_000) : null;
-  if (cached) return cached;
+  if (cached) {
+    const resolvedCached = await _resolveMobileScheduleSessionAvailability(cached);
+    return _saveMobilePageData('schedules', resolvedCached);
+  }
   return _coalesceMobilePageRequest('schedules', async () => {
   const [schedResult, brainResult] = await Promise.all([
     api('/api/schedules').catch(() => null),
@@ -568,7 +687,10 @@ export async function loadMobileSchedules({ force = false } = {}) {
 
   if (!schedResult && !brainResult) {
     const fallback = getCachedMobilePageData('schedules', 86_400_000);
-    if (fallback) return fallback;
+    if (fallback) {
+      const resolvedFallback = await _resolveMobileScheduleSessionAvailability(fallback);
+      return _saveMobilePageData('schedules', resolvedFallback);
+    }
   }
 
   const items = [];
@@ -581,7 +703,8 @@ export async function loadMobileSchedules({ force = false } = {}) {
   if (schedResult?.success && Array.isArray(schedResult.schedules)) {
     for (const job of schedResult.schedules) items.push(_normalizeCronJob(job));
   }
-  return _saveMobilePageData('schedules', items);
+  const resolvedItems = await _resolveMobileScheduleSessionAvailability(items);
+  return _saveMobilePageData('schedules', resolvedItems);
   });
 }
 
@@ -615,6 +738,16 @@ export async function updateMobileSchedule(item, fields) {
   const result = await api(`/api/schedules/${encodeURIComponent(item.id)}`, {
     method: 'PUT',
     body: JSON.stringify(fields || {}),
+  });
+  _invalidateMobilePageData('schedules');
+  return result;
+}
+
+export async function deleteMobileSchedule(item) {
+  if (!item || item.kind !== 'cron') throw new Error('This schedule cannot be deleted here');
+  const result = await api(`/api/schedules/${encodeURIComponent(item.id)}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ confirm: true }),
   });
   _invalidateMobilePageData('schedules');
   return result;
@@ -904,6 +1037,7 @@ export async function loadMobileSubagents({ force = false } = {}) {
       model: a.model || '',
       effectiveModel: a.effectiveModel || '',
       effectiveModelSource: a.effectiveModelSource || '',
+      reasoningEffort: a.reasoning_effort || a.reasoning || '',
       avatar,
       color,
       status: _subagentStatus(a),
@@ -958,7 +1092,7 @@ export async function loadSubagentRunDetail(agentId, taskId) {
   return api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(taskId)}`);
 }
 
-export async function sendSubagentRunRecovery(agentId, taskId, message, attachmentPreviews = []) {
+export async function sendSubagentRunRecovery(agentId, taskId, message, attachmentPreviews = [], options = {}) {
   return api(`/api/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(taskId)}/recovery`, {
     method: 'POST',
     body: JSON.stringify({
@@ -966,6 +1100,7 @@ export async function sendSubagentRunRecovery(agentId, taskId, message, attachme
       attachmentPreviews: Array.isArray(attachmentPreviews) ? attachmentPreviews : [],
     }),
     timeoutMs: 300000,
+    signal: options?.signal,
   });
 }
 
@@ -1476,6 +1611,8 @@ function _normalizeSessionSummary(s) {
     lastActiveAt: Number(s?.lastActiveAt || s?.updatedAt || Date.now()),
     lastAssistantAt: Number(s?.lastAssistantAt || 0) || null,
     pinnedAt: Number(s?.pinnedAt || 0) || null,
+    settledAt: Number(s?.settledAt || 0) || null,
+    settled: s?.settled === true || Number(s?.settledAt || 0) > 0,
     mobileLastReadAt: Number(s?.mobileLastReadAt || 0) || null,
     mobileUnread: s?.mobileUnread === true,
     activeRun: s?.activeRun === true,
@@ -1486,6 +1623,18 @@ function _normalizeSessionSummary(s) {
       label: String(s.lastOrigin.label || '').trim() || undefined,
     } : null,
     voiceRoom: s?.voiceRoom && typeof s.voiceRoom === 'object' ? s.voiceRoom : null,
+    externalImport: s?.externalImport && typeof s.externalImport === 'object' ? {
+      version: Number(s.externalImport.version || 1) || 1,
+      source: s.externalImport.source && typeof s.externalImport.source === 'object' ? {
+        provider: String(s.externalImport.source.provider || '').trim(),
+        adapter: String(s.externalImport.source.adapter || '').trim(),
+        sourceLabel: String(s.externalImport.source.sourceLabel || '').trim(),
+        sourceAccountId: String(s.externalImport.source.sourceAccountId || '').trim() || undefined,
+      } : null,
+      continuation: String(s.externalImport.continuation || 'prometheus'),
+      sourceResume: String(s.externalImport.sourceResume || 'unsupported'),
+      importedAt: Number(s.externalImport.importedAt || 0) || 0,
+    } : null,
   };
 }
 
@@ -1495,6 +1644,15 @@ export async function createMobileChatSession(sessionId, { title = 'New Chat' } 
   return mfetch('/api/sessions', {
     method: 'POST',
     body: JSON.stringify({ id: sid, channel: 'mobile', title }),
+  });
+}
+
+export async function createMobileProjectChatSession(projectId, { title = 'New Chat' } = {}) {
+  const pid = String(projectId || '').trim();
+  if (!pid) throw new Error('Project id required');
+  return mfetch(`/api/projects/${encodeURIComponent(pid)}/sessions`, {
+    method: 'POST',
+    body: JSON.stringify({ title, isOnboarding: false }),
   });
 }
 
@@ -1530,7 +1688,7 @@ function _normalizeSessionPageResponse(r, { scope = 'all', limit = MOBILE_SESSIO
   };
 }
 
-export async function loadMobileSessionPage({ limit = MOBILE_SESSION_PAGE_SIZE, offset = 0 } = {}) {
+export async function loadMobileSessionPage({ limit = MOBILE_SESSION_PAGE_SIZE, offset = 0, state = 'active' } = {}) {
   const requestedLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || MOBILE_SESSION_PAGE_SIZE)));
   const requestedOffset = Math.max(0, Math.floor(Number(offset) || 0));
   const params = new URLSearchParams({
@@ -1538,15 +1696,36 @@ export async function loadMobileSessionPage({ limit = MOBILE_SESSION_PAGE_SIZE, 
     limit: String(requestedLimit),
     offset: String(requestedOffset),
     includeAutomated: '1',
+    state: ['active', 'settled', 'all'].includes(String(state)) ? String(state) : 'active',
   });
   const r = await mfetch(`/api/sessions?${params.toString()}`);
   return _normalizeSessionPageResponse(r, { scope: 'all', limit: requestedLimit, offset: requestedOffset });
 }
 
+// Pinned chats are intentionally loaded through a server-side filtered page.
+// They may be far beyond the first page of the unified session timeline, so a
+// drawer render must not infer the pinned section from whichever 20 chats were
+// loaded for the ordinary list.
+export async function loadMobilePinnedSessions({ state = 'active' } = {}) {
+  const safeState = ['active', 'settled', 'all'].includes(String(state)) ? String(state) : 'active';
+  const params = new URLSearchParams({
+    scope: 'all',
+    limit: '200',
+    offset: '0',
+    includeAutomated: '1',
+    state: safeState,
+    pinned: '1',
+  });
+  const r = await mfetch(`/api/sessions?${params.toString()}`);
+  return _normalizeSessionPageResponse(r, { scope: 'all', limit: 200, offset: 0 }).sessions
+    .filter((session) => Number(session?.pinnedAt || 0) > 0);
+}
+
 export async function loadMobileSessionGroups(options = {}) {
   const limit = Math.max(1, Math.min(100, Math.floor(Number(options.limit) || MOBILE_SESSION_PAGE_SIZE)));
   const offset = Math.max(0, Math.floor(Number(options.offset) || 0));
-  const page = await loadMobileSessionPage({ limit, offset });
+  const state = ['active', 'settled', 'all'].includes(String(options.state)) ? String(options.state) : 'active';
+  const page = await loadMobileSessionPage({ limit, offset, state });
   return {
     sessions: page.sessions,
     // Retained briefly for callers outside the drawer while they migrate to
@@ -1556,16 +1735,17 @@ export async function loadMobileSessionGroups(options = {}) {
     channels: [],
     pageSize: limit,
     activePage: page,
+    state,
     activeChannel: 'all',
   };
 }
 loadMobileSessionGroups.loadPage = loadMobileSessionPage;
 
 
-export async function searchMobileChatSessions(query, { limit = 100, mode = 'content' } = {}) {
+export async function searchMobileChatSessions(query, { limit = 100, mode = 'content', state = 'active' } = {}) {
   const q = String(query || '').trim();
   if (!q) return [];
-  const params = new URLSearchParams({ q, limit: String(limit), mode: mode === 'title' ? 'title' : 'content', scope: 'all', includeAutomated: '1' });
+  const params = new URLSearchParams({ q, limit: String(limit), mode: mode === 'title' ? 'title' : 'content', scope: 'all', includeAutomated: '1', state: ['active', 'settled', 'all'].includes(String(state)) ? String(state) : 'active' });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 12000);
   let r;
@@ -1667,6 +1847,26 @@ export async function markMobileChatSessionRead(sessionId, readAt = Date.now()) 
   return mfetch(`/api/sessions/${encodeURIComponent(sid)}/mobile-read`, {
     method: 'POST',
     body: JSON.stringify({ readAt }),
+  });
+}
+
+export async function settleMobileChatSession(sessionId, { confirmPinned = false } = {}) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) throw new Error('Session id required');
+  invalidateMobileChatSessionCache(sid);
+  return mfetch(`/api/sessions/${encodeURIComponent(sid)}/settle`, {
+    method: 'POST',
+    body: JSON.stringify({ confirmPinned: confirmPinned === true }),
+  });
+}
+
+export async function unsettleMobileChatSession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) throw new Error('Session id required');
+  invalidateMobileChatSessionCache(sid);
+  return mfetch(`/api/sessions/${encodeURIComponent(sid)}/unsettle`, {
+    method: 'POST',
+    body: JSON.stringify({}),
   });
 }
 
@@ -1937,7 +2137,7 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
   const ctrl = new AbortController();
   if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
 
-  const url = (API || '') + '/api/chat';
+  const url = _buildUrl('/api/chat');
   const cb = (name, ...args) => { try { handlers[name]?.(...args); } catch (e) { console.error('[mobile chat handler]', name, e); } };
   const toChatStreamError = (err) => {
     if (err?.name === 'AbortError') return err;
@@ -1961,7 +2161,7 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
-        ...(getDeviceToken() ? { 'X-Pairing-Token': getDeviceToken() } : {}),
+        ...(_mobileRequestToken() ? { 'X-Pairing-Token': _mobileRequestToken() } : {}),
       },
       body: JSON.stringify({
         message,

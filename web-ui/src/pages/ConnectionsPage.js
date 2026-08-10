@@ -1,7 +1,8 @@
 /**
  * ConnectionsPage.js
  *
- * Connections panel powered by the extension catalog API.
+ * Plugins page powered by the extension catalog API. The connection detail
+ * surface remains shared with the desktop chat compatibility path.
  */
 
 import { api, ENDPOINTS } from '../api.js';
@@ -10,18 +11,62 @@ import { escHtml, showToast } from '../utils.js';
 let CONNECTORS = [];
 let connectionsState = {};
 let connectorStatuses = {};
+let connectionAttempts = [];
 let activeConnectorId = null;
+let connectorViewMode = 'plugins';
+let connectorCatalogState = 'idle';
+let connectorCatalogError = '';
+let connectorSearchQuery = '';
 let obsidianConnectorState = { bridge: { vaults: [] }, loading: false, syncing: false };
 const oauthPollIntervals = new Map();
 let connectorViewLayoutObserver = null;
 let connectorViewLayoutFrame = null;
 
-function syncConnectorViewToChatColumn() {
-  const view = document.getElementById('connector-view');
-  const chatShell = document.querySelector('main.main-shell');
-  if (!view || !chatShell || view.style.display === 'none') return;
+// These are bundled Simple Icons brand marks, not generated monograms. The
+// mapping stays presentation-only so manifests and connection contracts remain
+// the source of truth for connector identity and behavior.
+const connectorLogoSlugs = Object.freeze({
+  ga4: 'googleanalytics',
+  github: 'github',
+  gmail: 'gmail',
+  google_drive: 'googledrive',
+  hubspot: 'hubspot',
+  instagram: 'instagram',
+  linkedin: 'linkedin',
+  notion: 'notion',
+  obsidian: 'obsidian',
+  reddit: 'reddit',
+  salesforce: 'salesforce',
+  slack: 'slack',
+  stripe: 'stripe',
+  tiktok: 'tiktok',
+  vercel: 'vercel',
+  x: 'x',
+});
 
-  const bounds = chatShell.getBoundingClientRect();
+function getConnectorLogoUrl(connector) {
+  const slug = connectorLogoSlugs[connector?.id];
+  if (!slug) return '';
+  try {
+    return new URL(`../assets/connectors/${slug}.svg`, import.meta.url).href;
+  } catch {
+    return `../assets/connectors/${slug}.svg`;
+  }
+}
+
+function getConnectorSurface() {
+  if (connectorViewMode === 'plugins' || window.currentMode === 'plugins') {
+    return document.getElementById('plugins-view');
+  }
+  return document.querySelector('main.main-shell');
+}
+
+function syncConnectorViewToSurface() {
+  const view = document.getElementById('connector-view');
+  const surface = getConnectorSurface();
+  if (!view || !surface || view.style.display === 'none') return;
+
+  const bounds = surface.getBoundingClientRect();
   if (bounds.width < 1 || bounds.height < 1) return;
 
   view.style.left = `${Math.round(bounds.left)}px`;
@@ -36,17 +81,17 @@ function scheduleConnectorViewLayoutSync() {
   if (connectorViewLayoutFrame !== null) return;
   connectorViewLayoutFrame = requestAnimationFrame(() => {
     connectorViewLayoutFrame = null;
-    syncConnectorViewToChatColumn();
+    syncConnectorViewToSurface();
   });
 }
 
 function startConnectorViewLayoutSync() {
-  const chatShell = document.querySelector('main.main-shell');
-  if (!chatShell) return;
+  const surface = getConnectorSurface();
+  if (!surface) return;
 
   if (!connectorViewLayoutObserver && typeof ResizeObserver !== 'undefined') {
     connectorViewLayoutObserver = new ResizeObserver(scheduleConnectorViewLayoutSync);
-    connectorViewLayoutObserver.observe(chatShell);
+    connectorViewLayoutObserver.observe(surface);
   }
   window.addEventListener('resize', scheduleConnectorViewLayoutSync);
   scheduleConnectorViewLayoutSync();
@@ -67,11 +112,21 @@ function showConnectorView() {
   if (!view) return;
 
   view.style.display = 'flex';
-  syncConnectorViewToChatColumn();
+  const isPluginsPage = connectorViewMode === 'plugins' || window.currentMode === 'plugins';
+  const catalogShell = document.querySelector('#plugins-view .plugins-page-shell');
+  if (catalogShell) catalogShell.style.visibility = isPluginsPage ? 'hidden' : '';
+  const backLabel = document.getElementById('cv-back-label');
+  const backButton = document.getElementById('cv-back-btn');
+  if (backLabel) backLabel.textContent = isPluginsPage ? 'Plugins' : 'Chat';
+  if (backButton) {
+    backButton.title = isPluginsPage ? 'Back to plugins' : 'Back to chat';
+    backButton.setAttribute('aria-label', isPluginsPage ? 'Back to plugins' : 'Back to chat');
+  }
+  syncConnectorViewToSurface();
   startConnectorViewLayoutSync();
 
   const chatView = document.getElementById('chat-view');
-  if (chatView) chatView.style.display = 'none';
+  if (chatView && !isPluginsPage) chatView.style.display = 'none';
 }
 
 function buildConnectorMonogram(name) {
@@ -89,9 +144,11 @@ function buildConnectorMonogram(name) {
 function buildConnectorLogoMarkup(connector, size = 24, radius = 8) {
   const color = connector.color || '#4F46E5';
   const fontSize = Math.max(11, Math.floor(size * 0.45));
+  const logoUrl = getConnectorLogoUrl(connector);
   return `
-    <div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;border-radius:${radius}px;background:${color}18;color:${color};font-size:${fontSize}px;font-weight:700;letter-spacing:.04em">
-      ${escHtml(buildConnectorMonogram(connector.name))}
+    <div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;border-radius:${radius}px;background:${color}18;color:${color};font-size:${fontSize}px;font-weight:700;letter-spacing:.04em;overflow:hidden">
+      ${logoUrl ? `<img class="connector-logo-image" src="${escHtml(logoUrl)}" alt="" width="${size - 8}" height="${size - 8}" loading="lazy" decoding="async" onerror="this.hidden=true;this.nextElementSibling.hidden=false">` : ''}
+      <span${logoUrl ? ' hidden' : ''}>${escHtml(buildConnectorMonogram(connector.name))}</span>
     </div>
   `;
 }
@@ -117,30 +174,84 @@ function normalizeCredentialInfo(item) {
   };
 }
 
+const connectorNameCollator = new Intl.Collator('en-US', { sensitivity: 'base', numeric: true });
+
+function connectorSearchText(item) {
+  const setup = item?.setup || {};
+  const ownership = item?.ownership || {};
+  const connection = item?.connection || {};
+  const strategies = Array.isArray(connection.strategies) ? connection.strategies : [];
+  const capabilities = Array.isArray(connection.requestedCapabilities)
+    ? connection.requestedCapabilities.flatMap((capability) => [capability?.id, capability?.label, capability?.description, capability?.risk])
+    : [];
+  const fields = Array.isArray(setup.fields)
+    ? setup.fields.flatMap((field) => [field?.key, field?.label, field?.help, field?.input])
+    : [];
+  const strategyTerms = strategies.flatMap((strategy) => [
+    strategy?.id,
+    strategy?.adapter,
+    strategy?.name,
+    ...(Array.isArray(strategy?.capabilities) ? strategy.capabilities : []),
+    strategy?.authentication?.type,
+    ...(Array.isArray(strategy?.authentication?.scopes) ? strategy.authentication.scopes : []),
+  ]);
+
+  return [
+    item?.id,
+    item?.name,
+    item?.description,
+    item?.category,
+    item?.trustLevel,
+    ...(Array.isArray(item?.tags) ? item.tags : []),
+    setup.authType,
+    ...(Array.isArray(setup.scopes) ? setup.scopes : []),
+    ...(Array.isArray(setup.envVars) ? setup.envVars : []),
+    ...(Array.isArray(ownership.tools) ? ownership.tools : []),
+    ...(Array.isArray(ownership.capabilities) ? ownership.capabilities : []),
+    ...(Array.isArray(ownership.toolNamespaces) ? ownership.toolNamespaces : []),
+    ...(Array.isArray(item?.contracts?.capabilities) ? item.contracts.capabilities : []),
+    ...(Array.isArray(item?.contracts?.tools) ? item.contracts.tools : []),
+    ...fields,
+    ...capabilities,
+    ...strategyTerms,
+  ]
+    .filter((value) => value !== undefined && value !== null)
+    .map((value) => String(value))
+    .join(' ')
+    .toLocaleLowerCase();
+}
+
 function normalizeConnectorCatalogItem(item) {
   const authType = item?.setup?.authType || item?.state?.authType || 'none';
   const trustLevel = item?.trustLevel || 'bundled';
   return {
-    id: item.id,
-    name: item.name,
+    id: String(item?.id || ''),
+    name: String(item?.name || item?.id || 'Unnamed plugin'),
     category: item.category || 'General',
     authType,
     color: item?.ui?.color || '#4F46E5',
     desc: item.description || '',
+    tags: Array.isArray(item?.tags) ? item.tags : [],
+    docsUrl: item?.docsUrl || item?.setup?.docsUrl || '',
     permissions: Array.isArray(item?.ui?.permissions) ? item.ui.permissions : [],
     browserUrl: item?.setup?.browserLogin?.url || null,
     browserCheck: item?.setup?.browserLogin?.checkUrl || null,
     aiTools: Array.isArray(item?.ownership?.tools) ? item.ownership.tools : [],
     credInfo: normalizeCredentialInfo(item),
+    connection: item?.connection || null,
     trustLevel,
     isUserPlugin: trustLevel === 'third_party' || trustLevel === 'local' || trustLevel === 'marketplace',
     state: item?.state || {},
+    searchText: connectorSearchText(item),
   };
 }
 
 function setConnectorCatalog(items) {
   CONNECTORS = Array.isArray(items)
-    ? items.map(normalizeConnectorCatalogItem).sort((a, b) => a.name.localeCompare(b.name))
+    ? items
+      .map(normalizeConnectorCatalogItem)
+      .filter((connector) => connector.id)
+      .sort((a, b) => connectorNameCollator.compare(a.name, b.name) || connectorNameCollator.compare(a.id, b.id))
     : [];
   window.CONNECTORS = CONNECTORS;
 }
@@ -151,19 +262,14 @@ function syncConnectionMapsFromCatalog() {
 
   CONNECTORS.forEach((connector) => {
     const state = connector.state || {};
-    if (state.connected) {
-      connectionsState[connector.id] = {
-        connected: true,
-        connectedAt: state.connectedAt,
-        authType: state.authType || connector.authType,
-      };
-    }
-
-    connectorStatuses[connector.id] = {
-      connected: !!state.connected,
-      hasCredentials: !!state.hasCredentials,
+    const normalizedState = {
+      ...state,
+      connected: state.connected === true || state.authenticated === true,
+      hasCredentials: state.hasCredentials === true || state.configured === true,
       authType: state.authType || connector.authType,
     };
+    connectionsState[connector.id] = normalizedState;
+    connectorStatuses[connector.id] = normalizedState;
   });
 }
 
@@ -171,23 +277,100 @@ function getConnectorById(id) {
   return CONNECTORS.find((connector) => connector.id === id) || null;
 }
 
+function getLatestConnectionAttempt(serviceId) {
+  return connectionAttempts
+    .filter((attempt) => String(attempt?.serviceId || '') === String(serviceId || ''))
+    .sort((a, b) => {
+      const aTime = Date.parse(String(a?.updatedAt || a?.createdAt || '')) || 0;
+      const bTime = Date.parse(String(b?.updatedAt || b?.createdAt || '')) || 0;
+      return bTime - aTime || String(b?.id || '').localeCompare(String(a?.id || ''));
+    })[0] || null;
+}
+
+function connectorIsConnected(connector) {
+  return !!connectionsState[connector?.id]?.connected;
+}
+
+function getConnectorStatusMeta(connector) {
+  const state = connector?.state || {};
+  const attempt = getLatestConnectionAttempt(connector?.id);
+  const error = state.lastError?.message || state.lastError || attempt?.error?.message || '';
+  const attemptState = String(attempt?.state || '').toLowerCase();
+
+  if (state.authState === 'reauth_required' || attemptState === 'reauth_required') {
+    return { label: 'Reauthorize', tone: 'warning', detail: error || 'Authorization needs to be renewed.' };
+  }
+  if (attemptState === 'awaiting_external_admin' || state.authState === 'admin_blocked') {
+    return { label: 'Admin approval required', tone: 'warning', detail: error || 'A workspace or tenant administrator must approve this connection.' };
+  }
+  if (attemptState === 'degraded' || state.health === 'degraded') {
+    return { label: 'Degraded', tone: 'warning', detail: error || 'Authentication exists, but verification or provider health is incomplete.' };
+  }
+  if (attemptState === 'failed' || state.health === 'unavailable') {
+    return { label: 'Error', tone: 'error', detail: error || 'The integration reported an error.' };
+  }
+  if (connectorIsConnected(connector) && (state.verified === false || attemptState === 'verifying')) {
+    return { label: 'Needs verification', tone: 'warning', detail: error || 'Run verification before relying on this connection.' };
+  }
+  if (connectorIsConnected(connector)) {
+    return {
+      label: state.exposed === false ? 'Connected · tools off' : 'Connected',
+      tone: 'connected',
+      detail: state.exposed === false ? 'Authentication is available; tool exposure still needs review.' : '',
+    };
+  }
+  if (state.hasCredentials || state.configured) {
+    return { label: connector.authType === 'browser_session' ? 'Verify login' : 'Needs authorization', tone: 'warning', detail: error || '' };
+  }
+  return { label: 'Disconnected', tone: 'muted', detail: error || '' };
+}
+
+function connectorStatusColor(tone) {
+  if (tone === 'connected') return 'var(--ok)';
+  if (tone === 'error') return 'var(--err)';
+  if (tone === 'warning') return 'var(--warn)';
+  return 'var(--muted)';
+}
+
 async function loadConnectionsState() {
+  connectorCatalogState = 'loading';
+  connectorCatalogError = '';
+  renderConnectionsGrid();
+
   try {
-    const data = await api(`${ENDPOINTS.EXTENSIONS_CATALOG}?kind=connector`);
+    const [data, attemptsData] = await Promise.all([
+      api(`${ENDPOINTS.EXTENSIONS_CATALOG}?kind=connector`),
+      api('/api/connection-attempts?limit=200').catch(() => ({ attempts: [] })),
+    ]);
     setConnectorCatalog(data?.items || []);
+    connectionAttempts = Array.isArray(attemptsData?.attempts) ? attemptsData.attempts : [];
     syncConnectionMapsFromCatalog();
+    connectorCatalogState = 'ready';
   } catch (e) {
-    setConnectorCatalog([]);
-    connectionsState = {};
-    connectorStatuses = {};
+    connectorCatalogState = 'error';
+    connectorCatalogError = e?.message || 'Could not load the plugin catalog.';
+    if (!CONNECTORS.length) {
+      setConnectorCatalog([]);
+      connectionsState = {};
+      connectorStatuses = {};
+    }
     console.warn('[connections] Could not load catalog:', e?.message || e);
   }
 
   renderConnectionsGrid();
   updateConnectionsBadge();
-  loadMcpServers();
+  await loadMcpServers();
 
   const connectorView = document.getElementById('connector-view');
+  if (
+    activeConnectorId?.startsWith('mcp:') &&
+    connectorView &&
+    connectorView.style.display !== 'none'
+  ) {
+    const mcpId = activeConnectorId.slice(4);
+    if (mcpServerById(mcpId)) openMcpServerView(mcpId);
+    return;
+  }
   if (
     activeConnectorId &&
     connectorView &&
@@ -200,56 +383,83 @@ async function loadConnectionsState() {
 
 function updateConnectionsBadge() {
   const count = Object.values(connectionsState).filter((connection) => connection.connected).length;
-  const badge = document.getElementById('connections-count-badge');
-  if (badge) badge.textContent = count > 0 ? `${count} connected` : '';
+  const badges = [
+    document.getElementById('plugins-connections-count'),
+    document.getElementById('connections-count-badge'),
+  ].filter(Boolean);
+  badges.forEach((badge) => { badge.textContent = count > 0 ? `${count} connected` : ''; });
 }
 
 function filterConnectors(query) {
-  const q = String(query || '').toLowerCase().trim();
-  const grid = document.getElementById('connections-grid');
-  if (!grid) return;
-  grid.querySelectorAll('.conn-card').forEach((card) => {
-    const name = String(card.title || '').toLowerCase();
-    card.style.display = !q || name.includes(q) ? '' : 'none';
-  });
+  connectorSearchQuery = String(query || '').trim().toLocaleLowerCase();
+  const input = document.getElementById('plugins-search');
+  if (input && input.value !== query) input.value = query || '';
+  renderConnectionsGrid();
 }
 
 function renderConnectionsGrid() {
-  const grid = document.getElementById('connections-grid');
-  if (!grid) return;
+  const grids = [
+    document.getElementById('plugins-grid'),
+    document.getElementById('connections-grid'),
+  ].filter(Boolean);
+  if (!grids.length) return;
 
-  grid.innerHTML = '';
-  const q = String(document.getElementById('connections-search')?.value || '')
-    .toLowerCase()
-    .trim();
-
-  CONNECTORS.forEach((connector) => {
-    const isConnected = !!connectionsState[connector.id]?.connected;
-    const hasCreds = !!connectorStatuses[connector.id]?.hasCredentials;
-    const needsCreds =
-      connector.authType === 'oauth' && !isConnected && !hasCreds && !!connector.credInfo;
-
-    const card = document.createElement('div');
-    card.className = 'conn-card' + (isConnected ? ' connected' : '');
-    card.title =
-      connector.name +
-      (isConnected ? ' - Connected' : needsCreds ? ' - Credentials needed' : '');
-    card.style.position = 'relative';
-    card.style.display =
-      !q ||
-      connector.name.toLowerCase().includes(q) ||
-      connector.category.toLowerCase().includes(q)
-        ? ''
-        : 'none';
+  const query = connectorSearchQuery;
+  const visibleConnectors = CONNECTORS.filter((connector) => !query || connector.searchText.includes(query));
+  const cards = visibleConnectors.map((connector) => {
+    const status = getConnectorStatusMeta(connector);
+    const isConnected = connectorIsConnected(connector);
+    const isPageCard = grids.some((grid) => grid.id === 'plugins-grid');
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `conn-card plugin-card${isConnected ? ' connected' : ''}`;
+    card.title = `${connector.name} — ${status.label}`;
+    card.setAttribute('aria-label', `${connector.name}: ${status.label}`);
     card.innerHTML = `
-      <div class="conn-card-logo">${buildConnectorLogoMarkup(connector, 24, 8)}</div>
-      <div class="conn-card-name">${escHtml(connector.name)}</div>
-      ${connector.isUserPlugin ? '<div title="Custom plugin" style="position:absolute;top:6px;left:6px;font-size:8px;font-weight:800;color:var(--brand);background:var(--panel-2);border:1px solid var(--line);border-radius:4px;padding:1px 4px;letter-spacing:.04em">CUSTOM</div>' : ''}
-      ${isConnected ? '<div style="width:7px;height:7px;border-radius:50%;background:var(--ok);position:absolute;top:8px;right:8px"></div>' : ''}
+      <div class="plugin-card-top">
+        <div class="conn-card-logo">${buildConnectorLogoMarkup(connector, isPageCard ? 38 : 24, isPageCard ? 11 : 8)}</div>
+        ${connector.isUserPlugin ? '<span class="plugin-card-badge">CUSTOM</span>' : ''}
+      </div>
+      <div class="plugin-card-name">${escHtml(connector.name)}</div>
+      <div class="plugin-card-category">${escHtml(connector.category)}</div>
+      ${isPageCard ? `<div class="plugin-card-desc">${escHtml(connector.desc)}</div>` : ''}
+      <div class="plugin-card-status" style="color:${connectorStatusColor(status.tone)}"><span class="plugin-status-dot" aria-hidden="true"></span>${escHtml(status.label)}</div>
     `;
-    card.onclick = () => openConnectorView(connector.id);
-    grid.appendChild(card);
+    card.addEventListener('click', () => openConnectorView(connector.id));
+    return card;
   });
+
+  grids.forEach((grid) => {
+    grid.replaceChildren(...cards.map((card) => card.cloneNode(true)));
+    grid.querySelectorAll('.plugin-card').forEach((card, index) => {
+      const connector = visibleConnectors[index];
+      card.addEventListener('click', () => openConnectorView(connector.id));
+    });
+  });
+
+  const stateEl = document.getElementById('plugins-catalog-state');
+  const resultsEl = document.getElementById('plugins-search-results');
+  if (stateEl) {
+    if (connectorCatalogState === 'loading' && CONNECTORS.length === 0) {
+      stateEl.innerHTML = '<div class="plugins-loading-grid" aria-label="Loading plugins"><span></span><span></span><span></span><span></span></div>';
+    } else if (connectorCatalogState === 'error' && CONNECTORS.length === 0) {
+      stateEl.innerHTML = `<div class="plugins-inline-state plugins-inline-state--error"><span>${escHtml(connectorCatalogError || 'Could not load plugins.')}</span><button type="button" class="plugins-inline-btn" onclick="loadConnectionsState()">Retry</button></div>`;
+    } else if (CONNECTORS.length === 0) {
+      stateEl.innerHTML = '<div class="plugins-inline-state">No connector plugins are currently available.</div>';
+    } else if (connectorCatalogState === 'error') {
+      stateEl.innerHTML = `<div class="plugins-inline-state plugins-inline-state--error"><span>Showing the last catalog. ${escHtml(connectorCatalogError)}</span><button type="button" class="plugins-inline-btn" onclick="loadConnectionsState()">Retry</button></div>`;
+    } else {
+      stateEl.innerHTML = '';
+    }
+    if (CONNECTORS.length > 0 && visibleConnectors.length === 0) {
+      stateEl.innerHTML = `<div class="plugins-inline-state"><strong>No plugins match “${escHtml(connectorSearchQuery)}”.</strong><span>Try a connector name, category, tool, or authentication method.</span><button type="button" class="plugins-inline-btn" onclick="document.getElementById('plugins-search').value='';filterConnectors('')">Clear search</button></div>`;
+    }
+  }
+  if (resultsEl) {
+    resultsEl.textContent = query ? `${visibleConnectors.length} of ${CONNECTORS.length}` : `${CONNECTORS.length} plugins`;
+  }
+  const empty = document.getElementById('plugins-empty');
+  if (empty) empty.style.display = CONNECTORS.length > 0 && visibleConnectors.length === 0 ? '' : 'none';
 }
 
 function openConnectorView(id) {
@@ -257,7 +467,10 @@ function openConnectorView(id) {
   if (!connector) return;
 
   activeConnectorId = id;
-  const isConnected = !!connectionsState[id]?.connected;
+  connectorViewMode = window.currentMode === 'plugins' ? 'plugins' : 'chat';
+  const isConnected = connectorIsConnected(connector);
+  const status = getConnectorStatusMeta(connector);
+  const state = connector.state || {};
 
   document.getElementById('cv-logo').innerHTML = buildConnectorLogoMarkup(connector, 36, 9);
   document.getElementById('cv-name').textContent = connector.name;
@@ -265,7 +478,41 @@ function openConnectorView(id) {
   document.getElementById('cv-desc').textContent = connector.desc;
 
   const badge = document.getElementById('cv-status-badge');
-  if (badge) badge.style.display = isConnected ? '' : 'none';
+  if (badge) {
+    badge.style.display = '';
+    badge.textContent = `● ${status.label}`;
+    badge.style.color = connectorStatusColor(status.tone);
+    badge.style.background = status.tone === 'connected' ? 'rgba(49,184,132,0.15)' : 'var(--panel-2)';
+  }
+
+  const stateEl = document.getElementById('cv-connection-state');
+  if (stateEl) {
+    const lifecycle = [
+      ['configured', state.configured === true],
+      ['authenticated', state.authenticated === true || isConnected],
+      ['verified', state.verified === true],
+      ['tools exposed', state.exposed === true],
+    ].filter(([, present]) => present).map(([label]) => `<span class="cv-state-chip">${label}</span>`).join('');
+    const errorMarkup = status.detail ? `<div class="cv-state-error">${escHtml(status.detail)}</div>` : '';
+    const account = state.account || {};
+    const accountLabel = account.displayName || account.username || account.email || account.providerAccountId || '';
+    const resources = Array.isArray(state.resources) ? state.resources : [];
+    const grants = Array.isArray(state.capabilityGrants) ? state.capabilityGrants : [];
+    const scopes = Array.isArray(state.grantedScopes) ? state.grantedScopes : [];
+    const registeredTools = Array.isArray(state.registeredTools) ? state.registeredTools : [];
+    const exposedTools = Array.isArray(state.exposedTools) ? state.exposedTools : [];
+    const identityMarkup = accountLabel || resources.length || grants.length || scopes.length || registeredTools.length
+      ? `<div class="cv-identity-grid">
+          ${accountLabel ? `<div><span class="cv-identity-label">Account</span><strong>${escHtml(accountLabel)}</strong>${account.email && account.email !== accountLabel ? `<span>${escHtml(account.email)}</span>` : ''}</div>` : ''}
+          ${resources.length ? `<div><span class="cv-identity-label">Resource scope</span><strong>${escHtml(resources.slice(0, 3).map((resource) => resource.displayName || resource.id).join(', '))}</strong>${resources.length > 3 ? `<span>+${resources.length - 3} more</span>` : ''}</div>` : ''}
+          ${grants.length ? `<div><span class="cv-identity-label">Capabilities</span><strong>${grants.filter((grant) => grant.granted).length} granted</strong><span>${grants.filter((grant) => !grant.granted).length} approval-gated</span></div>` : ''}
+          ${scopes.length ? `<div><span class="cv-identity-label">Granted scopes</span><strong>${scopes.length} provider scope${scopes.length === 1 ? '' : 's'}</strong><span>${escHtml(scopes.join(' · '))}</span></div>` : ''}
+          ${registeredTools.length ? `<div><span class="cv-identity-label">Tool exposure</span><strong>${exposedTools.length}/${registeredTools.length} exposed</strong><span>${state.health ? `Health: ${escHtml(state.health)}` : 'Review-gated by default'}</span></div>` : ''}
+        </div>`
+      : '';
+    stateEl.innerHTML = `<div class="cv-state-line"><strong>${escHtml(status.label)}</strong>${lifecycle ? `<span class="cv-state-chips">${lifecycle}</span>` : ''}</div>${identityMarkup}${errorMarkup}`;
+    stateEl.style.display = '';
+  }
 
   const permsEl = document.getElementById('cv-permissions');
   if (permsEl) {
@@ -284,7 +531,8 @@ function openConnectorView(id) {
   const aiToolsEl = document.getElementById('cv-ai-tools');
   if (aiToolsEl) {
     const tools = connector.aiTools || [];
-    if (tools.length && isConnected) {
+    const toolsExposed = state.exposed !== false;
+    if (tools.length && isConnected && toolsExposed) {
       aiToolsEl.style.display = '';
       aiToolsEl.innerHTML = `
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">AI Tools Unlocked</div>
@@ -292,6 +540,15 @@ function openConnectorView(id) {
           ${tools.map((tool) => `<code style="font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--text-2)">${escHtml(tool)}</code>`).join('')}
         </div>
         <div style="font-size:11px;color:var(--muted);margin-top:8px">Activate with <code style="font-size:10.5px">request_tool_category({"category":"external_apps"})</code></div>
+      `;
+    } else if (tools.length && isConnected) {
+      aiToolsEl.style.display = '';
+      aiToolsEl.innerHTML = `
+        <div style="font-size:11px;font-weight:700;color:var(--warn);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Tools awaiting review</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;opacity:0.7">
+          ${tools.map((tool) => `<code style="font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--text-2)">${escHtml(tool)}</code>`).join('')}
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">Authentication is available, but tool exposure is not enabled yet.</div>
       `;
     } else if (tools.length) {
       aiToolsEl.style.display = '';
@@ -320,6 +577,7 @@ function openConnectorView(id) {
       );
     }
   }
+  renderCanonicalConnectionActions(connector, isConnected);
   loadConnectorActivity(id, isConnected);
 
   showConnectorView();
@@ -329,9 +587,126 @@ function closeConnectorView() {
   const connectorView = document.getElementById('connector-view');
   if (connectorView) connectorView.style.display = 'none';
   stopConnectorViewLayoutSync();
+  const catalogShell = document.querySelector('#plugins-view .plugins-page-shell');
+  if (catalogShell) catalogShell.style.visibility = '';
   const chatView = document.getElementById('chat-view');
-  if (chatView) chatView.style.display = 'flex';
+  if (chatView && connectorViewMode !== 'plugins') chatView.style.display = 'flex';
   activeConnectorId = null;
+}
+
+function encodedInlineValue(value) {
+  return encodeURIComponent(String(value ?? ''));
+}
+
+function renderCanonicalConnectionActions(connector, isConnected) {
+  const el = document.getElementById('cv-actions');
+  if (!el) return;
+
+  const attempt = getLatestConnectionAttempt(connector?.id);
+  const state = connector?.state || {};
+  const action = attempt?.requiredUserAction || null;
+  const attemptId = attempt?.id ? encodedInlineValue(attempt.id) : '';
+  const controls = [];
+
+  if (attemptId && attempt?.state === 'awaiting_approval') {
+    controls.push(`<button class="cv-btn-connect" onclick="continueConnectionAttempt(decodeURIComponent('${attemptId}'), {approved:true})">Approve and continue</button>`);
+  }
+
+  if (attemptId && action?.type === 'oauth') {
+    controls.push(`<button class="cv-btn-connect" onclick="openConnectionAttemptOAuth(decodeURIComponent('${attemptId}'), decodeURIComponent('${encodedInlineValue(action.authorizationUrl)}'), this)">${escHtml(action.label || 'Authorize in browser')}</button>`);
+  } else if (attemptId && action?.type === 'secure-input') {
+    const session = encodedInlineValue(action.credentialSessionId);
+    const fields = (Array.isArray(action.fields) ? action.fields : []).map((field) => `
+      <label class="cv-attempt-field"><span>${escHtml(field.label || field.key)}</span><input type="password" autocomplete="off" data-attempt-key="${escHtml(field.key || '')}" placeholder="${escHtml(field.placeholder || '')}" /></label>
+    `).join('');
+    controls.push(`<div class="cv-attempt-card"><div class="cv-attempt-title">${escHtml(action.label || 'Secure setup required')}</div>${fields}<button class="cv-btn-connect" onclick="submitConnectionAttemptSecureInput(decodeURIComponent('${attemptId}'), decodeURIComponent('${session}'), this)">Save securely and continue</button></div>`);
+  } else if (attemptId && action?.type === 'browser-login') {
+    controls.push(`<button class="cv-btn-connect" onclick="window.openPrometheusExternalLink ? window.openPrometheusExternalLink(decodeURIComponent('${encodedInlineValue(action.url)}'), {target:'_blank',features:'noopener,noreferrer'}) : window.open(decodeURIComponent('${encodedInlineValue(action.url)}'), '_blank', 'noopener,noreferrer');this.nextElementSibling.hidden=false">${escHtml(action.label || 'Sign in in browser')}</button><button class="cv-btn-connect" hidden onclick="continueConnectionAttempt(decodeURIComponent('${attemptId}'), {}, this)">Continue after login</button>`);
+  } else if (attemptId && action?.type === 'device-code') {
+    controls.push(`<div class="cv-attempt-card"><div class="cv-attempt-title">${escHtml(action.label || 'Device authorization')}</div><div class="cv-attempt-copy">Enter <code>${escHtml(action.userCode || '')}</code> at <a data-prometheus-link-mode="external" href="${escHtml(action.verificationUrl || '#')}" target="_blank" rel="noopener">${escHtml(action.verificationUrl || 'the verification page')}</a>.</div><button class="cv-btn-connect" onclick="continueConnectionAttempt(decodeURIComponent('${attemptId}'), {}, this)">Check authorization</button></div>`);
+  } else if (attemptId && action?.type === 'cli-login') {
+    controls.push(`<div class="cv-attempt-card"><div class="cv-attempt-title">${escHtml(action.label || 'Complete CLI login')}</div><code class="cv-attempt-command">${escHtml(action.commandPreview || '')}</code><div class="cv-attempt-copy">${escHtml(action.completionHint || 'Complete the command, then continue here.')}</div><button class="cv-btn-connect" onclick="continueConnectionAttempt(decodeURIComponent('${attemptId}'), {}, this)">Continue</button></div>`);
+  } else if (attemptId && action?.type === 'external-admin-approval') {
+    controls.push(`<div class="cv-attempt-card"><div class="cv-attempt-title">${escHtml(action.label || 'Administrator approval required')}</div><div class="cv-attempt-copy">${escHtml(action.instructions || '')}</div>${action.url ? `<a data-prometheus-link-mode="external" class="cv-attempt-link" href="${escHtml(action.url)}" target="_blank" rel="noopener">Open provider instructions</a>` : ''}<button class="cv-btn-connect" onclick="continueConnectionAttempt(decodeURIComponent('${attemptId}'), {approved:true}, this)">Continue</button></div>`);
+  }
+
+  const needsRepair = state.authState === 'reauth_required' || attempt?.state === 'reauth_required' || attempt?.state === 'degraded';
+  const needsVerification = isConnected && (state.verified === false || attempt?.state === 'verifying');
+  if (attemptId && needsRepair) {
+    const repairLabel = state.authState === 'reauth_required' || attempt?.state === 'reauth_required'
+      ? 'Reauthorize connection'
+      : 'Repair connection';
+    controls.push(`<button class="cv-btn-connect" onclick="runConnectionAttemptAction(decodeURIComponent('${attemptId}'), 'repair', this)">${repairLabel}</button>`);
+  } else if (attemptId && needsVerification) {
+    controls.push(`<button class="cv-btn-connect" onclick="runConnectionAttemptAction(decodeURIComponent('${attemptId}'), 'verify', this)">Verify connection</button>`);
+  }
+
+  if (!controls.length) return;
+  el.insertAdjacentHTML('beforeend', `<div class="cv-contract-actions"><div class="cv-contract-heading">Connection lifecycle</div>${controls.join('')}</div>`);
+}
+
+async function runConnectionAttemptAction(attemptId, operation, button) {
+  if (button) { button.disabled = true; button.textContent = 'Working…'; }
+  try {
+    const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/${encodeURIComponent(operation)}`, { method: 'POST', body: '{}' });
+    showToast('Connection updated', String(result?.attempt?.state || operation), 'success');
+    await loadConnectionsState();
+    if (activeConnectorId && getConnectorById(activeConnectorId)) openConnectorView(activeConnectorId);
+  } catch (error) {
+    showToast('Connection action failed', error?.message || String(error), 'error');
+    if (button) { button.disabled = false; button.textContent = operation === 'repair' ? 'Repair connection' : 'Verify connection'; }
+  }
+}
+
+async function continueConnectionAttempt(attemptId, input = {}, button) {
+  if (button) { button.disabled = true; button.textContent = 'Continuing…'; }
+  try {
+    const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: JSON.stringify(input || {}) });
+    showToast('Connection updated', String(result?.attempt?.state || 'continued'), 'success');
+    await loadConnectionsState();
+    if (activeConnectorId && getConnectorById(activeConnectorId)) openConnectorView(activeConnectorId);
+  } catch (error) {
+    showToast('Connection failed', error?.message || String(error), 'error');
+    if (button) { button.disabled = false; button.textContent = 'Continue'; }
+  }
+}
+
+async function openConnectionAttemptOAuth(attemptId, url, button) {
+  if (url) {
+    if (typeof window.openPrometheusExternalLink === 'function') window.openPrometheusExternalLink(url, { target: '_blank', features: 'noopener,noreferrer' });
+    else window.open(url, '_blank', 'noopener,noreferrer');
+  }
+  if (button) { button.disabled = true; button.textContent = 'Waiting for authorization…'; }
+  const started = Date.now();
+  try {
+    while (Date.now() - started < 10 * 60 * 1000) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const result = await api(`/api/connection-attempts/${encodeURIComponent(attemptId)}/continue`, { method: 'POST', body: '{}' });
+      const state = String(result?.attempt?.state || '');
+      if (!state.startsWith('awaiting_')) break;
+    }
+    await loadConnectionsState();
+    if (activeConnectorId && getConnectorById(activeConnectorId)) openConnectorView(activeConnectorId);
+  } catch (error) {
+    showToast('Authorization failed', error?.message || String(error), 'error');
+    if (button) { button.disabled = false; button.textContent = 'Retry authorization'; }
+  }
+}
+
+async function submitConnectionAttemptSecureInput(attemptId, sessionId, button) {
+  const wrap = button?.closest?.('.cv-attempt-card');
+  const values = {};
+  wrap?.querySelectorAll?.('input[data-attempt-key]').forEach((input) => {
+    values[input.getAttribute('data-attempt-key')] = input.value;
+  });
+  if (button) { button.disabled = true; button.textContent = 'Saving securely…'; }
+  try {
+    const saved = await api(`/api/connection-secure-input/${encodeURIComponent(sessionId)}`, { method: 'POST', body: JSON.stringify({ values }) });
+    await continueConnectionAttempt(attemptId, { credentialRef: saved.credentialRef }, button);
+  } catch (error) {
+    showToast('Secure setup failed', error?.message || String(error), 'error');
+    if (button) { button.disabled = false; button.textContent = 'Save securely and continue'; }
+  }
 }
 
 function renderObsidianVaultList() {
@@ -467,6 +842,99 @@ async function removeObsidianConnectorVault(vaultId) {
   }
 }
 
+function hasCanonicalOAuthStrategy(connector) {
+  return Array.isArray(connector?.connection?.strategies)
+    && connector.connection.strategies.some((strategy) => strategy?.adapter === 'connector-oauth');
+}
+
+function renderManagedOAuthActions(connector, isConnected) {
+  const el = document.getElementById('cv-actions');
+  if (!el) return;
+  const state = connector.state || {};
+  const account = state.account || {};
+  const accountLabel = account.username ? `@${account.username}` : (account.email || account.displayName || 'the connected account');
+  const connectionId = state.connectionId ? encodedInlineValue(state.connectionId) : '';
+  const hasProviderAppCredentials = !!connectorStatuses[connector.id]?.hasCredentials || state.providerApp?.clientIdConfigured === true;
+  const managedReady = state.providerApp?.clientIdConfigured === true || hasProviderAppCredentials || connector.connection?.providerApp?.externalSetupRequired === false;
+  const flowSecurityLabel = state.providerApp
+    ? [state.providerApp.pkceRequired ? 'PKCE enabled' : '', state.providerApp.nonceRequired ? 'OIDC nonce bound' : 'OAuth'].filter(Boolean).join(' · ')
+    : '';
+
+  if (isConnected) {
+    el.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:9px">
+        <div style="font-size:12px;color:var(--muted);line-height:1.55">Connected as <strong style="color:var(--text)">${escHtml(accountLabel)}</strong>. Read-only tools are exposed by default; write actions remain approval-gated.</div>
+        ${state.providerApp ? `<div style="font-size:11px;color:var(--muted)">${flowSecurityLabel} · ${state.providerApp.clientSecretConfigured ? 'provider app configured' : 'public-client configuration'}</div>` : ''}
+        ${state.contractVersion === 2 && connectionId
+          ? `<button class="cv-btn-disconnect" onclick="disconnectCanonicalConnection(decodeURIComponent('${connectionId}'), '${connector.id}')">Disconnect and revoke provider access when supported</button>`
+          : `<button class="cv-btn-disconnect" onclick="disconnectConnector('${connector.id}')">Disconnect ${escHtml(connector.name)}</button>`}
+        <button class="cv-btn-connect" onclick="renderCredentialForm('${connector.id}')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line)">Advanced: Use your own OAuth App</button>
+      </div>
+    `;
+    return;
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button class="cv-btn-connect" onclick="startCanonicalConnection('${connector.id}')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 3h6v6"/><path d="M10 14L21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+        Connect ${escHtml(connector.name)}
+      </button>
+      <div style="font-size:11px;color:var(--muted);line-height:1.55;text-align:center">Sign in, review the requested ${escHtml(connector.name)} scopes, and allow read-only connector tools. Account/resource identity and token health stay in the host-owned connection record.</div>
+      ${managedReady ? '' : `<div style="font-size:11px;color:var(--warn);line-height:1.55;background:rgba(230,170,70,.08);border:1px solid rgba(230,170,70,.2);border-radius:8px;padding:9px 11px">This managed flow needs a deployment-owned ${escHtml(connector.name)} provider app. No client secret is bundled in Prometheus; use Advanced setup for a user-owned app.</div>`}
+      <button class="cv-btn-connect" onclick="renderCredentialForm('${connector.id}')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line)">
+        Advanced: Use your own OAuth App
+      </button>
+    </div>
+  `;
+}
+
+async function startCanonicalConnection(id) {
+  const connector = getConnectorById(id);
+  if (!connector || !hasCanonicalOAuthStrategy(connector)) return;
+  const strategy = connector.connection.strategies.find((item) => item?.adapter === 'connector-oauth');
+  const requestedCapabilities = Array.isArray(connector.connection.requestedCapabilities)
+    ? connector.connection.requestedCapabilities.filter((capability) => capability?.risk === 'read').map((capability) => capability.id)
+    : (Array.isArray(strategy?.capabilities) ? strategy.capabilities : []);
+  const button = document.querySelector('#cv-actions .cv-btn-connect');
+  if (button) { button.disabled = true; button.textContent = 'Preparing secure connection…'; }
+  try {
+    const data = await api('/api/connection-attempts', {
+      method: 'POST',
+      body: JSON.stringify({
+        serviceId: id,
+        serviceName: connector.name,
+        requestedCapabilities,
+        readOnly: true,
+        metadata: {
+          connectionContractVersion: 2,
+          resourceScope: 'authenticated account',
+          expectedAccountId: connector.state?.account?.providerAccountId || undefined,
+        },
+      }),
+    });
+    showToast('Connection ready', 'Review the read-only capability grant, then continue.', 'success');
+    await loadConnectionsState();
+    openConnectorView(id);
+    return data;
+  } catch (error) {
+    showToast('Connection failed', error?.message || String(error), 'error');
+    if (button) { button.disabled = false; button.textContent = `Connect ${connector.name}`; }
+  }
+}
+
+async function disconnectCanonicalConnection(connectionId, id) {
+  if (!confirm('Disconnect this account and revoke the provider grant when supported?')) return;
+  try {
+    await api(`/api/connections-v2/${encodeURIComponent(connectionId)}/disconnect`, { method: 'POST', body: '{}' });
+    await loadConnectionsState();
+    if (getConnectorById(id)) openConnectorView(id);
+    showToast('Disconnected', 'The local session was cleared and provider revocation was attempted.', 'success');
+  } catch (error) {
+    showToast('Disconnect failed', error?.message || String(error), 'error');
+  }
+}
+
 function renderConnectorActions(connector, isConnected) {
   const el = document.getElementById('cv-actions');
   if (!el) return;
@@ -479,6 +947,11 @@ function renderConnectorActions(connector, isConnected) {
   if (connector.id === 'obsidian') {
     renderObsidianConnectorActions(connector, isConnected);
     if (!obsidianConnectorState.loading) loadObsidianConnectorState().catch(() => {});
+    return;
+  }
+
+  if (hasCanonicalOAuthStrategy(connector)) {
+    renderManagedOAuthActions(connector, isConnected);
     return;
   }
 
@@ -704,7 +1177,8 @@ async function startOAuthFlow(id) {
     }
 
     if (res?.url) {
-      window.open(res.url, '_blank', 'width=600,height=700');
+      if (typeof window.openPrometheusExternalLink === 'function') window.openPrometheusExternalLink(res.url, { target: '_blank', features: 'width=600,height=700' });
+      else window.open(res.url, '_blank', 'width=600,height=700');
       renderOAuthWaiting(id);
       pollOAuthCompletion(id);
       return;
@@ -917,7 +1391,8 @@ async function saveConnectorCredentials(id) {
       body: JSON.stringify({ id }),
     });
     if (res?.url) {
-      window.open(res.url, '_blank', 'width=600,height=700');
+      if (typeof window.openPrometheusExternalLink === 'function') window.openPrometheusExternalLink(res.url, { target: '_blank', features: 'width=600,height=700' });
+      else window.open(res.url, '_blank', 'width=600,height=700');
       renderOAuthWaiting(id);
       pollOAuthCompletion(id);
       return;
@@ -1134,13 +1609,18 @@ const escapeHtml = escHtml;
 // ──────────────────────────────────────────────────────────────────────────
 
 let mcpServers = [];
+let mcpServersError = '';
 
 async function loadMcpServers() {
   try {
     const data = await api('/api/mcp/servers');
-    mcpServers = Array.isArray(data?.servers) ? data.servers : [];
-  } catch {
+    mcpServers = Array.isArray(data?.servers)
+      ? data.servers.slice().sort((a, b) => connectorNameCollator.compare(String(a?.name || a?.id || ''), String(b?.name || b?.id || '')))
+      : [];
+    mcpServersError = '';
+  } catch (error) {
     mcpServers = [];
+    mcpServersError = error?.message || 'Could not load MCP servers.';
   }
   renderMcpServers();
 }
@@ -1158,14 +1638,15 @@ function mcpStatusMeta(s) {
 }
 
 function renderMcpServers() {
-  const section = document.getElementById('mcp-servers-section');
-  const list = document.getElementById('mcp-servers-list');
-  const count = document.getElementById('mcp-servers-count');
+  const section = document.getElementById('plugins-mcp-section') || document.getElementById('mcp-servers-section');
+  const list = document.getElementById('plugins-mcp-servers-list') || document.getElementById('mcp-servers-list');
+  const count = document.getElementById('plugins-mcp-count') || document.getElementById('mcp-servers-count');
   if (!section || !list) return;
   if (!mcpServers.length) {
     section.style.display = 'none';
     return;
   }
+
   section.style.display = '';
   if (count) count.textContent = `${mcpServers.length}`;
   // Cards mirror connector cards: click opens the full detail view (instructions,
@@ -1190,6 +1671,7 @@ function openMcpServerView(id) {
   const s = mcpServerById(id);
   if (!s) return;
   activeConnectorId = `mcp:${id}`;
+  connectorViewMode = window.currentMode === 'plugins' ? 'plugins' : 'chat';
   const { color, label, needsAuth } = mcpStatusMeta(s);
   const connected = s.status === 'connected';
   const initials = String(s.name || s.id).replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || 'MC';
@@ -1204,6 +1686,11 @@ function openMcpServerView(id) {
 
   const badge = document.getElementById('cv-status-badge');
   if (badge) { badge.style.display = ''; badge.textContent = connected ? '● Connected' : (s.status === 'error' ? '● Error' : '● Disconnected'); badge.style.color = color; badge.style.background = `${color}22`; }
+  const stateEl = document.getElementById('cv-connection-state');
+  if (stateEl) {
+    stateEl.innerHTML = `<div class="cv-state-line"><strong>${escHtml(label)}</strong><span class="cv-state-chips"><span class="cv-state-chip">${escHtml(s.transport || 'stdio')}</span>${connected ? '<span class="cv-state-chip">tools discovered</span>' : ''}</span></div>${s.error ? `<div class="cv-state-error">${escHtml(String(s.error))}</div>` : ''}`;
+    stateEl.style.display = '';
+  }
 
   // "What Prom can access" → the tools, or a hint to connect.
   const permsEl = document.getElementById('cv-permissions');
@@ -1303,8 +1790,13 @@ async function startMcpOAuth(id) {
   try {
     const r = await api(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/start`, { method: 'POST', body: JSON.stringify({}) });
     if (r?.success === false) throw new Error(r.error || 'Could not start authorization');
-    if (r?.authorizeUrl) { try { window.open(r.authorizeUrl, '_blank', 'noopener'); } catch {} }
-    if (statusEl) statusEl.innerHTML = `Waiting for you to finish signing in… ${r?.authorizeUrl ? `<a href="${escHtml(r.authorizeUrl)}" target="_blank" style="color:var(--brand)">reopen login</a>` : ''}`;
+    if (r?.authorizeUrl) {
+      try {
+        if (typeof window.openPrometheusExternalLink === 'function') window.openPrometheusExternalLink(r.authorizeUrl, { target: '_blank', features: 'noopener' });
+        else window.open(r.authorizeUrl, '_blank', 'noopener');
+      } catch {}
+    }
+    if (statusEl) statusEl.innerHTML = `Waiting for you to finish signing in… ${r?.authorizeUrl ? `<a data-prometheus-link-mode="external" href="${escHtml(r.authorizeUrl)}" target="_blank" style="color:var(--brand)">reopen login</a>` : ''}`;
     let waited = 0;
     _mcpOAuthPoll = setInterval(async () => {
       waited += 2;
@@ -1709,15 +2201,29 @@ async function removeUserPlugin(id) {
   }
 }
 
-loadConnectionsState();
+function pluginsPageActivate() {
+  if (connectorCatalogState === 'loading') return;
+  loadConnectionsState().catch((error) => {
+    connectorCatalogState = 'error';
+    connectorCatalogError = error?.message || 'Could not load the plugin catalog.';
+    renderConnectionsGrid();
+  });
+}
 
 window.loadConnectionsState = loadConnectionsState;
+window.pluginsPageActivate = pluginsPageActivate;
 window.updateConnectionsBadge = updateConnectionsBadge;
 window.filterConnectors = filterConnectors;
 window.renderConnectionsGrid = renderConnectionsGrid;
 window.openConnectorView = openConnectorView;
 window.closeConnectorView = closeConnectorView;
 window.renderConnectorActions = renderConnectorActions;
+window.startCanonicalConnection = startCanonicalConnection;
+window.disconnectCanonicalConnection = disconnectCanonicalConnection;
+window.runConnectionAttemptAction = runConnectionAttemptAction;
+window.continueConnectionAttempt = continueConnectionAttempt;
+window.openConnectionAttemptOAuth = openConnectionAttemptOAuth;
+window.submitConnectionAttemptSecureInput = submitConnectionAttemptSecureInput;
 window.renderCredentialForm = renderCredentialForm;
 window.saveConnectorCredentials = saveConnectorCredentials;
 window.startXurlSetup = startXurlSetup;

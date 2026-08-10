@@ -1,6 +1,6 @@
 # 16) Prometheus Mobile App Maintenance Reference
 
-Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gateway auth/session/delivery helpers, durable turn journal/model-worker runtime, mobile main-chat WebSocket stream handling, mobile camera-roll video attachments, mobile subagent Home chat/Runs recovery surfaces, iOS Home Screen Web Push for chat/task/subagent/team/scheduled-job events, and package scripts on: 2026-07-15
+Last verified against `web-ui/`, `generated/public-web-ui/`, `src/gateway/routes/`, gateway auth/session/delivery helpers, durable turn journal/model-worker runtime, mobile main-chat WebSocket stream handling, mobile camera-roll video attachments, mobile subagent Home chat/Runs recovery surfaces, iOS Home Screen Web Push for chat/task/subagent/team/scheduled-job events, auto-settle settings, and package scripts on: 2026-08-09
 
 Prometheus Mobile is a hash-routed PWA shell inside the existing web UI. It is not a separate native iOS/Android/Capacitor app in this repo. Treat `web-ui/src/mobile/*` as the canonical mobile app source and treat `generated/public-web-ui/static/mobile/*` as generated public-build output.
 
@@ -12,7 +12,7 @@ Canonical mobile source files:
 - `web-ui/src/mobile/mobile-shell.js` - mobile chrome, tab/drawer shell, session picker wiring.
 - `web-ui/src/mobile/mobile-pages.js` - most mobile screens and behavior: chat, voice, tasks, creative, schedules, teams, subagents, proposals, pairing, delivery notifications, live run UI, and mobile audio.
 - `web-ui/src/mobile/mobile-api.js` - thin API shim. Mobile fetches go through `mfetch`, which attaches `X-Pairing-Token`; media/WS URLs use query `pt`.
-- `web-ui/src/mobile/mobile-settings.js` - mobile settings surfaces, including model/voice settings.
+- `web-ui/src/mobile/mobile-settings.js` - mobile settings surfaces, including the first System section with the shared auto-settle policy/date controls and model/voice settings.
 - `web-ui/src/mobile/mobile-data.js` - static first-pass/mock mobile nav/schedule/team data still used by parts of the shell.
 - `web-ui/src/styles/mobile.css` - isolated mobile styling. It only takes over when `body.pm-mobile-active` is present; mobile themes use `--pm-*` surface tokens and semantic `--pm-accent*` tokens, while legacy `--pm-orange*` variables are compatibility aliases.
 
@@ -22,6 +22,8 @@ Mobile canvas/file viewer fullscreen mode: `initMobileCanvasSheet()` in `web-ui/
 Mobile reasoning/model control (2026-07-09): `web-ui/src/mobile/mobile-model-badge.js` renders the header-badge tap surface as a compact model-and-effort summary (`Model · Effort ›`) above a segmented range slider. Opening it uses a voice-mode-style bottom takeover that obscures roughly the lower third of the chat and centers the controls; reasoning-specific positioning bypasses the normal header-badge popover coordinates. Tapping the centered summary opens the existing credentialed provider → model picker; changing the range persists `reasoning_effort` through `/api/settings/provider` with haptic step feedback. The takeover variant is styled by `.pm-msheet-scrim.is-reasoning`, `.pm-msheet.is-reasoning`, and `.pm-reasoning-*` in `web-ui/src/styles/mobile.css`. Keep model/provider selection grouped in the dedicated picker rather than reintroducing inline settings selects or permanent Fast/Deep labels.
 
 Mobile haptic sliders (2026-08-01): `mobile-model-badge.js::attachMobileHapticGestureSurface(...)` provides the shared real-input gesture layer used by the reasoning selector and `mobile-shell.js::_wireTabbarSlider(...)`. The reasoning slider haptics only when the snapped effort index changes. The footer slider haptics only as the moving glass pill's actual center crosses one of the four tab-icon centers (Chat, Voice, Tasks, Hub), never on every pointermove or merely because the nearest tab preview changed. Keep its gesture listener scoped to the slider surface and dispose it with `disposeMobileHapticGestureSurfaces()` when rebuilding mobile chrome; do not reintroduce a per-move fallback vibration.
+
+Mobile overlay hit testing (2026-08-08): `attachMobileHapticGestureSurface(...)` mounts its transparent native-switch proxy as a fixed `<body>` sibling, so hiding or disabling `.pm-tabbar` alone does not remove the footer's hit target. The tabbar proxy must be owner-marked, kept below mobile sheets/modals, and made `pointer-events: none` while `body.pm-mobile-overlay-open` is active; reasoning/provider sheets retain their own high-priority gesture proxy.
 
 Mobile subagent chat header + context usage (2026-07-27, live after sync:web-ui): `renderSubagentChatPage` no longer hardcodes the Prometheus brand. It uses `renderMobileHeader({ hideBrand: true, leftIcon: 'back' })` and labels the shared model badge as `Name/Model Effort` (e.g. `Nolan/5.6 Terra High`) from the selected subagent's effective model. The same main-chat context ring + popover (`renderMobileContextChip` / `wireMobileContextWindow`) is mounted and scoped to `subagent_chat_${agentId}` with optional `getProvider` / `getAccountId` so plan usage tracks that subagent's provider/account. `mobile-model-badge.js` skips main-chat badge refresh and reasoning-sheet open on `.pm-subagent-model-badge` so the subagent label is not overwritten. [2026-07-27]
 
@@ -67,7 +69,9 @@ Service worker gotcha: `web-ui/service-worker.js` has a `VERSION` constant. Bump
 Mobile Prometheus One splash branding (2026-07-17): `web-ui/index.html` owns the cold-load `#pm-one-splash` composition. Its centered logo uses the dedicated generated asset `web-ui/src/assets/prometheus-one/p1-mark-ring.png` (P1 + gold ring + upper-right star only), while `web-ui/src/styles/mobile.css` owns the particle/constellation, mark entrance, Cinzel title fade, and metallic shimmer. Keep the transparent mark inside `.pm-one-mark-wrap`: entrance opacity/transform/filter animation belongs on that isolated compositor wrapper, while the image remains a stable `translateZ(0)` raster layer so iOS does not drop it when the sibling background-clipped title fades or shimmers. Preserve the reusable official lockup at `p1-logo.png`; do not overwrite it for splash-only variants. Bump the service-worker `VERSION` and the mobile CSS query version when changing this installed-PWA launch experience.
 Mobile chat layout motion (2026-07-18): composer focus/expansion, hamburger drawer motion, and composer-adjacent queued/plan/background-agent surfaces share `--pm-motion-*` timing in `web-ui/src/styles/mobile.css`. `updateChatComposerSpace()` in `mobile-pages.js` coalesces `ResizeObserver` measurements and continues any in-flight FLIP translation from its current visual offset, preventing repeated layout updates from restarting the chat movement. Keep `prefers-reduced-motion` at zero duration, and bump `web-ui/service-worker.js` after changing these motions.
 
-Mobile chat-session long-press actions (2026-08-01): `_openSessionContextSheet()` in `web-ui/src/mobile/mobile-shell.js` renders the Pin/Unpin, Rename, Mark as unread, and Delete chat buttons under `.pm-msheet-session-context`. Their labels use 14px regular text (`font-weight: 400`); the session title intentionally remains 15px semibold (`font-weight: 650`). The canonical rule is `.pm-msheet-session-context .pm-sess-action-row` in `web-ui/src/styles/mobile.css`, mirrored at `generated/public-web-ui/static/styles/mobile.css`. This pass uses the cache-bust token `pm-v238-2026-08-01-mobile-session-action-type` across the mobile entry/router/module query strings and service-worker source/generated mirrors.
+Mobile chat-session long-press actions (2026-08-01): `_openSessionContextSheet()` in `web-ui/src/mobile/mobile-shell.js` renders the Pin/Unpin, Rename, Mark as unread, Settle/Unsettle, and Delete chat buttons under `.pm-msheet-session-context`. Their labels use 14px regular text (`font-weight: 400`); the session title intentionally remains 15px semibold (`font-weight: 650`). The canonical rule is `.pm-msheet-session-context .pm-sess-action-row` in `web-ui/src/styles/mobile.css`, mirrored at `generated/public-web-ui/static/styles/mobile.css`. This pass uses the cache-bust token `pm-v238-2026-08-01-mobile-session-action-type` across the mobile entry/router/module query strings and service-worker source/generated mirrors.
+
+Mobile Settled Chats and auto-settle (2026-08-09): the drawer keeps active and settled sessions as separate paged views, with search and long-press Settle/Unsettle actions using the shared `/api/sessions/:id/settle` and `/unsettle` routes. The System settings section uses the same Never/7/14/30/90/Custom policy as desktop; saving a past Custom date presents the two choices “Start from now” and “Apply to eligible chats.” Dates are converted from the device calendar boundary, and the backend still enforces protected-session exclusions. `session_state_changed` invalidates the drawer/session caches so automatic settling is reflected without a manual refresh. The source is `web-ui/src/mobile/*`; sync it into `generated/public-web-ui/static/mobile/*` and bump the service-worker version for installed PWA cache invalidation. Current service-worker version: `pm-v243-2026-08-09-auto-settle-settings`.
 
 Session cache: `web-ui/src/mobile/mobile-api.js` caches `loadMobileChatSession` results in-memory for 30s (max 20 entries). Use `invalidateMobileChatSessionCache(sessionId?)` to bust. Cache is automatically busted on `updateMobileChatSessionHistory` writes. This makes revisiting the same chat instant within the TTL window. [2026-06-17]
 
@@ -616,9 +620,61 @@ For mobile voice:
 - `web-ui/src/mobile/mobile-router.js` schedules dismissal after a successful mobile render and after the complete brand sequence; the early bootstrap retains a bounded timeout fallback so the splash cannot trap the user.
 
 Keep the sequence mobile-scoped under `body.pm-mobile-active`. After edits, run the web UI sync check and visually smoke-test a cold load of `#mobile/chat` (or `/mobile`) at the black, constellation, mark, title, and dismissed phases.
+
+## P10-36 Independent Gateway Connections — 2026-08-09
+
+The phone is the client for multiple independent Prometheus gateways. A
+MacBook gateway and a desktop gateway do not share sessions, workspaces,
+files, browser profiles, agents, schedules, memories, credentials, model
+state, tools, or audit data. The phone catalog contains safe target metadata,
+target-scoped pairing grants, view filters, and immutable session target
+bindings only. This first slice is read-only catalog/status/pairing/selection;
+it does not add remote chat execution, task dispatch, computer federation, a
+central scheduler, or a shared database.
+
+Implementation ownership:
+
+- `src/gateway/gateway-identity.ts` owns the persisted installation-local
+  gateway ID and safe descriptor.
+- `src/gateway/routes/pairing.router.ts` owns QR challenge publication,
+  approval/poll, fingerprint-bound token delivery, bounded
+  `/api/mobile/gateway/catalog`, and self-revocation.
+- `web-ui/src/mobile/mobile-gateway-catalog.js` owns the phone catalog,
+  target credentials, namespaced IDs, all/selected filters, status probes,
+  read-only aggregation, and immutable session bindings.
+- `web-ui/src/mobile/mobile-gateways-page.js` and
+  `web-ui/src/mobile/mobile-shell.js` own the Gateway Connections view and
+  drawer entry. `web-ui/src/mobile/mobile-pages.js` owns the current-target
+  composer chip/popover, new-chat-only target selection, and guarded QR camera
+  reuse.
+- `scripts/test-mobile-gateway-contract.mjs` is the focused source-contract
+  test. `workspace/self/38-mobile-gateway-connections.md` is the detailed
+  boundary, security, verification, rollback, and next-phase reference.
+
+Remote target requests must never fall through to the current origin. The
+legacy mobile API path fails closed with `REMOTE_EXECUTION_NOT_ENABLED`, and
+catalog target requests reject unknown/offline/revoked entries. The new
+descriptor/catalog calls use `X-Pairing-Token`; `pt` remains only in older
+media/WebSocket compatibility paths and is not introduced for the new slice.
+
+The existing real camera is reused only when `BarcodeDetector` is available.
+The scanner accepts only a validated Prometheus pairing payload and routes to
+identity confirmation; it never reads or changes the open chat. Other browsers
+receive a short-lived pair-code fallback rather than simulated scan behavior.
+
+After source edits, regenerate public UI with `npm run sync:web-ui`, then run
+`npm run check:web-ui`, `npm run test:mobile-gateway`, and the backend TypeScript
+build. Keep the current-origin single-gateway path as the rollback-compatible
+default.
 ## P0-1 performance record — 2026-08-08
 
 - Prometheus mobile is a shared PWA/mobile-web surface; no native Capacitor app, physical phone, emulator, or paired token was available for this investigation.
 - mobile-router.js now emits one bounded mobile_router_loaded client mark through the shared privacy-conscious performance ring. It records no route content or credentials.
 - The repeatable harness probes 390×844 mobile startup and explicitly reports pairedJourney=false when no token is supplied. In this host state, the unpaired pair route reproduced a Chromium renderer crash after navigation while the machine was already above 92% memory use. This is a limitation/reproduction signal, not proof of a mobile source leak.
 - A paired-device run remains required for chat-list/thread load, composer input, SSE token cadence, offline/network-change recovery, and reconnect timing. Run it only after a clean local gateway state and retain the mobile recovery contract test as the source-level gate.
+
+## Persistent Chat Sources integration — 2026-08-08
+
+Mobile Sources is an online-only metadata surface. The existing top-right overflow menu now includes **Resources** beside Files, Permissions, and Settings. Selecting it opens a top-right popover that is hidden by default and closes through its close button or scrim; it does not appear automatically when a chat opens.
+
+The popover supports attached-source metadata, Browser history, save current Browser page, search, attach, and detach. Mobile caches no full resource contents. Full prompt retrieval remains a gateway concern and uses the same bounded resource context policy as desktop.

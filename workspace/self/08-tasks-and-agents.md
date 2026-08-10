@@ -220,3 +220,9 @@ Important note:
 - `deploy_analysis_team` says the final experience should be inline and says not to call `present_file`
 - `present_file` still mentions `deploy_analysis_team` as a common follow-up
 - treat the current product intent as inline-first until those descriptions are reconciled
+
+## Persistent Chat Sources integration — 2026-08-08
+
+`src/gateway/tasks/task-store.ts` synchronizes each saved task’s bounded journal tail as a versioned `task` chat resource. The resource can be attached to the task session and originating session, so task history is searchable without injecting the full journal into every model turn. `src/gateway/tasks/task-runner.ts` refreshes scheduled-job resource bindings at run time.
+
+Resource inheritance is deliberately narrow: only the background `_spawn` path copies the parent thread’s selected resource links, sharing immutable backing versions. Ordinary task creation, side chats, unrelated agents, and managed threads do not inherit chat resources automatically. Forks use the explicit resource-copy route and record inheritance provenance.

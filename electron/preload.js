@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('prometheusUpdater', {
   getState: () => ipcRenderer.invoke('updater:get-state'),
   /** Force a web update check now. */
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  /** Download an update found during a manual check. */
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
+  /** Enable/disable automatic checks, downloads, and install-on-quit. */
+  setAutoUpdateEnabled: (enabled) => ipcRenderer.invoke('updater:set-auto-update', { enabled: enabled === true }),
   /** Called whenever updater state changes. */
   onState: (cb) => {
     if (typeof cb !== 'function') return () => {};
@@ -43,6 +47,19 @@ contextBridge.exposeInMainWorld('prometheusUpdater', {
 // ─── App Metadata ───────────────────────────────────────────────────────────
 contextBridge.exposeInMainWorld('prometheusApp', {
   getVersion: () => ipcRenderer.invoke('get-app-version'),
+});
+
+// External links are an explicit escape hatch. Ordinary HTTP/HTTPS links are
+// routed by the renderer into the Prometheus Browser; this bridge is only for
+// a user-selected "Open externally" action or an intentional external flow.
+contextBridge.exposeInMainWorld('prometheusExternalLinks', {
+  open: (url) => ipcRenderer.invoke('external-link:open', { url: String(url || '') }),
+  onPrometheusNavigation: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on('prometheus-browser-navigation', handler);
+    return () => ipcRenderer.removeListener('prometheus-browser-navigation', handler);
+  },
 });
 
 // ─── Desktop-only Pairing Administration ──────────────────────────────────
@@ -89,6 +106,7 @@ contextBridge.exposeInMainWorld('prometheusBrowserSurface', {
   },
   // Teach-mode capture in the in-house view.
   setTeachCapture: (options = {}) => ipcRenderer.invoke('native-browser:teach-capture', options),
+  setDesignMode: (options = {}) => ipcRenderer.invoke('native-browser:design-mode', options),
   onTeachClick: (cb) => {
     if (typeof cb !== 'function') return () => {};
     const handler = (_event, payload) => cb(payload);
@@ -118,5 +136,29 @@ contextBridge.exposeInMainWorld('prometheusBrowserSurface', {
     const handler = (_event, payload) => cb(payload);
     ipcRenderer.on('native-browser-teach-scroll', handler);
     return () => ipcRenderer.removeListener('native-browser-teach-scroll', handler);
+  },
+  onDesignHover: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on('native-browser-design-hover', handler);
+    return () => ipcRenderer.removeListener('native-browser-design-hover', handler);
+  },
+  onDesignSelect: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on('native-browser-design-select', handler);
+    return () => ipcRenderer.removeListener('native-browser-design-select', handler);
+  },
+  onDesignAction: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on('native-browser-design-action', handler);
+    return () => ipcRenderer.removeListener('native-browser-design-action', handler);
+  },
+  onDesignChat: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const handler = (_event, payload) => cb(payload);
+    ipcRenderer.on('native-browser-design-chat', handler);
+    return () => ipcRenderer.removeListener('native-browser-design-chat', handler);
   },
 });
