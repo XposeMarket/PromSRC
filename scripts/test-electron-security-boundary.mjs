@@ -80,14 +80,14 @@ for (const channel of ['get-app-version', 'external-link:open', 'select-canvas-p
 }
 assert.match(mainSource, /autoUpdater\.autoDownload\s*=\s*false/);
 assert.match(mainSource, /autoUpdater\.autoInstallOnAppQuit\s*=\s*false/);
-assert.match(mainSource, /autoUpdater\.verifyUpdateCodeSignature\s*=\s*true/);
+assert.match(mainSource, /autoUpdater\.verifyUpdateCodeSignature\s*=\s*false/);
 assert.match(mainSource, /canonicalUpdaterApi\.createVersionedStateBackup/);
 assert.match(mainSource, /canonicalUpdaterApi\.writePendingValidation/);
 assert.match(mainSource, /completePendingCanonicalValidation/);
 assert.match(mainSource, /restart_validation_failed/);
 assert.match(mainSource, /payload\?\.confirm !== true/);
 assert.match(mainSource, /requestUpdateDrain\(\)/);
-assert.match(mainSource, /hasConfiguredUpdatePublisher\(\)/);
+assert.doesNotMatch(mainSource, /hasConfiguredUpdatePublisher/);
 assert.match(mainSource, /waitForGatewayProcessExitStrict/);
 assert.match(mainSource, /autoUpdater\.quitAndInstall\(false, true\)/);
 assert.doesNotMatch(mainSource, /autoUpdater\.autoInstallOnAppQuit\s*=\s*autoUpdateEnabled/);
@@ -119,8 +119,8 @@ assert.match(canonicalUpdaterSource, /acquireUpdateLock/);
 assert.match(canonicalUpdaterSource, /verifyFileSha512/);
 assert.match(canonicalUpdaterSource, /copyFileSync/);
 assert.match(publicBuilderSource, /forceCodeSigning:\s*true/);
-assert.match(publicBuilderSource, /verifyUpdateCodeSignature:\s*true/);
-assert.match(publicBuilderSource, /signAndEditExecutable:\s*true/);
+assert.match(publicBuilderSource, /verifyUpdateCodeSignature:\s*false/);
+assert.match(publicBuilderSource, /signAndEditExecutable:\s*false/);
 assert.match(cliSource, /requestRunningGatewayUpdate/);
 assert.doesNotMatch(cliSource, /git fetch --quiet/);
 assert.doesNotMatch(cliSource, /npm view .* version/);

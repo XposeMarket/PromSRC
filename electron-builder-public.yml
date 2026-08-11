@@ -129,11 +129,11 @@ win:
       arch:
         - x64
   icon: assets/Prometheus.ico
-  verifyUpdateCodeSignature: true
-  # Public installers must be signed so the updater can verify downloaded
-  # packages before installation. Release builds provide the signing
-  # certificate and password through the release environment.
-  signAndEditExecutable: true
+  # Public Windows releases intentionally remain unsigned, matching the
+  # established Prometheus distribution. The Electron updater still validates
+  # the GitHub release manifest and SHA-512 digest before any install.
+  verifyUpdateCodeSignature: false
+  signAndEditExecutable: false
 
 nsis:
   oneClick: false

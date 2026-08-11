@@ -198,7 +198,11 @@ if (IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD) {
     autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.autoRunAppAfterInstall = true;
     autoUpdater.allowDowngrade = false;
-    autoUpdater.verifyUpdateCodeSignature = true;
+    // Public Windows packages are intentionally unsigned in this
+    // distribution. The canonical updater still requires an explicit user
+    // confirmation, a protected state backup, release validation, and a
+    // matching SHA-512 digest before installation.
+    autoUpdater.verifyUpdateCodeSignature = false;
     autoUpdater.setFeedURL?.({ provider: 'github', owner: 'XposeMarket', repo: 'prometheus-releases' });
     autoUpdater.logger          = null;   // suppress console noise; surface via events only
   } catch (e) {
@@ -303,21 +307,6 @@ function validatePrometheusRelease(info) {
 
 function getReleaseDigest(info) {
   return String(info?.sha512 || info?.files?.find?.((file) => file?.sha512)?.sha512 || '').trim();
-}
-
-function hasConfiguredUpdatePublisher() {
-  if (process.platform !== 'win32') return true;
-  const candidates = [
-    path.join(process.resourcesPath || '', 'app-update.yml'),
-    path.join(APP_ROOT, 'app-update.yml'),
-  ];
-  return candidates.some((filePath) => {
-    try {
-      return /(?:^|\n)publisherName:\s*[^\s#]+/i.test(fs.readFileSync(filePath, 'utf8'));
-    } catch {
-      return false;
-    }
-  });
 }
 
 async function verifyDownloadedRelease(info) {
@@ -503,12 +492,6 @@ async function downloadPrometheusUpdate(source = 'manual', lockHeld = false) {
     updaterMessage = releaseCheck.message;
     return sendUpdaterState({ source, errorCode: 'release_validation_failed' });
   }
-  if (!hasConfiguredUpdatePublisher()) {
-    updaterStatus = 'error';
-    updaterMessage = 'Update download is blocked until this Prometheus build has a configured Windows publisher certificate.';
-    return sendUpdaterState({ source, errorCode: 'publisher_not_configured' });
-  }
-
   updaterStatus = 'downloading';
   updaterMessage = `Downloading Prometheus ${availableUpdate.version || 'update'}...`;
   updaterProgress = 0;
@@ -1194,9 +1177,6 @@ async function runSafeCanonicalApply(request = {}) {
 
       const releaseCheck = validatePrometheusRelease(pendingUpdate);
       if (!releaseCheck.ok) throw new Error(releaseCheck.message);
-      if (!hasConfiguredUpdatePublisher()) {
-        throw new Error('Update installation is blocked until this Prometheus build has a configured Windows publisher certificate.');
-      }
       if (!safeStorage.isEncryptionAvailable()) {
         throw new Error('OS-backed encryption is unavailable; Prometheus will not create an unprotected update backup.');
       }
