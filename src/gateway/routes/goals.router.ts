@@ -12,6 +12,7 @@ import {
 import { analyzeRunForImprovement, applyPromptMutation } from '../scheduling/prompt-mutation';
 import { hookBus } from '../hooks';
 import { isModelBusy } from '../comms/broadcaster';
+import { getConnectionRuntime } from '../../connections/runtime';
 import * as path from 'path';
 
 export const router = Router();
@@ -118,9 +119,25 @@ router.get('/api/mcp/servers', (_req, res) => {
     const mgr = getMCPManager();
     const configs = mgr.getConfigs();
     const status = mgr.getStatus();
+    const connections = getConnectionRuntime().orchestrator.listConnections();
     const merged = configs.map(cfg => {
       const s = status.find(x => x.id === cfg.id);
-      return { ...cfg, status: s?.status || 'disconnected', toolCount: s?.tools || 0, toolNames: s?.toolNames || [], error: s?.error, needsOAuth: s?.needsOAuth || false, oauthConnected: s?.oauthConnected || false };
+      const connection = connections.find((item) => item.serviceId === cfg.id || item.configuration?.mcpServerId === cfg.id);
+      return {
+        ...cfg,
+        status: s?.status || 'disconnected',
+        toolCount: s?.tools || 0,
+        toolNames: s?.toolNames || [],
+        error: s?.error,
+        needsOAuth: s?.needsOAuth || false,
+        oauthConnected: s?.oauthConnected || false,
+        connectionId: connection?.id,
+        contractVersion: connection?.contractVersion,
+        registeredTools: connection?.registeredTools,
+        availableTools: connection?.availableTools,
+        exposedTools: connection?.exposedTools,
+        toolMetadata: connection?.tools,
+      };
     });
     res.json({ success: true, servers: merged });
   } catch (err: any) {
@@ -156,6 +173,15 @@ router.post('/api/mcp/servers/:id/connect', async (req, res) => {
     const mgr = getMCPManager();
     const result = await mgr.connect(req.params.id);
     res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/api/mcp/servers/:id/refresh', async (req, res) => {
+  try {
+    const result = await getMCPManager().refreshTools(req.params.id);
+    res.status(result.success ? 200 : 400).json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

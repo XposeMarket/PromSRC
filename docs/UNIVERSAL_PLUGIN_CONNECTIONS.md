@@ -29,8 +29,15 @@ Existing connector state is projected once into `connections-v2.json`. Existing 
 
 ## Tool policy
 
-MCP tools are classified conservatively. Verified read-only tools may be exposed automatically when read-only setup was requested. Write, financial, destructive, credential/security, and unknown tools remain blocked until explicitly reviewed.
+The host keeps three tool decisions separate: `registeredTools` is what the
+runtime implements, `availableTools` is the connection's explicit model-facing
+allowlist, and `exposedTools` is the automatically safe/read-only subset. Read
+tools can run without an approval card. Available write, financial,
+destructive, credential/security, and unknown tools still pass through the
+normal per-call approval/audit policy. A user can replace the complete
+allowlist through `POST /api/connections-v2/:id/tools`; unknown names are
+rejected because they are not registered by the connection.
 
 ## Reference flow
 
-The bundled Robinhood MCP preset exercises the generic MCP OAuth path. It creates a durable attempt, shows an OAuth card, completes authorization on Robinhood's site, discovers tools, exposes only conservative read-only matches, verifies the connection, and supports reauthorization and disconnect.
+The bundled Robinhood MCP preset exercises the generic MCP OAuth path. It creates a durable attempt, shows an OAuth card, completes authorization on Robinhood's site, discovers tools, automatically exposes conservative read-only matches, keeps other discovered tools available behind the normal approval policy, verifies the connection, and supports reauthorization and disconnect.

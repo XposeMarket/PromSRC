@@ -70,6 +70,34 @@ export function checkExtensionConsistency(): ConsistencyIssue[] {
     }
   }
 
+  // 3b. Native runtime connector declarations must be exact, not merely
+  // “at least one manifest tool registered”. This catches both stale manifests
+  // and a runtime file that silently registers a tool that was never reviewed.
+  const runtimeConnectors = new Map(registry.listConnectors().map((connector) => [connector.id, connector]));
+  for (const d of listExtensionDescriptors('connector')) {
+    if (!d.runtime?.entrypoint) continue;
+    const runtime = runtimeConnectors.get(d.id);
+    if (!runtime) {
+      issues.push({ level: 'error', code: 'missing_connector_runtime', message: `${d.id}: native manifest has no registered connector runtime` });
+      continue;
+    }
+    const manifestTools = new Set((d.ownership?.tools || []).map(String).filter(Boolean));
+    const runtimeTools = new Set((runtime.toolNames || []).map(String).filter(Boolean));
+    for (const toolName of manifestTools) {
+      if (!runtimeTools.has(toolName)) {
+        issues.push({ level: 'error', code: 'runtime_tool_missing_from_connector', message: `${d.id}: manifest tool '${toolName}' is missing from runtime connector toolNames` });
+      }
+    }
+    for (const toolName of runtimeTools) {
+      if (!manifestTools.has(toolName)) {
+        issues.push({ level: 'error', code: 'runtime_tool_not_declared', message: `${d.id}: runtime connector declares '${toolName}' but the manifest does not own it` });
+      }
+      if (!registeredByName.has(toolName)) {
+        issues.push({ level: 'error', code: 'runtime_tool_not_registered', message: `${d.id}: runtime connector declares '${toolName}' but no tool definition is registered` });
+      }
+    }
+  }
+
   // 4. Every mcp_preset manifest must carry a launchable mcpPreset block and be
   //    registered in the registry (source of truth for preset configs).
   const registeredPresetIds = new Set(registry.listMcpPresets().map((p) => p.id));

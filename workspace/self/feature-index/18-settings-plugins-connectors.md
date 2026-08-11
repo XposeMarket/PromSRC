@@ -328,7 +328,8 @@ Different portions of the system record more than a binary connected flag:
 | **has credentials / configured** | Secret or configuration was saved; authentication may still be absent or expired. |
 | **authenticated / connected** | The relevant OAuth, API-key, browser-session, or local bridge check says usable access exists. |
 | **registered** | Prometheus has registered the integration's tools. |
-| **exposed** | Those tools are allowed into the active model-facing surface. |
+| **available** | A tool is in the connection's explicit model-facing `availableTools` allowlist. |
+| **exposed** | A tool is in the automatic/read-safe `exposedTools` subset; consequential available tools still use per-call approval. |
 | **verified / healthy** | Verification checks have passed, including safe-read when required. |
 | **degraded / reauth required** | Some access exists but a check failed, or a runtime token error demands reauthorization. |
 
@@ -357,8 +358,10 @@ credential form:
    can ask for OAuth, a secure value, a device code, a browser login, a CLI
    login, external admin approval, or a desktop continuation.
 5. **Connect, register, expose.** The chosen adapter carries out the supported
-   setup and writes a connection record.  A completed adapter may still move
-   into a verification state rather than straight to “ready.”
+   setup and writes a connection record. The host records registered tools,
+   the available allowlist, and the automatic/read-safe subset separately. A
+   completed adapter may still move into a verification state rather than
+   straight to “ready.”
 6. **Verify.** Built-in verification checks authentication, registered tools,
    exposed tools, and a safe read unless the target explicitly disables that
    requirement.  Plugins can add custom checks.  A partial result is marked
@@ -450,11 +453,20 @@ native extension owns schemas and dispatch rather than replacing auth logic.
 The activation planner can select an extension because it is enabled at
 startup, its tool/capability contract matches a request, an activation hint
 matches, or a connector is already connected.  A connector tool definition is
-only included in the connected-connector tool list when the connector's
-`isConnected()` check succeeds.  The registry briefly caches connector-status
-and connection checks (currently five seconds) to avoid expensive repeated
-status probes; a connect/disconnect/invalidation changes the revision and
-clears that cached state.
+included in the connected-connector tool list only when the host-owned
+`src/connections/tool-surface.ts` says its canonical connection is operational
+and the tool is in `availableTools`. `registeredTools` is the runtime contract;
+`exposedTools` is the automatically safe/read-only subset. Available write and
+unknown tools still pass through the normal per-call approval/audit policy.
+Legacy compatibility records fall back to the runtime connector's
+`isConnected()` result until migration. The same availability check runs again
+before native connector and dynamic MCP execution, and connection/allowlist
+mutations invalidate the short-lived surface cache.
+
+Canonical connection details expose `GET/POST /api/connections-v2/:id/tools`
+for inspection and complete allowlist replacement. The Plugins detail view
+uses this endpoint for a user-visible tool checklist; the agent/control plane
+can use `connection_ops` with `set_tool_availability` or `set_exposure`.
 
 ## 6. MCP: configuration, security, OAuth, and dynamic tools
 
@@ -479,6 +491,11 @@ mcp__<serverId>__<toolName>
 They are not present merely because a server row was saved.  If a server is
 disconnected, errors, or is disabled, its tools are not a connected dynamic MCP
 surface.  The UI's tool count/names are therefore a useful operational check.
+MCP stdio sessions react to `notifications/tools/list_changed`; remote
+HTTP/SSE sessions and the Plugins detail view also provide an explicit
+“Refresh discovered tools” path. Refresh replaces the runtime snapshot and
+reconciles managed canonical registration without silently expanding an
+explicit user allowlist.
 
 ### MCP presets
 

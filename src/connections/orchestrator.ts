@@ -4,6 +4,7 @@ import { ConnectionActivityStore } from './activity-store';
 import { ConnectionAttemptStore } from './attempt-store';
 import { ConnectionStore } from './connection-store';
 import { accountIdentitiesMatch } from './connector-contract';
+import { invalidateConnectionToolSurfaceCache } from './tool-surface';
 import type {
   ConnectionAdapterResult, ConnectionAttempt, ConnectionPlan, ConnectionRecord,
   ConnectionDiscoveryResult, ConnectionStrategy, ConnectionVerificationResult,
@@ -46,6 +47,41 @@ export class ConnectionOrchestrator {
   getAttempt(id: string): ConnectionAttempt | undefined { return this.options.attempts.get(id); }
   listAttempts(limit = 50): ConnectionAttempt[] { return this.options.attempts.list({ limit }); }
   listConnections(): ConnectionRecord[] { return this.options.connections.list(); }
+
+  /**
+   * Set the complete model-facing tool allowlist for a connection. Read-only
+   * tools remain in the automatic grant; write/unknown tools are available to
+   * the model only when explicitly included here and still pass through the
+   * normal per-call approval policy.
+   */
+  setToolAvailability(connectionId: string, toolNames: string[]): { connection: ConnectionRecord; rejectedTools: string[] } {
+    const connection = this.options.connections.get(connectionId);
+    if (!connection) throw new Error(`Unknown connection: ${connectionId}`);
+    const registered = new Set(connection.registeredTools.map((tool) => String(tool || '').trim()).filter(Boolean));
+    const requested = [...new Set((Array.isArray(toolNames) ? toolNames : [])
+      .map((tool) => String(tool || '').trim())
+      .filter(Boolean))].sort();
+    const availableTools = requested.filter((tool) => registered.has(tool));
+    const rejectedTools = requested.filter((tool) => !registered.has(tool));
+    const riskByName = new Map((connection.tools || []).map((tool) => [tool.name, tool.risk]));
+    const exposedTools = availableTools.filter((tool) => riskByName.get(tool) === 'read-only');
+    const updated = this.options.connections.update(connectionId, {
+      availableTools,
+      exposedTools,
+      exposed: exposedTools.length > 0,
+    });
+    invalidateConnectionToolSurfaceCache();
+    this.options.activity.append({
+      type: 'connection.updated',
+      connectionId,
+      serviceId: updated.serviceId,
+      pluginId: updated.pluginId,
+      message: `Updated tool availability for ${updated.serviceName || updated.serviceId}: ${availableTools.length}/${updated.registeredTools.length} enabled.`,
+      details: { availableTools, exposedTools, rejectedTools },
+    });
+    this.emit({ type: 'connection_updated', connection: updated });
+    return { connection: updated, rejectedTools };
+  }
 
   discover(service: string): ConnectionDiscoveryResult {
     return this.options.plans.discover?.(service) || { status: 'research_required', query: service, matches: [], nextAction: 'research_official_sources' };
@@ -132,7 +168,8 @@ export class ConnectionOrchestrator {
       const adapter = this.options.adapters.resolve(attempt.plan.strategy);
       await adapter.disconnect?.(this.context(attempt), connection);
     }
-    this.options.connections.update(connectionId, { enabled: false, authenticated: false, exposed: false, exposedTools: [], authState: 'none', health: 'unavailable' });
+    this.options.connections.update(connectionId, { enabled: false, authenticated: false, exposed: false, exposedTools: [], availableTools: [], authState: 'none', health: 'unavailable' });
+    invalidateConnectionToolSurfaceCache();
     this.options.activity.append({ type: 'connection.disconnected', connectionId, serviceId: connection.serviceId, pluginId: connection.pluginId, message: `Disconnected ${connection.serviceName || connection.serviceId}.` });
     this.emit({ type: 'connection_updated', connection: this.options.connections.get(connectionId) });
   }

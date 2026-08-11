@@ -62,6 +62,10 @@ const mcpRenderer = connections.slice(connections.indexOf('function renderMcpSer
 assert.doesNotMatch(mcpRenderer, /renderManagedOAuthActions|hasCanonicalOAuthStrategy\(connector\)/, 'MCP list rendering must not reference connector-card state');
 assert.match(connections, /expectedAccountId/, 'managed connector flow must carry account continuity metadata');
 assert.match(connections, /capabilityGrants/, 'connector detail must display canonical capability grants');
+assert.match(connections, /availableTools/, 'connector detail must expose the canonical model-facing tool allowlist');
+assert.match(connections, /saveConnectorToolAvailability/, 'connector detail must persist tool access through the canonical route');
+assert.match(connections, /saveMcpToolAvailability/, 'MCP detail must persist tool access through the canonical route');
+assert.match(connections, /api\/connections-v2\//, 'connector detail must use the v2 connection tool contract');
 for (const statusLabel of ['Needs verification', 'Admin approval required', 'Degraded', 'Reauthorize', 'Disconnected']) {
   assert.match(connections, new RegExp(statusLabel.replace(/\s+/g, '\\s+')), `Plugins must expose the ${statusLabel} state`);
 }
@@ -93,5 +97,6 @@ assert.match(connectorDocs, /connector-only/, 'connector self-docs must record p
 assert.match(connectorDocs, /no-search-match/, 'connector self-docs must record catalog states');
 assert.match(connectorDocs, /OAuth connector audit/, 'connector self-docs must record the OAuth audit');
 assert.match(connectorDocs, /Vercel and Stripe are not OAuth/, 'connector self-docs must classify API-key connectors correctly');
+assert.match(desktopDocs, /availableTools/, 'desktop self-docs must describe the canonical tool allowlist');
 
 console.log('[test-plugins-page-contract] Plugins navigation, grouped catalog, brand marks, lifecycle hooks, and docs contract passed');

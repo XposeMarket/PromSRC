@@ -276,6 +276,7 @@ export class ConnectorOAuthConnectionAdapter implements ConnectionAdapter {
       capabilityGrants: capabilities.capabilityGrants,
       grantedScopes: metadata.grantedScopes,
       registeredTools: tools.registeredTools,
+      availableTools: tools.registeredTools,
       exposedTools: tools.exposedTools,
       tools: tools.tools,
       providerApp: providerAppMetadata(strategy, metadata, bridge.id),

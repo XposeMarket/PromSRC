@@ -58,7 +58,7 @@ Current connector/plugin architecture facts:
 - connector/plugin metadata begins in bundled `prometheus.extension.json` descriptors
 - extension manifests can now declare explicit `contracts`, activation hints, and trust level
 - active connector tools are surfaced through the extension runtime registry, not directly from `connector-tools.ts`
-- active connector tool calls execute through the extension runtime registry, which currently delegates legacy tools to `handleConnectorTool(...)`
+- active connector tool calls execute through the extension runtime registry, with the host-owned `src/connections/tool-surface.ts` availability check applied before native execution
 - `connector_list` is still core/always available, but its status text is built through `getExtensionRuntimeRegistry().buildConnectorStatus()`
 - `connector_list` status is cached briefly inside `PrometheusExtensionRuntimeRegistry` (currently 5 seconds) and built with a single pass over connector `isConnected()` results. This keeps repeated connector discovery calls cheap without making connection state sticky for long.
 - `external_apps` is wrapper-first for the largest bundled surfaces: X/xAI uses `x_search_ops`, `x_posts`, `x_users`, `x_lists`, `x_dm`, and `x_admin`; Vercel uses `vercel_ops`. Granular connector/extension tools remain executable internals and auth still flows through the connector runtime.
@@ -131,9 +131,56 @@ Guardrails (`src/extensions/consistency.ts`, run at load + via
 - connector/provider/MCP-preset ids and tool names must be collision-free
 - `connector_list` status comes only from `getExtensionRuntimeRegistry().buildConnectorStatus()`
 - connected connector tool defs come only from
-  `getExtensionRuntimeRegistry().listConnectedConnectorToolDefinitions()`
+  `getExtensionRuntimeRegistry().listConnectedConnectorToolDefinitions()`, which
+  uses canonical `availableTools` for managed records and the legacy runtime
+  status fallback for unmigrated records
+- native connector and dynamic MCP calls re-check the same availability decision
+  at execution time; `exposedTools` is the safe/read-only automatic subset, not
+  the only way a write action can reach the normal approval queue
+- native connector manifests and runtime connector `toolNames` are checked for
+  exact parity by `src/extensions/consistency.ts`, not just one-way missing
+  tool registration
 - the legacy adapter skips any connector that has a native `runtime.entrypoint`, so
   native and legacy can never double-register during the transition
+
+### 23A) Plugin/MCP interoperability baseline — 2026-08-11
+
+The connector-only Prometheus surface follows the common interoperability
+patterns used by OpenAI Apps, Claude/MCP, Hermes Agent, and OpenClaw without
+folding model-provider credentials into the Plugins catalog:
+
+- **One connection, one host-owned tool surface.** A plugin/MCP connection
+  keeps the discovered/registered implementation names, an explicit
+  `availableTools` model-facing allowlist, and an `exposedTools` automatic
+  read-only subset. Writes and unknown side effects may remain available so the
+  normal per-call approval policy can run; disabling a tool removes it from the
+  model-facing allowlist entirely.
+- **Discover, authorize, expose, and execute are separate stages.** OAuth/API
+  key/browser/MCP setup produces a canonical connection record. Tool access is
+  then adjustable independently, and execution checks that record again rather
+  than trusting a stale prompt/tool list. This mirrors app permission controls,
+  MCP tool configuration, and OpenClaw's install/enable/runtime boundaries.
+- **MCP discovery is refreshable.** stdio `notifications/tools/list_changed`, an
+  explicit Plugins “Refresh discovered tools” action, and the
+  `POST /api/mcp/servers/:id/refresh` route update the canonical tool snapshot.
+  Explicit user allowlists survive refresh by intersection with the newly
+  registered names; removed tools cannot remain executable. Managed MCP detail
+  views use the same `availableTools`/`exposedTools` grant controls as native
+  connectors; older manually configured servers retain a visible compatibility
+  list until they enter the canonical connection-v2 flow.
+- **Remote MCP auth remains standards-based.** HTTP/SSE servers use the
+  existing OAuth metadata discovery, PKCE/state, vault-backed credentials, and
+  bearer/header handling. Prometheus does not silently treat a remote server as
+  trusted or auto-authorize newly discovered write tools.
+- **Tool schemas remain discoverable and deterministic.** Catalog/runtime
+  validation requires exact manifest/runtime ownership parity, while MCP
+  discovery preserves server-provided schemas and deterministic ordering. Tool
+  list changes invalidate the managed snapshot before a subsequent call.
+- **Scope boundary:** this baseline applies to connector/integration plugins,
+  custom MCP servers, local integrations, browser-session connectors, and
+  developer/advanced setup. Model providers, chat-model credentials, voice/
+  realtime providers, reasoning defaults, and provider authentication remain in
+  their existing Settings surfaces.
 
 Per-connector migration checklist:
 

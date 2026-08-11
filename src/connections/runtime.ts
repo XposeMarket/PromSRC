@@ -20,6 +20,12 @@ import type { ConnectionAdapterContext } from './types';
 import { buildMcpServerConfigFromPreset } from '../extensions/mcp-preset-service';
 import { ensurePrometheusExtensionRuntimeLoaded } from '../extensions/legacy-connector-adapter';
 import { migrateLegacyConnections } from './legacy-migration';
+export {
+  isManagedConnectorToolAvailable,
+  isManagedMcpToolAvailable,
+  isManagedConnectorToolExposed,
+  isManagedMcpToolExposed,
+} from './tool-surface';
 
 let singleton: { orchestrator: ConnectionOrchestrator; secureInput: SecureInputService; adapters: ConnectionAdapterRegistry } | null = null;
 
@@ -148,11 +154,3 @@ export function getConnectionRuntime() {
 }
 
 export function resetConnectionRuntime(): void { singleton = null; }
-
-export function isManagedMcpToolExposed(serverId: string, toolName: string): boolean {
-  const records = getConnectionRuntime().orchestrator.listConnections().filter((connection) =>
-    String(connection.configuration?.mcpServerId || connection.serviceId) === serverId,
-  );
-  if (!records.length) return true; // legacy unmanaged MCP configs retain compatibility
-  return records.some((connection) => connection.enabled && connection.exposedTools.includes(toolName));
-}

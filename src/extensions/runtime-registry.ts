@@ -18,6 +18,7 @@ import type { ConnectionAdapter } from '../connections/types.js';
 import type { ConnectionToolClassifier } from '../connections/tool-classifier.js';
 import type { ConnectionVerifier } from '../connections/verification-service.js';
 import type { LoadedExtensionDescriptor } from './types.js';
+import { getConnectionToolExposure } from '../connections/tool-surface.js';
 
 type RegisteredTool = PrometheusExtensionTool & {
   extensionId: string;
@@ -224,6 +225,11 @@ export class PrometheusExtensionRuntimeRegistry {
       .filter((tool) => {
         const connectorId = String((tool as any).connectorId || '').trim();
         if (!connectorId) return true;
+        const canonical = getConnectionToolExposure(connectorId, tool.name);
+        // Canonical connection records are authoritative for native and
+        // managed MCP-backed connectors. Legacy connectors keep their old
+        // runtime status path until they are migrated.
+        if (canonical.managed) return canonical.available;
         if (!connectedById.has(connectorId)) {
           connectedById.set(connectorId, this.isConnectorConnected(connectorId, now));
         }

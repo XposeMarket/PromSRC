@@ -39,6 +39,9 @@ export interface MCPTool {
   name: string;
   description: string;
   inputSchema: any;
+  outputSchema?: any;
+  annotations?: Record<string, unknown>;
+  execution?: Record<string, unknown>;
   serverId: string;
   serverName: string;
 }
@@ -63,6 +66,7 @@ interface MCPSession {
   pendingRequests: Map<number, PendingRequest>;
   buffer: string;
   initialized: boolean;
+  toolsUpdatedAt?: number;
 }
 
 export async function readJsonRpcResponse(resp: Response, timeoutMs: number): Promise<any> {
@@ -129,6 +133,7 @@ export interface MCPServerStatus {
   needsOAuth?: boolean;
   /** OAuth tokens are stored for this server. */
   oauthConnected?: boolean;
+  toolsUpdatedAt?: number;
 }
 
 // ─── Manager ──────────────────────────────────────────────────────────────────
@@ -138,6 +143,7 @@ export class MCPManager {
   private configDir: string;
   private sessions = new Map<string, MCPSession>();
   private configs: MCPServerConfig[] = [];
+  private readonly toolsChangedListeners = new Set<(serverId: string, tools: MCPTool[]) => void>();
   // Last WWW-Authenticate hint per server from a 401/403, used to bootstrap the
   // OAuth discovery flow.
   private oauthHints = new Map<string, { wwwAuthenticate: string }>();
@@ -274,6 +280,13 @@ export class MCPManager {
 
   getConfigs(): MCPServerConfig[] { return this.configs; }
 
+  /** Subscribe to a refreshed MCP tool list. Used by hosts that cache model
+   * tool definitions and need to invalidate them after tools/list changes. */
+  onToolsChanged(listener: (serverId: string, tools: MCPTool[]) => void): () => void {
+    this.toolsChangedListeners.add(listener);
+    return () => this.toolsChangedListeners.delete(listener);
+  }
+
   // ── CRIT-02 fix: validate command before accepting MCP config ─────────────────
   // MCP stdio configs spawn real processes. Validate the command is in the
   // known-safe allowlist so a prompt-injected instruction cannot register
@@ -380,6 +393,94 @@ export class MCPManager {
     return true;
   }
 
+  private normalizeTools(rawTools: any[], cfg: MCPServerConfig): MCPTool[] {
+    return (Array.isArray(rawTools) ? rawTools : [])
+      .map((tool: any) => ({
+        name: String(tool?.name || '').trim(),
+        description: String(tool?.description || ''),
+        inputSchema: tool?.inputSchema || { type: 'object', properties: {} },
+        outputSchema: tool?.outputSchema,
+        annotations: tool?.annotations && typeof tool.annotations === 'object' ? tool.annotations : undefined,
+        execution: tool?.execution && typeof tool.execution === 'object' ? tool.execution : undefined,
+        serverId: cfg.id,
+        serverName: cfg.name,
+      }))
+      .filter((tool) => tool.name);
+  }
+
+  private async setSessionTools(session: MCPSession, tools: MCPTool[]): Promise<void> {
+    const previous = JSON.stringify(session.tools);
+    const next = JSON.stringify(tools);
+    session.tools = tools;
+    session.toolsUpdatedAt = Date.now();
+    try {
+      const { reconcileManagedConnectionTools } = await import('../connections/tool-surface.js');
+      reconcileManagedConnectionTools(session.config.id, tools.map((tool) => tool.name));
+    } catch { /* canonical records are optional for legacy MCP configs */ }
+    if (previous === next) return;
+    for (const listener of this.toolsChangedListeners) {
+      try { listener(session.config.id, tools.slice()); } catch {}
+    }
+  }
+
+  /** Build headers for a live HTTP MCP request, refreshing OAuth when needed. */
+  private async buildHttpHeaders(session: MCPSession): Promise<Record<string, string>> {
+    const resolvedHeaders = this.resolveEnvSecrets(session.config.headers || {});
+    if (resolvedHeaders.missingRefs.length > 0) {
+      throw new Error(`Missing vault secret(s): ${resolvedHeaders.missingRefs.join(', ')}`);
+    }
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/event-stream',
+      'MCP-Protocol-Version': '2025-03-26',
+      ...resolvedHeaders.env,
+      ...((session as any)._sessionHeaders || {}),
+    };
+    const hasConfiguredAuth = Object.keys(resolvedHeaders.env).some((key) => key.toLowerCase() === 'authorization');
+    if (!hasConfiguredAuth) {
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === 'authorization') delete headers[key];
+      }
+      try {
+        const { getValidMcpAccessToken } = await import('./mcp-oauth.js');
+        const token = await getValidMcpAccessToken(session.config.id);
+        if (token) headers.Authorization = `Bearer ${token}`;
+      } catch { /* OAuth is optional for manually authenticated servers. */ }
+    }
+    return headers;
+  }
+
+  /** Re-run tools/list for a live session and replace its tool snapshot. */
+  async refreshTools(id: string): Promise<{ success: boolean; tools?: MCPTool[]; error?: string }> {
+    const session = this.sessions.get(id);
+    if (!session) return { success: false, error: `MCP server "${id}" not connected` };
+    if (session.status !== 'connected') return { success: false, error: `MCP server "${id}" is ${session.status}` };
+
+    try {
+      let rawTools: any[] = [];
+      if (session.config.transport === 'stdio') {
+        const result = await this.sendRequest(session, 'tools/list', {});
+        rawTools = result?.tools || [];
+      } else {
+        const cfg = session.config;
+        const headers = await this.buildHttpHeaders(session);
+        const response = await fetch(cfg.url!, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ jsonrpc: '2.0', id: session.requestId++, method: 'tools/list', params: {} }),
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+        const data = await readJsonRpcResponse(response, 12000);
+        rawTools = data?.result?.tools || data?.tools || [];
+      }
+      await this.setSessionTools(session, this.normalizeTools(rawTools, session.config));
+      return { success: true, tools: session.tools.slice() };
+    } catch (error: any) {
+      return { success: false, error: String(error?.message || error) };
+    }
+  }
+
   // ── Connection ─────────────────────────────────────────────────────────────
 
   async connect(id: string): Promise<{ success: boolean; tools?: MCPTool[]; error?: string }> {
@@ -476,14 +577,8 @@ export class MCPManager {
 
           try {
             const toolsResult = await this.sendRequest(session, 'tools/list', {});
-            const tools: MCPTool[] = (toolsResult?.tools || []).map((t: any) => ({
-              name: t.name,
-              description: t.description || '',
-              inputSchema: t.inputSchema || { type: 'object', properties: {} },
-              serverId: cfg.id,
-              serverName: cfg.name,
-            }));
-            session.tools = tools;
+            const tools = this.normalizeTools(toolsResult?.tools || [], cfg);
+            await this.setSessionTools(session, tools);
             session.status = 'connected';
             session.initialized = true;
             console.log(`[MCP:${cfg.id}] Connected — ${tools.length} tool(s): ${tools.map(t => t.name).join(', ')}`);
@@ -619,15 +714,8 @@ export class MCPManager {
 
       const toolsData = await readJsonRpcResponse(toolsResp, 12000);
 
-      const tools: MCPTool[] = (toolsData?.result?.tools || []).map((t: any) => ({
-        name: t.name,
-        description: t.description || '',
-        inputSchema: t.inputSchema || { type: 'object', properties: {} },
-        serverId: cfg.id,
-        serverName: cfg.name,
-      }));
-
-      session.tools = tools;
+      const tools = this.normalizeTools(toolsData?.result?.tools || [], cfg);
+      await this.setSessionTools(session, tools);
       session.status = 'connected';
       session.initialized = true;
       (session as any)._sessionHeaders = sessionHeaders;
@@ -661,14 +749,8 @@ export class MCPManager {
 
     if (session.config.transport === 'sse' || session.config.transport === 'http') {
       const cfg = session.config;
-      // Use session-scoped headers (includes Mcp-Session-Id if server issued one)
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/event-stream',
-        'MCP-Protocol-Version': '2025-03-26',
-        ...(cfg.headers || {}),
-        ...((session as any)._sessionHeaders || {}),
-      };
+      // Use session-scoped headers (including Mcp-Session-Id) plus a fresh OAuth token.
+      const headers = await this.buildHttpHeaders(session);
       const resp = await fetch(cfg.url!, {
         method: 'POST', headers,
         body: JSON.stringify({ jsonrpc: '2.0', id: session.requestId++, method: 'tools/call', params: { name: toolName, arguments: args } }),
@@ -705,6 +787,7 @@ export class MCPManager {
         error: session?.error,
         needsOAuth: Boolean((session as any)?._needsOAuth) || this.oauthHints.has(cfg.id),
         oauthConnected: hasMcpOAuthTokens ? hasMcpOAuthTokens(cfg.id) : undefined,
+        toolsUpdatedAt: session?.toolsUpdatedAt,
       };
     });
   }
@@ -752,6 +835,10 @@ export class MCPManager {
   }
 
   private handleMessage(session: MCPSession, msg: any): void {
+    if (msg?.method === 'notifications/tools/list_changed') {
+      void this.refreshTools(session.config.id);
+      return;
+    }
     if (msg.id !== undefined && session.pendingRequests.has(msg.id)) {
       const pending = session.pendingRequests.get(msg.id)!;
       session.pendingRequests.delete(msg.id);

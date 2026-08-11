@@ -121,7 +121,7 @@ The chat mode owns the central `main.main-shell` and the right panel. Non-chat m
 
 Settings is modal, not a page mode. `openSettings(tab)` and `closeSettings()` live in `SettingsPage.js`; the modal markup lives in `index.html`.
 
-The More popover exposes a dedicated `plugins` mode. `#plugins-view` owns the lightweight catalog shell and search UI; `ConnectionsPage.js` is loaded on first entry, fetches only `GET /api/extensions/catalog?kind=connector` plus connection attempts/configured MCP state, and owns the connector/MCP detail overlay `#connector-view`. The overlay is positioned against the active page or chat surface, so the same connection contracts remain usable from both compatibility paths. Model/provider settings remain in Settings.
+The More popover exposes a dedicated `plugins` mode. `#plugins-view` owns the lightweight catalog shell and search UI; `ConnectionsPage.js` is loaded on first entry, fetches only `GET /api/extensions/catalog?kind=connector` plus connection attempts/configured MCP state, and owns the connector/MCP detail overlay `#connector-view`. The overlay is positioned against the active page or chat surface, so the same connection contracts remain usable from both compatibility paths. Managed detail views use the canonical connection-v2 `registeredTools`/`availableTools`/`exposedTools` surface; model-provider settings remain in Settings.
 
 Projects are split: sidebar/list behavior lives in `ProjectsPage.js`, while project sessions ultimately route back into Chat/canvas through `ChatPage.js` globals.
 

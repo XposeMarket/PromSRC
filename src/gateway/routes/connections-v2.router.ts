@@ -81,6 +81,34 @@ router.get('/api/connections-v2', (_req, res) => {
   catch (error: any) { res.status(500).json({ success: false, error: error?.message || String(error) }); }
 });
 
+router.get('/api/connections-v2/:id/tools', (req, res) => {
+  try {
+    const connection = getConnectionRuntime().orchestrator.listConnections().find((item) => item.id === req.params.id);
+    if (!connection) { res.status(404).json({ success: false, error: 'Connection not found' }); return; }
+    res.json({
+      success: true,
+      connectionId: connection.id,
+      registeredTools: connection.registeredTools,
+      availableTools: connection.availableTools ?? connection.registeredTools,
+      exposedTools: connection.exposedTools,
+      tools: connection.tools || [],
+    });
+  } catch (error: any) { res.status(500).json({ success: false, error: error?.message || String(error) }); }
+});
+
+router.post('/api/connections-v2/:id/tools', (req, res) => {
+  try {
+    const requested = req.body?.availableTools ?? req.body?.toolNames;
+    if (!Array.isArray(requested)) { res.status(400).json({ success: false, error: 'availableTools must be an array' }); return; }
+    const result = getConnectionRuntime().orchestrator.setToolAvailability(req.params.id, requested.map(String));
+    res.json({
+      success: true,
+      connection: result.connection,
+      rejectedTools: result.rejectedTools,
+    });
+  } catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }
+});
+
 router.post('/api/connections-v2/:id/disconnect', async (req, res) => {
   try { await getConnectionRuntime().orchestrator.disconnect(req.params.id); res.json({ success: true }); }
   catch (error: any) { res.status(400).json({ success: false, error: error?.message || String(error) }); }

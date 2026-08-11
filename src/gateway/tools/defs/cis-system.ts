@@ -305,11 +305,13 @@ export function getCisSystemTools(): any[] {
         parameters: {
           type: 'object', required: ['action'],
           properties: {
-            action: { type: 'string', enum: ['discover', 'plan', 'connect', 'continue', 'verify', 'repair', 'status', 'cancel', 'disconnect', 'list', 'list_connections'] },
+            action: { type: 'string', enum: ['discover', 'plan', 'connect', 'continue', 'verify', 'repair', 'status', 'cancel', 'disconnect', 'list', 'list_connections', 'set_tool_availability', 'set_exposure'] },
             service: { type: 'string' }, service_id: { type: 'string' }, service_name: { type: 'string' },
             connection_attempt_id: { type: 'string' }, connection_id: { type: 'string' },
             detail: { type: 'string', enum: ['compact', 'full'], description: 'compact (default) returns bounded summaries; full returns complete canonical records.' },
             requested_capabilities: { type: 'array', items: { type: 'string' } }, read_only: { type: 'boolean' },
+            available_tools: { type: 'array', items: { type: 'string' }, description: 'For set_tool_availability/set_exposure: exact connector or MCP tool names to make available to the model. Write tools remain subject to normal approval.' },
+            tool_names: { type: 'array', items: { type: 'string' }, description: 'Compatibility alias for available_tools.' },
             approved: { type: 'boolean' }, metadata: { type: 'object' }, input: { type: 'object' },
           }, additionalProperties: false,
         },
@@ -345,7 +347,7 @@ export function getCisSystemTools(): any[] {
           type: 'object',
           required: ['action'],
           properties: {
-            action: { type: 'string', description: 'Action: list | status | upsert | import | connect | disconnect | delete | list_tools | start_enabled | oauth_start | oauth_status | oauth_clear' },
+            action: { type: 'string', description: 'Action: list | status | upsert | import | connect | disconnect | delete | list_tools | refresh_tools | start_enabled | oauth_start | oauth_status | oauth_clear' },
             id: { type: 'string', description: 'Server ID for connect/disconnect/delete/upsert' },
             name: { type: 'string', description: 'Human-readable server name (defaults to id)' },
             transport: { type: 'string', description: 'stdio, sse, or http (http is accepted as alias for streamable HTTP MCP)' },

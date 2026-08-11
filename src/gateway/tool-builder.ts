@@ -1614,8 +1614,8 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       const mcpTools = mcpToolsSnapshot || [];
       for (const t of mcpTools) {
         try {
-          const { isManagedMcpToolExposed } = require('../connections/runtime');
-          if (!isManagedMcpToolExposed(t.serverId, t.name)) continue;
+          const { isManagedMcpToolAvailable } = require('../connections/runtime');
+          if (!isManagedMcpToolAvailable(t.serverId, t.name)) continue;
         } catch { /* preserve legacy exposure if the orchestrator is unavailable */ }
         const prefixedName = `mcp__${t.serverId}__${t.name}`;
         dynamicToolDefs.push({

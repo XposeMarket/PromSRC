@@ -7,6 +7,7 @@ import type { ToolResult } from '../../tool-builder';
 import { resolveHookConfig } from '../../comms/webhook-handler';
 import { getConfig } from '../../../config/config';
 import { listMcpPresets, buildMcpServerConfigFromPreset } from '../../../extensions/mcp-preset-service';
+import { isManagedConnectorToolAvailable } from '../../../connections/tool-surface';
 
 const PLATFORM_TOOL_NAMES = new Set([
   'mcp_server_manage',
@@ -25,6 +26,10 @@ function isPlatformToolName(name: string): boolean {
   if (PLATFORM_TOOL_NAMES.has(name)) return true;
   if (name.startsWith('mcp__')) return true;
   if (name.startsWith('connector_')) return true;
+  // X API tools are connector-owned even though their historical namespace
+  // predates the connector_ prefix. Keep x_search/xai_live_search out of this
+  // branch; those remain model-provider tools.
+  if (name.startsWith('x_api_')) return true;
   try {
     const { loadComposites } = require('../../tools/composite-tools');
     return loadComposites().has(name);
@@ -49,8 +54,8 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
         const serverId = parts[1];
         const toolName = parts.slice(2).join('__');
         try {
-          const { isManagedMcpToolExposed } = await import('../../../connections/runtime.js');
-          if (!isManagedMcpToolExposed(serverId, toolName)) return { name, args, result: `MCP tool "${toolName}" is blocked by the connection exposure policy. Review and approve it before use.`, error: true };
+          const { isManagedMcpToolAvailable } = await import('../../../connections/runtime.js');
+          if (!isManagedMcpToolAvailable(serverId, toolName)) return { name, args, result: `MCP tool "${toolName}" is blocked by the connection tool-availability policy. Enable it from Plugins before use.`, error: true };
           const mcpResult = await getMCPManager().callTool(serverId, toolName, args ?? {});
           const text = mcpResult.content
             .map((c: any) => c.text || c.data || '')
@@ -85,6 +90,7 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
               toolNames: s.toolNames || [],
               error: s.error,
               description: cfg?.description,
+              toolsUpdatedAt: s.toolsUpdatedAt,
             };
           });
           const connected = servers.filter((s: any) => s.status === 'connected').length;
@@ -175,6 +181,15 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
           return { name, args, result: `All MCP tools (${allTools.length}):\n${lines.join('\n')}`, error: false };
         }
 
+        if (action === 'refresh_tools') {
+          const id = String(args.id || '').trim();
+          if (!id) return { name, args, result: 'refresh_tools requires id', error: true };
+          const refreshed = await mcpMgr.refreshTools(id);
+          return refreshed.success
+            ? { name, args, result: `Refreshed "${id}" — ${(refreshed.tools || []).length} tool(s): ${(refreshed.tools || []).map((tool: any) => tool.name).join(', ') || '(none)'}`, error: false }
+            : { name, args, result: `Could not refresh "${id}": ${refreshed.error}`, error: true };
+        }
+
         if (action === 'delete') {
           const id = String(args.id || '').trim();
           if (!id) return { name, args, result: 'delete requires id', error: true };
@@ -241,7 +256,7 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
           };
         }
 
-        return { name, args, result: `Unknown mcp_server_manage action: "${action}". Valid: list, status, connect, disconnect, delete, upsert, import, list_tools, start_enabled, oauth_start, oauth_status, oauth_clear`, error: true };
+        return { name, args, result: `Unknown mcp_server_manage action: "${action}". Valid: list, status, connect, disconnect, delete, upsert, import, list_tools, refresh_tools, start_enabled, oauth_start, oauth_status, oauth_clear`, error: true };
       } catch (err: any) {
         return { name, args, result: `mcp_server_manage error: ${err.message}`, error: true };
       }
@@ -264,7 +279,8 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
             authState: runtimeInvalid ? 'reauth_required' : connection.authState,
             health: runtimeInvalid ? 'unavailable' : connection.health,
             verified: runtimeInvalid ? false : connection.verified,
-            toolCount: Array.isArray(connection.exposedTools) ? connection.exposedTools.length : 0,
+            toolCount: Array.isArray(connection.availableTools) ? connection.availableTools.length : (Array.isArray(connection.registeredTools) ? connection.registeredTools.length : 0),
+            autoExposedToolCount: Array.isArray(connection.exposedTools) ? connection.exposedTools.length : 0,
             ...(runtimeInvalid ? { error: String(mcpStatus?.error || 'MCP runtime unavailable').slice(0, 240), action: 'reauthenticate' } : {}),
           };
         };
@@ -283,6 +299,24 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
           if (!query) return { name, args, result: 'status requires connection_attempt_id, connection_id, or service', error: true };
           const connection = runtime.orchestrator.listConnections().find((item: any) => item.id.toLowerCase() === query || item.serviceId.toLowerCase() === query || String(item.serviceName || '').toLowerCase() === query);
           return connection ? { name, args, result: JSON.stringify({ connection: args.detail === 'full' ? connection : summarizeConnection(connection) }), error: false } : { name, args, result: `Connection "${query}" not found.`, error: true };
+        }
+        if (action === 'set_tool_availability' || action === 'set_exposure') {
+          const connectionId = String(args.connection_id || args.id || '').trim();
+          const requested = args.available_tools ?? args.availableTools ?? args.tool_names ?? args.toolNames;
+          if (!connectionId) return { name, args, result: 'set_tool_availability requires connection_id', error: true };
+          if (!Array.isArray(requested)) return { name, args, result: 'set_tool_availability requires available_tools as an array', error: true };
+          const update = runtime.orchestrator.setToolAvailability(connectionId, requested.map(String));
+          return {
+            name,
+            args,
+            result: JSON.stringify({
+              connectionId,
+              availableTools: update.connection.availableTools || [],
+              exposedTools: update.connection.exposedTools,
+              rejectedTools: update.rejectedTools,
+            }, null, 2),
+            error: false,
+          };
         }
         if (action === 'discover') {
           const service = String(args.service || args.service_id || '').trim();
@@ -436,10 +470,16 @@ export const platformCapabilityExecutor: CapabilityExecutor = {
       return { name, args, result: buildConnectorStatus(), error: false };
     }
 
-    if (name.startsWith('connector_') && name !== 'connector_list') {
+    if ((name.startsWith('connector_') || name.startsWith('x_api_')) && name !== 'connector_list') {
       // Route through the extension registry (native connectors own execution).
       ensurePrometheusExtensionRuntimeLoaded();
-      const connResult = await getExtensionRuntimeRegistry().executeTool(name, args);
+      const registry = getExtensionRuntimeRegistry();
+      const extensionTool = registry.getTool(name) as any;
+      const connectorId = String(extensionTool?.connectorId || '').trim();
+      if (connectorId && !isManagedConnectorToolAvailable(connectorId, name)) {
+        return { name, args, result: `Connector tool "${name}" is not enabled for this connection. Enable it in Plugins → connection details before use.`, error: true };
+      }
+      const connResult = await registry.executeTool(name, args);
       return { name, args, ...connResult };
     }
 

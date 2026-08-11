@@ -100,6 +100,7 @@ export function isConnectionRecord(value: unknown): value is ConnectionRecord {
     && (value.resources === undefined || (Array.isArray(value.resources) && value.resources.every(isResourceIdentity)))
     && (value.capabilityGrants === undefined || (Array.isArray(value.capabilityGrants) && value.capabilityGrants.every(isCapabilityGrant)))
     && (value.providerApp === undefined || isProviderAppMetadata(value.providerApp))
+    && (value.availableTools === undefined || isStringArray(value.availableTools))
     && typeof value.createdAt === 'string'
     && typeof value.updatedAt === 'string';
 }

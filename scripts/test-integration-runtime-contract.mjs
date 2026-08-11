@@ -26,6 +26,7 @@ const actionDescription = mcp.function.parameters.properties.action.description;
 for (const action of ['oauth_start', 'oauth_status', 'oauth_clear']) {
   assert(actionDescription.includes(action), `MCP schema missing ${action}`);
 }
+assert(actionDescription.includes('refresh_tools'), 'MCP schema missing refresh_tools');
 assert(mcp.function.parameters.properties.scope, 'MCP OAuth scope schema missing');
 
 const metadataCandidates = buildAuthMetadataCandidates('https://agent.robinhood.com/mcp/trading', 'https://agent.robinhood.com');
@@ -50,6 +51,18 @@ assert.equal(parsedSse.result.tools[0].description, largeDescription, 'chunked S
 const toolBuilderSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'tool-builder.ts'), 'utf8');
 assert(!toolBuilderSource.includes('PROMETHEUS_DIRECT_CONNECTOR_TOOL_SCHEMAS'), 'connected connector schemas must not require an environment opt-in');
 assert.match(toolBuilderSource, /categoryIsActive\('external_apps'\)/, 'external_apps must expose connected connector schemas');
+const toolSurfaceSource = fs.readFileSync(path.join(root, 'src', 'connections', 'tool-surface.ts'), 'utf8');
+assert.match(toolSurfaceSource, /availableTools/, 'canonical connection tool surface must support explicit availability');
+assert.match(toolSurfaceSource, /isManagedConnectorToolAvailable/, 'native connector execution must have a host-owned guard');
+assert.match(toolSurfaceSource, /isManagedMcpToolAvailable/, 'MCP execution must have a host-owned guard');
+const runtimeRegistrySource = fs.readFileSync(path.join(root, 'src', 'extensions', 'runtime-registry.ts'), 'utf8');
+assert.match(runtimeRegistrySource, /getConnectionToolExposure/, 'connected connector definitions must consult canonical connection state');
+const mcpManagerSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'mcp-manager.ts'), 'utf8');
+assert.match(mcpManagerSource, /notifications\/tools\/list_changed/, 'MCP list changes must trigger refresh');
+assert.match(mcpManagerSource, /refreshTools\(id:/, 'MCP tools must have an explicit refresh path');
+assert.match(mcpManagerSource, /buildHttpHeaders/, 'live MCP HTTP requests must rebuild vault/OAuth headers');
+const consistencySource = fs.readFileSync(path.join(root, 'src', 'extensions', 'consistency.ts'), 'utf8');
+assert.match(consistencySource, /Native runtime connector declarations must be exact/, 'manifest/runtime connector parity must be checked');
 
 const webhook = await platformCapabilityExecutor.execute({
   name: 'webhook_manage', args: { action: 'get' }, workspacePath: root, sessionId: 'integration-contract', deps: {},

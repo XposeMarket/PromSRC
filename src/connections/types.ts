@@ -363,6 +363,10 @@ export interface ConnectionRecord {
   capabilityGrants?: ConnectionCapabilityGrant[];
   providerApp?: ConnectionProviderAppMetadata;
   registeredTools: string[];
+  /** All registered tools enabled for the model/action surface. */
+  availableTools?: string[];
+  /** Automatically exposed/read-safe subset; higher-risk tools still use the
+   * normal per-call approval policy when they are available. */
   exposedTools: string[];
   tools?: ClassifiedConnectionTool[];
   credentialRef?: string;

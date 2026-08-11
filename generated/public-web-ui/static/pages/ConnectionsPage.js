@@ -336,10 +336,18 @@ function getConnectorStatusMeta(connector) {
     return { label: 'Needs verification', tone: 'warning', detail: error || 'Run verification before relying on this connection.' };
   }
   if (connectorIsConnected(connector)) {
+    const registeredTools = Array.isArray(state.registeredTools) ? state.registeredTools : [];
+    const availableTools = Array.isArray(state.availableTools)
+      ? state.availableTools
+      : (state.contractVersion === 2 ? registeredTools : []);
     return {
-      label: state.exposed === false ? 'Connected · tools off' : 'Connected',
+      label: state.exposed === false && availableTools.length === 0 ? 'Connected · tools off' : 'Connected',
       tone: 'connected',
-      detail: state.exposed === false ? 'Authentication is available; tool exposure still needs review.' : '',
+      detail: state.exposed === false && availableTools.length === 0
+        ? 'Authentication is available; enable at least one tool for the model.'
+        : (availableTools.length > (Array.isArray(state.exposedTools) ? state.exposedTools.length : 0)
+          ? 'Read-only tools run automatically; action tools ask for approval when used.'
+          : ''),
     };
   }
   if (state.hasCredentials || state.configured) {
@@ -583,25 +591,43 @@ function openConnectorView(id) {
 
   const aiToolsEl = document.getElementById('cv-ai-tools');
   if (aiToolsEl) {
-    const tools = connector.aiTools || [];
-    const toolsExposed = state.exposed !== false;
-    if (tools.length && isConnected && toolsExposed) {
+    const tools = Array.isArray(state.registeredTools) && state.registeredTools.length
+      ? state.registeredTools
+      : (connector.aiTools || []);
+    const availableTools = Array.isArray(state.availableTools)
+      ? state.availableTools
+      : (state.contractVersion === 2 ? tools : (isConnected ? tools : []));
+    const exposedTools = Array.isArray(state.exposedTools) ? state.exposedTools : [];
+    const classifications = new Map((Array.isArray(state.tools) ? state.tools : []).map((tool) => [tool.name, tool]));
+    const canManageToolAvailability = Boolean(state.connectionId && state.contractVersion === 2 && tools.length);
+    const encodedConnectionId = encodedInlineValue(state.connectionId || '');
+    const toolRows = tools.map((tool) => {
+      const classification = classifications.get(tool);
+      const risk = classification?.risk || (exposedTools.includes(tool) ? 'read-only' : 'approval');
+      const checked = availableTools.includes(tool) ? ' checked' : '';
+      return canManageToolAvailability
+        ? `<label style="display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);cursor:pointer">
+            <input type="checkbox" data-connector-tool="${escHtml(tool)}"${checked} style="margin-top:2px;accent-color:var(--brand)" />
+            <span style="min-width:0;flex:1"><code style="font-size:10.5px;color:var(--text-2);word-break:break-word">${escHtml(tool)}</code><span style="display:block;margin-top:2px;font-size:10px;color:${risk === 'read-only' ? 'var(--ok)' : 'var(--warn)'}">${escHtml(risk === 'read-only' ? 'read-only · automatic' : `${risk} · approval required`)}</span></span>
+          </label>`
+        : `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);opacity:${availableTools.includes(tool) ? '1' : '0.55'}"><code style="font-size:10.5px;color:var(--text-2);word-break:break-word;flex:1">${escHtml(tool)}</code><span style="font-size:10px;color:${risk === 'read-only' ? 'var(--ok)' : 'var(--warn)'};white-space:nowrap">${escHtml(risk === 'read-only' ? 'read-only' : 'approval')}</span></div>`;
+    }).join('');
+    if (tools.length && isConnected && availableTools.length) {
       aiToolsEl.style.display = '';
       aiToolsEl.innerHTML = `
-        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">AI Tools Unlocked</div>
-        <div style="display:flex;flex-wrap:wrap;gap:5px">
-          ${tools.map((tool) => `<code style="font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--text-2)">${escHtml(tool)}</code>`).join('')}
-        </div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Tools available to Prometheus</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-bottom:8px">${exposedTools.length}/${tools.length} are read-only and automatic. Other enabled actions remain approval-gated at the moment they run.</div>
+        <div style="display:flex;flex-direction:column;gap:5px">${toolRows}</div>
+        ${canManageToolAvailability ? `<button class="cv-btn-connect" onclick="saveConnectorToolAvailability(decodeURIComponent('${encodedConnectionId}'), this)" style="margin-top:9px;background:var(--panel-2);color:var(--text);border:1px solid var(--line)">Save tool access</button>` : '<div style="font-size:11px;color:var(--muted);margin-top:8px">This legacy connector uses its runtime availability. Canonical connections expose a selectable tool allowlist.</div>'}
         <div style="font-size:11px;color:var(--muted);margin-top:8px">Activate with <code style="font-size:10.5px">request_tool_category({"category":"external_apps"})</code></div>
       `;
     } else if (tools.length && isConnected) {
       aiToolsEl.style.display = '';
       aiToolsEl.innerHTML = `
-        <div style="font-size:11px;font-weight:700;color:var(--warn);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Tools awaiting review</div>
-        <div style="display:flex;flex-wrap:wrap;gap:5px;opacity:0.7">
-          ${tools.map((tool) => `<code style="font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--text-2)">${escHtml(tool)}</code>`).join('')}
-        </div>
-        <div style="font-size:11px;color:var(--muted);margin-top:8px">Authentication is available, but tool exposure is not enabled yet.</div>
+        <div style="font-size:11px;font-weight:700;color:var(--warn);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">No tools enabled</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-bottom:8px">Authentication is available. Select the tools Prometheus may use, then save the connection grant.</div>
+        <div style="display:flex;flex-direction:column;gap:5px">${toolRows}</div>
+        ${canManageToolAvailability ? `<button class="cv-btn-connect" onclick="saveConnectorToolAvailability(decodeURIComponent('${encodedConnectionId}'), this)" style="margin-top:9px;background:var(--panel-2);color:var(--text);border:1px solid var(--line)">Save tool access</button>` : ''}
       `;
     } else if (tools.length) {
       aiToolsEl.style.display = '';
@@ -985,6 +1011,26 @@ async function disconnectCanonicalConnection(connectionId, id) {
     showToast('Disconnected', 'The local session was cleared and provider revocation was attempted.', 'success');
   } catch (error) {
     showToast('Disconnect failed', error?.message || String(error), 'error');
+  }
+}
+
+async function saveConnectorToolAvailability(connectionId, button) {
+  const selected = [...document.querySelectorAll('#cv-ai-tools input[data-connector-tool]:checked')]
+    .map((input) => input.getAttribute('data-connector-tool') || '')
+    .filter(Boolean);
+  if (button) { button.disabled = true; button.textContent = 'Saving tool access…'; }
+  try {
+    const result = await api(`/api/connections-v2/${encodeURIComponent(connectionId)}/tools`, {
+      method: 'POST',
+      body: JSON.stringify({ availableTools: selected }),
+    });
+    const rejected = Array.isArray(result?.rejectedTools) ? result.rejectedTools : [];
+    await loadConnectionsState();
+    if (activeConnectorId && getConnectorById(activeConnectorId)) openConnectorView(activeConnectorId);
+    showToast('Tool access saved', rejected.length ? `Ignored ${rejected.length} unregistered tool(s).` : `${selected.length} tool(s) enabled.`, 'success');
+  } catch (error) {
+    showToast('Tool access failed', error?.message || String(error), 'error');
+    if (button) { button.disabled = false; button.textContent = 'Save tool access'; }
   }
 }
 
@@ -1787,6 +1833,7 @@ function renderMcpServerActions(s, { needsAuth, connected }) {
     ${connected
       ? `<button class="cv-btn-disconnect" onclick="mcpServerDisconnect('${escHtml(id)}')">Disconnect</button>`
       : `<button class="cv-btn-connect" onclick="mcpServerConnect('${escHtml(id)}')" style="background:var(--brand);color:#fff;border:none;border-radius:9px;padding:11px;font-weight:700;cursor:pointer;font-family:inherit;font-size:13px">Connect</button>`}
+    ${connected ? `<button class="cv-btn-connect" onclick="mcpServerRefreshTools('${escHtml(id)}')" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:9px;font-weight:600;cursor:pointer;font-family:inherit;font-size:12px">Refresh discovered tools</button>` : ''}
 
     ${remote ? `
     <div style="margin-top:6px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:12px">
@@ -1939,6 +1986,19 @@ async function mcpServerConnect(id) {
     showToast('Connect failed', e?.message || String(e), 'error');
   }
   await loadMcpServers();
+}
+
+async function mcpServerRefreshTools(id) {
+  try {
+    const result = await api(`/api/mcp/servers/${encodeURIComponent(id)}/refresh`, { method: 'POST', body: '{}' });
+    if (result?.success === false) throw new Error(result.error || 'Refresh failed');
+    showToast('MCP tools refreshed', `${(result?.tools || []).length} tool(s) discovered.`, 'success');
+  } catch (e) {
+    showToast('Tool refresh failed', e?.message || String(e), 'error');
+  }
+  await loadMcpServers();
+  const current = mcpServerById(id);
+  if (current) openMcpServerView(id);
 }
 
 async function mcpServerDisconnect(id) {
@@ -2273,6 +2333,7 @@ window.closeConnectorView = closeConnectorView;
 window.renderConnectorActions = renderConnectorActions;
 window.startCanonicalConnection = startCanonicalConnection;
 window.disconnectCanonicalConnection = disconnectCanonicalConnection;
+window.saveConnectorToolAvailability = saveConnectorToolAvailability;
 window.runConnectionAttemptAction = runConnectionAttemptAction;
 window.continueConnectionAttempt = continueConnectionAttempt;
 window.openConnectionAttemptOAuth = openConnectionAttemptOAuth;
@@ -2309,6 +2370,7 @@ window.installFromUrl = installFromUrl;
 window.removeUserPlugin = removeUserPlugin;
 window.loadMcpServers = loadMcpServers;
 window.mcpServerConnect = mcpServerConnect;
+window.mcpServerRefreshTools = mcpServerRefreshTools;
 window.mcpServerDisconnect = mcpServerDisconnect;
 window.mcpServerRemove = mcpServerRemove;
 window.openMcpServerView = openMcpServerView;

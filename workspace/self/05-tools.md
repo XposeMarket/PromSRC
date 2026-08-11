@@ -105,7 +105,7 @@ Tool definition sources:
 - `src/gateway/tools/defs/xai-tools.ts`
 - browser tool definitions from `src/gateway/browser-tools.ts`
 - desktop tool definitions from `src/gateway/desktop-tools.ts`
-- connected connector definitions from `src/extensions/legacy-connector-adapter.ts` and `src/extensions/runtime-registry.ts`
+- connected connector definitions from `src/extensions/runtime-registry.ts`, filtered by the canonical connection tool surface in `src/connections/tool-surface.ts`
 - extension runtime definitions from `src/extensions/runtime-registry.ts`
 - MCP definitions from `src/gateway/mcp-manager.ts`
 - composite definitions from `src/gateway/tools/composite-tools.ts`
@@ -119,8 +119,8 @@ Extension-runtime facts:
 - `src/extensions/activation-planner.ts` plans extension activation from startup hints, tool contracts, tool patterns, capability contracts, capability hints, and connected connector state
 - `src/extensions/schema.ts` and `src/extensions/types.ts` now allow extension manifests to declare `trustLevel`, `activation`, `contracts`, and `runtime.entrypoint`
 - `src/extensions/legacy-connector-adapter.ts` bridges the old hard-wired connector system into the new extension registry; this keeps current Gmail/GitHub/Slack/etc. tools working while native extension modules are migrated one by one
-- connector schemas exposed to chat now come from `getExtensionRuntimeRegistry().listToolDefinitions()` in `src/gateway/tool-builder.ts`
-- connector execution now routes through `getExtensionRuntimeRegistry().executeTool(...)` in `src/gateway/agents-runtime/subagent-executor.ts`
+- connector schemas exposed to chat now come from `getExtensionRuntimeRegistry().listConnectedConnectorToolDefinitions()` in `src/gateway/tool-builder.ts`; managed records use `availableTools`, legacy records use the compatibility status path
+- connector execution now routes through `getExtensionRuntimeRegistry().executeTool(...)` with a second canonical availability check in `src/gateway/agents-runtime/capabilities/platform-executor.ts`
 - the standalone `src/tools/registry.ts` also registers extension tools from `getExtensionRuntimeRegistry().listTools()`
 - the old `CONNECTOR_TOOL_MAP`, `getConnectorToolDefs`, and `handleConnectorTool` are still compatibility inputs to the adapter, not the desired long-term source of truth
 
@@ -196,7 +196,7 @@ Capability-handled families currently include:
 - automations/tasks: `background_ops` core wrapper; hidden executable compatibility aliases `background_*`; `task_control`, `timer`, `internal_watch`, `schedule_job`, `schedule_job_*`, `automation_dashboard`; plan-step tools are hidden/injected by `chat.router.ts` rather than capability category activation
 - teams/agents: `agent_*`, `spawn_subagent`, `message_subagent`, `dispatch_team_agent`, `team_manage`, `ask_team_coordinator`, `set_agent_model`, `get_agent_models`, team chat/status/artifact tools
 - memory: `business_context_mode`, `memory_*`, `write_note`
-- platform: `mcp__*`, `mcp_server_manage`, `connector_*`, `connector_list`, composite management and saved composites
+- platform: `mcp__*`, `mcp_server_manage`, `connector_*`, `x_api_*`, `connector_list`, composite management and saved composites
 - web/media: `web_search`, `web_fetch`, `download_url`, `download_media`, `media_generate` plus hidden `generate_image`/`generate_video` compatibility aliases, `analyze_image`, `analyze_video`, `video_analyze_imported_video`, `save_site_shortcut`
 
 Direct executor switch handlers still own lower-level or specialized families:
