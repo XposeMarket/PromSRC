@@ -412,7 +412,8 @@ body.right-canvas-open .page-title {
 
 /* Hide sessions, pinned chats, and hamburger when sidebar collapsed */
 .sidebar.collapsed #sidebar-sessions-section,
-.sidebar.collapsed #sidebar-pinned-section {
+.sidebar.collapsed #sidebar-pinned-section,
+.sidebar.collapsed #sidebar-projects-section {
   display: none !important;
 }
 

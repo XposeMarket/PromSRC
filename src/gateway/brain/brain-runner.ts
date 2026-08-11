@@ -10,8 +10,10 @@
  *
  *   DREAM    — once nightly (default 23:30 local)
  *              Synthesizes the target day's thoughts, applies durable memory
- *              updates directly, generates formal proposals for everything else,
- *              and rewrites Brain/proposals.md as the morning briefing.
+ *              updates directly, selects the strongest Pulse Cards, creates a
+ *              small shortlist of lightweight plan proposals, and rewrites
+ *              Brain/proposals.md as the morning briefing. Strict executor
+ *              contracts remain available only for explicitly executable work.
  *              About 30 minutes later, runs a cleanup-only memory solidifier
  *              that may remove/dedupe but must not add new memory.
  *
@@ -64,6 +66,18 @@ import {
   parseBrainCarryForwardDecision,
   parseBrainThoughtCapsules,
 } from './brain-continuity.js';
+import {
+  BRAIN_DREAM_MAX_PROPOSALS,
+  BRAIN_DREAM_TARGET_PROPOSALS,
+  clearBrainDreamProposalBudget,
+} from './brain-proposal-policy.js';
+import {
+  beginBrainJobUsage,
+  finishBrainJobUsage,
+  getBrainUsageSnapshot,
+  type BrainJobUsageRecord,
+  type BrainUsageSummary,
+} from './brain-usage.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -375,6 +389,7 @@ export interface BrainJobStatus {
   lastAttempt?: string | null;
   lastOutcome?: 'idle' | 'success' | 'failed';
   lastError?: string | null;
+  usage?: BrainJobUsageRecord | null;
 }
 
 export interface BrainStatus {
@@ -384,6 +399,7 @@ export interface BrainStatus {
   dreamModel: string;
   thoughtReasoning: string;
   dreamReasoning: string;
+  usage: BrainUsageSummary;
 }
 
 function getDreamTimeForDate(dateStr: string): Date {
@@ -438,6 +454,9 @@ export class BrainRunner {
     const daily   = loadDailyStatus(today);
     const now     = new Date();
     const pendingDreamDate = this._getPendingDreamDate(now, state);
+    const usageSnapshot = getBrainUsageSnapshot({ limit: 100 });
+    const latestUsage = (job: 'thought' | 'dream'): BrainJobUsageRecord | null =>
+      usageSnapshot.records.find((record) => record.job === job) || null;
 
     // Next thought
     const lastThought = state.lastThoughtAt ? new Date(state.lastThoughtAt) : null;
@@ -464,6 +483,7 @@ export class BrainRunner {
       dreamModel: state.dreamModel || '',
       thoughtReasoning: state.thoughtReasoning || '',
       dreamReasoning: state.dreamReasoning || '',
+      usage: usageSnapshot.summary,
       thought: {
         id: 'brain_thought',
         name: '🧠 Brain Thought',
@@ -478,6 +498,7 @@ export class BrainRunner {
         lastAttempt: state.lastThoughtAttemptAt,
         lastOutcome: state.lastThoughtStatus,
         lastError: state.lastThoughtError,
+        usage: latestUsage('thought'),
       },
       dream: {
         id: 'brain_dream',
@@ -494,6 +515,7 @@ export class BrainRunner {
         lastAttempt: state.lastDreamAttemptAt,
         lastOutcome: state.lastDreamStatus,
         lastError: state.lastDreamError,
+        usage: latestUsage('dream'),
       },
     };
   }
@@ -853,6 +875,13 @@ export class BrainRunner {
     const windowLabel = getWindowLabel(windowStart);
     const runId       = crypto.randomUUID();
     const sessionId   = `brain_thought_${dateStr}_${windowLabel}`;
+    const usageHandle = beginBrainJobUsage({
+      job: 'thought',
+      runId,
+      date: dateStr,
+      sessionId,
+      startedAt: runStartedAt,
+    });
     const abortSignal = { aborted: false };
     const runtimeId = registerLiveRuntime({
       kind: 'brain_thought',
@@ -1126,6 +1155,11 @@ export class BrainRunner {
       saveDailyStatus(daily);
     }
 
+    const usage = finishBrainJobUsage(usageHandle, {
+      outcome: abortSignal.aborted ? 'aborted' : success ? 'success' : 'failed',
+      error: success ? undefined : (loadLatestState().lastThoughtError || 'Unknown thought run failure'),
+    });
+
     // Broadcast completion
     this.deps.broadcast({
       type: 'brain_thought_done',
@@ -1138,6 +1172,7 @@ export class BrainRunner {
       summary: resultText.slice(0, 400),
       success,
       error: success ? undefined : (loadLatestState().lastThoughtError || 'Unknown thought run failure'),
+      usage,
     });
 
     if (success) {
@@ -1153,6 +1188,7 @@ export class BrainRunner {
         activityPackageId: builtActivityPackage.package.packageId,
         activityPackageFile: builtActivityPackage.package.observability.packagePath,
         error: loadLatestState().lastThoughtError || 'Unknown thought run failure',
+        usage,
       });
     }
     return success;
@@ -1164,10 +1200,18 @@ export class BrainRunner {
     if (this.dreamRunning) return false;
     this.dreamRunning = true;
     const runStartedAt = Date.now();
+    const runId = crypto.randomUUID();
 
     const now         = new Date();
     const dreamLabel  = getWindowLabel(now);
     const sessionId   = `brain_dream_${dateStr}`;
+    const usageHandle = beginBrainJobUsage({
+      job: 'dream',
+      runId,
+      date: dateStr,
+      sessionId,
+      startedAt: runStartedAt,
+    });
     const abortSignal = { aborted: false };
     const runtimeId = registerLiveRuntime({
       kind: 'brain_dream',
@@ -1237,7 +1281,7 @@ export class BrainRunner {
         sendSSE,
         undefined,
         abortSignal,
-        `CONTEXT: Automated Brain Dream run for ${dateStr}. Drive off the Active Work Ledger and the day's thoughts: re-verify current state against live artifacts, do deep research (web + browser), update durable memory, and file hardened proposals. This is the nightly execution run.`,
+        `CONTEXT: Automated Brain Dream run for ${dateStr}. Drive primarily off the day's Pulse Cards: rank them, lightly verify the top few against live artifacts, update durable memory, and file at most ${BRAIN_DREAM_MAX_PROPOSALS} lightweight general plan proposals. Use the hardened proposal contract only when the user explicitly needs executable action or code work. This is the nightly synthesis run.`,
         dreamModelOverride,
         'cron',
         brainDreamToolFilter([
@@ -1309,6 +1353,7 @@ export class BrainRunner {
 	    } finally {
 	      finishLiveRuntime(runtimeId);
 	      clearSessionMutationScope(sessionId);
+	      clearBrainDreamProposalBudget(sessionId);
 	      this.dreamRunning = false;
 	    }
 
@@ -1459,6 +1504,11 @@ export class BrainRunner {
       saveLatestState(state);
     }
 
+    const usage = finishBrainJobUsage(usageHandle, {
+      outcome: abortSignal.aborted ? 'aborted' : success ? 'success' : 'failed',
+      error: success ? undefined : (loadLatestState().lastDreamError || 'Unknown dream run failure'),
+    });
+
     // Broadcast completion
     this.deps.broadcast({
       type: 'brain_dream_done',
@@ -1468,6 +1518,7 @@ export class BrainRunner {
       success,
       error: success ? undefined : (loadLatestState().lastDreamError || 'Unknown dream run failure'),
       recoveredArtifacts: artifactRecoveryNotes,
+      usage,
     });
 
     if (success) {
@@ -1479,6 +1530,7 @@ export class BrainRunner {
         date: dateStr,
         file: outFile,
         error: loadLatestState().lastDreamError || 'Unknown dream run failure',
+        usage,
       });
     }
     return success;
@@ -1490,10 +1542,18 @@ export class BrainRunner {
     if (this.dreamCleanupRunning || this.dreamRunning) return false;
     this.dreamCleanupRunning = true;
     const runStartedAt = Date.now();
+    const runId = crypto.randomUUID();
 
     const now = new Date();
     const cleanupLabel = getWindowLabel(now);
     const sessionId = `brain_dream_cleanup_${dateStr}`;
+    const usageHandle = beginBrainJobUsage({
+      job: 'dream_cleanup',
+      runId,
+      date: dateStr,
+      sessionId,
+      startedAt: runStartedAt,
+    });
     const abortSignal = { aborted: false };
     const runtimeId = registerLiveRuntime({
       kind: 'brain_dream',
@@ -1639,6 +1699,11 @@ export class BrainRunner {
       saveLatestState(latestAfter);
     }
 
+    const usage = finishBrainJobUsage(usageHandle, {
+      outcome: abortSignal.aborted ? 'aborted' : success ? 'success' : 'failed',
+      error: success ? undefined : (loadLatestState().lastDreamCleanupError || 'Unknown dream cleanup failure'),
+    });
+
     this.deps.broadcast({
       type: 'brain_dream_cleanup_done',
       date: dateStr,
@@ -1646,6 +1711,7 @@ export class BrainRunner {
       summary: resultText.slice(0, 600),
       success,
       error: success ? undefined : (loadLatestState().lastDreamCleanupError || 'Unknown dream cleanup failure'),
+      usage,
     });
 
 
@@ -1658,6 +1724,7 @@ export class BrainRunner {
         date: dateStr,
         file: outFile,
         error: loadLatestState().lastDreamCleanupError || 'Unknown dream cleanup failure',
+        usage,
       });
     }
     return success;
@@ -2085,7 +2152,7 @@ You are not just auditing for mistakes. You are acting like a proactive second b
 - new agents, subagents, teams, or workspace surfaces that now deserve follow-up work
 - latent opportunities where Prometheus could proactively help tomorrow, across any context: business, marketing, websites, apps, notifications, communications, code, research, content, or operations
 - business operating signals that should become structured company/entity memory later: people, leads, clients, projects, vendors, social accounts, offers, policies, deadlines, outreach, payments, meetings, and other business events
-- concrete next-step proposals the Dream could investigate into executor-ready plans
+- broad next-step plan seeds the Dream can rank behind the strongest Pulse Cards
 - "the user would probably appreciate if I got ahead on this" moments, even when they were not phrased as explicit tasks
 - useful wonderings: thoughtful "I wonder if..." observations that may be seeds for future help, not only defects
 
@@ -2100,7 +2167,7 @@ This is the standing, memory-grounded list of things the user is actively workin
 - For each live idea/project/bug you confirm (from today's activity AND from what MEMORY/USER tells you the user is building), upsert one JSONL row (one JSON object per line):
   {"id":"slug","title":"...","origin":"chat/transcript/note ref or 'memory'","diskPath":"workspace-relative or absolute allowed path, if it is a real project","status":"idea|drafted|in_progress|stalled|resolved","lastVerified":"${dateStr}","currentState":"what you actually observed in the artifact tonight","research":["url or finding"],"evidence":["path:line or ref"]}
 - Update status to "resolved" (and say how you verified) when current-state shows it is already done/fixed.
-- Keep entries concrete and grounded in current state; this ledger is what the Dream investigates and hardens into proposals.
+- Keep entries concrete and grounded in current state; the Dream uses this ledger to enrich or dedupe the selected Pulse Cards, not to create a second unbounded proposal queue.
 
 STEP 2 - ANALYZE USING THE RUBRIC
 
@@ -2161,14 +2228,14 @@ E. Memory Candidates
 - Format as a table row: Item | Target file | Confidence | Evidence
 
 F. Opportunity Seeds
-- Capture unfinished or proactive opportunities the Dream should investigate
+- Capture unfinished or proactive opportunities the Dream can rank behind the strongest Pulse Cards
 - This is the most important section when the user talked about something but did not finish it
 - Include repeated manual workflows, partial feature ideas, new agents/subagents/teams created but not yet deployed, placeholder-heavy or underused workspace surfaces, business/marketing/product ideas, notification follow-ups, and concrete "Prometheus should probably help with this next" openings
 - Prefer seeds that can become proposals, skills, composite tools, browser/desktop taught workflows, scheduled monitors, or one-shot task triggers
 - Format as: Seed | Why it matters | Suggested scouting surface | Confidence | Evidence
 
 G. Improvement Candidates
-- Items that might be worthy of proposals
+- Broad plan seeds or supporting signals that may strengthen one of the three Pulse Cards; do not write implementation tickets here
 - Format as: Issue | Proposal type | Suggested execution mode | Confidence | Evidence
 - Proposal types: ${brainThoughtProposalTypes()}
 - Execution modes: ${brainThoughtExecutionModes()}
@@ -2240,6 +2307,11 @@ Use this exact fenced JSON shape and no extra keys:
 ]
 \`\`\`
 
+
+Dream handoff rule: these three Pulse Cards are the normal proposal shortlist.
+Capsules, ledger rows, and improvement candidates are supporting evidence, not
+additional proposal candidates. Dream may expand a selected card into one
+lightweight general plan, but it should defer the rest.
 
 ## Runtime Thought Capsules
 After writing the Markdown, write ${capsuleFile} as a JSON array. There is NO fixed item-count limit: capture every distinct, evidence-supported thread that could usefully change Prometheus's behavior before the next Thought. A busy six-hour window may legitimately produce 10, 20, or more capsules; an inactive window may produce []. Merge duplicate activity under one stable threadKey and omit completed micro-actions with no future implication.
@@ -2537,7 +2609,7 @@ List ${skillGardenerDirRel}. If live-candidates.jsonl or workflow-episodes.jsonl
 
 List ${pendingPropsDirRel} to see what formal proposals are currently pending approval.
 
-ACTIVE WORK LEDGER (Brain/active-work.jsonl): if it exists, read it. This is the standing list of what the user is actively building or circling, maintained by Thought. It is a primary driver of tonight's work — investigate every NON-resolved entry even if no thought today mentioned it. You also have USER.md/SOUL.md/MEMORY.md in context; use them to decide which of the user's projects deserve a proactive look-through tonight.
+ACTIVE WORK LEDGER (Brain/active-work.jsonl): if it exists, read it. This is the standing list of what the user is actively building or circling, maintained by Thought. Use it to enrich and dedupe the Pulse Card shortlist, or as a fallback source when the day has weak/no cards. It is not a mandate to investigate or propose every NON-resolved entry tonight.
 ${brainDreamSourceEvidenceTools()}
 
 If no thought files exist in ${thoughtsDirRel}:
@@ -2550,10 +2622,10 @@ If no thought files exist in ${thoughtsDirRel}:
 
 PHASE 2 - CROSS-EXAMINE + RE-VERIFY CURRENT STATE
 
-For any item marked high confidence in sections C, D, E, F, or G of any thought, any high-confidence row in ${businessCandidatesFileRel}, and every non-resolved Active Work Ledger entry:
+After ranking the day's Pulse Cards, cross-examine only the selected card ideas plus high-confidence memory/business items that need a write decision. Treat unselected opportunity seeds and non-resolved ledger entries as deferred context unless they are needed to understand a selected card:
 - Read the cited origin evidence from ${auditDirRel} to confirm it is real and accurately described.
 - THEN RE-VERIFY CURRENT STATE TONIGHT (mandatory). Open the actual live artifact — the file, the tool/code, the project folder, the page, the thread — and confirm the gap/bug/missing-feature STILL exists and is STILL unhandled right now. The Thought may be hours old and the world moves: the user frequently fixes a bug or finishes a feature with another tool (Claude, Codex, manual edits) without going through Prometheus. Use file reads, ${isPublicBrainProfile() ? 'web_fetch' : 'read_source/grep_source/read_prom_file'}, and recent-modification signals to check.
-- If current state shows it is already done/fixed/handled: discard it, update its ledger entry to status "resolved" with how you verified, and do NOT propose it. This single check is what prevents stale proposals — do not skip it.
+- If current state shows a selected card is already done/fixed/handled: discard it, update its ledger entry to status "resolved" with how you verified, and do NOT propose it. This check prevents stale proposals without forcing a full audit of every old thread.
 - If evidence does not support the claim, downgrade or discard it.
 - Only items that survive BOTH origin verification AND a fresh current-state check proceed to later phases.
 
@@ -2665,12 +2737,14 @@ For a new skill proposal:
 
 PHASE 5 - INCUBATE OPPORTUNITY SEEDS (and the Active Work Ledger)
 
-Work through every verified opportunity seed AND every non-resolved Active Work Ledger entry. For each:
-- Scout the surface directly before deciding what to propose — read the actual ${brainIncubationFileTargets()}, including the user's own project files when the ledger points to one (workspace path or configured allowed path).
-- DEEP RESEARCH (this is your nightly advantage): use web_search/web_fetch (and browser_open + browser_get_page_text for JS-heavy pages) to research the idea properly — competitors and why they succeed, reusable open-source projects or libraries that could accelerate it, prior art, and how others solved the same problem. Capture concrete links and findings.
-- Confirm current state one more time if the seed is build-shaped: the gap/bug must still be present in the live artifact before you propose a fix.
-- Turn vague intent into a concrete morning-ready proposal only if the evidence supports it. Action proposals must carry the hardened contract (What you asked for / Current state / Research / Plan / Acceptance criteria / Risks). Put the research links and the confirmed current-state observation directly in the proposal so the user can approve it safely at a glance.
-- Update the ledger entry: set status (in_progress once a proposal is filed, or resolved if current state shows it is already done), refresh lastVerified, and record the research you did.
+Build the shortlist from the day's Pulse Cards, deduped with the Active Work Ledger. Select no more than ${BRAIN_DREAM_MAX_PROPOSALS}; target ${BRAIN_DREAM_TARGET_PROPOSALS} when signal supports it. For each selected card:
+- Scout only the relevant surface directly — read the actual ${brainIncubationFileTargets()}, including the user's own project files when the card points to one (workspace path or configured allowed path).
+- Do a light current-state check and at most one or two focused web lookups when they materially improve the broad plan. Do not deep-research every seed, ledger entry, or Thought.
+- If the selected card is build-shaped, confirm the gap still exists before proposing it. Keep the proposal broad; do not turn it into an exact implementation ticket.
+- Submit a lightweight general plan proposal using the card-to-plan guidance below. Use the hardened contract only for an explicitly executable action or code-change exception.
+- Update the selected ledger entry if useful: set status to in_progress once a proposal is filed, resolved if current state shows it is done, refresh lastVerified, and record only concise evidence/research.
+
+For every non-selected seed or ledger entry, preserve it under Deferred Ideas or Tomorrow's Watch Items. Do not spend proposal-generation tokens investigating it tonight.
 
 Also look for repeated workflows across the thoughts even if no single thought named them as an opportunity. If the user did a similar task multiple times, consider whether Prometheus should propose:
 - a new skill
@@ -2731,16 +2805,17 @@ For items that do pass:
 
 PHASE 7 - PROPOSALS
 
-Proposal quality gate - all 4 conditions must be true:
-1. CONCRETE - specific file, job, skill, agent, or behavior to change
-2. EVIDENCED - clear citation from a thought file or verified audit${isPublicBrainProfile() ? '' : ' or source'} reference
-3. NOT DUPLICATE - no semantically equivalent proposal already pending or already in the ledger
-4. EXECUTOR-READY - the executor prompt has enough detail to implement without guesswork
+Proposal quality gate for the normal Brain plan-card lane:
+1. RELEVANT - it comes from one of the day's strongest Pulse Cards or a clearly linked ledger thread
+2. GROUNDED - the Thought/origin and a concise live-state check support it
+3. DISTINCT - it is not already pending or semantically duplicated
+4. USEFUL - it gives tomorrow a clear direction without pretending to be a finished implementation plan
 
 Proposal handoff rule:
-- A proposal is the implementation plan. Approval means "execute this plan", not "approve this idea and figure it out later".
-- Do not submit proposals whose details only explain benefits, intent, or expected impact.
-- Every proposal must say exactly what to create, edit, delete, inspect, or verify. If you cannot produce that plan from current evidence, defer the idea instead of proposing it.
+- A normal Brain proposal is a lightweight plan for deciding what to explore next. It is intentionally broader than an executor ticket.
+- Keep it short, readable, and useful at a glance: why it matters, the broad next move, what to inspect first, and the evidence/card behind it.
+- Do not require exact files, diffs, exhaustive acceptance criteria, or deep research for this lane.
+- Only action and code-change proposals are implementation plans. They retain their current strict contracts and approval safeguards.
 
 This phase is not limited to "fix what went wrong."
 Strong proposals can also come from:
@@ -2753,9 +2828,9 @@ Strong proposals can also come from:
 - external events or notifications Prometheus can turn into useful drafts, follow-ups, or automations
 - planned content or workspace work that is clearly blocked only by the user not having time yet
 
-${brainDreamProposalGuidance()}
+${brainDreamLightweightProposalGuidance()}
 
-${brainDreamProposalSubmitRules()}
+${brainDreamLightweightProposalSubmitRules()}
 
 If zero proposals pass the gate, note that in the dream file.
 
@@ -2943,4 +3018,38 @@ export function setBrainRunnerInstance(r: BrainRunner): void {
 
 export function getBrainRunnerInstance(): BrainRunner | null {
   return _globalBrainRunner;
+}
+/**
+ * Live Dream policy. The older guidance above is retained for the legacy
+ * prompt builder, but the V2 runner uses this smaller card-to-plan contract.
+ */
+function brainDreamLightweightProposalGuidance(): string {
+  return `Brain Dream proposal mode: lightweight plan cards
+
+The primary proposal source is the day's Thought Pulse Cards. They are already
+the short list of user-facing ideas worth waking up to. Treat the cards as
+seeds, not implementation tickets:
+- Read every Thought's \`## Pulse Cards\` block, dedupe overlapping cards, and rank them by user momentum, usefulness tomorrow, and evidence.
+- Select at most ${BRAIN_DREAM_MAX_PROPOSALS} cards, targeting ${BRAIN_DREAM_TARGET_PROPOSALS} when the day has enough signal. Create fewer when the cards are weak, duplicate, or already resolved.
+- Investigate only the selected cards. For each, do a light live-state check and, only when it changes the direction, one or two focused lookups. Do not deep-research every Thought, capsule, ledger item, or deferred idea.
+- Keep each proposal broad and readable: one clear title, a short summary, and roughly 150-350 words of details covering why it matters, the broad next move, what to look at first, and the evidence/card that led there.
+- Do not turn a card into an exact file-by-file implementation plan, diff, exhaustive acceptance checklist, or competitor report. Those belong in a later approved execution task.
+- Unless the user explicitly asked for real-world execution, submit selected cards as \`execution_mode="general"\`. These are read-only follow-up plans for research, audit, internal orchestration, or a next planning pass; they must not authorize user-file edits or external side effects.
+- Keep non-selected ideas in Deferred Ideas or Tomorrow's Watch Items. Do not create additional proposals from them.
+
+Lightweight general proposals still need to be distinct and grounded, but they do not need the hardened action headings. Use the hardened contract only for an explicitly executable action proposal or a Prometheus \`code_change\` proposal.
+
+${brainHardenedActionContract()}`;
+}
+
+function brainDreamLightweightProposalSubmitRules(): string {
+  return `For each selected Pulse Card, submit at most one proposal with \`write_proposal\`:
+- Set \`execution_mode="general"\` for the normal Brain plan-card lane.
+- Include the card's title, a 1-2 sentence summary, and concise details with: Why it matters, Broad next move, First thing to inspect, and Evidence.
+- Use \`affected_files\` only for a few evidence/resource references; never present them as an exact edit scope for a lightweight plan. Omit it when the proposal is only a morning note.
+- When approval should launch the read-only/general follow-up, include three broad execution_steps (inspect, explore/outline, report next decision) and a short executor_prompt. Do not include affected_files without those executable steps, because approval would try to dispatch an incomplete task. Set \`requires_build=false\`.
+- Do not submit more than ${BRAIN_DREAM_MAX_PROPOSALS} proposals. If the tool reports that the Brain Dream budget is reached, record the remaining card under Deferred Ideas and continue writing the Dream artifacts.
+- Do not call \`write_proposal\` for every ledger item or every improvement candidate. A proposal is the selected card made slightly more useful, not a complete implementation specification.
+
+If an item truly requires user-world execution or a Prometheus source edit, it may use the existing hardened action/code-change lane, but only with explicit evidence and the full contract. That exception is for safety, not the normal nightly path.`;
 }

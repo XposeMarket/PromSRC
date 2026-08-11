@@ -96,6 +96,10 @@ contextBridge.exposeInMainWorld('prometheusBrowserSurface', {
   detach: () => ipcRenderer.invoke('native-browser:detach'),
   setBounds: (bounds = {}) => ipcRenderer.invoke('native-browser:set-bounds', bounds),
   navigate: (payload = {}) => ipcRenderer.invoke('native-browser:navigate', payload),
+  listTabs: (options = {}) => ipcRenderer.invoke('native-browser:list-tabs', options),
+  selectTab: (options = {}) => ipcRenderer.invoke('native-browser:select-tab', options),
+  newTab: (options = {}) => ipcRenderer.invoke('native-browser:new-tab', options),
+  closeTab: (options = {}) => ipcRenderer.invoke('native-browser:close-tab', options),
   focus: () => ipcRenderer.invoke('native-browser:focus'),
   state: () => ipcRenderer.invoke('native-browser:state'),
   onState: (cb) => {

@@ -604,19 +604,22 @@ async function checkForPrometheusUpdates(source = 'manual', lockHeld = false) {
   }
 }
 
-// ─── Native in-house browser: profile-keyed multi-view registry ──────────────
+// ─── Native in-house browser: profile/session/tab view registry ─────────────
 // Each "profile" is an isolated, on-disk Electron session partition (its own
 // cookies/logins), analogous to Prometheus' per-agent Chrome debug profiles.
 //   - The main chat uses the "main" profile by default.
 //   - Subagents/other owners can either share the main profile or get their own,
 //     so two agents driving two accounts never clash over one logged-in session.
-// Only ONE view is "presented" (positioned + visible) in the canvas at a time —
-// the main chat's. Other profiles' views stay parked at zero size but remain
-// alive for background automation (DOM snapshot / run-js).
+// Only ONE tab view is "presented" (positioned + visible) in the canvas at a
+// time. Other tabs/profiles stay parked at zero size but remain alive for
+// background automation (DOM snapshot / run-js).
 const NATIVE_BROWSER_DEFAULT_PROFILE = 'main';
-const nativeBrowserViews = new Map();      // partition -> WebContentsView/BrowserView
+const nativeBrowserViews = new Map();      // `${partition}::${tabId}` -> WebContentsView/BrowserView
 const nativeBrowserSessionPartitions = new Map(); // sessionId -> partition
+const nativeBrowserSessionTabs = new Map(); // sessionId -> { partition, tabIds, activeTabId }
+let nativeBrowserTabSequence = 0;
 let presentedNativePartition = '';         // partition currently shown in the canvas
+let presentedNativeTabId = '';             // tab currently shown in the canvas
 const nativeBrowserState = {
   available: !!(WebContentsView || BrowserView),
   attached: false,
@@ -624,6 +627,8 @@ const nativeBrowserState = {
   sessionId: '',
   profile: '',
   partition: '',
+  activeTabId: '',
+  tabs: [],
   url: 'about:blank',
   title: '',
   loading: false,
@@ -1660,15 +1665,59 @@ function resolveNativePartition(sessionId, profileId) {
   return partitionForNativeProfile(NATIVE_BROWSER_DEFAULT_PROFILE);
 }
 
+function nativeSessionKey(sessionId, partition) {
+  const sid = String(sessionId || '').trim();
+  return sid || `partition:${partition}`;
+}
+
+function nativeTabKey(partition, tabId) {
+  return `${partition}::${String(tabId || '').trim()}`;
+}
+
+function createNativeBrowserTabId() {
+  nativeBrowserTabSequence += 1;
+  return `native-tab-${Date.now().toString(36)}-${nativeBrowserTabSequence.toString(36)}`;
+}
+
+function getNativeTabRegistry(sessionId, partition, create = false) {
+  const key = nativeSessionKey(sessionId, partition);
+  let registry = nativeBrowserSessionTabs.get(key);
+  if (!registry && create) {
+    registry = { sessionId: String(sessionId || '').trim(), partition, tabIds: [], activeTabId: '' };
+    nativeBrowserSessionTabs.set(key, registry);
+  }
+  return registry || null;
+}
+
 function nativeViewMeta(view) {
-  if (!view.__promMeta) view.__promMeta = { url: 'about:blank', title: '', loading: false, lastError: '', designMode: false };
+  if (!view.__promMeta) view.__promMeta = {
+    url: 'about:blank',
+    title: '',
+    loading: false,
+    lastError: '',
+    designMode: false,
+    sessionId: '',
+    tabId: '',
+  };
   return view.__promMeta;
 }
 
-function getNativeViewByPartition(partition) {
-  const view = nativeBrowserViews.get(partition);
+function getNativeViewByPartition(partition, tabId = '') {
+  const requestedTabId = String(tabId || '').trim();
+  const candidates = [];
+  for (const [key, view] of nativeBrowserViews) {
+    const meta = nativeViewMeta(view);
+    if (meta.partition === partition || key.startsWith(`${partition}::`)) candidates.push([key, view, meta]);
+  }
+  const selected = requestedTabId
+    ? candidates.find(([, , meta]) => meta.tabId === requestedTabId)
+    : (partition === presentedNativePartition && presentedNativeTabId
+      ? candidates.find(([, , meta]) => meta.tabId === presentedNativeTabId)
+      : candidates[0]);
+  if (!selected) return null;
+  const [key, view] = selected;
   if (view && !view.webContents?.isDestroyed()) return view;
-  if (view) nativeBrowserViews.delete(partition);
+  if (view) nativeBrowserViews.delete(key);
   return null;
 }
 
@@ -1685,22 +1734,54 @@ function normalizeBrowserUrlForLoad(url) {
   return normalizeEmbeddedBrowserUrl(url);
 }
 
+function refreshNativeViewMeta(view) {
+  if (!view) return { url: 'about:blank', title: '', loading: false, lastError: '', tabId: '', sessionId: '' };
+  if (!view.webContents || view.webContents.isDestroyed()) return nativeViewMeta(view);
+  const meta = nativeViewMeta(view);
+  const wc = view.webContents;
+  meta.url = wc.getURL() || meta.url || 'about:blank';
+  meta.title = wc.getTitle() || meta.title || '';
+  meta.loading = wc.isLoading();
+  return meta;
+}
+
+function nativeTabsForSession(sessionId, partition, activeTabId = '') {
+  const registry = getNativeTabRegistry(sessionId, partition, false);
+  const activeId = String(activeTabId || registry?.activeTabId || '').trim();
+  return (registry?.tabIds || []).map((tabId, index) => {
+    const view = getNativeViewByPartition(partition, tabId);
+    const meta = view ? refreshNativeViewMeta(view) : { url: 'about:blank', title: '', loading: false, lastError: '' };
+    const wc = view?.webContents;
+    return {
+      id: tabId,
+      index,
+      title: meta.title || 'New Tab',
+      url: meta.url || 'about:blank',
+      loading: meta.loading === true,
+      active: tabId === activeId,
+      canGoBack: !!(wc && !wc.isDestroyed() && wc.canGoBack?.()),
+      canGoForward: !!(wc && !wc.isDestroyed() && wc.canGoForward?.()),
+    };
+  });
+}
+
 // Broadcasts the PRESENTED (canvas-visible) view's state to the renderer.
 function broadcastNativeBrowserState(extra = {}) {
   const partition = presentedNativePartition;
-  const view = partition ? getNativeViewByPartition(partition) : null;
-  const wc = view?.webContents;
-  if (wc && !wc.isDestroyed()) {
-    const meta = nativeViewMeta(view);
-    meta.url = wc.getURL() || meta.url || 'about:blank';
-    meta.title = wc.getTitle() || meta.title || '';
-    meta.loading = wc.isLoading();
+  const tabId = presentedNativeTabId;
+  const view = partition ? getNativeViewByPartition(partition, tabId) : null;
+  if (view) {
+    const meta = refreshNativeViewMeta(view);
     nativeBrowserState.url = meta.url;
     nativeBrowserState.title = meta.title;
     nativeBrowserState.loading = meta.loading;
-    nativeBrowserState.profile = nativeProfileFromPartition(partition);
-    nativeBrowserState.partition = partition;
+    nativeBrowserState.lastError = meta.lastError || '';
+    nativeBrowserState.sessionId = String(meta.sessionId || nativeBrowserState.sessionId || '').trim();
   }
+  nativeBrowserState.activeTabId = tabId || '';
+  nativeBrowserState.tabs = nativeTabsForSession(nativeBrowserState.sessionId, partition, tabId);
+  nativeBrowserState.profile = partition ? nativeProfileFromPartition(partition) : nativeBrowserState.profile;
+  nativeBrowserState.partition = partition || nativeBrowserState.partition;
   const payload = { ...nativeBrowserState, ...extra, timestamp: Date.now() };
   if (mainWindow && !mainWindow.isDestroyed()) {
     try { mainWindow.webContents.send('native-browser-state', payload); } catch {}
@@ -1711,23 +1792,21 @@ function broadcastNativeBrowserState(extra = {}) {
 // Per-session state payload (used by RPC results so each owner/profile gets its
 // OWN url/title/loading rather than whatever happens to be presented).
 function nativeSessionStatePayload(sessionId, view, partition, extra = {}) {
-  const meta = nativeViewMeta(view);
-  const wc = view.webContents;
-  if (wc && !wc.isDestroyed()) {
-    meta.url = wc.getURL() || meta.url || 'about:blank';
-    meta.title = wc.getTitle() || meta.title || '';
-    meta.loading = wc.isLoading();
-  }
+  const meta = view ? refreshNativeViewMeta(view) : { url: 'about:blank', title: '', loading: false, lastError: '', tabId: '' };
+  const registry = getNativeTabRegistry(sessionId, partition, false);
+  const activeTabId = String(registry?.activeTabId || meta.tabId || '').trim();
   return {
     sessionId: String(sessionId || ''),
     profile: nativeProfileFromPartition(partition),
     partition,
-    attached: true,
-    url: meta.url,
-    title: meta.title,
-    loading: meta.loading,
+    attached: extra.attached !== undefined ? extra.attached : true,
+    url: meta.url || 'about:blank',
+    title: meta.title || '',
+    loading: meta.loading === true,
     lastError: meta.lastError || '',
-    presented: partition === presentedNativePartition,
+    activeTabId,
+    tabs: nativeTabsForSession(sessionId, partition, activeTabId),
+    presented: partition === presentedNativePartition && activeTabId === presentedNativeTabId,
     timestamp: Date.now(),
     ...extra,
   };
@@ -1737,14 +1816,17 @@ function nativeSessionStatePayload(sessionId, view, partition, extra = {}) {
 // one, refreshes the canvas-facing broadcast too.
 function emitNativeSessionState(sessionId, view, partition, extra = {}) {
   const payload = nativeSessionStatePayload(sessionId, view, partition, extra);
-  if (partition === presentedNativePartition) broadcastNativeBrowserState();
+  const meta = view ? nativeViewMeta(view) : null;
+  if (partition === presentedNativePartition && (!meta || meta.tabId === presentedNativeTabId)) broadcastNativeBrowserState();
   return payload;
 }
 
-function wireNativeViewEvents(view, partition) {
+function wireNativeViewEvents(view, partition, sessionId, tabId) {
   const wc = view.webContents;
   const meta = nativeViewMeta(view);
-  const onUpdate = () => { if (partition === presentedNativePartition) broadcastNativeBrowserState(); };
+  const onUpdate = () => {
+    if (partition === presentedNativePartition && tabId === presentedNativeTabId) broadcastNativeBrowserState();
+  };
   // DEBUG: surface the in-house view's console (incl. preload) to the main log.
   wc.on('console-message', (_e, level, message) => {
     if (String(message || '').includes('[inhouse-preload]')) writeGatewayLog(`[main][inhouse-view] ${message}\n`);
@@ -1755,9 +1837,11 @@ function wireNativeViewEvents(view, partition) {
   wc.setWindowOpenHandler(({ url }) => {
     try {
       const targetUrl = normalizeBrowserUrlForLoad(url);
-      if (targetUrl !== 'about:blank') {
-        wc.loadURL(targetUrl).catch((err) => { meta.lastError = err?.message || String(err); onUpdate(); });
-      }
+      Promise.resolve().then(async () => {
+        const created = ensureNativeBrowserView(sessionId, '', '', { forceNew: true });
+        presentNativeView(partition, created.tabId, sessionId);
+        if (targetUrl !== 'about:blank') await created.view.webContents.loadURL(targetUrl);
+      }).catch((err) => { meta.lastError = err?.message || String(err); onUpdate(); });
     } catch (err) {
       meta.lastError = err?.message || String(err);
       onUpdate();
@@ -1777,17 +1861,23 @@ function wireNativeViewEvents(view, partition) {
   wc.on('did-fail-load', (_event, _code, description, validatedURL) => { meta.lastError = description || 'Native browser load failed.'; meta.url = validatedURL || wc.getURL() || meta.url; onUpdate(); });
 }
 
-// Ensures a view exists for the resolved profile partition and maps the session
-// to it. Returns { view, partition }.
-function ensureNativeBrowserView(sessionId = '', profileId = '') {
+// Ensures a view exists for the resolved profile partition and tab, and maps
+// the session to it. Returns { view, partition, tabId }.
+function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId = '', options = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Prometheus window is not ready.');
   if (!nativeBrowserState.available) throw new Error('Electron native browser surface is unavailable in this runtime.');
   const partition = resolveNativePartition(sessionId, profileId);
   const sid = String(sessionId || '').trim();
   if (sid) nativeBrowserSessionPartitions.set(sid, partition);
+  const registry = getNativeTabRegistry(sid, partition, true);
+  let tabId = String(requestedTabId || '').trim();
+  if (!tabId && options.forceNew !== true) tabId = String(registry.activeTabId || registry.tabIds[0] || '').trim();
+  if (!tabId) tabId = createNativeBrowserTabId();
+  if (!registry.tabIds.includes(tabId)) registry.tabIds.push(tabId);
+  registry.activeTabId = tabId;
 
-  let view = getNativeViewByPartition(partition);
-  if (view) return { view, partition };
+  let view = getNativeViewByPartition(partition, tabId);
+  if (view) return { view, partition, tabId };
 
   const webPreferences = {
     partition,
@@ -1810,37 +1900,54 @@ function ensureNativeBrowserView(sessionId = '', profileId = '') {
   }
   view.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS });
   applyNativeBrowserUserAgent(view);
-  wireNativeViewEvents(view, partition);
-  nativeBrowserViews.set(partition, view);
-  return { view, partition };
+  const meta = nativeViewMeta(view);
+  meta.sessionId = sid;
+  meta.partition = partition;
+  meta.tabId = tabId;
+  wireNativeViewEvents(view, partition, sid, tabId);
+  nativeBrowserViews.set(nativeTabKey(partition, tabId), view);
+  return { view, partition, tabId };
 }
 
-function requireNativeViewForSession(sessionId, profileId = '') {
-  const { view, partition } = ensureNativeBrowserView(sessionId, profileId);
+function requireNativeViewForSession(sessionId, profileId = '', tabId = '') {
+  const { view, partition, tabId: resolvedTabId } = ensureNativeBrowserView(sessionId, profileId, tabId);
   const wc = view.webContents;
   if (!wc || wc.isDestroyed()) throw new Error('Native browser view is not available.');
-  return { view, wc, partition };
+  return { view, wc, partition, tabId: resolvedTabId };
 }
 
 // Makes one profile's view the canvas-visible one and parks all others at zero
 // size, so only a single in-house browser is ever painted in the panel.
-function presentNativeView(partition) {
+function presentNativeView(partition, tabId = '', sessionId = '') {
+  const sid = String(sessionId || nativeBrowserState.sessionId || '').trim();
+  const registry = getNativeTabRegistry(sid, partition, true);
+  const selectedTabId = String(tabId || registry.activeTabId || registry.tabIds[0] || '').trim();
+  if (selectedTabId) registry.activeTabId = selectedTabId;
   presentedNativePartition = partition;
+  presentedNativeTabId = selectedTabId;
+  if (sid) nativeBrowserState.sessionId = sid;
+  nativeBrowserState.activeTabId = selectedTabId;
   nativeBrowserState.partition = partition;
   nativeBrowserState.profile = nativeProfileFromPartition(partition);
-  for (const [p, v] of nativeBrowserViews) {
-    if (p !== partition) { try { v.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {} }
+  for (const [key, v] of nativeBrowserViews) {
+    const meta = nativeViewMeta(v);
+    const isSelected = meta.partition === partition && meta.tabId === selectedTabId;
+    if (!isSelected) { try { v.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {} }
   }
 }
 
-function setNativeBrowserBounds(bounds = {}, sessionId = '') {
+function setNativeBrowserBounds(bounds = {}, sessionId = '', tabId = '') {
   const sid = String(sessionId || nativeBrowserState.sessionId || '').trim();
   const partition = resolveNativePartition(sid, '');
+  if (tabId) {
+    const registry = getNativeTabRegistry(sid, partition, false);
+    if (registry?.tabIds.includes(String(tabId).trim())) registry.activeTabId = String(tabId).trim();
+  }
   presentNativeView(partition);
   const next = normalizeNativeBrowserBounds(bounds);
   nativeBrowserState.bounds = next;
   nativeBrowserState.visible = nativeBrowserState.attached && next.width > 8 && next.height > 8;
-  const view = getNativeViewByPartition(partition);
+  const view = getNativeViewByPartition(partition, presentedNativeTabId);
   if (view) {
     try {
       view.setBounds(nativeBrowserState.visible ? next : { ...NATIVE_BROWSER_EMPTY_BOUNDS });
@@ -1854,14 +1961,14 @@ function setNativeBrowserBounds(bounds = {}, sessionId = '') {
 function hideNativeBrowserSurface(reason = '') {
   nativeBrowserState.visible = false;
   nativeBrowserState.bounds = { ...NATIVE_BROWSER_EMPTY_BOUNDS };
-  const view = presentedNativePartition ? getNativeViewByPartition(presentedNativePartition) : null;
+  const view = presentedNativePartition ? getNativeViewByPartition(presentedNativePartition, presentedNativeTabId) : null;
   if (view) { try { view.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {} }
   return broadcastNativeBrowserState({ reason });
 }
 
-async function openNativeBrowserSurface({ sessionId = '', url = '', profile = '' } = {}) {
-  const { view, wc, partition } = requireNativeViewForSession(sessionId, profile);
-  presentNativeView(partition);
+async function openNativeBrowserSurface({ sessionId = '', url = '', profile = '', tabId = '' } = {}) {
+  const { view, wc, partition, tabId: resolvedTabId } = requireNativeViewForSession(sessionId, profile, tabId);
+  presentNativeView(partition, resolvedTabId, sessionId);
   nativeBrowserState.attached = true;
   if (sessionId) nativeBrowserState.sessionId = String(sessionId);
   const meta = nativeViewMeta(view);
@@ -1877,9 +1984,9 @@ async function openNativeBrowserSurface({ sessionId = '', url = '', profile = ''
 // forcing a navigation. It only loads the requested URL when the view has no real
 // page yet, which prevents the render → attach → reload → broadcast → render echo
 // loop. Explicit navigation goes through openNativeBrowserSurface / navigate.
-async function attachNativeBrowserSurface({ sessionId = '', url = '', profile = '' } = {}) {
-  const { view, wc, partition } = requireNativeViewForSession(sessionId, profile);
-  presentNativeView(partition);
+async function attachNativeBrowserSurface({ sessionId = '', url = '', profile = '', tabId = '' } = {}) {
+  const { view, wc, partition, tabId: resolvedTabId } = requireNativeViewForSession(sessionId, profile, tabId);
+  presentNativeView(partition, resolvedTabId, sessionId);
   nativeBrowserState.attached = true;
   if (sessionId) nativeBrowserState.sessionId = String(sessionId);
   const meta = nativeViewMeta(view);
@@ -1895,9 +2002,9 @@ async function attachNativeBrowserSurface({ sessionId = '', url = '', profile = 
   return broadcastNativeBrowserState();
 }
 
-async function navigateNativeBrowserSurface({ action = '', url = '', sessionId = '' } = {}) {
-  const { view, wc, partition } = requireNativeViewForSession(sessionId);
-  presentNativeView(partition);
+async function navigateNativeBrowserSurface({ action = '', url = '', sessionId = '', tabId = '' } = {}) {
+  const { view, wc, partition, tabId: resolvedTabId } = requireNativeViewForSession(sessionId, '', tabId);
+  presentNativeView(partition, resolvedTabId, sessionId);
   const normalized = String(action || '').trim().toLowerCase();
   nativeViewMeta(view).lastError = '';
   if (normalized === 'back') {
@@ -1912,6 +2019,114 @@ async function navigateNativeBrowserSurface({ action = '', url = '', sessionId =
     throw new Error(`Unsupported native browser navigation action "${normalized || 'unknown'}".`);
   }
   return emitNativeSessionState(sessionId, view, partition);
+}
+
+function listNativeBrowserTabs({ sessionId = '', profile = '' } = {}) {
+  const sid = String(sessionId || '').trim();
+  const partition = resolveNativePartition(sid, profile);
+  const registry = getNativeTabRegistry(sid, partition, false);
+  return {
+    sessionId: sid,
+    profile: nativeProfileFromPartition(partition),
+    partition,
+    activeTabId: String(registry?.activeTabId || '').trim(),
+    tabs: nativeTabsForSession(sid, partition, registry?.activeTabId || ''),
+    attached: !!(registry && registry.tabIds.length),
+    presented: partition === presentedNativePartition,
+    timestamp: Date.now(),
+  };
+}
+
+function selectNativeBrowserTab({ sessionId = '', tabId = '', index = null } = {}) {
+  const sid = String(sessionId || '').trim();
+  const partition = resolveNativePartition(sid, '');
+  const registry = getNativeTabRegistry(sid, partition, false);
+  if (!registry || !registry.tabIds.length) throw new Error('No native browser tabs are open.');
+  const requested = String(tabId || '').trim();
+  const selectedTabId = requested || registry.tabIds[Math.max(0, Math.min(registry.tabIds.length - 1, Number(index) || 0))];
+  if (!registry.tabIds.includes(selectedTabId)) throw new Error('No native browser tab "' + selectedTabId + '".');
+  const view = getNativeViewByPartition(partition, selectedTabId);
+  if (!view) throw new Error('The requested native browser tab is no longer available.');
+  registry.activeTabId = selectedTabId;
+  presentNativeView(partition, selectedTabId, sid);
+  nativeBrowserState.attached = true;
+  nativeBrowserState.sessionId = sid;
+  return emitNativeSessionState(sid, view, partition);
+}
+
+async function newNativeBrowserTab({ sessionId = '', url = '', profile = '' } = {}) {
+  const sid = String(sessionId || '').trim();
+  const { view, wc, partition, tabId } = ensureNativeBrowserView(sid, profile, '', { forceNew: true });
+  presentNativeView(partition, tabId, sid);
+  nativeBrowserState.attached = true;
+  nativeBrowserState.sessionId = sid;
+  const meta = nativeViewMeta(view);
+  meta.lastError = '';
+  const targetUrl = normalizeBrowserUrlForLoad(url || 'about:blank');
+  if (targetUrl && targetUrl !== 'about:blank') await wc.loadURL(targetUrl);
+  refreshNativeViewMeta(view);
+  return emitNativeSessionState(sid, view, partition);
+}
+
+function destroyNativeBrowserView(partition, tabId, view) {
+  const key = nativeTabKey(partition, tabId);
+  try {
+    if (WebContentsView && mainWindow?.contentView?.removeChildView) mainWindow.contentView.removeChildView(view);
+    else if (typeof mainWindow?.removeBrowserView === 'function') mainWindow.removeBrowserView(view);
+  } catch {}
+  try {
+    if (view?.webContents && !view.webContents.isDestroyed()) view.webContents.destroy?.();
+  } catch {}
+  nativeBrowserViews.delete(key);
+}
+
+function closeNativeBrowserTab({ sessionId = '', tabId = '', index = null } = {}) {
+  const sid = String(sessionId || '').trim();
+  const partition = resolveNativePartition(sid, '');
+  const registry = getNativeTabRegistry(sid, partition, false);
+  if (!registry || !registry.tabIds.length) throw new Error('No native browser tabs are open.');
+  const requested = String(tabId || '').trim();
+  const activeIndex = registry.tabIds.indexOf(registry.activeTabId);
+  const tabIndex = requested
+    ? registry.tabIds.indexOf(requested)
+    : (index == null
+      ? Math.max(0, activeIndex)
+      : Math.max(0, Math.min(registry.tabIds.length - 1, Number(index) || 0)));
+  if (tabIndex < 0) throw new Error('No native browser tab "' + requested + '".');
+  const closingTabId = registry.tabIds[tabIndex];
+  const view = getNativeViewByPartition(partition, closingTabId);
+  if (view) destroyNativeBrowserView(partition, closingTabId, view);
+  registry.tabIds.splice(tabIndex, 1);
+  if (!registry.tabIds.length) {
+    nativeBrowserSessionTabs.delete(nativeSessionKey(sid, partition));
+    if (presentedNativePartition === partition) {
+      presentedNativePartition = '';
+      presentedNativeTabId = '';
+      nativeBrowserState.attached = false;
+      nativeBrowserState.visible = false;
+      nativeBrowserState.bounds = { ...NATIVE_BROWSER_EMPTY_BOUNDS };
+      nativeBrowserState.activeTabId = '';
+      nativeBrowserState.tabs = [];
+      broadcastNativeBrowserState({ attached: false, visible: false, activeTabId: '', tabs: [] });
+    }
+    return {
+      sessionId: sid,
+      profile: nativeProfileFromPartition(partition),
+      partition,
+      attached: false,
+      activeTabId: '',
+      tabs: [],
+      presented: false,
+      timestamp: Date.now(),
+    };
+  }
+  const nextIndex = Math.min(tabIndex, registry.tabIds.length - 1);
+  registry.activeTabId = registry.tabIds[nextIndex];
+  const nextView = getNativeViewByPartition(partition, registry.activeTabId);
+  presentNativeView(partition, registry.activeTabId, sid);
+  nativeBrowserState.attached = true;
+  nativeBrowserState.sessionId = sid;
+  return emitNativeSessionState(sid, nextView, partition);
 }
 
 // Toggle Teach-mode click capture inside the in-house view's preload. When on,
@@ -1936,8 +2151,10 @@ function stateNativeBrowserSurface({ sessionId = '' } = {}) {
   const sid = String(sessionId || '').trim();
   if (sid && nativeBrowserSessionPartitions.has(sid)) {
     const partition = nativeBrowserSessionPartitions.get(sid);
-    const view = getNativeViewByPartition(partition);
+    const registry = getNativeTabRegistry(sid, partition, false);
+    const view = getNativeViewByPartition(partition, registry?.activeTabId || '');
     if (view) return nativeSessionStatePayload(sid, view, partition);
+    if (registry) return nativeSessionStatePayload(sid, null, partition, { attached: false });
   }
   return broadcastNativeBrowserState();
 }
@@ -2181,8 +2398,12 @@ async function startNativeBrowserRpcServer() {
         const pathName = new URL(req.url || '/', 'http://127.0.0.1').pathname;
         let result;
         if (pathName === '/state') result = stateNativeBrowserSurface(payload);
+        else if (pathName === '/tabs') result = listNativeBrowserTabs(payload);
+        else if (pathName === '/select-tab') result = selectNativeBrowserTab(payload);
+        else if (pathName === '/new-tab') result = await newNativeBrowserTab(payload);
+        else if (pathName === '/close-tab') result = closeNativeBrowserTab(payload);
         else if (pathName === '/attach') result = await attachNativeBrowserSurface(payload);
-        else if (pathName === '/bounds') result = setNativeBrowserBounds(payload.bounds || payload, payload.sessionId);
+        else if (pathName === '/bounds') result = setNativeBrowserBounds(payload.bounds || payload, payload.sessionId, payload.tabId);
         else if (pathName === '/hide') result = hideNativeBrowserSurface('rpc hide');
         else if (pathName === '/open') result = await openNativeBrowserSurface(payload);
         else if (pathName === '/navigate') result = await navigateNativeBrowserSurface(payload);
@@ -2304,7 +2525,7 @@ function requireTrustedNativeMainFrame(event) {
     throw new Error('Teach capture events are accepted only from an embedded browser main frame.');
   }
   const partition = presentedNativePartition;
-  const view = partition ? getNativeViewByPartition(partition) : null;
+  const view = partition ? getNativeViewByPartition(partition, presentedNativeTabId) : null;
   if (!view || view.webContents !== event.sender) {
     throw new Error('Teach capture events are accepted only from the presented browser surface.');
   }
@@ -2393,8 +2614,12 @@ handleTrustedMain('select-canvas-paths', async (_event, options = {}) => {
 handleTrustedMain('native-browser:available', () => nativeBrowserState.available === true);
 handleTrustedMain('native-browser:attach', async (_event, options = {}) => attachNativeBrowserSurface(options));
 handleTrustedMain('native-browser:detach', async () => hideNativeBrowserSurface('detached'));
-handleTrustedMain('native-browser:set-bounds', async (_event, bounds = {}) => setNativeBrowserBounds(bounds, bounds && bounds.sessionId));
+handleTrustedMain('native-browser:set-bounds', async (_event, bounds = {}) => setNativeBrowserBounds(bounds, bounds && bounds.sessionId, bounds && bounds.tabId));
 handleTrustedMain('native-browser:navigate', async (_event, payload = {}) => navigateNativeBrowserSurface(payload));
+handleTrustedMain('native-browser:list-tabs', async (_event, payload = {}) => listNativeBrowserTabs(payload));
+handleTrustedMain('native-browser:select-tab', async (_event, payload = {}) => selectNativeBrowserTab(payload));
+handleTrustedMain('native-browser:new-tab', async (_event, payload = {}) => newNativeBrowserTab(payload));
+handleTrustedMain('native-browser:close-tab', async (_event, payload = {}) => closeNativeBrowserTab(payload));
 handleTrustedMain('native-browser:focus', async () => {
   const sid = String(nativeBrowserState.sessionId || '').trim();
   try { requireNativeViewForSession(sid).wc.focus(); } catch {}

@@ -122,6 +122,28 @@ export function resolveCodingRoot(rawRoot?: string): string {
   return resolved;
 }
 
+/**
+ * Repository lookups may be scoped to a file rather than a directory. Git
+ * requires a directory as its cwd, so walk to the nearest existing directory
+ * before asking Git for the repository root. This also handles a newly-created
+ * file whose parent directory already exists.
+ */
+function resolveGitStartPath(candidatePath: string): string {
+  let current = path.resolve(candidatePath);
+  try {
+    if (fs.statSync(current).isFile()) return path.dirname(current);
+    if (fs.existsSync(current)) return current;
+  } catch {
+    // Continue walking toward an existing parent.
+  }
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return current;
+}
+
 export function detectPackageManager(root: string): PackageManagerKind {
   if (fs.existsSync(path.join(root, 'pnpm-lock.yaml'))) return 'pnpm';
   if (fs.existsSync(path.join(root, 'yarn.lock'))) return 'yarn';
@@ -212,8 +234,9 @@ export function gitCurrentStatus(root: string): { branch?: string; dirtyFiles: s
 
 export function getCodingRepositorySnapshot(rawRoot?: string): CodingRepositorySnapshot {
   const requestedRoot = resolveCodingRoot(rawRoot);
-  const gitRoot = runGit(requestedRoot, ['rev-parse', '--show-toplevel'], 5000);
-  const root = path.resolve(gitRoot || requestedRoot);
+  const gitStartPath = resolveGitStartPath(requestedRoot);
+  const gitRoot = runGit(gitStartPath, ['rev-parse', '--show-toplevel'], 5000);
+  const root = path.resolve(gitRoot || gitStartPath);
   const name = path.basename(root) || 'Workspace';
   const status = parseGitStatusLines(root);
   const statusText = runGit(root, ['status', '--short', '--branch'], 5000);

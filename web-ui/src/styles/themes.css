@@ -2929,7 +2929,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
 }
 
 :root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view.chat-empty:not(.desktop-voice-mode) > .chat-input-area {
-  transform: translateY(clamp(-180px, -12vh, -90px));
+  transform: none !important;
 }
 
 :root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .topbar:hover,
@@ -3040,7 +3040,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
 :root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-browser-shell,
 :root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #canvas-browser-shell > div:first-child,
 :root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-layout,
-:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-control-slot,
+:root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-native-tabs,
 :root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-live-card,
 :root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-live-card > div:first-child,
 :root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-empty,
@@ -3063,6 +3063,12 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
    the legacy shell; these final parity rules close that gap without touching
    the mobile document.
    ───────────────────────────────────────────────────────────────────────── */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) {
+  --pm-shell-gold: #d6b75e;
+  --pm-shell-gold-light: #f0d98b;
+  --pm-shell-gold-muted: #a98a3b;
+}
+
 :root[data-skin="light"] {
   --pm-shell-surface: #000;
   --pm-shell-accent: #d6b75e;
@@ -3197,17 +3203,18 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 2px;
+  color: var(--pm-shell-gold-muted);
 }
 
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .section-title::after {
   content: "✦";
   flex: 1;
   overflow: hidden;
-  color: var(--pm-shell-accent);
+  color: var(--pm-shell-gold);
   font-size: 10px;
   letter-spacing: 0;
   text-align: right;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-accent-muted) 45%, transparent), transparent 84%) left center / calc(100% - 18px) 1px no-repeat;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-gold-muted) 45%, transparent), transparent 84%) left center / calc(100% - 18px) 1px no-repeat;
 }
 
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .session-list,
@@ -3245,10 +3252,10 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   width: 22px;
   height: 22px;
   padding-right: 0;
-  border: 1px solid color-mix(in srgb, var(--pm-shell-accent) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pm-shell-gold) 34%, transparent);
   border-radius: 6px;
-  background: color-mix(in srgb, var(--pm-shell-accent) 7%, transparent);
-  color: var(--pm-shell-accent);
+  background: color-mix(in srgb, var(--pm-shell-gold) 7%, transparent);
+  color: var(--pm-shell-gold);
 }
 
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item) .nav-icon svg {
@@ -3262,10 +3269,10 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   height: 20px;
   padding-right: 8px;
   border: 0;
-  border-right: 1px solid color-mix(in srgb, var(--pm-shell-accent) 34%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--pm-shell-gold) 48%, transparent);
   border-radius: 0;
   background: transparent;
-  color: var(--pm-shell-accent-light);
+  color: var(--pm-shell-gold-light);
 }
 
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon svg {
@@ -3275,7 +3282,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon::before {
   content: "✦";
   font: 17px/1 Georgia, 'Times New Roman', serif;
-  text-shadow: 0 0 8px color-mix(in srgb, var(--pm-shell-accent) 38%, transparent);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--pm-shell-gold) 38%, transparent);
 }
 
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .chat-input-area)::before,
@@ -3308,7 +3315,7 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
 }
 
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view.chat-empty:not(.desktop-voice-mode) > .chat-input-area {
-  transform: translateY(clamp(-180px, -12vh, -90px));
+  transform: none !important;
 }
 
 :root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-welcome,
@@ -3388,4 +3395,95 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
   background:
     linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
     #2e2e2e url('/assets/chat-main-background-dark.png') center center / cover no-repeat !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Final desktop shell alignment
+
+   The left rail keeps the Prometheus One metallic-gold chrome on every
+   preset. The source drawer follows the same 56px header rhythm as the main
+   topbar, while its active tab uses the preset's own shell accent.
+   ───────────────────────────────────────────────────────────────────────── */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.project-sidebar-row .project-card-icon, .project-chat-icon-line, .project-chat-folder) {
+  color: var(--pm-shell-gold) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .chat-pin-btn:is(:hover, .active) {
+  color: var(--pm-shell-gold-light) !important;
+  background: color-mix(in srgb, var(--pm-shell-gold) 10%, transparent) !important;
+}
+
+/* Pinned rows use the same flat treatment as ordinary session rows. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item {
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item:hover {
+  border-color: transparent !important;
+  background: var(--sidebar-item-hover) !important;
+  box-shadow: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item:is(.active, .unread.active) {
+  border-color: transparent !important;
+  background: var(--sidebar-active-bg) !important;
+  box-shadow: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item.unread:not(.active):not(.is-working) {
+  border-color: transparent !important;
+  background: color-mix(in srgb, var(--sidebar-active-bg) 52%, transparent) !important;
+  box-shadow: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item.is-working {
+  border-color: transparent !important;
+  background: color-mix(in srgb, var(--sidebar-active-bg) 70%, transparent) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--pm-orange), transparent 78%),
+    0 0 14px color-mix(in srgb, var(--pm-orange), transparent 70%) !important;
+}
+
+/* The source drawer header is the same size and surface as the main topbar. */
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-topbar {
+  height: 56px;
+  min-height: 56px;
+  background: var(--pm-shell-surface) !important;
+  border-bottom-color: var(--line) !important;
+  color: var(--text) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-heading {
+  color: var(--text) !important;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-shell {
+  color: var(--text);
+  background: var(--bg) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tabs {
+  border-bottom-color: var(--line) !important;
+  background: var(--bg) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab {
+  color: var(--muted);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab:hover {
+  color: var(--text);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab.is-active {
+  color: var(--pm-shell-accent-light) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel .source-panel-tab.is-active::after {
+  background: var(--pm-shell-accent) !important;
 }

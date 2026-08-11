@@ -75,6 +75,8 @@
     "test:request-ops": "npm run build:backend && node scripts/test-prometheus-request-ops.mjs",
     "test:audit-ops": "tsx src/gateway/audit/audit-ops.regression.ts",
     "test:activity-package": "tsx src/gateway/brain/activity-package.regression.ts",
+    "test:brain-proposal-policy": "tsx src/gateway/brain/brain-proposal-policy.regression.ts",
+    "test:brain-usage": "tsx src/gateway/brain/brain-usage.regression.ts",
     "test:process-hygiene": "tsx src/gateway/process-hygiene.regression.ts",
     "test:supervised-restart": "npm run build:backend && node scripts/test-supervised-restart-cleanup.mjs",
     "test:mobile-recovery": "node scripts/test-mobile-chat-recovery.mjs",

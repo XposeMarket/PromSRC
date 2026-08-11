@@ -564,6 +564,11 @@
   object-fit: cover;
   object-position: left center;
 }
+.imported-source-logo--openai {
+  background: #fff;
+  border-radius: 4px;
+  padding: 2px;
+}
 
 /* Imported conversations get a little more breathing room on desktop so the
    source artwork sits beside the title without changing the mobile sidebar. */
@@ -3957,6 +3962,28 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.24);
   backdrop-filter: blur(10px);
 }
+.chat-question-popover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 26;
+  max-height: min(62vh, 560px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel-2);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+}
+.chat-question-popover .chat-question-card {
+  margin: 0;
+  max-width: none;
+}
+.chat-question-popover[hidden] { display: none; }
 :root[data-theme="dark"] .chat-slash-command-popover {
   background: var(--panel-2);
   border-color: color-mix(in srgb, var(--line-strong) 82%, transparent);
@@ -4877,14 +4904,21 @@ body:not(.pm-mobile-active) #model-switcher-popover .model-switcher-quick-label 
 .chat-approval-card-medium { border-left-color: #d6b272; }
 .chat-approval-card-low { border-left-color: #22c55e; }
 
-/* Prometheus question card — themeable controls (dark-mode default-friendly) */
-.chat-question-card { border-left-color: #38bdf8; }
+/* Prometheus question card — the question itself is a clean popover surface;
+   option controls retain their own affordance borders. */
+.chat-question-card,
+.chat-question-card.chat-approval-card {
+  border: 0 !important;
+  border-left: 0 !important;
+  box-shadow: none;
+}
 .chat-question-card .pq-block { display: flex; flex-direction: column; gap: 7px; }
 .chat-question-card .pq-q-label { font-size: 12px; font-weight: 700; line-height: 1.35; }
 .chat-question-card .pq-optional { font-weight: 500; opacity: 0.6; }
-.chat-question-card .pq-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
+.chat-question-card .pq-options { display: flex; flex-direction: column; gap: 6px; }
 .chat-question-card .pq-option {
   display: flex; align-items: center; gap: 8px; cursor: pointer;
+  width: 100%; box-sizing: border-box;
   border: 1px solid var(--line, rgba(148,163,184,0.28));
   border-radius: 8px; padding: 7px 9px; font-size: 12px;
   background: rgba(127,127,127,0.06); color: var(--text);
@@ -8486,21 +8520,23 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
 .right-panel .source-panel-topbar {
   align-items: center;
   justify-content: space-between;
-  min-height: 60px;
+  height: 56px;
+  min-height: 56px;
+  box-sizing: border-box;
   padding: 0 16px;
   flex-shrink: 0;
   position: sticky;
   top: 0;
   z-index: 10;
-  color: #f2f1ee;
-  background: #111419 !important;
-  border-bottom: 1px solid rgba(255,255,255,.08) !important;
+  color: var(--text);
+  background: var(--pm-shell-surface, var(--panel)) !important;
+  border-bottom: 1px solid var(--line) !important;
 }
 .right-panel .source-panel-heading {
-  color: #f2f1ee;
-  font-size: 18px;
-  font-weight: 650;
-  letter-spacing: -.025em;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -.02em;
 }
 .source-panel-actions {
   display: flex;
@@ -8515,18 +8551,18 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   width: 34px;
   height: 34px;
   padding: 0;
-  border: 1px solid rgba(255,255,255,.055);
+  border: 1px solid var(--line-strong);
   border-radius: 10px;
-  color: #a8adb8;
-  background: rgba(255,255,255,.035);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--pm-shell-accent, var(--brand)) 6%, transparent);
   cursor: pointer;
   transition: color .15s ease, background .15s ease, border-color .15s ease;
 }
 .source-panel-icon-btn:hover,
 .source-panel-close-btn:hover {
-  color: #f7f5f0;
-  background: rgba(255,255,255,.09);
-  border-color: rgba(255,255,255,.12);
+  color: var(--text);
+  background: color-mix(in srgb, var(--pm-shell-accent, var(--brand)) 13%, transparent);
+  border-color: color-mix(in srgb, var(--pm-shell-accent, var(--brand)) 42%, var(--line-strong));
 }
 .source-panel-close-btn {
   margin-left: 4px;
@@ -8550,10 +8586,10 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   right: 6px;
   width: 6px;
   height: 6px;
-  border: 1px solid #111419;
+  border: 1px solid var(--pm-shell-surface, var(--panel));
   border-radius: 999px;
-  background: #a970ff;
-  box-shadow: 0 0 0 2px rgba(169,112,255,.18);
+  background: var(--pm-shell-accent, var(--brand));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--pm-shell-accent, var(--brand)) 18%, transparent);
   display: none;
 }
 .source-panel-shell {
@@ -8561,8 +8597,8 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   flex: 1 1 auto;
   min-height: 0;
   flex-direction: column;
-  color: #e8e8e5;
-  background: #111419;
+  color: var(--text);
+  background: var(--bg);
 }
 #source-panel-runtime-compat[hidden] { display: none !important; }
 .source-panel-tabs {
@@ -8570,22 +8606,22 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   grid-template-columns: repeat(3, minmax(0, 1fr));
   flex: 0 0 auto;
   padding: 0 15px;
-  border-bottom: 1px solid rgba(255,255,255,.075);
-  background: #111419;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
 }
 .source-panel-tab {
   position: relative;
   min-height: 48px;
   padding: 0 8px;
   border: 0;
-  color: #8d939e;
+  color: var(--muted);
   background: transparent;
   font: 600 12px/1 'Manrope', sans-serif;
   cursor: pointer;
   transition: color .15s ease;
 }
-.source-panel-tab:hover { color: #e6e7ea; }
-.source-panel-tab.is-active { color: #f2efff; }
+.source-panel-tab:hover { color: var(--text); }
+.source-panel-tab.is-active { color: var(--pm-shell-accent-light, var(--brand)); }
 .source-panel-tab.is-active::after {
   position: absolute;
   right: 18px;
@@ -8593,7 +8629,7 @@ body.creative-editor-on #canvas-creative-shell.creative-studio-shell,
   left: 18px;
   height: 2px;
   border-radius: 4px 4px 0 0;
-  background: #a970ff;
+  background: var(--pm-shell-accent, var(--brand));
   content: '';
 }
 .source-panel-filter-row {

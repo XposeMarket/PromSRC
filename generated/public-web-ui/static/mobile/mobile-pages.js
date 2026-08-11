@@ -6970,13 +6970,14 @@ function _renderMobileQuestionCard(item) {
       return `<div class="pm-q-block"><div class="pm-q-label">${escapeHtml(qq.label)}</div><div class="pm-q-answered">${escapeHtml(txt)}</div></div>`;
     }
     const opts = (qq.options || []).map((opt) => `<button type="button" class="pm-q-opt" data-pm-q-opt="${escapeHtml(opt)}" onclick="_mobileQuestionToggleOption(this, '${escapeHtml(qq.mode)}')">${escapeHtml(opt)}</button>`).join('');
-    const textArea = qq.mode === 'text' ? `<textarea class="pm-q-input" data-pm-q-text rows="2" placeholder="Answer..." oninput="_mobileQuestionRememberDraft(this)"></textarea>` : '';
-    const otherArea = qq.allowOther ? `${qq.mode !== 'text' ? `<button type="button" class="pm-q-other-toggle" onclick="_mobileQuestionToggleOther(this)">Other…</button>` : ''}<textarea class="pm-q-input pm-q-other" data-pm-q-other rows="1" placeholder="Other..." oninput="_mobileQuestionRememberDraft(this)"${qq.mode !== 'text' ? ' hidden' : ''}></textarea>` : '';
+    const otherArea = qq.allowOther && qq.mode !== 'text'
+      ? `<button type="button" class="pm-q-other-toggle" onclick="_mobileQuestionToggleOther(this)">Other…</button>`
+      : '';
     return `<div class="pm-q-block" data-pm-q="${escapeHtml(qq.id)}" data-pm-q-mode="${escapeHtml(qq.mode)}">
       <div class="pm-q-label">${escapeHtml(qq.label)}${qq.required ? '' : ' <span class="pm-q-optional">(optional)</span>'}</div>
       ${qq.helpText ? `<div class="pm-q-help">${escapeHtml(qq.helpText)}</div>` : ''}
       ${opts ? `<div class="pm-q-opts">${opts}</div>` : ''}
-      ${textArea}${otherArea}
+      ${otherArea}
     </div>`;
   }).join('');
   return `<div class="pm-question-card pm-question-${escapeHtml(q.status)}" data-pm-q-card="${escapeHtml(q.id)}">
@@ -6986,9 +6987,8 @@ function _renderMobileQuestionCard(item) {
     ${q.context ? `<div class="pm-q-context">${escapeHtml(q.context)}</div>` : ''}
     ${blocks}
     ${!pending && q.generalOther ? `<div class="pm-q-block"><div class="pm-q-label">Anything else</div><div class="pm-q-answered">${escapeHtml(q.generalOther)}</div></div>` : ''}
-    ${pending && q.allowGeneralOther ? `<textarea class="pm-q-input" data-pm-q-general rows="2" placeholder="Anything else..." oninput="_mobileQuestionRememberDraft(this)"></textarea>` : ''}
     ${pending
-      ? `<div class="pm-q-actions"><button type="button" class="pm-q-submit" onclick="_submitMobileQuestion(${idJson})">Submit</button><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
+      ? `<div class="pm-q-actions"><button type="button" class="pm-q-cancel" onclick="_cancelMobileQuestion(${idJson})">Cancel</button></div>`
       : `<div class="pm-q-resolved">This question was ${escapeHtml(q.status)}.</div>`}
   </div>`;
 }
@@ -7097,9 +7097,12 @@ function _renderMobileVoiceWorkgroup(message) {
   </section>`;
 }
 function _mobileQuestionToggleOther(btn) {
-  const ta = btn?.parentElement?.querySelector('[data-pm-q-other]') || btn?.nextElementSibling;
-  if (!ta) return;
-  if (ta.hasAttribute('hidden')) { ta.removeAttribute('hidden'); ta.focus(); } else { ta.setAttribute('hidden', ''); }
+  const card = btn?.closest?.('[data-pm-q-card]');
+  const block = btn?.closest?.('[data-pm-q]');
+  const itemId = String(block?.getAttribute('data-pm-q') || '').trim();
+  if (!card || !itemId) return;
+  card.setAttribute('data-pm-q-compose-target', `${itemId}::other`);
+  document.getElementById('pm-composer-input')?.focus?.();
   _mobileQuestionRememberDraft(btn);
 }
 
@@ -7125,7 +7128,7 @@ function _captureMobileQuestionDraftState(root) {
       if (!card.classList || !card.classList.contains('pm-question-card')) return;
       const qid = card.getAttribute('data-pm-q-card');
       if (!qid) return;
-      const state = { selected: {}, texts: {}, others: {}, general: '', focus: null };
+      const state = { selected: {}, texts: {}, others: {}, general: '', composeTarget: card.getAttribute('data-pm-q-compose-target') || '', focus: null };
       card.querySelectorAll('[data-pm-q]').forEach((block) => {
         const bid = block.getAttribute('data-pm-q') || '';
         state.selected[bid] = Array.from(block.querySelectorAll('.pm-q-opt.selected'))
@@ -7172,6 +7175,7 @@ function _restoreMobileQuestionDraftState(root, map) {
       const card = root.querySelector(`[data-pm-q-card="${_pmCssEscape(qid)}"]`);
       if (!card || !card.classList || !card.classList.contains('pm-question-card')) return;
       const state = combined[qid];
+      if (state.composeTarget) card.setAttribute('data-pm-q-compose-target', state.composeTarget);
       Object.entries(state.selected || {}).forEach(([bid, vals]) => {
         const block = card.querySelector(`[data-pm-q="${_pmCssEscape(bid)}"]`);
         if (!block || !Array.isArray(vals) || !vals.length) return;
@@ -7243,8 +7247,64 @@ function _collectMobileQuestionAnswers(q) {
   const generalOther = String(card.querySelector('[data-pm-q-general]')?.value || '').trim();
   return { answers, generalOther };
 }
-// Most-recent pending question for a session — docked inside the live streaming
-// bubble (below the tool stream) so it reads as part of the active blocked turn.
+
+function _applyMobileQuestionComposerAnswer(q, payload, composerText = '') {
+  const text = String(composerText || '').trim();
+  if (!text || !q || !payload) return payload;
+  const card = document.querySelector(`[data-pm-q-card="${_pmCssEscape(q.id)}"]`);
+  const rawTarget = String(card?.getAttribute('data-pm-q-compose-target') || '').trim();
+  const [targetId, targetKind] = rawTarget.split('::');
+  const targetQuestion = q.questions.find((item) => String(item.id) === String(targetId || ''))
+    || q.questions.find((item) => item.mode === 'text')
+    || q.questions.find((item) => item.allowOther)
+    || null;
+  const targetAnswer = targetQuestion
+    ? payload.answers.find((answer) => String(answer.id) === String(targetQuestion.id))
+    : null;
+  if (targetAnswer) {
+    if (targetKind === 'other' || (!targetKind && targetQuestion.mode !== 'text')) targetAnswer.other = text;
+    else targetAnswer.text = text;
+  } else if (q.allowGeneralOther) {
+    payload.generalOther = text;
+  } else if (payload.answers[0]) {
+    payload.answers[0].text = text;
+  }
+  return payload;
+}
+
+function _getMissingMobileQuestionAnswers(q, payload) {
+  const answers = Array.isArray(payload?.answers) ? payload.answers : [];
+  return (q?.questions || []).filter((item) => {
+    if (item?.required === false) return false;
+    const answer = answers.find((candidate) => String(candidate?.id || '') === String(item?.id || ''));
+    return !answer || (
+      !(Array.isArray(answer.selected) && answer.selected.length)
+      && !String(answer.text || '').trim()
+      && !String(answer.other || '').trim()
+    );
+  });
+}
+
+function _focusMobileQuestionComposer() {
+  const input = document.getElementById('pm-composer-input');
+  if (!input) return;
+  try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
+}
+
+async function _submitMobileQuestionFromComposer(text, sessionId = __pmChat.activeSessionId) {
+  const clean = String(text || '').trim();
+  const sid = String(sessionId || '').trim();
+  const staged = sid ? __pmChat.attachments?.[sid] : null;
+  if (Array.isArray(staged) && staged.length) return false;
+  const question = _getPendingQuestionForSession(sid);
+  if (!question) return false;
+  const submitted = await _submitMobileQuestion(question.id, { composerText: clean });
+  return submitted === true;
+}
+
+// Most-recent pending question for a session. The rendered question lives in
+// the composer popover so it stays directly above the input while the stream
+// re-renders.
 function _getPendingQuestionForSession(sessionId) {
   const sid = String(sessionId || '').trim();
   const thread = Array.isArray(__pmChat.threads?.[sid]) ? __pmChat.threads[sid] : [];
@@ -7254,6 +7314,28 @@ function _getPendingQuestionForSession(sessionId) {
   }
   return null;
 }
+
+function _syncMobileQuestionComposerPopover(sessionId = __pmChat.activeSessionId, draftMap = {}) {
+  const host = document.getElementById('pm-mobile-question-popover');
+  if (!host) return;
+  const question = _getPendingQuestionForSession(sessionId);
+  const composer = document.getElementById('pm-composer');
+  if (!question) {
+    host.hidden = true;
+    host.innerHTML = '';
+    host.removeAttribute('data-question-id');
+    composer?.classList.remove('has-pending-question');
+    try { window.__pmMobileQuestionComposerChanged?.(sessionId); } catch {}
+    return;
+  }
+  host.innerHTML = _renderMobileQuestionCard(question);
+  host.hidden = false;
+  host.setAttribute('data-question-id', String(question.id || ''));
+  composer?.classList.add('has-pending-question');
+  _restoreMobileQuestionDraftState(host, draftMap);
+  try { window.__pmMobileQuestionComposerChanged?.(sessionId); } catch {}
+}
+
 function _findMobileQuestionRecord(qid) {
   const id = String(qid || '').trim();
   if (!id) return null;
@@ -7298,7 +7380,7 @@ function _removeMobileQuestionFromThread(id) {
     if (changed && String(__pmChat.activeSessionId || '').trim() === String(sid)) _renderMobileChatSessionNow(sid);
   });
 }
-async function _submitMobileQuestion(id) {
+async function _submitMobileQuestion(id, options = {}) {
   const qid = String(id || '').trim();
   // Prefer the locally-rendered question record (already in the thread) so a
   // slow/failed /api/questions fetch can't strand Submit with an empty question
@@ -7312,6 +7394,19 @@ async function _submitMobileQuestion(id) {
   const savedPayload = _mobileQuestionPayloadFromDraft(q, _mobileQuestionDrafts.get(qid));
   const hasDomAnswer = payload.answers.some((answer) => (answer.selected || []).length || answer.text || answer.other) || payload.generalOther;
   if (!hasDomAnswer && savedPayload) payload = savedPayload;
+  _applyMobileQuestionComposerAnswer(q, payload, options.composerText);
+  const missing = _getMissingMobileQuestionAnswers(q, payload);
+  if (missing.length) {
+    _focusMobileQuestionComposer();
+    const labels = missing.map((item) => item.label).filter(Boolean).slice(0, 3).join('; ');
+    pmToast?.({
+      key: 'mobile-question-answer-required',
+      severity: 'warning',
+      title: 'Answer required',
+      summary: `Use the composer to answer: ${labels}`,
+    });
+    return false;
+  }
   _setMobileQuestionSubmitting(qid);
   try {
     const result = await window.api(`/api/questions/${encodeURIComponent(qid)}/submit`, { method: 'POST', body: JSON.stringify(payload) });
@@ -7337,10 +7432,12 @@ async function _submitMobileQuestion(id) {
         pmToast('Answer queued a resume message', 'info');
       }
     }
+    return true;
   } catch (err) {
     // Restore the same card if the answer could not be submitted.
     _updateMobileQuestionStatus({ questionId: qid, question: q }, 'pending');
     pmToast?.(`Question submit failed: ${err?.message || err}`, 'error');
+    return false;
   }
 }
 async function _cancelMobileQuestion(id) {
@@ -7509,14 +7606,15 @@ function _renderChatMessageHtml(m, index = -1) {
     inner += _renderMobileApprovalCard(m.approvalRequest, { compact: false });
   }
   if (m.questionRequest) {
-    // While the turn is live, the pending question is docked into the streaming
-    // bubble below (mirrors desktop). Suppress the standalone history copy so it
-    // isn't shown twice; a question-only message then renders nothing here.
+    // Pending questions are owned by the composer popover. Keep the history
+    // stream free of a second copy; preserve any real assistant text/approval
+    // that accompanied the question.
     const qPending = String(m.questionRequest.status || 'pending').toLowerCase() === 'pending';
-    const threadStreaming = (__pmChat.threads?.[__pmChat.activeSessionId] || []).some((x) => _isMobileAssistantMessage(x) && x.streaming === true);
-    const dockElsewhere = qPending && threadStreaming;
-    if (dockElsewhere && !String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
-    if (!dockElsewhere) inner += _renderMobileQuestionCard(m.questionRequest);
+    if (qPending) {
+      if (!String(m.body?.text || m.content || '').trim() && !m.approvalRequest) return '';
+    } else {
+      inner += _renderMobileQuestionCard(m.questionRequest);
+    }
   }
   const hasLiveTraceEntries = Array.isArray(m.liveTraceEntries) && m.liveTraceEntries.length > 0;
   const finalFrameReceived = m._pmFinalReceived === true;
@@ -7544,10 +7642,6 @@ function _renderChatMessageHtml(m, index = -1) {
   }
   if (hasPendingImageGeneration) {
     inner += _renderMobileGeneratedImageLoadingCard();
-  }
-  if (m.streaming) {
-    const dockedQuestion = _getPendingQuestionForSession(__pmChat.activeSessionId);
-    if (dockedQuestion) inner += `<div class="pm-streaming-question-dock">${_renderMobileQuestionCard(dockedQuestion)}</div>`;
   }
   inner += _renderMobileChatErrorPresentation(m.errorPresentation);
   if (b.text) {
@@ -8363,7 +8457,7 @@ function _renderThread(threadEl, sessionKey = '') {
   const openTerminals = {};
   const stableImageNodes = new Map();
   const approvalDetails = _captureMobileApprovalDetailsState(threadEl);
-  const questionDrafts = _captureMobileQuestionDraftState(threadEl);
+  const questionDrafts = _captureMobileQuestionDraftState(document);
   try {
     // Full thread renders happen when a new turn starts, session status is
     // reconciled, or durable history refreshes. Keep every decoded image node
@@ -8438,6 +8532,7 @@ function _renderThread(threadEl, sessionKey = '') {
       ? _renderMobileEmptyChatStarterCards()
       : ''
   );
+  _syncMobileQuestionComposerPopover(sid, questionDrafts);
   try {
     threadEl.querySelectorAll('img[src]').forEach((node) => {
       const src = String(node.getAttribute('src') || '').trim();
@@ -8473,7 +8568,7 @@ function _renderThread(threadEl, sessionKey = '') {
       else if (openTraceGroups[key]) d.setAttribute('open', '');
     });
     _restoreMobileApprovalDetailsState(threadEl, approvalDetails);
-    _restoreMobileQuestionDraftState(threadEl, questionDrafts);
+    _restoreMobileQuestionDraftState(document, questionDrafts);
     Object.entries(openTerminals).forEach(([approvalId, snapshot]) => {
       const nextHost = threadEl.querySelector(`[data-process-approval-host="${_pmCssEscape(approvalId)}"]`);
       if (!nextHost || !snapshot?.host) return;
@@ -10642,6 +10737,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     <form class="pm-composer${isVoiceRoomTranscript ? ' pm-voice-room-transcript-composer' : ''}" id="pm-composer"${isVoiceRoomTranscript ? ' aria-hidden="true" inert' : ''}>
       <span class="pm-glass-lens" aria-hidden="true"></span>
       <span class="pm-glass-border" aria-hidden="true"></span>
+      <div class="pm-mobile-question-popover" id="pm-mobile-question-popover" hidden></div>
       <div class="pm-chat-slash-popover" id="pm-chat-slash-popover" hidden></div>
       <div class="pm-skill-trigger-pill" id="pm-skill-trigger-pill" hidden aria-live="polite"></div>
       <div class="pm-attach-tray" id="pm-attach-tray" hidden></div>
@@ -13143,20 +13239,37 @@ void main() {
     // The composer belongs to the requested route. Do not let a run in a
     // different chat session turn a fresh/new-chat composer into a stop button.
     const sessionBusy = !!__pmChat.activeRuns?.[sid]?.busy;
-    const shouldAbort = sessionBusy && !_composerHasOutboundContent();
-    const shouldVoice = !sessionBusy && !_composerHasOutboundContent();
+    const questionPending = !!_getPendingQuestionForSession(sid);
+    const shouldAbort = !questionPending && sessionBusy && !_composerHasOutboundContent();
+    const shouldVoice = !questionPending && !sessionBusy && !_composerHasOutboundContent();
+    const shouldSubmitQuestion = questionPending;
     sendBtn.disabled = false;
     sendBtn.classList.toggle('is-abort', shouldAbort);
     sendBtn.classList.toggle('is-voice', shouldVoice);
-    sendBtn.title = shouldAbort ? 'Stop Prometheus' : shouldVoice ? 'Start voice mode' : sessionBusy ? 'Queue message' : 'Send';
-    sendBtn.innerHTML = shouldAbort
+    sendBtn.title = shouldSubmitQuestion ? 'Submit answer' : shouldAbort ? 'Stop Prometheus' : shouldVoice ? 'Start voice mode' : sessionBusy ? 'Queue message' : 'Send';
+    sendBtn.innerHTML = shouldSubmitQuestion
+      ? ICONS.send
+      : shouldAbort
       ? `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>`
       : shouldVoice
         ? `<img class="pm-send-voice-icon" src="${PM_CHAT_VOICE_ICON_SRC}" alt="" aria-hidden="true" />`
       : ICONS.send;
-    sendBtn.setAttribute('aria-label', shouldAbort ? 'Stop' : shouldVoice ? 'Start voice mode' : sessionBusy ? 'Queue message' : 'Send');
+    sendBtn.setAttribute('aria-label', shouldSubmitQuestion ? 'Submit answer' : shouldAbort ? 'Stop' : shouldVoice ? 'Start voice mode' : sessionBusy ? 'Queue message' : 'Send');
     updateComposerExpandedState();
   }
+
+  // Question cards live in the composer host and can be inserted by a stream
+  // event without an input/change event. Keep the send control authoritative
+  // as soon as that host changes, including the option-only/empty-composer
+  // case where the button is the question submit action.
+  const previousQuestionComposerBridge = window.__pmMobileQuestionComposerChanged;
+  const currentQuestionComposerBridge = (sessionId = requestedSession) => {
+    const sid = String(sessionId || requestedSession || '').trim();
+    if (sid && sid !== String(requestedSession || '').trim()) return;
+    updateComposerSubmitState(requestedSession);
+    updateChatComposerSpace();
+  };
+  window.__pmMobileQuestionComposerChanged = currentQuestionComposerBridge;
 
   function setBusy(busy, sessionForBusy = requestedSession) {
     const sid = String(sessionForBusy || requestedSession || MOBILE_CHAT_SESSION_ID);
@@ -16257,6 +16370,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (window.__pmMobileGoalChanged === currentGoalBridge) {
       window.__pmMobileGoalChanged = previousGoalBridge;
     }
+    if (window.__pmMobileQuestionComposerChanged === currentQuestionComposerBridge) {
+      window.__pmMobileQuestionComposerChanged = previousQuestionComposerBridge;
+    }
     if (__pmChat.workTimer) {
       clearInterval(__pmChat.workTimer);
       __pmChat.workTimer = null;
@@ -16295,7 +16411,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   };
 
   let lastComposerSubmitAt = 0;
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const submitNow = Date.now();
     // The native haptic proxy and the real submit control can both produce a
@@ -16308,6 +16424,16 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     // keyboard before the send/queue/abort/voice branch updates the layout.
     try { input?.blur?.(); } catch {}
     const text = _pmGetComposerValue(input);
+    const activeSid = String(__pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID);
+    if (_getPendingQuestionForSession(activeSid)) {
+      const submitted = await _submitMobileQuestionFromComposer(text, activeSid);
+      if (submitted) {
+        resetComposerInput();
+        _pmClearActiveSlashCommand(page, input, { focus: false });
+      }
+      updateComposerSubmitState(activeSid);
+      return;
+    }
     if (/^\/side(\s|$)/i.test(text.trim())) {
       const initial = text.trim().slice('/side'.length).trim();
       resetComposerInput();
@@ -16332,7 +16458,6 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       handleImmediateSlashCommand(text);
       return;
     }
-    const activeSid = String(__pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID);
     const hasAttachments = getPendingAttachments().length > 0;
     if ((__pmChat.activeRuns?.[activeSid]?.busy || __pmChat.activeRuns?.[requestedSession]?.busy) && !text.trim() && !hasAttachments) {
       requestMobileMainChatAbort(activeSid).catch((err) => {

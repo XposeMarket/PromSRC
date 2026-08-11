@@ -9,12 +9,27 @@ import {
   gitStage,
   resolveCodingRoot,
 } from '../coding/workspace-session';
+import { getWorkspace, sessionExists } from '../session';
 
 export const router = express.Router();
 
+function resolveRequestCodingRoot(rawRoot: string | undefined, rawSessionId: string | undefined): string {
+  const sessionId = String(rawSessionId || '').trim();
+  if (!rawRoot && sessionId && sessionExists(sessionId)) {
+    const sessionWorkspace = String(getWorkspace(sessionId) || '').trim();
+    if (sessionWorkspace) return resolveCodingRoot(sessionWorkspace);
+  }
+  return resolveCodingRoot(rawRoot);
+}
+
 router.get('/api/coding/session', (req, res) => {
   try {
-    res.json({ session: getCodingWorkspaceSession(req.query.root ? String(req.query.root) : undefined) });
+    res.json({
+      session: getCodingWorkspaceSession(resolveRequestCodingRoot(
+        req.query.root ? String(req.query.root) : undefined,
+        req.query.sessionId ? String(req.query.sessionId) : undefined,
+      )),
+    });
   } catch (err: any) {
     res.status(400).json({ error: String(err?.message || err) });
   }
@@ -31,7 +46,10 @@ router.get('/api/coding/status', (req, res) => {
 
 router.get('/api/coding/repository', (req, res) => {
   try {
-    const root = resolveCodingRoot(req.query.root ? String(req.query.root) : undefined);
+    const root = resolveRequestCodingRoot(
+      req.query.root ? String(req.query.root) : undefined,
+      req.query.sessionId ? String(req.query.sessionId) : undefined,
+    );
     res.json({ root, repository: getCodingRepositorySnapshot(root) });
   } catch (err: any) {
     res.status(400).json({ error: String(err?.message || err) });

@@ -3,6 +3,7 @@
 import { Router } from 'express';
 import { getBrainRunnerInstance } from '../brain/brain-runner';
 import { getBrainDir } from '../brain/brain-state';
+import { BRAIN_JOB_KINDS, getBrainUsageSnapshot, type BrainJobKind } from '../brain/brain-usage';
 import { getConfig, getAgentById, ensureAgentWorkspace } from '../../config/config';
 import { broadcastTeamEvent, addTeamSseClient, removeTeamSseClient } from '../comms/broadcaster';
 import {
@@ -2165,6 +2166,27 @@ router.get('/api/brain/status', (_req: any, res: any) => {
     thoughtModel: status.thoughtModel || '',
     dreamModel: status.dreamModel || '',
   });
+});
+
+router.get('/api/brain/usage', (req: any, res: any) => {
+  try {
+    const rawDays = String(req.query?.days || '').trim().toLowerCase();
+    const days = rawDays && rawDays !== 'all'
+      ? Math.max(1, Math.min(3650, Number(rawDays) || 30))
+      : null;
+    const rawJob = String(req.query?.job || '').trim() as BrainJobKind;
+    const job = (BRAIN_JOB_KINDS as readonly string[]).includes(rawJob) ? rawJob : undefined;
+    const rawLimit = Number(req.query?.limit);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(500, Math.floor(rawLimit)) : 50;
+    const snapshot = getBrainUsageSnapshot({
+      job,
+      sinceMs: days ? Date.now() - days * 24 * 60 * 60 * 1000 : undefined,
+      limit,
+    });
+    res.json({ success: true, days, job: job || null, ...snapshot });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Failed to load Brain usage history' });
+  }
 });
 
 router.get('/api/brain/pulse-cards', (_req: any, res: any) => {

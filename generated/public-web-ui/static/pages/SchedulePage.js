@@ -23,6 +23,7 @@ import { wsEventBus } from '../ws.js';
 
 let schedules  = [];
 let brainStatus = null;
+let brainUsage = null;
 let teamsById = {};
 let editingScheduleId = null;
 let scheduleSkillsCache = [];
@@ -71,15 +72,17 @@ function _toggleHtml(enabled, onClickFn, title = '') {
 
 async function refreshSchedules() {
   try {
-    const [schedResult, brainResult, teamsResult] = await Promise.all([
+    const [schedResult, brainResult, teamsResult, usageResult] = await Promise.all([
       api('/api/schedules'),
       api('/api/brain/status').catch(() => null),
       api('/api/teams').catch(() => null),
+      api('/api/brain/usage?days=30&limit=50').catch(() => null),
     ]);
     if (schedResult.success && Array.isArray(schedResult.schedules)) {
       schedules = schedResult.schedules;
     }
     brainStatus = (brainResult?.success) ? brainResult : null;
+    brainUsage = (usageResult?.success) ? usageResult : null;
     teamsById = {};
     if (teamsResult?.success && Array.isArray(teamsResult.teams)) {
       for (const team of teamsResult.teams) {
@@ -270,6 +273,7 @@ function renderScheduleList() {
   const count = document.getElementById('schedule-count');
   if (!list) return;
 
+  const brainUsageCard = brainUsage ? _renderBrainUsage() : '';
   const brainCards = brainStatus ? _renderBrainCards() : '';
   const cronCards  = schedules.map(_renderCronCard).join('');
   const totalCount = schedules.length + (brainStatus ? 2 : 0);
@@ -281,10 +285,73 @@ function renderScheduleList() {
   }
 
   if (count) count.textContent = `${totalCount} schedule${totalCount !== 1 ? 's' : ''}`;
-  list.innerHTML = brainCards + cronCards;
+  list.innerHTML = brainUsageCard + brainCards + cronCards;
 }
 
 // --- BRAIN CARDS ------------------------------------------------------------
+
+function _formatBrainUsageTokens(value) {
+  const tokens = Math.max(0, Number(value || 0));
+  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(tokens >= 10000 ? 0 : 1)}k`;
+  return String(Math.round(tokens));
+}
+
+function _formatBrainUsageCost(value) {
+  const usd = Math.max(0, Number(value || 0)) / 1000000;
+  if (usd <= 0) return '$0';
+  if (usd >= 1) return `$${usd.toFixed(2)}`;
+  if (usd >= 0.01) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(5)}`;
+}
+
+function _brainUsageJobLabel(job) {
+  if (job === 'thought') return 'Thought';
+  if (job === 'dream_cleanup') return 'Dream cleanup';
+  return 'Dream';
+}
+
+function _renderBrainUsage() {
+  const summary = brainUsage?.summary || {};
+  const records = Array.isArray(brainUsage?.records) ? brainUsage.records : [];
+  const byJob = summary.byJob || {};
+  const jobRows = ['thought', 'dream', 'dream_cleanup'].map((job) => {
+    const value = byJob[job] || {};
+    return `<div style="padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);min-width:125px">
+      <div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em">${_brainUsageJobLabel(job)}</div>
+      <div style="font-size:13px;font-weight:700;margin-top:2px">${_formatBrainUsageTokens(value.totalTokens)} tokens</div>
+      <div style="font-size:10px;color:var(--muted)">${Number(value.runs || 0)} run${Number(value.runs || 0) === 1 ? '' : 's'} · ${_formatBrainUsageCost(value.totalCostMicros)}</div>
+    </div>`;
+  }).join('');
+  const recentRows = records.slice(0, 6).map((record) => {
+    const when = record.completedAt ? new Date(record.completedAt).toLocaleString() : '—';
+    const outcome = String(record.outcome || 'unknown');
+    const outcomeColor = outcome === 'success' ? '#0d5c2f' : outcome === 'aborted' ? '#7d5700' : '#9b1c1c';
+    return `<tr>
+      <td style="padding:5px 7px;white-space:nowrap">${escHtml(when)}</td>
+      <td style="padding:5px 7px;white-space:nowrap">${escHtml(_brainUsageJobLabel(record.job))}</td>
+      <td style="padding:5px 7px;text-align:right;white-space:nowrap">${_formatBrainUsageTokens(record.totalTokens)}</td>
+      <td style="padding:5px 7px;text-align:right;white-space:nowrap">${_formatBrainUsageCost(record.totalCostMicros)}</td>
+      <td style="padding:5px 7px;color:${outcomeColor};font-weight:700;white-space:nowrap">${escHtml(outcome)}</td>
+    </tr>`;
+  }).join('');
+  const history = recentRows
+    ? `<div style="overflow:auto;margin-top:9px"><table style="width:100%;border-collapse:collapse;font-size:10px;color:var(--muted)">
+        <thead><tr style="border-bottom:1px solid var(--line);text-align:left"><th style="padding:4px 7px">Completed</th><th style="padding:4px 7px">Job</th><th style="padding:4px 7px;text-align:right">Tokens</th><th style="padding:4px 7px;text-align:right">Cost</th><th style="padding:4px 7px">Status</th></tr></thead>
+        <tbody>${recentRows}</tbody>
+      </table></div>`
+    : `<div style="font-size:11px;color:var(--muted);margin-top:9px">No Brain runs have been recorded yet.</div>`;
+
+  return `<div style="padding:12px;margin-bottom:10px;background:var(--panel);border:1px solid var(--line);border-radius:10px">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div style="font-weight:700;font-size:13px">Brain cost tracker</div>
+      <div style="font-size:10px;color:var(--muted)">Last 30 days · estimated pricing</div>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin:4px 0 9px">${Number(summary.runs || 0)} runs · ${_formatBrainUsageTokens(summary.totalTokens)} tokens · ${_formatBrainUsageCost(summary.totalCostMicros)} estimated cost</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${jobRows}</div>
+    ${history}
+  </div>`;
+}
 
 function _renderBrainCards() {
   if (!brainStatus) return '';
@@ -1103,5 +1170,8 @@ wsEventBus.on('brain_thought_done', () => {
   if (window.currentMode === 'schedule') refreshSchedules();
 });
 wsEventBus.on('brain_dream_done', () => {
+  if (window.currentMode === 'schedule') refreshSchedules();
+});
+wsEventBus.on('brain_dream_cleanup_done', () => {
   if (window.currentMode === 'schedule') refreshSchedules();
 });

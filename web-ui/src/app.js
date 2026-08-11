@@ -736,8 +736,8 @@ function ensureProjectsPage() {
 
 async function loadProjectSidebar() {
   try {
-    // Projects now render inline with Chats, so hydration must not depend on
-    // the removed standalone Projects panel being present in the DOM.
+    // Projects render in the dedicated Projects section above Sessions, so
+    // hydration must not depend on a standalone projects tab panel.
     await ensureProjectsPage();
     if (typeof window.loadProjects === 'function') await window.loadProjects();
   } catch (error) {
@@ -747,8 +747,8 @@ async function loadProjectSidebar() {
 window.loadProjectSidebar = loadProjectSidebar;
 
 export function setSidebarSegTab(tab) {
-  // Projects are rendered inline in Chats now; keep old callers harmless by
-  // treating a legacy projects tab request as a Chats request.
+  // Projects live in their own section above Sessions; keep old callers
+  // harmless by treating a legacy projects tab request as a Chats request.
   const selectedTab = tab === 'projects' ? 'chats' : tab;
   const tabs = ['chats', 'skills'];
   tabs.forEach(t => {
@@ -765,6 +765,7 @@ export function setSidebarSegTab(tab) {
 
   // Pinned chats section only shows on the chats tab
   const pinnedSection = document.getElementById('sidebar-pinned-section');
+  const projectsSection = document.getElementById('sidebar-projects-section');
   if (pinnedSection) {
     if (selectedTab === 'chats') {
       if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
@@ -772,6 +773,7 @@ export function setSidebarSegTab(tab) {
       pinnedSection.style.display = 'none';
     }
   }
+  if (projectsSection && selectedTab !== 'chats') projectsSection.style.display = 'none';
 
   window.sidebarTab = selectedTab;
 

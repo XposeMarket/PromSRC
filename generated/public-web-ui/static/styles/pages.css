@@ -1448,6 +1448,76 @@
   background:
     radial-gradient(circle at 18% 0%, rgba(56,189,248,0.12), transparent 34%),
     linear-gradient(180deg, rgba(15,23,42,0.94), rgba(15,23,42,0.88)) !important;
+  min-width: 0;
+}
+#canvas-browser-shell > div,
+#browser-canvas-layout,
+#browser-canvas-live-card,
+#browser-canvas-frame-wrap {
+  min-width: 0;
+}
+#browser-canvas-native-tabs {
+  flex: 0 0 auto;
+  scrollbar-width: thin;
+}
+#browser-canvas-native-tabs .browser-native-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 240px;
+  height: 32px;
+  padding: 0 9px 0 11px;
+  border: 1px solid rgba(148,163,184,0.16);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: rgba(15,23,42,0.62);
+  color: #94a3b8;
+  font: 700 11px/1 'Manrope', sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+#browser-canvas-native-tabs .browser-native-tab:hover {
+  color: #e0f2fe;
+  background: rgba(30,41,59,0.9);
+}
+#browser-canvas-native-tabs .browser-native-tab.active {
+  color: #f8fafc;
+  border-color: rgba(56,189,248,0.35);
+  background: rgba(30,41,59,0.96);
+  box-shadow: inset 0 -2px 0 #38bdf8;
+}
+#browser-canvas-native-tabs .browser-native-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#browser-canvas-native-tabs .browser-native-tab-close,
+#browser-canvas-native-tabs .browser-native-tab-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font: 700 15px/1 'Manrope', sans-serif;
+}
+#browser-canvas-native-tabs .browser-native-tab-close:hover,
+#browser-canvas-native-tabs .browser-native-tab-new:hover {
+  background: rgba(148,163,184,0.16);
+  color: #f8fafc;
+}
+#browser-canvas-native-tabs .browser-native-tab-new {
+  align-self: center;
+  margin: 0 2px 4px 2px;
+  border: 1px solid rgba(148,163,184,0.16);
+  color: #bae6fd;
 }
 #browser-canvas-layout {
   grid-template-columns: minmax(0, 1fr) clamp(300px, 27%, 390px) !important;
@@ -1456,6 +1526,7 @@
   align-items: stretch;
   width: 100%;
   box-sizing: border-box;
+  min-width: 0;
 }
 /* Agent & Co-pilot modes hide the side panel — collapse to a single full-width
    column so the browser fills the canvas. Only Teach keeps the two-column grid.
@@ -1471,6 +1542,7 @@
   justify-self: stretch;
 }
 #browser-canvas-frame-wrap {
+  flex: 1 1 auto;
   padding: 12px !important;
   overflow: hidden !important;
   align-items: stretch !important;
@@ -1481,6 +1553,14 @@
   margin: 0 auto !important;
 }
 #browser-canvas-frame-stage[data-native-browser-surface="1"] {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   border-radius: 12px;
   background: rgba(8,47,73,0.18);

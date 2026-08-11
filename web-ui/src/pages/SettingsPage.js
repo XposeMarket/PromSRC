@@ -2832,6 +2832,7 @@ async function openSettings(tab) {
   _scheduleSettingsVisibilityRefresh();
   document.getElementById('settings-modal').style.display = 'flex';
   document.body.classList.add('settings-page-open');
+  window.queueNativeBrowserSurfaceSync?.({ force: true });
   const settingsSearch = document.getElementById('settings-search-input');
   if (settingsSearch) {
     settingsSearch.value = '';
@@ -2888,6 +2889,7 @@ function closeSettings() {
   document.getElementById('settings-modal').style.display = 'none';
   document.body.classList.remove('settings-page-open');
   document.body.classList.remove('pm-mobile-overlay-open');
+  window.queueNativeBrowserSurfaceSync?.({ force: true });
   channelsStatusLoaded = false;
   _settingsAgentsLoadedSelection = '';
 }

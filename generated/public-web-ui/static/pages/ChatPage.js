@@ -213,10 +213,12 @@ if (window.browserCanvasState === undefined) {
     browserDesignSelectMode: false,
     browserDesignSelections: [],
     profileKind: '',
-    browserTarget: '',
-    profileLabel: '',
-    browserSessions: {},
-    sessionId: '',
+     browserTarget: '',
+     profileLabel: '',
+     browserSessions: {},
+     nativeTabs: [],
+     activeNativeTabId: '',
+     sessionId: '',
     followSessionId: '',
     url: '',
     title: '',
@@ -253,8 +255,10 @@ if (window.browserCanvasState === undefined) {
     interactableMapRequestedAt: 0,
     interactableMapRequestId: '',
     updatedAt: 0,
-  };
-}
+   };
+ }
+if (!Array.isArray(window.browserCanvasState.nativeTabs)) window.browserCanvasState.nativeTabs = [];
+if (typeof window.browserCanvasState.activeNativeTabId !== 'string') window.browserCanvasState.activeNativeTabId = '';
 let browserTransientHighlightFadeTimer = 0;
 let browserTransientHighlightCleanupTimer = 0;
 let browserQueuedTextFlushTimer = 0;
@@ -1822,6 +1826,8 @@ function getBrowserCanvasState() {
       browserTarget: '',
       profileLabel: '',
       browserSessions: {},
+      nativeTabs: [],
+      activeNativeTabId: '',
       sessionId: '',
       followSessionId: '',
       url: '',
@@ -1883,9 +1889,11 @@ function snapshotBrowserCanvasSessionState(state = getBrowserCanvasState()) {
       : [],
     profileKind: String(state.profileKind || '').trim(),
     browserTarget: String(state.browserTarget || '').trim(),
-    profileLabel: String(state.profileLabel || '').trim(),
-    browserSessions,
-    sessionId: String(state.sessionId || '').trim(),
+     profileLabel: String(state.profileLabel || '').trim(),
+     browserSessions,
+     nativeTabs: normalizeNativeBrowserTabs(state.nativeTabs),
+     activeNativeTabId: String(state.activeNativeTabId || '').trim(),
+     sessionId: String(state.sessionId || '').trim(),
     followSessionId: String(state.followSessionId || '').trim(),
     url: String(state.url || '').trim(),
     title: String(state.title || '').trim(),
@@ -1953,14 +1961,16 @@ function restoreBrowserCanvasSessionState(saved) {
   state.browserDesignSelections = Array.isArray(restored.browserDesignSelections)
     ? restored.browserDesignSelections.slice(0, 24).map((selection) => cloneBrowserDesignSelection(selection)).filter(Boolean)
     : [];
-  state.browserSessions = restored.browserSessions && typeof restored.browserSessions === 'object' && !Array.isArray(restored.browserSessions)
+   state.browserSessions = restored.browserSessions && typeof restored.browserSessions === 'object' && !Array.isArray(restored.browserSessions)
     ? Object.fromEntries(Object.entries(restored.browserSessions).map(([sessionId, record]) => {
         const clean = record && typeof record === 'object' ? { ...record } : {};
         clean.frameBase64 = '';
         return [sessionId, clean];
       }))
-    : {};
-  state.sessionId = String(restored.sessionId || '').trim();
+     : {};
+   state.nativeTabs = normalizeNativeBrowserTabs(restored.nativeTabs);
+   state.activeNativeTabId = String(restored.activeNativeTabId || '').trim();
+   state.sessionId = String(restored.sessionId || '').trim();
   state.followSessionId = String(restored.followSessionId || '').trim();
   state.url = String(restored.url || '').trim();
   state.title = String(restored.title || '').trim();
@@ -2436,6 +2446,10 @@ function upsertBrowserSessionRecord(msg, options = {}) {
     tool: String(msg?.tool || msg?.lastTool || previous.tool || '').trim(),
     statusLabel: String(msg?.statusLabel || previous.statusLabel || '').trim(),
     streamActive: typeof msg?.streamActive === 'boolean' ? msg.streamActive === true : previous.streamActive === true,
+    nativeTabs: Array.isArray(msg?.nativeTabs)
+      ? normalizeNativeBrowserTabs(msg.nativeTabs)
+      : (Array.isArray(previous.nativeTabs) ? normalizeNativeBrowserTabs(previous.nativeTabs) : []),
+    activeNativeTabId: String(msg?.activeNativeTabId || previous.activeNativeTabId || '').trim(),
     frameBase64: typeof msg?.frameBase64 === 'string' && msg.frameBase64.trim() ? msg.frameBase64 : previous.frameBase64,
     frameWidth: Number.isFinite(Number(msg?.frameWidth)) ? Number(msg.frameWidth) : (Number(previous.frameWidth) || 0),
     frameHeight: Number.isFinite(Number(msg?.frameHeight)) ? Number(msg.frameHeight) : (Number(previous.frameHeight) || 0),
@@ -2455,7 +2469,9 @@ function upsertBrowserSessionRecord(msg, options = {}) {
     state.profileKind = next.profileKind || state.profileKind || '';
     state.browserTarget = next.browserTarget || state.browserTarget || '';
     state.profileLabel = next.profileLabel || state.profileLabel || '';
-    if (next.frameBase64) {
+    if (Array.isArray(msg?.nativeTabs)) state.nativeTabs = normalizeNativeBrowserTabs(msg.nativeTabs);
+    if (msg?.activeNativeTabId !== undefined) state.activeNativeTabId = next.activeNativeTabId;
+     if (next.frameBase64) {
       state.frameBase64 = next.frameBase64;
       state.frameWidth = next.frameWidth;
       state.frameHeight = next.frameHeight;
@@ -2999,15 +3015,15 @@ function startBrowserCanvasStreamHeartbeat() {
       return;
     }
     if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) return;
-	    wsSend({
-	      type: 'browser:stream:set',
-	      sessionId: desired.sessionId,
-	      active: true,
-	      focus: desired.focus,
-	      preferCdp: true,
-	      restoreUrl: getBrowserCanvasRestoreHint(getBrowserCanvasState()).restoreUrl,
-	      restoreTitle: getBrowserCanvasRestoreHint(getBrowserCanvasState()).restoreTitle,
-	    });
+    wsSend({
+      type: 'browser:stream:set',
+      sessionId: desired.sessionId,
+      active: true,
+      focus: desired.focus,
+      preferCdp: true,
+      restoreUrl: getBrowserCanvasRestoreHint(getBrowserCanvasState()).restoreUrl,
+      restoreTitle: getBrowserCanvasRestoreHint(getBrowserCanvasState()).restoreTitle,
+    });
   }, 5000);
 }
 
@@ -3063,6 +3079,43 @@ function syncBrowserCanvasStream(options = {}) {
   }
 }
 
+function normalizeNativeBrowserTabs(tabs) {
+  if (!Array.isArray(tabs)) return [];
+  return tabs.map((tab, index) => ({
+    id: String(tab?.id || tab?.tabId || `native-tab-${index + 1}`).trim(),
+    title: String(tab?.title || '').trim() || 'New Tab',
+    url: String(tab?.url || 'about:blank').trim() || 'about:blank',
+    loading: tab?.loading === true,
+    active: tab?.active === true,
+    index: Number.isFinite(Number(tab?.index)) ? Number(tab.index) : index,
+    canGoBack: tab?.canGoBack === true,
+    canGoForward: tab?.canGoForward === true,
+  })).filter((tab) => tab.id);
+}
+
+function applyNativeBrowserStateToCanvas(nativeState, state = getBrowserCanvasState()) {
+  if (!nativeState || typeof nativeState !== 'object') return state;
+  if (Array.isArray(nativeState.tabs)) state.nativeTabs = normalizeNativeBrowserTabs(nativeState.tabs);
+  if (nativeState.activeTabId !== undefined) state.activeNativeTabId = String(nativeState.activeTabId || '').trim();
+  if (state.activeNativeTabId && state.nativeTabs.length) {
+    state.nativeTabs = state.nativeTabs.map((tab) => ({
+      ...tab,
+      active: tab.id === state.activeNativeTabId,
+    }));
+  }
+  return state;
+}
+
+function isSettingsSurfaceVisible() {
+  const modal = document.getElementById('settings-modal');
+  if (!modal) return false;
+  const style = window.getComputedStyle ? window.getComputedStyle(modal) : null;
+  return modal.style.display !== 'none'
+    && modal.getAttribute('aria-hidden') !== 'true'
+    && style?.display !== 'none'
+    && style?.visibility !== 'hidden';
+}
+
 function getNativeBrowserSurfaceApi() {
   return window.prometheusBrowserSurface && typeof window.prometheusBrowserSurface === 'object'
     ? window.prometheusBrowserSurface
@@ -3092,10 +3145,11 @@ async function syncNativeBrowserSurface(options = {}) {
   const shouldShow = !!(
     canvasOpen
     && isBrowserCanvasSurfaceActive()
-    && state.active
-    && sessionId
-    && isBrowserCanvasInHouseProvider(state)
-  );
+     && state.active
+     && sessionId
+     && isBrowserCanvasInHouseProvider(state)
+     && !isSettingsSurfaceVisible()
+   );
   if (!shouldShow) {
     nativeBrowserLastBoundsKey = '';
     if (nativeBrowserAttachedSessionId) {
@@ -3118,7 +3172,7 @@ async function syncNativeBrowserSurface(options = {}) {
     width: Math.round(rect.width),
     height: Math.round(rect.height),
   };
-  const key = `${sessionId}:${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
+  const key = `${sessionId}:${String(state.activeNativeTabId || '').trim()}:${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
   try {
     // Attach only when the session actually changes. Re-attaching on every render
     // or resize would re-trigger a native state broadcast and create an
@@ -3199,6 +3253,7 @@ async function openDirectNativeBrowserSurface(options = {}) {
   try {
     const nativeState = await api.attach({ sessionId, url: requestedUrl, profile: 'main' });
     if (nativeState && typeof nativeState === 'object') {
+      applyNativeBrowserStateToCanvas(nativeState, state);
       state.url = String(nativeState.url || state.url || 'about:blank').trim();
       state.title = String(nativeState.title || state.title || '').trim();
       state.loading = nativeState.loading === true;
@@ -3272,9 +3327,19 @@ function ensureNativeBrowserBoundsObserver() {
   const targetEl = getNativeBrowserBoundsElement();
   if (!targetEl) return;
   nativeBrowserBoundsObserver = new ResizeObserver(() => queueNativeBrowserSurfaceSync());
-  try { nativeBrowserBoundsObserver.observe(targetEl); } catch {}
+  [
+    targetEl,
+    document.getElementById('browser-canvas-frame-wrap'),
+    document.getElementById('browser-canvas-live-card'),
+    document.getElementById('browser-canvas-layout'),
+    document.getElementById('right-panel'),
+    document.getElementById('canvas-panel'),
+  ].filter(Boolean).forEach((element) => {
+    try { nativeBrowserBoundsObserver.observe(element); } catch {}
+  });
   window.addEventListener('resize', () => queueNativeBrowserSurfaceSync({ force: true }), { passive: true });
   window.addEventListener('scroll', () => queueNativeBrowserSurfaceSync({ force: true }), { passive: true, capture: true });
+  window.visualViewport?.addEventListener('resize', () => queueNativeBrowserSurfaceSync({ force: true }), { passive: true });
 }
 
 function ensureNativeBrowserSurfaceStateListener() {
@@ -3291,7 +3356,13 @@ function ensureNativeBrowserSurfaceStateListener() {
     const nextError = String(nativeState.lastError || '').trim();
     const nextStatus = nextError
       ? `Browser error: ${nextError}`
-      : (nativeState.loading ? 'In-house browser loading.' : 'In-house browser active.');
+      : (nextActive
+        ? (nativeState.loading ? 'In-house browser loading.' : 'In-house browser active.')
+        : 'In-house browser idle.');
+    const previousNativeTabsKey = JSON.stringify(state.nativeTabs || []);
+    const previousActiveNativeTabId = String(state.activeNativeTabId || '').trim();
+    applyNativeBrowserStateToCanvas(nativeState, state);
+    const nextTabsKey = JSON.stringify(state.nativeTabs || []);
     // Skip churn when nothing meaningful changed — native state broadcasts fire on
     // every loading toggle, so avoid redundant render + persist cycles.
     const unchanged = state.active === nextActive
@@ -3300,6 +3371,8 @@ function ensureNativeBrowserSurfaceStateListener() {
       && state.statusLabel === nextStatus
       && state.loading === (nativeState.loading === true)
       && state.lastError === nextError
+      && previousActiveNativeTabId === String(nativeState.activeTabId || '').trim()
+      && previousNativeTabsKey === nextTabsKey
       && state.profileKind === 'inhouse';
     if (unchanged) return;
     state.active = nextActive;
@@ -3317,7 +3390,7 @@ function ensureNativeBrowserSurfaceStateListener() {
     rememberBrowserCanvasRestorablePage(state.url, state.title, state);
     upsertBrowserSessionRecord({
       sessionId: sid,
-      active: true,
+      active: nextActive,
       url: state.url,
       title: state.title,
       statusLabel: state.statusLabel,
@@ -3325,6 +3398,8 @@ function ensureNativeBrowserSurfaceStateListener() {
       browserTarget: 'inhouse',
       profileLabel: state.profileLabel,
       streamActive: false,
+      nativeTabs: state.nativeTabs,
+      activeNativeTabId: state.activeNativeTabId,
       timestamp: state.updatedAt,
     });
     renderBrowserCanvasSurface();
@@ -3869,6 +3944,32 @@ function updateCreativeModeControls() {
   }
 }
 
+function renderNativeBrowserTabs(state, nativeProvider) {
+  const tabsEl = document.getElementById('browser-canvas-native-tabs');
+  if (!tabsEl) return;
+  const tabs = normalizeNativeBrowserTabs(state.nativeTabs);
+  if (!nativeProvider || !state.active) {
+    tabsEl.style.display = 'none';
+    tabsEl.innerHTML = '';
+    return;
+  }
+  const activeTabId = String(state.activeNativeTabId || '').trim();
+  tabsEl.style.display = 'flex';
+  tabsEl.innerHTML = `${tabs.map((tab) => {
+    const tabIdArg = JSON.stringify(tab.id).replace(/"/g, '&quot;');
+    const active = tab.id === activeTabId || (!activeTabId && tab.active);
+    const title = tab.title || (tab.url === 'about:blank' ? 'New Tab' : tab.url);
+    return `
+      <div class="browser-native-tab${active ? ' active' : ''}" role="tab" aria-selected="${active ? 'true' : 'false'}" tabindex="0" onclick="selectNativeBrowserCanvasTab(${tabIdArg}, event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectNativeBrowserCanvasTab(${tabIdArg}, event)}" title="${escHtml(tab.url || title)}">
+        <span style="width:7px;height:7px;border-radius:999px;background:${tab.loading ? '#fbbf24' : (active ? '#38bdf8' : '#64748b')};flex:0 0 auto"></span>
+        <span class="browser-native-tab-title">${escHtml(title)}</span>
+        <button class="browser-native-tab-close" type="button" title="Close tab" aria-label="Close ${escHtml(title)}" onclick="closeNativeBrowserCanvasTab(${tabIdArg}, event)">×</button>
+      </div>
+    `;
+  }).join('')}
+  <button class="browser-native-tab-new" type="button" title="New tab" aria-label="New tab" onclick="newNativeBrowserCanvasTab()">+</button>`;
+}
+
 function renderBrowserCanvasSurface() {
   const state = getBrowserCanvasState();
   const mode = normalizeBrowserInteractionMode(state.interactionMode);
@@ -3882,9 +3983,6 @@ function renderBrowserCanvasSurface() {
     state.elementNameDraftKey = '';
     state.elementNameDraft = '';
   }
-  const title = document.getElementById('browser-canvas-title');
-  const subtitle = document.getElementById('browser-canvas-subtitle');
-  const tabsWrap = document.getElementById('browser-canvas-agent-tabs');
   const urlEl = document.getElementById('browser-canvas-url');
   const stageTitle = document.getElementById('browser-canvas-stage-title');
   const stageCopy = document.getElementById('browser-canvas-stage-copy');
@@ -3901,11 +3999,6 @@ function renderBrowserCanvasSurface() {
   const selectionLabel = document.getElementById('browser-canvas-selection-label');
   const selectionText = document.getElementById('browser-canvas-selection-text');
   const modeTitleEl = document.getElementById('browser-canvas-mode-title');
-  const controlRow = document.getElementById('browser-canvas-control-row');
-  const controlBadge = document.getElementById('browser-canvas-control-badge');
-  const releaseBtn = document.getElementById('browser-canvas-release-btn');
-  const returnBtn = document.getElementById('browser-canvas-return-btn');
-  const reopenBtn = document.getElementById('browser-canvas-reopen-btn');
   const backBtn = document.getElementById('browser-canvas-back-btn');
   const forwardBtn = document.getElementById('browser-canvas-forward-btn');
   const reloadBtn = document.getElementById('browser-canvas-reload-btn');
@@ -3982,45 +4075,10 @@ function renderBrowserCanvasSurface() {
   const streamDescriptor = state.streamActive
     ? `${String(state.streamTransport || 'stream').toUpperCase()} live`
     : (nativeProvider && state.active ? 'NATIVE live' : '');
-  const browserTabs = getBrowserCanvasSessionTabs(state);
 
   ensureBrowserCanvasControlBindings();
   ensureBrowserCanvasGlobalControlBindings();
-  if (tabsWrap) {
-    tabsWrap.style.display = browserTabs.length > 1 ? 'flex' : 'none';
-    tabsWrap.innerHTML = browserTabs.map((record, index) => {
-      const sid = String(record.sessionId || '').trim();
-      const active = sid === visibleSessionId;
-      const label = getBrowserSessionLabel(record, index);
-      const statusDot = record.active ? '#22c55e' : '#64748b';
-      const sidArg = JSON.stringify(sid).replace(/"/g, '&quot;');
-      const statusArg = JSON.stringify({ statusLabel: `Watching ${label}.` }).replace(/"/g, '&quot;');
-      return `
-        <button type="button" onclick="followBrowserCanvasSession(${sidArg}, ${statusArg})" title="${escHtml(record.title || record.url || label)}" style="display:inline-flex;align-items:center;gap:7px;border:1px solid ${active ? 'rgba(56,189,248,0.42)' : 'rgba(148,163,184,0.16)'};background:${active ? 'rgba(56,189,248,0.16)' : 'rgba(15,23,42,0.52)'};color:${active ? '#e0f2fe' : '#cbd5e1'};border-radius:8px;padding:7px 10px;font-size:11px;font-weight:800;cursor:pointer;font-family:'Manrope',sans-serif;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-          <span style="width:7px;height:7px;border-radius:999px;background:${statusDot};box-shadow:${record.active ? '0 0 0 3px rgba(34,197,94,0.12)' : 'none'};flex-shrink:0"></span>
-          <span style="overflow:hidden;text-overflow:ellipsis">${escHtml(label)}</span>
-        </button>
-      `;
-    }).join('');
-  }
-  if (title) title.textContent = state.active ? (designMode ? 'Design Browser' : `${meta.label} Browser`) : 'Live Browser';
-  if (subtitle) {
-    let subtitleText = 'Waiting for browser activity in this chat';
-    if (state.active) {
-      if (followingDetachedSession) {
-        subtitleText = `Watching Teach verifier tab${state.streamActive ? ` · ${streamDescriptor}` : ''}${state.streamStatus ? ` · ${state.streamStatus}` : ''}`;
-      } else if (nativeProvider) {
-        subtitleText = `Prometheus in-house browser${state.statusLabel ? ` · ${state.statusLabel}` : ''}`;
-      } else if (state.streamActive) {
-        subtitleText = `${streamDescriptor}${state.streamStatus ? ` · ${state.streamStatus}` : ''}`;
-      } else if (designMode) {
-        subtitleText = 'Hover an element to outline it, then click to inspect it.';
-      } else {
-        subtitleText = state.statusLabel || `Watching ${state.title || state.url || 'the active page'}`;
-      }
-    }
-    subtitle.textContent = subtitleText;
-  }
+  renderNativeBrowserTabs(state, nativeProvider);
   if (urlEl) urlEl.textContent = state.url || restoreHint.restoreUrl || 'No active browser session';
   if (addressInput && document.activeElement !== addressInput) {
     addressInput.value = state.url || restoreHint.restoreUrl || '';
@@ -4114,55 +4172,17 @@ function renderBrowserCanvasSurface() {
       modeCopyEl.textContent = meta.copy;
     }
   }
-  if (controlRow) controlRow.style.display = mode === 'copilot' || mode === 'teach' || canReopenLastPage ? 'flex' : 'none';
-  if (controlBadge) {
-    if (followingDetachedSession) {
-      controlBadge.textContent = 'The canvas is following the detached Teach verifier tab. Return to Main Tab to resume direct control and element selection.';
-    } else if (canReopenLastPage && (!state.active || /^about:/i.test(String(state.url || '').trim()))) {
-      controlBadge.textContent = `Last browser page: ${restoreHint.restoreTitle || restoreHint.restoreUrl}`;
-    } else if (mode === 'teach') {
-      controlBadge.textContent = controlCaptured
-        ? 'Teach mode has the browser captured. Your next click, scroll, or shortcut becomes a pending step until you continue it.'
-        : 'Click the browser to stage a teach step. Press Esc or use Release to Agent when you want Prometheus to stop watching your inputs.';
-    } else {
-      controlBadge.textContent = controlCaptured
-        ? 'You are controlling the browser. Keystrokes and scroll go there until you release.'
-        : 'Click the browser to take control. Press Esc or use Release to Agent when you want Prometheus to continue.';
-    }
-  }
-  if (releaseBtn) releaseBtn.style.display = controlCaptured && !followingDetachedSession ? 'inline-flex' : 'none';
-  if (returnBtn) returnBtn.style.display = followingDetachedSession ? 'inline-flex' : 'none';
-  if (reopenBtn) {
-    reopenBtn.style.display = canReopenLastPage && !controlCaptured ? 'inline-flex' : 'none';
-    reopenBtn.title = canReopenLastPage ? `Reopen ${restoreHint.restoreTitle || restoreHint.restoreUrl}` : 'No saved browser page for this chat yet';
-  }
-  // Browser-mode layout: Agent & Co-pilot get the full-width browser with no side
-  // panels; only Teach keeps the Last Tool Call / Mode Notes / Teach sidebar. The
-  // take-control/release/reopen affordance is relocated to a slim full-width slot
-  // under the toolbar when the side panel is hidden so Co-pilot stays usable.
+  // Browser-mode layout: the live browser owns the canvas below the outer mode
+  // header. Teach keeps its workflow controls; Agent, Co-pilot, and Design use
+  // the full-width native surface.
   const sideCol = document.getElementById('browser-canvas-side-col');
   const layoutGrid = document.getElementById('browser-canvas-layout');
-  const controlSlot = document.getElementById('browser-canvas-control-slot');
-  const showSidePanels = mode === 'teach' || designMode;
+  const showSidePanels = mode === 'teach';
   if (sideCol) sideCol.style.display = showSidePanels ? 'flex' : 'none';
   // The grid columns are governed by a CSS rule keyed on this attribute because
   // #browser-canvas-layout sets grid-template-columns with !important, which an
   // inline style cannot override. data-side-panels="0" collapses to one column.
   if (layoutGrid) layoutGrid.dataset.sidePanels = showSidePanels ? '1' : '0';
-  if (controlRow && controlSlot) {
-    const modeCard = modeTitleEl ? modeTitleEl.parentElement : null;
-    if (showSidePanels) {
-      if (modeCard && controlRow.parentElement !== modeCard) {
-        const anchor = modeCopyEl && modeCopyEl.parentElement === modeCard ? modeCopyEl.nextElementSibling : null;
-        if (anchor) modeCard.insertBefore(controlRow, anchor);
-        else modeCard.appendChild(controlRow);
-      }
-      controlSlot.style.display = 'none';
-    } else {
-      if (controlRow.parentElement !== controlSlot) controlSlot.appendChild(controlRow);
-      controlSlot.style.display = controlRow.style.display !== 'none' ? 'block' : 'none';
-    }
-  }
   if (namePanel) namePanel.style.display = showTeachNaming ? 'block' : 'none';
   if (nameInput && nameInput.value !== state.elementNameDraft) nameInput.value = state.elementNameDraft || '';
   if (teachPanel) teachPanel.style.display = mode === 'teach' ? 'block' : 'none';
@@ -4330,9 +4350,7 @@ function renderBrowserCanvasSurface() {
       frameEl.dataset.frameBlobUrl = '';
     }
   }
-  const nativePlaceholder = document.getElementById('browser-canvas-native-placeholder');
-  if (nativePlaceholder) nativePlaceholder.style.display = nativeProvider && state.active ? 'flex' : 'none';
-  if (frameMeta) frameMeta.style.display = hasVisualSurface ? 'flex' : 'none';
+  if (frameMeta) frameMeta.style.display = nativeProvider && state.active ? 'none' : (hasVisualSurface ? 'flex' : 'none');
   if (frameCaption) {
     frameCaption.textContent = nativeProvider && state.active
       ? 'Prometheus in-house browser'
@@ -4369,9 +4387,9 @@ function renderBrowserCanvasSurface() {
     selectionText.textContent = state.selectedElement ? truncateBrowserPreview(fullSelectorText, 80) : fullSelectorText;
     selectionText.title = fullSelectorText;
   }
-  syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl);
   const stageEl = frameEl?.parentElement || document.getElementById('browser-canvas-frame-stage');
   if (stageEl) stageEl.dataset.nativeBrowserSurface = nativeProvider && state.active ? '1' : '0';
+  syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl);
   ensureBrowserCanvasHoverBindings();
   ensureBrowserCanvasFrameMetaResizeObserver(frameWrap, frameMeta, frameEl);
   updateBrowserSelectionOverlay(selectionBox, frameEl, state);
@@ -4523,9 +4541,13 @@ function syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl) {
   const viewportWidth = Math.max(1, Number(state.frameViewportWidth || state.frameWidth || frameEl.naturalWidth || 1280) || 1280);
   const viewportHeight = Math.max(1, Number(state.frameViewportHeight || state.frameHeight || frameEl.naturalHeight || 720) || 720);
   const wrapRectWidth = Number(frameWrap?.clientWidth || frameWrap?.getBoundingClientRect?.().width || 0);
-  const availableWidth = Math.max(220, Math.floor(wrapRectWidth) - 24);
+  const availableWidth = nativeProvider
+    ? Math.max(1, Math.floor(wrapRectWidth) - 24)
+    : Math.max(220, Math.floor(wrapRectWidth) - 24);
   const metaHeight = frameMeta.style.display === 'none' ? 0 : (Number(frameMeta.offsetHeight || 0) + 12);
-  const availableHeight = Math.max(160, Number(frameWrap?.clientHeight || 0) - metaHeight - 24);
+  const availableHeight = nativeProvider
+    ? Math.max(1, Number(frameWrap?.clientHeight || 0) - metaHeight - 24)
+    : Math.max(160, Number(frameWrap?.clientHeight || 0) - metaHeight - 24);
   const widthFirstHeight = Math.floor(availableWidth * (viewportHeight / viewportWidth));
   const renderWidth = Math.max(220, Math.floor(availableWidth));
   const renderHeight = Math.max(124, Math.min(availableHeight, widthFirstHeight));
@@ -4536,6 +4558,8 @@ function syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl) {
       stageEl.style.width = `${Math.floor(availableWidth)}px`;
       stageEl.style.height = `${Math.floor(availableHeight)}px`;
       stageEl.style.maxWidth = '100%';
+      stageEl.style.maxHeight = 'none';
+      stageEl.style.margin = '0';
     } else {
       stageEl.style.width = `${renderWidth}px`;
       stageEl.style.height = `${renderHeight}px`;
@@ -5190,6 +5214,7 @@ async function sendNativeBrowserNavigation(action, url = '') {
   try {
     const nativeState = await api.navigate({ sessionId, action: normalizedAction, url: address });
     if (nativeState && typeof nativeState === 'object') {
+      applyNativeBrowserStateToCanvas(nativeState, state);
       state.url = String(nativeState.url || state.url || '').trim();
       state.title = String(nativeState.title || state.title || '').trim();
       state.loading = nativeState.loading === true;
@@ -5218,6 +5243,112 @@ async function sendNativeBrowserNavigation(action, url = '') {
   renderBrowserCanvasSurface();
   persistActiveChat();
   return true;
+}
+
+function commitNativeBrowserTabState(nativeState, statusLabel = '') {
+  const state = getBrowserCanvasState();
+  if (nativeState && typeof nativeState === 'object') {
+    applyNativeBrowserStateToCanvas(nativeState, state);
+    state.active = nativeState.attached !== false;
+    state.sessionId = String(nativeState.sessionId || state.sessionId || '').trim();
+    state.url = String(nativeState.url || state.url || 'about:blank').trim();
+    state.title = String(nativeState.title || state.title || '').trim();
+    state.loading = nativeState.loading === true;
+    state.lastError = String(nativeState.lastError || '').trim();
+    state.statusLabel = state.lastError
+      ? `Browser error: ${state.lastError}`
+      : (statusLabel || (state.loading ? 'In-house browser loading.' : 'In-house browser active.'));
+    upsertBrowserSessionRecord({
+      sessionId: state.sessionId,
+      active: state.active,
+      url: state.url,
+      title: state.title,
+      statusLabel: state.statusLabel,
+      profileKind: 'inhouse',
+      browserTarget: 'inhouse',
+      profileLabel: 'Prometheus in-house browser',
+      nativeTabs: state.nativeTabs,
+      activeNativeTabId: state.activeNativeTabId,
+      timestamp: Date.now(),
+    }, { copyToCanvas: true });
+  }
+  renderBrowserCanvasSurface();
+  persistActiveChat();
+  queueNativeBrowserSurfaceSync({ force: true });
+  return nativeState;
+}
+
+async function selectNativeBrowserCanvasTab(tabId, event) {
+  event?.stopPropagation?.();
+  const api = getNativeBrowserSurfaceApi();
+  const state = getBrowserCanvasState();
+  const sessionId = getDirectBrowserSessionId(state);
+  const requestedTabId = String(tabId || '').trim();
+  if (!api || typeof api.selectTab !== 'function' || !sessionId || !requestedTabId) return false;
+  try {
+    const nativeState = await api.selectTab({ sessionId, tabId: requestedTabId });
+    commitNativeBrowserTabState(nativeState, 'Switched browser tab.');
+    return true;
+  } catch (error) {
+    state.lastError = String(error?.message || error || 'Could not switch browser tabs.').trim();
+    state.statusLabel = `Browser error: ${state.lastError}`;
+    renderBrowserCanvasSurface();
+    showToast(state.lastError, 'error');
+    return false;
+  }
+}
+
+async function newNativeBrowserCanvasTab(url = '') {
+  const api = getNativeBrowserSurfaceApi();
+  const state = getBrowserCanvasState();
+  const sessionId = getDirectBrowserSessionId(state);
+  if (!api || typeof api.newTab !== 'function' || !sessionId) return false;
+  let targetUrl = '';
+  try { targetUrl = String(url || '').trim() ? normalizeBrowserAddressInput(url) : 'about:blank'; }
+  catch (error) {
+    state.lastError = String(error?.message || error || 'Invalid browser URL.').trim();
+    state.statusLabel = `Browser error: ${state.lastError}`;
+    renderBrowserCanvasSurface();
+    showToast(state.lastError, 'error');
+    return false;
+  }
+  try {
+    const nativeState = await api.newTab({ sessionId, url: targetUrl });
+    commitNativeBrowserTabState(nativeState, targetUrl === 'about:blank' ? 'New tab ready.' : 'Opened new browser tab.');
+    if (targetUrl === 'about:blank') {
+      requestAnimationFrame(() => {
+        const input = document.getElementById('browser-canvas-address-input');
+        if (input) { input.focus({ preventScroll: true }); input.select?.(); }
+      });
+    }
+    return true;
+  } catch (error) {
+    state.lastError = String(error?.message || error || 'Could not open a new browser tab.').trim();
+    state.statusLabel = `Browser error: ${state.lastError}`;
+    renderBrowserCanvasSurface();
+    showToast(state.lastError, 'error');
+    return false;
+  }
+}
+
+async function closeNativeBrowserCanvasTab(tabId, event) {
+  event?.stopPropagation?.();
+  const api = getNativeBrowserSurfaceApi();
+  const state = getBrowserCanvasState();
+  const sessionId = getDirectBrowserSessionId(state);
+  const requestedTabId = String(tabId || '').trim();
+  if (!api || typeof api.closeTab !== 'function' || !sessionId || !requestedTabId) return false;
+  try {
+    const nativeState = await api.closeTab({ sessionId, tabId: requestedTabId });
+    commitNativeBrowserTabState(nativeState, 'Closed browser tab.');
+    return true;
+  } catch (error) {
+    state.lastError = String(error?.message || error || 'Could not close browser tab.').trim();
+    state.statusLabel = `Browser error: ${state.lastError}`;
+    renderBrowserCanvasSurface();
+    showToast(state.lastError, 'error');
+    return false;
+  }
 }
 
 function sendBrowserCanvasNavigation(action, url = '') {
@@ -5678,6 +5809,8 @@ function applyBrowserEventState(msg, options = {}) {
   if (msg.profileKind) state.profileKind = String(msg.profileKind || '').trim();
   if (msg.browserTarget) state.browserTarget = String(msg.browserTarget || '').trim();
   if (msg.profileLabel) state.profileLabel = String(msg.profileLabel || '').trim();
+  if (Array.isArray(msg.nativeTabs)) state.nativeTabs = normalizeNativeBrowserTabs(msg.nativeTabs);
+  if (msg.activeNativeTabId !== undefined) state.activeNativeTabId = String(msg.activeNativeTabId || '').trim();
   rememberBrowserCanvasRestorablePage(state.url, state.title, state);
   state.lastTool = String(msg.tool || msg.lastTool || state.lastTool || '').trim();
   state.statusLabel = String(msg.statusLabel || state.statusLabel || '').trim() || (state.active ? 'Browser active' : 'Browser idle');
@@ -12738,11 +12871,16 @@ function renderVisibleChatHistoryHtml(history = [], options = {}) {
         ? renderGoalContinuationMessage(msg)
         : `${isWorkerHandoff ? '<div class="msg-role voice-handoff-role">Voice Agent to Worker</div>' : ''}${renderUserMessageContent(msg)}`);
     const assistantApprovalHtml = !isUser ? renderInlineApprovalRequest(msg.approvalRequest) : '';
-    // While the turn is live, a pending question is docked in the streaming
-    // bubble instead — suppress the history copy so it isn't shown twice. A
-    // question-only message (no content/approval) then renders nothing here.
+    // Pending questions are owned by the composer popover. Keep the history
+    // copy out of the message stream so the prompt has one stable, actionable
+    // surface directly above the composer. A question-only message then
+    // renders nothing here.
     const isPendingQuestionMsg = !!msg.questionRequest && String(msg.questionRequest.status || 'pending').toLowerCase() === 'pending';
-    const suppressDockedQuestion = isPendingQuestionMsg && isSessionThinking(options.sessionId || window.activeChatSessionId);
+    const renderSessionId = String(options.sessionId || window.activeChatSessionId || '').trim();
+    const suppressDockedQuestion = isPendingQuestionMsg
+      && !isSideBoundary
+      && options.readonly !== true
+      && renderSessionId === String(window.activeChatSessionId || '').trim();
     if (suppressDockedQuestion && !msg.content && !msg.approvalRequest) return '';
     const assistantQuestionHtml = (!isUser && !suppressDockedQuestion) ? renderInlinePrometheusQuestion(msg.questionRequest) : '';
     const assistantContentHtml = !isUser
@@ -12804,11 +12942,10 @@ function renderSessionThinkingBodyHtml(sessionId) {
   const liveTraceHtml = renderLiveTurnTrace(st.liveTraceEntries || [], { streaming: true });
   const liveApprovalsHtml = renderStreamingApprovals(st.pendingApprovals || []);
   const inlinePlanHtml = renderInlineRuntimePlanHtml(st.runtimeProgressState);
-  const pendingQuestionHtml = renderStreamingPrometheusQuestionHtml(sessionId);
   const answerStarted = !!(st.finalResponseStarted || String(st.streamingAIText || '').trim());
   const showAnswerText = answerStarted && !!String(st.streamingAIText || '');
   const showLiveTrace = !!liveTraceHtml;
-  const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml && !pendingQuestionHtml;
+  const thinkingOnly = !showAnswerText && !progressHtml && !showLiveTrace && !liveApprovalsHtml && !inlinePlanHtml;
   const sess = getChatSessionById(sessionId);
   const startIndex = Number.isFinite(Number(st.currentTurnStartIndex)) ? Number(st.currentTurnStartIndex) : -1;
   const rawCurrentTurnEntries = startIndex >= 0 && Array.isArray(sess?.processLog) ? sess.processLog.slice(startIndex) : [];
@@ -12835,19 +12972,24 @@ function renderSessionThinkingBodyHtml(sessionId) {
               : (showLiveTrace || progressHtml || pendingImageHtml ? '' : `<div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`)
             }
             ${liveApprovalsHtml}
-            ${pendingQuestionHtml}
             ${inlinePlanHtml}`;
 }
 
 function renderSessionThinkingHtml(sessionId) {
   if (!isSessionThinking(sessionId)) return '';
+  // Pending Prometheus questions are rendered by the composer popover. Keep
+  // any live trace/progress visible, but remove an otherwise empty thinking
+  // bubble while the run waits for input.
+  const pendingQuestion = findPendingPrometheusQuestionForSession(sessionId)
+    && String(sessionId || '').trim() === String(window.activeChatSessionId || '').trim();
   const st = getSessionStreamState(sessionId) || {};
-  const thinkingOnly = !String(st.streamingAIText || '').trim()
-    && !Array.isArray(st.liveTraceEntries || []).length
-    && !Array.isArray(st.currentProgressLines || []).length
-    && !Array.isArray(st.pendingApprovals || []).length
-    && !getRuntimePlanItems(st.runtimeProgressState).length
-    && !findPendingPrometheusQuestionForSession(sessionId);
+  const hasNonQuestionThinking = !!String(st.streamingAIText || '').trim()
+    || !!Array.isArray(st.liveTraceEntries || []).length
+    || !!Array.isArray(st.currentProgressLines || []).length
+    || !!Array.isArray(st.pendingApprovals || []).length
+    || !!getRuntimePlanItems(st.runtimeProgressState).length;
+  if (pendingQuestion && !hasNonQuestionThinking) return '';
+  const thinkingOnly = !hasNonQuestionThinking;
   return `
     <div class="msg-shell ai">
       <div class="msg ai${thinkingOnly ? ' thinking-only' : ''}" id="${sessionId === window.activeChatSessionId ? 'thinking-msg' : `thinking-msg-${escHtml(sessionId)}`}">
@@ -13010,7 +13152,7 @@ function captureQuestionDraftState() {
       // Only the card root carries data-question-id with a child input structure.
       const qid = card.getAttribute('data-question-id');
       if (!qid || !card.classList || !card.classList.contains('chat-question-card')) return;
-      const state = { checked: [], texts: {}, others: {}, general: '', focus: null };
+      const state = { checked: [], texts: {}, others: {}, general: '', composeTarget: card.getAttribute('data-question-compose-target') || '', focus: null };
       card.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked').forEach((el) => {
         state.checked.push(`${el.getAttribute('data-question-id') || ''}::${el.value}`);
       });
@@ -13050,6 +13192,7 @@ function restoreQuestionDraftState(map) {
       const card = document.querySelector(`.chat-question-card[data-question-id="${sel}"]`);
       if (!card) return;
       const state = map[qid];
+      if (state.composeTarget) card.setAttribute('data-question-compose-target', state.composeTarget);
       const want = new Set(state.checked || []);
       card.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach((el) => {
         if (want.has(`${el.getAttribute('data-question-id') || ''}::${el.value}`)) el.checked = true;
@@ -13186,6 +13329,7 @@ function renderChatMessages() {
         }
       </div>`;
     if (!projectWelcome) loadEmptyChatBrainCards();
+    syncDesktopQuestionComposerPopover(window.activeChatSessionId);
     renderChatMessageNavigator();
     return;
   }
@@ -13213,6 +13357,7 @@ function renderChatMessages() {
       if (sidePane) sidePane.scrollTop = sidePane.scrollHeight;
     }
     restoreProcessPanelScroll(_panelScroll);
+    syncDesktopQuestionComposerPopover(window.activeChatSessionId);
     restoreQuestionDraftState(_questionDraft);
     restoreApprovalDetailsState(_approvalDetailsState);
     restoreApprovalProcessState(_approvalProcessState);
@@ -13227,6 +13372,7 @@ function renderChatMessages() {
   if (!window.chatMessagesUserScrolledUp) container.scrollTop = container.scrollHeight;
   else container.scrollTop = _mainScrollTop;
   restoreProcessPanelScroll(_panelScroll);
+  syncDesktopQuestionComposerPopover(window.activeChatSessionId);
   restoreQuestionDraftState(_questionDraft);
   restoreApprovalDetailsState(_approvalDetailsState);
   restoreApprovalProcessState(_approvalProcessState);
@@ -14654,10 +14800,9 @@ function renderInlineRuntimePlanHtml(progressState) {
   `;
 }
 
-// The pending Prometheus question for a session is docked inside the live
-// streaming bubble (below the tool stream, above the Process button) — the same
-// slot as the plan-progress panel — so it reads as part of the active turn that
-// is blocked waiting on the answer, instead of a detached history card.
+// The pending Prometheus question is owned by the composer popover. Keeping a
+// single surface above the composer prevents streaming/history rebuilds from
+// moving the question around or rendering duplicate copies.
 function findPendingPrometheusQuestionForSession(sessionId) {
   const sess = getChatSessionById(sessionId);
   if (!sess || !Array.isArray(sess.history)) return null;
@@ -14669,9 +14814,41 @@ function findPendingPrometheusQuestionForSession(sessionId) {
 }
 
 function renderStreamingPrometheusQuestionHtml(sessionId) {
+  // Retained as a no-op for callers from older render paths.
+  return '';
+}
+
+function syncDesktopQuestionComposerPopover(sessionId = window.activeChatSessionId) {
+  const host = document.getElementById('chat-question-popover');
+  if (!host) return;
   const question = findPendingPrometheusQuestionForSession(sessionId);
-  if (!question) return '';
-  return `<div class="streaming-question-dock">${renderInlinePrometheusQuestion(question)}</div>`;
+  if (!question) {
+    host.style.display = 'none';
+    host.innerHTML = '';
+    host.removeAttribute('data-question-id');
+    if (typeof updateDesktopComposerSendButton === 'function') updateDesktopComposerSendButton();
+    return;
+  }
+  host.innerHTML = renderInlinePrometheusQuestion(question);
+  host.style.display = 'block';
+  host.setAttribute('data-question-id', String(question.id || ''));
+  if (typeof updateDesktopComposerSendButton === 'function') updateDesktopComposerSendButton();
+}
+
+function hasPendingPrometheusQuestion(sessionId = window.activeChatSessionId) {
+  const question = findPendingPrometheusQuestionForSession(sessionId);
+  return !!question && String(question.status || 'pending').toLowerCase() === 'pending';
+}
+
+async function submitPendingPrometheusQuestionFromComposer(message, input) {
+  const clean = String(message || '').trim();
+  if (!input || (Array.isArray(pendingChatFiles) && pendingChatFiles.length)) return false;
+  const question = findPendingPrometheusQuestionForSession(window.activeChatSessionId);
+  if (!question || String(question.status || 'pending').toLowerCase() !== 'pending') return false;
+  const submitted = await submitInlinePrometheusQuestion(question.id, { composerText: clean });
+  if (submitted !== true) return false;
+  clearChatComposerAfterSend(input);
+  return true;
 }
 
 function getTaskProgressItems(task) {
@@ -15734,6 +15911,10 @@ async function sendChat(queuedMessage = null, options = {}) {
   const queuedTurn = queuedMessage == null ? null : normalizeQueuedChatTurn(queuedMessage);
   const raw = queuedTurn ? queuedTurn.message : getChatComposerValue();
   const message = String(raw || '').trim();
+  if (!queuedTurn && hasPendingPrometheusQuestion(window.activeChatSessionId)) {
+    await submitPendingPrometheusQuestionFromComposer(message, input);
+    return;
+  }
   if (!message) return;
   if (!queuedTurn && handleImmediateChatSlashCommand(message)) return;
   const excludedSkillIds = queuedTurn
@@ -16664,6 +16845,14 @@ async function sendChat(queuedMessage = null, options = {}) {
             if (event.message) {
               const msg = String(event.message);
               addProcessEntry('info', msg, event.actor ? { actor: event.actor } : undefined);
+            }
+            break;
+          }
+
+          case 'resources_changed': {
+            const resourceSessionId = String(event.sessionId || thisSessionId || '').trim();
+            if (!resourceSessionId || resourceSessionId === thisSessionId) {
+              scheduleChatResourcesReload(thisSessionId, 0);
             }
             break;
           }
@@ -17953,6 +18142,7 @@ const sourcePanelState = {
   git: null,
   gitSessionId: '',
   gitRoot: '',
+  gitScopeKey: '',
   gitLoaded: false,
   initialized: false,
   seenResourceKeys: new Set(),
@@ -18087,6 +18277,7 @@ async function loadChatResources(options = {}) {
   if (!sessionId) return;
   if (chatResourcesState.sessionId && chatResourcesState.sessionId !== sessionId) {
     chatResourcesState.query = '';
+    chatResourcesState.resources = [];
     sourcePanelState.activeSessionId = '';
   }
   const requestToken = ++chatResourcesState.requestToken;
@@ -18128,7 +18319,7 @@ function shouldRefreshChatResourcesForAction(action) {
 
 function scheduleChatResourcesReload(sessionId = '', delayMs = 180) {
   const sid = String(sessionId || window.activeChatSessionId || '').trim();
-  if (!sid || !document.getElementById('chat-resources-section')) return;
+  if (!sid) return;
   if (chatResourcesReloadTimer) clearTimeout(chatResourcesReloadTimer);
   chatResourcesReloadTimer = setTimeout(() => {
     chatResourcesReloadTimer = null;
@@ -18567,23 +18758,75 @@ function clearSourcePanelFilter() {
   renderSourcePanel();
 }
 
+function sourcePanelIsAbsolutePath(value) {
+  const normalized = String(value || '').trim().replace(/\\/g, '/');
+  return /^\/(?:\/)?/.test(normalized) || /^[A-Za-z]:\//.test(normalized);
+}
+
+function sourcePanelResolveGitPath(value, baseRoot = '') {
+  const raw = String(value || '').trim();
+  if (!raw || /^(?:https?|file):\/\//i.test(raw)) return '';
+  const normalized = normalizeCanvasPath(raw);
+  if (!normalized) return '';
+  if (sourcePanelIsAbsolutePath(normalized) || !baseRoot) return normalized;
+  const base = normalizeCanvasPath(baseRoot).replace(/\/+$/, '');
+  const relative = normalized.replace(/^\/+/, '');
+  return base ? normalizeCanvasPath(`${base}/${relative}`) : relative;
+}
+
+function sourcePanelGitFilePaths(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+  const paths = [];
+  const seen = new Set();
+  const add = (value) => {
+    const normalized = sourcePanelResolveGitPath(value);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    paths.push(normalized);
+  };
+  // Edits are the strongest signal: a repository should follow the files the
+  // active chat actually changed, not the gateway process's own checkout.
+  sourcePanelEditItems(sessionId).forEach((item) => add(item.path || item.displayPath));
+  const resources = (Array.isArray(chatResourcesState.resources) ? chatResourcesState.resources : [])
+    .map(sourcePanelResourceItem)
+    .filter((item) => item.bucket !== 'links' && !sourcePanelResourceIsLink(item.resource))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  resources.forEach((item) => add(chatResourceFilePath(item.resource)));
+  return paths;
+}
+
+function sourcePanelGitScopeKey(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+  return [sourcePanelWorkspaceRoot(sessionId), ...sourcePanelGitFilePaths(sessionId)].join('|');
+}
+
+async function sourcePanelSessionWorkspaceRoot(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return '';
+  try {
+    const data = await api(`/api/coding/session?sessionId=${encodeURIComponent(sid)}`, { timeoutMs: 8000, dedupe: false });
+    return String(data?.session?.root || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 function sourcePanelWorkspaceRoot(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
   const session = getChatSessionById(String(sessionId || '').trim());
   return String(
     sourcePanelState.project?.workspacePath
     || sourcePanelState.project?.root
+    || sourcePanelState.project?.rootPath
     || session?.canvasProjectRoot
-    || canvasProjectRoot
     || '',
   ).trim();
 }
 
 function sourcePanelFallbackProject(sessionId) {
   const session = getChatSessionById(String(sessionId || '').trim());
+  const workspacePath = sourcePanelWorkspaceRoot(sessionId);
   return {
     id: session?.projectId || '',
-    name: session?.projectName || session?.canvasProjectLabel || (sourcePanelWorkspaceRoot(sessionId) ? getCanvasProjectDisplayName(sourcePanelWorkspaceRoot(sessionId)) : 'Current project'),
-    workspacePath: session?.canvasProjectRoot || canvasProjectRoot || '',
+    name: session?.projectName || session?.canvasProjectLabel || (workspacePath ? getCanvasProjectDisplayName(workspacePath) : 'Current project'),
+    workspacePath,
   };
 }
 
@@ -18619,18 +18862,61 @@ async function loadSourcePanelGit(sessionId = sourcePanelState.activeSessionId |
   const sid = String(sessionId || '').trim();
   if (!sid || sid !== sourcePanelState.activeSessionId) return;
   const token = ++sourcePanelState.gitRequestToken;
-  const root = sourcePanelWorkspaceRoot(sid);
+  const explicitRoot = sourcePanelWorkspaceRoot(sid);
+  const filePaths = sourcePanelGitFilePaths(sid);
+  const scopeKey = sourcePanelGitScopeKey(sid);
   sourcePanelState.gitSessionId = sid;
-  sourcePanelState.gitRoot = root;
+  sourcePanelState.gitRoot = '';
+  sourcePanelState.gitScopeKey = scopeKey;
+  sourcePanelState.git = null;
   sourcePanelState.gitLoaded = false;
   try {
-    const endpoint = root ? `/api/coding/repository?root=${encodeURIComponent(root)}` : '/api/coding/repository';
-    const data = await api(endpoint, { timeoutMs: 8000, dedupe: false });
+    // A relative edit/resource path is resolved against the chat's workspace.
+    // Do not query that workspace when the chat has no touched local files;
+    // that is what previously surfaced the gateway repository on new chats.
+    const sessionRoot = explicitRoot || (filePaths.some((value) => !sourcePanelIsAbsolutePath(value))
+      ? await sourcePanelSessionWorkspaceRoot(sid)
+      : '');
     if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
-    sourcePanelState.git = data?.repository ? { root: data.root || root, repository: data.repository } : null;
+    const candidateRoots = [];
+    const seenRoots = new Set();
+    const addCandidate = (value) => {
+      const normalized = sourcePanelResolveGitPath(value, sessionRoot);
+      if (!normalized || seenRoots.has(normalized)) return;
+      seenRoots.add(normalized);
+      candidateRoots.push(normalized);
+    };
+    if (explicitRoot) addCandidate(explicitRoot);
+    filePaths.forEach((value) => addCandidate(value));
+    if (!candidateRoots.length) {
+      sourcePanelState.git = null;
+      sourcePanelState.gitRoot = '';
+      sourcePanelState.gitLoaded = true;
+      renderSourcePanel();
+      return;
+    }
+    const repositories = await Promise.all(candidateRoots.slice(0, 32).map(async (candidate) => {
+      try {
+        const params = new URLSearchParams({ root: candidate, sessionId: sid });
+        const data = await api(`/api/coding/repository?${params.toString()}`, { timeoutMs: 8000, dedupe: false });
+        const repository = data?.repository;
+        if (!repository || repository.connected !== true) return null;
+        return {
+          root: String(repository.root || data.root || candidate).trim(),
+          repository,
+        };
+      } catch {
+        return null;
+      }
+    }));
+    if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
+    const selected = repositories.find(Boolean);
+    sourcePanelState.git = selected || null;
+    sourcePanelState.gitRoot = selected?.root || '';
   } catch {
     if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
     sourcePanelState.git = null;
+    sourcePanelState.gitRoot = '';
   }
   sourcePanelState.gitLoaded = true;
   renderSourcePanel();
@@ -18650,12 +18936,13 @@ function ensureSourcePanelContext(sessionId = window.activeChatSessionId) {
     sourcePanelState.git = null;
     sourcePanelState.gitSessionId = '';
     sourcePanelState.gitRoot = '';
+    sourcePanelState.gitScopeKey = '';
     sourcePanelState.gitLoaded = false;
   }
   if (!sourcePanelState.projectLoaded || sourcePanelState.projectSessionId !== sid) loadSourcePanelProject(sid).catch(() => {});
   else {
-    const root = sourcePanelWorkspaceRoot(sid);
-    if (!sourcePanelState.gitLoaded || sourcePanelState.gitSessionId !== sid || sourcePanelState.gitRoot !== root) loadSourcePanelGit(sid).catch(() => {});
+    const scopeKey = sourcePanelGitScopeKey(sid);
+    if (!sourcePanelState.gitLoaded || sourcePanelState.gitSessionId !== sid || sourcePanelState.gitScopeKey !== scopeKey) loadSourcePanelGit(sid).catch(() => {});
   }
 }
 
@@ -20267,10 +20554,11 @@ function updateDesktopComposerSendButton() {
   const stopIcon = document.getElementById('stop-icon');
   // Session state is the authority here. Do not retain the previous chat's
   // DOM/global state when a user opens a fresh chat while it is still running.
-  const thinking = isDesktopComposerTurnActive();
+  const questionPending = hasPendingPrometheusQuestion(window.activeChatSessionId);
+  const thinking = !questionPending && isDesktopComposerTurnActive();
   const realtimeActive = realtimeVoiceStarting || realtimeVoiceRepliesEnabled;
   btn.dataset.thinking = thinking ? 'true' : 'false';
-  const voiceMode = !thinking && !realtimeActive && !hasDesktopComposerOutboundContent();
+  const voiceMode = !questionPending && !thinking && !realtimeActive && !hasDesktopComposerOutboundContent();
   btn.classList.toggle('voice-mode-btn', voiceMode);
   btn.classList.toggle('is-voice', voiceMode);
   btn.classList.toggle('realtime-voice-stop', realtimeActive);
@@ -20278,7 +20566,7 @@ function updateDesktopComposerSendButton() {
   if (voiceIcon) voiceIcon.hidden = !voiceMode;
   if (stopIcon) stopIcon.style.display = thinking || realtimeActive ? '' : 'none';
   btn.style.background = thinking || realtimeActive ? 'var(--err)' : '';
-  btn.title = thinking ? 'Stop generation' : realtimeActive ? (realtimeVoiceStarting ? 'Cancel realtime voice' : 'Exit realtime voice') : voiceMode ? 'Start voice mode' : 'Send';
+  btn.title = questionPending ? 'Submit answer' : thinking ? 'Stop generation' : realtimeActive ? (realtimeVoiceStarting ? 'Cancel realtime voice' : 'Exit realtime voice') : voiceMode ? 'Start voice mode' : 'Send';
   btn.setAttribute('aria-label', btn.title);
 }
 
@@ -41036,6 +41324,7 @@ function toggleRightPanel() {
   }
   if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
   syncHeaderCanvasChrome();
+  queueNativeBrowserSurfaceSync({ force: true });
 }
 
 function toggleCanvas(nextOpen = null, options = {}) {
@@ -41130,8 +41419,9 @@ function toggleCanvas(nextOpen = null, options = {}) {
 	  }
     syncHeaderCanvasChrome();
     if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
-	  syncCanvasSurfaceWidthLock();
+     syncCanvasSurfaceWidthLock();
     syncBrowserCanvasStream({ force: true });
+    queueNativeBrowserSurfaceSync({ force: true });
 	}
 
 function toggleCanvasFullscreen() {
@@ -43305,20 +43595,13 @@ function renderInlinePrometheusQuestion(item) {
         <span>${escHtml(option)}</span>
       </label>`;
     }).join('');
-    const textInput = q.mode === 'text'
-      ? `<textarea data-question-text="${escHtml(q.id)}" placeholder="Answer..." rows="2" class="pq-input"></textarea>`
+    const otherInput = q.allowOther && q.mode !== 'text'
+      ? `<div class="pq-other-row"><button type="button" class="pq-other-toggle" onclick="toggleQuestionOther(${idArg}, ${qIdArg})">Other</button></div>`
       : '';
-    const otherInput = q.allowOther
-      ? `<div class="pq-other-row">
-          ${q.mode !== 'text' ? `<button type="button" class="pq-other-toggle" onclick="toggleQuestionOther(${idArg}, ${qIdArg})">Other</button>` : ''}
-          <textarea data-question-other="${escHtml(q.id)}" placeholder="Other..." rows="1" class="pq-input pq-other-input"${q.mode !== 'text' ? ' hidden' : ''}></textarea>
-        </div>`
-      : '';
-    return `<div class="pq-block" style="margin-top:${index ? 10 : 0}px">
+    return `<div class="pq-block" data-question-compose-id="${escHtml(q.id)}" data-question-compose-mode="${escHtml(q.mode)}" data-question-compose-other="${q.allowOther ? 'true' : 'false'}" style="margin-top:${index ? 10 : 0}px">
       <div class="pq-q-label">${escHtml(q.label)}${q.required ? '' : ' <span class="pq-optional">(optional)</span>'}</div>
       ${q.helpText ? `<div class="chat-approval-subdetail">${escHtml(q.helpText)}</div>` : ''}
       ${options ? `<div class="pq-options">${options}</div>` : ''}
-      ${textInput}
       ${otherInput}
     </div>`;
   }).join('');
@@ -43336,10 +43619,8 @@ function renderInlinePrometheusQuestion(item) {
     ${question.context ? `<div class="chat-approval-subdetail">${escHtml(question.context)}</div>` : ''}
     ${questionBlocks}
     ${!pending && question.generalOther ? `<div class="chat-approval-scope"><span>Anything else</span>${escHtml(question.generalOther).replace(/\n/g, '<br>')}</div>` : ''}
-    ${pending && question.allowGeneralOther ? `<div style="margin-top:10px"><textarea data-question-general-other="1" placeholder="Anything else..." rows="2" class="pq-input"></textarea></div>` : ''}
     ${pending
       ? `<div class="chat-approval-actions">
-          <button class="chat-approval-btn chat-approval-approve" type="button" onclick="submitInlinePrometheusQuestion(${idArg})">Submit</button>
           <button class="chat-approval-btn chat-approval-deny" type="button" onclick="cancelInlinePrometheusQuestion(${idArg})">Cancel</button>
         </div>`
       : `<div class="chat-approval-resolved">This question was ${escHtml(statusLabel)}.</div>`}
@@ -43348,9 +43629,10 @@ function renderInlinePrometheusQuestion(item) {
 
 function toggleQuestionOther(questionId, itemId) {
   const card = document.querySelector(`[data-question-id="${cssEscapeValue(questionId)}"]`);
-  const other = card?.querySelector?.(`[data-question-other="${cssEscapeValue(itemId)}"]`);
-  if (!other) return;
-  if (other.hasAttribute('hidden')) { other.removeAttribute('hidden'); other.focus(); } else { other.setAttribute('hidden', ''); }
+  const block = card?.querySelector?.(`[data-question-compose-id="${cssEscapeValue(itemId)}"]`);
+  if (!card || !block) return;
+  card.setAttribute('data-question-compose-target', `${String(itemId)}::other`);
+  document.getElementById('chat-input')?.focus?.();
 }
 
 // Single_select radios can't be deselected natively. On mousedown, if the radio
@@ -43379,6 +43661,49 @@ function collectPrometheusQuestionAnswers(question) {
   });
   const generalOther = String(card.querySelector('[data-question-general-other="1"]')?.value || '').trim();
   return { answers, generalOther };
+}
+
+function applyPrometheusQuestionComposerAnswer(question, payload, composerText = '') {
+  const text = String(composerText || '').trim();
+  if (!text || !question || !payload) return payload;
+  const card = document.querySelector(`[data-question-id="${cssEscapeValue(question.id)}"]`);
+  const rawTarget = String(card?.getAttribute('data-question-compose-target') || '').trim();
+  const [targetId, targetKind] = rawTarget.split('::');
+  const targetQuestion = question.questions.find((item) => String(item.id) === String(targetId || ''))
+    || question.questions.find((item) => item.mode === 'text')
+    || question.questions.find((item) => item.allowOther)
+    || null;
+  const targetAnswer = targetQuestion
+    ? payload.answers.find((answer) => String(answer.id) === String(targetQuestion.id))
+    : null;
+  if (targetAnswer) {
+    if (targetKind === 'other' || (!targetKind && targetQuestion.mode !== 'text')) targetAnswer.other = text;
+    else targetAnswer.text = text;
+  } else if (question.allowGeneralOther) {
+    payload.generalOther = text;
+  } else if (payload.answers[0]) {
+    payload.answers[0].text = text;
+  }
+  return payload;
+}
+
+function getMissingPrometheusQuestionAnswers(question, payload) {
+  const answers = Array.isArray(payload?.answers) ? payload.answers : [];
+  return (question?.questions || []).filter((item) => {
+    if (item?.required === false) return false;
+    const answer = answers.find((candidate) => String(candidate?.id || '') === String(item?.id || ''));
+    return !answer || (
+      !(Array.isArray(answer.selected) && answer.selected.length)
+      && !String(answer.text || '').trim()
+      && !String(answer.other || '').trim()
+    );
+  });
+}
+
+function focusPrometheusQuestionComposer() {
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  try { input.focus({ preventScroll: true }); } catch { try { input.focus(); } catch {} }
 }
 
 function questionFromEventPayload(event = {}, status = '') {
@@ -43449,7 +43774,7 @@ function findLocalPrometheusQuestionRecord(id) {
   return null;
 }
 
-async function submitInlinePrometheusQuestion(id) {
+async function submitInlinePrometheusQuestion(id, options = {}) {
   // Prefer the locally-rendered question record so a slow/failed
   // /api/questions fetch can't make Submit appear to do nothing. Fall back to
   // the network only if the card isn't in local state.
@@ -43458,7 +43783,19 @@ async function submitInlinePrometheusQuestion(id) {
     showToast('Question missing', 'Could not load the pending question.', 'error');
     return;
   }
-  const payload = collectPrometheusQuestionAnswers(normalizePrometheusQuestionRecord(question));
+  const normalizedQuestion = normalizePrometheusQuestionRecord(question);
+  const payload = applyPrometheusQuestionComposerAnswer(
+    normalizedQuestion,
+    collectPrometheusQuestionAnswers(normalizedQuestion),
+    options.composerText,
+  );
+  const missing = getMissingPrometheusQuestionAnswers(normalizedQuestion, payload);
+  if (missing.length) {
+    focusPrometheusQuestionComposer();
+    const labels = missing.map((item) => item.label).filter(Boolean).slice(0, 3).join('; ');
+    showToast('Answer required', `Use the composer to answer: ${labels}`, 'warning');
+    return false;
+  }
   try {
     const result = await api(`/api/questions/${encodeURIComponent(id)}/submit`, {
       method: 'POST',
@@ -43477,8 +43814,10 @@ async function submitInlinePrometheusQuestion(id) {
       }
       setTimeout(() => sendChat(resumePrompt, { clientRequestId: newChatClientRequestId(targetSessionId || window.activeChatSessionId) }), 100);
     }
+    return true;
   } catch (err) {
     showToast('Question submit failed', String(err?.message || err), 'error');
+    return false;
   }
 }
 
@@ -43965,6 +44304,8 @@ window.stopComposerTranscription = stopComposerTranscription;
 window.updateDesktopComposerSendButton = updateDesktopComposerSendButton;
 window.hasDesktopComposerOutboundContent = hasDesktopComposerOutboundContent;
 window.isDesktopComposerTurnActive = isDesktopComposerTurnActive;
+window.hasPendingPrometheusQuestion = hasPendingPrometheusQuestion;
+window.submitPendingPrometheusQuestionFromComposer = submitPendingPrometheusQuestionFromComposer;
 updateDesktopComposerSendButton();
 window.toggleRealtimeVoiceReplies = toggleRealtimeVoiceReplies;
 window.onVoiceModeChanged = onVoiceModeChanged;
@@ -44036,6 +44377,9 @@ window.returnBrowserCanvasToPrimarySession = returnBrowserCanvasToPrimarySession
 window.followBrowserCanvasSession = followBrowserCanvasSession;
 window.reopenBrowserCanvasLastPage = reopenBrowserCanvasLastPage;
 window.sendBrowserCanvasNavigation = sendBrowserCanvasNavigation;
+window.selectNativeBrowserCanvasTab = selectNativeBrowserCanvasTab;
+window.newNativeBrowserCanvasTab = newNativeBrowserCanvasTab;
+window.closeNativeBrowserCanvasTab = closeNativeBrowserCanvasTab;
 window.openBrowserCanvasAddress = openBrowserCanvasAddress;
 window.handleBrowserCanvasAddressKeydown = handleBrowserCanvasAddressKeydown;
 window.queueNativeBrowserSurfaceSync = queueNativeBrowserSurfaceSync;

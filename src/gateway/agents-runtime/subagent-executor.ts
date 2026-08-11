@@ -454,6 +454,10 @@ import {
 } from '../scheduling/schedule-admin-tools';
 import { executeRegisteredCapabilityTool } from './capabilities/registry';
 import { appendEntityEvent, listEntities, readEntity, writeEntity } from '../business/entity-store';
+import {
+  claimBrainDreamProposalSlot,
+  releaseBrainDreamProposalSlot,
+} from '../brain/brain-proposal-policy.js';
 
 const getCreativeMotionRuntime = () => require('../creative/motion-runtime') as typeof import('../creative/motion-runtime');
 let cachedSourceAccessRoot: { workspace: string; sessionId: string; taskRevision: number; root: string } | null = null;
@@ -3148,6 +3152,20 @@ function persistFetchedSource(workspacePath: string, sessionId: string, item: Re
   }
 }
 
+// These tools can add or promote resources after the tool-call event has
+// already reached the client. Emit one explicit post-registration signal so
+// source panels do not have to guess when the resource store is ready.
+const RESOURCE_REFRESH_TOOLS = new Set([
+  'show_sources',
+  'web_search',
+  'web_search_single',
+  'web_search_multi',
+  'web_search_snippets',
+  'web_fetch',
+  'web_fetch_batch',
+  'download_url',
+]);
+
 export async function executeTool(name: string, args: any, workspacePath: string, deps: ExecuteToolDeps, sessionId: string = 'default'): Promise<ToolResult> {
   const executionStartedAt = Date.now();
   const grant = getDevSourceEditGrant(sessionId);
@@ -3176,6 +3194,14 @@ export async function executeTool(name: string, args: any, workspacePath: string
   } catch (err: any) {
     for (const item of prepared) finalizeDevEditMutation(item, err);
     throw err;
+  }
+  const completedToolName = String(result.name || name || '').trim().toLowerCase();
+  if (!result.error && RESOURCE_REFRESH_TOOLS.has(completedToolName)) {
+    deps.sendSSE?.('resources_changed', {
+      sessionId,
+      action: completedToolName,
+      reason: 'tool_resource_registration_complete',
+    });
   }
   for (const item of prepared) {
     try { finalizeDevEditMutation(item, result.error ? result.result : undefined); } catch (err: any) {
@@ -18248,6 +18274,15 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               error: true,
             };
           }
+		          const brainProposalSlot = claimBrainDreamProposalSlot(sessionId);
+		          if (brainProposalSlot.isBrainDream && !brainProposalSlot.allowed) {
+		            return {
+		              name,
+		              args,
+		              result: `BRAIN DREAM PROPOSAL BUDGET REACHED: this nightly Dream may create at most ${brainProposalSlot.limit} lightweight plan proposals. Record this idea under Deferred Ideas instead of creating another proposal.`,
+		              error: true,
+		            };
+		          }
 		          try {
 		            const { createProposal } = require('../proposals/proposal-store');
                 let teamExecution: any = undefined;
@@ -18405,9 +18440,10 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
               result: `Proposal created: ${proposal.id}\nTitle: ${proposal.title}\nStatus: pending human approval\nView in Prometheus → Proposals panel.`,
               error: false,
             };
-          } catch (err: any) {
-            return { name, args, result: `write_proposal error: ${err.message}`, error: true };
-          }
+	          } catch (err: any) {
+	            if (brainProposalSlot.isBrainDream) releaseBrainDreamProposalSlot(sessionId);
+	            return { name, args, result: `write_proposal error: ${err.message}`, error: true };
+	          }
         }
 
         // ── update_heartbeat ──────────────────────────────────────

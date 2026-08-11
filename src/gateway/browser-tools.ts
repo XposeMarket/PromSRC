@@ -85,6 +85,17 @@ interface InHouseBrowserSession {
   sessionId: string;
   url: string;
   title: string;
+  activeTabId: string;
+  tabs: Array<{
+    id: string;
+    index: number;
+    title: string;
+    url: string;
+    loading: boolean;
+    active: boolean;
+    canGoBack?: boolean;
+    canGoForward?: boolean;
+  }>;
   lastSnapshot: string;
   lastSnapshotAt: number;
   createdAt: number;
@@ -2530,6 +2541,20 @@ function getInHouseSession(sessionId: string): InHouseBrowserSession | undefined
   return inHouseSessions.get(resolveSessionId(sessionId));
 }
 
+function normalizeInHouseTabs(tabs: unknown): InHouseBrowserSession['tabs'] {
+  if (!Array.isArray(tabs)) return [];
+  return tabs.map((tab: any, index) => ({
+    id: String(tab?.id || tab?.tabId || `native-tab-${index + 1}`).trim(),
+    index: Number.isFinite(Number(tab?.index)) ? Number(tab.index) : index,
+    title: String(tab?.title || '').trim() || 'New Tab',
+    url: String(tab?.url || 'about:blank').trim() || 'about:blank',
+    loading: tab?.loading === true,
+    active: tab?.active === true,
+    canGoBack: tab?.canGoBack === true,
+    canGoForward: tab?.canGoForward === true,
+  })).filter((tab) => tab.id);
+}
+
 function upsertInHouseSession(sessionId: string, state: any = {}): InHouseBrowserSession {
   const resolved = resolveSessionId(sessionId);
   const existing = inHouseSessions.get(resolved);
@@ -2538,6 +2563,8 @@ function upsertInHouseSession(sessionId: string, state: any = {}): InHouseBrowse
     sessionId: resolved,
     url: String(state?.url || existing?.url || ''),
     title: String(state?.title || existing?.title || ''),
+    activeTabId: String(state?.activeTabId || existing?.activeTabId || '').trim(),
+    tabs: state?.tabs !== undefined ? normalizeInHouseTabs(state.tabs) : normalizeInHouseTabs(existing?.tabs),
     lastSnapshot: String(existing?.lastSnapshot || ''),
     lastSnapshotAt: Number(existing?.lastSnapshotAt || 0),
     createdAt: Number(existing?.createdAt || now),
@@ -2608,6 +2635,8 @@ function buildInHouseStatusPayload(sessionId: string, statusLabel: string, extra
     active: !!inHouse,
     url: String(extra.url || inHouse?.url || ''),
     title: String(extra.title || inHouse?.title || ''),
+    activeTabId: String(extra.activeTabId || inHouse?.activeTabId || '').trim(),
+    tabs: Array.isArray(extra.tabs) ? normalizeInHouseTabs(extra.tabs) : normalizeInHouseTabs(inHouse?.tabs),
     profileKind: 'inhouse',
     browserTarget: 'inhouse',
     profileLabel: getBrowserProfileLabel('inhouse'),
@@ -4717,8 +4746,23 @@ function formatBrowserTabs(session: BrowserSession): string {
   ].join('\n');
 }
 
+function formatInHouseTabs(session: InHouseBrowserSession): string {
+  const tabs = normalizeInHouseTabs(session.tabs);
+  if (!tabs.length) return 'No tabs are open in the Prometheus in-house browser.';
+  return [
+    `Browser tabs for Prometheus in-house browser (${tabs.length}):`,
+    ...tabs.map((tab) => `${tab.id === session.activeTabId || tab.active ? '*' : ' '} [${tab.index}] ${tab.title || '(untitled)'} ${tab.url || ''}`),
+  ].join('\n');
+}
+
 export async function browserListTabs(sessionId: string): Promise<string> {
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved)) {
+    const result: any = await callInHouseBrowser('tabs', { sessionId: resolved });
+    const inHouse = upsertInHouseSession(resolved, result);
+    return formatInHouseTabs(inHouse);
+  }
+  const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   if (session.transport === 'extension') {
     const tabs = await getUserChromeRelay().request('tabs.list');
@@ -4729,7 +4773,13 @@ export async function browserListTabs(sessionId: string): Promise<string> {
 }
 
 export async function browserSelectTab(sessionId: string, index: number): Promise<string> {
-  const session = sessions.get(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved)) {
+    const result: any = await callInHouseBrowser('select-tab', { sessionId: resolved, index: Number(index) });
+    const inHouse = upsertInHouseSession(resolved, result);
+    return `Selected Prometheus in-house browser tab [${index}].\n${formatInHouseTabs(inHouse)}`;
+  }
+  const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   if (session.transport === 'extension') {
     const tabs = await getUserChromeRelay().request('tabs.list');
@@ -4758,7 +4808,13 @@ export async function browserSelectTab(sessionId: string, index: number): Promis
 }
 
 export async function browserNewTab(sessionId: string, url?: string): Promise<string> {
-  const session = await getOrCreateSession(resolveSessionId(sessionId));
+  const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved)) {
+    const result: any = await callInHouseBrowser('new-tab', { sessionId: resolved, url: String(url || '').trim() });
+    const inHouse = upsertInHouseSession(resolved, result);
+    return `Opened new Prometheus in-house browser tab.\n${formatInHouseTabs(inHouse)}`;
+  }
+  const session = await getOrCreateSession(resolved);
   if (session.transport === 'extension') {
     const raw = String(url || '').trim();
     const targetUrl = raw && !/^[a-z][a-z0-9+.-]*:/i.test(raw) ? `https://${raw}` : (raw || 'about:blank');
@@ -4801,6 +4857,18 @@ export async function browserNewTab(sessionId: string, url?: string): Promise<st
 
 export async function browserCloseTab(sessionId: string, index?: number): Promise<string> {
   const resolved = resolveSessionId(sessionId);
+  if (getInHouseSession(resolved)) {
+    const result: any = await callInHouseBrowser('close-tab', {
+      sessionId: resolved,
+      index: index == null ? undefined : Number(index),
+    });
+    if (result?.attached === false) {
+      clearInHouseSession(resolved);
+      return 'Closed the last Prometheus in-house browser tab; browser session is now inactive.';
+    }
+    const inHouse = upsertInHouseSession(resolved, result);
+    return `Closed Prometheus in-house browser tab.\n${formatInHouseTabs(inHouse)}`;
+  }
   const session = sessions.get(resolved);
   if (!session) return 'ERROR: No browser session. Use browser_open first.';
   if (session.transport === 'extension') {

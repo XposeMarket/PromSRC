@@ -176,6 +176,7 @@
       const modal = document.getElementById('settings-modal');
       if (modal) modal.style.display = 'none';
       document.body.classList.remove('settings-page-open');
+      window.queueNativeBrowserSurfaceSync?.({ force: true });
     };
     window.closeSettings = closeSettingsShim;
 
@@ -183,6 +184,7 @@
       const modal = document.getElementById('settings-modal');
       if (modal) modal.style.display = 'flex';
       document.body.classList.add('settings-page-open');
+      window.queueNativeBrowserSurfaceSync?.({ force: true });
       const activeTab = applySettingsTabFallback(tab || window.settingsTab || 'system');
       try {
         await window.__PROM_LOAD_SETTINGS();
@@ -2175,11 +2177,16 @@
       <div id="pinned-chats-list" class="session-list"></div>
     </div>
 
+    <div class="sidebar-section" id="sidebar-projects-section" style="display:none">
+      <div class="section-title">Projects</div>
+      <div id="sidebar-projects-list" class="session-list"></div>
+    </div>
+
     <!-- SESSION SECTION (only shown in chat mode) -->
     <div class="sidebar-section" id="sidebar-sessions-section">
       <div class="section-title">Sessions</div>
 
-      <!-- Segmented tabs: Chats / Skills. Projects live inline in Chats. -->
+      <!-- Segmented tabs: Chats / Skills. Projects have their own section above. -->
       <div class="seg-tabs" id="segTabs">
         <button class="seg-btn active" data-tab="chats" onclick="setSidebarSegTab('chats')">Chats</button>
         <button class="seg-btn" data-tab="skills" onclick="setSidebarSegTab('skills')">Skills</button>
@@ -2335,10 +2342,11 @@
 	      </div>
       <!-- Design selections and staged files share the attachment row above the message input. -->
       <div id="chat-composer-attachment-stack" class="chat-composer-attachment-stack" style="display:none">
-        <div id="chat-design-selection-pills" class="chat-file-staging" style="display:none"></div>
-        <div id="chat-file-staging" class="chat-file-staging" style="display:none"></div>
+      <div id="chat-design-selection-pills" class="chat-file-staging" style="display:none"></div>
+      <div id="chat-file-staging" class="chat-file-staging" style="display:none"></div>
       </div>
       <div id="chat-skill-trigger-pill" class="chat-skill-trigger-pill" style="display:none" aria-live="polite"></div>
+      <div id="chat-question-popover" class="chat-question-popover" style="display:none"></div>
       <div id="chat-slash-command-popover" class="chat-slash-command-popover" style="display:none"></div>
       <div id="chat-skill-command-popover" class="chat-slash-command-popover chat-skill-command-popover" style="display:none"></div>
       <!-- Hidden file input -->
@@ -3187,17 +3195,10 @@
           </div>
         </div>
         <div id="canvas-browser-shell" style="display:none;flex:1;min-height:0;overflow:hidden;background:linear-gradient(180deg,rgba(56,189,248,0.08),rgba(14,165,233,0.03));">
-          <div style="display:flex;flex-direction:column;height:100%;min-height:0">
-            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.14)">
-              <div style="min-width:0">
-                <div id="browser-canvas-title" style="font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#f0f9ff">Live Browser</div>
-                <div id="browser-canvas-subtitle" style="font-size:10px;color:#b6c8d6;line-height:1.5;margin-top:1px">Waiting for browser activity in this chat</div>
-                <div id="browser-canvas-agent-tabs" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px"></div>
-              </div>
-            </div>
-            <div id="browser-canvas-control-slot" style="display:none;padding:10px 16px 0"></div>
-            <div id="browser-canvas-layout" style="display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,0.95fr);gap:14px;padding:16px;flex:1;min-height:0">
-              <div id="browser-canvas-live-card" style="min-height:0;border:1px solid rgba(148,163,184,0.24);border-radius:8px;overflow:hidden;background:rgba(2,6,23,0.5);display:flex;flex-direction:column">
+          <div style="display:flex;flex-direction:column;width:100%;height:100%;min-width:0;min-height:0">
+            <div id="browser-canvas-native-tabs" role="tablist" aria-label="Browser tabs" style="display:none;align-items:flex-end;gap:4px;min-width:0;min-height:38px;padding:5px 8px 0;border-bottom:1px solid rgba(148,163,184,0.18);background:rgba(2,6,23,0.42);overflow-x:auto;overflow-y:hidden"></div>
+            <div id="browser-canvas-layout" style="display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,0.95fr);gap:14px;padding:16px;flex:1;min-width:0;min-height:0">
+              <div id="browser-canvas-live-card" style="min-width:0;min-height:0;border:1px solid rgba(148,163,184,0.24);border-radius:8px;overflow:hidden;background:rgba(2,6,23,0.5);display:flex;flex-direction:column">
                 <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.72)">
                   <button id="browser-canvas-back-btn" type="button" onclick="sendBrowserCanvasNavigation('back')" title="Back" style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.56);color:#cbd5e1;border-radius:8px;cursor:pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg></button>
                   <button id="browser-canvas-forward-btn" type="button" onclick="sendBrowserCanvasNavigation('forward')" title="Forward" style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid rgba(148,163,184,0.18);background:rgba(15,23,42,0.56);color:#cbd5e1;border-radius:8px;cursor:pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg></button>
@@ -3215,13 +3216,12 @@
                   <div id="browser-canvas-stage-title" style="font-size:15px;font-weight:800;color:#f8fafc">Browser canvas is standing by</div>
                   <div id="browser-canvas-stage-copy" style="font-size:12px;line-height:1.7;color:#94a3b8;margin-top:8px">When Prometheus opens or updates a browser session, the browser canvas will follow it here and keep the current session, page title, and interaction mode in sync.</div>
                 </div>
-	                <div id="browser-canvas-frame-wrap" tabindex="0" style="display:none;flex:1;min-height:0;position:relative;padding:16px;overflow:auto;flex-direction:column;align-items:center;justify-content:flex-start;outline:none">
+                <div id="browser-canvas-frame-wrap" tabindex="0" style="display:none;flex:1;min-width:0;min-height:0;position:relative;padding:16px;overflow:auto;flex-direction:column;align-items:center;justify-content:flex-start;outline:none">
                   <div id="browser-canvas-frame-meta" style="display:none;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
                     <div id="browser-canvas-frame-caption" style="font-size:12px;font-weight:700;color:#f8fafc">Latest browser frame</div>
                     <div id="browser-canvas-frame-size" style="font-size:11px;color:#94a3b8">Viewport frame</div>
                   </div>
                   <div id="browser-canvas-frame-stage" style="position:relative;width:fit-content;max-width:100%;margin:0 auto">
-                    <div id="browser-canvas-native-placeholder" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;border-radius:12px;border:1px solid rgba(56,189,248,0.22);background:rgba(8,47,73,0.18);color:#bae6fd;font-size:12px;font-weight:800;z-index:1;pointer-events:none">Prometheus in-house browser</div>
                     <img id="browser-canvas-frame" alt="Browser frame" style="display:block;max-width:100%;height:auto;border-radius:12px;border:1px solid rgba(148,163,184,0.18);box-shadow:0 18px 40px rgba(2,6,23,0.38);cursor:crosshair" onclick="inspectBrowserCanvasPoint(event)" onload="handleBrowserCanvasFrameLoad()">
                     <div id="browser-canvas-selection-box" style="display:none;position:absolute;border:2px solid #38bdf8;border-radius:10px;box-shadow:0 0 0 9999px rgba(15,23,42,0.15);pointer-events:none;z-index:6"></div>
                     <div id="browser-canvas-hover-box" style="display:none;position:absolute;border:1.5px dashed rgba(56,189,248,0.85);border-radius:8px;background:rgba(56,189,248,0.08);pointer-events:none;z-index:5;transition:left 90ms ease,top 90ms ease,width 90ms ease,height 90ms ease"></div>
@@ -3251,18 +3251,6 @@
 	                <div style="border:1px solid rgba(148,163,184,0.22);border-radius:10px;padding:14px;background:rgba(15,23,42,0.42)">
 	                  <div id="browser-canvas-mode-title" style="font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;color:#94a3b8">Mode Notes</div>
 	                  <div id="browser-canvas-mode-copy" style="font-size:11px;line-height:1.7;color:#cbd5e1;margin-top:8px">Browser interaction guidance will appear here.</div>
-	                  <div id="browser-canvas-control-row" style="display:none;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding:10px 12px;border:1px solid rgba(251,191,36,0.18);border-radius:8px;background:rgba(245,158,11,0.08)">
-	                    <div id="browser-canvas-control-badge" style="font-size:11px;line-height:1.5;color:#fde68a">Click the browser to take control.</div>
-	                    <button id="browser-canvas-return-btn" onclick="returnBrowserCanvasToPrimarySession({ statusLabel: 'Returned to the main browser tab.' })" style="display:none;align-items:center;gap:6px;border:1px solid rgba(125,211,252,0.26);background:rgba(56,189,248,0.12);color:#bae6fd;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;flex-shrink:0">
-	                      <iconify-icon icon="solar:arrow-left-linear" width="14" height="14"></iconify-icon>Return to Main Tab
-	                    </button>
-	                    <button id="browser-canvas-reopen-btn" onclick="reopenBrowserCanvasLastPage()" style="display:none;align-items:center;gap:6px;border:1px solid rgba(34,197,94,0.26);background:rgba(34,197,94,0.12);color:#bbf7d0;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;flex-shrink:0">
-	                      <iconify-icon icon="solar:restart-bold-duotone" width="14" height="14"></iconify-icon>Reopen Last Page
-	                    </button>
-	                    <button id="browser-canvas-release-btn" onclick="releaseBrowserCanvasControl()" style="display:none;align-items:center;gap:6px;border:1px solid rgba(251,191,36,0.28);background:rgba(251,191,36,0.14);color:#fde68a;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;flex-shrink:0">
-	                      <iconify-icon icon="solar:rewind-back-bold-duotone" width="14" height="14"></iconify-icon>Release to Agent
-	                    </button>
-	                  </div>
 	                  <div id="browser-canvas-name-panel" style="display:none;margin-top:12px">
                     <label for="browser-canvas-name-input" style="display:block;font-size:11px;font-weight:700;color:#fde68a;margin-bottom:6px">Element Name</label>
                     <input id="browser-canvas-name-input" type="text" placeholder="tweet composer, search box, publish button..." oninput="updateBrowserElementNameDraft(this.value)" style="width:100%;border:1px solid rgba(251,191,36,0.25);border-radius:8px;padding:8px 10px;background:rgba(15,23,42,0.72);color:#f8fafc;font-size:12px;font-family:'Manrope',sans-serif;outline:none;box-sizing:border-box" />
@@ -5940,7 +5928,6 @@ function _backToChannelHub() {
   _renderChannelHub();
 }
 
-let _sessionHoverPreviewTimer = null;
 let _sessionHoverPreviewCloseTimer = null;
 let _sessionHoverPreviewSource = null;
 let _sessionHoverPreviewEditing = false;
@@ -5969,11 +5956,13 @@ function _getSessionHoverPreview() {
   popover.setAttribute('aria-label', 'Rename chat');
   popover.addEventListener('pointerenter', () => {
     if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
+    _sessionHoverPreviewCloseTimer = null;
   });
   // Pointer-down is earlier than click. Clearing here prevents the short
   // source-to-popover hover gap from closing the editor before it can focus.
   popover.addEventListener('pointerdown', () => {
     if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
+    _sessionHoverPreviewCloseTimer = null;
   });
   popover.addEventListener('pointerleave', scheduleSessionHoverPreviewClose);
   document.body.appendChild(popover);
@@ -5981,26 +5970,26 @@ function _getSessionHoverPreview() {
 }
 
 function queueSessionHoverPreview(source) {
-  if (!source || source.classList.contains('is-editing') || window.matchMedia('(max-width: 900px)').matches) return;
+  if (!source || source.classList.contains('is-editing') || _sessionHoverPreviewEditing || window.matchMedia('(max-width: 900px)').matches) return;
   if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
+  _sessionHoverPreviewCloseTimer = null;
   if (_sessionHoverPreviewSource === source && document.getElementById('session-hover-preview')?.classList.contains('is-visible')) return;
-  if (_sessionHoverPreviewTimer) clearTimeout(_sessionHoverPreviewTimer);
-  _sessionHoverPreviewTimer = setTimeout(() => showSessionHoverPreview(source), 520);
+  const popover = document.getElementById('session-hover-preview');
+  if (_sessionHoverPreviewSource && _sessionHoverPreviewSource !== source && popover?.classList.contains('is-visible')) {
+    hideSessionHoverPreview();
+  }
+  showSessionHoverPreview(source);
 }
 
 function scheduleSessionHoverPreviewClose() {
   if (_sessionHoverPreviewEditing) return;
-  if (_sessionHoverPreviewTimer) clearTimeout(_sessionHoverPreviewTimer);
-  _sessionHoverPreviewTimer = null;
   if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
-  _sessionHoverPreviewCloseTimer = setTimeout(hideSessionHoverPreview, 180);
+  _sessionHoverPreviewCloseTimer = setTimeout(hideSessionHoverPreview, 1500);
 }
 
 function hideSessionHoverPreview() {
   if (_sessionHoverPreviewEditing) return;
-  if (_sessionHoverPreviewTimer) clearTimeout(_sessionHoverPreviewTimer);
   if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
-  _sessionHoverPreviewTimer = null;
   _sessionHoverPreviewCloseTimer = null;
   _sessionHoverPreviewSource = null;
   const popover = document.getElementById('session-hover-preview');
@@ -6167,6 +6156,8 @@ function showSessionHoverPreview(source) {
   const session = _sessionById(id);
   const title = String(session?.title || source.dataset.sessionTitle || 'New chat').trim() || 'New chat';
   const popover = _getSessionHoverPreview();
+  if (_sessionHoverPreviewCloseTimer) clearTimeout(_sessionHoverPreviewCloseTimer);
+  _sessionHoverPreviewCloseTimer = null;
   _sessionHoverPreviewSource = source;
   _renderSessionHoverPreviewTitle(popover, id, title);
   popover.classList.add('is-visible');
@@ -6590,6 +6581,10 @@ function closeSettledSessionsView() {
 function _renderSettledSessionsList(el) {
   const pinnedSection = document.getElementById('sidebar-pinned-section');
   if (pinnedSection) pinnedSection.style.display = 'none';
+  const projectsSection = document.getElementById('sidebar-projects-section');
+  const projectsListEl = document.getElementById('sidebar-projects-list');
+  if (projectsListEl) projectsListEl.innerHTML = '';
+  if (projectsSection) projectsSection.style.display = 'none';
   const sessions = _sessionSearchQuery
     ? (_sessionSearchResults || []).map(sessionFromSearchResult).filter(Boolean)
     : (_settledSessions || []);
@@ -6878,9 +6873,18 @@ function renderSessionsList() {
   const projectRows = typeof window.renderProjectChatRows === 'function'
     ? window.renderProjectChatRows({ query: _sessionSearchQuery })
     : '';
-  // Projects are ordinary rows in the Chats stream. There is deliberately no
-  // separate desktop Projects heading or tab anymore.
-  const html = projectRows + displayedUnpinned.map(renderChatSessionCard).join('');
+  const projectsSection = document.getElementById('sidebar-projects-section');
+  const projectsListEl = document.getElementById('sidebar-projects-list');
+  if (projectsSection && projectsListEl) {
+    if (projectRows && onChatsTab) {
+      projectsListEl.innerHTML = projectRows;
+      projectsSection.style.display = '';
+    } else {
+      projectsListEl.innerHTML = '';
+      projectsSection.style.display = 'none';
+    }
+  }
+  const html = displayedUnpinned.map(renderChatSessionCard).join('');
 
   let content = html || (
     _sessionSearchLoading
@@ -8496,6 +8500,11 @@ let currentAbortController = null;
 let stopGenerationReconcileTimer = null;
 
 function handleSendStop() {
+  if (window.hasPendingPrometheusQuestion?.()) {
+    window.stopComposerTranscription?.({ refocus: false });
+    Promise.resolve(window.sendChat?.()).catch((err) => console.warn('[question] submit failed:', err));
+    return;
+  }
   if (window.isDesktopComposerTurnActive?.() || window._sessionThinking?.[window.activeChatSessionId]) {
     stopGeneration();
     return;

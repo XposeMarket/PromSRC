@@ -217,13 +217,16 @@ The page chooses a setup flow based on the connector's declared auth type:
 The current connector page does not bundle provider OAuth client secrets. A
 deployment is a direct click-through only when its provider app client ID (and,
 where required, client secret) is already available from the deployment
-environment or the local vault. In that case **Connect** starts the
-host-owned connection attempt, opens the provider authorization URL, receives
-the code on a localhost callback, stores/refreshes tokens in the vault, then
-verifies account/resource identity before exposing tools. If the app is not
-configured, the managed attempt fails with a provider-app-not-configured
-state; **Advanced: Use your own OAuth App** is the setup path. That means this
-is not universally one-click for a fresh installation.
+environment or the local vault. In that case **Connect** creates the
+host-owned connection attempt; the user approves the requested read-only
+capability grant, then the attempt opens the provider authorization URL,
+receives the code on a localhost callback, stores/refreshes tokens in the
+vault, and verifies account/resource identity before exposing tools. If the
+app is not configured, the managed attempt fails with a
+provider-app-not-configured state; **Advanced: Use your own OAuth App** is the
+setup path. That means this is not universally one-click for a fresh
+installation, and even a configured deployment intentionally has an approval
+step before the provider window.
 
 The managed OAuth family and declared tool surface are:
 
