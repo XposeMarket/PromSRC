@@ -2,7 +2,7 @@
  * Prometheus Desktop - Electron Main Process
  *
  * Spawns the Prometheus gateway
- * then opens a BrowserWindow pointed at http://127.0.0.1:18789
+ * then opens a BrowserWindow pointed at the selected local gateway port
  *
  * User data is stored in %APPDATA%\Prometheus\ (C:\Users\<n>\AppData\Roaming\Prometheus)
  * so it survives app updates and works correctly for any user on any machine.
@@ -25,9 +25,10 @@ const {
   nativeImage,
   safeStorage,
 } = require('electron');
-const { spawn, execSync }  = require('child_process');
+const { spawn, execSync, execFileSync }  = require('child_process');
 const path       = require('path');
 const http       = require('http');
+const net        = require('net');
 const fs         = require('fs');
 const crypto     = require('crypto');
 const {
@@ -40,7 +41,17 @@ const {
 } = require('./security');
 
 // ─── Config ────────────────────────────────────────────────────────────────
-const GATEWAY_URL  = 'http://127.0.0.1:18789';
+const DEFAULT_GATEWAY_PORT = 18789;
+function parseGatewayPort(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : null;
+}
+const requestedGatewayPort = parseGatewayPort(
+  process.env.PROMETHEUS_GATEWAY_PORT || process.env.GATEWAY_PORT,
+);
+const gatewayPortWasExplicit = requestedGatewayPort !== null;
+let gatewayPort = requestedGatewayPort || DEFAULT_GATEWAY_PORT;
+let GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
 const APP_ID       = 'com.prometheus.desktop';
 const APP_ROOT     = path.join(__dirname, '..');
 const ICON_PATH    = path.join(
@@ -81,7 +92,13 @@ function getGatewayWorkingDirectory() {
 }
 
 // ─── User Data Dir ─────────────────────────────────────────────────────────
-const USER_DATA_DIR = path.join(app.getPath('appData'), 'Prometheus');
+const defaultUserDataDir = path.join(app.getPath('appData'), 'Prometheus');
+const configuredUserDataDir = String(
+  process.env.PROMETHEUS_ELECTRON_DATA_DIR || process.env.PROMETHEUS_INSTANCE_DATA_DIR || '',
+).trim();
+const USER_DATA_DIR = configuredUserDataDir
+  ? path.resolve(configuredUserDataDir)
+  : defaultUserDataDir;
 app.setAppUserModelId(APP_ID);
 app.setName('Prometheus');
 app.setPath('userData', USER_DATA_DIR);
@@ -95,6 +112,18 @@ if (!fs.existsSync(USER_DATA_DIR)) {
 const SETUP_STAMP_FILE = path.join(USER_DATA_DIR, '.setup-complete');
 const CURRENT_VERSION  = require('../package.json').version;
 const UPDATER_SETTINGS_FILE = path.join(USER_DATA_DIR, 'updater-settings.json');
+const CANONICAL_UPDATE_CONFIG_DIR = path.join(USER_DATA_DIR, '.prometheus');
+
+// The shared updater protocol is compiled into dist for packaged builds. A
+// missing module is a fail-safe condition: the app can run, but it cannot
+// install an update or fall back to git/npm.
+let canonicalUpdaterApi = null;
+try {
+  const canonicalPath = path.join(APP_ROOT, 'dist', 'update', 'canonical-updater.js');
+  if (fs.existsSync(canonicalPath)) canonicalUpdaterApi = require(canonicalPath);
+} catch (error) {
+  console.error('[Updater] Canonical updater unavailable; updates disabled:', error && error.message ? error.message : error);
+}
 
 function readUpdaterSettings() {
   try {
@@ -160,10 +189,17 @@ let autoUpdater = null;
 if (IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD) {
   try {
     autoUpdater = require('electron-updater').autoUpdater;
-    autoUpdater.autoDownload    = autoUpdateEnabled;
-    // Enabled updates are installed on the next normal app quit. The General
-    // settings panel also exposes an explicit "Restart & install" action.
-    autoUpdater.autoInstallOnAppQuit = autoUpdateEnabled;
+    // Checks are allowed according to the preference, but downloads and
+    // installation are never implicit. The canonical backup/drain flow below
+    // is the only path allowed to call downloadUpdate or quitAndInstall.
+    autoUpdater.autoDownload    = false;
+    // Installation is never implicit. A user-confirmed request must pass the
+    // canonical backup/drain flow below before quitAndInstall is called.
+    autoUpdater.autoInstallOnAppQuit = false;
+    autoUpdater.autoRunAppAfterInstall = true;
+    autoUpdater.allowDowngrade = false;
+    autoUpdater.verifyUpdateCodeSignature = true;
+    autoUpdater.setFeedURL?.({ provider: 'github', owner: 'XposeMarket', repo: 'prometheus-releases' });
     autoUpdater.logger          = null;   // suppress console noise; surface via events only
   } catch (e) {
     console.error('[Updater] electron-updater not available:', e.message);
@@ -184,6 +220,16 @@ let updaterMessage      = autoUpdater ? '' : 'Updates are available only in pack
 let updaterChecking     = false;
 let updaterInstalling   = false;
 let updaterProgress     = 0;
+let canonicalUpdatePromise = null;
+let canonicalUpdateWatcher = null;
+let canonicalUpdateLock = null;
+let canonicalUpdatePendingValidation = null;
+let updaterReleaseValidated = false;
+let updaterSha512Verified = false;
+let updaterStateBackupCreated = false;
+let updaterRestartValidated = false;
+let updaterBackupId = '';
+let updaterInstallerPath = '';
 let isGatewayRestarting = false;
 let gatewayHealthTimer = null;
 let gatewayHealthCheckInFlight = false;
@@ -195,11 +241,13 @@ const NATIVE_BROWSER_EMPTY_BOUNDS = { x: 0, y: 0, width: 0, height: 0 };
 
 function getUpdaterState(extra = {}) {
   return {
-    supported: !!autoUpdater,
+    supported: !!autoUpdater && !!canonicalUpdaterApi && IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD,
     autoUpdateEnabled,
     currentVersion: CURRENT_VERSION,
     status: updaterStatus,
-    message: updaterMessage,
+    message: updaterStatus === 'error' && canonicalUpdaterApi?.sanitizeUpdateError
+      ? canonicalUpdaterApi.sanitizeUpdateError(updaterMessage)
+      : updaterMessage,
     progress: updaterProgress,
     version: (pendingUpdate || availableUpdate)?.version || '',
     releaseName: (pendingUpdate || availableUpdate)?.releaseName || '',
@@ -210,8 +258,193 @@ function getUpdaterState(extra = {}) {
   };
 }
 
+function updaterCanonicalPhase() {
+  const allowed = new Set([
+    'unsupported', 'idle', 'checking', 'available', 'downloading', 'ready',
+    'preparing', 'installing', 'relaunching', 'validated', 'busy', 'error',
+  ]);
+  return allowed.has(updaterStatus) ? updaterStatus : 'error';
+}
+
+function writeCanonicalUpdaterStatus(extra = {}) {
+  if (!canonicalUpdaterApi?.writeCanonicalUpdateStatus) return;
+  const info = pendingUpdate || availableUpdate || {};
+  try {
+    canonicalUpdaterApi.writeCanonicalUpdateStatus(CANONICAL_UPDATE_CONFIG_DIR, {
+      supported: !!autoUpdater && IS_PACKAGED_RUNTIME && IS_PUBLIC_BUILD,
+      phase: updaterCanonicalPhase(),
+      currentVersion: CURRENT_VERSION,
+      targetVersion: String(extra.version || info.version || ''),
+      message: canonicalUpdaterApi.sanitizeUpdateError
+        ? canonicalUpdaterApi.sanitizeUpdateError(updaterMessage)
+        : String(updaterMessage || '').slice(0, 500),
+      progress: updaterProgress,
+      requestId: String(extra.requestId || '').trim() || undefined,
+      source: String(extra.source || '').trim() || undefined,
+      backupId: updaterBackupId || undefined,
+      recoveryAvailable: extra.recoveryAvailable === true || updaterStateBackupCreated,
+      releaseValidated: updaterReleaseValidated,
+      sha512Verified: updaterSha512Verified,
+      stateBackupCreated: updaterStateBackupCreated,
+      restartValidated: updaterRestartValidated,
+      errorCode: String(extra.errorCode || '').trim() || undefined,
+    });
+  } catch (error) {
+    writeGatewayLog(`[main] Could not write canonical updater status: ${error && error.message ? error.message : error}\n`);
+  }
+}
+
+function validatePrometheusRelease(info) {
+  if (!canonicalUpdaterApi?.validateReleaseInfo) {
+    return { ok: false, message: 'The canonical release validator is unavailable; update is blocked.' };
+  }
+  return canonicalUpdaterApi.validateReleaseInfo(CURRENT_VERSION, info || {});
+}
+
+function getReleaseDigest(info) {
+  return String(info?.sha512 || info?.files?.find?.((file) => file?.sha512)?.sha512 || '').trim();
+}
+
+function hasConfiguredUpdatePublisher() {
+  if (process.platform !== 'win32') return true;
+  const candidates = [
+    path.join(process.resourcesPath || '', 'app-update.yml'),
+    path.join(APP_ROOT, 'app-update.yml'),
+  ];
+  return candidates.some((filePath) => {
+    try {
+      return /(?:^|\n)publisherName:\s*[^\s#]+/i.test(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function verifyDownloadedRelease(info) {
+  const digest = getReleaseDigest(info);
+  if (!digest) throw new Error('Downloaded release has no SHA-512 digest.');
+  const candidate = String(updaterInstallerPath || info?.downloadedFile || info?.path || '').trim();
+  if (!candidate || !fs.existsSync(candidate) || !canonicalUpdaterApi?.verifyFileSha512) {
+    throw new Error('Downloaded release path is unavailable for SHA-512 verification.');
+  }
+  const verified = await canonicalUpdaterApi.verifyFileSha512(candidate, digest);
+  if (!verified) throw new Error('Downloaded release SHA-512 verification failed.');
+  updaterSha512Verified = true;
+  return true;
+}
+
+function isCanonicalPathWithin(parentPath, candidatePath) {
+  const parent = path.resolve(parentPath);
+  const candidate = path.resolve(candidatePath);
+  const relative = path.relative(parent, candidate);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function getCanonicalStateRoots(requestRoots = []) {
+  if (!canonicalUpdaterApi?.collectUserStateRoots) return [];
+  let config = {};
+  try {
+    const configPath = path.join(CANONICAL_UPDATE_CONFIG_DIR, 'config.json');
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (parsed && typeof parsed === 'object') config = parsed;
+  } catch {}
+  const standard = canonicalUpdaterApi.collectUserStateRoots(USER_DATA_DIR, config, []);
+  const requested = Array.isArray(requestRoots) ? requestRoots : [];
+  const roots = [...standard, ...requested];
+  const seen = new Set();
+  return roots.filter((root) => {
+    const rawPath = String(root?.path || '').trim();
+    if (!rawPath) return false;
+    const candidate = path.resolve(rawPath);
+    if (candidate === path.parse(candidate).root) return false;
+    if (isCanonicalPathWithin(path.join(CANONICAL_UPDATE_CONFIG_DIR, 'updates'), candidate)) return false;
+    const key = process.platform === 'win32' ? candidate.toLowerCase() : candidate;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((root) => ({
+    label: String(root?.label || 'configured').slice(0, 80),
+    path: path.resolve(String(root.path).trim()),
+  }));
+}
+
+function encryptBackupManifest(plaintext) {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('OS-backed encryption is unavailable; protected update backup cannot be created.');
+  }
+  return safeStorage.encryptString(String(plaintext || ''));
+}
+
+function protectBackupDirectory(backupDir) {
+  const resolved = path.resolve(backupDir);
+  if (process.platform === 'win32') {
+    const username = String(process.env.USERNAME || '').trim();
+    if (!username) throw new Error('The current Windows user could not be resolved for backup protection.');
+    execFileSync('icacls.exe', [
+      resolved,
+      '/inheritance:r',
+      '/grant:r', `${username}:(OI)(CI)F`,
+      '/T',
+      '/C',
+    ], { stdio: 'ignore', windowsHide: true, timeout: 15_000 });
+    return;
+  }
+  fs.chmodSync(resolved, 0o700);
+}
+
+function requestLocalJson(method, pathname, payload = null, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const body = payload == null ? '' : JSON.stringify(payload);
+    const headers = { Connection: 'close' };
+    if (body) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = String(Buffer.byteLength(body));
+    }
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: gatewayPort,
+      path: pathname,
+      method,
+      headers,
+      timeout: timeoutMs,
+    }, (res) => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { if (raw.length < 100_000) raw += chunk; });
+      res.on('end', () => {
+        let parsed = {};
+        try { parsed = raw ? JSON.parse(raw) : {}; } catch {}
+        if (Number(res.statusCode || 0) < 200 || Number(res.statusCode || 0) >= 300) {
+          const error = new Error(String(parsed?.error || `Local Prometheus request failed (${res.statusCode || 0}).`));
+          error.statusCode = res.statusCode;
+          reject(error);
+          return;
+        }
+        resolve(parsed);
+      });
+    });
+    req.once('timeout', () => req.destroy(new Error('The Prometheus gateway did not respond in time.')));
+    req.once('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function requestUpdateDrain() {
+  const result = await requestLocalJson('POST', '/api/internal/update-drain', null, 10_000);
+  if (!result?.ok || !result?.preflight?.ready) {
+    const reasons = Array.isArray(result?.preflight?.reasons) ? result.preflight.reasons.join(', ') : 'pending work';
+    throw new Error(`Update is blocked until Prometheus is idle and durable writes are drained (${reasons}).`);
+  }
+  return result;
+}
+
 function sendUpdaterState(extra = {}) {
+  if (updaterStatus === 'error' && canonicalUpdaterApi?.sanitizeUpdateError) {
+    updaterMessage = canonicalUpdaterApi.sanitizeUpdateError(updaterMessage);
+  }
   const state = getUpdaterState(extra);
+  writeCanonicalUpdaterStatus(extra);
   if (mainWindow && !mainWindow.isDestroyed()) {
     try { mainWindow.webContents.send('updater-state', state); } catch {}
   }
@@ -220,11 +453,37 @@ function sendUpdaterState(extra = {}) {
 
 function applyUpdaterPreferences() {
   if (!autoUpdater) return;
-  autoUpdater.autoDownload = autoUpdateEnabled;
-  autoUpdater.autoInstallOnAppQuit = autoUpdateEnabled;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
 }
 
-async function downloadPrometheusUpdate(source = 'manual') {
+function updateBusyState(source = 'manual') {
+  updaterStatus = 'busy';
+  updaterMessage = 'Another Prometheus update operation is already in progress.';
+  return sendUpdaterState({ source, errorCode: 'busy' });
+}
+
+function runLocalCanonicalUpdateOperation(source, operation) {
+  if (!autoUpdater || !canonicalUpdaterApi?.acquireUpdateLock) {
+    return Promise.resolve().then(operation);
+  }
+  if (canonicalUpdatePromise || canonicalUpdateLock) {
+    return Promise.resolve(updateBusyState(source));
+  }
+  const lock = canonicalUpdaterApi.acquireUpdateLock(CANONICAL_UPDATE_CONFIG_DIR, `electron-main-${source}`);
+  if (!lock) return Promise.resolve(updateBusyState(source));
+  canonicalUpdateLock = lock;
+  canonicalUpdatePromise = Promise.resolve()
+    .then(operation)
+    .finally(() => {
+      try { lock.release(); } catch {}
+      if (canonicalUpdateLock === lock) canonicalUpdateLock = null;
+      canonicalUpdatePromise = null;
+    });
+  return canonicalUpdatePromise;
+}
+
+async function downloadPrometheusUpdate(source = 'manual', lockHeld = false) {
   if (!autoUpdater) {
     updaterStatus = 'unsupported';
     updaterMessage = 'Updates are available only in packaged public builds.';
@@ -233,23 +492,50 @@ async function downloadPrometheusUpdate(source = 'manual') {
   if (updaterInstalling) return sendUpdaterState({ source });
   if (pendingUpdate) {
     updaterStatus = 'ready';
-    updaterMessage = autoUpdateEnabled
-      ? 'Update downloaded. It will install when Prometheus quits.'
-      : 'Update downloaded and ready to install.';
+    updaterMessage = 'Update downloaded and ready for your explicit confirmation.';
     return sendUpdaterState({ source });
   }
-  if (!availableUpdate) return checkForPrometheusUpdates(source);
+  if (!availableUpdate) return checkForPrometheusUpdates(source, lockHeld);
+
+  const releaseCheck = validatePrometheusRelease(availableUpdate);
+  if (!releaseCheck.ok) {
+    updaterStatus = 'error';
+    updaterMessage = releaseCheck.message;
+    return sendUpdaterState({ source, errorCode: 'release_validation_failed' });
+  }
+  if (!hasConfiguredUpdatePublisher()) {
+    updaterStatus = 'error';
+    updaterMessage = 'Update download is blocked until this Prometheus build has a configured Windows publisher certificate.';
+    return sendUpdaterState({ source, errorCode: 'publisher_not_configured' });
+  }
 
   updaterStatus = 'downloading';
   updaterMessage = `Downloading Prometheus ${availableUpdate.version || 'update'}...`;
   updaterProgress = 0;
   sendUpdaterState({ source });
   try {
-    await autoUpdater.downloadUpdate();
+    const downloaded = await autoUpdater.downloadUpdate();
+    const paths = Array.isArray(downloaded) ? downloaded : [];
+    updaterInstallerPath = paths.find((candidate) => typeof candidate === 'string' && fs.existsSync(candidate)) || updaterInstallerPath;
+    await verifyDownloadedRelease(availableUpdate);
+    pendingUpdate = pendingUpdate || availableUpdate;
+    updaterStatus = 'ready';
+    updaterMessage = 'Update downloaded and ready for your explicit confirmation.';
+    updaterProgress = 100;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const info = pendingUpdate || availableUpdate || {};
+      mainWindow.webContents.send('update-ready', {
+        version: info.version,
+        releaseName: info.releaseName || `v${info.version}`,
+        releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
+      });
+    }
     return sendUpdaterState({ source });
   } catch (error) {
     updaterStatus = 'error';
-    updaterMessage = error && error.message ? error.message : 'Update download failed.';
+    updaterMessage = canonicalUpdaterApi?.sanitizeUpdateError
+      ? canonicalUpdaterApi.sanitizeUpdateError(error)
+      : 'Update download failed.';
     console.error('[Updater] downloadUpdate failed:', updaterMessage);
     return sendUpdaterState({ source });
   }
@@ -270,13 +556,12 @@ async function setAutoUpdateEnabled(enabled) {
     updaterMessage = 'Automatic updates are off. Use Check for updates when you want to look.';
   }
   if (autoUpdateEnabled && !pendingUpdate) {
-    if (availableUpdate) return downloadPrometheusUpdate('settings');
-    return checkForPrometheusUpdates('settings');
+    return runLocalCanonicalUpdateOperation('settings-check', () => checkForPrometheusUpdates('settings', true));
   }
   return sendUpdaterState({ source: 'settings' });
 }
 
-async function checkForPrometheusUpdates(source = 'manual') {
+async function checkForPrometheusUpdates(source = 'manual', lockHeld = false) {
   if (!autoUpdater) {
     updaterStatus = 'unsupported';
     updaterMessage = 'Updates are available only in packaged public builds.';
@@ -285,9 +570,7 @@ async function checkForPrometheusUpdates(source = 'manual') {
   if (updaterInstalling) return sendUpdaterState({ source });
   if (pendingUpdate) {
     updaterStatus = 'ready';
-    updaterMessage = autoUpdateEnabled
-      ? 'Update downloaded. It will install when Prometheus quits.'
-      : 'Update downloaded and ready to install.';
+    updaterMessage = 'Update downloaded and ready for your explicit confirmation.';
     return sendUpdaterState({ source });
   }
   if (updaterChecking) return sendUpdaterState({ source });
@@ -311,7 +594,9 @@ async function checkForPrometheusUpdates(source = 'manual') {
     return sendUpdaterState({ source });
   } catch (e) {
     updaterStatus = 'error';
-    updaterMessage = e && e.message ? e.message : 'Update check failed.';
+    updaterMessage = canonicalUpdaterApi?.sanitizeUpdateError
+      ? canonicalUpdaterApi.sanitizeUpdateError(e)
+      : 'Update check failed.';
     console.error('[Updater] checkForUpdates failed:', updaterMessage);
     return sendUpdaterState({ source });
   } finally {
@@ -469,9 +754,65 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// ─── Port cleanup ──────────────────────────────────────────────────────────
-// Never kill an arbitrary process just because it owns the configured port.
-// Refuse startup instead; the operator can then identify and close the owner.
+// ─── Port selection ─────────────────────────────────────────────────────────
+// Never kill an arbitrary process just because it owns a port. Electron keeps
+// the preferred port when it is free and otherwise claims the next available
+// loopback gateway port, allowing multiple Prometheus instances to coexist.
+function isGatewayPortAvailable(port) {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    let settled = false;
+    const done = (available) => {
+      if (settled) return;
+      settled = true;
+      resolve(available);
+    };
+    probe.once('error', () => done(false));
+    probe.listen({ port, host: '0.0.0.0', exclusive: true }, () => {
+      probe.close(() => done(true));
+    });
+  });
+}
+
+function getConfiguredGatewayHttpsPort() {
+  let enabled = ['1', 'true'].includes(String(process.env.GATEWAY_HTTPS_ENABLED || '').toLowerCase());
+  let port = parseGatewayPort(process.env.GATEWAY_HTTPS_PORT) || 18790;
+  try {
+    const configPath = path.join(USER_DATA_DIR, '.prometheus', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const https = config?.gateway?.https;
+    enabled = enabled || https?.enabled === true;
+    port = parseGatewayPort(https?.port) || port;
+  } catch {}
+  return enabled ? port : null;
+}
+
+async function selectGatewayPort() {
+  if (gatewayPortWasExplicit) {
+    if (!(await isGatewayPortAvailable(gatewayPort))) {
+      assertGatewayPortAvailable(gatewayPort);
+      throw new Error(`Prometheus cannot start because port ${gatewayPort} is already in use.`);
+    }
+  } else {
+    const httpsPort = getConfiguredGatewayHttpsPort();
+    let selected = null;
+    for (let offset = 0; offset < 1000 && gatewayPort + offset <= 65535; offset += 1) {
+      const candidate = gatewayPort + offset;
+      if (httpsPort && candidate === httpsPort) continue;
+      if (await isGatewayPortAvailable(candidate)) {
+        selected = candidate;
+        break;
+      }
+    }
+    if (!selected) {
+      throw new Error(`Prometheus could not find an available gateway port starting at ${gatewayPort}.`);
+    }
+    gatewayPort = selected;
+  }
+  GATEWAY_URL = `http://127.0.0.1:${gatewayPort}`;
+}
+
+// Preserve the detailed Windows owner message for explicitly requested ports.
 function assertGatewayPortAvailable(port) {
   if (process.platform !== 'win32') return;
   try {
@@ -504,7 +845,10 @@ function openGatewayLog() {
   try {
     const logsDir = path.dirname(GATEWAY_LOG_PATH);
     if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
-    gatewayLogStream = fs.createWriteStream(GATEWAY_LOG_PATH, { flags: 'w' });
+    try { gatewayLogStream?.end(); } catch {}
+    // Keep the previous gateway lifetime in the same log. Truncating here
+    // erased the restart trigger before the replacement could report it.
+    gatewayLogStream = fs.createWriteStream(GATEWAY_LOG_PATH, { flags: 'a' });
     gatewayLogStream.on('error', (err) => {
       if (err?.code !== 'EPIPE') {
         console.warn('[Prometheus] Gateway log stream error:', err?.message || err);
@@ -644,7 +988,10 @@ function checkGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS) {
       resolve(ok);
     };
     const req = http.request(`${GATEWAY_URL}/api/health`, {
-      method: 'GET',
+      // The gateway has a raw HEAD fast path. Avoid making the watchdog wait
+      // for a JSON body or any downstream middleware while deciding whether
+      // the process is reachable.
+      method: 'HEAD',
       headers: { Connection: 'close' },
     }, (res) => {
       const ok = Number(res.statusCode || 0) >= 200 && Number(res.statusCode || 0) < 300;
@@ -671,22 +1018,60 @@ function readGatewayRuntimeStatus() {
   }
 }
 
-function shouldDeferGatewayHealthRecovery(status) {
-  if (!status || !Number.isFinite(Number(status.timestamp))) return false;
-  const heartbeatAgeMs = Math.max(0, Date.now() - Number(status.timestamp));
-  if (heartbeatAgeMs < 20_000) return true;
-  if (!status.modelBusy) return false;
-  const busyAgeAtHeartbeatMs = Number.isFinite(Number(status.modelBusyAgeMs))
-    ? Number(status.modelBusyAgeMs)
-    : 0;
-  const busyAgeFromStartMs = Number.isFinite(Number(status.modelBusySince))
-    ? Math.max(0, Date.now() - Number(status.modelBusySince))
-    : 0;
-  const effectiveBusyAgeMs = Math.max(
-    busyAgeFromStartMs,
-    busyAgeAtHeartbeatMs + heartbeatAgeMs,
-  );
-  return effectiveBusyAgeMs < GATEWAY_BUSY_RECOVERY_GRACE_MS;
+function readGatewayProgressLease() {
+  try {
+    const leasePath = path.join(USER_DATA_DIR, '.prometheus', 'gateway-progress-lease.json');
+    if (!fs.existsSync(leasePath)) return null;
+    return JSON.parse(fs.readFileSync(leasePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function shouldDeferGatewayHealthRecovery(status, lease, expectedPid) {
+  const now = Date.now();
+  const gatewayPid = Number(expectedPid);
+  const statusPid = Number(status?.pid);
+  // Never use a stale heartbeat written by the gateway process that was just
+  // replaced. The progress lease has the same PID identity guard below.
+  const currentStatus = status
+    && (!gatewayPid || !statusPid || statusPid === gatewayPid)
+    ? status
+    : null;
+
+  if (currentStatus && Number.isFinite(Number(currentStatus.timestamp))) {
+    const heartbeatAgeMs = Math.max(0, now - Number(currentStatus.timestamp));
+    if (heartbeatAgeMs < 20_000) return true;
+    if (!currentStatus.modelBusy) return false;
+    const busyAgeAtHeartbeatMs = Number.isFinite(Number(currentStatus.modelBusyAgeMs))
+      ? Number(currentStatus.modelBusyAgeMs)
+      : 0;
+    const busyAgeFromStartMs = Number.isFinite(Number(currentStatus.modelBusySince))
+      ? Math.max(0, now - Number(currentStatus.modelBusySince))
+      : 0;
+    const effectiveBusyAgeMs = Math.max(
+      busyAgeFromStartMs,
+      busyAgeAtHeartbeatMs + heartbeatAgeMs,
+    );
+    if (effectiveBusyAgeMs < GATEWAY_BUSY_RECOVERY_GRACE_MS) return true;
+  }
+
+  const leasePid = Number(lease?.pid);
+  const lastProgressAt = Number(lease?.lastProgressAt);
+  const expiresAt = Number(lease?.expiresAt);
+  if (
+    lease?.state === 'active'
+    && (!gatewayPid || leasePid === gatewayPid)
+    && lastProgressAt > 0
+    && expiresAt > now
+  ) {
+    // An active provider worker renews this lease every few seconds. The
+    // model-worker pool independently kills a worker after stale heartbeats,
+    // so this cannot keep a dead provider request alive indefinitely.
+    return true;
+  }
+
+  return false;
 }
 
 function killGatewayProcessTree(child = gatewayProcess) {
@@ -715,6 +1100,288 @@ function waitForGatewayProcessExit(child, timeoutMs = 10_000) {
   });
 }
 
+function waitForGatewayProcessExitStrict(child, timeoutMs = 30_000) {
+  if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeListener('exit', onExit);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onExit = () => done();
+    const timer = setTimeout(() => done(new Error('Prometheus gateway did not shut down gracefully; update was not installed.')), timeoutMs);
+    child.once('exit', onExit);
+  });
+}
+
+async function shutdownGatewayForSafeUpdate() {
+  const target = gatewayProcess;
+  if (!target) return;
+  gatewayShuttingDown = true;
+  try {
+    await requestLocalJson('POST', '/api/internal/shutdown', null, 5_000);
+    await waitForGatewayProcessExitStrict(target, 30_000);
+    if (target.exitCode == null && target.signalCode == null) {
+      throw new Error('Prometheus gateway remained alive after graceful shutdown.');
+    }
+    if (gatewayProcess === target) gatewayProcess = null;
+  } catch (error) {
+    gatewayShuttingDown = false;
+    throw error;
+  }
+}
+
+async function recoverGatewayAfterUpdateFailure() {
+  if (gatewayProcess || isQuitting) return;
+  gatewayShuttingDown = false;
+  try {
+    await startGateway();
+    await waitForGateway();
+    writeGatewayLog('[main] Gateway recovered after a blocked update attempt\n');
+  } catch (error) {
+    writeGatewayLog(`[main] Gateway recovery after update failure failed: ${error && error.message ? error.message : error}\n`);
+  }
+}
+
+async function runSafeCanonicalApply(request = {}) {
+  if (canonicalUpdatePromise) return canonicalUpdatePromise;
+  canonicalUpdatePromise = (async () => {
+    const source = String(request?.source || 'electron').slice(0, 64);
+    const requestId = String(request?.requestId || '').trim() || undefined;
+    let installStarted = false;
+    let gatewayWasStopped = false;
+    if (request?.confirmed !== true) {
+      updaterStatus = 'error';
+      updaterMessage = 'Explicit confirmation is required before installing a Prometheus update.';
+      return sendUpdaterState({ source, requestId, errorCode: 'confirmation_required' });
+    }
+    if (!autoUpdater || !canonicalUpdaterApi) {
+      updaterStatus = 'unsupported';
+      updaterMessage = 'Safe updates are available only in a packaged public Prometheus build.';
+      return sendUpdaterState({ source, requestId, errorCode: 'unsupported' });
+    }
+    const lock = canonicalUpdaterApi.acquireUpdateLock(CANONICAL_UPDATE_CONFIG_DIR, 'electron-main');
+    if (!lock) {
+      updaterStatus = 'busy';
+      updaterMessage = 'Another Prometheus update operation is already in progress.';
+      return sendUpdaterState({ source, requestId, errorCode: 'busy' });
+    }
+    canonicalUpdateLock = lock;
+    try {
+      updaterStatus = 'preparing';
+      updaterMessage = 'Preparing the safe Prometheus update...';
+      updaterStateBackupCreated = false;
+      updaterRestartValidated = false;
+      updaterBackupId = '';
+      sendUpdaterState({ source, requestId });
+
+      if (!pendingUpdate) {
+        await checkForPrometheusUpdates(source, true);
+        if (!pendingUpdate && availableUpdate) await downloadPrometheusUpdate(source, true);
+      }
+      if (!pendingUpdate) {
+        return sendUpdaterState({ source, requestId });
+      }
+
+      const releaseCheck = validatePrometheusRelease(pendingUpdate);
+      if (!releaseCheck.ok) throw new Error(releaseCheck.message);
+      if (!hasConfiguredUpdatePublisher()) {
+        throw new Error('Update installation is blocked until this Prometheus build has a configured Windows publisher certificate.');
+      }
+      if (!safeStorage.isEncryptionAvailable()) {
+        throw new Error('OS-backed encryption is unavailable; Prometheus will not create an unprotected update backup.');
+      }
+      // Re-verify immediately before any drain, backup, or installer launch.
+      // This closes the race where electron-updater emits update-downloaded
+      // before its download promise has returned the final installer path.
+      await verifyDownloadedRelease(pendingUpdate);
+      if (updaterSha512Verified !== true) throw new Error('Downloaded release was not SHA-512 verified.');
+
+      await requestUpdateDrain();
+      updaterStatus = 'preparing';
+      updaterMessage = 'Durable writes are drained. Creating a protected user-state backup...';
+      sendUpdaterState({ source, requestId });
+
+      const paths = canonicalUpdaterApi.getUpdatePaths(CANONICAL_UPDATE_CONFIG_DIR);
+      const backup = canonicalUpdaterApi.createVersionedStateBackup({
+        stateRoot: USER_DATA_DIR,
+        updateDir: paths.updateDir,
+        backupsDir: paths.backupsDir,
+        currentVersion: CURRENT_VERSION,
+        targetVersion: String(pendingUpdate.version || ''),
+        stateRoots: getCanonicalStateRoots(request?.stateRoots),
+        encryptManifest: encryptBackupManifest,
+        protectBackup: protectBackupDirectory,
+      });
+      updaterBackupId = backup.backupId;
+      updaterStateBackupCreated = true;
+      canonicalUpdatePendingValidation = {
+        backupId: backup.backupId,
+        backupDir: backup.backupDir,
+        targetVersion: String(pendingUpdate.version || ''),
+        statePaths: backup.manifest.entries.filter((entry) => entry.exists).map((entry) => entry.sourcePath),
+        source,
+        requestId,
+      };
+      canonicalUpdaterApi.writePendingValidation(CANONICAL_UPDATE_CONFIG_DIR, canonicalUpdatePendingValidation);
+
+      updaterStatus = 'installing';
+      updaterMessage = 'Backup complete. Closing Prometheus to install the verified release...';
+      updaterInstalling = true;
+      sendUpdaterState({ source, requestId, recoveryAvailable: true });
+      isQuitting = true;
+      await shutdownGatewayForSafeUpdate();
+      gatewayWasStopped = true;
+      updaterStatus = 'relaunching';
+      updaterMessage = 'Installing the verified release and reopening Prometheus...';
+      sendUpdaterState({ source, requestId, recoveryAvailable: true });
+      // electron-updater performs the signed installer launch and returns to
+      // this process only during shutdown. No force-kill fallback is allowed.
+      autoUpdater.quitAndInstall(false, true);
+      installStarted = true;
+      return getUpdaterState({ source, requestId });
+    } catch (error) {
+      const message = canonicalUpdaterApi.sanitizeUpdateError
+        ? canonicalUpdaterApi.sanitizeUpdateError(error)
+        : String(error?.message || error || 'Safe update failed.');
+      updaterStatus = 'error';
+      updaterMessage = message;
+      updaterInstalling = false;
+      isQuitting = false;
+      if (gatewayWasStopped || gatewayShuttingDown) await recoverGatewayAfterUpdateFailure();
+      return sendUpdaterState({
+        source,
+        requestId,
+        errorCode: 'safe_update_failed',
+        recoveryAvailable: updaterStateBackupCreated,
+      });
+    } finally {
+      if (!installStarted) {
+        updaterInstalling = false;
+        try { lock.release(); } catch {}
+        if (canonicalUpdateLock === lock) canonicalUpdateLock = null;
+      }
+    }
+  })().finally(() => {
+    canonicalUpdatePromise = null;
+  });
+  return canonicalUpdatePromise;
+}
+
+async function processCanonicalUpdateRequest() {
+  if (!canonicalUpdaterApi || !canonicalUpdaterApi.consumeCanonicalUpdateRequest) return;
+  if (canonicalUpdatePromise || updaterInstalling || isQuitting) return;
+  const request = canonicalUpdaterApi.consumeCanonicalUpdateRequest(CANONICAL_UPDATE_CONFIG_DIR);
+  if (!request) return;
+  if (!autoUpdater) {
+    updaterStatus = 'unsupported';
+    updaterMessage = 'Safe updates are unavailable because the packaged public updater is not installed.';
+    sendUpdaterState({ source: request.source, requestId: request.requestId, errorCode: 'updater_unavailable' });
+    return;
+  }
+  if (request.action === 'apply') {
+    await runSafeCanonicalApply(request);
+    return;
+  }
+  const lock = canonicalUpdaterApi.acquireUpdateLock(CANONICAL_UPDATE_CONFIG_DIR, 'electron-main-check');
+  if (!lock) {
+    updaterStatus = 'busy';
+    updaterMessage = 'Another Prometheus update operation is already in progress.';
+    sendUpdaterState({ source: request.source, requestId: request.requestId, errorCode: 'busy' });
+    return;
+  }
+  canonicalUpdatePromise = (async () => {
+    try {
+      await checkForPrometheusUpdates(request.source, true);
+      sendUpdaterState({ source: request.source, requestId: request.requestId });
+    } finally {
+      try { lock.release(); } catch {}
+      if (canonicalUpdateLock === lock) canonicalUpdateLock = null;
+    }
+  })().finally(() => { canonicalUpdatePromise = null; });
+  await canonicalUpdatePromise;
+}
+
+function startCanonicalUpdateWatcher() {
+  if (canonicalUpdateWatcher || !canonicalUpdaterApi) return;
+  canonicalUpdateWatcher = setInterval(() => {
+    processCanonicalUpdateRequest().catch((error) => {
+      updaterStatus = 'error';
+      updaterMessage = canonicalUpdaterApi.sanitizeUpdateError
+        ? canonicalUpdaterApi.sanitizeUpdateError(error)
+        : 'Safe update request failed.';
+      sendUpdaterState({ source: 'canonical-watcher', errorCode: 'request_processing_failed' });
+    });
+  }, 500);
+  canonicalUpdateWatcher.unref?.();
+}
+
+async function completePendingCanonicalValidation() {
+  if (!canonicalUpdaterApi?.readPendingValidation) return;
+  const pending = canonicalUpdaterApi.readPendingValidation(CANONICAL_UPDATE_CONFIG_DIR);
+  if (!pending) return;
+  canonicalUpdatePendingValidation = pending;
+  updaterBackupId = String(pending.backupId || '');
+  updaterStateBackupCreated = true;
+  const updatePaths = canonicalUpdaterApi.getUpdatePaths(CANONICAL_UPDATE_CONFIG_DIR);
+  const backupId = String(pending.backupId || '').trim();
+  const backupDir = path.resolve(String(pending.backupDir || ''));
+  const expectedBackupDir = path.resolve(path.join(updatePaths.backupsDir, backupId));
+  const targetVersion = String(pending.targetVersion || '');
+  const backupLocationValid = /^[A-Za-z0-9._-]+$/.test(backupId)
+    && isCanonicalPathWithin(updatePaths.backupsDir, backupDir)
+    && backupDir === expectedBackupDir;
+  let manifestValid = false;
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      const plaintext = safeStorage.decryptString(fs.readFileSync(path.join(backupDir, 'manifest.enc')));
+      const manifest = JSON.parse(plaintext);
+      const entriesValid = Array.isArray(manifest?.entries) && manifest.entries.every((entry) => {
+        const relative = String(entry?.backupPath || '').trim();
+        if (!relative || path.isAbsolute(relative)) return false;
+        const backupEntry = path.resolve(backupDir, relative);
+        return isCanonicalPathWithin(backupDir, backupEntry)
+          && (!entry.exists || fs.existsSync(backupEntry));
+      });
+      manifestValid = manifest?.schemaVersion === 1
+        && manifest?.protection === 'encrypted-manifest'
+        && manifest?.backupId === backupId
+        && entriesValid;
+      if (manifestValid) {
+        pending._validatedStatePaths = manifest.entries
+          .filter((entry) => entry.exists)
+          .map((entry) => String(entry.sourcePath || '').trim())
+          .filter(Boolean);
+      }
+    }
+  } catch {}
+  const statePaths = Array.isArray(pending._validatedStatePaths) ? pending._validatedStatePaths : [];
+  const valid = targetVersion === CURRENT_VERSION
+    && backupLocationValid
+    && !!backupDir
+    && fs.existsSync(backupDir)
+    && fs.existsSync(path.join(backupDir, 'manifest.enc'))
+    && manifestValid
+    && statePaths.every((candidate) => fs.existsSync(path.resolve(String(candidate || ''))));
+  if (!valid) {
+    updaterStatus = 'error';
+    updaterMessage = 'The previous update could not validate its protected backup and user state. The backup was retained for recovery.';
+    updaterRestartValidated = false;
+    sendUpdaterState({ source: pending.source || 'restart-validation', requestId: pending.requestId, errorCode: 'restart_validation_failed', recoveryAvailable: true });
+    return;
+  }
+  updaterStatus = 'validated';
+  updaterMessage = `Prometheus ${CURRENT_VERSION} reopened and validated its protected user-state backup.`;
+  updaterRestartValidated = true;
+  sendUpdaterState({ source: pending.source || 'restart-validation', requestId: pending.requestId, recoveryAvailable: true });
+  try { fs.unlinkSync(canonicalUpdaterApi.getUpdatePaths(CANONICAL_UPDATE_CONFIG_DIR).pendingValidationFile); } catch {}
+  canonicalUpdatePendingValidation = null;
+}
+
 function startGatewayHealthWatchdog() {
   if (gatewayHealthTimer) return;
   gatewayHealthTimer = setInterval(async () => {
@@ -726,9 +1393,11 @@ function startGatewayHealthWatchdog() {
         return;
       }
       const status = readGatewayRuntimeStatus();
-      if (shouldDeferGatewayHealthRecovery(status)) {
+      const lease = readGatewayProgressLease();
+      if (shouldDeferGatewayHealthRecovery(status, lease, gatewayProcess.pid)) {
         gatewayHealthFailures = 0;
-        writeGatewayLog('[main] Gateway health timed out, but runtime heartbeat/busy grace is still current; deferring recovery\n');
+        const phase = lease?.phase ? ` phase=${String(lease.phase).slice(0, 80)}` : '';
+        writeGatewayLog(`[main] Gateway health timed out, but current runtime heartbeat/progress lease is still fresh${phase}; deferring recovery\n`);
         return;
       }
       gatewayHealthFailures += 1;
@@ -747,7 +1416,7 @@ function startGatewayHealthWatchdog() {
   gatewayHealthTimer.unref?.();
 }
 
-function startGateway() {
+async function startGateway() {
   console.log('[Prometheus] Starting gateway...');
   console.log(`[Prometheus] User data: ${USER_DATA_DIR}`);
   console.log(`[Prometheus] Packaged runtime: ${IS_PACKAGED_RUNTIME ? 'yes' : 'no'}`);
@@ -757,7 +1426,9 @@ function startGateway() {
   writeGatewayLog(`[main] Data dir: ${USER_DATA_DIR}\n`);
   writeGatewayLog(`[main] Packaged: ${IS_PACKAGED_RUNTIME}\n`);
 
-  assertGatewayPortAvailable(18789);
+  await selectGatewayPort();
+  assertGatewayPortAvailable(gatewayPort);
+  writeGatewayLog(`[main] Gateway selected port ${gatewayPort} (${GATEWAY_URL})\n`);
 
   // Bundled skills path — inside extraResources (outside asar, accessible to Node subprocess)
   const bundledSkillsDir = IS_PACKAGED_RUNTIME
@@ -775,6 +1446,8 @@ function startGateway() {
     PROMETHEUS_DATA_DIR:          USER_DATA_DIR,
     PROMETHEUS_APP_ROOT:          APP_ROOT,
     PROMETHEUS_WORKSPACE_DIR:     path.join(USER_DATA_DIR, 'workspace'),
+    PROMETHEUS_GATEWAY_PORT:      String(gatewayPort),
+    PROMETHEUS_VERSION:            CURRENT_VERSION,
     PROMETHEUS_BUNDLED_SKILLS_DIR: bundledSkillsDir,
     PROMETHEUS_ELECTRON_MANAGED:  '1',
     PROMETHEUS_PAIRING_ADMIN_TOKEN: PAIRING_ADMIN_TOKEN,
@@ -882,7 +1555,7 @@ async function restartGatewayFromElectron(options = {}) {
       await waitForGatewayProcessExit(staleProcess);
     }
     gatewayProcess = null;
-    startGateway();
+    await startGateway();
     await waitForGateway();
     writeGatewayLog('[main] Electron-managed gateway restart complete\n');
 
@@ -1763,33 +2436,30 @@ ipcMain.on('prometheus-design-chat', (event, payload = {}) => {
 
 handleTrustedMain('updater:get-state', () => getUpdaterState());
 
-handleTrustedMain('updater:check', async () => checkForPrometheusUpdates('manual'));
+handleTrustedMain('updater:check', async () => (
+  runLocalCanonicalUpdateOperation('manual-check', () => checkForPrometheusUpdates('manual', true))
+));
 
-handleTrustedMain('updater:download', async () => downloadPrometheusUpdate('manual'));
+handleTrustedMain('updater:download', async () => (
+  runLocalCanonicalUpdateOperation('manual-download', () => downloadPrometheusUpdate('manual', true))
+));
 
 handleTrustedMain('updater:set-auto-update', async (_event, payload = {}) => (
   setAutoUpdateEnabled(payload?.enabled === true)
 ));
 
-handleTrustedMain('updater:install', async () => {
-  if (!autoUpdater) {
+handleTrustedMain('updater:install', async (_event, payload = {}) => {
+  if (payload?.confirm !== true) {
+    updaterStatus = 'error';
+    updaterMessage = 'Explicit confirmation is required before installing a Prometheus update.';
+    return sendUpdaterState({ source: 'desktop-settings', errorCode: 'confirmation_required' });
+  }
+  if (!autoUpdater || !canonicalUpdaterApi) {
     updaterStatus = 'unsupported';
-    updaterMessage = 'Updates are available only in packaged public builds.';
-    return sendUpdaterState();
+    updaterMessage = 'Safe updates are available only in packaged public builds.';
+    return sendUpdaterState({ source: 'desktop-settings', errorCode: 'unsupported' });
   }
-  if (updaterInstalling) return sendUpdaterState();
-  if (!pendingUpdate) {
-    return checkForPrometheusUpdates('install');
-  }
-
-  updaterInstalling = true;
-  updaterStatus = 'installing';
-  updaterMessage = 'Closing Prometheus to install the update...';
-  sendUpdaterState();
-
-  isQuitting = true;
-  autoUpdater.quitAndInstall(false, true); // isSilent=false, isForceRunAfter=true
-  return getUpdaterState();
+  return runSafeCanonicalApply({ source: 'desktop-settings', confirmed: true });
 });
 
 // ─── Main Window ───────────────────────────────────────────────────────────
@@ -1874,24 +2544,39 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-available', (info) => {
     console.log(`[Updater] Update available: v${info.version}`);
+    const releaseCheck = validatePrometheusRelease(info);
+    if (!releaseCheck.ok) {
+      availableUpdate = null;
+      pendingUpdate = null;
+      updaterReleaseValidated = false;
+      updaterSha512Verified = false;
+      updaterStatus = 'error';
+      updaterMessage = releaseCheck.message;
+      sendUpdaterState({ errorCode: 'release_validation_failed' });
+      return;
+    }
     availableUpdate = info;
-    updaterStatus = autoUpdateEnabled ? 'downloading' : 'available';
-    updaterMessage = autoUpdateEnabled
-      ? `Downloading Prometheus ${info.version || 'update'}...`
-      : `Prometheus ${info.version || 'update'} is available.`;
+    pendingUpdate = null;
+    updaterReleaseValidated = true;
+    updaterSha512Verified = false;
+    updaterStatus = 'available';
+    updaterMessage = `Prometheus ${info.version || 'update'} is available. Choose Download, then confirm installation.`;
     updaterProgress = 0;
     sendUpdaterState({
       version: info.version || '',
       releaseName: info.releaseName || (info.version ? `v${info.version}` : ''),
       releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
     });
-    // autoDownload=true handles this in the enabled path. Manual downloads
-    // call updater:download after a disabled user's explicit action.
+    // Downloads are always explicit. The preference controls checks only.
   });
 
   autoUpdater.on('update-not-available', () => {
     availableUpdate = null;
     pendingUpdate = null;
+    updaterReleaseValidated = false;
+    updaterSha512Verified = false;
+    updaterStateBackupCreated = false;
+    updaterBackupId = '';
     updaterStatus = 'idle';
     updaterMessage = 'Prometheus is up to date.';
     updaterProgress = 0;
@@ -1909,28 +2594,25 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    console.log(`[Updater] Update downloaded: v${info.version} — ready to install`);
+    console.log(`[Updater] Update downloaded: v${info.version} — awaiting SHA-512 verification`);
     availableUpdate = info;
     pendingUpdate = info;
-    updaterStatus = 'ready';
-    updaterMessage = autoUpdateEnabled
-      ? 'Update downloaded. It will install when Prometheus quits.'
-      : 'Update downloaded and ready to install.';
-    updaterProgress = 100;
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update-ready', {
-        version:     info.version,
-        releaseName: info.releaseName || `v${info.version}`,
-        releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
-      });
-    }
+    updaterReleaseValidated = validatePrometheusRelease(info).ok;
+    updaterSha512Verified = false;
+    updaterStatus = 'downloading';
+    updaterMessage = 'Download complete. Verifying the release SHA-512 before it can be installed...';
+    updaterProgress = 99;
+    // The ready event is emitted only by downloadPrometheusUpdate after the
+    // returned installer path has passed SHA-512 verification.
     sendUpdaterState();
   });
 
   autoUpdater.on('error', (err) => {
-    console.error('[Updater] Error:', err.message);
+    const safeMessage = canonicalUpdaterApi?.sanitizeUpdateError
+      ? canonicalUpdaterApi.sanitizeUpdateError(err)
+      : 'Update operation failed.';
     updaterStatus = 'error';
-    updaterMessage = err && err.message ? err.message : 'Update check failed.';
+    updaterMessage = safeMessage;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-error', updaterMessage);
     }
@@ -1939,7 +2621,7 @@ function setupAutoUpdater() {
 
   // Delay the first check so it doesn't race with gateway startup.
   setTimeout(() => {
-    checkForPrometheusUpdates('startup').catch((e) => {
+    runLocalCanonicalUpdateOperation('startup-check', () => checkForPrometheusUpdates('startup', true)).catch((e) => {
       console.error('[Updater] startup check failed:', e.message);
     });
   }, 10_000); // 10s after app is ready
@@ -1958,16 +2640,24 @@ app.whenReady().then(async () => {
   // ── Step 2: Show loading splash + start gateway ────────────────────────
   const loader = createLoadingWindow();
   try {
+    // safeStorage is available only after Electron is ready. Validate the
+    // previous release's retained backup before starting normal app traffic.
+    await completePendingCanonicalValidation();
+  } catch (error) {
+    writeGatewayLog(`[main] Pending update validation failed closed: ${error && error.message ? error.message : error}\n`);
+  }
+  try {
     await startNativeBrowserRpcServer();
   } catch (err) {
     writeGatewayLog(`[main] Native browser RPC unavailable: ${err && err.message ? err.message : err}\n`);
   }
   try {
-    startGateway();
+    await startGateway();
     await waitForGateway();
     createWindow();
     loader.close();
     setupAutoUpdater();
+    startCanonicalUpdateWatcher();
     startGatewayHealthWatchdog();
   } catch (err) {
     loader.close();
@@ -1992,46 +2682,62 @@ app.on('before-quit', (event) => {
     gatewayHealthTimer = null;
   }
 
-  // If gateway is already gone or we already started shutdown, let quit proceed.
-  if (!gatewayProcess || gatewayProcess.killed || gatewayShuttingDown) return;
+  // A safe update has already completed this handshake and cleared
+  // gatewayProcess before quitAndInstall. For a normal quit, keep the same
+  // graceful-only rule: never force-kill a process that may still be draining
+  // user work. If the gateway cannot close, cancel this quit attempt and leave
+  // the app available for recovery/retry.
+  if (!gatewayProcess || gatewayProcess.killed || gatewayProcess.exitCode != null || gatewayProcess.signalCode != null) return;
+  if (gatewayShuttingDown) {
+    event.preventDefault();
+    return;
+  }
 
+  const target = gatewayProcess;
   gatewayShuttingDown = true;
   event.preventDefault();
 
-  const forceKillAndQuit = () => {
-    try {
-      if (process.platform === 'win32' && gatewayProcess && gatewayProcess.pid) {
-        execSync(`taskkill /PID ${gatewayProcess.pid} /F /T`, { stdio: 'pipe' });
-      } else if (gatewayProcess) {
-        gatewayProcess.kill('SIGKILL');
-      }
-    } catch {}
-    app.quit();
+  let settled = false;
+  let shutdownTimer;
+  let shutdownRequest;
+  const cancelQuit = (message) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(shutdownTimer);
+    try { shutdownRequest?.destroy(); } catch {}
+    target.removeListener('exit', onExit);
+    if (target.exitCode != null || target.signalCode != null) {
+      if (gatewayProcess === target) gatewayProcess = null;
+    } else {
+      // If the child exits after the HTTP request failed, do not treat the
+      // expected late exit as an unexpected gateway crash.
+      target.once('exit', () => {
+        if (gatewayProcess === target) gatewayProcess = null;
+      });
+    }
+    gatewayShuttingDown = false;
+    isQuitting = false;
+    writeGatewayLog(`[main] Graceful quit cancelled: ${message}\n`);
+    dialog.showErrorBox('Prometheus — Gateway still busy', `${message}\n\nNo process was force-killed. Try closing Prometheus again after active work finishes.`);
   };
-
   const onExit = () => {
-    clearTimeout(fallbackTimer);
+    if (settled) return;
+    settled = true;
+    clearTimeout(shutdownTimer);
+    if (gatewayProcess === target) gatewayProcess = null;
     app.quit();
   };
-  gatewayProcess.once('exit', onExit);
+  target.once('exit', onExit);
+  shutdownTimer = setTimeout(() => {
+    cancelQuit('The Prometheus gateway did not shut down gracefully within 30 seconds.');
+  }, 30_000);
 
-  // Force-kill fallback — gateway's own gracefulShutdown has a 1.2s hard exit,
-  // so 3s is more than enough.
-  const fallbackTimer = setTimeout(() => {
-    if (gatewayProcess) gatewayProcess.removeListener('exit', onExit);
-    forceKillAndQuit();
-  }, 3000);
-
-  // Ask the gateway to shut down gracefully via HTTP.
-  const req = http.request(
-    { hostname: '127.0.0.1', port: 18789, path: '/api/internal/shutdown', method: 'POST', timeout: 1000 },
-    (res) => { res.resume(); } // response received — gateway is draining, wait for 'exit'
+  shutdownRequest = http.request(
+    { hostname: '127.0.0.1', port: gatewayPort, path: '/api/internal/shutdown', method: 'POST', timeout: 5_000 },
+    (res) => { res.resume(); },
   );
-  req.on('error', () => {
-    // Gateway unreachable — skip straight to force-kill.
-    clearTimeout(fallbackTimer);
-    if (gatewayProcess) gatewayProcess.removeListener('exit', onExit);
-    forceKillAndQuit();
+  shutdownRequest.on('error', () => {
+    cancelQuit('The Prometheus gateway could not be reached for graceful shutdown.');
   });
-  req.end();
+  shutdownRequest.end();
 });

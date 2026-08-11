@@ -32,6 +32,11 @@ assert.match(app, /closeConnectorView\(\)/, 'mode changes must close the shared 
 assert.match(connections, /EXTENSIONS_CATALOG\}\?kind=connector/, 'catalog adapter must use connector kind only');
 assert.match(connections, /new Intl\.Collator\('en-US'/, 'catalog sort must use an explicit deterministic collator');
 assert.match(connections, /\.sort\(\(a, b\) => connectorNameCollator\.compare\(a\.name, b\.name\)/, 'visible catalog must sort by user-facing name');
+assert.match(connections, /const connectorLetterGroups = Object\.freeze/, 'catalog must define fixed three-letter ranges');
+for (const range of ['A–C', 'D–F', 'G–I', 'J–L', 'M–O', 'P–R', 'S–U', 'V–X', 'Y–Z']) {
+  assert.match(connections, new RegExp(range), `catalog must define the ${range} range`);
+}
+assert.match(connections, /plugin-letter-group/, 'catalog must render grouped letter sections');
 assert.match(connections, /connectorSearchText/, 'search must use a page-owned metadata adapter');
 for (const term of ['description', 'category', 'trustLevel', 'ownership.tools', 'connection.requestedCapabilities']) {
   assert.match(connections, new RegExp(term.replace('.', '\\.'), 's'), `search adapter must include ${term}`);
@@ -63,6 +68,7 @@ for (const statusLabel of ['Needs verification', 'Admin approval required', 'Deg
 assert.match(connections, /function pluginsPageActivate\(\)/, 'Plugins page must load data on activation');
 assert.match(connections, /No plugins match/, 'search must render a no-match state');
 assert.doesNotMatch(connections, /kind=provider/, 'connector catalog must not fetch model providers');
+assert.match(connections, /--connector-logo-url/, 'bundled brand marks must use the real local SVG as the logo source');
 
 for (const slug of [
   'github', 'gmail', 'googledrive', 'notion', 'slack', 'hubspot', 'googleanalytics',
@@ -77,10 +83,15 @@ for (const slug of [
 for (const selector of ['.plugins-page-shell', '.plugins-search-input', '.plugins-grid', '.plugin-card', '.cv-connection-state']) {
   assert.match(pagesCss, new RegExp(selector.replace('.', '\\.'), 's'), `Plugins CSS must define ${selector}`);
 }
+assert.match(pagesCss, /\.plugins-grid\s*\{[\s\S]*?display:\s*flex/, 'Plugins catalog must be vertically stacked');
+assert.match(pagesCss, /\.plugin-letter-heading\s*\{[\s\S]*?border-bottom:/, 'letter groups must be separated by dividers');
+assert.match(pagesCss, /mask-image:\s*var\(--connector-logo-url\)/, 'logo artwork must be colorized from the local SVG path');
 
 assert.match(desktopDocs, /More → Plugins/, 'desktop self-docs must describe Plugins navigation');
 assert.match(desktopDocs, /ConnectionsPage\.js.*lazy-loaded/, 'desktop self-docs must describe lazy ownership');
 assert.match(connectorDocs, /connector-only/, 'connector self-docs must record provider exclusion');
 assert.match(connectorDocs, /no-search-match/, 'connector self-docs must record catalog states');
+assert.match(connectorDocs, /OAuth connector audit/, 'connector self-docs must record the OAuth audit');
+assert.match(connectorDocs, /Vercel and Stripe are not OAuth/, 'connector self-docs must classify API-key connectors correctly');
 
-console.log('[test-plugins-page-contract] Plugins navigation, connector-only catalog, lifecycle hooks, and docs contract passed');
+console.log('[test-plugins-page-contract] Plugins navigation, grouped catalog, brand marks, lifecycle hooks, and docs contract passed');

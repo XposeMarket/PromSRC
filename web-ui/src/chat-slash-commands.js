@@ -15,6 +15,7 @@ const ALL_CHAT_SLASH_COMMANDS = [
   { command: '/new', label: 'Start a fresh chat', placeholder: 'Use without extra text to open a new chat...', surfaces: ['desktop', 'mobile'] },
   { command: '/screenshot', label: 'Open screenshot controls', placeholder: 'Use without extra text for screenshot options...', surfaces: ['mobile'] },
   { command: '/restart', label: 'Open gateway restart controls', placeholder: 'Use without extra text for quick/full restart...', surfaces: ['mobile'] },
+  { command: '/update', label: 'Open safe Prometheus update controls', placeholder: 'Use without extra text to check and install the latest release...', surfaces: ['desktop', 'mobile'] },
   { command: '/stop', label: 'Inspect and stop live AI flows', placeholder: 'Use without extra text to show live flows...', surfaces: ['mobile'] },
   { command: '/stop_now', label: 'Stop the active main chat turn', placeholder: 'Use without extra text to abort this chat...', surfaces: ['mobile'] },
   { command: '/browse', label: 'Browse workspace files', placeholder: 'Optional path to start in, e.g. src/gateway', surfaces: ['mobile'] },

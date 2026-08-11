@@ -42,6 +42,7 @@ import {
   type ImportJobStatus,
   type ImportPreview,
   type ImportedSetup,
+  type SetupImportScope,
 } from './import-types';
 
 const IMPORT_SCHEMA_VERSION = 1 as const;
@@ -62,6 +63,7 @@ interface CreateImportJobInput {
   sourceAccountId?: string;
   overwrite?: boolean;
   conversationMode?: ConversationImportMode;
+  setupScope?: SetupImportScope;
   /** Optional bounded file selection for source-aware batch imports. */
   sourceFiles?: string[];
 }
@@ -369,6 +371,7 @@ function adapterContext(job: ImportJob): AdapterContext {
     sourceLabel: job.sourceLabel,
     inputDigest: job.sourceDigest,
     requestedAdapter: job.adapter === 'unsupported' ? undefined : job.adapter,
+    setupScope: job.setupScope,
   };
 }
 
@@ -389,6 +392,7 @@ function buildPreview(job: ImportJob, conversations: ImportedConversation[] = []
     sourceLabel: job.sourceLabel,
     sourceDigest,
     ...(job.conversationMode ? { conversationMode: job.conversationMode } : {}),
+    ...(job.setupScope ? { setupScope: job.setupScope } : {}),
     conversations: conversations.length,
     projects: projectSummaries.length,
     messages: conversations.reduce((sum, item) => sum + item.messages.length, 0),
@@ -404,6 +408,7 @@ function buildPreview(job: ImportJob, conversations: ImportedConversation[] = []
     conversationSummaries: conversationSummaries.map((item) => ({
       id: item.id,
       title: item.title,
+      ...(item.project?.sourceProjectId ? { projectId: item.project.sourceProjectId } : {}),
       ...(item.project?.name ? { projectName: item.project.name } : {}),
       messages: item.messages.length,
       events: item.events.length,
@@ -716,6 +721,11 @@ function setupSnapshotFile(job: ImportJob, setup: ImportedSetup): string {
   const root = setupSnapshotRoot(job.id);
   fs.mkdirSync(root, { recursive: true });
   atomicWrite(path.join(root, 'manifest.json'), setup);
+  // MCP-only imports still get a canonical, redacted snapshot so rollback
+  // and review do not depend on copying the provider's original config file.
+  atomicWrite(path.join(root, 'mcp.json'), {
+    mcpServers: Object.fromEntries(setup.mcpServers.map((server) => [server.id, server.config])),
+  });
   const stagedFiles = listStagedFiles(job.stagedPath);
   for (const item of setup.files) {
     if (!['memory', 'skill', 'agent_instructions', 'permissions', 'connector', 'config'].includes(item.category)) continue;
@@ -810,7 +820,8 @@ export async function createImportJob(input: CreateImportJobInput): Promise<{ jo
   const sourceAccountId = String(input.sourceAccountId || '').trim().slice(0, 240);
   const existing = listInternalJobs(ownerId).find((job) => job.kind === input.kind
     && job.workspacePath === workspacePath
-    && (input.kind !== 'conversation' || (job.conversationMode || 'sessions') === (input.conversationMode || 'sessions'))
+    && (input.kind !== 'conversation' || (job.conversationMode || 'projects') === (input.conversationMode || 'projects'))
+    && (input.kind !== 'setup' || (job.setupScope || 'mcp') === (input.setupScope || 'mcp'))
     && job.sourceDigest === staged.inputDigest
     && String(job.sourceAccountId || '') === sourceAccountId
     && !['deleted', 'rolled_back'].includes(job.status));
@@ -825,7 +836,8 @@ export async function createImportJob(input: CreateImportJobInput): Promise<{ jo
     ownerId,
     workspacePath,
     kind: input.kind,
-    ...(input.kind === 'conversation' ? { conversationMode: input.conversationMode || 'sessions' } : {}),
+    ...(input.kind === 'conversation' ? { conversationMode: input.conversationMode || 'projects' } : {}),
+    ...(input.kind === 'setup' ? { setupScope: input.setupScope || 'mcp' } : {}),
     status: 'staging',
     adapter: initialAdapter,
     provider: 'generic',

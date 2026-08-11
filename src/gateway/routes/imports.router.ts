@@ -12,7 +12,7 @@ import {
   rollbackImportJob,
 } from '../imports/import-service';
 import { discoverImportSources } from '../imports/import-discovery';
-import type { ConversationImportMode, ImportAdapterId, ImportJobKind } from '../imports/import-types';
+import type { ConversationImportMode, ImportAdapterId, ImportJobKind, SetupImportScope } from '../imports/import-types';
 
 export const router = Router();
 
@@ -39,7 +39,14 @@ function normalizeKind(value: unknown): ImportJobKind {
 }
 
 function normalizeConversationMode(value: unknown): ConversationImportMode {
-  return String(value || '').trim().toLowerCase() === 'projects' ? 'projects' : 'sessions';
+  // Project boundaries are detected automatically. Keep an explicit
+  // `sessions` value for backwards-compatible API callers, but omit it from
+  // the new General settings UI.
+  return String(value || '').trim().toLowerCase() === 'sessions' ? 'sessions' : 'projects';
+}
+
+function normalizeSetupScope(value: unknown): SetupImportScope {
+  return String(value || '').trim().toLowerCase() === 'all' ? 'all' : 'mcp';
 }
 
 router.get('/api/imports/jobs', (_req, res) => {
@@ -106,6 +113,7 @@ router.post('/api/imports/jobs', async (req, res) => {
       sourceAccountId: typeof body.sourceAccountId === 'string' ? body.sourceAccountId.trim() : undefined,
       overwrite: body.overwrite === true,
       conversationMode: normalizeKind(body.kind) === 'conversation' ? normalizeConversationMode(body.conversationMode) : undefined,
+      setupScope: normalizeKind(body.kind) === 'setup' ? normalizeSetupScope(body.setupScope) : undefined,
       sourceFiles,
     });
     res.status(created.idempotent ? 200 : 201).json({ success: true, idempotent: created.idempotent, job: created.job });

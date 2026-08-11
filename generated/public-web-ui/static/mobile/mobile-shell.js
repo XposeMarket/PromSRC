@@ -1,8 +1,8 @@
 // Mobile shell — header, drawer, bottom tabbar. Pure DOM helpers.
 import { mobileNavTabs, mobileDrawerItems } from './mobile-data.js';
 import { renderMd, timeAgo } from '../utils.js';
-import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js?v=pm-v263-2026-08-09-directed-chat-shield';
-import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js?v=pm-v263-2026-08-09-directed-chat-shield';
+import { initMobileModelBadge, mobileModelBadgeSeedLabel, attachMobileButtonHaptic, attachMobileHapticGestureSurface, disposeMobileHapticGestureSurfaces, pmHaptic } from './mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover';
+import { mobileGatewayFetch, buildWorkspaceCanvasUrl } from './mobile-api.js?v=pm-v266-2026-08-11-new-project-popover';
 import {
   getGateway,
   getGatewayFilter,
@@ -245,6 +245,7 @@ export const ICONS = {
   starburst: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5v19M2.5 12h19M5.3 5.3l13.4 13.4M18.7 5.3 5.3 18.7"/><path d="m12 7.4 1.25 3.35L16.6 12l-3.35 1.25L12 16.6l-1.25-3.35L7.4 12l3.35-1.25L12 7.4Z"/></svg>',
   calendar:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>',
   users:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  person:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
   robot:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"/><circle cx="9" cy="13" r="1.4"/><circle cx="15" cy="13" r="1.4"/><line x1="12" y1="3" x2="12" y2="7"/><line x1="2" y1="13" x2="4" y2="13"/><line x1="20" y1="13" x2="22" y2="13"/></svg>',
   doc:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 13 12 16 17 11"/></svg>',
   dots:      '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
@@ -765,7 +766,9 @@ function _wireTabbarSlider(tabbar, { onNavigate, getActiveTab }) {
   let requestGestureNativeHaptic = null;
   // While pressed/dragging the pill swells past the bar so it reads as a lens
   // lifting off the surface (and the icon underneath magnifies via CSS).
-  const PRESS_GROW = 1.18;
+  // The active pill should grow a touch farther than the bar itself, like the
+  // iOS tab slider's lifted pressed state.
+  const PRESS_GROW = 1.22;
 
   const tabs = () => Array.from(tabbar.querySelectorAll('.pm-tab'));
   const indicator = () => tabbar.querySelector('.pm-tab-indicator');
@@ -1028,16 +1031,23 @@ function _drawerGatewayStatusTone(status) {
   return 'unknown';
 }
 
+function _shouldShowMobileGatewayContext() {
+  return isMobileGatewayCatalogEnabled() && loadGatewayCatalog().length > 1;
+}
+
 function _renderDrawerGatewayFilterPanel() {
   const panel = _drawerEl?.querySelector?.('#pm-drawer-gateway-filter');
   if (!panel) return;
-  if (!isMobileGatewayCatalogEnabled()) {
+  // Pairing is a single-target setup surface. Do not show the hub's gateway
+  // catalog beside it; that makes a completed request look like it reopened
+  // pairing when the URL still contains the one-time QR envelope.
+  if (window.__pmMobilePairingActive === true) {
     panel.hidden = true;
     panel.innerHTML = '';
     return;
   }
   const entries = loadGatewayCatalog();
-  if (!entries.length) {
+  if (!isMobileGatewayCatalogEnabled() || entries.length <= 1) {
     panel.hidden = true;
     panel.innerHTML = '';
     return;
@@ -1243,7 +1253,6 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
     const b = el(`
       <button class="pm-tab ${tab.id === activeTab ? 'active' : ''}" data-tab="${tab.id}" role="tab" aria-label="${escapeHtml(tab.label)}" aria-selected="${tab.id === activeTab ? 'true' : 'false'}">
         ${ICONS[tab.icon] || ''}
-        <span>${escapeHtml(tab.label)}</span>
         <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
       </button>
     `);
@@ -1262,7 +1271,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
   // magnified — instead of the old binary whole-icon scale.
   const magnify = el(`<div class="pm-tab-magnify" aria-hidden="true"></div>`);
   mobileNavTabs.forEach(tab => {
-    const cell = el(`<div class="pm-tab-magnify-cell">${ICONS[tab.icon] || ''}<span class="pm-tab-magnify-label">${escapeHtml(tab.label)}</span></div>`);
+    const cell = el(`<div class="pm-tab-magnify-cell">${ICONS[tab.icon] || ''}</div>`);
     magnify.appendChild(cell);
   });
   tabbar.appendChild(magnify);
@@ -1879,8 +1888,12 @@ function _sessionButtonHtml(session, options = {}) {
   const roomRoster = Array.isArray(session?.voiceRoom?.participants)
     ? session.voiceRoom.participants.map((participant) => String(participant?.label || '').trim()).filter(Boolean).join(' · ')
     : '';
-  const secondaryText = String(session?.gatewayName || roomRoster || visiblePreview || '').trim();
-  const secondaryClass = session?.gatewayName || roomRoster ? 'pm-session-gateway' : 'pm-session-preview';
+  const showGatewayContext = _shouldShowMobileGatewayContext();
+  const showGatewayName = showGatewayContext && session?.gatewayName;
+  const secondaryText = String(showGatewayName || roomRoster || visiblePreview || '').trim();
+  const secondaryClass = showGatewayName
+    ? 'pm-session-gateway pm-session-computer'
+    : roomRoster ? 'pm-session-gateway' : 'pm-session-preview';
   // Origin channel (Desktop / Telegram / Mobile) is intentionally not shown
   // in the sessions list — keep title, state, roster, and preview only.
   return `
@@ -1910,7 +1923,7 @@ function _searchResultButtonHtml(session, query) {
   return `
     <button class="pm-session-row pm-search-result-row${state.stateClass}${activeClass}${importedClass}" type="button" data-session-id="${escapeHtml(session.id)}" data-session-channel="${escapeHtml(session?.channel || '')}" data-session-state="${state.stateName}"${ariaCurrent}>
       <span class="pm-session-row-top"><span class="pm-session-title-line">${sourceLogo}<span class="pm-session-title">${escapeHtml(title)}</span></span>${state.stateLabel}</span>
-      ${session?.gatewayName ? `<span class="pm-session-gateway">${escapeHtml(session.gatewayName)}</span>` : ''}
+      ${_shouldShowMobileGatewayContext() && session?.gatewayName ? `<span class="pm-session-gateway pm-session-computer">${escapeHtml(session.gatewayName)}</span>` : ''}
       ${projectLabel ? `<span class="pm-search-meta">${projectLabel}</span>` : ''}
       <span class="pm-session-preview"><strong>${escapeHtml(label)}:</strong> ${snippet}</span>
       ${timestamp ? `<time class="pm-session-time" datetime="${new Date(Number(session.lastMessageAt || session.lastActiveAt || session.createdAt)).toISOString()}">${escapeHtml(timestamp)}</time>` : ''}

@@ -7,7 +7,7 @@ import {
   createDevSourceEditApprovalScope,
   grantDevSourceEditApproval,
 } from './dev-source-approvals';
-import { addPersistentAllowedPath, addSessionAllowedPath } from './path-permissions';
+import { addPersistentAllowedPaths, addSessionAllowedPaths } from './path-permissions';
 import { getApprovalQueue, registerApprovalResolutionListener, type ApprovalRecord } from './verification-flow';
 import { markCoordinatedDevApplyBatch } from './dev-edit-coordinator';
 import { getDevSourceEditContinuation, upsertDevSourceEditContinuation } from './dev-source-approvals';
@@ -38,6 +38,18 @@ function isOneShotApproval(approval: ApprovalRecord): boolean {
     || approval.toolName === 'request_dev_source_edit'
     || approval.approvalKind === 'final_action'
     || approval.toolName === 'request_final_action_approval';
+}
+
+function requestedPathAccessPaths(approval: ApprovalRecord): string[] {
+  const requestedPath = approval.pathAccess?.requestedPath;
+  const requestedPaths = Array.isArray(approval.pathAccess?.requestedPaths)
+    ? approval.pathAccess.requestedPaths
+    : [];
+  return Array.from(new Set(
+    [requestedPath, ...requestedPaths]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean),
+  ));
 }
 
 export function resolveApprovalDecision(input: ResolveApprovalDecisionInput): ResolveApprovalDecisionResult {
@@ -72,12 +84,26 @@ export function resolveApprovalDecision(input: ResolveApprovalDecisionInput): Re
     };
   }
 
-  if (decision === 'approved' && approval.approvalKind === 'path_access' && approval.pathAccess?.requestedPath) {
+  const pathAccessPaths = decision === 'approved' ? requestedPathAccessPaths(approval) : [];
+  if (pathAccessPaths.length) {
     try {
-      if (grantScope === 'always') addPersistentAllowedPath(approval.pathAccess.requestedPath);
-      else addSessionAllowedPath(approval.sessionId, approval.pathAccess.requestedPath);
+      if (grantScope === 'always') {
+        addPersistentAllowedPaths(pathAccessPaths);
+      } else if (grantScope === 'session' || approval.approvalKind === 'path_access') {
+        // Legacy path_access approvals must add a session allowance even when
+        // the caller only sends the basic approve action, because the waiting
+        // tool retries immediately after the approval resolves.
+        addSessionAllowedPaths(approval.sessionId, pathAccessPaths);
+      }
     } catch (err: any) {
       console.warn('[approvals] Could not add allowed path:', err?.message || err);
+      if (grantScope === 'always') {
+        return {
+          success: false,
+          statusCode: 500,
+          error: `Approval was not resolved because the allowed path could not be saved: ${err?.message || err}`,
+        };
+      }
     }
   }
 

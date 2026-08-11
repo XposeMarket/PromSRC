@@ -377,6 +377,7 @@ import { ensureScheduleRuntimeForAgent } from '../scheduling/schedule-agent';
 import { bindTaskRunToSession, getTaskRunBinding } from '../tasks/task-run-mirror';
 import type { SkillWindow } from '../prompt-context';
 import { isToolHiddenInPublicBuild, resolvePrometheusRoot } from '../../runtime/distribution.js';
+import { isTerminalFirstWorkspaceMode } from '../../runtime/workspace-tool-mode.js';
 import { getApprovalQueue, serializeApprovalForClient } from '../verification-flow.js';
 // Registers durable dev-apply timeout/rejection handling even in lean gateway
 // startup paths that have not loaded the HTTP approval routes yet.
@@ -4518,6 +4519,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     scope: CommandBoundaryScope;
     reason: string;
     externalPaths: string[];
+    pathAccessPaths: string[];
     environmentChanges: string[];
     packageManager?: string;
     requiresExplicitApproval: boolean;
@@ -4544,6 +4546,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       scope: boundaryRank[nextScope] > boundaryRank[base.scope] ? nextScope : base.scope,
       reason: uniqueStrings([base.reason, next.reason || '']).join(' '),
       externalPaths: uniqueStrings([...(base.externalPaths || []), ...(next.externalPaths || [])]),
+      pathAccessPaths: uniqueStrings([...(base.pathAccessPaths || []), ...(next.pathAccessPaths || [])]),
       environmentChanges: uniqueStrings([...(base.environmentChanges || []), ...(next.environmentChanges || [])]),
       packageManager: next.packageManager || base.packageManager,
       requiresExplicitApproval: base.requiresExplicitApproval || next.requiresExplicitApproval === true,
@@ -4576,6 +4579,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       scope: 'workspace',
       reason: '',
       externalPaths: [],
+      pathAccessPaths: [],
       environmentChanges: [],
       requiresExplicitApproval: false,
       requiresAdmin: false,
@@ -4682,6 +4686,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           ? `Command ${kind === 'cwd' ? 'cwd is' : 'references'} a user-profile path outside the workspace: "${candidate}".`
           : `Command ${kind === 'cwd' ? 'cwd is' : 'references'} an external path outside the workspace: "${candidate}".`,
         externalPaths: [candidate],
+        pathAccessPaths: [candidate],
         requiresExplicitApproval: true,
       });
     }
@@ -4791,7 +4796,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 	  if ((name === 'run_command' || name === 'start_process') && !bypassGenericToolApproval) {
 	    const rawCmd = String(args?.command || '').trim();
 	    if (!rawCmd) return { name, args, result: 'command is required', error: true };
-    if (looksLikeNativeFileToolBypass(rawCmd)) {
+    if (!isTerminalFirstWorkspaceMode(getConfig().getConfig()) && looksLikeNativeFileToolBypass(rawCmd)) {
       return {
         name,
         args,
@@ -4892,6 +4897,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             commandBoundary.environmentChanges.length ? `Environment changes: ${commandBoundary.environmentChanges.join(', ')}` : '',
           ].filter(Boolean).join(' ')
         : '';
+      const pathAccessPaths = uniqueStrings(commandBoundary.pathAccessPaths || []);
 	    const approval = approvalQueue.create({
 	      sessionId,
 	      taskId: activeTaskId,
@@ -4901,6 +4907,9 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 	      toolName: approvalDisplayToolName,
       approvalKind: isElevatedCommand ? 'elevated_command' : 'command',
       toolArgs: { ...args, command: rawCmd },
+      pathAccess: pathAccessPaths.length
+        ? { requestedPath: pathAccessPaths[0], requestedPaths: pathAccessPaths }
+        : undefined,
       commandPermissionCandidate: isElevatedCommand ? undefined : permissionCandidate,
       action: isElevatedCommand
         ? `Run as administrator in ${approvalCwd}: ${rawCmd}`
@@ -14242,7 +14251,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       case 'start_process': {
         const rawCmd = String(args.command || '').trim();
         if (!rawCmd) return { name, args, result: 'command is required', error: true };
-        if (looksLikeNativeFileToolBypass(rawCmd)) {
+        if (!isTerminalFirstWorkspaceMode(getConfig().getConfig()) && looksLikeNativeFileToolBypass(rawCmd)) {
           return {
             name,
             args,
@@ -14372,7 +14381,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
 	      case 'run_command': {
         const rawCmd = (args.command || '').trim();
         if (!rawCmd) return { name, args, result: 'command is required', error: true };
-        if (looksLikeNativeFileToolBypass(rawCmd)) {
+        if (!isTerminalFirstWorkspaceMode(getConfig().getConfig()) && looksLikeNativeFileToolBypass(rawCmd)) {
           return {
             name,
             args,

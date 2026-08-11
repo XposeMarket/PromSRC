@@ -285,6 +285,11 @@ function handleMessage(slot: WorkerSlot, raw: unknown): void {
   if (message.type === 'heartbeat') {
     slot.lastHeartbeatAt = message.at;
     slot.rssBytes = message.rssBytes;
+    if (slot.task && !slot.task.settled) {
+      noteWorkerStage(slot.task, 'provider_heartbeat', {
+        rssBytes: message.rssBytes,
+      });
+    }
     return;
   }
   const task = slot.task;

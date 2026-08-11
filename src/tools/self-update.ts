@@ -1,85 +1,51 @@
 /**
- * self-update.ts — Prometheus Self-Update Tool
+ * Queue a Prometheus self-update through the canonical updater protocol.
  *
- * Allows the AI to trigger a self-update of Prometheus via a Telegram message
- * or chat command. The tool:
- *   1. Launches self-update.bat detached (so the current gateway can exit)
- *   2. Returns a "starting update" message immediately
- *   3. After the update completes, the restarted gateway sends a Telegram
- *      confirmation message (handled in server-v2.ts startup logic)
- *
- * The AI should tell the user "I'm starting the update now — I'll go offline
- * briefly and message you when I'm back!" before calling this tool.
+ * The trusted packaged Electron main process owns release verification,
+ * backup, installation, relaunch, and restart validation. This tool only
+ * records an authenticated request for that process to consume.
  */
 
-import { spawn } from 'child_process';
 import path from 'path';
-import fs from 'fs';
+import { getConfig } from '../config/config.js';
 import { ToolResult } from '../types.js';
-
-// Resolve the Prometheus root (two levels up from dist/tools/ or src/tools/)
-function resolvePrometheusRoot(): string {
-  return path.resolve(__dirname, '..', '..');
-}
+import { collectUserStateRoots, requestCanonicalUpdate } from '../update/canonical-updater.js';
 
 export async function executeSelfUpdate(): Promise<ToolResult> {
-  const root = resolvePrometheusRoot();
-  const batPath = path.join(root, 'self-update.bat');
+  const configManager = getConfig();
+  const configDir = configManager.getConfigDir();
+  const queued = requestCanonicalUpdate(configDir, {
+    action: 'apply',
+    source: 'self_update',
+    confirmed: true,
+    stateRoots: collectUserStateRoots(path.dirname(configDir), configManager.getConfig()),
+  });
 
-  if (!fs.existsSync(batPath)) {
+  if (!queued.ok) {
     return {
       success: false,
-      error: `self-update.bat not found at: ${batPath}. Make sure Prometheus is properly installed.`,
+      error: queued.message,
     };
   }
 
-  // Write a "pending" marker so the restart knows an update was triggered
-  // (will be replaced by self-update.bat with SUCCESS or FAILED)
-  try {
-    const statusDir = path.join(require('os').homedir(), '.prometheus');
-    if (!fs.existsSync(statusDir)) fs.mkdirSync(statusDir, { recursive: true });
-    // Don't write yet — self-update.bat will write the final status itself
-  } catch {}
-
-  try {
-    // Spawn detached so this process can exit cleanly while update runs
-    const child = spawn('cmd.exe', ['/c', batPath], {
-      cwd: root,
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false, // Show the terminal window so user can see progress
-    });
-    child.unref(); // Don't keep the Node.js event loop alive for this child
-
-    return {
-      success: true,
-      stdout: [
-        '🔥 Self-update initiated!',
-        '',
-        'Prometheus is now:',
-        '  1. Pulling the latest code',
-        '  2. Rebuilding',
-        '  3. Restarting the gateway',
-        '',
-        'The gateway will go offline briefly (~30-60 seconds).',
-        'You will receive a Telegram message when the update is complete.',
-      ].join('\n'),
-      stderr: '',
-      exitCode: 0,
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      error: `Failed to launch self-update: ${err.message}`,
-    };
-  }
+  return {
+    success: true,
+    stdout: [
+      '🔥 Safe self-update queued.',
+      '',
+      'Prometheus will verify the release, preserve an encrypted state backup,',
+      'drain active work, install, relaunch, and validate before reporting completion.',
+    ].join('\n'),
+    stderr: '',
+    exitCode: 0,
+  };
 }
 
 export const selfUpdateTool = {
   name: 'self_update',
   description:
-    'Trigger a Prometheus self-update. Pulls latest code, rebuilds, and restarts the gateway. ' +
-    'A Telegram message is sent when the update is complete. ' +
+    'Trigger a Prometheus self-update through the canonical safe updater. ' +
+    'The release is verified and user state is backed up before installation. ' +
     'IMPORTANT: Before calling this tool, tell the user you are starting the update and will message them when back online.',
   execute: executeSelfUpdate,
   schema: {

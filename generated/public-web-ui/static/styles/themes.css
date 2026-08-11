@@ -3053,3 +3053,339 @@ body:not(.pm-mobile-active) #chat-view > .chat-input-area #send-btn.realtime-voi
 :root:is([data-skin="light"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #browser-canvas-frame-wrap {
   background: var(--pm-studio-surface) !important;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   SHARED PROMETHEUS ONE DESKTOP SHELL
+
+   All desktop presets use one rail/chat structure. A preset is allowed to
+   change its palette, but not the logo, typography, spacing, dividers, list
+   geometry, or empty-chat composition. Ash & Ember used to fall through to
+   the legacy shell; these final parity rules close that gap without touching
+   the mobile document.
+   ───────────────────────────────────────────────────────────────────────── */
+:root[data-skin="light"] {
+  --pm-shell-surface: #000;
+  --pm-shell-accent: #d6b75e;
+  --pm-shell-accent-light: #f0d98b;
+  --pm-shell-accent-muted: #a98a3b;
+}
+
+:root[data-skin="gray"] {
+  --pm-shell-surface: #171717;
+  --pm-shell-accent: #f97316;
+  --pm-shell-accent-light: #fb923c;
+  --pm-shell-accent-muted: #c2410c;
+  --p1-shared-gold: #f97316;
+  --p1-shared-gold-light: #fb923c;
+  --p1-shared-gold-dark: #9a3412;
+  --p1-shared-gold-soft: rgba(249, 115, 22, .12);
+  --p1-shared-gold-line: rgba(249, 115, 22, .34);
+  --p1-shared-gold-glow: rgba(249, 115, 22, .24);
+  --pm-brain-card-bg: #2e2e2e;
+  --pm-chat-page-bg: #2e2e2e;
+  --pm-unread-chat-bg: #2e2e2e;
+  --pm-pinned-chat-bg: #484848;
+  --pm-studio-surface: #171717;
+}
+
+:root[data-skin="dark"] {
+  --pm-shell-surface: #1a1a1a;
+  --pm-shell-accent: #f97316;
+  --pm-shell-accent-light: #fb923c;
+  --pm-shell-accent-muted: #c2410c;
+}
+
+:root[data-skin="blue"] {
+  --pm-shell-surface: #07101f;
+  --pm-shell-accent: #3d8bff;
+  --pm-shell-accent-light: #8fc1ff;
+  --pm-shell-accent-muted: #1e5fd0;
+}
+
+:root[data-skin="purple"] {
+  --pm-shell-surface: #0c0518;
+  --pm-shell-accent: #8b5cf6;
+  --pm-shell-accent-light: #c4a5ff;
+  --pm-shell-accent-muted: #6d3fd1;
+}
+
+:root[data-skin="custom"] {
+  --pm-shell-surface: var(--sidebar-bg);
+  --pm-shell-accent: var(--brand);
+  --pm-shell-accent-light: var(--brand);
+  --pm-shell-accent-muted: var(--muted);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar-fixed {
+  gap: 8px;
+  padding: 10px 8px 6px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar-top {
+  min-height: 0;
+  padding: 2px 4px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .brand {
+  gap: 8px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 0;
+  background: url("../assets/prometheus-one/p1-mark-ring.png") center / contain no-repeat;
+  filter: drop-shadow(0 0 12px color-mix(in srgb, var(--pm-shell-accent) 24%, transparent));
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .logo img {
+  opacity: 0;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar.collapsed .logo {
+  width: 38px;
+  height: 38px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .brand-title {
+  color: var(--sidebar-text);
+  font-size: 0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .brand-title::before {
+  content: "PROMETHEUS 1";
+  color: var(--sidebar-text);
+  font-size: 11px;
+  letter-spacing: 2px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .brand-sub {
+  color: var(--pm-shell-accent-muted);
+  font-size: 0;
+  font-weight: 700;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .brand-sub::before {
+  content: "1 Program. Unlimited abilities.";
+  color: var(--pm-shell-accent-muted);
+  font-size: 7px;
+  letter-spacing: .1px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar-search {
+  min-height: 0;
+  padding: 6px 10px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar-scroll {
+  gap: 8px;
+  padding: 8px 8px 10px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .seg-tabs {
+  gap: 2px;
+  padding: 2px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .section-title {
+  min-height: 27px;
+  padding: 8px 6px 4px;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .section-title::after {
+  content: "✦";
+  flex: 1;
+  overflow: hidden;
+  color: var(--pm-shell-accent);
+  font-size: 10px;
+  letter-spacing: 0;
+  text-align: right;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pm-shell-accent-muted) 45%, transparent), transparent 84%) left center / calc(100% - 18px) 1px no-repeat;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .session-list,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #jobs-list,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #skills-list,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #skills-search-results,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #channels-list {
+  gap: 5px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #jobs-list {
+  padding: 0 10px 10px 0;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #skills-list,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #skills-search-results,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #channels-list {
+  padding: 10px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(#jobs-list, #skills-list, #skills-search-results) {
+  display: block;
+  gap: normal;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .chat-session-item.job-item,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar #pinned-chats-list .job-item {
+  min-height: 0;
+  margin: 0 0 2px;
+  padding: 6px 26px 6px 8px;
+  border-radius: 8px;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item) .nav-icon {
+  width: 22px;
+  height: 22px;
+  padding-right: 0;
+  border: 1px solid color-mix(in srgb, var(--pm-shell-accent) 22%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--pm-shell-accent) 7%, transparent);
+  color: var(--pm-shell-accent);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar :is(.nav-item, .more-popover-item) .nav-icon svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.7;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon {
+  width: 24px;
+  height: 20px;
+  padding-right: 8px;
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--pm-shell-accent) 34%, transparent);
+  border-radius: 0;
+  background: transparent;
+  color: var(--pm-shell-accent-light);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon svg {
+  display: none;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .sidebar .new-chat .nav-icon::before {
+  content: "✦";
+  font: 17px/1 Georgia, 'Times New Roman', serif;
+  text-shadow: 0 0 8px color-mix(in srgb, var(--pm-shell-accent) 38%, transparent);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .chat-input-area)::before,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .chat-input-area)::after {
+  content: none !important;
+  display: none !important;
+  animation: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(.sidebar, .topbar, .sidebar-footer) {
+  background: var(--pm-shell-surface) !important;
+  border-color: var(--line) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(main.main-shell, .main-shell-wrap, .page-view, #connector-view) {
+  background: var(--bg) !important;
+  background-image: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) :is(main.main-shell, #chat-view, .side-chat-main-pane, .side-chat-pane) {
+  background: var(--pm-chat-page-bg) !important;
+  background-image: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .chat-input-area {
+  background: var(--pm-pinned-chat-bg) !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view.chat-empty:not(.desktop-voice-mode) > .chat-input-area {
+  transform: translateY(clamp(-180px, -12vh, -90px));
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-welcome,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-welcome h2,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .msg-content,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .markdown-body :is(h1, h2, h3, h4, strong) {
+  color: var(--text);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon {
+  width: 72px;
+  height: 72px;
+  background: url("../assets/prometheus-one/p1-mark-ring.png") center / contain no-repeat;
+  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--pm-shell-accent) 24%, transparent));
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-welcome-icon img,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar img {
+  opacity: 0 !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .msg:not(.user) .msg-avatar {
+  border-color: color-mix(in srgb, var(--pm-shell-accent) 36%, transparent);
+  background:
+    url("../assets/prometheus-one/prometheus-avatar-column-gold.png") center / 24px 24px no-repeat,
+    radial-gradient(circle, color-mix(in srgb, var(--pm-shell-accent) 12%, transparent), var(--pm-shell-surface) 72%);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--pm-shell-accent-light) 10%, transparent), 0 5px 14px rgba(0, 0, 0, .24);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-pulse-card {
+  background: var(--pm-brain-card-bg) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-pulse-card:hover,
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #chat-view .chat-pulse-card:focus-visible {
+  background: color-mix(in srgb, var(--pm-brain-card-bg), var(--pm-shell-accent) 5%) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel {
+  background: var(--bg) !important;
+  border-left-color: var(--line-strong) !important;
+  color: var(--text);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel :is(#right-panel-topbar, .right-section, #project-session-section) {
+  background: var(--bg) !important;
+  border-color: var(--line) !important;
+  color: var(--text);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel :is(.project-editor-block, .project-context-card, .progress-card, .conn-tile, .channel-hub-card) {
+  background: var(--panel-2) !important;
+  border-color: var(--line) !important;
+  color: var(--text);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) .right-panel :is(.project-editor-textarea, #connections-search) {
+  background: var(--panel) !important;
+  border-color: var(--line) !important;
+  color: var(--text) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #settings-modal :is(.settings-page-card, .settings-page-sidebar, .settings-page-main) {
+  color: var(--text);
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #settings-modal .settings-page-sidebar {
+  background: var(--pm-shell-surface) !important;
+  border-right-color: var(--line-strong) !important;
+}
+
+:root:is([data-skin="light"], [data-skin="gray"], [data-skin="dark"], [data-skin="blue"], [data-skin="purple"], [data-skin="custom"]) body:not(.pm-mobile-active) #settings-modal .settings-page-main {
+  background: var(--bg) !important;
+}
+
+:root[data-background-visuals="on"][data-skin="gray"] body:not(.pm-mobile-active) :is(#chat-view, .side-chat-main-pane, .side-chat-pane) {
+  background:
+    linear-gradient(var(--pm-background-overlay), var(--pm-background-overlay)),
+    #2e2e2e url('/assets/chat-main-background-dark.png') center center / cover no-repeat !important;
+}

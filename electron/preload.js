@@ -19,7 +19,7 @@ contextBridge.exposeInMainWorld('prometheusUpdater', {
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   /** Download an update found during a manual check. */
   downloadUpdate: () => ipcRenderer.invoke('updater:download'),
-  /** Enable/disable automatic checks, downloads, and install-on-quit. */
+  /** Enable/disable automatic release checks. Installation always needs confirmation. */
   setAutoUpdateEnabled: (enabled) => ipcRenderer.invoke('updater:set-auto-update', { enabled: enabled === true }),
   /** Called whenever updater state changes. */
   onState: (cb) => {
@@ -40,8 +40,8 @@ contextBridge.exposeInMainWorld('prometheusUpdater', {
   onUpdateError: (cb) => {
     ipcRenderer.on('update-error', (_event, message) => cb(message));
   },
-  /** Quit and install the downloaded update. */
-  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  /** Confirm and start the protected drain/backup/install flow. */
+  installUpdate: (confirmed = false) => ipcRenderer.invoke('updater:install', { confirm: confirmed === true }),
 });
 
 // ─── App Metadata ───────────────────────────────────────────────────────────

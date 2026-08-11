@@ -511,6 +511,94 @@ function _publicRemoteAccess() {
   };
 }
 
+function _funnelHttpsPort(): number {
+  const cfg = getConfig().getConfig() as any;
+  const publicUrl = String(cfg?.gateway?.remoteAccess?.publicUrl || '').trim();
+  try {
+    const parsed = new URL(publicUrl);
+    if (parsed.protocol === 'https:' && parsed.port) {
+      const port = Number(parsed.port);
+      if ([443, 8443, 10000].includes(port)) return port;
+    }
+  } catch {}
+  return 443;
+}
+
+function _funnelHttpsPortIsExplicit(): boolean {
+  const cfg = getConfig().getConfig() as any;
+  const publicUrl = String(cfg?.gateway?.remoteAccess?.publicUrl || '').trim();
+  try {
+    const parsed = new URL(publicUrl);
+    return parsed.protocol === 'https:' && !!parsed.port;
+  } catch {
+    return false;
+  }
+}
+
+type FunnelRoute = { httpsPort: number; targetPorts: number[] };
+
+function _parseFunnelRoutes(raw: string): FunnelRoute[] {
+  try {
+    const parsed = JSON.parse(raw) as any;
+    const routes: FunnelRoute[] = [];
+    for (const [endpoint, service] of Object.entries(parsed?.Web || {})) {
+      const endpointPort = Number(String(endpoint).match(/:(\d+)$/)?.[1] || 443);
+      if (![443, 8443, 10000].includes(endpointPort)) continue;
+      const targetPorts = new Set<number>();
+      for (const handler of Object.values((service as any)?.Handlers || {})) {
+        const matches = String((handler as any)?.Proxy || '').matchAll(/127\.0\.0\.1:(\d+)/g);
+        for (const match of matches) targetPorts.add(Number(match[1]));
+      }
+      if (targetPorts.size) routes.push({ httpsPort: endpointPort, targetPorts: [...targetPorts] });
+    }
+    if (routes.length) return routes;
+  } catch {}
+
+  const routes: FunnelRoute[] = [];
+  let httpsPort = 443;
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    const endpoint = line.match(/https:\/\/[^\s(]+/i)?.[0];
+    if (endpoint) {
+      try {
+        const parsed = new URL(endpoint);
+        httpsPort = Number(parsed.port || 443);
+      } catch {}
+    }
+    const target = line.match(/127\.0\.0\.1:(\d+)/);
+    if (target) routes.push({ httpsPort, targetPorts: [Number(target[1])] });
+  }
+  return routes;
+}
+
+async function _getFunnelRoutes(): Promise<FunnelRoute[]> {
+  const result = await _runTailscaleCli(['funnel', 'status', '--json'], 5000);
+  if (result.code !== 0 && !result.stdout) return [];
+  return _parseFunnelRoutes(result.stdout);
+}
+
+async function _resolveFunnelHttpsPort(localPort: number): Promise<number> {
+  const configured = _funnelHttpsPort();
+  const routes = await _getFunnelRoutes();
+  const active = routes.find(route => route.targetPorts.includes(localPort));
+  if (active) return active.httpsPort;
+
+  const configuredOwner = routes.find(route => route.httpsPort === configured);
+  if (!configuredOwner) return configured;
+  if (_funnelHttpsPortIsExplicit()) {
+    throw new Error(`Tailscale HTTPS port ${configured} is already serving another local service.`);
+  }
+
+  const available = [443, 8443, 10000].find((port) => (
+    !routes.some(route => route.httpsPort === port)
+  ));
+  if (!available) throw new Error('All Tailscale Funnel HTTPS ports (443, 8443, 10000) are already in use.');
+  return available;
+}
+
+function _funnelTargetCommand(localPort: number, httpsPort: number): string[] {
+  return ['funnel', '--bg', `--https=${httpsPort}`, String(localPort)];
+}
+
 router.get('/api/pairing/remote-access', requirePairingAdmin, (_req, res) => {
   res.json({ success: true, remoteAccess: _publicRemoteAccess() });
 });
@@ -557,6 +645,9 @@ router.get('/api/pairing/tailscale/status', requirePairingAdmin, async (_req, re
     suggestedUrl: '',
     funnelActive: false,
     funnelPorts: [] as number[],
+    funnelHttpsPorts: [] as number[],
+    suggestedHttpsPort: 443,
+    suggestedFunnelCommand: '',
     raw: '',
   };
   const version = await _runTailscaleCli(['version']);
@@ -584,12 +675,22 @@ router.get('/api/pairing/tailscale/status', requirePairingAdmin, async (_req, re
     out.error = (status.stderr || '').trim() || 'Tailscale is installed but not logged in. Run `tailscale up` once.';
   }
 
-  const funnel = await _runTailscaleCli(['funnel', 'status']);
-  if (funnel.code === 0 && funnel.stdout) {
-    out.raw = funnel.stdout.slice(0, 2000);
-    const portMatches = Array.from(funnel.stdout.matchAll(/127\.0\.0\.1:(\d+)/g));
-    out.funnelPorts = [...new Set(portMatches.map(m => Number(m[1])).filter(n => Number.isFinite(n)))];
-    out.funnelActive = out.funnelPorts.length > 0;
+  const funnel = await _runTailscaleCli(['funnel', 'status', '--json']);
+  if (funnel.code === 0 && funnel.stdout) out.raw = funnel.stdout.slice(0, 2000);
+  const funnelRoutes = _parseFunnelRoutes(funnel.stdout);
+  out.funnelPorts = [...new Set(funnelRoutes.flatMap(route => route.targetPorts))];
+  out.funnelHttpsPorts = [...new Set(funnelRoutes.map(route => route.httpsPort))];
+  const localPort = _gatewayPort();
+  const activeRoute = funnelRoutes.find(route => route.targetPorts.includes(localPort));
+  out.funnelActive = !!activeRoute;
+  const availableHttpsPort = [443, 8443, 10000].find((port) => (
+    !funnelRoutes.some(route => route.httpsPort === port)
+      || funnelRoutes.some(route => route.httpsPort === port && route.targetPorts.includes(localPort))
+  )) || 443;
+  out.suggestedHttpsPort = activeRoute?.httpsPort || availableHttpsPort;
+  out.suggestedFunnelCommand = `tailscale funnel --bg --https=${out.suggestedHttpsPort} ${localPort}`;
+  if (out.hostname) {
+    out.suggestedUrl = `https://${out.hostname}${out.suggestedHttpsPort === 443 ? '' : `:${out.suggestedHttpsPort}`}`;
   }
 
   res.json(out);
@@ -605,28 +706,34 @@ function _gatewayPort(): number {
   return Number(cfg?.gateway?.port || process.env.GATEWAY_PORT || 18789);
 }
 
-async function _isFunnelActiveOnPort(port: number): Promise<boolean> {
-  const result = await _runTailscaleCli(['funnel', 'status'], 5000);
-  if (result.code !== 0 || !result.stdout) return false;
-  const portMatches = Array.from(result.stdout.matchAll(/127\.0\.0\.1:(\d+)/g));
-  return portMatches.some(m => Number(m[1]) === port);
+async function _isFunnelActiveOnPort(port: number, httpsPort = _funnelHttpsPort()): Promise<boolean> {
+  const routes = await _getFunnelRoutes();
+  return routes.some(route => route.httpsPort === httpsPort && route.targetPorts.includes(port));
 }
 
 // Enable funnel for the gateway port.
 router.post('/api/pairing/tailscale/funnel/enable', requirePairingAdmin, async (_req, res) => {
   const port = _gatewayPort();
-  const result = await _runTailscaleCli(['funnel', String(port)], 10000);
+  let httpsPort: number;
+  try {
+    httpsPort = await _resolveFunnelHttpsPort(port);
+  } catch (err: any) {
+    return res.json({ success: false, error: String(err?.message || err), port });
+  }
+  const result = await _runTailscaleCli(_funnelTargetCommand(port, httpsPort), 10000);
   if (result.code !== 0 && result.code !== -2) {
     const errMsg = (result.stderr || result.stdout || '').trim() || 'Failed to enable Tailscale funnel.';
-    return res.json({ success: false, error: errMsg, port });
+    return res.json({ success: false, error: errMsg, port, httpsPort });
   }
-  const active = await _isFunnelActiveOnPort(port);
-  res.json({ success: true, funnelActive: active, port });
+  const active = await _isFunnelActiveOnPort(port, httpsPort);
+  res.json({ success: true, funnelActive: active, port, httpsPort });
 });
 
-// Disable (reset) the funnel.
+// Disable only this instance's Funnel listener. A global `funnel reset` would
+// also disconnect another Prometheus instance using the same Tailscale node.
 router.post('/api/pairing/tailscale/funnel/disable', requirePairingAdmin, async (_req, res) => {
-  const result = await _runTailscaleCli(['funnel', 'reset'], 8000);
+  const httpsPort = await _resolveFunnelHttpsPort(_gatewayPort());
+  const result = await _runTailscaleCli(['funnel', `--https=${httpsPort}`, 'off'], 8000);
   const ok = result.code === 0;
   if (ok) {
     // Disabling Funnel is also an explicit request to use local pairing. Do
@@ -641,14 +748,15 @@ router.post('/api/pairing/tailscale/funnel/disable', requirePairingAdmin, async 
       cfgMgr.updateConfig({ gateway } as any);
     } catch {}
   }
-  res.json({ success: ok, error: ok ? undefined : (result.stderr || 'Failed to reset funnel').trim() });
+  res.json({ success: ok, httpsPort, error: ok ? undefined : (result.stderr || 'Failed to disable this Funnel listener').trim() });
 });
 
 // Lightweight status check — just returns funnelActive for the gateway port.
 router.get('/api/pairing/tailscale/funnel/status', requirePairingAdmin, async (_req, res) => {
   const port = _gatewayPort();
-  const active = await _isFunnelActiveOnPort(port);
-  res.json({ success: true, funnelActive: active, port });
+  const httpsPort = _funnelHttpsPort();
+  const active = await _isFunnelActiveOnPort(port, httpsPort);
+  res.json({ success: true, funnelActive: active, port, httpsPort });
 });
 
 // ── Funnel watchdog (exported for use by startup.ts) ─────────────────────
@@ -660,13 +768,20 @@ export async function ensureTailscaleFunnel(opts: { logPrefix?: string } = {}): 
   if (!ra?.enabled || ra?.mode !== 'tailscale-funnel') return;
   const port = _gatewayPort();
   const log = opts.logPrefix || '[TailscaleFunnel]';
-  const active = await _isFunnelActiveOnPort(port);
-  if (active) {
-    console.log(`${log} Funnel already active on port ${port}.`);
+  let httpsPort: number;
+  try {
+    httpsPort = await _resolveFunnelHttpsPort(port);
+  } catch (err: any) {
+    console.warn(`${log} Could not select a Funnel HTTPS port: ${String(err?.message || err)}`);
     return;
   }
-  console.log(`${log} Funnel not active — enabling on port ${port}…`);
-  const result = await _runTailscaleCli(['funnel', String(port)], 12000);
+  const active = await _isFunnelActiveOnPort(port, httpsPort);
+  if (active) {
+    console.log(`${log} Funnel already active on HTTPS ${httpsPort} → ${port}.`);
+    return;
+  }
+  console.log(`${log} Funnel not active — enabling HTTPS ${httpsPort} → ${port}…`);
+  const result = await _runTailscaleCli(_funnelTargetCommand(port, httpsPort), 12000);
   if (result.code === 0 || result.code === -2) {
     console.log(`${log} Funnel enable command sent.`);
   } else {

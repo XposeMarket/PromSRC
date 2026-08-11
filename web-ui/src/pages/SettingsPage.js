@@ -367,7 +367,7 @@ function applyDesktopUpdateState(nextState = {}) {
   const status = String(_desktopUpdaterState.status || (supported ? 'idle' : 'unsupported'));
   const version = String(_desktopUpdaterState.version || '').trim();
   const currentVersion = String(_desktopUpdaterState.currentVersion || '').trim();
-  const busy = ['checking', 'downloading', 'installing'].includes(status);
+  const busy = ['checking', 'downloading', 'preparing', 'installing', 'relaunching'].includes(status);
 
   if (els.toggle) {
     els.toggle.disabled = !supported;
@@ -467,9 +467,22 @@ async function downloadDesktopUpdate() {
 async function installDesktopUpdate() {
   const bridge = window.prometheusUpdater;
   if (!bridge || typeof bridge.installUpdate !== 'function') return;
+  const confirmed = await new Promise((resolve) => showConfirm(
+    'Prometheus will flush durable writes, create a protected backup of user state, close, install the verified release, reopen, and validate it.',
+    () => resolve(true),
+    () => resolve(false),
+    {
+      title: 'Install Prometheus update?',
+      confirmText: 'Install & reopen',
+      cancelText: 'Cancel',
+      danger: true,
+      details: 'Vault and credentials, settings, workspace files, memory, sessions, projects, and configured external workspaces remain in the user-data directory and are included in the retained backup.',
+    },
+  ));
+  if (!confirmed) return;
   try {
     applyDesktopUpdateState({ status: 'installing', message: 'Closing Prometheus to install the update…' });
-    applyDesktopUpdateState(await bridge.installUpdate());
+    applyDesktopUpdateState(await bridge.installUpdate(true));
   } catch (error) {
     applyDesktopUpdateState({ status: 'error', message: error?.message || 'Update installation failed.' });
   }
@@ -1933,7 +1946,7 @@ async function loadSessionCompactionSettings() {
     if (wordsEl) wordsEl.value = String(Number(s.rollingCompactionSummaryMaxWords) || 900);
     if (modelEl) modelEl.value = String(s.rollingCompactionModel || '');
     await applyGoalRoutingToForm('compactor', s?.mainChatGoals?.compactionModel || '', s?.mainChatGoals?.compactionReasoning || '');
-    renderContextBudgetSummary(s.contextProfile, s.contextBudget, s);
+    renderContextBudgetSummary(s.contextProfile, s.contextBudget);
     window._settingsSessionLoadedToUI = true;
   } catch (e) {
     window._settingsSessionLoadedToUI = false;
@@ -1949,21 +1962,11 @@ function formatTokenCount(n) {
   return String(Math.round(value));
 }
 
-function renderContextBudgetSummary(profile, budget, session) {
+function renderContextBudgetSummary(profile, budget) {
   const wrap = document.getElementById('settings-context-budget-summary');
   if (!wrap) return;
   const p = profile || {};
   const b = budget || {};
-  const enabled = session?.rollingCompactionEnabled !== false;
-  const sourceKey = String(p.source || '').trim();
-  const sourceLabels = {
-    provider_metadata: 'provider-reported metadata',
-    config_override: 'manual config override',
-    known_table: 'known model profile',
-    ollama_num_ctx: 'Ollama num_ctx',
-    fallback: 'fallback estimate',
-  };
-  const source = sourceLabels[sourceKey] || 'unknown estimate';
   wrap.innerHTML = `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
       <div style="border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--panel-2,#fff)">
@@ -1982,10 +1985,6 @@ function renderContextBudgetSummary(profile, budget, session) {
         <div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:800">Tool budget</div>
         <div style="font-size:13px;font-weight:800;color:var(--text);margin-top:3px">${escHtml(formatTokenCount(b.toolContextBudgetTokens))} tokens</div>
       </div>
-    </div>
-    <div style="font-size:11px;color:var(--muted);line-height:1.55;margin-top:10px">
-      ${enabled ? 'Prometheus automatically compacts between tool rounds when the active model approaches its usable input budget.' : 'Automatic context compaction is disabled.'}
-      Window source: ${escHtml(source)}. Token counts are estimated before each model call and calibrated by provider usage where available.
     </div>
   `;
 }
@@ -2045,10 +2044,15 @@ async function loadSecuritySettings() {
     if (statusEl) statusEl.textContent = 'Loading...';
     const data = await api('/api/settings/security', { timeoutMs: 5000 });
     const mode = (data?.toolPermissionMode ?? data?.terminalPermissionMode) === 'lite' ? 'lite' : 'default';
+    const workspaceMode = String(data?.workspaceToolMode ?? data?.workspaceMode ?? 'prometheus').toLowerCase() === 'terminal-first'
+      ? 'terminal-first'
+      : 'prometheus';
     const defaultEl = document.getElementById('settings-terminal-permission-default');
     const liteEl = document.getElementById('settings-terminal-permission-lite');
     if (defaultEl) defaultEl.checked = mode === 'default';
     if (liteEl) liteEl.checked = mode === 'lite';
+    const workspaceToolsEl = document.getElementById('settings-workspace-tools-enabled');
+    if (workspaceToolsEl) workspaceToolsEl.checked = workspaceMode !== 'terminal-first';
     const hardEl = document.getElementById('settings-hard-blocked-patterns');
     if (hardEl) hardEl.textContent = (data?.hardBlockedPatterns || []).join(', ') || 'none configured';
     renderCommandPermissionGrants(data?.commandPermissions || []);
@@ -2056,12 +2060,19 @@ async function loadSecuritySettings() {
     if (statusEl) statusEl.textContent = '';
   } catch (err) {
     window._settingsSecurityLoadedToUI = false;
-    if (statusEl) statusEl.textContent = `Failed to load security settings: ${err.message}`;
+    console.warn('[settings] Security settings request failed:', err);
+    if (statusEl) statusEl.textContent = '';
   }
 }
 
 function getTerminalPermissionModeFromUI() {
   return document.getElementById('settings-terminal-permission-lite')?.checked ? 'lite' : 'default';
+}
+
+function getWorkspaceToolModeFromUI() {
+  return document.getElementById('settings-workspace-tools-enabled')?.checked === false
+    ? 'terminal-first'
+    : 'prometheus';
 }
 
 async function saveSecuritySettings({ showStatus = false } = {}) {
@@ -2070,7 +2081,10 @@ async function saveSecuritySettings({ showStatus = false } = {}) {
     if (showStatus && statusEl) statusEl.textContent = 'Saving...';
     const data = await api('/api/settings/security', {
       method: 'POST',
-      body: JSON.stringify({ toolPermissionMode: getTerminalPermissionModeFromUI() }),
+      body: JSON.stringify({
+        toolPermissionMode: getTerminalPermissionModeFromUI(),
+        workspaceToolMode: getWorkspaceToolModeFromUI(),
+      }),
     });
     if (!data?.success) throw new Error(data?.error || 'Failed to save security settings');
     if (showStatus && statusEl) statusEl.textContent = 'Saved.';
@@ -2886,6 +2900,7 @@ let externalImportDiscoveryLoading = false;
 let externalImportDiscoveryError = '';
 let externalImportBatchState = null;
 const externalImportConversationSelections = new Map();
+const externalImportConversationViews = new Map();
 
 function formatExternalImportBytes(value) {
   const bytes = Number(value || 0);
@@ -2902,7 +2917,10 @@ function externalImportDiscoverySourceTitle(source) {
 function externalImportDiscoverySourceDetail(source) {
   const kind = source?.kind === 'setup' ? 'setup' : 'conversation';
   const count = kind === 'setup' ? Number(source?.setupFileCount || 0) : Number(source?.transcriptCount || 0);
-  const unit = kind === 'setup' ? (count === 1 ? 'setup file' : 'setup files') : (count === 1 ? 'transcript' : 'transcripts');
+  const mcpSource = /mcp|integration/i.test(String(source?.label || ''));
+  const unit = kind === 'setup'
+    ? (mcpSource ? (count === 1 ? 'MCP config file' : 'MCP config files') : (count === 1 ? 'setup file' : 'setup files'))
+    : (count === 1 ? 'transcript' : 'transcripts');
   const size = formatExternalImportBytes(source?.bytes);
   const batches = Number(source?.batches?.length || 0);
   return `${count} ${unit} found${size ? ` · ${size}` : ''}${batches > 1 ? ` · ${batches} safe batches` : ''}`;
@@ -2928,7 +2946,9 @@ function renderExternalImportDiscovery() {
     const kind = source?.kind === 'setup' ? 'setup' : 'conversation';
     const previewable = source?.previewable !== false;
     const batchable = kind === 'conversation' && source?.batchable === true && Array.isArray(source?.batches) && source.batches.length > 0;
-    const action = previewable ? (kind === 'setup' ? 'Preview setup' : 'Preview chats') : batchable ? 'Preview projects + chats' : 'Choose smaller folder';
+    const action = previewable
+      ? (kind === 'setup' ? 'Preview MCP integrations' : source?.supportsProjects ? 'Preview projects + chats' : 'Preview chats')
+      : batchable ? 'Preview projects + chats' : 'Choose smaller folder';
     const notes = Array.isArray(source?.notes) ? source.notes.slice(0, 2) : [];
     const noteHtml = notes.length ? `<div class="settings-import-discovery-notes">${notes.map((note) => `<span>${escHtml(note)}</span>`).join('')}</div>` : '';
     const capped = source?.capped ? '<span class="settings-import-discovery-warning">bounded scan</span>' : '';
@@ -2937,13 +2957,8 @@ function renderExternalImportDiscovery() {
       : batchable
         ? `onclick="previewDiscoveredExternalImportBatches('${escHtml(sourceId)}','projects')"`
         : `disabled title="${escHtml(String(source?.previewBlockReason || 'Choose a smaller source folder for preview.'))}"`;
-    const projectButton = kind === 'conversation' && source?.supportsProjects && !previewable && batchable
-      ? ''
-      : kind === 'conversation' && source?.supportsProjects
-        ? `<button class="settings-inline-link" type="button" onclick="previewDiscoveredExternalImport('${escHtml(sourceId)}','projects')">Preview projects + chats</button>`
-      : '';
     const batchButton = batchable
-      ? `<button class="settings-inline-link" type="button" onclick="previewDiscoveredExternalImportBatches('${escHtml(sourceId)}','${previewable ? 'projects' : 'sessions'}')">${previewable ? 'Preview all chats in safe batches' : 'Preview chats only in safe batches'}</button>`
+      ? `<button class="settings-inline-link" type="button" onclick="previewDiscoveredExternalImportBatches('${escHtml(sourceId)}','projects')">Preview all chats in safe batches</button>`
       : '';
     return `
       <article class="settings-import-discovery-source">
@@ -2954,7 +2969,6 @@ function renderExternalImportDiscovery() {
         </div>
         <div class="settings-import-discovery-actions">
           <button class="btn btn-sm" type="button" ${buttonAttrs}>${action}</button>
-          ${projectButton}
           ${batchButton}
         </div>
       </article>
@@ -3004,53 +3018,86 @@ function renderExternalImportJob(kind, job) {
   const el = document.getElementById(`settings-import-${kind}-job`);
   if (!el) return;
   if (!job) {
-    el.innerHTML = '<div class="settings-import-empty">No staged import. Choose a local export or configuration folder and build a preview.</div>';
+    el.innerHTML = kind === 'setup'
+      ? '<div class="settings-import-empty">No staged MCP integration preview. Choose a detected config or local MCP file and preview it.</div>'
+      : '<div class="settings-import-empty">No staged import. Choose a local export or conversation folder and build a preview.</div>';
     return;
   }
   const preview = job.preview || {};
   const result = job.result || {};
   const warnings = Array.isArray(preview.warnings) ? preview.warnings : [];
-  const projectSummaries = Array.isArray(preview.projectSummaries) ? preview.projectSummaries : [];
   const status = String(job.status || '');
   const jobId = String(job.id || '');
   const canConfirm = status === 'preview_ready';
   const selectedCount = kind === 'conversation' ? externalImportSelectedConversationIds(job).size : 0;
   const canRetry = status === 'failed' || status === 'partial';
-  const canRollback = status === 'completed' || status === 'partial';
-  const canDelete = status === 'rolled_back' || status === 'failed' || status === 'deleted';
   const counts = kind === 'conversation'
-    ? `${Number(preview.conversations || 0)} conversations · ${Number(preview.projects || 0)} projects · ${Number(preview.messages || 0)} messages · ${Number(preview.historicalEvents || 0)} historical events · ${Number(preview.resources || 0)} resources`
-    : `${Number(preview.mcpServers || 0)} MCP servers · ${Number(preview.setupFiles || 0)} setup files · ${Number(preview.secretsRedacted || 0)} secrets held for reauthorization · ${Number(preview.conflicts || 0)} conflicts`;
+    ? `${Number(preview.conversations || 0)} chats · ${Number(preview.projects || 0)} projects · ${Number(preview.messages || 0)} messages · ${Number(preview.resources || 0)} attachments`
+    : `${Number(preview.mcpServers || 0)} MCP integrations · ${Number(preview.secretsRedacted || 0)} reauthorizations required · ${Number(preview.conflicts || 0)} conflicts`;
   const summaryHtml = kind === 'conversation' ? renderExternalImportConversationSelection(job) : '';
-  const projectSummaryHtml = kind === 'conversation' && projectSummaries.length
-    ? `<div class="settings-import-preview-list settings-import-project-preview-list">${projectSummaries.map((item) => `<div><span>${escHtml(item.name || item.id || 'Project')}</span><small>${Number(item.conversations || 0)} chats${Number(item.messages || 0) ? ` · ${Number(item.messages)} messages` : ''}${item.sourcePath ? ` · ${escHtml(item.sourcePath)}` : ''}</small></div>`).join('')}</div>`
-    : '';
-  const setupFiles = Array.isArray(job.setup?.files) ? job.setup.files.slice(0, 6) : [];
-  const setupSummaryHtml = kind === 'setup' && setupFiles.length
-    ? `<div class="settings-import-preview-list">${setupFiles.map((item) => `<div><span>${escHtml(item.relativePath || 'setup file')}</span><small>${escHtml(String(item.category || 'unknown').replace(/_/g, ' '))}</small></div>`).join('')}</div>`
-    : '';
   const warningHtml = warnings.length
     ? `<div class="settings-import-warning"><strong>Review warnings</strong><ul>${warnings.slice(0, 6).map((warning) => `<li>${escHtml(warning)}</li>`).join('')}</ul></div>`
     : '';
   const resultHtml = (result.sessionIds?.length || result.projectIds?.length || result.mcpServerIds?.length || result.failures?.length)
-    ? `<div class="settings-import-result">${kind === 'conversation' ? `${Number(result.sessionIds?.length || 0)} Prometheus threads${result.projectIds?.length ? ` · ${Number(result.projectIds.length)} projects` : ''}` : `${Number(result.mcpServerIds?.length || 0)} MCP configurations`} · ${Number(result.skipped || 0)} skipped${result.failures?.length ? ` · ${Number(result.failures.length)} failures` : ''}</div>`
+    ? `<div class="settings-import-result">${kind === 'conversation' ? `${Number(result.sessionIds?.length || 0)} Prometheus threads${result.projectIds?.length ? ` · ${Number(result.projectIds.length)} projects` : ''}` : `${Number(result.mcpServerIds?.length || 0)} MCP integrations`} · ${Number(result.skipped || 0)} skipped${result.failures?.length ? ` · ${Number(result.failures.length)} failures` : ''}</div>`
+    : '';
+  const setupResultAction = kind === 'setup' && result.mcpServerIds?.length
+    ? '<button class="settings-inline-link" type="button" onclick="setMode(\'plugins\')">Open Plugins to authorize</button>'
     : '';
   el.innerHTML = `
     <div class="settings-import-job-head"><span class="settings-import-job-status settings-import-job-status--${escHtml(status)}">${escHtml(status.replace(/_/g, ' ') || 'staged')}</span><span>${escHtml(externalImportJobLabel(job))}</span></div>
     <div class="settings-import-counts">${escHtml(counts)}</div>
     ${summaryHtml}
-    ${projectSummaryHtml}
-    ${setupSummaryHtml}
     ${warningHtml}
     ${resultHtml}
+    ${setupResultAction}
     <div class="settings-import-actions">
       ${canConfirm && kind === 'conversation' ? `<button class="btn btn-sm" onclick="confirmExternalImportJob('${escHtml(jobId)}','${kind}')" ${selectedCount ? '' : 'disabled'}>Import selected chats${selectedCount ? ` (${selectedCount})` : ''}</button>` : ''}
       ${canConfirm && kind !== 'conversation' ? `<button class="btn btn-sm" onclick="confirmExternalImportJob('${escHtml(jobId)}','${kind}')">Confirm import</button>` : ''}
       ${canRetry ? `<button class="btn btn-sm" onclick="retryExternalImportJob('${escHtml(jobId)}','${kind}')">Retry</button>` : ''}
-      ${canRollback ? `<button class="settings-inline-link" onclick="rollbackExternalImportJob('${escHtml(jobId)}','${kind}')">Roll back</button>` : ''}
-      ${canDelete ? `<button class="settings-danger-button" onclick="deleteExternalImportJob('${escHtml(jobId)}','${kind}')">Delete record</button>` : ''}
     </div>
   `;
+}
+
+function externalImportHistoryLabel(job) {
+  const provider = String(job?.provider || job?.sourceLabel || 'Source').trim();
+  const status = String(job?.status || 'staged').replace(/_/g, ' ');
+  const preview = job?.preview || {};
+  const count = job?.kind === 'conversation'
+    ? `${Number(preview.conversations || job?.result?.sessionIds?.length || 0)} chats`
+    : `${Number(preview.mcpServers || job?.result?.mcpServerIds?.length || 0)} MCP integrations`;
+  return `${provider} · ${count} · ${status}`;
+}
+
+function renderExternalImportHistory() {
+  const el = document.getElementById('settings-import-history-list');
+  if (!el) return;
+  const jobs = externalImportJobs
+    .filter((job) => job && job.status !== 'deleted')
+    .filter((job) => ['completed', 'partial', 'failed', 'rolled_back'].includes(String(job.status || '')))
+    .slice(0, 24);
+  if (!jobs.length) {
+    el.innerHTML = '<div class="settings-import-empty">No completed imports or rollback records yet.</div>';
+    return;
+  }
+  el.innerHTML = jobs.map((job) => {
+    const id = escHtml(String(job.id || ''));
+    const kind = job.kind === 'setup' ? 'setup' : 'conversation';
+    const canRollback = ['completed', 'partial'].includes(String(job.status || ''));
+    const canDelete = ['rolled_back', 'failed'].includes(String(job.status || ''));
+    const action = canRollback
+      ? `<button class="settings-inline-link" type="button" onclick="rollbackExternalImportJob('${id}','${kind}')">Roll back</button>`
+      : canDelete
+        ? `<button class="settings-danger-button" type="button" onclick="deleteExternalImportJob('${id}','${kind}')">Delete record</button>`
+        : '';
+    return `<div class="settings-import-history-row"><div class="settings-import-history-copy"><strong>${escHtml(externalImportHistoryLabel(job))}</strong><small>${escHtml(String(job.sourceLabel || job.provider || 'Imported source'))}</small></div><span class="settings-import-history-actions"><time datetime="${escHtml(String(job.updatedAt || ''))}">${escHtml(externalImportPreviewTimestamp(Date.parse(String(job.updatedAt || ''))))}</time>${action}</span></div>`;
+  }).join('');
+}
+
+function upsertExternalImportJobRecord(job) {
+  if (!job?.id) return;
+  externalImportJobs = [job, ...externalImportJobs.filter((item) => String(item?.id || '') !== String(job.id))];
+  renderExternalImportHistory();
 }
 
 async function loadExternalImportJobs() {
@@ -3062,6 +3109,7 @@ async function loadExternalImportJobs() {
       selectedExternalImportJobs[kind] = latest;
       renderExternalImportJob(kind, latest);
     }
+    renderExternalImportHistory();
   } catch (error) {
     externalImportStatus('conversation', 'error', `Could not load import history: ${error.message}`);
     externalImportStatus('setup', 'error', `Could not load import history: ${error.message}`);
@@ -3071,10 +3119,9 @@ async function loadExternalImportJobs() {
 function externalImportForm(kind, discoveredSource = null, requestedConversationMode = '') {
   const path = String(discoveredSource?.sourcePath || document.getElementById(`settings-import-${kind}-path`)?.value || '').trim();
   const sourceLabel = String(document.getElementById(`settings-import-${kind}-label`)?.value || '').trim();
-  const sourceAccountId = String(document.getElementById(`settings-import-${kind}-account`)?.value || '').trim();
   const adapter = kind === 'setup'
     ? 'setup-config'
-    : String(discoveredSource?.adapter || document.getElementById('settings-import-conversation-adapter')?.value || '').trim();
+    : String(discoveredSource?.adapter || '').trim();
   const sourceFiles = Array.isArray(discoveredSource?.sourceFiles)
     ? discoveredSource.sourceFiles.filter((value) => typeof value === 'string' && value.trim()).slice(0, 8000)
     : [];
@@ -3082,12 +3129,12 @@ function externalImportForm(kind, discoveredSource = null, requestedConversation
     kind,
     sourcePath: path,
     sourceLabel: sourceLabel || String(discoveredSource?.label || '').trim() || undefined,
-    sourceAccountId: sourceAccountId || undefined,
     adapter: adapter || undefined,
     conversationMode: kind === 'conversation'
-      ? (requestedConversationMode || String(discoveredSource?.supportsProjects ? 'projects' : document.getElementById('settings-import-conversation-mode')?.value || 'sessions'))
+      ? 'projects'
       : undefined,
-    overwrite: kind === 'setup' && document.getElementById('settings-import-setup-overwrite')?.checked === true,
+    setupScope: kind === 'setup' ? 'mcp' : undefined,
+    overwrite: false,
     ...(sourceFiles.length ? { sourceFiles } : {}),
   };
 }
@@ -3106,6 +3153,7 @@ async function previewExternalImportJob(kind, discoveredSource = null, requested
       timeoutMs: 120000,
     });
     selectedExternalImportJobs[kind] = data.job;
+    upsertExternalImportJobRecord(data.job);
     renderExternalImportJob(kind, data.job);
     externalImportStatus(kind, 'success', data.idempotent ? 'Existing matching preview reused.' : 'Preview ready. Review it, then confirm explicitly.');
   } catch (error) {
@@ -3113,14 +3161,14 @@ async function previewExternalImportJob(kind, discoveredSource = null, requested
   }
 }
 
-async function previewDiscoveredExternalImport(sourceId, mode = 'sessions') {
+async function previewDiscoveredExternalImport(sourceId, mode = 'projects') {
   const source = externalImportDiscoverySources.find((item) => String(item?.id || '') === String(sourceId || ''));
   if (!source) {
     externalImportDiscoveryError = 'That detected source is no longer available. Scan again to refresh the list.';
     renderExternalImportDiscovery();
     return;
   }
-  await previewExternalImportJob(source.kind === 'setup' ? 'setup' : 'conversation', source, mode);
+  await previewExternalImportJob(source.kind === 'setup' ? 'setup' : 'conversation', source, 'projects');
 }
 
 function externalImportConversationSummaries(job) {
@@ -3169,31 +3217,106 @@ function renderExternalImportConversationSelection(job, compact = false) {
   const total = Number(preview.conversationSummariesTotal || preview.conversations || summaries.length);
   const canSelect = job.status === 'preview_ready';
   const truncated = preview.conversationSummariesTruncated === true || total > summaries.length;
-  const rows = summaries.map((item) => {
+  const projectSummaries = Array.isArray(preview.projectSummaries) ? preview.projectSummaries : [];
+  const projectMap = new Map(projectSummaries.map((project) => [String(project?.id || ''), project]));
+  const projectGroups = [];
+  const groupMap = new Map();
+  const regularChats = [];
+  for (const item of summaries) {
+    const projectId = String(item?.projectId || '').trim();
+    const projectName = String(item?.projectName || '').trim();
+    if (!projectId && !projectName) {
+      regularChats.push(item);
+      continue;
+    }
+    const key = projectId || `name:${projectName}`;
+    let group = groupMap.get(key);
+    if (!group) {
+      const source = projectMap.get(projectId) || {};
+      group = {
+        id: projectId || key,
+        name: projectName || String(source.name || projectId || 'Imported project'),
+        sourcePath: String(source.sourcePath || '').trim(),
+        items: [],
+      };
+      groupMap.set(key, group);
+      projectGroups.push(group);
+    }
+    group.items.push(item);
+  }
+  const viewKey = String(job.id || '');
+  const view = externalImportConversationViews.get(viewKey) || (projectGroups.length ? 'projects' : 'chats');
+
+  const renderRow = (item, compactRow = false) => {
     const id = String(item?.id || '');
     const title = String(item?.title || id || 'Untitled chat');
-    const project = String(item?.projectName || '').trim();
-    const detail = `${Number(item?.messages || 0)} messages${Number(item?.events || 0) ? ` · ${Number(item.events)} historical events` : ''}${project ? ` · ${project}` : ''}`;
+    const detail = `${Number(item?.messages || 0)} messages${Number(item?.resources || 0) ? ` · ${Number(item.resources)} attachments` : ''}`;
     return `
-      <label class="settings-import-selection-row">
+      <label class="settings-import-selection-row${compactRow ? ' settings-import-selection-row--project-chat' : ''}">
         <input type="checkbox" data-import-job-id="${escHtml(job.id)}" data-conversation-id="${escHtml(id)}" ${selected.has(id) ? 'checked' : ''} ${canSelect ? '' : 'disabled'} onchange="toggleExternalImportConversation(this)" />
         <span class="settings-import-selection-copy"><strong>${escHtml(title)}</strong><small>${escHtml(detail)}</small></span>
         <time datetime="${escHtml(externalImportPreviewDatetime(item?.updatedAt || item?.createdAt))}">${escHtml(externalImportPreviewTimestamp(item?.updatedAt || item?.createdAt))}</time>
       </label>`;
-  }).join('');
+  };
+  const renderProject = (group) => {
+    const ids = group.items.map((item) => String(item?.id || '')).filter(Boolean);
+    const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
+    const rows = group.items.map((item) => renderRow(item, true)).join('');
+    return `<details class="settings-import-project-group" open>
+      <summary>
+        <input type="checkbox" data-import-job-id="${escHtml(job.id)}" data-import-project-id="${escHtml(group.id)}" ${allSelected ? 'checked' : ''} ${canSelect ? '' : 'disabled'} onchange="toggleExternalImportProject(this); event.stopPropagation();" />
+        <span class="settings-import-project-group-copy"><strong>${escHtml(group.name)}</strong><small>${group.items.length} chat${group.items.length === 1 ? '' : 's'}${group.sourcePath ? ` · ${escHtml(group.sourcePath)}` : ''}</small></span>
+      </summary>
+      <div class="settings-import-project-group-chats">${rows}</div>
+    </details>`;
+  };
+  const visibleRows = view === 'projects'
+    ? projectGroups.map(renderProject).join('')
+    : regularChats.map((item) => renderRow(item)).join('');
+  const emptyView = view === 'projects' && !projectGroups.length
+    ? '<div class="settings-import-empty">No source projects were detected in this preview.</div>'
+    : view === 'chats' && !regularChats.length
+      ? '<div class="settings-import-empty">No top-level chats were detected. Chats inside projects are shown in Projects.</div>'
+      : '';
   return `
     <section class="settings-import-selection${compact ? ' settings-import-selection--compact' : ''}">
       <div class="settings-import-selection-head">
-        <div><strong>Select chats to import</strong><small>${selected.size}/${total} selected · newest first</small></div>
+        <div><strong>${projectGroups.length ? 'Review projects and chats' : 'Select chats to import'}</strong><small>${selected.size}/${total} selected · newest first</small></div>
         <div class="settings-import-selection-actions">
           <button class="settings-inline-link" type="button" data-import-job-id="${escHtml(job.id)}" onclick="setExternalImportConversationSelection(this,true)" ${canSelect ? '' : 'disabled'}>Select all</button>
           <button class="settings-inline-link" type="button" data-import-job-id="${escHtml(job.id)}" onclick="setExternalImportConversationSelection(this,false)" ${canSelect ? '' : 'disabled'}>Clear</button>
         </div>
       </div>
-      ${canSelect ? '<div class="settings-import-inline-note">Nothing imports until you select chats and confirm.</div>' : ''}
+      ${projectGroups.length ? `<div class="settings-import-view-tabs" role="tablist" aria-label="Import preview view"><button type="button" class="settings-import-view-tab${view === 'projects' ? ' is-active' : ''}" role="tab" aria-selected="${view === 'projects'}" data-import-job-id="${escHtml(job.id)}" onclick="setExternalImportConversationView(this,'projects')">Projects (${projectGroups.length})</button><button type="button" class="settings-import-view-tab${view === 'chats' ? ' is-active' : ''}" role="tab" aria-selected="${view === 'chats'}" data-import-job-id="${escHtml(job.id)}" onclick="setExternalImportConversationView(this,'chats')">Chats (${regularChats.length})</button></div>` : ''}
+      ${canSelect ? '<div class="settings-import-inline-note">Select individual chats or a whole project, then confirm. Selecting chats inside a project creates that Prometheus project with only those chats.</div>' : ''}
       ${truncated ? `<div class="settings-import-inline-note">Showing ${summaries.length} of ${total} chats in this preview. Narrow the source if you need a smaller review set.</div>` : ''}
-      <div class="settings-import-selection-list">${rows}</div>
+      <div class="settings-import-selection-list">${emptyView || visibleRows}</div>
     </section>`;
+}
+
+function setExternalImportConversationView(button, view) {
+  const job = externalImportJobForSelection(button?.dataset?.importJobId);
+  if (!job) return;
+  externalImportConversationViews.set(String(job.id), view === 'chats' ? 'chats' : 'projects');
+  refreshExternalImportSelection(job);
+}
+
+function toggleExternalImportProject(input) {
+  const job = externalImportJobForSelection(input?.dataset?.importJobId);
+  if (!job || job.status !== 'preview_ready') return;
+  const projectId = String(input?.dataset?.importProjectId || '');
+  const summaries = externalImportConversationSummaries(job);
+  const previewProjects = Array.isArray(job.preview?.projectSummaries) ? job.preview.projectSummaries : [];
+  const project = previewProjects.find((item) => String(item?.id || '') === projectId);
+  const projectName = String(project?.name || '').trim();
+  const ids = summaries
+    .filter((item) => String(item?.projectId || '') === projectId || (!projectId.startsWith('name:') && String(item?.projectName || '').trim() === projectName) || (projectId.startsWith('name:') && `name:${String(item?.projectName || '').trim()}` === projectId))
+    .map((item) => String(item?.id || ''))
+    .filter(Boolean);
+  const selected = externalImportSelectedConversationIds(job);
+  ids.forEach((id) => input.checked ? selected.add(id) : selected.delete(id));
+  externalImportConversationSelections.set(String(job.id), selected);
+  refreshExternalImportSelection(job);
 }
 
 function externalImportJobForSelection(jobId) {
@@ -3254,9 +3377,7 @@ function renderExternalImportBatchJobs() {
     const selectedCount = externalImportSelectedConversationIds(job).size;
     const action = job.status === 'preview_ready'
       ? `<button class="settings-inline-link" type="button" onclick="confirmExternalImportBatchJob('${escHtml(job.id)}')" ${selectedCount ? '' : 'disabled'}>Import selected${selectedCount ? ` (${selectedCount})` : ''}</button>`
-      : job.status === 'completed'
-        ? `<button class="settings-inline-link" type="button" onclick="rollbackExternalImportBatchJob('${escHtml(job.id)}')">Roll back</button>`
-        : ['failed', 'partial'].includes(job.status)
+      : ['failed', 'partial'].includes(job.status)
           ? `<button class="settings-inline-link" type="button" onclick="retryExternalImportBatchJob('${escHtml(job.id)}')">Retry</button>`
         : '';
     return `<div class="settings-import-batch-row"><div class="settings-import-batch-row-head"><strong>${escHtml(label)}</strong><small>${Number(preview.conversations || 0)} chats · ${Number(preview.messages || 0)} messages</small></div><span class="settings-import-batch-row-actions"><em>${escHtml(String(job.status || 'staged').replace(/_/g, ' '))}</em>${action}</span>${renderExternalImportConversationSelection(job, true)}</div>`;
@@ -3294,6 +3415,7 @@ async function previewDiscoveredExternalImportBatches(sourceId, mode = 'projects
       const body = externalImportForm('conversation', batchSource, mode);
       const data = await api('/api/imports/jobs', { method: 'POST', body: JSON.stringify(body), timeoutMs: 120000 });
       externalImportBatchState.jobs.push(data.job);
+      upsertExternalImportJobRecord(data.job);
       selectedExternalImportJobs.conversation = data.job;
     } catch (error) {
       externalImportBatchState.errors.push(`${batch.label}: ${error.message}`);
@@ -3332,6 +3454,7 @@ async function confirmExternalImportBatchJob(jobId, skipPrompt = false) {
   try {
     const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/confirm`, { method: 'POST', body: JSON.stringify({ confirm: true, conversationIds }), timeoutMs: 120000 });
     replaceExternalImportBatchJob(data.job);
+    upsertExternalImportJobRecord(data.job);
   } catch (error) {
     externalImportStatus('conversation', 'error', `Codex batch import failed: ${error.message}`);
   }
@@ -3343,6 +3466,7 @@ async function retryExternalImportBatchJob(jobId) {
   try {
     const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST', timeoutMs: 120000 });
     replaceExternalImportBatchJob(data.job);
+    upsertExternalImportJobRecord(data.job);
     externalImportStatus('conversation', data.job?.status === 'failed' ? 'error' : 'success', data.job?.status === 'preview_ready' ? 'Codex batch preview rebuilt.' : externalImportJobLabel(data.job));
   } catch (error) {
     externalImportStatus('conversation', 'error', `Codex batch retry failed: ${error.message}`);
@@ -3380,6 +3504,7 @@ async function rollbackExternalImportBatchJob(jobId) {
   try {
     const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/rollback`, { method: 'POST', body: JSON.stringify({ confirm: true }) });
     replaceExternalImportBatchJob(data.job);
+    upsertExternalImportJobRecord(data.job);
     if (typeof window.loadChatSessions === 'function') await window.loadChatSessions();
   } catch (error) {
     externalImportStatus('conversation', 'error', `Codex batch rollback failed: ${error.message}`);
@@ -3395,7 +3520,7 @@ async function confirmExternalImportJob(jobId, kind) {
     return;
   }
   const ok = await new Promise((resolve) => showConfirm(
-    kind === 'conversation' ? 'Import these conversations into Prometheus?' : 'Import this MCP/setup configuration?',
+    kind === 'conversation' ? 'Import these conversations into Prometheus?' : 'Import these MCP integrations into Prometheus?',
     () => resolve(true),
     () => resolve(false),
     {
@@ -3405,7 +3530,7 @@ async function confirmExternalImportJob(jobId, kind) {
         ? (job.conversationMode === 'projects'
           ? 'Detected source projects become normal Prometheus projects, with imported chats linked inside each project. Historical tool calls and reasoning are records only and will never execute. Source-session resume is not claimed.'
           : 'Imported messages become normal Prometheus threads. Historical tool calls and reasoning are preserved as records only and will never execute. Source-session resume is not claimed.')
-        : 'Non-secret setup is staged with a backup. Credentials, OAuth tokens, and API keys are not copied; affected connectors must be authorized again.',
+        : 'MCP metadata is staged with a backup and remains disabled until authorized. Credentials, OAuth tokens, and API keys are not copied; finish authorization in Plugins.',
     },
   ));
   if (!ok) return;
@@ -3417,6 +3542,7 @@ async function confirmExternalImportJob(jobId, kind) {
       timeoutMs: 120000,
     });
     selectedExternalImportJobs[kind] = data.job;
+    upsertExternalImportJobRecord(data.job);
     renderExternalImportJob(kind, data.job);
     externalImportStatus(kind, data.job?.status === 'partial' ? 'error' : 'success', externalImportJobLabel(data.job));
     if (kind === 'conversation' && typeof window.loadChatSessions === 'function') await window.loadChatSessions();
@@ -3430,6 +3556,7 @@ async function retryExternalImportJob(jobId, kind) {
   try {
     const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST', timeoutMs: 120000 });
     selectedExternalImportJobs[kind] = data.job;
+    upsertExternalImportJobRecord(data.job);
     renderExternalImportJob(kind, data.job);
     externalImportStatus(kind, data.job?.status === 'failed' ? 'error' : 'success', externalImportJobLabel(data.job));
   } catch (error) {
@@ -3448,6 +3575,7 @@ async function rollbackExternalImportJob(jobId, kind) {
   try {
     const data = await api(`/api/imports/jobs/${encodeURIComponent(jobId)}/rollback`, { method: 'POST', body: JSON.stringify({ confirm: true }) });
     selectedExternalImportJobs[kind] = data.job;
+    upsertExternalImportJobRecord(data.job);
     renderExternalImportJob(kind, data.job);
     externalImportStatus(kind, 'success', 'Import rolled back.');
     if (kind === 'conversation' && typeof window.loadChatSessions === 'function') await window.loadChatSessions();
@@ -3461,6 +3589,8 @@ async function deleteExternalImportJob(jobId, kind) {
     await api(`/api/imports/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
     selectedExternalImportJobs[kind] = null;
     renderExternalImportJob(kind, null);
+    externalImportJobs = externalImportJobs.filter((job) => String(job?.id || '') !== String(jobId));
+    renderExternalImportHistory();
     externalImportStatus(kind, 'success', 'Import record deleted.');
   } catch (error) {
     externalImportStatus(kind, 'error', `Delete failed: ${error.message}`);
@@ -5026,7 +5156,10 @@ function buildSettingsBulkPayloadForTab(tab) {
   if (activeTab === 'security') {
     if (!window._settingsSecurityLoadedToUI) throw new Error('Security settings are still loading.');
     const payload = {
-      security: { terminalPermissionMode: getTerminalPermissionModeFromUI() },
+      security: {
+        terminalPermissionMode: getTerminalPermissionModeFromUI(),
+        workspaceToolMode: getWorkspaceToolModeFromUI(),
+      },
     };
     if (window._settingsPathsLoadedToUI) {
       payload.paths = buildSettingsPathsPayload();
@@ -6911,8 +7044,8 @@ async function _enableFunnel() {
   try {
     const r = await pairingAdminApi('/api/pairing/tailscale/funnel/enable', { method: 'POST', body: '{}' });
     if (!r?.success) throw new Error(r?.error || 'Failed to enable funnel');
-    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#15803d">Funnel enabled on port ${r.port}. ✓</span>`;
-    _applyFunnelLiveStatus(true);
+    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#15803d">Funnel enabled on HTTPS ${r.httpsPort || 443} → local port ${r.port}. ✓</span>`;
+    _applyFunnelLiveStatus(!!r.funnelActive);
     showToast?.('Tailscale funnel enabled', '', 'success');
   } catch (err) {
     if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#b91c1c">${escHtml(err.message || 'Enable failed')}</span>`;
@@ -6926,11 +7059,11 @@ async function _disableFunnel() {
   const funnelMsg = document.getElementById('pairing-funnel-msg');
   const disableBtn = document.getElementById('pairing-funnel-disable-btn');
   if (disableBtn) { disableBtn.disabled = true; disableBtn.textContent = 'Disabling…'; }
-  if (funnelMsg) funnelMsg.textContent = 'Running tailscale funnel reset…';
+  if (funnelMsg) funnelMsg.textContent = 'Disabling this instance’s Tailscale Funnel listener…';
   try {
     const r = await pairingAdminApi('/api/pairing/tailscale/funnel/disable', { method: 'POST', body: '{}' });
     if (!r?.success) throw new Error(r?.error || 'Failed to disable funnel');
-    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#b45309">Funnel disabled.</span>`;
+    if (funnelMsg) funnelMsg.innerHTML = `<span style="color:#b45309">Funnel listener on HTTPS ${r.httpsPort || 443} disabled.</span>`;
     _applyFunnelLiveStatus(false);
     showToast?.('Tailscale funnel disabled', '', 'success');
   } catch (err) {
@@ -6957,7 +7090,8 @@ async function _detectTailscale() {
     lines.push(`<div><strong>Logged in:</strong> ${r.loggedIn ? '<span style="color:#15803d">yes</span>' : '<span style="color:#b45309">no — run <span style="font-family:ui-monospace">tailscale up</span></span>'}</div>`);
     if (r.hostname) lines.push(`<div><strong>Hostname:</strong> <span style="font-family:ui-monospace;word-break:break-all">${escHtml(r.hostname)}</span></div>`);
     if (r.suggestedUrl) lines.push(`<div><strong>Suggested URL:</strong> <span style="font-family:ui-monospace;word-break:break-all">${escHtml(r.suggestedUrl)}</span></div>`);
-    lines.push(`<div><strong>Funnel:</strong> ${r.funnelActive ? `<span style="color:#15803d">active (ports: ${r.funnelPorts.join(', ')})</span>` : '<span style="color:#b45309">not active</span>'}</div>`);
+    lines.push(`<div><strong>Funnel:</strong> ${r.funnelActive ? `<span style="color:#15803d">active (HTTPS ${r.suggestedHttpsPort || 443} → local ${r.funnelPorts.join(', ')})</span>` : '<span style="color:#b45309">not active for this instance</span>'}</div>`);
+    if (r.suggestedFunnelCommand) lines.push(`<div style="margin-top:4px;font-family:ui-monospace;word-break:break-all;font-size:11px">${escHtml(r.suggestedFunnelCommand)}</div>`);
     if (r.suggestedUrl) {
       lines.push(`<div style="margin-top:8px"><button class="btn btn-sm" id="pairing-ts-apply-btn" style="background:#eaf2ff;border:1px solid #bdd3f6;color:#0d4faf">Use this URL</button></div>`);
     }
@@ -6965,7 +7099,7 @@ async function _detectTailscale() {
     const port = (() => {
       try { return new URL(window.location.origin).port || '18789'; } catch { return '18789'; }
     })();
-    if (cmd) cmd.textContent = `tailscale funnel ${port}`;
+    if (cmd) cmd.textContent = r.suggestedFunnelCommand || `tailscale funnel --bg --https=443 ${port}`;
     _applyFunnelLiveStatus(!!r.funnelActive);
     const apply = document.getElementById('pairing-ts-apply-btn');
     if (apply && r.suggestedUrl) {

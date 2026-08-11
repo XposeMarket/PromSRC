@@ -463,6 +463,8 @@ export interface PrometheusConfig {
   };
   tools: {
     enabled: string[];
+    /** Preferred workspace editing surface for model-facing file work. */
+    workspace_mode?: 'prometheus' | 'terminal-first';
     permissions: ToolPermissions;
   };
   skills: {

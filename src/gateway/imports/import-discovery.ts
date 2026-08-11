@@ -293,11 +293,11 @@ function definitions(options: Required<Pick<ImportDiscoveryOptions, 'homeDir' | 
       notes: ['Native Hermes session transcripts are previewed before import.'],
     }),
     candidate({
-      id: 'hermes-setup', provider: 'hermes', label: 'Hermes Agent setup', kind: 'setup', adapter: 'setup-config',
+      id: 'hermes-setup', provider: 'hermes', label: 'Hermes MCP integrations', kind: 'setup', adapter: 'setup-config',
       supportsProjects: false,
       root: path.join(localAppData, 'hermes'), mode: 'directory',
       includeWhen: (stats) => stats.setupFileCount > 0,
-      notes: ['Secrets are redacted and must be reauthorized.'],
+      notes: ['Local MCP declarations only; secrets are redacted and must be reauthorized.'],
     }),
     candidate({
       id: 'codex-conversations', provider: 'codex', label: 'Codex', kind: 'conversation', adapter: 'codex-local',
@@ -307,6 +307,13 @@ function definitions(options: Required<Pick<ImportDiscoveryOptions, 'homeDir' | 
       notes: ['Only local rollout/session artifacts are inspected; Codex private web history is not scraped.'],
     }),
     candidate({
+      id: 'codex-mcp-integrations', provider: 'codex', label: 'Codex MCP integrations', kind: 'setup', adapter: 'setup-config',
+      supportsProjects: false,
+      root: path.join(homeDir, '.codex', 'config.toml'), mode: 'file',
+      includeWhen: (stats) => stats.setupFileCount > 0,
+      notes: ['Codex MCP server declarations are imported as disabled Prometheus integrations; provider plugin packages remain metadata only.'],
+    }),
+    candidate({
       id: 'claude-code-conversations', provider: 'claude', label: 'Claude Code', kind: 'conversation', adapter: 'claude-code-local',
       supportsProjects: true,
       root: path.join(homeDir, '.claude', 'projects'), mode: 'directory',
@@ -314,11 +321,25 @@ function definitions(options: Required<Pick<ImportDiscoveryOptions, 'homeDir' | 
       notes: ['Local Claude Code project transcripts only.'],
     }),
     candidate({
-      id: 'claude-code-setup', provider: 'claude', label: 'Claude Code setup', kind: 'setup', adapter: 'setup-config',
+      id: 'claude-code-setup', provider: 'claude', label: 'Claude Code MCP integrations', kind: 'setup', adapter: 'setup-config',
       supportsProjects: false,
       root: path.join(homeDir, '.claude'), mode: 'directory',
       includeWhen: (stats) => stats.setupFileCount > 0 && stats.bytes <= MAX_SCAN_BYTES,
-      notes: ['The setup preview is bounded; credentials and tokens are not copied.'],
+      notes: ['Local MCP declarations only; credentials and tokens are not copied.'],
+    }),
+    candidate({
+      id: 'claude-code-mcp-config', provider: 'claude', label: 'Claude MCP integrations', kind: 'setup', adapter: 'setup-config',
+      supportsProjects: false,
+      root: path.join(homeDir, '.claude.json'), mode: 'file',
+      includeWhen: (stats) => stats.setupFileCount > 0,
+      notes: ['Only local MCP declarations are read; no Claude web account or private UI scraping is used.'],
+    }),
+    candidate({
+      id: 'claude-desktop-mcp-config', provider: 'claude', label: 'Claude Desktop MCP integrations', kind: 'setup', adapter: 'setup-config',
+      supportsProjects: false,
+      root: path.join(appData, 'Claude', 'claude_desktop_config.json'), mode: 'file',
+      includeWhen: (stats) => stats.setupFileCount > 0,
+      notes: ['Local Claude Desktop MCP declarations only; secrets require reauthorization in Prometheus.'],
     }),
     candidate({
       id: 'openclaw-conversations', provider: 'openclaw', label: 'OpenClaw', kind: 'conversation', adapter: 'openclaw-local',
@@ -328,11 +349,11 @@ function definitions(options: Required<Pick<ImportDiscoveryOptions, 'homeDir' | 
       notes: ['OpenClaw gateway/session files are treated as historical data during import.'],
     }),
     candidate({
-      id: 'openclaw-setup', provider: 'openclaw', label: 'OpenClaw setup', kind: 'setup', adapter: 'setup-config',
+      id: 'openclaw-setup', provider: 'openclaw', label: 'OpenClaw MCP integrations', kind: 'setup', adapter: 'setup-config',
       supportsProjects: false,
       root: path.join(homeDir, '.openclaw'), mode: 'directory',
       includeWhen: (stats) => stats.setupFileCount > 0,
-      notes: ['Gateway credentials and pairing secrets require reauthorization.'],
+      notes: ['Local MCP declarations only; gateway credentials and pairing secrets require reauthorization.'],
     }),
     candidate({
       id: 'localclaw-conversations', provider: 'localclaw', label: 'LocalClaw', kind: 'conversation', adapter: 'localclaw-local',
@@ -342,11 +363,11 @@ function definitions(options: Required<Pick<ImportDiscoveryOptions, 'homeDir' | 
       notes: ['LocalClaw artifacts are shown only when transcript-like files are present.'],
     }),
     candidate({
-      id: 'localclaw-setup', provider: 'localclaw', label: 'LocalClaw setup', kind: 'setup', adapter: 'setup-config',
+      id: 'localclaw-setup', provider: 'localclaw', label: 'LocalClaw MCP integrations', kind: 'setup', adapter: 'setup-config',
       supportsProjects: false,
       root: path.join(homeDir, '.localclaw'), mode: 'directory',
       includeWhen: (stats) => stats.setupFileCount > 0,
-      notes: ['Secrets are redacted and must be reauthorized.'],
+      notes: ['Local MCP declarations only; secrets are redacted and must be reauthorized.'],
     }),
     ...[
       path.join(appData, 'Cursor', 'User', 'History'),

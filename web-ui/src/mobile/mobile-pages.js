@@ -4,7 +4,7 @@ import {
 } from './mobile-data.js';
 import {
   ICONS, icon, escapeHtml, el, renderMobileHeader, wireHeaderActions, openDrawer, invalidateMobileDrawerSessions, refreshMobileDrawerSessions,
-} from './mobile-shell.js?v=pm-v263-2026-08-09-directed-chat-shield';
+} from './mobile-shell.js?v=pm-v288-2026-08-11-gateway-context-visibility';
 import { memoryPageActivate, memoryPageUnmount } from '../pages/MemoryPage.js';
 import {
   applyMobileDraftModelRouteToSession,
@@ -13,8 +13,8 @@ import {
   pmHaptic,
   resetMobileDraftModelRoute,
   setMobileSubagentReasoningContext,
-} from './mobile-model-badge.js?v=pm-v263-2026-08-09-directed-chat-shield';
-import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js?v=pm-v260-2026-08-09-mobile-theme-palette';
+} from './mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover';
+import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js?v=pm-v266-2026-08-11-new-project-popover';
 import { formatModelWithReasoning } from '../model-display.js';
 
 import {
@@ -23,7 +23,7 @@ import {
   loadMobileTeams, loadMobileTeamDetail,
   startTeamRun, pauseTeam, resumeTeam, triggerTeamReview, deleteTeam,
   saveTeamContextReference, invalidateTeamsCache,
-  streamChat, MOBILE_CHAT_SESSION_ID, createMobileChatSessionId, createMobileChatSession, createMobileProjectChatSession,
+  streamChat, MOBILE_CHAT_SESSION_ID, createMobileChatSessionId, createMobileChatSession, createMobileProject, createMobileProjectChatSession,
   resolveMobileVoiceRoom, appendMobileVoiceRoomTranscript,
   loadGatewayStatus, loadMobileChatSession, invalidateMobileChatSessionCache, loadMobileChatRunStatus, loadMobileChatRunStatuses, loadMobileChatStreamReplay, reconcileMobileChatTurn,
   loadMobileBackgroundStatuses, loadMobileBackgroundStatus,
@@ -42,14 +42,14 @@ import {
   loadMobileProcessRuns, loadMobileProcessRunLog, rerunMobileProcessRun, killMobileProcessRun, submitMobileProcessInput,
   uploadMobileTextFile, uploadMobileBinaryFile,
   loadMobileCommandModels, loadMobileStopTargets, stopMobileMainChat, stopMobileRuntime,
-  runMobileScreenshotCommand, restartMobileGateway,
+  runMobileScreenshotCommand, restartMobileGateway, requestMobileUpdate,
   loadMobileWorkspaceFiles, loadMobileFileScreenshot,
   loadCanvasImageDataUrl, creativeExtractLayers, loadCreativeGallery, buildInlineMediaUrl, buildDownloadMediaUrl, buildWorkspaceCanvasUrl,
   loadMobileSubagents, loadMobileSubagentDetail, loadSubagentSystemPrompt, loadSubagentMemory, loadSubagentHeartbeat,
   tickSubagentHeartbeat, loadSubagentRuns, loadSubagentRunDetail, sendSubagentRunRecovery, loadSubagentChat, loadSubagentContextRefs,
   spawnSubagentTask, streamSubagentChat, loadSubagentChatStreamReplay,
  getMobilePushStatus, enableMobileChatPushNotifications, disableMobileChatPushNotifications, reconcileMobileChatPushNotifications,
- } from './mobile-api.js?v=pm-v263-2026-08-09-directed-chat-shield';
+ } from './mobile-api.js?v=pm-v266-2026-08-11-new-project-popover';
 import {
   getGateway,
   loadGatewayCatalog,
@@ -58,12 +58,14 @@ import {
   getMobileSessionTarget,
   resolveMobileSessionGateway,
   setMobileActiveGatewayTarget,
+  isCurrentGateway,
   setActiveGatewayId,
   bindMobileSessionTarget,
   parseTargetNamespacedId,
   targetNamespacedId,
   onGatewayCatalogChanged,
   getPairingPayload,
+  setPendingGatewayPair,
 } from './mobile-gateway-catalog.js';
 import { getAccount } from '../auth/account.js';
 import { renderMd } from '../utils.js';
@@ -4928,6 +4930,88 @@ function _mobileMessagesRepresentSameTurn(a, b) {
   return Number.isFinite(aSource) && aSource >= 0 && aSource === bSource;
 }
 
+function _mobileUserAttachmentSignature(msg) {
+  const attachments = [
+    ...(Array.isArray(msg?.attachmentPreviews) ? msg.attachmentPreviews : []),
+    ...(Array.isArray(msg?.body?.attachments) ? msg.body.attachments : []),
+  ];
+  const keys = attachments.map((item) => {
+    const path = String(item?.workspacePath || item?.path || item?.filePath || '').trim().toLowerCase();
+    const name = String(item?.name || item?.file_name || item?.fileName || '').trim().toLowerCase();
+    const mime = String(item?.mimeType || item?.type || '').trim().toLowerCase();
+    return `${path || name}|${mime}`;
+  }).filter((key) => key !== '|');
+  return [...new Set(keys)].sort().join(';;');
+}
+
+function _mergeMobileUserTurnDetails(target, source) {
+  if (!target || !source || target === source) return target;
+  const targetBody = target.body && typeof target.body === 'object' ? target.body : { text: '' };
+  const sourceText = _mobileMessageCopyText(source);
+  const targetText = _mobileMessageCopyText(target);
+  if ((!targetText
+    || /^attached file\(s\)$/i.test(targetText)
+    || /^please review the attached file\(s\)\.?$/i.test(targetText)) && sourceText) {
+    targetBody.text = sourceText;
+    target.content = sourceText;
+  }
+  const sourceAttachments = [
+    ...(Array.isArray(source?.attachmentPreviews) ? source.attachmentPreviews : []),
+    ...(Array.isArray(source?.body?.attachments) ? source.body.attachments : []),
+  ];
+  const targetAttachments = [
+    ...(Array.isArray(target?.attachmentPreviews) ? target.attachmentPreviews : []),
+    ...(Array.isArray(targetBody.attachments) ? targetBody.attachments : []),
+  ];
+  if (sourceAttachments.length || targetAttachments.length) {
+    const seen = new Set();
+    const merged = [...targetAttachments, ...sourceAttachments].filter((item) => {
+      const key = `${String(item?.workspacePath || item?.path || item?.filePath || item?.name || '').trim().toLowerCase()}|${String(item?.size || item?.bytes || '').trim()}`;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    targetBody.attachments = merged;
+    target.attachmentPreviews = merged;
+  }
+  if (!String(target._clientRequestId || '').trim() && String(source._clientRequestId || '').trim()) {
+    target._clientRequestId = String(source._clientRequestId).trim();
+  }
+  if (!target.uploadState && source.uploadState) target.uploadState = source.uploadState;
+  target.timestamp = Math.min(Number(target.timestamp || Date.now()), Number(source.timestamp || Date.now()));
+  return target;
+}
+
+function _mobileUserTurnsRepresentSameSend(a, b) {
+  if (!a || !b || a.role !== 'user' || b.role !== 'user') return false;
+  const aRequest = String(a._clientRequestId || '').trim();
+  const bRequest = String(b._clientRequestId || '').trim();
+  if (aRequest && bRequest) return aRequest === bRequest;
+  const aText = _mobileMessageCopyText(a).replace(/\s+/g, ' ').trim().toLowerCase();
+  const bText = _mobileMessageCopyText(b).replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!aText || aText !== bText) return false;
+  if (_mobileUserAttachmentSignature(a) !== _mobileUserAttachmentSignature(b)) return false;
+  return Math.abs(Number(a.timestamp || 0) - Number(b.timestamp || 0)) < 15_000;
+}
+
+function _dedupeMobileUserTurns(thread) {
+  const list = Array.isArray(thread) ? thread : [];
+  for (let i = 0; i < list.length; i += 1) {
+    const current = list[i];
+    if (!current || current.role !== 'user') continue;
+    for (let j = i - 1; j >= 0; j -= 1) {
+      const previous = list[j];
+      if (!previous || previous.role !== 'user') continue;
+      if (!_mobileUserTurnsRepresentSameSend(previous, current)) break;
+      _mergeMobileUserTurnDetails(previous, current);
+      list.splice(i, 1);
+      i -= 1;
+      break;
+    }
+  }
+  return list;
+}
+
 function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
   const next = Array.isArray(nextThread) ? nextThread : [];
   const local = Array.isArray(localThread) ? localThread : [];
@@ -5053,6 +5137,7 @@ function _mergeMobileThreadLocalArtifacts(nextThread, localThread) {
 function _mergeMobileSessionThreadWithLocal(sessionId, serverHistory, localThread) {
   const mapped = _mapServerHistoryToMobile(serverHistory);
   const merged = _mergeMobileThreadLocalArtifacts(mapped, localThread);
+  _dedupeMobileUserTurns(merged);
   return _reconcileMobileThreadOrder(_mergeMobilePinnedCompletedTurn(sessionId, merged));
 }
 
@@ -7386,16 +7471,24 @@ function _renderChatMessageHtml(m, index = -1) {
   const msgIndex = Number.isFinite(Number(index)) ? Number(index) : -1;
   const workflowLabel = _mobileWorkflowTransitionLabel(m);
   const attachments = Array.isArray(m.body?.attachments) ? m.body.attachments : [];
-  const attachmentHtml = attachments.length ? _renderChatAttachmentPreviews(attachments, false) : '';
+  const attachmentHtml = attachments.length
+    ? _renderChatAttachmentPreviews(attachments, false, m.role === 'user')
+    : '';
   const revealTime = m.time ? `<span class="pm-reveal-time" aria-hidden="true">${escapeHtml(m.time)}</span>` : '';
   if (m.role === 'user') {
     const isWorkerHandoff = _isMobileVoiceAgentWorkerHandoff(m);
     const isEditing = __pmChat.editingMessageIndex === msgIndex;
+    const userText = String(m.body?.text || '').trim();
+    const isAttachmentOnlyPlaceholder = attachments.length > 0
+      && /^(attached file\(s\)|please review the attached file\(s\)\.)$/i.test(userText);
+    const userBubbleHtml = (isAttachmentOnlyPlaceholder && !isWorkerHandoff)
+      ? ''
+      : `<div class="pm-bubble">${isWorkerHandoff ? '<span class="pm-sender pm-handoff-sender">Voice Agent to Worker</span>' : ''}${isAttachmentOnlyPlaceholder ? '' : `<div class="markdown-body">${_renderMobileSkillReferencedMarkdown(m.body.text, m.body.selectedSkillRefs || m.selectedSkillRefs)}</div>`}</div>`;
     // While editing, render the composer in place of the bubble (NOT nested
     // inside .pm-bubble) so it reads as an editable message, not an inner panel.
     const contentHtml = isEditing
       ? _renderMobileUserEditComposer(m, msgIndex, attachmentHtml)
-      : `<div class="pm-bubble">${isWorkerHandoff ? '<span class="pm-sender pm-handoff-sender">Voice Agent to Worker</span>' : ''}<div class="markdown-body">${_renderMobileSkillReferencedMarkdown(m.body.text, m.body.selectedSkillRefs || m.selectedSkillRefs)}</div>${attachmentHtml}</div>`;
+      : `${attachmentHtml}${userBubbleHtml}`;
     return `<div class="pm-msg from-user${isEditing ? ' editing' : ''}${isWorkerHandoff ? ' voice-worker-handoff' : ''}${m.workflowPart ? ` workflow-${escapeHtml(String(m.workflowPart))}` : ''}" data-msg-index="${msgIndex}">
       ${workflowLabel && !isWorkerHandoff ? `<div class="pm-workflow-transition-label">${escapeHtml(workflowLabel)}</div>` : ''}
       ${contentHtml}${isEditing ? '' : _renderMobileMessageActions(m, msgIndex)}${revealTime}</div>`;
@@ -7625,7 +7718,7 @@ function _collectMediaFromToolEvent(message, evt, inheritedToolName = '') {
   }
 }
 
-function _renderChatAttachmentPreviews(files, removable = true) {
+function _renderChatAttachmentPreviews(files, removable = true, plainImagePreviews = false) {
   const items = (Array.isArray(files) ? files : []).map((f, i) => {
     const name = escapeHtml(f.name || 'Attachment');
     const state = String(f.uploadState || '').trim();
@@ -7645,6 +7738,9 @@ function _renderChatAttachmentPreviews(files, removable = true) {
       const mediaAttrs = !removable
         ? ` data-pm-media data-kind="image" data-src="${escapeHtml(src)}" data-download="${escapeHtml(f.workspacePath ? `/api/canvas/download?path=${encodeURIComponent(String(f.workspacePath || ''))}` : src)}" data-name="${name}" data-path="${escapeHtml(String(f.workspacePath || ''))}"`
         : '';
+      if (plainImagePreviews) {
+        return `<button type="button" class="pm-message-image-preview"${mediaAttrs}><img src="${escapeHtml(src)}" alt="" loading="lazy" decoding="async"></button>`;
+      }
       const tag = removable ? 'div' : 'button type="button"';
       return `<${tag} class="pm-attach-chip image${removable ? '' : ' openable'}"${mediaAttrs}>${remove}<img src="${escapeHtml(src)}" alt=""><span><strong>${name}</strong><em>${meta}</em></span></${removable ? 'div' : 'button'}>`;
     }
@@ -7658,7 +7754,7 @@ function _renderChatAttachmentPreviews(files, removable = true) {
     }
     return `<div class="pm-attach-chip">${remove}<span class="pm-attach-file">${ICONS.clipboard}</span><span><strong>${name}</strong><em>${meta}</em></span></div>`;
   }).join('');
-  return items ? `<div class="pm-attach-list">${items}</div>` : '';
+  return items ? `<div class="pm-attach-list${plainImagePreviews ? ' pm-message-attachment-list' : ''}">${items}</div>` : '';
 }
 
 function _formatBytes(bytes) {
@@ -7867,8 +7963,8 @@ function _renderMobileEmptyChatStarterCards() {
   return `<div class="pm-mobile-empty-chat" aria-label="Starter prompts">
     <div class="pm-mobile-empty-chat-cards">
       ${cards.map((card, index) => `
-        <button class="pm-mobile-empty-chat-card" type="button" data-mobile-starter-prompt="${index}">
-          <span class="pm-mobile-empty-chat-card-title">${escapeHtml(card.title)}</span>
+        <button class="pm-mobile-empty-chat-card" type="button" aria-label="${escapeHtml(`${card.title}: ${card.body}`)}" data-mobile-starter-prompt="${index}">
+          <span class="pm-mobile-empty-chat-card-title" aria-hidden="true">${escapeHtml(card.title)}</span>
           <span class="pm-mobile-empty-chat-card-body">${escapeHtml(card.body)}</span>
         </button>
       `).join('')}
@@ -9500,19 +9596,41 @@ function _pmFetchComposerSkillMatches(value, page) {
 }
 
 let _pmSkillCacheLoadPromise = null;
+// An empty array is a valid loaded result, but it is also the value used by
+// the desktop skills page while its request is still in flight. Keep that
+// distinction explicit so typing `$` never renders a picker and immediately
+// hides it during the async load.
+let _pmSkillCacheReady = Array.isArray(window.prometheusSkillsCache)
+  && window.prometheusSkillsCache.length > 0;
 function _pmEnsureSkillTriggerCacheLoaded() {
-  if (Array.isArray(window.prometheusSkillsCache) && window.prometheusSkillsCache.length) return;
-  if (_pmSkillCacheLoadPromise) return;
+  if (_pmSkillCacheReady) return Promise.resolve(window.prometheusSkillsCache || []);
+  if (Array.isArray(window.prometheusSkillsCache) && window.prometheusSkillsCache.length) {
+    _pmSkillCacheReady = true;
+    return Promise.resolve(window.prometheusSkillsCache);
+  }
+  if (_pmSkillCacheLoadPromise) return _pmSkillCacheLoadPromise;
   // Always use the mobile-authenticated fetch. The desktop loadInstalledSkills()
   // uses the desktop api() helper + #skills-list DOM and fails silently on mobile,
   // leaving window.prometheusSkillsCache empty so the trigger pill never renders.
   _pmSkillCacheLoadPromise = mobileGatewayFetch('/api/skills')
     .then((data) => {
       window.prometheusSkillsCache = Array.isArray(data?.skills) ? data.skills : [];
+      _pmSkillCacheReady = true;
       window.dispatchEvent(new CustomEvent('prometheus:skills-cache-updated', { detail: { skills: window.prometheusSkillsCache } }));
+      return window.prometheusSkillsCache;
     })
-    .catch((err) => console.warn('[mobile skills] trigger cache load failed:', err))
+    .catch((err) => {
+      console.warn('[mobile skills] trigger cache load failed:', err);
+      // Complete the same render cycle on failure so a temporary loading
+      // surface cannot remain open forever above the composer. Preserve any
+      // cache another surface may have populated while this request ran.
+      if (!Array.isArray(window.prometheusSkillsCache)) window.prometheusSkillsCache = [];
+      _pmSkillCacheReady = true;
+      window.dispatchEvent(new CustomEvent('prometheus:skills-cache-updated', { detail: { skills: window.prometheusSkillsCache, error: err } }));
+      return window.prometheusSkillsCache;
+    })
     .finally(() => { _pmSkillCacheLoadPromise = null; });
+  return _pmSkillCacheLoadPromise;
 }
 
 function _pmSkillTriggerIcon() {
@@ -9777,12 +9895,23 @@ function _pmSelectSlashCommand(page, input, command) {
 
 function _pmRenderSlashPopover(page, input) {
   const popover = page.querySelector('#pm-chat-slash-popover');
-  if (!popover || pmActiveSlashCommand) {
+  const skillState = _pmSkillComposerState(input);
+  if (!popover || (pmActiveSlashCommand && !skillState)) {
     _pmHideSlashPopover(page);
     return [];
   }
-  const skillSuggestions = _pmSkillComposerSuggestions(input);
-  if (skillSuggestions.length) {
+  if (skillState) {
+    _pmEnsureSkillTriggerCacheLoaded();
+    if (!_pmSkillCacheReady) {
+      popover.innerHTML = '<div class="pm-chat-slash-loading" role="status">Loading skills…</div>';
+      popover.hidden = false;
+      return [];
+    }
+    const skillSuggestions = _pmSkillComposerSuggestions(input);
+    if (!skillSuggestions.length) {
+      _pmHideSlashPopover(page);
+      return [];
+    }
     pmSkillComposerSelectionIndex = Math.max(0, Math.min(pmSkillComposerSelectionIndex, skillSuggestions.length - 1));
     popover.innerHTML = skillSuggestions.map((skill, idx) => {
       const description = String(skill.description || '').trim();
@@ -9831,19 +9960,26 @@ function _pmRenderSlashPopover(page, input) {
 
 function _pmHandleSlashInput(page, input) {
   const value = String(input?.value || '');
-  if (_pmSkillComposerState(input)) {
+  const skillState = _pmSkillComposerState(input);
+  if (skillState) {
+    // A slash command selection can outlive a route/input replacement. A
+    // skill token is a new explicit picker mode and must always be allowed to
+    // open its own suggestions.
+    if (pmActiveSlashCommand) {
+      pmActiveSlashCommand = null;
+      _pmRefreshSlashChrome(page, input);
+      _pmUpdateComposerRichPreview(page, input);
+    }
     pmSkillComposerSelectionIndex = 0;
     _pmRenderSlashPopover(page, input);
     return;
   }
   if (pmActiveSlashCommand) {
-    if (_pmSlashCommandState(input)) {
-      pmActiveSlashCommand = null;
-      _pmRefreshSlashChrome(page, input);
-      pmSlashCommandSelectionIndex = 0;
-      _pmRenderSlashPopover(page, input);
-    }
-    return;
+    const activeMatch = _pmMatchSlashCommandValue(value);
+    if (activeMatch?.item?.command === pmActiveSlashCommand.command) return;
+    pmActiveSlashCommand = null;
+    _pmRefreshSlashChrome(page, input);
+    _pmUpdateComposerRichPreview(page, input);
   }
   const match = _pmMatchSlashCommandValue(value);
   if (match) {
@@ -10274,6 +10410,12 @@ function _saveMobileLastChatContext(context = {}) {
 
 export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTranscript = false }) {
   _installMobileApprovalBridge();
+  // Composer picker state belongs to the mounted page. Resetting the active
+  // slash command prevents a prior route's command chip from suppressing the
+  // first `$` skill picker on the next mobile chat.
+  pmActiveSlashCommand = null;
+  pmSlashCommandSelectionIndex = 0;
+  pmSkillComposerSelectionIndex = 0;
   // A bare mobile chat route reopens the last explicitly opened chat. The New
   // Chat button clears that remembered id, so only that action lands on the
   // unsaved mobile_default draft with starter cards.
@@ -10283,7 +10425,19 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   const routedTarget = parseTargetNamespacedId(routedSession);
   let requestedSession = String(routedTarget?.targetId || routedSession).trim() || MOBILE_CHAT_SESSION_ID;
   const boundTarget = getMobileSessionTarget(requestedSession);
-  const gatewayTarget = resolveMobileSessionGateway(requestedSession, { pendingGatewayId: routedTarget?.gatewayId || boundTarget?.gatewayId || rememberedChatContext.gatewayId || getActiveGatewayId() });
+  const currentGateway = requestedSession === MOBILE_CHAT_SESSION_ID
+    ? loadGatewayCatalog().find((entry) => isCurrentGateway(entry))
+    : null;
+  const gatewayTarget = resolveMobileSessionGateway(requestedSession, {
+    // A fresh chat belongs to this PWA's gateway. Remembered context is still
+    // used for an existing session, but it must never redirect a new draft to
+    // the Electron gateway or an old dev port after a restart.
+    pendingGatewayId: routedTarget?.gatewayId
+      || boundTarget?.gatewayId
+      || (currentGateway?.gatewayId || '')
+      || rememberedChatContext.gatewayId
+      || getActiveGatewayId(),
+  });
   if (routedTarget?.gatewayId && requestedSession !== MOBILE_CHAT_SESSION_ID) {
     bindMobileSessionTarget(requestedSession, routedTarget.gatewayId, { started: true });
   } else if (requestedSession !== MOBILE_CHAT_SESSION_ID && gatewayTarget?.gatewayId && !boundTarget?.gatewayId) {
@@ -10314,10 +10468,36 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     if (!contextDock || !form) return;
     const rect = form.getBoundingClientRect?.();
     if (!rect || !rect.height) return;
-    const viewportHeight = Number(window.visualViewport?.height || window.innerHeight || 0);
-    if (!viewportHeight) return;
-    const bottom = Math.max(8, Math.round(viewportHeight - Number(rect.top || 0) + 8));
+    const keyboardOpen = _pmKbApp?.classList?.contains('pm-keyboard-open')
+      || document.body?.classList?.contains('pm-keyboard-open');
+    if (!keyboardOpen) {
+      // Anchor to the composer's actual screen position. iOS can leave the
+      // resolved `bottom` value at the keyboard offset for several frames
+      // after dismissal, which previously let the dock slide behind it.
+      const layoutHeight = Math.max(
+        Number(window.innerHeight || 0),
+        Number(document.documentElement?.clientHeight || 0),
+      );
+      if (layoutHeight) {
+        contextDock.style.setProperty(
+          '--pm-context-dock-bottom',
+          `${Math.max(8, Math.round(layoutHeight - Number(rect.top || 0) + 8))}px`,
+        );
+        return;
+      }
+    }
+    const viewport = window.visualViewport;
+    const viewportBottom = Number(viewport?.offsetTop || 0)
+      + Number(viewport?.height || window.innerHeight || 0);
+    if (!viewportBottom) return;
+    const bottom = Math.max(8, Math.round(viewportBottom - Number(rect.top || 0) + 8));
     contextDock.style.setProperty('--pm-context-dock-bottom', `${bottom}px`);
+  }
+
+  function reanchorContextDockAfterLayout() {
+    [0, 80, 180, 360, 700].forEach((delay) => {
+      window.setTimeout(() => requestAnimationFrame(() => syncContextDockToComposer()), delay);
+    });
   }
 
   const closeMenu = () => {
@@ -10678,7 +10858,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     if (value) value.querySelector('strong').textContent = target?.name || 'Gateway unavailable';
     else targetChip.innerHTML = `<strong>${escapeHtml(target?.name || 'Gateway unavailable')}</strong>`;
     targetChip.disabled = false;
-    targetChip.setAttribute('aria-expanded', String(!!targetPopover));
+    targetChip.setAttribute('aria-expanded', String(!!targetPopover && targetPopover.dataset?.popoverType === 'target'));
     targetChip.setAttribute('aria-label', target ? `Current gateway: ${target.name}` : 'Gateway target unavailable');
     return target;
   }
@@ -10702,8 +10882,216 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     });
   }
 
+  function dismissNewChatContextDock() {
+    // The unsaved-chat selectors are part of the starter surface only. Once
+    // the first message has created a real session, remove the mounted dock
+    // instead of waiting for a route re-render that may not happen yet.
+    closeTargetPopover?.();
+    contextDock?.remove();
+    document.body.classList.remove('pm-mobile-context-popover-open');
+  }
+
+  // iOS can dispatch the delayed trusted click against the element that was
+  // underneath a fixed popover when the first touch was not consumed early
+  // enough. Keep a capture-phase guard on both the pointer and click paths so
+  // the Brain Cards never see a gesture that began inside this picker.
+  function installMobileContextPopoverGuard({ wrapper, scrim, trigger, optionSelector }) {
+    let shieldTimer = null;
+    const clearShield = () => {
+      if (shieldTimer) window.clearTimeout(shieldTimer);
+      shieldTimer = null;
+      document.removeEventListener('click', shieldClick, true);
+      document.removeEventListener('pointerup', shieldPointerUp, true);
+      document.removeEventListener('touchend', shieldTouchEnd, true);
+    };
+    const shieldClick = (event) => {
+      if (event.isTrusted === false) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      clearShield();
+    };
+    const shieldPointerUp = (event) => {
+      if (event.isTrusted === false) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const shieldTouchEnd = (event) => {
+      if (event.isTrusted === false) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const armShield = () => {
+      clearShield();
+      document.addEventListener('click', shieldClick, true);
+      document.addEventListener('pointerup', shieldPointerUp, true);
+      document.addEventListener('touchend', shieldTouchEnd, { capture: true, passive: false });
+      shieldTimer = window.setTimeout(clearShield, 900);
+    };
+    const eventPoint = (event) => {
+      const touch = event?.touches?.[0] || event?.changedTouches?.[0] || event;
+      const x = Number(touch?.clientX);
+      const y = Number(touch?.clientY);
+      return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+    };
+    const containsPoint = (element, point) => {
+      if (!element || !point) return false;
+      const rect = element.getBoundingClientRect();
+      return point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom;
+    };
+    const optionAtPoint = (event) => {
+      const point = eventPoint(event);
+      if (!point) return null;
+      return [...wrapper.querySelectorAll(optionSelector)].find((option) => containsPoint(option, point)) || null;
+    };
+    const interactiveAtPoint = (event) => {
+      const point = eventPoint(event);
+      if (!point) return null;
+      const selector = `${optionSelector}, input, textarea, select, button, a, [contenteditable="true"]`;
+      return [...wrapper.querySelectorAll(selector)].find((element) => containsPoint(element, point)) || null;
+    };
+    const eventPath = (event) => (typeof event.composedPath === 'function' ? event.composedPath() : []);
+    const eventIsInside = (event) => {
+      const node = event.target;
+      const path = eventPath(event);
+      return path.includes(wrapper)
+        || path.includes(trigger)
+        || wrapper.contains(node)
+        || trigger?.contains?.(node);
+    };
+    const popoverInputFocused = () => {
+      const active = document.activeElement;
+      return wrapper.contains(active)
+        && active?.matches?.('input, textarea, select, [contenteditable="true"]');
+    };
+    // Attachments are a higher visual and interaction layer than the
+    // new-chat selectors. If a selector is still mounted when the user taps
+    // the paperclip or an attachment action, close the selector but let the
+    // attachment event continue to its real handler.
+    const eventIsInHigherLayer = (event) => {
+      const node = event.target;
+      const path = eventPath(event);
+      const selectors = ['#pm-attach-btn', '#pm-attach-sheet', '#pm-camera-capture', '#pm-chat-voice-camera'];
+      return selectors.some((selector) => path.some((entry) => entry?.matches?.(selector)))
+        || selectors.some((selector) => node?.closest?.(selector));
+    };
+    const stopEvent = (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const onPointerDown = (event) => {
+      if (event.defaultPrevented) return;
+      if (eventIsInside(event)) return;
+      if (eventIsInHigherLayer(event)) {
+        closeTargetPopover();
+        return;
+      }
+      const point = eventPoint(event);
+      const option = optionAtPoint(event);
+      const interactive = interactiveAtPoint(event);
+      if (interactive && !option && interactive.matches?.('input, textarea, select, [contenteditable="true"]')) {
+        // WebKit can report the element behind a fixed translucent dialog as
+        // the touch target. Focus the visual input explicitly before shielding
+        // the underlying composer so the keyboard still opens on first tap.
+        try { interactive.focus({ preventScroll: true }); } catch { try { interactive.focus(); } catch {} }
+        stopEvent(event);
+        return;
+      }
+      if (option) {
+        // Some iOS/WebKit builds report the element underneath a fixed,
+        // translucent popover as the pointer target. Preventing that touch
+        // without activating the visual option kills the delayed click too,
+        // leaving the popover open but completely inert. Resolve the option
+        // from the touch coordinates and activate it on the first contact.
+        stopEvent(event);
+        try { pmHaptic?.(10); } catch {}
+        option.click();
+        return;
+      }
+      if (containsPoint(wrapper, point)) {
+        // The visual hit-test says the gesture is in the popover even if a
+        // mobile browser reported the underlying card as event.target.
+        stopEvent(event);
+        return;
+      }
+      if (!point && popoverInputFocused()) {
+        // iOS may emit a coordinate-less pointer during keyboard presentation
+        // against the element that was underneath the dialog. It is not an
+        // away tap; keep the focused field and its popover alive.
+        stopEvent(event);
+        return;
+      }
+      stopEvent(event);
+      armShield();
+      closeTargetPopover();
+    };
+    const onClick = (event) => {
+      if (event.defaultPrevented || eventIsInside(event)) return;
+      if (eventIsInHigherLayer(event)) {
+        closeTargetPopover();
+        return;
+      }
+      const option = optionAtPoint(event);
+      const interactive = interactiveAtPoint(event);
+      if (interactive && !option && interactive.matches?.('input, textarea, select, [contenteditable="true"]')) {
+        try { interactive.focus({ preventScroll: true }); } catch { try { interactive.focus(); } catch {} }
+        stopEvent(event);
+        return;
+      }
+      if (option) {
+        stopEvent(event);
+        armShield();
+        try { pmHaptic?.(10); } catch {}
+        option.click();
+        return;
+      }
+      const point = eventPoint(event);
+      if (containsPoint(wrapper, point)) {
+        stopEvent(event);
+        return;
+      }
+      if (!point && popoverInputFocused()) {
+        // Do not treat the keyboard's delayed, coordinate-less click as an
+        // away click while the dialog field still owns focus.
+        stopEvent(event);
+        return;
+      }
+      stopEvent(event);
+      armShield();
+      closeTargetPopover();
+    };
+    const onWrapperPointerDown = (event) => event.stopPropagation();
+    const onWrapperClick = (event) => event.stopPropagation();
+    const onScrimPointerDown = (event) => {
+      stopEvent(event);
+      armShield();
+      closeTargetPopover();
+    };
+    wrapper.addEventListener('pointerdown', onWrapperPointerDown);
+    wrapper.addEventListener('click', onWrapperClick);
+    scrim.addEventListener('pointerdown', onScrimPointerDown, true);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('touchstart', onPointerDown, { capture: true, passive: false });
+    document.addEventListener('click', onClick, true);
+    return {
+      armShield,
+      cleanup() {
+        clearShield();
+        wrapper.removeEventListener('pointerdown', onWrapperPointerDown);
+        wrapper.removeEventListener('click', onWrapperClick);
+        scrim.removeEventListener('pointerdown', onScrimPointerDown, true);
+        document.removeEventListener('pointerdown', onPointerDown, true);
+        document.removeEventListener('touchstart', onPointerDown, true);
+        document.removeEventListener('click', onClick, true);
+      },
+    };
+  }
+
   function openChatTargetPopover() {
     if (requestedSession !== MOBILE_CHAT_SESSION_ID || !targetChip) return;
+    if (targetPopover?.dataset?.popoverType === 'target') {
+      closeTargetPopover();
+      return;
+    }
     closeTargetPopover();
     const target = currentChatGateway();
     const immutable = requestedSession !== MOBILE_CHAT_SESSION_ID;
@@ -10714,79 +11102,60 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     wrapper.setAttribute('aria-modal', 'true');
     wrapper.setAttribute('aria-label', 'Gateway target');
     const entries = loadGatewayCatalog();
-    wrapper.innerHTML = `<div class="pm-new-chat-context-popover-title">${immutable ? 'Chat target' : 'Connected computer'}</div><div class="pm-new-chat-context-popover-subtitle">${immutable ? 'This thread is permanently bound to its original gateway.' : 'Choose where this new chat should run.'}</div>${entries.map((entry) => `<button type="button" class="pm-chat-settings-menu-item pm-new-chat-context-option" data-chat-target-id="${escapeHtml(entry.gatewayId)}" aria-selected="${String(entry.gatewayId === target?.gatewayId)}" ${immutable ? 'disabled' : ''}><span class="pm-new-chat-context-option-icon" aria-hidden="true">${ICONS.monitor}</span><span class="pm-new-chat-context-option-copy"><strong>${escapeHtml(entry.name)}</strong><small>${escapeHtml(`${entry.platform || 'unknown'} · ${gatewayStatusLabel(entry.status)}`)}${entry.workspaceName ? ` · ${escapeHtml(entry.workspaceName)}` : ''}</small></span><span class="pm-new-chat-context-option-check" aria-hidden="true">${entry.gatewayId === target?.gatewayId ? ICONS.check : ''}</span></button>`).join('')}`;
+    wrapper.innerHTML = `<div class="pm-new-chat-context-popover-title">${immutable ? 'Chat target' : 'Connected computer'}</div>${entries.map((entry) => `<button type="button" class="pm-chat-settings-menu-item pm-new-chat-context-option" data-chat-target-id="${escapeHtml(entry.gatewayId)}" aria-selected="${String(entry.gatewayId === target?.gatewayId)}" ${immutable ? 'disabled' : ''}><span class="pm-new-chat-context-option-icon" aria-hidden="true">${ICONS.monitor}</span><span class="pm-new-chat-context-option-copy"><strong>${escapeHtml(entry.name)}</strong></span><span class="pm-new-chat-context-option-check" aria-hidden="true">${entry.gatewayId === target?.gatewayId ? ICONS.check : ''}</span></button>`).join('')}`;
     const scrim = document.createElement('button');
     scrim.type = 'button';
     scrim.className = 'pm-chat-target-popover-scrim';
     scrim.setAttribute('aria-label', 'Close gateway target');
-    scrim.addEventListener('click', closeTargetPopover);
     const onEscape = (event) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       closeTargetPopover();
     };
-    const shieldUnderlyingClick = () => {
-      let armed = true;
-      const cleanup = () => {
-        if (!armed) return;
-        armed = false;
-        document.removeEventListener('click', shield, true);
-      };
-      const shield = (clickEvent) => {
-        // The option.click() call below creates an untrusted synthetic click;
-        // let that one reach the option handler, but consume iOS's subsequent
-        // trusted click that would otherwise land on a brain card underneath.
-        if (clickEvent.isTrusted === false) return;
-        cleanup();
-        clickEvent.preventDefault();
-        clickEvent.stopImmediatePropagation();
-      };
-      document.addEventListener('click', shield, true);
-      window.setTimeout(cleanup, 900);
-    };
-    const onPointerDownOutside = (event) => {
-      const node = event.target;
-      const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
-      if (path.includes(wrapper) || wrapper.contains(node) || targetChip?.contains(node)) return;
-      const x = Number(event.clientX);
-      const y = Number(event.clientY);
-      const option = Number.isFinite(x) && Number.isFinite(y)
-        ? [...wrapper.querySelectorAll('[data-chat-target-id]')].find((button) => {
-          const rect = button.getBoundingClientRect();
-          return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-        })
-        : null;
-      if (option) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        shieldUnderlyingClick();
-        option.click();
-        return;
-      }
-      closeTargetPopover();
-    };
     document.body.append(scrim);
     (contextDock || form || document.body).append(wrapper);
+    let popoverGuard = null;
+    popoverGuard = installMobileContextPopoverGuard({
+      wrapper,
+      scrim,
+      trigger: targetChip,
+      optionSelector: '[data-chat-target-id]',
+    });
     contextDock?.classList.add('pm-context-popover-open');
     form?.classList.add('pm-target-popover-open');
+    document.body.classList.add('pm-mobile-context-popover-open');
     document.addEventListener('keydown', onEscape, true);
-    document.addEventListener('pointerdown', onPointerDownOutside, true);
     targetPopover = wrapper;
     targetChip?.setAttribute('aria-expanded', 'true');
+    scrim.addEventListener('click', () => {
+      popoverGuard?.armShield();
+      closeTargetPopover();
+    });
     closeTargetPopover = () => {
+      popoverGuard?.cleanup();
       scrim.remove();
       wrapper.remove();
       contextDock?.classList.remove('pm-context-popover-open');
       form?.classList.remove('pm-target-popover-open');
+      document.body.classList.remove('pm-mobile-context-popover-open');
       document.removeEventListener('keydown', onEscape, true);
-      document.removeEventListener('pointerdown', onPointerDownOutside, true);
       targetPopover = null;
       targetChip?.setAttribute('aria-expanded', 'false');
+      reanchorContextDockAfterLayout();
       closeTargetPopover = () => {};
     };
-    wrapper.addEventListener('pointerdown', (event) => event.stopPropagation());
-    wrapper.addEventListener('click', (event) => event.stopPropagation());
-    wrapper.querySelectorAll('[data-chat-target-id]').forEach((button) => button.addEventListener('click', () => {
+    wrapper.querySelectorAll('[data-chat-target-id]').forEach((button) => button.addEventListener('click', (event) => {
+      if (event?.isTrusted && button.dataset.pmHaptic !== '1') {
+        try { pmHaptic?.(10); } catch {}
+      }
+      if (button.getAttribute('aria-selected') === 'true') {
+        // Treat tapping the current target as an away click. It should dismiss
+        // the picker without reopening the keyboard or changing any state.
+        popoverGuard?.armShield();
+        closeTargetPopover();
+        return;
+      }
+      popoverGuard?.armShield();
       pendingGatewayId = button.getAttribute('data-chat-target-id') || pendingGatewayId;
       setActiveGatewayId(pendingGatewayId);
       setMobileActiveGatewayTarget(pendingGatewayId);
@@ -10794,115 +11163,272 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
       renderChatTargetChip();
       renderChatProjectChip();
       closeTargetPopover();
-      input?.focus?.({ preventScroll: true });
     }));
-    wrapper.querySelector('[data-chat-target-id]:not([disabled])')?.focus?.();
+    // Keep picker rows as real buttons. A native haptic switch overlay consumes
+    // the physical iOS tap and relies on a second synthetic click, which can be
+    // discarded while the selected row is closing its own modal layer.
   }
 
-  targetChip?.addEventListener('click', openChatTargetPopover);
+  const bindContextTrigger = (button, activate) => {
+    if (!button || typeof activate !== 'function') return;
+    // The haptic proxy activates on touch while keyboard/mouse activation
+    // reaches the real button. Debounce the two browser paths so a selected
+    // chip always performs one toggle (close), never close-then-reopen.
+    let lastActivationAt = 0;
+    const run = () => {
+      const now = Date.now();
+      if (now - lastActivationAt < 80) return;
+      lastActivationAt = now;
+      activate();
+    };
+    button.addEventListener('click', run);
+    try { attachMobileButtonHaptic(button, run); } catch {}
+  };
+  bindContextTrigger(targetChip, openChatTargetPopover);
+  bindContextTrigger(projectChip, openChatProjectPopover);
   renderChatTargetChip();
   renderChatProjectChip();
   const stopGatewayTargetUpdates = onGatewayCatalogChanged(() => renderChatTargetChip());
 
+  function syncNewProjectPopoverToKeyboard(keyboardOpen = false, visualBottom = 0, layoutHeight = 0) {
+    const popover = targetPopover?.dataset?.popoverType === 'new-project' ? targetPopover : null;
+    if (!popover) return;
+    const open = keyboardOpen === true;
+    popover.classList.toggle('pm-new-project-keyboard-open', open);
+    if (!open) {
+      popover.style.removeProperty('--pm-new-project-keyboard-shift');
+      return;
+    }
+    const targetBottom = Math.max(0, Number(visualBottom || window.visualViewport?.height || window.innerHeight || 0) - 8);
+    const measureAndAnchor = () => {
+      if (targetPopover !== popover || !document.contains(popover)) return;
+      const rect = popover.getBoundingClientRect?.();
+      if (!rect || !rect.height) return;
+      const shift = targetBottom - Number(rect.bottom || 0);
+      const limit = Math.max(Number(layoutHeight || window.innerHeight || 0), targetBottom, rect.height) + 80;
+      popover.style.setProperty('--pm-new-project-keyboard-shift', `${Math.round(Math.max(-limit, Math.min(limit, shift)))}px`);
+    };
+    requestAnimationFrame(measureAndAnchor);
+  }
+
+  function openNewProjectPopover() {
+    if (!projectChip || !contextDock) return;
+    closeTargetPopover();
+    const wrapper = document.createElement('div');
+    wrapper.className = 'pm-chat-settings-popover pm-new-chat-context-popover pm-new-project-popover';
+    wrapper.dataset.popoverType = 'new-project';
+    wrapper.setAttribute('role', 'dialog');
+    wrapper.setAttribute('aria-modal', 'true');
+    wrapper.setAttribute('aria-label', 'New project');
+    wrapper.innerHTML = `
+      <div class="pm-new-chat-context-popover-title">New project</div>
+      <form class="pm-new-project-form">
+        <label class="pm-new-project-label" for="pm-new-project-name">Project name</label>
+        <input id="pm-new-project-name" class="pm-new-project-input" type="text" maxlength="120" autocomplete="off" placeholder="e.g. Mobile app" />
+        <div class="pm-new-project-error" role="alert" hidden></div>
+        <div class="pm-new-project-actions">
+          <button type="button" class="pm-new-project-button pm-new-project-cancel" data-project-create-action="cancel">Cancel</button>
+          <button type="button" class="pm-new-project-button pm-new-project-confirm" data-project-create-action="confirm">Create</button>
+        </div>
+      </form>`;
+    const scrim = document.createElement('button');
+    scrim.type = 'button';
+    scrim.className = 'pm-chat-target-popover-scrim';
+    scrim.setAttribute('aria-label', 'Close new project dialog');
+    document.body.append(scrim);
+    contextDock.append(wrapper);
+    const popoverGuard = installMobileContextPopoverGuard({
+      wrapper,
+      scrim,
+      trigger: projectChip,
+      optionSelector: '[data-project-create-action]',
+    });
+    contextDock.classList.add('pm-context-popover-open');
+    document.body.classList.add('pm-mobile-context-popover-open');
+    document.body.classList.add('pm-new-project-dialog-open');
+    targetPopover = wrapper;
+    projectChip.setAttribute('aria-expanded', 'true');
+    const nameInput = wrapper.querySelector('#pm-new-project-name');
+    const errorEl = wrapper.querySelector('.pm-new-project-error');
+    const confirmButton = wrapper.querySelector('.pm-new-project-confirm');
+    const formEl = wrapper.querySelector('.pm-new-project-form');
+    let submitting = false;
+    const close = () => {
+      popoverGuard.cleanup();
+      scrim.remove();
+      wrapper.remove();
+      contextDock.classList.remove('pm-context-popover-open');
+      document.body.classList.remove('pm-mobile-context-popover-open');
+      document.body.classList.remove('pm-new-project-dialog-open');
+      document.removeEventListener('keydown', onEscape, true);
+      targetPopover = null;
+      projectChip.setAttribute('aria-expanded', 'false');
+      reanchorContextDockAfterLayout();
+      closeTargetPopover = () => {};
+    };
+    closeTargetPopover = close;
+    const onEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      close();
+    };
+    document.addEventListener('keydown', onEscape, true);
+    const setError = (message = '') => {
+      if (!errorEl) return;
+      errorEl.textContent = message;
+      errorEl.hidden = !message;
+    };
+    const cancel = () => {
+      popoverGuard.armShield();
+      close();
+    };
+    const submit = async (event) => {
+      event?.preventDefault?.();
+      if (submitting) return;
+      const name = String(nameInput?.value || '').trim();
+      if (!name) {
+        setError('Enter a project name.');
+        nameInput?.focus?.();
+        return;
+      }
+      popoverGuard.armShield();
+      submitting = true;
+      if (confirmButton) confirmButton.disabled = true;
+      setError('');
+      try {
+        const created = await createMobileProject(name);
+        const project = created?.project || created;
+        const projectId = String(project?.id || '').trim();
+        if (!projectId) throw new Error('Prometheus did not return the new project.');
+        targetProjectId = projectId;
+        targetProjectLabel = String(project?.name || name).trim() || name;
+        rememberChatContext();
+        renderChatProjectChip();
+        invalidateMobileDrawerSessions();
+        try { window.__pmMobileProjectsChanged?.(project); } catch {}
+        close();
+      } catch (error) {
+        submitting = false;
+        if (confirmButton) confirmButton.disabled = false;
+        setError(String(error?.message || error || 'Could not create project.'));
+      }
+    };
+    scrim.addEventListener('click', cancel);
+    wrapper.querySelector('.pm-new-project-cancel')?.addEventListener('click', (event) => {
+      if (event?.isTrusted) {
+        try { pmHaptic?.(10); } catch {}
+      }
+      cancel();
+    });
+    formEl?.addEventListener('submit', submit);
+    confirmButton?.addEventListener('click', (event) => {
+      if (event?.isTrusted) {
+        try { pmHaptic?.(10); } catch {}
+      }
+      void submit(event);
+    });
+    setTimeout(() => {
+      if (document.contains(nameInput)) nameInput.focus({ preventScroll: true });
+    }, 80);
+  }
+
   async function openChatProjectPopover() {
     if (requestedSession !== MOBILE_CHAT_SESSION_ID || !projectChip || !contextDock) return;
+    if (targetPopover?.dataset?.popoverType === 'project') {
+      closeTargetPopover();
+      return;
+    }
     closeTargetPopover();
     const wrapper = document.createElement('div');
     wrapper.className = 'pm-chat-settings-popover pm-new-chat-context-popover';
     wrapper.dataset.popoverType = 'project';
     wrapper.setAttribute('role', 'dialog');
     wrapper.setAttribute('aria-label', 'Directed chat');
-    wrapper.innerHTML = '<div class="pm-new-chat-context-popover-title">Directed chat</div><div class="pm-new-chat-context-popover-subtitle">Choose Chat or a project for this new conversation.</div><div class="pm-new-chat-context-loading">Loading projects…</div>';
+    wrapper.innerHTML = '<div class="pm-new-chat-context-popover-title">Directed chat</div><div class="pm-new-chat-context-loading">Loading projects…</div>';
     const scrim = document.createElement('button');
     scrim.type = 'button';
     scrim.className = 'pm-chat-target-popover-scrim';
     scrim.setAttribute('aria-label', 'Close directed chat picker');
-    scrim.addEventListener('click', closeTargetPopover);
     const onEscape = (event) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       closeTargetPopover();
     };
-    const shieldUnderlyingClick = () => {
-      let armed = true;
-      const cleanup = () => {
-        if (!armed) return;
-        armed = false;
-        document.removeEventListener('click', shield, true);
-      };
-      const shield = (clickEvent) => {
-        if (clickEvent.isTrusted === false) return;
-        cleanup();
-        clickEvent.preventDefault();
-        clickEvent.stopImmediatePropagation();
-      };
-      document.addEventListener('click', shield, true);
-      window.setTimeout(cleanup, 900);
-    };
-    const onPointerDownOutside = (event) => {
-      const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
-      if (path.includes(wrapper) || wrapper.contains(event.target) || projectChip.contains(event.target)) return;
-      const x = Number(event.clientX);
-      const y = Number(event.clientY);
-      const option = Number.isFinite(x) && Number.isFinite(y)
-        ? [...wrapper.querySelectorAll('[data-project-id]')].find((button) => {
-          const rect = button.getBoundingClientRect();
-          return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
-        })
-        : null;
-      if (option) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        shieldUnderlyingClick();
-        option.click();
-        return;
-      }
-      closeTargetPopover();
-    };
     document.body.append(scrim);
     contextDock.append(wrapper);
+    let popoverGuard = null;
+    popoverGuard = installMobileContextPopoverGuard({
+      wrapper,
+      scrim,
+      trigger: projectChip,
+      optionSelector: '[data-project-id], [data-new-project]',
+    });
     contextDock.classList.add('pm-context-popover-open');
+    document.body.classList.add('pm-mobile-context-popover-open');
     document.addEventListener('keydown', onEscape, true);
-    document.addEventListener('pointerdown', onPointerDownOutside, true);
     targetPopover = wrapper;
     projectChip.setAttribute('aria-expanded', 'true');
+    scrim.addEventListener('click', () => {
+      popoverGuard?.armShield();
+      closeTargetPopover();
+    });
     closeTargetPopover = () => {
+      popoverGuard?.cleanup();
       scrim.remove();
       wrapper.remove();
       contextDock.classList.remove('pm-context-popover-open');
+      document.body.classList.remove('pm-mobile-context-popover-open');
       document.removeEventListener('keydown', onEscape, true);
-      document.removeEventListener('pointerdown', onPointerDownOutside, true);
       targetPopover = null;
       targetChip?.setAttribute('aria-expanded', 'false');
       projectChip?.setAttribute('aria-expanded', 'false');
+      reanchorContextDockAfterLayout();
       closeTargetPopover = () => {};
     };
-    wrapper.addEventListener('pointerdown', (event) => event.stopPropagation());
-    wrapper.addEventListener('click', (event) => event.stopPropagation());
     try {
       const data = await mobileGatewayFetch('/api/projects');
+      if (!document.contains(wrapper) || targetPopover !== wrapper) return;
       const projects = (Array.isArray(data) ? data : data?.projects || []).filter((project) => project?.id);
       const options = [{ id: '', name: 'Chat' }, ...projects];
-      wrapper.querySelector('.pm-new-chat-context-loading').outerHTML = options.map((project) => {
+      const newProjectMarkup = '<button type="button" class="pm-chat-settings-menu-item pm-new-chat-context-option pm-new-project-option" data-new-project="true"><span class="pm-new-chat-context-option-icon" aria-hidden="true">+</span><span class="pm-new-chat-context-option-copy"><strong>New project</strong></span><span class="pm-new-chat-context-option-check" aria-hidden="true">›</span></button>';
+      wrapper.querySelector('.pm-new-chat-context-loading').outerHTML = `${newProjectMarkup}${options.map((project) => {
         const selected = String(project.id || '') === targetProjectId;
-        return `<button type="button" class="pm-chat-settings-menu-item pm-new-chat-context-option" data-project-id="${escapeHtml(project.id || '')}" aria-selected="${String(selected)}"><span class="pm-new-chat-context-option-icon" aria-hidden="true">${project.id ? ICONS.folder : ICONS.chat}</span><span class="pm-new-chat-context-option-copy"><strong>${escapeHtml(project.name)}</strong><small>${project.id ? 'Project chat' : 'Regular chat'}</small></span><span class="pm-new-chat-context-option-check" aria-hidden="true">${selected ? ICONS.check : ''}</span></button>`;
-      }).join('');
-      wrapper.querySelectorAll('[data-project-id]').forEach((button) => button.addEventListener('click', () => {
+        return `<button type="button" class="pm-chat-settings-menu-item pm-new-chat-context-option" data-project-id="${escapeHtml(project.id || '')}" aria-selected="${String(selected)}"><span class="pm-new-chat-context-option-icon" aria-hidden="true">${project.id ? ICONS.folder : ICONS.chat}</span><span class="pm-new-chat-context-option-copy"><strong>${escapeHtml(project.name)}</strong></span><span class="pm-new-chat-context-option-check" aria-hidden="true">${selected ? ICONS.check : ''}</span></button>`;
+      }).join('')}`;
+      const newProjectButton = wrapper.querySelector('[data-new-project]');
+      const openNewProject = (event) => {
+        if (event?.isTrusted) {
+          try { pmHaptic?.(10); } catch {}
+        }
+        popoverGuard?.armShield();
+        openNewProjectPopover();
+      };
+      newProjectButton?.addEventListener('click', openNewProject);
+      wrapper.querySelectorAll('[data-project-id]').forEach((button) => button.addEventListener('click', (event) => {
+        if (event?.isTrusted && button.dataset.pmHaptic !== '1') {
+          try { pmHaptic?.(10); } catch {}
+        }
+        if (button.getAttribute('aria-selected') === 'true') {
+          // Match an away click when the user taps the already active route.
+          popoverGuard?.armShield();
+          closeTargetPopover();
+          return;
+        }
+        popoverGuard?.armShield();
         targetProjectId = String(button.dataset.projectId || '').trim();
         targetProjectLabel = String(button.querySelector('strong')?.textContent || '').trim();
         if (!targetProjectId) targetProjectLabel = '';
         rememberChatContext();
         renderChatProjectChip();
         closeTargetPopover();
-        input?.focus?.({ preventScroll: true });
       }));
-      wrapper.querySelector('[data-project-id][aria-selected="true"]')?.focus?.();
+      // Project picker rows intentionally remain direct buttons; see the target
+      // picker above for why these modal options do not use a haptic proxy.
     } catch {
-      wrapper.querySelector('.pm-new-chat-context-loading').textContent = 'Projects are unavailable right now.';
+      const loading = wrapper.querySelector('.pm-new-chat-context-loading');
+      if (loading) loading.textContent = 'Projects are unavailable right now.';
     }
   }
-
-  projectChip?.addEventListener('click', openChatProjectPopover);
 
   _pmRefreshSlashChrome(page, input);
   _installMobileTimestampReveal(threadEl, handleMobileMessageAction);
@@ -10983,7 +11509,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     const maxHeight = Number(input.dataset.maxHeight || dynamicCap);
     input.style.height = 'auto';
     const nextHeight = Math.min(input.scrollHeight || 0, maxHeight);
-    input.style.height = `${Math.max(30, nextHeight)}px`;
+    input.style.height = `${Math.max(28, nextHeight)}px`;
     input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
   };
   // SpeechRecognition may deliver a final result after the composer has been
@@ -11100,6 +11626,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   let voiceCameraFrameCacheRefreshPending = false;
   let voiceCameraFrameCacheRefreshPromise = null;
   let voiceCameraLiveFrameReader = null;
+  let voiceCameraFrameSequence = 0;
   let voiceCameraAutoCaptureInFlight = null;
   let voiceCameraAutoCaptureLastAt = 0;
   const CAMERA_RECORD_HOLD_MS = 420;
@@ -11731,9 +12258,17 @@ void main() {
             const payload = getPairingPayload(pairValue || '');
             if (payload && payload.origin === parsedUrl.origin) {
               stopCameraCapture();
-              // Rebuild a minimal safe deep link from the validated payload;
-              // arbitrary QR URLs and any unrelated query data are discarded.
-              window.location.href = `${payload.origin}/?pair=${encodeURIComponent(pairValue)}#mobile/pair`;
+              // This is the deliberate multi-gateway path. Keep the current
+              // PWA document/origin so its catalog remains the hub, then let
+              // the pairing page claim and poll the scanned target directly.
+              // The validated payload is the only thing carried forward;
+              // arbitrary QR URLs and unrelated query data are discarded.
+              if (!setPendingGatewayPair(pairValue)) {
+                setCameraStatus('That pairing QR is no longer valid');
+                cameraPairScanBusy = false;
+                return;
+              }
+              navigate?.('#mobile/pair/add');
               return;
             }
             setCameraStatus('That is not a valid Prometheus pairing QR');
@@ -11768,6 +12303,7 @@ void main() {
 
   function readCameraFrameDataUrl(maxDim = 1024, quality = 0.78) {
     if (!cameraVideo || !cameraStream) return null;
+    const capturedAt = Date.now();
     const width = Number(cameraVideo.videoWidth || 0);
     const height = Number(cameraVideo.videoHeight || 0);
     if (!width || !height) return null;
@@ -11782,7 +12318,9 @@ void main() {
       dataUrl: canvas.toDataURL('image/jpeg', Math.max(0.5, Math.min(0.9, Number(quality) || 0.78))),
       width: canvas.width,
       height: canvas.height,
-      capturedAt: Date.now(),
+      capturedAt,
+      encodedAt: Date.now(),
+      frameId: `chat_camera_${++voiceCameraFrameSequence}`,
     };
   }
 
@@ -11807,6 +12345,7 @@ void main() {
 
   function readVoiceCameraFrameDataUrlAsync(maxDim = 768, quality = 0.68) {
     if (!cameraVideo || !cameraStream) return Promise.resolve(null);
+    const capturedAt = Date.now();
     const width = Number(cameraVideo.videoWidth || 0);
     const height = Number(cameraVideo.videoHeight || 0);
     if (!width || !height) return Promise.resolve(null);
@@ -11832,7 +12371,9 @@ void main() {
           dataUrl: String(reader.result || ''),
           width: canvas.width,
           height: canvas.height,
-          capturedAt: Date.now(),
+          capturedAt,
+          encodedAt: Date.now(),
+          frameId: `chat_camera_${++voiceCameraFrameSequence}`,
         });
         reader.onerror = () => resolve(null);
         reader.readAsDataURL(blob);
@@ -11840,22 +12381,41 @@ void main() {
     });
   }
 
-  async function refreshVoiceCameraFrameCache() {
+  async function refreshVoiceCameraFrameCache(options = {}) {
     if (String(cameraCaptureOptions?.target || '') !== 'voice') return voiceCameraFrameCache;
-    if (voiceCameraFrameCacheRefreshPromise) return voiceCameraFrameCacheRefreshPromise;
+    const force = options?.force === true;
+    const requestedAt = Date.now();
+    const previous = voiceCameraFrameCacheRefreshPromise;
+    if (previous) {
+      const existing = await previous.catch(() => null);
+      const existingCapturedAt = Number(existing?.capturedAt || 0) || 0;
+      // A turn-boundary request may await a cache refresh that started a few
+      // milliseconds earlier, but it must not accept an older timer result as
+      // the turn's frame when that refresh has already gone stale.
+      if (!force || existingCapturedAt >= requestedAt - 150) return existing;
+    }
     // Live vision is sampled once per spoken second. Keep those frames lighter
     // than a user-captured photo. `toBlob`/FileReader keeps JPEG encoding off
-    // the synchronous live-audio read path on iOS.
-    voiceCameraFrameCacheRefreshPromise = readVoiceCameraFrameDataUrlAsync(768, 0.68)
-      .then((frame) => {
-        if (frame?.dataUrl && String(cameraCaptureOptions?.target || '') === 'voice' && cameraStream) {
-          voiceCameraFrameCache = frame;
-        }
-        return voiceCameraFrameCache;
-      })
-      .catch(() => voiceCameraFrameCache)
-      .finally(() => { voiceCameraFrameCacheRefreshPromise = null; });
-    return voiceCameraFrameCacheRefreshPromise;
+    // the synchronous live-audio read path on iOS. A forced read retries briefly
+    // while Safari finishes exposing the first video frame.
+    const work = (async () => {
+      let frame = null;
+      for (let attempt = 0; attempt < (force ? 3 : 1); attempt++) {
+        frame = await readVoiceCameraFrameDataUrlAsync(768, 0.68);
+        if (frame?.dataUrl) break;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+      if (frame?.dataUrl && String(cameraCaptureOptions?.target || '') === 'voice' && cameraStream) {
+        voiceCameraFrameCache = frame;
+      }
+      return frame?.dataUrl ? frame : (force ? null : voiceCameraFrameCache);
+    })().catch(() => (force ? null : voiceCameraFrameCache));
+    let promise = null;
+    promise = work.finally(() => {
+      if (voiceCameraFrameCacheRefreshPromise === promise) voiceCameraFrameCacheRefreshPromise = null;
+    });
+    voiceCameraFrameCacheRefreshPromise = promise;
+    return promise;
   }
 
   function scheduleVoiceCameraFrameCacheRefresh() {
@@ -12580,8 +13140,9 @@ void main() {
 
   function updateComposerSubmitState(sessionForBusy = requestedSession) {
     const sid = String(sessionForBusy || requestedSession || MOBILE_CHAT_SESSION_ID);
-    const activeSid = String(__pmChat.activeSessionId || requestedSession || MOBILE_CHAT_SESSION_ID);
-    const sessionBusy = !!(__pmChat.activeRuns?.[activeSid]?.busy || __pmChat.activeRuns?.[sid]?.busy);
+    // The composer belongs to the requested route. Do not let a run in a
+    // different chat session turn a fresh/new-chat composer into a stop button.
+    const sessionBusy = !!__pmChat.activeRuns?.[sid]?.busy;
     const shouldAbort = sessionBusy && !_composerHasOutboundContent();
     const shouldVoice = !sessionBusy && !_composerHasOutboundContent();
     sendBtn.disabled = false;
@@ -12696,6 +13257,10 @@ void main() {
     const enabled = !!active;
     const thread = Array.isArray(__pmChat.threads?.[requestedSession]) ? __pmChat.threads[requestedSession] : [];
     const newChatVoice = requestedSession === MOBILE_CHAT_SESSION_ID && thread.length === 0;
+    const hideNewChatContext = enabled && newChatVoice;
+    if (hideNewChatContext) closeTargetPopover();
+    contextDock?.classList.toggle('pm-chat-context-dock-voice-hidden', hideNewChatContext);
+    contextDock?.setAttribute('aria-hidden', hideNewChatContext ? 'true' : 'false');
     form?.classList.toggle('is-voice-active', enabled);
     body?.classList.toggle('pm-chat-voice-occluded', enabled);
     document.body?.classList.toggle('pm-chat-voice-active', enabled);
@@ -13302,6 +13867,8 @@ void main() {
   let _pmKbPinRaf = 0;
   let _pmKbPinUntil = 0;
   let _pmKbFocusActive = false;
+  let _pmKbFocusGraceUntil = 0;
+  let _pmKbFocusGraceTimer = 0;
   let _pmKbViewportMode = '';
   const _pmKbComposerShiftProperty = '--pm-keyboard-composer-shift';
   const _pmKbComposerViewportProperties = ['position', 'left', 'right', 'bottom', 'z-index'];
@@ -13378,6 +13945,7 @@ void main() {
       : 0;
     const baselineOffset = Math.max(0, Math.round(_pmKbBaselineHeight - (vv ? visualHeight : layoutHeight)));
     const composerFocused = document.activeElement === input
+      || document.activeElement?.matches?.('#pm-new-project-name')
       || (sideSheet?.classList?.contains('open') && document.activeElement === sideInput);
     // Ignore small deltas from Safari's collapsing URL bar; only treat a
     // sizeable gap as a real keyboard. Some installed iOS PWAs shrink both
@@ -13388,8 +13956,14 @@ void main() {
     // the focus frame, especially when the document is already at its bottom;
     // waiting for a measurable delta leaves the composer behind the keyboard
     // until a manual scroll produces the next viewport event.
-    const open = layoutOffset > 90
-      || (composerFocused && (_pmKbFocusActive || baselineOffset > 90));
+    // A stale/shrinking visual viewport can outlive the field that opened the
+    // keyboard. Do not let that closing-frame measurement re-hide the tab bar;
+    // only an actively focused composer or project-name field owns this state.
+    const open = composerFocused && (
+      layoutOffset > 90
+      || baselineOffset > 90
+      || (_pmKbFocusActive && performance.now() < _pmKbFocusGraceUntil)
+    );
     // iOS has two incompatible fixed-position behaviors: some webviews anchor
     // fixed children to the layout viewport, while others already anchor them
     // to the visual viewport. Reset the small visual correction before each
@@ -13411,6 +13985,12 @@ void main() {
     const keyboardOffset = open && _pmKbViewportMode === 'layout' ? layoutOffset : 0;
     _pmKbApp.style.setProperty('--pm-keyboard-offset', `${keyboardOffset}px`);
     _pmKbApp.classList.toggle('pm-keyboard-open', open);
+    // A focused field is not proof that iOS has presented the keyboard yet.
+    // During that short focus-only window the new-project dialog must remain
+    // centered; switch to keyboard anchoring only after the viewport has
+    // actually contracted.
+    const keyboardViewportSettled = layoutOffset > 90 || baselineOffset > 90;
+    syncNewProjectPopoverToKeyboard(open && keyboardViewportSettled, visualBottom, layoutHeight);
     if (open && !document.body?.classList?.contains('pm-mobile-document-scroll')) {
       // A document-scrolled iOS PWA can pan the visual viewport while the
       // fixed composer remains tied to the layout viewport. Correct the final
@@ -13459,12 +14039,21 @@ void main() {
   window.addEventListener('resize', _onWindowKeyboardResize, { passive: true });
   const _onComposerFocusKb = () => {
     _pmKbFocusActive = true;
+    _pmKbFocusGraceUntil = performance.now() + 1600;
+    if (_pmKbFocusGraceTimer) window.clearTimeout(_pmKbFocusGraceTimer);
+    _pmKbFocusGraceTimer = window.setTimeout(() => {
+      _pmKbFocusGraceTimer = 0;
+      _scheduleKeyboardOffset();
+    }, 1700);
     _pmKbBaselineHeight = Math.max(_pmKbBaselineHeight, Number(window.innerHeight || 0), Number(window.visualViewport?.height || 0));
     // Move the real composer before Safari finishes presenting the keyboard;
     // the later viewport pass replaces the provisional 8px bottom edge with
     // the measured visual-viewport edge.
     _pmKbApp.style.setProperty('--pm-keyboard-offset', '0px');
     _pmKbApp.classList.add('pm-keyboard-open');
+    // Keep the dialog centered during the focus hand-off. The first measured
+    // visualViewport/layout resize will move it to the keyboard edge.
+    syncNewProjectPopoverToKeyboard(false, Number(window.visualViewport?.height || window.innerHeight || 0), Number(window.innerHeight || 0));
     _pmKbTabbar?.style.setProperty('display', 'none', 'important');
     _pmKbSetComposerViewportStyles(8);
     // Pin aggressively through the keyboard's open animation so the shell never
@@ -13479,13 +14068,30 @@ void main() {
   };
   const _onComposerBlurKb = () => {
     _pmKbFocusActive = false;
+    _pmKbFocusGraceUntil = 0;
+    if (_pmKbFocusGraceTimer) {
+      window.clearTimeout(_pmKbFocusGraceTimer);
+      _pmKbFocusGraceTimer = 0;
+    }
     _pmKbPinUntil = 0;
     _pmKbViewportMode = '';
-    setTimeout(_scheduleKeyboardOffset, 60);
+    // Blur is the authoritative end of the keyboard interaction. Restore the
+    // persistent chrome immediately; waiting for a final visualViewport event
+    // can leave iOS PWAs with the tab bar permanently hidden/frozen.
+    _pmKbApp.classList.remove('pm-keyboard-open');
+    _pmKbTabbar?.style.removeProperty('display');
+    syncNewProjectPopoverToKeyboard(false);
+    // iOS restores visualViewport and the fixed containing block over several
+    // frames after blur. Re-anchor throughout that close animation, including
+    // the retained multiline-text case where the composer stays tall.
+    [60, 180, 360, 700].forEach((delay) => setTimeout(() => {
+      _scheduleKeyboardOffset();
+      updateChatComposerSpace();
+    }, delay));
   };
   const _isKeyboardComposerTarget = (target) => target === input
     || target === sideInput
-    || target?.matches?.('#pm-composer-input, #pm-mobile-side-input');
+    || target?.matches?.('#pm-composer-input, #pm-mobile-side-input, #pm-new-project-name');
   const _onComposerFocusInKb = (event) => {
     if (_isKeyboardComposerTarget(event.target)) _onComposerFocusKb();
   };
@@ -13505,6 +14111,11 @@ void main() {
     page.removeEventListener('focusin', _onComposerFocusInKb);
     page.removeEventListener('focusout', _onComposerFocusOutKb);
     _pmKbFocusActive = false;
+    _pmKbFocusGraceUntil = 0;
+    if (_pmKbFocusGraceTimer) {
+      window.clearTimeout(_pmKbFocusGraceTimer);
+      _pmKbFocusGraceTimer = 0;
+    }
     if (_pmKbApp) {
       _pmKbApp.classList.remove('pm-keyboard-open');
       _pmKbApp.style.removeProperty('--pm-keyboard-offset');
@@ -14290,7 +14901,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       }
       case 'model_reverted': {
         // switch_model is turn-scoped; gateway emits this at turn end to revert the badge.
-        import('./mobile-model-badge.js?v=pm-v263-2026-08-09-directed-chat-shield').then(({ refreshMobileModelBadge }) => {
+        import('./mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover').then(({ refreshMobileModelBadge }) => {
           refreshMobileModelBadge(true, null).catch(() => {});
         }).catch(() => {});
         return 'streaming';
@@ -14430,7 +15041,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     const raw = String(text || '').trim().toLowerCase();
     if (!/^\/[a-z_]+$/.test(raw)) return '';
     if (raw === '/model') return '/models';
-    return ['/models', '/new', '/screenshot', '/restart', '/stop', '/stop_now'].includes(raw) ? raw : '';
+    return ['/models', '/new', '/screenshot', '/restart', '/update', '/stop', '/stop_now'].includes(raw) ? raw : '';
   }
 
   async function requestMobileMainChatAbort(sessionId = requestedSession, { showToast = true } = {}) {
@@ -14547,6 +15158,17 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         actions: [
           { action: 'restart-quick', label: 'Quick Restart', icon: 'refresh' },
           { action: 'restart-full', label: 'Full Build + Restart', icon: 'gear', kind: 'danger' },
+        ],
+      });
+      return true;
+    }
+
+    if (command === '/update') {
+      addCommandTurn(command, {
+        text: 'Choose an update action. Prometheus will check the signed release first; installation requires a second explicit tap and backs up user state before closing and reopening.',
+        actions: [
+          { action: 'update-check', label: 'Check for Updates', icon: 'refresh' },
+          { action: 'update-apply', label: 'Install & Reopen', icon: 'download', kind: 'danger' },
         ],
       });
       return true;
@@ -14700,6 +15322,32 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         navigate?.('#mobile/settings/models');
         return;
       }
+      if (action === 'update-check' || action === 'update-apply') {
+        const applying = action === 'update-apply';
+        updateCommandTurn(turn, {
+          text: applying
+            ? 'Checking the release and asking Prometheus to perform the safe backup, drain, install, and reopen sequence...'
+            : 'Checking the latest signed Prometheus release...',
+          actions: [],
+        });
+        const result = await requestMobileUpdate({
+          action: applying ? 'apply' : 'check',
+          confirm: applying,
+          source: 'mobile',
+        });
+        const status = result?.status || {};
+        const phase = String(status.phase || '').toLowerCase();
+        const available = phase === 'available' || phase === 'ready';
+        updateCommandTurn(turn, {
+          text: applying
+            ? (result?.message || 'Safe update accepted. Prometheus will back up state, install, reopen, and validate the new version.')
+            : (status.message || (available ? 'A Prometheus update is available.' : 'Prometheus is up to date.')),
+          actions: !applying && available
+            ? [{ action: 'update-apply', label: 'Install & Reopen', icon: 'download', kind: 'danger' }]
+            : [],
+        });
+        return;
+      }
       if (action === 'restart-quick' || action === 'restart-full') {
         const rebuild = action === 'restart-full';
         updateCommandTurn(turn, {
@@ -14804,6 +15452,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       pmToast(`${selectedGateway.name} is ${selectedGateway.status}. Sending is blocked until it reconnects or is repaired.`, 'error');
       return;
     }
+    const sendAttemptKey = `${requestedSession}|${msg}|${files.map((file) => `${String(file?.name || '').trim().toLowerCase()}:${String(file?.size || file?.bytes || '').trim()}`).join(',')}`;
+    const previousSendAttempt = __pmChat.lastMobileSendAttempt;
+    if (previousSendAttempt?.key === sendAttemptKey && Date.now() - Number(previousSendAttempt.at || 0) < 1200) return;
+    __pmChat.lastMobileSendAttempt = { key: sendAttemptKey, at: Date.now() };
     const fromQueue = options.fromQueue === true;
     const excludedSkillIds = fromQueue && Array.isArray(options.excludedSkillIds)
       ? options.excludedSkillIds.map((id) => String(id || '').trim()).filter(Boolean)
@@ -14887,6 +15539,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       __pmVoice.targetSessionForced = true;
       if (__pmVoice.activeVoiceRuntime) __pmVoice.activeVoiceRuntime.isStreamActive = false;
       __pmVoice.activeVoiceRuntime = null;
+      dismissNewChatContextDock();
       invalidateMobileDrawerSessions('mobile');
       try {
         if (!projectSessionCreated) await createMobileChatSession(actualSessionId, { title: 'New Chat' });
@@ -14924,8 +15577,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
 
     if (!Array.isArray(options.attachments)) {
       __pmChat.attachments[actualSessionId] = [];
-      if (!isUnsavedDraftSession) renderPendingAttachments();
-      else attachTray.hidden = true;
+      renderPendingAttachments();
     }
     const clientRequestId = _newMobileClientRequestId(actualSessionId);
     if (!__pmChat.sentClientRequestIds || typeof __pmChat.sentClientRequestIds !== 'object') __pmChat.sentClientRequestIds = {};
@@ -14950,6 +15602,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (options.skipUserBubble !== true) {
       optimisticUserTurn = _makeMobileUserMessage(msg || 'Attached file(s)', files, { selectedSkillRefs });
       optimisticUserTurn._clientRequestId = clientRequestId;
+      optimisticUserTurn._pmOptimistic = true;
       optimisticUserTurn.uploadState = files.length ? 'uploading' : 'ready';
       activeThread.push(optimisticUserTurn);
     }
@@ -15244,6 +15897,26 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         ? payload.attachmentPreviews
         : (Array.isArray(payload.body?.attachments) ? payload.body.attachments : []);
       const ts = Number(payload.timestamp || msg.at || data?.at || Date.now()) || Date.now();
+      const incomingUserTurn = {
+        role: 'user',
+        timestamp: ts,
+        body: { text, attachments },
+        content: text,
+        attachmentPreviews: attachments,
+        _clientRequestId: incomingClientRequestId,
+      };
+      const existingRequestUser = incomingClientRequestId
+        ? [...activeThread].reverse().find((turn) => turn?.role === 'user'
+          && String(turn._clientRequestId || '').trim() === incomingClientRequestId)
+        : null;
+      if (existingRequestUser) {
+        _mergeMobileUserTurnDetails(existingRequestUser, incomingUserTurn);
+        _reindexMobileThread(activeThread);
+        renderThreadNow();
+        _markMobileSessionRunning(requestedSession, true);
+        setBusy(true);
+        return 'streaming';
+      }
       const existingWorkerHandoff = _findMobileVoiceWorkerHandoffByText(activeThread, text, ts);
       if (existingWorkerHandoff) {
         existingWorkerHandoff._clientRequestId = incomingClientRequestId || existingWorkerHandoff._clientRequestId;
@@ -15258,18 +15931,14 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       const previousText = _stripMobileInternalUploadContext(previousUser?.body?.text || previousUser?.content || '');
       const previousTs = Number(previousUser?.timestamp || 0);
       const isDuplicate = previousUser
-        && previousText === text
-        && Math.abs(previousTs - ts) < 10000;
+        && (_mobileUserTurnsRepresentSameSend(previousUser, incomingUserTurn)
+          || (previousText === text && Math.abs(previousTs - ts) < 10000));
       if (!isInternalWatchUserMessage && !isDuplicate && (text || attachments.length)) {
         activeThread.push({
-          role: 'user',
+          ...incomingUserTurn,
           time: _nowTime(),
-          timestamp: ts,
-          body: { text, attachments },
-          content: text,
-          attachmentPreviews: attachments,
-          _clientRequestId: incomingClientRequestId,
         });
+        _dedupeMobileUserTurns(activeThread);
         _reindexMobileThread(activeThread);
         renderThreadNow();
       }
@@ -15520,7 +16189,11 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   wsEventBus?.on?.('bg_agent_event', onBackgroundSpawnEvent);
   wsEventBus?.on?.('bg_agent_done', onBackgroundSpawnDone);
   const refreshSkillTriggerPill = () => _pmRenderSkillTriggerPill(page, input);
-  const onSkillsCacheUpdated = () => {
+  const onSkillsCacheUpdated = (event) => {
+    if (Array.isArray(event?.detail?.skills)) {
+      window.prometheusSkillsCache = event.detail.skills;
+      _pmSkillCacheReady = true;
+    }
     refreshSkillTriggerPill();
     if (_pmSkillComposerState(input)) _pmRenderSlashPopover(page, input);
   };
@@ -15621,8 +16294,15 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     _teardownKeyboardController();
   };
 
+  let lastComposerSubmitAt = 0;
   form.addEventListener('submit', (e) => {
     e.preventDefault();
+    const submitNow = Date.now();
+    // The native haptic proxy and the real submit control can both produce a
+    // submit-sized activation on iOS. Collapse that same physical tap into one
+    // request while still allowing deliberate later sends/queued prompts.
+    if (submitNow - lastComposerSubmitAt < 450) return;
+    lastComposerSubmitAt = submitNow;
     // The send control is a submit button behind the mobile haptic proxy.
     // Explicitly blur the composer first so iOS/Android dismiss the virtual
     // keyboard before the send/queue/abort/voice branch updates the layout.
@@ -15805,6 +16485,10 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     _pmRenderSkillTriggerPill(page, input);
     _pmUpdateComposerRichPreview(page, input);
     updateComposerSubmitState();
+    // Text growth changes the form's top edge while it remains bottom-anchored.
+    // Re-measure immediately so the routing rows stay above the expanded
+    // composer instead of being left behind at their collapsed position.
+    updateComposerExpandedState();
   });
   input?.addEventListener('focus', updateComposerExpandedState);
   input?.addEventListener('blur', () => setTimeout(updateComposerExpandedState, 0));
@@ -15853,6 +16537,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
   input?.addEventListener('blur', () => setTimeout(() => _pmHideSlashPopover(page), 120));
   commandChip?.addEventListener('click', () => _pmClearActiveSlashCommand(page, input));
   window.addEventListener('prometheus:skills-cache-updated', onSkillsCacheUpdated);
+  // Warm the explicit `$` picker while the chat surface mounts. The picker
+  // still shows a stable loading row if the user types before this completes.
+  _pmEnsureSkillTriggerCacheLoaded();
   window.addEventListener('prometheus:markdown-ready', onMarkdownReady);
 
   function syncComposerAfterProgrammaticTextChange() {
@@ -19852,9 +20539,27 @@ const __pmRealtimeAgent = {
     active: false,
     timer: null,
     inFlight: null,
+    prepareInFlight: null,
     queuedFrame: null,
     lastSentAt: 0,
+    lastAssociatedFrameAt: 0,
+    lastAssociatedCapturedAt: 0,
+    lastAssociatedFrameId: '',
+    lastAssociatedTurnId: 0,
+    frameSequence: 0,
     generation: 0,
+    turnId: 0,
+    turnStartedAt: 0,
+    turnCaptureStartedAt: 0,
+    turnFrameId: '',
+    attachmentVisibleTurnId: 0,
+    phase: 'idle',
+    responseGateActive: false,
+    preparationReady: false,
+    pendingAttachmentPreparation: null,
+    audioCommitted: false,
+    responseRequestedAt: 0,
+    responseStartedAt: 0,
   },
   // WebRTC can expose a little more jitter/packet-loss telemetry than the
   // audio element itself.  Keep the monitor on the realtime session so it can
@@ -20086,6 +20791,17 @@ function _sendMobileRealtimeAgentResponseCreate(reason = 'manual') {
     return false;
   }
   try {
+    const cameraState = _mobileRealtimeLiveVisionState();
+    cameraState.responseRequestedAt = Date.now();
+    _voiceDebug('realtime-agent-model-request-start', {
+      reason,
+      provider: conn.provider || 'openai_webrtc',
+      cameraTurnId: cameraState.turnId || 0,
+      cameraPhase: cameraState.phase || 'idle',
+      cameraFrameAt: cameraState.lastAssociatedFrameAt || 0,
+      cameraFrameId: cameraState.lastAssociatedFrameId || '',
+      cameraFrameCapturedAt: cameraState.lastAssociatedCapturedAt || 0,
+    });
     dc.send(JSON.stringify({ type: 'response.create' }));
     _voiceDebug('realtime-agent-response-create', { reason });
     return true;
@@ -21688,7 +22404,11 @@ function _mobileBase64ToInt16(b64) {
   const binary = atob(String(b64 || ''));
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Int16Array(bytes.buffer);
+  // A provider can split a PCM packet on an odd byte boundary. Keep complete
+  // little-endian samples only; a partial trailing byte must not become a
+  // malformed Int16Array or poison the next playback chunk.
+  const usableBytes = bytes.length - (bytes.length % 2);
+  return new Int16Array(bytes.buffer, 0, usableBytes / 2);
 }
 
 function _mobileInt16ToBase64(int16) {
@@ -21763,6 +22483,8 @@ function _createMobileXaiPlayback(options = {}) {
   const ctx = new AudioCtx();
   const sourceRate = Math.max(1, Number(options.sampleRate || MOBILE_XAI_REALTIME_SAMPLE_RATE) || MOBILE_XAI_REALTIME_SAMPLE_RATE);
   const outputRate = Math.max(1, Math.round(ctx.sampleRate || sourceRate));
+  const provider = String(options.provider || 'openai_ws');
+  const isXai = provider === 'xai';
   // A larger callback block keeps the WebSocket fallback from depending on
   // extremely frequent main-thread audio callbacks while camera frames,
   // canvas encoding, or tool UI updates are active on iOS.
@@ -21785,18 +22507,68 @@ function _createMobileXaiPlayback(options = {}) {
   let smoothGain = 0;
   let underruns = 0;
   let emptySamples = 0;
+  let chunksEnqueued = 0;
+  let samplesEnqueued = 0;
+  let droppedChunks = 0;
+  let lastDebugAt = 0;
+  let resampleInput = [];
+  let resampleBaseIndex = 0;
+  let resampleNextPosition = 0;
+  const debugPlayback = (event, data = {}, force = false) => {
+    if (!isXai) return;
+    const now = Date.now();
+    if (!force && now - lastDebugAt < 900) return;
+    lastDebugAt = now;
+    _voiceDebug(`xai-realtime-playback-${event}`, {
+      ...data,
+      queuedMs: Math.round((queuedSamples / outputRate) * 1000),
+      underruns,
+      chunksEnqueued,
+      droppedChunks,
+    });
+  };
+  const resampleForXai = (int16) => {
+    if (!isXai || sourceRate === outputRate) return _resampleInt16ToFloat32(int16, sourceRate, outputRate);
+    for (let i = 0; i < int16.length; i += 1) {
+      const raw = int16[i] || 0;
+      resampleInput.push(raw < 0 ? raw / 0x8000 : raw / 0x7fff);
+    }
+    const endIndex = resampleBaseIndex + resampleInput.length;
+    const ratio = sourceRate / outputRate;
+    const result = [];
+    // Keep one look-ahead sample so adjacent xAI deltas share the same linear
+    // interpolation boundary. Resetting interpolation per packet is audible
+    // as a click/crunch on mobile output devices.
+    while (Math.floor(resampleNextPosition) + 1 < endIndex) {
+      const floorPosition = Math.floor(resampleNextPosition);
+      const index = floorPosition - resampleBaseIndex;
+      const frac = resampleNextPosition - floorPosition;
+      const a = resampleInput[index] || 0;
+      const b = resampleInput[index + 1] ?? a;
+      result.push(a + ((b - a) * frac));
+      resampleNextPosition += ratio;
+    }
+    const keepFrom = Math.max(resampleBaseIndex, Math.floor(resampleNextPosition) - 1);
+    if (keepFrom > resampleBaseIndex) {
+      resampleInput.splice(0, keepFrom - resampleBaseIndex);
+      resampleBaseIndex = keepFrom;
+    }
+    return Float32Array.from(result);
+  };
   // A little more cushion lets a short Wi-Fi/cellular stall become a brief
   // pause while the queue catches up, instead of repeatedly starting/stopping
   // at the edge of an underrun.
   const prebufferSamples = Math.max(
     processorSize * 3,
-    Math.round(outputRate * Math.max(0.34, Number(options.prebufferSeconds || 0.42) || 0.42)),
+    Math.round(outputRate * (isXai
+      ? Math.max(0.48, Number(options.prebufferSeconds || 0.55) || 0.55)
+      : Math.max(0.34, Number(options.prebufferSeconds || 0.42) || 0.42))),
   );
   // Do not tear down playback on the first empty callback. A camera read or
   // vision/tool update can briefly occupy the main thread even though the
   // network queue is about to receive more audio. Holding a short silence
   // window lets the output fade smoothly and resume from the same stream.
-  const underrunGraceSamples = Math.max(processorSize, Math.round(outputRate * 0.08));
+  const underrunGraceSamples = Math.max(processorSize, Math.round(outputRate * (isXai ? 0.16 : 0.08)));
   // Memory-safety ceiling only (~60s). Realtime audio (esp. xAI/Grok) streams the full
   // response in a fast burst over the WS, faster than realtime playback. A small cap here
   // made trimQueue() destructively delete unplayed/in-flight audio on long messages, causing
@@ -21821,7 +22593,10 @@ function _createMobileXaiPlayback(options = {}) {
       out.fill(0);
       return;
     }
-    if (!playing && queuedSamples >= prebufferSamples) playing = true;
+    if (!playing && queuedSamples >= prebufferSamples) {
+      playing = true;
+      debugPlayback('started', { prebufferMs: Math.round((prebufferSamples / outputRate) * 1000) }, true);
+    }
     for (let i = 0; i < out.length; i += 1) {
       const sample = playing ? popSample() : null;
       if (sample == null) {
@@ -21831,6 +22606,7 @@ function _createMobileXaiPlayback(options = {}) {
             underruns += 1;
             playing = false;
             emptySamples = 0;
+            debugPlayback('underrun', { graceMs: Math.round((underrunGraceSamples / outputRate) * 1000) }, true);
           }
         }
         const step = 1 / 960;
@@ -21853,20 +22629,25 @@ function _createMobileXaiPlayback(options = {}) {
     while (queuedSamples > maxQueueSamples && queue.length > 1) {
       const chunk = queue.shift();
       queuedSamples = Math.max(0, queuedSamples - (chunk?.length || 0));
-      current = null;
-      currentOffset = 0;
+      droppedChunks += 1;
     }
+    if (droppedChunks) debugPlayback('backpressure-drop', { maxQueueMs: Math.round((maxQueueSamples / outputRate) * 1000) });
   };
 
   return {
     ctx,
     enqueue(int16) {
       if (!int16 || !int16.length) return;
-      const float = _resampleInt16ToFloat32(int16, sourceRate, outputRate);
+      const float = resampleForXai(int16);
       if (!float.length) return;
       queue.push(float);
       queuedSamples += float.length;
+      chunksEnqueued += 1;
+      samplesEnqueued += float.length;
       trimQueue();
+      if (isXai && !playing && queuedSamples < prebufferSamples) {
+        debugPlayback('buffering', { bufferMs: Math.round((queuedSamples / outputRate) * 1000) });
+      }
       try { if (ctx.state === 'suspended') ctx.resume?.(); } catch {}
     },
     interrupt() {
@@ -21877,6 +22658,10 @@ function _createMobileXaiPlayback(options = {}) {
       playing = false;
       smoothGain = 0;
       emptySamples = 0;
+      resampleInput = [];
+      resampleBaseIndex = 0;
+      resampleNextPosition = 0;
+      if (isXai) debugPlayback('interrupted', {}, true);
     },
     async resume() { try { await ctx.resume?.(); } catch {} },
     close() {
@@ -21894,10 +22679,15 @@ function _createMobileXaiPlayback(options = {}) {
         currentSamplesRemaining: current ? Math.max(0, current.length - currentOffset) : 0,
         outputRate,
         sourceRate,
+        provider,
         prebufferMs: Math.round((prebufferSamples / outputRate) * 1000),
         underrunGraceMs: Math.round((underrunGraceSamples / outputRate) * 1000),
         playing,
         underruns,
+        chunksEnqueued,
+        samplesEnqueued,
+        droppedChunks,
+        resamplePendingSamples: resampleInput.length,
       };
     },
   };
@@ -22052,7 +22842,7 @@ async function _startMobileOpenAiRealtimeWebSocketSession(sessionId, options = {
   }
   if (!ws) throw new Error(lastWsError || 'OpenAI realtime WebSocket failed.');
   openAiCapture.ws = ws;
-  const playback = _createMobileXaiPlayback({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE });
+  const playback = _createMobileXaiPlayback({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE, provider: 'openai_ws' });
   await playback.resume?.();
 
   ws.addEventListener('close', (ev) => {
@@ -22295,7 +23085,7 @@ async function _startMobileXaiRealtimeSession(sessionId, options = {}) {
     ws = new WebSocket(bootstrap.wsUrl, [`xai-client-secret.${bootstrap.clientSecret}`]);
     ws.binaryType = 'arraybuffer';
     xaiCapture.ws = ws;
-    playback = _createMobileXaiPlayback({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE });
+    playback = _createMobileXaiPlayback({ sampleRate: MOBILE_XAI_REALTIME_SAMPLE_RATE, provider: 'xai' });
     await playback.resume?.();
 
     ws.addEventListener('close', (ev) => {
@@ -23000,7 +23790,30 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     }
   }
   if (type === 'response.created') {
+    const cameraState = _mobileRealtimeLiveVisionState();
+    const cameraGateRace = cameraState.responseGateActive && cameraState.phase !== 'response_ready';
+    cameraState.responseStartedAt = Date.now();
+    _voiceDebug('realtime-agent-model-inference-start', {
+      provider: __pmRealtimeAgent.conn?.provider || 'openai_webrtc',
+      cameraTurnId: cameraState.turnId || 0,
+      cameraGateRace,
+      requestToInferenceMs: cameraState.responseRequestedAt
+        ? Math.max(0, cameraState.responseStartedAt - cameraState.responseRequestedAt)
+        : 0,
+      cameraFrameAt: cameraState.lastAssociatedFrameAt || 0,
+      cameraFrameId: cameraState.lastAssociatedFrameId || '',
+      cameraFrameCapturedAt: cameraState.lastAssociatedCapturedAt || 0,
+    });
     _stopMobileRealtimeLiveCameraVision('response_created');
+    if (cameraGateRace) {
+      try { __pmRealtimeAgent.conn?.dc?.send?.(JSON.stringify({ type: 'response.cancel' })); } catch {}
+      try { __pmRealtimeAgent.conn?.playback?.interrupt?.(); } catch {}
+      __pmRealtimeAgent.activeResponse = false;
+      _voiceDebug('realtime-agent-model-request-cancelled-camera-not-associated', {
+        cameraTurnId: cameraState.turnId || 0,
+      });
+      return;
+    }
     if (
       String(__pmRealtimeAgent.conn?.provider || '') === 'xai'
       && __pmRealtimeAgent.turn?.xaiVisionInjecting
@@ -23192,9 +24005,26 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       try {
         const sid = sessionId;
         const staged = __pmRealtimeAgent.stagedAttachmentTurn || __pmRealtimeAgent.stagedImageTurn;
+        const associatedCameraTurnId = Number(_mobileRealtimeLiveVisionState().lastAssociatedTurnId || 0) || 0;
+        const stagedCameraTurnId = Number(staged?._pmCameraTurnId || 0) || 0;
+        const stagedBelongsToCurrentTurn = !stagedCameraTurnId
+          || (associatedCameraTurnId > 0 && stagedCameraTurnId === associatedCameraTurnId);
         const subagentTarget = _currentMobileSubagentVoiceTarget();
         if (subagentTarget) {
           _voiceDebug('realtime-agent-subagent-user-transcript', { agentId: subagentTarget.agentId, transcript });
+        } else if (staged && !stagedBelongsToCurrentTurn) {
+          // A late frame from the previous response must never become the
+          // attachment for this transcript. Leave its already-visible preview
+          // in history, but detach it from the next turn's staging pointer.
+          _voiceDebug('realtime-agent-live-camera-staged-frame-not-current', {
+            stagedCameraTurnId,
+            associatedCameraTurnId,
+            transcriptLen: transcript.length,
+          });
+          __pmRealtimeAgent.stagedImageTurn = null;
+          __pmRealtimeAgent.stagedAttachmentTurn = null;
+          _finalizeMobileRealtimeAgentChatTurn(sid, 'user', transcript);
+          _ensureMobileRealtimeAgentTurnOrder(sid);
         } else if (staged && Array.isArray(__pmChat.threads?.[sid]) && __pmChat.threads[sid].includes(staged)) {
           // The user just spoke about a staged photo — attach the transcript to the
           // photo bubble so the image + caption show as one user message.
@@ -23347,6 +24177,17 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
     return;
   }
   if (type === 'response.done' || type === 'response.audio.done' || type === 'response.output_audio.done' || type === 'response.cancelled') {
+    const cameraState = _mobileRealtimeLiveVisionState();
+    _voiceDebug('realtime-agent-model-response-finished', {
+      type,
+      provider: __pmRealtimeAgent.conn?.provider || 'openai_webrtc',
+      cameraTurnId: cameraState.turnId || 0,
+      cameraFrameId: cameraState.lastAssociatedFrameId || '',
+      cameraFrameCapturedAt: cameraState.lastAssociatedCapturedAt || 0,
+      inferenceMs: cameraState.responseStartedAt
+        ? Math.max(0, Date.now() - cameraState.responseStartedAt)
+        : 0,
+    });
     _stopMobileRealtimeLiveCameraVision('response_finished');
     __pmRealtimeAgent.activeResponse = false;
     __pmVoice.realtimeSpeechActiveResponse = false;
@@ -23433,16 +24274,48 @@ async function _handleMobileRealtimeAgentEvent(event, sessionId) {
       __pmRealtimeAgent.turn.subagentVoiceUserLogKey = '';
       __pmRealtimeAgent.turn.subagentVoiceReplyLogKey = '';
       _startMobileRealtimeLiveCameraVision('speech_started');
-      const flushImages = () => {
-        if (__pmRealtimeAgent.pendingImages.length) _flushMobileRealtimeAgentPendingImages('speech_started').catch(() => {});
-      };
-      flushImages();
-    } else if (type === 'input_audio_buffer.speech_stopped' || type === 'input_audio_buffer.committed') {
-      _stopMobileRealtimeLiveCameraVision(type);
+      const cameraState = _mobileRealtimeLiveVisionState();
+      cameraState.pendingAttachmentPreparation = __pmRealtimeAgent.pendingImages.length
+        ? _flushMobileRealtimeAgentPendingImages('speech_started', { createResponse: false }).catch(() => false)
+        : Promise.resolve(false);
+    } else if (type === 'input_audio_buffer.speech_stopped') {
+      const cameraState = _mobileRealtimeLiveVisionState();
+      if (cameraState.responseGateActive) {
+        const attachmentPreparation = cameraState.pendingAttachmentPreparation || Promise.resolve(false);
+        const livePreparation = _prepareMobileRealtimeLiveCameraForTurn('speech_stopped');
+        Promise.all([
+          Promise.resolve(attachmentPreparation).catch(() => false),
+          Promise.resolve(livePreparation).catch(() => false),
+        ]).then(() => {
+          cameraState.preparationReady = true;
+          _maybeReleaseMobileRealtimeCameraResponseGate('speech_stopped_camera_ready');
+        }).catch(() => {
+          cameraState.preparationReady = true;
+          _maybeReleaseMobileRealtimeCameraResponseGate('speech_stopped_camera_prepare_failed');
+        });
+      } else {
+        _stopMobileRealtimeLiveCameraVision(type);
+      }
+    } else if (type === 'input_audio_buffer.committed') {
+      const cameraState = _mobileRealtimeLiveVisionState();
+      if (cameraState.responseGateActive) {
+        cameraState.audioCommitted = true;
+        _maybeReleaseMobileRealtimeCameraResponseGate('audio_committed_camera_ready');
+      } else {
+        _stopMobileRealtimeLiveCameraVision(type);
+      }
     }
     const audioItemId = String(event?.item_id || '').trim();
     if (type === 'input_audio_buffer.committed' && audioItemId) __pmRealtimeAgent.turn.currentUserTranscriptItemId = audioItemId;
-    _voiceDebug('realtime-agent-audio-buffer-event', { type, itemId: event?.item_id || '', previousItemId: event?.previous_item_id || '', currentItemId: __pmRealtimeAgent.turn.currentUserTranscriptItemId || '' });
+    _voiceDebug('realtime-agent-audio-buffer-event', {
+      type,
+      itemId: event?.item_id || '',
+      previousItemId: event?.previous_item_id || '',
+      currentItemId: __pmRealtimeAgent.turn.currentUserTranscriptItemId || '',
+      cameraTurnId: _mobileRealtimeLiveVisionState().turnId || 0,
+      cameraPhase: _mobileRealtimeLiveVisionState().phase || 'idle',
+      cameraGateActive: _mobileRealtimeLiveVisionState().responseGateActive === true,
+    });
     return;
   }
   if (type === 'error') {
@@ -24227,7 +25100,10 @@ async function _sendMobileRealtimeAgentFunctionOutput(callId, output, options = 
 // up "not seeing" the image. Verified: an image item added while idle is visible
 // to a later spoken/typed turn's response.
 async function _injectRealtimeImageItemToConversation(img, label) {
+  const options = arguments.length > 2 && arguments[2] && typeof arguments[2] === 'object' ? arguments[2] : {};
+  const isCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
   if (!img || img.realtimeInjected) return false;
+  if (!isCurrent()) return false;
   if (img.realtimeInjectionPromise) return img.realtimeInjectionPromise;
   img.realtimeInjectionPromise = (async () => {
     const conn = __pmRealtimeAgent.conn;
@@ -24237,11 +25113,13 @@ async function _injectRealtimeImageItemToConversation(img, label) {
     // vision sidecar and appends the resulting visual context through the
     // bridge route instead of silently dropping conversation.item.create.
     if (_isMobileCodexV3RealtimeConnection(conn)) {
+      if (!isCurrent()) return false;
       const injected = await _sendMobileCodexVisionSummaryToRealtime([img.dataUrl], {
         name: img.name,
         reason: 'image_staged',
         label,
         toast: false,
+        isCurrent,
       });
       if (injected) {
         img.realtimeInjected = true;
@@ -24253,7 +25131,7 @@ async function _injectRealtimeImageItemToConversation(img, label) {
     if (!dc || dc.readyState !== 'open' || provider === 'xai') return false;
     try {
       const imageUrl = await _downscaleDataUrlForRealtime(img.dataUrl);
-      if (__pmRealtimeAgent.conn?.dc?.readyState !== 'open') return false;
+      if (!isCurrent() || __pmRealtimeAgent.conn?.dc?.readyState !== 'open') return false;
       __pmRealtimeAgent.conn.dc.send(JSON.stringify({
         type: 'conversation.item.create',
         item: {
@@ -24283,6 +25161,7 @@ async function _summarizeMobileXaiVisionImages(dataUrls, opts = {}) {
     .map((u) => String(u || '').trim())
     .filter((u) => u.startsWith('data:image'));
   if (!urls.length) return '';
+  if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) return '';
   const isVideo = urls.length > 1;
   try {
     const reqBody = isVideo
@@ -24290,6 +25169,7 @@ async function _summarizeMobileXaiVisionImages(dataUrls, opts = {}) {
       : { dataUrl: urls[0], name: String(opts.name || 'camera photo') };
     _voiceDebug('realtime-agent-xai-summary-start', { isVideo, count: urls.length, reason: opts.reason || '' });
     const res = await mobileGatewayFetch('/api/voice-agent/xai-vision-summary', { method: 'POST', body: JSON.stringify(reqBody) });
+    if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) return '';
     const summary = String(res?.summary || '').trim();
     if (!summary) { _voiceDebug('realtime-agent-xai-summary-empty', { error: res?.error || '' }); return ''; }
     _voiceDebug('realtime-agent-xai-summary-ready', { isVideo, summaryLen: summary.length });
@@ -24310,10 +25190,12 @@ async function _sendMobileXaiVisionSummaryToRealtime(dataUrls, opts = {}) {
     .map((u) => String(u || '').trim())
     .filter((u) => u.startsWith('data:image'));
   if (!urls.length) return false;
+  if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) return false;
   const isVideo = urls.length > 1;
   const promptText = String(opts.promptText || '').trim();
   const summary = String(opts.precomputedSummary || await _summarizeMobileXaiVisionImages(urls, opts)).trim();
   if (!summary) return false;
+  if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) return false;
   try {
     const dc = __pmRealtimeAgent.conn?.dc;
     if (!dc || dc.readyState !== 'open' || String(__pmRealtimeAgent.conn?.provider) !== 'xai') return false;
@@ -24350,7 +25232,9 @@ async function _kickoffMobileXaiVisionSummary(dataUrls, opts = {}) {
   return _sendMobileXaiVisionSummaryToRealtime(dataUrls, opts);
 }
 
-function _stageMobileRealtimeAgentAttachmentPreview(attachment, sessionId) {
+function _stageMobileRealtimeAgentAttachmentPreview(attachment, sessionId, options = {}) {
+  const cameraTurnId = Number(options.cameraTurnId || attachment?.turnId || 0) || 0;
+  const cameraFrameId = String(options.cameraFrameId || attachment?.frameId || '').trim();
   const previewAttachment = {
     kind: String(attachment?.kind || 'file').trim() || 'file',
     name: String(attachment?.name || 'Voice attachment').trim(),
@@ -24360,12 +25244,20 @@ function _stageMobileRealtimeAgentAttachmentPreview(attachment, sessionId) {
     workspacePath: String(attachment?.workspacePath || ''),
     path: String(attachment?.path || ''),
     sizeLabel: String(attachment?.sizeLabel || ''),
+    cameraTurnId,
+    cameraFrameId,
+    capturedAt: Number(options.capturedAt || attachment?.capturedAt || 0) || 0,
+    attachmentState: String(options.attachmentState || attachment?.attachmentState || '').trim(),
   };
   const sid = String(sessionId || __pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
   try {
     if (!__pmChat.threads[sid]) __pmChat.threads[sid] = [];
     let turn = __pmRealtimeAgent.stagedAttachmentTurn || __pmRealtimeAgent.stagedImageTurn;
-    if (turn && __pmChat.threads[sid].includes(turn)) {
+    const existingCameraTurnId = Number(turn?._pmCameraTurnId || 0) || 0;
+    const canReuseStagedTurn = turn
+      && __pmChat.threads[sid].includes(turn)
+      && (!cameraTurnId || !existingCameraTurnId || existingCameraTurnId === cameraTurnId);
+    if (canReuseStagedTurn) {
       turn.body = turn.body || { text: '', attachments: [] };
       turn.body.attachments = [...(turn.body.attachments || []), previewAttachment];
     } else {
@@ -24376,18 +25268,28 @@ function _stageMobileRealtimeAgentAttachmentPreview(attachment, sessionId) {
       };
       __pmChat.threads[sid].push(turn);
     }
+    if (cameraTurnId) {
+      turn._pmCameraTurnId = cameraTurnId;
+      turn._pmCameraFrameId = cameraFrameId;
+      turn._pmCameraAttachmentState = previewAttachment.attachmentState || 'associated';
+    }
     turn.attachmentPreviews = turn.body.attachments;
     __pmRealtimeAgent.stagedAttachmentTurn = turn;
     __pmRealtimeAgent.stagedImageTurn = turn;
     _persistMobileThreadSnapshot(sid);
     _renderMobileChatSessionNow(sid);
     _renderRecent();
-    _notifyMobileChatVoiceUpdate(sid, { reason: 'realtime_attachment_staged', force: true });
+    _notifyMobileChatVoiceUpdate(sid, {
+      reason: options.source === 'realtime_live_camera' ? 'realtime_live_camera_attached' : 'realtime_attachment_staged',
+      force: true,
+      cameraTurnId: cameraTurnId || undefined,
+      cameraFrameId: cameraFrameId || undefined,
+    });
   } catch {}
   // The Voice page owns a first-class center preview deck. Feed staged user
   // attachments into it as well, instead of making users infer success from a
   // hidden chat bubble.
-  try { __pmRealtimeAgent.enqueuePreviews?.([previewAttachment], { transient: false }); } catch {}
+  try { __pmRealtimeAgent.enqueuePreviews?.([previewAttachment], { transient: options.previewTransient === true }); } catch {}
   return previewAttachment;
 }
 
@@ -24515,7 +25417,8 @@ async function _flushMobileRealtimeAgentPendingImages(reason = 'speech', options
       __pmRealtimeAgent.turn.xaiVisionInjectReason = '';
     }
     _voiceDebug('realtime-agent-image-flushed-xai-summary', { count: all.length, reason, injected });
-    const shouldCreateVisionResponse = options.createResponse === true || reason === 'speech_started';
+    const shouldCreateVisionResponse = options.createResponse === true
+      || (reason === 'speech_started' && options.createResponse !== false);
     if (injected && shouldCreateVisionResponse && __pmRealtimeAgent.conn?.dc?.readyState === 'open') {
       __pmRealtimeAgent.conn.dc.send(JSON.stringify({
         type: 'response.create',
@@ -24580,10 +25483,222 @@ function _mobileRealtimeLiveVisionState() {
     active: false,
     timer: null,
     inFlight: null,
+    prepareInFlight: null,
     queuedFrame: null,
     lastSentAt: 0,
+    lastAssociatedFrameAt: 0,
+    lastAssociatedCapturedAt: 0,
+    lastAssociatedFrameId: '',
+    lastAssociatedTurnId: 0,
+    frameSequence: 0,
     generation: 0,
+    turnId: 0,
+    turnStartedAt: 0,
+    turnCaptureStartedAt: 0,
+    turnFrameId: '',
+    attachmentVisibleTurnId: 0,
+    phase: 'idle',
+    responseGateActive: false,
+    preparationReady: false,
+    pendingAttachmentPreparation: null,
+    audioCommitted: false,
+    responseRequestedAt: 0,
+    responseStartedAt: 0,
   });
+}
+
+function _mobileRealtimeLiveVisionIsCurrent(state, generation, turnId) {
+  return !!(
+    state?.active
+    && Number(state.generation || 0) === Number(generation || 0)
+    && Number(state.turnId || 0) === Number(turnId || 0)
+    && !Number(state.responseStartedAt || 0)
+    && !__pmRealtimeAgent.activeResponse
+    && !__pmVoice.realtimeSpeechActiveResponse
+    && __pmRealtimeAgent.conn?.dc?.readyState === 'open'
+  );
+}
+
+async function _associateMobileRealtimeLiveCameraFrame(frame, options = {}) {
+  const state = _mobileRealtimeLiveVisionState();
+  const generation = Number(options.generation || state.generation || 0);
+  const turnId = Number(options.turnId || state.turnId || 0);
+  const isCurrent = () => _mobileRealtimeLiveVisionIsCurrent(state, generation, turnId);
+  const dataUrl = String(frame?.dataUrl || '').trim();
+  if (!dataUrl.startsWith('data:image')) return false;
+  const capturedAt = Number(frame?.capturedAt || 0) || Date.now();
+  const encodedAt = Number(frame?.encodedAt || capturedAt) || capturedAt;
+  const frameId = String(frame?.frameId || `live_camera_${turnId}_${capturedAt}_${++state.frameSequence}`);
+  const ageMs = Math.max(0, Date.now() - capturedAt);
+  if (ageMs > 3200) {
+    _voiceDebug('realtime-agent-live-camera-frame-dropped-stale', {
+      reason: options.reason || 'live_camera',
+      ageMs,
+      turnId,
+      frameId,
+    });
+    return false;
+  }
+  const turnCaptureStartedAt = Number(options.turnCaptureStartedAt || state.turnCaptureStartedAt || 0) || 0;
+  if (options.authoritative === true && turnCaptureStartedAt && capturedAt < turnCaptureStartedAt - 1200) {
+    _voiceDebug('realtime-agent-live-camera-frame-dropped-before-turn', {
+      reason: options.reason || 'live_camera',
+      turnId,
+      frameId,
+      capturedAt,
+      turnCaptureStartedAt,
+    });
+    return false;
+  }
+  if (!isCurrent()) {
+    _voiceDebug('realtime-agent-live-camera-frame-dropped-not-current', {
+      reason: options.reason || 'live_camera',
+      turnId,
+      frameId,
+    });
+    return false;
+  }
+  const provider = String(__pmRealtimeAgent.conn?.provider || 'openai_realtime');
+  const image = {
+    dataUrl,
+    name: String(frame?.name || `Live camera · turn ${turnId}`),
+    mimeType: 'image/jpeg',
+    realtimeInjected: false,
+    frameId,
+    turnId,
+    capturedAt,
+    encodedAt,
+  };
+  const captureMs = Math.max(0, encodedAt - capturedAt);
+  const uploadStartedAt = Date.now();
+  _voiceDebug('realtime-agent-live-camera-encode-ready', {
+    reason: options.reason || 'live_camera',
+    turnId,
+    frameId,
+    capturedAt,
+    encodedAt,
+    captureMs,
+    bytes: dataUrl.length,
+  });
+  _voiceDebug('realtime-agent-live-camera-association-start', {
+    reason: options.reason || 'live_camera',
+    provider,
+    turnId,
+    frameId,
+    ageMs,
+    captureMs,
+    bytes: dataUrl.length,
+  });
+  _voiceDebug('realtime-agent-live-camera-upload-start', {
+    reason: options.reason || 'live_camera',
+    provider,
+    turnId,
+    frameId,
+  });
+  let sent = false;
+  try {
+    const correlation = `[LIVE_CAMERA_VOICE_TURN turn=${turnId} frame=${frameId}]`;
+    sent = provider === 'xai'
+      ? await _sendMobileXaiVisionSummaryToRealtime([image.dataUrl], {
+        name: image.name,
+        reason: options.reason || 'live_camera_speech',
+        promptText: correlation,
+        toast: false,
+        isCurrent,
+      })
+      : await _injectRealtimeImageItemToConversation(image, [
+        correlation,
+        'Live camera frame captured during the user\'s active spoken turn.',
+        'Use this newest frame as visual context; do not claim the camera is unavailable.',
+      ].join(' '), { isCurrent });
+  } catch (err) {
+    _voiceDebug('realtime-agent-live-camera-association-failed', {
+      reason: options.reason || 'live_camera',
+      provider,
+      turnId,
+      frameId,
+      uploadMs: Math.max(0, Date.now() - uploadStartedAt),
+      message: err?.message || String(err),
+    });
+    return false;
+  }
+  const associatedAt = Date.now();
+  _voiceDebug('realtime-agent-live-camera-upload-finished', {
+    reason: options.reason || 'live_camera',
+    provider,
+    turnId,
+    frameId,
+    sent: !!sent,
+    uploadMs: Math.max(0, associatedAt - uploadStartedAt),
+  });
+  if (!isCurrent()) {
+    _voiceDebug('realtime-agent-live-camera-frame-dropped-late', {
+      reason: options.reason || 'live_camera',
+      provider,
+      turnId,
+      frameId,
+      uploadMs: Math.max(0, associatedAt - uploadStartedAt),
+    });
+    return false;
+  }
+  state.lastSentAt = associatedAt;
+  state.lastAssociatedFrameAt = associatedAt;
+  state.lastAssociatedCapturedAt = capturedAt;
+  state.lastAssociatedFrameId = frameId;
+  state.lastAssociatedTurnId = turnId;
+  state.turnFrameId = frameId;
+  state.phase = sent ? 'associated' : 'association_failed';
+  _voiceDebug('realtime-agent-live-camera-frame-associated', {
+    reason: options.reason || 'live_camera',
+    provider,
+    sent: !!sent,
+    turnId,
+    frameId,
+    capturedAt,
+    encodedAt,
+    associatedAt,
+    ageMs: Math.max(0, associatedAt - capturedAt),
+    captureMs,
+    uploadMs: Math.max(0, associatedAt - uploadStartedAt),
+  });
+  if (sent && options.authoritative === true && state.attachmentVisibleTurnId !== turnId) {
+    const sid = String(__pmRealtimeAgent.conn?.sessionId || __pmVoice?.targetSessionId || __pmChat?.activeSessionId || MOBILE_CHAT_SESSION_ID).trim() || MOBILE_CHAT_SESSION_ID;
+    const visibleAttachment = {
+      kind: 'image',
+      name: `Live camera attached · turn ${turnId}`,
+      mimeType: image.mimeType,
+      dataUrl: image.dataUrl,
+      frameId,
+      turnId,
+      capturedAt,
+      attachmentState: 'associated',
+    };
+    try {
+      _stageMobileRealtimeAgentAttachmentPreview(visibleAttachment, sid, {
+        cameraTurnId: turnId,
+        cameraFrameId: frameId,
+        capturedAt,
+        source: 'realtime_live_camera',
+        attachmentState: 'associated',
+        previewTransient: true,
+      });
+      __pmRealtimeAgent.enqueuePreviews?.([visibleAttachment], { transient: true });
+      state.attachmentVisibleTurnId = turnId;
+      _voiceDebug('realtime-agent-live-camera-attachment-visible', {
+        provider,
+        turnId,
+        frameId,
+        capturedAt,
+      });
+    } catch (err) {
+      _voiceDebug('realtime-agent-live-camera-attachment-visible-failed', {
+        turnId,
+        frameId,
+        message: err?.message || String(err),
+      });
+    }
+  }
+  return !!sent;
 }
 
 function _stopMobileRealtimeLiveCameraVision(reason = 'speech_finished') {
@@ -24591,6 +25706,12 @@ function _stopMobileRealtimeLiveCameraVision(reason = 'speech_finished') {
   state.active = false;
   state.generation = Number(state.generation || 0) + 1;
   state.queuedFrame = null;
+  state.prepareInFlight = null;
+  state.phase = 'idle';
+  state.responseGateActive = false;
+  state.preparationReady = false;
+  state.pendingAttachmentPreparation = null;
+  state.audioCommitted = false;
   if (state.timer) clearInterval(state.timer);
   state.timer = null;
   _voiceDebug('realtime-agent-live-camera-stopped', { reason });
@@ -24599,6 +25720,7 @@ function _stopMobileRealtimeLiveCameraVision(reason = 'speech_finished') {
 function _queueMobileRealtimeLiveCameraFrame(reason = 'speech_active') {
   const state = _mobileRealtimeLiveVisionState();
   if (!state.active) return false;
+  if (state.prepareInFlight) return true;
   const reader = __pmRealtimeAgent.liveCameraFrameReader;
   const asyncReader = __pmRealtimeAgent.liveCameraFrameAsyncReader;
   if (typeof reader !== 'function') return false;
@@ -24608,57 +25730,145 @@ function _queueMobileRealtimeLiveCameraFrame(reason = 'speech_active') {
   if (!dataUrl.startsWith('data:image')) return false;
   // Keep only the newest frame if the vision sidecar or network takes longer
   // than a second. This prevents stale camera frames from building a queue.
+  if (state.queuedFrame && String(state.queuedFrame.dataUrl || '') !== dataUrl) {
+    _voiceDebug('realtime-agent-live-camera-frame-dropped-backpressure', {
+      reason,
+      turnId: state.turnId,
+      droppedFrameId: String(state.queuedFrame.frameId || ''),
+      replacementFrameId: String(frame?.frameId || ''),
+    });
+  }
   state.queuedFrame = {
     ...frame,
     dataUrl,
     capturedAt: Number(frame?.capturedAt || Date.now()) || Date.now(),
+    frameId: String(frame?.frameId || `live_camera_${state.turnId}_${Date.now()}_${++state.frameSequence}`),
     reason,
   };
   if (state.inFlight) return true;
   const generation = Number(state.generation || 0);
+  const turnId = Number(state.turnId || 0);
   state.inFlight = (async () => {
-    while (state.active && generation === Number(state.generation || 0) && state.queuedFrame) {
+    while (_mobileRealtimeLiveVisionIsCurrent(state, generation, turnId) && state.queuedFrame) {
       const current = state.queuedFrame;
       state.queuedFrame = null;
       let freshest = null;
       if (typeof asyncReader === 'function') {
         try { freshest = await asyncReader(); } catch {}
       }
-      if (!state.active || generation !== Number(state.generation || 0)) break;
+      if (!_mobileRealtimeLiveVisionIsCurrent(state, generation, turnId)) break;
       const selected = String(freshest?.dataUrl || '').startsWith('data:image') ? freshest : current;
-      const image = {
-        dataUrl: selected.dataUrl,
-        name: `Live camera frame ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`,
-        mimeType: 'image/jpeg',
-        realtimeInjected: false,
-      };
-      state.lastSentAt = Date.now();
-      try {
-        const provider = String(__pmRealtimeAgent.conn?.provider || 'openai_realtime');
-        const sent = provider === 'xai'
-          ? await _sendMobileXaiVisionSummaryToRealtime([image.dataUrl], {
-            name: image.name,
-            reason: 'live_camera_speech',
-            toast: false,
-          })
-          : await _injectRealtimeImageItemToConversation(image, [
-            'Live camera frame captured during the user\'s active spoken turn.',
-            'Use this newest frame as visual context; do not claim the camera is unavailable.',
-          ].join(' '));
-        _voiceDebug('realtime-agent-live-camera-frame', {
-          sent: !!sent,
-          provider,
-          ageMs: Math.max(0, Date.now() - Number(selected.capturedAt || Date.now())),
-        });
-      } catch (err) {
-        _voiceDebug('realtime-agent-live-camera-frame-failed', { message: err?.message || String(err) });
-      }
+      await _associateMobileRealtimeLiveCameraFrame(selected, { reason, generation, turnId });
     }
   })().finally(() => {
     state.inFlight = null;
-    if (state.active && state.queuedFrame && generation === Number(state.generation || 0)) {
+    if (_mobileRealtimeLiveVisionIsCurrent(state, generation, turnId) && state.queuedFrame) {
       _queueMobileRealtimeLiveCameraFrame('queued_latest_frame');
     }
+  });
+  return true;
+}
+
+async function _prepareMobileRealtimeLiveCameraForTurn(reason = 'turn_ready') {
+  const state = _mobileRealtimeLiveVisionState();
+  // Camera opening and the first mic gesture can overlap on mobile Safari. If
+  // the reader became available after speech_started/PTT press, recover the
+  // turn here before committing audio. Never create a new camera turn after a
+  // response has already begun.
+  if (!state.active
+    && !__pmRealtimeAgent.activeResponse
+    && !__pmVoice.realtimeSpeechActiveResponse
+    && typeof __pmRealtimeAgent.liveCameraFrameReader === 'function'
+    && __pmRealtimeAgent.conn?.dc?.readyState === 'open') {
+    _startMobileRealtimeLiveCameraVision(`${reason}_late_camera_ready`);
+  }
+  if (!state.active || state.prepareInFlight) return state.prepareInFlight || false;
+  const reader = __pmRealtimeAgent.liveCameraFrameReader;
+  const asyncReader = __pmRealtimeAgent.liveCameraFrameAsyncReader;
+  if (typeof reader !== 'function') return false;
+  const generation = Number(state.generation || 0);
+  const turnId = Number(state.turnId || 0);
+  state.phase = 'preparing';
+  const run = (async () => {
+    // Drain an older association before selecting the turn's final frame. The
+    // generation check below prevents that older request from becoming the
+    // current frame if the response has already started.
+    if (state.inFlight) await state.inFlight.catch(() => {});
+    if (!_mobileRealtimeLiveVisionIsCurrent(state, generation, turnId)) return false;
+    let frame = null;
+    try { frame = reader(); } catch {}
+    let freshest = null;
+    if (typeof asyncReader === 'function') {
+      try { freshest = await asyncReader({ force: true, reason, turnId }); } catch {}
+    }
+    if (!_mobileRealtimeLiveVisionIsCurrent(state, generation, turnId)) return false;
+    const selectedCandidate = String(freshest?.dataUrl || '').startsWith('data:image') ? freshest : frame;
+    const minTurnFrameAt = Number(state.turnCaptureStartedAt || 0) - 1200;
+    const selected = selectedCandidate && (!minTurnFrameAt || Number(selectedCandidate.capturedAt || 0) >= minTurnFrameAt)
+      ? selectedCandidate
+      : null;
+    if (!selected) {
+      _voiceDebug('realtime-agent-live-camera-turn-frame-missing', {
+        reason,
+        turnId,
+        turnCaptureStartedAt: state.turnCaptureStartedAt || 0,
+        cachedFrameAt: Number(frame?.capturedAt || 0) || 0,
+        freshFrameAt: Number(freshest?.capturedAt || 0) || 0,
+      });
+    }
+    const sent = await _associateMobileRealtimeLiveCameraFrame(selected, {
+      reason,
+      generation,
+      turnId,
+      authoritative: true,
+      turnCaptureStartedAt: state.turnCaptureStartedAt,
+    });
+    state.preparationReady = true;
+    _voiceDebug('realtime-agent-live-camera-turn-prepared', {
+      reason,
+      turnId,
+      sent,
+      frameId: state.lastAssociatedFrameId || '',
+      frameAt: state.lastAssociatedFrameAt || 0,
+      frameCapturedAt: state.lastAssociatedCapturedAt || 0,
+    });
+    return sent;
+  })().catch((err) => {
+    state.preparationReady = true;
+    state.phase = 'association_failed';
+    _voiceDebug('realtime-agent-live-camera-turn-preparation-failed', {
+      reason,
+      turnId,
+      message: err?.message || String(err),
+    });
+    return false;
+  }).finally(() => {
+    if (state.prepareInFlight === run) state.prepareInFlight = null;
+  });
+  state.prepareInFlight = run;
+  return run;
+}
+
+function _maybeReleaseMobileRealtimeCameraResponseGate(reason = 'camera_turn_ready') {
+  const state = _mobileRealtimeLiveVisionState();
+  if (!state.responseGateActive || !state.preparationReady) return false;
+  if (!state.active) return false;
+  state.phase = 'response_ready';
+  if (state.timer) clearInterval(state.timer);
+  state.timer = null;
+  state.queuedFrame = null;
+  _sendMobileRealtimeAgentCreateResponseFlag(true);
+  const wasCommitted = state.audioCommitted === true;
+  state.responseGateActive = false;
+  if (wasCommitted && !state.responseRequestedAt) {
+    state.responseRequestedAt = Date.now();
+    _scheduleMobileRealtimeAgentResponseAfterSkillContext(reason);
+  }
+  _voiceDebug('realtime-agent-live-camera-response-released', {
+    reason,
+    turnId: state.turnId,
+    wasCommitted,
+    frameAt: state.lastAssociatedFrameAt || 0,
   });
   return true;
 }
@@ -24670,8 +25880,31 @@ function _startMobileRealtimeLiveCameraVision(reason = 'speech_started') {
   if (state.active) return true;
   state.active = true;
   state.generation = Number(state.generation || 0) + 1;
+  state.turnId = Number(state.turnId || 0) + 1;
+  state.turnStartedAt = Date.now();
+  state.turnCaptureStartedAt = state.turnStartedAt;
+  state.turnFrameId = '';
+  state.lastAssociatedFrameAt = 0;
+  state.lastAssociatedCapturedAt = 0;
+  state.lastAssociatedFrameId = '';
+  state.lastAssociatedTurnId = 0;
+  state.attachmentVisibleTurnId = 0;
+  state.phase = 'capturing';
+  state.preparationReady = false;
+  state.pendingAttachmentPreparation = null;
+  state.audioCommitted = false;
+  state.responseStartedAt = 0;
+  state.responseRequestedAt = 0;
+  state.responseGateActive = (__pmRealtimeAgent.conn?.listenMode || __pmRealtimeAgent.listenMode) === 'always_listening'
+    && !_isMobileCodexV3RealtimeConnection(__pmRealtimeAgent.conn);
   state.lastSentAt = 0;
-  _voiceDebug('realtime-agent-live-camera-started', { reason, intervalMs: 1000 });
+  if (state.responseGateActive) _sendMobileRealtimeAgentCreateResponseFlag(false);
+  _voiceDebug('realtime-agent-live-camera-started', {
+    reason,
+    intervalMs: 1000,
+    turnId: state.turnId,
+    responseGateActive: state.responseGateActive,
+  });
   _queueMobileRealtimeLiveCameraFrame(reason);
   state.timer = setInterval(() => {
     if (!state.active) return;
@@ -24928,6 +26161,7 @@ function _mobileRealtimeAgentPttPress(sessionId) {
           && ptt.pressId === pressId
           && String(ptt.sessionId || '') === sid
           && String(conn?.sessionId || '') === sid;
+        if (stillHeld) _startMobileRealtimeLiveCameraVision('ptt_press');
         _setMobileRealtimeAgentMicEnabled(stillHeld);
         _voiceDebug('realtime-agent-ptt-bootstrap-resolved', {
           sessionId: sid,
@@ -24938,6 +26172,7 @@ function _mobileRealtimeAgentPttPress(sessionId) {
       .catch((err) => _voiceDebug('realtime-agent-ptt-start-failed', { message: err?.message || String(err) }));
     return;
   }
+  _startMobileRealtimeLiveCameraVision('ptt_press');
   _setMobileRealtimeAgentMicEnabled(true);
 }
 
@@ -24961,8 +26196,9 @@ function _mobileRealtimeAgentPttRelease() {
     if (dc?.readyState === 'open') {
       try {
         dc.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+        _mobileRealtimeLiveVisionState().audioCommitted = true;
         if (conn?.provider === 'xai') {
-          dc.send(JSON.stringify({ type: 'response.create' }));
+          _sendMobileRealtimeAgentResponseCreate('xai_ptt_release');
         } else {
           _scheduleMobileRealtimeAgentResponseAfterSkillContext('ptt_release');
         }
@@ -24973,11 +26209,14 @@ function _mobileRealtimeAgentPttRelease() {
     // AVAS v3 has server VAD configured by thread/realtime/start. Disabling
     // this track delivers silence, closes the VAD turn, and lets AVAS reply.
     // Public commit/create events are invalid on the v3 data channel.
-    _setMobileRealtimeAgentMicEnabled(false);
-    _voiceDebug('codex-v3-ptt-release-server-vad', {
-      sessionId: conn.sessionId,
-      heldForMs,
-      micEnabled: conn.micTrack?.enabled === true,
+    Promise.resolve(_prepareMobileRealtimeLiveCameraForTurn('codex_ptt_release')).finally(() => {
+      _setMobileRealtimeAgentMicEnabled(false);
+      _voiceDebug('codex-v3-ptt-release-server-vad', {
+        sessionId: conn.sessionId,
+        heldForMs,
+        micEnabled: conn.micTrack?.enabled === true,
+        cameraFrameAt: _mobileRealtimeLiveVisionState().lastAssociatedFrameAt || 0,
+      });
     });
     return;
   }
@@ -24994,23 +26233,26 @@ function _mobileRealtimeAgentPttRelease() {
       _setMobileRealtimeAgentMicEnabled(false);
       return;
     }
-    setTimeout(() => {
+    setTimeout(async () => {
+      await Promise.resolve(_prepareMobileRealtimeLiveCameraForTurn('xai_ptt_release')).catch(() => false);
       commitAndRespond();
       _setMobileRealtimeAgentMicEnabled(false);
     }, 180);
     return;
   }
   _setMobileRealtimeAgentMicEnabled(false);
-  const flushThenCommit = () => {
+  const flushThenCommit = async () => {
     // Flush any staged photo into the conversation BEFORE committing the audio +
     // creating the response, so the image is attached to this spoken turn.
+    await Promise.resolve(_prepareMobileRealtimeLiveCameraForTurn('ptt_release')).catch(() => false);
     if (__pmRealtimeAgent.pendingImages.length) {
-      _flushMobileRealtimeAgentPendingImages('ptt_release').finally(() => commitAndRespond());
+      await _flushMobileRealtimeAgentPendingImages('ptt_release').catch(() => false);
+      commitAndRespond();
     } else {
       commitAndRespond();
     }
   };
-  flushThenCommit();
+  flushThenCommit().catch(() => commitAndRespond());
 }
 
 async function _mobileRealtimeAgentEnableAlwaysListening(sessionId) {
@@ -25475,12 +26717,14 @@ async function _sendMobileCodexVisionSummaryToRealtime(dataUrls, opts = {}) {
     .map((u) => String(u || '').trim())
     .filter((u) => u.startsWith('data:image'));
   if (!urls.length) return false;
+  if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) return false;
   const summary = String(opts.precomputedSummary || await _summarizeMobileXaiVisionImages(urls, {
     ...opts,
     toast: opts.toast === true,
     reason: opts.reason || 'codex_bridge_camera',
   })).trim();
   if (!summary) return false;
+  if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) return false;
   const label = String(opts.label || '').trim();
   const isLive = String(opts.reason || '').startsWith('live_camera');
   const text = [
@@ -25491,10 +26735,15 @@ async function _sendMobileCodexVisionSummaryToRealtime(dataUrls, opts = {}) {
     `Vision description: ${summary}`,
   ].filter(Boolean).join('\n');
   try {
+    if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) return false;
     const result = await mobileGatewayFetch('/api/realtime/codex-bridge/append-text', {
       method: 'POST',
       body: JSON.stringify({ sessionId: conn.codexBridgeSessionId, text }),
     });
+    if (typeof opts.isCurrent === 'function' && !opts.isCurrent()) {
+      _voiceDebug('realtime-agent-codex-vision-summary-dropped-stale', { isLive, count: urls.length });
+      return false;
+    }
     if (result?.success === false) throw new Error(result?.error || 'Codex realtime visual context was not accepted.');
     _voiceDebug('realtime-agent-codex-vision-summary-injected', {
       isLive,
@@ -26423,6 +27672,7 @@ export async function renderVoicePage(page, ctx) {
   let voicePageCameraOpening = false;
   let voicePageCameraFacingMode = 'environment';
   let voicePageCameraFrameReader = null;
+  let voicePageCameraFrameSequence = 0;
 
   const setVoicePageCameraStatus = (text = '') => {
     if (voiceCameraStatus) voiceCameraStatus.textContent = String(text || '');
@@ -26460,6 +27710,7 @@ export async function renderVoicePage(page, ctx) {
 
   const readVoicePageLiveCameraFrame = () => {
     if (!voiceCameraVideo || !voicePageCameraStream) return null;
+    const capturedAt = Date.now();
     const width = Number(voiceCameraVideo.videoWidth || 0);
     const height = Number(voiceCameraVideo.videoHeight || 0);
     if (!width || !height) return null;
@@ -26481,12 +27732,15 @@ export async function renderVoicePage(page, ctx) {
       dataUrl: canvas.toDataURL('image/jpeg', 0.76),
       width: canvas.width,
       height: canvas.height,
-      capturedAt: Date.now(),
+      capturedAt,
+      encodedAt: Date.now(),
+      frameId: `voice_page_camera_${++voicePageCameraFrameSequence}`,
     };
   };
 
   const readVoicePageLiveCameraFrameAsync = () => {
     if (!voiceCameraVideo || !voicePageCameraStream) return Promise.resolve(null);
+    const capturedAt = Date.now();
     const width = Number(voiceCameraVideo.videoWidth || 0);
     const height = Number(voiceCameraVideo.videoHeight || 0);
     if (!width || !height) return Promise.resolve(null);
@@ -26515,7 +27769,9 @@ export async function renderVoicePage(page, ctx) {
           dataUrl: String(reader.result || ''),
           width: canvas.width,
           height: canvas.height,
-          capturedAt: Date.now(),
+          capturedAt,
+          encodedAt: Date.now(),
+          frameId: `voice_page_camera_${++voicePageCameraFrameSequence}`,
         });
         reader.onerror = () => resolve(null);
         reader.readAsDataURL(blob);
@@ -36708,6 +37964,23 @@ function _pmTaskDispatchedMessage(task) {
   return prompt;
 }
 
+function _pmRenderTaskPromptDisclosure(task) {
+  const prompt = _pmTaskDispatchedMessage(task);
+  if (!prompt) return '';
+  const compact = prompt.replace(/\s+/g, ' ').trim();
+  const previewLimit = 96;
+  const preview = compact.slice(0, previewLimit);
+  return `<section class="pm-task-prompt-section">
+    <details class="pm-task-prompt-disclosure">
+      <summary>
+        <span class="pm-task-prompt-title">Task Prompt</span>
+        <span class="pm-task-prompt-preview">${escapeHtml(preview)}${compact.length > previewLimit ? '…' : ''}</span>
+      </summary>
+      <div class="pm-card-body pm-task-prompt-body">${escapeHtml(prompt)}</div>
+    </details>
+  </section>`;
+}
+
 function _pmTaskAction(task) {
   const s = String(task?.status || '').toLowerCase();
   if (s === 'running') return { action: 'pause', label: 'Pause' };
@@ -36804,7 +38077,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
                 </div>
               </section>` : ''}
               <section><div class="pm-card-head">Progress</div>${_pmRenderTaskProgress(_pmTaskProgressItems(detail))}</section>
-              <section><div class="pm-card-head">Task Prompt</div><div class="pm-card-body" style="white-space:pre-wrap;">${escapeHtml(_pmTaskDispatchedMessage(detail))}</div></section>
+              ${_pmRenderTaskPromptDisclosure(detail)}
               <section><div class="pm-card-head">Evidence Bus</div>${_pmRenderTaskEvidence(detailEvidence)}</section>
               <section><div class="pm-card-head">Process Log</div>${_pmRenderTaskJournal(detail.journal)}</section>
             `}
@@ -36832,7 +38105,7 @@ export async function renderTasksPage(page, { navigate, taskId = '' }) {
   function wireTaskCards() {
     listEl.querySelectorAll('.pm-task-card').forEach(card => {
       card.addEventListener('click', async (event) => {
-        if (event.target.closest('button, textarea, input, a')) return;
+        if (event.target.closest('button, textarea, input, a, summary')) return;
         const id = card.getAttribute('data-task-id');
         expandedId = expandedId === id ? '' : id;
         paint();
@@ -38407,7 +39680,7 @@ async function _renderSubagentRunsTab(slot, agentId) {
             ${detail.finalSummary ? `<section><div class="pm-card-head">Output</div><div class="pm-sa-run-output">${_mobileRunSummaryPresentation(detail.finalSummary)}</div></section>` : ''}
             ${canRecover || detail.recoveryConversation?.length ? renderRecoveryThread(detail, id, canRecover) : ''}
             <section><div class="pm-card-head">Progress</div>${_pmRenderTaskProgress(_pmTaskProgressItems(detail))}</section>
-            <section><div class="pm-card-head">Task Prompt</div><div class="pm-card-body" style="white-space:pre-wrap;">${escapeHtml(_pmTaskDispatchedMessage(detail))}</div></section>
+            ${_pmRenderTaskPromptDisclosure(detail)}
             <section><div class="pm-card-head">Process Log</div>${_pmRenderTaskJournal(detail.journal)}</section>
           `}
         </div>` : ''}
@@ -38438,7 +39711,7 @@ async function _renderSubagentRunsTab(slot, agentId) {
     });
     slot.querySelectorAll('[data-sa-run-id]').forEach((card) => {
       card.addEventListener('click', async (event) => {
-        if (event.target.closest('button, textarea, input, a')) return;
+        if (event.target.closest('button, textarea, input, a, summary')) return;
         await openDetail(card.getAttribute('data-sa-run-id'));
       });
     });

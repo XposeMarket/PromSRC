@@ -54,7 +54,9 @@ export function createApp(): express.Application {
     }
     next();
   });
-  app.use(cors(buildGatewayCorsOptions()));
+  // CORS is request-aware so the mobile hub bridge can be allowed narrowly
+  // for pairing claim/poll and read-only gateway catalog requests.
+  app.use((req, res, next) => cors(buildGatewayCorsOptions(req))(req, res, next));
   // Provider routes must enforce their smaller limit before the general JSON
   // parser buffers or parses the request. The raw parser preserves exact HMAC bytes.
   const hookPath = resolveHookConfig().path;

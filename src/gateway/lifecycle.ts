@@ -19,6 +19,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { DEFAULT_GATEWAY_PORT, getRuntimeGatewayPort } from '../config/gateway-port.js';
 import { spawn, execFileSync } from 'child_process';
 import type { BootAutomatedSession } from './boot';
 import { prepareActiveRuntimesForGatewayShutdown } from './runtime-recovery';
@@ -99,7 +100,7 @@ function getRestartContextPath(): string {
 }
 
 function getGatewayHealthUrl(): string {
-  const port = Number(process.env.GATEWAY_PORT || 18789) || 18789;
+  const port = getRuntimeGatewayPort() || DEFAULT_GATEWAY_PORT;
   return `http://127.0.0.1:${port}/api/health`;
 }
 
@@ -733,6 +734,15 @@ export async function gracefulRestart(ctx: RestartContext): Promise<void> {
   try {
     const replacementEnv = { ...process.env, PROMETHEUS_HOT_RESTART: '1' } as NodeJS.ProcessEnv;
     delete replacementEnv.PROMETHEUS_SUPERVISED_GATEWAY_CHILD;
+    // A restart is a replacement of this exact instance, never a request for
+    // the auto-instance allocator. Pin the replacement to the current port so
+    // a stale inherited launcher flag cannot move it to the next free port and
+    // leave the original gateway tree running beside it.
+    delete replacementEnv.PROMETHEUS_AUTO_INSTANCE;
+    delete replacementEnv.PROMETHEUS_NEW_INSTANCE;
+    replacementEnv.PROMETHEUS_GATEWAY_PORT = String(
+      getRuntimeGatewayPort() || DEFAULT_GATEWAY_PORT,
+    );
     const launch = resolveDirectGatewayLaunch(root);
     const child = launch
       ? spawn(process.execPath, launch.args, {

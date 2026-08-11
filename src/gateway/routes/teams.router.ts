@@ -1980,7 +1980,7 @@ function normalizeAuthoredBrainPulseCard(card: unknown, source: string, sourcePa
   if (!card || typeof card !== 'object') return null;
   const raw = card as Record<string, unknown>;
   const title = cleanBrainPulseText(raw.title, 52);
-  const body = cleanBrainPulseText(raw.body, 130);
+  const body = cleanBrainPulseText(raw.body, 90);
   const prompt = cleanBrainPulseText(raw.prompt, 520);
   if (!title || !body || !prompt) return null;
   return {
@@ -2062,7 +2062,7 @@ function extractBrainPulseCardsFromThought(file: string, markdown: string): Brai
     if (row.length < 2 || /^seed$/i.test(row[0]) || /^-+$/.test(row.join(''))) continue;
     const fullTitle = cleanBrainPulseText(row[0], 140);
     const title = cleanBrainPulseText(fullTitle, 46);
-    const body = cleanBrainPulseText(row[1], 116);
+    const body = cleanBrainPulseText(row[1], 90);
     if (!title || !body) continue;
     cards.push({
       title,
@@ -2079,7 +2079,7 @@ function extractBrainPulseCardsFromThought(file: string, markdown: string): Brai
     if (row.length < 3 || /^issue$/i.test(row[0]) || /^-+$/.test(row.join(''))) continue;
     const fullTitle = cleanBrainPulseText(row[0], 140);
     const title = cleanBrainPulseText(fullTitle, 46);
-    const body = cleanBrainPulseText(`${row[1]} - ${row[2]}`, 116);
+    const body = cleanBrainPulseText(`${row[1]} - ${row[2]}`, 90);
     if (!title || !body) continue;
     cards.push({
       title,
@@ -2098,7 +2098,7 @@ function extractBrainPulseCardsFromThought(file: string, markdown: string): Brai
     .filter((part) => /^I wonder\s+(?:if|whether|how|what|why|where|when)\s+/i.test(part))
     .map((part) => part.split(/\n\s*\n/)[0]);
   for (const match of wonderMatches) {
-    const body = cleanBrainPulseText(match.replace(/^I wonder\s+/i, ''), 116);
+    const body = cleanBrainPulseText(match.replace(/^I wonder\s+/i, ''), 90);
     if (!body) continue;
     cards.push({
       title: 'Dig Into a Recent Thread',

@@ -1,205 +1,3 @@
-
-
-/* --------------------------------------------------------------------------
-   Prometheus One mobile launch sequence
-   Black first frame -> constellations -> P1 mark -> Cinzel title -> app.
-   -------------------------------------------------------------------------- */
-body.pm-mobile-active .pm-one-splash {
-  position: fixed;
-  inset: 0;
-  z-index: 100000;
-  display: grid;
-  place-items: center;
-  overflow: hidden;
-  isolation: isolate;
-  background: #000;
-  opacity: 1;
-  transition: opacity 360ms cubic-bezier(.4, 0, .2, 1), visibility 360ms;
-}
-
-body.pm-mobile-active .pm-one-splash[hidden] { display: none; }
-
-body.pm-mobile-active .pm-one-splash.is-leaving {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.pm-one-starfield {
-  position: absolute;
-  inset: -8%;
-  opacity: 0;
-  pointer-events: none;
-  background-repeat: repeat;
-  mix-blend-mode: screen;
-}
-
-.pm-one-starfield-far {
-  background-image:
-    radial-gradient(circle at 8px 12px, rgba(240, 211, 148, .72) 0 1px, transparent 1.4px),
-    radial-gradient(circle at 38px 52px, rgba(182, 137, 66, .55) 0 .8px, transparent 1.3px),
-    radial-gradient(circle at 74px 24px, rgba(255, 235, 184, .46) 0 .65px, transparent 1.15px);
-  background-size: 92px 86px, 113px 121px, 149px 137px;
-  filter: blur(.1px) drop-shadow(0 0 3px rgba(216, 169, 81, .28));
-  transform: scale(1.04);
-}
-
-.pm-one-starfield-near {
-  background-image:
-    radial-gradient(circle at 22px 31px, #f5d995 0 1.2px, rgba(224, 180, 92, .42) 1.4px, transparent 3.2px),
-    radial-gradient(circle at 91px 67px, rgba(240, 204, 128, .82) 0 .95px, transparent 2.4px);
-  background-size: 137px 153px, 211px 187px;
-  filter: drop-shadow(0 0 6px rgba(232, 190, 105, .52));
-  transform: scale(1.015);
-}
-
-.pm-one-constellations {
-  position: absolute;
-  inset: -2%;
-  width: 104%;
-  height: 104%;
-  opacity: 0;
-  color: #b98a3b;
-  filter: drop-shadow(0 0 5px rgba(214, 164, 74, .25));
-  transform: scale(1.025);
-}
-
-.pm-one-constellation-lines path {
-  fill: none;
-  stroke: url(#pm-one-line-gold, currentColor);
-  stroke: currentColor;
-  stroke-width: .42;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 1.5 1.1;
-  opacity: .27;
-  vector-effect: non-scaling-stroke;
-}
-
-.pm-one-constellation-stars circle {
-  fill: #d7aa57;
-  opacity: .78;
-  filter: url(#pm-one-star-glow);
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.pm-one-constellation-stars circle:nth-child(3n) { animation: pm-one-star-pulse 2.1s ease-in-out 1.1s infinite alternate; }
-.pm-one-constellation-stars circle:nth-child(4n + 1) { animation: pm-one-star-pulse 2.8s ease-in-out 1.45s infinite alternate-reverse; }
-.pm-one-constellation-stars .is-bright {
-  fill: #f5dc9b;
-  opacity: 1;
-  animation: pm-one-bright-star 1.7s ease-in-out 1s infinite alternate;
-}
-
-.pm-one-brand {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: min(70vw, 286px);
-  transform: translateY(-1vh);
-}
-
-.pm-one-mark-wrap {
-  width: clamp(172px, 54vw, 228px);
-  opacity: 0;
-  transform: translateZ(0) scale(.86);
-  transform-origin: center;
-  filter: drop-shadow(0 0 22px rgba(202, 151, 63, .22));
-  isolation: isolate;
-  contain: paint;
-  will-change: opacity, transform, filter;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-}
-
-.pm-one-mark {
-  display: block;
-  width: 100%;
-  height: auto;
-  object-fit: contain;
-  border-radius: 0;
-  opacity: 1;
-  transform: translateZ(0);
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-}
-
-.pm-one-title {
-  position: relative;
-  margin-top: 20px;
-  font-family: 'Cinzel', 'Times New Roman', Georgia, serif;
-  font-size: clamp(20px, 5.5vw, 26px);
-  font-weight: 600;
-  letter-spacing: .072em;
-  line-height: 1.2;
-  text-align: center;
-  white-space: nowrap;
-  color: transparent;
-  background: linear-gradient(105deg, #75501d 0%, #d3a958 27%, #f6e0a7 46%, #fff4ca 50%, #d0a04a 57%, #8b6326 100%);
-  background-size: 240% 100%;
-  background-position: 100% 0;
-  -webkit-background-clip: text;
-  background-clip: text;
-  opacity: 0;
-  transform: translateY(9px);
-  filter: drop-shadow(0 0 12px rgba(213, 164, 75, .18));
-}
-
-.pm-one-splash.is-running .pm-one-starfield-far {
-  animation: pm-one-particles-in 520ms ease-out 40ms both, pm-one-particle-drift 3.6s ease-in-out 600ms infinite alternate;
-}
-.pm-one-splash.is-running .pm-one-starfield-near {
-  animation: pm-one-particles-in 460ms ease-out 100ms both, pm-one-particle-drift-near 3.2s ease-in-out 620ms infinite alternate;
-}
-.pm-one-splash.is-running .pm-one-constellations {
-  animation: pm-one-constellations-in 560ms ease-out 80ms both;
-}
-.pm-one-splash.is-running .pm-one-mark-wrap {
-  animation: pm-one-mark-in 520ms cubic-bezier(.16, 1, .3, 1) 520ms both;
-}
-.pm-one-splash.is-running .pm-one-title {
-  animation: pm-one-title-in 420ms cubic-bezier(.22, 1, .36, 1) 980ms both, pm-one-title-shimmer 620ms cubic-bezier(.4, 0, .2, 1) 1360ms 1 both;
-}
-
-@keyframes pm-one-particles-in {
-  from { opacity: 0; transform: scale(1.055); }
-  to { opacity: .78; transform: scale(1); }
-}
-@keyframes pm-one-particle-drift { to { transform: translate3d(-4px, 6px, 0) scale(1.012); opacity: .94; } }
-@keyframes pm-one-particle-drift-near { to { transform: translate3d(5px, -7px, 0) scale(1.02); opacity: .9; } }
-@keyframes pm-one-constellations-in {
-  from { opacity: 0; transform: scale(1.035); }
-  to { opacity: 1; transform: scale(1); }
-}
-@keyframes pm-one-mark-in {
-  from { opacity: 0; transform: translateZ(0) scale(.86); filter: blur(5px) drop-shadow(0 0 5px rgba(202, 151, 63, 0)); }
-  to { opacity: 1; transform: translateZ(0) scale(1); filter: blur(0) drop-shadow(0 0 22px rgba(202, 151, 63, .22)); }
-}
-@keyframes pm-one-title-in {
-  from { opacity: 0; transform: translateY(9px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-@keyframes pm-one-title-shimmer {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
-}
-@keyframes pm-one-star-pulse { from { opacity: .42; transform: scale(.72); } to { opacity: 1; transform: scale(1.42); } }
-@keyframes pm-one-bright-star { from { transform: scale(.9); opacity: .7; } to { transform: scale(1.45); opacity: 1; } }
-
-@media (prefers-reduced-motion: reduce) {
-  .pm-one-splash.is-running .pm-one-starfield,
-  .pm-one-splash.is-running .pm-one-constellations,
-  .pm-one-splash.is-running .pm-one-mark-wrap,
-  .pm-one-splash.is-running .pm-one-title {
-    animation-duration: 1ms;
-    animation-delay: 0ms;
-  }
-  body.pm-mobile-active .pm-one-splash { transition-duration: 180ms; }
-}
-
 /* Prometheus Mobile — isolated mobile shell + pages.
  * Only activates when <body> has class "pm-mobile-active".
  * Desktop UI is untouched otherwise.
@@ -236,7 +34,18 @@ body.pm-mobile-active .pm-one-splash.is-leaving {
   --pm-radius-pill:   999px;
   --pm-font:          -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
   --pm-header-h:      56px;
-  --pm-tabbar-h:      68px;
+  --pm-tabbar-h:      60px;
+  /* The installed PWA paints its content just below the translucent status
+     area. Keep the floating chrome clear of that border and give the chat
+     surface the same small downward nudge. Bottom chrome sits a few pixels
+     closer to the home-indicator safe area so the whole mobile composition
+     reads as one vertically centered surface. */
+  --pm-mobile-chrome-top-offset: 16px;
+  --pm-mobile-content-top-offset: 16px;
+  --pm-mobile-tabbar-bottom: 7px;
+  --pm-mobile-composer-gap: 11px;
+  --pm-mobile-chrome-inset: clamp(22px, 8.5vw, 50px);
+  --pm-mobile-context-chip-top: calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-chrome-top-offset, 0px) + 52px);
   --pm-lg-header-blur: 1.5px;
   --pm-lg-header-saturate: 1;
   --pm-lg-header-brightness: 1.04;
@@ -691,7 +500,7 @@ body.pm-mobile-drawer-open .pm-app {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: max(env(safe-area-inset-top), 12px) 14px 6px;
+  padding: calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-chrome-top-offset, 0px)) 14px 6px;
   background: transparent;
   pointer-events: none;
 }
@@ -889,16 +698,13 @@ body.pm-mobile-drawer-open .pm-app {
   transition: transform .16s ease, background .2s ease;
 }
 .pm-header .pm-online::before {
-  content: '';
-  flex: 0 0 auto;
-  width: 9px; height: 9px; border-radius: 50%;
-  background: var(--pm-green);
-  box-shadow: 0 0 0 3px rgba(47,174,102,.18);
+  content: none;
+  display: none;
 }
-.pm-header .pm-online.offline { color: var(--pm-red); }
+.pm-header .pm-online.offline { color: var(--pm-text); }
 .pm-header .pm-online.offline::before {
-  background: var(--pm-red);
-  box-shadow: 0 0 0 3px rgba(216,71,58,.16);
+  content: none;
+  display: none;
 }
 :root[data-theme="dark"] .pm-header .pm-online {
   background: rgba(255,255,255,.05);
@@ -930,6 +736,8 @@ body.pm-mobile-drawer-open .pm-app {
 .pm-model-badge .pm-model-badge-label {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  text-align: center;
   min-height: 1.35em;
   padding-bottom: 1px;
   overflow: hidden;
@@ -1676,7 +1484,7 @@ body.pm-model-badge-pressing * {
    Chat/voice render no title-row at all (see renderMobileHeader), so their
    messages scroll all the way up behind the floating buttons. */
 .pm-title-row {
-  padding: calc(max(env(safe-area-inset-top), 12px) + 48px) 18px 10px;
+  padding: calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-chrome-top-offset, 0px) + 48px) 18px 10px;
   display: flex; align-items: center; gap: 10px;
   flex-wrap: wrap;
 }
@@ -1877,11 +1685,11 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
 /* ---------- bottom tab nav ---------- */
 .pm-tabbar {
   position: absolute;
-  left: max(12px, env(safe-area-inset-left));
-  right: max(12px, env(safe-area-inset-right));
-  bottom: calc(env(safe-area-inset-bottom) + 10px);
-  height: 64px;
-  padding: 6px;
+  left: max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-left));
+  right: max(var(--pm-mobile-chrome-inset, 22px), env(safe-area-inset-right));
+  bottom: calc(env(safe-area-inset-bottom) + var(--pm-mobile-tabbar-bottom, 10px));
+  height: 56px;
+  padding: 4px;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   overflow: hidden;
@@ -1898,7 +1706,10 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
     0 18px 48px rgba(0,0,0,.20),
     0 4px 12px rgba(0,0,0,.10);
   z-index: 5;
-  transform: translateZ(0);
+  transform: translateZ(0) scale(1);
+  transform-origin: center center;
+  transition: transform .22s cubic-bezier(.34, 1.56, .5, 1), box-shadow .22s ease;
+  will-change: transform;
   /* Let the tabbar own horizontal drags (slider gesture) instead of the page. */
   touch-action: none;
 }
@@ -1917,6 +1728,12 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
    overflow, so fade it out for the duration of the gesture. */
 .pm-tabbar.pm-tabbar-pressing {
   overflow: visible;
+  transform: translateZ(0) scale(1.035);
+  box-shadow:
+    inset 0 1.5px 1px rgba(255,255,255,.36),
+    inset 0 -10px 26px rgba(255,255,255,.05),
+    0 20px 52px rgba(0,0,0,.24),
+    0 5px 14px rgba(0,0,0,.12);
 }
 .pm-tabbar.pm-tabbar-pressing .pm-glass-lens {
   opacity: 0;
@@ -2069,12 +1886,12 @@ body.pm-mobile-active.pm-mobile-document-scroll.pm-mobile-voice-snap .pm-body.pm
   position: relative;
   z-index: 2;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 4px;
+  gap: 0;
   min-width: 0;
   color: rgba(34,26,20,.68);
   font-size: 10px; font-weight: 800;
   cursor: pointer;
-  padding: 8px 4px;
+  padding: 4px 2px;
   border-radius: 999px;
   text-shadow: 0 1px 1px rgba(255,255,255,.35);
   transition: color .22s ease, transform .2s ease, opacity .2s ease;
@@ -4033,15 +3850,15 @@ html.pm-session-context-open * {
 }
 .pm-mobile-empty-chat-card {
   width: 100%;
-  min-height: 86px;
+  min-height: 48px;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  flex-direction: row;
+  align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 0;
   border: 1px solid color-mix(in srgb, var(--pm-muted) 32%, transparent);
-  border-radius: 16px;
-  padding: 14px 15px;
+  border-radius: 14px;
+  padding: 12px 14px;
   background: transparent;
   color: var(--pm-text);
   box-shadow: none;
@@ -4059,17 +3876,26 @@ html.pm-session-context-open * {
   outline-offset: 2px;
 }
 .pm-mobile-empty-chat-card-title {
-  display: block;
-  font-size: 14px;
-  line-height: 1.25;
-  font-weight: 850;
-  letter-spacing: 0;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .pm-mobile-empty-chat-card-body {
   display: block;
-  color: var(--pm-muted);
-  font-size: 12px;
-  line-height: 1.42;
+  width: 100%;
+  min-width: 0;
+  color: var(--pm-text);
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 :root[data-theme="dark"] .pm-mobile-empty-chat-card {
   border-color: color-mix(in srgb, var(--pm-muted) 36%, transparent);
@@ -4158,6 +3984,10 @@ html.pm-session-context-open * {
 .pm-msg.from-user .pm-bubble {
   background: var(--pm-orange-soft);
   border-color: color-mix(in srgb, var(--pm-orange) 18%, transparent);
+  /* A sent-image row may be wider than the text. Do not let the preview's
+     intrinsic width stretch the actual message bubble. */
+  width: fit-content;
+  max-width: 100%;
 }
 .pm-msg.from-user.voice-worker-handoff .pm-bubble {
   background: color-mix(in srgb, var(--pm-orange-soft), var(--pm-surface) 42%);
@@ -7297,8 +7127,9 @@ html.pm-session-context-open * {
    stays transparent and reads through the glass. */
 .pm-composer {
   position: absolute;
-  left: 10px; right: 10px;
-  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + 22px);
+  left: var(--pm-mobile-chrome-inset, 22px);
+  right: var(--pm-mobile-chrome-inset, 22px);
+  bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-mobile-composer-gap, 22px));
   /* overflow:visible so popovers anchored above the composer (skill-trigger pill,
      slash command popover via bottom:calc(100%+Npx)) are NOT clipped. The glass
      material rounding is preserved by .pm-glass-lens, which clips itself. */
@@ -7320,7 +7151,7 @@ html.pm-session-context-open * {
      pill. The expanded state below intentionally switches back to the
      existing card-like radius. */
   border-radius: 999px;
-  padding: 5px 9px;
+  padding: 3px 7px;
   box-shadow:
     inset 0 1.5px 1px rgba(255,255,255,.32),     /* top rim light — same as tabbar */
     inset 0 -1.5px 1.5px rgba(255,255,255,.16),  /* bottom rim light */
@@ -7328,6 +7159,8 @@ html.pm-session-context-open * {
     0 1px 4px rgba(0,0,0,.06);
   z-index: 4;
   transition:
+    left var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
+    right var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
     bottom var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
     padding var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
     border-radius var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
@@ -8605,11 +8438,63 @@ html.pm-session-context-open * {
 .pm-composer-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  transform: translateY(-3px);
+  gap: 6px;
+  min-height: 38px;
+  transform: none;
   transition: transform var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1));
 }
-.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row {
+#pm-composer .pm-composer-row > .pm-haptic-host {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  align-self: center;
+}
+#pm-composer .pm-composer-row > .pm-haptic-host > .pm-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  flex: 0 0 auto;
+  padding: 0;
+  margin: 0;
+}
+#pm-composer .pm-composer-row > .pm-haptic-host > .pm-icon-btn svg {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+#pm-composer .pm-composer-row > .pm-haptic-host:has(> #pm-send-btn) {
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  flex-basis: 38px;
+}
+#pm-composer .pm-composer-row > .pm-haptic-host:has(> #pm-send-btn) > #pm-send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  margin: 0;
+  padding: 0;
+}
+#pm-composer .pm-composer-row > .pm-haptic-host:has(> #pm-send-btn) > #pm-send-btn .pm-send-voice-icon {
+  display: block;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  object-fit: contain;
+  transform: none;
+}
+.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row {
   display: grid;
   grid-template-columns: auto 1fr auto auto;
   grid-template-rows: auto auto;
@@ -8617,7 +8502,61 @@ html.pm-session-context-open * {
   gap: 8px;
   transform: none;
 }
-.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-input-wrap {
+#pm-composer .pm-composer-row > .pm-icon-btn {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  padding: 0;
+  align-self: center;
+}
+#pm-composer .pm-composer-row > .pm-icon-btn svg {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+#pm-composer .pm-composer-row > .pm-send {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  flex: 0 0 38px;
+  align-self: center;
+}
+#pm-composer:is(.is-focused, .has-attachments) {
+  left: 10px;
+  right: 10px;
+}
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-icon-btn {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  flex-basis: 44px;
+}
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-send {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  flex-basis: 40px;
+}
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-haptic-host {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  flex-basis: 44px;
+}
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-haptic-host:has(> #pm-send-btn) {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  flex-basis: 40px;
+}
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-haptic-host:has(> #pm-send-btn) > #pm-send-btn {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  flex-basis: 40px;
+}
+.pm-composer:is(.is-focused, .has-attachments) .pm-composer-input-wrap {
   grid-column: 1 / -1;
   grid-row: 1;
   width: 100%;
@@ -8625,42 +8564,54 @@ html.pm-session-context-open * {
   align-self: stretch;
   display: flex;
 }
-.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row > .pm-icon-btn:first-of-type {
+.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-icon-btn:first-of-type {
   grid-column: 1;
   grid-row: 2;
 }
-.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row > .pm-icon-btn:not(:first-of-type) {
+.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-icon-btn:not(:first-of-type) {
   grid-column: 3;
   grid-row: 2;
   justify-self: end;
   margin-left: auto;
 }
-.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-row > .pm-send {
+.pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-send {
   grid-column: 4;
   grid-row: 2;
   justify-self: end;
   margin-left: 0;
 }
-#pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-chat-mic-btn,
-.pm-agent-chat-composer.pm-composer:is(.is-focused, .has-text, .has-attachments) [id$="-mic-btn"] {
+#pm-composer:is(.is-focused, .has-attachments) #pm-chat-mic-btn,
+.pm-agent-chat-composer.pm-composer:is(.is-focused, .has-attachments) [id$="-mic-btn"] {
   grid-column: 3;
   grid-row: 2;
   margin-left: auto;
   justify-self: end;
 }
-#pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-attach-btn {
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-haptic-host:has(> #pm-chat-mic-btn) {
+  grid-column: 3;
+  grid-row: 2;
+  margin-left: auto;
+  justify-self: end;
+}
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > .pm-haptic-host:has(> #pm-send-btn) {
+  grid-column: 4;
+  grid-row: 2;
+  margin-left: 0;
+  justify-self: end;
+}
+#pm-composer:is(.is-focused, .has-attachments) #pm-attach-btn {
   grid-column: 1;
   grid-row: 2;
   margin-left: 0;
   justify-self: start;
 }
-#pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-chat-target-chip {
+#pm-composer:is(.is-focused, .has-attachments) #pm-chat-target-chip {
   grid-column: 2;
   grid-row: 2;
   justify-self: start;
 }
-#pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-send-btn,
-.pm-agent-chat-composer.pm-composer:is(.is-focused, .has-text, .has-attachments) [id$="-send-btn"] {
+#pm-composer:is(.is-focused, .has-attachments) #pm-send-btn,
+.pm-agent-chat-composer.pm-composer:is(.is-focused, .has-attachments) [id$="-send-btn"] {
   grid-column: 4;
   grid-row: 2;
   justify-self: end;
@@ -8762,8 +8713,12 @@ html.pm-session-context-open * {
   padding: 0;
 }
 #pm-composer .pm-composer-row > #pm-attach-btn {
-  width: 34px;
-  min-width: 34px;
+  width: 36px;
+  min-width: 36px;
+}
+#pm-composer:is(.is-focused, .has-attachments) .pm-composer-row > #pm-attach-btn {
+  width: 44px;
+  min-width: 44px;
 }
 .pm-attach-native-btn {
   position: relative;
@@ -8886,6 +8841,16 @@ html.pm-session-context-open * {
   z-index: 8;
 }
 .pm-chat-slash-popover[hidden] { display: none; }
+.pm-chat-slash-loading {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 10px;
+  color: var(--pm-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
 .pm-composer .pm-skill-trigger-pill {
   position: absolute;
   left: 16px;
@@ -9254,6 +9219,42 @@ html.pm-session-context-open * {
 }
 .pm-attach-chip strong { font-size: 12px; font-weight: 800; }
 .pm-attach-chip em { font-size: 11px; color: var(--pm-muted); font-style: normal; }
+.pm-message-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  width: max-content;
+  max-width: 100%;
+  align-self: flex-end;
+  margin: 0;
+}
+.pm-message-image-preview {
+  appearance: none;
+  display: block;
+  width: min(30vw, 128px);
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0 !important;
+  outline: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none !important;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-message-image-preview:active { transform: scale(.985); }
+.pm-message-image-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: inherit;
+  object-fit: cover;
+  background: transparent;
+}
 .pm-attach-remove {
   position: absolute;
   top: -7px;
@@ -9754,10 +9755,10 @@ html.pm-session-context-open * {
 .pm-composer-input {
   flex: 1;
   min-width: 0;
-  min-height: 30px;
+  min-height: 28px;
   max-height: 148px;
   border: none; background: transparent; outline: none;
-  font-size: 16px; padding: 4px 6px 3px;
+  font-size: 16px; padding: 2px 4px;
   color: var(--pm-text);
   font-family: inherit;
   line-height: 1.25;
@@ -9770,21 +9771,75 @@ html.pm-session-context-open * {
     min-height var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1)),
     padding var(--pm-motion-layout-duration, 300ms) var(--pm-motion-layout-ease, cubic-bezier(.22,.74,.22,1));
 }
-.pm-composer:is(.is-focused, .has-text, .has-attachments) {
+.pm-composer:is(.is-focused, .has-attachments) {
+  left: 10px;
+  right: 10px;
   border-radius: 28px;
   padding: 10px 12px 9px;
 }
-.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-input {
+.pm-composer:is(.is-focused, .has-attachments) .pm-composer-input {
   min-height: 34px;
   max-height: min(50dvh, 280px);
   padding: 3px 6px 8px;
   align-self: stretch;
   overflow-wrap: anywhere;
 }
-.pm-composer:is(.is-focused, .has-text, .has-attachments) .pm-composer-rich-preview {
+.pm-composer:is(.is-focused, .has-attachments) .pm-composer-rich-preview {
   min-height: 34px;
   max-height: min(50dvh, 280px);
   padding: 3px 6px 8px;
+}
+/* A retained draft does not keep the composer in its editing layout after the
+   keyboard closes. Collapse back to the original pill and show one clipped
+   preview line; focusing the textarea restores its measured multiline height. */
+.pm-composer.has-text:not(.is-focused):not(.has-attachments) .pm-composer-input,
+.pm-composer.has-text:not(.is-focused):not(.has-attachments) .pm-composer-rich-preview {
+  height: 28px !important;
+  min-height: 28px !important;
+  max-height: 28px !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+  text-overflow: ellipsis;
+  word-break: normal;
+}
+#pm-composer:not(.is-focused):not(.has-attachments) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 54px;
+  min-height: 54px;
+  max-height: 54px;
+  padding: 3px 7px;
+}
+#pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-row {
+  width: 100%;
+  height: 38px;
+  min-height: 38px;
+  flex: 0 0 38px;
+  align-items: center;
+  margin: 0;
+  transform: translateY(-5px);
+}
+#pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-input-wrap {
+  height: 28px;
+  min-height: 28px;
+  align-self: center;
+  align-items: center;
+}
+#pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-input {
+  width: 100%;
+  height: 28px !important;
+  min-height: 28px;
+  max-height: 28px;
+  padding: 2px 4px;
+  line-height: 24px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+#pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-row > .pm-icon-btn,
+#pm-composer:not(.is-focused):not(.has-attachments) .pm-composer-row > .pm-haptic-host {
+  align-self: center;
 }
 .pm-composer .pm-send {
   width: 40px; height: 40px; border-radius: 13px;
@@ -10474,8 +10529,8 @@ body.pm-mobile-active:has(.pm-page[data-mobile-page]:not([data-mobile-page="chat
   cursor: pointer;
 }
 .pm-body.pm-chat-body {
-  padding-top: calc(max(env(safe-area-inset-top), 12px) + var(--pm-header-h) + 34px);
-  scroll-padding-top: calc(max(env(safe-area-inset-top), 12px) + var(--pm-header-h) + 34px);
+  padding-top: calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) + 34px);
+  scroll-padding-top: calc(max(env(safe-area-inset-top), 12px) + var(--pm-mobile-content-top-offset, 0px) + var(--pm-header-h) + 34px);
   padding-bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-chat-composer-space, 170px) + var(--pm-keyboard-offset, 0px));
   scroll-padding-bottom: calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom) + var(--pm-chat-composer-space, 170px) + var(--pm-keyboard-offset, 0px));
 }
@@ -12689,6 +12744,61 @@ html.pm-schedule-long-press-pending .pm-schedule-card { -webkit-user-select: non
 .pm-task-expanded .pm-card-body {
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+.pm-task-prompt-section {
+  width: 100%;
+  min-width: 0;
+}
+.pm-task-prompt-disclosure {
+  min-width: 0;
+  border-top: 1px solid var(--pm-border);
+  padding-top: 10px;
+}
+.pm-task-prompt-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  list-style: none;
+  cursor: pointer;
+  color: var(--pm-text);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.3;
+  -webkit-tap-highlight-color: transparent;
+}
+.pm-task-prompt-disclosure > summary::-webkit-details-marker { display: none; }
+.pm-task-prompt-disclosure > summary::before {
+  content: '+';
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--pm-border);
+  border-radius: 50%;
+  color: var(--pm-orange);
+  font-size: 14px;
+  line-height: 1;
+}
+.pm-task-prompt-disclosure[open] > summary::before { content: '−'; }
+.pm-task-prompt-title { flex: 0 0 auto; }
+.pm-task-prompt-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pm-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.pm-task-prompt-body {
+  max-height: min(48dvh, 360px);
+  margin-top: 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+  -webkit-overflow-scrolling: touch;
 }
 .pm-task-final-response,
 .pm-task-evidence-entry,
@@ -15059,6 +15169,16 @@ body.pm-mobile-active.pm-mobile-overlay-open .pm-tabbar {
 body.pm-mobile-active.pm-mobile-overlay-open .pm-tabbar-haptic-gesture-surface {
   pointer-events: none !important;
 }
+/* The popover and keyboard layers own the lower viewport. The transparent
+   native-switch sensor must yield with the visible tab bar or it can retain a
+   pointer capture and make the next tab tap appear frozen. */
+body.pm-mobile-active:is(.pm-mobile-context-popover-open, .pm-keyboard-open) .pm-tabbar,
+body.pm-mobile-active:is(.pm-mobile-context-popover-open, .pm-keyboard-open) .pm-tabbar-haptic-gesture-surface {
+  pointer-events: none !important;
+}
+body.pm-mobile-active:is(.pm-mobile-context-popover-open, .pm-keyboard-open) .pm-tabbar-haptic-gesture-surface {
+  visibility: hidden !important;
+}
 
 
 /* ---------------- Mobile chat settings popover ---------------- */
@@ -15336,7 +15456,7 @@ body.pm-mobile-active .pm-chat-settings-menu-item {
    opens a popover sliding in from the right over the chat. */
 .pm-ctx-chip {
   position: absolute;
-  top: calc(max(env(safe-area-inset-top), 12px) + 46px);
+  top: var(--pm-mobile-context-chip-top);
   right: 21px;
   z-index: 7;
   width: 30px;
@@ -15368,7 +15488,7 @@ body.pm-mobile-active .pm-chat-settings-menu-item {
 
 .pm-ctx-popover {
   position: absolute;
-  top: calc(max(env(safe-area-inset-top), 12px) + 58px);
+  top: calc(var(--pm-mobile-context-chip-top) + 42px);
   right: 16px;
   z-index: 30;
   width: min(320px, calc(100vw - 32px));
@@ -16336,7 +16456,7 @@ body.pm-mobile-active .pm-drawer .pm-session-title-line {
   display: inline-flex;
   align-items: center;
   flex: 1 1 auto;
-  gap: 4px;
+  gap: 0;
   min-width: 0;
   max-width: 100%;
 }
@@ -17259,7 +17379,7 @@ body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row:active {
   white-space: nowrap;
   cursor: pointer;
 }
-.pm-composer:is(.is-focused, .has-text, .has-attachments) #pm-chat-target-chip {
+.pm-composer:is(.is-focused, .has-attachments) #pm-chat-target-chip {
   display: inline-flex;
   align-items: center;
   flex-direction: row;
@@ -17270,7 +17390,7 @@ body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row:active {
 .pm-chat-target-chip strong { display: block; color: var(--pm-text-soft, var(--pm-text)); font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
 .pm-chat-target-chip:disabled { cursor: default; opacity: .86; }
 .pm-chat-target-popover { position: absolute; z-index: 2600; left: 8px; right: 8px; bottom: calc(100% + 8px); max-height: min(60dvh, 420px); overflow: auto; overscroll-behavior: contain; padding: 10px; border: 1px solid var(--pm-border); border-radius: 16px; background: var(--pm-panel, var(--pm-bg-soft)); box-shadow: 0 18px 48px rgba(0,0,0,.28); }
-.pm-chat-target-popover-scrim { appearance: none; position: fixed; inset: 0; z-index: 10039; width: 100%; height: 100%; padding: 0; border: 0; background: rgba(0,0,0,.18); pointer-events: auto; }
+.pm-chat-target-popover-scrim { appearance: none; position: fixed; inset: 0; z-index: 10039; width: 100%; height: 100%; padding: 0; border: 0; background: rgba(0,0,0,.18); pointer-events: auto; touch-action: none; }
 .pm-chat-target-popover h3 { margin: 0 0 8px; font-size: 13px; }
 .pm-chat-target-popover p { margin: 0 0 9px; color: var(--pm-muted); font-size: 11px; line-height: 1.35; }
 .pm-chat-target-option { width: 100%; display: flex; justify-content: space-between; gap: 8px; padding: 9px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--pm-text); text-align: left; }
@@ -17281,31 +17401,72 @@ body.pm-mobile-active .pm-msheet.is-model-switch .pm-msheet-row:active {
 /* New-chat routing lives above the composer on the brain-card page. These
    selectors intentionally reuse the same glass/popover treatment as the
    header settings menu. */
-.pm-new-chat-context-dock { position: fixed; left: 10px; right: 10px; bottom: var(--pm-context-dock-bottom, calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom, 0px) + 30px + var(--pm-composer-live-height, 86px))); display: grid; gap: 2px; margin: 0; z-index: 10021; isolation: isolate; pointer-events: none; }
-.pm-new-chat-context-row { appearance: none; width: 100%; display: grid; grid-template-columns: 24px minmax(0, 1fr) 18px; align-items: center; gap: 10px; min-height: 42px; padding: 5px 8px; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--pm-text); text-align: left; font: inherit; cursor: pointer; pointer-events: auto; }
+.pm-new-chat-context-dock { position: fixed; left: var(--pm-mobile-chrome-inset, 22px); right: var(--pm-mobile-chrome-inset, 22px); bottom: var(--pm-context-dock-bottom, calc(var(--pm-tabbar-h) + env(safe-area-inset-bottom, 0px) + 30px + var(--pm-composer-live-height, 86px))); display: grid; gap: 2px; margin: 0; z-index: 10040; isolation: isolate; pointer-events: none; }
+body.pm-mobile-active .pm-new-chat-context-dock.pm-chat-context-dock-voice-hidden { display: none !important; }
+body.pm-mobile-active:has(#pm-composer:is(.is-focused, .has-attachments)) .pm-new-chat-context-dock { left: 10px; right: 10px; }
+.pm-new-chat-context-dock > .pm-haptic-host,
+.pm-new-chat-context-popover .pm-haptic-host { display: flex; width: 100%; min-width: 0; pointer-events: auto; }
+.pm-new-chat-context-dock > .pm-haptic-host > .pm-new-chat-context-row,
+.pm-new-chat-context-popover .pm-haptic-host > .pm-new-chat-context-option { flex: 1 1 auto; min-width: 0; }
+.pm-new-chat-context-dock .pm-haptic-switch-overlay { pointer-events: auto; }
+.pm-new-chat-context-row { appearance: none; width: 100%; display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 5px 8px; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--pm-text); text-align: left; font: inherit; cursor: pointer; pointer-events: auto; }
 .pm-new-chat-context-row:active { background: transparent; }
-.pm-new-chat-context-icon { width: 22px; height: 22px; display: grid; place-items: center; color: var(--pm-text-soft); }
+.pm-new-chat-context-icon { flex: 0 0 22px; width: 22px; height: 22px; display: grid; place-items: center; color: var(--pm-text-soft); }
 .pm-new-chat-context-icon svg { width: 20px; height: 20px; }
-.pm-new-chat-context-value { min-width: 0; display: grid; gap: 2px; }
+.pm-new-chat-context-value { flex: 0 1 auto; width: auto; max-width: calc(100% - 60px); min-width: 0; display: grid; gap: 2px; }
 .pm-new-chat-context-value strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
 .pm-new-chat-context-value small { color: var(--pm-muted); font-size: 10px; }
-.pm-new-chat-context-chevron { display: grid; place-items: center; color: var(--pm-muted); }
+.pm-new-chat-context-chevron { flex: 0 0 18px; display: grid; place-items: center; color: var(--pm-muted); }
 .pm-new-chat-context-chevron svg { width: 15px; height: 15px; }
-.pm-new-chat-context-popover { position: absolute; top: auto; right: 0; bottom: calc(100% + 6px); left: 0; z-index: 10041; width: auto; max-width: none; max-height: min(56dvh, 420px); overflow: auto; isolation: isolate; pointer-events: auto !important; touch-action: manipulation; }
-.pm-new-chat-context-popover-title { padding: 5px 10px 2px; color: var(--pm-text); font-size: 15px; font-weight: 700; }
+.pm-new-chat-context-popover { position: absolute; top: auto; right: 0; bottom: calc(100% + 6px); left: 0; z-index: 1; width: auto; max-width: none; max-height: min(56dvh, 420px); overflow: auto; isolation: isolate; pointer-events: auto !important; touch-action: manipulation; }
+.pm-new-project-popover { position: fixed !important; top: 50%; right: auto; bottom: auto; left: 50%; width: min(calc(100vw - 24px), 420px) !important; max-width: 420px !important; max-height: min(72dvh, 520px); transform: translate3d(-50%, -50%, 0); z-index: 2; }
+.pm-new-project-popover.pm-new-project-keyboard-open { top: auto; bottom: 8px; max-height: min(72dvh, calc(100dvh - 16px)); transform: translate3d(-50%, var(--pm-new-project-keyboard-shift, 0px), 0); }
+.pm-new-chat-context-popover-title { padding: 8px 10px 6px; color: var(--pm-text); font-size: 15px; line-height: 1.15; font-weight: 700; white-space: nowrap; }
 .pm-new-chat-context-popover-subtitle { padding: 0 10px 7px; color: var(--pm-muted); font-size: 11px; line-height: 1.35; }
-.pm-new-chat-context-option { grid-template-columns: 22px minmax(0, 1fr) 20px; min-height: 48px; }
+.pm-new-chat-context-option {
+  grid-template-columns: 22px minmax(0, 1fr) 20px;
+  min-height: 42px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  /* The picker uses the checkmark for selection. Do not add a second inset
+     outline when iOS focuses the row after a touch. */
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+}
+.pm-new-chat-context-option:focus,
+.pm-new-chat-context-option:focus-visible {
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+}
 .pm-new-chat-context-option-icon { display: grid; place-items: center; color: var(--pm-text-soft); }
 .pm-new-chat-context-option-icon svg { width: 21px; height: 21px; }
-.pm-new-chat-context-option-copy { min-width: 0; display: grid; gap: 2px; }
+.pm-new-chat-context-option-copy { min-width: 0; display: flex; align-items: center; }
 .pm-new-chat-context-option-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .pm-new-chat-context-option-copy small { color: var(--pm-muted); font-size: 10px; }
 .pm-new-chat-context-option-check { display: grid; place-items: center; color: var(--pm-green, #42d392); }
 .pm-new-chat-context-option-check svg { width: 18px; height: 18px; }
 .pm-new-chat-context-loading { padding: 10px; color: var(--pm-muted); font-size: 12px; }
+.pm-new-chat-context-popover .pm-new-project-option { color: var(--pm-orange, #f97316); }
+.pm-new-chat-context-popover .pm-haptic-host > .pm-new-project-option { flex: 1 1 auto; min-width: 0; }
+.pm-new-project-form { display: grid; gap: 8px; padding: 2px 10px 6px; }
+.pm-new-project-label { color: var(--pm-text-soft); font-size: 11px; font-weight: 700; }
+.pm-new-project-input { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--pm-border); border-radius: 12px; background: rgba(0,0,0,.16); color: var(--pm-text); font: inherit; font-size: 15px; outline: none; }
+.pm-new-project-input:focus { border-color: color-mix(in srgb, var(--pm-orange) 70%, var(--pm-border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pm-orange) 18%, transparent); }
+.pm-new-project-error { color: var(--pm-red, #ff7b72); font-size: 11px; line-height: 1.3; }
+.pm-new-project-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 3px; }
+.pm-new-project-button { width: auto; min-width: 92px; min-height: 40px; padding: 8px 12px; border: 0 !important; outline: 0; border-radius: 12px; background: rgba(255,255,255,.06); color: var(--pm-text); font: inherit; font-size: 13px; font-weight: 700; box-shadow: none !important; }
+.pm-new-project-button:focus,
+.pm-new-project-button:focus-visible { border: 0 !important; outline: 0; box-shadow: none !important; }
+.pm-new-project-button:active { transform: scale(.98); }
+.pm-new-project-confirm { background: color-mix(in srgb, var(--pm-orange) 18%, transparent); color: #fff; }
+.pm-new-project-button:disabled { opacity: .55; }
 .pm-new-chat-context-dock.pm-context-popover-open { z-index: 10040; }
 .pm-new-chat-context-dock.pm-context-popover-open .pm-new-chat-context-popover,
 .pm-new-chat-context-dock.pm-context-popover-open .pm-new-chat-context-popover * { pointer-events: auto !important; }
+body.pm-mobile-context-popover-open .pm-chat-body { pointer-events: none !important; }
+body.pm-new-project-dialog-open .pm-composer { visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }
 
 /* Shared mobile hierarchy: page headings and chat titles stay crisp white on
    every skin, while the drawer's gateway label remains the single source for
@@ -17321,6 +17482,12 @@ body.pm-mobile-active .pm-drawer .pm-session-title {
 }
 body.pm-mobile-active .pm-drawer :is(.pm-drawer-section-title, .pm-session-gateway, .pm-session-state) {
   color: var(--pm-p1-gold, #d6b75e) !important;
+}
+body.pm-mobile-active .pm-drawer .pm-session-computer {
+  color: #3d8bff !important;
+}
+:root[data-skin="blue"] body.pm-mobile-active .pm-drawer .pm-session-computer {
+  color: #aeb9ca !important;
 }
 body.pm-mobile-active .pm-drawer .pm-session-row.is-working::before,
 body.pm-mobile-active .pm-drawer .pm-session-row.is-unread::before {

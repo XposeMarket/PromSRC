@@ -106,6 +106,23 @@ export function isTrustedGatewayOrigin(origin: string | undefined | null): boole
   return false;
 }
 
+function isHttpsOrigin(origin: string | undefined | null): boolean {
+  try {
+    return new URL(String(origin || '')).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function isMobileGatewayBridgePath(request?: Pick<Request, 'path' | 'url'>): boolean {
+  const pathname = String(request?.path || request?.url || '').split('?', 1)[0];
+  return (
+    pathname === '/api/pairing/claim' ||
+    /^\/api\/pairing\/poll\/[^/]+$/.test(pathname) ||
+    pathname === '/api/mobile/gateway/catalog'
+  );
+}
+
 function extractGatewayToken(req: GatewayRequestLike, allowQueryToken = false): string {
   const authHeader = getHeaderValue(req.headers, 'authorization');
   if (authHeader.toLowerCase().startsWith('bearer ')) {
@@ -211,10 +228,16 @@ export function requireGatewayAuth(req: Request, res: Response, next: NextFuncti
   next();
 }
 
-export function buildGatewayCorsOptions(): CorsOptions {
+export function buildGatewayCorsOptions(request?: Pick<Request, 'path' | 'url'>): CorsOptions {
   return {
     origin(origin, callback) {
-      callback(null, isTrustedGatewayOrigin(origin));
+      // Pairing claim/poll are still protected by the short-lived QR
+      // challenge and desktop approval. Catalog reads are still protected by
+      // the target-scoped pairing token. Allowing HTTPS hub origins on only
+      // these three paths lets the in-app scanner connect gateways without
+      // turning the rest of the API into a cross-origin surface.
+      const bridgeOrigin = Boolean(origin) && isHttpsOrigin(origin) && isMobileGatewayBridgePath(request);
+      callback(null, isTrustedGatewayOrigin(origin) || bridgeOrigin);
     },
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Gateway-Token', 'X-Pairing-Token', 'X-Pairing-Device-Fingerprint', 'X-Prometheus-Render-Token'],

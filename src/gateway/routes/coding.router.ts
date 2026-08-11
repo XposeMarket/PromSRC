@@ -5,6 +5,7 @@ import {
   gitCommit,
   gitCreateBranch,
   gitCurrentStatus,
+  getCodingRepositorySnapshot,
   gitStage,
   resolveCodingRoot,
 } from '../coding/workspace-session';
@@ -23,6 +24,15 @@ router.get('/api/coding/status', (req, res) => {
   try {
     const root = resolveCodingRoot(req.query.root ? String(req.query.root) : undefined);
     res.json({ root, ...gitCurrentStatus(root) });
+  } catch (err: any) {
+    res.status(400).json({ error: String(err?.message || err) });
+  }
+});
+
+router.get('/api/coding/repository', (req, res) => {
+  try {
+    const root = resolveCodingRoot(req.query.root ? String(req.query.root) : undefined);
+    res.json({ root, repository: getCodingRepositorySnapshot(root) });
   } catch (err: any) {
     res.status(400).json({ error: String(err?.message || err) });
   }

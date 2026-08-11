@@ -3856,6 +3856,8 @@ function updateCreativeModeControls() {
 
   if (canvasToggleBtn) {
     canvasToggleBtn.title = meta ? `${meta.title} is active` : 'Open Canvas';
+    canvasToggleBtn.setAttribute('aria-label', meta ? `${meta.title} is active` : (canvasOpen ? 'Close Canvas' : 'Open Canvas'));
+    canvasToggleBtn.setAttribute('aria-pressed', canvasOpen ? 'true' : 'false');
   }
   if (backBtn) {
     backBtn.title = canvasOpen ? 'Close Canvas' : 'Back to Context';
@@ -12628,8 +12630,8 @@ function renderEmptyChatStarterCards() {
   const cards = getEmptyChatStarterCards();
   return `<div class="chat-pulse-cards" aria-label="Starter prompts">
     ${cards.map((card, index) => `
-      <button class="chat-pulse-card" type="button" onclick="applyEmptyChatStarterPrompt(${index})">
-        <span class="chat-pulse-card-title">${escHtml(card.title)}</span>
+      <button class="chat-pulse-card" type="button" aria-label="${escHtml(`${card.title}: ${card.body}`)}" onclick="applyEmptyChatStarterPrompt(${index})">
+        <span class="chat-pulse-card-title" aria-hidden="true">${escHtml(card.title)}</span>
         <span class="chat-pulse-card-body">${escHtml(card.body)}</span>
       </button>
     `).join('')}
@@ -15585,6 +15587,53 @@ function getChatComposerValue() {
   return String(input?.value || '').trim();
 }
 
+async function handleDesktopUpdateCommand() {
+  try {
+    const check = await api('/api/lifecycle/update', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'check', source: 'desktop' }),
+      timeoutMs: 12_000,
+    });
+    const status = check?.status || {};
+    const phase = String(status.phase || '').toLowerCase();
+    const available = phase === 'available' || phase === 'ready';
+    if (!check?.ok) throw new Error(check?.error || 'Prometheus update check failed.');
+    if (!available) {
+      showToast('Prometheus updates', status.message || 'Prometheus is up to date.', 'info');
+      return;
+    }
+
+    const confirmed = await new Promise((resolve) => {
+      showConfirm(
+        `Prometheus ${status.targetVersion || 'latest'} is available. Continue with the safe update?`,
+        () => resolve(true),
+        () => resolve(false),
+        {
+          title: 'Update Prometheus?',
+          confirmText: 'Install & reopen',
+          cancelText: 'Cancel',
+          danger: true,
+          details: 'Prometheus will verify the signed release, flush durable writes, create a protected versioned backup, close, install, reopen, and validate. Secrets, credentials, settings, workspace files, memory, sessions, and projects remain in the user-data directory.',
+        },
+      );
+    });
+    if (!confirmed) {
+      showToast('Update canceled', 'No files were changed.', 'info');
+      return;
+    }
+
+    const applied = await api('/api/lifecycle/update', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'apply', confirm: true, source: 'desktop' }),
+      timeoutMs: 8_000,
+    });
+    if (!applied?.ok) throw new Error(applied?.error || 'Prometheus could not start the safe update flow.');
+    showToast('Update accepted', 'Prometheus will safely back up state, close, install, reopen, and validate.', 'success');
+  } catch (error) {
+    showToast('Update unavailable', error?.message || 'Prometheus could not check for updates.', 'error');
+  }
+}
+
 function handleImmediateChatSlashCommand(message) {
   const raw = String(message || '').trim();
   const command = raw.toLowerCase();
@@ -15600,6 +15649,11 @@ function handleImmediateChatSlashCommand(message) {
     clearChatComposerAfterSend(input);
     openOrCreateSideChat(initialText);
     showToast('Side chat opened', initialText ? 'Sending your first side-chat message.' : 'Split view is ready.', 'success');
+    return true;
+  }
+  if (command === '/update') {
+    clearChatComposerAfterSend(input);
+    handleDesktopUpdateCommand();
     return true;
   }
   return false;
@@ -16069,6 +16123,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     ));
     if (existingIndex >= 0) {
       sessionHistoryRef[existingIndex] = mergeChatMessageMetadata({ ...assistantMessage }, sessionHistoryRef[existingIndex]);
+      if (sessionHistoryRef[existingIndex]?.fileChanges) announceSourcePanelFileChanges(thisSessionId);
       return sessionHistoryRef[existingIndex];
     }
     if (!shouldAppendAfterInterruption && userTurnIndex >= 0 && userTurnIndex < sessionHistoryRef.length - 1) {
@@ -16088,6 +16143,7 @@ async function sendChat(queuedMessage = null, options = {}) {
       streamState.steerTimerAnchored = false;
       syncSessionHistoryToServerById(thisSessionId, sessionHistoryRef).catch(() => {});
     }
+    if (assistantMessage.fileChanges) announceSourcePanelFileChanges(thisSessionId);
     return assistantMessage;
   };
   if (options.voicePendingTurnId) removeVoicePendingTurnInternal(options.voicePendingTurnId);
@@ -17885,6 +17941,26 @@ const chatResourcesState = {
   query: '',
   requestToken: 0,
 };
+const sourcePanelState = {
+  activeSessionId: '',
+  tab: 'overview',
+  query: '',
+  filterOpen: false,
+  miniFilter: 'all',
+  project: null,
+  projectSessionId: '',
+  projectLoaded: false,
+  git: null,
+  gitSessionId: '',
+  gitRoot: '',
+  gitLoaded: false,
+  initialized: false,
+  seenResourceKeys: new Set(),
+  seenEditKeys: new Set(),
+  miniHideTimer: null,
+  projectRequestToken: 0,
+  gitRequestToken: 0,
+};
 const CHAT_RESOURCES_PREVIEW_LIMIT = 6;
 let chatResourcesReloadTimer = null;
 let canvasFullscreenMode = false;
@@ -18009,7 +18085,10 @@ function renderChatResourcesList(resources = chatResourcesState.resources) {
 async function loadChatResources(options = {}) {
   const sessionId = String(options.sessionId || window.activeChatSessionId || window.agentSessionId || '').trim();
   if (!sessionId) return;
-  if (chatResourcesState.sessionId && chatResourcesState.sessionId !== sessionId) chatResourcesState.query = '';
+  if (chatResourcesState.sessionId && chatResourcesState.sessionId !== sessionId) {
+    chatResourcesState.query = '';
+    sourcePanelState.activeSessionId = '';
+  }
   const requestToken = ++chatResourcesState.requestToken;
   chatResourcesState.loading = true;
   chatResourcesState.sessionId = sessionId;
@@ -18021,9 +18100,13 @@ async function loadChatResources(options = {}) {
     if (requestToken !== chatResourcesState.requestToken || sessionId !== chatResourcesState.sessionId) return;
     chatResourcesState.resources = Array.isArray(data?.resources) ? data.resources : [];
     renderChatResourcesList();
+    ensureSourcePanelContext(sessionId);
+    syncSourcePanelData({ sessionId, announce: true });
   } catch (error) {
     if (requestToken !== chatResourcesState.requestToken || sessionId !== chatResourcesState.sessionId) return;
     if (!chatResourcesState.resources.length && host) host.innerHTML = `<div class="chat-resources-empty">Sources unavailable.</div>`;
+    ensureSourcePanelContext(sessionId);
+    syncSourcePanelData({ sessionId, announce: false });
   } finally {
     if (requestToken === chatResourcesState.requestToken) chatResourcesState.loading = false;
   }
@@ -18073,11 +18156,17 @@ function setChatResourcesExpanded(expanded = false) {
 }
 
 function toggleSources(nextOpen = null) {
-  if (typeof nextOpen === 'boolean') {
-    setChatResourcesExpanded(nextOpen);
+  const panel = document.getElementById('right-panel');
+  if (nextOpen === false) {
+    if (panel?.classList.contains('open')) toggleRightPanel();
+    hideSourcesMinimizedPanel();
     return;
   }
-  setChatResourcesExpanded(!chatResourcesState.expanded);
+  if (nextOpen === true || !panel?.classList.contains('open')) {
+    openFullSourcePanel();
+    return;
+  }
+  toggleRightPanel();
 }
 
 function openChatResourceFile(resourceId) {
@@ -18091,6 +18180,667 @@ function openChatResourceFile(resourceId) {
   const url = chatResourceUrl(resource);
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
 }
+
+function sourcePanelTimestamp(value) {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number' || /^\d+(?:\.\d+)?$/.test(String(value || '').trim())) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+    return numeric < 1e12 ? numeric * 1000 : numeric;
+  }
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sourcePanelAge(value) {
+  const timestamp = sourcePanelTimestamp(value);
+  if (!timestamp) return '';
+  const delta = Math.max(0, Date.now() - timestamp);
+  const minutes = Math.floor(delta / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function sourcePanelByteLabel(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function sourcePanelResourceSize(resource) {
+  return sourcePanelByteLabel(
+    resource?.size
+    || resource?.metadata?.size
+    || resource?.metadata?.sizeBytes
+    || resource?.metadata?.byteLength
+    || resource?.metadata?.bytes,
+  );
+}
+
+function sourcePanelFileTag(resource) {
+  const mime = String(resource?.mimeType || resource?.metadata?.mimeType || '').toLowerCase();
+  const pathValue = chatResourceFilePath(resource) || chatResourceTitle(resource);
+  const extension = String(pathValue).split(/[./\\]/).pop()?.trim().toLowerCase() || '';
+  if (mime.includes('pdf') || extension === 'pdf') return 'pdf';
+  if (mime.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif'].includes(extension)) return 'img';
+  if (mime.startsWith('video/') || ['mp4', 'mov', 'webm', 'mkv'].includes(extension)) return 'video';
+  if (['html', 'htm'].includes(extension) || mime.includes('html')) return 'html';
+  if (['js', 'jsx', 'ts', 'tsx', 'css', 'scss', 'json', 'py', 'go', 'rs', 'java', 'sql', 'md'].includes(extension)) return extension.slice(0, 3);
+  return extension.slice(0, 4) || 'file';
+}
+
+function sourcePanelResourceIsLink(resource) {
+  return Boolean(chatResourceUrl(resource))
+    || ['link', 'web_page', 'browser_page'].includes(String(resource?.kind || '').toLowerCase());
+}
+
+function sourcePanelResourceBucket(resource) {
+  if (sourcePanelResourceIsLink(resource)) return 'links';
+  const kind = String(resource?.kind || '').toLowerCase();
+  const origin = String(resource?.origin || '').toLowerCase();
+  const direction = String(resource?.metadata?.direction || resource?.metadata?.role || '').toLowerCase();
+  if (['artifact', 'creative_asset', 'tool_result', 'task'].includes(kind)
+    || ['assistant_artifact', 'task_journal', 'tool_observation'].includes(origin)
+    || ['output', 'generated', 'assistant'].includes(direction)) return 'outputs';
+  return 'inputs';
+}
+
+function sourcePanelResourceItem(resource) {
+  const id = String(resource?.id || '').trim();
+  const url = chatResourceUrl(resource);
+  const title = chatResourceTitle(resource);
+  const key = `resource:${id || url || title}`;
+  return {
+    key,
+    type: 'resource',
+    resource,
+    bucket: sourcePanelResourceBucket(resource),
+    updatedAt: sourcePanelTimestamp(resource?.updatedAt || resource?.createdAt || resource?.lastVisitedAt),
+  };
+}
+
+function sourcePanelEditItems(sessionId = window.activeChatSessionId) {
+  const session = getChatSessionById(String(sessionId || '').trim());
+  const aggregate = new Map();
+  const addPayload = (payload, atValue) => {
+    const groupData = normalizeFileChangeGroups(payload);
+    const payloads = groupData.length ? groupData.map((group) => group.data) : [normalizeFileChangesPayload(payload)];
+    const generatedAt = sourcePanelTimestamp(payload?.generatedAt);
+    const at = sourcePanelTimestamp(atValue) || generatedAt;
+    payloads.filter(Boolean).forEach((data) => {
+      data.files.forEach((file) => {
+        const displayPath = String(file.displayPath || file.path || '').trim();
+        if (!displayPath) return;
+        const pathValue = String(file.path || displayPath).trim();
+        const key = pathValue.replace(/\\/g, '/').toLowerCase();
+        const previous = aggregate.get(key);
+        const next = previous || {
+          key: `edit:${key}`,
+          type: 'edit',
+          title: displayPath.split(/[\\/]/).pop() || displayPath,
+          path: pathValue,
+          displayPath,
+          insertions: 0,
+          deletions: 0,
+          status: 'modified',
+          binary: false,
+          updatedAt: 0,
+          editCount: 0,
+        };
+        next.insertions += Math.max(0, Number(file.insertions) || 0);
+        next.deletions += Math.max(0, Number(file.deletions) || 0);
+        next.status = String(file.status || next.status || 'modified');
+        next.binary = next.binary || file.binary === true;
+        next.updatedAt = Math.max(next.updatedAt, at);
+        next.editCount += 1;
+        aggregate.set(key, next);
+      });
+    });
+  };
+  const history = Array.isArray(session?.history) ? session.history : [];
+  history.forEach((message, index) => {
+    if (!isAssistantLikeMessage(message) || !message?.fileChanges) return;
+    addPayload(message.fileChanges, message.timestamp || index);
+  });
+  try {
+    collectBackgroundFileChangeGroups(sessionId).forEach((group) => addPayload(group.fileChanges, group.fileChanges?.generatedAt));
+  } catch {}
+  return Array.from(aggregate.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0) || a.title.localeCompare(b.title));
+}
+
+function sourcePanelMatchesItem(item, query = sourcePanelState.query) {
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return true;
+  const resource = item?.resource;
+  const haystack = [
+    item?.title,
+    item?.displayPath,
+    item?.path,
+    item?.message,
+    item?.author,
+    resource && chatResourceTitle(resource),
+    resource && chatResourceLocatorLabel(resource),
+    resource?.mimeType,
+    resource?.kind,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return haystack.includes(needle);
+}
+
+function sourcePanelSnapshot() {
+  return sourcePanelState.git?.repository || sourcePanelState.git || null;
+}
+
+function sourcePanelGitItems() {
+  const repository = sourcePanelSnapshot();
+  if (!repository) return [];
+  const items = [];
+  if (repository.connected || repository.repoFullName || repository.name) {
+    items.push({
+      key: 'git:repository',
+      type: 'git-repo',
+      title: repository.repoFullName || repository.name || 'Local repository',
+      provider: repository.provider || 'Git',
+      updatedAt: sourcePanelTimestamp(repository.updatedAt),
+      repository,
+    });
+  }
+  (Array.isArray(repository.commits) ? repository.commits : []).forEach((commit) => {
+    items.push({
+      key: `git:commit:${String(commit.hash || commit.shortHash || commit.message || '')}`,
+      type: 'git-commit',
+      title: `Commit ${commit.shortHash || String(commit.hash || '').slice(0, 7)}`.trim(),
+      message: String(commit.message || '').trim(),
+      author: String(commit.author || '').trim(),
+      at: commit.at,
+      updatedAt: sourcePanelTimestamp(commit.at),
+      repository,
+      commit,
+    });
+  });
+  return items;
+}
+
+function sourcePanelData(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+  const resourceItems = (Array.isArray(chatResourcesState.resources) ? chatResourcesState.resources : []).map(sourcePanelResourceItem);
+  const links = resourceItems.filter((item) => item.bucket === 'links' && sourcePanelMatchesItem(item));
+  const files = resourceItems.filter((item) => item.bucket !== 'links');
+  const inputs = files.filter((item) => item.bucket === 'inputs' && sourcePanelMatchesItem(item));
+  const outputs = files.filter((item) => item.bucket === 'outputs' && sourcePanelMatchesItem(item));
+  const edits = sourcePanelEditItems(sessionId).filter((item) => sourcePanelMatchesItem(item));
+  const recent = [...resourceItems.filter((item) => sourcePanelMatchesItem(item)), ...edits]
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return { resourceItems, links, inputs, outputs, edits, recent, gitItems: sourcePanelGitItems().filter((item) => sourcePanelMatchesItem(item)) };
+}
+
+function sourcePanelIconMarkup(kind, label) {
+  const className = String(kind || 'file').replace(/[^a-z0-9_-]/gi, '');
+  return `<span class="source-item-icon source-item-icon--${className}" aria-hidden="true">${escHtml(String(label || 'file'))}</span>`;
+}
+
+function sourcePanelResourceMeta(resource) {
+  const url = chatResourceUrl(resource);
+  if (url) {
+    try { return new URL(url).hostname.replace(/^www\./i, ''); } catch { return url; }
+  }
+  const mime = String(resource?.mimeType || resource?.metadata?.mimeType || '').trim();
+  const size = sourcePanelResourceSize(resource);
+  return [mime || sourcePanelFileTag(resource), size].filter(Boolean).join(' • ');
+}
+
+function sourcePanelResourceRowMarkup(item, { mini = false } = {}) {
+  const resource = item.resource;
+  const url = chatResourceUrl(resource);
+  const fileTag = sourcePanelFileTag(resource);
+  const iconKind = url ? 'web' : fileTag === 'img' ? 'image' : fileTag;
+  const iconLabel = url ? '↗' : fileTag === 'video' ? '▶' : fileTag;
+  const age = sourcePanelAge(resource?.updatedAt || resource?.createdAt || resource?.lastVisitedAt);
+  const meta = [sourcePanelResourceMeta(resource), age].filter(Boolean).join(' • ');
+  const unavailable = ['missing', 'unavailable', 'stale', 'deleted'].includes(String(resource?.status || '').toLowerCase());
+  return `<button type="button" class="source-panel-row source-panel-row--resource${unavailable ? ' is-unavailable' : ''}" onclick="openSourcePanelItem(${encodeInlineJsString(item.key)})" title="${escHtml(url ? 'Open source' : 'Open file')}" data-source-item="${escHtml(item.key)}">
+    ${sourcePanelIconMarkup(iconKind, iconLabel)}
+    <span class="source-item-copy"><span class="source-item-title">${escHtml(chatResourceTitle(resource))}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml(meta || chatResourceLocatorLabel(resource) || 'Source')}</span></span></span>
+    <span class="source-item-chevron" aria-hidden="true">›</span>
+  </button>`;
+}
+
+function sourcePanelEditRowMarkup(item) {
+  const age = sourcePanelAge(item.updatedAt);
+  const counts = `${item.insertions ? `<span class="source-count-add">+${item.insertions}</span>` : ''}${item.deletions ? `${item.insertions ? '<span class="source-count-muted"> • </span>' : ''}<span class="source-count-del">-${item.deletions}</span>` : ''}`;
+  const meta = [counts, item.displayPath, age].filter(Boolean).join('<span class="source-count-muted"> • </span>');
+  return `<button type="button" class="source-panel-row source-panel-row--edit" onclick="openSourcePanelItem(${encodeInlineJsString(item.key)})" title="Open ${escHtml(item.displayPath)}" data-source-item="${escHtml(item.key)}">
+    ${sourcePanelIconMarkup('edit', 'Δ')}
+    <span class="source-item-copy"><span class="source-item-title">${escHtml(item.title)}</span><span class="source-item-meta"><span class="source-meta-path">${meta}</span></span></span>
+    <span class="source-item-chevron" aria-hidden="true">›</span>
+  </button>`;
+}
+
+function sourcePanelGitRowMarkup(item) {
+  const repository = item.repository || {};
+  if (item.type === 'git-commit') {
+    const meta = [item.message, item.author, sourcePanelAge(item.at)].filter(Boolean).join(' • ');
+    return `<button type="button" class="source-panel-row source-panel-row--git" onclick="openSourcePanelItem(${encodeInlineJsString(item.key)})" title="Open commit" data-source-item="${escHtml(item.key)}">
+      ${sourcePanelIconMarkup('git', '↗')}
+      <span class="source-item-copy"><span class="source-item-title">${escHtml(item.title)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml(meta || 'Git activity')}</span></span></span>
+      <span class="source-item-chevron" aria-hidden="true">›</span>
+    </button>`;
+  }
+  const branch = repository.branch || repository.defaultBranch || 'local';
+  return `<button type="button" class="source-panel-row source-panel-row--git" onclick="openSourcePanelItem(${encodeInlineJsString(item.key)})" title="Open repository" data-source-item="${escHtml(item.key)}">
+    ${sourcePanelIconMarkup('git', '⌘')}
+    <span class="source-item-copy"><span class="source-item-title">${escHtml(item.title)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml([item.provider, branch].filter(Boolean).join(' • ') || 'Repository')}</span></span></span>
+    <span class="source-item-chevron" aria-hidden="true">›</span>
+  </button>`;
+}
+
+function sourcePanelItemMarkup(item, options = {}) {
+  if (item?.type === 'resource') return sourcePanelResourceRowMarkup(item, options);
+  if (item?.type === 'edit') return sourcePanelEditRowMarkup(item, options);
+  if (item?.type === 'git-repo' || item?.type === 'git-commit') return sourcePanelGitRowMarkup(item, options);
+  return '';
+}
+
+function sourcePanelSectionMarkup(title, items, emptyText, footerLabel = '') {
+  const visible = Array.isArray(items) ? items.slice(0, 3) : [];
+  return `<section class="source-panel-section"><h3 class="source-panel-section-title">${escHtml(title)}</h3>${visible.length ? `<div class="source-panel-list">${visible.map((item) => sourcePanelItemMarkup(item)).join('')}</div>${items.length > visible.length ? `<button class="source-panel-link-button" type="button" onclick="clearSourcePanelFilter()">· ${escHtml(footerLabel || `View all ${title.toLowerCase()} (${items.length})`)}</button>` : ''}` : `<div class="source-panel-empty">${escHtml(emptyText)}</div>`}</section>`;
+}
+
+function sourcePanelCountMarkup(label, value, glyph) {
+  return `<div class="source-panel-count-card"><span class="count-label"><span aria-hidden="true">${escHtml(glyph)}</span>${escHtml(label)}</span><span class="count-value">${escHtml(String(value))}</span></div>`;
+}
+
+function renderSourcePanelOverview(data) {
+  const project = sourcePanelState.project || {};
+  const repository = sourcePanelSnapshot();
+  const projectName = String(project.name || project.projectName || project.label || 'Current project').trim();
+  const root = String(project.workspacePath || project.root || '').trim();
+  const fileCount = data.inputs.length + data.outputs.length + data.edits.length;
+  const commitCount = repository && Number.isFinite(Number(repository.commitCount)) ? Number(repository.commitCount) : '—';
+  return `<section class="source-panel-section source-panel-project-context">
+    <h3 class="source-panel-section-title">Project context</h3>
+    <p class="source-panel-project-name">${escHtml(projectName)}</p>
+    <p class="source-panel-subtitle">These sources are available to this project${root ? `<span class="source-panel-project-root">${escHtml(root)}</span>` : ''}</p>
+    <div class="source-panel-count-grid">
+      ${sourcePanelCountMarkup('Files', fileCount, '▤')}
+      ${sourcePanelCountMarkup('Web links', data.links.length, '◎')}
+      ${sourcePanelCountMarkup('Git commits', commitCount, '⌘')}
+      ${sourcePanelCountMarkup('PRs', '—', '⑂')}
+    </div>
+  </section>
+  <section class="source-panel-section"><h3 class="source-panel-section-title">Recent sources</h3>${data.recent.length ? `<div class="source-panel-list">${data.recent.slice(0, 5).map((item) => sourcePanelItemMarkup(item)).join('')}</div>` : '<div class="source-panel-empty">No sources yet.</div>'}${data.recent.length > 5 ? '<button class="source-panel-link-button" type="button" onclick="clearSourcePanelFilter()">· View all project sources</button>' : ''}</section>`;
+}
+
+function renderSourcePanelFiles(data) {
+  const sections = [
+    sourcePanelSectionMarkup('Inputs', data.inputs, 'No input files yet.', `View all inputs (${data.inputs.length})`),
+    sourcePanelSectionMarkup('Code edits', data.edits, 'No code edits yet.', `View all edits (${data.edits.length})`),
+    sourcePanelSectionMarkup('Outputs', data.outputs, 'No output files yet.', `View all outputs (${data.outputs.length})`),
+  ];
+  return sections.join('<div class="source-panel-group-divider"></div>');
+}
+
+function sourcePanelGitEnvRow(glyph, label, value, valueClass = '') {
+  return `<div class="source-panel-env-row"><span aria-hidden="true">${escHtml(glyph)}</span><span>${escHtml(label)}</span><span class="env-value ${valueClass}">${escHtml(String(value || '—'))}</span></div>`;
+}
+
+function sourcePanelInfoRow(glyph, label, value, action = '') {
+  return `<div class="source-panel-info-row${action ? ' is-link' : ''}"${action ? ` onclick="${action}"` : ''}><span aria-hidden="true">${escHtml(glyph)}</span><span>${escHtml(label)}</span>${value ? `<span class="info-value">${escHtml(String(value))}</span>` : ''}</div>`;
+}
+
+function renderSourcePanelGit(data) {
+  const repository = sourcePanelSnapshot();
+  if (!repository || !repository.connected && !repository.repoFullName && !repository.name) {
+    return `<section class="source-panel-section"><h3 class="source-panel-section-title">Repository</h3><div class="source-panel-empty">No Git repository detected for this project.</div><button class="source-panel-link-button" type="button" onclick="refreshSourcePanel()">↻ Refresh repository</button></section>`;
+  }
+  const repoTitle = repository.repoFullName || repository.name || 'Local repository';
+  const dirtyCount = Array.isArray(repository.dirtyFiles) ? repository.dirtyFiles.length : (Number(repository.stagedFiles || 0) + Number(repository.unstagedFiles || 0) + Number(repository.untrackedFiles || 0));
+  const aheadBehind = [Number(repository.ahead) ? `↑${Number(repository.ahead)}` : '', Number(repository.behind) ? `↓${Number(repository.behind)}` : ''].filter(Boolean).join(' ');
+  const branch = repository.branch || repository.defaultBranch || 'main';
+  const repoUrl = repository.htmlUrl || '';
+  const cloneUrl = repository.cloneUrl || repository.remoteUrl || '';
+  const activity = Array.isArray(repository.commits) ? repository.commits : [];
+  return `<section class="source-panel-section"><h3 class="source-panel-section-title">Repository</h3>
+    <div class="source-panel-repo-card">${sourcePanelIconMarkup('git', '⌘')}<span class="source-panel-repo-copy"><span class="source-item-title">${escHtml(repoTitle)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml(repository.provider || 'Git repository')}</span></span></span><span class="source-panel-status${repository.connected ? '' : ' source-panel-status--local'}">${repository.connected ? 'Connected' : 'Local'}</span></div>
+  </section>
+  <section class="source-panel-section"><h3 class="source-panel-section-title">Environment</h3><div class="source-panel-environment-card">
+    ${sourcePanelGitEnvRow('⊞', 'Changes', dirtyCount, dirtyCount ? 'is-negative' : 'is-positive')}
+    ${sourcePanelGitEnvRow('▱', 'Local', repository.statusText ? 'Dirty' : 'Clean')}
+    ${sourcePanelGitEnvRow('⑂', branch, aheadBehind || 'up to date', aheadBehind ? 'is-positive' : '')}
+    ${sourcePanelGitEnvRow('⇧', 'Commit and Push', repository.stagedFiles ? `${repository.stagedFiles} staged` : '—')}
+    ${sourcePanelGitEnvRow('⊙', 'Local Servers', '—')}
+  </div></section>
+  <section class="source-panel-section"><h3 class="source-panel-section-title">Repository info</h3><div class="source-panel-info-card">
+    ${sourcePanelInfoRow('▤', 'About', 'Prometheus workspace')}
+    ${repoUrl ? sourcePanelInfoRow('◉', 'Open on GitHub', '↗', `openSourcePanelUrl(${encodeInlineJsString(repoUrl)})`) : ''}
+    ${cloneUrl ? sourcePanelInfoRow('▣', 'Clone URL', 'copy', `copySourcePanelText(${encodeInlineJsString(cloneUrl)})`) : ''}
+  </div></section>
+  <section class="source-panel-section"><h3 class="source-panel-section-title source-panel-activity-title">Recent activity</h3>${activity.length ? `<div class="source-panel-list">${activity.slice(0, 5).map((commit) => sourcePanelGitRowMarkup({ type: 'git-commit', key: `git:commit:${commit.hash || commit.shortHash || commit.message}`, title: `Commit ${commit.shortHash || String(commit.hash || '').slice(0, 7)}`, message: commit.message, author: commit.author, at: commit.at, repository })).join('')}</div>` : '<div class="source-panel-empty">No recent commits found.</div>'}${activity.length > 5 ? '<button class="source-panel-link-button" type="button" onclick="setSourcePanelTab(\'git\')">· View all activity</button>' : ''}</section>`;
+}
+
+function renderSourcePanel() {
+  const body = document.getElementById('source-panel-body');
+  if (!body) return;
+  const tab = ['overview', 'files', 'git'].includes(sourcePanelState.tab) ? sourcePanelState.tab : 'overview';
+  sourcePanelState.tab = tab;
+  document.querySelectorAll('[data-source-tab]').forEach((button) => {
+    const active = button.getAttribute('data-source-tab') === tab;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  const filterRow = document.getElementById('source-panel-filter-row');
+  if (filterRow) filterRow.hidden = !sourcePanelState.filterOpen;
+  const filterButton = document.getElementById('source-panel-filter');
+  if (filterButton) filterButton.setAttribute('aria-pressed', sourcePanelState.filterOpen ? 'true' : 'false');
+  const data = sourcePanelData();
+  body.innerHTML = tab === 'overview' ? renderSourcePanelOverview(data) : tab === 'files' ? renderSourcePanelFiles(data) : renderSourcePanelGit(data);
+}
+
+function setSourcePanelTab(tab = 'overview') {
+  sourcePanelState.tab = ['overview', 'files', 'git'].includes(tab) ? tab : 'overview';
+  renderSourcePanel();
+  if (sourcePanelState.tab === 'git') loadSourcePanelGit(sourcePanelState.activeSessionId || window.activeChatSessionId).catch(() => {});
+}
+
+function toggleSourcePanelFilter(nextOpen = null) {
+  sourcePanelState.filterOpen = typeof nextOpen === 'boolean' ? nextOpen : !sourcePanelState.filterOpen;
+  renderSourcePanel();
+  if (sourcePanelState.filterOpen) setTimeout(() => document.getElementById('source-panel-filter-input')?.focus(), 0);
+}
+
+function filterSourcePanel(query = '') {
+  sourcePanelState.query = String(query || '');
+  renderSourcePanel();
+  const input = document.getElementById('source-panel-filter-input');
+  if (input && input.value !== sourcePanelState.query) input.value = sourcePanelState.query;
+}
+
+function clearSourcePanelFilter() {
+  sourcePanelState.query = '';
+  sourcePanelState.filterOpen = false;
+  renderSourcePanel();
+}
+
+function sourcePanelWorkspaceRoot(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+  const session = getChatSessionById(String(sessionId || '').trim());
+  return String(
+    sourcePanelState.project?.workspacePath
+    || sourcePanelState.project?.root
+    || session?.canvasProjectRoot
+    || canvasProjectRoot
+    || '',
+  ).trim();
+}
+
+function sourcePanelFallbackProject(sessionId) {
+  const session = getChatSessionById(String(sessionId || '').trim());
+  return {
+    id: session?.projectId || '',
+    name: session?.projectName || session?.canvasProjectLabel || (sourcePanelWorkspaceRoot(sessionId) ? getCanvasProjectDisplayName(sourcePanelWorkspaceRoot(sessionId)) : 'Current project'),
+    workspacePath: session?.canvasProjectRoot || canvasProjectRoot || '',
+  };
+}
+
+async function loadSourcePanelProject(sessionId = window.activeChatSessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  const token = ++sourcePanelState.projectRequestToken;
+  const session = getChatSessionById(sid);
+  const projectId = String(session?.projectId || '').trim();
+  if (!projectId) {
+    sourcePanelState.project = sourcePanelFallbackProject(sid);
+    sourcePanelState.projectSessionId = sid;
+    sourcePanelState.projectLoaded = true;
+    renderSourcePanel();
+    loadSourcePanelGit(sid).catch(() => {});
+    return;
+  }
+  try {
+    const project = await api(`/api/projects/${encodeURIComponent(projectId)}`, { timeoutMs: 8000, dedupe: false });
+    if (token !== sourcePanelState.projectRequestToken || sid !== sourcePanelState.activeSessionId) return;
+    sourcePanelState.project = project || sourcePanelFallbackProject(sid);
+  } catch {
+    if (token !== sourcePanelState.projectRequestToken || sid !== sourcePanelState.activeSessionId) return;
+    sourcePanelState.project = sourcePanelFallbackProject(sid);
+  }
+  sourcePanelState.projectSessionId = sid;
+  sourcePanelState.projectLoaded = true;
+  renderSourcePanel();
+  loadSourcePanelGit(sid).catch(() => {});
+}
+
+async function loadSourcePanelGit(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid !== sourcePanelState.activeSessionId) return;
+  const token = ++sourcePanelState.gitRequestToken;
+  const root = sourcePanelWorkspaceRoot(sid);
+  sourcePanelState.gitSessionId = sid;
+  sourcePanelState.gitRoot = root;
+  sourcePanelState.gitLoaded = false;
+  try {
+    const endpoint = root ? `/api/coding/repository?root=${encodeURIComponent(root)}` : '/api/coding/repository';
+    const data = await api(endpoint, { timeoutMs: 8000, dedupe: false });
+    if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
+    sourcePanelState.git = data?.repository ? { root: data.root || root, repository: data.repository } : null;
+  } catch {
+    if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
+    sourcePanelState.git = null;
+  }
+  sourcePanelState.gitLoaded = true;
+  renderSourcePanel();
+}
+
+function ensureSourcePanelContext(sessionId = window.activeChatSessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  if (sourcePanelState.activeSessionId !== sid) {
+    sourcePanelState.activeSessionId = sid;
+    sourcePanelState.initialized = false;
+    sourcePanelState.seenResourceKeys = new Set();
+    sourcePanelState.seenEditKeys = new Set();
+    sourcePanelState.project = null;
+    sourcePanelState.projectSessionId = '';
+    sourcePanelState.projectLoaded = false;
+    sourcePanelState.git = null;
+    sourcePanelState.gitSessionId = '';
+    sourcePanelState.gitRoot = '';
+    sourcePanelState.gitLoaded = false;
+  }
+  if (!sourcePanelState.projectLoaded || sourcePanelState.projectSessionId !== sid) loadSourcePanelProject(sid).catch(() => {});
+  else {
+    const root = sourcePanelWorkspaceRoot(sid);
+    if (!sourcePanelState.gitLoaded || sourcePanelState.gitSessionId !== sid || sourcePanelState.gitRoot !== root) loadSourcePanelGit(sid).catch(() => {});
+  }
+}
+
+function syncSourcePanelData({ sessionId = window.activeChatSessionId, announce = true } = {}) {
+  const sid = String(sessionId || '').trim();
+  if (sid) ensureSourcePanelContext(sid);
+  const data = sourcePanelData(sid);
+  const resourceKeys = new Set(data.resourceItems.map((item) => `${item.key}:${item.resource?.updatedAt || item.resource?.versionCount || ''}`));
+  const editKeys = new Set(data.edits.map((item) => `${item.key}:${item.updatedAt}:${item.insertions}:${item.deletions}:${item.status}`));
+  if (!sourcePanelState.initialized) {
+    sourcePanelState.seenResourceKeys = resourceKeys;
+    sourcePanelState.seenEditKeys = editKeys;
+    sourcePanelState.initialized = true;
+    renderSourcePanel();
+    return [];
+  }
+  const additions = [];
+  resourceKeys.forEach((key) => { if (!sourcePanelState.seenResourceKeys.has(key)) additions.push(key); });
+  editKeys.forEach((key) => { if (!sourcePanelState.seenEditKeys.has(key)) additions.push(key); });
+  sourcePanelState.seenResourceKeys = resourceKeys;
+  sourcePanelState.seenEditKeys = editKeys;
+  renderSourcePanel();
+  if (announce && additions.length && !document.getElementById('right-panel')?.classList.contains('open')) showSourcesMinimizedPanel();
+  return additions;
+}
+
+function announceSourcePanelFileChanges(sessionId = window.activeChatSessionId) {
+  return syncSourcePanelData({ sessionId, announce: true });
+}
+
+function sourcePanelFindItem(key, sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+  const data = sourcePanelData(sessionId);
+  return [...data.resourceItems, ...sourcePanelEditItems(sessionId), ...data.gitItems].find((item) => item.key === key) || null;
+}
+
+function openSourcePanelUrl(url) {
+  const value = String(url || '').trim();
+  if (!value) return;
+  if (typeof window.openPrometheusExternalLink === 'function') window.openPrometheusExternalLink(value, { target: '_blank', features: 'noopener,noreferrer' });
+  else window.open(value, '_blank', 'noopener,noreferrer');
+}
+
+async function copySourcePanelText(value) {
+  const text = String(value || '');
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); showToast?.('Copied', 'Clone URL copied to clipboard.', 'success', 2200); }
+  catch { showToast?.('Copy unavailable', text, 'info', 3000); }
+}
+
+function openSourcePanelItem(key) {
+  const item = sourcePanelFindItem(String(key || ''));
+  if (!item) return;
+  if (item.type === 'resource') {
+    const url = chatResourceUrl(item.resource);
+    if (url) openSourcePanelUrl(url);
+    else openChatResourceFile(item.resource?.id);
+    return;
+  }
+  if (item.type === 'edit') {
+    if (item.path && item.status !== 'deleted' && typeof canvasPresentFile === 'function') Promise.resolve(canvasPresentFile(item.path, item.title)).catch(() => {});
+    return;
+  }
+  if (item.type === 'git-repo') {
+    if (item.repository?.htmlUrl) openSourcePanelUrl(item.repository.htmlUrl);
+    else setSourcePanelTab('git');
+    return;
+  }
+  if (item.type === 'git-commit') {
+    const base = item.repository?.htmlUrl;
+    if (base && item.commit?.hash) openSourcePanelUrl(`${base}/commit/${encodeURIComponent(item.commit.hash)}`);
+    else setSourcePanelTab('git');
+  }
+}
+
+function sourcePanelMiniFilterLabel(filter) {
+  return ({ all: 'All sources', links: 'Web links', files: 'Files', git: 'Git' })[filter] || 'All sources';
+}
+
+function sourcePanelMiniItems(filter = sourcePanelState.miniFilter) {
+  const data = sourcePanelData();
+  if (filter === 'links') return data.links;
+  if (filter === 'files') return [...data.inputs, ...data.outputs, ...data.edits].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  if (filter === 'git') return data.gitItems;
+  return [...data.recent, ...data.gitItems].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+function toggleSourcePanelMiniFilter() {
+  const order = ['all', 'links', 'files', 'git'];
+  const currentIndex = Math.max(0, order.indexOf(sourcePanelState.miniFilter));
+  sourcePanelState.miniFilter = order[(currentIndex + 1) % order.length];
+  renderSourcesMinimizedPanel();
+}
+
+function renderSourcesMinimizedPanel() {
+  const panel = document.getElementById('sources-minimized-panel');
+  if (!panel) return;
+  const filter = sourcePanelState.miniFilter;
+  const items = sourcePanelMiniItems(filter).slice(0, 4);
+  panel.innerHTML = `<div class="sources-minimized-card">
+    <div class="sources-minimized-header"><strong>Sources</strong><span class="sources-minimized-header-actions"><button class="source-panel-icon-btn" type="button" aria-label="Refresh sources" title="Refresh sources" onclick="refreshSourcePanel()">↻</button><button class="source-panel-icon-btn" type="button" aria-label="${escHtml(sourcePanelMiniFilterLabel(filter))}" title="${escHtml(sourcePanelMiniFilterLabel(filter))}; click to cycle" onclick="toggleSourcePanelMiniFilter()">⌕</button><button class="source-panel-close-btn" type="button" aria-label="Close minimized sources" title="Close" onclick="hideSourcesMinimizedPanel()">×</button></span></div>
+    <div class="source-mini-tabs" aria-label="Source filters">
+      <button class="source-mini-tab${filter === 'all' ? ' is-active' : ''}" type="button" title="All sources" aria-label="All sources" onclick="setSourcePanelMiniFilter('all')">◎</button>
+      <button class="source-mini-tab${filter === 'links' ? ' is-active' : ''}" type="button" title="Web links" aria-label="Web links" onclick="setSourcePanelMiniFilter('links')">↗</button>
+      <button class="source-mini-tab${filter === 'files' ? ' is-active' : ''}" type="button" title="Files" aria-label="Files" onclick="setSourcePanelMiniFilter('files')">▤</button>
+      <button class="source-mini-tab${filter === 'git' ? ' is-active' : ''}" type="button" title="Git" aria-label="Git" onclick="setSourcePanelMiniFilter('git')">⌘</button>
+    </div>
+    <div class="source-mini-list">${items.length ? items.map((item) => sourcePanelItemMarkup(item, { mini: true })).join('') : '<div class="source-panel-empty">No sources in this view.</div>'}</div>
+    <button class="sources-minimized-footer" type="button" onclick="openFullSourcePanel()">· View all sources</button>
+  </div>`;
+}
+
+function setSourcePanelMiniFilter(filter = 'all') {
+  sourcePanelState.miniFilter = ['all', 'links', 'files', 'git'].includes(filter) ? filter : 'all';
+  renderSourcesMinimizedPanel();
+}
+
+function showSourcesMinimizedPanel() {
+  const panel = document.getElementById('sources-minimized-panel');
+  const rightPanel = document.getElementById('right-panel');
+  if (!panel || rightPanel?.classList.contains('open')) return;
+  if (!sourcePanelMiniItems(sourcePanelState.miniFilter).length) {
+    if (!sourcePanelMiniItems('all').length) return;
+    sourcePanelState.miniFilter = 'all';
+  }
+  if (sourcePanelState.miniHideTimer) clearTimeout(sourcePanelState.miniHideTimer);
+  renderSourcesMinimizedPanel();
+  panel.hidden = false;
+  panel.classList.remove('is-closing');
+  requestAnimationFrame(() => panel.classList.add('is-visible'));
+}
+
+function hideSourcesMinimizedPanel(options = {}) {
+  const panel = document.getElementById('sources-minimized-panel');
+  if (!panel) return;
+  panel.classList.remove('is-visible');
+  panel.classList.add('is-closing');
+  if (sourcePanelState.miniHideTimer) clearTimeout(sourcePanelState.miniHideTimer);
+  sourcePanelState.miniHideTimer = setTimeout(() => {
+    panel.hidden = true;
+    panel.classList.remove('is-closing');
+  }, 230);
+  if (options.resetFilter !== false) sourcePanelState.miniFilter = 'all';
+}
+
+function openFullSourcePanel() {
+  hideSourcesMinimizedPanel({ resetFilter: false });
+  const panel = document.getElementById('right-panel');
+  if (panel && !panel.classList.contains('open')) toggleRightPanel();
+  setSourcePanelTab('overview');
+}
+
+function refreshSourcePanel() {
+  const sid = sourcePanelState.activeSessionId || window.activeChatSessionId || window.agentSessionId;
+  if (sid) {
+    loadChatResources({ sessionId: sid, background: true }).catch(() => {});
+    loadSourcePanelProject(sid).catch(() => {});
+    loadSourcePanelGit(sid).catch(() => {});
+  }
+  renderSourcePanel();
+}
+
+function initSourcePanelEdgeReveal() {
+  if (window.matchMedia?.('(pointer: coarse)').matches) return;
+  let revealTimer = null;
+  const cancel = () => {
+    if (revealTimer) clearTimeout(revealTimer);
+    revealTimer = null;
+  };
+  document.addEventListener('pointermove', (event) => {
+    if (event.pointerType && event.pointerType !== 'mouse') return cancel();
+    const atRightEdge = event.clientX >= window.innerWidth - 2;
+    const rightPanel = document.getElementById('right-panel');
+    if (!atRightEdge || rightPanel?.classList.contains('open')) return cancel();
+    if (revealTimer) return;
+    revealTimer = setTimeout(() => {
+      revealTimer = null;
+      showSourcesMinimizedPanel();
+    }, 120);
+  }, { passive: true });
+}
+
+queueMicrotask(() => {
+  renderSourcePanel();
+  initSourcePanelEdgeReveal();
+});
 
 let creativeSceneDoc = createSceneDocument();
 let creativeSelectedId = null;
@@ -40280,6 +41030,9 @@ function toggleRightPanel() {
     if (sidebar && !sidebar.classList.contains('collapsed')) {
       if (typeof window.toggleSidebar === 'function') window.toggleSidebar();
     }
+    hideSourcesMinimizedPanel({ resetFilter: false });
+    ensureSourcePanelContext(window.activeChatSessionId || window.agentSessionId);
+    if (chatResourcesState.sessionId) loadChatResources({ sessionId: chatResourcesState.sessionId, background: true }).catch(() => {});
   }
   if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
   syncHeaderCanvasChrome();
@@ -42322,6 +43075,10 @@ function renderSessionApprovalCard(item) {
   const isDevSource = item.approvalKind === 'dev_source_edit' || item.toolName === 'request_dev_source_edit';
   const isFinalAction = item.approvalKind === 'final_action' || item.toolName === 'request_final_action_approval';
   const isOneShot = item.oneShot === true || item.approvalKind === 'elevated_command' || isDevSource || isFinalAction;
+  const pathAccessPaths = Array.from(new Set([
+    item.pathAccess?.requestedPath,
+    ...(Array.isArray(item.pathAccess?.requestedPaths) ? item.pathAccess.requestedPaths : []),
+  ].map((value) => String(value || '').trim()).filter(Boolean)));
   const approveEndpoint = isProposal ? `/api/proposals/${item.id}/approve` : `/api/approvals/${item.id}/approve`;
   const denyEndpoint = isProposal ? `/api/proposals/${item.id}/deny` : `/api/approvals/${item.id}/deny`;
   return `<div class="approval-card" style="background:${palette.bg};border-color:${palette.border};padding:10px 12px">
@@ -42333,6 +43090,7 @@ function renderSessionApprovalCard(item) {
       </div>
     </div>
     ${item.summary ? `<div style="font-size:11px;color:${palette.text};margin-bottom:6px;line-height:1.4;opacity:0.9">${escHtml(String(item.summary).slice(0, 180))}</div>` : ''}
+    ${pathAccessPaths.length ? `<div style="font-size:10px;color:${palette.text};margin:-2px 0 7px;line-height:1.35"><strong>Path access:</strong><br>${pathAccessPaths.slice(0, 8).map((value) => escHtml(value)).join('<br>')}</div>` : ''}
     ${item.command ? `<pre style="margin:0 0 8px;background:rgba(255,255,255,0.82);border:1px solid ${palette.border};border-radius:8px;padding:8px;font-size:10px;color:${palette.strongText || palette.text};white-space:pre-wrap;word-break:break-word;font-family:'IBM Plex Mono',monospace">${escHtml(String(item.command).slice(0, 300))}</pre>` : ''}
     ${item.scopedTarget ? `<div style="font-size:10px;color:${palette.text};margin:-3px 0 7px;line-height:1.3">Scope: ${escHtml(String(item.scopedTarget).slice(0, 140))}</div>` : ''}
     ${Array.isArray(item.devSourceEdit?.allowedFiles) && item.devSourceEdit.allowedFiles.length ? `<div style="font-size:10px;color:${palette.text};margin:-3px 0 7px;line-height:1.35">Files: ${item.devSourceEdit.allowedFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
@@ -42350,7 +43108,7 @@ function renderSessionApprovalCard(item) {
         : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
           <button onclick="resolveSessionApproval('${item.id}','approve','${approveEndpoint}')" style="border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Approve Once</button>
           <button onclick="resolveSessionApproval('${item.id}','approve_session','${approveEndpoint}','session')" style="border:none;background:#0f766e;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">This Session</button>
-          <button onclick="resolveSessionApproval('${item.id}','approve_always','${approveEndpoint}','always')" style="border:none;background:#2563eb;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Always Allow</button>
+          <button onclick="resolveSessionApproval('${item.id}','approve_always','${approveEndpoint}','always')" style="border:none;background:#2563eb;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">${pathAccessPaths.length ? 'Always allow path' : 'Always Allow'}</button>
           <button onclick="resolveSessionApproval('${item.id}','deny','${denyEndpoint}')" style="border:1px solid ${palette.border};background:transparent;color:${palette.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Deny</button>
         </div>`}
   </div>`;
@@ -42367,6 +43125,7 @@ function normalizeChatApprovalRecord(record = {}, fallback = {}) {
   const isDevSource = approvalKind === 'dev_source_edit' || toolName === 'request_dev_source_edit';
   const isFinalAction = approvalKind === 'final_action' || toolName === 'request_final_action_approval';
   const human = summarizeApprovalForHumans(record, fallback);
+  const pathAccess = record.pathAccess || fallback.pathAccess || null;
   return {
     id,
     sessionId,
@@ -42383,6 +43142,7 @@ function normalizeChatApprovalRecord(record = {}, fallback = {}) {
     scopedAction: String(record.scopedAction || fallback.scopedAction || '').trim(),
     scopedTarget: String(record.scopedTarget || fallback.scopedTarget || '').trim(),
     commandBoundary: record.commandBoundary || fallback.commandBoundary || null,
+    pathAccess,
     devSourceEdit: record.devSourceEdit || fallback.devSourceEdit || null,
     finalAction: record.finalAction || fallback.finalAction || null,
     oneShot: record.oneShot === true || fallback.oneShot === true || approvalKind === 'elevated_command' || isDevSource || isFinalAction,
@@ -42411,6 +43171,10 @@ function renderInlineApprovalRequest(item) {
   const commandBoundary = approval.commandBoundary || null;
   const boundaryScope = String(commandBoundary?.scope || '').trim();
   const boundaryPaths = Array.isArray(commandBoundary?.externalPaths) ? commandBoundary.externalPaths.filter(Boolean) : [];
+  const pathAccessPaths = Array.from(new Set([
+    approval.pathAccess?.requestedPath,
+    ...(Array.isArray(approval.pathAccess?.requestedPaths) ? approval.pathAccess.requestedPaths : []),
+  ].map((value) => String(value || '').trim()).filter(Boolean)));
   const boundaryEnv = Array.isArray(commandBoundary?.environmentChanges) ? commandBoundary.environmentChanges.filter(Boolean) : [];
   const devPlan = approval.devSourceEdit?.plan || null;
   const devEvidence = Array.isArray(devPlan?.evidence) ? devPlan.evidence : [];
@@ -42450,6 +43214,7 @@ function renderInlineApprovalRequest(item) {
       <ol class="chat-approval-plan">${devExpectedWorkflow.slice(0, 8).map((step) => `<li>${escHtml(String(step))}</li>`).join('')}</ol>
     </details>` : ''}
     ${pending && boundaryScope && boundaryScope !== 'workspace' ? `<div class="chat-approval-scope"><span>Boundary</span>${escHtml(boundaryScope.replace(/_/g, ' '))}${commandBoundary?.reason ? `<br>${escHtml(String(commandBoundary.reason))}` : ''}</div>` : ''}
+    ${pending && pathAccessPaths.length ? `<div class="chat-approval-scope"><span>Path access requested</span>${pathAccessPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
     ${pending && boundaryPaths.length ? `<div class="chat-approval-scope"><span>External paths</span>${boundaryPaths.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
     ${pending && boundaryEnv.length ? `<div class="chat-approval-scope"><span>Environment</span>${boundaryEnv.slice(0, 8).map((item) => escHtml(String(item))).join('<br>')}</div>` : ''}
     ${pending && sourceFiles.length ? `<div class="chat-approval-scope"><span>Files</span>${sourceFiles.map((file) => escHtml(String(file))).join('<br>')}</div>` : ''}
@@ -42971,6 +43736,9 @@ async function loadSessionApprovals() {
         affectedSystems: a.affectedSystems || [],
         command: a.command || a.scopedAction || '',
         scopedTarget: a.scopedTarget || '',
+        commandBoundary: a.commandBoundary || null,
+        pathAccess: a.pathAccess || null,
+        oneShot: a.oneShot === true,
         status: a.status || 'pending',
         toolName: a.toolName || '',
         approvalKind: a.approvalKind || '',
@@ -43225,6 +43993,19 @@ window.loadChatResources = loadChatResources;
 window.filterChatResources = filterChatResources;
 window.setChatResourcesExpanded = setChatResourcesExpanded;
 window.openChatResourceFile = openChatResourceFile;
+window.setSourcePanelTab = setSourcePanelTab;
+window.refreshSourcePanel = refreshSourcePanel;
+window.toggleSourcePanelFilter = toggleSourcePanelFilter;
+window.filterSourcePanel = filterSourcePanel;
+window.clearSourcePanelFilter = clearSourcePanelFilter;
+window.openSourcePanelItem = openSourcePanelItem;
+window.openSourcePanelUrl = openSourcePanelUrl;
+window.copySourcePanelText = copySourcePanelText;
+window.toggleSourcePanelMiniFilter = toggleSourcePanelMiniFilter;
+window.setSourcePanelMiniFilter = setSourcePanelMiniFilter;
+window.showSourcesMinimizedPanel = showSourcesMinimizedPanel;
+window.hideSourcesMinimizedPanel = hideSourcesMinimizedPanel;
+window.openFullSourcePanel = openFullSourcePanel;
 window.toggleCanvasFullscreen = toggleCanvasFullscreen;
 window.toggleLeftPanel = toggleLeftPanel;
 window.toggleRightPanel = toggleRightPanel;
@@ -45812,6 +46593,7 @@ wsEventBus.on('bg_agent_done', (msg) => {
       history[lastAiIdx] = { ...lastMsg, fileChanges: nextFileChanges };
       persistActiveChat();
       renderChatMessages();
+      announceSourcePanelFileChanges(window.activeChatSessionId);
     }
     return;
   }
@@ -45823,6 +46605,7 @@ wsEventBus.on('bg_agent_done', (msg) => {
   };
   persistActiveChat();
   renderChatMessages();
+  if (nextFileChanges) announceSourcePanelFileChanges(window.activeChatSessionId);
   addProcessEntry('info', `Background Agent ${msg.bgId}: result injected into reply.`, { actor: 'Background Agent' });
 });
 

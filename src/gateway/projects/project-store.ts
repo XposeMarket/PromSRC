@@ -86,8 +86,99 @@ export interface Project {
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
+let legacyProjectMigrationComplete = false;
+
+function copyMissingTree(sourceDir: string, targetDir: string): number {
+  if (!fs.existsSync(sourceDir)) return 0;
+  fs.mkdirSync(targetDir, { recursive: true });
+  let copied = 0;
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const source = path.join(sourceDir, entry.name);
+    const target = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      copied += copyMissingTree(source, target);
+    } else if (!fs.existsSync(target)) {
+      fs.copyFileSync(source, target);
+      copied += 1;
+    }
+  }
+  return copied;
+}
+
+/**
+ * The canonical PromSRC dev gateway runs in `.prometheus-instances/port-*` so
+ * it cannot collide with Electron. The old source checkout data lives in the
+ * sibling `.prometheus` directory. Import only that explicit instance shape;
+ * Electron and ordinary gateways must never read another gateway's store.
+ */
+function migrateLegacyDevProjects(currentProjectsDir: string): void {
+  if (legacyProjectMigrationComplete) return;
+  legacyProjectMigrationComplete = true;
+
+  const dataRoot = String(process.env.PROMETHEUS_DATA_DIR || '').trim();
+  if (!dataRoot) return;
+  const resolvedDataRoot = path.resolve(dataRoot);
+  const parentName = path.basename(path.dirname(resolvedDataRoot)).toLowerCase();
+  const instanceName = path.basename(resolvedDataRoot).toLowerCase();
+  if (parentName !== '.prometheus-instances' || !instanceName.startsWith('port-')) return;
+
+  const currentConfigDir = path.resolve(getConfig().getConfigDir());
+  const legacyConfigDir = path.join(path.dirname(path.dirname(resolvedDataRoot)), '.prometheus');
+  if (path.resolve(legacyConfigDir) === currentConfigDir) return;
+  const legacyProjectsDir = path.join(legacyConfigDir, 'projects');
+  if (!fs.existsSync(legacyProjectsDir)) return;
+
+  const currentSessionDir = path.join(currentConfigDir, 'sessions');
+  const legacySessionDir = path.join(legacyConfigDir, 'sessions');
+  const currentWorkspaceProjectsDir = path.join(getConfig().getWorkspacePath(), 'projects');
+  const legacyWorkspaceProjectsDir = path.join(legacyConfigDir, '..', 'workspace', 'projects');
+  let projectsCopied = 0;
+  let sessionsCopied = 0;
+  let workspaceFilesCopied = 0;
+
+  for (const entry of fs.readdirSync(legacyProjectsDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const id = entry.name.slice(0, -5);
+    if (!isSafeStorageId(id)) continue;
+    const sourceProjectFile = path.join(legacyProjectsDir, entry.name);
+    const targetProjectFile = path.join(currentProjectsDir, entry.name);
+    try {
+      const parsed = JSON.parse(fs.readFileSync(sourceProjectFile, 'utf-8')) as Project;
+      if (!fs.existsSync(targetProjectFile)) {
+        fs.mkdirSync(currentProjectsDir, { recursive: true });
+        fs.copyFileSync(sourceProjectFile, targetProjectFile);
+        projectsCopied += 1;
+      }
+
+      for (const session of Array.isArray(parsed.sessions) ? parsed.sessions : []) {
+        const sessionId = String(session?.id || '').trim();
+        if (!isSafeStorageId(sessionId)) continue;
+        const sourceSessionFile = path.join(legacySessionDir, `${sessionId}.json`);
+        const targetSessionFile = path.join(currentSessionDir, `${sessionId}.json`);
+        if (fs.existsSync(sourceSessionFile) && !fs.existsSync(targetSessionFile)) {
+          fs.mkdirSync(currentSessionDir, { recursive: true });
+          fs.copyFileSync(sourceSessionFile, targetSessionFile);
+          sessionsCopied += 1;
+        }
+      }
+
+      const sourceWorkspace = path.join(legacyWorkspaceProjectsDir, id);
+      const targetWorkspace = path.join(currentWorkspaceProjectsDir, id);
+      workspaceFilesCopied += copyMissingTree(sourceWorkspace, targetWorkspace);
+    } catch (error: any) {
+      console.warn(`[ProjectStore] Could not import legacy dev project ${id}:`, error?.message || error);
+    }
+  }
+
+  if (projectsCopied || sessionsCopied || workspaceFilesCopied) {
+    console.log(`[ProjectStore] Imported legacy dev data: ${projectsCopied} project(s), ${sessionsCopied} session(s), ${workspaceFilesCopied} workspace file(s).`);
+  }
+}
+
 function getProjectsDir(): string {
-  return resolveConfinedStoragePath(getConfig().getConfigDir(), 'projects', { label: 'projects directory' });
+  const dir = resolveConfinedStoragePath(getConfig().getConfigDir(), 'projects', { label: 'projects directory' });
+  migrateLegacyDevProjects(dir);
+  return dir;
 }
 
 function getProjectFile(id: string): string {

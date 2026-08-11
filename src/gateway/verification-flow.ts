@@ -32,8 +32,9 @@ export interface ApprovalRecord {
   toolName: string;
   toolArgs: Record<string, any>;
   approvalKind?: 'command' | 'elevated_command' | 'tool' | 'dev_source_edit' | 'dev_apply_live' | 'final_action' | 'path_access';
-  /** Path approval fields — populated when approvalKind === 'path_access' */
-  pathAccess?: { requestedPath: string };
+  /** Path approval fields — populated for direct path approvals and terminal
+   * approvals that reference a path outside the configured workspace. */
+  pathAccess?: { requestedPath: string; requestedPaths?: string[] };
   /** Human-readable description of what will happen */
   action: string;
   reason?: string;
@@ -128,6 +129,7 @@ export function serializeApprovalForClient(record: ApprovalRecord): Record<strin
     toolName: record.toolName,
     toolArgs: truncateApprovalValue(record.toolArgs || {}),
     approvalKind: record.approvalKind,
+    pathAccess: record.pathAccess ? truncateApprovalValue(record.pathAccess) : undefined,
     oneShot: record.approvalKind === 'elevated_command'
       || record.approvalKind === 'dev_source_edit'
       || record.approvalKind === 'dev_apply_live'

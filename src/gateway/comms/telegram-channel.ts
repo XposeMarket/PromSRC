@@ -19,7 +19,6 @@
 
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
 import { getConfig } from '../../config/config';
 import { mainChatRoutePatch } from '../../config/main-chat-route.js';
 import { readAgentPromptFile, writeAgentPromptFile } from '../../agents/agent-prompt-file.js';
@@ -54,6 +53,12 @@ import { sanitizeFinalReply, stripInternalToolNotes } from './reply-processor';
 import { createMessageCoalescer, type MessageCoalescer } from './message-coalescer';
 import { createTelegramStreamingMessage } from './telegram-streaming-message';
 import { getHumanDelayMs, sleep, type HumanDelayConfig } from './human-delay';
+import {
+  collectUserStateRoots,
+  requestCanonicalUpdate,
+  sanitizeUpdateError,
+  waitForCanonicalUpdateStatus,
+} from '../../update/canonical-updater';
 
 const CREATIVE_TELEGRAM_PROGRESS_INTERVAL = 10;
 const CREATIVE_TELEGRAM_PROGRESS_MIN_INTERVAL_MS = 1500;
@@ -784,78 +789,21 @@ export class TelegramChannel {
     };
   }
 
-  private runShellCapture(command: string, cwd: string, timeoutMs: number = 15000): { ok: boolean; stdout: string; stderr: string } {
-    try {
-      const out = execSync(command, {
-        cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        encoding: 'utf-8',
-        timeout: timeoutMs,
-      });
-      return { ok: true, stdout: String(out || '').trim(), stderr: '' };
-    } catch (err: any) {
-      const stdout = String(err?.stdout || '').trim();
-      const stderr = String(err?.stderr || err?.message || '').trim();
-      return { ok: false, stdout, stderr };
-    }
-  }
-
-  private checkForGitUpdate(): UpdateCheckResult {
-    const root = path.resolve(__dirname, '..', '..', '..');
-    const gitProbe = this.runShellCapture('git rev-parse --is-inside-work-tree', root, 6000);
-    if (!gitProbe.ok || gitProbe.stdout !== 'true') {
-      return {
-        ok: false,
-        available: false,
-        message: 'This install is not a git working tree. /update currently supports git installs.',
-      };
-    }
-
-    const branchRes = this.runShellCapture('git rev-parse --abbrev-ref HEAD', root, 6000);
-    if (!branchRes.ok || !branchRes.stdout) {
-      return { ok: false, available: false, message: 'Could not resolve current git branch.' };
-    }
-    const branch = branchRes.stdout;
-    const upstreamRes = this.runShellCapture('git rev-parse --abbrev-ref --symbolic-full-name @{u}', root, 6000);
-    if (!upstreamRes.ok) {
-      return {
-        ok: false,
-        available: false,
-        branch,
-        message: `No upstream tracking branch is configured for "${branch}".`,
-      };
-    }
-
-    this.runShellCapture('git fetch --quiet', root, 20000);
-    const countsRes = this.runShellCapture('git rev-list --left-right --count HEAD...@{u}', root, 6000);
-    if (!countsRes.ok) {
-      return { ok: false, available: false, branch, message: 'Unable to compare local branch with upstream.' };
-    }
-
-    const [aheadRaw, behindRaw] = countsRes.stdout.split(/\s+/);
-    const ahead = Number(aheadRaw || 0);
-    const behind = Number(behindRaw || 0);
-    const available = Number.isFinite(behind) && behind > 0;
-    let message = `Already up to date on "${branch}".`;
-    if (available && ahead > 0) message = `Update available: behind ${behind}, ahead ${ahead} on "${branch}".`;
-    else if (available) message = `Update available: behind by ${behind} commit(s) on "${branch}".`;
-    else if (ahead > 0) message = `Local branch "${branch}" is ahead by ${ahead} commit(s).`;
-
-    let commits: Array<{ hash: string; subject: string }> = [];
-    if (available) {
-      const logRes = this.runShellCapture('git log --oneline -n 6 HEAD..@{u}', root, 8000);
-      if (logRes.ok && logRes.stdout) {
-        commits = logRes.stdout.split(/\r?\n/).map((line) => {
-          const trimmed = String(line || '').trim();
-          const sp = trimmed.indexOf(' ');
-          return sp > 0
-            ? { hash: trimmed.slice(0, sp), subject: trimmed.slice(sp + 1) }
-            : { hash: trimmed, subject: '' };
-        }).filter((c) => c.hash);
-      }
-    }
-
-    return { ok: true, available, branch, ahead, behind, commits, message };
+  private async checkForCanonicalUpdate(): Promise<UpdateCheckResult> {
+    const configDir = getConfig().getConfigDir();
+    const queued = requestCanonicalUpdate(configDir, {
+      action: 'check',
+      source: 'telegram',
+      stateRoots: collectUserStateRoots(path.dirname(configDir), getConfig().getConfig()),
+    });
+    if (!queued.ok) return { ok: false, available: false, message: queued.message };
+    const status = await waitForCanonicalUpdateStatus(configDir, queued.request.requestId, 4500);
+    const available = status.phase === 'available' || status.phase === 'ready';
+    return {
+      ok: status.supported,
+      available,
+      message: status.message || (available ? 'A Prometheus update is available.' : 'Prometheus is up to date.'),
+    };
   }
 
   private formatUpdateCheckMessage(check: UpdateCheckResult): string {
@@ -876,9 +824,8 @@ export class TelegramChannel {
   }
 
   private async runTelegramSelfUpdate(chatId: number, userId: number): Promise<void> {
-    const sessionId = this.getTelegramSessionId(userId, chatId);
-    const root = path.resolve(__dirname, '..', '..', '..');
-    const check = this.checkForGitUpdate();
+    const configDir = getConfig().getConfigDir();
+    const check = await this.checkForCanonicalUpdate();
     if (!check.ok) {
       await this.sendMessage(chatId, `❌ ${check.message}`);
       return;
@@ -888,47 +835,17 @@ export class TelegramChannel {
       return;
     }
 
-    const dirty = this.runShellCapture('git status --porcelain', root, 6000);
-    if (dirty.ok && dirty.stdout) {
-      await this.sendMessage(chatId, '❌ Update blocked: local git changes detected. Commit/stash changes first.');
-      return;
-    }
-
-    await this.sendMessage(chatId, '🔥 Update confirmed. Running: fetch → pull --ff-only → npm install → npm run build');
-
-    const pullRes = this.runShellCapture('git pull --ff-only', root, 45000);
-    if (!pullRes.ok) {
-      await this.sendMessage(chatId, `❌ git pull failed.\n\n<code>${String(pullRes.stderr || pullRes.stdout).slice(-1200)}</code>`);
-      return;
-    }
-
-    const installRes = this.runShellCapture('npm install', root, 180000);
-    if (!installRes.ok) {
-      await this.sendMessage(chatId, `❌ npm install failed.\n\n<code>${String(installRes.stderr || installRes.stdout).slice(-1200)}</code>`);
-      return;
-    }
-
-    const buildRes = this.runShellCapture('npm run build', root, 240000);
-    if (!buildRes.ok) {
-      await this.sendMessage(chatId, `❌ Build failed. Gateway will stay online.\n\n<code>${String(buildRes.stderr || buildRes.stdout).slice(-1200)}</code>`);
-      return;
-    }
-
-    await this.sendMessage(chatId, '✅ Update build succeeded. Restarting gateway now...');
-    const { gracefulRestart } = await import('../lifecycle.js');
-    await gracefulRestart({
-      reason: 'self_update',
-      timestamp: Date.now(),
-      title: 'Telegram self-update',
-      summary: `Self-update requested from Telegram by user ${userId}.`,
-      previousSessionId: sessionId,
-      originChannel: 'telegram',
-      respondToTelegram: true,
-      previousTelegramChatId: String(chatId),
-      previousTelegramUserId: userId,
-      buildOutput: String(buildRes.stdout || '').slice(-2000),
-      testInstructions: 'Confirm update pulled latest commits, gateway restarted, and Telegram polling resumed.',
+    const queued = requestCanonicalUpdate(configDir, {
+      action: 'apply',
+      source: 'telegram',
+      confirmed: true,
+      stateRoots: collectUserStateRoots(path.dirname(configDir), getConfig().getConfig()),
     });
+    if (!queued.ok) {
+      await this.sendMessage(chatId, `❌ ${queued.message}`);
+      return;
+    }
+    await this.sendMessage(chatId, '✅ Safe update accepted. Prometheus will verify the release, retain an encrypted state backup, drain active work, install, relaunch, and validate before reporting completion.');
   }
 
   private async runFullRestart(chatId: number, userId: number): Promise<void> {
@@ -4300,7 +4217,7 @@ export class TelegramChannel {
       }).catch(() => {});
       try {
         if (action === 'check') {
-          const check = this.checkForGitUpdate();
+          const check = await this.checkForCanonicalUpdate();
           await this.apiCall('sendMessage', {
             chat_id: chatId,
             text: this.formatUpdateCheckMessage(check),
@@ -4315,7 +4232,7 @@ export class TelegramChannel {
           await this.sendMessage(chatId, '❌ Unknown update option. Use /update to open the update menu again.');
         }
       } catch (err: any) {
-        await this.sendMessage(chatId, `❌ Update action failed: ${String(err?.message || err)}`);
+        await this.sendMessage(chatId, `❌ Update action failed: ${sanitizeUpdateError(err)}`);
       }
       return;
     }
@@ -6549,14 +6466,14 @@ export class TelegramChannel {
     }
 
     if (text === '/update' || text === '/update ' || text === '/update check') {
-      const check = this.checkForGitUpdate();
+      const check = await this.checkForCanonicalUpdate();
       await this.apiCall('sendMessage', {
         chat_id: chatId,
         text: this.formatUpdateCheckMessage(check),
         parse_mode: 'HTML',
         reply_markup: check.ok && check.available ? this.buildUpdateReplyMarkup() : undefined,
       }).catch(async (err: any) => {
-        await this.sendMessage(chatId, `❌ Could not run update check: ${String(err?.message || err)}`);
+        await this.sendMessage(chatId, `❌ Could not run update check: ${sanitizeUpdateError(err)}`);
       });
       return;
     }

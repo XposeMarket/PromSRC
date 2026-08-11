@@ -1,13 +1,21 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
+import net from 'net';
 import { execSync, spawn, type ChildProcess } from 'child_process';
 import readline from 'readline/promises';
 import { stdin as input, stdout as output } from 'process';
 import { getConfig } from '../config/config';
+import {
+  buildGatewayUrl,
+  DEFAULT_GATEWAY_PORT,
+  parseGatewayPort,
+  resolveGatewayPort,
+} from '../config/gateway-port';
 import { getDatabase } from '../db/database';
 import { getOllamaClient } from '../agents/ollama-client';
 import * as ui from './ui.js';
@@ -22,6 +30,9 @@ import {
   takeSupervisorRestartRequest,
   type SupervisorRestartRequest,
 } from '../runtime/supervisor-restart-request.js';
+import {
+  readCanonicalUpdateStatus,
+} from '../update/canonical-updater';
 // AgentOrchestrator removed — legacy pipeline superseded by reactor + multi-agent orchestration
 
 const program = new Command();
@@ -30,39 +41,6 @@ program
   .name('prometheus')
   .description('Local AI agent powered by your choice of LLM provider')
   .version('1.0.2');
-
-type InstallMode = 'git' | 'npm' | 'unknown';
-type UpdateSource = 'git' | 'npm' | 'none';
-
-interface UpdateContext {
-  rootDir: string;
-  packageName: string;
-  currentVersion: string;
-  mode: InstallMode;
-}
-
-interface UpdateCheckResult {
-  mode: InstallMode;
-  source: UpdateSource;
-  available: boolean;
-  message: string;
-  currentVersion: string;
-  latestVersion?: string;
-  packageName?: string;
-  branch?: string;
-  ahead?: number;
-  behind?: number;
-}
-
-interface UpdateCacheState {
-  checkedAt: number;
-  mode: InstallMode;
-  packageName: string;
-  currentVersion: string;
-  result: UpdateCheckResult;
-}
-
-const UPDATE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function runCapture(command: string, cwd: string, timeoutMs: number = 10000): { ok: boolean; stdout: string; stderr: string } {
   try {
@@ -107,6 +85,154 @@ const GATEWAY_START_ATTEMPTS = parsePositiveInt(process.env.PROMETHEUS_GATEWAY_S
 const GATEWAY_BUSY_RESTART_GRACE_MS = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_BUSY_GRACE_MS, 45_000);
 const GATEWAY_HEALTH_TIMEOUT_MS = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_HEALTH_TIMEOUT_MS, 5_000);
 const GATEWAY_HEALTH_FAILURE_LIMIT = parsePositiveInt(process.env.PROMETHEUS_SUPERVISOR_HEALTH_FAILURE_LIMIT, 2);
+
+let gatewayPortOverride: number | undefined;
+
+function getGatewayPort(): number {
+  if (gatewayPortOverride) return gatewayPortOverride;
+  return resolveGatewayPort(getConfig().getConfig());
+}
+
+function getGatewayUrl(host = '127.0.0.1'): string {
+  return buildGatewayUrl(getGatewayPort(), host);
+}
+
+function getGatewayStateRoot(): string {
+  return process.env.PROMETHEUS_DATA_DIR || resolveInstallRoot();
+}
+
+function getPairingAdminTokenPath(): string {
+  return path.join(getGatewayStateRoot(), '.prometheus', 'pairing-admin-token');
+}
+
+function ensureManualPairingAdminCredential(): { token: string; path: string; generated: boolean; persisted: boolean } | null {
+  if (process.env.PROMETHEUS_ELECTRON_MANAGED === '1') return null;
+
+  const configured = String(process.env.PROMETHEUS_PAIRING_ADMIN_TOKEN || '').trim();
+  if (configured) return { token: configured, path: getPairingAdminTokenPath(), generated: false, persisted: false };
+
+  const tokenPath = getPairingAdminTokenPath();
+  try {
+    const existing = fs.readFileSync(tokenPath, 'utf8').trim();
+    if (existing) {
+      process.env.PROMETHEUS_PAIRING_ADMIN_TOKEN = existing;
+      return { token: existing, path: tokenPath, generated: false, persisted: true };
+    }
+  } catch {}
+
+  const token = crypto.randomBytes(32).toString('hex');
+  let persisted = false;
+  try {
+    fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
+    fs.writeFileSync(tokenPath, `${token}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    persisted = true;
+  } catch {
+    // If another instance won a simultaneous first-start race, reuse its token.
+    try {
+      const existing = fs.readFileSync(tokenPath, 'utf8').trim();
+      if (existing) {
+        process.env.PROMETHEUS_PAIRING_ADMIN_TOKEN = existing;
+        return { token: existing, path: tokenPath, generated: false, persisted: true };
+      }
+    } catch {}
+  }
+
+  process.env.PROMETHEUS_PAIRING_ADMIN_TOKEN = token;
+  return { token, path: tokenPath, generated: true, persisted };
+}
+
+function isGatewayPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    let settled = false;
+    const done = (available: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(available);
+    };
+    probe.once('error', () => done(false));
+    probe.listen({ port, host: '0.0.0.0', exclusive: true }, () => {
+      probe.close(() => done(true));
+    });
+  });
+}
+
+function getConfiguredGatewayHttpsPort(): number | undefined {
+  const config = getConfig().getConfig() as any;
+  const https = config?.gateway?.https;
+  const enabled = ['1', 'true'].includes(String(process.env.GATEWAY_HTTPS_ENABLED || '').toLowerCase())
+    || https?.enabled === true;
+  if (!enabled) return undefined;
+  return parseGatewayPort(https?.port)
+    || parseGatewayPort(process.env.GATEWAY_HTTPS_PORT)
+    || 18790;
+}
+
+async function findAvailableGatewayPort(startPort: number): Promise<number> {
+  const httpsPort = getConfiguredGatewayHttpsPort();
+  for (let offset = 0; offset < 1000 && startPort + offset <= 65535; offset += 1) {
+    const candidate = startPort + offset;
+    if (httpsPort && candidate === httpsPort) continue;
+    if (await isGatewayPortAvailable(candidate)) return candidate;
+  }
+  throw new Error(`Prometheus could not find an available gateway port starting at ${startPort}.`);
+}
+
+const DEV_GATEWAY_INSTANCE_FILE = path.join(resolveInstallRoot(), '.prometheus', 'dev-gateway-instance.json');
+
+function readCanonicalDevGatewayPort(): number {
+  try {
+    const saved = JSON.parse(fs.readFileSync(DEV_GATEWAY_INSTANCE_FILE, 'utf8'));
+    return parseGatewayPort(saved?.port) || (DEFAULT_GATEWAY_PORT + 1);
+  } catch {
+    return DEFAULT_GATEWAY_PORT + 1;
+  }
+}
+
+function persistCanonicalDevGatewayPort(port: number): void {
+  fs.mkdirSync(path.dirname(DEV_GATEWAY_INSTANCE_FILE), { recursive: true });
+  fs.writeFileSync(DEV_GATEWAY_INSTANCE_FILE, JSON.stringify({ version: 1, port }, null, 2) + '\n');
+}
+
+async function configureGatewayInstance(options: { port?: string; dataDir?: string; newInstance?: boolean; autoInstance?: boolean; canonicalDevInstance?: boolean }): Promise<void> {
+  let selectedPort: number | undefined;
+  let preferredPort: number | undefined;
+  const autoInstance = options.autoInstance || process.env.PROMETHEUS_AUTO_INSTANCE === '1';
+  if (options.port !== undefined) {
+    selectedPort = parseGatewayPort(options.port);
+    if (!selectedPort) throw new Error(`Invalid gateway port: ${options.port}`);
+  } else if (options.canonicalDevInstance) {
+    selectedPort = readCanonicalDevGatewayPort();
+    persistCanonicalDevGatewayPort(selectedPort);
+  } else if (options.newInstance || process.env.PROMETHEUS_NEW_INSTANCE === '1') {
+    selectedPort = await findAvailableGatewayPort(
+      gatewayPortOverride || resolveGatewayPort(getConfig().getConfig()) || DEFAULT_GATEWAY_PORT,
+    );
+  } else if (autoInstance) {
+    preferredPort = gatewayPortOverride || resolveGatewayPort(getConfig().getConfig()) || DEFAULT_GATEWAY_PORT;
+    selectedPort = preferredPort;
+    if (!(await isGatewayPortAvailable(preferredPort))) {
+      selectedPort = await findAvailableGatewayPort(preferredPort + 1);
+    }
+  }
+  if (selectedPort) {
+    gatewayPortOverride = selectedPort;
+    process.env.PROMETHEUS_GATEWAY_PORT = String(selectedPort);
+  }
+  const needsIsolatedData = options.canonicalDevInstance
+    || options.newInstance
+    || process.env.PROMETHEUS_NEW_INSTANCE === '1'
+    || (autoInstance && selectedPort !== preferredPort);
+  if (options.dataDir || needsIsolatedData) {
+    const dataDir = path.resolve(
+      options.dataDir
+        || process.env.PROMETHEUS_DATA_DIR
+        || resolveInstallRoot(),
+      ...(options.dataDir || !selectedPort ? [] : ['.prometheus-instances', `port-${selectedPort}`]),
+    );
+    process.env.PROMETHEUS_DATA_DIR = dataDir;
+  }
+}
 
 function gatewaySupervisorEnabled(): boolean {
   return process.env.PROMETHEUS_SUPERVISOR === '1'
@@ -160,7 +286,7 @@ async function probeGatewayHealth(timeoutMs = GATEWAY_HEALTH_TIMEOUT_MS): Promis
     };
     const req = http.request({
       host: '127.0.0.1',
-      port: 18789,
+      port: getGatewayPort(),
       path: '/api/health',
       method: 'GET',
       agent: false,
@@ -192,7 +318,7 @@ interface GatewayRuntimeStatus extends GatewayRuntimeStatusSnapshot {
 
 function readGatewayRuntimeStatus(): GatewayRuntimeStatus | null {
   try {
-    const p = path.join(resolveInstallRoot(), '.prometheus', 'gateway-runtime-status.json');
+    const p = path.join(getGatewayStateRoot(), '.prometheus', 'gateway-runtime-status.json');
     if (!fs.existsSync(p)) return null;
     return JSON.parse(fs.readFileSync(p, 'utf-8')) as GatewayRuntimeStatus;
   } catch {
@@ -208,7 +334,7 @@ function hasLiveGatewayHeartbeat(status: GatewayRuntimeStatus | null, maxAgeMs =
   return owners.length > 0 && (!Number.isFinite(statusPid) || owners.includes(statusPid));
 }
 
-function getGatewayPortOwnerPids(port = 18789): number[] {
+function getGatewayPortOwnerPids(port = getGatewayPort()): number[] {
   if (process.platform === 'win32') {
     const parseNetstatOwners = (out: string): number[] => Array.from(new Set(
       out
@@ -281,7 +407,7 @@ async function clearUnhealthyGatewayPort(exemptPids: number[] = []): Promise<voi
   const exempt = new Set([process.pid, ...exemptPids.filter(pid => Number.isFinite(pid))]);
   const owners = getGatewayPortOwnerPids().filter(pid => !exempt.has(pid));
   if (owners.length === 0) return;
-  console.error(`[GatewaySupervisor] Port 18789 is held by an unhealthy gateway process (${owners.join(', ')}). Terminating it before restart...`);
+  console.error(`[GatewaySupervisor] Port ${getGatewayPort()} is held by an unhealthy gateway process (${owners.join(', ')}). Terminating it before restart...`);
   for (const pid of owners) killPidTree(pid);
   for (let i = 0; i < 20; i++) {
     await sleep(250);
@@ -392,9 +518,10 @@ function buildTerminalStatusBoard(): any {
     'unknown';
   return {
     host: liveConfig?.gateway?.host || '127.0.0.1',
-    port: liveConfig?.gateway?.port || 18789,
+    port: getGatewayPort(),
     model,
-    workspace: cfg.getWorkspacePath(),
+    workspace: process.env.PROMETHEUS_WORKSPACE_DIR
+      || (process.env.PROMETHEUS_DATA_DIR ? path.join(getGatewayStateRoot(), 'workspace') : cfg.getWorkspacePath()),
     skillsTotal: 0,
     skillsEnabled: 0,
     searchStatus: 'Checking...',
@@ -449,9 +576,10 @@ async function waitForGatewayHealthAndNotify(
 }
 
 async function runMissionThroughGateway(mission: string): Promise<void> {
+  const gatewayUrl = getGatewayUrl();
   const ready = await ensureGatewayForCli();
   if (!ready) {
-    ui.error('Gateway did not become ready at http://127.0.0.1:18789');
+    ui.error(`Gateway did not become ready at ${gatewayUrl}`);
     process.exitCode = 1;
     return;
   }
@@ -460,10 +588,10 @@ async function runMissionThroughGateway(mission: string): Promise<void> {
   ui.header('Prometheus Agent');
   ui.label('Mission', mission);
   ui.label('Session', sessionId);
-  ui.label('UI', 'http://127.0.0.1:18789');
+  ui.label('UI', gatewayUrl);
   ui.blank();
 
-  const res = await fetch('http://127.0.0.1:18789/api/chat', {
+  const res = await fetch(`${gatewayUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -528,7 +656,7 @@ async function runSupervisedGateway(): Promise<void> {
   let restartTimer: NodeJS.Timeout | null = null;
   let fastLaunchPending = false;
   const supervisorStateDir = process.env.PROMETHEUS_SUPERVISOR_STATE_DIR
-    || path.join(resolveInstallRoot(), '.prometheus');
+    || path.join(getGatewayStateRoot(), '.prometheus');
 
   const launchReplacementSupervisor = async (request: SupervisorRestartRequest): Promise<boolean> => {
     try {
@@ -677,7 +805,7 @@ async function runSupervisedGateway(): Promise<void> {
         console.error(`[GatewaySupervisor] Ignored supervisor replacement request (${supervisorRequest.status}).`);
       }
       if (probe.healthy) {
-        console.error('[GatewaySupervisor] Child exited, but a healthy gateway is already serving port 18789. Stopping this supervisor instead of relaunching a duplicate.');
+        console.error(`[GatewaySupervisor] Child exited, but a healthy gateway is already serving port ${getGatewayPort()}. Stopping this supervisor instead of relaunching a duplicate.`);
         stopping = true;
         if (restartTimer) {
           clearTimeout(restartTimer);
@@ -809,209 +937,6 @@ function readPackageMeta(rootDir: string): { name: string; version: string } {
   }
 }
 
-function detectInstallMode(rootDir: string): InstallMode {
-  const gitPath = path.join(rootDir, '.git');
-  if (fs.existsSync(gitPath)) return 'git';
-  const gitProbe = runCapture('git rev-parse --is-inside-work-tree', rootDir, 4000);
-  if (gitProbe.ok && gitProbe.stdout.trim() === 'true') return 'git';
-  if (fs.existsSync(path.join(rootDir, 'package.json'))) return 'npm';
-  return 'unknown';
-}
-
-function resolveUpdateContext(): UpdateContext {
-  const rootDir = resolveInstallRoot();
-  const pkg = readPackageMeta(rootDir);
-  const mode = detectInstallMode(rootDir);
-  return {
-    rootDir,
-    packageName: pkg.name,
-    currentVersion: pkg.version,
-    mode,
-  };
-}
-
-function parseNpmVersion(raw: string): string | null {
-  const text = String(raw || '').trim();
-  if (!text) return null;
-  try {
-    const parsed = JSON.parse(text);
-    if (typeof parsed === 'string' && parsed.trim()) return parsed.trim();
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      const last = parsed[parsed.length - 1];
-      if (typeof last === 'string' && last.trim()) return last.trim();
-    }
-  } catch {
-    // ignore
-  }
-  const cleaned = text.replace(/^"|"$/g, '').trim();
-  return cleaned || null;
-}
-
-function checkGitUpdate(ctx: UpdateContext, fetchRemote: boolean): UpdateCheckResult {
-  const branchRes = runCapture('git rev-parse --abbrev-ref HEAD', ctx.rootDir, 4000);
-  if (!branchRes.ok) {
-    return {
-      mode: 'git',
-      source: 'git',
-      available: false,
-      message: 'Git repository detected, but current branch could not be resolved.',
-      currentVersion: ctx.currentVersion,
-    };
-  }
-  const branch = branchRes.stdout.trim() || 'HEAD';
-  const upstreamRes = runCapture('git rev-parse --abbrev-ref --symbolic-full-name @{u}', ctx.rootDir, 4000);
-  if (!upstreamRes.ok) {
-    return {
-      mode: 'git',
-      source: 'git',
-      available: false,
-      message: `No upstream tracking branch configured for "${branch}".`,
-      currentVersion: ctx.currentVersion,
-      branch,
-    };
-  }
-
-  if (fetchRemote) {
-    runCapture('git fetch --quiet', ctx.rootDir, 12000);
-  }
-
-  const countsRes = runCapture('git rev-list --left-right --count HEAD...@{u}', ctx.rootDir, 4000);
-  if (!countsRes.ok) {
-    return {
-      mode: 'git',
-      source: 'git',
-      available: false,
-      message: `Unable to compare local branch "${branch}" with upstream.`,
-      currentVersion: ctx.currentVersion,
-      branch,
-    };
-  }
-
-  const parts = countsRes.stdout.trim().split(/\s+/).filter(Boolean);
-  const ahead = Number(parts[0] || 0);
-  const behind = Number(parts[1] || 0);
-
-  let message = `No updates available on branch "${branch}".`;
-  if (behind > 0 && ahead > 0) {
-    message = `Update available: "${branch}" is behind by ${behind} commit(s) and ahead by ${ahead}.`;
-  } else if (behind > 0) {
-    message = `Update available: "${branch}" is behind by ${behind} commit(s).`;
-  } else if (ahead > 0) {
-    message = `Local branch "${branch}" is ahead of upstream by ${ahead} commit(s).`;
-  }
-
-  const latestHash = runCapture('git rev-parse --short @{u}', ctx.rootDir, 3000);
-
-  return {
-    mode: 'git',
-    source: 'git',
-    available: behind > 0,
-    message,
-    currentVersion: ctx.currentVersion,
-    latestVersion: latestHash.ok ? latestHash.stdout.trim() : undefined,
-    branch,
-    ahead,
-    behind,
-  };
-}
-
-function checkNpmUpdate(ctx: UpdateContext): UpdateCheckResult {
-  const candidates = Array.from(
-    new Set(
-      [
-        process.env.PROMETHEUS_NPM_PACKAGE,
-        ctx.packageName,
-        'prometheus',
-      ].filter(Boolean).map(v => String(v)),
-    ),
-  );
-
-  for (const packageName of candidates) {
-    const latestRes = runCapture(`npm view ${packageName} version --json`, ctx.rootDir, 12000);
-    if (!latestRes.ok) continue;
-
-    const latestVersion = parseNpmVersion(latestRes.stdout);
-    if (!latestVersion) continue;
-
-    const available = latestVersion !== ctx.currentVersion;
-    return {
-      mode: 'npm',
-      source: 'npm',
-      available,
-      message: available
-        ? `Update available: ${ctx.currentVersion} -> ${latestVersion} (${packageName}).`
-        : `No npm updates available (${packageName}@${ctx.currentVersion}).`,
-      currentVersion: ctx.currentVersion,
-      latestVersion,
-      packageName,
-    };
-  }
-
-  return {
-    mode: 'npm',
-    source: 'npm',
-    available: false,
-    message: 'Could not resolve latest version from npm registry.',
-    currentVersion: ctx.currentVersion,
-  };
-}
-
-function checkForUpdates(ctx: UpdateContext, fetchRemote: boolean = true): UpdateCheckResult {
-  if (ctx.mode === 'git') return checkGitUpdate(ctx, fetchRemote);
-  if (ctx.mode === 'npm') return checkNpmUpdate(ctx);
-  return {
-    mode: 'unknown',
-    source: 'none',
-    available: false,
-    message: 'Install type is unknown. Run manual update steps from your repository.',
-    currentVersion: ctx.currentVersion,
-  };
-}
-
-function getUpdateCachePath(): string {
-  return path.join(getConfig().getConfigDir(), 'update_state.json');
-}
-
-function readUpdateCache(): UpdateCacheState | null {
-  try {
-    const cachePath = getUpdateCachePath();
-    if (!fs.existsSync(cachePath)) return null;
-    const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf-8')) as UpdateCacheState;
-    if (!parsed || typeof parsed.checkedAt !== 'number' || !parsed.result) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writeUpdateCache(ctx: UpdateContext, result: UpdateCheckResult): void {
-  try {
-    const cachePath = getUpdateCachePath();
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const payload: UpdateCacheState = {
-      checkedAt: Date.now(),
-      mode: ctx.mode,
-      packageName: ctx.packageName,
-      currentVersion: ctx.currentVersion,
-      result,
-    };
-    fs.writeFileSync(cachePath, JSON.stringify(payload, null, 2), 'utf-8');
-  } catch {
-    // best effort only
-  }
-}
-
-function printUpdateCheck(result: UpdateCheckResult): void {
-  if (result.available) {
-    ui.warn(result.message);
-    ui.label('Current', result.currentVersion);
-    if (result.latestVersion) ui.label('Latest', result.latestVersion);
-  } else {
-    ui.success(result.message);
-    ui.label('Version', result.currentVersion);
-  }
-}
-
 async function confirmUpdate(assumeYes: boolean): Promise<boolean> {
   if (assumeYes) return true;
   if (!process.stdin.isTTY) return false;
@@ -1024,59 +949,91 @@ async function confirmUpdate(assumeYes: boolean): Promise<boolean> {
   }
 }
 
-function hasDirtyGitChanges(rootDir: string): boolean {
-  const status = runCapture('git status --porcelain', rootDir, 4000);
-  if (!status.ok) return false;
-  return status.stdout.trim().length > 0;
-}
-
-function applyGitUpdate(ctx: UpdateContext, force: boolean): boolean {
-  if (!force && hasDirtyGitChanges(ctx.rootDir)) {
-    console.error('[update] Local git changes detected. Commit/stash first or use --force.');
-    return false;
-  }
-
-  const steps: Array<[string, string]> = [
-    ['Pull latest changes', 'git pull --ff-only'],
-    ['Install dependencies', 'npm install'],
-    ['Build project', 'npm run build'],
-    ['Refresh global link', 'npm link'],
-  ];
-
-  for (const [label, cmd] of steps) {
-    if (!runStep(label, cmd, ctx.rootDir)) return false;
-  }
-  return true;
-}
-
-function applyNpmUpdate(ctx: UpdateContext, check: UpdateCheckResult): boolean {
-  const packageName = check.packageName || ctx.packageName;
-  return runStep(
-    `Install latest npm package (${packageName}@latest)`,
-    `npm install -g ${packageName}@latest`,
-    ctx.rootDir,
-  );
-}
-
 function maybeNotifyUpdate(): void {
   if (process.env.PROMETHEUS_DISABLE_UPDATE_CHECK === '1') return;
-  const ctx = resolveUpdateContext();
-  const cache = readUpdateCache();
-  const isFresh = cache
-    && (Date.now() - cache.checkedAt) < UPDATE_CACHE_TTL_MS
-    && cache.mode === ctx.mode
-    && cache.packageName === ctx.packageName
-    && cache.currentVersion === ctx.currentVersion;
-
-  const result = isFresh ? cache.result : checkForUpdates(ctx, true);
-  if (!isFresh) {
-    writeUpdateCache(ctx, result);
+  const status = readCanonicalUpdateStatus(getConfig().getConfigDir(), {
+    currentVersion: readPackageMeta(resolveInstallRoot()).version,
+    supported: process.env.PROMETHEUS_ELECTRON_MANAGED === '1'
+      && process.env.PROMETHEUS_PUBLIC_BUILD === '1',
+  });
+  if (status.phase === 'available' || status.phase === 'ready') {
+    ui.warn(status.message || 'A Prometheus update is ready.');
+    ui.hint('Run `prometheus update` to request the safe packaged update flow.');
   }
+}
 
-  if (result.available) {
-    ui.warn(result.message);
-    ui.hint('Run `prometheus update` to install.');
+async function runCanonicalCliUpdate(actionMode: 'check' | 'apply', assumeYes: boolean): Promise<void> {
+  const requestRunningGatewayUpdate = (action: 'check' | 'apply', confirmed = false): Promise<any> => new Promise((resolve) => {
+    const payload = JSON.stringify({ action, confirm: confirmed === true, source: 'cli' });
+    const gatewayConfig = (getConfig().getConfig() as any)?.gateway || {};
+    const rawToken = String(gatewayConfig?.auth?.token || gatewayConfig?.auth_token || '').trim();
+    const token = String(getConfig().resolveSecret(rawToken) || rawToken).trim();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Content-Length': String(Buffer.byteLength(payload)),
+      Connection: 'close',
+    };
+    if (token) headers['X-Gateway-Token'] = token;
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: getGatewayPort(),
+      path: '/api/lifecycle/update',
+      method: 'POST',
+      headers,
+      timeout: 5000,
+    }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { if (body.length < 100_000) body += chunk; });
+      res.on('end', () => {
+        let parsed: any = null;
+        try { parsed = body ? JSON.parse(body) : {}; } catch { parsed = {}; }
+        if (Number(res.statusCode || 0) >= 200 && Number(res.statusCode || 0) < 300) {
+          resolve(parsed || { ok: true });
+          return;
+        }
+        resolve({ ...(parsed || {}), ok: false, error: parsed?.error || `Gateway update request failed (${res.statusCode || 0}).` });
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('The running Prometheus gateway did not respond.')));
+    req.on('error', (error) => resolve({ ok: false, error: 'No running packaged Prometheus gateway is available. Start the packaged app first; no Git/npm changes were made.' }));
+    req.end(payload);
+  });
+
+  const checkResult = await requestRunningGatewayUpdate('check');
+  if (!checkResult?.ok) {
+    ui.error(String(checkResult?.error || 'Prometheus update check failed.'));
+    process.exitCode = 1;
+    return;
   }
+  const check = checkResult.status || {};
+  if (!check.supported) {
+    ui.error(check.message || 'Safe updates require a packaged public Prometheus build.');
+    process.exitCode = 1;
+    return;
+  }
+  if (actionMode === 'check') {
+    ui.label('Version', check.currentVersion);
+    if (['available', 'ready'].includes(check.phase)) ui.warn(check.message || 'A Prometheus update is available.');
+    else ui.info(check.message || 'Prometheus update status unavailable.');
+    return;
+  }
+  if (!['available', 'ready'].includes(check.phase)) {
+    ui.info(check.message || 'Prometheus is already up to date.');
+    return;
+  }
+  const confirmed = await confirmUpdate(assumeYes);
+  if (!confirmed) {
+    ui.info('Update canceled.');
+    return;
+  }
+  const applied = await requestRunningGatewayUpdate('apply', true);
+  if (!applied?.ok) {
+    ui.error(String(applied?.error || 'Prometheus could not start the safe update flow.'));
+    process.exitCode = 1;
+    return;
+  }
+  ui.success('Safe update accepted. Electron will verify, back up, drain, install, relaunch, and validate it.');
 }
 
 // ---- ONBOARD ----
@@ -1095,7 +1052,7 @@ program
     ui.success('Job database initialized');
     ui.header('Next Steps');
     ui.info('1. Start the gateway:  prom');
-    ui.info('2. Open browser:       http://localhost:18789');
+    ui.info(`2. Open browser:       ${getGatewayUrl('localhost')}`);
     ui.info('3. Go to Settings → Models to configure your LLM provider');
     ui.blank();
   });
@@ -1106,20 +1063,34 @@ const gateway = program.command('gateway').description('Control the gateway serv
 gateway
   .command('start')
   .description('Start the gateway + web UI server')
-  .action(async () => {
+  .option('--port <port>', 'Use a dedicated gateway port for this instance')
+  .option('--data-dir <path>', 'Use a dedicated data directory for this instance')
+  .option('--new-instance', 'Choose the next free port and an isolated instance data directory')
+  .option('--auto-instance', 'Use the default instance when free, otherwise choose the next free isolated instance')
+  .option('--canonical-dev-instance', 'Use the one persistent gateway assigned to this dev checkout')
+  .action(async (options: { port?: string; dataDir?: string; newInstance?: boolean; autoInstance?: boolean; canonicalDevInstance?: boolean }) => {
+    await configureGatewayInstance(options);
+    const pairingAdmin = ensureManualPairingAdminCredential();
+    if (pairingAdmin?.generated) {
+      console.log(`[Pairing] Browser admin credential: ${pairingAdmin.token}`);
+      console.log(pairingAdmin.persisted
+        ? `[Pairing] Credential saved to: ${pairingAdmin.path}`
+        : '[Pairing] Credential could not be saved; keep this terminal open or set PROMETHEUS_PAIRING_ADMIN_TOKEN explicitly.');
+    }
+    const gatewayUrl = getGatewayUrl();
     // ── Check if already running (skip during hot restart — old server is shutting down) ──
     if (!process.env.PROMETHEUS_HOT_RESTART) {
       try {
         if (await checkGatewayHealth(1200)) {
-          console.log('Gateway is already running at http://127.0.0.1:18789');
+          console.log(`Gateway is already running at ${gatewayUrl}`);
           return;
         }
-        const res = await fetch('http://127.0.0.1:18789/api/status', {
+        const res = await fetch(`${gatewayUrl}/api/status`, {
           signal: AbortSignal.timeout(1200),
         });
         if (res.ok) {
           const data = await res.json() as any;
-          console.log('Gateway is already running at http://127.0.0.1:18789');
+          console.log(`Gateway is already running at ${gatewayUrl}`);
           if (data?.currentModel) console.log(`Model: ${data.currentModel}`);
           return;
         }
@@ -1127,7 +1098,7 @@ gateway
       const runtimeStatus = readGatewayRuntimeStatus();
       if (hasLiveGatewayHeartbeat(runtimeStatus, 30_000)) {
         const ageMs = runtimeStatus?.timestamp ? Date.now() - Number(runtimeStatus.timestamp) : -1;
-        console.log(`Gateway is already running at http://127.0.0.1:18789 (runtime heartbeat ${Math.max(0, Math.round(ageMs / 1000))}s ago)`);
+        console.log(`Gateway is already running at ${gatewayUrl} (runtime heartbeat ${Math.max(0, Math.round(ageMs / 1000))}s ago)`);
         return;
       }
     }
@@ -1195,11 +1166,12 @@ gateway
   .command('status')
   .description('Check gateway status')
   .action(async () => {
+    const gatewayUrl = getGatewayUrl('localhost');
     ui.header('Gateway Status');
     try {
-      const res  = await fetch('http://localhost:18789/api/status');
+      const res  = await fetch(`${gatewayUrl}/api/status`);
       const data = await res.json() as any;
-      ui.statusRow('Gateway', 'Online  http://localhost:18789', 'ok');
+      ui.statusRow('Gateway', `Online  ${gatewayUrl}`, 'ok');
       ui.statusRow('Model',   data.currentModel || 'unknown',  'ok');
       if (data.provider) ui.statusRow('Provider', data.provider, 'ok');
     } catch {
@@ -1327,11 +1299,12 @@ program.command('doctor').action(async () => {
 
   // Gateway
   let gatewayModel = '';
+  const gatewayUrl = getGatewayUrl('localhost');
   try {
-    const res  = await fetch('http://localhost:18789/api/status', { signal: AbortSignal.timeout(2000) } as any);
+    const res  = await fetch(`${gatewayUrl}/api/status`, { signal: AbortSignal.timeout(2000) } as any);
     const data = await res.json() as any;
     gatewayModel = data?.currentModel ? `  (${data.currentModel})` : '';
-    ui.statusRow('Gateway', `Online  http://localhost:18789${gatewayModel}`, 'ok');
+    ui.statusRow('Gateway', `Online  ${gatewayUrl}${gatewayModel}`, 'ok');
   } catch {
     ui.statusRow('Gateway', 'Offline', 'error');
     ui.hint('Run: prom gateway start');
@@ -1339,17 +1312,16 @@ program.command('doctor').action(async () => {
 
   // Update check
   try {
-    const ctx   = resolveUpdateContext();
-    const cache = readUpdateCache();
-    const fresh = cache
-      && (Date.now() - cache.checkedAt) < UPDATE_CACHE_TTL_MS
-      && cache.mode === ctx.mode;
-    const result = fresh ? cache.result : checkForUpdates(ctx, false);
-    if (result.available) {
-      ui.statusRow('Updates', result.message, 'update');
+    const status = readCanonicalUpdateStatus(getConfig().getConfigDir(), {
+      currentVersion: readPackageMeta(resolveInstallRoot()).version,
+      supported: process.env.PROMETHEUS_ELECTRON_MANAGED === '1'
+        && process.env.PROMETHEUS_PUBLIC_BUILD === '1',
+    });
+    if (status.phase === 'available' || status.phase === 'ready') {
+      ui.statusRow('Updates', status.message, 'update');
       ui.hint('Run: prometheus update');
     } else {
-      ui.statusRow('Updates', `Up to date  (v${ctx.currentVersion})`, 'ok');
+      ui.statusRow('Updates', status.supported ? `Up to date  (v${status.currentVersion})` : 'Packaged public build required', status.supported ? 'ok' : 'warn');
     }
   } catch {
     ui.statusRow('Updates', 'Could not check', 'warn');
@@ -1361,62 +1333,25 @@ program.command('doctor').action(async () => {
 // ---- UPDATE ----
 program
   .command('update [mode]')
-  .description('Check for updates and install them (mode: check|apply)')
+  .description('Request the safe packaged Prometheus update flow (mode: check|apply)')
   .option('-y, --yes', 'Skip confirmation prompt when applying updates', false)
-  .option('--force', 'Allow git update even with local changes', false)
-  .action(async (mode: string | undefined, options: { yes?: boolean; force?: boolean }) => {
+  .action(async (mode: string | undefined, options: { yes?: boolean }) => {
     const actionMode = String(mode || 'apply').toLowerCase();
     if (actionMode !== 'check' && actionMode !== 'apply') {
       ui.error(`Unknown mode "${actionMode}". Use "check" or "apply".`);
       process.exitCode = 1;
       return;
     }
-
-    const ctx = resolveUpdateContext();
-    const check = checkForUpdates(ctx, true);
-    writeUpdateCache(ctx, check);
-    printUpdateCheck(check);
-
-    if (actionMode === 'check') {
-      return;
-    }
-
-    if (!check.available) {
-      ui.success('Prometheus is already up to date.');
-      ui.blank();
-      return;
-    }
-
-    const confirmed = await confirmUpdate(Boolean(options.yes));
-    if (!confirmed) {
-      ui.info('Update canceled.');
-      return;
-    }
-
-    let ok = false;
-    if (ctx.mode === 'git') {
-      ok = applyGitUpdate(ctx, Boolean(options.force));
-    } else if (ctx.mode === 'npm') {
-      ok = applyNpmUpdate(ctx, check);
-    } else {
-      ui.error('Unknown install mode. Run manual repo update commands.');
-      process.exitCode = 1;
-      return;
-    }
-
-    if (!ok) {
-      process.exitCode = 1;
-      return;
-    }
-
-    ui.success('Update complete.');
-    ui.hint('Restart any running Prometheus gateway process.');
-    ui.blank();
+    await runCanonicalCliUpdate(actionMode as 'check' | 'apply', Boolean(options.yes));
   });
 
-// Default: calling `prom` with no arguments starts the gateway (like `prom gateway start`)
+// Default: calling `prom` with no arguments targets the one persistent dev
+// instance assigned to this checkout. The gateway start command detects a
+// healthy listener and exits cleanly, so an accidental second launch cannot
+// silently allocate another port and data directory. Multiple instances remain
+// available through the explicit --new-instance and --auto-instance flags.
 if (process.argv.slice(2).length === 0) {
-  process.argv.push('gateway', 'start');
+  process.argv.push('gateway', 'start', '--canonical-dev-instance');
 }
 
 program.parse();

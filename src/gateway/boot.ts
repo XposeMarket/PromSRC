@@ -532,15 +532,24 @@ export async function runBootMd(
         && ['restarting', 'paused'].includes(String(targetGoal.status || ''))
         && !!targetRestartCheckpoint
         && /restart|prom_apply_dev_changes/i.test(`${targetGoal.pausedReason || ''} ${targetRestartCheckpoint.reason || ''}`);
+      // A plain manual restart is already complete once this replacement
+      // gateway has booted.  Limit this shortcut to the session that issued
+      // the restart so unrelated runtimes interrupted by the same process
+      // replacement still get their own recovery handling.
+      const isRestartInitiatingSession = !restartCtx.previousSessionId
+        || target.sessionId === String(restartCtx.previousSessionId).trim();
+      const plainManualGatewayRestart = isRestartInitiatingSession
+        && (explicitQuickRestart || isPlainManualGatewayRestartRequest(lastUserRequest))
+        && !target.devEdit
+        && (!Array.isArray(restartCtx.affectedFiles) || restartCtx.affectedFiles.length === 0);
       // A non-goal foreground turn which called gateway_restart/apply used to
       // receive a short, tool-disabled BOOT reply and then stop.  It is now
       // resumed below through the original foreground execution path once this
       // boot pass has reconciled any dev-edit continuation.
-      const foregroundPlannedRestart = !goalOwnedRestart && !!target.plannedRestartTool;
+      const foregroundPlannedRestart = !goalOwnedRestart
+        && !plainManualGatewayRestart
+        && !!target.plannedRestartTool;
       const suppressTerminalRestartReply = goalOwnedRestart || foregroundPlannedRestart;
-      const plainManualGatewayRestart = (explicitQuickRestart || isPlainManualGatewayRestartRequest(lastUserRequest))
-        && !target.devEdit
-        && (!Array.isArray(restartCtx.affectedFiles) || restartCtx.affectedFiles.length === 0);
 
       if (goalOwnedRestart) {
         const devEdit = target.devEdit;
@@ -561,6 +570,11 @@ export async function runBootMd(
           changedSurfaces: devEdit?.changedSurfaces,
           verificationSummary: devEdit?.lastVerification?.summary,
         });
+      } else if (plainManualGatewayRestart) {
+        // Do not retrigger the original user turn here.  That turn's only
+        // intended action was the restart itself; replaying it after boot
+        // causes a second gateway_restart call.
+        finalText = 'Restarted. Prometheus is back online.';
       } else if (foregroundPlannedRestart) {
         if (target.devEdit) {
           markDevSourceEditContinuationComplete({
@@ -570,8 +584,6 @@ export async function runBootMd(
             note: `Gateway restart completed successfully. ${restartCtx.summary || target.devEdit.summary || 'Approved dev changes are live.'}`,
           });
         }
-      } else if (plainManualGatewayRestart) {
-        finalText = 'Restarted. Prometheus is back online.';
       } else {
         try {
           const result = await handleChat(

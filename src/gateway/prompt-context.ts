@@ -41,6 +41,7 @@ import { detectKeywordToolCategories } from '../runtime/tool-category-keyword-ro
 import { buildMemoryAtomReferenceContext } from './memory-index/memory-atoms.js';
 import { buildRuntimeHostContext } from './runtime-host-context.js';
 import { readCachedGpuInfo } from './gpu-detector';
+import { getWorkspaceToolMode } from '../runtime/workspace-tool-mode.js';
 
 function buildPromptRuntimeHostContext(workspacePath: string): string {
   const gpu = readCachedGpuInfo();
@@ -1364,14 +1365,18 @@ const TOOL_CATEGORY_MATCH_HINTS: Record<string, string> = {
 function buildToolCategoryMatchContext(messageText: string, activatedCategories: Set<string>): string {
   const detected = detectToolCategories(messageText);
   const allowed = new Set(getRuntimeAllowedCategories(Object.keys(TOOL_CATEGORY_MATCH_HINTS) as any));
+  const workspaceToolMode = getWorkspaceToolMode(getConfig().getConfig());
   const lines: string[] = [];
   for (const category of Object.keys(TOOL_CATEGORY_MATCH_HINTS)) {
     if (!detected.has(category)) continue;
     if (!allowed.has(category)) continue;
     if (activatedCategories.has(category)) continue;
+    const hint = category === 'workspace_write' && workspaceToolMode === 'terminal-first'
+      ? 'use terminal or run_command for workspace file work and command/process work; keep the existing path, approval, hard-block, and audit rules.'
+      : TOOL_CATEGORY_MATCH_HINTS[category];
     lines.push(
       `The user message may need category: ${category}.`,
-      `Use request_tool_category({"category":"${category}","scope":"turn"}) if you need tools to ${TOOL_CATEGORY_MATCH_HINTS[category]}`,
+      `Use request_tool_category({"category":"${category}","scope":"turn"}) if you need tools to ${hint}`,
       'Do not activate it if core tools are enough. Use scope=session only for explicit ongoing workflows.',
     );
   }
@@ -1431,12 +1436,17 @@ function buildToolsContextUncached(activatedCategories: Set<string>, options?: {
     .map(([, label]) => label)
     .join(' | ');
 
+  const workspaceToolMode = getWorkspaceToolMode(getConfig().getConfig());
+  const fileEditRouting = workspaceToolMode === 'terminal-first'
+    ? '[FILE EDIT ROUTING] Terminal-first mode is active. For workspace file work, use terminal or run_command with the existing workspace/path boundaries, approval gates, hard-deny rules, and audit trail. Use shell commands for reads, edits, searches, and file operations. Native workspace read/edit wrappers and the regular file primitives are not available in this turn; Git, code navigation, safety, process, and source/developer tools remain separate surfaces.'
+    : '[FILE EDIT ROUTING] For workspace edits, activate/use workspace_write/file_ops. Use workspace_read(action:"grep"/"search"/"stats"/"read") when locating or understanding the target; if an exact file plus exact snippet/line range is already known, use workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"patchset") directly. For obvious small single-file edits or bug fixes, do not call skill_list/skill_read just because broad file/frontend skills match; read a skill only when the user explicitly asks, the workflow is unfamiliar/high-risk, or the skill is needed for a specific non-obvious procedure. Edit tools fail safely and return post-edit context. Do not use workspace_run/terminal/Python/PowerShell/sed/node scripts as the default file editor.';
+
   const legacyMenu = `[TOOLS] Core tools loaded (file read/search, web, basic memory(action="write"|"read"|"search"), skill_list/skill_read only for core skill discovery, tasks, switch_model, set_current_model, update_heartbeat). Activate additional categories as needed:
   ${categoryMenu}
   Preferred category IDs are the names in the menu above; legacy IDs like browser, file_ops, team_ops, connectors, and mcp still work as aliases.
   Use: request_tool_category({"category":"browser_automation","scope":"turn"}) for the current user turn. Use scope=session only for explicit ongoing workflows; scope=next_turn keeps it through one follow-up turn; scope=ttl with turns keeps it for a bounded multi-turn workflow.
 
-[FILE EDIT ROUTING] For workspace edits, activate/use workspace_write/file_ops. Use workspace_read(action:"grep"/"search"/"stats"/"read") when locating or understanding the target; if an exact file plus exact snippet/line range is already known, use workspace_edit(action:"find_replace"/"replace_lines"/"insert_after"/"delete_lines"/"patchset") directly. For obvious small single-file edits or bug fixes, do not call skill_list/skill_read just because broad file/frontend skills match; read a skill only when the user explicitly asks, the workflow is unfamiliar/high-risk, or the skill is needed for a specific non-obvious procedure. Edit tools fail safely and return post-edit context. Do not use workspace_run/terminal/Python/PowerShell/sed/node scripts as the default file editor.
+  ${fileEditRouting}
 ${arePrometheusDevToolsVisible()
   ? '[SOURCE ROOT SAFETY] When the request concerns Prometheus itself, inspect the live product tree with dev_source_read. Do not use workspace/repos/PromSRC*, PromSRC-compare, rescue copies, or other workspace clones as current product source unless the user explicitly asks to compare that copy.'
   : '[PROMETHEUS REPO ROUTING] Treat the configured workspace repository as the editable project. Use workspace_read/workspace_code_nav to inspect it and workspace_edit/workspace_run/workspace_git to change and verify it. Direct Prometheus self-edit/dev-source and repo-sync tools are hidden by default.'}
@@ -1520,6 +1530,8 @@ ${BG_AGENT_RUNTIME_HINT}`;
   if (activatedCategories.size === 0) return baseMenu;
 
   const activePolicies: string[] = [];
+  const terminalFirstWorkspacePolicy = '[TERMINAL-FIRST WORKSPACE MODE] Native Prometheus file read/edit wrappers are disabled for this turn. Use terminal or run_command for workspace reads, searches, edits, and file operations. The terminal still uses the configured workspace/path boundaries, command grants, approvals, hard-deny rules, and audit/evidence pipeline.';
+  const workspacePolicyCategories = new Set(['workspace_write', 'file_ops', 'shell', 'commands']);
   const automationPackActive = ['automation_scheduling', 'automation_tasks', 'automation_recovery', 'automation_sessions']
     .some((category) => activatedCategories.has(category));
   if (automationPackActive && !activatedCategories.has('automations')) {
@@ -1527,7 +1539,9 @@ ${BG_AGENT_RUNTIME_HINT}`;
   }
   for (const cat of activatedCategories) {
     if (isPrometheusDevToolCategoryHidden(cat)) continue;
-    const rawPolicy = CATEGORY_POLICIES[cat];
+    const rawPolicy = workspacePolicyCategories.has(cat) && workspaceToolMode === 'terminal-first'
+      ? `${terminalFirstWorkspacePolicy}\n\n${TOOL_BLOCKS.shell}`
+      : CATEGORY_POLICIES[cat];
     if (!rawPolicy) continue;
     const policy = getVisibleCategoryPolicy(rawPolicy);
     const mode = getInstructionResolverMode();
@@ -1561,6 +1575,7 @@ export function buildToolsContext(activatedCategories: Set<string>, options?: { 
     .map((category) => String(category || '').trim())
     .filter(Boolean)
     .sort();
+  const workspaceToolMode = getWorkspaceToolMode(getConfig().getConfig());
   let searchFingerprint: Record<string, unknown> = {};
   try {
     const search = (getConfig().getConfig() as any)?.search || {};
@@ -1575,6 +1590,7 @@ export function buildToolsContext(activatedCategories: Set<string>, options?: { 
   } catch {}
   const fingerprint = JSON.stringify({
     categories,
+    workspaceToolMode,
     instructionIntents: options?.instructionIntents || null,
     search: searchFingerprint,
     publicDistribution: isPublicDistributionBuild(),

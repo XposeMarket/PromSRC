@@ -88,6 +88,7 @@ async function main(): Promise<void> {
 
     assert.equal(isMeaningfulRuntimeProgressEvent('heartbeat'), false);
     assert.equal(isMeaningfulRuntimeProgressEvent('keepalive'), false);
+    assert.equal(isMeaningfulRuntimeProgressEvent('provider_heartbeat'), true);
     assert.equal(isMeaningfulRuntimeProgressEvent('tool_result'), true);
     assert.equal(fs.readdirSync(root).some((name) => name.includes('.tmp-')), false, 'atomic temp files must be cleaned up');
     console.log('gateway progress lease regression passed');

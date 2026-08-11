@@ -218,6 +218,35 @@ async function main(): Promise<void> {
     assert.ok(!JSON.stringify(setupResult.setup).includes(secret));
     assert.equal(setupResult.setup.files.find((file) => file.relativePath === 'MEMORY.md')?.activation, 'inactive_snapshot');
 
+    const codexMcpDir = path.join(root, 'codex-mcp');
+    fs.mkdirSync(codexMcpDir, { recursive: true });
+    const codexMcpSecret = 'codex-mcp-secret-that-must-not-leak';
+    const codexMcpPath = path.join(codexMcpDir, 'config.toml');
+    fs.writeFileSync(codexMcpPath, [
+      '[plugins."documents@openai-primary-runtime"]',
+      'enabled = true',
+      '[mcp_servers.docs]',
+      'name = "Documents"',
+      'command = "node"',
+      'args = ["server.js"]',
+      '[mcp_servers.docs.env]',
+      `API_KEY = "${codexMcpSecret}"`,
+    ].join('\n'), 'utf8');
+    const codexMcpResult = adapters.parseSetupImport({
+      stagedPath: codexMcpDir,
+      files: adapters.listStagedFiles(codexMcpDir),
+      sourceLabel: 'Codex MCP integrations',
+      inputDigest: 'codex-mcp-digest',
+      requestedAdapter: 'setup-config',
+      setupScope: 'mcp',
+    });
+    assert.equal(codexMcpResult.provider, 'codex');
+    assert.equal(codexMcpResult.setup.mcpServers.length, 1);
+    assert.equal(codexMcpResult.setup.mcpServers[0].config.enabled, false);
+    assert.equal(codexMcpResult.setup.files.length, 0);
+    assert.ok(codexMcpResult.setup.warnings.some((warning) => warning.includes('provider plugin package metadata')));
+    assert.ok(!JSON.stringify(codexMcpResult.setup).includes(codexMcpSecret));
+
     const ownerId = 'import-regression-owner';
     const first = await service.createImportJob({
       ownerId,
@@ -352,6 +381,8 @@ async function main(): Promise<void> {
       sourceLabel: 'Hermes setup',
       requestedAdapter: 'setup-config',
     });
+    assert.equal(setupJob.job.setupScope, 'mcp');
+    assert.equal(setupJob.job.preview?.setupFiles, 0);
     const setupCommitted = await service.confirmImportJob(setupJob.job.id, ownerId);
     assert.ok(['completed', 'partial'].includes(setupCommitted.status));
     const mcp = (await import('../mcp-manager')).getMCPManager();

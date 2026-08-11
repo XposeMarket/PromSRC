@@ -15,6 +15,7 @@ import {
   type ImportedSetupFile,
   type ImportSourceIdentity,
   type SetupSecretNotice,
+  type SetupImportScope,
 } from './import-types';
 
 export const IMPORT_MAX_FILES = 8_000;
@@ -38,6 +39,7 @@ export interface AdapterContext {
   sourceLabel: string;
   inputDigest: string;
   requestedAdapter?: ImportAdapterId;
+  setupScope?: SetupImportScope;
 }
 
 export interface ConversationAdapterResult {
@@ -1191,9 +1193,100 @@ function classifySetupFile(relativePath: string): ImportedSetupFile['category'] 
   return 'unknown';
 }
 
+/**
+ * Parse only the small TOML subset used by local Codex MCP declarations.
+ * This is intentionally not a general TOML interpreter: import preview must
+ * never evaluate expressions, expand commands, or execute provider config.
+ */
+function stripTomlComment(line: string): string {
+  let quote = '';
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if ((char === '"' || char === "'") && line[index - 1] !== '\\') {
+      quote = quote === char ? '' : (quote || char);
+    }
+    if (char === '#' && !quote) return line.slice(0, index).trim();
+  }
+  return line.trim();
+}
+
+function splitTomlArray(value: string): string[] {
+  const out: string[] = [];
+  let start = 0;
+  let quote = '';
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if ((char === '"' || char === "'") && value[index - 1] !== '\\') quote = quote === char ? '' : (quote || char);
+    if (quote) continue;
+    if (char === '[' || char === '{') depth += 1;
+    if (char === ']' || char === '}') depth -= 1;
+    if (char === ',' && depth === 0) {
+      out.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  if (value.slice(start).trim()) out.push(value.slice(start).trim());
+  return out;
+}
+
+function parseTomlScalar(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    return splitTomlArray(trimmed.slice(1, -1)).map((item) => parseTomlScalar(item));
+  }
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try { return JSON.parse(trimmed); } catch { return trimmed.slice(1, -1).slice(0, 20_000); }
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1).slice(0, 20_000);
+  if (/^(true|false)$/i.test(trimmed)) return trimmed.toLowerCase() === 'true';
+  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) return Number(trimmed);
+  return trimmed.slice(0, 20_000);
+}
+
+function extractCodexMcpCandidates(text: string): { candidates: Array<{ id: string; raw: any }>; hasProviderPlugins: boolean } {
+  const byId = new Map<string, Record<string, any>>();
+  let currentId = '';
+  let section = '';
+  let hasProviderPlugins = false;
+  for (const rawLine of text.split(/\r?\n/).slice(0, 100_000)) {
+    const line = stripTomlComment(rawLine);
+    if (!line) continue;
+    const header = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    if (header) {
+      section = header[1].trim();
+      if (/^plugins(?:\.|$)/i.test(section)) hasProviderPlugins = true;
+      const serverMatch = section.match(/^mcp_servers\.(.+?)(\.env)?$/i);
+      if (!serverMatch) {
+        currentId = '';
+        continue;
+      }
+      const rawId = serverMatch[1].replace(/^['"]|['"]$/g, '').trim();
+      currentId = rawId.slice(0, 120);
+      if (!currentId) continue;
+      if (!byId.has(currentId)) byId.set(currentId, { id: currentId });
+      if (Boolean(serverMatch[2])) {
+        const existing = byId.get(currentId)!;
+        existing.env = existing.env && typeof existing.env === 'object' ? existing.env : {};
+      }
+      continue;
+    }
+    const assignment = line.match(/^\s*([A-Za-z0-9_.-]+|"[^"]+"|'[^']+')\s*=\s*(.*?)\s*$/);
+    if (!assignment || !currentId) continue;
+    const key = assignment[1].replace(/^['"]|['"]$/g, '');
+    const target = /\.env$/i.test(section)
+      ? (byId.get(currentId)!.env ||= {})
+      : byId.get(currentId)!;
+    target[key] = parseTomlScalar(assignment[2]);
+  }
+  return { candidates: [...byId.entries()].map(([id, raw]) => ({ id, raw })), hasProviderPlugins };
+}
+
 export function parseSetupImport(context: AdapterContext): SetupAdapterResult {
   const lower = `${context.sourceLabel} ${context.files.map((file) => file.relativePath).join(' ')}`.toLowerCase();
-  const provider = lower.includes('hermes') ? 'hermes' : lower.includes('openclaw') ? 'openclaw' : lower.includes('localclaw') ? 'localclaw' : lower.includes('claude') ? 'claude' : 'generic';
+  const provider = lower.includes('codex') ? 'codex' : lower.includes('chatgpt') || lower.includes('openai') ? 'chatgpt' : lower.includes('hermes') ? 'hermes' : lower.includes('openclaw') ? 'openclaw' : lower.includes('localclaw') ? 'localclaw' : lower.includes('claude') ? 'claude' : 'generic';
+  const scope = context.setupScope || 'all';
   const mcpServers: ImportedMcpServer[] = [];
   const secretNotices: SetupSecretNotice[] = [];
   const warnings: string[] = [];
@@ -1201,11 +1294,25 @@ export function parseSetupImport(context: AdapterContext): SetupAdapterResult {
   for (const file of context.files.slice(0, IMPORT_MAX_FILES)) {
     const category = classifySetupFile(file.relativePath);
     const hash = crypto.createHash('sha256').update(fs.readFileSync(file.absolutePath)).digest('hex');
-    files.push({ relativePath: file.relativePath, category, size: file.size, sha256: hash, activation: category === 'config' || category === 'connector' ? 'review_required' : 'inactive_snapshot' });
-    if (!/\.json$/i.test(file.relativePath) || file.size > IMPORT_MAX_TEXT_BYTES) continue;
+    if (scope === 'all') {
+      files.push({ relativePath: file.relativePath, category, size: file.size, sha256: hash, activation: category === 'config' || category === 'connector' ? 'review_required' : 'inactive_snapshot' });
+    }
+    if (!/\.(json|toml)$/i.test(file.relativePath) || file.size > IMPORT_MAX_TEXT_BYTES) continue;
     let root: any;
-    try { root = parseJsonText(readText(file), file.relativePath); } catch { continue; }
-    for (const candidate of extractMcpCandidates(root)) {
+    let candidates: Array<{ id: string; raw: any }> = [];
+    let text = '';
+    try {
+      text = readText(file);
+      if (/\.toml$/i.test(file.relativePath)) {
+        const parsed = extractCodexMcpCandidates(text);
+        candidates = parsed.candidates;
+        if (parsed.hasProviderPlugins) warnings.push(`${file.relativePath}: provider plugin package metadata was detected; only compatible MCP server declarations are imported.`);
+      } else {
+        root = parseJsonText(text, file.relativePath);
+        candidates = extractMcpCandidates(root);
+      }
+    } catch { continue; }
+    for (const candidate of candidates) {
       const id = candidate.id.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 120) || `server_${mcpServers.length + 1}`;
       const notices: SetupSecretNotice[] = [];
       const redacted = redactSetupValue({ ...(candidate.raw || {}), id }, '', notices, id) as Record<string, unknown>;
@@ -1225,5 +1332,6 @@ export function parseSetupImport(context: AdapterContext): SetupAdapterResult {
     inputDigest: context.inputDigest,
     importedAt: new Date().toISOString(),
   };
+  if (scope === 'mcp' && !mcpServers.length) warnings.push('No supported MCP server declarations were found. Provider-native plugin packages are not executable Prometheus MCP servers and were not copied.');
   return { adapter: 'setup-config', provider, setup: { source, mcpServers, files, secretNotices, warnings } };
 }

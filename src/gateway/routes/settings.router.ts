@@ -2,6 +2,7 @@
 // Settings, Credentials, Model, Auth, Memory, Hooks routes
 import { Router } from 'express';
 import { getConfig } from '../../config/config';
+import { getWorkspaceToolMode, normalizeWorkspaceToolMode } from '../../runtime/workspace-tool-mode.js';
 import { mainChatRoutePatch, parseMainChatRoute, preserveLiveMainChatRoute } from '../../config/main-chat-route.js';
 import { getVault } from '../../security/vault';
 import { getMCPManager } from '../mcp-manager';
@@ -72,7 +73,23 @@ import {
   serializePrometheusQuestionForClient,
   submitPrometheusQuestionResponse,
 } from '../prometheus-questions';
-import { flushSession, touchSession } from '../session';
+import {
+  flushSession,
+  touchSession,
+  flushAllSessions,
+  flushPendingSessionWrites,
+  flushPendingChatAuditWrites,
+  getChatAuditPersistenceStatus,
+  getSessionPersistenceStatus,
+} from '../session';
+import { listLiveRuntimes, getLiveRuntimePersistenceStatus } from '../live-runtime-registry';
+import {
+  collectUserStateRoots,
+  evaluateUpdatePreflight,
+  readCanonicalUpdateStatus,
+  requestCanonicalUpdate,
+  waitForCanonicalUpdateStatus,
+} from '../../update/canonical-updater';
 import {
   AutoSettleSettingsError,
   getAutoSettleClientSettings,
@@ -85,6 +102,31 @@ import {
 export const router = Router();
 
 const CONFIG_DIR_PATH = getConfig().getConfigDir();
+
+function getUpdateStateRoot(): string {
+  return path.resolve(String(process.env.PROMETHEUS_DATA_DIR || path.dirname(CONFIG_DIR_PATH)));
+}
+
+function getUpdatePreflight() {
+  const runtimes = listLiveRuntimes();
+  const activeOperations = runtimes.filter((runtime) => runtime.status === 'running' || runtime.status === 'interrupted').length;
+  const sessions = getSessionPersistenceStatus();
+  const chatAudit = getChatAuditPersistenceStatus();
+  const runtimePersistence = getLiveRuntimePersistenceStatus();
+  const pendingWrites = Number(sessions.pending || 0)
+    + Number(chatAudit.pendingBatches || 0)
+    + Number(chatAudit.pendingRecords || 0)
+    + Number(runtimePersistence.pendingEvents || 0);
+  const persistenceBusy = Boolean(
+    sessions.active || sessions.scheduled
+    || chatAudit.active || chatAudit.scheduled
+    || runtimePersistence.active || runtimePersistence.scheduled || runtimePersistence.ledgerDirty,
+  );
+  return {
+    ...evaluateUpdatePreflight({ activeOperations, pendingWrites, persistenceBusy }),
+    persistence: { sessions, chatAudit, runtimePersistence },
+  };
+}
 
 // Start the 30-minute keep-alive immediately so tokens stay fresh even when
 // the user isn't actively chatting (prevents ~36-hour refresh-token expiry).
@@ -1650,10 +1692,13 @@ router.get('/api/settings/security', requireGatewayAuth, (_req, res) => {
   const cfg = getConfig().getConfig() as any;
   const shell = cfg?.tools?.permissions?.shell || {};
   const mode = shell.approval_mode === 'lite' ? 'lite' : 'default';
+  const workspaceMode = getWorkspaceToolMode(cfg);
   res.json({
     success: true,
     toolPermissionMode: mode,
     terminalPermissionMode: mode,
+    workspaceToolMode: workspaceMode,
+    workspaceMode,
     hardBlockedPatterns: Array.isArray(shell.blocked_patterns) ? shell.blocked_patterns : [],
     commandPermissions: listCommandPermissionGrants(),
   });
@@ -1662,12 +1707,19 @@ router.get('/api/settings/security', requireGatewayAuth, (_req, res) => {
 router.post('/api/settings/security', requireGatewayAuth, (req, res) => {
   try {
     const requestedMode = req.body?.toolPermissionMode ?? req.body?.terminalPermissionMode;
-    const mode = requestedMode === 'lite' ? 'lite' : 'default';
     const cm = getConfig();
     const current = cm.getConfig() as any;
+    const mode = requestedMode === undefined
+      ? (current?.tools?.permissions?.shell?.approval_mode === 'lite' ? 'lite' : 'default')
+      : (requestedMode === 'lite' ? 'lite' : 'default');
+    const requestedWorkspaceMode = req.body?.workspaceToolMode ?? req.body?.workspaceMode;
+    const workspaceMode = requestedWorkspaceMode === undefined
+      ? getWorkspaceToolMode(current)
+      : normalizeWorkspaceToolMode(requestedWorkspaceMode);
     cm.updateConfig({
       tools: {
         ...(current.tools || {}),
+        workspace_mode: workspaceMode,
         permissions: {
           ...(current.tools?.permissions || {}),
           shell: {
@@ -1681,9 +1733,9 @@ router.post('/api/settings/security', requireGatewayAuth, (req, res) => {
       actionType: 'approval_resolved',
       toolName: 'settings_security',
       approvalStatus: 'auto_allowed',
-      resultSummary: `Tool permission mode set to ${mode}`,
+      resultSummary: `Tool permission mode set to ${mode}; workspace tool mode set to ${workspaceMode}`,
     });
-    res.json({ success: true, toolPermissionMode: mode, terminalPermissionMode: mode });
+    res.json({ success: true, toolPermissionMode: mode, terminalPermissionMode: mode, workspaceToolMode: workspaceMode, workspaceMode });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message || 'Failed to save security settings' });
   }
@@ -1794,6 +1846,97 @@ router.post('/api/questions/:id/cancel', requireGatewayAuth, (req, res) => {
 });
 
 // ─── Lifecycle / Restart ──────────────────────────────────────────────────────────
+
+// The gateway never downloads, installs, pulls, or shells out for an update.
+// It is only a local authenticated request broker for the trusted packaged
+// Electron main process. The preflight intentionally refuses to cross an
+// active runtime or an un-drained persistence queue.
+router.get('/api/lifecycle/update', requireGatewayAuth, (_req, res) => {
+  res.json({
+    ok: true,
+    status: readCanonicalUpdateStatus(CONFIG_DIR_PATH, {
+      supported: process.env.PROMETHEUS_ELECTRON_MANAGED === '1'
+        && process.env.PROMETHEUS_PUBLIC_BUILD === '1',
+      currentVersion: String(process.env.PROMETHEUS_VERSION || '0.0.0'),
+    }),
+    preflight: getUpdatePreflight(),
+  });
+});
+
+router.post('/api/lifecycle/update', requireGatewayAuth, async (req, res) => {
+  const action = String(req.body?.action || 'check').trim().toLowerCase();
+  if (action !== 'check' && action !== 'apply') {
+    res.status(400).json({ ok: false, error: 'Use update action check or apply.' });
+    return;
+  }
+  if (action === 'apply' && req.body?.confirm !== true) {
+    res.status(400).json({ ok: false, error: 'Explicit confirmation is required before installing an update.' });
+    return;
+  }
+
+  let preflight = getUpdatePreflight();
+  if (action === 'apply' && preflight.activeOperations > 0) {
+    res.status(409).json({
+      ok: false,
+      error: 'Update is blocked until active work and persistence writes have drained.',
+      code: 'preflight_blocked',
+      preflight,
+    });
+    return;
+  }
+
+  // Flush queues before the request is handed to Electron. This does not
+  // cancel active work; active work was rejected above and the Electron main
+  // process performs a second strict preflight at install time.
+  if (action === 'apply') {
+    try {
+      flushAllSessions();
+      await Promise.all([flushPendingSessionWrites(), flushPendingChatAuditWrites()]);
+    } catch {
+      res.status(500).json({ ok: false, error: 'Prometheus could not flush durable state safely; no update was queued.', code: 'persistence_flush_failed' });
+      return;
+    }
+    preflight = getUpdatePreflight();
+    if (!preflight.ready) {
+      res.status(409).json({
+        ok: false,
+        error: 'Update is blocked until durable Prometheus writes have drained.',
+        code: 'preflight_blocked',
+        preflight,
+      });
+      return;
+    }
+  }
+
+  const stateRoots = collectUserStateRoots(
+    getUpdateStateRoot(),
+    getConfig().getConfig(),
+  );
+  const queued = requestCanonicalUpdate(CONFIG_DIR_PATH, {
+    action,
+    source: String(req.body?.source || 'gateway').slice(0, 64),
+    confirmed: req.body?.confirm === true,
+    stateRoots,
+  });
+  if (!queued.ok) {
+    res.status(queued.code === 'busy' ? 409 : 503).json({ ok: false, error: queued.message, code: queued.code });
+    return;
+  }
+
+  if (action === 'check') {
+    const status = await waitForCanonicalUpdateStatus(CONFIG_DIR_PATH, queued.request.requestId, 4500);
+    res.json({ ok: true, accepted: true, requestId: queued.request.requestId, status, preflight });
+    return;
+  }
+
+  res.status(202).json({
+    ok: true,
+    accepted: true,
+    requestId: queued.request.requestId,
+    message: 'Safe update accepted. Prometheus will verify, back up state, drain, install, relaunch, and validate before reporting success.',
+    preflight,
+  });
+});
 
 router.post('/api/lifecycle/restart', requireGatewayAuth, (req, res) => {
   const rebuild = req.body?.rebuild === true;
@@ -2186,8 +2329,13 @@ router.post('/api/settings/bulk', async (req, res) => {
 
     if (body.security) {
       const mode = body.security.terminalPermissionMode === 'lite' ? 'lite' : 'default';
+      const requestedWorkspaceMode = body.security.workspaceToolMode ?? body.security.workspaceMode;
+      const workspaceMode = requestedWorkspaceMode === undefined
+        ? getWorkspaceToolMode(current)
+        : normalizeWorkspaceToolMode(requestedWorkspaceMode);
       updates.tools = {
         ...((updates.tools || current.tools || {})),
+        workspace_mode: workspaceMode,
         permissions: {
           ...((updates.tools?.permissions || current.tools?.permissions || {})),
           shell: {

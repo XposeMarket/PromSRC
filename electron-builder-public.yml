@@ -129,11 +129,11 @@ win:
       arch:
         - x64
   icon: assets/Prometheus.ico
-  verifyUpdateCodeSignature: false
-  # Disabled to avoid electron-builder's winCodeSign symlink extraction failure
-  # on normal Windows shells. The afterPack hook stamps Prometheus.ico into the
-  # exe directly with rcedit so shell/taskbar icons do not fall back to Electron.
-  signAndEditExecutable: false
+  verifyUpdateCodeSignature: true
+  # Public installers must be signed so the updater can verify downloaded
+  # packages before installation. Release builds provide the signing
+  # certificate and password through the release environment.
+  signAndEditExecutable: true
 
 nsis:
   oneClick: false

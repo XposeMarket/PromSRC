@@ -4,20 +4,20 @@
 
 import { markClientPerformance } from '../performance.js';
 
-import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v263-2026-08-09-directed-chat-shield';
+import { createMobileShell, invalidateMobileDrawerSessions } from './mobile-shell.js?v=pm-v288-2026-08-11-gateway-context-visibility';
 import {
   renderChatPage, renderVoicePage, renderSchedulePage, renderScheduleEditorPage,
   renderTeamsPage, renderTeamDetailPage, renderPlaceholderPage,
   renderTasksPage, renderMorePage, renderProposalsPage,
   renderHubPage, renderSubagentsPage, renderSubagentDetailPage, renderSubagentChatPage,
-} from './mobile-pages.js?v=pm-v263-2026-08-09-directed-chat-shield';
+} from './mobile-pages.js?v=pm-v287-2026-08-11-context-chevron';
 import { renderMobileGatewaysPage } from './mobile-gateways-page.js';
 import {
   getDeviceToken,
   loadMobileSessionGroups,
   prefetchMobileSecondaryPages,
   searchMobileChatSessions,
-} from './mobile-api.js?v=pm-v263-2026-08-09-directed-chat-shield';
+} from './mobile-api.js?v=pm-v266-2026-08-11-new-project-popover';
 import {
   loadMobileGatewaySessionGroups,
   searchMobileGatewaySessions,
@@ -25,6 +25,7 @@ import {
   bindMobileSessionTarget,
   hasAnyGatewayCredential,
   isMobileGatewayCatalogEnabled,
+  getPendingGatewayPair,
 } from './mobile-gateway-catalog.js';
 import { connectWS, ensureWSConnected } from '../ws.js';
 
@@ -33,7 +34,7 @@ let mobileRenderGeneration = 0;
 
 function loadMobilePairingPage() {
   if (!mobilePairingPagePromise) {
-    mobilePairingPagePromise = import('./mobile-pairing-page.js?v=pm-v260-2026-08-09-mobile-theme-palette')
+    mobilePairingPagePromise = import('./mobile-pairing-page.js?v=pm-v266-2026-08-11-new-project-popover')
       .catch((error) => {
         mobilePairingPagePromise = null;
         throw error;
@@ -150,9 +151,20 @@ export function mobileDeepLink(route = 'chat', arg = '', extra = [], opts = {}) 
 export function mobileNavigate(route) {
   if (!route) return;
   if (!route.startsWith('#')) route = '#' + (route.replace(/^\//, '').startsWith('mobile') ? route.replace(/^\//, '') : 'mobile/' + route.replace(/^\//, ''));
+  // A pair URL is a one-time transport envelope. Once the pairing page leaves
+  // the pair route, remove it so a successful approval cannot be replayed by
+  // the router on the next render. Keep all unrelated PWA query state.
+  if (!/^#mobile\/pair(?:\/|$)/.test(route)) {
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('pair')) {
+        url.searchParams.delete('pair');
+        history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+      }
+    } catch {}
+  }
   // Preserve the `?source=pwa` query so an installed PWA never falls out of
-  // PWA-launch mode through internal navigation. Other query params are kept
-  // as-is — we only touch the hash.
+  // PWA-launch mode through internal navigation.
   if (window.location.hash === route) {
     safeRender();
   } else {
@@ -220,6 +232,7 @@ function render() {
   }
 
   if (!isMobileRoute()) {
+    window.__pmMobilePairingActive = false;
     document.body.classList.remove('pm-mobile-active', 'pm-mobile-document-scroll', 'pm-mobile-overlay-open');
     const root = document.getElementById('mobile-root');
     if (root) { root.hidden = true; root.innerHTML = ''; }
@@ -249,6 +262,8 @@ function render() {
 
   let { page, arg, extra } = mobileRouteFromLocation();
   const pairCode = _pairCodeFromUrl();
+  const scannerPairCode = page === 'pair' && arg === 'add' ? getPendingGatewayPair() : '';
+  const activePairCode = pairCode || scannerPairCode;
   const gatewayCatalogEnabled = isMobileGatewayCatalogEnabled();
 
   // The current legacy API helpers are intentionally single-origin. Clear a
@@ -269,6 +284,7 @@ function render() {
   //     unpaired phone can never accidentally hit /api endpoints.
   if (pairCode) page = 'pair';
   else if (!getDeviceToken() && !hasAnyGatewayCredential() && page !== 'pair') page = 'pair';
+  window.__pmMobilePairingActive = page === 'pair';
 
   // The desktop Settings modal can be opened on top of any mobile page (via the
   // header gear) without changing the route. Any actual navigation to a
@@ -354,7 +370,7 @@ function render() {
         // A route change can happen while the pairing-only chunk is loading.
         // Do not let a late import resolution repaint a newer mobile route.
         if (renderGeneration !== mobileRenderGeneration) return undefined;
-        return renderPairPage(slot, { code: pairCode, addMode: arg === 'add', navigate: mobileNavigate });
+        return renderPairPage(slot, { code: activePairCode, addMode: arg === 'add', navigate: mobileNavigate });
       });
     case 'gateways': return renderMobileGatewaysPage(slot, { navigate: mobileNavigate });
     case 'chat':      return renderChatPage(slot, { navigate: mobileNavigate, sessionId: arg ? decodeURIComponent(arg) : null, voiceRoomTranscript: String(extra?.[0] || '').toLowerCase() === 'voice-room' });
@@ -425,33 +441,6 @@ function renderMobileBootError(err) {
 }
 
 function safeRender() {
-  const finishPrometheusOneSplash = () => {
-    const splash = document.getElementById('pm-one-splash');
-    if (!splash || splash.dataset.dismissScheduled === '1') return;
-    splash.dataset.dismissScheduled = '1';
-    if (window.__PM_ONE_SPLASH_FALLBACK) {
-      window.clearTimeout(window.__PM_ONE_SPLASH_FALLBACK);
-      window.__PM_ONE_SPLASH_FALLBACK = null;
-    }
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
-    const dismiss = () => {
-      if (window.__PM_ONE_SPLASH_DISMISS_TIMER) {
-        window.clearTimeout(window.__PM_ONE_SPLASH_DISMISS_TIMER);
-        window.__PM_ONE_SPLASH_DISMISS_TIMER = null;
-      }
-      splash.classList.add('is-leaving');
-      window.setTimeout(() => {
-        splash.remove();
-        if (window.__PM_ONE_SPLASH_DISMISS === dismiss) window.__PM_ONE_SPLASH_DISMISS = null;
-      }, reducedMotion ? 120 : 360);
-    };
-    window.__PM_ONE_SPLASH_DISMISS = dismiss;
-    if (splash.dataset.skipRequested === '1') {
-      dismiss();
-    } else {
-      window.__PM_ONE_SPLASH_DISMISS_TIMER = window.setTimeout(dismiss, reducedMotion ? 80 : 1900);
-    }
-  };
   try {
     const result = render();
     if (result && typeof result.catch === 'function') {
@@ -460,7 +449,6 @@ function safeRender() {
         renderMobileBootError(err);
       });
     }
-    finishPrometheusOneSplash();
     return true;
   } catch (err) {
     console.error('[mobile] render failed:', err);

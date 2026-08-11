@@ -18,6 +18,37 @@ export interface CodingWorkspaceSession {
   previewUrl?: string;
 }
 
+export interface CodingRepositoryActivity {
+  hash: string;
+  shortHash: string;
+  author: string;
+  message: string;
+  at: string;
+}
+
+export interface CodingRepositorySnapshot {
+  root: string;
+  connected: boolean;
+  name: string;
+  branch?: string;
+  defaultBranch?: string;
+  remoteName?: string;
+  remoteUrl?: string;
+  repoFullName?: string;
+  provider?: string;
+  htmlUrl?: string;
+  cloneUrl?: string;
+  statusText: string;
+  dirtyFiles: string[];
+  stagedFiles: number;
+  unstagedFiles: number;
+  untrackedFiles: number;
+  ahead: number;
+  behind: number;
+  commitCount: number;
+  commits: CodingRepositoryActivity[];
+}
+
 function runGit(root: string, args: string[], timeout = 5000): string {
   try {
     return execFileSync('git', args, {
@@ -30,6 +61,50 @@ function runGit(root: string, args: string[], timeout = 5000): string {
   } catch {
     return '';
   }
+}
+
+function normalizeGitRemote(remote: string): { remoteUrl?: string; repoFullName?: string; provider?: string; htmlUrl?: string; cloneUrl?: string } {
+  const value = String(remote || '').trim();
+  if (!value) return {};
+  const normalized = value.replace(/^git\+/, '').replace(/\.git(?:#.*)?$/i, '');
+  const match = normalized.match(/^(?:https?:\/\/|ssh:\/\/git@|git@)([^/:]+)[/:](.+)$/i);
+  if (!match) return { remoteUrl: value };
+  const host = match[1].toLowerCase();
+  const repoFullName = match[2].replace(/^\/+/, '').replace(/\.git$/i, '');
+  const provider = host.includes('github') ? 'GitHub' : host.includes('gitlab') ? 'GitLab' : host.includes('bitbucket') ? 'Bitbucket' : host;
+  const htmlUrl = host.includes('github') || host.includes('gitlab') || host.includes('bitbucket')
+    ? `https://${host}/${repoFullName}`
+    : undefined;
+  return {
+    remoteUrl: value,
+    repoFullName,
+    provider,
+    htmlUrl,
+    cloneUrl: htmlUrl ? `${htmlUrl}.git` : value,
+  };
+}
+
+function parseGitStatusLines(root: string): { dirtyFiles: string[]; stagedFiles: number; unstagedFiles: number; untrackedFiles: number } {
+  const lines = runGit(root, ['status', '--porcelain=v1', '--untracked-files=all'])
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+$/, ''))
+    .filter(Boolean);
+  let stagedFiles = 0;
+  let unstagedFiles = 0;
+  let untrackedFiles = 0;
+  const dirtyFiles: string[] = [];
+  for (const line of lines) {
+    const indexStatus = line.slice(0, 1);
+    const worktreeStatus = line.slice(1, 2);
+    const displayPath = line.slice(3).trim();
+    if (indexStatus === '?' && worktreeStatus === '?') untrackedFiles += 1;
+    else {
+      if (indexStatus && indexStatus !== ' ') stagedFiles += 1;
+      if (worktreeStatus && worktreeStatus !== ' ') unstagedFiles += 1;
+    }
+    if (displayPath) dirtyFiles.push(displayPath);
+  }
+  return { dirtyFiles: Array.from(new Set(dirtyFiles)), stagedFiles, unstagedFiles, untrackedFiles };
 }
 
 function readJson(filePath: string): any | null {
@@ -132,5 +207,58 @@ export function gitCurrentStatus(root: string): { branch?: string; dirtyFiles: s
     branch: runGit(root, ['branch', '--show-current'], 5000) || undefined,
     dirtyFiles: getDirtyFiles(root),
     statusText: runGit(root, ['status', '--short', '--branch'], 5000),
+  };
+}
+
+export function getCodingRepositorySnapshot(rawRoot?: string): CodingRepositorySnapshot {
+  const requestedRoot = resolveCodingRoot(rawRoot);
+  const gitRoot = runGit(requestedRoot, ['rev-parse', '--show-toplevel'], 5000);
+  const root = path.resolve(gitRoot || requestedRoot);
+  const name = path.basename(root) || 'Workspace';
+  const status = parseGitStatusLines(root);
+  const statusText = runGit(root, ['status', '--short', '--branch'], 5000);
+  const branch = runGit(root, ['branch', '--show-current'], 5000) || undefined;
+  const remoteName = runGit(root, ['remote'], 5000).split(/\r?\n/).map((item) => item.trim()).find(Boolean) || undefined;
+  const remote = remoteName ? normalizeGitRemote(runGit(root, ['remote', 'get-url', remoteName], 5000)) : {};
+  const defaultBranch = runGit(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], 5000)
+    .replace(/^origin\//, '') || undefined;
+  const upstreamCounts = runGit(root, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], 5000)
+    .split(/\s+/)
+    .map((value) => Number(value));
+  const ahead = Number.isFinite(upstreamCounts[0]) ? Math.max(0, upstreamCounts[0]) : 0;
+  const behind = Number.isFinite(upstreamCounts[1]) ? Math.max(0, upstreamCounts[1]) : 0;
+  const commitCount = Number(runGit(root, ['rev-list', '--count', '--all'], 5000)) || 0;
+  const commits = runGit(root, ['log', '-8', '--date=iso-strict', '--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s'], 5000)
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const [hashValue, shortHash, author, at, ...messageParts] = line.split('\x1f');
+      return {
+        hash: String(hashValue || ''),
+        shortHash: String(shortHash || ''),
+        author: String(author || ''),
+        at: String(at || ''),
+        message: messageParts.join('\x1f').trim(),
+      };
+    })
+    .filter((item) => item.hash && item.message);
+
+  return {
+    root,
+    connected: Boolean(gitRoot),
+    name,
+    branch,
+    defaultBranch,
+    remoteName,
+    ...remote,
+    statusText,
+    dirtyFiles: status.dirtyFiles,
+    stagedFiles: status.stagedFiles,
+    unstagedFiles: status.unstagedFiles,
+    untrackedFiles: status.untrackedFiles,
+    ahead,
+    behind,
+    commitCount,
+    commits,
   };
 }

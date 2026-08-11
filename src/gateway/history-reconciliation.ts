@@ -3,6 +3,8 @@ export function historyMessageMergeKey(msg: any): string {
   const role = msg?.role === 'assistant' || msg?.role === 'ai' ? 'assistant' : msg?.role === 'user' ? 'user' : '';
   const messageId = String(msg?.messageId || msg?.id || '').trim();
   if (role && messageId) return `${role}|id:${messageId}`;
+  const clientRequestId = String(msg?.clientRequestId || msg?._clientRequestId || '').trim();
+  if (role && clientRequestId) return `${role}|client:${clientRequestId}`;
   const content = String(msg?.content || '').replace(/\s+/g, ' ').trim().slice(0, 500);
   if (!role || !content) return '';
   const eventId = String(msg?.voiceInterruptionEventId || msg?.eventId || '').trim();

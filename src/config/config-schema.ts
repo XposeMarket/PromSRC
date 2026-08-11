@@ -360,6 +360,7 @@ export const PrometheusConfigSchema = z.object({
 
   tools: z.object({
     enabled:     z.array(z.string()),
+    workspace_mode: z.enum(['prometheus', 'terminal-first']).optional(),
     permissions: ToolPermissionsSchema,
   }),
 

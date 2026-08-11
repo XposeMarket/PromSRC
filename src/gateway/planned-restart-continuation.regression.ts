@@ -101,6 +101,48 @@ async function main(): Promise<void> {
       'BOOT must not append a terminal restart acknowledgement to a resumable foreground thread',
     );
 
+    const quickSessionId = 'quick_manual_restart_session';
+    const quickRuntimeId = runtimes.registerLiveRuntime({
+      kind: 'main_chat',
+      label: 'quick manual restart',
+      sessionId: quickSessionId,
+      recoveryPolicy: 'mark_interrupted',
+      recoveryData: { message: 'restart the gateway pls' },
+    });
+    session.addMessage(quickSessionId, {
+      role: 'user',
+      content: 'restart the gateway pls',
+      timestamp: Date.now(),
+    });
+    runtimes.updateLiveRuntimeCheckpoint(quickRuntimeId, {
+      event: 'tool_call',
+      toolName: 'gateway_restart',
+      message: 'restart tool accepted',
+    });
+    recovery.prepareActiveRuntimesForGatewayShutdown('gateway_restart');
+    runtimes.finishLiveRuntime(quickRuntimeId);
+    runtimes.markDurableRuntimeRecovered(quickRuntimeId, 'interrupted', { recovery: 'chat_checkpointed' });
+    lifecycle.writeRestartContext({
+      reason: 'manual',
+      timestamp: Date.now(),
+      previousSessionId: quickSessionId,
+      quickRestart: true,
+      summary: 'quick manual restart',
+    });
+    const quickBootResult = await boot.runBootMd(root, async () => {
+      throw new Error('plain manual restart must not retrigger the original model turn');
+    });
+    assert.equal(quickBootResult.status, 'ran');
+    assert.deepEqual(
+      quickBootResult.resumableForegroundRuntimeIds || [],
+      [],
+      'a plain manual restart must not be queued for foreground replay',
+    );
+    assert.ok(
+      session.getHistory(quickSessionId).some((message) => message.content === 'Restarted. Prometheus is back online.'),
+      'plain manual restart should persist a deterministic post-boot acknowledgement',
+    );
+
     console.log('planned restart foreground continuation regression: ok');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

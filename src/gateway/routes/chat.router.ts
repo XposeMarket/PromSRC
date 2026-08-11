@@ -2402,7 +2402,7 @@ async function handleChat(
    * sized bubble splitting. Errors thrown by this callback are swallowed.
    */
   callerOnToken?: (token: string) => void,
-  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
+  runtimeOptions?: { directSubagentChat?: boolean; syntheticThreadSupervisionReview?: boolean; supervisionLoop?: boolean; silentSupervisionLoop?: boolean; supervisionOwnerSessionId?: string; supervisionId?: string; excludedSkillIds?: string[]; forcedSkillIds?: string[]; instructionCallerRequirements?: string[]; timingRecorder?: TurnTimingRecorder; turnRouteSnapshot?: TurnRouteSnapshot; promptMemoryMode?: 'full' | 'compact'; runtimeId?: string; internalWatchContext?: { watchId: string; actionPolicy: 'review_only' | 'recover_same_run' | 'full_rerun_allowed'; targetTaskId?: string; delivery: 'follow_up' | 'live_steer' } },
 ): Promise<HandleChatResult> {
   const latencyStartAt = Date.now();
   const turnTiming = runtimeOptions?.timingRecorder || createTurnTimingRecorder(sessionId, {
@@ -6941,13 +6941,24 @@ RULES:
 	        onToken: emitStreamToken,
 	        onThinking: (chunk: string) => emitThinkingToken(chunk, 'thinking'),
 	        onReasoningSummary: (chunk: string) => emitThinkingToken(chunk, 'reasoning_summary'),
-	        onModelEvent: emitModelStreamEvent,
+        onModelEvent: emitModelStreamEvent,
         onWorkerStage: (stage: string, fields?: Record<string, number | string | boolean>) => {
-          turnTiming.mark(`model_worker_${stage}`, {
-            provider: generationOverride.providerId,
-            model: generationOverride.model,
-            ...fields,
-          });
+          const activeRuntimeId = String(runtimeOptions?.runtimeId || '').trim();
+          if (activeRuntimeId && (stage === 'provider_started' || stage === 'provider_heartbeat')) {
+            markLiveRuntimeProgress(activeRuntimeId, {
+              event: stage,
+              phase: 'provider_request',
+            });
+          }
+          // Heartbeats are intentionally not written to turn-timing logs; they
+          // are liveness signals, not user-visible work boundaries.
+          if (stage !== 'provider_heartbeat') {
+            turnTiming.mark(`model_worker_${stage}`, {
+              provider: generationOverride.providerId,
+              model: generationOverride.model,
+              ...fields,
+            });
+          }
         },
 	        abortSignal: abortSignal?.signal,
 	        usageContext: {
@@ -9999,6 +10010,9 @@ async function runInteractiveTurn(
     role: 'user' as const,
     content: message,
     timestamp: Date.now(),
+    ...(normalizeClientRequestId(requestMeta?.clientRequestId)
+      ? { clientRequestId: normalizeClientRequestId(requestMeta?.clientRequestId) }
+      : {}),
     channel: turnOrigin.channel,
     channelLabel: turnOrigin.label || turnOrigin.channel,
     origin: turnOrigin,
@@ -10355,6 +10369,7 @@ async function runInteractiveTurn(
         timingRecorder: turnTiming,
         turnRouteSnapshot,
         promptMemoryMode: flags?.promptMemoryMode,
+        runtimeId: flags?.runtimeId,
       },
   ));
   turnTiming.mark('handle_chat_done');
@@ -10740,7 +10755,7 @@ export function retriggerInterruptedMainChat(runtime: InterruptedMainChatRuntime
     undefined,
     undefined,
     undefined,
-    { syntheticRestartRecovery: true, preAcquiredTurnLease: admissionLease },
+    { syntheticRestartRecovery: true, preAcquiredTurnLease: admissionLease, runtimeId },
     origin,
     { clientRequestId: runtime.clientRequestId },
   ).catch((err: any) => {

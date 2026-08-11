@@ -547,13 +547,13 @@
   color: var(--err);
 }
 .plugins-loading-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   margin-bottom: 14px;
 }
 .plugins-loading-grid span {
-  height: 150px;
+  height: 82px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: linear-gradient(100deg, var(--panel-2) 30%, color-mix(in srgb, var(--text) 8%, var(--panel-2)) 50%, var(--panel-2) 70%);
@@ -562,15 +562,49 @@
 }
 @keyframes plugins-skeleton { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 .plugins-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.plugin-letter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.plugin-letter-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--line-strong);
+}
+.plugin-letter-label {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.plugin-letter-count {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+.plugin-letter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .plugin-card {
   min-width: 0;
-  min-height: 168px;
-  align-items: flex-start;
-  padding: 14px;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: center;
+  padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--panel-2);
@@ -587,9 +621,27 @@
 .plugin-card-top {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  width: 100%;
+  justify-content: flex-start;
+  grid-column: 1;
+  grid-row: 1 / -1;
+  width: 42px;
   min-height: 38px;
+}
+.plugin-card-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  grid-column: 2;
+  grid-row: 1 / -1;
+  min-width: 0;
+  width: 100%;
+}
+.plugin-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
 }
 .plugin-card-badge {
   padding: 2px 5px;
@@ -599,10 +651,13 @@
   font-size: 8px;
   font-weight: 800;
   letter-spacing: .05em;
+  flex-shrink: 0;
 }
 .plugin-card-name {
-  width: 100%;
-  margin-top: 11px;
+  width: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-top: 0;
   overflow: hidden;
   color: var(--text);
   font-size: 13px;
@@ -621,8 +676,8 @@
 .plugin-card-desc {
   display: -webkit-box;
   width: 100%;
-  min-height: 34px;
-  margin-top: 9px;
+  min-height: 0;
+  margin-top: 8px;
   overflow: hidden;
   color: var(--muted);
   font-size: 11px;
@@ -633,11 +688,15 @@
 .plugin-card-status {
   display: inline-flex;
   align-items: center;
+  grid-column: 3;
+  grid-row: 1 / -1;
+  align-self: center;
   gap: 5px;
-  margin-top: auto;
-  padding-top: 12px;
+  margin-top: 0;
+  padding-top: 0;
   font-size: 10.5px;
   font-weight: 800;
+  white-space: nowrap;
 }
 .plugin-status-dot {
   width: 6px;
@@ -748,8 +807,8 @@
   .plugins-page-toolbar { align-items: flex-start; flex-direction: column; gap: 7px; }
   .plugins-search-wrap { width: 100%; }
   .plugins-search-results { text-align: left; }
-  .plugins-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
-  .plugins-loading-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plugins-grid { gap: 14px; }
+  .plugins-loading-grid { gap: 8px; }
 }
 /* Connector detail view permission rows */
 .cv-perm-row {
@@ -3354,13 +3413,17 @@
 }
 .connector-logo-image {
   display: block;
-  width: calc(100% - 8px);
-  height: calc(100% - 8px);
-  padding: 4px;
   box-sizing: border-box;
   border-radius: 5px;
-  background: #fff;
-  object-fit: contain;
+  background: var(--connector-logo-color, currentColor);
+  -webkit-mask-image: var(--connector-logo-url);
+  mask-image: var(--connector-logo-url);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
 }
 .chat-file-pill .pill-thumb {
   width: 34px;

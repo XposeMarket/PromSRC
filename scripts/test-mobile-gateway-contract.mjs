@@ -84,7 +84,10 @@ function assertContractFiles() {
   assert.doesNotMatch(gatewaysPage, /Aggregated read-only view/);
   assert.doesNotMatch(pages, /pm-mobile-gateway-pills/);
   assert.match(pages, /pm-chat-settings-connections/);
-  assert.match(pages, /onPointerDownOutside/);
+  assert.match(pages, /installMobileContextPopoverGuard/);
+  assert.match(pages, /document\.addEventListener\('touchstart', onPointerDown, \{ capture: true, passive: false \}\)/);
+  assert.match(pages, /document\.addEventListener\('click', onClick, true\)/);
+  assert.match(pages, /pm-mobile-context-popover-open/);
   assert.match(pages, /requestedSession === MOBILE_CHAT_SESSION_ID \? `/, 'gateway selector must be limited to the new-chat draft');
   assert.match(pages, /requestedSession !== MOBILE_CHAT_SESSION_ID \|\| !targetChip/, 'existing chats must not open the gateway selector');
   assert.match(mobileApi, /_isCurrentMobileRequestTarget/);
@@ -104,6 +107,10 @@ function assertContractFiles() {
   assert.doesNotMatch(css, /pm-drawer-gateway-filter-inner|pm-drawer-gateway-filter-label/);
   assert.match(index, /Gateway Connections · Pair a phone/);
   assert.match(index, /vendor\/jsqr\/jsQR\.js/);
+  assert.doesNotMatch(index, /class="status-pill gateway-status-pill"/);
+  assert.doesNotMatch(index, /id="gateway-status-pill"/);
+  assert.match(css, /\.pm-header \.pm-online::before[\s\S]{0,120}display: none/);
+  assert.match(shell, /pm-model-badge/);
 }
 
 async function run() {

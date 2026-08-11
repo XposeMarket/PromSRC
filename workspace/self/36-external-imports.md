@@ -1,14 +1,15 @@
 # P11-37 External conversation and setup imports
 
 Status: implemented vertical slice, verified against the current Prometheus
-source tree on 2026-08-09.
+source tree on 2026-08-11.
 
 This feature has two deliberately separate flows in Settings → General:
 
 1. conversation imports create ordinary Prometheus web sessions that can be
    opened and continued with Prometheus models;
-2. MCP/setup imports create disabled MCP definitions plus an inactive,
-   reviewable setup snapshot.
+2. MCP integration imports create disabled MCP definitions plus a canonical,
+   redacted MCP snapshot. The General settings flow is MCP-only; the legacy
+   API can still explicitly request a broader inactive setup snapshot.
 
 Neither flow resumes a provider-owned source session. `sourceResume` is always
 `unsupported`; imported tool calls, tool results, reasoning, browser activity,
@@ -44,22 +45,30 @@ artifacts, and subagent activity are historical data only.
   `web-ui/src/styles/settings.css` provide General settings controls. Opening
   General automatically scans the bounded discovery endpoint and renders
   source-specific “Preview chats”, “Preview projects + chats”, and “Preview
-  setup” actions. Conversation previews show selectable chat rows newest
-  first; nothing is committed until the user checks chats and confirms. The
-  old Migration tab is a compatibility redirect to the General import cards.
+  MCP integrations” actions. Conversation previews show selectable chats
+  newest first, with top-level chats separated from expandable project groups;
+  nothing is committed until the user checks chats and confirms. Rollback and
+  deletion controls live in a separate compact import-history panel. The old
+  Migration tab is a compatibility redirect to the General import cards.
 
 ## Supported source boundary
 
 | Source | Current supported input | Explicit limitation |
 |---|---|---|
 | ChatGPT | Official `conversations.json` export, including a ZIP export and bounded non-JSON archive assets | No private ChatGPT web scraping; attachments without a stable relation are retained on the first conversation and called out in the preview |
-| Codex | Local JSON/JSONL/Markdown transcript, current Codex CLI/Desktop `rollout-*.jsonl` envelope (`session_meta`/`turn_context`/`response_item`/`event_msg`), or another app/server artifact that exposes readable message records | Local artifact parsing only; the Codex app-server `thread/resume` protocol is not invoked by import and source-session resume is not claimed. The large `~/.codex/sessions` corpus is split by date and then into deterministic batches capped at 200 MiB; each batch has its own preview, retry, confirmation, checkpoint, and rollback record. A single rollout still cannot exceed the staged safety limit. |
-| Claude / Claude Code | Local JSON/JSONL/Markdown transcript artifacts with readable role/content records | Private Claude UI APIs and UI automation are unsupported; private database fields are not guessed |
+| Codex | Local JSON/JSONL/Markdown transcript, current Codex CLI/Desktop `rollout-*.jsonl` envelope (`session_meta`/`turn_context`/`response_item`/`event_msg`), or another app/server artifact that exposes readable message records. Local `~/.codex/config.toml` `[mcp_servers]` declarations are also previewable as MCP integrations. | Local artifact parsing only; the Codex app-server `thread/resume` protocol is not invoked by import and source-session resume is not claimed. The large `~/.codex/sessions` corpus is split by date and then into deterministic batches capped at 200 MiB; each batch has its own preview, retry, confirmation, checkpoint, and rollback record. A single rollout still cannot exceed the staged safety limit. Codex `[plugins]` entries are package metadata, not Prometheus MCP servers, and are not installed or executed. |
+| Claude / Claude Code | Local JSON/JSONL/Markdown transcript artifacts with readable role/content records; local `.claude.json` or Claude Desktop MCP config when present | Private Claude UI APIs and UI automation are unsupported; private database fields are not guessed. MCP imports are disabled until each integration is authorized in Prometheus. |
 | Cursor | A copied local SQLite/VSCDB/SQLite3/DB file with a readable transcript table | The database is opened read-only; unknown/private schemas return an explicit unsupported result |
 | Hermes | Native `hermes sessions export <output>.jsonl` envelope JSONL (one session per line), plus generic local JSON/JSONL/Markdown transcript artifacts; setup folders can be reviewed separately | No Hermes gateway connection or source-runtime resume; native export preserves historical reasoning/tool records but does not make them executable |
 | OpenClaw / LocalClaw | Local JSON/JSONL/Markdown transcript artifacts; setup folders can be reviewed separately | No Gateway takeover, channel connection, pairing, browser-profile, or source-runtime resume |
 | Generic | JSON, JSONL, Markdown role/content records | Ambiguous records are imported only when a safe role/content mapping exists; otherwise the preview reports unsupported/skipped data |
 | Grok / Grok Build | Generic JSON/JSONL/Markdown when the user supplies a local export | No private Grok web API or UI automation adapter is claimed |
+
+ChatGPT/ChatGPT web connector/plugin configuration has no supported local
+export or documented local MCP manifest in this codebase. Discovery therefore
+does not scrape the ChatGPT web UI or private app databases; a user-supplied
+supported MCP JSON config can still be previewed through the generic setup
+parser.
 
 The adapter selection is data-driven. Automatic detection can identify known
 source names from the local label/path, but a known brand does not authorize
@@ -108,6 +117,13 @@ same explicit path metadata. Cursor remains session-only by default because
 its supported local database boundary is not safely inferable; an explicit
 project path in a supported record can still be grouped.
 
+The General settings UI defaults to automatic `projects` mode and does not
+expose format, source-account, or scope controls. The preview has two views:
+Projects contains expandable source-project groups with project-level and
+chat-level checkboxes; Chats contains only source top-level chats. Selecting a
+chat nested under a project creates the Prometheus project but commits only
+the selected chat IDs. Selecting a project checks all of its visible chats.
+
 Project creation is idempotent by owner/workspace/provider/account/source
 project identity. Retrying a job links to the existing project and does not
 duplicate sessions. Rollback deletes only projects created by that job and
@@ -133,12 +149,15 @@ an explicit selection is rejected, so an omitted UI payload cannot silently
 mass-import the staged corpus; retries reuse the selection already recorded on
 the job.
 
-Conversation commit is idempotent by its external binding. Setup commit backs
-up `mcp-servers.json`, imports only normalized non-secret metadata with
-`enabled=false`, skips conflicts unless the user opted into replacement, and
-writes memory/skill/instruction files into an inactive setup snapshot. It does
-not connect MCP servers, spawn commands, refresh OAuth, or copy provider
-credentials.
+Conversation commit is idempotent by its external binding. MCP integration
+commit backs up `mcp-servers.json`, imports only normalized non-secret metadata
+with `enabled=false`, skips conflicts by default, and writes a canonical
+redacted `mcp.json` plus manifest into the import snapshot. Credentials are
+represented as pending reauthorization notices; the flow does not connect MCP
+servers, spawn commands, refresh OAuth, or copy provider credentials. The
+legacy `setupScope=all` API path may write broader memory/skill/instruction
+files into an inactive snapshot, but the General settings integration path
+uses `setupScope=mcp` and does not copy them.
 
 Rollback removes only sessions whose binding points at the job, tombstones
 created resources, restores the setup backup when one exists, or deletes only
@@ -203,12 +222,16 @@ source digest and per-conversation provenance key.
   historical tool non-execution markers, archive resource mapping, setup secret
   redaction/reauthorization markers, disabled MCP commit, digest idempotency,
   rollback, and malformed-input retry.
+- The same regression covers Codex TOML `[mcp_servers]` parsing, provider
+  plugin metadata warnings, MCP-only scope, canonical redacted snapshots,
+  and secret non-leakage.
 - `npm run test:external-import-sidebar` covers the five source assets,
   provenance propagation, three desktop row render sites, accessibility and
   logo fallback, General placement, and the compatibility redirect.
 - `npm run test:external-import-discovery` covers bounded known-location
   detection, source-specific adapters, official-export filename detection,
-  absent-source handling, and the no-content/no-secret discovery contract.
+  Codex MCP configuration detection, absent-source handling, and the
+  no-content/no-secret discovery contract.
 - `npx tsc --noEmit --pretty false` is the focused backend type check when the
   repository-wide type surface is clean; unrelated dirty-worktree syntax or
   pre-existing type errors must be reported separately rather than hidden by

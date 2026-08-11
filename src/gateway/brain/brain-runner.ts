@@ -2201,7 +2201,7 @@ Choose card ideas from actual user-facing threads: things the user mentioned bri
 Prefer cards that feel useful, timely, personal to the user's recent work with Prometheus, and editable, not alarmist or awkward.
 Each card must:
 - have a short, natural title under 52 characters
-- have a clear body under 130 characters
+- have a clear body that is one short sentence under 90 characters
 - have a prompt that can be placed directly into the chat composer for the user to edit or send
 - avoid phrases like "Brain Thought", "thought file", "Dream should", "audit window", "evidence", "section", raw citations, file paths, and internal jargon in title/body/prompt
 - make the prompt grounded enough that Prometheus can verify current state before acting
@@ -2209,13 +2209,13 @@ Each card must:
 
 Good card style examples:
 - title: "Premium UI Microfeatures"
-  body: "Small polish passes could make Prometheus feel more finished without a huge rebuild."
+  body: "Small polish passes can make Prometheus feel more finished without a rebuild."
   prompt: "Let's dig into premium UI microfeatures for Prometheus based on the recent chat UI work. Review what changed recently, then suggest 5 small high-impact polish ideas and the best first one to implement."
 - title: "Prompt Cache Next Steps"
-  body: "A lightweight way to save winning prompts could turn repeated workflows into reusable tooling."
+  body: "A lightweight prompt cache could turn repeated workflows into reusable tooling."
   prompt: "Let's explore a Prompt Cache feature for Prometheus. Ground it in recent chats and current workspace artifacts, then sketch the smallest useful version and how it would show up in the UI."
 - title: "Opus 4.8 Showcase"
-  body: "The model upgrade momentum could become a cleaner demo or launch asset."
+  body: "The model upgrade could become a cleaner demo or launch asset."
   prompt: "Let's revisit the Opus 4.8 showcase idea from the recent Prometheus work. Check what exists now, then propose the cleanest next version or repair path."
 
 Use this exact fenced JSON shape and no extra keys:

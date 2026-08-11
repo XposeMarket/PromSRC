@@ -6,7 +6,7 @@ import {
   escapeHtml,
   renderMobileHeader,
   wireHeaderActions,
-} from './mobile-shell.js?v=pm-v256-2026-08-09-keyboard-bottom-anchor';
+} from './mobile-shell.js?v=pm-v288-2026-08-11-gateway-context-visibility';
 import {
   gatewayStatusLabel,
   getGatewayFilter,

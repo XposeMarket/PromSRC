@@ -161,6 +161,7 @@ export const ENDPOINTS = {
   // Coding workspace
   CODING_SESSION: '/api/coding/session',
   CODING_STATUS: '/api/coding/status',
+  CODING_REPOSITORY: '/api/coding/repository',
   CODING_DIFF: '/api/coding/diff',
   CODING_BRANCH: '/api/coding/branch',
   CODING_STAGE: '/api/coding/stage',

@@ -11,6 +11,7 @@
 .localclaw/vault/
 /.prometheus/
 /.prometheus-dev-*/
+/.prometheus-instances/
 /.agents/
 /.claude/
 /Brain/

@@ -8,6 +8,12 @@
 
 export type ImportJobKind = 'conversation' | 'setup';
 export type ConversationImportMode = 'sessions' | 'projects';
+/**
+ * The General settings integration flow is deliberately MCP-only. `all` is
+ * retained for the legacy setup migrator/API so existing callers can still
+ * stage a broader inactive snapshot when they explicitly request it.
+ */
+export type SetupImportScope = 'mcp' | 'all';
 
 export interface ImportSourceBatch {
   id: string;
@@ -158,6 +164,7 @@ export interface ImportPreview {
   sourceLabel: string;
   sourceDigest: string;
   conversationMode?: ConversationImportMode;
+  setupScope?: SetupImportScope;
   conversations: number;
   projects: number;
   messages: number;
@@ -175,6 +182,7 @@ export interface ImportPreview {
   conversationSummaries: Array<{
     id: string;
     title: string;
+    projectId?: string;
     projectName?: string;
     messages: number;
     events: number;
@@ -234,6 +242,7 @@ export interface ImportJob {
   workspacePath: string;
   kind: ImportJobKind;
   conversationMode?: ConversationImportMode;
+  setupScope?: SetupImportScope;
   status: ImportJobStatus;
   adapter: ImportAdapterId;
   provider: string;

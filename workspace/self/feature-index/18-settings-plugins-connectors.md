@@ -180,8 +180,14 @@ no-search-match states are rendered in the page itself.
 
 Bundled connector cards use the real brand SVG marks in
 `web-ui/src/assets/connectors/` (Simple Icons v16.28.0, copied into the
-generated public mirror), not generated monograms. Custom or unknown
+generated public mirror), not generated monograms. The marks are rendered
+with each connector manifest's brand color; official monochrome brands such
+as Vercel, X, Notion, and TikTok remain black by design. Custom or unknown
 connector-style plugins retain a text fallback when no bundled mark exists.
+
+The catalog is presented as vertical three-letter ranges (A–C, D–F, G–I,
+and so on). Search filters the same sorted source list, so only ranges with
+matching connectors remain visible and each range keeps its divider.
 
 Clicking a catalog item opens the shared `#connector-view` detail surface.
 Legacy OAuth/API-key/browser/local flows and the newer connection-attempt
@@ -205,6 +211,55 @@ The page chooses a setup flow based on the connector's declared auth type:
 | **Browser session** | Open the Prometheus browser window, sign in there, close/finish the site flow, then use Verify. |
 | **Local bridge** | Provide a local target such as an Obsidian vault and select its access mode. |
 | **MCP** | Configure the remote/local MCP server and authorize it when its strategy requires OAuth; configured servers are also visible in the Plugins page. |
+
+### OAuth connector audit — 2026-08-11
+
+The current connector page does not bundle provider OAuth client secrets. A
+deployment is a direct click-through only when its provider app client ID (and,
+where required, client secret) is already available from the deployment
+environment or the local vault. In that case **Connect** starts the
+host-owned connection attempt, opens the provider authorization URL, receives
+the code on a localhost callback, stores/refreshes tokens in the vault, then
+verifies account/resource identity before exposing tools. If the app is not
+configured, the managed attempt fails with a provider-app-not-configured
+state; **Advanced: Use your own OAuth App** is the setup path. That means this
+is not universally one-click for a fresh installation.
+
+The managed OAuth family and declared tool surface are:
+
+| Connector | Provider app / callback | Default managed scopes and tools |
+| --- | --- | --- |
+| **GA4** | Google desktop OAuth app; `http://localhost:19429/auth/callback/ga4` | Analytics read-only, identity, and OpenID; 3 tools: reports, realtime users, and property listing. |
+| **GitHub** | GitHub OAuth App; `http://localhost:19422/auth/callback/github`; PKCE | `repo`, `read:user`, `user:email`, `read:org`; 6 tools for repositories, issues, pull requests, issue/repository creation, and search. Read-only exposure is the default, while writes remain approval-gated. |
+| **Gmail** | Google desktop OAuth app; `http://localhost:19420/auth/callback/gmail` | Gmail read-only, identity, and OpenID; 6 tools for listing/getting/preparing/sending mail, profile, and labels. |
+| **Google Drive** | Google desktop OAuth app; `http://localhost:19425/auth/callback/google-drive` | Drive read-only, identity, and OpenID; 4 tools for listing, getting, reading, and searching files. |
+| **HubSpot** | HubSpot public app; `http://localhost:19426/auth/callback/hubspot` | Contact/company/deal read scopes; 5 CRM tools including contact create and search. |
+| **Notion** | Notion public integration; `http://localhost:19423/auth/callback/notion` | Provider-controlled workspace access with no scope query; 4 tools for search, page read/create, and database query. |
+| **Reddit** | Reddit web app; `http://localhost:19424/auth/callback/reddit` | `identity`, `read`, `history`; 4 tools for posts, search, post submission, and comments. |
+| **Salesforce** | Salesforce Connected App with nonce/ID-token configuration; `http://localhost:19427/auth/callback/salesforce` | `api`, `refresh_token`, `openid`; 4 tools for query, search, record create, and record read. |
+| **Slack** | Slack app with OAuth redirect; `http://localhost:19421/auth/callback/slack` | Channel/history/user/search/file read scopes; 4 tools for channels, sending messages, history, and search. |
+| **X / Twitter** | X Developer app with OAuth 2.0 User Context; default `http://localhost:8080/callback`, or the exact advanced redirect URI | 50 `x_api_*` tools covering identity, posts/search, likes/bookmarks, follows, lists, spaces/trends, DMs, usage, and generic API requests. X is a separate custom PKCE/browser/xurl path, not the nine-connector native bridge. |
+
+The tool contract is deliberately separate from authentication: a token can be
+present while a connection is still awaiting verification, or while tools are
+registered but not exposed. The managed descriptors default to read-only tool
+exposure; write/high-impact capabilities require the connection policy and
+approval path. The X connector's OAuth 2.0 user context is also unrelated to
+xAI/Grok model OAuth.
+
+The compatibility **Advanced** path is not identical to the managed descriptor
+path: it uses the legacy connector classes and their requested scopes. Today
+that makes Gmail, HubSpot, Reddit, and Slack's legacy fallback scopes broader
+than the managed read-only descriptor scopes (for example Gmail also declares
+send/modify there, and Slack includes `chat:write`). This is an audit finding
+to consolidate in a later hardening slice, not a claim that the managed default
+already grants those write tools.
+
+Vercel and Stripe are not OAuth connectors in the Plugins catalog. They use API
+keys; Vercel's setup accepts a Vercel token plus optional project/team IDs.
+Instagram, LinkedIn, and TikTok use the Prometheus browser-session login and
+Verify flow. Obsidian is a local vault bridge. These must not be described as
+provider OAuth merely because older runtime files share an OAuth base class.
 
 ### Managed connection-v2 pilot: GitHub
 

@@ -32,6 +32,10 @@ import {
   normalizeManifestToolCategory,
   getAutomationWorkflowPackForTool,
 } from '../runtime/tool-category-manifest';
+import {
+  filterToolDefinitionsForWorkspaceMode,
+  getWorkspaceToolMode,
+} from '../runtime/workspace-tool-mode';
 
 export interface BuildToolsDeps {
   getMCPManager: () => any;
@@ -1086,6 +1090,7 @@ function trimToolBuildCache(): void {
 export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<string>) {
   const { getMCPManager } = deps;
   const configSnapshot = getConfig().getConfig() as any;
+  const workspaceToolMode = getWorkspaceToolMode(configSnapshot);
   const isPublicBuild = getPublicBuildAllowedCategories(['prometheus_source_write'] as const).length === 0;
   const devToolsVisible = arePrometheusDevToolsVisible();
   const normalizedActiveCategories = new Set<string>();
@@ -1132,6 +1137,7 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
       `devTools:${devToolsVisible ? '1' : '0'}`,
       `subagent:${subagentMode ? '1' : '0'}`,
       `agentBuilder:${agentBuilderEnabled ? '1' : '0'}`,
+      `workspaceMode:${workspaceToolMode}`,
       `extensions:${extensionRevision}`,
       `mcp:${mcpToolSignature}`,
       `cats:${stableCategoryKey(normalizedActiveCategories)}`,
@@ -1646,7 +1652,10 @@ export function buildTools(deps: BuildToolsDeps, activatedCategories?: Set<strin
     if (!devToolsVisible && isPrometheusDevToolHidden(name)) return false;
     return true;
   });
-  const visibleToolDefs = runtimeToolDefs.filter((t: any) => !SCHEMA_HIDDEN_COMPAT_TOOL_NAMES.has(String(t?.function?.name || '')));
+  const visibleToolDefs = filterToolDefinitionsForWorkspaceMode(
+    runtimeToolDefs.filter((t: any) => !SCHEMA_HIDDEN_COMPAT_TOOL_NAMES.has(String(t?.function?.name || ''))),
+    workspaceToolMode,
+  );
 
   // Canonical classification is authoritative by default. Keep the legacy
   // classifier as a rollback/shadow oracle and record drift out of band.

@@ -26,6 +26,7 @@ const CATALOG_KEY = 'pm_mobile_gateway_catalog_v1';
 const FILTER_KEY = 'pm_mobile_gateway_filter_v1';
 const ACTIVE_KEY = 'pm_mobile_active_gateway_v1';
 const SESSION_TARGETS_KEY = 'pm_mobile_session_targets_v1';
+const PENDING_GATEWAY_PAIR_KEY = 'pm_mobile_pending_gateway_pair_v1';
 const TOKEN_PREFIX = 'pm_mobile_gateway_token_v1:';
 const DEVICE_PREFIX = 'pm_mobile_gateway_device_v1:';
 const STATUS_PROBE_TIMEOUT_MS = 8000;
@@ -355,8 +356,11 @@ export async function gatewayFetchJson(entryOrId, path, options = {}) {
     error.code = 'UNKNOWN_GATEWAY_TARGET';
     throw error;
   }
+  // UNKNOWN means this target has not been probed in this browser session yet;
+  // it must still be reachable for the first catalog read. OFFLINE and
+  // REVOKED are the only fail-closed states.
   if (options.allowProbe !== true
-      && [MOBILE_GATEWAY_STATUS.UNKNOWN, MOBILE_GATEWAY_STATUS.OFFLINE, MOBILE_GATEWAY_STATUS.REVOKED].includes(String(entry.status || ''))) {
+      && [MOBILE_GATEWAY_STATUS.OFFLINE, MOBILE_GATEWAY_STATUS.REVOKED].includes(String(entry.status || ''))) {
     const error = new Error(`Gateway “${entry.name}” is not online.`);
     error.code = entry.status === MOBILE_GATEWAY_STATUS.REVOKED ? 'GATEWAY_REVOKED' : 'GATEWAY_OFFLINE';
     error.retryable = entry.status !== MOBILE_GATEWAY_STATUS.REVOKED;
@@ -388,6 +392,19 @@ export async function gatewayFetchJson(entryOrId, path, options = {}) {
     let body = null;
     try { body = text ? JSON.parse(text) : null; } catch { body = null; }
     if (!response.ok) {
+      if (response.status === 401) {
+        // A rejected pairing grant must not degrade into an empty chat list.
+        // Clear only the credential for the target that rejected it, then let
+        // the router take the phone back through pairing if no grant remains.
+        setGatewayToken(entry.gatewayId, '');
+        if (isCurrentGateway(entry)) clearDeviceToken();
+        updateGatewayStatus(entry.gatewayId, {
+          status: MOBILE_GATEWAY_STATUS.REVOKED,
+          lastError: 'This phone is no longer paired with the gateway.',
+          revokedAt: Date.now(),
+        });
+        try { window.dispatchEvent(new Event('pm-device-revoked')); } catch {}
+      }
       const error = new Error(String(body?.error || body?.message || `Gateway request failed (${response.status}).`));
       error.status = response.status;
       error.body = body;
@@ -636,6 +653,33 @@ export function getPairingPayload(value) {
       gatewayId: String(parsed.gatewayId),
     };
   } catch { return null; }
+}
+
+// An in-app QR scan must stay on the current PWA origin. Keep the validated
+// payload in session storage while the pairing route claims and polls the
+// target gateway; never put the cross-origin target back into window.location.
+export function setPendingGatewayPair(value) {
+  const raw = String(value || '').trim();
+  if (!raw || !getPairingPayload(raw)) return false;
+  try {
+    sessionStorage.setItem(PENDING_GATEWAY_PAIR_KEY, raw);
+    return true;
+  } catch { return false; }
+}
+
+export function getPendingGatewayPair() {
+  try {
+    const raw = String(sessionStorage.getItem(PENDING_GATEWAY_PAIR_KEY) || '').trim();
+    if (!raw || !getPairingPayload(raw)) {
+      if (raw) sessionStorage.removeItem(PENDING_GATEWAY_PAIR_KEY);
+      return '';
+    }
+    return raw;
+  } catch { return ''; }
+}
+
+export function clearPendingGatewayPair() {
+  try { sessionStorage.removeItem(PENDING_GATEWAY_PAIR_KEY); } catch {}
 }
 
 export function encodePairingPayload(payload = {}) {

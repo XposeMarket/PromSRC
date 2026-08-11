@@ -59,9 +59,18 @@ assert.ok(settings.includes('previewDiscoveredExternalImportBatches'), 'large Co
 assert.ok(settings.includes('Confirm selected chats'), 'Codex batches must have one explicit selection-based commit confirmation');
 assert.ok(settings.includes('selectedConversationIds') || settings.includes('conversationIds'), 'chat selection must be carried to the import confirmation');
 assert.ok(settings.includes('newest first'), 'chat previews must advertise newest-first ordering');
-for (const id of ['settings-external-import', 'settings-import-conversation-path', 'settings-import-conversation-mode', 'settings-import-setup-path', 'settings-import-conversation-job', 'settings-import-setup-job']) {
+assert.ok(settings.includes('settings-import-project-group'), 'project-capable previews must group chats under expandable projects');
+assert.ok(settings.includes('settings-import-view-tabs'), 'project previews must separate project and top-level chat views');
+assert.ok(settings.includes('settings-import-history-list'), 'rollback controls must live in a separate import history panel');
+assert.ok(html.includes('Import MCP integrations'), 'the right-hand flow must be MCP integration focused');
+assert.ok(!settings.includes('historical events'), 'historical event counts must not be shown in the import preview UI');
+for (const id of ['settings-external-import', 'settings-import-conversation-path', 'settings-import-setup-path', 'settings-import-conversation-job', 'settings-import-setup-job', 'settings-import-history', 'settings-import-history-list']) {
   assert.ok(html.includes(`id="${id}"`), `${id} must be present in General settings`);
 }
+for (const id of ['settings-import-conversation-mode', 'settings-import-conversation-adapter', 'settings-import-conversation-account', 'settings-import-setup-label', 'settings-import-setup-overwrite']) {
+  assert.ok(!html.includes(`id="${id}"`), `${id} must not remain in the automatic import UI`);
+}
+assert.ok(settings.includes('function toggleExternalImportProject'), 'project selection must support whole-project selection');
 for (const fn of ['previewExternalImportJob', 'previewDiscoveredExternalImportBatches', 'confirmExternalImportJob', 'confirmExternalImportBatchJob', 'confirmExternalImportBatches', 'retryExternalImportJob', 'retryExternalImportBatchJob', 'rollbackExternalImportJob', 'rollbackExternalImportBatchJob', 'deleteExternalImportJob']) {
   assert.ok(settings.includes(`window.${fn} = ${fn}`), `${fn} must be exposed to the settings shell`);
 }

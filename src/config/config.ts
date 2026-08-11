@@ -9,6 +9,7 @@ import { isPublicDistributionBuild } from '../runtime/distribution.js';
 import { listProviderSecretFieldPaths } from '../providers/provider-registry.js';
 import { ensureAgentPromptFile } from '../agents/agent-prompt-file.js';
 import { seedLegacyMainChatRoute } from './main-chat-route.js';
+import { DEFAULT_GATEWAY_PORT, getRuntimeGatewayPort } from './gateway-port.js';
 
 function migrateLegacyDir(legacyDir: string, targetDir: string): void {
   try {
@@ -59,6 +60,8 @@ migrateLegacyData();
 //   1. PROMETHEUS_DATA_DIR env var  (set by Docker / CI)
 //   2. .prometheus/ next to the project root
 //   3. ~/.prometheus in the user's home directory
+// The gateway port additionally accepts the per-process
+// PROMETHEUS_GATEWAY_PORT override, which wins over config.json.
 const PROJECT_CONFIG_NEW = path.join(__dirname, '..', '..', '.prometheus');
 const PROJECT_CONFIG = PROJECT_CONFIG_NEW;
 const HOME_CONFIG    = path.join(os.homedir(), '.prometheus');
@@ -86,7 +89,7 @@ const WORKSPACE_DIR =
 export const DEFAULT_CONFIG: PrometheusConfig = {
   version: '1.0.2',
   gateway: {
-    port: process.env.GATEWAY_PORT ? parseInt(process.env.GATEWAY_PORT, 10) : 18789,
+    port: getRuntimeGatewayPort() || DEFAULT_GATEWAY_PORT,
     // Mobile pairing is a LAN feature. Bind the gateway to IPv4 interfaces by
     // default so a phone on the same Wi-Fi can reach the origin in the QR.
     // Gateway auth and paired-device tokens still protect API access.
@@ -196,6 +199,10 @@ export const DEFAULT_CONFIG: PrometheusConfig = {
   },
   tools: {
     enabled: ['shell', 'read', 'write', 'edit', 'search'],
+    // Native Prometheus workspace/file tools are the safe default. The
+    // Security settings toggle can switch model-facing file work to terminal
+    // commands without changing terminal permissions or path boundaries.
+    workspace_mode: 'prometheus',
     permissions: {
       shell: {
         workspace_only: true,
@@ -699,11 +706,11 @@ function normalizeLegacyPathsInConfig(loaded: any): any {
   // misconfiguration when config was copied from a different machine), reset
   // it to the standard Ollama default. Works on any OS.
   const OLLAMA_DEFAULT = process.env.OLLAMA_HOST || 'http://localhost:11434';
-  const gatewayPort = String(out?.gateway?.port || 18789);
+  const gatewayPort = String(out?.gateway?.port || DEFAULT_GATEWAY_PORT);
   const fixOllamaEndpoint = (ep: string): string => {
     if (!ep) return OLLAMA_DEFAULT;
     // If it's pointing at the gateway port, it's wrong
-    if (ep.includes(`:${gatewayPort}`) || ep.endsWith(':18789') || ep.endsWith(':3000')) {
+    if (ep.includes(`:${gatewayPort}`) || ep.endsWith(`:${DEFAULT_GATEWAY_PORT}`) || ep.endsWith(':3000')) {
       console.log(`[Config] Correcting misconfigured Ollama endpoint "${ep}" → "${OLLAMA_DEFAULT}"`);
       return OLLAMA_DEFAULT;
     }
@@ -921,9 +928,15 @@ export class ConfigManager {
             }
           : DEFAULT_CONFIG.session;
 
+        const runtimeGatewayPort = getRuntimeGatewayPort();
         const merged: PrometheusConfig = {
           ...DEFAULT_CONFIG,
           ...loaded,
+          gateway: {
+            ...DEFAULT_CONFIG.gateway,
+            ...(loaded.gateway || {}),
+            ...(runtimeGatewayPort ? { port: runtimeGatewayPort } : {}),
+          },
           llm: mergedLlm,
           image_generation: mergedImageGeneration,
           video_generation: mergedVideoGeneration,

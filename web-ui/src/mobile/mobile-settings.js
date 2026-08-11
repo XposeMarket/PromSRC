@@ -1,6 +1,6 @@
-import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=slash-command-style-align-v1';
+import { ICONS, escapeHtml, renderMobileHeader, wireHeaderActions } from './mobile-shell.js?v=pm-v288-2026-08-11-gateway-context-visibility';
 import { mobileGatewayFetch, loadGatewayStatus, loadVoiceStatus } from './mobile-api.js';
-import { prettifyModelName } from './mobile-model-badge.js?v=pm-v260-2026-08-09-mobile-theme-palette';
+import { prettifyModelName } from './mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover';
 import { effortOptions, reasoningCapability, supportsFastSpeed, validEffort } from '../reasoning-capabilities.js';
 
 // Fallback model lists when /api/extensions/catalog is unavailable.

@@ -444,7 +444,7 @@ export function createServer(
     if (err?.code === 'EADDRINUSE') {
       console.error(`[Gateway] Port ${host}:${port} is already in use.`);
       console.error('[Gateway] Another gateway instance is likely already running.');
-      console.error('[Gateway] Use one instance only, then open http://127.0.0.1:18789');
+      console.error(`[Gateway] The configured gateway port is ${port}; use a different instance port if needed.`);
       process.exit(1);
       return;
     }
@@ -980,7 +980,7 @@ export function createServer(
     if (err?.code === 'EADDRINUSE') {
       console.error(`[Gateway] Port ${host}:${port} is already in use.`);
       console.error('[Gateway] Another gateway instance is likely already running.');
-      console.error('[Gateway] Use one instance only, then open http://127.0.0.1:18789');
+      console.error(`[Gateway] The configured gateway port is ${port}; use a different instance port if needed.`);
       process.exit(1);
       return;
     }

@@ -28,9 +28,10 @@ import {
 } from '../config/config';
 import { getVault } from '../security/vault';
 import { getOllamaClient } from '../agents/ollama-client';
-import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, flushAllSessions, flushPendingChatAuditWrites, getChatAuditPersistenceStatus, getSessionPersistenceStatus, getSessionCacheStatus } from './session';
+import { getSession, addMessage, getHistory, getHistoryForApiCall, getWorkspace, setWorkspace, clearHistory, flushAllSessions, flushPendingSessionWrites, flushPendingChatAuditWrites, getChatAuditPersistenceStatus, getSessionPersistenceStatus, getSessionCacheStatus } from './session';
 import { stopAutoSettleScheduler } from './auto-settle';
-import { compactRuntimeStateOnStartup, flushLiveRuntimePersistence, getLiveRuntimePersistenceStatus, warmLiveRuntimePersistence, type LiveRuntimeSnapshot } from './live-runtime-registry';
+import { compactRuntimeStateOnStartup, flushLiveRuntimePersistence, getLiveRuntimePersistenceStatus, warmLiveRuntimePersistence, listLiveRuntimes, type LiveRuntimeSnapshot } from './live-runtime-registry';
+import { evaluateUpdatePreflight } from '../update/canonical-updater';
 import { runBootMd } from './boot';
 import { setupErrorResponseEndpoint } from './errors/error-response-endpoint-integrated';
 import { isStorageBoundaryError } from './storage/storage-paths';
@@ -794,6 +795,65 @@ app.post('/api/internal/shutdown', (req, res) => {
   }
   res.json({ ok: true });
   setImmediate(() => gracefulShutdown('SIGTERM'));
+});
+
+function getUpdatePreflightForInternalRequest() {
+  const sessions = getSessionPersistenceStatus();
+  const chatAudit = getChatAuditPersistenceStatus();
+  const runtimePersistence = getLiveRuntimePersistenceStatus();
+  const activeOperations = listLiveRuntimes().filter((runtime) => runtime.status === 'running' || runtime.status === 'interrupted').length;
+  const pendingWrites = Number(sessions.pending || 0)
+    + Number(chatAudit.pendingBatches || 0)
+    + Number(chatAudit.pendingRecords || 0)
+    + Number(runtimePersistence.pendingEvents || 0);
+  return {
+    ...evaluateUpdatePreflight({
+      activeOperations,
+      pendingWrites,
+      persistenceBusy: Boolean(
+        sessions.active || sessions.scheduled || chatAudit.active || chatAudit.scheduled
+        || runtimePersistence.active || runtimePersistence.scheduled || runtimePersistence.ledgerDirty,
+      ),
+    }),
+    persistence: { sessions, chatAudit, runtimePersistence },
+  };
+}
+
+app.get('/api/internal/update-preflight', (req, res) => {
+  const addr = req.socket.remoteAddress || '';
+  if (addr !== '127.0.0.1' && addr !== '::1' && addr !== '::ffff:127.0.0.1') {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+  res.json({ ok: true, preflight: getUpdatePreflightForInternalRequest() });
+});
+
+app.post('/api/internal/update-drain', async (req, res) => {
+  const addr = req.socket.remoteAddress || '';
+  if (addr !== '127.0.0.1' && addr !== '::1' && addr !== '::ffff:127.0.0.1') {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+  try {
+    const before = getUpdatePreflightForInternalRequest();
+    if (before.activeOperations > 0) {
+      res.status(409).json({ ok: false, preflight: before });
+      return;
+    }
+    // The Electron main process performs the final active-runtime check before
+    // calling this endpoint. Draining here is still idempotent and makes the
+    // boundary explicit: no installer is started until durable queues settle.
+    flushAllSessions();
+    await Promise.all([
+      flushPendingSessionWrites(),
+      flushPendingChatAuditWrites(),
+      flushLiveRuntimePersistence(),
+    ]);
+    const preflight = getUpdatePreflightForInternalRequest();
+    res.json({ ok: preflight.ready, preflight });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: 'Durable Prometheus state could not be drained safely.' });
+  }
 });
 
 // ─── Router Registrations ────────────────────────────────────────────────────

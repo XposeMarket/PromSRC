@@ -697,6 +697,82 @@
   line-height: 1.4;
 }
 
+#settings-modal .settings-import-history {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--panel-2);
+}
+
+#settings-modal .settings-import-history-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#settings-modal .settings-import-history-heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+#settings-modal .settings-import-history-heading p {
+  max-width: 760px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+#settings-modal .settings-import-history-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+#settings-modal .settings-import-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 75%, transparent);
+}
+
+#settings-modal .settings-import-history-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+#settings-modal .settings-import-history-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#settings-modal .settings-import-history-copy small,
+#settings-modal .settings-import-history-actions time {
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+#settings-modal .settings-import-history-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  flex: 0 0 auto;
+}
+
 #settings-modal .settings-import-batches {
   display: grid;
   gap: 8px;
@@ -779,6 +855,40 @@
     width: 100%;
     justify-content: flex-start;
   }
+}
+
+/* Appearance state is explicit: preset controls are a preview until the user
+   makes a local custom copy. This keeps the editor honest about what changes
+   the active theme and what is merely a preset's seed value. */
+#settings-modal .appearance-active-theme {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#settings-modal .appearance-custom-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+#settings-modal #appearance-custom-state {
+  max-width: 620px;
+}
+
+#settings-modal .appearance-custom-section:has(:disabled) .appearance-custom-panel {
+  border-color: color-mix(in srgb, var(--line) 82%, var(--muted));
+}
+
+#settings-modal .appearance-custom-panel :is(input, select, button):disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+#settings-modal .appearance-custom-panel input:disabled {
+  filter: saturate(.65);
 }
 
 #settings-modal .settings-import-empty {
@@ -877,6 +987,35 @@
   font-size: 9.5px;
 }
 
+#settings-modal .settings-import-view-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 75%, transparent);
+}
+
+#settings-modal .settings-import-view-tab {
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 9.5px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+#settings-modal .settings-import-view-tab.is-active {
+  background: color-mix(in srgb, var(--brand) 18%, var(--panel));
+  color: var(--text);
+}
+
 #settings-modal .settings-import-selection-actions {
   display: inline-flex;
   align-items: center;
@@ -944,6 +1083,88 @@
   accent-color: var(--brand);
 }
 
+#settings-modal .settings-import-project-group {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+#settings-modal .settings-import-project-group:last-child {
+  border-bottom: 0;
+}
+
+#settings-modal .settings-import-project-group > summary {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 6px;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+}
+
+#settings-modal .settings-import-project-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+#settings-modal .settings-import-project-group > summary::before {
+  content: '›';
+  display: inline-block;
+  width: 10px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform .15s ease;
+}
+
+#settings-modal .settings-import-project-group[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+#settings-modal .settings-import-project-group > summary > input {
+  grid-column: 2;
+  grid-row: 1;
+  margin-left: -1px;
+  accent-color: var(--brand);
+}
+
+#settings-modal .settings-import-project-group > summary::before {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+#settings-modal .settings-import-project-group-copy {
+  grid-column: 3;
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+#settings-modal .settings-import-project-group-copy strong {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#settings-modal .settings-import-project-group-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#settings-modal .settings-import-project-group-chats {
+  margin-left: 17px;
+  border-left: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+}
+
+#settings-modal .settings-import-selection-row--project-chat {
+  padding-left: 8px;
+}
+
 #settings-modal .settings-import-project-preview-list small {
   max-width: 65%;
   overflow-wrap: anywhere;
@@ -1005,6 +1226,16 @@
 
   #settings-modal .settings-import-card-heading {
     display: block;
+  }
+
+  #settings-modal .settings-import-history-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  #settings-modal .settings-import-history-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   #settings-modal .settings-import-safety-badge {

@@ -1647,6 +1647,15 @@ export async function createMobileChatSession(sessionId, { title = 'New Chat' } 
   });
 }
 
+export async function createMobileProject(name) {
+  const projectName = String(name || '').trim();
+  if (!projectName) throw new Error('Project name required');
+  return mfetch('/api/projects', {
+    method: 'POST',
+    body: JSON.stringify({ name: projectName }),
+  });
+}
+
 export async function createMobileProjectChatSession(projectId, { title = 'New Chat' } = {}) {
   const pid = String(projectId || '').trim();
   if (!pid) throw new Error('Project id required');
@@ -2119,6 +2128,19 @@ export async function restartMobileGateway({ rebuild = false, sessionId = '', or
   }
 }
 
+export async function requestMobileUpdate({ action = 'check', confirm = false, source = 'mobile' } = {}) {
+  const normalizedAction = action === 'apply' ? 'apply' : 'check';
+  return mfetch('/api/lifecycle/update', {
+    method: 'POST',
+    body: JSON.stringify({
+      action: normalizedAction,
+      confirm: confirm === true,
+      source: String(source || 'mobile').slice(0, 64),
+    }),
+    timeoutMs: normalizedAction === 'check' ? 12_000 : 8_000,
+  });
+}
+
 /**
  * POST /api/chat and stream back SSE events.
  *
@@ -2183,6 +2205,10 @@ export function streamChat({ message, sessionId = MOBILE_CHAT_SESSION_ID, attach
       signal: ctrl.signal,
     };
     try {
+      // Catalog reads may target another gateway, but chat execution is
+      // strictly local to the current PWA origin. Do not let a remembered
+      // remote target silently send or save a new turn in the wrong gateway.
+      _assertMobileRequestTarget();
       res = await fetch(url, requestInit);
     } catch (err) {
       cb('onError', toChatStreamError(err));

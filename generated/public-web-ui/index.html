@@ -249,14 +249,14 @@
 <script>
   (() => {
     // Theme registry — single source of truth (runs before any other script).
-    // Each theme has a structural `base` (dark|light) that drives the existing
-    // dark/light CSS untouched, plus an `id` exposed as data-skin for overrides.
+    // Every preset uses the same Prometheus One desktop shell. `data-skin`
+    // selects the color tokens and optional artwork for that shared structure.
     window.PROM_THEMES = [
-      { id: 'light', label: 'Prometheus One', base: 'dark'  },
-      { id: 'gray',  label: 'Ash & Ember',    base: 'dark'  },
-      { id: 'dark',  label: 'Default Dark',  base: 'dark'  },
-      { id: 'blue',  label: 'Olympian Blue', base: 'dark'  },
-      { id: 'purple', label: 'Aether Violet', base: 'dark' },
+      { id: 'light', label: 'Prometheus One', base: 'dark', description: 'Black & gold · shared P1 shell' },
+      { id: 'gray',  label: 'Ash & Ember',    base: 'dark', description: 'Light graphite & ember · shared P1 shell' },
+      { id: 'dark',  label: 'Default Dark',  base: 'dark', description: 'Warm graphite · shared P1 shell' },
+      { id: 'blue',  label: 'Olympian Blue', base: 'dark', description: 'Electric navy · shared P1 shell' },
+      { id: 'purple', label: 'Aether Violet', base: 'dark', description: 'Deep violet · shared P1 shell' },
     ];
     window.PROM_RESOLVE_THEME = (id) =>
       window.PROM_THEMES.find((t) => t.id === id) || window.PROM_THEMES[0];
@@ -321,40 +321,6 @@
 </head>
 <body class="auth-pending">
 <canvas id="ember-canvas" aria-hidden="true"></canvas>
-<div id="pm-one-splash" class="pm-one-splash" role="status" aria-label="Prometheus One is starting — tap to skip" tabindex="0" hidden>
-  <div class="pm-one-starfield pm-one-starfield-far" aria-hidden="true"></div>
-  <div class="pm-one-starfield pm-one-starfield-near" aria-hidden="true"></div>
-  <svg class="pm-one-constellations" viewBox="0 0 390 844" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-    <defs>
-      <filter id="pm-one-star-glow" x="-250%" y="-250%" width="600%" height="600%"><feGaussianBlur stdDeviation="1.8" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    </defs>
-    <g class="pm-one-constellation-lines">
-      <path d="M-18 126 54 92l48 55 66-20 42 58 61-27 45 52 89-19" />
-      <path d="M18 294 73 252l65 38 47-76 53 35 74-40 52 33" />
-      <path d="M-12 520 57 481l61 44 53-62 66 43 62-52 96 28" />
-      <path d="M21 705 84 662l47 31 57-65 72 43 48-36 91 50" />
-      <path d="M43 43 69 92 38 157 73 252 57 327" />
-      <path d="M339 34 316 98l49 93-53 18 52 78" />
-      <path d="M57 481 29 410l58-48 31-72" />
-      <path d="M299 454 349 390l-18-61 33-42" />
-      <path d="M84 662 52 599l66-74" />
-      <path d="M308 635 299 570l50-88" />
-    </g>
-    <g class="pm-one-constellation-stars">
-      <circle cx="54" cy="92" r="1.8"/><circle cx="102" cy="147" r="1.2"/><circle cx="168" cy="127" r="1.5"/><circle cx="210" cy="185" r="1.1"/><circle cx="271" cy="158" r="1.7"/><circle cx="316" cy="210" r="1.1"/>
-      <circle cx="73" cy="252" r="1.4"/><circle cx="138" cy="290" r="1.1"/><circle cx="185" cy="214" r="1.7"/><circle cx="238" cy="249" r="1.2"/><circle cx="312" cy="209" r="1.5"/><circle cx="364" cy="242" r="1.1"/>
-      <circle cx="57" cy="481" r="1.7"/><circle cx="118" cy="525" r="1.1"/><circle cx="171" cy="463" r="1.4"/><circle cx="237" cy="506" r="1.1"/><circle cx="299" cy="454" r="1.7"/><circle cx="349" cy="482" r="1.2"/>
-      <circle cx="84" cy="662" r="1.6"/><circle cx="131" cy="693" r="1.1"/><circle cx="188" cy="628" r="1.7"/><circle cx="260" cy="671" r="1.1"/><circle cx="308" cy="635" r="1.4"/>
-      <circle class="is-bright" cx="339" cy="98" r="2.1"/><circle class="is-bright" cx="29" cy="410" r="1.8"/><circle class="is-bright" cx="349" cy="390" r="1.8"/>
-    </g>
-  </svg>
-  <div class="pm-one-brand">
-    <div class="pm-one-mark-wrap" aria-hidden="true">
-      <img class="pm-one-mark" src="/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="sync" fetchpriority="high" />
-    </div>
-    <div class="pm-one-title" aria-label="Prometheus One">Prometheus One</div>
-  </div>
-</div>
 <div id="mobile-root" hidden></div>
 <script>
   (() => {
@@ -369,33 +335,11 @@
         document.body.classList.add('pm-mobile-active');
         document.body.classList.add('pm-mobile-document-scroll');
         document.body.classList.remove('auth-pending');
-        const oneSplash = document.getElementById('pm-one-splash');
-        if (oneSplash) {
-          const skipSplash = () => {
-            oneSplash.dataset.skipRequested = '1';
-            if (typeof window.__PM_ONE_SPLASH_DISMISS === 'function') {
-              window.__PM_ONE_SPLASH_DISMISS();
-            }
-          };
-          oneSplash.addEventListener('pointerup', skipSplash, { passive: true });
-          oneSplash.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              skipSplash();
-            }
-          });
-          oneSplash.hidden = false;
-          requestAnimationFrame(() => oneSplash.classList.add('is-running'));
-          window.__PM_ONE_SPLASH_FALLBACK = window.setTimeout(() => {
-            oneSplash.classList.add('is-leaving');
-            window.setTimeout(() => oneSplash.remove(), 360);
-          }, 3000);
-        }
         const mobileCssTag = document.querySelector('link[href*="static/styles/mobile.css"]');
         if (!mobileCssTag) {
           const cssTag = document.createElement('link');
           cssTag.rel = 'stylesheet';
-      cssTag.href = 'static/styles/mobile.css?v=pm-v260-2026-08-09-mobile-theme-palette';
+          cssTag.href = 'static/styles/mobile.css?v=pm-v288-2026-08-11-gateway-context-visibility';
           cssTag.dataset.promMobileStyle = '1';
           document.head.appendChild(cssTag);
         }
@@ -410,15 +354,6 @@
 <style>
   /* First-paint guard: keeps the mobile launch frame black before mobile.css arrives. */
   body.pm-mobile-active { background: #000 !important; }
-  body.pm-mobile-active #pm-one-splash:not([hidden]) {
-    position: fixed;
-    inset: 0;
-    z-index: 100000;
-    display: grid;
-    place-items: center;
-    overflow: hidden;
-    background: #000;
-  }
   #ember-canvas {
     position: fixed;
     inset: 0;
@@ -2347,17 +2282,6 @@
       </div>
     </div>
 
-    <button
-      type="button"
-      class="status-pill gateway-status-pill"
-      id="gateway-status-pill"
-      onclick="openSettings('system')"
-      title="Open Settings · General"
-      aria-label="Open Settings · General"
-    >
-      <div class="dot" id="ollama-dot"></div>
-      <span id="ollama-status">Checking...</span>
-    </button>
     <div class="status-pill stat-compact" id="system-pill">
       <span id="quick-system-stats">CPU --% • RAM --% • GPU --%</span>
     </div>
@@ -3454,75 +3378,79 @@
   </div>
   </div>
 
-  <!-- Right panel topbar: always visible, switches between Context and Canvas -->
-  <div id="right-panel-topbar" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--line);flex-shrink:0;background:var(--panel);min-height:38px;position:sticky;top:0;z-index:10">
-    <span style="font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em">Context</span>
-    <div style="display:flex;align-items:center;gap:6px">
-    <button id="side-chats-toggle-btn" onclick="showSideChatSplit()" title="Open side chats" style="display:none;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease;position:relative">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M12 5v14"/><path d="M7 9h2"/><path d="M15 9h2"/><path d="M15 13h2"/></svg>
-      Side chats
-    </button>
-    <button id="canvas-toggle-btn" onclick="toggleCanvas()" title="Open Canvas" style="display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease;position:relative">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M8 9l-4 3 4 3"/><path d="M16 9l4 3-4 3"/><path d="M12 6v12"/></svg>
-      Canvas
-      <span id="canvas-notify-dot" style="display:none;position:absolute;top:4px;right:4px;width:7px;height:7px;background:var(--brand);border-radius:50%;border:1.5px solid var(--panel)"></span>
-    </button>
-    </div>
-  </div>
-
-  <div class="right-section" id="agent-context-section">
-    <div class="right-section-title">Agent Context</div>
-    <div class="progress-card" id="progress-card">
-      <button class="progress-card-header" id="progress-toggle" type="button" onclick="toggleProgressPanel()">
-        <span>Progress</span>
-        <span class="chev" id="progress-chevron">&#9662;</span>
+  <!-- Sources panel topbar. Canvas temporarily reuses this bar while it is open. -->
+  <div id="right-panel-topbar" class="source-panel-topbar" style="display:flex">
+    <div class="source-panel-heading">Sources</div>
+    <div class="source-panel-actions">
+      <button id="source-panel-refresh" class="source-panel-icon-btn" type="button" aria-label="Refresh sources" title="Refresh sources" onclick="refreshSourcePanel()">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.9-4L3 10m0-4v4h4M4 13a8 8 0 0 0 14.9 4L21 14m0 4v-4h-4"/></svg>
       </button>
-      <div class="progress-list-wrap" id="progress-list-wrap">
-        <div id="progress-empty" class="progress-empty">Progress - This panel will be used to make a short to-do list</div>
-        <div id="progress-list" class="progress-list" style="display:none"></div>
+      <button id="canvas-toggle-btn" class="source-panel-icon-btn source-panel-canvas-btn" type="button" aria-label="Open Canvas" aria-pressed="false" title="Open Canvas" onclick="toggleCanvas()">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M12 6v12"/></svg>
+        <span>Canvas</span>
+        <span id="canvas-notify-dot" aria-hidden="true"></span>
+      </button>
+      <button id="source-panel-close" class="source-panel-close-btn" type="button" aria-label="Close sources" title="Close sources" onclick="toggleRightPanel()">×</button>
+    </div>
+    <!-- Compatibility control kept for side-chat integrations. -->
+    <button id="side-chats-toggle-btn" onclick="showSideChatSplit()" title="Open side chats" hidden aria-hidden="true">Side chats</button>
+  </div>
+
+  <section id="source-panel-shell" class="source-panel-shell" aria-label="Sources">
+    <nav id="source-panel-tabs" class="source-panel-tabs" aria-label="Source categories">
+      <button class="source-panel-tab is-active" type="button" data-source-tab="overview" aria-selected="true" onclick="setSourcePanelTab('overview')">Overview</button>
+      <button class="source-panel-tab" type="button" data-source-tab="files" aria-selected="false" onclick="setSourcePanelTab('files')">Files</button>
+      <button class="source-panel-tab" type="button" data-source-tab="git" aria-selected="false" onclick="setSourcePanelTab('git')">Git</button>
+    </nav>
+    <div id="source-panel-filter-row" class="source-panel-filter-row" hidden>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input id="source-panel-filter-input" type="search" placeholder="Filter sources" autocomplete="off" oninput="filterSourcePanel(this.value)">
+      <button type="button" aria-label="Clear source filter" title="Clear filter" onclick="filterSourcePanel('')">×</button>
+    </div>
+    <div id="source-panel-body" class="source-panel-body"></div>
+  </section>
+
+  <!-- Runtime compatibility targets for progress, approvals, and process streaming. -->
+  <div id="source-panel-runtime-compat" hidden aria-hidden="true">
+    <div class="right-section" id="agent-context-section">
+      <div class="right-section-title">Agent Context</div>
+      <div class="progress-card" id="progress-card">
+        <button class="progress-card-header" id="progress-toggle" type="button" onclick="toggleProgressPanel()">
+          <span>Progress</span>
+          <span class="chev" id="progress-chevron">&#9662;</span>
+        </button>
+        <div class="progress-list-wrap" id="progress-list-wrap">
+          <div id="progress-empty" class="progress-empty">Progress - This panel will be used to make a short to-do list</div>
+          <div id="progress-list" class="progress-list" style="display:none"></div>
+        </div>
       </div>
     </div>
-  </div>
-
-  <div class="right-section chat-resources-section" id="chat-resources-section" style="display:block;padding:0;border-bottom:1px solid var(--line);flex-shrink:0">
-    <div class="chat-resources-header">
-      <div class="right-section-title">Sources</div>
-      <button id="chat-resources-expanded-close" class="chat-resources-close" type="button" aria-label="Close expanded sources" title="Close" onclick="setChatResourcesExpanded(false)" style="display:none">×</button>
-    </div>
-    <div id="chat-resources-list" class="chat-resources-list"><div class="chat-resources-empty">No sources yet.</div></div>
-  </div>
-
-
-
-  <!-- PENDING APPROVALS PANEL — Phase 5 -->
-  <div id="session-approvals-section" style="flex-shrink:0;border-bottom:1px solid var(--line)">
-    <div style="padding:10px 14px 8px;display:flex;align-items:center;justify-content:space-between">
-      <div style="display:flex;align-items:center;gap:7px">
-        <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;color:var(--muted)">Pending Actions</span>
-        <span id="session-approvals-badge" style="display:none;font-size:10px;background:rgba(249,115,22,0.15);color:#fb923c;border:1px solid rgba(249,115,22,0.32);border-radius:999px;padding:1px 7px;font-weight:700"></span>
+    <div class="right-section chat-resources-section" id="chat-resources-section">
+      <div class="chat-resources-header">
+        <div class="right-section-title">Sources</div>
+        <button id="chat-resources-expanded-close" class="chat-resources-close" type="button" aria-label="Close expanded sources" title="Close" onclick="setChatResourcesExpanded(false)" style="display:none">×</button>
       </div>
-      <button onclick="loadSessionApprovals()" title="Refresh" style="border:0;background:none;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px">↻</button>
+      <div id="chat-resources-list" class="chat-resources-list"><div class="chat-resources-empty">No sources yet.</div></div>
     </div>
-    <div id="session-approvals-list" style="padding:0 10px 10px;display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto">
-      <div style="font-size:11px;color:var(--muted);text-align:center;padding:10px 0;opacity:0.6">No pending actions</div>
+    <div id="session-approvals-section">
+      <div>
+        <span>Pending Actions</span>
+        <span id="session-approvals-badge"></span>
+      </div>
+      <button onclick="loadSessionApprovals()" title="Refresh" type="button">↻</button>
+      <div id="session-approvals-list"><div>No pending actions</div></div>
     </div>
-  </div>
-
-  <!-- hidden agent-execution-panel kept for WS compatibility -->
-  <div id="agent-execution-panel" style="display:none"></div>
-
-  <!-- PROCESS LOG -->
-  <div id="process-log-section" style="display:flex;flex-direction:column;flex:1 1 320px;overflow:hidden;min-height:280px">
-    <div style="padding:8px 16px 6px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);flex-shrink:0">
-      <a href="javascript:void(0)" onclick="openProcessLogFile()" style="font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);text-decoration:none;cursor:pointer;hover:color:var(--brand)">Process Log</a>
-      <button onclick="clearProcessLog()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:10px;font-family:inherit">✕ clear</button>
-    </div>
-    <div id="process-log" style="flex:1;overflow-y:auto;padding:8px 12px;font-size:11px;line-height:1.7;font-family:'JetBrains Mono',monospace">
-      <div style="color:var(--muted);text-align:center;padding:20px 0;opacity:0.5">Waiting for activity...</div>
+    <div id="agent-execution-panel"></div>
+    <div id="process-log-section">
+      <a href="javascript:void(0)" onclick="openProcessLogFile()">Process Log</a>
+      <button onclick="clearProcessLog()" type="button">clear</button>
+      <div id="process-log"><div>Waiting for activity...</div></div>
     </div>
   </div>
 </div><!-- end right-panel -->
 </div><!-- end workspace -->
+
+<aside id="sources-minimized-panel" class="sources-minimized-panel" aria-label="New sources" aria-live="polite" hidden></aside>
 
 <!-- NEW PROJECT MODAL -->
 <div id="new-project-modal" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center;background:rgba(0,0,0,0.5)">
@@ -3709,7 +3637,7 @@
         <button id="settings-tab-appearance" class="settings-tab-item" data-settings-search="appearance themes theme colors background embers opacity customize" onclick="setSettingsTab('appearance')"><span class="settings-nav-icon" data-settings-nav-icon="palette" aria-hidden="true"></span><span>Appearance</span></button>
         <button id="settings-tab-models" class="settings-tab-item" data-settings-search="models ai providers" onclick="setSettingsTab('models')"><span class="settings-nav-icon" data-settings-nav-icon="grid" aria-hidden="true"></span><span>Models</span></button>
         <button id="settings-tab-search" class="settings-tab-item" data-settings-search="search web research credentials keys api tokens" onclick="setSettingsTab('search')"><span class="settings-nav-icon" data-settings-nav-icon="search" aria-hidden="true"></span><span>Search</span></button>
-        <button id="settings-tab-security" class="settings-tab-item" data-settings-search="security permissions paths" onclick="setSettingsTab('security')"><span class="settings-nav-icon" data-settings-nav-icon="shieldCheck" aria-hidden="true"></span><span>Security</span></button>
+        <button id="settings-tab-security" class="settings-tab-item" data-settings-search="security permissions paths workspace tools terminal file shell" onclick="setSettingsTab('security')"><span class="settings-nav-icon" data-settings-nav-icon="shieldCheck" aria-hidden="true"></span><span>Security</span></button>
         <button id="settings-tab-agents" class="settings-tab-item" data-settings-search="agents subagents" onclick="setSettingsTab('agents')"><span class="settings-nav-icon" data-settings-nav-icon="users" aria-hidden="true"></span><span>Agents</span></button>
         <button id="settings-tab-heartbeat" class="settings-tab-item" data-settings-search="heartbeat automation" onclick="setSettingsTab('heartbeat')"><span class="settings-nav-icon" data-settings-nav-icon="activity" aria-hidden="true"></span><span>Heartbeat</span></button>
         <button id="settings-tab-channels" class="settings-tab-item" data-settings-search="channels notifications telegram discord whatsapp" onclick="setSettingsTab('channels')"><span class="settings-nav-icon" data-settings-nav-icon="send" aria-hidden="true"></span><span>Channels</span></button>
@@ -3787,13 +3715,12 @@
         <section class="settings-section settings-updates-section">
           <div class="settings-section-heading">
             <h2>Updates</h2>
-            <span class="settings-help" tabindex="0" aria-label="Update technical details" data-settings-help="Installed public builds check the Prometheus release feed. Automatic updates download in the background and install the next time Prometheus quits.">?</span>
+            <span class="settings-help" tabindex="0" aria-label="Update technical details" data-settings-help="Installed public builds check the Prometheus release feed. Downloads and installation always require explicit confirmation after Prometheus drains durable writes and creates a protected user-state backup.">?</span>
           </div>
           <div class="settings-section-panel settings-updates-panel">
             <div class="settings-row settings-update-preference-row">
               <div class="settings-row-copy">
                 <div class="settings-row-label">Automatically update Prometheus</div>
-                <div class="settings-row-description">Check for new releases, download them in the background, and install them when the app quits.</div>
               </div>
               <button id="settings-auto-update-toggle" class="appearance-switch" type="button" role="switch" aria-checked="true" aria-label="Automatically update Prometheus" onclick="toggleDesktopAutoUpdate()"><span class="appearance-switch-thumb"></span></button>
             </div>
@@ -3814,15 +3741,13 @@
 
         <section id="settings-external-import" class="settings-section settings-external-import-section">
           <div class="settings-section-heading">
-            <h2>Import chats &amp; setup</h2>
+            <h2>Import chats &amp; MCP integrations</h2>
             <span class="settings-help" tabindex="0" aria-label="External import safety details" data-settings-help="Imports are staged and previewed before commit. Historical tool calls never execute. Credentials and OAuth tokens are redacted and must be authorized again.">?</span>
           </div>
-          <div class="settings-section-description settings-external-import-intro">Bring supported local conversation exports into normal Prometheus threads, or review MCP and agent setup separately. Imported chats can continue with Prometheus models; resuming a source provider session is not claimed.</div>
           <div class="settings-import-discovery" aria-labelledby="settings-import-discovery-title">
             <div class="settings-import-discovery-heading">
               <div>
                 <h3 id="settings-import-discovery-title">Found on this computer</h3>
-                <p>Prometheus checks known local agent folders only. Nothing is imported during detection; every item gets a quarantine preview and explicit confirmation.</p>
               </div>
               <button class="settings-inline-link" type="button" onclick="loadExternalImportDiscovery()">Scan again</button>
             </div>
@@ -3833,7 +3758,7 @@
               <div class="settings-import-card-heading">
                 <div>
                   <h3>Import another conversation source</h3>
-                  <p>ChatGPT export first, plus safe local Codex, Claude Code, Cursor, Hermes, OpenClaw/LocalClaw, JSON/JSONL, and Markdown adapters.</p>
+                  <p>Prometheus automatically detects supported local transcripts, project boundaries, and official exports. Preview the newest chats first, then choose exactly what to import.</p>
                 </div>
                 <span class="settings-import-safety-badge">Preview first</span>
               </div>
@@ -3841,38 +3766,9 @@
                 <span>Local export or folder path</span>
                 <input id="settings-import-conversation-path" class="settings-row-input settings-import-path-input" type="text" autocomplete="off" placeholder="C:\\Exports\\conversations.zip or ~/.claude/projects" />
               </label>
-              <div class="settings-import-field-grid">
-                <label class="settings-import-field" for="settings-import-conversation-adapter">
-                  <span>Format / source (optional)</span>
-                  <select id="settings-import-conversation-adapter" class="settings-row-select">
-                    <option value="">Detect safely</option>
-                    <option value="chatgpt-export">ChatGPT official export</option>
-                    <option value="codex-local">Codex local/app-server artifacts</option>
-                    <option value="claude-code-local">Claude Code local artifacts</option>
-                    <option value="cursor-local">Cursor local database/artifacts</option>
-                    <option value="hermes-local">Hermes local transcripts</option>
-                    <option value="openclaw-local">OpenClaw local transcripts</option>
-                    <option value="localclaw-local">LocalClaw local transcripts</option>
-                    <option value="generic-json">Generic JSON</option>
-                    <option value="generic-jsonl">Generic JSONL</option>
-                    <option value="generic-markdown">Generic Markdown</option>
-                  </select>
-                </label>
-                <label class="settings-import-field" for="settings-import-conversation-account">
-                  <span>Source account label (optional)</span>
-                  <input id="settings-import-conversation-account" class="settings-row-input" type="text" autocomplete="off" placeholder="personal / work" />
-                </label>
-              </div>
-              <label class="settings-import-field" for="settings-import-conversation-mode" style="margin-top:9px">
-                <span>Import scope</span>
-                <select id="settings-import-conversation-mode" class="settings-row-select">
-                  <option value="sessions">Chats only — keep regular threads</option>
-                  <option value="projects">Projects + chats — create Prometheus projects</option>
-                </select>
-              </label>
               <div class="settings-import-card-actions">
                 <button class="btn btn-sm" type="button" onclick="previewExternalImportJob('conversation')">Build preview</button>
-                <span class="settings-import-inline-note">Nothing is committed yet.</span>
+                <span class="settings-import-inline-note">Project-aware preview is automatic. Nothing is committed yet.</span>
               </div>
               <div id="settings-import-conversation-status" class="settings-row-status" role="status" aria-live="polite"></div>
               <div id="settings-import-conversation-job" class="settings-import-job" aria-live="polite"><div class="settings-import-empty">No staged import. Choose a local export or conversation folder and build a preview.</div></div>
@@ -3882,33 +3778,32 @@
             <article class="settings-import-card">
               <div class="settings-import-card-heading">
                 <div>
-                  <h3>Import another MCP &amp; agent setup</h3>
-                  <p>Import non-secret MCP definitions, memory/skills metadata, permissions, and connector configuration as an inactive review snapshot.</p>
+                  <h3>Import MCP integrations</h3>
+                  <p>Prometheus detects local MCP declarations from supported agent configurations. Import metadata safely, then authorize and enable each integration in Plugins.</p>
                 </div>
                 <span class="settings-import-safety-badge settings-import-safety-badge--secure">Reauthorize secrets</span>
               </div>
               <label class="settings-import-field" for="settings-import-setup-path">
-                <span>Local setup or configuration folder</span>
-                <input id="settings-import-setup-path" class="settings-row-input settings-import-path-input" type="text" autocomplete="off" placeholder="C:\\Users\\you\\.config\\agent" />
+                <span>Local MCP config folder or file</span>
+                <input id="settings-import-setup-path" class="settings-row-input settings-import-path-input" type="text" autocomplete="off" placeholder="C:\\Users\\you\\.codex\\config.toml" />
               </label>
-              <div class="settings-import-field-grid">
-                <label class="settings-import-field" for="settings-import-setup-label">
-                  <span>Setup label (optional)</span>
-                  <input id="settings-import-setup-label" class="settings-row-input" type="text" autocomplete="off" placeholder="Hermes setup" />
-                </label>
-                <label class="settings-import-checkbox" for="settings-import-setup-overwrite">
-                  <input id="settings-import-setup-overwrite" type="checkbox" />
-                  <span>Replace conflicting MCP definitions after preview</span>
-                </label>
-              </div>
               <div class="settings-import-card-actions">
-                <button class="btn btn-sm" type="button" onclick="previewExternalImportJob('setup')">Build setup preview</button>
-                <span class="settings-import-inline-note">Tokens and keys are never silently copied.</span>
+                <button class="btn btn-sm" type="button" onclick="previewExternalImportJob('setup')">Preview MCP integrations</button>
+                <span class="settings-import-inline-note">Conflicts are skipped by default; tokens and keys are never silently copied.</span>
               </div>
               <div id="settings-import-setup-status" class="settings-row-status" role="status" aria-live="polite"></div>
-              <div id="settings-import-setup-job" class="settings-import-job" aria-live="polite"><div class="settings-import-empty">No staged setup import. Configuration stays inactive until you confirm it.</div></div>
+              <div id="settings-import-setup-job" class="settings-import-job" aria-live="polite"><div class="settings-import-empty">No staged MCP integration preview. Imported definitions stay disabled until you confirm and authorize them.</div></div>
             </article>
           </div>
+          <section id="settings-import-history" class="settings-import-history" aria-labelledby="settings-import-history-title">
+            <div class="settings-import-history-heading">
+              <div>
+                <h3 id="settings-import-history-title">Import history &amp; rollback</h3>
+                <p>Completed imports stay here so the preview cards remain focused. Rollback removes only state created by that import.</p>
+              </div>
+            </div>
+            <div id="settings-import-history-list" class="settings-import-history-list" aria-live="polite"><div class="settings-import-empty">No completed imports or rollback records yet.</div></div>
+          </section>
         </section>
 
         <section class="settings-section settings-auto-settle-section">
@@ -3953,20 +3848,24 @@
           </div>
           <div class="settings-section-description appearance-theme-intro">Choose a starting point for the workspace. Your custom colors and typography stay on this device until you switch back to a preset.</div>
           <div id="theme-picker-grid" class="appearance-theme-grid"></div>
+          <div id="appearance-active-theme" class="appearance-active-theme" role="status" aria-live="polite"></div>
         </section>
 
         <section class="settings-section appearance-custom-section">
           <div class="settings-section-heading">
             <h2>Customize</h2>
-            <span class="settings-help" tabindex="0" aria-label="Custom theme technical details" data-settings-help="Custom theme controls update live and are stored locally in your browser. Choose Custom theme above to make the editor the active theme.">?</span>
+            <span class="settings-help" tabindex="0" aria-label="Custom theme technical details" data-settings-help="Preset themes share the Prometheus One shell. Choose Edit as custom to copy the active preset into a local custom theme, then edit its colors or typography.">?</span>
           </div>
           <div class="settings-section-panel appearance-custom-panel">
             <div class="appearance-panel-toolbar">
               <div>
-                <div class="appearance-panel-title">Custom theme</div>
-                <div class="settings-section-description">Tune the accent, surfaces, type, and contrast to make Prometheus feel like yours.</div>
+                <div class="appearance-panel-title">Custom theme editor</div>
+                <div id="appearance-custom-state" class="settings-section-description">Choose Custom theme to edit its accent, surfaces, type, and contrast.</div>
               </div>
-              <button id="appearance-reset-custom" class="appearance-secondary-button" type="button" onclick="resetAppearanceCustomTheme()">Reset</button>
+              <div class="appearance-custom-actions">
+                <button id="appearance-edit-custom" class="appearance-secondary-button" type="button" onclick="editAppearanceAsCustom()">Edit as custom</button>
+                <button id="appearance-reset-custom" class="appearance-secondary-button" type="button" onclick="resetAppearanceCustomTheme()">Reset</button>
+              </div>
             </div>
             <div class="appearance-control-list">
               <div class="appearance-control-row">
@@ -4006,7 +3905,7 @@
         <section class="settings-section appearance-background-section">
           <div class="settings-section-heading">
             <h2>Background atmosphere</h2>
-            <span class="settings-help" tabindex="0" aria-label="Background atmosphere technical details" data-settings-help="Background images and ember particles are off by default. When enabled, the blue, purple, and dark gray desktop themes use their atmospheric artwork and matching embers.">?</span>
+            <span class="settings-help" tabindex="0" aria-label="Background atmosphere technical details" data-settings-help="Background images and ember particles are off by default. When enabled, each desktop preset uses its own artwork and matching color overlay.">?</span>
           </div>
           <div class="settings-section-panel appearance-preferences-panel">
             <div class="appearance-control-list">
@@ -4141,7 +4040,6 @@
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
           <div>
             <div class="right-section-title" style="margin-bottom:4px">Tool Permissions</div>
-            <div style="font-size:12px;color:var(--muted);line-height:1.45">Choose whether ordinary tool policy gates pause for approval. Explicit Prometheus approval cards, dev-source edits, and administrator commands remain gated.</div>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
@@ -4160,14 +4058,20 @@
             </span>
           </label>
         </div>
-        <div style="font-size:11px;color:var(--muted);margin-top:9px;overflow-wrap:anywhere">Hard-blocked patterns: <span id="settings-hard-blocked-patterns">Loading...</span></div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
+          <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">
+            <input id="settings-workspace-tools-enabled" type="checkbox" checked style="margin-top:3px" />
+            <span>
+              <span style="display:block;font-size:13px;font-weight:700;color:var(--text)">Use Prometheus File Tools</span>
+            </span>
+          </label>
+        </div>
         <div id="settings-security-status" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
       </div>
       <div class="settings-command-permissions-panel" style="border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
           <div>
             <div class="right-section-title" style="margin-bottom:4px">Always-Allowed Commands</div>
-            <div style="font-size:12px;color:var(--muted);line-height:1.45">Exact command and working-directory grants created from the Always Allow button.</div>
           </div>
           <div class="settings-command-permissions-actions">
             <button id="settings-command-permissions-toggle" type="button" class="btn btn-sm settings-command-permissions-toggle" aria-expanded="false" aria-controls="settings-command-permissions-details" onclick="toggleCommandPermissionList()">View commands</button>
@@ -5429,7 +5333,7 @@
             <div style="margin-top:10px">
               <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Public URL</div>
               <input type="text" id="pairing-remote-url" placeholder="https://your-machine.tail1234.ts.net" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px" />
-              <div id="pairing-remote-url-hint" style="margin-top:4px;font-size:11px;color:var(--muted);line-height:1.45">Paste the HTTPS address Tailscale assigned your machine.</div>
+              <div id="pairing-remote-url-hint" style="margin-top:4px;font-size:11px;color:var(--muted);line-height:1.45">Paste the HTTPS address Tailscale assigned your machine. Multiple Prometheus instances can use separate Funnel HTTPS ports such as 443, 8443, and 10000.</div>
             </div>
             <div style="display:flex;gap:8px;margin-top:12px">
               <button id="pairing-remote-save-btn" class="btn btn-sm" style="background:var(--brand);color:#fff;border:none;flex:1">Save</button>
@@ -7869,6 +7773,13 @@ function renderApprovalCard(p) {
   const denyEndpoint = isProposal ? `/api/proposals/${p.id}/deny` : `/api/approvals/${p.id}`;
   const denyBody = isProposal ? '{}' : JSON.stringify({ decision: 'rejected' });
   const approveBody = isProposal ? '{}' : JSON.stringify({ decision: 'approved' });
+  const approveSessionBody = JSON.stringify({ decision: 'approved', grantScope: 'session' });
+  const approveAlwaysBody = JSON.stringify({ decision: 'approved', grantScope: 'always' });
+  const pathAccessPaths = Array.from(new Set([
+    p.pathAccess?.requestedPath,
+    ...(Array.isArray(p.pathAccess?.requestedPaths) ? p.pathAccess.requestedPaths : []),
+  ].map((value) => String(value || '').trim()).filter(Boolean)));
+  const isPathAccess = !isProposal && pathAccessPaths.length > 0;
 
   return `<div class="approval-card" style="background:${rc.bg};border-color:${rc.border};padding:10px 12px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
@@ -7879,11 +7790,19 @@ function renderApprovalCard(p) {
       </div>
     </div>
     ${summary ? `<div style="font-size:11px;color:${rc.text};margin-bottom:6px;line-height:1.4;opacity:0.9">${escHtml(String(summary).slice(0, 120))}</div>` : ''}
+    ${isPathAccess ? `<div style="font-size:10px;color:${rc.text};margin:-1px 0 8px;line-height:1.35"><strong>Requested path${pathAccessPaths.length === 1 ? '' : 's'}:</strong><br>${pathAccessPaths.slice(0, 8).map((value) => escHtml(value)).join('<br>')}</div>` : ''}
     ${systems.length ? `<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px">${systems.map(s => `<span style="font-size:9px;background:rgba(255,255,255,0.72);color:${rc.text};border:1px solid ${rc.border};border-radius:4px;padding:1px 5px;font-family:monospace">${escHtml(s)}</span>`).join('')}</div>` : ''}
-    <div style="display:flex;gap:6px">
-      <button onclick="resolveSessionApproval('${p.id}','approve','${escHtml(approveEndpoint)}','${escHtml(approveBody).replace(/'/g,'&#39;')}')" style="flex:1;border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">✓ Approve</button>
-      <button onclick="resolveSessionApproval('${p.id}','deny','${escHtml(denyEndpoint)}','${escHtml(denyBody).replace(/'/g,'&#39;')}')" style="flex:1;border:1px solid ${rc.border};background:transparent;color:${rc.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">✗ Deny</button>
-    </div>
+    ${isPathAccess
+      ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <button onclick="resolveSessionApproval('${p.id}','approve','${escHtml(approveEndpoint)}','${escHtml(approveBody).replace(/'/g,'&#39;')}')" style="border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Approve</button>
+        <button onclick="resolveSessionApproval('${p.id}','approve_session','${escHtml(approveEndpoint)}','${escHtml(approveSessionBody).replace(/'/g,'&#39;')}')" style="border:none;background:#0f766e;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Allow this session</button>
+        <button onclick="resolveSessionApproval('${p.id}','approve_always','${escHtml(approveEndpoint)}','${escHtml(approveAlwaysBody).replace(/'/g,'&#39;')}')" style="border:none;background:#2563eb;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Always allow path</button>
+        <button onclick="resolveSessionApproval('${p.id}','deny','${escHtml(denyEndpoint)}','${escHtml(denyBody).replace(/'/g,'&#39;')}')" style="border:1px solid ${rc.border};background:transparent;color:${rc.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">✗ Deny</button>
+      </div>`
+      : `<div style="display:flex;gap:6px">
+        <button onclick="resolveSessionApproval('${p.id}','approve','${escHtml(approveEndpoint)}','${escHtml(approveBody).replace(/'/g,'&#39;')}')" style="flex:1;border:none;background:#16a34a;color:#fff;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">✓ Approve</button>
+        <button onclick="resolveSessionApproval('${p.id}','deny','${escHtml(denyEndpoint)}','${escHtml(denyBody).replace(/'/g,'&#39;')}')" style="flex:1;border:1px solid ${rc.border};background:transparent;color:${rc.text};border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">✗ Deny</button>
+      </div>`}
   </div>`;
 }
 
@@ -7912,6 +7831,10 @@ async function loadSessionApprovals() {
         riskScore: a.riskScore ?? 8,
         affectedSystems: a.affectedSystems || [],
         toolArgs: a.toolArgs,
+        toolName: a.toolName,
+        approvalKind: a.approvalKind,
+        pathAccess: a.pathAccess,
+        oneShot: a.oneShot,
         sourceAgentId: null, // not a proposal-store item
       }));
     const proposalItems = (proposalData.proposals || []).filter(p => !currentSessionId || p.sourceSessionId === currentSessionId).map(p => ({
@@ -8067,8 +7990,9 @@ async function checkStatus() {
     // For cloud providers, always show as online if gateway is up
 	    const providerChecking = !!status.providerChecking;
 	    const backendOnline = isCloud ? true : (status.providerOnline !== undefined ? !!status.providerOnline : !!status.ollama);
-	    dot.className = providerChecking ? 'dot' : 'dot ' + (backendOnline ? 'online' : 'offline');
-	    document.getElementById('ollama-status').textContent = providerChecking
+	    if (dot) dot.className = providerChecking ? 'dot' : 'dot ' + (backendOnline ? 'online' : 'offline');
+	    const statusEl = document.getElementById('ollama-status');
+	    if (statusEl) statusEl.textContent = providerChecking
 	      ? 'Checking...'
 	      : (backendOnline ? 'Online' : 'Offline');
 	    const ro = document.getElementById('r-ollama');
@@ -8928,7 +8852,17 @@ let _errBackdrop = null;
     var status = String(_updaterState.status || 'idle');
     try {
       if (status === 'ready') {
-        await window.prometheusUpdater.installUpdate();
+        const confirmed = await new Promise(function(resolve) {
+          if (typeof window.showConfirm !== 'function') { resolve(true); return; }
+          window.showConfirm(
+            'Prometheus will flush durable writes, create a protected user-state backup, close, install the verified release, reopen, and validate it.',
+            function() { resolve(true); },
+            function() { resolve(false); },
+            { title: 'Install Prometheus update?', confirmText: 'Install & reopen', cancelText: 'Cancel', danger: true }
+          );
+        });
+        if (!confirmed) return;
+        await window.prometheusUpdater.installUpdate(true);
         return;
       }
       if (status === 'available' && typeof window.prometheusUpdater.downloadUpdate === 'function') {
@@ -9331,23 +9265,12 @@ let _errBackdrop = null;
 </div><!-- end .app -->
 
 <!-- Prometheus Mobile (hash-routed, activates on #mobile/*) -->
-<script>
-  (() => {
-    if (!document.body.classList.contains('pm-mobile-active')) return;
-    const root = document.getElementById('mobile-root');
-    if (!root) return;
-    root.hidden = false;
-    if (!root.innerHTML.trim()) {
-      root.innerHTML = '<div class="pm-mobile-boot-screen"><div class="pm-mobile-boot-mark"><img src="/assets/Prometheus.png" alt="Prometheus" /></div><div>Loading Prometheus Mobile...</div></div>';
-    }
-  })();
-</script>
 <script type="module">
   const shouldBootMobile = typeof window.__PROM_SHOULD_BOOT_MOBILE === 'function'
     ? window.__PROM_SHOULD_BOOT_MOBILE()
     : document.body.classList.contains('pm-mobile-active');
   if (shouldBootMobile) {
-    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=pm-v263-2026-08-09-directed-chat-shield')
+    window.__PROM_MOBILE_ROUTER_READY = import('./static/mobile/mobile-router.js?v=pm-v288-2026-08-11-gateway-context-visibility')
       .catch((err) => {
         console.error('[mobile] router import failed:', err);
         throw err;
@@ -9381,7 +9304,7 @@ let _errBackdrop = null;
     // browser/iOS HTTP cache. The query is intentionally changed with every
     // frontend release; updateViaCache prevents a cached SW script from being
     // treated as the current worker during the update check.
-    const PM_PWA_VERSION = 'pm-v260-2026-08-09-mobile-theme-palette';
+    const PM_PWA_VERSION = 'pm-v288-2026-08-11-gateway-context-visibility';
     const PM_SERVICE_WORKER_URL = `/service-worker.js?v=${PM_PWA_VERSION}`;
 
     // Auto-reload once when the SW finishes installing a new version, so a

@@ -243,6 +243,7 @@ function applyBackgroundPreferences(preferences, skinId = document.documentEleme
   const normalized = normalizeAppearancePreferences(preferences);
   const palette = {
     light: [5, 5, 5],
+    gray: [46, 46, 46],
     dark: [26, 26, 26],
     blue: [6, 13, 30],
     purple: [10, 4, 24],
@@ -340,6 +341,11 @@ function syncAppearanceSettingsForm() {
   const grid = document.getElementById('theme-picker-grid');
   if (!grid) return;
   const preferences = readAppearancePreferences();
+  const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  const activeTheme = activeId === 'custom'
+    ? { id: 'custom', label: 'Custom theme', base: 'dark', description: 'Your palette' }
+    : resolveTheme(activeId);
+  const customActive = activeId === 'custom';
   const custom = customDraftForCurrentTheme(preferences);
   const setValue = (id, value) => {
     const element = document.getElementById(id);
@@ -364,6 +370,43 @@ function syncAppearanceSettingsForm() {
   if (opacityInput) opacityInput.disabled = !preferences.backgroundEffects;
   setAppearanceSwitch('appearance-sidebar-translucent', custom.translucentSidebar);
   setAppearanceSwitch('appearance-background-effects', preferences.backgroundEffects);
+
+  const customControlIds = [
+    'appearance-accent-color', 'appearance-accent-text',
+    'appearance-background-color', 'appearance-background-text',
+    'appearance-foreground-color', 'appearance-foreground-text',
+    'appearance-font', 'appearance-contrast',
+  ];
+  customControlIds.forEach((id) => {
+    const element = document.getElementById(id);
+    if (!element) return;
+    element.disabled = !customActive;
+    element.setAttribute('aria-disabled', customActive ? 'false' : 'true');
+  });
+  const customSwitch = document.getElementById('appearance-sidebar-translucent');
+  if (customSwitch) {
+    customSwitch.disabled = !customActive;
+    customSwitch.setAttribute('aria-disabled', customActive ? 'false' : 'true');
+  }
+  const resetButton = document.getElementById('appearance-reset-custom');
+  if (resetButton) {
+    resetButton.disabled = !customActive;
+    resetButton.title = customActive ? 'Reset the custom theme to its source preset' : 'Select Custom theme to edit it';
+  }
+  const editButton = document.getElementById('appearance-edit-custom');
+  if (editButton) editButton.hidden = customActive;
+  const customState = document.getElementById('appearance-custom-state');
+  if (customState) {
+    customState.textContent = customActive
+      ? 'Custom theme is active. Changes update the desktop shell live and stay on this device.'
+      : `${activeTheme.label} is a preset. The Prometheus One shell stays shared; make a custom copy to edit colors or typography.`;
+  }
+  const activeState = document.getElementById('appearance-active-theme');
+  if (activeState) {
+    activeState.textContent = customActive
+      ? 'Active theme: Custom theme'
+      : `Active theme: ${activeTheme.label} · ${activeTheme.description || 'Official desktop preset'}`;
+  }
 }
 
 // Render the theme cards and the live Appearance controls.
@@ -374,7 +417,7 @@ export function renderThemePicker() {
   const themes = [...getThemeList(), { id: 'custom', label: 'Custom theme', base: 'dark' }];
   grid.innerHTML = themes.map((theme) => {
     const active = theme.id === activeId;
-    const description = theme.id === 'light' ? 'Gold on obsidian' : theme.id === 'gray' ? 'Ash gray & ember' : theme.id === 'dark' ? 'Warm graphite' : theme.id === 'blue' ? 'Electric navy' : theme.id === 'purple' ? 'Deep violet' : 'Your palette';
+    const description = theme.description || (theme.id === 'light' ? 'Black & gold · shared P1 shell' : theme.id === 'gray' ? 'Light graphite & ember · shared P1 shell' : theme.id === 'dark' ? 'Warm graphite · shared P1 shell' : theme.id === 'blue' ? 'Electric navy · shared P1 shell' : theme.id === 'purple' ? 'Deep violet · shared P1 shell' : 'Your palette');
     return (
       '<button type="button" class="theme-swatch theme-swatch--large' + (active ? ' is-active' : '') + '"'
       + ' data-theme-id="' + theme.id + '" data-skin-preview="' + theme.id + '"'
@@ -401,6 +444,7 @@ export function renderAppearanceSettings() {
 export function updateAppearanceCustomField(field, value) {
   const preferences = readAppearancePreferences();
   const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  if (activeId !== 'custom') return;
   const seedId = activeId === 'custom' ? preferences.custom.sourceTheme : activeId;
   const draft = normalizeCustomTheme(activeId === 'custom' ? preferences.custom : presetCustomDefaults(seedId), presetCustomDefaults(seedId));
   if (field === 'accent' || field === 'background' || field === 'foreground') draft[field] = normalizeHex(value, draft[field]);
@@ -414,6 +458,7 @@ export function toggleAppearanceCustomSwitch(field) {
   if (field !== 'translucentSidebar') return;
   const preferences = readAppearancePreferences();
   const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  if (activeId !== 'custom') return;
   const seedId = activeId === 'custom' ? preferences.custom.sourceTheme : activeId;
   const draft = normalizeCustomTheme(activeId === 'custom' ? preferences.custom : presetCustomDefaults(seedId), presetCustomDefaults(seedId));
   draft.translucentSidebar = !draft.translucentSidebar;
@@ -421,9 +466,20 @@ export function toggleAppearanceCustomSwitch(field) {
   applyCustomTheme(draft);
 }
 
+export function editAppearanceAsCustom() {
+  const preferences = readAppearancePreferences();
+  const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  if (activeId === 'custom') return;
+  const draft = presetCustomDefaults(activeId);
+  preferences.custom = { ...draft, sourceTheme: activeId };
+  writeAppearancePreferences(preferences);
+  applyCustomTheme(preferences.custom);
+}
+
 export function resetAppearanceCustomTheme() {
   const preferences = readAppearancePreferences();
   const activeId = document.documentElement.getAttribute('data-skin') || 'light';
+  if (activeId !== 'custom') return;
   const seedId = activeId === 'custom' ? preferences.custom.sourceTheme : activeId;
   const draft = presetCustomDefaults(seedId);
   preferences.custom = draft;
@@ -886,6 +942,7 @@ window.renderThemePicker = renderThemePicker;
 window.renderAppearanceSettings = renderAppearanceSettings;
 window.updateAppearanceCustomField = updateAppearanceCustomField;
 window.toggleAppearanceCustomSwitch = toggleAppearanceCustomSwitch;
+window.editAppearanceAsCustom = editAppearanceAsCustom;
 window.resetAppearanceCustomTheme = resetAppearanceCustomTheme;
 window.toggleAppearanceBackgrounds = toggleAppearanceBackgrounds;
 window.updateAppearanceBackgroundOpacity = updateAppearanceBackgroundOpacity;

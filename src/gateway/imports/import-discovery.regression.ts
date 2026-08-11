@@ -19,6 +19,7 @@ function write(relativePath: string, value = '{}'): void {
 write('local-app-data/hermes/sessions/2026/session-1.jsonl', '{"role":"user","content":"hello"}\n');
 write('local-app-data/hermes/config.yaml', 'model: safe\n');
 write('home/.codex/sessions/2026/rollout-1.jsonl', '{"type":"event_msg"}\n');
+write('home/.codex/config.toml', '[mcp_servers.node]\ncommand = "node"\n');
 write('home/.claude/projects/demo/session.jsonl', '{"type":"user"}\n');
 write('home/.openclaw/plugins/installs.json', '{"plugins":[]}');
 write('home/Downloads/conversations.json', '[]');
@@ -35,6 +36,7 @@ assert.equal(result.scannedAt, '2026-08-09T12:00:00.000Z');
 assert.ok(result.sources.some((item) => item.id === 'hermes-conversations' && item.transcriptCount === 1));
 assert.ok(result.sources.some((item) => item.id === 'hermes-setup' && item.setupFileCount >= 1));
 assert.ok(result.sources.some((item) => item.id === 'codex-conversations' && item.adapter === 'codex-local'));
+assert.ok(result.sources.some((item) => item.id === 'codex-mcp-integrations' && item.kind === 'setup'));
 assert.ok(result.sources.some((item) => item.id === 'claude-code-conversations' && item.transcriptCount === 1));
 assert.ok(result.sources.some((item) => item.id === 'chatgpt-export-SG9tZQ' || item.label === 'ChatGPT official export'));
 assert.ok(result.sources.some((item) => item.id === 'openclaw-setup' && item.kind === 'setup'));

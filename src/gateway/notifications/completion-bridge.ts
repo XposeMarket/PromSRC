@@ -1,4 +1,5 @@
 import { getConfig } from '../../config/config';
+import { DEFAULT_GATEWAY_PORT, getRuntimeGatewayPort } from '../../config/gateway-port.js';
 import { getSession, getSessionDisplayTitle } from '../session';
 import {
   resolveChannelsConfig,
@@ -67,7 +68,7 @@ function buildMobileChatLink(sessionId: string, requestOrigin?: string): string 
       || cfg?.remoteAccess?.publicUrl
       || '',
   ).trim();
-  const origin = configuredBase || String(requestOrigin || '').trim() || `http://127.0.0.1:${Number(process.env.GATEWAY_PORT || 18789) || 18789}`;
+  const origin = configuredBase || String(requestOrigin || '').trim() || `http://127.0.0.1:${getRuntimeGatewayPort() || DEFAULT_GATEWAY_PORT}`;
   const base = origin.replace(/\/+$/, '');
   return `${base}/?source=pwa#mobile/chat/${encodeURIComponent(sessionId || 'default')}`;
 }

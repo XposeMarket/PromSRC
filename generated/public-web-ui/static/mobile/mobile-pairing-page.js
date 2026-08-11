@@ -2,7 +2,7 @@
 import {
   renderMobileHeader,
   wireHeaderActions,
-} from './mobile-shell.js?v=pm-v260-2026-08-09-mobile-theme-palette';
+} from './mobile-shell.js?v=pm-v288-2026-08-11-gateway-context-visibility';
 import {
   claimPairing,
   pollPairing,
@@ -17,6 +17,7 @@ import {
   upsertGateway,
   setActiveGatewayId,
   normalizeGatewayOrigin,
+  clearPendingGatewayPair,
 } from './mobile-gateway-catalog.js';
 import { checkSessionDetailed, getAccount, mountLoginScreen } from '../auth/account.js';
 
@@ -96,6 +97,7 @@ async function _ensureAccountBeforePairing(setStage) {
 }
 
 export async function renderPairPage(page, { code, navigate, addMode = false }) {
+  const pairRoute = addMode ? '#mobile/pair/add' : '#mobile/pair';
   const pairingPayload = getPairingPayload(code);
   const pairingCode = pairingPayload?.challenge || String(code || '').trim();
   const looksLikeEncodedQrPayload = !pairingPayload
@@ -110,7 +112,7 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
     origin: targetOrigin,
   } : null;
   page.innerHTML = `
-    ${renderMobileHeader({ title: 'Pair phone', online: false, leftIcon: 'menu' })}
+    ${renderMobileHeader({ title: addMode ? 'Add gateway' : 'Pair phone', online: false, leftIcon: 'menu' })}
     <div class="pm-body" style="display:flex;flex-direction:column;align-items:center;text-align:center;padding-top:8px;">
       <div id="pm-pair-stage" style="max-width:360px;width:100%;">
         <div class="pm-voice-orb" style="width:min(60vw,200px);margin:14px auto 24px;" aria-hidden="true">
@@ -127,7 +129,7 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
           </svg>
         </div>
         <h2 id="pm-pair-title" style="margin:0 0 6px;font-size:22px;font-weight:800;letter-spacing:-.3px;">Connecting to Prometheus…</h2>
-        <p id="pm-pair-sub" style="margin:0 0 18px;color:var(--pm-muted);font-size:14px;line-height:1.5;">Waiting for approval on your desktop.</p>
+        <p id="pm-pair-sub" style="margin:0 0 18px;color:var(--pm-muted);font-size:14px;line-height:1.5;">${addMode ? 'Adding a second Prometheus gateway to this app.' : 'Waiting for approval on your desktop.'}</p>
         <div id="pm-pair-status" style="font-size:13px;color:var(--pm-text-soft);"></div>
         <div id="pm-pair-actions" style="margin-top:24px;display:flex;flex-direction:column;gap:8px;"></div>
       </div>
@@ -148,13 +150,14 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
   }
 
   if (looksLikeEncodedQrPayload) {
+    if (addMode) clearPendingGatewayPair();
     setStage({
       title: 'Invalid or expired QR',
       sub: 'This pairing QR is not valid for Prometheus, or it has already expired. Generate a fresh QR on the target computer.',
       status: '',
       actions: `<button class="pm-btn primary" id="pm-pair-newqr">Try again</button><button class="pm-btn ghost" id="pm-pair-back">Gateway Connections</button>`,
     });
-    page.querySelector('#pm-pair-newqr')?.addEventListener('click', () => { window.location.href = window.location.origin + '/#mobile/pair'; });
+    page.querySelector('#pm-pair-newqr')?.addEventListener('click', () => { window.location.href = window.location.origin + `/${pairRoute}`; });
     page.querySelector('#pm-pair-back')?.addEventListener('click', () => navigate('#mobile/gateways'));
     return;
   }
@@ -198,7 +201,7 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
         statusEl.innerHTML = '<span style="color:var(--pm-red);">Enter the pair code from desktop Settings.</span>';
         return;
       }
-      window.location.href = `${window.location.origin}/?pair=${encodeURIComponent(typedCode)}#mobile/pair`;
+      window.location.href = `${window.location.origin}/?pair=${encodeURIComponent(typedCode)}${pairRoute}`;
     });
     page.querySelector('#pm-pair-retry')?.addEventListener('click', () => location.reload());
     return;
@@ -241,8 +244,9 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
       status: '',
       actions: `<button class="pm-btn primary" id="pm-pair-newqr">Try a new QR</button>`,
     });
+    if (addMode) clearPendingGatewayPair();
     page.querySelector('#pm-pair-newqr').addEventListener('click', () => {
-      window.location.href = window.location.origin + '/#mobile/pair';
+      window.location.href = window.location.origin + `/${pairRoute}`;
     });
     return;
   }
@@ -250,7 +254,7 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
   // 2. Poll for approval.
   setStage({
     title: 'Waiting for approval',
-    sub: 'Tap Allow on your desktop to finish pairing.',
+    sub: addMode ? 'Approve this gateway on its desktop to add it here.' : 'Tap Allow on your desktop to connect this phone.',
     status: '<span style="display:inline-flex;align-items:center;gap:8px;"><span class="pm-pair-spinner" style="display:inline-block;width:14px;height:14px;border:2px solid var(--pm-orange);border-right-color:transparent;border-radius:50%;animation:pm-spin 1s linear infinite;"></span> Listening…</span>',
     actions: `<button class="pm-btn ghost" id="pm-pair-cancel">Cancel</button>`,
   });
@@ -264,15 +268,21 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
   }
 
   let cancelled = false;
-  page.querySelector('#pm-pair-cancel').addEventListener('click', () => { cancelled = true; _clearPairRequestCache(pairingCode); navigate('#mobile/gateways'); });
+  page.querySelector('#pm-pair-cancel').addEventListener('click', () => {
+    cancelled = true;
+    _clearPairRequestCache(pairingCode);
+    if (addMode) clearPendingGatewayPair();
+    navigate('#mobile/gateways');
+  });
 
   const startedAt = Date.now();
   const POLL_MS = 1500;
   while (!cancelled) {
     if (Date.now() - startedAt > 10 * 60 * 1000) {
       _clearPairRequestCache(pairingCode);
+      if (addMode) clearPendingGatewayPair();
       setStage({ title: 'Pairing timed out', sub: 'The request expired. Please ask the desktop for a new QR.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Try again</button>` });
-      page.querySelector('#pm-pair-newqr').addEventListener('click', () => { window.location.href = window.location.origin + '/#mobile/pair'; });
+      page.querySelector('#pm-pair-newqr').addEventListener('click', () => { window.location.href = window.location.origin + `/${pairRoute}`; });
       return;
     }
     try {
@@ -290,17 +300,46 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
           gatewayId: String(r.gateway?.gatewayId || targetHint?.gatewayId || '').trim(),
         };
         if (!gateway.gatewayId || !gateway.origin) {
+          if (addMode) clearPendingGatewayPair();
           setStage({ title: 'Target identity unavailable', sub: 'The computer approved pairing but did not return a stable gateway identity. Nothing was saved.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Try again</button>` });
-          page.querySelector('#pm-pair-newqr')?.addEventListener('click', () => { window.location.href = window.location.origin + '/#mobile/gateways'; });
+          page.querySelector('#pm-pair-newqr')?.addEventListener('click', () => { window.location.href = window.location.origin + `/${pairRoute}`; });
           return;
         }
         if ((targetHint?.gatewayId && gateway.gatewayId !== targetHint.gatewayId)
             || (targetOrigin && gateway.origin !== targetOrigin)) {
+          if (addMode) clearPendingGatewayPair();
           setStage({ title: 'Wrong gateway identity', sub: 'The approved response did not match the computer represented by this QR. Nothing was saved.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Start again</button>` });
-          page.querySelector('#pm-pair-newqr')?.addEventListener('click', () => { window.location.href = window.location.origin + '/#mobile/gateways'; });
+          page.querySelector('#pm-pair-newqr')?.addEventListener('click', () => { window.location.href = window.location.origin + `/${pairRoute}`; });
           return;
         }
         const displayName = String(gateway.name || 'Prometheus gateway');
+
+        // A normal QR/deep-link pairing is always a primary connection to the
+        // gateway that owns the URL. If an embedded browser kept the old hub
+        // document instead of following the link, move it to the target before
+        // saving the target's primary device token. The in-app scanner never
+        // enters this branch because it passes addMode=true.
+        if (!addMode && normalizeGatewayOrigin(targetOrigin) !== normalizeGatewayOrigin(window.location.origin)) {
+          setStage({ title: 'Opening target gateway…', sub: `Connecting to ${displayName}.`, status: '', actions: '' });
+          window.location.href = `${targetOrigin}/?pair=${encodeURIComponent(String(code || pairingCode))}#mobile/pair`;
+          return;
+        }
+
+        if (!addMode) {
+          setDeviceToken(r.deviceToken, r.deviceId);
+          clearPendingGatewayPair();
+          try { localStorage.setItem('pm_force_mobile', '1'); } catch {}
+          setStage({
+            title: 'Phone connected',
+            sub: `${displayName} approved this phone. Opening your chats…`,
+            status: '✅',
+            actions: `<button class="pm-btn primary" id="pm-pair-open-chat">Open chat</button>`,
+          });
+          page.querySelector('#pm-pair-open-chat')?.addEventListener('click', () => navigate('#mobile/chat'));
+          setTimeout(() => { if (!cancelled) navigate('#mobile/chat'); }, 450);
+          return;
+        }
+
         setStage({
           title: 'Confirm this gateway',
           sub: `Pair this phone with ${displayName}? The target computer approved the request.`,
@@ -312,6 +351,7 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
           page.querySelector('#pm-pair-reject')?.addEventListener('click', () => resolve(false), { once: true });
         });
         if (!confirmed) {
+          clearPendingGatewayPair();
           setStage({ title: 'Pairing cancelled', sub: 'No credential was saved on this phone.', status: '', actions: `<button class="pm-btn ghost" id="pm-pair-back">Back to gateways</button>` });
           page.querySelector('#pm-pair-back')?.addEventListener('click', () => navigate('#mobile/gateways'));
           return;
@@ -323,21 +363,37 @@ export async function renderPairPage(page, { code, navigate, addMode = false }) 
         if (!getDeviceToken() && normalizeGatewayOrigin(targetOrigin) === normalizeGatewayOrigin(window.location.origin)) {
           setDeviceToken(r.deviceToken, r.deviceId);
         }
+        clearPendingGatewayPair();
         try { localStorage.setItem('pm_force_mobile', '1'); } catch {}
         setStage({ title: 'Gateway connected', sub: `${displayName} is now available as an independent target.`, status: '✅', actions: `<button class="pm-btn primary" id="pm-pair-done">View gateway connections</button>` });
         page.querySelector('#pm-pair-done')?.addEventListener('click', () => navigate('#mobile/gateways'));
         return;
       }
+      if (r.status === 'approved_already_collected') {
+        _clearPairRequestCache(pairingCode);
+        if (addMode) clearPendingGatewayPair();
+        setStage({
+          title: 'Approval already completed',
+          sub: 'This one-time pairing approval was already collected. Generate a fresh QR and start again.',
+          status: '',
+          actions: `<button class="pm-btn primary" id="pm-pair-newqr">Start a fresh pairing</button><button class="pm-btn ghost" id="pm-pair-back">Gateway Connections</button>`,
+        });
+        page.querySelector('#pm-pair-newqr')?.addEventListener('click', () => { window.location.href = window.location.origin + `/${pairRoute}`; });
+        page.querySelector('#pm-pair-back')?.addEventListener('click', () => navigate('#mobile/gateways'));
+        return;
+      }
       if (r.status === 'denied') {
         _clearPairRequestCache(pairingCode);
+        if (addMode) clearPendingGatewayPair();
         setStage({ title: 'Pairing denied', sub: 'Your desktop user denied this request. You can try again with a new QR.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Try again</button>` });
-        page.querySelector('#pm-pair-newqr').addEventListener('click', () => { window.location.href = window.location.origin + '/#mobile/pair'; });
+        page.querySelector('#pm-pair-newqr').addEventListener('click', () => { window.location.href = window.location.origin + `/${pairRoute}`; });
         return;
       }
       if (r.status === 'expired' || r.status === 'not_found') {
         _clearPairRequestCache(pairingCode);
+        if (addMode) clearPendingGatewayPair();
         setStage({ title: 'QR expired', sub: 'Please generate a fresh QR on your desktop and scan again.', status: '', actions: `<button class="pm-btn primary" id="pm-pair-newqr">Reload</button>` });
-        page.querySelector('#pm-pair-newqr').addEventListener('click', () => location.reload());
+        page.querySelector('#pm-pair-newqr').addEventListener('click', () => { window.location.href = window.location.origin + `/${pairRoute}`; });
         return;
       }
     } catch (err) {

@@ -141,13 +141,18 @@ function buildConnectorMonogram(name) {
   return `${tokens[0][0]}${tokens[1][0]}`.toUpperCase();
 }
 
+function normalizeConnectorBrandColor(value) {
+  const color = String(value || '').trim();
+  return /^#[0-9a-f]{3,8}$/i.test(color) ? color : '#4F46E5';
+}
+
 function buildConnectorLogoMarkup(connector, size = 24, radius = 8) {
-  const color = connector.color || '#4F46E5';
+  const color = normalizeConnectorBrandColor(connector.color);
   const fontSize = Math.max(11, Math.floor(size * 0.45));
   const logoUrl = getConnectorLogoUrl(connector);
   return `
     <div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;border-radius:${radius}px;background:${color}18;color:${color};font-size:${fontSize}px;font-weight:700;letter-spacing:.04em;overflow:hidden">
-      ${logoUrl ? `<img class="connector-logo-image" src="${escHtml(logoUrl)}" alt="" width="${size - 8}" height="${size - 8}" loading="lazy" decoding="async" onerror="this.hidden=true;this.nextElementSibling.hidden=false">` : ''}
+      ${logoUrl ? `<span class="connector-logo-image" role="img" aria-label="${escHtml(connector.name)} logo" style="--connector-logo-url:url('${escHtml(logoUrl)}');--connector-logo-color:${color};width:${size - 8}px;height:${size - 8}px"></span>` : ''}
       <span${logoUrl ? ' hidden' : ''}>${escHtml(buildConnectorMonogram(connector.name))}</span>
     </div>
   `;
@@ -175,6 +180,24 @@ function normalizeCredentialInfo(item) {
 }
 
 const connectorNameCollator = new Intl.Collator('en-US', { sensitivity: 'base', numeric: true });
+
+const connectorLetterGroups = Object.freeze([
+  { key: 'a-c', label: 'A–C', start: 65, end: 67 },
+  { key: 'd-f', label: 'D–F', start: 68, end: 70 },
+  { key: 'g-i', label: 'G–I', start: 71, end: 73 },
+  { key: 'j-l', label: 'J–L', start: 74, end: 76 },
+  { key: 'm-o', label: 'M–O', start: 77, end: 79 },
+  { key: 'p-r', label: 'P–R', start: 80, end: 82 },
+  { key: 's-u', label: 'S–U', start: 83, end: 85 },
+  { key: 'v-x', label: 'V–X', start: 86, end: 88 },
+  { key: 'y-z', label: 'Y–Z', start: 89, end: 90 },
+]);
+
+function connectorLetterGroup(name) {
+  const firstCode = String(name || '').trim().toLocaleUpperCase().charCodeAt(0);
+  return connectorLetterGroups.find((group) => firstCode >= group.start && firstCode <= group.end)
+    || { key: 'other', label: 'Other', start: 0, end: 0 };
+}
 
 function connectorSearchText(item) {
   const setup = item?.setup || {};
@@ -406,34 +429,64 @@ function renderConnectionsGrid() {
 
   const query = connectorSearchQuery;
   const visibleConnectors = CONNECTORS.filter((connector) => !query || connector.searchText.includes(query));
-  const cards = visibleConnectors.map((connector) => {
-    const status = getConnectorStatusMeta(connector);
-    const isConnected = connectorIsConnected(connector);
-    const isPageCard = grids.some((grid) => grid.id === 'plugins-grid');
-    const card = document.createElement('button');
-    card.type = 'button';
-    card.className = `conn-card plugin-card${isConnected ? ' connected' : ''}`;
-    card.title = `${connector.name} — ${status.label}`;
-    card.setAttribute('aria-label', `${connector.name}: ${status.label}`);
-    card.innerHTML = `
-      <div class="plugin-card-top">
-        <div class="conn-card-logo">${buildConnectorLogoMarkup(connector, isPageCard ? 38 : 24, isPageCard ? 11 : 8)}</div>
-        ${connector.isUserPlugin ? '<span class="plugin-card-badge">CUSTOM</span>' : ''}
-      </div>
-      <div class="plugin-card-name">${escHtml(connector.name)}</div>
-      <div class="plugin-card-category">${escHtml(connector.category)}</div>
-      ${isPageCard ? `<div class="plugin-card-desc">${escHtml(connector.desc)}</div>` : ''}
-      <div class="plugin-card-status" style="color:${connectorStatusColor(status.tone)}"><span class="plugin-status-dot" aria-hidden="true"></span>${escHtml(status.label)}</div>
-    `;
-    card.addEventListener('click', () => openConnectorView(connector.id));
-    return card;
-  });
 
   grids.forEach((grid) => {
-    grid.replaceChildren(...cards.map((card) => card.cloneNode(true)));
-    grid.querySelectorAll('.plugin-card').forEach((card, index) => {
-      const connector = visibleConnectors[index];
-      card.addEventListener('click', () => openConnectorView(connector.id));
+    const isPageCard = grid.id === 'plugins-grid';
+    const cards = visibleConnectors.map((connector) => {
+      const status = getConnectorStatusMeta(connector);
+      const isConnected = connectorIsConnected(connector);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = `conn-card plugin-card${isConnected ? ' connected' : ''}`;
+      card.dataset.connectorId = connector.id;
+      card.title = `${connector.name} — ${status.label}`;
+      card.setAttribute('aria-label', `${connector.name}: ${status.label}`);
+      card.innerHTML = `
+        <div class="plugin-card-top">
+          <div class="conn-card-logo">${buildConnectorLogoMarkup(connector, isPageCard ? 38 : 24, isPageCard ? 11 : 8)}</div>
+        </div>
+        <div class="plugin-card-copy">
+          <div class="plugin-card-heading">
+            <div class="plugin-card-name">${escHtml(connector.name)}</div>
+            ${connector.isUserPlugin ? '<span class="plugin-card-badge">CUSTOM</span>' : ''}
+          </div>
+          <div class="plugin-card-category">${escHtml(connector.category)}</div>
+          ${isPageCard ? `<div class="plugin-card-desc">${escHtml(connector.desc)}</div>` : ''}
+        </div>
+        <div class="plugin-card-status" style="color:${connectorStatusColor(status.tone)}"><span class="plugin-status-dot" aria-hidden="true"></span>${escHtml(status.label)}</div>
+      `;
+      return card;
+    });
+
+    if (isPageCard) {
+      const groups = new Map();
+      visibleConnectors.forEach((connector, index) => {
+        const group = connectorLetterGroup(connector.name);
+        if (!groups.has(group.key)) groups.set(group.key, { group, cards: [] });
+        groups.get(group.key).cards.push(cards[index]);
+      });
+
+      const sections = [...groups.values()].map(({ group, cards: groupCards }) => {
+        const section = document.createElement('section');
+        section.className = 'plugin-letter-group';
+        section.dataset.letterRange = group.key;
+        section.innerHTML = `
+          <div class="plugin-letter-heading">
+            <span class="plugin-letter-label">${group.label}</span>
+            <span class="plugin-letter-count">${groupCards.length} ${groupCards.length === 1 ? 'plugin' : 'plugins'}</span>
+          </div>
+          <div class="plugin-letter-list"></div>
+        `;
+        section.querySelector('.plugin-letter-list').replaceChildren(...groupCards);
+        return section;
+      });
+      grid.replaceChildren(...sections);
+    } else {
+      grid.replaceChildren(...cards);
+    }
+
+    grid.querySelectorAll('.plugin-card').forEach((card) => {
+      card.addEventListener('click', () => openConnectorView(card.dataset.connectorId));
     });
   });
 
