@@ -40695,11 +40695,14 @@ async function canvasUpdatePreview() {
   // Design Mode adds editing behavior directly to the preview document. A
   // sandbox without allow-same-origin gives that document an opaque origin,
   // which prevents the parent from attaching the hover/selection handlers.
-  // Keep the rest of the sandbox restrictions in place (no forms, popups, or
-  // top-level navigation); this exception is limited to the local authoring
-  // surface while Design Mode is active.
+  // Project previews also need the parent DOM bridge for their editable
+  // preview path. Keep the rest of the sandbox restrictions in place (no
+  // forms, popups, or top-level navigation), and never grant this bridge to
+  // image/binary previews.
   const sandboxPermissions = [isScriptedPreview ? 'allow-scripts' : '', 'allow-downloads'];
-  if (useProjectPreview) sandboxPermissions.push('allow-same-origin');
+  if (useProjectPreview || (isDesignMode && !tab.isImage && !tab.isBinary)) {
+    sandboxPermissions.push('allow-same-origin');
+  }
   frame.setAttribute('sandbox', sandboxPermissions.filter(Boolean).join(' '));
   if (useProjectPreview) {
     const previewPath = getDesignPreviewEntryPath(tab);

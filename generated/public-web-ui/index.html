@@ -11,6 +11,7 @@
 <meta name="color-scheme" content="dark light">
 <link rel="manifest" href="/manifest.webmanifest">
 <title>Prometheus</title>
+<script src="vendor/jsqr/jsQR.js"></script>
   <script>
   (() => {
     if (typeof window.__PROM_SHOULD_BOOT_MOBILE === 'function') return;
@@ -349,7 +350,7 @@
   </svg>
   <div class="pm-one-brand">
     <div class="pm-one-mark-wrap" aria-hidden="true">
-      <img class="pm-one-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="sync" fetchpriority="high" />
+      <img class="pm-one-mark" src="/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="sync" fetchpriority="high" />
     </div>
     <div class="pm-one-title" aria-label="Prometheus One">Prometheus One</div>
   </div>
@@ -3538,7 +3539,7 @@
 <!-- PROJECT DIRECTORY SETUP -->
 <div id="project-directory-modal" class="project-setup-modal" aria-modal="true" role="dialog" aria-labelledby="project-directory-title">
   <div class="project-setup-dialog">
-    <div class="project-setup-icon"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="Prometheus One" /></div>
+    <div class="project-setup-icon"><img src="/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="Prometheus One" /></div>
     <h2 id="project-directory-title">Link a project directory?</h2>
     <p>Choose a file or folder in File Explorer, or paste a local path below, so Prometheus can keep this project’s chats, files, and commands scoped to the right place.</p>
     <input id="project-directory-path-input" class="project-setup-path" type="text" autocomplete="off" spellcheck="false" placeholder="Paste a file or folder path" onkeydown="if(event.key==='Enter')usePastedProjectDirectory()" />
@@ -3553,7 +3554,7 @@
 
 <div id="project-directory-permission-modal" class="project-setup-modal" aria-modal="true" role="dialog" aria-labelledby="project-directory-permission-title">
   <div class="project-setup-dialog">
-    <div class="project-setup-icon project-setup-icon-warning"><img src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="Prometheus One" /></div>
+    <div class="project-setup-icon project-setup-icon-warning"><img src="/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="Prometheus One" /></div>
     <h2 id="project-directory-permission-title">Allow this directory?</h2>
     <p>This path is outside Prometheus’s configured workspace. Choose a file or folder in File Explorer, then allow Prometheus to read, write, and modify it for this project.</p>
     <input id="project-directory-permission-path" class="project-setup-path" type="text" autocomplete="off" spellcheck="false" placeholder="Paste a file or folder path" oninput="updatePastedProjectDirectory(this.value)" />

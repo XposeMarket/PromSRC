@@ -22,6 +22,7 @@ const PUBLIC_WEB_VENDOR_FILES = [
   'vendor/codemirror/mode/markdown/markdown.min.js',
   'vendor/codemirror/mode/python/python.min.js',
   'vendor/marked/marked.min.js',
+  'vendor/jsqr/jsQR.js',
   'vendor/dompurify/purify.min.js',
   'vendor/fabric/fabric.min.js',
   'vendor/gif/gif.js',
@@ -237,6 +238,7 @@ function copyPublicWebVendorAssets() {
     copyVendorFile(`node_modules/codemirror/mode/${mode}/${mode}.js`, `codemirror/mode/${mode}/${mode}.min.js`);
   }
   copyVendorFile('node_modules/marked/marked.min.js', 'marked/marked.min.js');
+  copyVendorFile('node_modules/jsqr/dist/jsQR.js', 'jsqr/jsQR.js');
   copyVendorFile('node_modules/dompurify/dist/purify.min.js', 'dompurify/purify.min.js');
   copyVendorFile('web-ui/vendor/fabric/fabric.min.js', 'fabric/fabric.min.js');
   copyVendorFile('node_modules/gif.js/dist/gif.js', 'gif/gif.js');

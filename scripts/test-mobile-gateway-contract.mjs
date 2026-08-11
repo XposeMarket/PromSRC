@@ -74,6 +74,8 @@ function assertContractFiles() {
   assert.match(pairing, /api\/pairing\/me\/revoke/);
   assert.match(auth, /X-Pairing-Device-Fingerprint/);
   assert.match(pages, /BarcodeDetector/);
+  assert.match(pages, /jsQR/);
+  assert.match(pages, /attemptBoth/);
   assert.match(pages, /not a valid Prometheus pairing QR/);
   assert.match(pages, /REMOTE_EXECUTION_NOT_ENABLED|read-only/);
   assert.match(pairingPage, /Confirm this gateway/);
@@ -101,6 +103,7 @@ function assertContractFiles() {
   assert.match(css, /pm-drawer-gateway-pills[\s\S]*overflow-x: auto/);
   assert.doesNotMatch(css, /pm-drawer-gateway-filter-inner|pm-drawer-gateway-filter-label/);
   assert.match(index, /Gateway Connections · Pair a phone/);
+  assert.match(index, /vendor\/jsqr\/jsQR\.js/);
 }
 
 async function run() {

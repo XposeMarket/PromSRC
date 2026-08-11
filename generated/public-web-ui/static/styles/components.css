@@ -2893,6 +2893,73 @@ body:not(.pm-mobile-active) #chat-view .chat-welcome :is(h2, p) {
   }
 }
 
+/* The empty desktop chat is a composed landing state, not a scrolling
+   document. Keep the welcome stack and composer together in the available
+   center-column height; the old viewport-sized bottom padding was reserved
+   for the absolute composer and now pushes the flow composer too high. */
+@media (min-width: 901px) {
+  body:not(.pm-mobile-active) #chat-view.chat-empty {
+    overflow: hidden;
+    padding: clamp(14px, 3.5vh, 34px) 20px clamp(14px, 3vh, 30px);
+    gap: clamp(10px, 1.5vh, 16px);
+  }
+
+  body:not(.pm-mobile-active) #chat-view.chat-empty > #chat-messages {
+    flex: 0 1 auto;
+    width: 100%;
+    padding: 0;
+    overflow: visible;
+  }
+
+  body:not(.pm-mobile-active) #chat-view.chat-empty .chat-welcome {
+    gap: clamp(6px, 1vh, 9px);
+  }
+
+  body:not(.pm-mobile-active) #chat-view.chat-empty .chat-welcome-icon img {
+    width: clamp(56px, 8vh, 72px) !important;
+    height: clamp(56px, 8vh, 72px) !important;
+  }
+
+  body:not(.pm-mobile-active) #chat-view.chat-empty .chat-welcome h2 {
+    font-size: clamp(28px, 4.6vh, 36px);
+  }
+
+  body:not(.pm-mobile-active) #chat-view.chat-empty .chat-pulse-cards {
+    margin-top: clamp(8px, 1.5vh, 18px);
+  }
+
+  body:not(.pm-mobile-active) #chat-view.chat-empty .chat-pulse-card {
+    min-height: clamp(92px, 14vh, 122px);
+    padding: clamp(10px, 1.8vh, 18px) clamp(12px, 1.6vw, 16px);
+  }
+}
+
+@media (min-width: 901px) and (max-height: 760px) {
+  body:not(.pm-mobile-active) #chat-view.chat-empty {
+    padding-top: 12px;
+    padding-bottom: 12px;
+    gap: 10px;
+  }
+
+  body:not(.pm-mobile-active) #chat-view.chat-empty .chat-welcome h2 {
+    font-size: 28px;
+  }
+
+  body:not(.pm-mobile-active) #chat-view.chat-empty .chat-pulse-cards {
+    gap: 9px;
+    margin-top: 8px;
+  }
+
+  body:not(.pm-mobile-active) #chat-view.chat-empty .chat-pulse-card {
+    min-height: 88px;
+    padding: 10px 11px;
+  }
+
+  body:not(.pm-mobile-active) #chat-view.chat-empty .chat-input-area {
+    padding: 7px 10px 6px;
+  }
+}
+
 #chat-messages.chat-scroller-active {
   scrollbar-color: rgba(249,115,22,0.42) transparent;
 }

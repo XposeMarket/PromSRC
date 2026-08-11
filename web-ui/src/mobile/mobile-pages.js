@@ -11091,6 +11091,9 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   let cameraOrbGl = null;
   let cameraPairScanTimer = null;
   let cameraPairScanDetector = null;
+  let cameraPairScanCanvas = null;
+  let cameraPairScanContext = null;
+  let cameraPairScanLastAt = 0;
   let cameraPairScanBusy = false;
   let voiceCameraFrameCacheTimer = null;
   let voiceCameraFrameCache = null;
@@ -11542,6 +11545,9 @@ void main() {
     if (cameraPairScanTimer) cancelAnimationFrame(cameraPairScanTimer);
     cameraPairScanTimer = null;
     cameraPairScanDetector = null;
+    cameraPairScanCanvas = null;
+    cameraPairScanContext = null;
+    cameraPairScanLastAt = 0;
     cameraPairScanBusy = false;
     if (cameraHoldTimer) clearTimeout(cameraHoldTimer);
     cameraHoldTimer = null;
@@ -11659,31 +11665,63 @@ void main() {
     await openCameraCapture(options);
   }
 
+  function decodePairingQrFrameWithJsQr() {
+    if (typeof window.jsQR !== 'function' || !cameraVideo) return '';
+    const rawWidth = Number(cameraVideo.videoWidth || 0);
+    const rawHeight = Number(cameraVideo.videoHeight || 0);
+    if (!rawWidth || !rawHeight) return '';
+    const maxDimension = 960;
+    const scale = Math.min(1, maxDimension / Math.max(rawWidth, rawHeight));
+    const width = Math.max(1, Math.round(rawWidth * scale));
+    const height = Math.max(1, Math.round(rawHeight * scale));
+    if (!cameraPairScanCanvas) cameraPairScanCanvas = document.createElement('canvas');
+    if (cameraPairScanCanvas.width !== width || cameraPairScanCanvas.height !== height) {
+      cameraPairScanCanvas.width = width;
+      cameraPairScanCanvas.height = height;
+      cameraPairScanContext = cameraPairScanCanvas.getContext('2d', { willReadFrequently: true });
+    }
+    if (!cameraPairScanContext) return '';
+    cameraPairScanContext.drawImage(cameraVideo, 0, 0, width, height);
+    const frame = cameraPairScanContext.getImageData(0, 0, width, height);
+    const code = window.jsQR(frame.data, width, height, { inversionAttempts: 'attemptBoth' });
+    return String(code?.data || '').trim();
+  }
+
   async function startPairingQrScan() {
-    if (typeof window.BarcodeDetector !== 'function') {
+    const hasNativeQrDecoder = typeof window.BarcodeDetector === 'function';
+    const hasBundledQrDecoder = typeof window.jsQR === 'function';
+    if (!hasNativeQrDecoder && !hasBundledQrDecoder) {
       pmToast('QR scanning is unavailable in this browser. Use Gateway Connections → Add gateway and enter the short-lived pair code.', 'info');
       return false;
     }
-    try {
-      cameraPairScanDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
-    } catch {
-      cameraPairScanDetector = null;
+    cameraPairScanDetector = null;
+    if (hasNativeQrDecoder) {
+      try {
+        cameraPairScanDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+      } catch {
+        cameraPairScanDetector = null;
+      }
+    }
+    if (!cameraPairScanDetector && !hasBundledQrDecoder) {
       pmToast('This camera does not expose a safe QR decoder. Use the pair-code fallback.', 'info');
       return false;
     }
     await openCameraCapture({ target: 'pairing' });
-    if (!cameraStream || !cameraVideo || !cameraPairScanDetector) return false;
+    if (!cameraStream || !cameraVideo || (!cameraPairScanDetector && !hasBundledQrDecoder)) return false;
     cameraPairScanBusy = false;
+    cameraPairScanLastAt = 0;
     cameraShutter?.setAttribute('disabled', 'disabled');
     cameraShutter?.setAttribute('aria-label', 'QR scanner active');
     setCameraStatus('Point the camera at a Prometheus pairing QR');
-    const scan = async () => {
+    const scan = async (now = performance.now()) => {
       if (!cameraStream || cameraCapture?.hidden || cameraCaptureOptions?.target !== 'pairing') return;
-      if (!cameraPairScanBusy) {
+      if (!cameraPairScanBusy && now - cameraPairScanLastAt >= 140) {
         cameraPairScanBusy = true;
+        cameraPairScanLastAt = now;
         try {
-          const codes = await cameraPairScanDetector.detect(cameraVideo);
-          const raw = String(codes?.[0]?.rawValue || '').trim();
+          const raw = cameraPairScanDetector
+            ? String((await cameraPairScanDetector.detect(cameraVideo))?.[0]?.rawValue || '').trim()
+            : decodePairingQrFrameWithJsQr();
           if (raw) {
             let parsedUrl = null;
             try { parsedUrl = new URL(raw); } catch {}

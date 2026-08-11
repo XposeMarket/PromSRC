@@ -1104,7 +1104,7 @@ export function createMobileShell({ activeTab, onNavigate, onNewChat, onOpenSess
       <div class="pm-drawer-brand">
         <span class="pm-brand-flame">🔥</span>
         <span class="pm-drawer-brand-legacy">Prometheus</span>
-        <img class="pm-brand-p1-mark" src="/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="async">
+        <img class="pm-brand-p1-mark" src="/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette" alt="" decoding="async">
         <span class="pm-drawer-brand-p1" aria-hidden="true"></span>
       </div>
       <button class="pm-theme-toggle" type="button" data-mobile-theme-toggle aria-label="Toggle dark mode"></button>

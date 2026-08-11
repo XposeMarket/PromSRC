@@ -51,7 +51,6 @@ const PRECACHE = [
   '/src/state.js',
   '/src/utils.js',
   '/assets/Prometheus.png',
-  '/src/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette',
   '/static/assets/prometheus-one/p1-mark-ring.png?v=pm-v260-2026-08-09-mobile-theme-palette',
 ];
 
