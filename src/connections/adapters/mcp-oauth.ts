@@ -1,3 +1,4 @@
+import { CONNECTOR_CONNECTION_CONTRACT_VERSION } from '../types.js';
 import type { ConnectionAdapter, ConnectionAdapterContext, ConnectionAdapterResult, ConnectionRecord, ConnectionStrategy, ConnectionVerificationResult } from '../types.js';
 
 export interface McpOAuthHost {
@@ -36,7 +37,7 @@ export class McpOAuthConnectionAdapter implements ConnectionAdapter {
     if (!connected.ok) return { state: 'degraded', error: { code: 'MCP_CONNECT_FAILED', message: connected.error || 'MCP server connection failed.', retryable: true, phase: 'registering' } };
     const tools = connected.tools || [];
     const readOnly = tools.filter((name) => /\b(get|list|read|search|find|lookup|fetch|view|inspect|status|quote|balance|holding|position|profile|history)\b/i.test(name.replace(/[_-]+/g, ' ')) && !/\b(place|submit|buy|sell|trade|order|transfer|withdraw|deposit|delete|cancel|create|update|write)\b/i.test(name.replace(/[_-]+/g, ' ')));
-    return { state: 'verifying', configuration: connected.configuration, connection: { configured: true, authenticated: true, authState: 'healthy', registered: true, registeredTools: tools, availableTools: tools, exposed: readOnly.length > 0, exposedTools: readOnly, tools: tools.map((name) => ({ name, risk: readOnly.includes(name) ? 'read-only' : 'unknown', approved: readOnly.includes(name), classificationReason: readOnly.includes(name) ? 'Conservative read-only name classification.' : 'Available only after the normal tool approval prompt.' })) } };
+    return { state: 'verifying', configuration: connected.configuration, connection: { contractVersion: CONNECTOR_CONNECTION_CONTRACT_VERSION, configured: true, authenticated: true, authState: 'healthy', registered: true, registeredTools: tools, availableTools: tools, exposed: readOnly.length > 0, exposedTools: readOnly, tools: tools.map((name) => ({ name, risk: readOnly.includes(name) ? 'read-only' : 'unknown', approved: readOnly.includes(name), classificationReason: readOnly.includes(name) ? 'Conservative read-only name classification.' : 'Available only after the normal tool approval prompt.' })) } };
   }
   async verify(_context: ConnectionAdapterContext, connection: ConnectionRecord): Promise<ConnectionVerificationResult[]> {
     const now = new Date().toISOString();

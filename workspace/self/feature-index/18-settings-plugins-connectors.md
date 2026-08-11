@@ -497,6 +497,11 @@ HTTP/SSE sessions and the Plugins detail view also provide an explicit
 reconciles managed canonical registration without silently expanding an
 explicit user allowlist.
 
+Managed MCP connections expose the same Plugins tool checklist as native
+connectors through `GET/POST /api/connections-v2/:id/tools`; manually configured
+legacy servers remain visible and executable through their runtime list until
+they are adopted into a canonical connection-v2 record.
+
 ### MCP presets
 
 MCP presets are extension-registered runtime objects, not a hardcoded menu.

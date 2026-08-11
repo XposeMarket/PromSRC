@@ -15,6 +15,9 @@ assert(platformCapabilityExecutor.canHandle('connection_ops'), 'connection_ops m
 
 const defs = getCisSystemTools();
 assert(defs.some((def) => def.function?.name === 'connection_ops'), 'connection_ops schema missing');
+const connectionDef = defs.find((def) => def.function?.name === 'connection_ops');
+assert(connectionDef.function.parameters.properties.action.enum.includes('set_tool_availability'), 'connection_ops schema missing set_tool_availability');
+assert(connectionDef.function.parameters.properties.available_tools, 'connection_ops schema missing available_tools');
 const webhookDef = defs.find((def) => def.function?.name === 'webhook_manage');
 assert(webhookDef, 'webhook_manage schema missing');
 assert.match(webhookDef.function.parameters.properties.action.description, /set_provider/);
@@ -61,6 +64,8 @@ const mcpManagerSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'mcp-
 assert.match(mcpManagerSource, /notifications\/tools\/list_changed/, 'MCP list changes must trigger refresh');
 assert.match(mcpManagerSource, /refreshTools\(id:/, 'MCP tools must have an explicit refresh path');
 assert.match(mcpManagerSource, /buildHttpHeaders/, 'live MCP HTTP requests must rebuild vault/OAuth headers');
+const mcpRouteSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'routes', 'goals.router.ts'), 'utf8');
+assert.match(mcpRouteSource, /toolMetadata: connection\?\.tools/, 'MCP status must expose canonical tool grant metadata');
 const consistencySource = fs.readFileSync(path.join(root, 'src', 'extensions', 'consistency.ts'), 'utf8');
 assert.match(consistencySource, /Native runtime connector declarations must be exact/, 'manifest/runtime connector parity must be checked');
 

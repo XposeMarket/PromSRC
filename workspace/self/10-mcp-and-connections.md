@@ -143,7 +143,7 @@ Guardrails (`src/extensions/consistency.ts`, run at load + via
 - the legacy adapter skips any connector that has a native `runtime.entrypoint`, so
   native and legacy can never double-register during the transition
 
-### 23A) Plugin/MCP interoperability baseline — 2026-08-11
+### 23C) Plugin/MCP interoperability baseline — 2026-08-11
 
 The connector-only Prometheus surface follows the common interoperability
 patterns used by OpenAI Apps, Claude/MCP, Hermes Agent, and OpenClaw without
@@ -181,6 +181,13 @@ folding model-provider credentials into the Plugins catalog:
   developer/advanced setup. Model providers, chat-model credentials, voice/
   realtime providers, reasoning defaults, and provider authentication remain in
   their existing Settings surfaces.
+
+Reference audit sources: [OpenAI Apps](https://help.openai.com/en/articles/11487775-connectors-in),
+[Anthropic MCP](https://docs.anthropic.com/en/docs/mcp),
+[Hermes Agent MCP](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/mcp.md),
+[OpenClaw plugin architecture](https://github.com/openclaw/openclaw/blob/main/docs/tools/plugin.md),
+[OpenClaw plugin CLI](https://github.com/openclaw/openclaw/blob/main/docs/cli/plugins.md),
+and the [MCP tools specification](https://modelcontextprotocol.io/specification/2025-06-18/server/tools).
 
 Per-connector migration checklist:
 
@@ -233,6 +240,7 @@ Bundled connector extension folders currently include:
 Connections routes currently include:
 
 - `GET /api/connections`
+- `GET /api/connections-v2/:id/tools` and `POST /api/connections-v2/:id/tools` for the canonical per-connection tool allowlist
 - `POST /api/connections/credentials`
 - `POST /api/connections/save`
 - `POST /api/connections/disconnect`
@@ -241,6 +249,7 @@ Connections routes currently include:
 - `POST /api/connections/browser-open`
 - `POST /api/connections/browser-verify`
 - `GET /api/connections/activity`
+- `POST /api/mcp/servers/:id/refresh` for explicit MCP `tools/list` refresh
 
 Browser-session verification is currently implemented for:
 

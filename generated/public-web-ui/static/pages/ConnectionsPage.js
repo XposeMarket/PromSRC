@@ -1801,12 +1801,39 @@ function openMcpServerView(id) {
 
   const aiToolsEl = document.getElementById('cv-ai-tools');
   if (aiToolsEl) {
-    const tools = Array.isArray(s.toolNames) ? s.toolNames : [];
-    if (connected && tools.length) {
+    const tools = Array.isArray(s.registeredTools) && s.registeredTools.length
+      ? s.registeredTools
+      : (Array.isArray(s.toolNames) ? s.toolNames : []);
+    const availableTools = Array.isArray(s.availableTools) ? s.availableTools : tools;
+    const exposedTools = Array.isArray(s.exposedTools) ? s.exposedTools : [];
+    const classifications = new Map((Array.isArray(s.toolMetadata) ? s.toolMetadata : []).map((tool) => [tool.name, tool]));
+    const canManageToolAvailability = Boolean(s.connectionId && s.contractVersion === 2 && tools.length);
+    const encodedConnectionId = encodedInlineValue(s.connectionId || '');
+    const encodedServerId = encodedInlineValue(s.id);
+    const toolRows = tools.map((tool) => {
+      const classification = classifications.get(tool);
+      const risk = classification?.risk || (exposedTools.includes(tool) ? 'read-only' : 'approval');
+      const checked = availableTools.includes(tool) ? ' checked' : '';
+      return canManageToolAvailability
+        ? `<label style="display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);cursor:pointer">
+            <input type="checkbox" data-mcp-tool="${escHtml(tool)}"${checked} style="margin-top:2px;accent-color:var(--brand)" />
+            <span style="min-width:0;flex:1"><code style="font-size:10.5px;color:var(--text-2);word-break:break-word">mcp__${escHtml(s.id)}__${escHtml(tool)}</code><span style="display:block;margin-top:2px;font-size:10px;color:${risk === 'read-only' ? 'var(--ok)' : 'var(--warn)'}">${escHtml(risk === 'read-only' ? 'read-only · automatic' : `${risk} · approval required`)}</span></span>
+          </label>`
+        : `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);opacity:${availableTools.includes(tool) ? '1' : '0.55'}"><code style="font-size:10.5px;color:var(--text-2);word-break:break-word;flex:1">mcp__${escHtml(s.id)}__${escHtml(tool)}</code><span style="font-size:10px;color:${risk === 'read-only' ? 'var(--ok)' : 'var(--warn)'};white-space:nowrap">${escHtml(risk === 'read-only' ? 'read-only' : 'approval')}</span></div>`;
+    }).join('');
+    if (connected && tools.length && availableTools.length) {
       aiToolsEl.style.display = '';
-      aiToolsEl.innerHTML = `<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">AI Tools Unlocked</div>
-        <div style="display:flex;flex-wrap:wrap;gap:5px">${tools.map((t) => `<code style="font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--text-2)">mcp__${escHtml(s.id)}__${escHtml(t)}</code>`).join('')}</div>
+      aiToolsEl.innerHTML = `<div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">MCP tools available to Prometheus</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-bottom:8px">${exposedTools.length}/${tools.length} are read-only and automatic. Other enabled actions remain approval-gated at the moment they run.</div>
+        <div style="display:flex;flex-direction:column;gap:5px">${toolRows}</div>
+        ${canManageToolAvailability ? `<button class="cv-btn-connect" onclick="saveMcpToolAvailability(decodeURIComponent('${encodedConnectionId}'), decodeURIComponent('${encodedServerId}'), this)" style="margin-top:9px;background:var(--panel-2);color:var(--text);border:1px solid var(--line)">Save tool access</button>` : '<div style="font-size:11px;color:var(--muted);margin-top:8px">This legacy MCP server uses its runtime tool list. Canonical connections expose a selectable tool allowlist.</div>'}
         <div style="font-size:11px;color:var(--muted);margin-top:8px">Activate with <code style="font-size:10.5px">request_tool_category({"category":"mcp_server_tools"})</code></div>`;
+    } else if (connected && tools.length) {
+      aiToolsEl.style.display = '';
+      aiToolsEl.innerHTML = `<div style="font-size:11px;font-weight:700;color:var(--warn);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">No MCP tools enabled</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.45;margin-bottom:8px">The server is connected, but no discovered tools are enabled for the model.</div>
+        <div style="display:flex;flex-direction:column;gap:5px">${toolRows}</div>
+        ${canManageToolAvailability ? `<button class="cv-btn-connect" onclick="saveMcpToolAvailability(decodeURIComponent('${encodedConnectionId}'), decodeURIComponent('${encodedServerId}'), this)" style="margin-top:9px;background:var(--panel-2);color:var(--text);border:1px solid var(--line)">Save tool access</button>` : ''}`;
     } else {
       aiToolsEl.style.display = 'none';
       aiToolsEl.innerHTML = '';
@@ -1819,6 +1846,26 @@ function openMcpServerView(id) {
   if (activityWrap) activityWrap.style.display = 'none';
 
   showConnectorView();
+}
+
+async function saveMcpToolAvailability(connectionId, serverId, button) {
+  const selected = [...document.querySelectorAll('#cv-ai-tools input[data-mcp-tool]:checked')]
+    .map((input) => input.getAttribute('data-mcp-tool') || '')
+    .filter(Boolean);
+  if (button) { button.disabled = true; button.textContent = 'Saving tool access…'; }
+  try {
+    const result = await api(`/api/connections-v2/${encodeURIComponent(connectionId)}/tools`, {
+      method: 'POST',
+      body: JSON.stringify({ availableTools: selected }),
+    });
+    const rejected = Array.isArray(result?.rejectedTools) ? result.rejectedTools : [];
+    await loadMcpServers();
+    if (mcpServerById(serverId)) openMcpServerView(serverId);
+    showToast('MCP tool access saved', rejected.length ? `Ignored ${rejected.length} undiscovered tool(s).` : `${selected.length} tool(s) enabled.`, 'success');
+  } catch (error) {
+    showToast('MCP tool access failed', error?.message || String(error), 'error');
+    if (button) { button.disabled = false; button.textContent = 'Save tool access'; }
+  }
 }
 
 function renderMcpServerActions(s, { needsAuth, connected }) {
@@ -2334,6 +2381,7 @@ window.renderConnectorActions = renderConnectorActions;
 window.startCanonicalConnection = startCanonicalConnection;
 window.disconnectCanonicalConnection = disconnectCanonicalConnection;
 window.saveConnectorToolAvailability = saveConnectorToolAvailability;
+window.saveMcpToolAvailability = saveMcpToolAvailability;
 window.runConnectionAttemptAction = runConnectionAttemptAction;
 window.continueConnectionAttempt = continueConnectionAttempt;
 window.openConnectionAttemptOAuth = openConnectionAttemptOAuth;
