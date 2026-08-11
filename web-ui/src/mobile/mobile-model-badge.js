@@ -756,7 +756,8 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
         if (event.pointerType === 'mouse' && event.button !== 0) return;
         requestGestureNativeHaptic = gesture?.requestNativeHaptic || null;
         const rect = control.getBoundingClientRect();
-        const currentProgress = Number(control.style.getPropertyValue('--pm-reasoning-progress')) || (selectedIndex / indexMax);
+        const styleProgress = Number(control.style.getPropertyValue('--pm-reasoning-progress'));
+        const currentProgress = Number.isFinite(styleProgress) ? styleProgress : (selectedIndex / indexMax);
         gestureStart = { x: Number(event.clientX || 0), y: Number(event.clientY || 0), progress: currentProgress, rect };
         gestureAxis = null;
         control.classList.add('is-dragging');
