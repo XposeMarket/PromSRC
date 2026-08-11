@@ -15373,13 +15373,50 @@ body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-advanced > span:last
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control {
   grid-column: 1 / -1;
   grid-row: 2;
-  width: 100%;
+  width: min(100%, 260px);
+  justify-self: center;
 }
 body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-track {
+  width: 58px;
+  height: 128px;
+  margin: 0 auto;
+  padding: 5px;
+  grid-auto-flow: row;
+  grid-auto-rows: 1fr;
+  grid-auto-columns: auto;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pm-surface-strong) 84%, white 16%);
   box-shadow: inset 0 1px 2px rgba(255,255,255,.12), 0 8px 20px rgba(0,0,0,.22);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill {
+  left: 5px;
+  right: 5px;
+  top: auto;
+  bottom: 5px;
+  width: auto;
+  height: var(--pm-reasoning-fill-height, 20%);
+  background: color-mix(in srgb, var(--pm-accent) var(--pm-reasoning-color-strength, 0%), transparent);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,.3), 0 4px 14px color-mix(in srgb, var(--pm-accent) var(--pm-reasoning-color-strength, 0%), transparent);
+  transition: height .16s cubic-bezier(.2,.9,.2,1), background-color .16s ease, box-shadow .16s ease;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-fill::after {
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: auto;
+  width: auto;
+  height: 18px;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-segment::after {
+  width: 6px;
+  height: 6px;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-segment {
+  min-height: 0;
+}
+body.pm-mobile-active .pm-msheet.is-reasoning .pm-reasoning-control.is-dragging .pm-reasoning-fill { transition: none; }
 body.pm-mobile-active .pm-msheet.is-model-switch {
   min-height: min(42dvh, 360px);
   max-height: min(52dvh, 460px);

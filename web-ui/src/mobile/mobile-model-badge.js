@@ -686,6 +686,8 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
       control.style.setProperty('--pm-reasoning-progress', String(safeProgress));
       const fillWidth = ((1 / options.length) + safeProgress * ((options.length - 1) / options.length)) * 100;
       control.style.setProperty('--pm-reasoning-fill-width', `${fillWidth}%`);
+      control.style.setProperty('--pm-reasoning-fill-height', `${fillWidth}%`);
+      control.style.setProperty('--pm-reasoning-color-strength', `${Math.round(safeProgress * 100)}%`);
     };
     const commitIndex = (index, immediate = false, { snap = true, save = true } = {}) => {
       const safeIndex = Math.max(0, Math.min(options.length - 1, Number(index) || 0));
@@ -715,10 +717,24 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
         if (saveResult?.catch) saveResult.catch((err) => _toast(err?.message || 'Could not save reasoning', 'error'));
       }
     };
+    let gestureStart = null;
+    let gestureAxis = null;
     const progressFromEvent = (event) => {
       const rect = control.getBoundingClientRect();
-      const pct = rect.width ? (event.clientX - rect.left) / rect.width : 0;
-      return Math.max(0, Math.min(1, pct));
+      if (!gestureStart) {
+        return rect.height ? (event.clientY - rect.top) / rect.height : 0;
+      }
+      const dx = Number(event.clientX || 0) - gestureStart.x;
+      const dy = Number(event.clientY || 0) - gestureStart.y;
+      if (!gestureAxis && Math.max(Math.abs(dx), Math.abs(dy)) >= 8) {
+        gestureAxis = Math.abs(dy) >= Math.abs(dx) ? 'vertical' : 'horizontal';
+      }
+      if (gestureAxis === 'horizontal') {
+        const distance = Math.max(120, rect.width * 0.72);
+        return gestureStart.progress + (dx / distance);
+      }
+      const distance = Math.max(96, rect.height * 0.72);
+      return gestureStart.progress + (dy / distance);
     };
     const indexFromProgress = (progress) => {
       return Math.round(Math.max(0, Math.min(1, Number(progress) || 0)) * (options.length - 1));
@@ -739,6 +755,10 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
       onPointerDown: (event, gesture) => {
         if (event.pointerType === 'mouse' && event.button !== 0) return;
         requestGestureNativeHaptic = gesture?.requestNativeHaptic || null;
+        const rect = control.getBoundingClientRect();
+        const currentProgress = Number(control.style.getPropertyValue('--pm-reasoning-progress')) || (selectedIndex / indexMax);
+        gestureStart = { x: Number(event.clientX || 0), y: Number(event.clientY || 0), progress: currentProgress, rect };
+        gestureAxis = null;
         control.classList.add('is-dragging');
         updateFromPointer(event);
       },
@@ -754,6 +774,8 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
           control.classList.remove('is-dragging');
           updateFromPointer(event, true);
         } finally {
+          gestureStart = null;
+          gestureAxis = null;
           requestGestureNativeHaptic = null;
         }
       },
@@ -764,6 +786,8 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
           control.classList.remove('is-dragging');
           updateFromPointer(event, true);
         } finally {
+          gestureStart = null;
+          gestureAxis = null;
           requestGestureNativeHaptic = null;
         }
       },
@@ -771,12 +795,12 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
     };
     attachMobileHapticGestureSurface(control, pointerHandlers);
     control.addEventListener('keydown', (event) => {
-      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
       const currentIndex = Number(control.getAttribute('aria-valuenow') || selectedIndex);
       if (event.key === 'Home') commitIndex(0, true);
       else if (event.key === 'End') commitIndex(options.length - 1, true);
-      else commitIndex(currentIndex + (event.key === 'ArrowRight' ? 1 : -1), true);
+      else commitIndex(currentIndex + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1), true);
     });
   }
 }

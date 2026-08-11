@@ -50,7 +50,7 @@ export function renderReasoningSelector({
   const safeLiveLabelId = safeId(liveLabelId, `${rootId}-live-label`);
   const safeAdvancedId = safeId(advancedId, `${rootId}-advanced`);
   const slider = options ? `
-    <div class="pm-reasoning-control" id="${esc(safeControlId)}" style="--pm-reasoning-index:${selectedIndex};--pm-reasoning-progress:${selectedProgress};--pm-reasoning-fill-width:${selectedFillWidth}%;--pm-reasoning-steps:${Math.max(1, options.length - 1)}" role="slider" tabindex="0" aria-label="Reasoning level" aria-valuemin="0" aria-valuemax="${options.length - 1}" aria-valuenow="${selectedIndex}" aria-valuetext="${esc(effortName)}">
+     <div class="pm-reasoning-control" id="${esc(safeControlId)}" style="--pm-reasoning-index:${selectedIndex};--pm-reasoning-progress:${selectedProgress};--pm-reasoning-fill-width:${selectedFillWidth}%;--pm-reasoning-fill-height:${selectedFillWidth}%;--pm-reasoning-color-strength:${Math.round(selectedProgress * 100)}%;--pm-reasoning-steps:${Math.max(1, options.length - 1)}" role="slider" tabindex="0" aria-label="Reasoning level. Swipe down for higher reasoning and up for lower reasoning." aria-valuemin="0" aria-valuemax="${options.length - 1}" aria-valuenow="${selectedIndex}" aria-valuetext="${esc(effortName)}">
       <div class="pm-reasoning-track" aria-hidden="true">
         <div class="pm-reasoning-fill"></div>
         ${options.map((value, index) => `<button type="button" class="pm-reasoning-segment ${index === selectedIndex ? 'is-active ' : ''}${index <= selectedIndex ? 'is-filled' : ''}" data-index="${index}" data-value="${esc(value)}" aria-label="${esc(formatReasoningSelectorLabel(value, provider))}"><span>${esc(formatReasoningSelectorLabel(value, provider))}</span></button>`).join('')}
