@@ -299,9 +299,12 @@ router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
     const svg = await QRCode.toString(pairUrl, {
       type: 'svg',
       errorCorrectionLevel: 'M',
-      margin: 1,
-      color: { dark: '#221a14', light: '#ffffff' },
-      width: 320,
+      // Keep a full quiet zone and fit the 320px pairing card's 288px content
+      // box. The old 320px / margin-1 SVG was prone to sub-pixel scaling and
+      // failed the bundled decoder on common camera resolutions.
+      margin: 2,
+      color: { dark: '#000000', light: '#ffffff' },
+      width: 288,
     });
 
     const cfg = getConfig().getConfig() as any;
@@ -311,6 +314,7 @@ router.post('/api/pairing/qr', requirePairingAdmin, async (req, res) => {
       challengeId: challenge.id,
       pairCode: challenge.humanCode,
       pairUrl,
+      pairingOrigin: origin,
       bindHost: pairingOrigin.bindHost,
       lanOrigins: pairingOrigin.lanOrigins,
       warning: pairingOrigin.warning,
@@ -483,7 +487,20 @@ function _runTailscaleCli(args: string[], timeoutMs: number = 4000): Promise<{ c
       // Lazy require so tests / non-Node environments don't blow up.
       // tslint:disable-next-line:no-var-requires
       const { spawn } = require('child_process') as typeof import('child_process');
-      const proc = spawn('tailscale', args, { windowsHide: true });
+      const configured = String(process.env.PROMETHEUS_TAILSCALE_BIN || '').trim();
+      const installedCandidates = process.platform === 'darwin'
+        ? [
+          '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
+          path.join(os.homedir(), 'Applications/Tailscale.app/Contents/MacOS/Tailscale'),
+        ]
+        : process.platform === 'win32'
+          ? [
+            path.join(String(process.env.ProgramFiles || ''), 'Tailscale', 'tailscale.exe'),
+            path.join(String(process.env.LOCALAPPDATA || ''), 'Tailscale', 'tailscale.exe'),
+          ]
+          : [];
+      const tailscaleBin = [configured, ...installedCandidates].find((candidate) => candidate && fs.existsSync(candidate)) || 'tailscale';
+      const proc = spawn(tailscaleBin, args, { windowsHide: true });
       let stdout = ''; let stderr = ''; let done = false;
       const finish = (code: number) => { if (done) return; done = true; resolve({ code, stdout, stderr }); };
       proc.stdout?.on('data', (b: Buffer) => { stdout += b.toString('utf8'); });

@@ -7148,15 +7148,21 @@ async function refreshPairingQR() {
     _pairingCurrentChallenge = r;
     if (wrap) {
       const pairCode = String(r.pairCode || '').trim();
+      let pairingOrigin = String(r.pairingOrigin || '').trim();
+      if (!pairingOrigin) {
+        try { pairingOrigin = new URL(String(r.pairUrl || '')).origin; } catch {}
+      }
       wrap.innerHTML = `
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:18px;align-items:center;">
-          <div style="display:flex;justify-content:center;">${r.qrSvg || ''}</div>
+          <div style="display:flex;justify-content:center;max-width:288px;width:100%;margin:0 auto;">${r.qrSvg || ''}</div>
           <div style="display:flex;flex-direction:column;gap:10px;min-width:0;text-align:left;">
             <div style="font-size:12px;font-weight:800;color:var(--text);text-transform:uppercase;letter-spacing:.06em;">Pair code</div>
             <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:clamp(22px,4vw,34px);font-weight:900;letter-spacing:.08em;line-height:1.15;color:#221a14;background:#fff8ef;border:1px solid #f3d6b9;border-radius:10px;padding:14px 16px;text-align:center;word-break:break-word;">
               ${escHtml(pairCode || 'PAIR-....-....')}
             </div>
-            <div style="font-size:12px;color:var(--muted);line-height:1.45;">Scan the QR from Safari, or open the Home Screen app and enter this code.</div>
+            <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Gateway address</div>
+            <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--text);background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px 9px;word-break:break-all;">${escHtml(pairingOrigin || 'Unavailable')}</div>
+            <div style="font-size:12px;color:var(--muted);line-height:1.45;">Scan the QR from Safari, or open this gateway address on the phone first and enter the pair code. You can also paste the full pairing link.</div>
             <button class="btn btn-sm" id="pairing-copy-code-btn" style="background:#fff;border:1px solid var(--line);color:var(--text);width:max-content">Copy code</button>
           </div>
         </div>`;
