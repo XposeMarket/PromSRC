@@ -6,7 +6,8 @@
  *   1. one operation row that evolves from preparing -> running
  *   2. one result row
  *
- * Raw names/arguments/results remain available as expandable technical details.
+ * The stream stays compact; raw protocol details remain available to logs and
+ * telemetry instead of adding a second technical panel to every row.
  */
 
 function compact(value, max = 120) {
@@ -67,6 +68,15 @@ function durationLabel(value) {
 }
 
 const COMMAND_TERMINAL_MAX_CHARS = 64 * 1024;
+const TERMINAL_COMMAND_ACTIONS = new Set([
+  'workspace_run',
+  'run_command',
+  'terminal',
+  'shell',
+  'shell_command',
+  'terminal_run',
+  'start_process',
+]);
 
 function disclosureState() {
   if (typeof window === 'undefined') return null;
@@ -126,21 +136,6 @@ function resultCount(value, keys) {
     }
   } catch {}
   return null;
-}
-
-function sanitizeTechnicalValue(value, depth = 0) {
-  if (depth > 6) return '[nested value omitted]';
-  if (Array.isArray(value)) return value.slice(0, 80).map((item) => sanitizeTechnicalValue(item, depth + 1));
-  if (!value || typeof value !== 'object') return value;
-  const out = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (/token|secret|password|passphrase|authorization|api[_-]?key|cookie|credential/i.test(key)) {
-      out[key] = '[redacted]';
-    } else {
-      out[key] = sanitizeTechnicalValue(item, depth + 1);
-    }
-  }
-  return out;
 }
 
 function normalizeAction(value) {
@@ -222,8 +217,8 @@ function describeTool(actionRaw, argsRaw = {}) {
     return make('file.edit', 'file edit', 'Preparing file edit…', targetText, fileTarget ? `Updated ${fileTarget}` : 'Updated files', { family: 'file', target: fileTarget, countNoun: 'file edit' });
   }
 
-  if (action === 'workspace_run' || /^(?:run_command|shell|shell_command|terminal_run)$/.test(action)) {
-    return make('command.run', 'command', 'Preparing command…', command ? `Running command · ${compact(command, 110)}` : 'Running command', 'Command finished', { family: 'command', target: command, countNoun: 'command' });
+  if (TERMINAL_COMMAND_ACTIONS.has(action)) {
+    return make('command.run', 'command', 'Preparing command…', command ? `Running command · ${compact(command, 110)}` : 'Running command', command ? `Ran command · ${compact(command, 110)}` : 'Ran command', { family: 'command', target: command, countNoun: 'command' });
   }
 
   if (action.startsWith('desktop_')) {
@@ -257,6 +252,9 @@ function describeTool(actionRaw, argsRaw = {}) {
 }
 
 function failureLabel(description, result) {
+  if (description.key === 'command.run') {
+    return description.target ? `Command failed · ${description.target}` : 'Command failed';
+  }
   const reason = resultFirstLine(result, 110);
   const base = `${description.noun.charAt(0).toUpperCase()}${description.noun.slice(1)} failed`;
   return reason ? `${base} · ${reason}` : base;
@@ -549,6 +547,7 @@ export function toolActivitySummary(entriesInput, { live = false } = {}) {
   for (const list of groups.values()) {
     const first = list[0];
     if (list.length === 1) parts.push(activityText(first).replace(/\s+·\s+\d+(?:\.\d+)?\s*(?:ms|s)$/i, ''));
+    else if (first.family === 'command') parts.push(`Ran ${list.length} commands`);
     else parts.push(`${list.length} ${first.countNoun || 'tool calls'}${/s$/i.test(first.countNoun || '') ? '' : 's'}`);
   }
   if (failed.length === 1) parts.push(activityText(failed[0]).replace(/\s+·\s+\d+(?:\.\d+)?\s*(?:ms|s)$/i, ''));
@@ -559,20 +558,10 @@ export function toolActivitySummary(entriesInput, { live = false } = {}) {
   return `${parts.slice(0, -1).join(', ')} · ${parts[parts.length - 1]}`;
 }
 
-export function toolActivityDetailItems(activity = {}) {
-  const items = [];
-  if (activity.technicalName) items.push(['Tool', activity.technicalName]);
-  if (activity.status) items.push(['Status', activity.status]);
-  if (activity.target) items.push(['Target', activity.target]);
-  const duration = durationLabel(activity.durationMs);
-  if (duration) items.push(['Duration', duration]);
-  if (activity.callId) items.push(['Call ID', activity.callId]);
-  if (activity.progress) items.push(['Progress', activity.progress]);
-  if (activity.args && Object.keys(activity.args).length) {
-    try { items.push(['Arguments', JSON.stringify(sanitizeTechnicalValue(activity.args), null, 2)]); } catch {}
-  }
-  if (activity.kind === 'result' && String(activity.result || '').trim()) items.push(['Result', String(activity.result).trim()]);
-  return items;
+export function toolActivityDetailItems(_activity = {}) {
+  // Kept as a compatibility export for integrations that imported the helper;
+  // the user-facing stream intentionally has no technical detail section.
+  return [];
 }
 
 export function renderToolActivityEntry(entry, escapeHtml) {
@@ -583,15 +572,7 @@ export function renderToolActivityEntry(entry, escapeHtml) {
     : (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const label = String(entry.text || activityText(activity));
   const state = activity.kind === 'result' ? (activity.ok === false ? 'failed' : 'succeeded') : activity.status || 'running';
-  const detailItems = toolActivityDetailItems(activity);
-  const details = detailItems.map(([key, value]) => {
-    const multiline = /[\r\n{}\[\]]/.test(String(value || '')) || String(value || '').length > 120;
-    return `<div class="tool-activity-detail-row${multiline ? ' is-block' : ''}"><strong>${esc(key)}</strong>${multiline ? `<pre>${esc(value)}</pre>` : `<span>${esc(value)}</span>`}</div>`;
-  }).join('');
   const activityKey = activity.callId || activity.activityId || entry?.id || `${activity.action || 'tool'}_${activity.kind || 'operation'}`;
-  const disclosureKey = `activity:${activityKey}:${activity.kind || 'operation'}`;
-  const storedDisclosure = disclosureState()?.get(disclosureKey);
-  const activityOpen = storedDisclosure === true;
   const terminal = activity.family === 'command' ? activity.terminal : null;
   const terminalActive = terminal && !terminal.completed && !['exited'].includes(String(terminal.state || '').toLowerCase());
   const showTerminal = terminal && ((activity.kind === 'operation' && !activity.resultAttached) || activity.kind === 'result');
@@ -604,14 +585,9 @@ export function renderToolActivityEntry(entry, escapeHtml) {
     <pre data-command-terminal-output="${esc(terminal.runId || '')}" data-terminal-sequence="${esc(terminal.sequence || 0)}">${esc(terminalOutput || (terminalActive ? 'Waiting for output…' : 'Open to load output…'))}</pre>
   </details>` : '';
   return `<div class="tool-activity-wrap" data-activity-key="${esc(activityKey)}">
-  <details class="tool-activity-entry" data-tool-disclosure-key="${esc(disclosureKey)}" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}"${activityOpen ? ' open' : ''}>
-    <summary>
-      <span class="tool-activity-kicker">Tool</span>
-      <span class="tool-activity-label">${esc(label)}</span>
-      <span class="tool-activity-chevron" aria-hidden="true">›</span>
-    </summary>
-    <div class="tool-activity-details">${details || '<div class="tool-activity-detail-empty">No additional details.</div>'}</div>
-  </details>
+  <div class="tool-activity-entry" data-kind="${esc(activity.kind || 'operation')}" data-status="${esc(state)}">
+    <div class="tool-activity-entry-summary"><span class="tool-activity-label">${esc(label)}</span></div>
+  </div>
   ${terminalHtml}
   </div>`;
 }

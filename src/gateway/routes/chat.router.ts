@@ -553,6 +553,8 @@ type TurnFileChange = {
   oldPath?: string;
   diffPreview?: string;
   binary?: boolean;
+  baselineKind?: 'git-head' | 'git-index' | 'turn-snapshot' | 'none';
+  baselineId?: string;
 };
 
 type TurnFileChanges = {
@@ -746,6 +748,42 @@ function extractTouchedFilesFromToolResult(result: any, workspacePath: string): 
   ));
 }
 
+function isInsideTurnWorkspace(workspacePath: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(workspacePath), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function extractTerminalWorkspaceChangesFromToolResult(result: any, workspacePath: string): TurnFileChange[] {
+  const changes: TurnFileChange[] = [];
+  const sources = [result?.extra, result?.data, result].filter((source) => source && typeof source === 'object');
+  for (const source of sources) {
+    const rawChanges = source.workspaceChanges || source.workspace_changes;
+    if (!Array.isArray(rawChanges)) continue;
+    for (const raw of rawChanges) {
+      if (!raw || typeof raw !== 'object') continue;
+      const absPath = resolveTurnFilePath(raw.path || raw.absPath || raw.file || raw.displayPath, workspacePath);
+      if (!absPath || !isInsideTurnWorkspace(workspacePath, absPath)) continue;
+      const status = String(raw.status || 'modified').toLowerCase();
+      if (!['added', 'modified', 'deleted', 'renamed'].includes(status)) continue;
+      const rawOldPath = String(raw.oldPath || raw.old_path || '').trim();
+      const oldPath = rawOldPath ? resolveTurnFilePath(rawOldPath, workspacePath) : '';
+      changes.push({
+        path: absPath,
+        displayPath: String(raw.displayPath || normalizeDisplayPath(absPath, workspacePath)).replace(/\\/g, '/'),
+        status: status as TurnFileChangeStatus,
+        insertions: Math.max(0, Number(raw.insertions) || 0),
+        deletions: Math.max(0, Number(raw.deletions) || 0),
+        ...(oldPath && isInsideTurnWorkspace(workspacePath, oldPath) ? { oldPath } : {}),
+        ...(String(raw.diffPreview || '').trim() ? { diffPreview: String(raw.diffPreview).slice(0, 12_000) } : {}),
+        ...(raw.binary === true ? { binary: true } : {}),
+        ...(raw.baselineKind ? { baselineKind: raw.baselineKind } : {}),
+        ...(String(raw.baselineId || '').trim() ? { baselineId: String(raw.baselineId).trim() } : {}),
+      });
+    }
+  }
+  return Array.from(new Map(changes.map((change) => [path.resolve(change.path).toLowerCase(), change])).values());
+}
+
 function runGitText(cwd: string, args: string[], maxBuffer = 2 * 1024 * 1024): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile('git', args, {
@@ -799,11 +837,17 @@ async function inferGitStatus(root: string, relPath: string, absPath: string): P
 }
 
 async function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: string): Promise<TurnFileChanges | undefined> {
+  const terminalChanges = Array.from(new Map(
+    (Array.isArray(toolResults) ? toolResults : [])
+      .flatMap((result) => extractTerminalWorkspaceChangesFromToolResult(result, workspacePath))
+      .map((change) => [path.resolve(change.path).toLowerCase(), change] as const),
+  ).values());
   const touched = Array.from(new Set(
     (Array.isArray(toolResults) ? toolResults : [])
       .flatMap((result) => extractTouchedFilesFromToolResult(result, workspacePath)),
-  ));
-  if (!touched.length) return undefined;
+  )).filter((filePath) => !terminalChanges.some((change) => path.resolve(change.path).toLowerCase() === path.resolve(filePath).toLowerCase()));
+  if (!touched.length && !terminalChanges.length) return undefined;
+  const snapshotRefs = collectSnapshotRefsFromToolResults(toolResults);
 
   const candidates = touched.slice(0, 40);
   const collected: Array<TurnFileChange | undefined> = new Array(candidates.length);
@@ -815,12 +859,20 @@ async function collectTurnFileChanges(toolResults: any[] | undefined, workspaceP
     let status: TurnFileChangeStatus = fs.existsSync(absPath) ? 'modified' : 'deleted';
     let diffPreview = '';
     let binary = false;
+    const snapshot = snapshotRefs.find((ref: any) => {
+      const target = String(ref?.targetPath || '').trim();
+      return target && path.resolve(target).toLowerCase() === path.resolve(absPath).toLowerCase();
+    });
+    let baselineKind: TurnFileChange['baselineKind'] = 'none';
 
     if (gitRoot) {
       const relPath = path.relative(gitRoot, absPath).replace(/\\/g, '/');
       status = await inferGitStatus(gitRoot, relPath, absPath);
       try {
-        const numstat = (await runGitText(gitRoot, ['diff', '--numstat', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0] || '';
+        const numstat = (await runGitText(gitRoot, ['diff', 'HEAD', '--numstat', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0]
+          || (await runGitText(gitRoot, ['diff', '--cached', '--numstat', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0]
+          || (await runGitText(gitRoot, ['diff', '--numstat', '--', relPath])).trim().split(/\r?\n/).filter(Boolean)[0]
+          || '';
         const parts = numstat.split(/\s+/);
         if (parts[0] === '-' || parts[1] === '-') {
           binary = true;
@@ -833,11 +885,15 @@ async function collectTurnFileChanges(toolResults: any[] | undefined, workspaceP
         insertions = countTextFileLines(absPath);
       }
       try {
-        diffPreview = (await runGitText(gitRoot, ['diff', '--unified=2', '--', relPath], 512 * 1024)).slice(0, 12000);
+        diffPreview = (await runGitText(gitRoot, ['diff', 'HEAD', '--unified=2', '--', relPath], 512 * 1024)).slice(0, 12000)
+          || (await runGitText(gitRoot, ['diff', '--cached', '--unified=2', '--', relPath], 512 * 1024)).slice(0, 12000)
+          || (await runGitText(gitRoot, ['diff', '--unified=2', '--', relPath], 512 * 1024)).slice(0, 12000);
       } catch {}
+      baselineKind = status === 'modified' && !diffPreview ? 'git-index' : 'git-head';
     } else if (fs.existsSync(absPath)) {
-      insertions = countTextFileLines(absPath);
-      status = 'added';
+      insertions = snapshot ? 0 : countTextFileLines(absPath);
+      status = snapshot?.existed ? 'modified' : 'added';
+      baselineKind = snapshot ? 'turn-snapshot' : 'none';
     }
 
     if (!fs.existsSync(absPath) && status !== 'deleted') return undefined;
@@ -851,6 +907,8 @@ async function collectTurnFileChanges(toolResults: any[] | undefined, workspaceP
       deletions,
       diffPreview: diffPreview || undefined,
       binary: binary || undefined,
+      baselineKind,
+      ...(snapshot?.id ? { baselineId: snapshot.id } : {}),
     };
   };
   const workers = Array.from({ length: Math.min(4, candidates.length) }, async () => {
@@ -860,7 +918,10 @@ async function collectTurnFileChanges(toolResults: any[] | undefined, workspaceP
     }
   });
   await Promise.all(workers);
-  const changes = collected.filter((change): change is TurnFileChange => !!change);
+  const changes = [
+    ...terminalChanges,
+    ...collected.filter((change): change is TurnFileChange => !!change),
+  ];
 
   if (!changes.length) return undefined;
   const insertions = changes.reduce((sum, file) => sum + Math.max(0, Number(file.insertions) || 0), 0);
@@ -1145,6 +1206,40 @@ function appendRuntimeNarrationBoundary(entries: Record<string, any>[], value: u
   if (entries.length > 250) entries.splice(0, entries.length - 250);
 }
 
+function compactRuntimeWorkspaceChangeMetadata(data: any): Record<string, any> {
+  const sources = [data?.extra, data]
+    .filter((source) => source && typeof source === 'object');
+  const source = sources.find((candidate) =>
+    Array.isArray(candidate.workspaceChanges) || Array.isArray(candidate.workspace_changes));
+  if (!source) return {};
+  const rawChanges = Array.isArray(source.workspaceChanges) ? source.workspaceChanges : source.workspace_changes;
+  const workspaceChanges = rawChanges
+    .filter((change: any) => change && typeof change === 'object')
+    .slice(0, 200)
+    .map((change: any) => ({
+      path: change.path || change.absPath || change.file,
+      displayPath: change.displayPath,
+      status: change.status,
+      insertions: Number(change.insertions) || 0,
+      deletions: Number(change.deletions) || 0,
+      ...(change.oldPath || change.old_path ? { oldPath: change.oldPath || change.old_path } : {}),
+      ...(change.binary === true ? { binary: true } : {}),
+      ...(change.baselineKind ? { baselineKind: change.baselineKind } : {}),
+      ...(change.baselineId ? { baselineId: change.baselineId } : {}),
+      ...(String(change.diffPreview || '').trim() ? { diffPreview: String(change.diffPreview).slice(0, 4000) } : {}),
+    }))
+    .filter((change: any) => String(change.path || change.displayPath || '').trim());
+  if (!workspaceChanges.length) return {};
+  return {
+    workspacePath: source.workspacePath,
+    workspaceChanges,
+    workspaceChangeSource: source.workspaceChangeSource || 'terminal',
+    ...(source.workspaceChangesTruncated === true || rawChanges.length > workspaceChanges.length
+      ? { workspaceChangesTruncated: true }
+      : {}),
+  };
+}
+
 function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string, any> | null {
   const eventType = String(type || '').trim();
   if (!eventType || eventType === 'heartbeat' || eventType === 'token' || eventType === 'thinking_delta') return null;
@@ -1201,6 +1296,7 @@ function runtimeProcessEntryFromSseEvent(type: string, data: any): Record<string
         error: data?.ok === false || data?.success === false || Boolean(data?.error),
         toolCallId: data?.toolCallId || data?.tool_call_id || data?.callId,
         stepNum: data?.stepNum,
+        ...compactRuntimeWorkspaceChangeMetadata(data),
       },
     };
   }
@@ -1559,7 +1655,7 @@ import { runStartup } from '../core/startup';
 import { isPublicDistributionBuild } from '../../runtime/distribution.js';
 import { detectStage4InstructionIntents } from '../../runtime/instruction-intent-detector';
 import { isProviderStatusChecking, markProviderStatus, readProviderStatusCache } from '../provider-status';
-import { attachWorkspaceCheckpoint, createWorkspaceTurnCheckpoint } from '../../workspace-history';
+import { attachWorkspaceCheckpoint, collectSnapshotRefsFromToolResults, createWorkspaceTurnCheckpoint } from '../../workspace-history';
 import {
   getCodingContextPacketTelemetry,
   observeCodingContext,
@@ -2459,13 +2555,15 @@ async function handleChat(
   const bootAllowedTools = new Set(['list_files', 'read_file']);
   const configuredWorkspace = getConfig().getWorkspacePath();
   const sessionWorkspace = getWorkspace(sessionId);
+  const sessionProject = findProjectBySessionId(sessionId);
+  const projectWorkspace = String(sessionProject?.workspacePath || '').trim();
   // Scoped execution workspaces (set by team dispatch, cron scheduler, etc.) take
-  // priority over the global config path. For normal interactive chat, the current
-  // launcher/config remains authoritative so stale persisted sessions cannot keep
-  // a dev run bound to an old AppData/legacy workspace or vice versa.
-  const workspacePath = shouldUseSessionWorkspace(executionMode, sessionWorkspace)
+  // priority over the global config path. Project sessions are an explicit user
+  // binding, so they remain authoritative for interactive chat as well. Ordinary
+  // sessions still follow the current launcher/config to avoid stale workspaces.
+  const workspacePath = projectWorkspace || (shouldUseSessionWorkspace(executionMode, sessionWorkspace)
     ? sessionWorkspace
-    : configuredWorkspace;
+    : configuredWorkspace);
   const workContextConfig = (getConfig().getConfig() as any)?.work_context || {};
   const codingContextPacketEnabled = process.env.PROMETHEUS_CODING_CONTEXT_PACKET_V3 === '1'
     || process.env.PROMETHEUS_CODING_CONTEXT_PACKET_V2 === '1'
@@ -4415,14 +4513,20 @@ async function handleChat(
   // Inject active browser session state so LLM knows to reuse it instead of re-opening
   const browserInfo = getBrowserSessionInfo(sessionId);
   const browserControlCtx = formatBrowserInteractionContextBlock(sessionId);
+  const browserTabs = Array.isArray(browserInfo.tabs) ? browserInfo.tabs.slice(0, 8) : [];
+  const activeBrowserTab = browserTabs.find((tab) => tab.active || tab.id === browserInfo.activeTabId) || browserTabs[0];
+  const browserTabContext = browserTabs.length
+    ? ` ${browserTabs.length} tab${browserTabs.length === 1 ? '' : 's'} open${activeBrowserTab?.url ? `; active URL: ${activeBrowserTab.url}` : ''}.`
+    : '';
+  const browserScopeLabel = browserInfo.profileKind === 'inhouse' ? 'IN-APP BROWSER' : 'BROWSER';
   const browserStateCtx = browserInfo.active
-    ? `\n\n[BROWSER SESSION ACTIVE: A browser tab is already open.${
+    ? `\n\n[${browserScopeLabel} SESSION ACTIVE — THIS CHAT SESSION ONLY: The browser is currently open for this chat session.${browserTabContext}${
         browserInfo.title ? ` Current page: "${browserInfo.title}"` : ''
       }${
         browserInfo.url ? ` at ${browserInfo.url}` : ''
       }. Browser profile: ${browserInfo.profileLabel || (browserInfo.profileKind === 'user' ? 'user Chrome profile' : 'Prometheus browser profile')}.${
         browserInfo.debugPort ? ` CDP port: ${browserInfo.debugPort}.` : ''
-      } Use browser_snapshot to see current elements, or browser_click to navigate. Do NOT call browser_open unless you need to go to a completely different site.${
+      } This state is scoped to session ${sessionId}; do not assume another chat has these tabs or cookies. Use browser_snapshot to see current elements, or browser_click to navigate. Do NOT call browser_open unless you need to go to a completely different site.${
         browserInfo.mode ? ` Current browser control mode: ${browserInfo.mode}.` : ''
       }]${browserControlCtx ? `\n${browserControlCtx}` : ''}`
     : '';

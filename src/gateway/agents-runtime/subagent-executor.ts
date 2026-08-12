@@ -64,6 +64,7 @@ import { runBoundedWorkspaceSearch } from '../workspace-search';
 import { getMCPManager } from '../mcp-manager';
 import { getProcessSupervisor } from '../process/supervisor';
 import { runElevatedCommand } from '../process/elevated-command';
+import { createTerminalWorkspaceTracker } from '../coding/terminal-change-tracker';
 import { executePromRepoSyncTool } from '../prom-repo-sync';
 import { buildToolBenchmarkAggregate } from '../tool-observations';
 import { buildGeneratedImageVisionEvent } from '../generated-image-preview';
@@ -558,7 +559,7 @@ export interface ExecuteToolDeps {
   buildBrowserLaunchCommand: (app: string, url: string) => string;
   normalizeWorkspacePathAliases: (rawCmd: string, workspacePath: string) => string;
   isAllowedShellCommand: (command: string) => boolean;
-  runCommandCaptured: (command: string, cwd: string, timeoutMs?: number, options?: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string }) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason?: string; signal?: NodeJS.Signals | number | null; noOutputTimedOut?: boolean; runId?: string }>;
+  runCommandCaptured: (command: string, cwd: string, timeoutMs?: number, options?: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string; workspacePath?: string; trackWorkspaceChanges?: boolean }) => Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason?: string; signal?: NodeJS.Signals | number | null; noOutputTimedOut?: boolean; runId?: string; workspacePath?: string; workspaceChanges?: Array<Record<string, unknown>>; workspaceSnapshots?: Array<Record<string, unknown>>; workspaceChangeSource?: 'terminal'; workspaceChangesTruncated?: boolean }>;
   toolCallId?: string;
   skillsManager: any;
   getSessionSkillWindows: (sessionId: string) => Map<string, SkillWindow>;
@@ -4215,7 +4216,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
     return targets;
   }
   async function runCapturedToolCommand(command: string, cwd: string, timeoutMs = 120000): Promise<ToolResult> {
-    const captured = await deps.runCommandCaptured(command, cwd, timeoutMs, { sessionId, toolCallId: deps.toolCallId });
+    const captured = await deps.runCommandCaptured(command, cwd, timeoutMs, { sessionId, toolCallId: deps.toolCallId, workspacePath });
     const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
     const outcome = classifyCommandTermination(captured);
     return {
@@ -4223,7 +4224,18 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
       args,
       result: `${command} [${outcome.label}]\n${truncateText(output || '(no output)', 12000)}`,
       error: !outcome.ok,
-      extra: { ...(captured.runId ? { runId: captured.runId } : {}), terminationReason: outcome.reason, signal: captured.signal ?? undefined },
+      extra: {
+        ...(captured.runId ? { runId: captured.runId } : {}),
+        terminationReason: outcome.reason,
+        signal: captured.signal ?? undefined,
+        ...(captured.workspaceChanges ? {
+          workspacePath: captured.workspacePath,
+          workspaceChanges: captured.workspaceChanges,
+          workspaceSnapshots: captured.workspaceSnapshots,
+          workspaceChangeSource: captured.workspaceChangeSource,
+          ...(captured.workspaceChangesTruncated ? { workspaceChangesTruncated: true } : {}),
+        } : {}),
+      },
     };
   }
   function readPackageScripts(cwd: string): Record<string, string> {
@@ -14318,13 +14330,15 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             noOutputTimeoutMs,
             sessionId,
             toolCallId: deps.toolCallId,
+            workspacePath,
+            trackWorkspaceChanges: true,
           });
           return {
             name,
             args,
             result: `Started supervised process ${run.runId} cwd=${commandCwd.displayCwd}\n${normalizedCmd}`,
             error: false,
-            extra: { runId: run.runId },
+            extra: { runId: run.runId, workspacePath: run.record.workspacePath, workspaceChangeSource: 'terminal' },
           };
         } catch (err: any) {
           return { name, args, result: `start_process failed: ${err.message || err}`, error: true };
@@ -14386,7 +14400,18 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
           args,
           result: `${runId} [${outcome.label}]\n${output.slice(0, 4000) || '(no output)'}`,
           error: !outcome.ok,
-          extra: { runId, terminationReason: outcome.reason, signal: exit.exitSignal ?? undefined },
+          extra: {
+            runId,
+            terminationReason: outcome.reason,
+            signal: exit.exitSignal ?? undefined,
+            ...(exit.workspaceChanges ? {
+              workspacePath: exit.workspacePath,
+              workspaceChanges: exit.workspaceChanges,
+              workspaceSnapshots: exit.workspaceSnapshots,
+              workspaceChangeSource: exit.workspaceChangeSource,
+              ...(exit.workspaceChangesTruncated ? { workspaceChangesTruncated: true } : {}),
+            } : {}),
+          },
         };
       }
 
@@ -14441,6 +14466,13 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             return { name, args, result: 'Blocked: administrator execution requires a fresh one-shot approval.', error: true };
           }
           try {
+            const workspaceTracker = createTerminalWorkspaceTracker({
+              workspacePath,
+              cwd: commandCwd.cwd,
+              command: normalizedCmd,
+              sessionId,
+              toolCallId: deps.toolCallId,
+            });
             const elevated = await runElevatedCommand({
               command: normalizedCmd,
               cwd: commandCwd.cwd,
@@ -14449,12 +14481,25 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
             });
             const output = [elevated.stdout, elevated.stderr].filter(Boolean).join('\n').trim();
             const ok = !elevated.timedOut && elevated.exitCode === 0;
+            const workspaceResult = workspaceTracker?.finalize();
             return {
               name,
               args,
               result: `${normalizedCmd} [${elevated.timedOut ? 'administrator timeout' : `administrator exit ${elevated.exitCode}`}] cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
               error: !ok,
-              extra: { elevated: true, approvalId: approvedCommandApprovalId, exitCode: elevated.exitCode, timedOut: elevated.timedOut },
+              extra: {
+                elevated: true,
+                approvalId: approvedCommandApprovalId,
+                exitCode: elevated.exitCode,
+                timedOut: elevated.timedOut,
+                ...(workspaceResult?.workspaceChanges.length ? {
+                  workspacePath: workspaceResult.workspacePath,
+                  workspaceChanges: workspaceResult.workspaceChanges,
+                  workspaceSnapshots: workspaceResult.workspaceSnapshots,
+                  workspaceChangeSource: workspaceResult.workspaceChangeSource,
+                  ...(workspaceResult.truncated ? { workspaceChangesTruncated: true } : {}),
+                } : {}),
+              },
             };
           } catch (error: any) {
             return { name, args, result: `Administrator command failed: ${error?.message || error}`, error: true };
@@ -14509,6 +14554,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 approvalId: approvedCommandApprovalId || undefined,
                 sessionId,
                 toolCallId: deps.toolCallId,
+                workspacePath,
               });
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
               const outcome = classifyCommandTermination(captured);
@@ -14516,7 +14562,18 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 name, args,
                 result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
                 error: !outcome.ok,
-                extra: { ...(captured.runId ? { runId: captured.runId } : {}), terminationReason: outcome.reason, signal: captured.signal ?? undefined },
+                extra: {
+                  ...(captured.runId ? { runId: captured.runId } : {}),
+                  terminationReason: outcome.reason,
+                  signal: captured.signal ?? undefined,
+                  ...(captured.workspaceChanges ? {
+                    workspacePath: captured.workspacePath,
+                    workspaceChanges: captured.workspaceChanges,
+                    workspaceSnapshots: captured.workspaceSnapshots,
+                    workspaceChangeSource: captured.workspaceChangeSource,
+                    ...(captured.workspaceChangesTruncated ? { workspaceChangesTruncated: true } : {}),
+                  } : {}),
+                },
               };
             } catch (capErr: any) {
               return { name, args, result: `run_command capture failed: ${capErr.message}`, error: true };
@@ -14541,6 +14598,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 approvalId: approvedCommandApprovalId || undefined,
                 sessionId,
                 toolCallId: deps.toolCallId,
+                workspacePath,
               });
               const output = [captured.stdout, captured.stderr].filter(Boolean).join('\n').trim();
               const outcome = classifyCommandTermination(captured);
@@ -14548,7 +14606,18 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
                 name, args,
                 result: `${normalizedCmd} [${outcome.label}] run=${captured.runId || 'n/a'} cwd=${commandCwd.displayCwd}\n${output.slice(0, 4000) || '(no output)'}`,
                 error: !outcome.ok,
-                extra: { ...(captured.runId ? { runId: captured.runId } : {}), terminationReason: outcome.reason, signal: captured.signal ?? undefined },
+                extra: {
+                  ...(captured.runId ? { runId: captured.runId } : {}),
+                  terminationReason: outcome.reason,
+                  signal: captured.signal ?? undefined,
+                  ...(captured.workspaceChanges ? {
+                    workspacePath: captured.workspacePath,
+                    workspaceChanges: captured.workspaceChanges,
+                    workspaceSnapshots: captured.workspaceSnapshots,
+                    workspaceChangeSource: captured.workspaceChangeSource,
+                    ...(captured.workspaceChangesTruncated ? { workspaceChangesTruncated: true } : {}),
+                  } : {}),
+                },
               };
             } catch (capErr: any) {
               return { name, args, result: `run_command capture failed: ${capErr.message}`, error: true };
@@ -16214,6 +16283,7 @@ async function executeToolRaw(name: string, args: any, workspacePath: string, de
         const result = await browserSetProfileTarget(sessionId, args.target || 'prometheus', {
           closeExisting: args.close_existing !== false,
           profileDirectory: args.profile_directory ?? args.profileDirectory,
+          inhouseProfile: args.inhouse_profile ?? args.inhouseProfile,
         });
         await broadcastBrowserStatus('browser_set_profile_target');
         return { name, args, result, error: result.startsWith('ERROR') };

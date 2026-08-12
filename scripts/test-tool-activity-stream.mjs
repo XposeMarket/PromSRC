@@ -11,7 +11,6 @@ const {
   applyCommandProcessEvent,
   coalesceToolActivityEntries,
   renderToolActivityEntry,
-  setToolActivityDisclosureState,
   toolActivitySummary,
 } = activity;
 
@@ -55,13 +54,12 @@ const {
 }
 
 {
-  globalThis.window = {};
   const entries = [];
   applyToolActivityEvent(entries, 'call', { toolCallId: 'persist_open_1', action: 'workspace_read', args: { action: 'read', path: 'main.cpp' } });
-  setToolActivityDisclosureState('activity:persist_open_1:operation', true);
   const html = renderToolActivityEntry(entries[0], (value) => String(value));
-  assert.match(html, /data-tool-disclosure-key="activity:persist_open_1:operation"[^>]* open/);
-  delete globalThis.window;
+  assert.match(html, /tool-activity-entry-summary/);
+  assert.doesNotMatch(html, /data-tool-disclosure-key="activity:persist_open_1:operation"/);
+  assert.doesNotMatch(html, /tool-activity-details|Arguments|Result/);
 }
 
 {
@@ -215,13 +213,24 @@ const {
     durationMs: 3200,
   });
   const html = entries.map((entry) => renderToolActivityEntry(entry, (value) => String(value))).join('\n');
-  assert.match(html, /<details class="tool-activity-entry"/);
-  assert.match(html, /class="tool-activity-kicker">Tool</);
+  assert.match(html, /class="tool-activity-entry"/);
+  assert.doesNotMatch(html, /tool-activity-kicker/);
   assert.doesNotMatch(html, /tool-activity-state/);
-  assert.match(html, /Arguments/);
-  assert.match(html, /\[redacted\]/);
+  assert.doesNotMatch(html, /tool-activity-details|Arguments|Result|\[redacted\]/);
   assert.doesNotMatch(html, /should-not-render|also-hidden/);
-  assert.match(html, /Command finished · 3\.2 s/);
+  assert.match(html, /Ran command · npm test · 3\.2 s/);
+  assert.doesNotMatch(html, /Command finished|Workspace Run/);
 }
 
-console.log('[tool-activity-stream] two-row lifecycle, structured summaries, and expandable details passed');
+{
+  for (const action of ['workspace_run', 'run_command', 'terminal', 'shell', 'shell_command', 'terminal_run', 'start_process']) {
+    const entries = [];
+    applyToolActivityEvent(entries, 'call', { id: `alias_${action}`, action, args: { action: 'run', command: 'npm test' } });
+    applyToolActivityEvent(entries, 'result', { id: `alias_${action}`, action, args: { action: 'run', command: 'npm test' }, result: 'ok', error: false });
+    assert.equal(entries[0].text, 'Running command · npm test', `${action} uses the live command label`);
+    assert.match(entries[1].text, /^Ran command · npm test/, `${action} uses the completed command label`);
+    assert.doesNotMatch(entries.map((entry) => entry.text).join('\n'), /Command finished|Workspace Run/);
+  }
+}
+
+console.log('[tool-activity-stream] two-row lifecycle, compact tool/result rows, and terminal output passed');

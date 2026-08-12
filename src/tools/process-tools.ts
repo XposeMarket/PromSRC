@@ -23,6 +23,7 @@ export const runCommandTool = {
     const result = await runTerminal({
       command: validation.command,
       cwd: validation.cwd,
+      workspacePath: validation.cwd,
       mode: 'foreground',
       shell: args.shell ? String(args.shell) as ProcessShell : 'auto',
       pty: args.pty === true,
@@ -39,6 +40,16 @@ export const runCommandTool = {
       stderr: exit.stderr,
       exitCode: exit.exitCode ?? 0,
       data: { runId: run.runId, run: getProcessSupervisor().get(run.runId), exit },
+      extra: {
+        runId: run.runId,
+        ...(exit.workspaceChanges ? {
+          workspacePath: exit.workspacePath,
+          workspaceChanges: exit.workspaceChanges,
+          workspaceSnapshots: exit.workspaceSnapshots,
+          workspaceChangeSource: exit.workspaceChangeSource,
+          ...(exit.workspaceChangesTruncated ? { workspaceChangesTruncated: true } : {}),
+        } : {}),
+      },
       error: exit.exitCode === 0 ? undefined : exit.stderr || `Command exited with ${exit.exitCode ?? 'unknown status'}`,
     };
   },
@@ -59,6 +70,7 @@ export const startProcessTool = {
     const result = await runTerminal({
       command: validation.command,
       cwd: validation.cwd,
+      workspacePath: validation.cwd,
       mode: 'background',
       shell: args.shell ? String(args.shell) as ProcessShell : 'auto',
       pty: args.pty === true,
@@ -67,7 +79,10 @@ export const startProcessTool = {
       stdin: args.stdin === true,
     });
     const run = result.run;
-    return ok({ runId: run.runId, run: run.record }, `Started ${run.runId}`);
+    return {
+      ...ok({ runId: run.runId, run: run.record }, `Started ${run.runId}`),
+      extra: { runId: run.runId, workspacePath: run.record.workspacePath, workspaceChangeSource: 'terminal' },
+    };
   },
 };
 
@@ -118,6 +133,16 @@ export const processWaitTool = {
       stderr: exit.stderr,
       exitCode: exit.exitCode ?? 0,
       data: { exit, run: getProcessSupervisor().get(runId) },
+      extra: {
+        runId,
+        ...(exit.workspaceChanges ? {
+          workspacePath: exit.workspacePath,
+          workspaceChanges: exit.workspaceChanges,
+          workspaceSnapshots: exit.workspaceSnapshots,
+          workspaceChangeSource: exit.workspaceChangeSource,
+          ...(exit.workspaceChangesTruncated ? { workspaceChangesTruncated: true } : {}),
+        } : {}),
+      },
     };
   },
 };

@@ -46,6 +46,11 @@ export interface ProcessRunRecord {
   stderrBytes: number;
   outputPreview: string;
   outputSeq?: number;
+  workspacePath?: string;
+  workspaceChanges?: any[];
+  workspaceSnapshots?: any[];
+  workspaceChangeSource?: 'terminal';
+  workspaceChangesTruncated?: boolean;
 }
 
 export interface ProcessRunExit {
@@ -57,6 +62,11 @@ export interface ProcessRunExit {
   stderr: string;
   timedOut: boolean;
   noOutputTimedOut: boolean;
+  workspacePath?: string;
+  workspaceChanges?: any[];
+  workspaceSnapshots?: any[];
+  workspaceChangeSource?: 'terminal';
+  workspaceChangesTruncated?: boolean;
 }
 
 export interface ProcessSpawnInput {
@@ -77,6 +87,8 @@ export interface ProcessSpawnInput {
   stdinMode?: 'ignore' | 'pipe';
   input?: string;
   captureOutput?: boolean;
+  workspacePath?: string;
+  trackWorkspaceChanges?: boolean;
 }
 
 export interface ProcessLogResult {

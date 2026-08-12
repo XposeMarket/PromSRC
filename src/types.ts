@@ -126,6 +126,7 @@ export interface ToolResult {
   stdout?: string;
   stderr?: string;
   exitCode?: number;
+  extra?: any;
 }
 
 export interface ToolPermissions {

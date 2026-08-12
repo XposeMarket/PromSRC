@@ -4788,15 +4788,15 @@ router.get('/api/canvas/file', (req: any, res: any, next: any) => _requireGatewa
       const buffer = fs.readFileSync(absPath);
       const base64 = buffer.toString('base64');
       const mimeType = IMAGE_EXTS[ext];
-      res.json({ success: true, path: relPath, absPath, isImage: true, base64, mimeType, size: stat.size, mtime: stat.mtime });
+      res.json({ success: true, path: relPath, absPath, inWorkspace: isPathInside(workspacePath, absPath), isImage: true, base64, mimeType, size: stat.size, mtime: stat.mtime });
       return;
     }
     if (BINARY_EXTS[ext]) {
-      res.json({ success: true, path: relPath, absPath, isBinary: true, mimeType: BINARY_EXTS[ext], ext, size: stat.size, mtime: stat.mtime });
+      res.json({ success: true, path: relPath, absPath, inWorkspace: isPathInside(workspacePath, absPath), isBinary: true, mimeType: BINARY_EXTS[ext], ext, size: stat.size, mtime: stat.mtime });
       return;
     }
     const content = fs.readFileSync(absPath, 'utf-8');
-    res.json({ success: true, path: relPath, absPath, content, size: stat.size, mtime: stat.mtime });
+    res.json({ success: true, path: relPath, absPath, inWorkspace: isPathInside(workspacePath, absPath), content, size: stat.size, mtime: stat.mtime });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -4965,6 +4965,44 @@ router.post('/api/canvas/file', (req: any, res: any, next: any) => _requireGatew
     res.json({ success: true, path: relPath, absPath, size: content.length, workspaceSnapshot: snapshot });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/canvas/workspace-copy
+// Creates a workspace-owned copy of an external canvas file. Saving the
+// workspace copy never overwrites the user's original file; subsequent saves
+// use the normal /api/canvas/file route against the returned workspace path.
+router.post('/api/canvas/workspace-copy', (req: any, res: any, next: any) => _requireGatewayAuth(req, res, next), async (req: any, res: any) => {
+  const sourcePath = String(req.body?.sourcePath || req.body?.source_path || '').trim();
+  const filename = String(req.body?.filename || '').trim().replace(/[^a-zA-Z0-9._\-() ]/g, '_');
+  const content = req.body?.content;
+  if (!sourcePath) { res.status(400).json({ success: false, error: 'sourcePath required' }); return; }
+  if (!filename) { res.status(400).json({ success: false, error: 'filename required' }); return; }
+  if (typeof content !== 'string') { res.status(400).json({ success: false, error: 'content must be a string' }); return; }
+  try {
+    const source = resolveCanvasPath(sourcePath);
+    if (!fs.existsSync(source.absPath)) { res.status(404).json({ success: false, error: 'Source file not found' }); return; }
+    const workspacePath = source.workspacePath;
+    const copyDir = path.join(workspacePath, 'uploads', 'canvas');
+    fs.mkdirSync(copyDir, { recursive: true });
+    let absPath = path.join(copyDir, filename);
+    if (fs.existsSync(absPath)) {
+      const ext = path.extname(filename);
+      const stem = path.basename(filename, ext);
+      absPath = path.join(copyDir, `${stem}-${Date.now()}${ext}`);
+    }
+    const snapshot = toSnapshotRef(createWorkspaceSnapshot({
+      workspacePath,
+      targetPath: absPath,
+      displayPath: path.relative(workspacePath, absPath).replace(/\\/g, '/'),
+      operation: 'canvas_workspace_copy',
+    }));
+    fs.writeFileSync(absPath, content, 'utf-8');
+    const relPath = path.relative(workspacePath, absPath).replace(/\\/g, '/');
+    _broadcastWS({ type: 'canvas_saved', path: relPath, absPath, sourcePath, size: content.length, workspaceSnapshot: snapshot });
+    res.json({ success: true, path: relPath, absPath, sourcePath, size: content.length, workspaceSnapshot: snapshot });
+  } catch (err: any) {
+    res.status(403).json({ success: false, error: String(err?.message || err || 'Could not create workspace copy') });
   }
 });
 

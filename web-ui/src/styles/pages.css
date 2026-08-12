@@ -1611,6 +1611,10 @@
 }
 .canvas-new-tab:hover { color: var(--brand); }
 .canvas-mode-btn.active { background: var(--brand) !important; color: #fff !important; }
+#canvas-save-menu button:hover { background: var(--bg-soft); }
+#canvas-save-menu button:disabled { opacity: .45; cursor: not-allowed; }
+#canvas-save-menu button:disabled:hover { background: transparent; }
+#canvas-save-menu-btn[aria-expanded="true"] { color: var(--text); background: rgba(249,115,22,.14) !important; }
 #canvas-editor-wrap .CodeMirror {
   height: 100%; font-family: 'IBM Plex Mono', monospace;
   font-size: 13px; line-height: 1.65;
@@ -1657,6 +1661,7 @@
   justify-content: flex-start;
 }
 .canvas-tab-dirty::after { content: '\25CF'; color: var(--warn); margin-left: 4px; font-size: 8px; vertical-align: middle; }
+.canvas-tab-external::before { content: '\21BB'; color: var(--brand); margin-right: 2px; font-size: 11px; }
 .canvas-file-tree-item { display:flex; align-items:center; gap:6px; padding:4px 12px; cursor:pointer; border-radius:6px; color:var(--text); transition:background 0.1s ease; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .canvas-file-tree-item:hover { background:var(--bg-soft); }
 .canvas-file-tree-dir { font-weight:700; color:var(--muted); cursor:default; padding:5px 12px 2px; font-size:10px; text-transform:uppercase; letter-spacing:0.05em; }
@@ -1805,18 +1810,18 @@
 }
 
 .assistant-image-gallery--pending {
-  max-width: min(100%, 460px);
+  max-width: min(100%, 340px);
 }
 
 .assistant-image-card--pending {
-  width: min(100%, 420px);
+  width: min(100%, 320px);
 }
 
 .assistant-image-pending-preview {
   position: relative;
-  width: min(100vw - 80px, 420px);
+  width: min(100vw - 80px, 320px);
   max-width: 100%;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 16 / 9;
   overflow: hidden;
   background:
     radial-gradient(circle at 50% 44%, rgba(22, 104, 227, 0.16), transparent 32%),
@@ -1847,10 +1852,10 @@
 }
 
 .assistant-image-pending-spinner {
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
   border-radius: 999px;
-  border: 3px solid rgba(22, 104, 227, 0.16);
+  border: 2px solid rgba(22, 104, 227, 0.16);
   border-top-color: var(--brand);
   animation: assistant-image-pending-spin 0.9s linear infinite;
   flex: 0 0 auto;

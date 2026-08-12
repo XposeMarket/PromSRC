@@ -514,6 +514,8 @@ const SIDEBAR_DEFAULT_W = 280; // matches --sidebar-w
 const SIDEBAR_MIN_W = 180;
 const SIDEBAR_MAX_W = 400;
 const SIDEBAR_PAGES_COLLAPSED_KEY = 'sidebar_pages_collapsed';
+let _sidebarPinnedCollapsed = false;
+let _sidebarProjectsCollapsed = false;
 
 function _resetSidebarWidth() {
   document.documentElement.style.removeProperty('--sidebar-w');
@@ -525,6 +527,13 @@ function _getRightPanelWidth() {
   const panel = document.getElementById('right-panel');
   if (!panel || !panel.classList.contains('open')) return 0;
   return panel.offsetWidth || RIGHT_PANEL_W;
+}
+
+function _getSourcesMinimizedLayoutWidth() {
+  // The minimized Sources surface is a floating peek, not a second layout
+  // column. Keep this helper for older callers, but never reserve space for
+  // the overlay or shift the chat underneath it.
+  return 0;
 }
 
 // Tracks custom drag width; 0 means use the stylesheet default.
@@ -546,11 +555,13 @@ function _applySidebarWidth(width) {
 function _syncPageViewPositions() {
   const sidebar = document.getElementById('sidebar');
   const collapsed = sidebar && sidebar.classList.contains('collapsed');
-  const sidebarRight = sidebar
-    ? Math.round(sidebar.getBoundingClientRect().right)
-    : (collapsed ? 64 : SIDEBAR_DEFAULT_W);
+  const sidebarRight = collapsed
+    ? 0
+    : sidebar
+      ? Math.round(_sidebarDragW || sidebar.getBoundingClientRect().width || SIDEBAR_DEFAULT_W)
+      : SIDEBAR_DEFAULT_W;
   const left = `${sidebarRight}px`;
-  const rightW = _getRightPanelWidth();
+  const rightW = _getRightPanelWidth() + _getSourcesMinimizedLayoutWidth();
   const right = rightW > 0 ? `${rightW}px` : '0';
   document.querySelectorAll('.page-view').forEach(el => {
     el.style.setProperty('left', left, 'important');
@@ -590,12 +601,31 @@ export function toggleRightPanel() {
 }
 
 // ── Sidebar collapse ──────────────────────────────────────────
+function syncSidebarEdgeReveal(collapsed) {
+  const edge = document.getElementById('sidebar-edge-reveal');
+  if (edge) edge.classList.toggle('is-active', !!collapsed);
+}
+
+function updateSidebarToggleControls(collapsed) {
+  const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  ['sidebarToggle', 'windowSidebarToggle'].forEach((id) => {
+    const control = document.getElementById(id);
+    if (!control) return;
+    control.classList.toggle('active', collapsed);
+    control.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    control.setAttribute('aria-label', label);
+    control.title = label;
+  });
+  syncSidebarEdgeReveal(collapsed);
+}
+
 export function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
   const collapsed = sidebar.classList.toggle('collapsed');
   if (collapsed) _resetSidebarWidth();
   try { localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0'); } catch {}
+  updateSidebarToggleControls(collapsed);
   _syncPageViewPositions();
 }
 
@@ -621,29 +651,81 @@ export function toggleSidebarPages(event) {
   setSidebarPagesCollapsed(!sidebar.classList.contains('pages-collapsed'));
 }
 
+function setSidebarSectionCollapsed(sectionName, collapsed) {
+  const config = sectionName === 'projects'
+    ? { sectionId: 'sidebar-projects-section', contentId: 'sidebar-projects-list' }
+    : { sectionId: 'sidebar-pinned-section', contentId: 'pinned-chats-list' };
+  const section = document.getElementById(config.sectionId);
+  const toggle = section?.querySelector(`[data-sidebar-section-toggle="${sectionName}"]`);
+  const content = document.getElementById(config.contentId);
+  const nextCollapsed = Boolean(collapsed);
+
+  if (sectionName === 'projects') _sidebarProjectsCollapsed = nextCollapsed;
+  else _sidebarPinnedCollapsed = nextCollapsed;
+
+  section?.classList.toggle('is-collapsed', nextCollapsed);
+  toggle?.setAttribute('aria-expanded', String(!nextCollapsed));
+  if (content) content.hidden = nextCollapsed;
+}
+
+// Desktop mirrors the mobile drawer: the section state is intentionally
+// session-local and does not affect the underlying chats or project data.
+function initSidebarSectionToggles() {
+  document.querySelectorAll('[data-sidebar-section-toggle]').forEach((toggle) => {
+    if (toggle.dataset.sidebarSectionToggleBound === '1') return;
+    toggle.dataset.sidebarSectionToggleBound = '1';
+    toggle.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const sectionName = toggle.dataset.sidebarSectionToggle === 'projects' ? 'projects' : 'pinned';
+      const isCollapsed = sectionName === 'projects' ? _sidebarProjectsCollapsed : _sidebarPinnedCollapsed;
+      setSidebarSectionCollapsed(sectionName, !isCollapsed);
+    });
+  });
+
+  setSidebarSectionCollapsed('pinned', _sidebarPinnedCollapsed);
+  setSidebarSectionCollapsed('projects', _sidebarProjectsCollapsed);
+}
+
 // Desktop convenience: a deliberate move to the physical left screen edge
 // reopens a collapsed sidebar. A short dwell prevents accidental reveals while
 // simply passing the pointer across the page.
 function initSidebarEdgeReveal() {
   if (window.matchMedia?.('(pointer: coarse)').matches) return;
   let revealTimer = null;
+  let edge = document.getElementById('sidebar-edge-reveal');
+  if (!edge && document.body) {
+    edge = document.createElement('div');
+    edge.id = 'sidebar-edge-reveal';
+    edge.className = 'sidebar-edge-reveal';
+    edge.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(edge);
+  }
   const cancel = () => {
     if (revealTimer) clearTimeout(revealTimer);
     revealTimer = null;
   };
-  document.addEventListener('pointermove', (event) => {
+  const schedule = (event) => {
     if (event.pointerType && event.pointerType !== 'mouse') return cancel();
     const sidebar = document.getElementById('sidebar');
     if (!sidebar || !sidebar.classList.contains('collapsed') || sidebar.classList.contains('is-resizing')) return cancel();
-    if (event.clientX > 2 || event.buttons) return cancel();
+    if (event.buttons) return cancel();
     if (revealTimer) return;
     revealTimer = setTimeout(() => {
       revealTimer = null;
       const current = document.getElementById('sidebar');
       if (current?.classList.contains('collapsed')) toggleSidebar();
     }, 120);
+  };
+  edge?.addEventListener('pointerenter', schedule, { passive: true });
+  edge?.addEventListener('pointermove', schedule, { passive: true });
+  edge?.addEventListener('pointerleave', cancel, { passive: true });
+  document.addEventListener('pointermove', (event) => {
+    if (event.clientX > 18 || event.buttons) return cancel();
+    schedule(event);
   }, { passive: true });
   window.addEventListener('blur', cancel);
+  syncSidebarEdgeReveal(document.getElementById('sidebar')?.classList.contains('collapsed'));
 }
 
 // ── Sidebar drag-resize ───────────────────────────────────────
@@ -800,7 +882,7 @@ const PAGE_TITLES = {
 };
 
 const PAGE_MODULES = {
-  chat: './pages/ChatPage.js?v=desktop-chat-thinking-orb-v2',
+  chat: './pages/ChatPage.js?v=desktop-chat-thinking-orb-v5',
   bgtasks: './pages/TasksPage.js',
   schedule: './pages/SchedulePage.js',
   teams: './pages/TeamsPage.js',
@@ -980,12 +1062,14 @@ window.addEventListener('resize', () => {
       const sidebar = document.getElementById('sidebar');
       if (sidebar) sidebar.classList.add('collapsed');
     }
+    updateSidebarToggleControls(document.getElementById('sidebar')?.classList.contains('collapsed'));
     setSidebarPagesCollapsed(localStorage.getItem(SIDEBAR_PAGES_COLLAPSED_KEY) === '1', { persist: false });
     _syncPageViewPositions();
   } catch {}
 })();
 
 initSidebarEdgeReveal();
+initSidebarSectionToggles();
 
 window.runPrometheusOnboarding = () => runOnboardingIfNeeded().catch((err) => {
   console.warn('[onboarding] manual start failed:', err);

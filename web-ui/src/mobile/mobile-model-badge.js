@@ -1,12 +1,12 @@
-// mobile-model-badge.js — interactive header model badge for Prometheus Mobile.
+// mobile-model-badge.js ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â interactive header model badge for Prometheus Mobile.
 //
 // The header used to show a static "Online" pill. It now shows the *current
 // main-chat model* (truncated to a friendly short name) while keeping the same
 // green/red gateway online/offline dot.
 //
-//   • TAP            → reasoning / thinking-level sheet for the ACTIVE provider
+//   ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ TAP            ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ reasoning / thinking-level sheet for the ACTIVE provider
 //                      (mirrors the desktop composer reasoning controls).
-//   • PRESS-AND-HOLD → haptic buzz + quick provider→model switch sheet, limited
+//   ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ PRESS-AND-HOLD ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ haptic buzz + quick providerÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢model switch sheet, limited
 //                      to providers the user actually has saved credentials for.
 //
 // Haptics: iOS Safari has no Web Vibration API. The working trick (per the
@@ -25,7 +25,7 @@ import {
 import { formatModelDisplayName, formatModelWithReasoning } from '../model-display.js';
 import { renderReasoningSelector } from '../components/reasoning-selector.js';
 
-// ── Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ──
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Provider metadata (mirrors web-ui/src/components/agent-model-picker.js) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 const BUILTIN_LABELS = {
   ollama: 'Ollama (local)',
   llama_cpp: 'llama.cpp (local)',
@@ -44,7 +44,7 @@ const BUILTIN_STATIC_MODELS = {
   anthropic: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
   perplexity: ['sonar-pro', 'sonar', 'sonar-reasoning-pro', 'sonar-reasoning', 'sonar-deep-research'],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
-  xai: ['grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent', 'grok-build-0.1'],
+  xai: ['grok-4.6', 'grok-4.5', 'grok-composer-2.5-fast', 'grok-4.3', 'grok-4.3-latest', 'grok-latest', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning', 'grok-4.20-multi-agent-0309', 'grok-4.20-multi-agent', 'grok-build-0.1'],
 };
 
 // Reasoning controls per provider (mirrors mobile-settings renderProviderFields).
@@ -56,7 +56,7 @@ const XAI_EFFORT_OPTIONS = ['', 'none', 'low', 'medium', 'high'];
 const XAI_MULTI_AGENT_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh'];
 const ANTHROPIC_EFFORT_OPTIONS = ['', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-// ── Caches ───────────────────────────────────────────────────────────────────
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Caches ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 let _llmCache = null;            // full llm config { provider, providers }
 let _catalogCache = null;        // [{ id, name, runtime, ... }]
 let _credentialedIds = null;     // [providerId, ...]
@@ -69,14 +69,14 @@ function _esc(s) {
   ));
 }
 
-// ── Friendly model-name truncation ───────────────────────────────────────────
-// claude-haiku-4-5-20251001 → "Claude Haiku 4.5"
-// gpt-5.5 → "GPT 5.5"   ·   grok-4.20-reasoning → "Grok 4.20"
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Friendly model-name truncation ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// claude-haiku-4-5-20251001 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ "Claude Haiku 4.5"
+// gpt-5.5 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ "GPT 5.5"   Ãƒâ€šÃ‚Â·   grok-4.20-reasoning ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ "Grok 4.20"
 export function prettifyModelName(model, provider) {
   return formatModelDisplayName(model, provider);
 }
 
-// ── Haptic feedback ──────────────────────────────────────────────────────────
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Haptic feedback ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 const _hapticGestureDisposers = new Set();
 
 export function disposeMobileHapticGestureSurfaces() {
@@ -281,8 +281,8 @@ export function attachMobileHapticGestureSurface(surface, handlers = {}) {
 // Give an arbitrary button the same real iOS haptic the model badge has: a native
 // `<input switch>` overlay sits on top of the button so the user's physical tap
 // toggles it (system haptic), then we forward the activation to the real control.
-// The overlay is a sibling (inside a wrapper) — not a child — so it survives the
-// button's innerHTML being rewritten (the send button morphs send↔voice↔abort).
+// The overlay is a sibling (inside a wrapper) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not a child ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so it survives the
+// button's innerHTML being rewritten (the send button morphs sendÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬ÂvoiceÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬Âabort).
 export function attachMobileButtonHaptic(btn, activate) {
   if (!btn || btn.dataset.pmHaptic === '1') return;
   btn.dataset.pmHaptic = '1';
@@ -306,7 +306,7 @@ export function attachMobileButtonHaptic(btn, activate) {
   });
 }
 
-// ── Data loaders ─────────────────────────────────────────────────────────────
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Data loaders ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 async function _loadLlm(force) {
   if (_llmCache && !force) return _llmCache;
   try {
@@ -457,7 +457,7 @@ function _setBadgeFast(fast) {
   });
 }
 
-// ── Badge label refresh ──────────────────────────────────────────────────────
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Badge label refresh ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 export async function refreshMobileModelBadge(force = false, modelChangeDetail = null) {
   // Subagent chat owns its header badge (Name/Model Effort). Don't clobber it
   // with the main-chat route when that page is active.
@@ -505,7 +505,7 @@ export function mobileModelBadgeSeedLabel() {
   return window.__pmModelBadgeLabel || 'Online';
 }
 
-// ── Model popover plumbing ────────────────────────────────────────────────────
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Model popover plumbing ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 function _closeSheet() {
   const scrim = document.getElementById('pm-msheet-scrim');
   const sheet = document.getElementById('pm-msheet');
@@ -619,7 +619,7 @@ function _toast(msg, kind) {
   try { window.pmToast ? window.pmToast(msg, kind) : null; } catch {}
 }
 
-// ── TAP: fluid reasoning slider + click-through advanced model controls ───────
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ TAP: fluid reasoning slider + click-through advanced model controls ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 let _reasoningSaveTimer = null;
 let _reasoningSaveChain = Promise.resolve();
 
@@ -642,7 +642,7 @@ export function setMobileSubagentReasoningContext(context = null) {
 
 async function _openReasoningSheet() {
   pmHaptic(10);
-  const sheet = _openSheet('', '<div class="pm-msheet-loading">Loading…</div>');
+  const sheet = _openSheet('', '<div class="pm-msheet-loading">LoadingÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦</div>');
   sheet?.classList.add('is-reasoning');
   document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
   sheet?.removeAttribute('style');
@@ -684,9 +684,8 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
     const setProgress = (progress) => {
       const safeProgress = Math.max(0, Math.min(1, Number(progress) || 0));
       control.style.setProperty('--pm-reasoning-progress', String(safeProgress));
-      const fillWidth = ((1 / options.length) + safeProgress * ((options.length - 1) / options.length)) * 100;
-      control.style.setProperty('--pm-reasoning-fill-width', `${fillWidth}%`);
-      control.style.setProperty('--pm-reasoning-fill-height', `${fillWidth}%`);
+      const wheelTravel = options.length > 1 ? ((options.length - 1) / options.length) * 360 : 0;
+      control.style.setProperty('--pm-reasoning-wheel-rotation', `${-safeProgress * wheelTravel}deg`);
       control.style.setProperty('--pm-reasoning-color-strength', `${Math.round(safeProgress * 100)}%`);
     };
     const commitIndex = (index, immediate = false, { snap = true, save = true } = {}) => {
@@ -708,6 +707,11 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
           requestGestureNativeHaptic?.();
           pmHaptic(8);
         }
+        const rollClass = safeIndex > lastIndex ? 'is-rolling-forward' : 'is-rolling-backward';
+        control.classList.remove('is-rolling-forward', 'is-rolling-backward');
+        void control.offsetWidth;
+        control.classList.add(rollClass);
+        window.setTimeout(() => control.classList.remove(rollClass), 420);
         lastIndex = safeIndex;
       }
       if (save) {
@@ -721,9 +725,7 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
     let gestureAxis = null;
     const progressFromEvent = (event) => {
       const rect = control.getBoundingClientRect();
-      if (!gestureStart) {
-        return rect.height ? (event.clientY - rect.top) / rect.height : 0;
-      }
+      if (!gestureStart || !rect.width || !rect.height) return 0;
       const dx = Number(event.clientX || 0) - gestureStart.x;
       const dy = Number(event.clientY || 0) - gestureStart.y;
       if (!gestureAxis && Math.max(Math.abs(dx), Math.abs(dy)) >= 8) {
@@ -733,8 +735,11 @@ function _renderReasoningBody(provider, cfg, { onAdvanced = _openSwitchSheet, on
         const distance = Math.max(120, rect.width * 0.72);
         return gestureStart.progress + (dx / distance);
       }
-      const distance = Math.max(96, rect.height * 0.72);
-      return gestureStart.progress + (dy / distance);
+      if (gestureAxis === 'vertical') {
+        const distance = Math.max(96, rect.height * 0.72);
+        return gestureStart.progress + (dy / distance);
+      }
+      return gestureStart.progress;
     };
     const indexFromProgress = (progress) => {
       return Math.round(Math.max(0, Math.min(1, Number(progress) || 0)) * (options.length - 1));
@@ -810,7 +815,7 @@ async function _openSubagentReasoningSheet() {
   const context = _subagentReasoningContext;
   if (!context?.agentId) return;
   pmHaptic(10);
-  const sheet = _openSheet('', '<div class="pm-msheet-loading">Loading…</div>');
+  const sheet = _openSheet('', '<div class="pm-msheet-loading">LoadingÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦</div>');
   sheet?.classList.add('is-reasoning');
   document.getElementById('pm-msheet-scrim')?.classList.add('is-reasoning');
   sheet?.removeAttribute('style');
@@ -860,9 +865,9 @@ function _queueReasoningSave(provider, patch, immediate = false) {
   else _reasoningSaveTimer = setTimeout(commit, 180);
 }
 
-// ── Advanced: provider / model / intelligence controls ───────────────────────
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Advanced: provider / model / intelligence controls ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 async function _openSwitchSheet() {
-  const sheet = _openSheet('Advanced <span class="pm-msheet-chev">›</span>', '<div class="pm-msheet-loading">Loading controls…</div>');
+  const sheet = _openSheet('Advanced <span class="pm-msheet-chev">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Âº</span>', '<div class="pm-msheet-loading">Loading controlsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦</div>');
   sheet?.classList.add('is-model-switch');
   document.getElementById('pm-msheet-scrim')?.classList.add('is-model-switch');
   sheet?.removeAttribute('style');
@@ -885,12 +890,12 @@ function _advancedRow(label, value, action, { disabled = false } = {}) {
     <button type="button" class="pm-advanced-row" data-action="${_esc(action)}" ${disabled ? 'disabled' : ''}>
       <span class="pm-advanced-row-label">${_esc(label)}</span>
       <span class="pm-advanced-row-value">${_esc(value)}</span>
-      <span class="pm-advanced-row-chev" aria-hidden="true">⌄</span>
+      <span class="pm-advanced-row-chev" aria-hidden="true">ÃƒÂ¢Ã…â€™Ã¢â‚¬Å¾</span>
     </button>`;
 }
 
 function _renderAdvancedSheet() {
-  _setSheetTitle('Advanced <span class="pm-msheet-chev">›</span>');
+  _setSheetTitle('Advanced <span class="pm-msheet-chev">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Âº</span>');
   const { provider, model, cfg, options, effortValue } = _currentAdvancedState();
   const rows = [
     _advancedRow('Provider', _providerLabel(provider), 'provider'),
@@ -910,8 +915,8 @@ function _renderSpeedList(provider) {
   const cfg = (_llmCache?.providers || {})[provider] || {};
   if (!supportsFastSpeed(provider, cfg.model || '')) return _renderAdvancedSheet();
   const current = cfg.speed === 'fast' || cfg.fast_mode === true ? 'fast' : 'standard';
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">‹</button> Speed`);
-  const rows = ['standard', 'fast'].map(value => `<button type="button" class="pm-msheet-row" data-speed="${value}"><span class="pm-msheet-row-label">${value === 'fast' ? 'Fast' : 'Standard'}</span>${value === current ? '<span class="pm-msheet-check">✓</span>' : ''}</button>`).join('');
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹</button> Speed`);
+  const rows = ['standard', 'fast'].map(value => `<button type="button" class="pm-msheet-row" data-speed="${value}"><span class="pm-msheet-row-label">${value === 'fast' ? 'Fast' : 'Standard'}</span>${value === current ? '<span class="pm-msheet-check">ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“</span>' : ''}</button>`).join('');
   const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
   document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
   body?.querySelectorAll('[data-speed]').forEach(btn => btn.addEventListener('click', () => {
@@ -925,7 +930,7 @@ function _renderSpeedList(provider) {
 }
 
 function _renderProviderList() {
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">‹</button> Provider`);
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹</button> Provider`);
   const { provider: activeProvider } = _activeModel(_llmCache);
   const ids = (_credentialedIds || []).slice();
   if (activeProvider && !ids.includes(activeProvider)) ids.unshift(activeProvider);
@@ -946,7 +951,7 @@ function _renderProviderList() {
     <button type="button" class="pm-msheet-row" data-provider="${_esc(id)}">
       <span class="pm-msheet-row-label">${_esc(_providerLabel(id))}</span>
       ${id === activeProvider ? '<span class="pm-msheet-dot" title="Current"></span>' : ''}
-      <span class="pm-msheet-chev">›</span>
+      <span class="pm-msheet-chev">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Âº</span>
     </button>`).join('');
   const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
   document.getElementById('pm-msheet-back')?.addEventListener('click', _renderAdvancedSheet);
@@ -964,14 +969,14 @@ function _renderProviderList() {
 
 function _renderModelList(provider) {
   const { provider: activeProvider, model: activeModel } = _activeModel(_llmCache);
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">‹</button> Model`);
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹</button> Model`);
   const models = _modelsForProvider(provider);
 
   let rows = models.map((m) => {
     const isActive = provider === activeProvider && m === activeModel;
     return `<button type="button" class="pm-msheet-row" data-model="${_esc(m)}">
       <span class="pm-msheet-row-label">${_esc(prettifyModelName(m, provider))}</span>
-      ${isActive ? '<span class="pm-msheet-check">✓</span>' : ''}
+      ${isActive ? '<span class="pm-msheet-check">ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“</span>' : ''}
     </button>`;
   }).join('');
   if (!models.length) {
@@ -993,12 +998,12 @@ function _renderEffortList(provider) {
     return;
   }
   const current = String(cfg.reasoning_effort || '').trim();
-  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">‹</button> Intelligence`);
+  _setSheetTitle(`<button type="button" class="pm-msheet-back" id="pm-msheet-back">ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹</button> Intelligence`);
   const rows = options.map((value) => {
     const isActive = value === current || (!value && !current);
     return `<button type="button" class="pm-msheet-row" data-effort="${_esc(value)}">
       <span class="pm-msheet-row-label">${_esc(_effortLabel(value, provider))}</span>
-      ${isActive ? '<span class="pm-msheet-check">✓</span>' : ''}
+      ${isActive ? '<span class="pm-msheet-check">ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“</span>' : ''}
     </button>`;
   }).join('');
   const body = _setSheetBody(`<div class="pm-msheet-rows">${rows}</div>`);
@@ -1023,7 +1028,7 @@ async function _switchModel(provider, model, { keepOpen = false, returnToAdvance
     await _saveChatModelRoute({ providerId: provider, model, reasoningEffort: current?.effective?.providerId === provider ? current.effective.reasoningEffort || undefined : undefined, accountId: current?.effective?.providerId === provider ? current.effective.accountId || undefined : undefined });
     window.__pmChatModelRoute = await _loadChatModelRoute();
     const nextCfg = { ...((_llmCache?.providers || {})[provider] || {}), model, reasoning_effort: window.__pmChatModelRoute?.effective?.reasoningEffort };
-    _toast(`Model → ${prettifyModelName(model, provider)}`, 'success');
+    _toast(`Model ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ ${prettifyModelName(model, provider)}`, 'success');
     await refreshMobileModelBadge(false, { provider, model });
     try { window.dispatchEvent(new CustomEvent('pm-model-changed', { detail: { provider, model } })); } catch {}
     if (keepOpen && returnToAdvanced) _renderAdvancedSheet();
@@ -1034,7 +1039,7 @@ async function _switchModel(provider, model, { keepOpen = false, returnToAdvance
   }
 }
 
-// ── Tap gesture wiring (delegated, attached once) ────────────────────────────
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Tap gesture wiring (delegated, attached once) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 let _wired = false;
 
 export function initMobileModelBadge() {

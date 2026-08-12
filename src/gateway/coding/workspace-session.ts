@@ -49,6 +49,13 @@ export interface CodingRepositorySnapshot {
   commits: CodingRepositoryActivity[];
 }
 
+export interface CodingRepositoryBranch {
+  name: string;
+  current: boolean;
+  upstream?: string;
+  commit?: string;
+}
+
 function runGit(root: string, args: string[], timeout = 5000): string {
   try {
     return execFileSync('git', args, {
@@ -61,6 +68,43 @@ function runGit(root: string, args: string[], timeout = 5000): string {
   } catch {
     return '';
   }
+}
+
+function runGitCommand(root: string, args: string[], timeout = 30000): string {
+  try {
+    return execFileSync('git', args, {
+      cwd: root,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout,
+      windowsHide: true,
+    }).trim();
+  } catch (error: any) {
+    const stderr = Buffer.isBuffer(error?.stderr) ? error.stderr.toString('utf8') : String(error?.stderr || '');
+    const stdout = Buffer.isBuffer(error?.stdout) ? error.stdout.toString('utf8') : String(error?.stdout || '');
+    const detail = (stderr || stdout || error?.message || 'Git command failed').trim();
+    throw new Error(detail.slice(0, 2000));
+  }
+}
+
+function splitGitRecord(line: string): string[] {
+  return String(line || '').replace(/%x1f/g, '\t').split('\t');
+}
+
+function gitRepositoryRoot(root: string): string {
+  const detected = runGit(root, ['rev-parse', '--show-toplevel'], 5000);
+  if (!detected) throw new Error('Selected workspace is not a Git repository');
+  return path.resolve(detected);
+}
+
+function normalizeGitPathspec(root: string, rawPath: string): string {
+  const repoRoot = gitRepositoryRoot(root);
+  const candidate = path.resolve(path.isAbsolute(rawPath) ? rawPath : path.join(repoRoot, rawPath));
+  const relative = path.relative(repoRoot, candidate);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('Git file is outside the selected repository');
+  }
+  return relative.replace(/\\/g, '/');
 }
 
 function normalizeGitRemote(remote: string): { remoteUrl?: string; repoFullName?: string; provider?: string; htmlUrl?: string; cloneUrl?: string } {
@@ -212,16 +256,99 @@ export function getGitDiff(root: string, file?: string): string {
 }
 
 export function gitStage(root: string, files: string[]): string {
-  const args = ['add', '--', ...(files.length > 0 ? files : ['.'])];
-  return runGit(root, args, 30000);
+  const args = ['add', '--', ...(files.length > 0 ? files.map((file) => normalizeGitPathspec(root, file)) : ['.'])];
+  return runGitCommand(root, args, 30000);
+}
+
+export function gitUnstage(root: string, files: string[]): string {
+  const selected = files.length > 0 ? files.map((file) => normalizeGitPathspec(root, file)) : ['.'];
+  try {
+    return runGitCommand(root, ['restore', '--staged', '--', ...selected], 30000);
+  } catch {
+    return runGitCommand(root, ['reset', 'HEAD', '--', ...selected], 30000);
+  }
 }
 
 export function gitCommit(root: string, message: string): string {
-  return runGit(root, ['commit', '-m', message], 60000);
+  return runGitCommand(root, ['commit', '-m', message], 60000);
 }
 
 export function gitCreateBranch(root: string, branch: string): string {
-  return runGit(root, ['checkout', '-b', branch], 30000);
+  const name = String(branch || '').trim();
+  if (!name || name.length > 200 || !runGit(root, ['check-ref-format', '--branch', name], 5000)) {
+    throw new Error('Invalid Git branch name');
+  }
+  return runGitCommand(root, ['checkout', '-b', name], 30000);
+}
+
+export function gitListBranches(root: string): CodingRepositoryBranch[] {
+  return runGit(root, [
+    'for-each-ref',
+    '--sort=-committerdate',
+    '--format=%(refname:short)\t%(HEAD)\t%(upstream:short)\t%(objectname:short)',
+    'refs/heads',
+  ], 10000)
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const [name, head, upstream, commit] = splitGitRecord(line);
+      return {
+        name: String(name || '').trim(),
+        current: String(head || '').trim() === '*',
+        ...(String(upstream || '').trim() ? { upstream: String(upstream).trim() } : {}),
+        ...(String(commit || '').trim() ? { commit: String(commit).trim() } : {}),
+      };
+    })
+    .filter((branch) => branch.name);
+}
+
+export function gitCheckoutBranch(root: string, branch: string): string {
+  const name = String(branch || '').trim();
+  if (!name || name.length > 200 || !runGit(root, ['check-ref-format', '--branch', name], 5000)) {
+    throw new Error('Invalid Git branch name');
+  }
+  return runGitCommand(root, ['checkout', name], 30000);
+}
+
+function validateGitRemoteName(value: string): string {
+  const name = String(value || '').trim();
+  if (!name || name.length > 120 || !/^[A-Za-z0-9_.-]+$/.test(name)) throw new Error('Invalid Git remote name');
+  return name;
+}
+
+export function gitPush(root: string, remote = 'origin', branch?: string): string {
+  const remoteName = validateGitRemoteName(remote || 'origin');
+  const branchName = String(branch || runGit(root, ['branch', '--show-current'], 5000)).trim();
+  if (!branchName || !runGit(root, ['check-ref-format', '--branch', branchName], 5000)) throw new Error('A valid current branch is required before pushing');
+  return runGitCommand(root, ['push', '--set-upstream', remoteName, branchName], 120000);
+}
+
+export function gitPull(root: string, remote = 'origin', branch?: string): string {
+  const remoteName = validateGitRemoteName(remote || 'origin');
+  const branchName = String(branch || runGit(root, ['branch', '--show-current'], 5000)).trim();
+  if (!branchName || !runGit(root, ['check-ref-format', '--branch', branchName], 5000)) throw new Error('A valid current branch is required before pulling');
+  return runGitCommand(root, ['pull', '--ff-only', remoteName, branchName], 120000);
+}
+
+export function getGitFileHistory(root: string, file: string, limit = 20): CodingRepositoryActivity[] {
+  const rawTarget = String(file || '').trim();
+  if (!rawTarget) return [];
+  const target = normalizeGitPathspec(root, rawTarget);
+  const safeLimit = Math.max(1, Math.min(50, Math.floor(Number(limit) || 20)));
+  return runGit(root, ['log', `-${safeLimit}`, '--date=iso-strict', '--pretty=format:%H\t%h\t%an\t%ad\t%s', '--', target], 15000)
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const [hash, shortHash, author, at, ...messageParts] = splitGitRecord(line);
+      return {
+        hash: String(hash || ''),
+        shortHash: String(shortHash || ''),
+        author: String(author || ''),
+        at: String(at || ''),
+        message: messageParts.join('\t').trim(),
+      };
+    })
+    .filter((item) => item.hash && item.message);
 }
 
 export function gitCurrentStatus(root: string): { branch?: string; dirtyFiles: string[]; statusText: string } {
@@ -251,17 +378,17 @@ export function getCodingRepositorySnapshot(rawRoot?: string): CodingRepositoryS
   const ahead = Number.isFinite(upstreamCounts[0]) ? Math.max(0, upstreamCounts[0]) : 0;
   const behind = Number.isFinite(upstreamCounts[1]) ? Math.max(0, upstreamCounts[1]) : 0;
   const commitCount = Number(runGit(root, ['rev-list', '--count', '--all'], 5000)) || 0;
-  const commits = runGit(root, ['log', '-8', '--date=iso-strict', '--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s'], 5000)
+  const commits = runGit(root, ['log', '-8', '--date=iso-strict', '--pretty=format:%H\t%h\t%an\t%ad\t%s'], 5000)
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => {
-      const [hashValue, shortHash, author, at, ...messageParts] = line.split('\x1f');
+      const [hashValue, shortHash, author, at, ...messageParts] = splitGitRecord(line);
       return {
         hash: String(hashValue || ''),
         shortHash: String(shortHash || ''),
         author: String(author || ''),
         at: String(at || ''),
-        message: messageParts.join('\x1f').trim(),
+        message: messageParts.join('\t').trim(),
       };
     })
     .filter((item) => item.hash && item.message);

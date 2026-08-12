@@ -13,6 +13,8 @@ export type TurnFileChange = {
   oldPath?: string;
   diffPreview?: string;
   binary?: boolean;
+  baselineKind?: 'git-head' | 'turn-snapshot' | 'git-index' | 'none';
+  baselineId?: string;
 };
 
 export type TurnFileChanges = {
@@ -171,6 +173,43 @@ export function extractTouchedFilesFromToolResult(result: any, workspacePath: st
   return collectCandidatePathsFromArgs(toolName, result?.args, workspacePath);
 }
 
+function isInsideWorkspace(workspacePath: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(workspacePath), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function extractExplicitTerminalChangesFromToolResult(result: any, workspacePath: string): TurnFileChange[] {
+  const changes: TurnFileChange[] = [];
+  const sources = [result?.extra, result?.data, result]
+    .filter((source) => source && typeof source === 'object');
+  for (const source of sources) {
+    const rawChanges = source.workspaceChanges || source.workspace_changes;
+    if (!Array.isArray(rawChanges)) continue;
+    for (const raw of rawChanges) {
+      if (!raw || typeof raw !== 'object') continue;
+      const absolute = resolveTurnFilePath(raw.path || raw.absPath || raw.file || raw.displayPath, workspacePath);
+      if (!absolute || !isInsideWorkspace(workspacePath, absolute)) continue;
+      const status = String(raw.status || 'modified').trim().toLowerCase();
+      if (!['added', 'modified', 'deleted', 'renamed'].includes(status)) continue;
+      const rawOldPath = String(raw.oldPath || raw.old_path || '').trim();
+      const oldPath = rawOldPath ? resolveTurnFilePath(rawOldPath, workspacePath) : '';
+      changes.push({
+        path: absolute,
+        displayPath: String(raw.displayPath || normalizeDisplayPath(absolute, workspacePath)).replace(/\\/g, '/'),
+        status: status as TurnFileChangeStatus,
+        insertions: Math.max(0, Number(raw.insertions) || 0),
+        deletions: Math.max(0, Number(raw.deletions) || 0),
+        ...(oldPath && isInsideWorkspace(workspacePath, oldPath) ? { oldPath } : {}),
+        ...(String(raw.diffPreview || '').trim() ? { diffPreview: String(raw.diffPreview).slice(0, 12_000) } : {}),
+        ...(raw.binary === true ? { binary: true } : {}),
+        ...(raw.baselineKind ? { baselineKind: raw.baselineKind } : {}),
+        ...(String(raw.baselineId || '').trim() ? { baselineId: String(raw.baselineId).trim() } : {}),
+      });
+    }
+  }
+  return Array.from(new Map(changes.map((change) => [path.resolve(change.path).toLowerCase(), change])).values());
+}
+
 export function synthesizeToolResultsFromProcessEntries(entries: any[]): any[] {
   const out: any[] = [];
   const callsByStep = new Map<string, any>();
@@ -191,11 +230,12 @@ export function synthesizeToolResultsFromProcessEntries(entries: any[]): any[] {
         name: toolName,
         result: String(entry?.content || ''),
         error: extra.error === true || entry?.type === 'error',
+        extra: { ...(prior.extra || {}), ...extra },
       });
       continue;
     }
     if (extra.args && isTurnFileMutationTool(toolName)) {
-      out.push({ name: toolName, args: extra.args, result: String(entry?.content || ''), error: entry?.type === 'error' });
+      out.push({ name: toolName, args: extra.args, result: String(entry?.content || ''), error: entry?.type === 'error', extra });
     }
   }
   return out;
@@ -249,11 +289,16 @@ function inferGitStatus(root: string, relPath: string, absPath: string): TurnFil
 }
 
 export function collectTurnFileChanges(toolResults: any[] | undefined, workspacePath: string): TurnFileChanges | undefined {
+  const explicit = Array.from(new Map(
+    (Array.isArray(toolResults) ? toolResults : [])
+      .flatMap((result) => extractExplicitTerminalChangesFromToolResult(result, workspacePath))
+      .map((change) => [path.resolve(change.path).toLowerCase(), change] as const),
+  ).values());
   const touched = Array.from(new Set(
     (Array.isArray(toolResults) ? toolResults : [])
       .flatMap((result) => extractTouchedFilesFromToolResult(result, workspacePath)),
-  ));
-  if (!touched.length) return undefined;
+  )).filter((filePath) => !explicit.some((change) => path.resolve(change.path).toLowerCase() === path.resolve(filePath).toLowerCase()));
+  if (!touched.length && !explicit.length) return undefined;
 
   const changes: TurnFileChange[] = [];
   for (const absPath of touched.slice(0, 80)) {
@@ -302,16 +347,20 @@ export function collectTurnFileChanges(toolResults: any[] | undefined, workspace
     });
   }
 
-  if (!changes.length) return undefined;
-  const insertions = changes.reduce((sum, file) => sum + Math.max(0, Number(file.insertions) || 0), 0);
-  const deletions = changes.reduce((sum, file) => sum + Math.max(0, Number(file.deletions) || 0), 0);
+  const allChanges = Array.from(new Map(
+    [...explicit, ...changes]
+      .map((change) => [path.resolve(change.path).toLowerCase(), change] as const),
+  ).values());
+  if (!allChanges.length) return undefined;
+  const insertions = allChanges.reduce((sum, file) => sum + Math.max(0, Number(file.insertions) || 0), 0);
+  const deletions = allChanges.reduce((sum, file) => sum + Math.max(0, Number(file.deletions) || 0), 0);
   return {
     summary: {
-      fileCount: changes.length,
+      fileCount: allChanges.length,
       insertions,
       deletions,
     },
-    files: changes.sort((a, b) => a.displayPath.localeCompare(b.displayPath)),
+    files: allChanges.sort((a, b) => a.displayPath.localeCompare(b.displayPath)),
     generatedAt: Date.now(),
   };
 }

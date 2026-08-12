@@ -37,6 +37,7 @@ router.post('/api/processes', async (req, res) => {
     const result = await runTerminal({
       command: validation.command,
       cwd: validation.cwd,
+      workspacePath: validation.cwd,
       mode: body.background === true || body.mode === 'background' ? 'background' : 'foreground',
       shell: body.shell ? String(body.shell) as ProcessShell : 'auto',
       pty: body.pty === true,
@@ -85,6 +86,7 @@ router.post('/api/processes/:runId/rerun', async (req, res) => {
     const result = await runTerminal({
       command: previous.command,
       cwd: previous.cwd,
+      workspacePath: previous.workspacePath || previous.cwd,
       mode: req.body?.mode === 'background' || previous.mode === 'background' ? 'background' : 'foreground',
       shell: previous.shell || 'auto',
       pty: previous.pty === true,

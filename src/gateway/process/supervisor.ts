@@ -7,6 +7,7 @@ import { getConfig } from '../../config/config';
 import { broadcastWS } from '../comms/broadcaster';
 import { ProcessRunStore } from './store';
 import { classifyCommandTermination } from './command-outcome';
+import { createTerminalWorkspaceTracker, type TerminalWorkspaceChangeResult, type TerminalWorkspaceTracker } from '../coding/terminal-change-tracker';
 import type {
   ManagedProcessRun,
   ProcessLogResult,
@@ -187,10 +188,21 @@ export class ProcessSupervisor {
       outputPreview: '',
       outputSeq: 0,
     };
+    const workspaceTracker: TerminalWorkspaceTracker | null = input.trackWorkspaceChanges
+      ? createTerminalWorkspaceTracker({
+          workspacePath: input.workspacePath || getConfig().getWorkspacePath() || cwd,
+          cwd,
+          command,
+          runId,
+          sessionId: input.sessionId,
+          toolCallId: input.toolCallId,
+        })
+      : null;
+    if (workspaceTracker) record.workspacePath = workspaceTracker.workspacePath;
     this.persistAndBroadcast(record, 'process_run_started');
 
     if (input.pty === true) {
-      return this.spawnPty(input, record, invocation);
+      return this.spawnPty(input, record, invocation, workspaceTracker);
     }
 
     const child = spawn(invocation.shell, invocation.args, {
@@ -267,6 +279,26 @@ export class ProcessSupervisor {
       if (typeof (timeoutTimer as any).unref === 'function') (timeoutTimer as any).unref();
     }
 
+    const finalizeWorkspace = (exit: ProcessRunExit): TerminalWorkspaceChangeResult | null => {
+      if (!workspaceTracker) return null;
+      try {
+        const result = workspaceTracker.finalize();
+        if (result.workspaceChanges.length) {
+          Object.assign(exit, {
+            workspacePath: result.workspacePath,
+            workspaceChanges: result.workspaceChanges,
+            workspaceSnapshots: result.workspaceSnapshots,
+            workspaceChangeSource: result.workspaceChangeSource,
+            ...(result.truncated ? { workspaceChangesTruncated: true } : {}),
+          });
+        }
+        return result;
+      } catch (error: any) {
+        console.warn(`[ProcessSupervisor] workspace tracking failed for ${runId}:`, error?.message || error);
+        return null;
+      }
+    };
+
     const waitPromise = new Promise<ProcessRunExit>((resolve) => {
       child.on('close', (code, signal) => {
         if (settled) return;
@@ -284,6 +316,7 @@ export class ProcessSupervisor {
           timedOut: reason === 'overall_timeout' || reason === 'no_output_timeout',
           noOutputTimedOut: reason === 'no_output_timeout',
         };
+        const workspaceResult = finalizeWorkspace(exit);
         const outcome = classifyCommandTermination({ code, timedOut: exit.timedOut, reason, signal });
         updateRecord({
           state: 'exited',
@@ -298,7 +331,26 @@ export class ProcessSupervisor {
           waitingForInputHint: false,
           completionSummary: outcome.ok ? buildSummary(code, stderr, stdout) : undefined,
           failureSummary: outcome.ok ? undefined : (buildSummary(code, stderr, stdout) || outcome.label),
+          ...(workspaceResult?.workspaceChanges.length ? {
+            workspacePath: workspaceResult.workspacePath,
+            workspaceChanges: workspaceResult.workspaceChanges,
+            workspaceSnapshots: workspaceResult.workspaceSnapshots,
+            workspaceChangeSource: workspaceResult.workspaceChangeSource,
+            ...(workspaceResult.truncated ? { workspaceChangesTruncated: true } : {}),
+          } : {}),
         }, 'process_run_exited');
+        if (workspaceResult?.workspaceChanges.length) {
+          this.persistAndBroadcast(record, 'workspace_changes', {
+            runId,
+            sessionId: record.sessionId,
+            toolCallId: record.toolCallId,
+            workspacePath: workspaceResult.workspacePath,
+            workspaceChanges: workspaceResult.workspaceChanges,
+            workspaceSnapshots: workspaceResult.workspaceSnapshots,
+            workspaceChangeSource: workspaceResult.workspaceChangeSource,
+            ...(workspaceResult.truncated ? { workspaceChangesTruncated: true } : {}),
+          });
+        }
         this.active.delete(runId);
         resolve(exit);
       });
@@ -336,6 +388,7 @@ export class ProcessSupervisor {
     input: ProcessSpawnInput,
     record: ProcessRunRecord,
     invocation: ReturnType<typeof getShellInvocation>,
+    workspaceTracker: TerminalWorkspaceTracker | null,
   ): Promise<ManagedProcessRun> {
     const runId = record.runId;
     const cwd = record.cwd;
@@ -399,6 +452,26 @@ export class ProcessSupervisor {
       if (typeof (timeoutTimer as any).unref === 'function') (timeoutTimer as any).unref();
     }
 
+    const finalizeWorkspace = (exit: ProcessRunExit): TerminalWorkspaceChangeResult | null => {
+      if (!workspaceTracker) return null;
+      try {
+        const result = workspaceTracker.finalize();
+        if (result.workspaceChanges.length) {
+          Object.assign(exit, {
+            workspacePath: result.workspacePath,
+            workspaceChanges: result.workspaceChanges,
+            workspaceSnapshots: result.workspaceSnapshots,
+            workspaceChangeSource: result.workspaceChangeSource,
+            ...(result.truncated ? { workspaceChangesTruncated: true } : {}),
+          });
+        }
+        return result;
+      } catch (error: any) {
+        console.warn(`[ProcessSupervisor] workspace tracking failed for ${record.runId}:`, error?.message || error);
+        return null;
+      }
+    };
+
     const waitPromise = new Promise<ProcessRunExit>((resolve) => {
       ptyProcess.onExit(({ exitCode, signal }) => {
         if (settled) return;
@@ -416,6 +489,7 @@ export class ProcessSupervisor {
           timedOut: reason === 'overall_timeout' || reason === 'no_output_timeout',
           noOutputTimedOut: reason === 'no_output_timeout',
         };
+        const workspaceResult = finalizeWorkspace(exit);
         const outcome = classifyCommandTermination({ code: exitCode, timedOut: exit.timedOut, reason, signal: signal || null });
         updateRecord({
           state: 'exited',
@@ -430,7 +504,26 @@ export class ProcessSupervisor {
           waitingForInputHint: false,
           completionSummary: outcome.ok ? buildSummary(exitCode, stderr, stdout) : undefined,
           failureSummary: outcome.ok ? undefined : (buildSummary(exitCode, stderr, stdout) || outcome.label),
+          ...(workspaceResult?.workspaceChanges.length ? {
+            workspacePath: workspaceResult.workspacePath,
+            workspaceChanges: workspaceResult.workspaceChanges,
+            workspaceSnapshots: workspaceResult.workspaceSnapshots,
+            workspaceChangeSource: workspaceResult.workspaceChangeSource,
+            ...(workspaceResult.truncated ? { workspaceChangesTruncated: true } : {}),
+          } : {}),
         }, 'process_run_exited');
+        if (workspaceResult?.workspaceChanges.length) {
+          this.persistAndBroadcast(record, 'workspace_changes', {
+            runId: record.runId,
+            sessionId: record.sessionId,
+            toolCallId: record.toolCallId,
+            workspacePath: workspaceResult.workspacePath,
+            workspaceChanges: workspaceResult.workspaceChanges,
+            workspaceSnapshots: workspaceResult.workspaceSnapshots,
+            workspaceChangeSource: workspaceResult.workspaceChangeSource,
+            ...(workspaceResult.truncated ? { workspaceChangesTruncated: true } : {}),
+          });
+        }
         this.active.delete(runId);
         resolve(exit);
       });
@@ -498,6 +591,11 @@ export class ProcessSupervisor {
         stderr: logs.stderr.trim(),
         timedOut: record.timedOut === true,
         noOutputTimedOut: record.noOutputTimedOut === true,
+        workspacePath: record.workspacePath,
+        workspaceChanges: record.workspaceChanges,
+        workspaceSnapshots: record.workspaceSnapshots,
+        workspaceChangeSource: record.workspaceChangeSource,
+        workspaceChangesTruncated: record.workspaceChangesTruncated,
       };
     }
     return run.wait();

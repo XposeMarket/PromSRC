@@ -339,8 +339,8 @@ async function runCommandCaptured(
   command: string,
   cwd: string,
   timeoutMs = 120000,
-  options: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string } = {},
-): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason: ProcessTerminationReason; signal: NodeJS.Signals | number | null; noOutputTimedOut: boolean; runId?: string }> {
+  options: { shell?: string; pty?: boolean; approvalId?: string; sessionId?: string; toolCallId?: string; workspacePath?: string; trackWorkspaceChanges?: boolean } = {},
+): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; reason: ProcessTerminationReason; signal: NodeJS.Signals | number | null; noOutputTimedOut: boolean; runId?: string; workspacePath?: string; workspaceChanges?: Array<Record<string, unknown>>; workspaceSnapshots?: Array<Record<string, unknown>>; workspaceChangeSource?: 'terminal'; workspaceChangesTruncated?: boolean }> {
   const resolvedCwd = path.resolve(String(cwd || getConfig().getWorkspacePath() || process.cwd()));
   const run = await getProcessSupervisor().spawn({
     command,
@@ -352,6 +352,8 @@ async function runCommandCaptured(
     sessionId: options.sessionId,
     toolCallId: options.toolCallId,
     timeoutMs,
+    workspacePath: options.workspacePath || getConfig().getWorkspacePath(),
+    trackWorkspaceChanges: options.trackWorkspaceChanges !== false,
   });
   const exit = await run.wait();
   return {
@@ -363,6 +365,11 @@ async function runCommandCaptured(
     signal: exit.exitSignal,
     noOutputTimedOut: exit.noOutputTimedOut,
     runId: exit.runId,
+    workspacePath: exit.workspacePath,
+    workspaceChanges: exit.workspaceChanges,
+    workspaceSnapshots: exit.workspaceSnapshots,
+    workspaceChangeSource: exit.workspaceChangeSource,
+    workspaceChangesTruncated: exit.workspaceChangesTruncated,
   };
 }
 

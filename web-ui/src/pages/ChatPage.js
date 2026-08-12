@@ -19,6 +19,7 @@ import { formatModelDisplayName } from '../model-display.js';
 import { CHAT_COMPOSER_SUGGESTION_LIMIT, CHAT_SKILL_TRIGGER, getChatSlashCommands, mergeSlashCommandSkillIds } from '../chat-slash-commands.js';
 import { CREATIVE_LIBRARY_PACKS, CREATIVE_SIZE_PRESETS, CREATIVE_STYLE_PRESETS, createSceneDocument, applySceneGraphOps, executeSceneGraphOps, buildSceneSelectionContext, parseCreativeOpsFromText, getCreativePatchInstruction, resolveElementAtTime, measureTextBlock, buildTextFontSpec, getCreativeElementLibrary, getCreativeAnimationPresetCatalog, getEnabledCreativeLibraryIds, getCreativeLibraryPackCatalog, setCreativeLibraryRuntimePacks, validateCreativeSceneLayout } from '../components/creative/sceneGraph.js';
 import { installProcessRunCardHandlers, renderProcessRunCard } from '../components/ProcessRunCard.js';
+import { renderUnifiedDiffMarkup } from '../components/coding-diff.js';
 import {
   appendCommandTerminalChunkToDom,
   applyCommandProcessEvent,
@@ -31,6 +32,14 @@ import {
 } from '../tool-activity.js';
 import { appendFinalResponseDelta, beginFinalResponse, reconcileFinalResponse } from '../chat-final-response.js';
 import { mountThinkingOrb } from '../vendor/thinking-orb.js';
+import {
+  backgroundAgentAgeLabel,
+  backgroundAgentPreview,
+  backgroundAgentWorkForSession,
+  findBackgroundAgentWork,
+  persistBackgroundAgentWork,
+  resolveBackgroundAgentIdentity,
+} from '../background-agent-work.js';
 installToolActivityExpansionPersistence();
 // (state.js imports handled via window.* proxy above)
 
@@ -212,7 +221,8 @@ if (window.browserCanvasState === undefined) {
     browserDesignMode: false,
     browserDesignSelectMode: false,
     browserDesignSelections: [],
-    profileKind: '',
+     profileKind: '',
+     inhouseProfile: 'main',
      browserTarget: '',
      profileLabel: '',
      browserSessions: {},
@@ -277,6 +287,7 @@ let nativeBrowserDesignUnsubscribers = [];
 let nativeBrowserDesignModeOn = false;
 let nativeBrowserDesignSessionId = '';
 let nativeBrowserLinkOpenInFlight = Promise.resolve();
+const nativeBrowserGatewaySyncTimers = new Map();
 
 // Per-session streaming state — allows concurrent independent sessions
 if (window._sessionThinking === undefined) window._sessionThinking = {};
@@ -491,7 +502,7 @@ async function createSideChat(options = {}) {
   const anchorPreview = String(options.anchorPreview || anchorMsg?.content || '').replace(/\s+/g, ' ').trim().slice(0, 160);
   const side = {
     ...createEmptyChatSession(id),
-    title: makeSideChatTitle(initialText || anchorPreview || 'Side chat'),
+    title: String(options.title || '').trim() || makeSideChatTitle(initialText || anchorPreview || 'Side chat'),
     autoTitleLocked: true,
     history: [buildSideChatBoundaryMessage(parent, { anchorIndex, anchorPreview })],
     processLog: [],
@@ -1495,6 +1506,7 @@ const IMMERSIVE_CENTER_COL_MIN_WIDTH = 480;
 // room before it is allowed to displace the chat surface.
 const CANVAS_CHAT_COLUMN_MIN_WIDTH = 400;
 const CANVAS_CHAT_COLUMN_HARD_MIN_WIDTH = 380;
+const NATIVE_BROWSER_RESIZE_HANDLE_GUTTER = 8;
 const CREATIVE_MODE_PANEL_WIDTH = IMMERSIVE_CANVAS_PANEL_WIDTH;
 let creativeModeSavedPanelWidth = null;
 let canvasPreviewSavedPanelWidth = null;
@@ -1743,14 +1755,13 @@ function resetRightPanelWidth() {
 function getBrowserCanvasPanelWidthTarget(mode = getBrowserCanvasState().interactionMode) {
   const normalizedMode = normalizeBrowserInteractionMode(mode);
   const isTeachMode = normalizedMode === 'teach';
-  const viewportWidth = typeof window === 'undefined'
-    ? 0
-    : Math.max(0, Number(window.innerWidth) || 0);
-  const minimumWidth = isTeachMode ? BROWSER_MODE_TEACH_MIN_PANEL_WIDTH : BROWSER_MODE_MIN_PANEL_WIDTH;
-  const maximumWidth = isTeachMode ? BROWSER_MODE_TEACH_PANEL_WIDTH : Number.POSITIVE_INFINITY;
-  if (!viewportWidth) return isTeachMode ? maximumWidth : BROWSER_MODE_PANEL_WIDTH;
-  const midpointWidth = Math.floor(viewportWidth * (isTeachMode ? 0.58 : 0.50));
-  return Math.max(minimumWidth, Math.min(maximumWidth, midpointWidth));
+  // Browser is a Canvas surface, so it should open at the same useful default
+  // width and use the same workspace maximum instead of the old half-window cap.
+  // Teach may still grow further by drag when its workflow rail is visible.
+  return Math.max(
+    CANVAS_PANEL_MIN_WIDTH,
+    isTeachMode ? BROWSER_MODE_TEACH_MIN_PANEL_WIDTH : BROWSER_MODE_MIN_PANEL_WIDTH,
+  );
 }
 
 function applyBrowserCanvasPanelDefault(options = {}) {
@@ -1759,11 +1770,10 @@ function applyBrowserCanvasPanelDefault(options = {}) {
   const mode = normalizeBrowserInteractionMode(getBrowserCanvasState().interactionMode);
   if (options.force !== true && browserCanvasPanelWidthMode === mode) return false;
   browserCanvasPanelWidthMode = mode;
-  const isTeachMode = mode === 'teach';
   setRightPanelWidth(getBrowserCanvasPanelWidthTarget(mode), {
-    minimumWidth: isTeachMode ? BROWSER_MODE_TEACH_MIN_PANEL_WIDTH : BROWSER_MODE_MIN_PANEL_WIDTH,
-    reservedWidth: isTeachMode ? 420 : 0,
-    maxViewportRatio: isTeachMode ? 0.62 : 0.5,
+    minimumWidth: CANVAS_PANEL_MIN_WIDTH,
+    maxViewportRatio: 1,
+    preserveChatColumn: true,
   });
   return true;
 }
@@ -1822,8 +1832,9 @@ function getBrowserCanvasState() {
       browserDesignMode: false,
       browserDesignSelectMode: false,
       browserDesignSelections: [],
-      profileKind: '',
-      browserTarget: '',
+       profileKind: '',
+       inhouseProfile: 'main',
+       browserTarget: '',
       profileLabel: '',
       browserSessions: {},
       nativeTabs: [],
@@ -1888,6 +1899,7 @@ function snapshotBrowserCanvasSessionState(state = getBrowserCanvasState()) {
       ? state.browserDesignSelections.slice(0, 24).map((selection) => cloneBrowserDesignSelection(selection)).filter(Boolean)
       : [],
     profileKind: String(state.profileKind || '').trim(),
+    inhouseProfile: String(state.inhouseProfile || '').trim() || 'main',
     browserTarget: String(state.browserTarget || '').trim(),
      profileLabel: String(state.profileLabel || '').trim(),
      browserSessions,
@@ -2393,6 +2405,101 @@ function cloneBrowserDesignSelection(selection) {
   };
 }
 
+function getChatHighlightSessionId(sessionId = '') {
+  return String(sessionId || window.activeChatSessionId || window.agentSessionId || 'default').trim() || 'default';
+}
+
+function normalizeChatHighlightedTextContext(value, fallback = {}) {
+  const source = value && typeof value === 'object' ? value : fallback;
+  const text = String(source?.text || value || '').replace(/\s+/g, ' ').trim().slice(0, 2400);
+  if (!text) return null;
+  return {
+    text,
+    sourceRole: String(source?.sourceRole || '').trim().toLowerCase(),
+    messageIndex: Number.isInteger(source?.messageIndex) ? source.messageIndex : null,
+    createdAt: Number(source?.createdAt || Date.now()) || Date.now(),
+  };
+}
+
+function getActiveChatHighlightedTextContext(sessionId = window.activeChatSessionId) {
+  return chatHighlightedTextContexts.get(getChatHighlightSessionId(sessionId)) || null;
+}
+
+function setChatHighlightedTextContext(text, metadata = {}) {
+  const context = normalizeChatHighlightedTextContext({ text, ...metadata });
+  const sessionId = getChatHighlightSessionId(metadata.sessionId);
+  if (!context) {
+    chatHighlightedTextContexts.delete(sessionId);
+  } else {
+    chatHighlightedTextContexts.set(sessionId, context);
+  }
+  updateDesignSelectionChip();
+  return context;
+}
+
+function clearChatHighlightedTextContext(sessionId = window.activeChatSessionId) {
+  chatHighlightedTextContexts.delete(getChatHighlightSessionId(sessionId));
+  updateDesignSelectionChip();
+}
+
+function clearHighlightedTextAnnotation() {
+  clearChatHighlightedTextContext();
+  hideChatTextSelectionPopover();
+}
+
+function highlightedTextToAttachmentPreview(context = getActiveChatHighlightedTextContext()) {
+  if (!context?.text) return null;
+  return {
+    kind: 'text-selection',
+    name: 'Annotation',
+    ext: 'text',
+    previewText: context.text.slice(0, 240),
+    text: context.text,
+    sourceRole: context.sourceRole || '',
+    messageIndex: Number.isInteger(context.messageIndex) ? context.messageIndex : null,
+  };
+}
+
+function renderHighlightedTextPillMarkup(context = getActiveChatHighlightedTextContext()) {
+  if (!context?.text) return '';
+  const preview = context.text.length > 68 ? `${context.text.slice(0, 66)}…` : context.text;
+  return `<div class="chat-file-pill chat-annotation-pill" title="${escHtml(`Annotation\n\n${context.text}`)}">
+    <span class="pill-icon"><iconify-icon icon="solar:quote-up-square-bold-duotone" width="14" height="14"></iconify-icon></span>
+    <span class="pill-copy"><strong class="pill-name">Annotation</strong><em class="pill-ext" title="${escHtml(context.text)}">${escHtml(preview)}</em></span>
+    <button class="pill-remove" onclick="clearHighlightedTextAnnotation()" title="Remove annotation" aria-label="Remove annotation">&times;</button>
+  </div>`;
+}
+
+function getBrowserDesignAnnotationSelections(state = getBrowserCanvasState()) {
+  const selections = [];
+  const seen = new Set();
+  const add = (selection) => {
+    const next = cloneBrowserDesignSelection(selection);
+    if (!next) return;
+    const key = getBrowserTeachSelectionKey(next);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    selections.push(next);
+  };
+  (Array.isArray(state?.browserDesignSelections) ? state.browserDesignSelections : []).forEach(add);
+  if (state?.selectedElement) add(state.selectedElement);
+  return selections.slice(-24);
+}
+
+function renderBrowserDesignSelectionPillMarkup(selection, index) {
+  if (!selection) return '';
+  const label = selection.selector
+    || (selection.id ? `#${selection.id}` : '')
+    || selection.tagName
+    || 'element';
+  const truncated = label.length > 40 ? `${label.slice(0, 38)}…` : label;
+  return `<div class="chat-file-pill chat-annotation-pill" title="${escHtml(`Annotation ${index + 1}\n\n${label}${selection.text ? `\n\n${selection.text}` : ''}`)}">
+    <span class="pill-icon"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon></span>
+    <span class="pill-copy"><strong class="pill-name">Annotation ${index + 1}</strong><em class="pill-ext">${escHtml(truncated)}</em></span>
+    <button class="pill-remove" onclick="removeBrowserDesignSelectionPill(${index})" title="Remove annotation" aria-label="Remove annotation">&times;</button>
+  </div>`;
+}
+
 function getCurrentChatModeSessionId() {
   return String(window.activeChatSessionId || window.agentSessionId || '').trim();
 }
@@ -2437,8 +2544,9 @@ function upsertBrowserSessionRecord(msg, options = {}) {
     browserLabel: String(msg?.browserLabel || previous.browserLabel || (ownerType === 'background' ? 'Subagent' : 'Main Agent')).trim(),
     browserTaskPrompt: String(msg?.browserTaskPrompt || previous.browserTaskPrompt || '').trim(),
     browserSpawnerSessionId: String(msg?.browserSpawnerSessionId || previous.browserSpawnerSessionId || '').trim(),
-    profileKind: String(msg?.profileKind || previous.profileKind || '').trim(),
-    browserTarget: String(msg?.browserTarget || previous.browserTarget || msg?.profileKind || previous.profileKind || '').trim(),
+     profileKind: String(msg?.profileKind || previous.profileKind || '').trim(),
+     inhouseProfile: String(msg?.inhouseProfile || previous.inhouseProfile || 'main').trim() || 'main',
+     browserTarget: String(msg?.browserTarget || previous.browserTarget || msg?.profileKind || previous.profileKind || '').trim(),
     profileLabel: String(msg?.profileLabel || previous.profileLabel || '').trim(),
     active: typeof msg?.active === 'boolean' ? msg.active === true : previous.active === true,
     url: String(msg?.url || previous.url || '').trim(),
@@ -2467,6 +2575,7 @@ function upsertBrowserSessionRecord(msg, options = {}) {
     state.statusLabel = next.statusLabel || state.statusLabel;
     state.streamActive = next.streamActive;
     state.profileKind = next.profileKind || state.profileKind || '';
+    state.inhouseProfile = next.inhouseProfile || state.inhouseProfile || 'main';
     state.browserTarget = next.browserTarget || state.browserTarget || '';
     state.profileLabel = next.profileLabel || state.profileLabel || '';
     if (Array.isArray(msg?.nativeTabs)) state.nativeTabs = normalizeNativeBrowserTabs(msg.nativeTabs);
@@ -2565,6 +2674,7 @@ function followBrowserCanvasSession(sessionId, options = {}) {
     state.statusLabel = record.statusLabel || state.statusLabel;
     state.streamActive = record.streamActive === true;
     state.profileKind = record.profileKind || '';
+    state.inhouseProfile = record.inhouseProfile || 'main';
     state.browserTarget = record.browserTarget || record.profileKind || '';
     state.profileLabel = record.profileLabel || '';
     if (state.frameBlobUrl) { try { URL.revokeObjectURL(state.frameBlobUrl); } catch {} }
@@ -2611,6 +2721,7 @@ function returnBrowserCanvasToPrimarySession(options = {}) {
     state.statusLabel = record.statusLabel || state.statusLabel;
     state.streamActive = record.streamActive === true;
     state.profileKind = record.profileKind || '';
+    state.inhouseProfile = record.inhouseProfile || 'main';
     state.browserTarget = record.browserTarget || record.profileKind || '';
     state.profileLabel = record.profileLabel || '';
     if (state.frameBlobUrl) { try { URL.revokeObjectURL(state.frameBlobUrl); } catch {} }
@@ -3095,6 +3206,8 @@ function normalizeNativeBrowserTabs(tabs) {
 
 function applyNativeBrowserStateToCanvas(nativeState, state = getBrowserCanvasState()) {
   if (!nativeState || typeof nativeState !== 'object') return state;
+  if (nativeState.profile !== undefined) state.inhouseProfile = String(nativeState.profile || '').trim() || 'main';
+  if (nativeState.profileLabel !== undefined) state.profileLabel = String(nativeState.profileLabel || '').trim() || state.profileLabel;
   if (Array.isArray(nativeState.tabs)) state.nativeTabs = normalizeNativeBrowserTabs(nativeState.tabs);
   if (nativeState.activeTabId !== undefined) state.activeNativeTabId = String(nativeState.activeTabId || '').trim();
   if (state.activeNativeTabId && state.nativeTabs.length) {
@@ -3120,6 +3233,45 @@ function getNativeBrowserSurfaceApi() {
   return window.prometheusBrowserSurface && typeof window.prometheusBrowserSurface === 'object'
     ? window.prometheusBrowserSurface
     : null;
+}
+
+function getPreferredInHouseProfileId(state = getBrowserCanvasState()) {
+  const stored = (() => {
+    try { return localStorage.getItem('prometheus.inhouse.profile') || ''; } catch { return ''; }
+  })();
+  // The settings choice is global to this desktop install. Prefer it over a
+  // stale profile copied into a session snapshot so switching profiles while
+  // the browser canvas is open takes effect on the next attach.
+  return String(stored || state.inhouseProfile || 'main').trim() || 'main';
+}
+
+function announceNativeBrowserStateToGateway(nativeState, state = getBrowserCanvasState(), options = {}) {
+  const sid = String(nativeState?.sessionId || state.sessionId || getDirectBrowserSessionId(state) || '').trim();
+  if (!sid) return;
+  const send = () => {
+    nativeBrowserGatewaySyncTimers.delete(sid);
+    if (!(window.ws && window.ws.readyState === WebSocket.OPEN)) return;
+    const browserActive = nativeState?.active !== undefined
+      ? nativeState.active !== false
+      : nativeState?.attached !== false;
+    wsSend({
+      type: 'browser:native_state',
+      sessionId: sid,
+      active: browserActive,
+      attached: nativeState?.attached !== false,
+      profile: String(nativeState?.profile || state.inhouseProfile || 'main').trim() || 'main',
+      profileLabel: String(nativeState?.profileLabel || state.profileLabel || '').trim(),
+      url: String(nativeState?.url || state.url || '').trim(),
+      title: String(nativeState?.title || state.title || '').trim(),
+      activeTabId: String(nativeState?.activeTabId || state.activeNativeTabId || '').trim(),
+      tabs: Array.isArray(nativeState?.tabs) ? nativeState.tabs : (Array.isArray(state.nativeTabs) ? state.nativeTabs : []),
+      timestamp: Date.now(),
+    });
+  };
+  const previous = nativeBrowserGatewaySyncTimers.get(sid);
+  if (previous) clearTimeout(previous);
+  if (options.immediate === true) send();
+  else nativeBrowserGatewaySyncTimers.set(sid, setTimeout(send, 80));
 }
 
 function getNativeBrowserBoundsElement() {
@@ -3152,9 +3304,9 @@ async function syncNativeBrowserSurface(options = {}) {
    );
   if (!shouldShow) {
     nativeBrowserLastBoundsKey = '';
-    if (nativeBrowserAttachedSessionId) {
-      nativeBrowserAttachedSessionId = '';
-      try { await api.detach?.(); } catch {}
+    nativeBrowserAttachedSessionId = '';
+    if (typeof api.detach === 'function') {
+      try { await api.detach(); } catch {}
     } else {
       try { await api.setBounds?.({ x: 0, y: 0, width: 0, height: 0 }); } catch {}
     }
@@ -3166,23 +3318,33 @@ async function syncNativeBrowserSurface(options = {}) {
     queueNativeBrowserSurfaceSync({ force: true });
     return false;
   }
+  // The native WebContentsView is composited above the renderer, so a DOM
+  // z-index cannot keep it from swallowing the panel's left-edge resize grip.
+  // Reserve a few physical pixels for that grip in the native bounds.
+  const resizeGutter = Math.min(
+    NATIVE_BROWSER_RESIZE_HANDLE_GUTTER,
+    Math.max(0, Math.floor(rect.width) - 8),
+  );
   const bounds = {
-    x: Math.round(rect.left),
+    x: Math.round(rect.left + resizeGutter),
     y: Math.round(rect.top),
-    width: Math.round(rect.width),
+    width: Math.max(0, Math.round(rect.width - resizeGutter)),
     height: Math.round(rect.height),
   };
   const key = `${sessionId}:${String(state.activeNativeTabId || '').trim()}:${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
+  const profileId = getPreferredInHouseProfileId(state);
+  const attachKey = `${sessionId}:${profileId}`;
   try {
-    // Attach only when the session actually changes. Re-attaching on every render
-    // or resize would re-trigger a native state broadcast and create an
-    // attach → state → render → attach echo loop. Bounds updates are cheap and
-    // idempotent, so those run whenever the rect changes.
-    if (nativeBrowserAttachedSessionId !== sessionId) {
-      nativeBrowserAttachedSessionId = sessionId;
+    // Attach only when the session or selected profile changes. Re-attaching on
+    // every render or resize would re-trigger a native state broadcast and
+    // create an attach → state → render → attach echo loop. Bounds updates are
+    // cheap and idempotent, so those run whenever the rect changes.
+    if (nativeBrowserAttachedSessionId !== attachKey) {
+      nativeBrowserAttachedSessionId = attachKey;
       await api.attach?.({
         sessionId,
         url: state.url || getBrowserCanvasRestoreHint(state).restoreUrl || 'about:blank',
+        profile: profileId,
       });
     }
     if (key !== nativeBrowserLastBoundsKey || options.force === true) {
@@ -3191,9 +3353,29 @@ async function syncNativeBrowserSurface(options = {}) {
     }
     return true;
   } catch (err) {
+    // Allow the next render/resize to retry a failed attach instead of leaving
+    // a stale key that makes the detached view look permanently connected.
+    if (nativeBrowserAttachedSessionId === attachKey) nativeBrowserAttachedSessionId = '';
     console.warn('[Prometheus] Native browser surface sync failed:', err);
     return false;
   }
+}
+
+async function fetchChatSessionSummariesWithRetry() {
+  const url = '/api/sessions?scope=all&includeAutomated=1&limit=160&offset=0';
+  // Electron can paint the renderer before the gateway has completed its
+  // warmup. Keep the first-load failure from looking like the user's history
+  // disappeared; retry a few times before falling back to the normal refresh
+  // timer.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const timeoutMs = 2500 + attempt * 750;
+    const data = await fetchJsonWithTimeout(url, timeoutMs);
+    if (data && Array.isArray(data.sessions) && (data.sessions.length > 0 || Number(data.total || 0) === 0)) {
+      return data;
+    }
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 400 + attempt * 500));
+  }
+  return null;
 }
 
 function normalizeBrowserAddressInput(value) {
@@ -3225,12 +3407,14 @@ async function openDirectNativeBrowserSurface(options = {}) {
 
   const state = getBrowserCanvasState();
   const sessionId = getDirectBrowserSessionId(state);
+  const inhouseProfile = getPreferredInHouseProfileId(state);
   const restoreHint = getBrowserCanvasRestoreHint(state);
   const requestedUrl = String(options.url || state.url || restoreHint.restoreUrl || 'about:blank').trim() || 'about:blank';
   if (requestedUrl === 'about:blank' && !String(state.title || '').trim()) state.title = 'New Tab';
   state.sessionId = sessionId;
   state.active = true;
   state.profileKind = 'inhouse';
+  state.inhouseProfile = inhouseProfile;
   state.browserTarget = 'inhouse';
   state.profileLabel = 'Prometheus in-house browser';
   state.loading = false;
@@ -3247,13 +3431,15 @@ async function openDirectNativeBrowserSurface(options = {}) {
     profileKind: 'inhouse',
     browserTarget: 'inhouse',
     profileLabel: state.profileLabel,
+    inhouseProfile,
     timestamp: Date.now(),
   }, { copyToCanvas: true });
   setBrowserCanvasSurface('browser');
   try {
-    const nativeState = await api.attach({ sessionId, url: requestedUrl, profile: 'main' });
+     const nativeState = await api.attach({ sessionId, url: requestedUrl, profile: inhouseProfile });
     if (nativeState && typeof nativeState === 'object') {
       applyNativeBrowserStateToCanvas(nativeState, state);
+      announceNativeBrowserStateToGateway(nativeState, state, { immediate: true });
       state.url = String(nativeState.url || state.url || 'about:blank').trim();
       state.title = String(nativeState.title || state.title || '').trim();
       state.loading = nativeState.loading === true;
@@ -3262,6 +3448,15 @@ async function openDirectNativeBrowserSurface(options = {}) {
         ? `Browser error: ${state.lastError}`
         : (state.loading ? 'In-house browser loading.' : state.statusLabel);
     }
+    announceNativeBrowserStateToGateway({
+      sessionId,
+      attached: true,
+      profile: state.inhouseProfile,
+      url: state.url,
+      title: state.title,
+      tabs: state.nativeTabs,
+      activeTabId: state.activeNativeTabId,
+    }, state, { immediate: true });
     renderBrowserCanvasSurface();
     persistActiveChat();
     window.requestAnimationFrame?.(() => {
@@ -3350,7 +3545,12 @@ function ensureNativeBrowserSurfaceStateListener() {
     const sid = String(nativeState.sessionId || '').trim();
     if (!sid || sid !== getBrowserCanvasVisibleSessionId()) return;
     const state = getBrowserCanvasState();
-    const nextActive = nativeState.attached !== false;
+    // Hiding the native view should not erase this session's browser context
+    // while tabs still exist. Closing the last tab sends an empty tab list and
+    // still makes the browser inactive.
+    const nativeTabs = Array.isArray(nativeState.tabs) ? nativeState.tabs : [];
+    const nextActive = nativeState.attached !== false
+      || (state.active === true && nativeTabs.length > 0);
     const nextUrl = String(nativeState.url || state.url || '').trim();
     const nextTitle = String(nativeState.title || state.title || '').trim();
     const nextError = String(nativeState.lastError || '').trim();
@@ -3359,10 +3559,11 @@ function ensureNativeBrowserSurfaceStateListener() {
       : (nextActive
         ? (nativeState.loading ? 'In-house browser loading.' : 'In-house browser active.')
         : 'In-house browser idle.');
-    const previousNativeTabsKey = JSON.stringify(state.nativeTabs || []);
-    const previousActiveNativeTabId = String(state.activeNativeTabId || '').trim();
-    applyNativeBrowserStateToCanvas(nativeState, state);
-    const nextTabsKey = JSON.stringify(state.nativeTabs || []);
+     const previousNativeTabsKey = JSON.stringify(state.nativeTabs || []);
+     const previousActiveNativeTabId = String(state.activeNativeTabId || '').trim();
+     applyNativeBrowserStateToCanvas(nativeState, state);
+     const nextTabsKey = JSON.stringify(state.nativeTabs || []);
+    announceNativeBrowserStateToGateway({ ...nativeState, active: nextActive }, state);
     // Skip churn when nothing meaningful changed — native state broadcasts fire on
     // every loading toggle, so avoid redundant render + persist cycles.
     const unchanged = state.active === nextActive
@@ -3375,10 +3576,10 @@ function ensureNativeBrowserSurfaceStateListener() {
       && previousNativeTabsKey === nextTabsKey
       && state.profileKind === 'inhouse';
     if (unchanged) return;
-    state.active = nextActive;
-    state.profileKind = 'inhouse';
-    state.browserTarget = 'inhouse';
-    state.profileLabel = 'Prometheus in-house browser';
+     state.active = nextActive;
+     state.profileKind = 'inhouse';
+     state.browserTarget = 'inhouse';
+     state.profileLabel = String(nativeState.profileLabel || state.profileLabel || 'Prometheus in-house browser').trim();
     state.url = nextUrl;
     state.title = nextTitle;
     state.loading = nativeState.loading === true;
@@ -3394,9 +3595,10 @@ function ensureNativeBrowserSurfaceStateListener() {
       url: state.url,
       title: state.title,
       statusLabel: state.statusLabel,
-      profileKind: 'inhouse',
-      browserTarget: 'inhouse',
-      profileLabel: state.profileLabel,
+       profileKind: 'inhouse',
+       browserTarget: 'inhouse',
+       profileLabel: state.profileLabel,
+       inhouseProfile: state.inhouseProfile,
       streamActive: false,
       nativeTabs: state.nativeTabs,
       activeNativeTabId: state.activeNativeTabId,
@@ -3863,7 +4065,6 @@ function updateCreativeModeControls() {
     document.getElementById('right-panel-browser-live-dot'),
   ].filter(Boolean);
   const browserModeButtons = document.querySelectorAll('[data-browser-mode-btn]');
-  const browserDesignButton = document.querySelector('[data-browser-design-btn]');
   const root = document.documentElement;
 
   if (root) root.dataset.creativeMode = mode || '';
@@ -3884,11 +4085,19 @@ function updateCreativeModeControls() {
 
   modeButtons.forEach((btn) => {
     const btnMode = normalizeCreativeMode(btn.dataset.creativeModeBtn);
-    const active = !!mode && btnMode === mode;
+    const browserDesignActive = browserSurfaceActive
+      && browserState.browserDesignMode === true
+      && btnMode === 'design';
+    const active = browserDesignActive || (!!mode && btnMode === mode);
+    const activeAccent = browserDesignActive ? '#38bdf8' : (meta?.accent || 'rgba(255,255,255,0.18)');
+    const activeGlow = browserDesignActive ? 'rgba(56,189,248,0.2)' : (meta?.glow || 'rgba(255,255,255,0.06)');
     btn.dataset.active = active ? 'true' : 'false';
-    btn.style.borderColor = active ? (meta?.accent || 'rgba(255,255,255,0.18)') : 'rgba(255,255,255,0.12)';
-    btn.style.background = active ? (meta?.glow || 'rgba(255,255,255,0.06)') : 'rgba(255,255,255,0.06)';
-    btn.style.color = active ? (meta?.accent || '#e8e6e1') : '#9a9890';
+    btn.style.borderColor = active ? activeAccent : 'rgba(255,255,255,0.12)';
+    btn.style.background = active ? activeGlow : 'rgba(255,255,255,0.06)';
+    btn.style.color = active ? (browserDesignActive ? '#e0f2fe' : (meta?.accent || '#e8e6e1')) : '#9a9890';
+    if (btnMode === 'design' && browserSurfaceActive) {
+      btn.title = browserDesignActive ? 'Close Browser Design mode' : 'Enter Browser Design mode';
+    }
   });
 
   exitButtons.forEach((btn) => {
@@ -3896,28 +4105,27 @@ function updateCreativeModeControls() {
   });
   browserSurfaceButtons.forEach((btn) => {
     btn.dataset.active = browserSurfaceActive ? 'true' : 'false';
-    btn.title = browserSurfaceActive ? 'Hide browser activity' : 'Show browser activity';
+    btn.title = browserSurfaceActive ? 'Close browser surface' : 'Show browser activity';
   });
   browserModeButtons.forEach((btn) => {
     const btnMode = normalizeBrowserInteractionMode(btn.dataset.browserModeBtn);
     const active = browserSurfaceActive && !browserState.browserDesignMode && btnMode === normalizeBrowserInteractionMode(browserState.interactionMode);
     btn.dataset.active = active ? 'true' : 'false';
   });
-  if (browserDesignButton) {
-    const active = browserSurfaceActive && browserState.browserDesignMode === true;
-    browserDesignButton.dataset.active = active ? 'true' : 'false';
-    browserDesignButton.style.borderColor = active ? '#38bdf8' : 'rgba(56,189,248,0.22)';
-    browserDesignButton.style.background = active ? 'rgba(56,189,248,0.2)' : 'rgba(56,189,248,0.08)';
-    browserDesignButton.style.color = active ? '#e0f2fe' : '#bae6fd';
-  }
   browserLiveDots.forEach((dot) => {
     dot.style.display = browserState.active ? 'inline-flex' : 'none';
   });
   if (browserModeRail) browserModeRail.style.display = browserSurfaceActive ? 'inline-flex' : 'none';
 
   if (canvasToggleBtn) {
-    canvasToggleBtn.title = meta ? `${meta.title} is active` : 'Open Canvas';
-    canvasToggleBtn.setAttribute('aria-label', meta ? `${meta.title} is active` : (canvasOpen ? 'Close Canvas' : 'Open Canvas'));
+    const browserInHouseActive = browserState.active === true && isBrowserCanvasInHouseProvider(browserState);
+    canvasToggleBtn.classList.toggle('browser-live', browserInHouseActive);
+    canvasToggleBtn.title = browserInHouseActive
+      ? 'Open Canvas — in-app browser active'
+      : (meta ? `${meta.title} is active` : 'Open Canvas');
+    canvasToggleBtn.setAttribute('aria-label', browserInHouseActive
+      ? 'Open Canvas — in-app browser active'
+      : (meta ? `${meta.title} is active` : (canvasOpen ? 'Close Canvas' : 'Open Canvas')));
     canvasToggleBtn.setAttribute('aria-pressed', canvasOpen ? 'true' : 'false');
   }
   if (backBtn) {
@@ -3982,6 +4190,7 @@ function renderBrowserCanvasSurface() {
   const clickHighlight = document.getElementById('browser-canvas-click-highlight');
   const agentCursor = document.getElementById('browser-canvas-agent-cursor');
   const selectionCard = document.getElementById('browser-canvas-selection-card');
+  const annotationsEl = document.getElementById('browser-canvas-annotations');
   const selectionLabel = document.getElementById('browser-canvas-selection-label');
   const selectionText = document.getElementById('browser-canvas-selection-text');
   const modeTitleEl = document.getElementById('browser-canvas-mode-title');
@@ -4148,13 +4357,13 @@ function renderBrowserCanvasSurface() {
   // header. Teach keeps its workflow controls; Agent, Co-pilot, and Design use
   // the full-width native surface.
   const sideCol = document.getElementById('browser-canvas-side-col');
-  const layoutGrid = document.getElementById('browser-canvas-layout');
+  const browserLayoutGrid = document.getElementById('browser-canvas-layout');
   const showSidePanels = mode === 'teach';
   if (sideCol) sideCol.style.display = showSidePanels ? 'flex' : 'none';
   // The grid columns are governed by a CSS rule keyed on this attribute because
   // #browser-canvas-layout sets grid-template-columns with !important, which an
   // inline style cannot override. data-side-panels="0" collapses to one column.
-  if (layoutGrid) layoutGrid.dataset.sidePanels = showSidePanels ? '1' : '0';
+  if (browserLayoutGrid) browserLayoutGrid.dataset.sidePanels = showSidePanels ? '1' : '0';
   if (namePanel) namePanel.style.display = showTeachNaming ? 'block' : 'none';
   if (nameInput && nameInput.value !== state.elementNameDraft) nameInput.value = state.elementNameDraft || '';
   if (teachPanel) teachPanel.style.display = mode === 'teach' ? 'block' : 'none';
@@ -4337,7 +4546,25 @@ function renderBrowserCanvasSurface() {
       ? 'Native Electron surface'
       : (width > 0 && height > 0 ? `${width} × ${height}` : 'Viewport frame');
   }
-  if (selectionCard) selectionCard.style.display = ((mode === 'teach' || designMode) && state.selectedElement && !followingDetachedSession && !nativeProvider) ? 'block' : 'none';
+  const annotationSelections = designMode
+    ? getBrowserDesignAnnotationSelections(state)
+    : (mode === 'teach' && state.selectedElement ? [cloneBrowserDesignSelection(state.selectedElement)].filter(Boolean) : []);
+  if (selectionCard) selectionCard.style.display = ((mode === 'teach' || designMode) && annotationSelections.length && !followingDetachedSession && !nativeProvider) ? 'block' : 'none';
+  if (annotationsEl) {
+    annotationsEl.style.display = annotationSelections.length ? 'flex' : 'none';
+    annotationsEl.innerHTML = annotationSelections.map((annotation, index) => {
+      const selector = annotation.selector
+        || (annotation.id ? `#${annotation.id}` : '')
+        || annotation.tagName
+        || 'element';
+      const summary = summarizeBrowserTeachTarget(annotation, state);
+      return `<div class="browser-canvas-annotation-row">
+        <span class="browser-canvas-annotation-index">Annotation ${index + 1}</span>
+        <strong title="${escHtml(summary)}">${escHtml(truncateBrowserPreview(summary, 72))}</strong>
+        <small title="${escHtml(selector)}">${escHtml(truncateBrowserPreview(selector, 96))}</small>
+      </div>`;
+    }).join('');
+  }
   if (frameSize && state.streamActive) {
     const width = Number(state.frameWidth || 0);
     const height = Number(state.frameHeight || 0);
@@ -4346,17 +4573,19 @@ function renderBrowserCanvasSurface() {
     }
   }
   if (selectionLabel) {
-    selectionLabel.textContent = state.selectedElement
-      ? (state.selectedElement.text || state.selectedElement.id || state.selectedElement.tagName || 'Element selected')
-      : 'No browser element selected';
+    selectionLabel.textContent = annotationSelections.length
+      ? `${annotationSelections.length} annotation${annotationSelections.length === 1 ? '' : 's'} attached`
+      : 'No annotation selected';
   }
   if (selectionText) {
-    const fullSelectorText = state.selectedElement
-      ? (state.selectedElement.selector || (state.selectedElement.id ? `#${state.selectedElement.id}` : state.selectedElement.tagName || 'element'))
+    const fullSelectorText = annotationSelections.length
+      ? (annotationSelections.length > 1
+        ? `${annotationSelections.length} browser annotations are attached to the next chat turn.`
+        : (annotationSelections[0].selector || (annotationSelections[0].id ? `#${annotationSelections[0].id}` : annotationSelections[0].tagName || 'element')))
        : (designMode
          ? 'Hover over the live browser frame and click an element to open its Design actions.'
          : 'Enter Teach mode and click the live browser frame to capture a real page element.');
-    selectionText.textContent = state.selectedElement ? truncateBrowserPreview(fullSelectorText, 80) : fullSelectorText;
+    selectionText.textContent = annotationSelections.length ? truncateBrowserPreview(fullSelectorText, 120) : fullSelectorText;
     selectionText.title = fullSelectorText;
   }
   const stageEl = frameEl?.parentElement || document.getElementById('browser-canvas-frame-stage');
@@ -4380,6 +4609,8 @@ function renderBrowserCanvasSurface() {
   syncNativeBrowserDesignMode(state);
   updateDesignSelectionChip();
   updateCreativeModeControls();
+  const miniSources = document.getElementById('sources-minimized-panel');
+  if (miniSources?.classList.contains('is-visible')) renderSourcesMinimizedPanel();
 }
 
 function setBrowserCanvasSurface(surface, options = {}) {
@@ -4411,7 +4642,8 @@ async function openBrowserCanvasSurface() {
     return;
   }
   const browserState = getBrowserCanvasState();
-  if (!browserState.active || isBrowserCanvasInHouseProvider(browserState)) {
+  const nativeSurfaceAvailable = !!getNativeBrowserSurfaceApi();
+  if (nativeSurfaceAvailable || !browserState.active || isBrowserCanvasInHouseProvider(browserState)) {
     try {
       if (await openDirectNativeBrowserSurface()) {
         if (preserveDesignIntent) setBrowserDesignMode(true, { persist: false });
@@ -5215,17 +5447,28 @@ async function sendNativeBrowserNavigation(action, url = '') {
     url: state.url,
     title: state.title,
     statusLabel: state.statusLabel,
-    profileKind: 'inhouse',
-    browserTarget: 'inhouse',
-    profileLabel: 'Prometheus in-house browser',
+       profileKind: 'inhouse',
+       browserTarget: 'inhouse',
+       profileLabel: state.profileLabel || 'Prometheus in-house browser',
+       inhouseProfile: state.inhouseProfile || 'main',
     timestamp: Date.now(),
-  }, { copyToCanvas: true });
-  renderBrowserCanvasSurface();
-  persistActiveChat();
-  return true;
-}
+   }, { copyToCanvas: true });
+  announceNativeBrowserStateToGateway({
+    sessionId,
+    attached: true,
+    profile: state.inhouseProfile,
+    profileLabel: state.profileLabel,
+    url: state.url,
+    title: state.title,
+    tabs: state.nativeTabs,
+    activeTabId: state.activeNativeTabId,
+  }, state, { immediate: true });
+   renderBrowserCanvasSurface();
+   persistActiveChat();
+   return true;
+ }
 
-function commitNativeBrowserTabState(nativeState, statusLabel = '') {
+ function commitNativeBrowserTabState(nativeState, statusLabel = '') {
   const state = getBrowserCanvasState();
   if (nativeState && typeof nativeState === 'object') {
     applyNativeBrowserStateToCanvas(nativeState, state);
@@ -5246,12 +5489,14 @@ function commitNativeBrowserTabState(nativeState, statusLabel = '') {
       statusLabel: state.statusLabel,
       profileKind: 'inhouse',
       browserTarget: 'inhouse',
-      profileLabel: 'Prometheus in-house browser',
-      nativeTabs: state.nativeTabs,
+       profileLabel: state.profileLabel || 'Prometheus in-house browser',
+       inhouseProfile: state.inhouseProfile || 'main',
+       nativeTabs: state.nativeTabs,
       activeNativeTabId: state.activeNativeTabId,
       timestamp: Date.now(),
-    }, { copyToCanvas: true });
-  }
+     }, { copyToCanvas: true });
+    announceNativeBrowserStateToGateway(nativeState, state, { immediate: true });
+   }
   renderBrowserCanvasSurface();
   persistActiveChat();
   queueNativeBrowserSurfaceSync({ force: true });
@@ -5787,6 +6032,7 @@ function applyBrowserEventState(msg, options = {}) {
   state.url = String(msg.url || state.url || '').trim();
   state.title = String(msg.title || state.title || '').trim();
   if (msg.profileKind) state.profileKind = String(msg.profileKind || '').trim();
+  if (msg.inhouseProfile) state.inhouseProfile = String(msg.inhouseProfile || '').trim() || 'main';
   if (msg.browserTarget) state.browserTarget = String(msg.browserTarget || '').trim();
   if (msg.profileLabel) state.profileLabel = String(msg.profileLabel || '').trim();
   if (Array.isArray(msg.nativeTabs)) state.nativeTabs = normalizeNativeBrowserTabs(msg.nativeTabs);
@@ -6061,8 +6307,7 @@ async function exitCreativeModeFromUI() {
 function renderQueuedPromptsPanel() {
   const panel = document.getElementById('queued-prompts-panel');
   const list = document.getElementById('queued-prompts-list');
-  const title = document.getElementById('queued-prompts-title');
-  if (!panel || !list || !title) {
+  if (!panel || !list) {
     updateBackgroundSpawnDockOffset();
     return;
   }
@@ -6076,8 +6321,7 @@ function renderQueuedPromptsPanel() {
     return;
   }
   panel.style.display = 'block';
-  title.textContent = String(count);
-  title.setAttribute('aria-label', `${count} queued prompt${count === 1 ? '' : 's'}`);
+  panel.setAttribute('aria-label', `${count} queued prompt${count === 1 ? '' : 's'}`);
   list.innerHTML = queue.map((q, i) => `
     <div class="queued-item">
       <span class="queued-item-index">${i + 1}.</span>
@@ -7473,7 +7717,7 @@ async function loadChatSessions() {
   setChatSessions(loadStoredSessionStubsForStartup());
   let serverSessions = [];
   try {
-    const data = await fetchJsonWithTimeout('/api/sessions?scope=all&includeAutomated=1&limit=160&offset=0', 2500);
+    const data = await fetchChatSessionSummariesWithRetry();
     if (data) {
       serverSessions = Array.isArray(data.sessions) ? data.sessions : [];
     }
@@ -7481,6 +7725,7 @@ async function loadChatSessions() {
 
   if (serverSessions.length > 0) {
     mergeServerSessionSummaries(serverSessions);
+    if (typeof window.renderSessionsList === 'function') window.renderSessionsList();
   }
 
   const rememberedSessionId = recallActiveChatSessionId();
@@ -7844,7 +8089,7 @@ function syncActiveChat() {
   // Restore canvas tabs for this session (re-fetch content from disk)
   canvasTabs = [];
   activeCanvasTabId = null;
-  if (canvasEditor) canvasEditor.setValue('');
+  if (canvasEditor) setCanvasEditorValue('');
   canvasRenderTabs();
   applyCanvasViewMode('code', null);
   const savedPaths = sess && Array.isArray(sess.canvasFiles) ? sess.canvasFiles : [];
@@ -11737,11 +11982,9 @@ function renderFileChangeRow(file) {
   const openAttrs = canOpen
     ? `role="button" tabindex="0" onclick="canvasPresentFile(${pathArg}, ${labelArg})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();canvasPresentFile(${pathArg}, ${labelArg})}"`
     : 'aria-disabled="true"';
-  const statusLabel = file.binary ? 'binary' : file.status;
   return `
     <div class="file-change-row ${canOpen ? 'is-openable' : 'is-disabled'}" ${openAttrs}>
       <div class="file-change-main">
-        <span class="file-change-status ${escHtml(file.status)}">${escHtml(statusLabel)}</span>
         <span class="file-change-path" title="${escHtml(file.displayPath)}">${escHtml(file.displayPath)}</span>
       </div>
       <div class="file-change-counts" aria-label="${file.insertions} additions and ${file.deletions} deletions">
@@ -11756,9 +11999,9 @@ function renderWorkspaceCheckpointAction(checkpoint) {
   if (!checkpoint?.id) return '';
   const idArg = encodeInlineJsString(checkpoint.id);
   const title = checkpoint.snapshotCount
-    ? `Restore this turn checkpoint (${checkpoint.snapshotCount} snapshots)`
-    : 'Restore this turn checkpoint';
-  return `<button type="button" class="file-change-restore-btn" title="${escHtml(title)}" onclick="restoreWorkspaceCheckpointFromDiff(${idArg}, this)">Restore turn</button>`;
+    ? `Undo this turn (${checkpoint.snapshotCount} snapshots)`
+    : 'Undo this turn';
+  return `<button type="button" class="file-change-restore-btn" title="${escHtml(title)}" onclick="restoreWorkspaceCheckpointFromDiff(${idArg}, this)">Undo</button>`;
 }
 
 function renderFileChangesGroup(data, options = {}) {
@@ -11799,7 +12042,7 @@ function renderFileChanges(fileChanges) {
 
 function confirmWorkspaceCheckpointRestore(checkpointId) {
   const id = String(checkpointId || '').trim();
-  const message = `Restore this turn checkpoint?\n\nThis will put every changed file back to its state before that Prometheus turn.`;
+  const message = `Undo this turn?\n\nThis will put every changed file back to its state before that Prometheus turn.`;
   if (typeof showConfirm === 'function') {
     return new Promise((resolve) => {
       showConfirm(
@@ -11807,8 +12050,8 @@ function confirmWorkspaceCheckpointRestore(checkpointId) {
         () => resolve(true),
         () => resolve(false),
         {
-          title: 'Restore turn?',
-          confirmText: 'Restore',
+          title: 'Undo turn?',
+          confirmText: 'Undo',
           cancelText: 'Cancel',
           danger: true,
           details: id,
@@ -11836,11 +12079,16 @@ async function restoreWorkspaceCheckpointFromDiff(checkpointId, button = null) {
       timeoutMs: 30000,
     });
     const touched = (Array.isArray(result?.restored) ? result.restored.length : 0) + (Array.isArray(result?.deleted) ? result.deleted.length : 0);
-    addProcessEntry('warn', `Restored workspace checkpoint ${id}${touched ? ` (${touched} path${touched === 1 ? '' : 's'})` : ''}.`);
-    showToast('Workspace restored', touched ? `Restored ${touched} path${touched === 1 ? '' : 's'}.` : 'Restored checkpoint.', 'success', 2600);
+    const restoredChanges = [
+      ...(Array.isArray(result?.restored) ? result.restored : []).map((pathValue) => ({ path: pathValue, status: 'modified' })),
+      ...(Array.isArray(result?.deleted) ? result.deleted : []).map((pathValue) => ({ path: pathValue, status: 'deleted' })),
+    ];
+    if (restoredChanges.length) await refreshOpenCanvasFiles({ workspaceChanges: restoredChanges }, { force: true });
+    addProcessEntry('info', `Undid workspace turn ${id}${touched ? ` (${touched} path${touched === 1 ? '' : 's'})` : ''}.`);
+    showToast('Undo complete', touched ? `Undid ${touched} path${touched === 1 ? '' : 's'}.` : 'Turn undone.', 'success', 2600);
   } catch (err) {
-    addProcessEntry('error', `Workspace restore failed: ${String(err?.message || err)}`);
-    showToast('Restore failed', String(err?.message || err), 'error', 4000);
+    addProcessEntry('error', `Workspace undo failed: ${String(err?.message || err)}`);
+    showToast('Undo failed', String(err?.message || err), 'error', 4000);
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -13417,7 +13665,12 @@ function updateChatMessageNavigatorActive(container = document.getElementById('c
   let active = targets[0] || null;
   targets.forEach((node) => { if (node.offsetTop <= readLine) active = node; });
   const activeIndex = String(active?.getAttribute('data-chat-message-index') || '');
-  navigator.querySelectorAll('[data-chat-message-target]').forEach((button) => {
+  const markers = Array.from(navigator.querySelectorAll('[data-chat-message-target]'));
+  const activePosition = Math.max(0, markers.findIndex((button) => button.getAttribute('data-chat-message-target') === activeIndex));
+  markers.forEach((button, position) => {
+    const distance = Math.abs(position - activePosition);
+    const waveWidth = 9 + (17 * Math.exp(-distance / 1.35));
+    button.style.setProperty('--nav-wave-width', `${waveWidth.toFixed(2)}px`);
     button.classList.toggle('active', button.getAttribute('data-chat-message-target') === activeIndex);
   });
 }
@@ -13935,6 +14188,8 @@ function formatToolCallForLog(actionRaw, args, streamState) {
   const withSubject = (base, label = subject) => label ? `${base}: ${label}` : base;
   const withParens = (base, label = subject) => label ? `${base} (${label})` : base;
   const modelProvider = [firstToolArg(args, ['model']), firstToolArg(args, ['provider', 'providerId'])].filter(Boolean).join(' / ');
+  const command = firstToolArg(args, ['command', 'cmd', 'script'], 180);
+  const runningCommand = command ? `Running command · ${command}` : 'Running command';
 
   const exact = {
     declare_plan: 'Declaring Plan...',
@@ -13954,8 +14209,13 @@ function formatToolCallForLog(actionRaw, args, streamState) {
     memory_graph_snapshot: 'Snapshotting Memory Graph...',
     web_search: withSubject('Searching the Web', firstToolArg(args, ['query', 'q'])),
     web_fetch: withSubject('Fetching URL', firstToolArg(args, ['url'])),
-    run_command: withParens('Running Command', firstToolArg(args, ['command'], 180)),
-    shell: withParens('Running Shell Command', firstToolArg(args, ['command'], 180)),
+    workspace_run: runningCommand,
+    run_command: runningCommand,
+    terminal: runningCommand,
+    shell: runningCommand,
+    shell_command: runningCommand,
+    terminal_run: runningCommand,
+    start_process: runningCommand,
     skill_list: 'Searching Skills...',
     skill_read: withSubject('Reading Skill', firstToolArg(args, ['id', 'skill_id', 'name'])),
     skill_resource_list: withSubject('Listing Skill Resources', firstToolArg(args, ['id', 'skill_id', 'name'])),
@@ -14074,8 +14334,13 @@ function compactSkillReadResult(rawText) {
   return `${title}\nDescription: ${truncated}`;
 }
 
-function formatToolResultForLog(action, text, ok, streamState) {
+function formatToolResultForLog(action, text, ok, streamState, args = {}) {
   const t = String(action || '').trim().toLowerCase();
+  if (/^(?:workspace_run|run_command|terminal|shell|shell_command|terminal_run|start_process)$/.test(t)) {
+    const command = firstToolArg(args, ['command', 'cmd', 'script'], 180);
+    const label = ok ? 'Ran command' : 'Command failed';
+    return `${label}${command ? ` · ${command}` : ''} => ${text || '(no output)'}`;
+  }
   if (t === 'complete_plan_step' || t === 'step_complete' || t === 'bg_plan_advance') {
     return `${formatPlanStepResultForLog(streamState, ok)} => ${text || (ok ? 'Done' : 'Failed')}`;
   }
@@ -14178,7 +14443,7 @@ function parsePersistedToolLogEntries(toolLog, msg) {
       ts,
       type: ok ? 'result' : 'error',
       actor: 'Prom',
-      content: formatToolResultForLog(name, resultText, ok, null),
+      content: formatToolResultForLog(name, resultText, ok, null, args),
       extra,
     });
   }
@@ -15842,6 +16107,7 @@ function clearChatComposerAfterSend(input) {
   clearSkillTriggerExclusions();
   clearSelectedComposerSkills();
   hideSkillTriggerPill();
+  clearChatHighlightedTextContext();
 }
 
 window.clearActiveSlashCommand = clearActiveSlashCommand;
@@ -16209,19 +16475,21 @@ async function sendChat(queuedMessage = null, options = {}) {
   const designAttachmentPreview = (normalizeCreativeMode(window.currentCreativeMode) === 'design' || isBrowserDesignMode())
     ? designSelectionToAttachmentPreview()
     : null;
+  const highlightedTextAttachmentPreview = highlightedTextToAttachmentPreview();
+  const contextualAttachmentPreviews = [designAttachmentPreview, highlightedTextAttachmentPreview].filter(Boolean);
   let filesToUpload = [];
   const queuedFiles = queuedTurn ? queuedTurn.files : [];
   if (queuedFiles.length || (!queuedTurn && pendingChatFiles.length)) {
     filesToUpload = queuedFiles.length ? queuedFiles.slice() : pendingChatFiles.slice();
     uploadedFileCount = filesToUpload.length;
     uploadedAttachmentPreviews = stagedFilesToAttachmentPreviews(filesToUpload);
-    if (designAttachmentPreview) uploadedAttachmentPreviews.push(designAttachmentPreview);
+    uploadedAttachmentPreviews.push(...contextualAttachmentPreviews);
     if (!queuedTurn) {
       pendingChatFiles = [];
       renderChatFilePills();
     }
-  } else if (designAttachmentPreview) {
-    uploadedAttachmentPreviews = [designAttachmentPreview];
+  } else if (contextualAttachmentPreviews.length) {
+    uploadedAttachmentPreviews = contextualAttachmentPreviews.slice();
   }
   let messageWithFiles = message;
 
@@ -16342,7 +16610,7 @@ async function sendChat(queuedMessage = null, options = {}) {
     const uploadResults = await uploadStagedFilesToCanvas(filesToUpload);
     fileContextNote = buildFileContextNote(uploadResults);
     uploadedAttachmentPreviews = uploadResultsToAttachmentPreviews(uploadResults);
-    if (designAttachmentPreview) uploadedAttachmentPreviews.push(designAttachmentPreview);
+    uploadedAttachmentPreviews.push(...contextualAttachmentPreviews);
     visionAttachments = uploadResults
       .filter(r => r.isImage && r.base64 && r.mimeType)
       .map(r => ({ type: 'image', base64: r.base64, mimeType: r.mimeType, name: r.name }));
@@ -16977,7 +17245,7 @@ async function sendChat(queuedMessage = null, options = {}) {
               break;
             }
             sawToolActivityThisTurn = true;
-            const resultDisplay = formatToolResultForLog(action, text, ok, streamState);
+            const resultDisplay = formatToolResultForLog(action, text, ok, streamState, event.args || {});
             if (action) pushProgressLine(`${stepPrefix}${formatToolCallForLog(action, {}, streamState).replace(/\.\.\.$/, '')} ${ok ? 'complete' : 'failed'}`);
             if (action) applyLiveToolActivity('result', event);
             if (isBackgroundAgentTool) {
@@ -17339,6 +17607,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            if (event.thinking) collectTurnThinking(event.thinking);
 	            finalArtifacts = Array.isArray(event.artifacts) ? event.artifacts : [];
 	            finalFileChanges = event.fileChanges || null;
+	            if (event.fileChanges) void refreshOpenCanvasFiles(event.fileChanges);
 	            finalProductCarousel = event.productCarousel || null;
 	            finalRichArtifacts = Array.isArray(event.richArtifacts) ? event.richArtifacts : null;
 	            finalGoalCompletionReport = event.goalCompletionReport || finalGoalCompletionReport;
@@ -17357,6 +17626,7 @@ async function sendChat(queuedMessage = null, options = {}) {
 	            }
 	            if (Array.isArray(event.artifacts)) finalArtifacts = event.artifacts;
 	            if (event.fileChanges) finalFileChanges = event.fileChanges;
+	            if (event.fileChanges) void refreshOpenCanvasFiles(event.fileChanges);
 	            if (event.productCarousel) finalProductCarousel = event.productCarousel;
 	            if (Array.isArray(event.richArtifacts)) finalRichArtifacts = event.richArtifacts;
 	            if (event.goalCompletionReport) finalGoalCompletionReport = event.goalCompletionReport;
@@ -17666,6 +17936,66 @@ function ensureBackgroundSpawnClearedIds() {
   return window.backgroundSpawnClearedIds;
 }
 
+function ensureBackgroundSpawnDockOpenState() {
+  if (!window.backgroundSpawnDockOpenState || typeof window.backgroundSpawnDockOpenState !== 'object') {
+    window.backgroundSpawnDockOpenState = {};
+  }
+  return window.backgroundSpawnDockOpenState;
+}
+
+function backgroundSpawnDockIsOpen(sessionId, laneCount = 0) {
+  const sid = String(sessionId || window.activeChatSessionId || '').trim();
+  const state = ensureBackgroundSpawnDockOpenState();
+  if (Object.prototype.hasOwnProperty.call(state, sid)) return state[sid] === true;
+  return laneCount <= 2;
+}
+
+function setBackgroundSpawnDockOpen(sessionId, open) {
+  ensureBackgroundSpawnDockOpenState()[String(sessionId || window.activeChatSessionId || '').trim()] = open === true;
+}
+
+function backgroundSpawnIdentityForLane(lane, allLanes = []) {
+  const usedNames = allLanes
+    .filter((item) => item && item !== lane && String(item.sessionId || '') === String(lane?.sessionId || ''))
+    .map((item) => item.agentName || item.label);
+  const usedColors = allLanes
+    .filter((item) => item && item !== lane && String(item.sessionId || '') === String(lane?.sessionId || ''))
+    .map((item) => item.agentColor);
+  return resolveBackgroundAgentIdentity(lane?.id, {
+    existingName: lane?.agentName,
+    existingColor: lane?.agentColor,
+    usedNames,
+    usedColors,
+  });
+}
+
+function backgroundSpawnWorkRecord(lane) {
+  if (!lane) return null;
+  const identity = backgroundSpawnIdentityForLane(lane, Array.from(ensureBackgroundSpawnDockMap().values()));
+  return {
+    id: lane.id,
+    sessionId: lane.sessionId || window.activeChatSessionId,
+    agentName: identity.name,
+    agentColor: identity.color,
+    task: lane.task,
+    status: lane.status,
+    startedAt: lane.startedAt,
+    completedAt: lane.completedAt || (['completed', 'failed'].includes(String(lane.status || '').toLowerCase()) ? lane.updatedAt : 0),
+    updatedAt: lane.updatedAt,
+    result: lane.result,
+    error: lane.error,
+    fileChanges: lane.fileChanges,
+    events: lane.events,
+  };
+}
+
+function backgroundSpawnLaneForDetail(id, sessionId = window.activeChatSessionId) {
+  const cleanId = String(id || '').trim();
+  const activeLane = ensureBackgroundSpawnDockMap().get(cleanId);
+  if (activeLane && (!sessionId || !activeLane.sessionId || activeLane.sessionId === String(sessionId))) return activeLane;
+  return findBackgroundAgentWork(cleanId, sessionId);
+}
+
 function backgroundSpawnVoiceWorkgroupId(msg = {}) {
   const direct = String(msg.voiceWorkgroupId || msg.workgroupId || '').trim();
   if (direct) return direct;
@@ -17697,16 +18027,25 @@ function upsertBackgroundSpawnLane(msg = {}) {
   if (!id) return null;
   const lanes = ensureBackgroundSpawnDockMap();
   const existing = lanes.get(id) || {};
+  const identity = resolveBackgroundAgentIdentity(id, {
+    existingName: existing.agentName,
+    existingColor: existing.agentColor,
+    usedNames: Array.from(lanes.values()).filter((lane) => lane !== existing).map((lane) => lane.agentName || lane.label),
+    usedColors: Array.from(lanes.values()).filter((lane) => lane !== existing).map((lane) => lane.agentColor),
+  });
   const lane = {
     id,
     sessionId: String(msg.sessionId || existing.sessionId || window.activeChatSessionId || '').trim(),
-    label: String(msg.label || msg.name || existing.label || 'Background Spawn').trim(),
+    label: identity.name,
+    agentName: identity.name,
+    agentColor: identity.color,
     task: String(msg.task || msg.prompt || existing.task || '').trim(),
     status: String(msg.state || existing.status || 'running').trim(),
     events: Array.isArray(existing.events) ? existing.events : [],
     expanded: existing.expanded === true,
     startedAt: Number(existing.startedAt || Date.now()),
     updatedAt: Date.now(),
+    completedAt: Number(existing.completedAt || msg.completedAt || 0) || 0,
     result: existing.result || '',
     error: existing.error || '',
     fileChanges: msg.fileChanges || existing.fileChanges || null,
@@ -17855,24 +18194,59 @@ function pushBackgroundSpawnEvent(msg = {}) {
     if (!prev || prev.type !== entry.type || prev.content !== entry.content) lane.events.push(entry);
     if (lane.events.length > 160) lane.events.splice(0, lane.events.length - 160);
   }
+  persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
+  if (typeof renderSourcePanel === 'function') renderSourcePanel();
   renderBackgroundSpawnDock();
 }
 
 function completeBackgroundSpawnLane(msg = {}) {
+  const clearedId = backgroundSpawnLaneId(msg);
+  const clearedSessionId = String(msg.sessionId || msg.spawnerSessionId || window.activeChatSessionId || '').trim();
+  if (clearedId && ensureBackgroundSpawnClearedIds().has(clearedId)) {
+    const existing = findBackgroundAgentWork(clearedId, clearedSessionId) || {};
+    const failed = msg.state === 'failed' || msg.state === 'timed_out' || !!msg.error;
+    const completedAt = Number(msg.completedAt || Date.now()) || Date.now();
+    const identity = resolveBackgroundAgentIdentity(clearedId, {
+      existingName: existing.agentName,
+      existingColor: existing.agentColor,
+    });
+    persistBackgroundAgentWork({
+      ...existing,
+      id: clearedId,
+      sessionId: clearedSessionId || existing.sessionId || window.activeChatSessionId,
+      agentName: identity.name,
+      agentColor: identity.color,
+      task: existing.task || msg.task || msg.prompt || '',
+      status: failed ? 'failed' : 'completed',
+      startedAt: existing.startedAt || msg.startedAt || completedAt,
+      completedAt,
+      updatedAt: Date.now(),
+      result: String(msg.result || existing.result || '').trim(),
+      error: String(msg.error || existing.error || '').trim(),
+      fileChanges: msg.fileChanges || existing.fileChanges || null,
+      events: existing.events || [],
+    });
+    if (typeof renderSourcePanel === 'function') renderSourcePanel();
+    renderBackgroundAgentDetail();
+    return;
+  }
   if (!backgroundSpawnEventSessionMatches(msg)) return;
   const lane = upsertBackgroundSpawnLane(msg);
   if (!lane) return;
   const failed = msg.state === 'failed' || !!msg.error;
   lane.status = failed ? 'failed' : 'completed';
+  lane.completedAt = Number(msg.completedAt || Date.now()) || Date.now();
   lane.result = String(msg.result || '').trim();
   lane.error = String(msg.error || '').trim();
   if (msg.fileChanges) lane.fileChanges = msg.fileChanges;
   const ts = new Date().toLocaleTimeString();
   const content = failed
-    ? `Background Spawn failed${lane.error ? `: ${backgroundSpawnPreview(lane.error, 260)}` : ''}`
-    : `Background Spawn complete${lane.result ? `: ${backgroundSpawnPreview(lane.result, 260)}` : ''}`;
+    ? `${lane.agentName || 'Agent'} failed${lane.error ? `: ${backgroundSpawnPreview(lane.error, 260)}` : ''}`
+    : `${lane.agentName || 'Agent'} complete${lane.result ? `: ${backgroundSpawnPreview(lane.result, 260)}` : ''}`;
   lane.events.push({ ts, type: failed ? 'error' : 'final', actor: 'Background Agent', content, extra: msg });
   lane.updatedAt = Date.now();
+  persistBackgroundAgentWork(backgroundSpawnWorkRecord(lane));
+  if (typeof renderSourcePanel === 'function') renderSourcePanel();
   renderBackgroundSpawnDock();
 }
 
@@ -17883,66 +18257,146 @@ function toggleBackgroundSpawnLane(id) {
   renderBackgroundSpawnDock();
 }
 
+function backgroundSpawnDetailRecord(id, sessionId = window.activeChatSessionId) {
+  const source = backgroundSpawnLaneForDetail(id, sessionId);
+  if (!source) return null;
+  if (source.events || source.task !== undefined) return backgroundSpawnWorkRecord(source);
+  return source;
+}
+
+function renderBackgroundAgentDetail() {
+  const host = document.getElementById('background-agent-detail');
+  if (!host) return;
+  const id = String(window.backgroundAgentDetailId || '').trim();
+  const record = id ? backgroundSpawnDetailRecord(id) : null;
+  if (!record) {
+    host.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  const previousScroll = host.querySelector('.background-agent-detail-stream')?.scrollTop || 0;
+  const status = String(record.status || 'running').toLowerCase();
+  const failed = status === 'failed';
+  const finalText = String(record.result || record.error || '').trim();
+  const events = Array.isArray(record.events) ? record.events : [];
+  const identity = resolveBackgroundAgentIdentity(record.id, {
+    existingName: record.agentName,
+    existingColor: record.agentColor,
+  });
+  const statusLabel = status === 'in_progress' ? 'running' : status;
+  const displayEvents = events.map((event) => ({
+    ...event,
+    actor: !event.actor || /background\s*(?:spawn|agent)/i.test(String(event.actor)) ? identity.name : event.actor,
+  }));
+  host.hidden = false;
+  host.innerHTML = `
+    <section class="side-chat-pane background-agent-detail-pane" aria-label="${escHtml(identity.name)} background work">
+      <header class="side-chat-header background-agent-detail-header">
+        <div class="side-chat-title-wrap">
+          <div class="side-chat-kicker">Background work · ${escHtml(statusLabel)}</div>
+          <div class="side-chat-title" style="color:${escHtml(identity.color)}">${escHtml(identity.name)}</div>
+        </div>
+        <button class="side-chat-close" type="button" data-background-agent-detail-close title="Close background work" aria-label="Close background work">×</button>
+      </header>
+      <div class="side-chat-messages background-agent-detail-messages">
+        <div class="background-agent-detail-summary">
+          <span class="background-agent-detail-avatar" style="--background-agent-color:${escHtml(identity.color)}">${escHtml(identity.name.slice(0, 2).toUpperCase())}</span>
+          <div><strong style="color:${escHtml(identity.color)}">${escHtml(identity.name)}</strong><span>${escHtml(backgroundAgentAgeLabel(record.completedAt || record.updatedAt))}</span></div>
+        </div>
+        <div class="background-agent-detail-stream">${displayEvents.length ? formatProcessLines(displayEvents) : '<div class="background-agent-detail-empty">Waiting for live events...</div>'}</div>
+        ${finalText ? `<article class="background-agent-detail-final${failed ? ' is-failed' : ''}"><div class="background-agent-detail-final-label">Final response</div><div class="markdown-body">${renderMd(finalText)}</div></article>` : ''}
+      </div>
+    </section>`;
+  host.querySelector('[data-background-agent-detail-close]')?.addEventListener('click', closeBackgroundAgentDetail);
+  const stream = host.querySelector('.background-agent-detail-stream');
+  if (stream) stream.scrollTop = previousScroll;
+}
+
+function openBackgroundAgentDetail(id) {
+  const cleanId = String(id || '').trim();
+  if (!cleanId || !backgroundSpawnDetailRecord(cleanId)) return;
+  const chatView = document.getElementById('chat-view');
+  if (!chatView) return;
+  let host = document.getElementById('background-agent-detail');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'background-agent-detail';
+    chatView.appendChild(host);
+  }
+  window.backgroundAgentDetailId = cleanId;
+  renderBackgroundAgentDetail();
+}
+
+function closeBackgroundAgentDetail() {
+  window.backgroundAgentDetailId = '';
+  const host = document.getElementById('background-agent-detail');
+  if (host) {
+    host.hidden = true;
+    host.innerHTML = '';
+  }
+}
+
 function renderBackgroundSpawnDock() {
   const dock = document.getElementById('background-spawn-dock');
   if (!dock) return;
   updateBackgroundSpawnDockOffset();
-  const previousScroll = new Map();
-  dock.querySelectorAll('.background-spawn-lane[data-bg-id]').forEach((node) => {
-    const id = String(node.getAttribute('data-bg-id') || '');
-    const panel = node.querySelector('.background-spawn-panel');
-    if (id && panel) previousScroll.set(id, {
-      top: Number(panel.scrollTop || 0),
-      nearBottom: (panel.scrollHeight - panel.scrollTop - panel.clientHeight) < 6,
-    });
-  });
   const lanes = Array.from(ensureBackgroundSpawnDockMap().values())
     .filter((lane) => !lane.sessionId || lane.sessionId === String(window.activeChatSessionId || '').trim() || lane.sessionId === String(window.agentSessionId || '').trim())
     .sort((a, b) => a.startedAt - b.startedAt);
   dock.hidden = lanes.length === 0;
+  dock.classList.toggle('has-many', lanes.length > 2);
   if (!lanes.length) {
     dock.innerHTML = '';
+    renderBackgroundAgentDetail();
     updateBackgroundSpawnDockOffset();
     return;
   }
-  dock.innerHTML = lanes.map((lane) => {
+  const sessionId = String(lanes[0]?.sessionId || window.activeChatSessionId || '').trim();
+  const dockOpen = backgroundSpawnDockIsOpen(sessionId, lanes.length);
+  dock.classList.toggle('is-open', dockOpen);
+  dock.classList.toggle('is-collapsed', !dockOpen);
+  if (!dockOpen) {
+    dock.innerHTML = `
+      <button type="button" class="background-spawn-pill" data-bg-open-all aria-label="Open ${lanes.length} background agents">
+        <span class="background-spawn-pill-dot" aria-hidden="true"></span>
+        <strong>${lanes.length} ${lanes.length === 1 ? 'Agent' : 'Agents'}</strong>
+      </button>`;
+    dock.querySelector('[data-bg-open-all]')?.addEventListener('click', () => {
+      setBackgroundSpawnDockOpen(sessionId, true);
+      renderBackgroundSpawnDock();
+    });
+    renderBackgroundAgentDetail();
+    updateBackgroundSpawnDockOffset();
+    return;
+  }
+  dock.innerHTML = `${lanes.length > 2 ? '<button type="button" class="background-spawn-close" data-bg-collapse-all aria-label="Collapse background agents">×</button>' : ''}${lanes.map((lane) => {
     const status = String(lane.status || 'running').toLowerCase();
     const statusLabel = status === 'in_progress' ? 'running' : status;
     const latest = lane.events[lane.events.length - 1];
-    const detail = latest?.content || lane.task || 'Working in parallel...';
-    const task = lane.task ? `<div class="background-spawn-task">${escHtml(lane.task)}</div>` : '';
-    const events = lane.events.length
-      ? `<div class="background-spawn-events">${formatProcessLines(lane.events)}</div>`
-      : '<div class="background-spawn-empty">Waiting for live events...</div>';
-    const plan = renderBackgroundSpawnPlan(lane);
+    const detail = latest?.content || (lane.result ? backgroundAgentPreview(lane.result, 120) : 'Working in parallel...');
+    const identity = resolveBackgroundAgentIdentity(lane.id, { existingName: lane.agentName, existingColor: lane.agentColor });
     return `
-      <section class="background-spawn-lane ${lane.expanded ? 'expanded' : ''} ${escHtml(status)}" data-bg-id="${escHtml(lane.id)}">
-        <button type="button" class="background-spawn-summary" data-bg-toggle="${escHtml(lane.id)}">
-          <span class="background-spawn-avatar">BG</span>
+      <section class="background-spawn-lane ${escHtml(status)}" data-bg-id="${escHtml(lane.id)}" style="--background-agent-color:${escHtml(identity.color)}">
+        <button type="button" class="background-spawn-summary" data-bg-open-detail="${escHtml(lane.id)}" aria-label="Open ${escHtml(identity.name)} background work">
+          <span class="background-spawn-avatar">${escHtml(identity.name.slice(0, 2).toUpperCase())}</span>
           <span class="background-spawn-main">
-            <strong>${escHtml(lane.label || 'Background Spawn')}</strong>
+            <strong>${escHtml(identity.name)}</strong>
             <em>${escHtml(detail)}</em>
           </span>
           <span class="background-spawn-status">${escHtml(statusLabel)}</span>
-          <span class="background-spawn-chevron">${lane.expanded ? '^' : 'v'}</span>
+          <span class="background-spawn-chevron">›</span>
         </button>
-        ${task}
-        <div class="background-spawn-panel">${plan}${events}</div>
       </section>
     `;
-  }).join('');
-  dock.querySelectorAll('[data-bg-toggle]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      toggleBackgroundSpawnLane(btn.getAttribute('data-bg-toggle'));
-    });
+  }).join('')}`;
+  dock.querySelector('[data-bg-collapse-all]')?.addEventListener('click', () => {
+    setBackgroundSpawnDockOpen(sessionId, false);
+    renderBackgroundSpawnDock();
   });
-  dock.querySelectorAll('.background-spawn-lane[data-bg-id]').forEach((node) => {
-    const id = String(node.getAttribute('data-bg-id') || '');
-    const panel = node.querySelector('.background-spawn-panel');
-    const saved = previousScroll.get(id);
-    if (!panel || !saved) return;
-    panel.scrollTop = saved.nearBottom ? panel.scrollHeight : saved.top;
+  dock.querySelectorAll('[data-bg-open-detail]').forEach((btn) => {
+    btn.addEventListener('click', () => openBackgroundAgentDetail(btn.getAttribute('data-bg-open-detail')));
   });
+  renderBackgroundAgentDetail();
   updateBackgroundSpawnDockOffset();
 }
 
@@ -17986,7 +18440,7 @@ function collectBackgroundFileChangeGroups(sessionId = window.activeChatSessionI
     .map((lane) => ({
       id: `bg_${lane.id}`,
       source: `background:${lane.id}`,
-      label: lane.label && lane.label !== 'Background Spawn' ? `Background Spawn - ${lane.label}` : 'Background Spawn edits',
+      label: lane.agentName ? `${lane.agentName} edits` : 'Background agent edits',
       fileChanges: lane.fileChanges,
     }));
 }
@@ -18113,6 +18567,7 @@ const chatResourcesState = {
 const sourcePanelState = {
   activeSessionId: '',
   tab: 'overview',
+  scope: 'thread',
   query: '',
   filterOpen: false,
   miniFilter: 'all',
@@ -18120,16 +18575,28 @@ const sourcePanelState = {
   projectSessionId: '',
   projectLoaded: false,
   git: null,
+  codingContext: null,
   gitSessionId: '',
   gitRoot: '',
   gitScopeKey: '',
   gitLoaded: false,
+  gitRemoteData: null,
+  gitRemoteKey: '',
+  gitRemoteLoading: false,
+  workRefreshTimer: null,
+  processRuns: [],
+  processSessionId: '',
+  processLoaded: false,
+  processRequestToken: 0,
+  processRefreshTimer: null,
+  miniProcessExpanded: false,
   initialized: false,
   seenResourceKeys: new Set(),
   seenEditKeys: new Set(),
   miniHideTimer: null,
   projectRequestToken: 0,
   gitRequestToken: 0,
+  diffRequestToken: 0,
 };
 const CHAT_RESOURCES_PREVIEW_LIMIT = 6;
 let chatResourcesReloadTimer = null;
@@ -18140,6 +18607,7 @@ let canvasTabs = [];
 let activeCanvasTabId = null;
 let canvasEditor = null;
 let canvasEditorInitialized = false;
+let canvasEditorProgrammaticUpdate = false;
 let canvasWorkspaceTree = [];
 let canvasWorkspaceRootPath = '';
 let canvasProjectRoot = null;
@@ -18497,6 +18965,12 @@ function sourcePanelMatchesItem(item, query = sourcePanelState.query) {
     item?.path,
     item?.message,
     item?.author,
+    item?.status,
+    item?.baselineKind,
+    item?.workType,
+    item?.workId,
+    item?.agentName,
+    item?.preview,
     resource && chatResourceTitle(resource),
     resource && chatResourceLocatorLabel(resource),
     resource?.mimeType,
@@ -18506,12 +18980,43 @@ function sourcePanelMatchesItem(item, query = sourcePanelState.query) {
 }
 
 function sourcePanelSnapshot() {
-  return sourcePanelState.git?.repository || sourcePanelState.git || null;
+  return sourcePanelState.codingContext?.roots?.find((item) => item?.repository?.vcs?.kind === 'git')?.repository
+    || sourcePanelState.codingContext?.roots?.[0]?.repository
+    || sourcePanelState.git?.repository
+    || sourcePanelState.git
+    || null;
+}
+
+function sourcePanelRemoteRoot() {
+  const roots = Array.isArray(sourcePanelState.codingContext?.roots) ? sourcePanelState.codingContext.roots : [];
+  return roots.find((item) => item?.repository?.vcs?.kind === 'git' && item?.repository?.remoteUrl)
+    || roots.find((item) => item?.repository?.vcs?.kind === 'git')
+    || null;
+}
+
+function sourcePanelWorkspaceFiles() {
+  const context = sourcePanelState.codingContext;
+  const files = Array.isArray(context?.files) ? context.files : [];
+  return files.map((file) => ({
+    key: `workspace-file:${file.id || file.path}`,
+    type: 'workspace-file',
+    title: file.displayPath || file.path || 'Changed file',
+    path: file.path,
+    displayPath: file.displayPath || file.path,
+    status: file.status,
+    insertions: Number(file.insertions || 0),
+    deletions: Number(file.deletions || 0),
+    baselineKind: file.baselineKind,
+    baselineId: file.baselineId,
+    root: file.repoRoot || context?.root || '',
+    file,
+    updatedAt: Number(file.updatedAt || context?.generatedAt || 0),
+  }));
 }
 
 function sourcePanelGitItems() {
   const repository = sourcePanelSnapshot();
-  if (!repository) return [];
+  if (!repository || repository.vcs?.kind === 'none') return [];
   const items = [];
   if (repository.connected || repository.repoFullName || repository.name) {
     items.push({
@@ -18539,6 +19044,175 @@ function sourcePanelGitItems() {
   return items;
 }
 
+function sourcePanelCountLabel(value) {
+  const count = Number(value) || 0;
+  return count.toLocaleString();
+}
+
+function sourcePanelEnvironmentItems(data = {}) {
+  const context = sourcePanelState.codingContext || {};
+  const roots = Array.isArray(context.roots) ? context.roots : [];
+  const rootItem = roots.find((item) => item?.repository?.vcs?.kind === 'git') || roots[0] || {};
+  const repository = rootItem.repository || sourcePanelSnapshot() || {};
+  const files = Array.isArray(rootItem.files) && rootItem.files.length
+    ? rootItem.files
+    : (Array.isArray(data.workspaceFiles) ? data.workspaceFiles : []);
+  const insertions = files.reduce((total, file) => total + Math.max(0, Number(file?.insertions) || 0), 0);
+  const deletions = files.reduce((total, file) => total + Math.max(0, Number(file?.deletions) || 0), 0);
+  const changedCount = files.length;
+  const changes = changedCount
+    ? `${insertions ? `+${sourcePanelCountLabel(insertions)}` : '0'} ${deletions ? `-${sourcePanelCountLabel(deletions)}` : '0'}`
+    : '—';
+  const branch = String(repository.branch || repository.defaultBranch || 'main').trim() || 'main';
+  const aheadBehind = [
+    Number(repository.ahead) ? `↑${Number(repository.ahead)}` : '',
+    Number(repository.behind) ? `↓${Number(repository.behind)}` : '',
+  ].filter(Boolean).join(' ');
+  const root = String(rootItem.root || context.root || sourcePanelWorkspaceRoot() || '').trim();
+  const remoteRoot = sourcePanelRemoteRoot();
+  const remoteData = sourcePanelState.gitRemoteData;
+  const remoteLoading = sourcePanelState.gitRemoteLoading && remoteRoot?.root === root;
+  const remoteAvailable = Boolean(repository.remoteUrl || repository.vcs?.remoteConnected || repository.remoteConnected);
+  const pullRequestValue = remoteLoading
+    ? 'loading'
+    : remoteAvailable && remoteData?.root === root
+      ? `${Number(remoteData.prs?.length || 0)} open`
+      : 'unavailable';
+  const gitAction = "openFullSourcePanel(); setSourcePanelTab('git')";
+  const codingAction = root ? `openCodingWorkspace(${encodeInlineJsString(root)})` : gitAction;
+  return [
+    { glyph: '⊞', label: 'Changes', value: changes, valueClass: changedCount ? 'is-negative' : 'is-positive' },
+    { glyph: '▱', label: 'Local', value: '', chevron: true, action: gitAction },
+    { glyph: '⑂', label: branch, value: aheadBehind, chevron: true, action: gitAction },
+    { glyph: '⇧', label: 'Commit or push', value: '', action: codingAction },
+    { glyph: '◉', label: 'Pull request status', value: pullRequestValue, valueClass: pullRequestValue === 'unavailable' ? 'is-muted' : '' },
+    { glyph: '↗', label: 'Compare branch', value: '', action: gitAction },
+  ];
+}
+
+function sourcePanelEnvironmentRowMarkup(item, { mini = false } = {}) {
+  const action = String(item?.action || '').trim();
+  const tag = action ? 'button' : 'div';
+  const attrs = action ? ` type="button" onclick="${action}"` : '';
+  return `<${tag} class="source-panel-environment-row${mini ? ' source-panel-environment-row--mini' : ''}${action ? ' is-link' : ''}"${attrs}>
+    <span class="source-panel-environment-glyph" aria-hidden="true">${escHtml(item?.glyph || '·')}</span>
+    <span class="source-panel-environment-label">${escHtml(item?.label || '')}</span>
+    ${item?.value ? `<span class="source-panel-environment-value ${escHtml(item?.valueClass || '')}">${escHtml(item.value)}</span>` : ''}
+    ${item?.chevron ? '<span class="source-panel-environment-chevron" aria-hidden="true">⌄</span>' : ''}
+  </${tag}>`;
+}
+
+function renderSourcePanelEnvironment(data, { mini = false } = {}) {
+  const rows = sourcePanelEnvironmentItems(data).map((item) => sourcePanelEnvironmentRowMarkup(item, { mini })).join('');
+  return `<section class="source-panel-section source-panel-environment-section${mini ? ' source-panel-section--mini' : ''}">
+    <div class="source-panel-section-heading"><h3 class="source-panel-section-title">Environment</h3>${mini ? '<button class="source-panel-section-add" type="button" aria-label="Open environment" title="Open environment" onclick="openFullSourcePanel(); setSourcePanelTab(\'git\')">＋</button>' : ''}</div>
+    <div class="source-panel-environment-card">${rows}</div>
+  </section>`;
+}
+
+function sourcePanelProcessItems(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+  const sid = String(sessionId || '').trim();
+  return (Array.isArray(sourcePanelState.processRuns) ? sourcePanelState.processRuns : [])
+    .filter((run) => {
+      const runSessionId = String(run?.sessionId || run?.codingSessionId || '').trim();
+      if (sid && runSessionId !== sid) return false;
+      const state = String(run?.state || '').toLowerCase();
+      return String(run?.mode || '').toLowerCase() === 'background' || !['exited', 'completed'].includes(state);
+    })
+    .map((run) => ({
+      key: `process:${String(run?.runId || run?.id || run?.command || '')}`,
+      type: 'process',
+      title: String(run?.command || run?.title || 'Background process').trim() || 'Background process',
+      status: String(run?.state || 'running').trim().toLowerCase(),
+      cwd: String(run?.cwd || run?.workspacePath || '').trim(),
+      updatedAt: sourcePanelTimestamp(run?.updatedAt || run?.startedAt),
+      run,
+    }))
+    .filter((item) => item.key !== 'process:')
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+function sourcePanelProcessRowMarkup(item, { mini = false } = {}) {
+  const run = item?.run || {};
+  const state = String(item?.status || 'running').toLowerCase();
+  const status = state === 'exited' ? (Number(run.exitCode) === 0 ? 'complete' : 'failed') : state.replace(/_/g, ' ');
+  const cwd = String(item?.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '';
+  const meta = [status, cwd].filter(Boolean).join(' • ');
+  return `<button type="button" class="source-panel-row source-panel-row--process${mini ? ' source-panel-row--mini' : ''}" onclick="openSourcePanelProcess(${encodeInlineJsString(run.runId || '')})" title="Open process details">
+    ${sourcePanelIconMarkup('process', '›_')}
+    <span class="source-item-copy"><span class="source-item-title">${escHtml(item.title)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml(meta || 'Background process')}</span></span></span>
+  </button>`;
+}
+
+function renderSourcePanelProcesses(data, { mini = false } = {}) {
+  const items = Array.isArray(data?.processes) ? data.processes : sourcePanelProcessItems();
+  const limit = mini && !sourcePanelState.miniProcessExpanded ? 4 : (mini ? 10 : items.length);
+  const visible = items.slice(0, limit);
+  const remaining = Math.max(0, items.length - visible.length);
+  return `<section class="source-panel-section source-panel-process-section${mini ? ' source-panel-section--mini' : ''}">
+    <h3 class="source-panel-section-title">Background processes</h3>
+    ${visible.length ? `<div class="source-panel-list source-panel-process-list">${visible.map((item) => sourcePanelProcessRowMarkup(item, { mini })).join('')}</div>${remaining ? `<button class="source-panel-link-button source-panel-process-more" type="button" onclick="toggleSourcePanelMiniProcesses()">Show ${remaining} more</button>` : ''}` : '<div class="source-panel-empty">No background processes in this scope.</div>'}
+  </section>`;
+}
+
+function sourcePanelComputerUseState() {
+  const active = Boolean(
+    window.desktopPictureInPicture?.active
+    || window.desktopSurfaceState?.active
+    || window.computerUseState?.active
+    || document.body?.classList.contains('desktop-surface-active')
+    || document.body?.classList.contains('computer-use-active'),
+  );
+  return { active, label: 'Picture in Picture', value: active ? 'Hide' : 'Show' };
+}
+
+function sourcePanelComputerUseMarkup({ mini = false } = {}) {
+  const state = sourcePanelComputerUseState();
+  const action = "window.toggleDesktopPictureInPicture?.() || window.toggleDesktopSurface?.() || window.openDesktopPictureInPicture?.()";
+  return `<section class="source-panel-section source-panel-computer-section${mini ? ' source-panel-section--mini' : ''}">
+    <h3 class="source-panel-section-title">Computer Use</h3>
+    <button type="button" class="source-panel-info-row source-panel-computer-row${mini ? ' source-panel-computer-row--mini' : ''}" onclick="${action}" title="${escHtml(state.active ? 'Hide Picture in Picture' : 'Show Picture in Picture')}">
+      <span class="source-panel-computer-glyph" aria-hidden="true">▣</span><span>${escHtml(state.label)}</span><span class="info-value">${escHtml(state.value)}</span>
+    </button>
+  </section>`;
+}
+
+function sourcePanelBrowserItems() {
+  const records = typeof getBrowserCanvasSessionTabs === 'function' ? getBrowserCanvasSessionTabs() : [];
+  const visible = records.filter((record) => record?.active || record?.streamActive || record?.url || record?.title || record?.nativeTabs?.length);
+  if (!visible.length) return [{ key: 'browser:new-tab', type: 'browser', title: 'New tab', meta: '', record: null }];
+  return visible.map((record, index) => ({
+    key: `browser:${String(record.sessionId || index)}`,
+    type: 'browser',
+    title: String(record.title || record.url || getBrowserSessionLabel(record, index) || 'Browser').trim(),
+    meta: String(record.url || record.statusLabel || '').trim(),
+    record,
+  }));
+}
+
+function sourcePanelBrowserRowMarkup(item, { mini = false } = {}) {
+  const record = item?.record;
+  const sessionId = record?.sessionId || '';
+  const action = sessionId
+    ? `followBrowserCanvasSession(${encodeInlineJsString(sessionId)}); openBrowserCanvasSurface()`
+    : 'openBrowserCanvasSurface()';
+  let meta = item?.meta || '';
+  if (/^https?:\/\//i.test(meta)) {
+    try { meta = new URL(meta).hostname.replace(/^www\\./i, ''); } catch {}
+  }
+  return `<button type="button" class="source-panel-info-row source-panel-browser-row${mini ? ' source-panel-browser-row--mini' : ''}" onclick="${action}" title="Open Browser">
+    <span class="source-panel-browser-glyph" aria-hidden="true">◉</span><span class="source-panel-browser-title">${escHtml(item.title || 'Browser')}</span>${meta ? `<span class="info-value">${escHtml(meta)}</span>` : ''}
+  </button>`;
+}
+
+function renderSourcePanelBrowser(data, { mini = false } = {}) {
+  const items = Array.isArray(data?.browserItems) ? data.browserItems : sourcePanelBrowserItems();
+  return `<section class="source-panel-section source-panel-browser-section${mini ? ' source-panel-section--mini' : ''}">
+    <h3 class="source-panel-section-title">Browser</h3>
+    <div class="source-panel-info-card">${items.slice(0, mini ? 4 : 8).map((item) => sourcePanelBrowserRowMarkup(item, { mini })).join('')}</div>
+  </section>`;
+}
+
 function sourcePanelData(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
   const resourceItems = (Array.isArray(chatResourcesState.resources) ? chatResourcesState.resources : []).map(sourcePanelResourceItem);
   const links = resourceItems.filter((item) => item.bucket === 'links' && sourcePanelMatchesItem(item));
@@ -18546,9 +19220,14 @@ function sourcePanelData(sessionId = sourcePanelState.activeSessionId || window.
   const inputs = files.filter((item) => item.bucket === 'inputs' && sourcePanelMatchesItem(item));
   const outputs = files.filter((item) => item.bucket === 'outputs' && sourcePanelMatchesItem(item));
   const edits = sourcePanelEditItems(sessionId).filter((item) => sourcePanelMatchesItem(item));
-  const recent = [...resourceItems.filter((item) => sourcePanelMatchesItem(item)), ...edits]
+  const workspaceFiles = sourcePanelWorkspaceFiles().filter((item) => sourcePanelMatchesItem(item));
+  const recent = [...resourceItems.filter((item) => sourcePanelMatchesItem(item)), ...edits, ...workspaceFiles]
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  return { resourceItems, links, inputs, outputs, edits, recent, gitItems: sourcePanelGitItems().filter((item) => sourcePanelMatchesItem(item)) };
+  const data = { resourceItems, links, inputs, outputs, edits, workspaceFiles, recent, gitItems: sourcePanelGitItems().filter((item) => sourcePanelMatchesItem(item)) };
+  data.processes = sourcePanelProcessItems(sessionId);
+  data.environment = sourcePanelEnvironmentItems(data);
+  data.browserItems = sourcePanelBrowserItems();
+  return data;
 }
 
 function sourcePanelIconMarkup(kind, label) {
@@ -18593,6 +19272,19 @@ function sourcePanelEditRowMarkup(item) {
   </button>`;
 }
 
+function sourcePanelWorkspaceFileRowMarkup(item) {
+  const status = String(item.status || 'modified').toLowerCase();
+  const statusLabel = status === 'added' ? 'A' : status === 'deleted' ? 'D' : status === 'renamed' ? 'R' : 'M';
+  const counts = `${item.insertions ? `<span class="source-count-add">+${item.insertions}</span>` : ''}${item.deletions ? `${item.insertions ? '<span class="source-count-muted"> • </span>' : ''}<span class="source-count-del">-${item.deletions}</span>` : ''}`;
+  const baseline = item.baselineKind === 'none' ? 'no baseline' : item.baselineKind === 'git-index' ? 'staged' : item.baselineKind === 'turn-snapshot' || item.baselineKind === 'session-snapshot' ? 'snapshot' : 'working tree';
+  const meta = [statusLabel, counts, baseline].filter(Boolean).join('<span class="source-count-muted"> • </span>');
+  return `<button type="button" class="source-panel-row source-panel-row--workspace-file source-panel-row--status-${escHtml(status)}" onclick="openSourcePanelItem(${encodeInlineJsString(item.key)})" title="Open diff for ${escHtml(item.displayPath)}" data-source-item="${escHtml(item.key)}">
+    ${sourcePanelIconMarkup('edit', statusLabel)}
+    <span class="source-item-copy"><span class="source-item-title">${escHtml(item.displayPath)}</span><span class="source-item-meta"><span class="source-meta-path">${meta}</span></span></span>
+    <span class="source-item-chevron" aria-hidden="true">›</span>
+  </button>`;
+}
+
 function sourcePanelGitRowMarkup(item) {
   const repository = item.repository || {};
   if (item.type === 'git-commit') {
@@ -18614,6 +19306,7 @@ function sourcePanelGitRowMarkup(item) {
 function sourcePanelItemMarkup(item, options = {}) {
   if (item?.type === 'resource') return sourcePanelResourceRowMarkup(item, options);
   if (item?.type === 'edit') return sourcePanelEditRowMarkup(item, options);
+  if (item?.type === 'workspace-file') return sourcePanelWorkspaceFileRowMarkup(item, options);
   if (item?.type === 'git-repo' || item?.type === 'git-commit') return sourcePanelGitRowMarkup(item, options);
   return '';
 }
@@ -18629,11 +19322,14 @@ function sourcePanelCountMarkup(label, value, glyph) {
 
 function renderSourcePanelOverview(data) {
   const project = sourcePanelState.project || {};
+  const context = sourcePanelState.codingContext || {};
   const repository = sourcePanelSnapshot();
   const projectName = String(project.name || project.projectName || project.label || 'Current project').trim();
-  const root = String(project.workspacePath || project.root || '').trim();
-  const fileCount = data.inputs.length + data.outputs.length + data.edits.length;
+  const root = String(context.root || project.workspacePath || project.root || '').trim();
+  const fileCount = Number(context.counts?.files || data.workspaceFiles.length || data.inputs.length + data.outputs.length + data.edits.length);
   const commitCount = repository && Number.isFinite(Number(repository.commitCount)) ? Number(repository.commitCount) : '—';
+  const remoteData = sourcePanelState.gitRemoteData;
+  const prCount = remoteData && remoteData.root && remoteData.root === sourcePanelRemoteRoot()?.root ? Number(remoteData.prs?.length || 0) : '—';
   return `<section class="source-panel-section source-panel-project-context">
     <h3 class="source-panel-section-title">Project context</h3>
     <p class="source-panel-project-name">${escHtml(projectName)}</p>
@@ -18642,19 +19338,106 @@ function renderSourcePanelOverview(data) {
       ${sourcePanelCountMarkup('Files', fileCount, '▤')}
       ${sourcePanelCountMarkup('Web links', data.links.length, '◎')}
       ${sourcePanelCountMarkup('Git commits', commitCount, '⌘')}
-      ${sourcePanelCountMarkup('PRs', '—', '⑂')}
+      ${sourcePanelCountMarkup('Open PRs', prCount, '↗')}
     </div>
   </section>
+  ${renderSourcePanelEnvironment(data)}
+  ${renderSourcePanelProcesses(data)}
+  ${sourcePanelComputerUseMarkup()}
+  ${renderSourcePanelBrowser(data)}
   <section class="source-panel-section"><h3 class="source-panel-section-title">Recent sources</h3>${data.recent.length ? `<div class="source-panel-list">${data.recent.slice(0, 5).map((item) => sourcePanelItemMarkup(item)).join('')}</div>` : '<div class="source-panel-empty">No sources yet.</div>'}${data.recent.length > 5 ? '<button class="source-panel-link-button" type="button" onclick="clearSourcePanelFilter()">· View all project sources</button>' : ''}</section>`;
 }
 
 function renderSourcePanelFiles(data) {
   const sections = [
     sourcePanelSectionMarkup('Inputs', data.inputs, 'No input files yet.', `View all inputs (${data.inputs.length})`),
-    sourcePanelSectionMarkup('Code edits', data.edits, 'No code edits yet.', `View all edits (${data.edits.length})`),
+    sourcePanelSectionMarkup('Changed files', data.workspaceFiles, 'No workspace changes in this scope.', `View all changes (${data.workspaceFiles.length})`),
+    sourcePanelSectionMarkup('Recorded edits', data.edits, 'No recorded edits yet.', `View all edits (${data.edits.length})`),
     sourcePanelSectionMarkup('Outputs', data.outputs, 'No output files yet.', `View all outputs (${data.outputs.length})`),
   ];
   return sections.join('<div class="source-panel-group-divider"></div>');
+}
+
+function sourcePanelWorkItems(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+  const contextWork = Array.isArray(sourcePanelState.codingContext?.work) ? sourcePanelState.codingContext.work : [];
+  const items = backgroundAgentWorkForSession(sessionId).map((record) => ({
+    key: `work:background:${record.id}`,
+    type: 'work',
+    title: record.agentName || 'Background agent',
+    displayPath: `background • ${record.id}`,
+    status: record.status || 'completed',
+    updatedAt: Number(record.completedAt || record.updatedAt || 0),
+    workType: 'background',
+    workId: record.id,
+    agentName: record.agentName,
+    agentColor: record.agentColor,
+    preview: record.result || record.error || record.task || 'Background work',
+    completedAt: record.completedAt || record.updatedAt,
+  }));
+  const contextItems = contextWork.map((item) => ({
+      key: `work:${item.type}:${item.id}`,
+      type: 'work',
+      title: item.title || (item.type === 'task' ? 'Background task' : 'Proposal'),
+      displayPath: `${item.type} • ${item.id}`,
+      status: item.status || 'linked',
+      updatedAt: Number(item.updatedAt || item.createdAt || 0),
+      workType: item.type,
+      workId: item.id,
+    }));
+  const seen = new Set([...items, ...contextItems].map((item) => `${item.workType}:${item.workId}`));
+  contextItems.forEach((item) => {
+    if (!items.some((existing) => existing.workType === item.workType && existing.workId === item.workId)) items.push(item);
+  });
+  const session = getChatSessionById(String(sessionId || '').trim());
+  const historySeen = new Set([...seen]);
+  for (const message of Array.isArray(session?.history) ? session.history : []) {
+    const candidates = [
+      ['task', message?.taskId || message?.backgroundTaskId, message?.taskTitle || 'Background task'],
+      ['proposal', message?.proposalId, message?.proposalTitle || 'Proposal'],
+      ['subagent', message?.subagentId || message?.agentId, message?.subagentName || 'Subagent'],
+      ['workgroup', message?.workgroupId || message?.voiceWorkgroupId, message?.workgroupTitle || 'Agent workgroup'],
+    ];
+    for (const [type, idValue, titleValue] of candidates) {
+      const id = String(idValue || '').trim();
+      if (!id || historySeen.has(`${type}:${id}`)) continue;
+      historySeen.add(`${type}:${id}`);
+      items.push({
+        key: `work:${type}:${id}`,
+        type: 'work',
+        title: String(titleValue || type).trim(),
+        displayPath: `${type} • ${id}`,
+        status: String(message?.taskStatus || message?.status || 'linked').trim(),
+        updatedAt: Number(message?.timestamp || 0),
+        workType: type,
+        workId: id,
+      });
+    }
+  }
+  return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+function sourcePanelWorkRowMarkup(item) {
+  if (item.workType === 'background') {
+    const color = String(item.agentColor || '#1677d2').trim();
+    const age = backgroundAgentAgeLabel(item.completedAt || item.updatedAt);
+    return `<button type="button" class="source-panel-row source-panel-row--work source-panel-row--background-agent" style="--source-agent-color:${escHtml(color)}" onclick="openSourcePanelWork(${encodeInlineJsString(item.workType)}, ${encodeInlineJsString(item.workId)})" title="Open ${escHtml(item.title)}">
+      ${sourcePanelIconMarkup('work', '•')}
+      <span class="source-item-copy"><span class="source-item-title"><span class="source-agent-name" style="color:${escHtml(color)}">${escHtml(item.title)}</span><time class="source-agent-age">${escHtml(age)}</time></span><span class="source-item-meta"><span class="source-meta-path">${escHtml(backgroundAgentPreview(item.preview, 150))}</span></span></span>
+      <span class="source-item-chevron" aria-hidden="true">›</span>
+    </button>`;
+  }
+  const icon = item.workType === 'task' ? '✓' : item.workType === 'proposal' ? '◇' : item.workType === 'subagent' ? '•' : '⌁';
+  return `<button type="button" class="source-panel-row source-panel-row--work" onclick="openSourcePanelWork(${encodeInlineJsString(item.workType)}, ${encodeInlineJsString(item.workId)})" title="Open ${escHtml(item.title)}">
+    ${sourcePanelIconMarkup('work', icon)}
+    <span class="source-item-copy"><span class="source-item-title">${escHtml(item.title)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml([item.workType, item.status].filter(Boolean).join(' • '))}</span></span></span>
+    <span class="source-item-chevron" aria-hidden="true">›</span>
+  </button>`;
+}
+
+function renderSourcePanelWork(data) {
+  const items = sourcePanelWorkItems().filter((item) => sourcePanelMatchesItem(item));
+  return `<section class="source-panel-section"><h3 class="source-panel-section-title">Linked work</h3>${items.length ? `<div class="source-panel-list">${items.slice(0, 8).map(sourcePanelWorkRowMarkup).join('')}</div>` : '<div class="source-panel-empty">Tasks and agent work created in this thread will stay linked here.</div>'}</section>
+    <section class="source-panel-section"><h3 class="source-panel-section-title">Change sets</h3>${data.workspaceFiles.length ? `<div class="source-panel-list">${data.workspaceFiles.slice(0, 5).map(sourcePanelWorkspaceFileRowMarkup).join('')}</div>` : '<div class="source-panel-empty">No change set recorded yet.</div>'}</section>`;
 }
 
 function sourcePanelGitEnvRow(glyph, label, value, valueClass = '') {
@@ -18665,40 +19448,68 @@ function sourcePanelInfoRow(glyph, label, value, action = '') {
   return `<div class="source-panel-info-row${action ? ' is-link' : ''}"${action ? ` onclick="${action}"` : ''}><span aria-hidden="true">${escHtml(glyph)}</span><span>${escHtml(label)}</span>${value ? `<span class="info-value">${escHtml(String(value))}</span>` : ''}</div>`;
 }
 
+function sourcePanelRemoteReviewMarkup(root) {
+  const remote = sourcePanelState.gitRemoteData;
+  if (!remote || String(remote.root || '') !== String(root || '')) return sourcePanelState.gitRemoteLoading ? '<section class="source-panel-section"><div class="source-panel-empty">Loading remote review data…</div></section>' : '';
+  if (sourcePanelRemoteRoot()?.repository?.provider && sourcePanelRemoteRoot().repository.provider !== 'GitHub') return '<section class="source-panel-section"><h3 class="source-panel-section-title">Remote review</h3><div class="source-panel-empty">Remote review actions are currently available for GitHub-linked repositories.</div></section>';
+  if (sourcePanelState.gitRemoteLoading) return '<section class="source-panel-section"><div class="source-panel-empty">Loading remote review data…</div></section>';
+  if (!remote.connected) return '<section class="source-panel-section"><h3 class="source-panel-section-title">Remote review</h3><div class="source-panel-empty">Connect GitHub to load pull requests and checks. Local Git stays available.</div></section>';
+  const prs = Array.isArray(remote.prs) ? remote.prs : [];
+  const checks = Array.isArray(remote.checks) ? remote.checks : [];
+  const prMarkup = prs.length ? prs.slice(0, 5).map((pr) => `<button type="button" class="source-panel-row source-panel-row--git" onclick="openSourcePanelUrl(${encodeInlineJsString(pr.url)})" title="Open pull request"><span class="source-item-icon source-item-icon--git" aria-hidden="true">↗</span><span class="source-item-copy"><span class="source-item-title">#${escHtml(String(pr.number))} ${escHtml(pr.title)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml([pr.state, pr.draft ? 'draft' : pr.head ? `${pr.head} → ${pr.base}` : '', pr.author].filter(Boolean).join(' • '))}</span></span></span><span class="source-item-chevron" aria-hidden="true">›</span></button>`).join('') : '<div class="source-panel-empty">No open pull requests.</div>';
+  const checkMarkup = checks.length ? checks.slice(0, 5).map((check) => `<button type="button" class="source-panel-row source-panel-row--git"${check.url ? ` onclick="openSourcePanelUrl(${encodeInlineJsString(check.url)})"` : ''}><span class="source-item-icon source-item-icon--git" aria-hidden="true">${check.conclusion === 'success' ? '✓' : check.conclusion === 'failure' ? '!' : '·'}</span><span class="source-item-copy"><span class="source-item-title">${escHtml(check.name)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml([check.status, check.conclusion].filter(Boolean).join(' • ') || 'queued')}</span></span></span></button>`).join('') : '<div class="source-panel-empty">No checks reported for this branch.</div>';
+  return `<section class="source-panel-section"><h3 class="source-panel-section-title">Pull requests</h3><div class="source-panel-list">${prMarkup}</div></section><section class="source-panel-section"><h3 class="source-panel-section-title">Checks</h3><div class="source-panel-list">${checkMarkup}</div></section>`;
+}
+
 function renderSourcePanelGit(data) {
-  const repository = sourcePanelSnapshot();
-  if (!repository || !repository.connected && !repository.repoFullName && !repository.name) {
-    return `<section class="source-panel-section"><h3 class="source-panel-section-title">Repository</h3><div class="source-panel-empty">No Git repository detected for this project.</div><button class="source-panel-link-button" type="button" onclick="refreshSourcePanel()">↻ Refresh repository</button></section>`;
+  const context = sourcePanelState.codingContext || {};
+  const roots = Array.isArray(context.roots) ? context.roots : [];
+  const repositories = roots.filter((item) => item?.repository?.vcs?.kind === 'git');
+  if (!repositories.length) {
+    return `<section class="source-panel-section"><h3 class="source-panel-section-title">Filesystem workspace</h3><div class="source-panel-empty">No Git repository is linked to this scope. File browsing and snapshot-backed diffs remain available.</div>${data.workspaceFiles.length ? `<div class="source-panel-list">${data.workspaceFiles.slice(0, 5).map(sourcePanelWorkspaceFileRowMarkup).join('')}</div>` : ''}<button class="source-panel-link-button" type="button" onclick="refreshSourcePanel()">↻ Refresh workspace</button></section>`;
   }
-  const repoTitle = repository.repoFullName || repository.name || 'Local repository';
-  const dirtyCount = Array.isArray(repository.dirtyFiles) ? repository.dirtyFiles.length : (Number(repository.stagedFiles || 0) + Number(repository.unstagedFiles || 0) + Number(repository.untrackedFiles || 0));
-  const aheadBehind = [Number(repository.ahead) ? `↑${Number(repository.ahead)}` : '', Number(repository.behind) ? `↓${Number(repository.behind)}` : ''].filter(Boolean).join(' ');
-  const branch = repository.branch || repository.defaultBranch || 'main';
-  const repoUrl = repository.htmlUrl || '';
-  const cloneUrl = repository.cloneUrl || repository.remoteUrl || '';
-  const activity = Array.isArray(repository.commits) ? repository.commits : [];
-  return `<section class="source-panel-section"><h3 class="source-panel-section-title">Repository</h3>
-    <div class="source-panel-repo-card">${sourcePanelIconMarkup('git', '⌘')}<span class="source-panel-repo-copy"><span class="source-item-title">${escHtml(repoTitle)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml(repository.provider || 'Git repository')}</span></span></span><span class="source-panel-status${repository.connected ? '' : ' source-panel-status--local'}">${repository.connected ? 'Connected' : 'Local'}</span></div>
-  </section>
-  <section class="source-panel-section"><h3 class="source-panel-section-title">Environment</h3><div class="source-panel-environment-card">
-    ${sourcePanelGitEnvRow('⊞', 'Changes', dirtyCount, dirtyCount ? 'is-negative' : 'is-positive')}
-    ${sourcePanelGitEnvRow('▱', 'Local', repository.statusText ? 'Dirty' : 'Clean')}
-    ${sourcePanelGitEnvRow('⑂', branch, aheadBehind || 'up to date', aheadBehind ? 'is-positive' : '')}
-    ${sourcePanelGitEnvRow('⇧', 'Commit and Push', repository.stagedFiles ? `${repository.stagedFiles} staged` : '—')}
-    ${sourcePanelGitEnvRow('⊙', 'Local Servers', '—')}
-  </div></section>
-  <section class="source-panel-section"><h3 class="source-panel-section-title">Repository info</h3><div class="source-panel-info-card">
-    ${sourcePanelInfoRow('▤', 'About', 'Prometheus workspace')}
-    ${repoUrl ? sourcePanelInfoRow('◉', 'Open on GitHub', '↗', `openSourcePanelUrl(${encodeInlineJsString(repoUrl)})`) : ''}
-    ${cloneUrl ? sourcePanelInfoRow('▣', 'Clone URL', 'copy', `copySourcePanelText(${encodeInlineJsString(cloneUrl)})`) : ''}
-  </div></section>
-  <section class="source-panel-section"><h3 class="source-panel-section-title source-panel-activity-title">Recent activity</h3>${activity.length ? `<div class="source-panel-list">${activity.slice(0, 5).map((commit) => sourcePanelGitRowMarkup({ type: 'git-commit', key: `git:commit:${commit.hash || commit.shortHash || commit.message}`, title: `Commit ${commit.shortHash || String(commit.hash || '').slice(0, 7)}`, message: commit.message, author: commit.author, at: commit.at, repository })).join('')}</div>` : '<div class="source-panel-empty">No recent commits found.</div>'}${activity.length > 5 ? '<button class="source-panel-link-button" type="button" onclick="setSourcePanelTab(\'git\')">· View all activity</button>' : ''}</section>`;
+  return repositories.map((rootItem) => {
+    const repository = rootItem.repository || {};
+    const repoTitle = repository.repoFullName || repository.name || rootItem.label || 'Local repository';
+    const files = Array.isArray(rootItem.files) ? rootItem.files : [];
+    const dirtyCount = files.length;
+    const aheadBehind = [Number(repository.ahead) ? `↑${Number(repository.ahead)}` : '', Number(repository.behind) ? `↓${Number(repository.behind)}` : ''].filter(Boolean).join(' ');
+    const branch = repository.branch || repository.defaultBranch || 'main';
+    const repoUrl = repository.htmlUrl || '';
+    const activity = Array.isArray(repository.commits) ? repository.commits : [];
+    return `<section class="source-panel-section"><h3 class="source-panel-section-title">Repository</h3>
+      <div class="source-panel-repo-card">${sourcePanelIconMarkup('git', '⌘')}<span class="source-panel-repo-copy"><span class="source-item-title">${escHtml(repoTitle)}</span><span class="source-item-meta"><span class="source-meta-path">${escHtml(rootItem.root || repository.provider || 'Git repository')}</span></span></span><span class="source-panel-status${repository.vcs?.remoteConnected ? '' : ' source-panel-status--local'}">${repository.vcs?.remoteConnected ? 'Remote' : 'Local'}</span></div>
+    </section>
+    <section class="source-panel-section"><h3 class="source-panel-section-title">Status</h3><div class="source-panel-environment-card">
+      ${sourcePanelGitEnvRow('⊞', 'Changed', dirtyCount, dirtyCount ? 'is-negative' : 'is-positive')}
+      ${sourcePanelGitEnvRow('▱', 'Worktree', repository.statusText ? 'Dirty' : 'Clean')}
+      ${sourcePanelGitEnvRow('⑂', branch, aheadBehind || 'up to date', aheadBehind ? 'is-positive' : '')}
+      ${sourcePanelGitEnvRow('⇧', 'Staged', files.filter((file) => file.staged).length)}
+      ${sourcePanelGitEnvRow('＋', 'Untracked', files.filter((file) => file.untracked).length)}
+    </div><button class="source-panel-link-button" type="button" onclick="openCodingWorkspace(${encodeInlineJsString(rootItem.root)})">Open coding workspace ·</button></section>
+    ${files.length ? `<section class="source-panel-section"><h3 class="source-panel-section-title">Changed files</h3><div class="source-panel-list">${files.slice(0, 6).map((file) => sourcePanelWorkspaceFileRowMarkup(sourcePanelWorkspaceFiles().find((item) => item.path === file.path) || { ...file, key: `workspace-file:${file.id || file.path}`, displayPath: file.displayPath, path: file.path, root: rootItem.root })).join('')}</div></section>` : ''}
+    ${activity.length ? `<section class="source-panel-section"><h3 class="source-panel-section-title">Recent commits</h3><div class="source-panel-list">${activity.slice(0, 5).map((commit) => sourcePanelGitRowMarkup({ type: 'git-commit', repository, commit, title: `Commit ${commit.shortHash || String(commit.hash || '').slice(0, 7)}`.trim(), message: commit.message, author: commit.author, at: commit.at, key: `git:commit:${String(commit.hash || commit.shortHash || commit.message || '')}` })).join('')}</div></section>` : ''}
+    ${sourcePanelRemoteReviewMarkup(rootItem.root)}
+    ${repoUrl ? `<section class="source-panel-section"><button class="source-panel-link-button" type="button" onclick="openSourcePanelUrl(${encodeInlineJsString(repoUrl)})">Open remote ·</button></section>` : ''}`;
+  }).join('<div class="source-panel-group-divider"></div>');
+}
+
+function sourcePanelScopeMarkup() {
+  const scope = sourcePanelState.scope === 'project' ? 'project' : 'thread';
+  return `<div class="source-panel-scope-row"><span>Scope</span><div class="source-panel-scope-toggle" role="group" aria-label="Source scope"><button type="button" class="${scope === 'thread' ? 'is-active' : ''}" onclick="setSourcePanelScope('thread')">Thread</button><button type="button" class="${scope === 'project' ? 'is-active' : ''}" onclick="setSourcePanelScope('project')">Project</button></div></div>`;
+}
+
+function setSourcePanelScope(scope = 'thread') {
+  sourcePanelState.scope = scope === 'project' ? 'project' : 'thread';
+  sourcePanelState.gitLoaded = false;
+  renderSourcePanel();
+  loadSourcePanelGit(sourcePanelState.activeSessionId || window.activeChatSessionId).catch(() => {});
 }
 
 function renderSourcePanel() {
   const body = document.getElementById('source-panel-body');
   if (!body) return;
-  const tab = ['overview', 'files', 'git'].includes(sourcePanelState.tab) ? sourcePanelState.tab : 'overview';
+  const tab = ['overview', 'work', 'files', 'git'].includes(sourcePanelState.tab) ? sourcePanelState.tab : 'overview';
   sourcePanelState.tab = tab;
   document.querySelectorAll('[data-source-tab]').forEach((button) => {
     const active = button.getAttribute('data-source-tab') === tab;
@@ -18710,13 +19521,19 @@ function renderSourcePanel() {
   const filterButton = document.getElementById('source-panel-filter');
   if (filterButton) filterButton.setAttribute('aria-pressed', sourcePanelState.filterOpen ? 'true' : 'false');
   const data = sourcePanelData();
-  body.innerHTML = tab === 'overview' ? renderSourcePanelOverview(data) : tab === 'files' ? renderSourcePanelFiles(data) : renderSourcePanelGit(data);
+  body.innerHTML = `${sourcePanelScopeMarkup()}${tab === 'overview' ? renderSourcePanelOverview(data) : tab === 'work' ? renderSourcePanelWork(data) : tab === 'files' ? renderSourcePanelFiles(data) : renderSourcePanelGit(data)}`;
+  const mini = document.getElementById('sources-minimized-panel');
+  if (mini?.classList.contains('is-visible')) renderSourcesMinimizedPanel();
 }
 
 function setSourcePanelTab(tab = 'overview') {
-  sourcePanelState.tab = ['overview', 'files', 'git'].includes(tab) ? tab : 'overview';
+  sourcePanelState.tab = ['overview', 'work', 'files', 'git'].includes(tab) ? tab : 'overview';
   renderSourcePanel();
-  if (sourcePanelState.tab === 'git') loadSourcePanelGit(sourcePanelState.activeSessionId || window.activeChatSessionId).catch(() => {});
+  if (sourcePanelState.tab === 'git') {
+    const sid = sourcePanelState.activeSessionId || window.activeChatSessionId;
+    loadSourcePanelGit(sid).catch(() => {});
+    loadSourcePanelRemoteData(sid).catch(() => {});
+  }
 }
 
 function toggleSourcePanelFilter(nextOpen = null) {
@@ -18757,14 +19574,16 @@ function sourcePanelResolveGitPath(value, baseRoot = '') {
 function sourcePanelGitFilePaths(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
   const paths = [];
   const seen = new Set();
+  const baseRoot = sourcePanelWorkspaceRoot(sessionId);
   const add = (value) => {
-    const normalized = sourcePanelResolveGitPath(value);
+    const normalized = sourcePanelResolveGitPath(value, baseRoot);
     if (!normalized || seen.has(normalized)) return;
     seen.add(normalized);
     paths.push(normalized);
   };
   // Edits are the strongest signal: a repository should follow the files the
   // active chat actually changed, not the gateway process's own checkout.
+  sourcePanelWorkspaceFiles().forEach((item) => add(item.path));
   sourcePanelEditItems(sessionId).forEach((item) => add(item.path || item.displayPath));
   const resources = (Array.isArray(chatResourcesState.resources) ? chatResourcesState.resources : [])
     .map(sourcePanelResourceItem)
@@ -18775,7 +19594,7 @@ function sourcePanelGitFilePaths(sessionId = sourcePanelState.activeSessionId ||
 }
 
 function sourcePanelGitScopeKey(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
-  return [sourcePanelWorkspaceRoot(sessionId), ...sourcePanelGitFilePaths(sessionId)].join('|');
+  return [sourcePanelState.scope, sourcePanelWorkspaceRoot(sessionId), ...sourcePanelGitFilePaths(sessionId)].join('|');
 }
 
 async function sourcePanelSessionWorkspaceRoot(sessionId) {
@@ -18838,68 +19657,105 @@ async function loadSourcePanelProject(sessionId = window.activeChatSessionId) {
   loadSourcePanelGit(sid).catch(() => {});
 }
 
+async function loadSourcePanelProcesses(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  const token = ++sourcePanelState.processRequestToken;
+  sourcePanelState.processSessionId = sid;
+  sourcePanelState.processLoaded = false;
+  try {
+    const data = await api('/api/processes?limit=100', { timeoutMs: 8000, dedupe: false });
+    if (token !== sourcePanelState.processRequestToken || sid !== sourcePanelState.activeSessionId) return;
+    sourcePanelState.processRuns = Array.isArray(data?.runs) ? data.runs : [];
+  } catch {
+    if (token !== sourcePanelState.processRequestToken || sid !== sourcePanelState.activeSessionId) return;
+    sourcePanelState.processRuns = [];
+  } finally {
+    if (token === sourcePanelState.processRequestToken && sid === sourcePanelState.activeSessionId) {
+      sourcePanelState.processLoaded = true;
+      renderSourcePanel();
+    }
+  }
+}
+
 async function loadSourcePanelGit(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
   const sid = String(sessionId || '').trim();
   if (!sid || sid !== sourcePanelState.activeSessionId) return;
   const token = ++sourcePanelState.gitRequestToken;
-  const explicitRoot = sourcePanelWorkspaceRoot(sid);
   const filePaths = sourcePanelGitFilePaths(sid);
-  const scopeKey = sourcePanelGitScopeKey(sid);
+  const scopeKey = [sourcePanelState.scope, sourcePanelWorkspaceRoot(sid), ...filePaths].join('|');
   sourcePanelState.gitSessionId = sid;
   sourcePanelState.gitRoot = '';
   sourcePanelState.gitScopeKey = scopeKey;
   sourcePanelState.git = null;
+  sourcePanelState.codingContext = null;
+  sourcePanelState.gitRemoteData = null;
+  sourcePanelState.gitRemoteKey = '';
+  sourcePanelState.gitRemoteLoading = false;
   sourcePanelState.gitLoaded = false;
   try {
-    // A relative edit/resource path is resolved against the chat's workspace.
-    // Do not query that workspace when the chat has no touched local files;
-    // that is what previously surfaced the gateway repository on new chats.
-    const sessionRoot = explicitRoot || (filePaths.some((value) => !sourcePanelIsAbsolutePath(value))
-      ? await sourcePanelSessionWorkspaceRoot(sid)
-      : '');
+    const params = new URLSearchParams({ sessionId: sid, scope: sourcePanelState.scope === 'project' ? 'project' : 'thread' });
+    if (filePaths.length) params.set('paths', filePaths.map((value) => encodeURIComponent(value)).join('|'));
+    const data = await api(`/api/coding/context?${params.toString()}`, { timeoutMs: 10000, dedupe: false });
     if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
-    const candidateRoots = [];
-    const seenRoots = new Set();
-    const addCandidate = (value) => {
-      const normalized = sourcePanelResolveGitPath(value, sessionRoot);
-      if (!normalized || seenRoots.has(normalized)) return;
-      seenRoots.add(normalized);
-      candidateRoots.push(normalized);
-    };
-    if (explicitRoot) addCandidate(explicitRoot);
-    filePaths.forEach((value) => addCandidate(value));
-    if (!candidateRoots.length) {
-      sourcePanelState.git = null;
-      sourcePanelState.gitRoot = '';
-      sourcePanelState.gitLoaded = true;
-      renderSourcePanel();
-      return;
-    }
-    const repositories = await Promise.all(candidateRoots.slice(0, 32).map(async (candidate) => {
-      try {
-        const params = new URLSearchParams({ root: candidate, sessionId: sid });
-        const data = await api(`/api/coding/repository?${params.toString()}`, { timeoutMs: 8000, dedupe: false });
-        const repository = data?.repository;
-        if (!repository || repository.connected !== true) return null;
-        return {
-          root: String(repository.root || data.root || candidate).trim(),
-          repository,
-        };
-      } catch {
-        return null;
-      }
-    }));
-    if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
-    const selected = repositories.find(Boolean);
-    sourcePanelState.git = selected || null;
-    sourcePanelState.gitRoot = selected?.root || '';
+    sourcePanelState.codingContext = data || null;
+    const primary = data?.roots?.[0];
+    sourcePanelState.git = primary?.repository ? { root: primary.root, repository: primary.repository } : null;
+    sourcePanelState.gitRoot = String(primary?.root || data?.root || '').trim();
   } catch {
     if (token !== sourcePanelState.gitRequestToken || sid !== sourcePanelState.activeSessionId) return;
     sourcePanelState.git = null;
+    sourcePanelState.codingContext = null;
     sourcePanelState.gitRoot = '';
   }
   sourcePanelState.gitLoaded = true;
   renderSourcePanel();
+  if (sourcePanelState.tab === 'git') loadSourcePanelRemoteData(sid).catch(() => {});
+}
+
+async function loadSourcePanelRemoteData(sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid || sid !== sourcePanelState.activeSessionId || !sourcePanelState.gitLoaded) return;
+  const rootItem = sourcePanelRemoteRoot();
+  const repository = rootItem?.repository || {};
+  const root = String(rootItem?.root || '').trim();
+  const key = [sourcePanelState.scope, root, repository.branch || ''].join('|');
+  if (!root || !repository.remoteUrl || repository.provider !== 'GitHub') {
+    sourcePanelState.gitRemoteData = { root, connected: false, prs: [], checks: [] };
+    sourcePanelState.gitRemoteKey = key;
+    sourcePanelState.gitRemoteLoading = false;
+    renderSourcePanel();
+    return;
+  }
+  if (sourcePanelState.gitRemoteKey === key && sourcePanelState.gitRemoteData) return;
+  sourcePanelState.gitRemoteLoading = true;
+  renderSourcePanel();
+  try {
+    const baseParams = new URLSearchParams({ root, sessionId: sid });
+    const checkParams = new URLSearchParams({ root, sessionId: sid, ref: repository.branch || '' });
+    const [prs, checks] = await Promise.all([
+      api(`/api/coding/prs?${baseParams.toString()}`, { timeoutMs: 12000, dedupe: false }),
+      api(`/api/coding/checks?${checkParams.toString()}`, { timeoutMs: 12000, dedupe: false }),
+    ]);
+    if (sid !== sourcePanelState.activeSessionId) return;
+    sourcePanelState.gitRemoteData = {
+      root,
+      connected: prs?.connected === true || checks?.connected === true,
+      prs: Array.isArray(prs?.prs) ? prs.prs : [],
+      checks: Array.isArray(checks?.checks) ? checks.checks : [],
+      error: prs?.error || checks?.error || '',
+    };
+    sourcePanelState.gitRemoteKey = key;
+  } catch (error) {
+    if (sid !== sourcePanelState.activeSessionId) return;
+    sourcePanelState.gitRemoteData = { root, connected: false, prs: [], checks: [], error: error?.message || 'Remote review data unavailable.' };
+    sourcePanelState.gitRemoteKey = key;
+  } finally {
+    if (sid === sourcePanelState.activeSessionId) {
+      sourcePanelState.gitRemoteLoading = false;
+      renderSourcePanel();
+    }
+  }
 }
 
 function ensureSourcePanelContext(sessionId = window.activeChatSessionId) {
@@ -18914,16 +19770,26 @@ function ensureSourcePanelContext(sessionId = window.activeChatSessionId) {
     sourcePanelState.projectSessionId = '';
     sourcePanelState.projectLoaded = false;
     sourcePanelState.git = null;
+    sourcePanelState.codingContext = null;
     sourcePanelState.gitSessionId = '';
     sourcePanelState.gitRoot = '';
     sourcePanelState.gitScopeKey = '';
     sourcePanelState.gitLoaded = false;
+    sourcePanelState.gitRemoteData = null;
+    sourcePanelState.gitRemoteKey = '';
+    sourcePanelState.gitRemoteLoading = false;
+    sourcePanelState.processRuns = [];
+    sourcePanelState.processSessionId = '';
+    sourcePanelState.processLoaded = false;
+    sourcePanelState.processRequestToken += 1;
+    sourcePanelState.miniProcessExpanded = false;
   }
   if (!sourcePanelState.projectLoaded || sourcePanelState.projectSessionId !== sid) loadSourcePanelProject(sid).catch(() => {});
   else {
     const scopeKey = sourcePanelGitScopeKey(sid);
     if (!sourcePanelState.gitLoaded || sourcePanelState.gitSessionId !== sid || sourcePanelState.gitScopeKey !== scopeKey) loadSourcePanelGit(sid).catch(() => {});
   }
+  if (!sourcePanelState.processLoaded || sourcePanelState.processSessionId !== sid) loadSourcePanelProcesses(sid).catch(() => {});
 }
 
 function syncSourcePanelData({ sessionId = window.activeChatSessionId, announce = true } = {}) {
@@ -18953,9 +19819,64 @@ function announceSourcePanelFileChanges(sessionId = window.activeChatSessionId) 
   return syncSourcePanelData({ sessionId, announce: true });
 }
 
+function scheduleSourcePanelWorkRefresh() {
+  if (!sourcePanelState.activeSessionId || !sourcePanelState.initialized) return;
+  const rightPanel = document.getElementById('right-panel');
+  if (!rightPanel?.classList.contains('open') && sourcePanelState.tab !== 'work') return;
+  if (sourcePanelState.workRefreshTimer) clearTimeout(sourcePanelState.workRefreshTimer);
+  sourcePanelState.workRefreshTimer = setTimeout(() => {
+    sourcePanelState.workRefreshTimer = null;
+    loadSourcePanelGit(sourcePanelState.activeSessionId).catch(() => {});
+  }, 650);
+}
+
+function scheduleSourcePanelProcessRefresh() {
+  const sid = String(sourcePanelState.activeSessionId || window.activeChatSessionId || '').trim();
+  if (!sid) return;
+  if (sourcePanelState.processRefreshTimer) clearTimeout(sourcePanelState.processRefreshTimer);
+  sourcePanelState.processRefreshTimer = setTimeout(() => {
+    sourcePanelState.processRefreshTimer = null;
+    loadSourcePanelProcesses(sid).catch(() => {});
+  }, 180);
+}
+
+function handleWorkspaceChangePresentation(event = {}) {
+  const run = event?.run && typeof event.run === 'object' ? event.run : {};
+  const sessionId = String(event.sessionId || run.sessionId || '').trim();
+  void refreshOpenCanvasFiles(event);
+  if (!sessionId || sessionId !== sourcePanelState.activeSessionId) return;
+  loadSourcePanelGit(sessionId)
+    .then(() => syncSourcePanelData({ sessionId, announce: true }))
+    .catch(() => {});
+}
+
+wsEventBus.on('workspace_changes', handleWorkspaceChangePresentation);
+wsEventBus.on('process_run_exited', (event = {}) => {
+  if (event?.workspaceChanges || event?.run?.workspaceChanges) handleWorkspaceChangePresentation(event);
+});
+wsEventBus.on('workspace_history_restored', (event = {}) => {
+  const restoredChanges = [
+    ...(Array.isArray(event?.restored) ? event.restored : []).map((pathValue) => ({ path: pathValue, status: 'modified' })),
+    ...(Array.isArray(event?.deleted) ? event.deleted : []).map((pathValue) => ({ path: pathValue, status: 'deleted' })),
+  ];
+  if (restoredChanges.length) void refreshOpenCanvasFiles({ workspaceChanges: restoredChanges }, { force: true });
+  const sid = String(sourcePanelState.activeSessionId || window.activeChatSessionId || '').trim();
+  if (sid) {
+    loadSourcePanelGit(sid).then(() => syncSourcePanelData({ sessionId: sid, announce: true })).catch(() => {});
+  }
+});
+
+['task_running', 'task_complete', 'task_paused', 'task_failed', 'task_step_done', 'task_panel_update', 'approval_created', 'approval_approved', 'approval_denied', 'agent_spawned', 'bg_agent_done'].forEach((eventName) => {
+  wsEventBus.on(eventName, () => scheduleSourcePanelWorkRefresh());
+});
+
+['process_run_started', 'process_run_update', 'process_run_output', 'process_run_exited'].forEach((eventName) => {
+  wsEventBus.on(eventName, () => scheduleSourcePanelProcessRefresh());
+});
+
 function sourcePanelFindItem(key, sessionId = sourcePanelState.activeSessionId || window.activeChatSessionId) {
   const data = sourcePanelData(sessionId);
-  return [...data.resourceItems, ...sourcePanelEditItems(sessionId), ...data.gitItems].find((item) => item.key === key) || null;
+  return [...data.resourceItems, ...sourcePanelEditItems(sessionId), ...data.workspaceFiles, ...data.gitItems, ...sourcePanelWorkItems(sessionId)].find((item) => item.key === key) || null;
 }
 
 function openSourcePanelUrl(url) {
@@ -18972,6 +19893,296 @@ async function copySourcePanelText(value) {
   catch { showToast?.('Copy unavailable', text, 'info', 3000); }
 }
 
+function sourcePanelDiffRoot(item) {
+  return String(item?.root || item?.file?.repoRoot || sourcePanelState.codingContext?.root || sourcePanelState.gitRoot || '').trim();
+}
+
+function codingDiffWorkspaceElement() {
+  return document.getElementById('coding-diff-workspace');
+}
+
+function closeCodingWorkspace() {
+  codingDiffWorkspaceElement()?.remove();
+}
+
+function codingDiffFileItems(root = '') {
+  const items = sourcePanelWorkspaceFiles();
+  const normalizedRoot = String(root || '').replace(/\\/g, '/').toLowerCase();
+  return items.filter((item) => !normalizedRoot || String(sourcePanelDiffRoot(item)).replace(/\\/g, '/').toLowerCase() === normalizedRoot);
+}
+
+async function loadCodingDiffFile(item, view = 'working') {
+  const host = document.querySelector('#coding-diff-workspace .coding-diff-view');
+  const meta = document.querySelector('#coding-diff-workspace .coding-diff-meta');
+  if (!host || !item?.path) return;
+  const token = ++sourcePanelState.diffRequestToken;
+  host.innerHTML = '<div class="coding-diff-loading">Loading diff…</div>';
+  try {
+    const params = new URLSearchParams({
+      root: sourcePanelDiffRoot(item),
+      file: item.path,
+      view,
+      sessionId: sourcePanelState.activeSessionId || window.activeChatSessionId || '',
+    });
+    const data = await api(`/api/coding/diff?${params.toString()}`, { timeoutMs: 12000, dedupe: false });
+    if (token !== sourcePanelState.diffRequestToken) return;
+    const baseline = data?.baselineKind === 'none' ? 'No baseline' : data?.baselineKind === 'turn-snapshot' || data?.baselineKind === 'session-snapshot' ? 'Snapshot' : data?.baselineKind === 'git-index' ? 'Staged' : 'Git working tree';
+    if (meta) meta.textContent = `${baseline} · ${data?.insertions || 0} additions · ${data?.deletions || 0} deletions`;
+    host.innerHTML = renderUnifiedDiffMarkup(data?.diff, { emptyText: data?.baselineKind === 'none' ? 'No comparison baseline is available for this file.' : undefined });
+  } catch (error) {
+    host.textContent = error?.message || 'Unable to load diff.';
+  }
+}
+
+async function loadCodingWorkspaceTree(root, relativePath, host) {
+  if (!host || !root) return;
+  host.innerHTML = '<div class="coding-diff-tree-loading">Loading…</div>';
+  try {
+    const params = new URLSearchParams({ root, depth: '1' });
+    if (relativePath) params.set('path', relativePath);
+    const data = await api(`/api/coding/tree?${params.toString()}`, { timeoutMs: 10000 });
+    const entries = Array.isArray(data?.entries) ? data.entries : [];
+    host.innerHTML = entries.length ? entries.map((entry) => entry.type === 'directory'
+      ? `<button type="button" class="coding-diff-tree-entry coding-diff-tree-entry--folder" data-coding-tree-folder="${escHtml(entry.path)}"><span aria-hidden="true">›</span><span>${escHtml(entry.name)}</span></button>`
+      : `<button type="button" class="coding-diff-tree-entry" data-coding-tree-file="${escHtml(entry.path)}"><span aria-hidden="true">·</span><span>${escHtml(entry.name)}</span></button>`).join('')
+      : '<div class="coding-diff-tree-loading">No files in this folder.</div>';
+    host.dataset.codingTreePath = relativePath || '';
+  } catch (error) {
+    host.textContent = error?.message || 'Workspace tree unavailable.';
+  }
+}
+
+async function loadCodingBranches(root, select) {
+  if (!root || !select) return;
+  try {
+    const params = new URLSearchParams({ root, sessionId: sourcePanelState.activeSessionId || window.activeChatSessionId || '' });
+    const data = await api(`/api/coding/branches?${params.toString()}`, { timeoutMs: 10000 });
+    const branches = Array.isArray(data?.branches) ? data.branches : [];
+    select.innerHTML = `<option value="">Branch</option>${branches.map((branch) => `<option value="${escHtml(branch.name)}"${branch.current ? ' selected' : ''}>${escHtml(branch.name)}${branch.current ? ' · current' : ''}</option>`).join('')}`;
+  } catch {
+    select.innerHTML = '<option value="">Branches unavailable</option>';
+  }
+}
+
+async function loadCodingFileHistory(item, host) {
+  if (!host || !item?.file?.repoRoot) {
+    if (host) host.innerHTML = '<span class="coding-diff-history-empty">Snapshot-backed file · Git history unavailable</span>';
+    return;
+  }
+  host.innerHTML = '<span class="coding-diff-history-empty">Loading history…</span>';
+  try {
+    const params = new URLSearchParams({
+      root: sourcePanelDiffRoot(item),
+      file: item.displayPath || item.file.displayPath || item.path,
+      limit: '5',
+      sessionId: sourcePanelState.activeSessionId || window.activeChatSessionId || '',
+    });
+    const data = await api(`/api/coding/history?${params.toString()}`, { timeoutMs: 10000 });
+    const history = Array.isArray(data?.history) ? data.history : [];
+    host.innerHTML = history.length
+      ? history.map((commit) => `<div class="coding-diff-history-row"><span class="coding-diff-history-hash">${escHtml(commit.shortHash || '')}</span><span title="${escHtml(commit.message || '')}">${escHtml(commit.message || 'Commit')}</span></div>`).join('')
+      : '<span class="coding-diff-history-empty">No file history yet.</span>';
+  } catch {
+    host.innerHTML = '<span class="coding-diff-history-empty">File history unavailable.</span>';
+  }
+}
+
+function renderCodingDiffWorkspace(root = '', initialItem = null) {
+  const files = codingDiffFileItems(root);
+  let selected = initialItem || files[0] || null;
+  const existing = codingDiffWorkspaceElement();
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'coding-diff-workspace';
+  overlay.className = 'coding-diff-workspace';
+  const canStage = !!selected?.file?.repoRoot && !['none', 'turn-snapshot', 'session-snapshot'].includes(String(selected?.baselineKind || ''));
+  const canCommit = files.some((item) => item?.file?.staged);
+  const canBranch = !!root && (files.some((item) => item?.file?.repoRoot) || (sourcePanelState.codingContext?.roots || []).some((item) => String(item?.root || '').toLowerCase() === String(root || '').toLowerCase() && item?.repository?.vcs?.kind === 'git'));
+  const rootRepository = (sourcePanelState.codingContext?.roots || []).find((item) => String(item?.root || '').toLowerCase() === String(root || '').toLowerCase())?.repository || {};
+  const canRemote = canBranch && Boolean(rootRepository.remoteUrl);
+  const canOpenPr = canRemote && rootRepository.provider === 'GitHub';
+  overlay.innerHTML = `<div class="coding-diff-backdrop" data-coding-diff-close="true"></div><section class="coding-diff-shell" role="dialog" aria-modal="true" aria-label="Coding workspace">
+    <header class="coding-diff-header"><div><strong>Coding workspace</strong><span class="coding-diff-meta">${escHtml(selected ? selected.displayPath : 'No changed files')}</span></div><div class="coding-diff-header-actions">${canBranch ? '<select class="coding-diff-branch-select" data-coding-branch-select aria-label="Switch branch"><option value="">Branch</option></select>' : ''}${selected?.path ? '<button type="button" class="coding-diff-action" data-coding-diff-open-file="true">Open</button>' : ''}${canStage ? `<button type="button" class="coding-diff-action" data-coding-diff-stage="true">${selected.file?.staged ? 'Unstage' : 'Stage'}</button>` : ''}${canCommit ? '<button type="button" class="coding-diff-action" data-coding-diff-commit="true">Commit</button>' : ''}${canBranch ? '<button type="button" class="coding-diff-action" data-coding-diff-branch="true">New branch</button>' : ''}${canRemote ? '<button type="button" class="coding-diff-action" data-coding-diff-pull="true">Pull</button><button type="button" class="coding-diff-action" data-coding-diff-push="true">Push</button>' : ''}${canOpenPr ? '<button type="button" class="coding-diff-action" data-coding-diff-pr="true">Open PR</button>' : ''}<button type="button" class="source-panel-icon-btn" title="Close coding workspace" aria-label="Close coding workspace" data-coding-diff-close="true">×</button></div></header>
+    <div class="coding-diff-toolbar"><div class="coding-diff-view-toggle"><button type="button" data-coding-diff-view="working" class="is-active">Working</button><button type="button" data-coding-diff-view="staged">Staged</button><button type="button" data-coding-diff-view="turn">This turn</button></div><span class="coding-diff-root">${escHtml(root || sourcePanelState.codingContext?.root || '')}</span></div>
+    <div class="coding-diff-layout"><aside class="coding-diff-files"><div class="coding-diff-tree-title">Workspace</div><div class="coding-diff-tree-list" data-coding-tree-list></div><div class="coding-diff-tree-title coding-diff-tree-title--changes">Changed</div>${files.length ? files.map((item) => `<button type="button" class="coding-diff-file${selected?.path === item.path ? ' is-active' : ''}" data-coding-diff-file-path="${escHtml(item.path)}"><span>${escHtml(item.displayPath)}</span>${String(item.status || '').toLowerCase() !== 'modified' ? `<small>${escHtml(String(item.status || ''))}</small>` : ''}</button>`).join('') : '<div class="source-panel-empty">No changed files in this scope.</div>'}</aside><main class="coding-diff-main"><div class="coding-diff-history" data-coding-history></div><div class="coding-diff-view"></div></main></div>
+  </section>`;
+  document.body.appendChild(overlay);
+  const treeHost = overlay.querySelector('[data-coding-tree-list]');
+  loadCodingWorkspaceTree(root || sourcePanelState.codingContext?.root || '', '', treeHost).catch(() => {});
+  loadCodingBranches(root || sourcePanelState.codingContext?.root || '', overlay.querySelector('[data-coding-branch-select]')).catch(() => {});
+  loadCodingFileHistory(selected, overlay.querySelector('[data-coding-history]')).catch(() => {});
+  const switchBranch = (branchSelect) => {
+    if (!branchSelect?.value) return;
+    const branch = String(branchSelect.value || '').trim();
+    branchSelect.value = '';
+    if (!window.confirm(`Switch to “${branch}”? Uncommitted changes may prevent checkout.`)) return;
+    api('/api/coding/checkout', { method: 'POST', body: { root: root || sourcePanelState.codingContext?.root || '', branch, confirm: true }, timeoutMs: 30000 })
+      .then(() => loadSourcePanelGit(sourcePanelState.activeSessionId || window.activeChatSessionId))
+      .then(() => renderCodingDiffWorkspace(root, selected))
+      .then(() => showToast?.('Branch switched', branch, 'success', 2600))
+      .catch((error) => showToast?.('Checkout failed', error?.message || 'Unable to switch branches.', 'error', 3500));
+  };
+  overlay.addEventListener('change', (event) => {
+    const branchSelect = event.target?.closest?.('[data-coding-branch-select]');
+    if (branchSelect) switchBranch(branchSelect);
+  });
+  overlay.addEventListener('click', (event) => {
+    if (event.target?.closest?.('[data-coding-diff-close]')) { closeCodingWorkspace(); return; }
+    const openFileButton = event.target?.closest?.('[data-coding-diff-open-file]');
+    if (openFileButton && selected?.path && typeof canvasPresentFile === 'function') {
+      Promise.resolve(canvasPresentFile(selected.path, selected.displayPath)).catch(() => {});
+      return;
+    }
+    const commitButton = event.target?.closest?.('[data-coding-diff-commit]');
+    if (commitButton) {
+      const message = window.prompt('Commit message');
+      if (!message?.trim() || !window.confirm(`Commit staged changes with “${message.trim()}”?`)) return;
+      api('/api/coding/commit', { method: 'POST', body: { root: sourcePanelDiffRoot(selected), message: message.trim(), confirm: true }, timeoutMs: 30000 })
+        .then(() => loadSourcePanelGit(sourcePanelState.activeSessionId || window.activeChatSessionId))
+        .then(() => showToast?.('Committed', 'Staged changes committed locally.', 'success', 2600))
+        .catch((error) => showToast?.('Commit failed', error?.message || 'Unable to commit staged changes.', 'error', 3500));
+      return;
+    }
+    const branchButton = event.target?.closest?.('[data-coding-diff-branch]');
+    if (branchButton) {
+      const branch = window.prompt('New branch name');
+      if (!branch?.trim() || !window.confirm(`Create and switch to “${branch.trim()}”?`)) return;
+      api('/api/coding/branch', { method: 'POST', body: { root: sourcePanelDiffRoot(selected), branch: branch.trim(), confirm: true }, timeoutMs: 30000 })
+        .then(() => loadSourcePanelGit(sourcePanelState.activeSessionId || window.activeChatSessionId))
+        .then(() => renderCodingDiffWorkspace(sourcePanelDiffRoot(selected), selected))
+        .then(() => showToast?.('Branch created', branch.trim(), 'success', 2600))
+        .catch((error) => showToast?.('Branch failed', error?.message || 'Unable to create branch.', 'error', 3500));
+      return;
+    }
+    const pullButton = event.target?.closest?.('[data-coding-diff-pull]');
+    if (pullButton) {
+      if (!window.confirm('Pull remote changes with fast-forward only?')) return;
+      api('/api/coding/pull', { method: 'POST', body: { root, confirm: true }, timeoutMs: 120000 })
+        .then(() => loadSourcePanelGit(sourcePanelState.activeSessionId || window.activeChatSessionId))
+        .then(() => showToast?.('Pulled', 'Remote changes updated locally.', 'success', 2600))
+        .catch((error) => showToast?.('Pull failed', error?.message || 'Unable to pull remote changes.', 'error', 3500));
+      return;
+    }
+    const pushButton = event.target?.closest?.('[data-coding-diff-push]');
+    if (pushButton) {
+      if (!window.confirm(`Push branch “${rootRepository.branch || 'current'}” to the configured remote?`)) return;
+      api('/api/coding/push', { method: 'POST', body: { root, confirm: true }, timeoutMs: 120000 })
+        .then(() => loadSourcePanelGit(sourcePanelState.activeSessionId || window.activeChatSessionId))
+        .then(() => showToast?.('Pushed', 'The current branch was pushed.', 'success', 2600))
+        .catch((error) => showToast?.('Push failed', error?.message || 'Unable to push the current branch.', 'error', 3500));
+      return;
+    }
+    const prButton = event.target?.closest?.('[data-coding-diff-pr]');
+    if (prButton) {
+      const title = window.prompt('Pull request title', `Changes from ${rootRepository.branch || 'current branch'}`);
+      if (!title?.trim()) return;
+      const body = window.prompt('Pull request description (optional)', '') || '';
+      const base = rootRepository.defaultBranch || 'main';
+      if (!window.confirm(`Create a pull request from “${rootRepository.branch || 'current'}” into “${base}”?`)) return;
+      api('/api/coding/pr', { method: 'POST', body: { root, title: title.trim(), body, base, confirm: true }, timeoutMs: 30000 })
+        .then((result) => { sourcePanelState.gitRemoteKey = ''; return loadSourcePanelRemoteData(sourcePanelState.activeSessionId || window.activeChatSessionId).then(() => result); })
+        .then((result) => showToast?.('Pull request opened', result?.url || 'GitHub pull request created.', 'success', 4000))
+        .catch((error) => showToast?.('Pull request failed', error?.message || 'Unable to create pull request.', 'error', 3500));
+      return;
+    }
+    const stageButton = event.target?.closest?.('[data-coding-diff-stage]');
+    if (stageButton && selected?.file?.repoRoot) {
+      const action = selected.file.staged ? 'unstage' : 'stage';
+      if (!window.confirm(`${action === 'stage' ? 'Stage' : 'Unstage'} ${selected.displayPath}?`)) return;
+      const endpoint = action === 'stage' ? '/api/coding/stage' : '/api/coding/unstage';
+      api(endpoint, { method: 'POST', body: { root: sourcePanelDiffRoot(selected), files: [selected.displayPath], confirm: true }, timeoutMs: 12000 })
+        .then(() => loadSourcePanelGit(sourcePanelState.activeSessionId || window.activeChatSessionId))
+        .then(() => {
+          const refreshed = sourcePanelWorkspaceFiles().find((item) => item.path === selected.path) || selected;
+          renderCodingDiffWorkspace(sourcePanelDiffRoot(refreshed), refreshed);
+        })
+        .catch((error) => showToast?.('Coding action failed', error?.message || 'Unable to update Git staging.', 'error', 3500));
+      return;
+    }
+    const treeFolder = event.target?.closest?.('[data-coding-tree-folder]');
+    if (treeFolder) {
+      loadCodingWorkspaceTree(root || sourcePanelState.codingContext?.root || '', treeFolder.dataset.codingTreeFolder || '', treeHost).catch(() => {});
+      return;
+    }
+    const treeFile = event.target?.closest?.('[data-coding-tree-file]');
+    if (treeFile) {
+      const relativePath = treeFile.dataset.codingTreeFile || '';
+      const item = files.find((candidate) => candidate.displayPath === relativePath);
+      if (item) {
+        selected = item;
+        const fileButton = Array.from(overlay.querySelectorAll('[data-coding-diff-file-path]')).find((button) => button.dataset.codingDiffFilePath === item.path);
+        fileButton?.click();
+      } else if (typeof canvasPresentFile === 'function') {
+        const absolutePath = root ? `${String(root).replace(/[\\/]+$/, '')}/${relativePath}` : relativePath;
+        Promise.resolve(canvasPresentFile(absolutePath, relativePath)).catch(() => {});
+      }
+      return;
+    }
+    const fileButton = event.target?.closest?.('[data-coding-diff-file-path]');
+    if (fileButton) {
+      const item = files.find((candidate) => candidate.path === fileButton.dataset.codingDiffFilePath);
+      if (!item) return;
+      selected = item;
+      const stageAction = overlay.querySelector('[data-coding-diff-stage]');
+      if (stageAction) {
+        stageAction.textContent = item.file?.staged ? 'Unstage' : 'Stage';
+        stageAction.hidden = !item.file?.repoRoot;
+      }
+      const meta = overlay.querySelector('.coding-diff-meta');
+      if (meta) meta.textContent = item.displayPath || item.path;
+      loadCodingFileHistory(item, overlay.querySelector('[data-coding-history]')).catch(() => {});
+      overlay.querySelectorAll('[data-coding-diff-file-path]').forEach((button) => button.classList.toggle('is-active', button === fileButton));
+      loadCodingDiffFile(item, overlay.querySelector('[data-coding-diff-view].is-active')?.dataset?.codingDiffView || 'working').catch(() => {});
+      return;
+    }
+    const viewButton = event.target?.closest?.('[data-coding-diff-view]');
+    if (viewButton && selected) {
+      overlay.querySelectorAll('[data-coding-diff-view]').forEach((button) => button.classList.toggle('is-active', button === viewButton));
+      const activePath = overlay.querySelector('[data-coding-diff-file-path].is-active')?.dataset?.codingDiffFilePath;
+      const item = files.find((candidate) => candidate.path === activePath) || selected;
+      loadCodingDiffFile(item, viewButton.dataset.codingDiffView || 'working').catch(() => {});
+    }
+  });
+  if (selected) loadCodingDiffFile(selected).catch(() => {});
+}
+
+function openCodingWorkspace(root = '', item = null) {
+  const selectedRoot = String(root || sourcePanelDiffRoot(item) || sourcePanelState.codingContext?.root || '').trim();
+  renderCodingDiffWorkspace(selectedRoot, item);
+}
+
+function openSourcePanelWork(type, id) {
+  const cleanType = String(type || '').trim();
+  const cleanId = String(id || '').trim();
+  if (!cleanId) return;
+  if (cleanType === 'task') {
+    if (typeof window.setMode === 'function') window.setMode('bgtasks');
+    if (typeof window.openBgtPanel === 'function') window.openBgtPanel(cleanId);
+    return;
+  }
+  if (cleanType === 'proposal') {
+    if (typeof window.setMode === 'function') window.setMode('proposals');
+    return;
+  }
+  if (cleanType === 'subagent') {
+    if (typeof window.setMode === 'function') window.setMode('bgtasks');
+    if (typeof window.openBgtPanel === 'function') window.openBgtPanel(cleanId);
+    return;
+  }
+  if (cleanType === 'background') {
+    openBackgroundAgentDetail(cleanId);
+    return;
+  }
+  if (typeof window.openPrometheusLink === 'function') window.openPrometheusLink(`/tasks/${encodeURIComponent(cleanId)}`);
+}
+
+function openSourcePanelProcess(runId) {
+  const id = String(runId || '').trim();
+  if (!id) return;
+  openFullSourcePanel();
+  if (typeof window.openProcessRunDetails === 'function') window.openProcessRunDetails(id);
+}
+
 function openSourcePanelItem(key) {
   const item = sourcePanelFindItem(String(key || ''));
   if (!item) return;
@@ -18983,6 +20194,10 @@ function openSourcePanelItem(key) {
   }
   if (item.type === 'edit') {
     if (item.path && item.status !== 'deleted' && typeof canvasPresentFile === 'function') Promise.resolve(canvasPresentFile(item.path, item.title)).catch(() => {});
+    return;
+  }
+  if (item.type === 'workspace-file') {
+    openCodingWorkspace(sourcePanelDiffRoot(item), item);
     return;
   }
   if (item.type === 'git-repo') {
@@ -19004,7 +20219,7 @@ function sourcePanelMiniFilterLabel(filter) {
 function sourcePanelMiniItems(filter = sourcePanelState.miniFilter) {
   const data = sourcePanelData();
   if (filter === 'links') return data.links;
-  if (filter === 'files') return [...data.inputs, ...data.outputs, ...data.edits].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  if (filter === 'files') return [...data.inputs, ...data.outputs, ...data.edits, ...data.workspaceFiles].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   if (filter === 'git') return data.gitItems;
   return [...data.recent, ...data.gitItems].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
@@ -19016,21 +20231,29 @@ function toggleSourcePanelMiniFilter() {
   renderSourcesMinimizedPanel();
 }
 
+function toggleSourcePanelMiniProcesses() {
+  sourcePanelState.miniProcessExpanded = !sourcePanelState.miniProcessExpanded;
+  renderSourcesMinimizedPanel();
+}
+
 function renderSourcesMinimizedPanel() {
   const panel = document.getElementById('sources-minimized-panel');
   if (!panel) return;
-  const filter = sourcePanelState.miniFilter;
-  const items = sourcePanelMiniItems(filter).slice(0, 4);
+  const data = sourcePanelData();
+  const items = sourcePanelMiniItems('all').slice(0, 5);
   panel.innerHTML = `<div class="sources-minimized-card">
-    <div class="sources-minimized-header"><strong>Sources</strong><span class="sources-minimized-header-actions"><button class="source-panel-icon-btn" type="button" aria-label="Refresh sources" title="Refresh sources" onclick="refreshSourcePanel()">↻</button><button class="source-panel-icon-btn" type="button" aria-label="${escHtml(sourcePanelMiniFilterLabel(filter))}" title="${escHtml(sourcePanelMiniFilterLabel(filter))}; click to cycle" onclick="toggleSourcePanelMiniFilter()">⌕</button><button class="source-panel-close-btn" type="button" aria-label="Close minimized sources" title="Close" onclick="hideSourcesMinimizedPanel()">×</button></span></div>
-    <div class="source-mini-tabs" aria-label="Source filters">
-      <button class="source-mini-tab${filter === 'all' ? ' is-active' : ''}" type="button" title="All sources" aria-label="All sources" onclick="setSourcePanelMiniFilter('all')">◎</button>
-      <button class="source-mini-tab${filter === 'links' ? ' is-active' : ''}" type="button" title="Web links" aria-label="Web links" onclick="setSourcePanelMiniFilter('links')">↗</button>
-      <button class="source-mini-tab${filter === 'files' ? ' is-active' : ''}" type="button" title="Files" aria-label="Files" onclick="setSourcePanelMiniFilter('files')">▤</button>
-      <button class="source-mini-tab${filter === 'git' ? ' is-active' : ''}" type="button" title="Git" aria-label="Git" onclick="setSourcePanelMiniFilter('git')">⌘</button>
+    <div class="sources-minimized-header"><strong>Sources</strong><span class="sources-minimized-header-actions"><button class="source-panel-icon-btn source-panel-add-btn" type="button" aria-label="Open Sources" title="Open Sources" onclick="openFullSourcePanel()">＋</button><button class="source-panel-icon-btn" type="button" aria-label="Refresh sources" title="Refresh sources" onclick="refreshSourcePanel()">↻</button><button class="source-panel-close-btn" type="button" aria-label="Close minimized sources" title="Close" onclick="hideSourcesMinimizedPanel()">×</button></span></div>
+    <div class="sources-minimized-body">
+      ${renderSourcePanelEnvironment(data, { mini: true })}
+      ${renderSourcePanelProcesses(data, { mini: true })}
+      ${sourcePanelComputerUseMarkup({ mini: true })}
+      ${renderSourcePanelBrowser(data, { mini: true })}
+      <section class="source-panel-section source-panel-sources-section source-panel-section--mini">
+        <div class="source-panel-section-heading"><h3 class="source-panel-section-title">Sources</h3><button class="source-panel-section-add" type="button" aria-label="Open Sources" title="Open Sources" onclick="openFullSourcePanel()">＋</button></div>
+        <div class="source-mini-list">${items.length ? items.map((item) => sourcePanelItemMarkup(item, { mini: true })).join('') : '<div class="source-panel-empty">No sources yet.</div>'}</div>
+      </section>
+      <button class="sources-minimized-footer" type="button" onclick="openFullSourcePanel()">· View all</button>
     </div>
-    <div class="source-mini-list">${items.length ? items.map((item) => sourcePanelItemMarkup(item, { mini: true })).join('') : '<div class="source-panel-empty">No sources in this view.</div>'}</div>
-    <button class="sources-minimized-footer" type="button" onclick="openFullSourcePanel()">· View all sources</button>
   </div>`;
 }
 
@@ -19039,24 +20262,37 @@ function setSourcePanelMiniFilter(filter = 'all') {
   renderSourcesMinimizedPanel();
 }
 
+function syncSourcesMinimizedLayout(open) {
+  const panel = document.getElementById('sources-minimized-panel');
+  const body = document.body;
+  const root = document.documentElement;
+  if (!open || !panel) {
+    body?.classList.remove('sources-minimized-open');
+    root?.style.removeProperty('--sources-minimized-layout-width');
+  } else {
+    root?.style.removeProperty('--sources-minimized-layout-width');
+    body?.classList.add('sources-minimized-open');
+  }
+  if (typeof window._syncPageViewPositions === 'function') window._syncPageViewPositions();
+}
+
 function showSourcesMinimizedPanel() {
   const panel = document.getElementById('sources-minimized-panel');
   const rightPanel = document.getElementById('right-panel');
   if (!panel || rightPanel?.classList.contains('open')) return;
-  if (!sourcePanelMiniItems(sourcePanelState.miniFilter).length) {
-    if (!sourcePanelMiniItems('all').length) return;
-    sourcePanelState.miniFilter = 'all';
-  }
+  if (!sourcePanelMiniItems('all').length) sourcePanelState.miniFilter = 'all';
   if (sourcePanelState.miniHideTimer) clearTimeout(sourcePanelState.miniHideTimer);
   renderSourcesMinimizedPanel();
   panel.hidden = false;
   panel.classList.remove('is-closing');
+  syncSourcesMinimizedLayout(true);
   requestAnimationFrame(() => panel.classList.add('is-visible'));
 }
 
 function hideSourcesMinimizedPanel(options = {}) {
   const panel = document.getElementById('sources-minimized-panel');
   if (!panel) return;
+  syncSourcesMinimizedLayout(false);
   panel.classList.remove('is-visible');
   panel.classList.add('is-closing');
   if (sourcePanelState.miniHideTimer) clearTimeout(sourcePanelState.miniHideTimer);
@@ -19080,6 +20316,7 @@ function refreshSourcePanel() {
     loadChatResources({ sessionId: sid, background: true }).catch(() => {});
     loadSourcePanelProject(sid).catch(() => {});
     loadSourcePanelGit(sid).catch(() => {});
+    loadSourcePanelProcesses(sid).catch(() => {});
   }
   renderSourcePanel();
 }
@@ -19093,7 +20330,7 @@ function initSourcePanelEdgeReveal() {
   };
   document.addEventListener('pointermove', (event) => {
     if (event.pointerType && event.pointerType !== 'mouse') return cancel();
-    const atRightEdge = event.clientX >= window.innerWidth - 2;
+    const atRightEdge = event.clientX >= window.innerWidth - 10;
     const rightPanel = document.getElementById('right-panel');
     if (!atRightEdge || rightPanel?.classList.contains('open')) return cancel();
     if (revealTimer) return;
@@ -19218,6 +20455,11 @@ let creativeFabricRenderToken = 0;
 let creativeFabricLastRenderPromise = Promise.resolve(null);
 const creativeFabricIconMarkupCache = new Map();
 let designSelectedElementContext = null;
+const chatHighlightedTextContexts = new Map();
+let chatTextSelectionPopoverEl = null;
+let chatTextSelectionPopoverBound = false;
+let chatTextSelectionHideTimer = null;
+let chatTextSelectionDetails = null;
 let creativeHtmlMotionSelectedElementContext = null;
 let creativeHtmlMotionActionPopoverEl = null;
 let creativeHtmlMotionChatPopoverEl = null;
@@ -23442,7 +24684,7 @@ function realtimeNarrationFromToolCall(action, displayAction = '') {
     if (tool.includes('type')) return 'Typing on your computer.';
     return 'Controlling your computer.';
   }
-  if (tool === 'run_command') return 'Running a command.';
+  if (/^(?:workspace_run|run_command|terminal|shell|shell_command|terminal_run|start_process)$/.test(tool)) return 'Running a command.';
   if (tool === 'web_search') return 'Searching the web.';
   if (tool.startsWith('creative_') || tool.startsWith('canvas')) return 'Updating the workspace.';
   if (tool.startsWith('background_')) return 'Starting a background agent.';
@@ -23455,7 +24697,7 @@ function realtimeNarrationFromToolResult(action, ok) {
   if (!tool) return '';
   if (tool.startsWith('browser_')) return ok ? 'Browser step complete.' : 'The browser step had an issue.';
   if (tool.startsWith('desktop_')) return ok ? 'Computer control step complete.' : 'The computer control step had an issue.';
-  if (tool === 'run_command') return ok ? 'Command finished.' : 'The command failed.';
+  if (/^(?:workspace_run|run_command|terminal|shell|shell_command|terminal_run|start_process)$/.test(tool)) return ok ? 'Command completed.' : 'The command failed.';
   if (tool === 'web_search') return ok ? 'Search complete.' : 'Search had an issue.';
   if (tool.startsWith('background_')) return ok ? 'Background agent is moving.' : 'Background agent had an issue.';
   return ok ? '' : 'That step had an issue.';
@@ -26567,6 +27809,7 @@ function getCanvasWorkspaceDisplayRoot() {
 function updateDesignSelectionChip() {
   const chip = document.getElementById('chat-design-selection-chip');
   const pills = document.getElementById('chat-design-selection-pills');
+  const highlightedContext = getActiveChatHighlightedTextContext();
   const setSingleSelectionPill = (context) => {
     if (!pills) return;
     if (!context) {
@@ -26588,23 +27831,32 @@ function updateDesignSelectionChip() {
       ? `${contextSummary.slice(0, 46)}…`
       : contextSummary;
     pills.style.display = 'flex';
-    pills.innerHTML = `<div class="chat-file-pill" title="${escHtml([`Selected design element: ${label}`, text ? `Text: ${text}` : '', snippet ? `Snippet: ${snippet.slice(0, 500)}` : ''].filter(Boolean).join('\n\n'))}">
+    const elementPill = `<div class="chat-file-pill chat-annotation-pill" title="${escHtml([`Annotation: ${label}`, text ? `Text: ${text}` : '', snippet ? `Snippet: ${snippet.slice(0, 500)}` : ''].filter(Boolean).join('\n\n'))}">
       <span class="pill-icon"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon></span>
-      <span class="pill-name">${escHtml(truncatedLabel)}</span>
-      ${truncatedContext ? `<span class="pill-ext" title="${escHtml(contextSummary)}">${escHtml(truncatedContext)}</span>` : `<span class="pill-ext">${escHtml(context.tagName || 'el')}</span>`}
+      <span class="pill-copy"><strong class="pill-name">Annotation</strong><em class="pill-ext" title="${escHtml(contextSummary)}">${escHtml(truncatedLabel)}${truncatedContext ? ` · ${escHtml(truncatedContext)}` : ''}</em></span>
       <button class="pill-remove" onclick="clearDesignSelectionContext()" title="Remove">&times;</button>
     </div>`;
+    pills.innerHTML = [renderHighlightedTextPillMarkup(highlightedContext), elementPill].filter(Boolean).join('');
     syncChatAttachmentStackVisibility();
   };
   const browserState = getBrowserCanvasState();
-  if (isBrowserCanvasSurfaceActive() && browserState.selectedElement) {
-    const label = browserState.selectedElement.selector
-      || (browserState.selectedElement.id ? `#${browserState.selectedElement.id}` : '')
-      || browserState.selectedElement.tagName
-      || 'element';
+  const browserAnnotations = isBrowserCanvasSurfaceActive()
+    ? getBrowserDesignAnnotationSelections(browserState)
+    : [];
+  if (browserAnnotations.length || highlightedContext) {
     if (chip) {
-      chip.textContent = `Browser: ${label}`;
+      const count = browserAnnotations.length + (highlightedContext ? 1 : 0);
+      chip.textContent = `${count === 1 ? 'Annotation' : `${count} Annotations`} attached`;
+      chip.title = 'Chat annotations attached to the next message';
       chip.style.display = 'block';
+    }
+    if (pills) {
+      pills.style.display = 'flex';
+      pills.innerHTML = [
+        renderHighlightedTextPillMarkup(highlightedContext),
+        ...browserAnnotations.map((selection, index) => renderBrowserDesignSelectionPillMarkup(selection, index)),
+      ].filter(Boolean).join('');
+      syncChatAttachmentStackVisibility();
     }
     return;
   }
@@ -26646,8 +27898,8 @@ function updateDesignSelectionChip() {
     || designSelectedElementContext.tagName
     || 'element';
   if (chip) {
-    chip.textContent = `Element: ${label}`;
-    chip.title = `Selected design element: ${label}`;
+    chip.textContent = `Annotation: ${label}`;
+    chip.title = `Selected design annotation: ${label}`;
     chip.style.display = 'block';
   }
   setSingleSelectionPill(designSelectedElementContext);
@@ -38265,6 +39517,18 @@ function buildCombinedCallerContext(latestMessage = '') {
   return [
     buildCreativeSceneCallerContext(),
     buildBrowserTeachCallerContext(latestMessage),
+    (() => {
+      const highlighted = getActiveChatHighlightedTextContext();
+      if (!highlighted?.text) return '';
+      return [
+        '[CHAT_HIGHLIGHTED_TEXT]',
+        'The user attached highlighted chat text as an annotation. Treat it as the primary quoted context for this turn.',
+        `source_role: ${highlighted.sourceRole || 'chat'}`,
+        Number.isInteger(highlighted.messageIndex) ? `message_index: ${highlighted.messageIndex}` : '',
+        `text:\n${highlighted.text}`,
+        '[/CHAT_HIGHLIGHTED_TEXT]',
+      ].filter(Boolean).join('\n');
+    })(),
   ].filter(Boolean).join('\n\n');
 }
 
@@ -38419,6 +39683,32 @@ function escapeCanvasPreviewAttribute(value) {
     .replace(/>/g, '&gt;');
 }
 
+// Code previews are an editor surface, not a second browser. Keep links,
+// forms, and popup APIs inside the preview so an accidental click cannot
+// navigate the Electron renderer or open Prometheus Browser.
+function protectCanvasPreviewDocument(source) {
+  const guard = `<script data-prometheus-preview-guard>(function(){
+    try {
+      var noopOpen = function(){ return null; };
+      window.open = noopOpen;
+      document.addEventListener('click', function(event){
+        var anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+        if (anchor) event.preventDefault();
+      }, true);
+      document.addEventListener('auxclick', function(event){
+        var anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+        if (anchor) event.preventDefault();
+      }, true);
+      document.addEventListener('submit', function(event){ event.preventDefault(); }, true);
+    } catch (_) {}
+  })();<\/script>`;
+  const value = String(source || '');
+  if (/<script[^>]+data-prometheus-preview-guard/i.test(value)) return value;
+  if (/<\/body\s*>/i.test(value)) return value.replace(/<\/body\s*>/i, `${guard}</body>`);
+  if (/<\/html\s*>/i.test(value)) return value.replace(/<\/html\s*>/i, `${guard}</html>`);
+  return `${value}${guard}`;
+}
+
 // Keep Design previews independent from the save request.  Loading the page through
 // the project-preview route meant a Code → Preview transition could show a stale or
 // blank document while its write was still in flight.  srcdoc renders the editor's
@@ -38432,13 +39722,15 @@ function buildDesignPreviewDocument(content, previewPath) {
   const baseTag = `<base href="${escapeCanvasPreviewAttribute(baseHref)}">`;
   const source = String(content || '');
 
+  let documentSource = '';
   if (/<head\b[^>]*>/i.test(source)) {
-    return source.replace(/<head\b[^>]*>/i, (match) => `${match}${baseTag}`);
+    documentSource = source.replace(/<head\b[^>]*>/i, (match) => `${match}${baseTag}`);
+  } else if (/<html\b[^>]*>/i.test(source)) {
+    documentSource = source.replace(/<html\b[^>]*>/i, (match) => `${match}<head>${baseTag}</head>`);
+  } else {
+    documentSource = `<!doctype html><html><head>${baseTag}</head><body>${source}</body></html>`;
   }
-  if (/<html\b[^>]*>/i.test(source)) {
-    return source.replace(/<html\b[^>]*>/i, (match) => `${match}<head>${baseTag}</head>`);
-  }
-  return `<!doctype html><html><head>${baseTag}</head><body>${source}</body></html>`;
+  return protectCanvasPreviewDocument(documentSource);
 }
 
 async function syncDirtyDesignTabsToDisk() {
@@ -38568,7 +39860,7 @@ async function writeCanvasFileSnapshot(diskPath, content, options = {}) {
   }
 
   if (activeCanvasTabId === tab.id) {
-    if (canvasEditor && tab.mode !== 'preview') canvasEditor.setValue(content);
+    if (canvasEditor && tab.mode !== 'preview') setCanvasEditorValue(content);
     if (tab.mode === 'preview') canvasUpdatePreview();
   }
   canvasRenderTabs();
@@ -40521,6 +41813,29 @@ function handleBrowserDesignSelect() {
   persistActiveChat();
 }
 
+function removeBrowserDesignSelectionPill(index) {
+  const state = getBrowserCanvasState();
+  const annotations = getBrowserDesignAnnotationSelections(state);
+  const removed = annotations[Number(index)];
+  if (!removed) return;
+  const removedKey = getBrowserTeachSelectionKey(removed);
+  state.browserDesignSelections = (Array.isArray(state.browserDesignSelections) ? state.browserDesignSelections : [])
+    .filter((entry) => getBrowserTeachSelectionKey(entry) !== removedKey);
+  if (getBrowserTeachSelectionKey(state.selectedElement) === removedKey) {
+    state.selectedElement = state.browserDesignSelections[state.browserDesignSelections.length - 1] || null;
+  }
+  if (!state.selectedElement) {
+    const sessionId = String(state.sessionId || getBrowserCanvasPrimarySessionId() || '').trim();
+    if (sessionId && window.ws && window.ws.readyState === WebSocket.OPEN) {
+      wsSend({ type: 'browser:clear_selection', sessionId });
+    }
+  }
+  state.updatedAt = Date.now();
+  updateDesignSelectionChip();
+  renderBrowserCanvasSurface();
+  persistActiveChat();
+}
+
 function applyBrowserDesignSelection(selection, options = {}) {
   const state = getBrowserCanvasState();
   const next = cloneBrowserDesignSelection(selection);
@@ -40729,7 +42044,7 @@ async function commitDesignInlineEdit(el, originalText) {
     if (tab) {
       tab.content = updatedSource;
       tab.savedContent = updatedSource;
-      if (canvasEditor && activeCanvasTabId === tab.id) canvasEditor.setValue(updatedSource);
+      if (canvasEditor && activeCanvasTabId === tab.id) setCanvasEditorValue(updatedSource);
     }
     showToast('Design: text updated and saved.', 'info');
     addProcessEntry('info', `Design: updated text in ${path}`);
@@ -40789,24 +42104,25 @@ function clearDesignMultiSelection() {
 function renderDesignSelectionPills() {
   const cont = document.getElementById('chat-design-selection-pills');
   if (!cont) return;
-  if (!designMultiSelectedElements.length) {
+  const highlightedPill = renderHighlightedTextPillMarkup();
+  if (!designMultiSelectedElements.length && !highlightedPill) {
     cont.style.display = 'none';
     cont.innerHTML = '';
     syncChatAttachmentStackVisibility();
     return;
   }
   cont.style.display = 'flex';
-  cont.innerHTML = designMultiSelectedElements.map((entry, idx) => {
+  const designPills = designMultiSelectedElements.map((entry, idx) => {
     const c = entry.context;
     const label = c.selector || (c.id ? `#${c.id}` : '') || c.tagName || 'element';
     const truncated = label.length > 40 ? `${label.slice(0, 38)}…` : label;
-    return `<div class="chat-file-pill" title="${escHtml(label)}">
+    return `<div class="chat-file-pill chat-annotation-pill" title="${escHtml(`Annotation ${idx + 1}\n\n${label}`)}">
       <span class="pill-icon"><iconify-icon icon="solar:cursor-square-bold-duotone" width="14" height="14"></iconify-icon></span>
-      <span class="pill-name">${escHtml(truncated)}</span>
-      <span class="pill-ext">${escHtml(c.tagName || 'el')}</span>
+      <span class="pill-copy"><strong class="pill-name">Annotation ${idx + 1}</strong><em class="pill-ext">${escHtml(truncated)}</em></span>
       <button class="pill-remove" onclick="removeDesignSelectionPill(${idx})" title="Remove">&times;</button>
     </div>`;
-  }).join('');
+  });
+  cont.innerHTML = [highlightedPill, ...designPills].filter(Boolean).join('');
   syncChatAttachmentStackVisibility();
 }
 
@@ -41057,7 +42373,7 @@ async function submitDesignChatPopover() {
   // The full selection context travels in the private Design caller context.
   // Keep the visible user turn concise and readable.
   mainInput.value = context
-    ? `${text}\n\n[Design Mode selected element attached]`
+    ? `${text}\n\n[Annotation attached]`
     : text;
   hideDesignChatPopover();
   try { await sendChat(); } catch (err) { showToast(`Send failed: ${err.message}`, 'error'); }
@@ -41150,17 +42466,14 @@ function setupDesignPreviewSelection(frame, tab) {
     if (designClickTimeout) { clearTimeout(designClickTimeout); designClickTimeout = null; }
     if (designActionPopoverEl) designActionPopoverEl.style.display = 'none';
     event.preventDefault();
-    event.stopPropagation();
-    frame._designBypassClick = true;
-    try {
-      target.dispatchEvent(new frame.contentWindow.MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-        view: frame.contentWindow,
-        button: 0,
-      }));
-    } catch {}
-    setTimeout(() => { frame._designBypassClick = false; }, 0);
+    event.stopImmediatePropagation();
+    // A synthetic click here used to activate links/file previews, which could
+    // unexpectedly hand the user off to Browser mode. Double-click remains a
+    // local Design selection/action gesture and never forwards the page click.
+    applyDesignPreviewSelection(target, frame);
+    designLastClickedElement = target;
+    designLastClickedFrame = frame;
+    showDesignActionPopover(target, frame);
   }, true);
   frame.contentWindow.addEventListener('scroll', () => repositionDesignPopovers(), true);
   if (designSelectedElementContext?.selector) {
@@ -41269,6 +42582,8 @@ function toggleLeftPanel() {
 
 function syncHeaderCanvasChrome() {
   const rightPanel = document.getElementById('right-panel');
+  const browserState = getBrowserCanvasState();
+  const canvasButton = document.getElementById('canvas-toggle-btn');
   const isRightCanvasOpen = Boolean(
     canvasOpen &&
     rightPanel &&
@@ -41277,6 +42592,14 @@ function syncHeaderCanvasChrome() {
   );
   document.body.classList.toggle('right-canvas-open', isRightCanvasOpen);
   document.body.classList.toggle('right-creative-canvas-open', isRightCanvasOpen && isStructuredCreativeMode(window.currentCreativeMode));
+  const browserInHouseActive = browserState.active === true && isBrowserCanvasInHouseProvider(browserState);
+  if (canvasButton) {
+    canvasButton.classList.toggle('browser-live', browserInHouseActive);
+    if (browserInHouseActive) {
+      canvasButton.title = 'Open Canvas — in-app browser active';
+      canvasButton.setAttribute('aria-label', 'Open Canvas — in-app browser active');
+    }
+  }
 }
 
 function toggleRightPanel() {
@@ -41424,6 +42747,16 @@ function toggleCanvasFullscreen() {
   }
 }
 
+function setCanvasEditorValue(value) {
+  if (!canvasEditor) return;
+  canvasEditorProgrammaticUpdate = true;
+  try {
+    canvasEditor.setValue(String(value ?? ''));
+  } finally {
+    canvasEditorProgrammaticUpdate = false;
+  }
+}
+
 function syncCanvasFullscreenButton() {
   const btn = document.getElementById('canvas-fullscreen-btn');
   if (!btn) return;
@@ -41470,6 +42803,10 @@ function initCanvasEditor() {
     const tab = canvasTabs.find(t => t.id === activeCanvasTabId);
     if (!tab) return;
     const newVal = canvasEditor.getValue();
+    if (canvasEditorProgrammaticUpdate) {
+      tab.content = newVal;
+      return;
+    }
     if (tab.diskPath && newVal !== tab.savedContent) {
       tab.dirty = true;
     } else if (tab.diskPath) {
@@ -41528,7 +42865,7 @@ function canvasOpenTab(id) {
   if (canvasEditor) {
     // Temporarily disconnect change handler to avoid double-render during setValue
     const silentSet = () => {
-      canvasEditor.setValue(tab.content || '');
+      setCanvasEditorValue(tab.content || '');
       canvasEditor.setOption('mode', tab.language || 'null');
       setTimeout(() => canvasEditor.refresh(), 10);
     };
@@ -41550,7 +42887,7 @@ function canvasCloseTab(id, ev) {
       canvasOpenTab(canvasTabs[Math.min(idx, canvasTabs.length - 1)].id);
     } else {
       activeCanvasTabId = null;
-      if (canvasEditor) canvasEditor.setValue('');
+      if (canvasEditor) setCanvasEditorValue('');
       applyCanvasViewMode('code', null);
       canvasRenderTabs();
     }
@@ -41680,9 +43017,11 @@ function canvasRenderTabs() {
     const codeModeBtn = document.getElementById('canvas-code-btn');
     const previewModeBtn = document.getElementById('canvas-preview-btn');
     const saveBtn = document.getElementById('canvas-save-btn');
+    const saveControls = document.getElementById('canvas-save-controls');
     if (codeModeBtn) codeModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     if (saveBtn) saveBtn.style.display = 'none';
+    if (saveControls) saveControls.style.display = 'none';
     renderCreativeWorkspace();
     return;
   }
@@ -41691,14 +43030,16 @@ function canvasRenderTabs() {
     const codeModeBtn = document.getElementById('canvas-code-btn');
     const previewModeBtn = document.getElementById('canvas-preview-btn');
     const saveBtn = document.getElementById('canvas-save-btn');
+    const saveControls = document.getElementById('canvas-save-controls');
     if (codeModeBtn) codeModeBtn.style.display = 'none';
     if (previewModeBtn) previewModeBtn.style.display = 'none';
     if (saveBtn) saveBtn.style.display = 'none';
+    if (saveControls) saveControls.style.display = 'none';
     renderBrowserCanvasSurface();
     return;
   }
   tabsEl.innerHTML = canvasTabs.map(t => `
-    <div class="canvas-tab ${t.id === activeCanvasTabId ? 'active' : ''} ${t.dirty ? 'canvas-tab-dirty' : ''}" onclick="canvasOpenTab('${t.id}')" title="${escHtml(t.diskPath || t.name)}">
+    <div class="canvas-tab ${t.id === activeCanvasTabId ? 'active' : ''} ${t.dirty ? 'canvas-tab-dirty' : ''} ${t.externalChanged ? 'canvas-tab-external' : ''}" onclick="canvasOpenTab('${t.id}')" title="${escHtml(t.externalChanged ? 'Changed outside Canvas · ' : '')}${escHtml(t.diskPath || t.name)}">
       <span>${escHtml(t.name)}</span>
       <button class="canvas-tab-close" onclick="canvasCloseTab('${t.id}', event)" title="Close">×</button>
     </div>
@@ -41709,8 +43050,17 @@ function canvasRenderTabs() {
   const saveBtn = document.getElementById('canvas-save-btn');
   if (codeModeBtn) codeModeBtn.classList.toggle('active', !tab || tab.mode !== 'preview');
   if (previewModeBtn) previewModeBtn.classList.toggle('active', !!(tab && tab.mode === 'preview'));
-  // Show save button only for non-image files with a disk path
-  if (saveBtn) saveBtn.style.display = (tab && tab.diskPath && !tab.isImage && !tab.isBinary) ? 'flex' : 'none';
+  // Show save controls only for non-image files with a disk path. Keep the
+  // original target disabled unless this tab came from an external file.
+  const saveControls = document.getElementById('canvas-save-controls');
+  if (saveControls) saveControls.style.display = (tab && tab.diskPath && !tab.isImage && !tab.isBinary) ? 'flex' : 'none';
+  else if (saveBtn) saveBtn.style.display = (tab && tab.diskPath && !tab.isImage && !tab.isBinary) ? 'flex' : 'none';
+  const originalBtn = document.getElementById('canvas-save-original-btn');
+  const originalPath = String(tab?.originalPath || '').trim();
+  if (originalBtn) {
+    originalBtn.disabled = !originalPath;
+    originalBtn.title = originalPath ? `Save to ${originalPath}` : 'No external original for this file';
+  }
 }
 
 async function canvasUpdatePreview() {
@@ -41837,14 +43187,14 @@ async function canvasUpdatePreview() {
   if (ext === 'md') {
     frame.removeAttribute('src');
     const rendered = renderMd(content);
-    frame.srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    frame.srcdoc = protectCanvasPreviewDocument(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
       body{font-family:system-ui,sans-serif;line-height:1.7;padding:24px 32px;max-width:800px;margin:0 auto;color:#17243b}
       h1,h2,h3{font-weight:700;margin:16px 0 8px} code{background:#f0f4fb;padding:2px 6px;border-radius:4px;font-size:0.88em}
       pre{background:#f0f4fb;padding:14px;border-radius:8px;overflow-x:auto} pre code{background:none;padding:0}
       blockquote{border-left:3px solid #3b82f6;padding-left:14px;color:#64748b;margin:10px 0}
       table{border-collapse:collapse;width:100%} th,td{border:1px solid #dbe3ee;padding:6px 10px}
       a{color:#1668e3} hr{border:none;border-top:1px solid #dbe3ee;margin:16px 0}
-    </style></head><body>${rendered}</body></html>`;
+    </style></head><body>${rendered}</body></html>`);
     return;
   }
 
@@ -41865,7 +43215,7 @@ async function canvasUpdatePreview() {
     return;
   }
   frame.removeAttribute('src');
-  frame.srcdoc = content;
+  frame.srcdoc = protectCanvasPreviewDocument(content);
   frame.onload = () => {
     try {
       const doc = frame.contentDocument;
@@ -41880,55 +43230,127 @@ async function canvasUpdatePreview() {
         doc.body.addEventListener('input', () => {
           const html = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
           tab.content = html;
-          if (canvasEditor && tab.mode !== 'preview') canvasEditor.setValue(html);
+          if (canvasEditor && tab.mode !== 'preview') setCanvasEditorValue(html);
         });
       }
     } catch {}
   };
 }
 
-async function canvasSave() {
+function closeCanvasSaveMenu() {
+  const menu = document.getElementById('canvas-save-menu');
+  const toggle = document.getElementById('canvas-save-menu-btn');
+  if (menu) menu.hidden = true;
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
+}
+
+function positionCanvasSaveMenu() {
+  const menu = document.getElementById('canvas-save-menu');
+  const toggle = document.getElementById('canvas-save-menu-btn');
+  if (!menu || !toggle || menu.hidden) return;
+  const rect = toggle.getBoundingClientRect();
+  const width = Math.max(150, menu.offsetWidth || 150);
+  const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
+  menu.style.position = 'fixed';
+  menu.style.left = `${left}px`;
+  menu.style.right = 'auto';
+  menu.style.top = `${Math.min(window.innerHeight - 8, rect.bottom + 6)}px`;
+  menu.style.zIndex = '100000';
+}
+
+function toggleCanvasSaveMenu(event) {
+  event?.stopPropagation?.();
+  const menu = document.getElementById('canvas-save-menu');
+  const toggle = document.getElementById('canvas-save-menu-btn');
+  if (!menu) return;
+  const nextOpen = menu.hidden;
+  menu.hidden = !nextOpen;
+  if (toggle) toggle.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+  if (nextOpen) requestAnimationFrame(positionCanvasSaveMenu);
+}
+
+if (typeof document !== 'undefined' && !window.__promCanvasSaveMenuInstalled) {
+  window.__promCanvasSaveMenuInstalled = true;
+  document.addEventListener('pointerdown', (event) => {
+    if (!event.target?.closest?.('#canvas-save-controls, #canvas-save-menu')) closeCanvasSaveMenu();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeCanvasSaveMenu();
+  });
+  window.addEventListener('resize', positionCanvasSaveMenu, { passive: true });
+  window.addEventListener('scroll', positionCanvasSaveMenu, { passive: true, capture: true });
+}
+
+async function canvasSave(target = 'workspace') {
   const tab = canvasTabs.find(t => t.id === activeCanvasTabId);
   if (!tab) { addProcessEntry('warn', 'Canvas: no file open to save.'); return; }
   if (canvasEditor && tab.mode !== 'preview') tab.content = canvasEditor.getValue();
+  closeCanvasSaveMenu();
 
-  // If tab has a workspace disk path, save back to disk
-  if (tab.diskPath) {
-    const btn = document.getElementById('canvas-save-btn');
-    if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
-    try {
-      const r = await fetch('/api/canvas/file', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: tab.diskPath, content: tab.content }),
-      });
-      const d = await r.json();
-      if (d.success) {
-        tab.dirty = false;
-        tab.savedContent = tab.content;
-        canvasRenderTabs();
-        addProcessEntry('info', `Canvas: saved → ${tab.diskPath}`);
-      } else {
-        addProcessEntry('error', `Canvas: save failed — ${d.error}`);
-      }
-    } catch (e) {
-      addProcessEntry('error', `Canvas: save error — ${e.message}`);
-    } finally {
-      if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save';
-      }
-    }
+  const saveTarget = String(target || 'workspace').toLowerCase() === 'original' ? 'original' : 'workspace';
+  const originalPath = String(tab.originalPath || '').trim();
+  const previousPath = String(tab.diskPath || '').trim();
+  let writePath = saveTarget === 'original' ? originalPath : String(tab.workspacePath || '').trim();
+  if (saveTarget === 'original' && !writePath) {
+    addProcessEntry('warn', 'Canvas: this file has no external original to save.');
     return;
   }
 
-  // No disk path — fall back to browser download
-  const blob = new Blob([tab.content], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = tab.name; a.click();
-  URL.revokeObjectURL(url);
-  addProcessEntry('info', `Canvas: downloaded ${tab.name}`);
+  const btn = document.getElementById('canvas-save-btn');
+  if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+  try {
+    let data = null;
+    if (saveTarget === 'workspace' && !writePath && previousPath && tab.inWorkspace === false) {
+      const response = await fetch('/api/canvas/workspace-copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourcePath: previousPath, filename: tab.name, content: tab.content }),
+      });
+      data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Could not create workspace copy');
+      writePath = String(data.absPath || data.path || '').trim();
+      if (previousPath && previousPath !== writePath) canvasNotifyClose(previousPath);
+      tab.workspacePath = writePath;
+      tab.diskPath = writePath;
+      tab.inWorkspace = true;
+      canvasNotifyOpen(writePath);
+    } else {
+      writePath = writePath || previousPath;
+      if (!writePath) {
+        const blob = new Blob([tab.content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url; anchor.download = tab.name; anchor.click();
+        URL.revokeObjectURL(url);
+        addProcessEntry('info', `Canvas: downloaded ${tab.name}`);
+        return;
+      }
+      const response = await fetch('/api/canvas/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: writePath, content: tab.content }),
+      });
+      data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Save failed');
+    }
+    tab.dirty = false;
+    tab.externalChanged = false;
+    tab.savedContent = tab.content;
+    canvasRenderTabs();
+    persistActiveChat();
+    addProcessEntry('info', `Canvas: saved ${saveTarget} → ${writePath}`);
+  } catch (error) {
+    addProcessEntry('error', `Canvas: save error — ${error?.message || error}`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<iconify-icon icon="solar:diskette-bold-duotone" width="14" height="14"></iconify-icon> Save';
+    }
+  }
+}
+
+function canvasSaveOriginal() {
+  return canvasSave('original');
 }
 
 function canvasAddToContext() {
@@ -42362,6 +43784,206 @@ function ensureChatPasteListener() {
   document.addEventListener('paste', handleChatPaste, true);
 }
 
+function getChatSelectionElement(node) {
+  if (!node) return null;
+  const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+  return element instanceof Element ? element : null;
+}
+
+function getChatSelectionDetails() {
+  const selection = window.getSelection?.();
+  if (!selection || selection.rangeCount < 1 || selection.isCollapsed) return null;
+  const text = String(selection.toString() || '').replace(/\s+/g, ' ').trim().slice(0, 2400);
+  if (!text) return null;
+  const range = selection.getRangeAt(0);
+  const chatView = document.getElementById('chat-view');
+  const startElement = getChatSelectionElement(range.startContainer);
+  const endElement = getChatSelectionElement(range.endContainer);
+  if (!chatView || !startElement || !endElement || !chatView.contains(startElement) || !chatView.contains(endElement)) return null;
+  if (startElement.closest('.chat-input-area, #chat-text-selection-popover, input, textarea, select, [contenteditable="true"]')
+    || endElement.closest('.chat-input-area, #chat-text-selection-popover, input, textarea, select, [contenteditable="true"]')) return null;
+  const messageElement = startElement.closest('.msg-shell[data-chat-message-index]');
+  const messageIndex = messageElement ? Number(messageElement.getAttribute('data-chat-message-index')) : null;
+  const sourceRole = messageElement?.classList.contains('user') ? 'user' : 'assistant';
+  const rect = range.getBoundingClientRect?.();
+  return {
+    text,
+    rect: rect && Number.isFinite(rect.left) ? rect : null,
+    messageIndex: Number.isInteger(messageIndex) ? messageIndex : null,
+    sourceRole,
+  };
+}
+
+function hideChatTextSelectionPopover() {
+  if (chatTextSelectionHideTimer) {
+    clearTimeout(chatTextSelectionHideTimer);
+    chatTextSelectionHideTimer = null;
+  }
+  if (!chatTextSelectionPopoverEl) return;
+  chatTextSelectionPopoverEl.hidden = true;
+  chatTextSelectionPopoverEl.style.display = 'none';
+}
+
+function clearChatTextSelectionRange() {
+  try {
+    const selection = window.getSelection?.();
+    if (selection && !selection.isCollapsed) selection.removeAllRanges();
+  } catch {}
+}
+
+function positionChatTextSelectionPopover(rect, event = null) {
+  const popover = chatTextSelectionPopoverEl;
+  if (!popover) return;
+  const measured = popover.getBoundingClientRect();
+  const viewportWidth = Math.max(0, window.innerWidth || document.documentElement.clientWidth || 0);
+  const viewportHeight = Math.max(0, window.innerHeight || document.documentElement.clientHeight || 0);
+  const sourceRect = rect && rect.width >= 0
+    ? rect
+    : { left: Number(event?.clientX || 0), right: Number(event?.clientX || 0), top: Number(event?.clientY || 0), bottom: Number(event?.clientY || 0), width: 0, height: 0 };
+  const preferredLeft = Number(sourceRect.left || event?.clientX || 0);
+  const centeredLeft = sourceRect.width > 0
+    ? (Number(sourceRect.left || 0) + Math.max(0, (Number(sourceRect.width) - measured.width) / 2))
+    : preferredLeft;
+  const left = Math.max(10, Math.min(viewportWidth - measured.width - 10, centeredLeft));
+  const below = Number(sourceRect.bottom || event?.clientY || 0) + 8;
+  const above = Number(sourceRect.top || event?.clientY || 0) - measured.height - 8;
+  const top = below + measured.height <= viewportHeight - 10 || above < 10
+    ? Math.max(10, Math.min(viewportHeight - measured.height - 10, below))
+    : above;
+  popover.style.left = `${Math.round(left)}px`;
+  popover.style.top = `${Math.round(top)}px`;
+}
+
+async function copyChatHighlightedText(text) {
+  const value = String(text || '').trim();
+  if (!value) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const helper = document.createElement('textarea');
+      helper.value = value;
+      helper.style.position = 'fixed';
+      helper.style.opacity = '0';
+      document.body.appendChild(helper);
+      helper.select();
+      document.execCommand('copy');
+      helper.remove();
+    }
+    showToast('Copied', 'Highlighted text is on the clipboard.', 'success', 1800);
+  } catch (error) {
+    showToast('Copy failed', String(error?.message || 'The highlighted text could not be copied.'), 'error');
+  }
+}
+
+async function openHighlightedTextDetails(details) {
+  const text = String(details?.text || '').trim();
+  if (!text) return;
+  const prompt = [
+    'Tell me more about this highlighted text.',
+    '',
+    `"${text}"`,
+    '',
+    'Explain what it means, what it is or does, and any surrounding context that would help me understand it. If it is code, explain the behavior and important details plainly.',
+  ].join('\n');
+  await createSideChat({
+    title: 'More details',
+    initialText: prompt,
+    anchorIndex: details.messageIndex,
+    anchorPreview: text,
+  });
+}
+
+async function runChatTextSelectionAction(action) {
+  // Clicking a fixed toolbar can collapse the browser selection in some
+  // Electron/Chromium builds even though the toolbar prevents mousedown's
+  // default behavior. Keep the exact selection captured when the popover was
+  // shown so the action remains reliable.
+  const details = getChatSelectionDetails() || chatTextSelectionDetails;
+  if (!details) {
+    hideChatTextSelectionPopover();
+    return;
+  }
+  hideChatTextSelectionPopover();
+  chatTextSelectionDetails = null;
+  clearChatTextSelectionRange();
+  if (action === 'copy') {
+    await copyChatHighlightedText(details.text);
+    return;
+  }
+  if (action === 'add') {
+    setChatHighlightedTextContext(details.text, details);
+    document.getElementById('chat-input')?.focus?.();
+    showToast('Annotation added', 'The highlighted text will be included with your next message.', 'success', 2400);
+    return;
+  }
+  if (action === 'details') {
+    try {
+      await openHighlightedTextDetails(details);
+    } catch (error) {
+      showToast('Side chat failed', String(error?.message || error), 'error');
+    }
+  }
+}
+
+function showChatTextSelectionPopover(details, event = null) {
+  if (!chatTextSelectionPopoverEl || !details?.text) return;
+  chatTextSelectionDetails = { ...details };
+  chatTextSelectionPopoverEl.innerHTML = `
+    <button type="button" class="chat-text-selection-action chat-text-selection-copy" data-chat-selection-action="copy" title="Copy highlighted text"><iconify-icon icon="solar:copy-bold-duotone" width="14" height="14"></iconify-icon><span>Copy</span></button>
+    <span class="chat-text-selection-divider" aria-hidden="true"></span>
+    <button type="button" class="chat-text-selection-action" data-chat-selection-action="add"><iconify-icon icon="solar:add-square-bold-duotone" width="14" height="14"></iconify-icon><span>Add to chat</span></button>
+    <button type="button" class="chat-text-selection-action" data-chat-selection-action="details"><iconify-icon icon="solar:chat-round-dots-bold-duotone" width="14" height="14"></iconify-icon><span>More details</span></button>`;
+  chatTextSelectionPopoverEl.hidden = false;
+  chatTextSelectionPopoverEl.style.display = 'inline-flex';
+  positionChatTextSelectionPopover(details.rect, event);
+}
+
+function initChatTextSelectionPopover() {
+  if (chatTextSelectionPopoverBound) return;
+  const popover = document.getElementById('chat-text-selection-popover');
+  if (!popover) return;
+  chatTextSelectionPopoverEl = popover;
+  chatTextSelectionPopoverBound = true;
+  popover.addEventListener('mousedown', (event) => event.preventDefault());
+  popover.addEventListener('click', (event) => {
+    const button = event.target.closest?.('[data-chat-selection-action]');
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void runChatTextSelectionAction(button.getAttribute('data-chat-selection-action') || '');
+  });
+  document.addEventListener('mouseup', (event) => {
+    if (popover.contains(event.target)) return;
+    setTimeout(() => {
+      const details = getChatSelectionDetails();
+      if (details) showChatTextSelectionPopover(details, event);
+      else hideChatTextSelectionPopover();
+    }, 0);
+  });
+  document.addEventListener('contextmenu', (event) => {
+    if (popover.contains(event.target)) return;
+    const details = getChatSelectionDetails();
+    if (!details) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showChatTextSelectionPopover(details, event);
+  }, true);
+  document.addEventListener('pointerdown', (event) => {
+    if (!popover.contains(event.target)) hideChatTextSelectionPopover();
+  }, true);
+  document.addEventListener('selectionchange', () => {
+    if (chatTextSelectionHideTimer) clearTimeout(chatTextSelectionHideTimer);
+    chatTextSelectionHideTimer = setTimeout(() => {
+      chatTextSelectionHideTimer = null;
+      const details = getChatSelectionDetails();
+      if (details) showChatTextSelectionPopover(details);
+      else hideChatTextSelectionPopover();
+    }, 80);
+  });
+  window.addEventListener('resize', hideChatTextSelectionPopover, { passive: true });
+}
+
 function readFileAsBase64(file) {
   return new Promise((resolve, reject) => {
     if (!file) {
@@ -42562,6 +44184,10 @@ function buildFileContextNote(uploadResults) {
 }
 
 function chatFileUploadInit() {
+  // The selection toolbar is independent of file upload, so initialize it
+  // before checking for the composer. This also keeps it available on a
+  // chat-only/rendered surface that does not expose the upload controls.
+  initChatTextSelectionPopover();
   const inputArea = document.querySelector('.chat-input-area');
   if (!inputArea) return;
 
@@ -42895,6 +44521,122 @@ function canvasNotifyClose(diskPath) {
   }).catch(() => {});
 }
 
+function normalizeCanvasChangePath(value) {
+  return String(value || '').trim().replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '').toLowerCase();
+}
+
+function canvasChangePathMatches(tabPath, changePath) {
+  const tabValue = normalizeCanvasChangePath(tabPath);
+  const changeValue = normalizeCanvasChangePath(changePath);
+  if (!tabValue || !changeValue) return false;
+  return tabValue === changeValue
+    || tabValue.endsWith(`/${changeValue}`)
+    || changeValue.endsWith(`/${tabValue}`);
+}
+
+function canvasChangesFromPayload(payload = {}) {
+  const candidates = [
+    ...(Array.isArray(payload?.files) ? payload.files : []),
+    ...(Array.isArray(payload?.workspaceChanges) ? payload.workspaceChanges : []),
+    ...(Array.isArray(payload?.workspace_changes) ? payload.workspace_changes : []),
+    ...(Array.isArray(payload?.run?.workspaceChanges) ? payload.run.workspaceChanges : []),
+  ];
+  return Array.from(new Map(candidates
+    .filter((file) => file && typeof file === 'object')
+    .map((file) => [normalizeCanvasChangePath(file.path || file.displayPath || file.file), file])
+    .filter(([key]) => key)).values());
+}
+
+async function refreshOpenCanvasFiles(payload = {}, options = {}) {
+  const changes = canvasChangesFromPayload(payload);
+  if (!changes.length) return 0;
+  const affected = canvasTabs.filter((tab) => changes.some((change) => (
+    canvasChangePathMatches(tab.diskPath, change.path || change.displayPath)
+    || canvasChangePathMatches(tab.workspacePath, change.path || change.displayPath)
+    || canvasChangePathMatches(tab.originalPath, change.path || change.displayPath)
+    || canvasChangePathMatches(tab.diskPath, change.oldPath || change.old_path)
+  )));
+  if (!affected.length) return 0;
+  let refreshed = 0;
+  await Promise.all(affected.map(async (tab) => {
+    const change = changes.find((candidate) => (
+      canvasChangePathMatches(tab.diskPath, candidate.path || candidate.displayPath)
+      || canvasChangePathMatches(tab.workspacePath, candidate.path || candidate.displayPath)
+      || canvasChangePathMatches(tab.originalPath, candidate.path || candidate.displayPath)
+      || canvasChangePathMatches(tab.diskPath, candidate.oldPath || candidate.old_path)
+    ));
+    if (!change) return;
+    if (tab.dirty && options.force !== true) {
+      if (!tab.externalChanged) showToast('Canvas file changed', `${tab.name} has newer workspace content. Save or reload it to review.`, 'info', 4500);
+      tab.externalChanged = true;
+      return;
+    }
+    const oldPath = String(tab.diskPath || '').trim();
+    const renamedPath = String(change.status || '').toLowerCase() === 'renamed'
+      ? String(change.path || '').trim()
+      : '';
+    const targetPath = renamedPath || String(tab.workspacePath || tab.diskPath || '').trim();
+    if (!targetPath || String(change.status || '').toLowerCase() === 'deleted') {
+      tab.externalChanged = true;
+      return;
+    }
+    try {
+      const response = await fetch(`/api/canvas/file?path=${encodeURIComponent(targetPath)}`);
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'File is no longer available');
+      const fileName = targetPath.split(/[\\/]/).filter(Boolean).pop() || tab.name;
+      if (data.isImage) {
+        tab.content = `data:${data.mimeType};base64,${data.base64}`;
+        tab.savedContent = tab.content;
+        tab.isImage = true;
+        tab.isBinary = false;
+        tab.mimeType = data.mimeType;
+      } else if (data.isBinary) {
+        tab.content = '';
+        tab.savedContent = '';
+        tab.isImage = false;
+        tab.isBinary = true;
+        tab.mimeType = data.mimeType;
+        tab.ext = data.ext || (fileName.split('.').pop() || '').toLowerCase();
+        tab.size = data.size || 0;
+        tab.mode = 'preview';
+      } else {
+        tab.content = String(data.content || '');
+        tab.savedContent = tab.content;
+        tab.isImage = false;
+        tab.isBinary = false;
+      }
+      if (renamedPath && oldPath && oldPath !== renamedPath) {
+        canvasNotifyClose(oldPath);
+        tab.diskPath = renamedPath;
+        tab.name = fileName;
+        tab.workspacePath = renamedPath;
+        tab.inWorkspace = true;
+        canvasNotifyOpen(renamedPath);
+      }
+      tab.dirty = false;
+      tab.externalChanged = false;
+      if (canvasEditor && activeCanvasTabId === tab.id && !tab.isBinary && !tab.isImage) {
+        setCanvasEditorValue(tab.content);
+        canvasEditor.setOption('mode', tab.language || getCanvasLang(tab.name));
+      }
+      refreshed += 1;
+    } catch {
+      tab.externalChanged = true;
+    }
+  }));
+  if (refreshed) {
+    canvasRenderTabs();
+    const activeTab = canvasTabs.find((tab) => tab.id === activeCanvasTabId);
+    if (activeTab && activeTab.mode === 'preview') canvasUpdatePreview();
+    const tree = document.getElementById('canvas-project-tree');
+    if (tree && canvasWorkspaceTree.length) tree.innerHTML = canvasRenderWorkspaceTree(canvasWorkspaceTree, 0);
+  } else if (affected.some((tab) => tab.externalChanged)) {
+    canvasRenderTabs();
+  }
+  return refreshed;
+}
+
 async function canvasPresentFileLegacy(diskPath, label) {
   if (!diskPath) return;
   const name = label || diskPath.split('/').pop() || diskPath;
@@ -42927,7 +44669,7 @@ async function canvasPresentFileLegacy(diskPath, label) {
           tab.isBinary = false;
           tab.mode = (name.endsWith('.html') || name.endsWith('.htm') || name.endsWith('.md')) ? 'preview' : 'code';
           if (canvasEditor && activeCanvasTabId === tab.id) {
-            canvasEditor.setValue(d.content);
+            setCanvasEditorValue(d.content);
             canvasEditor.setOption('mode', getCanvasLang(name));
           }
         }
@@ -43005,6 +44747,9 @@ async function canvasPresentFile(diskPath, label, options = {}) {
       const response = await fetch(`/api/canvas/file?path=${encodeURIComponent(diskPath)}`);
       const data = await response.json();
       if (data.success) {
+        tab.inWorkspace = data.inWorkspace !== false;
+        if (tab.inWorkspace) tab.workspacePath = diskPath;
+        else if (!tab.originalPath) tab.originalPath = diskPath;
         if (data.isImage) {
           const dataUrl = `data:${data.mimeType};base64,${data.base64}`;
           tab.content = dataUrl;
@@ -43028,7 +44773,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
           tab.isBinary = false;
           tab.mode = (name.endsWith('.html') || name.endsWith('.htm') || name.endsWith('.md')) ? 'preview' : 'code';
           if (canvasEditor && activeCanvasTabId === tab.id) {
-            canvasEditor.setValue(data.content);
+            setCanvasEditorValue(data.content);
             canvasEditor.setOption('mode', getCanvasLang(name));
           }
         }
@@ -43063,11 +44808,18 @@ async function canvasPresentFile(diskPath, label, options = {}) {
     }
     const id = 'ctab_' + Math.random().toString(36).slice(2);
     const ext = name.split('.').pop().toLowerCase();
+    const inWorkspace = data.inWorkspace !== false;
+    const canvasPathMeta = {
+      inWorkspace,
+      workspacePath: inWorkspace ? diskPath : '',
+      originalPath: inWorkspace ? '' : diskPath,
+    };
     if (data.isImage) {
       const dataUrl = `data:${data.mimeType};base64,${data.base64}`;
       canvasTabs.push({
         id, name, content: dataUrl, savedContent: dataUrl,
         diskPath, dirty: false,
+        ...canvasPathMeta,
         mode: 'preview',
         language: 'null',
         isImage: true,
@@ -43077,6 +44829,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
       canvasTabs.push({
         id, name, content: '', savedContent: '',
         diskPath, dirty: false,
+        ...canvasPathMeta,
         mode: 'preview',
         language: 'null',
         isBinary: true,
@@ -43089,6 +44842,7 @@ async function canvasPresentFile(diskPath, label, options = {}) {
       canvasTabs.push({
         id, name, content: data.content, savedContent: data.content,
         diskPath, dirty: false,
+        ...canvasPathMeta,
         mode: autoPreview ? 'preview' : 'code',
         language: getCanvasLang(name),
       });
@@ -44325,11 +46079,17 @@ window.filterChatResources = filterChatResources;
 window.setChatResourcesExpanded = setChatResourcesExpanded;
 window.openChatResourceFile = openChatResourceFile;
 window.setSourcePanelTab = setSourcePanelTab;
+window.setSourcePanelScope = setSourcePanelScope;
 window.refreshSourcePanel = refreshSourcePanel;
 window.toggleSourcePanelFilter = toggleSourcePanelFilter;
 window.filterSourcePanel = filterSourcePanel;
 window.clearSourcePanelFilter = clearSourcePanelFilter;
 window.openSourcePanelItem = openSourcePanelItem;
+window.openSourcePanelWork = openSourcePanelWork;
+window.openBackgroundAgentDetail = openBackgroundAgentDetail;
+window.closeBackgroundAgentDetail = closeBackgroundAgentDetail;
+window.openCodingWorkspace = openCodingWorkspace;
+window.closeCodingWorkspace = closeCodingWorkspace;
 window.openSourcePanelUrl = openSourcePanelUrl;
 window.copySourcePanelText = copySourcePanelText;
 window.toggleSourcePanelMiniFilter = toggleSourcePanelMiniFilter;
@@ -44350,6 +46110,9 @@ window.applyCanvasViewMode = applyCanvasViewMode;
 window.canvasRenderTabs = canvasRenderTabs;
 window.canvasUpdatePreview = canvasUpdatePreview;
 window.canvasSave = canvasSave;
+window.canvasSaveOriginal = canvasSaveOriginal;
+window.toggleCanvasSaveMenu = toggleCanvasSaveMenu;
+window.refreshOpenCanvasFiles = refreshOpenCanvasFiles;
 window.openBrowserCanvasSurface = openBrowserCanvasSurface;
 window.openPrometheusBrowserLink = openPrometheusBrowserLink;
 window.toggleBrowserCanvasSurface = toggleBrowserCanvasSurface;
@@ -44360,6 +46123,7 @@ window.toggleBrowserDesignMode = toggleBrowserDesignMode;
 window.handleBrowserDesignEdit = handleBrowserDesignEdit;
 window.handleBrowserDesignChat = handleBrowserDesignChat;
 window.handleBrowserDesignSelect = handleBrowserDesignSelect;
+window.removeBrowserDesignSelectionPill = removeBrowserDesignSelectionPill;
 window.submitBrowserDesignChatPopover = submitBrowserDesignChatPopover;
 window.hideBrowserDesignPopovers = hideBrowserDesignPopovers;
 window.releaseBrowserCanvasControl = releaseBrowserCanvasControl;
@@ -44389,6 +46153,7 @@ window.saveNamedBrowserItemRoot = saveNamedBrowserItemRoot;
 window.canvasAddToContext = canvasAddToContext;
 window.renderChatFilePills = renderChatFilePills;
 window.removeChatFile = removeChatFile;
+window.clearHighlightedTextAnnotation = clearHighlightedTextAnnotation;
 window.stageFiles = stageFiles;
 window.handleDesignEdit = handleDesignEdit;
 window.handleDesignChat = handleDesignChat;
@@ -45663,7 +47428,7 @@ function handleMainChatStreamEvent(msg = {}, options = {}) {
       ? summarizeToolResultForBackgroundSession(resultText, action)
       : resultText;
     const ok = evt.ok !== false && evt.success !== false && !evt.error;
-    const text = action ? formatToolResultForLog(action, safeResultText, ok, streamState) : safeResultText;
+    const text = action ? formatToolResultForLog(action, safeResultText, ok, streamState, evt.args || {}) : safeResultText;
     addSessionProcessEntry(sid, ok ? 'result' : 'error', text, { action, args: evt.args || {}, error: !ok, durationMs: evt.durationMs ?? evt.elapsedMs, ...(evt.actor ? { actor: evt.actor } : {}) });
     applyToolActivityToStreamState(streamState, 'result', evt);
     renderIfViewing();
@@ -45861,7 +47626,7 @@ function appendVoiceAgentToolProcessEvent(msg = {}) {
     const ok = evt.ok !== false && evt.success !== false && !evt.error;
     const entry = {
       type: ok ? 'result' : 'error',
-      content: formatToolResultForLog(action, resultText, ok, null),
+      content: formatToolResultForLog(action, resultText, ok, null, evt.args || {}),
       actor: 'Voice Agent',
       extra: { actor: 'Voice Agent', action, args: evt.args || {}, error: !ok, durationMs: evt.durationMs ?? evt.elapsedMs },
       ts: new Date().toLocaleTimeString(),

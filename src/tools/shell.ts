@@ -228,6 +228,7 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
     const result = await runTerminal({
       command: validation.command,
       cwd: validation.cwd,
+      workspacePath: validation.cwd,
       mode: args.background ? 'background' : 'foreground',
       shell: args.shell || 'auto',
       pty: args.pty === true,
@@ -240,6 +241,7 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
         success: true,
         stdout: `Started background command ${run.runId}`,
         data: { runId: run.runId, run: run.record },
+        extra: { runId: run.runId, workspacePath: run.record.workspacePath, workspaceChangeSource: 'terminal' },
       };
     }
     const output = result.exit || await run.wait();
@@ -248,7 +250,27 @@ export async function executeShell(args: ShellToolArgs): Promise<ToolResult> {
       stdout: output.stdout,
       stderr: output.stderr,
       exitCode: output.exitCode ?? 0,
-      data: { runId: output.runId, run: supervisor.get(output.runId) },
+      data: {
+        runId: output.runId,
+        run: supervisor.get(output.runId),
+        ...(output.workspaceChanges ? {
+          workspaceChanges: output.workspaceChanges,
+          workspaceSnapshots: output.workspaceSnapshots,
+          workspaceChangeSource: output.workspaceChangeSource,
+          workspacePath: output.workspacePath,
+          ...(output.workspaceChangesTruncated ? { workspaceChangesTruncated: true } : {}),
+        } : {}),
+      },
+      extra: {
+        runId: output.runId,
+        ...(output.workspaceChanges ? {
+          workspaceChanges: output.workspaceChanges,
+          workspaceSnapshots: output.workspaceSnapshots,
+          workspaceChangeSource: output.workspaceChangeSource,
+          workspacePath: output.workspacePath,
+          ...(output.workspaceChangesTruncated ? { workspaceChangesTruncated: true } : {}),
+        } : {}),
+      },
       error: output.exitCode === 0 ? undefined : output.stderr || `Command exited with ${output.exitCode ?? 'unknown status'}`,
     };
   } catch (error: any) {

@@ -47,6 +47,25 @@ const HISTORY_DIR = '.prometheus/history';
 const MAX_FILE_BYTES = 250 * 1024 * 1024;
 const MAX_DIRECTORY_BYTES = 250 * 1024 * 1024;
 const MAX_DIRECTORY_FILES = 5000;
+const SNAPSHOT_EXCLUDED_DIRECTORIES = new Set([
+  '.git',
+  '.prometheus',
+  'audit',
+  'node_modules',
+  '.next',
+  'dist',
+  'build',
+  'coverage',
+  '.cache',
+  '.turbo',
+  '.vite',
+  'out',
+  'target',
+  'tmp',
+  'temp',
+  '__pycache__',
+]);
+const SNAPSHOT_EXCLUDED_FILES = new Set(['tool_audit.log']);
 
 function safeIdPart(value: string, fallback = 'item'): string {
   return String(value || fallback)
@@ -118,7 +137,8 @@ function walkAndCopyDirectory(srcRoot: string, destRoot: string): { fileCount: n
       if (capped) return;
       const src = path.join(dir, entry.name);
       const rel = path.relative(srcRoot, src);
-      if (!rel || rel.split(path.sep).includes('.git') || rel.replace(/\\/g, '/').startsWith(HISTORY_DIR)) continue;
+      const normalizedRel = rel.replace(/\\/g, '/');
+      if (!rel || normalizedRel.startsWith(`${HISTORY_DIR}/`) || normalizedRel.split('/').some((part) => SNAPSHOT_EXCLUDED_DIRECTORIES.has(part.toLowerCase())) || SNAPSHOT_EXCLUDED_FILES.has(entry.name.toLowerCase())) continue;
       const dest = path.join(destRoot, rel);
       if (entry.isDirectory()) {
         walk(src);

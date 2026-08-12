@@ -16,6 +16,14 @@ import {
 } from './mobile-model-badge.js?v=pm-v266-2026-08-11-new-project-popover';
 import { renderMobileContextChip, wireMobileContextWindow } from './mobile-context-window.js?v=pm-v266-2026-08-11-new-project-popover';
 import { formatModelWithReasoning } from '../model-display.js';
+import {
+  backgroundAgentAgeLabel,
+  backgroundAgentPreview,
+  backgroundAgentWorkForSession,
+  findBackgroundAgentWork,
+  persistBackgroundAgentWork,
+  resolveBackgroundAgentIdentity,
+} from '../background-agent-work.js';
 
 import {
   loadMobileSchedules, toggleSchedule, runScheduleNow, updateMobileSchedule, deleteMobileSchedule,
@@ -53,6 +61,8 @@ import {
 import {
   getGateway,
   loadGatewayCatalog,
+  MOBILE_GATEWAY_STATUS,
+  probeGateway,
   gatewayStatusLabel,
   getActiveGatewayId,
   getMobileSessionTarget,
@@ -2902,7 +2912,26 @@ function _safeJsonPreview(value, max = 130) {
 function _mobileToolLabel(evt) {
   const action = String(evt?.action || evt?.toolName || evt?.type || '').trim();
   if (!action) return 'Working';
+  const normalized = action.toLowerCase();
+  if (['workspace_run', 'run_command', 'terminal', 'shell', 'shell_command', 'terminal_run', 'start_process'].includes(normalized)) {
+    const args = evt?.args && typeof evt.args === 'object'
+      ? evt.args
+      : evt?.params && typeof evt.params === 'object' ? evt.params : {};
+    const command = String(args.command || args.cmd || args.script || '').replace(/\s+/g, ' ').trim();
+    return command ? `Running command · ${command.length > 120 ? `${command.slice(0, 117)}...` : command}` : 'Running command';
+  }
   return action.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function _mobileToolResultLabel(evt) {
+  const action = String(evt?.action || evt?.toolName || evt?.name || '').trim().toLowerCase();
+  if (['workspace_run', 'run_command', 'terminal', 'shell', 'shell_command', 'terminal_run', 'start_process'].includes(action)) {
+    const args = evt?.args && typeof evt.args === 'object' ? evt.args : {};
+    const command = String(args.command || args.cmd || args.script || '').replace(/\s+/g, ' ').trim();
+    const compactCommand = command.length > 120 ? `${command.slice(0, 117)}...` : command;
+    return evt?.error ? `Command failed${compactCommand ? ` · ${compactCommand}` : ''}` : `Ran command${compactCommand ? ` · ${compactCommand}` : ''}`;
+  }
+  return _mobileToolLabel(evt);
 }
 
 function _makeProcessEntry(type, text, extra = null) {
@@ -3499,6 +3528,11 @@ function _handleMobileInlineCommandProcessEvent(eventType, message = {}, attempt
   wsEventBus.on(eventType, (message = {}) => _handleMobileInlineCommandProcessEvent(eventType, message));
 });
 wsEventBus.on('process_run_output', (message = {}) => _handleMobileInlineCommandProcessEvent('process_run_output', message));
+wsEventBus.on('workspace_changes', (message = {}) => {
+  if (_mergeMobileWorkspaceChangeEvent(message)) {
+    window.__pmRenderActiveChatThread?.();
+  }
+});
 
 document.addEventListener('toggle', async (event) => {
   const terminal = event.target?.closest?.('.tool-command-terminal.is-complete');
@@ -6246,6 +6280,32 @@ function _normalizeMobileFileChanges(fileChanges) {
     files: normalizedFiles,
     checkpoint: _normalizeMobileWorkspaceCheckpoint(fileChanges?.checkpoint),
   };
+}
+
+function _mergeMobileWorkspaceChangeEvent(event = {}) {
+  const run = event?.run && typeof event.run === 'object' ? event.run : {};
+  const sessionId = String(event.sessionId || run.sessionId || '').trim();
+  if (!sessionId || sessionId !== String(__pmChat.activeSessionId || '').trim()) return false;
+  const incoming = _normalizeMobileFileChanges({
+    files: event.workspaceChanges || run.workspaceChanges || event.workspace_changes,
+    summary: event.summary,
+  });
+  if (!incoming) return false;
+  const thread = Array.isArray(__pmChat.threads?.[sessionId]) ? __pmChat.threads[sessionId] : [];
+  const target = [...thread].reverse().find((message) => message?.role === 'ai' || message?.role === 'assistant');
+  if (!target) return false;
+  const existing = _normalizeMobileFileChanges(target.fileChanges);
+  const files = [...(existing?.files || []), ...incoming.files];
+  const byPath = new Map(files.map((file) => [String(file.path || file.displayPath).toLowerCase(), file]));
+  target.fileChanges = _normalizeMobileFileChanges({
+    files: Array.from(byPath.values()),
+    summary: {
+      fileCount: byPath.size,
+      insertions: Array.from(byPath.values()).reduce((sum, file) => sum + Number(file.insertions || 0), 0),
+      deletions: Array.from(byPath.values()).reduce((sum, file) => sum + Number(file.deletions || 0), 0),
+    },
+  });
+  return true;
 }
 
 function _normalizeMobileWorkspaceCheckpoint(checkpoint) {
@@ -9388,13 +9448,27 @@ function _renderMobileSourceList(root = document) {
   const mode = root?.querySelector?.('#pm-mobile-sources-mode');
   if (!list) return;
   const resources = Array.isArray(mobileSourceState.resources) ? mobileSourceState.resources : [];
+  const linkedWork = !mobileSourceState.history
+    ? backgroundAgentWorkForSession(mobileSourceState.sessionId || __pmChat.activeSessionId)
+    : [];
   if (count) count.textContent = resources.length ? String(resources.length) : '';
   if (mode) mode.textContent = mobileSourceState.history ? 'Browser history' : 'Attached to this chat';
-  if (!resources.length) {
+  if (!resources.length && !linkedWork.length) {
     list.innerHTML = `<div style="padding:20px 8px;text-align:center;color:var(--pm-muted,#89909d);font-size:12px">${mobileSourceState.history ? 'No Browser history yet.' : 'No Sources attached yet.'}</div>`;
     return;
   }
-  list.innerHTML = resources.map((resource) => {
+  const workMarkup = linkedWork.length
+    ? `<div class="pm-mobile-sources-section-label">Linked work</div>${linkedWork.slice(0, 8).map((record) => {
+      const id = String(record?.id || '');
+      const color = String(record?.agentColor || '#1677d2');
+      const preview = backgroundAgentPreview(record?.result || record?.error || record?.task || 'Background work', 150);
+      return `<button type="button" class="pm-mobile-source-row pm-mobile-source-row--work" data-mobile-background-work="${escapeHtml(id)}" aria-label="Open ${escapeHtml(record?.agentName || 'Background agent')} background work">
+        <span class="pm-mobile-source-copy"><strong><span class="pm-mobile-source-agent-name" style="color:${escapeHtml(color)}">${escapeHtml(record?.agentName || 'Background agent')}</span><time class="pm-mobile-source-age">${escapeHtml(backgroundAgentAgeLabel(record?.completedAt || record?.updatedAt))}</time></strong><small>${escapeHtml(preview)}</small></span>
+        <span class="pm-mobile-source-chevron" aria-hidden="true">›</span>
+      </button>`;
+    }).join('')}`
+    : '';
+  const resourceMarkup = resources.map((resource) => {
     const id = String(resource?.id || '');
     const locator = _mobileSourceLocator(resource);
     const action = mobileSourceState.history
@@ -9402,6 +9476,7 @@ function _renderMobileSourceList(root = document) {
       : `<button type="button" data-mobile-source-detach="${escapeHtml(id)}" class="pm-mobile-source-action pm-mobile-source-muted">Detach</button>`;
     return `<div class="pm-mobile-source-row"><div class="pm-mobile-source-copy"><strong>${escapeHtml(resource?.title || resource?.kind || 'Source')}</strong><small>${escapeHtml([resource?.kind, resource?.hasContent ? 'saved' : 'metadata', locator].filter(Boolean).join(' · '))}</small></div>${action}</div>`;
   }).join('');
+  list.innerHTML = `${workMarkup}${resourceMarkup}`;
 }
 
 async function _loadMobileSources(root = document, options = {}) {
@@ -10855,8 +10930,15 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     }, 250));
   });
   page.querySelector('#pm-mobile-sources-list')?.addEventListener('click', async (event) => {
+    const backgroundWorkButton = event.target?.closest?.('[data-mobile-background-work]');
     const attachButton = event.target?.closest?.('[data-mobile-source-attach]');
     const detachButton = event.target?.closest?.('[data-mobile-source-detach]');
+    if (backgroundWorkButton) {
+      event.preventDefault();
+      _closeMobileSources(page);
+      openMobileBackgroundAgentDetail(backgroundWorkButton.getAttribute('data-mobile-background-work') || '');
+      return;
+    }
     try {
       if (attachButton) {
         const id = attachButton.getAttribute('data-mobile-source-attach') || '';
@@ -10934,6 +11016,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   const sideState = {
     link: null,
     thread: [],
+    backgroundAgentId: '',
     busy: false,
     abort: null,
   };
@@ -11546,6 +11629,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     _loadMobileEmptyChatBrainCards().catch(() => {});
   }
   const previousBackgroundDockBridge = window.__pmMobileBackgroundSpawnDockChanged;
+  const previousBackgroundAgentDetailBridge = window.__pmMobileBackgroundAgentDetail;
   const previousToolProgressDockBridge = window.__pmMobileToolProgressDockChanged;
   const previousQueuedPromptsBridge = window.__pmMobileQueuedPromptsChanged;
   const previousGoalBridge = window.__pmMobileGoalChanged;
@@ -11553,6 +11637,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
     _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
     updateChatComposerSpace();
   };
+  const currentBackgroundAgentDetailBridge = (id = '') => openMobileBackgroundAgentDetail(id);
   const currentQueuedPromptsBridge = () => {
     updateChatComposerSpace();
   };
@@ -11590,6 +11675,7 @@ export function renderChatPage(page, { navigate, sessionId = null, voiceRoomTran
   };
   const currentToolProgressDockBridge = () => updateChatComposerSpace();
   window.__pmMobileBackgroundSpawnDockChanged = currentBackgroundDockBridge;
+  window.__pmMobileBackgroundAgentDetail = currentBackgroundAgentDetailBridge;
   window.__pmMobileToolProgressDockChanged = currentToolProgressDockBridge;
   window.__pmMobileQueuedPromptsChanged = currentQueuedPromptsBridge;
   window.__pmMobileGoalChanged = currentGoalBridge;
@@ -13596,13 +13682,98 @@ void main() {
     sideInput.style.overflowY = sideInput.scrollHeight > maxHeight ? 'auto' : 'hidden';
   }
 
+  function _mobileBackgroundAgentDetailRecord(id) {
+    const cleanId = String(id || '').trim();
+    if (!cleanId) return null;
+    const lane = _mobileBackgroundSpawnLanes()[cleanId];
+    const stored = findBackgroundAgentWork(cleanId, requestedSession)
+      || findBackgroundAgentWork(cleanId, __pmChat.activeSessionId);
+    if (!lane) return stored;
+    const identity = resolveBackgroundAgentIdentity(lane.id, {
+      existingName: lane.agentName,
+      existingColor: lane.agentColor,
+    });
+    const processEntries = Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [];
+    return {
+      id: lane.id,
+      sessionId: lane.sessionId || requestedSession,
+      agentName: identity.name,
+      agentColor: identity.color,
+      task: lane.task || lane.prompt || '',
+      status: lane.status || 'running',
+      startedAt: Number(lane.startedAt || lane.message?.workStartedAt || lane.message?.createdAt || 0) || 0,
+      completedAt: Number(lane.completedAt || lane.message?.workEndedAt || 0) || 0,
+      updatedAt: Number(lane.updatedAt || Date.now()) || Date.now(),
+      result: String(lane.result || lane.message?.content || '').trim(),
+      error: String(lane.error || '').trim(),
+      fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
+      events: processEntries,
+    };
+  }
+
+  function _mobileBackgroundAgentDetailEvents(record) {
+    const name = String(record?.agentName || 'Agent');
+    return (Array.isArray(record?.events) ? record.events : [])
+      .map((entry) => ({
+        ...entry,
+        type: String(entry?.type || 'info'),
+        text: String(entry?.text || entry?.content || entry?.message || '').trim(),
+        actor: String(entry?.actor || name).trim() || name,
+      }))
+      .filter((entry) => entry.text);
+  }
+
+  function openMobileBackgroundAgentDetail(id) {
+    const cleanId = String(id || '').trim();
+    const record = _mobileBackgroundAgentDetailRecord(cleanId);
+    if (!cleanId || !record) return;
+    sideState.backgroundAgentId = cleanId;
+    sideState.link = null;
+    sideState.thread = [];
+    setMobileSideBusy(false);
+    if (sideTitleEl) sideTitleEl.textContent = record.agentName || 'Background work';
+    if (sideSubtitleEl) {
+      const status = String(record.status || 'running').toLowerCase();
+      sideSubtitleEl.textContent = `Background work · ${status === 'in_progress' ? 'running' : status}`;
+    }
+    sideSheet?.removeAttribute('inert');
+    sideSheet?.setAttribute('aria-hidden', 'false');
+    sideSheet?.classList.add('open');
+    sideSheet?.classList.add('background-agent-detail-mode');
+    renderMobileSideSheet();
+  }
+
   function renderMobileSideSheet() {
     if (!sideThreadEl) return;
-    const visible = (Array.isArray(sideState.thread) ? sideState.thread : [])
-      .filter((msg, index) => msg && msg.sideChatBoundary !== true && !_isMobileHiddenVoiceDraftMessage(msg, index));
-    sideThreadEl.innerHTML = visible.length
-      ? visible.map((msg, index) => _renderChatMessageHtml(msg, index)).join('')
-      : '<div class="pm-mobile-side-empty">Start the side chat from /side.</div>';
+    const backgroundRecord = sideState.backgroundAgentId
+      ? _mobileBackgroundAgentDetailRecord(sideState.backgroundAgentId)
+      : null;
+    sideSheet?.classList.toggle('background-agent-detail-mode', !!backgroundRecord);
+    if (backgroundRecord) {
+      const status = String(backgroundRecord.status || 'running').toLowerCase();
+      const failed = status === 'failed';
+      const events = _mobileBackgroundAgentDetailEvents(backgroundRecord);
+      const processHtml = events.length
+        ? _renderMobileProcess(events).replace('<details class="pm-process-stream"', '<details class="pm-process-stream" open')
+        : '<div class="pm-background-agent-detail-empty">Waiting for live events...</div>';
+      const finalText = String(failed ? (backgroundRecord.error || backgroundRecord.result) : backgroundRecord.result || '').trim();
+      sideThreadEl.innerHTML = `
+        <div class="pm-background-agent-detail">
+          <div class="pm-background-agent-detail-head">
+            <span class="pm-background-agent-detail-avatar" style="--background-agent-color:${escapeHtml(backgroundRecord.agentColor || '#1677d2')}">${escapeHtml(String(backgroundRecord.agentName || 'Agent').slice(0, 2).toUpperCase())}</span>
+            <div><strong style="color:${escapeHtml(backgroundRecord.agentColor || '#1677d2')}">${escapeHtml(backgroundRecord.agentName || 'Agent')}</strong><span>${escapeHtml(backgroundAgentAgeLabel(backgroundRecord.completedAt || backgroundRecord.updatedAt))}</span></div>
+            <em>${escapeHtml(status === 'in_progress' ? 'running' : status)}</em>
+          </div>
+          <div class="pm-background-agent-detail-stream">${processHtml}</div>
+          ${finalText ? `<article class="pm-background-agent-detail-final${failed ? ' is-failed' : ''}"><div class="pm-background-agent-detail-final-label">${failed ? 'Failed' : 'Final response'}</div><div class="markdown-body">${_renderMobileMarkdown(finalText)}</div></article>` : ''}
+        </div>`;
+    } else {
+      const visible = (Array.isArray(sideState.thread) ? sideState.thread : [])
+        .filter((msg, index) => msg && msg.sideChatBoundary !== true && !_isMobileHiddenVoiceDraftMessage(msg, index));
+      sideThreadEl.innerHTML = visible.length
+        ? visible.map((msg, index) => _renderChatMessageHtml(msg, index)).join('')
+        : '<div class="pm-mobile-side-empty">Start the side chat from /side.</div>';
+    }
     _wireMobileProcessRunActions(sideThreadEl);
     _wireMobileChatEnhancements(sideThreadEl);
     requestAnimationFrame(() => {
@@ -13708,6 +13879,7 @@ void main() {
     const result = existing
       ? { link: existing, thread: await loadMobileSideThread(existing) }
       : await createMobileSideChat(initialText);
+    sideState.backgroundAgentId = '';
     sideState.link = result.link;
     sideState.thread = Array.isArray(result.thread) ? result.thread : [];
     setMobileSideBusy(false);
@@ -13727,6 +13899,8 @@ void main() {
   }
 
   function closeMobileSideChatSheet() {
+    sideState.backgroundAgentId = '';
+    sideSheet?.classList.remove('background-agent-detail-mode');
     sideSheet?.classList.remove('open');
     sideSheet?.setAttribute('aria-hidden', 'true');
     sideSheet?.setAttribute('inert', '');
@@ -13815,7 +13989,7 @@ void main() {
         _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         aiTurn.toolActivityStarted = true;
         _collectMediaFromToolEvent(aiTurn, evt);
-        _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${_mobileToolLabel(evt)}${evt.error ? ' failed' : ' complete'}`, evt);
+        _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', _mobileToolResultLabel(evt), evt);
         _applyMobileToolActivity(aiTurn, 'result', evt);
         renderMobileSideSheet();
         return 'streaming';
@@ -14940,7 +15114,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
         }
         _moveMobileWorkflowBubbleBeforeTool(aiTurn);
         aiTurn.toolActivityStarted = true;
-        const label = _mobileToolLabel(evt);
+        const label = _mobileToolResultLabel(evt);
         const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
         _collectMediaFromToolEvent(aiTurn, evt);
         _appendMobileProcess(aiTurn, evt.error ? 'error' : 'result', `${label}${result ? ` -> ${result}` : ' complete'}`, evt);
@@ -15556,12 +15730,21 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
       ? options.attachments.slice()
       : getPendingAttachments().slice().concat(stagedVoiceImages);
     if (!msg && files.length === 0) return;
-    const selectedGateway = currentChatGateway();
+    let selectedGateway = currentChatGateway();
     if (!selectedGateway) {
       pmToast('No known gateway target. Pair or select a gateway before sending.', 'error');
       return;
     }
-    if (selectedGateway.status === 'offline' || selectedGateway.status === 'revoked') {
+    // The catalog dot is only a cache. Verify the selected target immediately
+    // before admitting a turn so a gateway that went offline cannot receive a
+    // message through a stale composer state. Probe failures update the
+    // target status and remain fail-closed below.
+    try {
+      selectedGateway = await probeGateway(selectedGateway);
+    } catch {
+      selectedGateway = getGateway(selectedGateway.gatewayId) || selectedGateway;
+    }
+    if (selectedGateway.status !== MOBILE_GATEWAY_STATUS.ONLINE) {
       pmToast(`${selectedGateway.name} is ${selectedGateway.status}. Sending is blocked until it reconnects or is repaired.`, 'error');
       return;
     }
@@ -16257,6 +16440,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (__pmChat.activeSessionId !== requestedSession) return;
     if (!_pushMobileBackgroundSpawnEvent(msg, requestedSession)) return;
     _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
+    if (sideState.backgroundAgentId && sideState.backgroundAgentId === _mobileBackgroundSpawnId(msg)) renderMobileSideSheet();
     updateChatComposerSpace();
   };
   const onBackgroundSpawnDone = (msg = {}) => {
@@ -16264,6 +16448,7 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     if (!_completeMobileBackgroundSpawnLane(msg, requestedSession)) return;
     const mergedLateFileChanges = _mergeMobileLatestAssistantBackgroundFileChanges(requestedSession);
     _renderMobileBackgroundSpawnDock(backgroundSpawnDock, requestedSession);
+    if (sideState.backgroundAgentId && sideState.backgroundAgentId === _mobileBackgroundSpawnId(msg)) renderMobileSideSheet();
     updateChatComposerSpace();
     if (mergedLateFileChanges) {
       renderThreadNow();
@@ -16360,6 +16545,9 @@ function _resetMobileLiveAiTurnForReplay(aiTurn, options = {}) {
     }
     if (window.__pmMobileBackgroundSpawnDockChanged === currentBackgroundDockBridge) {
       window.__pmMobileBackgroundSpawnDockChanged = previousBackgroundDockBridge;
+    }
+    if (window.__pmMobileBackgroundAgentDetail === currentBackgroundAgentDetailBridge) {
+      window.__pmMobileBackgroundAgentDetail = previousBackgroundAgentDetailBridge;
     }
     if (window.__pmMobileToolProgressDockChanged === currentToolProgressDockBridge) {
       window.__pmMobileToolProgressDockChanged = previousToolProgressDockBridge;
@@ -32309,7 +32497,7 @@ void main() {
         moveVoiceWorkerDraftFinalIntoTrace();
         _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
         chatAiTurn.toolActivityStarted = true;
-        const label = _mobileToolLabel(evt);
+        const label = _mobileToolResultLabel(evt);
         const toolKey = _mobileVoiceToolKey(evt, label);
         const args = _safeJsonPreview(evt.args || evt.params || evt.input);
         const text = `${label}${args ? `: ${args}` : ''}`;
@@ -32332,7 +32520,7 @@ void main() {
         moveVoiceWorkerDraftFinalIntoTrace();
         _moveMobileVisibleAnswerIntoWorkflowTrace(chatAiTurn);
         chatAiTurn.toolActivityStarted = true;
-        const label = _mobileToolLabel(evt);
+        const label = _mobileToolResultLabel(evt);
         const toolKey = _mobileVoiceToolKey(evt, label);
         const result = _safeJsonPreview(evt.result || evt.output || evt.error || '', 180);
         const beforeMedia = _collectMessageMedia(chatAiTurn);
@@ -35456,6 +35644,12 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
   if (!id) return null;
   const lanes = _mobileBackgroundSpawnLanes();
   const existing = lanes[id] || {};
+  const identity = resolveBackgroundAgentIdentity(id, {
+    existingName: existing.agentName,
+    existingColor: existing.agentColor,
+    usedNames: Object.values(lanes).filter((lane) => lane !== existing).map((lane) => lane.agentName || lane.label),
+    usedColors: Object.values(lanes).filter((lane) => lane !== existing).map((lane) => lane.agentColor),
+  });
   const prompt = _mobileBackgroundSpawnPromptFromMessage(msg, existing);
   const rawSessionId = String(msg.sessionId || '').trim();
   const bgSessionId = String(
@@ -35478,7 +35672,9 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     id,
     sessionId: parentSessionId,
     bgSessionId,
-    label: String(msg.label || msg.name || existing.label || 'Background Spawn').trim(),
+    label: identity.name,
+    agentName: identity.name,
+    agentColor: identity.color,
     task: prompt,
     prompt,
     status: String(msg.state || existing.status || 'running').trim(),
@@ -35488,9 +35684,9 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     updatedAt: Date.now(),
     message: existing.message || {
       role: 'ai',
-      from: 'Background Spawn',
+      from: identity.name,
       content: '',
-      body: { sender: 'Background Spawn', text: '' },
+      body: { sender: identity.name, text: '' },
       processEntries: [],
       streaming: true,
       createdAt: Date.now(),
@@ -35503,7 +35699,35 @@ function _upsertMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeS
     approvalRequest: existing.approvalRequest || null,
   };
   lanes[id] = lane;
+  if (lane.message) {
+    lane.message.from = lane.agentName;
+    if (!lane.message.body || typeof lane.message.body !== 'object') lane.message.body = { sender: lane.agentName, text: '' };
+    lane.message.body.sender = lane.agentName;
+  }
   return lane;
+}
+
+function _mobileBackgroundSpawnWorkRecord(lane) {
+  if (!lane) return null;
+  const identity = resolveBackgroundAgentIdentity(lane.id, {
+    existingName: lane.agentName,
+    existingColor: lane.agentColor,
+  });
+  return {
+    id: lane.id,
+    sessionId: lane.sessionId || __pmChat.activeSessionId,
+    agentName: identity.name,
+    agentColor: identity.color,
+    task: lane.task || lane.prompt,
+    status: lane.status,
+    startedAt: lane.startedAt,
+    completedAt: lane.completedAt || (['completed', 'failed'].includes(String(lane.status || '').toLowerCase()) ? lane.updatedAt : 0),
+    updatedAt: lane.updatedAt,
+    result: lane.result,
+    error: lane.error,
+    fileChanges: lane.fileChanges || lane.message?.fileChanges || null,
+    events: Array.isArray(lane.message?.processEntries) ? lane.message.processEntries : [],
+  };
 }
 
 function _normalizeMobileBackgroundSpawnEvent(msg = {}) {
@@ -35667,7 +35891,7 @@ function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSe
       laneChanged = true;
     }
   }
-  const changed = _applyMobileAgentStreamEvent(lane.message, evt, 'Background Spawn');
+  const changed = _applyMobileAgentStreamEvent(lane.message, evt, lane.agentName || 'Background agent');
   if (lane.message?.approvalRequest && !lane.approvalRequest) {
     lane.approvalRequest = {
       ...lane.message.approvalRequest,
@@ -35686,15 +35910,47 @@ function _pushMobileBackgroundSpawnEvent(msg = {}, sessionId = __pmChat.activeSe
   }
   if (lane.message?.fileChanges) lane.fileChanges = lane.message.fileChanges;
   lane.updatedAt = Date.now();
+  persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane));
+  if (mobileSourceState.sessionId === lane.sessionId && !mobileSourceState.history) _renderMobileSourceList(document);
   return changed || laneChanged;
 }
 
 function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activeSessionId) {
+  const clearedId = _mobileBackgroundSpawnId(msg);
+  const clearedSessionId = String(sessionId || msg.spawnerSessionId || msg.sessionId || __pmChat.activeSessionId || '').trim();
+  if (clearedId && _mobileBackgroundSpawnClearedIds()[clearedId]) {
+    const existing = findBackgroundAgentWork(clearedId, clearedSessionId) || {};
+    const failed = msg.state === 'failed' || msg.state === 'timed_out' || !!msg.error;
+    const completedAt = Number(msg.completedAt || Date.now()) || Date.now();
+    const identity = resolveBackgroundAgentIdentity(clearedId, {
+      existingName: existing.agentName,
+      existingColor: existing.agentColor,
+    });
+    persistBackgroundAgentWork({
+      ...existing,
+      id: clearedId,
+      sessionId: clearedSessionId || existing.sessionId || __pmChat.activeSessionId,
+      agentName: identity.name,
+      agentColor: identity.color,
+      task: existing.task || msg.task || msg.prompt || '',
+      status: failed ? 'failed' : 'completed',
+      startedAt: existing.startedAt || msg.startedAt || completedAt,
+      completedAt,
+      updatedAt: Date.now(),
+      result: String(msg.result || existing.result || '').trim(),
+      error: String(msg.error || existing.error || '').trim(),
+      fileChanges: msg.fileChanges || existing.fileChanges || null,
+      events: existing.events || [],
+    });
+    if (mobileSourceState.sessionId === clearedSessionId && !mobileSourceState.history) _renderMobileSourceList(document);
+    return true;
+  }
   if (!_mobileBackgroundSpawnMatchesSession(msg, sessionId)) return false;
   const lane = _upsertMobileBackgroundSpawnLane(msg, sessionId);
   if (!lane) return false;
   const failed = msg.state === 'failed' || !!msg.error;
   lane.status = failed ? 'failed' : 'completed';
+  lane.completedAt = Number(msg.completedAt || Date.now()) || Date.now();
   lane.result = String(msg.result || lane.result || lane.message?.content || '').trim();
   lane.error = String(msg.error || lane.error || '').trim();
   if (msg.fileChanges) {
@@ -35706,16 +35962,18 @@ function _completeMobileBackgroundSpawnLane(msg = {}, sessionId = __pmChat.activ
   lane.message.workEndedAt = Date.now();
   lane.message.workDurationMs = Math.max(0, lane.message.workEndedAt - Number(lane.message.workStartedAt || lane.message.createdAt || lane.message.workEndedAt));
   if (failed) {
-    _appendMobileProcess(lane.message, 'error', `Background Spawn failed${msg.error ? `: ${String(msg.error).slice(0, 260)}` : ''}`, { actor: 'Background Agent', ...msg });
+    _appendMobileProcess(lane.message, 'error', `${lane.agentName || 'Agent'} failed${msg.error ? `: ${String(msg.error).slice(0, 260)}` : ''}`, { actor: lane.agentName || 'Background Agent', ...msg });
   } else {
     const result = String(lane.result || '').trim();
-    _appendMobileProcess(lane.message, 'final', `Background Spawn complete${result ? `: ${result.slice(0, 260)}` : ''}`, { actor: 'Background Agent', ...msg });
+    _appendMobileProcess(lane.message, 'final', `${lane.agentName || 'Agent'} complete${result ? `: ${result.slice(0, 260)}` : ''}`, { actor: lane.agentName || 'Background Agent', ...msg });
     if (result && !String(lane.message.content || '').trim()) {
       lane.message.content = result;
       lane.message.body = { ...(lane.message.body || {}), text: result };
     }
   }
   lane.updatedAt = Date.now();
+  persistBackgroundAgentWork(_mobileBackgroundSpawnWorkRecord(lane));
+  if (mobileSourceState.sessionId === lane.sessionId && !mobileSourceState.history) _renderMobileSourceList(document);
   return true;
 }
 
@@ -35740,6 +35998,7 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     .filter((lane) => lane && (!lane.sessionId || lane.sessionId === activeSession))
     .sort((a, b) => Number(a.startedAt || 0) - Number(b.startedAt || 0));
   host.hidden = lanes.length === 0;
+  host.classList.toggle('has-many', lanes.length > 2);
   if (!lanes.length) {
     host.innerHTML = '';
     host.classList.remove('is-open', 'is-collapsed');
@@ -35747,7 +36006,11 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     _syncMobileRuntimePillPair(host);
     return;
   }
-  const dockOpen = _mobileBackgroundSpawnDockOpen(activeSession);
+  const preferenceState = __pmChat.backgroundSpawnDockOpen && typeof __pmChat.backgroundSpawnDockOpen === 'object'
+    ? __pmChat.backgroundSpawnDockOpen
+    : {};
+  const hasPreference = Object.prototype.hasOwnProperty.call(preferenceState, activeSession);
+  const dockOpen = hasPreference ? _mobileBackgroundSpawnDockOpen(activeSession) : lanes.length <= 2;
   host.classList.toggle('is-open', dockOpen);
   host.classList.toggle('is-collapsed', !dockOpen);
   host.closest?.('.pm-page')?.classList.toggle('pm-bg-agents-open', dockOpen);
@@ -35794,18 +36057,17 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     const panelHtml = _renderMobileBackgroundSpawnPanel(lane, planHtml, processHtml);
     const statusLabel = status === 'approval_required' ? 'approval' : (status === 'in_progress' ? 'running' : status);
     return `
-      <section class="pm-background-spawn-lane ${escapeHtml(status)}${lane.expanded ? ' expanded' : ''}" data-bg-id="${escapeHtml(lane.id)}">
-        <button type="button" class="pm-background-spawn-summary" data-pm-bg-toggle="${escapeHtml(lane.id)}">
-          <span class="pm-background-spawn-avatar">BG</span>
+      <section class="pm-background-spawn-lane ${escapeHtml(status)}" data-bg-id="${escapeHtml(lane.id)}">
+        <button type="button" class="pm-background-spawn-summary" data-pm-bg-open-detail="${escapeHtml(lane.id)}" aria-label="Open ${escapeHtml(lane.agentName || 'background agent')} background work">
+          <span class="pm-background-spawn-avatar" style="--background-agent-color:${escapeHtml(lane.agentColor || '#1677d2')}">${escapeHtml(String(lane.agentName || 'Agent').slice(0, 2).toUpperCase())}</span>
           <span class="pm-background-spawn-main">
-            <strong>${escapeHtml(lane.label || 'Background Spawn')}</strong>
+            <strong style="color:${escapeHtml(lane.agentColor || '#1677d2')}">${escapeHtml(lane.agentName || 'Agent')}</strong>
             <em>${escapeHtml(latestText)}</em>
           </span>
           <span class="pm-background-spawn-status">${escapeHtml(statusLabel)}</span>
-          <span class="pm-background-spawn-chevron">${lane.expanded ? '^' : 'v'}</span>
+          <span class="pm-background-spawn-chevron">›</span>
           <input type="checkbox" switch class="pm-haptic-switch-overlay" aria-hidden="true" tabindex="-1" />
         </button>
-        ${!lane.expanded && lane.task ? `<div class="pm-background-spawn-task">${escapeHtml(lane.task)}</div>` : ''}
         <div class="pm-background-spawn-panel">${panelHtml}</div>
       </section>
     `;
@@ -35817,14 +36079,10 @@ function _renderMobileBackgroundSpawnDock(dock, sessionId = __pmChat.activeSessi
     _renderMobileBackgroundSpawnDock(host, sessionId);
     try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
   });
-  host.querySelectorAll('[data-pm-bg-toggle]').forEach((btn) => {
+  host.querySelectorAll('[data-pm-bg-open-detail]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const lane = _mobileBackgroundSpawnLanes()[String(btn.getAttribute('data-pm-bg-toggle') || '')];
-      if (!lane) return;
       try { pmHaptic(12); } catch {}
-      lane.expanded = !lane.expanded;
-      _renderMobileBackgroundSpawnDock(host, sessionId);
-      try { window.__pmMobileBackgroundSpawnDockChanged?.(); } catch {}
+      window.__pmMobileBackgroundAgentDetail?.(btn.getAttribute('data-pm-bg-open-detail') || '');
     });
   });
   host.querySelectorAll('[data-pm-approval-action][data-pm-approval-id]').forEach((btn) => {
@@ -35865,7 +36123,7 @@ function _collectMobileBackgroundFileChangeGroups(sessionId = __pmChat.activeSes
     .map((lane) => ({
       id: `bg_${lane.id}`,
       source: `background:${lane.id}`,
-      label: lane.label && lane.label !== 'Background Spawn' ? `Background Spawn - ${lane.label}` : 'Background Spawn edits',
+      label: lane.agentName ? `${lane.agentName} edits` : 'Background agent edits',
       fileChanges: lane.fileChanges || lane.message?.fileChanges,
     }));
 }

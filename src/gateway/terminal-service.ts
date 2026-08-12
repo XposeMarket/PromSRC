@@ -21,6 +21,7 @@ export interface TerminalRunInput {
   noOutputTimeoutMs?: number;
   stdin?: boolean;
   input?: string;
+  workspacePath?: string;
 }
 
 export interface TerminalRunResult {
@@ -98,6 +99,8 @@ export async function runTerminal(input: TerminalRunInput): Promise<TerminalRunR
     noOutputTimeoutMs: input.noOutputTimeoutMs,
     stdinMode: input.stdin === true || input.input != null || pty ? 'pipe' : 'ignore',
     input: input.input,
+    workspacePath: input.workspacePath || resolveTerminalCwd(input.cwd),
+    trackWorkspaceChanges: true,
   });
   if (mode === 'foreground') {
     const exit = await run.wait();
