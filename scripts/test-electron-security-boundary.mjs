@@ -14,6 +14,7 @@ const {
   normalizePassthroughExternalUrl,
   parseWindowsListeningPids,
 } = require(path.join(root, 'electron', 'security.js'));
+const { getNativeBrowserViewImplementations } = require(path.join(root, 'electron', 'native-browser-view.js'));
 
 const gateway = 'http://127.0.0.1:18789';
 assert.equal(isTrustedRendererUrl(`${gateway}/chat?session=ok#turn`, gateway), true);
@@ -69,6 +70,37 @@ const serverSource = fs.readFileSync(path.join(root, 'src', 'gateway', 'server-v
 const selfUpdateSource = fs.readFileSync(path.join(root, 'src', 'tools', 'self-update.ts'), 'utf8');
 const canonicalUpdaterSource = fs.readFileSync(path.join(root, 'src', 'update', 'canonical-updater.ts'), 'utf8');
 const publicBuilderSource = fs.readFileSync(path.join(root, 'electron-builder-public.yml'), 'utf8');
+function FakeWebContentsView() {}
+function FakeBrowserView() {}
+const modernHost = {
+  isDestroyed: () => false,
+  contentView: { addChildView() {}, removeChildView() {} },
+  addBrowserView() {},
+};
+assert.deepEqual(
+  getNativeBrowserViewImplementations({
+    mainWindow: modernHost,
+    WebContentsView: FakeWebContentsView,
+    BrowserView: FakeBrowserView,
+  }).map(({ kind }) => kind),
+  ['web-contents', 'browser'],
+);
+assert.deepEqual(
+  getNativeBrowserViewImplementations({
+    mainWindow: { addBrowserView() {} },
+    WebContentsView: FakeWebContentsView,
+    BrowserView: FakeBrowserView,
+  }).map(({ kind }) => kind),
+  ['browser'],
+);
+assert.deepEqual(
+  getNativeBrowserViewImplementations({
+    mainWindow: modernHost,
+    WebContentsView: undefined,
+    BrowserView: undefined,
+  }),
+  [],
+);
 assert.doesNotMatch(mainSource, /url\.startsWith\(GATEWAY_URL\)/);
 assert.doesNotMatch(mainSource, /killPortIfInUse/);
 assert.match(mainSource, /selectGatewayPort\(\)/);
@@ -132,6 +164,8 @@ assert.match(mainSource, /event\.sender !== mainWindow\.webContents/);
 assert.match(mainSource, /event\.senderFrame !== event\.sender\.mainFrame/);
 assert.match(mainSource, /view\.webContents !== event\.sender/);
 assert.match(mainSource, /normalizeEmbeddedBrowserUrl\(url\)/, 'native browser loads must use the embedded URL boundary');
+assert.match(mainSource, /refreshNativeBrowserAvailability\(\)/, 'native browser availability must use the live host capabilities');
+assert.match(mainSource, /detachNativeBrowserView\(v\)/, 'inactive native browser views must be detached from the window');
 assert.match(mainSource, /requestPrometheusBrowserNavigation\(url\)/, 'desktop external navigation must dispatch to the Prometheus Browser');
 assert.match(mainSource, /isLocalGatewayUrl\(url, GATEWAY_URL\)/, 'local gateway links must remain internal');
 assert.match(mainSource, /presentNativeView\(partition\)/, 'native browser navigation must present the session-keyed view');

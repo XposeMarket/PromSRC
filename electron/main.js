@@ -39,6 +39,7 @@ const {
   normalizePassthroughExternalUrl,
   parseWindowsListeningPids,
 } = require('./security');
+const { getNativeBrowserViewImplementations } = require('./native-browser-view');
 
 // ─── Config ────────────────────────────────────────────────────────────────
 const DEFAULT_GATEWAY_PORT = 18789;
@@ -594,7 +595,7 @@ async function checkForPrometheusUpdates(source = 'manual', lockHeld = false) {
 //   - Subagents/other owners can either share the main profile or get their own,
 //     so two agents driving two accounts never clash over one logged-in session.
 // Only ONE tab view is "presented" (positioned + visible) in the canvas at a
-// time. Other tabs/profiles stay parked at zero size but remain alive for
+// time. Other tabs/profiles stay detached from the window but remain alive for
 // background automation (DOM snapshot / run-js).
 const NATIVE_BROWSER_DEFAULT_PROFILE = 'main';
 const nativeBrowserViews = new Map();      // `${partition}::${tabId}` -> WebContentsView/BrowserView
@@ -604,7 +605,7 @@ let nativeBrowserTabSequence = 0;
 let presentedNativePartition = '';         // partition currently shown in the canvas
 let presentedNativeTabId = '';             // tab currently shown in the canvas
 const nativeBrowserState = {
-  available: !!(WebContentsView || BrowserView),
+  available: false,
   attached: false,
   visible: false,
   sessionId: '',
@@ -1678,8 +1679,58 @@ function nativeViewMeta(view) {
     designMode: false,
     sessionId: '',
     tabId: '',
+    attached: false,
   };
   return view.__promMeta;
+}
+
+function nativeBrowserViewImplementations() {
+  return getNativeBrowserViewImplementations({ mainWindow, WebContentsView, BrowserView });
+}
+
+function refreshNativeBrowserAvailability() {
+  nativeBrowserState.available = nativeBrowserViewImplementations().length > 0;
+  return nativeBrowserState.available;
+}
+
+function attachNativeBrowserView(view) {
+  if (!view) throw new Error('Native browser view is missing.');
+  const meta = nativeViewMeta(view);
+  if (meta.attached === true) return;
+  const kind = view.__prometheusNativeBrowserViewKind;
+  if (kind === 'web-contents') {
+    if (!mainWindow?.contentView?.addChildView) throw new Error('Electron WebContentsView attachment is unavailable.');
+    mainWindow.contentView.addChildView(view);
+  } else if (kind === 'browser') {
+    if (typeof mainWindow?.addBrowserView === 'function') mainWindow.addBrowserView(view);
+    else if (typeof mainWindow?.setBrowserView === 'function') mainWindow.setBrowserView(view);
+    else throw new Error('Electron BrowserView attachment is unavailable.');
+  } else {
+    throw new Error('Unknown native browser view implementation.');
+  }
+  meta.attached = true;
+}
+
+function detachNativeBrowserView(view) {
+  if (!view) return;
+  const meta = nativeViewMeta(view);
+  if (meta.attached !== true) return;
+  const kind = view.__prometheusNativeBrowserViewKind;
+  try {
+    if (kind === 'web-contents') {
+      if (mainWindow?.contentView?.removeChildView) mainWindow.contentView.removeChildView(view);
+      else throw new Error('Electron WebContentsView removal is unavailable.');
+    } else if (kind === 'browser') {
+      if (typeof mainWindow?.removeBrowserView === 'function') mainWindow.removeBrowserView(view);
+      else if (typeof mainWindow?.setBrowserView === 'function') mainWindow.setBrowserView(null);
+      else throw new Error('Electron BrowserView removal is unavailable.');
+    } else {
+      throw new Error('Unknown native browser view implementation.');
+    }
+    meta.attached = false;
+  } catch (error) {
+    writeGatewayLog(`[main] Failed to detach native browser view: ${error?.message || error}\n`);
+  }
 }
 
 function getNativeViewByPartition(partition, tabId = '') {
@@ -1845,7 +1896,7 @@ function wireNativeViewEvents(view, partition, sessionId, tabId) {
 // the session to it. Returns { view, partition, tabId }.
 function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId = '', options = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Prometheus window is not ready.');
-  if (!nativeBrowserState.available) throw new Error('Electron native browser surface is unavailable in this runtime.');
+  if (!refreshNativeBrowserAvailability()) throw new Error('Electron native browser surface is unavailable in this runtime.');
   const partition = resolveNativePartition(sessionId, profileId);
   const sid = String(sessionId || '').trim();
   if (sid) nativeBrowserSessionPartitions.set(sid, partition);
@@ -1867,17 +1918,26 @@ function ensureNativeBrowserView(sessionId = '', profileId = '', requestedTabId 
     webSecurity: true,
     preload: path.join(__dirname, 'inhouse-browser-preload.js'),
   };
-  view = WebContentsView
-    ? new WebContentsView({ webPreferences })
-    : new BrowserView({ webPreferences });
-
-  if (WebContentsView && mainWindow.contentView?.addChildView) {
-    mainWindow.contentView.addChildView(view);
-  } else if (typeof mainWindow.addBrowserView === 'function') {
-    mainWindow.addBrowserView(view);
-  } else if (typeof mainWindow.setBrowserView === 'function') {
-    mainWindow.setBrowserView(view);
+  let creationError = null;
+  for (const implementation of nativeBrowserViewImplementations()) {
+    let candidate = null;
+    try {
+      candidate = new implementation.Constructor({ webPreferences });
+      candidate.__prometheusNativeBrowserViewKind = implementation.kind;
+      attachNativeBrowserView(candidate);
+      view = candidate;
+      break;
+    } catch (error) {
+      creationError = error;
+      writeGatewayLog(`[main] Failed to create ${implementation.kind} native browser view: ${error?.message || error}\n`);
+      try { detachNativeBrowserView(candidate); } catch {}
+      try {
+        if (candidate?.webContents && !candidate.webContents.isDestroyed()) candidate.webContents.destroy?.();
+      } catch {}
+    }
   }
+  if (!view) throw creationError || new Error('Electron native browser surface could not be created.');
+
   view.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS });
   applyNativeBrowserUserAgent(view);
   const meta = nativeViewMeta(view);
@@ -1896,8 +1956,9 @@ function requireNativeViewForSession(sessionId, profileId = '', tabId = '') {
   return { view, wc, partition, tabId: resolvedTabId };
 }
 
-// Makes one profile's view the canvas-visible one and parks all others at zero
-// size, so only a single in-house browser is ever painted in the panel.
+// Makes one profile's view the canvas-visible one. Detached inactive views keep
+// their WebContents alive for automation, while avoiding multiple attached
+// WebContentsViews (which can report incorrect visibility on macOS).
 function presentNativeView(partition, tabId = '', sessionId = '') {
   const sid = String(sessionId || nativeBrowserState.sessionId || '').trim();
   const registry = getNativeTabRegistry(sid, partition, true);
@@ -1909,10 +1970,15 @@ function presentNativeView(partition, tabId = '', sessionId = '') {
   nativeBrowserState.activeTabId = selectedTabId;
   nativeBrowserState.partition = partition;
   nativeBrowserState.profile = nativeProfileFromPartition(partition);
-  for (const [key, v] of nativeBrowserViews) {
+  for (const [, v] of nativeBrowserViews) {
     const meta = nativeViewMeta(v);
     const isSelected = meta.partition === partition && meta.tabId === selectedTabId;
-    if (!isSelected) { try { v.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {} }
+    if (isSelected) {
+      attachNativeBrowserView(v);
+    } else {
+      try { v.setBounds({ ...NATIVE_BROWSER_EMPTY_BOUNDS }); } catch {}
+      detachNativeBrowserView(v);
+    }
   }
 }
 
@@ -2050,10 +2116,7 @@ async function newNativeBrowserTab({ sessionId = '', url = '', profile = '' } = 
 
 function destroyNativeBrowserView(partition, tabId, view) {
   const key = nativeTabKey(partition, tabId);
-  try {
-    if (WebContentsView && mainWindow?.contentView?.removeChildView) mainWindow.contentView.removeChildView(view);
-    else if (typeof mainWindow?.removeBrowserView === 'function') mainWindow.removeBrowserView(view);
-  } catch {}
+  detachNativeBrowserView(view);
   try {
     if (view?.webContents && !view.webContents.isDestroyed()) view.webContents.destroy?.();
   } catch {}
@@ -2591,7 +2654,7 @@ handleTrustedMain('select-canvas-paths', async (_event, options = {}) => {
   return Array.isArray(result.filePaths) ? result.filePaths : [];
 });
 
-handleTrustedMain('native-browser:available', () => nativeBrowserState.available === true);
+handleTrustedMain('native-browser:available', () => refreshNativeBrowserAvailability());
 handleTrustedMain('native-browser:attach', async (_event, options = {}) => attachNativeBrowserSurface(options));
 handleTrustedMain('native-browser:detach', async () => hideNativeBrowserSurface('detached'));
 handleTrustedMain('native-browser:set-bounds', async (_event, bounds = {}) => setNativeBrowserBounds(bounds, bounds && bounds.sessionId, bounds && bounds.tabId));
@@ -2686,6 +2749,7 @@ function createWindow() {
     },
     autoHideMenuBar: true,
   });
+  refreshNativeBrowserAvailability();
 
   Menu.setApplicationMenu(null);
   mainWindow.loadURL(GATEWAY_URL);
@@ -2732,7 +2796,10 @@ function createWindow() {
   mainWindow.webContents.on('will-navigate', guardMainNavigation);
   mainWindow.webContents.on('will-redirect', guardMainNavigation);
 
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    nativeBrowserState.available = false;
+  });
 }
 
 // ─── Auto-Update Events ────────────────────────────────────────────────────
