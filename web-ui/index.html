@@ -3036,10 +3036,6 @@
            <button data-browser-mode-btn="teach" onclick="setBrowserInteractionMode('teach')" title="Teach mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif">Teach</button>
            <button data-browser-design-btn="true" onclick="toggleBrowserDesignMode()" title="Design mode" style="display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(56,189,248,0.22);background:rgba(56,189,248,0.08);color:#bae6fd;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif"><iconify-icon icon="solar:magic-stick-3-bold-duotone" width="14" height="14"></iconify-icon>Design</button>
         </div>
-        <div id="canvas-browser-status-pill" style="display:none;align-items:center;gap:6px;border:1px solid rgba(56,189,248,0.26);background:rgba(56,189,248,0.12);color:#bae6fd;border-radius:999px;padding:4px 10px;font-size:10px;font-weight:800;font-family:'Manrope',sans-serif;letter-spacing:0.04em;text-transform:uppercase">
-          <span id="canvas-browser-status-dot" style="width:7px;height:7px;border-radius:999px;background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,0.14)"></span>
-          <span id="canvas-browser-status-label">Browser idle</span>
-        </div>
         <div id="canvas-publish-controls" style="display:none;align-items:center;gap:6px;padding-right:6px;margin-right:2px;border-right:1px solid rgba(255,255,255,0.09)"></div>
         <div style="display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,0.12);border-radius:8px;overflow:hidden;background:rgba(255,255,255,0.06)">
           <button id="canvas-code-btn" onclick="setCanvasMode('code')" class="canvas-mode-btn active" style="border:0;background:transparent;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;color:#9a9890">Code</button>
@@ -3049,8 +3045,9 @@
           <iconify-icon icon="solar:diskette-bold-duotone" width="14" height="14"></iconify-icon>
           Save
         </button>
-        <button id="canvas-fullscreen-btn" onclick="toggleCanvasFullscreen()" title="Fullscreen" style="display:flex;align-items:center;gap:4px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.07);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease">
-          <iconify-icon icon="solar:maximize-square-2-bold-duotone" width="14" height="14"></iconify-icon>
+        <button id="canvas-fullscreen-btn" onclick="toggleCanvasFullscreen()" title="Fullscreen" aria-label="Fullscreen" style="display:flex;align-items:center;gap:4px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.07);color:#9a9890;border-radius:8px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Manrope',sans-serif;transition:all 0.15s ease">
+          <svg data-canvas-fullscreen-icon="expand" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"></path></svg>
+          <svg data-canvas-fullscreen-icon="exit" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none"><path d="M9 3v6H3M15 3v6h6M9 21v-6H3M15 21v-6h6"></path></svg>
         </button>
       </div>
     </div>
@@ -3207,8 +3204,6 @@
                     <input id="browser-canvas-address-input" type="text" spellcheck="false" onkeydown="handleBrowserCanvasAddressKeydown(event)" placeholder="Open a URL..." style="min-width:0;flex:1;height:28px;border:0;background:transparent;color:#e0f2fe;font-size:11px;font-family:'Manrope',sans-serif;outline:none" />
                     <button id="browser-canvas-open-btn" type="button" onclick="openBrowserCanvasAddress()" title="Open URL" style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1px solid rgba(56,189,248,0.22);background:rgba(56,189,248,0.12);color:#bae6fd;border-radius:8px;cursor:pointer;flex-shrink:0"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg></button>
                   </div>
-                  <div id="browser-canvas-session-chip" style="font-size:10px;font-weight:800;color:#bbf7d0;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.18);border-radius:8px;padding:5px 8px;white-space:nowrap">No session</div>
-                  <div id="browser-canvas-stream-chip" style="font-size:10px;font-weight:800;color:#bae6fd;background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.18);border-radius:8px;padding:5px 8px;white-space:nowrap">Stream idle</div>
                   <div id="browser-canvas-url" style="display:none;margin-left:8px;font-size:11px;color:#cbd5f5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">No active browser session</div>
                 </div>
                 <div id="browser-canvas-empty" style="display:block;padding:28px 22px;color:#cbd5e1">

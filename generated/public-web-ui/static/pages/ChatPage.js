@@ -3847,7 +3847,6 @@ function updateCreativeModeControls() {
   const widthLockMessage = getCanvasWidthLockMessage();
   const browserState = getBrowserCanvasState();
   const browserSurfaceActive = isBrowserCanvasSurfaceActive();
-  const browserMeta = getBrowserInteractionMeta(browserState.interactionMode);
   const badge = document.getElementById('creative-mode-badge');
   const canvasToggleBtn = document.getElementById('canvas-toggle-btn');
   const backBtn = document.getElementById('canvas-context-btn');
@@ -3859,9 +3858,6 @@ function updateCreativeModeControls() {
     document.getElementById('right-panel-browser-surface-btn'),
   ].filter(Boolean);
   const browserModeRail = document.getElementById('canvas-browser-mode-rail');
-  const browserStatusPill = document.getElementById('canvas-browser-status-pill');
-  const browserStatusLabel = document.getElementById('canvas-browser-status-label');
-  const browserStatusDot = document.getElementById('canvas-browser-status-dot');
   const browserLiveDots = [
     document.getElementById('canvas-browser-live-dot'),
     document.getElementById('right-panel-browser-live-dot'),
@@ -3918,16 +3914,6 @@ function updateCreativeModeControls() {
     dot.style.display = browserState.active ? 'inline-flex' : 'none';
   });
   if (browserModeRail) browserModeRail.style.display = browserSurfaceActive ? 'inline-flex' : 'none';
-  if (browserStatusPill) browserStatusPill.style.display = browserSurfaceActive ? 'inline-flex' : 'none';
-  if (browserStatusLabel) {
-    browserStatusLabel.textContent = browserState.active
-      ? (browserState.browserDesignMode ? 'Design mode' : `${browserMeta.label} mode`)
-      : 'Browser idle';
-  }
-  if (browserStatusDot) {
-    browserStatusDot.style.background = browserState.active ? '#22c55e' : '#94a3b8';
-    browserStatusDot.style.boxShadow = browserState.active ? '0 0 0 3px rgba(34,197,94,0.14)' : '0 0 0 3px rgba(148,163,184,0.12)';
-  }
 
   if (canvasToggleBtn) {
     canvasToggleBtn.title = meta ? `${meta.title} is active` : 'Open Canvas';
@@ -4004,8 +3990,6 @@ function renderBrowserCanvasSurface() {
   const reloadBtn = document.getElementById('browser-canvas-reload-btn');
   const openBtn = document.getElementById('browser-canvas-open-btn');
   const addressInput = document.getElementById('browser-canvas-address-input');
-  const chromeSessionChip = document.getElementById('browser-canvas-session-chip');
-  const chromeStreamChip = document.getElementById('browser-canvas-stream-chip');
   const namePanel = document.getElementById('browser-canvas-name-panel');
   const nameInput = document.getElementById('browser-canvas-name-input');
   const savedWrap = document.getElementById('browser-canvas-saved-elements');
@@ -4090,18 +4074,6 @@ function renderBrowserCanvasSurface() {
     btn.style.opacity = btn.disabled ? '0.45' : '1';
     btn.style.cursor = btn.disabled ? 'not-allowed' : 'pointer';
   });
-  if (chromeSessionChip) {
-    chromeSessionChip.textContent = followingDetachedSession
-      ? 'Verifier tab'
-      : (state.active ? (nativeProvider ? 'In-house browser' : (visibleSessionId ? `Session ${String(visibleSessionId).slice(0, 8)}` : 'Session ready')) : 'No session');
-  }
-  if (chromeStreamChip) {
-    chromeStreamChip.textContent = nativeProvider && state.active
-      ? 'Native surface'
-      : (state.streamActive
-      ? `${String(state.streamTransport || 'stream').toUpperCase()} ${String(state.streamFocus || 'passive')}`
-      : 'Stream idle');
-  }
   if (stageTitle) {
     stageTitle.textContent = state.active
       ? (state.title || state.url || 'Browser session active')
@@ -4388,7 +4360,14 @@ function renderBrowserCanvasSurface() {
     selectionText.title = fullSelectorText;
   }
   const stageEl = frameEl?.parentElement || document.getElementById('browser-canvas-frame-stage');
-  if (stageEl) stageEl.dataset.nativeBrowserSurface = nativeProvider && state.active ? '1' : '0';
+  const nativeSurfaceActive = nativeProvider && state.active;
+  const nativeSurfaceValue = nativeSurfaceActive ? '1' : '0';
+  if (stageEl) stageEl.dataset.nativeBrowserSurface = nativeSurfaceValue;
+  if (frameWrap) frameWrap.dataset.nativeBrowserSurface = nativeSurfaceValue;
+  const liveCard = document.getElementById('browser-canvas-live-card');
+  if (liveCard) liveCard.dataset.nativeBrowserSurface = nativeSurfaceValue;
+  const layoutGrid = document.getElementById('browser-canvas-layout');
+  if (layoutGrid) layoutGrid.dataset.nativeBrowserSurface = nativeSurfaceValue;
   syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl);
   ensureBrowserCanvasHoverBindings();
   ensureBrowserCanvasFrameMetaResizeObserver(frameWrap, frameMeta, frameEl);
@@ -4541,13 +4520,14 @@ function syncBrowserCanvasFrameLayout(frameWrap, frameMeta, frameEl) {
   const viewportWidth = Math.max(1, Number(state.frameViewportWidth || state.frameWidth || frameEl.naturalWidth || 1280) || 1280);
   const viewportHeight = Math.max(1, Number(state.frameViewportHeight || state.frameHeight || frameEl.naturalHeight || 720) || 720);
   const wrapRectWidth = Number(frameWrap?.clientWidth || frameWrap?.getBoundingClientRect?.().width || 0);
+  const surfaceInset = nativeProvider ? 0 : 24;
   const availableWidth = nativeProvider
-    ? Math.max(1, Math.floor(wrapRectWidth) - 24)
-    : Math.max(220, Math.floor(wrapRectWidth) - 24);
+    ? Math.max(1, Math.floor(wrapRectWidth) - surfaceInset)
+    : Math.max(220, Math.floor(wrapRectWidth) - surfaceInset);
   const metaHeight = frameMeta.style.display === 'none' ? 0 : (Number(frameMeta.offsetHeight || 0) + 12);
   const availableHeight = nativeProvider
-    ? Math.max(1, Number(frameWrap?.clientHeight || 0) - metaHeight - 24)
-    : Math.max(160, Number(frameWrap?.clientHeight || 0) - metaHeight - 24);
+    ? Math.max(1, Number(frameWrap?.clientHeight || 0) - metaHeight - surfaceInset)
+    : Math.max(160, Number(frameWrap?.clientHeight || 0) - metaHeight - surfaceInset);
   const widthFirstHeight = Math.floor(availableWidth * (viewportHeight / viewportWidth));
   const renderWidth = Math.max(220, Math.floor(availableWidth));
   const renderHeight = Math.max(124, Math.min(availableHeight, widthFirstHeight));
@@ -41410,8 +41390,7 @@ function toggleCanvas(nextOpen = null, options = {}) {
       panel.style.inset = '0';
       panel.style.zIndex = '20';
       panel.style.background = '';
-      const fsBtn = document.getElementById('canvas-fullscreen-btn');
-      if (fsBtn) fsBtn.title = 'Fullscreen';
+      syncCanvasFullscreenButton();
     }
 	    panel.style.display = 'none';
 	    if (topbar) topbar.style.display = 'flex';
@@ -41428,23 +41407,34 @@ function toggleCanvasFullscreen() {
   const panel = document.getElementById('canvas-panel');
   if (!panel || !canvasOpen) return;
   canvasFullscreenMode = !canvasFullscreenMode;
-  const btn = document.getElementById('canvas-fullscreen-btn');
   if (canvasFullscreenMode) {
     panel.style.position = 'fixed';
     panel.style.inset = '0';
     panel.style.zIndex = '1000';
     panel.style.background = '#2a2a2a';
-    if (btn) btn.title = 'Exit fullscreen';
   } else {
     panel.style.position = 'absolute';
     panel.style.inset = '0';
     panel.style.zIndex = '20';
     panel.style.background = '';
-    if (btn) btn.title = 'Fullscreen';
   }
+  syncCanvasFullscreenButton();
   if (isStructuredCreativeMode(normalizeCreativeMode(window.currentCreativeMode))) {
     scheduleCreativeStageViewportSync({ force: true, center: creativeStageZoomMode !== 'manual' });
   }
+}
+
+function syncCanvasFullscreenButton() {
+  const btn = document.getElementById('canvas-fullscreen-btn');
+  if (!btn) return;
+  const active = !!canvasFullscreenMode;
+  const expandIcon = btn.querySelector('[data-canvas-fullscreen-icon="expand"]');
+  const exitIcon = btn.querySelector('[data-canvas-fullscreen-icon="exit"]');
+  if (expandIcon) expandIcon.style.display = active ? 'none' : 'block';
+  if (exitIcon) exitIcon.style.display = active ? 'block' : 'none';
+  btn.title = active ? 'Exit fullscreen' : 'Fullscreen';
+  btn.setAttribute('aria-label', active ? 'Exit fullscreen' : 'Fullscreen');
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
 }
 
 function initCanvasEditor() {
